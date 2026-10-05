@@ -21,7 +21,9 @@ The `.dockerignore` has 8 section header comments for 13 patterns — nearly 1:1
 ## Proposed Solutions
 
 ### Option A: Keep only non-obvious comments (Recommended)
+
 Remove comments that restate what patterns already convey. Keep comments for `supabase/` and section breaks.
+
 - Pros: Cleaner, less maintenance burden, matches typical .dockerignore style
 - Cons: Slightly less self-documenting for Docker beginners
 - Effort: Small

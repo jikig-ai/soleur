@@ -103,7 +103,9 @@ broke the web container or Cloudflare proxying drifted.
 Diagnose:
 
 ```bash
-gh run list --workflow=web-platform-release.yml --limit 5
+# --event workflow_run selects the DEPLOY arm. Since #5806 (ADR-217) this workflow
+# runs twice per merge and the push arm carries no deploy job at all.
+gh run list --workflow=web-platform-release.yml --event workflow_run --limit 5
 ssh prod-web -- 'docker ps --format "table {{.Names}}\t{{.Status}}"'
 ssh prod-web -- 'docker logs --tail 200 web-platform | tail -100'
 ```
@@ -461,6 +463,7 @@ curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
 ```
 
 Decision rule:
+
 - `ghStatus: 401` (GitHub rejected a SENT JWT) + `attempts: 3` (persisted across
   retries) ⇒ credential CONTENT class (key↔App mismatch or bad `iss`). Retry/format
   fixes are irrelevant — go to STEP 2.
@@ -556,33 +559,52 @@ For per-op slicing, run separate queries per `op:<verb>`.
 
 ### Sentry — alert rule status
 
+Migrated 2026-08-19 (#7590) off `projects/{org}/{proj}/rules/`, which now
+410s on a brownout schedule. The replacement is org-scoped and read-only, so
+unlike the write recipe below this one is a drop-in. Note `status` is gone;
+the equivalent field is `enabled`.
+
 ```bash
 curl -s --max-time 10 \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-  "https://${SENTRY_API_HOST}/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
-  | jq '.[] | {name, lastTriggered, status}'
+  "https://${SENTRY_API_HOST}/api/0/organizations/$SENTRY_ORG/workflows/?per_page=100" \
+  | jq '.[] | select(.name | startswith("auth-")) | {name, lastTriggered, enabled}'
 ```
 
-Confirms the three rules (`auth-exchange-code-burst`,
-`auth-callback-no-code-burst`, `auth-per-user-loop`) exist and shows
-when each last fired.
+Confirms the auth rules (`auth-exchange-code-burst`,
+`auth-callback-no-code-burst`, `auth-per-user-loop`, `auth-signout-burst`)
+exist and shows when each last fired. Verified live 2026-08-19: all four
+present, `enabled: true`. This is a READ against the non-deprecated
+`workflows/` endpoint and stays correct for all four regardless of which
+system owns each rule's definition — see the ownership table below.
 
 ### Reconcile alert rules (rule drift / missing rule)
 
-If a rule is missing from the GET output above, or someone edited a
-rule via the Sentry UI and it has drifted from the configurator's
-canonical config, re-run the idempotent configurator:
+Drift in any of the four auth rules is reported daily, and after every apply, by
+`scripts/sentry-alert-live-fidelity.sh` (via `scheduled-sentry-alert-drift.yml`,
+which files an issue naming each finding's class and remedy). Ownership since
+2026-09-21 (#8451):
 
-```bash
-SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain) \
-SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain) \
-SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT -p soleur -c prd --plain) \
-bash apps/web-platform/scripts/configure-sentry-alerts.sh
-```
+| rule | owner | how to reconcile drift |
+|---|---|---|
+| `auth-per-user-loop` | Terraform-frozen `sentry_alert` (`legacy_trigger_conditions`, `ignore_changes = all`); an apply never writes it | PUT its capture entry back (below) |
+| `auth-signout-burst` | Terraform (`sentry_alert`, `ignore_changes = [environment]`) | re-dispatch `apply-sentry-infra.yml` |
+| `auth-exchange-code-burst` | Terraform (`sentry_alert`, `ignore_changes = [environment]`) | re-dispatch `apply-sentry-infra.yml` |
+| `auth-callback-no-code-burst` | Terraform (`sentry_alert`, `ignore_changes = [environment]`) | re-dispatch `apply-sentry-infra.yml` |
 
-The script is idempotent: re-running produces zero net changes when
-state is already correct. It fails closed if a rule name has been
-duplicated in the UI (resolve the duplicate manually before re-running).
+To repair `auth-per-user-loop` (captured id `566671`): take its entry from the
+committed capture
+(`jq '.[] | select(.name == "auth-per-user-loop")' knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json`),
+PUT it to `/api/0/organizations/<org>/workflows/566671/`, GET it back, and re-run
+the probe. This is the same remedy the drift issue's reading guide gives for the
+`FROZEN …` classes. The rule cannot become a native, apply-repaired rule until
+the provider ships `event_unique_user_frequency_count` as a trigger (#7985).
+
+> **Superseded 2026-09-21 (#8451): `apps/web-platform/scripts/configure-sentry-alerts.sh`
+> is not a repair path.** Its `projects/{org}/{proj}/rules/` endpoint now returns
+> 410 persistently (the scheduled brownout recorded here on 2026-08-19, #7590,
+> ended in removal), and it owns none of the four rules. Do not run it; it is
+> kept only until #7634 settles its write path.
 
 #### Accepted Sentry alert intervals
 
@@ -617,11 +639,24 @@ doppler run -p soleur -c prd -- bash -c \
    bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh'
 ```
 
+The inventory above is read-only and an agent may run it.
+
 If zero matches: close the tracking issue with the dry-run output.
-If non-zero matches: re-run with `--apply` (replace) or
+If non-zero matches: the operator re-runs it with `--apply` (replace) or
 `--apply --add-or-clause` (additive deploy-window posture, query
-strings only — `fields[]` always replaces). The script self-verifies
-on `--apply` and exits non-zero if any references remain.
+strings only — `fields[]` always replaces) **in their own terminal**. `--apply`
+rewrites production alert rules, saved searches, Discover queries and
+dashboards, so after the inventory it asks for a typed `yes` (ADR-249, #8486).
+With no TTY it stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` before
+any network call, so an agent prints the command below for the operator and does
+not run it:
+
+```bash
+cd <absolute worktree path> && doppler run -p soleur -c prd -- bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh --apply
+```
+
+The script self-verifies on `--apply` and exits non-zero if any references
+remain.
 
 **Sharp edge — tag vs. extra namespace.** The Sentry UI's issue-stream
 search bar searches **tags** (`Sentry.setTag()`), not extra-context

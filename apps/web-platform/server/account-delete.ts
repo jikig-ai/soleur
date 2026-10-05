@@ -6,6 +6,14 @@ import { removeGitDataRepo } from "@/server/git-data-replication";
 import { createChildLogger } from "./logger";
 import { hashUserId, reportSilentFallback, warnSilentFallback } from "@/server/observability";
 
+/**
+ * Sentry tag literals of the Art. 17 git-data erasure report. `sentry_alert.art17_erasure_incomplete`
+ * (infra/sentry/issue-alerts.tf) filters on exactly these two, and
+ * sentry-git-data-pin-fault-alert-op-contract.test.ts pins the rule to them (#8572).
+ */
+export const ART17_ERASURE_FEATURE = "account-delete";
+export const ART17_ERASURE_OP = "git-data-bare-repo-erasure";
+
 const log = createChildLogger("account-delete");
 
 const PAGE_SIZE = 1_000;
@@ -42,6 +50,16 @@ async function listAllStorageObjects(
 export interface DeleteAccountResult {
   success: boolean;
   error?: string;
+  /**
+   * (#8094) True when the account was deleted but the git-data bare-repo erasure was
+   * NOT observed to complete — the host refused it, or was unreachable. The cascade
+   * deliberately still succeeds (a git-data fault must not strand the auth-user
+   * deletion), so this is how the caller learns not to claim the erasure happened.
+   *
+   * Absent/false means one of two things that are both honest to report as done: the
+   * erasure completed, or this environment never had git-data to erase.
+   */
+  gitDataErasurePending?: boolean;
 }
 
 /**
@@ -206,18 +224,97 @@ export async function deleteAccount(
   // the sole-owned workspace's git-data repo id). NO-OP at flag-off (inside the call).
   // Best-effort, mirroring the attachments/logo purges: reports, never throws — a
   // reachability blip must not abort the auth-user deletion that follows.
+  // (#8094) The OUTCOME is consumed, not discarded. `removeGitDataRepo` used to return
+  // void, so a refusal by the host and a completed erasure were the same value here and
+  // both fell through to `{ success: true }` — the user was told the account was
+  // permanently deleted while their bare repository may still have been on the host.
+  // Still non-fatal, still reported to Sentry; the change is that we no longer claim an
+  // erasure we did not observe.
+  let gitDataErasurePending = false;
   try {
-    await removeGitDataRepo(userId);
+    const outcome = await removeGitDataRepo(userId);
+    if (outcome.status !== "erased" && outcome.status !== "skipped") {
+      gitDataErasurePending = true;
+      // The five non-terminal states mean genuinely different things and need different
+      // operator responses, so the discriminator rides a TAG, not only `extra`:
+      //   refused      — the host looked and declined; the repo is probably still there.
+      //   unauthorized — the REMOVE key was rejected. PERMANENT and fleet-wide until a
+      //                  host replace re-bakes authorized_keys; every repo is un-erased.
+      //   unconfigured — a config fault; nothing was dialed. `detail` leads with the cause:
+      //                  remove_key_absent — the remove key is missing while git-data is
+      //                    otherwise armed. Remedy: restore GIT_REMOVE_SSH_PRIVATE_KEY in
+      //                    Doppler prd and redeploy.
+      //                  pin_invalid | pin_absent — GIT_DATA_SSH_HOST_KEY is malformed or
+      //                    unset, whatever the store flag says (#7226, #5914). Remedy:
+      //                    republish the pin (the replace job does), or re-run
+      //                    git-data-cutover.yml mode=redeploy if the secret is present but not loaded,
+      //                    then sweep the refused erasures (runbook pin-fault row).
+      //                  ssh_client_absent — the image has no `ssh` (#5914): ship
+      //                    openssh-client in the runner stage, then sweep.
+      //   unreachable  — no answer at all; the repo's state is unknown, which is not the
+      //                  same as un-erased.
+      //   host_key_mismatch — ssh reached a host whose key does not match the pin (#7226).
+      //                  The repo is un-erased. Remedy: the web app holds a stale or wrong
+      //                  pin — redeploy; or the host was re-keyed outside the replace job.
+      // Sentry does not index `extra`, so an alert rule cannot key on a value that lives
+      // only there — which is why `outcome` moved out of it.
+      //
+      // MESSAGE path (err === null, #5914): an Error-path report is pre-captured by the
+      // pino mirror with only `feature=pino-mirror` and the tagged capture is dropped
+      // (#8629), so art17_erasure_incomplete — which filters on `feature`/`op` — would
+      // never see it. The status (and, for `unconfigured`, the fixed reason word) leads the
+      // message so each fault groups into its own Sentry issue, and a `remove_key_absent`
+      // issue can never hide a later `pin_absent`. Since #8572 the rule also re-pages per
+      // event (`event_frequency_count {1h, 0}`, throttled by its 5-minute per-issue action
+      // interval), so an open issue no longer swallows the next fault; before, it paged
+      // only on first-seen / reappeared / regression. An archived or ignored issue fires
+      // no trigger at all, so these issues are resolved after the sweep, never archived.
+      const reason =
+        outcome.status === "unconfigured" ? /^([a-z_]+): /.exec(outcome.detail)?.[1] : undefined;
+      reportSilentFallback(null, {
+        feature: ART17_ERASURE_FEATURE,
+        op: ART17_ERASURE_OP,
+        tags: { erasure_outcome: outcome.status, ...(reason ? { erasure_reason: reason } : {}) },
+        extra: {
+          userId,
+          // DELIBERATE, and not a duplicate of `userId` above: `reportSilentFallback`
+          // pseudonymizes `extra.userId` by policy (ADR-029), which is correct for a
+          // subject identifier and fatal for this one — `workspaceId === auth.users.id`
+          // is the bare-repo NAME on the host, and the users/workspaces rows are deleted
+          // seconds later in this same cascade. Hashed, the record names an outstanding
+          // erasure nobody can locate; the sweep runbook's `.extra.userId` query already
+          // returns "no-user-id" for exactly this reason.
+          // Lawful basis for retaining it: completing the Art. 17 erasure the subject
+          // requested. It is the minimum needed to identify the object still to delete,
+          // and it is scrubbed out of `detail` (see scrubErasureDetail) so this is the
+          // single, documented carrier rather than an incidental one.
+          gitDataRepoId: userId,
+          ...(outcome.status === "refused" ? { exitCode: outcome.exitCode } : {}),
+          detail: outcome.detail,
+        },
+        message:
+          `git-data erasure ${outcome.status}${reason ? ` (${reason})` : ""}: bare-repo erasure ` +
+          "did not complete during Art. 17 deletion — the repo may persist on the git-data host",
+      });
+    }
   } catch (err) {
-    // Non-fatal (a git-data reachability blip must not strand the auth-user
-    // deletion), but a failed Art. 17 erasure is a compliance event — mirror to
-    // Sentry so an un-erased bare repo is observable and can be swept, rather than
-    // silently logged (cq-silent-fallback-must-mirror-to-sentry).
-    reportSilentFallback(err, {
-      feature: "account-delete",
-      op: "git-data-bare-repo-erasure",
-      extra: { userId },
-      message: "removeGitDataRepo failed during Art. 17 deletion — bare repo may persist on the git-data host",
+    // An unexpected throw (assertSafeWorkspaceId, a programming fault) must reach the
+    // SAME honest answer as a refusal. Before #8094 this arm existed and set nothing, so
+    // it was the one route that could still report an unobserved success.
+    gitDataErasurePending = true;
+    // MESSAGE path, like the outcome report above (#8629): the Error path never reaches
+    // art17_erasure_incomplete. The thrown MESSAGE is deliberately not carried —
+    // assertSafeWorkspaceId's embeds the raw id — only the error's name. The known throws
+    // here are pre-dial (`refusing unsafe workspace_id`, `GIT_DATA_SSH_HOST is unset in
+    // production`), so the host was not reached.
+    reportSilentFallback(null, {
+      feature: ART17_ERASURE_FEATURE,
+      op: ART17_ERASURE_OP,
+      tags: { erasure_outcome: "threw" },
+      extra: { userId, gitDataRepoId: userId, errorName: err instanceof Error ? err.name : typeof err },
+      message:
+        "git-data erasure threw: removeGitDataRepo threw during Art. 17 deletion — bare repo may " +
+        "persist on the git-data host",
     });
   }
 
@@ -1053,6 +1150,34 @@ export async function deleteAccount(
     return { success: false, error: "Account deletion failed at anonymise-routine-runs. Please try again." };
   }
 
+  // 3.996 Anonymise engine settings and run ownership (migration 138).
+  //       Engine lineage and lifecycle events remain for operational
+  //       accountability, while user identity references are severed before
+  //       auth deletion. The service-role-only RPC is idempotent.
+  try {
+    const { error: anonEngineErr } = await service.rpc(
+      "anonymise_agent_engine_data",
+      { p_user_id: userId },
+    );
+    if (anonEngineErr) {
+      reportSilentFallback(anonEngineErr, {
+        feature: "account-delete",
+        op: "anonymise-agent-engine-data",
+        extra: { userId },
+        message: "anonymise_agent_engine_data failed — aborting deletion to avoid FK-block",
+      });
+      return { success: false, error: "Account deletion failed at anonymise-agent-engine-data. Please try again." };
+    }
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "account-delete",
+      op: "anonymise-agent-engine-data",
+      extra: { userId },
+      message: "anonymise_agent_engine_data threw — aborting deletion to avoid FK-block",
+    });
+    return { success: false, error: "Account deletion failed at anonymise-agent-engine-data. Please try again." };
+  }
+
   // 4. Delete auth record — FK cascade handles public.users and all children
   //    IMPORTANT: auth deletion runs LAST among destructive steps. If it
   //    fails, the preceding steps are idempotent (anonymise re-runs as a
@@ -1073,5 +1198,10 @@ export async function deleteAccount(
   }
 
   log.info({ userId }, "Account deleted successfully (GDPR Art. 17)");
-  return { success: true };
+  // OMITTED when nothing is outstanding, not set to `false`. The field means "an erasure
+  // is still owed"; its absence is the ordinary, honest shape, and four sibling cascade
+  // tests assert `toEqual({ success: true })` on the happy path. Returning an explicit
+  // `false` broke deep equality in all four while saying nothing extra — the flag is
+  // read for truthiness at every call site.
+  return gitDataErasurePending ? { success: true, gitDataErasurePending: true } : { success: true };
 }

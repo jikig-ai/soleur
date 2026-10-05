@@ -21,6 +21,7 @@ conditions and the concrete sequence are below.
 
 > **Reference schemes used in this runbook** (kept distinct so cross-references are
 > unambiguous during a live cutover):
+>
 > - **Verdict conditions 1–4** — the GO/NO-GO gate (§ Verdict): 1 subscription, 2 overlay,
 >   3 fallback pool, 4 firewall.
 > - **HARD BLOCKERS B1–B3** — the design requirements (§ HARD BLOCKERS): B1 fallback pool,
@@ -78,6 +79,7 @@ LB.
 > does **not** migrate or destroy the record at all — it *keeps* `cloudflare_record.app` and
 > adds a `cloudflare_load_balancer` on the same name, never modelling the two as a Terraform
 > replace. The GA cutover PR must:
+>
 > 1. **retain** `cloudflare_record.app` (do not delete / convert it), and
 > 2. rewrite the stale `dns.tf` comment (which still describes the *older* `for_each`
 >    round-robin A-record design, itself superseded by the LB).

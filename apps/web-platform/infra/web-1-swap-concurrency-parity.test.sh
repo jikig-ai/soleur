@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 #
-# Drift guard: the SIX GitHub Actions jobs that MUTATE web-1 (two swap the web-1
-# container via `command: deploy web-platform …` → /hooks/deploy → ci-deploy.sh; #6604
-# attaches the encrypted volume; #6854 recuts it; #6730 births a web host and #6969
-# replaces one, both of which pull web-1 in via the firewall-attachment singleton) MUST
-# share ONE job-level
+# Drift guard: the EIGHT GitHub Actions jobs that mutate web-1 — or that invalidate the
+# credential the jobs mutating web-1 authenticate with — MUST share ONE job-level
 # `web-1-swap` concurrency group so GitHub's scheduler serializes them across
 # pipelines — at most one web-1 mutation in flight at a time (#6060 item (c) /
-# FINDING 1 from #6051's review). A FOURTH member — the #6604 freeze workflow — carries
+# FINDING 1 from #6051's review). A further member — the #6604 freeze workflow — carries
 # the group at WORKFLOW scope (it is a dedicated dispatch, not a job in a shared
 # workflow), asserted separately below.
 #
+# Two swap the web-1 container via `command: deploy web-platform …` → /hooks/deploy →
+# ci-deploy.sh; #6604 attaches the encrypted volume; #6854 recuts it; #6730 births a web host
+# and #6969 replaces one, both of which pull web-1 in via the firewall-attachment singleton;
+# #7095 destroys the CF Access ci_ssh token the others' live SSH bridges authenticate with;
+# #7542 replaces terraform_data.journald_persistent, whose provisioners run root commands on
+# web-1 and restart vector + systemd-journald.
+#
 # reason: 5 job-level members -> 3 (the `warm_standby` and `web_2_recreate` members were
 # DELETED with the web-2 dispatch sweep, #6575, 2026-07-20) -> 4 (#6854) -> 5 (#6730)
-# -> 6 (#6969).
+# -> 6 (#6969) -> 7 (#7095) -> 8 (#7542).
 #
-# The six job-level members (allow-list — an explicit named list so a DELIBERATE
+# The eight job-level members (allow-list — an explicit named list so a DELIBERATE
 # future member is a visible allow-list edit, while a silently-dropped copy OR an
 # accidentally-enrolled job both fail loud):
 #   1. web-platform-release.yml        job `deploy`                  (tagged-release deploy)
@@ -24,6 +28,8 @@
 #   4. apply-web-platform-infra.yml    job `workspaces_luks_recut`   (#6854 destroys + recreates that volume)
 #   5. apply-web-platform-infra.yml    job `web_host_create`         (#6730 births a web host; the firewall-attachment singleton pulls web-1 into the plan)
 #   6. apply-web-platform-infra.yml    job `web_host_replace`        (#6969 replaces a web host; same singleton, same reason)
+#   7. apply-web-platform-infra.yml    job `ci_ssh_token_replace`    (#7095 destroys the credential the other members' SSH bridges use)
+#   8. apply-web-platform-infra.yml    job `vector_redeliver`        (#7542 root remote-exec on web-1; restarts vector + systemd-journald)
 # Plus the WORKFLOW-level member: workspaces-luks-cutover.yml (#6604 freeze — stops/repoints web-1's /mnt/data).
 #
 # NOT a member (negative assertion): the routine `apply` job in
@@ -34,7 +40,7 @@
 # Invariants asserted:
 #   - each named member carries a job-level `concurrency.group: web-1-swap` with
 #     `cancel-in-progress: false` (a killed in-progress swap would widen a 521 window);
-#   - the TOTAL count of `group: web-1-swap` across the three workflows == 7
+#   - the TOTAL count of `group: web-1-swap` across the three workflows == 8
 #     (allow-list length — NOT head -1, NOT >= 3: a dropped OR an unlisted member fails);
 #   - the workflow-level `terraform-apply-web-platform-host` R2 serializer literal is
 #     still present in BOTH apply-web-platform-infra.yml AND apply-deploy-pipeline-fix.yml
@@ -103,7 +109,7 @@ assert_member() {
   fi
 }
 
-# --- The seven named members (allow-list) ---
+# --- The eight named members (allow-list) ---
 assert_member "$RELEASE_WF"      "deploy"                  "release-deploy"
 assert_member "$PIPELINE_FIX_WF" "apply"                   "pipeline-fix-apply"
 assert_member "$APPLY_INFRA_WF"  "workspaces_luks_cutover" "workspaces-luks-cutover"
@@ -127,7 +133,7 @@ assert_member "$APPLY_INFRA_WF"  "web_host_replace"        "web-host-replace"
 # #7095: the ci-ssh-token-replace job destroys and re-mints the CF Access ci_ssh service
 # token. It reaches NO host — its -target set is two Cloudflare addresses and a blast-radius
 # gate refuses every hcloud_*/terraform_data/tls_private_key address — so it is NOT a web-1
-# mutation surface in the sense the other six are. It rides this group for the INVERSE
+# mutation surface in the sense the other members are. It rides this group for the INVERSE
 # reason: three of the six cf-tunnel-ssh-bridge callers (workspaces-luks-cutover,
 # workspaces-luks-verify, git-data-cutover) hold LIVE SSH sessions authenticated with the
 # credential this job destroys. A mid-cutover re-mint 403s the cutover cloudflared on its
@@ -135,6 +141,13 @@ assert_member "$APPLY_INFRA_WF"  "web_host_replace"        "web-host-replace"
 # group serializes it against the workflows whose CREDENTIAL it invalidates, not against
 # workflows that mutate the same resource.
 assert_member "$APPLY_INFRA_WF"  "ci_ssh_token_replace"    "ci-ssh-token-replace"
+# #7542: the vector-redeliver job REPLACES terraform_data.journald_persistent, whose create-time
+# provisioners run root commands on web-1 and restart both vector.service and systemd-journald. It
+# is a member of the FIRST kind — a genuine web-1 mutation surface, like members 3-6 — not of the
+# ci_ssh kind. A concurrent container swap (members 1-2) or a LUKS cutover/recut (3-4) during that
+# remote-exec window is exactly what this group exists to serialize. It also holds an SSH bridge
+# authenticated with the credential member 7 destroys, so it needs the mutex in both directions.
+assert_member "$APPLY_INFRA_WF"  "vector_redeliver"        "vector-redeliver"
 
 # --- The #6604 freeze workflow (workspaces-luks-cutover.yml) carries web-1-swap at
 # WORKFLOW scope (it is a dedicated dispatch, not a job in a shared workflow), so it
@@ -152,14 +165,16 @@ else
 fi
 
 # --- Total count of job-level `group: web-1-swap` across the three shared workflows
-# == 6. History: 5 -> 3 (warm_standby + web_2_recreate DELETED with the web-2 dispatch
+# == 8. History: 5 -> 3 (warm_standby + web_2_recreate DELETED with the web-2 dispatch
 # sweep #6575, 2026-07-20) -> 4 (the #6854 workspaces-luks-recut job added a legitimate
-# member) -> 5 (#6730's web_host_create) -> 6 (#6969's web_host_replace;
-# apply-web-platform-infra.yml now carries FOUR: workspaces_luks_cutover +
-# workspaces_luks_recut + web_host_create + web_host_replace). The six members are the
-# release deploy, pipeline-fix apply, the #6604 volume-attach, the #6854 volume-recut, the
-# #6730 host-birth and the #6969 host-replace jobs. A silently-dropped member drops below 6;
-# an accidentally-enrolled or duplicated job pushes above 6. The freeze workflow's
+# member) -> 5 (#6730's web_host_create) -> 6 (#6969's web_host_replace) -> 7 (#7095's
+# ci_ssh_token_replace) -> 8 (#7542's vector_redeliver; apply-web-platform-infra.yml now
+# carries SIX of the eight: workspaces_luks_cutover + workspaces_luks_recut +
+# web_host_create + web_host_replace + ci_ssh_token_replace + vector_redeliver). The eight
+# members are the release deploy, the pipeline-fix apply, the #6604 volume-attach, the #6854
+# volume-recut, the #6730 host-birth, the #6969 host-replace, the #7095 credential re-mint
+# and the #7542 vector redelivery. A silently-dropped member drops below 8; an
+# accidentally-enrolled or duplicated job pushes above 8. The freeze workflow's
 # workflow-level group is asserted above and NOT part of this count.
 #
 # KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE. The count and the allow-list are
@@ -170,10 +185,10 @@ fi
 # way — both halves edited together, so the count still means what it says. ---
 web1_count=$(grep -rhE '^[[:space:]]+group:[[:space:]]*web-1-swap[[:space:]]*$' \
   "$RELEASE_WF" "$APPLY_INFRA_WF" "$PIPELINE_FIX_WF" | grep -c .)
-if [ "$web1_count" -eq 7 ]; then
+if [ "$web1_count" -eq 8 ]; then
   pass
 else
-  fail "expected exactly 7 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
+  fail "expected exactly 8 'group: web-1-swap' occurrences (allow-list length), found $web1_count"
 fi
 
 # --- Workflow-level R2 serializer preserved in BOTH apply workflows (coexists

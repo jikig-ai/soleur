@@ -1,12 +1,18 @@
-# Better Stack Logs ingest token for the dedicated arm64 Inngest host's Vector shipper (#6197).
+# Better Stack Logs ingest token for the dedicated Inngest host's Vector shipper (#6197).
 #
-# The dedicated host (cax11, arm64, 10.0.1.40) runs vector.service under
+# ARCH CORRECTED 2026-08-11 (#7228). This header described the host as "cax11, arm64". It is
+# neither: arch is DERIVED (`local.inngest_arch`, inngest-host.tf:62) from `var.inngest_server_type`,
+# which defaults to `cpx22` — so the live host is amd64 and the arm64 checksum is the unused arm
+# of the ternary. cax11 was the intended type at #6178 provision time and was EU-wide out of
+# stock, so the fleet never ran it. Do not re-derive the arch here; read it from that local.
+#
+# The dedicated host (cpx22, amd64, 10.0.1.40) runs vector.service under
 # `doppler run --config prd` (the soleur-inngest project resolves from
 # EnvironmentFile=/etc/default/inngest-server, #6555), so BETTERSTACK_LOGS_TOKEN must live in
 # the ISOLATED soleur-inngest project's `prd` root config — it currently exists only in
-# soleur/prd (the co-located web host reads it there). This mirrors ghcr-read-credential.tf:
-# a `doppler_secret` whose value comes from a sensitive, no-default var sourced from Doppler
-# `prd_terraform` (Approach B — only the one 24-char token enters terraform.tfstate, NOT the
+# soleur/prd (the co-located web host reads it there). This follows the operator-minted shape of
+# resend.tf's resend_receiving_api_key: a `doppler_secret` whose value comes from a sensitive,
+# no-default var sourced from Doppler `prd_terraform` (Approach B — only the one 24-char token enters terraform.tfstate, NOT the
 # ~116-secret soleur/prd map a `data.doppler_secrets` mirror would materialize).
 #
 # The provider already manages the soleur-inngest project (inngest-host.tf: doppler_project.inngest),
@@ -17,7 +23,7 @@
 # soleur/prd_terraform (the TF runner's TF_VAR source) → verify read-only via `doppler secrets get`
 # → THEN the additive `inngest_host` dispatch applies this pure-create resource. TF_VAR_betterstack_logs_token
 # has NO default (hr-tf-variable-no-operator-mint-default). dev is intentionally NOT provisioned:
-# the dark arm64 host reads `--config prd` exclusively (hr-dev-prd-distinct).
+# the dark host reads `--config prd` exclusively (hr-dev-prd-distinct).
 
 resource "doppler_secret" "inngest_betterstack_logs_token" {
   # Reference the TF-managed project + env (NOT string literals) so Terraform builds the
@@ -33,7 +39,7 @@ resource "doppler_secret" "inngest_betterstack_logs_token" {
 
   lifecycle {
     # Value churn (rotation) is managed at the source of truth (Better Stack / Doppler),
-    # not this file — mirrors ghcr-read-credential.tf / github-app.tf. The isolation
+    # not this file — mirrors resend.tf. The isolation
     # self-check keys on the NAME, so a rotate is safe (the name persists).
     ignore_changes = [value]
   }

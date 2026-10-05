@@ -63,7 +63,7 @@ web-1's public IPv4** (`dns.tf`), covered by no Access application. So the servi
 traverse the tunnel or Access at all, and nothing in this decision can reach it. A replace would take production from **stale but serving** to **destroyed and
 unbootable**, with no rollback.
 
-It would not even solve the problem. A fresh host runs 16 SSH-delivered installers, and those run
+It would not even solve the problem. A fresh host runs 17 SSH-delivered installers (16 when this was written; #8097 added one), and those run
 over the same bridge whose credential is dead. The redeploy needs the channel that the redeploy was
 supposed to repair.
 
@@ -164,6 +164,21 @@ redeployed. **Re-evaluation trigger:** the next host-level remediation proposal,
 `/v1/datacenters` query reporting `cx33` available in web-1's location, whichever comes first;
 tracked as B7 on #7103. A hard-rule exception with no expiry is how a hard rule dies.
 
+> **Re-examined 2026-08-06 (#7309) — the trigger did NOT fire; the exception STANDS.**
+> Probed `.server_types.available`, 3 samples, per datacenter: `cx33` is **✗ in `hel1-dc2`**
+> (web-1's location, which is what this trigger keys on) and **✓ in `nbg1-dc3` and
+> `fsn1-dc14`**. So the "`available = false` in **all 6** datacenters" reading above is a
+> 2026-08-01 sample and is now **false fleet-wide** — do not cite it as current. Only the
+> `hel1-dc2` cell answers the question this exception rests on, and it is unchanged.
+>
+> **The trigger as written is also too weak, and #7309 is the evidence.** It fires on ONE
+> green probe. `cx23` in `hel1-dc2` changed direction twice across twelve days — the first
+> inside twenty-four hours — so a single ✓ is a moment, not a capacity reservation, and
+> retiring a hard-rule exception on one reading is exactly the inference #7309 exists to
+> warn against. Re-scope to a REPEATED, PER-DATACENTER sample under #6460, which must build
+> that anyway. Until then, read this trigger as "sustained availability in web-1's DC",
+> not "any query anywhere returns true".
+
 **Negative / accepted — the gate.** The bridge now depends on the detector at run time: a detector defect, or a
 Doppler enumeration failure, fails every SSH-bridged workflow. This is deliberate fail-closed
 posture — the alternative is proceeding on an unmeasured channel, which is the defect being
@@ -191,6 +206,64 @@ Also tracked: the absence of a `deploy-web-image.yml` that can redeploy an **exi
 absence is why an already-built, already-signed image sat unreachable for three days — the only way
 to deploy is to mint a new version.
 
+> **Re-examined 2026-09-24 (#8632) — the trigger fired (a host-level remediation proposal); the
+> exception STANDS.** #8632 delivers a rotated `prd_workspaces_luks` token to web-1 in place
+> (`terraform_data.luks_monitor_token_install`, ADR-119 2026-09-24 addendum). Probed
+> `/v1/datacenters` `.server_types.available` at 2026-09-24T08:39Z: `cx33` (id 115) is available in
+> **none** of the 6 datacenters, including web-1's `hel1-dc2` (it is `supported` in nbg1-dc3,
+> hel1-dc2 and fsn1-dc14). Web-1 still cannot be redeployed, so the in-place edit is taken under
+> this exception.
+
+> **Re-examined 2026-09-24 (#8705) — the trigger fired again; the exception STANDS.** #8705 rotates
+> `doppler_service_token.web_probes` and re-fires web-1's four probe installers in place (their
+> `/etc/default/*` files are rewritten whole). Re-probed `/v1/datacenters`
+> `.server_types.available` at 2026-09-24T18:08Z: `cx33` (id 115) is available in none of the 6
+> datacenters. Web-1 still cannot be redeployed.
+
+> **Re-examined 2026-09-27 (#8706) — the trigger fired again; the exception STANDS.** #8706 installs
+> web-1's daily LUKS probe in place through `terraform_data.luks_monitor_install`: two binaries
+> (`luks-monitor`, `workspaces-luks-emit.sh`), two units (`luks-monitor.service`,
+> `luks-monitor.timer`), a `daemon-reload`, a timer enable, one service start, and one line in
+> `/etc/default/luks-monitor` (`SOLEUR_SENTRY_DSN=`). `/v1/datacenters` `.server_types.available` on
+> 2026-09-27 (measured by the #8706 architecture review): `cx33` (id 115) is available in 0 of the
+> 6 datacenters. Web-1 still cannot be redeployed. See
+> [ADR-119's 2026-09-27 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-27-the-monitor-units-and-the-dsn-line-have-a-terraform-owner-8706).
+
+> **Re-examined 2026-09-28 (#9045): the trigger fired again, and the exception STANDS.** #9045 adds
+> a read-only forensic step to `terraform_data.luks_monitor_install`, and its command list is folded
+> into `triggers_replace`. The merge therefore re-fires the installer once on web-1, in place:
+>
+> - the same files are redelivered byte-identical;
+> - the DSN line is rewritten identically;
+> - the probe is kicked once more.
+>
+> The forensic step itself writes nothing. Measured with `GET /v1/datacenters`
+> `.server_types.available` at 2026-09-28T08:05:28Z: `cx33` (id 115) is available in 0 of the 6
+> datacenters. Web-1 still cannot be redeployed. See
+> [ADR-119's 2026-09-28 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-28-the-dead-man-guards-the-freeze-window-only-9045).
+
+> **Re-examined 2026-09-28 (#9123) — the trigger fired, and for the first time the probe reads
+> ✓ in `hel1-dc2`; the expiry question is now live, not theoretical.** #9123 delivers web-1's
+> boot path in place through `terraform_data.workspaces_boot_unlock_install`: the
+> `workspaces-luks-reopen.{sh,service,-failure.service,timer}` family, the fstab rewrite to
+> `/dev/mapper/workspaces … nofail`, the crypttab `luks,noauto` line, the `docker.service.d`
+> §(e) drop-in, and `chattr +i` on the covered root-disk `/mnt/data` inode. See
+> [ADR-119's 2026-09-28 addendum](./ADR-119-luks-at-rest-for-the-live-workspaces-volume.md#addendum-2026-09-28-the-e-mount-gate-and-the-boot-unlock-have-a-terraform-owner-9123).
+>
+> Measured with `GET /v1/datacenters` `.server_types.available` at 2026-09-28T21:31Z,
+> 21:32Z and 21:34Z (three samples, identical): `cx33` (id 115) is **available in `hel1-dc2`** —
+> web-1's location — and in `fsn1-dc14`; still unavailable in `nbg1-dc3`, `ash-dc1`, `hil-dc1`
+> and `sin-dc1` (`supported` in `nbg1-dc3`, `hel1-dc2` and `fsn1-dc14` only). This is the first
+> probe since this ADR's 2026-08-01 baseline to read ✓ in web-1's DC, so the standing
+> justification — "a `-replace` has no create side" — is not true on today's data.
+>
+> Per the #7309 amendment above, one ✓ is a moment, not a capacity reservation: the trigger
+> reads as "sustained availability in web-1's DC", and three samples inside three minutes are
+> not a sustained sample. The exception's retirement therefore cannot be pronounced from this
+> note — but it can no longer be assumed either. The #9123 plan's own instruction applies:
+> **the immutable-redeploy route must be re-weighed before this ships.** That re-weigh is
+> recorded on #9123; the in-place delivery above is what it adjudicates.
+
 ## Rejected alternatives
 
 **Convert the Access tokens from Terraform `output`s to `doppler_secret` resources.** This was the
@@ -215,3 +288,66 @@ ran, and already produced the right answer. Building another one fixes nothing.
 
 **Patch the infra code again.** Rejected: the code on `main` is already correct. Two of the fifteen
 failed releases (`30650563981`, `30688451384`) postdate that correct fix. The defect is arrival, not authorship.
+
+## Amendment — 2026-08-16 (#7539): a stage with no channel must not plan over it
+
+Proposition 3 above says **probe the transport before the destroy**. It is implemented as the final
+step of the `cf-tunnel-ssh-bridge` composite action, and its contract is *step position*: a caller
+that has invoked the bridge has necessarily passed the gate.
+
+That argument structurally cannot reach a stage that **never invokes the composite**. #7539 was that
+case. `apply-web-platform-infra.yml`'s `apply` job runs two Terraform stages split by a credential
+boundary — the first plans and applies before the bridge exports `TF_VAR_ci_ssh_private_key`, the
+second runs after it and owns every SSH-provisioned resource. A single `-target=` line for an
+SSH-provisioned resource sat in the first stage, whose own step title reads *"non-SSH resources
+only"*. `server.tf` resolves `agent = var.ci_ssh_private_key == null`, so it baked `agent = true` and
+died with `SSH agent requested but SSH_AUTH_SOCK not-specified`. `main`'s apply was red for six
+consecutive pushes.
+
+**The amendment generalises §3 from "probe the channel before using it" to "a stage that has no
+channel must not be able to plan over it", and moves enforcement from runtime to build time.**
+
+The runtime probe and the build-time assertion are complements, not substitutes. §3's probe answers
+*is the channel alive right now* on a stage that has one; the new assertion answers *may this stage
+reach that kind of resource at all*, before a run exists. Neither implies the other: a live channel
+does not make a bridge-less stage safe, and a correct placement does not make a dead credential
+work.
+
+**Enforcement** is the Guard 1 bright line in
+[`plugins/soleur/test/terraform-target-parity.test.ts`](../../../../plugins/soleur/test/terraform-target-parity.test.ts):
+no `-target=terraform_data.*` may appear anywhere in the `apply` job before the step whose `uses:` is
+`./.github/actions/cf-tunnel-ssh-bridge`. It is stated over `terraform_data` rather than over the
+SSH predicate because 17 of the 18 `terraform_data` resources in the infra root are SSH-provisioned
+and nothing else in the root carries a `provisioner` block — so the line is strictly stronger there,
+needs no dependency graph, and cannot be narrowed by a resource silently dropping out of the SSH set.
+It fails the pull request rather than the apply.
+
+Two mechanisms produced the same failure, and both reduce to the placement:
+
+- **Transitive.** `-target` is transitive on dependencies, so the misplaced resource dragged its
+  `depends_on` target into the bridge-less plan when that dependency happened to need replacing. A
+  *clean* dependency plans as a no-op, which is why the misplacement sat green for months.
+- **Direct.** Once a sibling change cleaned that dependency, the misplaced resource failed on its own
+  first `file` provisioner. This is the durable form: an SSH-provisioned resource on a stage with no
+  SSH transport fails whether or not anything is dragged in with it.
+
+### Rejected alternative — open the bridge before the first stage
+
+Recorded here because it is a genuine architectural rejection that would otherwise survive only in a
+plan that gets archived.
+
+Opening `cf-tunnel-ssh-bridge` before the first stage would also have made the misplaced target work.
+It is rejected because it **inverts the stage contract**: it puts a root SSH credential on the stage
+explicitly designated for non-SSH resources, widening the blast radius of every one of that stage's
+~123 targets to include a live credential they have no need for, and dissolving the boundary that
+makes the two-stage split legible at all. The correct fix moves one line to the stage that already
+owns that class of resource. The credential boundary is the design; the misplacement was the defect.
+
+The prose instruction alone is not sufficient, and this is measured rather than assumed: the
+`ALLOW-LIST MAINTENANCE` comment above the first stage's target list already said to exclude
+SSH-provisioned resources. It landed 2026-05-20 (`620f682c2`). The violation was appended to the
+list that instruction governs on 2026-08-12 (`0d6443960`) — 138 lines below it, measured in that
+commit, inside the same `-target=` allow-list the comment is attached to. An earlier revision of
+this paragraph said "six lines beneath"; that number was written from recollection and is wrong.
+The distance is not the point and never was: the instruction governed the list, the addition went
+into the list, and the instruction did not hold.

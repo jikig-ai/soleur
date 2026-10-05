@@ -1,0 +1,72 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "random_password.workspaces_luks_web[\"web-2\"]",
+      "mode": "managed",
+      "type": "random_password",
+      "name": "workspaces_luks_web",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "length": 40
+        },
+        "after": null
+      }
+    },
+    {
+      "address": "random_password.workspaces_luks_web[0]",
+      "mode": "managed",
+      "type": "random_password",
+      "name": "workspaces_luks_web",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "length": 40
+        },
+        "after": null
+      }
+    },
+    {
+      "address": "module.x.doppler_secret.workspaces_luks_key",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "workspaces_luks_key",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "name": "WORKSPACES_LUKS_KEY"
+        },
+        "after": {
+          "name": "WORKSPACES_LUKS_KEY"
+        }
+      }
+    },
+    {
+      "address": "module.y[\"k\"].doppler_secret.workspaces_luks_web_key[0]",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "workspaces_luks_web_key",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "name": "WORKSPACES_LUKS_KEY"
+        },
+        "after": {
+          "name": "WORKSPACES_LUKS_KEY"
+        }
+      }
+    }
+  ]
+}

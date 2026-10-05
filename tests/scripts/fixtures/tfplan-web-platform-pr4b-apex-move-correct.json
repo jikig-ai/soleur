@@ -1,0 +1,66 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_record.pages_apex",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "pages_apex",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "name": "soleur.ai",
+          "type": "A",
+          "content": "185.199.108.153",
+          "proxied": true,
+          "ttl": 1
+        },
+        "after": {
+          "name": "soleur.ai",
+          "type": "CNAME",
+          "content": "soleur-docs.pages.dev",
+          "proxied": true,
+          "ttl": 1
+        },
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": false
+      },
+      "previous_address": "cloudflare_record.github_pages[\"185.199.108.153\"]"
+    },
+    {
+      "address": "cloudflare_record.www",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "www",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "name": "www",
+          "type": "CNAME",
+          "content": "jikig-ai.github.io",
+          "proxied": true,
+          "ttl": 1
+        },
+        "after": {
+          "name": "www",
+          "type": "CNAME",
+          "content": "soleur-docs.pages.dev",
+          "proxied": true,
+          "ttl": 1
+        },
+        "after_unknown": {},
+        "before_sensitive": false,
+        "after_sensitive": false
+      }
+    }
+  ]
+}

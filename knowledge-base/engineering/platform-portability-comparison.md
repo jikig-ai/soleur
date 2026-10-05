@@ -1,16 +1,24 @@
 ---
 title: "Platform Portability Comparison"
 last_updated: 2026-06-08
-platforms:
+status: historical
+# The platforms this document MEASURED, not a supported set. Gemini CLI and
+# OpenHands were retired 2026-09-23 (ADR-245) and their hand-ported trees
+# deleted; deepagents was never ported. Supported harnesses live in the
+# `Harness` union in plugins/soleur/lib/harness.ts, which is the authority.
+platforms_measured:
   - codex-cli
   - gemini-cli
   - openhands
   - deepagents
+retired: 2026-09-23
 ---
 
 # Platform Portability Comparison
 
 Unified comparison of Soleur portability across all analyzed agent platforms. Updated when new inventories are produced or platform capabilities change.
+
+> **Retired 2026-09-23 (ADR-245, #8306): the Gemini CLI and OpenHands columns are a historical record, not a shipped state.** The hand-ported `.gemini/` and `.openhands/` trees were deleted from the repository on that date because nobody maintained them. The supported harnesses are Claude Code, Grok Build, Codex and Devin. The measurements below stand as taken and are left intact — this banner scopes them; it does not amend them. Re-entry for either platform requires a `Harness` union member in `plugins/soleur/lib/harness.ts` plus a generator, never another hand port.
 
 ## Summary
 
@@ -66,22 +74,26 @@ Unified comparison of Soleur portability across all analyzed agent platforms. Up
 ## Platform Strengths
 
 ### Codex CLI
+
 - Identical SKILL.md format (zero content changes for green skills)
 - Growing ecosystem backed by OpenAI
 
 ### Gemini CLI
+
 - Best developer UX primitives (`ask_user`, `write_todos` — direct equivalents)
 - Highest GREEN percentage (54.3%)
 - Command argument interpolation (`{{args}}` in TOML)
 - Unlimited skill chaining depth (context injection)
 
 ### OpenHands
+
 - First zero-RED target; multi-level parallel subagents preserve the domain-leader hierarchy as markdown
 - Full lifecycle hook system + full plugin system (install/enable/disable)
 - Model-agnostic; Docker sandbox; per-agent scoping
 - AgentDefinition is a superset of Soleur's markdown format (cheapest mechanical port)
 
 ### deepagents
+
 - Second zero-RED target; every primitive has an equivalent
 - **Identical SKILL.md format** — skills port better than any prior target
 - **Built-in `write_todos`** (only OpenHands lacked it)
@@ -93,15 +105,19 @@ Unified comparison of Soleur portability across all analyzed agent platforms. Up
 ## Platform Weaknesses
 
 ### Codex CLI
+
 - 43.4% RED — 4 fundamental blockers; not viable without major platform changes
 
 ### Gemini CLI
+
 - Single-level sequential subagents (breaks domain-leader hierarchy); no hooks; no plugin system; flat agent dir
 
 ### OpenHands
+
 - No structured user prompts; skills are context-injection only; flat agent directory; young plugin ecosystem
 
 ### deepagents
+
 - **Lowest GREEN% (19.7%)** — all 67 agents require markdown→Python rewrite (no markdown-agent loader)
 - **No plugin/distribution system** — ship as Python package + skills dir; no enable/disable/marketplace (worse than OpenHands)
 - No structured user prompts (HITL respond only)

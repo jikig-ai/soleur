@@ -17,6 +17,30 @@
 # (userId → userIdHash via HMAC-SHA256 reusing SENTRY_USERID_PEPPER per
 # ADR-029 §I4) → pii_scrub_string (regex backstop for non-pino / kernel-oops
 # lines, runs ONLY when the structured branch did not parse).
+#
+# Reload-path exercise (#7539). This paragraph carries no runtime meaning: it
+# exists to move the sha256 that `terraform_data.journald_persistent`'s
+# `triggers_replace` takes over this file (server.tf, the file() pair with
+# journald-soleur.conf), so the arm plans one real delivery and the hardened
+# reload runs once on web-1 under observation.
+#
+# Why a content change is the ONLY way to do that. The hardening shipped in
+# #7539 — a 20s settle window sized to one RestartSec=10 cycle, an NRestarts
+# delta to catch a crash-loop that is momentarily active, a `.prev` snapshot
+# taken only from a demonstrably-running agent, and a restore-and-report path
+# that distinguishes restored-and-running from VECTOR IS DOWN. None of it had
+# ever executed: #7539 touched neither trigger file, so the hash never moved.
+# `apply_target=vector-redeliver` cannot force it either, and that is by design
+# rather than a defect — the arm plans with `-target` and deliberately no
+# `-replace`, because a `-replace` flag "would force a needless production
+# restart even when the config had not changed" (runbooks/vector-redeliver.md).
+# Fired against an unmoved hash it plans `No changes`, its gate grades an empty
+# plan, the apply step is skipped, and the run reports success having done
+# nothing — measured on run 32279292256.
+#
+# So the dormancy cause and the dispatch's no-op are the same fact, and only a
+# real content change breaks the tie. Do not delete this paragraph to "clean
+# up": removing it moves the hash again and schedules another replace.
 
 data_dir = "/var/lib/vector"
 
@@ -175,6 +199,44 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-server-flip-guard",
   "inngest-registry-probe",
   "inngest-doublefire-probe",
+  # #7695: the LUKS boot stage. Source 4 is EXACT-VALUE equality, so without this entry every
+  # SOLEUR_INNGEST_LUKS_STAGE marker is silently dropped at the source and a failed luksOpen on
+  # a deny-all-public host with no SSH is undiagnosable — the #6617 lesson this file already
+  # records for the probe trio. Emitted by BOTH the cloud-init runcmd stage and
+  # inngest-luks-open.service (the boot-reopen unit), which share the tag deliberately: they are
+  # two entry points to one question ("is /mnt/data on the mapper?") and splitting the tag would
+  # split the query an operator has to run.
+  "inngest-luks-stage",
+  # #6894: the on-host LUKS cutover FSM (inngest-luks-cutover.service). Its own tag, not
+  # inngest-luks-stage: the stage answers "is /mnt/data on the mapper at boot?", this one answers
+  # "where is the cutover?" — and it is the ONLY off-box read of a copy-and-swap on a host with no
+  # inbound channel. journald-config.test.sh asserts this entry equals the unit's SyslogIdentifier.
+  "inngest-luks-cutover",
+  # #7228: the boot-trace emitter reporting its OWN death. inngest-boot-phone-home.sh
+  # (cloud-init-inngest.yml) is the single delivery path for all eight
+  # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
+  # with no SSH — and all three of its failure modes were `exit 0` with no output, so it
+  # could not report that the trace had died. Paired with the tmpfs defect (the token is
+  # staged only from `runcmd:`, which cloud-init runs on first boot only, while /run is
+  # cleared every reboot) one reboot made the host dark forever and the silence read as
+  # health. journald is the RIGHT channel precisely because the emitter's own POST is the
+  # thing that failed, and the two are independent at the credential level: the emitter
+  # reads the staged token file, while this Vector process resolves BETTERSTACK_LOGS_TOKEN
+  # from Doppler at ExecStart. Bounded by construction — the emitter is SILENT ON SUCCESS,
+  # so a healthy host pays zero rows and a fully-dark one pays ~15 per boot.
+  #
+  # journald-config.test.sh CF-4 previously asserted this tag's ABSENCE, correctly, on the
+  # stated condition that the emitter "never calls logger". It now does, so that pair is
+  # inverted there into the positive lockstep form the same file uses for ci-deploy.
+  "inngest-boot-phone-home",
+  # #7228: the per-boot token re-stage oneshot (inngest-bs-token-restage.service, written by
+  # cloud-init-inngest.yml). Every write of /run/inngest-bs-logs-token used to live in
+  # `runcmd:` — first boot only — while /run is tmpfs, so one reboot killed the boot-trace
+  # channel permanently and silently. This unit re-FETCHES the token from Doppler each boot,
+  # and this entry is what lets it say so: it emits on SUCCESS as well as failure (~1 row per
+  # reboot), because without a positive control a healthy host and a host whose unit never ran
+  # are the same observation — the ADR-117 shape this PR exists to close.
+  "inngest-bs-token-restage",
   # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
   # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
   # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
@@ -190,6 +252,13 @@ include_matches.SYSLOG_IDENTIFIER = [
   # (workspaces-luks-soak-6604.sh) has no channel to read — a dead probe would look identical to a
   # healthy silent one. Exact-value match: the units set SyslogIdentifier=luks-monitor / logger -t.
   "luks-monitor",
+  # #9123: the boot-unlock family (workspaces-luks-reopen.{service,-failure.service} +
+  # the reopen script's `logger -t workspaces-luks-reopen` success row). The unit sets
+  # SyslogIdentifier=workspaces-luks-reopen; the script's success line and both units'
+  # stderr (phase-name die() output, the reporter's classification echo) ride this tag.
+  # Event-driven only — a healthy host emits ~1 line per boot; a broken one emits one
+  # fatal per exhausted ladder per hour after the start-limit window closes.
+  "workspaces-luks-reopen",
   # #6438 §1/§3 + #6548: the three web-host consumer/guard oneshot probes (web-*.service,
   # for_each var.web_hosts). Each declares SyslogIdentifier= (retagging the ExecStart basename
   # `bash`) so its fault-CLASSIFICATION stderr reaches Better Stack off-box, not SSH-only: the
@@ -199,6 +268,24 @@ include_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  # (#7228) The inngest consumer-perspective probe on the web host. Same argument as the three
+  # above: the heartbeat only says "suppressed", this channel says WHY — UNREACHABLE (no listener
+  # at 10.0.1.40:8288) vs EMPTY REGISTRY (serving, owns nothing) vs WEDGED (GraphQL error
+  # envelope). Those are three different remediations, and #7228 is a twelve-day outage in which
+  # the binary signal was green and no channel carried the WHY, so shipping the beat without this
+  # entry would repeat the defect one layer down. Reading it must not require SSH
+  # (hr-no-ssh-fallback-in-runbooks).
+  #
+  # QUOTA, and this IS the "fresh quota decision" the note above demands rather than a skip of it.
+  # The probe runs at 60s, which unbounded would cost 1,440 identical fault lines/day while the
+  # host is dark — precisely the cost #6617b removed, and the host is dark for the whole deferral
+  # window. So the probe is SILENT on success (zero rows in the healthy steady state at any
+  # cadence) and its fault line is rate-limited on a /run marker to ~30min, giving a WORST case of
+  # ~48 rows/day and a typical case of 0. That sits inside the same headroom the other tags
+  # occupy, and it is a ceiling enforced in code (inngest-consumer-probe.sh `_fault`), not a
+  # projection: inngest-consumer-probe.test.sh drives two consecutive fault runs and asserts the
+  # second emits nothing.
+  "inngest-consumer-probe",
   # #6617 (a/c): the dedicated inngest host's three remaining dark channels. Each entry here
   # is HALF a change — Source 4 is sd_journal_add_match EXACT-VALUE equality, so an entry
   # whose unit does not set that literal SyslogIdentifier= is a permanently-dead no-op that

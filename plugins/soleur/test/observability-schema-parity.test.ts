@@ -52,6 +52,24 @@ function topLevelKeys(blockBody: string): string[] {
     .filter((k): k is string => Boolean(k));
 }
 
+// Indented `key:` names directly under a given column-0 parent key, up to the
+// first line that returns to column 0. Comment-only continuation lines (a wrapped
+// `#` explanation under a sub-field) are skipped, so prose can be added to a
+// template block without registering as a schema field.
+function subFieldsOf(blockBody: string, parent: string): string[] {
+  const lines = blockBody.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.startsWith(`${parent}:`));
+  if (start === -1) throw new Error(`parent key \`${parent}:\` not found`);
+  const out: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    if (/^[^\s]/.test(line)) break; // back to column 0 — parent's children end here
+    const m = line.match(/^\s+([a-z_]+):/);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
 // Body of the first ```yaml fence appearing in `text`. `label` identifies the
 // surface/block in the throw so a real drift points at the offending source.
 // The `[^\n]*` after the language token tolerates a trailing info-string
@@ -111,6 +129,37 @@ describe("## Observability schema parity across the 4 surfaces", () => {
     expect(asSet(names)).toEqual(asSet(CANONICAL));
   });
 
+  // #7393 added `credentials_required` as an OPTIONAL sub-field of
+  // `discoverability_test`. `topLevelKeys()` is column-0-anchored, so a sub-field
+  // leaves every assertion above at 5 — which is exactly why it needed its own
+  // extractor: without one, a template block silently losing the sub-field would
+  // be invisible to all four surfaces.
+  test("surface 2b — discoverability_test sub-fields agree across canonical + all 3 template blocks", () => {
+    const canonicalSub = subFieldsOf(
+      firstYamlBlock(canonicalSrc.slice(markerIdx), "plan/SKILL.md §2.9 canonical block"),
+      "discoverability_test",
+    );
+    // Sanity anchor: if canonical stops declaring the sub-fields, the per-block
+    // comparison below would pass vacuously by comparing empty set to empty set.
+    expect(canonicalSub.length).toBeGreaterThanOrEqual(3);
+    expect(asSet(canonicalSub)).toEqual(
+      asSet(["command", "expected_output", "credentials_required"]),
+    );
+
+    const sections = extractAllObservabilityBlocks(read(TEMPLATES));
+    expect(sections.length).toBe(3);
+    sections.forEach((section, i) => {
+      const sub = subFieldsOf(
+        firstYamlBlock(section, `plan-issue-templates.md block #${i + 1}`),
+        "discoverability_test",
+      );
+      expect(
+        asSet(sub),
+        `template block #${i + 1} discoverability_test sub-fields must equal canonical`,
+      ).toEqual(asSet(canonicalSub));
+    });
+  });
+
   test("surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)", () => {
     const rule = read(AGENTS_CORPUS)
       .split(/\r?\n/)
@@ -125,4 +174,52 @@ describe("## Observability schema parity across the 4 surfaces", () => {
     );
     expect(rule, "AGENTS.rules.md rule must state the WITHOUT SSH invariant").toContain("WITHOUT SSH");
   });
+});
+
+// Check 10's 15-second cap is a RESTATED value: the runtime of record is the
+// `timeout Ns` line in preflight/SKILL.md, and four authoring-gate surfaces
+// restate it so a plan author can size a probe before shipping. Nothing pinned
+// them together — change the cap and the four keep saying "15-second", green and
+// stale, sizing probes against a cap that no longer exists. That is the
+// "a guard that RESTATES the value it guards goes stale silently and fails GREEN"
+// class (review/SKILL.md), which is the class #8412's learning is about; leaving
+// it unpinned inside that PR would have been the third instance in one branch.
+//
+// Each surface must (a) mention the cap at least once — so deleting the mention
+// reds rather than passing vacuously — and (b) state the SAME number the runtime
+// enforces. #8413 tracks mechanizing the two reject conditions themselves.
+const PREFLIGHT = "plugins/soleur/skills/preflight/SKILL.md";
+const CAP_RESTATERS = [
+  PLAN_SKILL,
+  DEEPEN,
+  "plugins/soleur/skills/deepen-plan/workflows/deepen-plan.workflow.js",
+  "plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md",
+] as const;
+
+describe("preflight Check 10 cap parity — runtime vs the surfaces that restate it", () => {
+  const runtime = read(PREFLIGHT).match(/\btimeout[\s]+(\d+)s\b/);
+
+  test("preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)", () => {
+    expect(runtime, `${PREFLIGHT} must carry a literal \`timeout <N>s\` line`).not.toBeNull();
+  });
+
+  for (const surface of CAP_RESTATERS) {
+    test(`${surface} restates the cap, and states the runtime's number`, () => {
+      const cap = runtime![1];
+      const src = read(surface);
+      // Both spellings the surfaces use: "15-second cap" and "15s cap"/"15 seconds".
+      const mentions = [...src.matchAll(/(\d+)\s*(?:-second|s\b|\s+seconds?)\s*cap/gi)];
+      expect(
+        mentions.length,
+        `${surface} must restate Check 10's cap at least once (found none) — ` +
+          "if this surface intentionally stopped mentioning it, drop it from CAP_RESTATERS",
+      ).toBeGreaterThan(0);
+      for (const m of mentions) {
+        expect(
+          m[1],
+          `${surface} states a ${m[1]}-second cap; ${PREFLIGHT} enforces ${cap}s`,
+        ).toBe(cap);
+      }
+    });
+  }
 });

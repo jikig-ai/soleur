@@ -24,7 +24,7 @@
  */
 
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
+import type { VerifiedUser } from "@/server/request-auth";
 import { createClient } from "@/lib/supabase/server";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -38,7 +38,7 @@ function isAction(v: unknown): v is InboxAction {
   return typeof v === "string" && (ACTIONS as readonly string[]).includes(v);
 }
 
-export async function inboxStateHandler(req: Request, user: User) {
+export async function inboxStateHandler(req: Request, user: VerifiedUser) {
   // Path shape: /api/inbox/<id>/state
   const segments = new URL(req.url).pathname.split("/").filter(Boolean);
   const id = segments.at(-2) ?? "";

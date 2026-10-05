@@ -23,6 +23,7 @@ dependencies: []
 ## Proposed Solutions
 
 ### Option A: Remove the guard (Recommended)
+
 - **Pros:** Consistent with siblings, removes dead code
 - **Cons:** None — all cases already covered
 - **Effort:** Small

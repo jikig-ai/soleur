@@ -258,10 +258,39 @@ Return only \`after\` = that count. Do not modify any issue.`
 // ---------------------------------------------------------------------------
 // Run.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// ADR-110: semantic tier → harness spawn value. Workflow runtime has no import
+// (same constraint as plan-review named-panel inlining). Source of truth:
+// plugins/soleur/lib/harness-model-map.ts — keep this copy byte-identical.
+// <!-- harness-model-map:start -->
+function resolveWorkflowModel(tier) {
+  var env = (typeof process !== 'undefined' && process.env) ? process.env : {}
+  var grok = !env.CLAUDECODE && (env.GROK_HOME || env.GROK_AGENT || env.GROK_DEFAULT_MODEL || env.GROK_SUBAGENTS)
+  var claude = !!env.CLAUDECODE
+  var map = grok
+    ? { cheap: 'grok-4.5', standard: 'grok-4.7', strong: 'grok-4.7', advisor: 'grok-4.7', inherit: 'inherit' }
+    : claude
+      ? { cheap: 'haiku', standard: 'sonnet', strong: 'opus', advisor: 'fable', inherit: 'inherit' }
+      : { cheap: 'inherit', standard: 'inherit', strong: 'inherit', advisor: 'inherit', inherit: 'inherit' }
+  var resolved = map[tier]
+  if (!resolved) throw new Error('unknown semantic tier: ' + String(tier))
+  return resolved
+}
+;(function (hostAgent) {
+  agent = function agent(prompt, opts) {
+    if (opts && typeof opts.model === 'string') {
+      opts.model = resolveWorkflowModel(opts.model)
+    }
+    return hostAgent(prompt, opts)
+  }
+})(agent)
+// <!-- harness-model-map:end -->
+// ---------------------------------------------------------------------------
+
 phase('Cluster')
-log('tier pins: cluster→sonnet, report→sonnet (mechanical steps per ADR-053; brief + one-shot inherit the session model)')
-// Pinned 'sonnet': issue clustering from a structured list is mechanical (ADR-053).
-const clustered = await agent(clusterPrompt, { label: 'cluster', phase: 'Cluster', schema: CLUSTERS_SCHEMA, model: 'sonnet' })
+log('tier pins: cluster→standard, report→standard (mechanical steps per ADR-053; brief + one-shot inherit the session model)')
+// Pinned 'standard': issue clustering from a structured list is mechanical (ADR-053).
+const clustered = await agent(clusterPrompt, { label: 'cluster', phase: 'Cluster', schema: CLUSTERS_SCHEMA, model: 'standard' })
 
 // Fail-fast on invalid label/milestone — mirror the helper's exit 2 paths.
 if (!clustered || !clustered.labelValid || !clustered.milestoneValid) {
@@ -317,6 +346,7 @@ if (picked.length === 0) {
 // stage 2 hands it to /soleur:one-shot (skipped under --dry-run or budget floor).
 // ---------------------------------------------------------------------------
 phase('Drain')
+let oneShotsDispatched = 0 // #9403: pipeline-tally `counts` surface
 const drainResults = await pipeline(
   picked,
   // Stage 1: scoped brief from issue bodies.
@@ -341,6 +371,7 @@ const drainResults = await pipeline(
         notes: `SKIPPED — token budget floor (${ONE_SHOT_FLOOR}) reached; not enough headroom to run a full one-shot for this cluster.`,
       }
     }
+    oneShotsDispatched++ // #9403: pipeline-tally counts — the invoking prose posts this via `incr agent_rounds`
     return agent(oneShotPrompt(brief), { label: `one-shot:${brief.area}`, phase: 'Drain', schema: ONE_SHOT_RESULT_SCHEMA })
   },
 )
@@ -354,8 +385,8 @@ const results = drainResults.filter(Boolean)
 phase('Report')
 let after = null
 if (!dryRun && results.some((r) => r.status === 'merged')) {
-  // Pinned 'sonnet': markdown report assembly from structured data is mechanical (ADR-053).
-  const delta = await agent(reportPrompt, { label: 'report', phase: 'Report', schema: DELTA_SCHEMA, model: 'sonnet' })
+  // Pinned 'standard': markdown report assembly from structured data is mechanical (ADR-053).
+  const delta = await agent(reportPrompt, { label: 'report', phase: 'Report', schema: DELTA_SCHEMA, model: 'standard' })
   after = delta?.after ?? null
 }
 
@@ -378,6 +409,10 @@ const summary = {
   },
   picked: picked.map((c) => ({ area: c.area, count: c.count, issues: c.issues.map((i) => i.number) })),
   budget: { total: budget.total, spent: budget.spent(), oneShotFloor: ONE_SHOT_FLOOR, droppedClusters },
+  // #9403: pipeline-tally bridge — the invoking prose posts these via
+  // `pipeline-tally.sh incr <dim> <n>`. agent_rounds counts one-shot dispatches
+  // only (brief/cluster/report agents are mechanical spawns, not counted).
+  counts: { agent_rounds: oneShotsDispatched },
   delegated: dryRun ? 0 : results.filter((r) => r.status === 'merged' || r.status === 'pr-open' || r.status === 'failed').length,
   results,
   backlogDelta: { before, after, closed },

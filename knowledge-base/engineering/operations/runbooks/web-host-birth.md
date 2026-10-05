@@ -11,6 +11,120 @@ aborts rather than guessing, and during a web-1 outage it would abort every time
 
 ## The procedure
 
+### Step 0 — check the escrow config before you start; diagnose an abort (#9377)
+
+A host born (or replaced) after #9377 reads its LUKS key and header-escrow pair from the separate
+`prd_workspaces_luks_web` config. The provisioner **formats even when escrow is missing, by design**, so the
+dispatch itself refuses to start without it: the `Escrow readiness preflight` step of `web-host-create` and
+`web-host-replace` runs `scripts/web-host-escrow-preflight.sh` before any Terraform command, and **any
+non-zero result aborts the run with nothing changed** (1 contract violated, 2 no token, 3 the config could not be
+read; an unreadable config is never treated as a missing one).
+
+**Ask first, with no human step.** The same check runs on its own, read-only, in a dispatch-only workflow, so you
+learn the answer **before** you start a birth. Dispatch it from `main`, find the run created by your dispatch, watch it, and
+read the verdict from the run log. The gh CLI exposes no job-summary field, so the log carries everything you need. Run it as
+ONE shell call (the variables must survive between the commands):
+
+```bash
+W=web-host-escrow-diagnose.yml
+B=$(gh run list --workflow=$W --limit 1 --json databaseId --jq '.[0].databaseId // 0')   # B: the newest run id before your dispatch
+gh workflow run $W --ref main
+for i in 1 2 3 4 5 6; do sleep 5; ID=$(gh run list --workflow=$W --event workflow_dispatch --branch main --limit 5 --json databaseId --jq "[.[]|select(.databaseId>$B)]|last|.databaseId // empty"); [ -n "$ID" ] && break; done
+echo "run id: ${ID:-NONE}"; [ -n "$ID" ] || { echo "no run found: stop and report"; exit 1; }
+timeout 540 gh run watch "$ID" --exit-status -i 10 >/dev/null; echo "watch-rc=$?"           # 0 green, 1 red, 124 still queued or running after 9 minutes
+gh run view "$ID" --json headSha,conclusion --jq '"headSha=\(.headSha) conclusion=\(.conclusion)"'
+git fetch -q origin main && git rev-parse origin/main        # the current main head, after the run
+gh run view "$ID" --log | grep -E 'Z (Verdict: |Run-context: |escrow-split-contract:)'
+```
+
+The run is the one created after your dispatch (a higher id than B; dispatch is asynchronous, hence the short wait), and it is
+fresh only if its `headSha` equals the `origin/main` printed after it. Take the verdict **only** from the **last** line that
+starts with `Verdict:` right after the log timestamp, and read the `Run-context:` line for the commit, the person or agent
+that dispatched, and the UTC time (several agents of one operator share one identity, so it names the dispatcher, not you).
+Never test the log for `live-ok` or `PASS` as bare substrings: GitHub echoes the step's script into the log, and that text
+contains both. A **green run with no `Verdict:` line did not run the check and is NOT a pass**. Dispatch at most twice per
+session without a changed cause.
+
+The run changes nothing: no Terraform, no Doppler write, `contents: read`. A ref that does not carry the file fails at
+dispatch, before any run exists. A ref other than `main` that does carry it is stopped by the `infra-privileged`
+environment's main-only policy: the run is created and its job is blocked before any step runs. That is expected; dispatch
+with `--ref main` and never retry it with a token workaround.
+
+| You see | It means | Do this |
+|---|---|---|
+| The credential-loading step red, no `Verdict:` line; its annotation contains `verdict=` (for example `no_credential_source`, `privileged_read_failed`, `privileged_empty`) | The Tier-B read token or the workplace-token entry in `soleur-infra-privileged` is missing, rejected or empty | Stop and report; do not loop. Read the annotation with `gh run view "$ID"`. The repairs are steps O2 (re-seed the project keys) and O3 (the read token and its environment seeding) of [infra-credential-tiers-8209.md](./infra-credential-tiers-8209.md), and they need a workplace-scoped Doppler login. Never run step O13's `DOPPLER_TOKEN_TF` revocation from this table: it is gated on O12b |
+| Red or cancelled, no `Verdict:` line and no loader annotation (the job hit its 10-minute limit, was cancelled, or lost its runner) | The loader or the runner stalled before the check could report | Dispatch once more. A second identical outcome means Doppler or the network is down: stop and report |
+| `gh workflow run` failed, or the run exists but its job never started | The ref is not `main`, or the workflow file is not on `main` yet | Dispatch with `--ref main`; if the file is absent from `main`, the PR that adds it has not merged |
+| `watch-rc=124` with a run id (the run is still queued or running after 9 minutes) | No runner picked it up, or the job is stuck | Run the watch once more; a second 124 means stop and report with the run id. Do not dispatch again while it is still queued |
+| Green, but no `Verdict:` line | The check step did not run its body (for example a `SHELLOPTS` value that skips execution) | **Not a pass.** Stop, open the step log and report |
+| **PASS** | The five names are in `prd_workspaces_luks_web` and none of web-1's pair is in the `prd` root | The names are in place; do not birth on this alone. The check cannot see the signed `HEAD` of web-1's bucket with the new pair returning 403, which the mint step on #9377 requires. Read the latest comments on #9377 with the command under this table and look for an operator comment, dated after this pair's names appeared, that states both 403 results. If there is none, stop and report: do not birth |
+| **NO TOKEN** (exit 2) | No provider token reached the check. Usually the Tier-B project has no usable workplace-token entry; the check also exits 2 when its own tools are missing | Read the step log. Stop and report: re-seeding the entry (step O2 of the same runbook) needs a workplace-scoped Doppler login. Never run step O13's revocation from this table |
+| **FAIL** (exit 1) | A name is missing, or a forbidden one is present (`WORKSPACES_LUKS_KEY` or web-1's R2 pair in the `prd` root); the `CAUSE` lines say which family of missing name: a Terraform-managed name not created yet (Step 0a; none was missing on 2026-10-04), or the R2 pair (the live mint, the only gap on that date) | Stop and report to the operator: both families are operator steps. Never copy web-1's pair into the new config, and never delete a `prd` name to make this pass (a forbidden-name `FAIL` has no `CAUSE` line) |
+| **NOT READY** (exit 1) | The check exited 0 but did not print the exact `escrow-split-contract:live-ok` line: a checker or workflow defect, which does not change between runs | Stop and report; open the step log. Do not dispatch again |
+| **UNREADABLE** (exit 3) | A config could not be read. The checker reads `prd_workspaces_luks_web` first, so a bad or rotated token names it too. A `NOTE` line means Doppler reported the config as not found; without one, read the vendor detail in the step log (`Invalid Auth token` means the provider token is bad, rotated or not re-seeded) | Stop and report. With a `NOTE`, `prd_workspaces_luks_web` could not be read (it was in state on 2026-10-04, and the Step 0a workflow cannot create it): report it with the `NOTE` line and do not dispatch anything from here. Otherwise suspect the workflow before the credential on a first dispatch; the operator, not you, re-seeds the carrier entry from the current token (step O2 pattern) rather than rotating, and never run step O13's revocation from this table |
+| **UNEXPECTED exit 124** (or **137**) | The check timed out after 240 seconds (137: it ignored the termination signal and was killed): Doppler or the network stalled | Dispatch once more; a repeat means Doppler is down: stop and report |
+| **UNEXPECTED**, including exit 78 | The check ended in a way this table does not cover (78 is the check refusing to run under shell tracing) | Open the step log, look for tracing (`xtrace`, `SHELLOPTS`), fix it by a pull request, dispatch again |
+
+```bash
+gh issue view 9377 --json comments --jq '.comments[-6:][]|.createdAt+" "+(.body|.[0:600])'
+```
+
+The `NOTE` line reads: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`. That says what the failed read is consistent with; it is not a diagnosis. (The push-apply is disabled. The Step 0a workflow creates the three names, not the config itself.) The checker prints one `escrow-split-contract:CAUSE` line per family of missing name and is the single source for the cause map; it is not repeated here.
+
+**A green run is necessary, not sufficient, and valid only when it ran.** The check reads secret *names*, so it cannot tell a
+bucket-scoped R2 pair from web-1's pair pasted under the same names (the mint step on #9377 requires a signed `HEAD` of
+web-1's bucket with the new pair to return 403), and it says nothing about a later change. The log's `Run-context:` line
+prints the commit and the UTC time. Cite a green run only if it was created by your dispatch in this birth session (an id above
+B), its `headSha` equals the current `main` head, and no more than an hour has passed; otherwise dispatch again. The birth and
+replace jobs re-run the same preflight themselves (with their own copy of the read token) and still abort on any non-zero
+result with nothing changed; the break-glass path below runs the preflight by hand and does not use this workflow.
+Back-to-back dispatches are harmless to the environment. A red run blocks nothing automated: repair the named cause and
+dispatch again.
+
+The token this check uses is the workplace personal token the Tier-B loader exports. Read-only is a property of the workflow's
+steps, not of the token; a narrower credential is tracked in <https://github.com/jikig-ai/soleur/issues/9461>.
+
+**If `escrow=missing` pages anyway** (alert `web-host-luks-boot-fatal`, stage `workspaces_luks_provision_escrow`;
+the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at
+birth**, so the only way to re-attempt it is a host replace (`web-host-replace`, with the config repaired first).
+While the web-class host holds no user data that costs one replace. Once a web-class host holds data, the
+remediation of this page is owned by the #9372 follow-up; no re-escrow step is defined here.
+
+Read the stage's events for a host (no SSH):
+
+```bash
+# <host> is the server name: soleur-<web_host_key> (web-1 is soleur-web-platform)
+doppler run -p soleur -c prd -- bash scripts/sentry-issue.sh --host-events <host> --stage workspaces_luks_provision_escrow
+```
+
+The event's detail reads `arm=escrow reason=<x>`; decode `<x>` with the table below. No event for the stage on a
+fresh birth means escrow succeeded or the boot never reached it (the readiness row's `escrow=ok` is the positive
+signal). That page is rate-limited by the alert's frequency throttle (**35 minutes, per rule per issue group**), and
+every boot event from every host lands in one perpetually-active Sentry issue group, so the throttle is
+**fleet-wide and spans boots**: an escrow page within 35 minutes of any other `web-host-luks-boot-fatal` page (any of
+its fourteen stages, on any host, including an earlier failed attempt of this same birth) can be folded into
+silence, and an escrow page can equally swallow a fatal one that follows it. Do not rely on the email alone: after
+every web-class birth or replace, read the stage with the command above.
+
+| `reason=` | Meaning | Remediation (the boot continued and the volume is formatted; escrow is attempted once, so every one ends in a host replace) |
+|---|---|---|
+| `creds` | At least one of the four names (bucket, key id, secret, endpoint) read back empty from `prd_workspaces_luks_web`. | Repair the config (the preflight reads names only, so an empty value passes it), then replace the host. |
+| `shape` | The **bucket or the endpoint** failed its pattern (a lowercase DNS-style bucket name; exactly `https://<32 hex>.r2.cloudflarestorage.com`). | Fix the value in `prd_workspaces_luks_web`, then replace the host. |
+| `creds_shape` | The **R2 key id or secret** failed its pattern (key id: 16 to 128 alphanumerics; secret: 16 to 256 of `A-Za-z0-9/+=_-`), for example a stray quote, space or newline from a paste. No value is ever echoed. | Re-mint or re-paste the pair cleanly in `prd_workspaces_luks_web`, then replace the host. |
+| `uuid` | `cryptsetup luksUUID` did not return a UUID for the opened container. | Local to the host (not a config problem); replace the host. |
+| `tmp` | The tmpfs directory for the header copy could not be created. | Local to the host; replace the host. |
+| `backup` | `cryptsetup luksHeaderBackup` failed or wrote an empty file. | Local to the host; replace the host. |
+| `put` | R2 refused the upload (a non-2xx answer): the pair is not write-scoped to the bucket, the bucket or endpoint is wrong, or R2 was unavailable. | Repair the config, then replace the host. No automated check of the pair's R2 scope or of R2 availability exists yet; the mint procedure and its probe are owned by the #9377 mint comment. |
+| `readback` | The object read back after the upload did not match the header's size and md5 (an ETag mismatch). | Replace the host. No automated check of R2 availability exists yet; a persistent mismatch is owned by the #9377 mint comment. |
+
+**During an outage, when the preflight cannot pass.** The preflight has **no in-workflow bypass**, by design (an
+aborted dispatch costs one reviewer approval and a second dispatch needs a second one). If it cannot pass while the
+fleet is down, the only route is the break-glass operator-local apply below, which **does not run the checker**:
+repair `prd_workspaces_luks_web` first, or the host is born with `escrow=missing`. A **web-1** rebirth is not a
+supported recovery today whatever the preflight says: a rebuilt web-1 fails closed at the provisioner's
+`discriminate` arm (see "`web-1` is refused" in `web-host-replace.md`), and that stays true until the de-pet
+rebuild (#9421).
+
 Dispatch `web-host-create` and approve it:
 
 ```bash
@@ -39,6 +153,90 @@ below happens inside the job.
 does not declare one. The `confirm` token must be exactly `BIRTH-<key>`; it is a typo-guard, not
 the authorization, and it embeds the key so that authorizing the wrong host requires typing that
 host's name.
+
+### Step 0a — create the escrow resources (`apply-web-escrow-create`, #9377)
+
+The three Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
+`WORKSPACES_HEADER_R2_ENDPOINT`) are created, when absent, by the dispatch-only workflow `apply-web-escrow-create.yml`, because the
+push-apply is disabled. Each dispatch below needs the owner's separate, explicit authorization; a menu answer is not
+authorization.
+
+**If step 1 shows nothing to create, skip step 2.** The step 1 log then reads `Plan gate passed: 0 create(s)` and `Creates: none`: the five resources already exist (created 2026-10-04, see the ADR-263 D9 marker), so go straight to step 3 and keep step 4 (the live preflight) as the gate before any host dispatch. Order:
+
+1. **Plan only.** Dispatch with `plan_only` left true (`confirm` must be exactly `CREATE-WEB-ESCROW`, `reason` is required):
+
+   ```bash
+   gh workflow run apply-web-escrow-create.yml --ref main -f confirm=CREATE-WEB-ESCROW -f plan_only=true -f reason='<why>'
+   gh run list --workflow apply-web-escrow-create.yml --limit 3   # confirm the run actually started
+   gh run list --workflow apply-deploy-pipeline-fix.yml --status cancelled --limit 5   # a queued run can displace an older pending one in the shared group (also apply-web-platform-infra.yml and workspaces-plaintext-forget.yml): look only at runs created after this dispatch
+   ```
+
+   Read the plan gate and Summary output from the run log (a GitHub job summary has no API, so the log is the
+   agent-readable copy; the run must have finished):
+
+   ```bash
+   gh run watch <run-id> --exit-status > /dev/null; gh run view <run-id> --log | grep -E 'plan: |Plan gate passed|Creates:'
+   ```
+
+   Every non-no-op entry prints as `plan: <address> -> <verbs>`, then `Plan gate passed: N create(s)` and `Creates: N of 5:
+   ...`. A green plan-only run means the plan holds only exact `["create"]` entries at the five addresses (any subset of
+   them, so check N against the five) and that no name the plan would create exists live (a name already present for a
+   resource in state is expected to be present). It wrote nothing.
+2. **Applying run.** Dispatch the same command with `-f plan_only=false`. It re-plans and re-grades with the same gates, so
+   compare its `Creates: N of 5` line with the plan-only one; it then applies the saved plan and re-reads the names.
+   After a red re-read ("UNVERIFIED"), re-dispatch with `plan_only=true`: zero creates and the three names present means
+   the apply landed.
+3. **The R2 credential mint** (tracked on #9377, not Terraform: the stored Cloudflare tokens lack the "API Tokens: Edit"
+   scope, so a `cloudflare_api_token` apply 403s, and the pair is minted by a person who supplies a token-minting
+   credential; everything after that credential is scriptable). Until it is done the preflight fails with the checker's
+   missing-R2-pair CAUSE line; that is expected and is not a fault of the apply. A green run here proves the three names
+   exist, not that the pair is bucket-scoped (intended to be scoped, unverified until the signed isolation proof).
+4. The preflight must print `escrow-split-contract:live-ok` (command in Step 0 above; names only, it does not prove the R2
+   pair's scope or values); only then dispatch the web-host workflow. `web_host_create` and `web_host_replace` are jobs of
+   `apply-web-platform-infra.yml`, which is disabled: enable it for the dispatch, dispatch, disable it again, and note that
+   a merge inside the enabled window triggers its push-apply.
+5. The first live apply happened on 2026-10-04 (see the ADR-263 D9 marker), so the CLO's measured supersession of the conditional wording (counsel review C4) and a re-read
+   of the names, tracked on #9377.
+
+**An abort names its cause; the next action depends on which:**
+
+- **A secret name already exists live** (the names step aborts, naming the secret name, never a value). The listing proves
+  a name exists, never its value, and cannot tell an own name from one inherited from `prd`. The rule keys on whether a
+  web-class volume could have been formatted: it has not while #9372 is open (`gh issue view 9372 --json state`), no
+  `web_host_create` or `web_host_replace` job ran to completion (list the jobs of each recent run:
+  `gh run view <run-id> --json jobs --jq '.jobs[]|select(.name|test("web_host_(create|replace)"))|[.name,.conclusion]|@tsv'`;
+  a run-level conclusion alone does not say) and no break-glass local apply was done. First read whether the name is
+  inherited from `prd` (names only, never a value); if it is, stop and escalate: it cannot be removed from the branch
+  config, and deleting it in `prd` changes every branch config.
+
+  ```bash
+  doppler secrets --only-names --json -p soleur -c prd | jq 'has("<NAME>")'   # true: inherited, stop here
+  ```
+
+  Otherwise the stray secret holds nothing keyed by it: remove it from the branch config only, under the owner's
+  authorization and after a second confirmation, with output discarded and the result checked by a separate names-only
+  read (`false` means gone, and the command exits 0; run the same read for a name known to be present as a positive control):
+
+  ```bash
+  doppler secrets delete <NAME> -p soleur -c prd_workspaces_luks_web -y > /dev/null
+  doppler secrets --only-names --json -p soleur -c prd_workspaces_luks_web | jq 'has("<NAME>")'
+  ```
+
+  then re-dispatch. If a web-class volume may be formatted, never remove or overwrite it: import it into state under a
+  separate reviewed change, run while no applier is queued, and escalate on #9372 (item 2 of its 2026-10-03 comment,
+  passphrase-loss recovery).
+- **`doppler_config.workspaces_luks_web` in the plan.** As a `create` it is not in this root's state (a `-target`
+  dependency of the key copies): `apply-deploy-pipeline-fix` or a push-apply creates it, this workflow cannot, do not retry.
+  As any other verb it reads as state and live disagreeing (inferred, nothing measured): file an issue and decide a
+  reviewed import or reconcile.
+- **A `doppler_secret` create aimed at another project or config, with a malformed name, or a moved/import entry.** The gate names
+  the destination; a person decides the next reviewed change.
+- **Any other address or verb in the plan** (a replace, an update, a host, an indexed spelling). Nothing was applied; a
+  person decides the next reviewed change, and a comment on #9377 with the gate step's `plan:` lines is the record.
+- **The apply fails part-way** (an R2 or Doppler API error). Re-dispatch: the plan then holds only the remainder. A secret
+  created but not recorded in state is caught by the names step and needs a person. A bucket created live but absent from
+  state makes every re-dispatch fail (the workflow has no import verb): no data is at risk, because header backups start
+  only after the first format; a person imports it under a reviewed change.
 
 ### What the job does, and why each step is not optional
 
@@ -100,15 +298,31 @@ key.
   `curl -sS -o /dev/null -w '%{http_code}\n' https://app.soleur.ai/health` returns 200.
 - **No page is not proof of health.** `betteruptime_monitor.app` probes the `app.soleur.ai`
   A-record, which *is* web-1 — on a dead web-1 it reddens only once the host is already dark.
+- **A web-2 birth/rebirth rotates its sshd host key.** `terraform_data.deploy_pipeline_fix_web2`
+  (#9151) then fails closed at its pinned `host_key` — re-capture with
+  `scripts/capture-web-2-host-key.sh <new-ip>` and land `web-2-ssh-host-key.pub` in a PR
+  (ADR-237; `web-host-replace.md` carries the same note).
 
 ## Break-glass: operator-local apply
 
 **Use this only when the dispatch itself is unavailable** (Actions down, the workflow broken).
 It is the pre-#6730 procedure and it reproduces by hand every gate the job enforces
-automatically — including the two that are easiest to skip and worst to skip.
+automatically — including the escrow preflight (step 0, which no part of the pre-#6730 procedure ran) and the two that
+are easiest to skip and worst to skip.
 
 <details>
 <summary>Operator-local procedure</summary>
+
+### 0. Run the escrow readiness preflight — MANDATORY (#9377)
+
+Break-glass means the dispatch is unavailable, so the diagnostic workflow in Step 0 is unavailable too and this runs by hand. It needs a workplace-scoped Doppler login. The provider token is the value `DOPPLER_TOKEN_TF` in Doppler project `soleur-infra-privileged`, config `prd` (step O10 of [infra-credential-tiers-8209.md](./infra-credential-tiers-8209.md) removed it from `soleur/prd_terraform`, so a read from there no longer works). The command passes it through the environment only, never echoed:
+
+```bash
+TF_VAR_doppler_token_tf="$(doppler secrets get DOPPLER_TOKEN_TF -p soleur-infra-privileged -c prd --plain)" bash scripts/web-host-escrow-preflight.sh
+```
+
+It must exit 0. The dispatch runs this as an in-job step; an operator-local run does not, and a host born without it is
+formatted with `escrow=missing` (see Step 0 above for reading a red result, including the absent-config NOTE).
 
 ### 1. Resolve a digest and pin it
 
@@ -151,6 +365,12 @@ An empty DSN means a fresh host boots **dark**: it fails, emits nothing, and pag
 would find out when a user tells you `app.soleur.ai` is down.
 
 ### 4. Apply with the pin
+
+> **#8209 / ADR-241 — the single-loader form below is the PRE-cutover one.** After the Tier-B
+> cutover the same command is wrapped by an outer `soleur-infra-privileged` loader, and the inner
+> `prd_terraform` loader carries `--preserve-env` so the outer values win. Canonical form and
+> rationale: [`infra-credential-tiers-8209.md`](./infra-credential-tiers-8209.md) §Local Terraform
+> invocation.
 
 ```bash
 cd apps/web-platform/infra

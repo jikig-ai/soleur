@@ -158,3 +158,7 @@ its own cycle, not folded into a read-only UI PR).
   routes + the `crm_get_contact_detail` audit RPC. `crmStore` technology string updated to
   include `beta_contact_access_log` (mig 126 + 127). Still **no `founder -> crmStore`** edge
   (the founder reaches it through `webapp`).
+
+## New-lead chat — amendment (ADR-022)
+
+A new-lead chat is a Concierge Query (ADR-022) with `buildCrmTools` registered on that Query only. Writes use the same RPCs and the same review gate. `agent-runner.ts` is not the new-session writer.

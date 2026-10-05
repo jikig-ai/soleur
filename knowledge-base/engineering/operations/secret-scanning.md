@@ -379,14 +379,37 @@ Mitigations in place:
 
 1. **`rename-guard` CI job** (added 2026-05-15, [#3160](https://github.com/jikig-ai/soleur/issues/3160))
    — fails the PR check on any `git mv` whose destination matches a regex
-   in `.gitleaks.toml`'s allowlist surface. Override paths:
+   in `.gitleaks.toml`'s allowlist surface **and whose source does not**.
+   Override paths:
    - Apply the `secret-scan-allow-rename` label to the PR, OR
    - Include `Rename-Allowed-By: <name>` as a trailer on any commit in
      the PR (mirrors the `Co-Authored-By` convention; case-sensitive).
 
+   **Allowlist → allowlist renames are exempt by construction** (2026-08-11,
+   [#5095](https://github.com/jikig-ai/soleur/issues/5095) /
+   [#5097](https://github.com/jikig-ai/soleur/issues/5097)). Laundering requires
+   the source to be OUTSIDE the allowlist: when both sides match, gitleaks was
+   already not scanning that content, so the rename creates no new unscanned
+   surface and there is nothing to launder. This is the `archive-kb` shape —
+   compound `git mv`s plans/specs into their own `archive/` subdirectory on every
+   one-shot run, and the regex
+   `knowledge-base/(?:plans|project/(?:plans|specs))/.*\.md$` matches both sides.
+   Without the exemption the label was effectively mandatory rather than an
+   exceptional opt-in.
+
+   The exemption is evaluated **per rename pair**, so a laundering rename
+   elsewhere in the same PR is still caught. Pre-applying the label — the
+   originally-filed remedy — would instead have disarmed the guard for the whole
+   PR. Source and target are resolved through one shared resolver against one
+   array: two separately-derived sets would be two assemblies, and a source set
+   wider than the target set fails the guard open.
+
    Logic lives in `apps/web-platform/scripts/rename-guard.sh`; the smoke
    matrix exercises it via three cases (`rename-guard-fires`,
-   `rename-guard-label-override`, `rename-guard-trailer-override`).
+   `rename-guard-label-override`, `rename-guard-trailer-override`), and
+   `scripts/rename-guard.test.sh` carries the exemption's fixtures plus a
+   two-row mutation battery (deleting the source check reverts the archival case
+   to a violation; widening the source set fails the guard open).
 2. **GitHub push protection** independently scans every committed line for
    well-known token shapes (Doppler, AWS, Stripe, etc.) and blocks the push
    regardless of allowlist scope. We confirmed this empirically when
@@ -550,15 +573,29 @@ a re-enrollment on next login.
 
 ### `SUPABASE_ACCESS_TOKEN` (CLI / `sbp_`)
 
-1. https://supabase.com/dashboard/account/tokens → revoke compromised token.
-2. Generate new token; update Doppler `prd_terraform` (used by Terraform
-   provider) AND any local `~/.zshrc` exports.
+1. <https://supabase.com/dashboard/account/tokens> → revoke compromised token.
+2. Generate new token; update the Doppler `prd` **root** — its current home,
+   inherited by every `prd_*` branch including `prd_terraform` for the Terraform
+   provider; #7716 item 6 moves the migrate job onto the GH secret and removes
+   the root copy, because `ci-deploy.sh resolve_env_file()` downloads the whole
+   root into the app container env and nothing in app code reads this token — AND
+   any local `~/.zshrc` exports. The GitHub Actions secret of the same name is
+   Terraform-published: `terraform apply` of
+   `github_actions_secret.supabase_access_token` rewrites it from the
+   `supabase_access_token` variable.
 3. Re-run any in-flight `terraform apply` that may have authenticated with
    the old token.
+4. Blast radius: the post-migration PostgREST reload
+   (`apps/web-platform/scripts/postgrest-reload-schema.sh`) authenticates with
+   this token, and a rejected credential fails the prd `migrate` job on the
+   very next release (#8028 made that loud — `release-outcome` emails ops@).
+   No `dev` config carries this token by design (a `pull_request` job reads
+   `dev_scheduled`); the sole Management-API credential is this one —
+   `SUPABASE_PAT` was retired in #8028.
 
 ### `ANTHROPIC_API_KEY`
 
-1. https://console.anthropic.com → API Keys → revoke + regenerate.
+1. <https://console.anthropic.com> → API Keys → revoke + regenerate.
 2. Update Doppler `prd` AND `dev` (separate keys per env if possible).
 3. No re-deploy needed — server reads at request time.
 
@@ -573,7 +610,7 @@ a re-enrollment on next login.
 
 ### `GITHUB_APP_PRIVATE_KEY`
 
-1. https://github.com/settings/apps/<app> → Private keys → generate new.
+1. <https://github.com/settings/apps/><app> → Private keys → generate new.
 2. Update Doppler `prd`.
 3. **All installations re-authenticate.** The old private key is still
    accepted by GitHub for ~ 5 minutes; after that, every active
@@ -585,12 +622,12 @@ a re-enrollment on next login.
 
 | Token | Where to rotate | Notes |
 |---|---|---|
-| `RESEND_API_KEY` | https://resend.com/api-keys | No re-deploy; reads at request time |
-| `CF_API_TOKEN_PURGE` | https://dash.cloudflare.com/profile/api-tokens | Scoped to cache-purge; rotate + update Doppler |
-| `SENTRY_*` (DSN, auth-token) | https://sentry.io → Settings → Auth Tokens / Project DSNs | DSN is public-by-design; auth-token rotation needs CI re-deploy |
-| `GOOGLE_CLIENT_SECRET` | https://console.cloud.google.com → APIs & Services → Credentials | OAuth flow re-auth; no token invalidation |
-| `GITHUB_CLIENT_SECRET` | https://github.com/settings/applications/<id> | Same as above |
-| `BUTTONDOWN_API_KEY` | https://buttondown.email/settings/programming | Newsletter integration only |
+| `RESEND_API_KEY` | <https://resend.com/api-keys> | No re-deploy; reads at request time |
+| `CF_API_TOKEN_PURGE` | <https://dash.cloudflare.com/profile/api-tokens> | Scoped to cache-purge; rotate + update Doppler |
+| `SENTRY_*` (DSN, auth-token) | <https://sentry.io> → Settings → Auth Tokens / Project DSNs | DSN is public-by-design; auth-token rotation needs CI re-deploy |
+| `GOOGLE_CLIENT_SECRET` | <https://console.cloud.google.com> → APIs & Services → Credentials | OAuth flow re-auth; no token invalidation |
+| `GITHUB_CLIENT_SECRET` | <https://github.com/settings/applications/><id> | Same as above |
+| `BUTTONDOWN_API_KEY` | <https://buttondown.email/settings/programming> | Newsletter integration only |
 | `VAPID_PRIVATE_KEY` | regenerate keypair, redeploy server, push subscriptions re-register | Web-push subscribers need to re-subscribe |
 | `DISCORD_OPS_WEBHOOK_URL` | Discord channel → Edit Webhook → Regenerate URL | Internal-only |
 | `DATABASE_URL` password | Supabase dashboard → Database → Connection pooler → reset password | Coordinate with deploy |
@@ -796,10 +833,12 @@ To upgrade:
    with `targetRules = [...]`. Migrating to v8.25+ would let us collapse 13
    per-rule allowlist blocks into one. Worth doing on the next bump.
 2. Fetch the new SHA256 from the release's `checksums.txt`:
+
    ```bash
    curl -sL https://github.com/gitleaks/gitleaks/releases/download/v<NEW>/gitleaks_<NEW>_checksums.txt \
      | grep linux_x64.tar.gz
    ```
+
 3. Update `GITLEAKS_VERSION` and `GITLEAKS_SHA256` in `.github/workflows/secret-scan.yml`.
 4. Verify the smoke-test matrix still passes on the bump PR.
 5. Update the version pin reference in this runbook's frontmatter.

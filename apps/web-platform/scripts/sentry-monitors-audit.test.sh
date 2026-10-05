@@ -74,10 +74,17 @@ else
 fi
 
 # ------------------------------------------------------------------------
-# T3 — orphan join logic. Fixture: 2 monitors, 1 alert referencing slug A
-# only. Expected: monitor B is orphan (no paired routing).
+# T3 — Class A: cron detector with no routing workflow. REFIXTURED in #7590
+# onto the binding that actually exists (monitor <- name - detector
+# -workflowIds-> workflow). The old fixture bound `monitor.slug` inside rule
+# filters, a shape that matches 0 rows in the live org and always did.
+#
+# This row pins the COUNT (1-of-2): a predicate that ignored `workflowIds`
+# would report 2, and one that inverted it would also report 1 — which is why
+# T15 fixtures the OTHER direction (both routed -> 0). Slug IDENTITY — which of
+# the two is listed — is pinned by T19 since #8630 made Class A per-slug.
 # ------------------------------------------------------------------------
-echo "T3: orphan join — monitor without alert"
+echo "T3: Class A — cron detector with no routing workflow"
 TMP3=$(mktemp -d)
 cat > "$TMP3/monitors.json" <<'EOF'
 [
@@ -85,9 +92,11 @@ cat > "$TMP3/monitors.json" <<'EOF'
   {"slug": "monitor-b", "name": "Monitor B", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
 ]
 EOF
-cat > "$TMP3/rules.json" <<'EOF'
+printf '[]' > "$TMP3/workflows.json"
+cat > "$TMP3/detectors.json" <<'EOF'
 [
-  {"id": "1001", "name": "Alert for A", "conditions": [], "filters": [{"key":"monitor.slug","value":"monitor-a"}], "actions": []}
+  {"id": "3001", "name": "monitor-a", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "3002", "name": "monitor-b", "type": "monitor_check_in_failure", "workflowIds": []}
 ]
 EOF
 set +e
@@ -96,23 +105,20 @@ SENTRY_AUTH_TOKEN=fake \
   SENTRY_PROJECT=web-platform \
   SENTRY_API_HOST=de.sentry.io \
   SENTRY_FIXTURE_MONITORS="$TMP3/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP3/rules.json" \
+  SENTRY_FIXTURE_RULES="$TMP3/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP3/detectors.json" \
   AUDIT_OUT_DIR="$TMP3" \
   bash "$SCRIPT" >/dev/null 2>&1
 rc=$?
 set -e
 report=$(ls "$TMP3"/sentry-migration-audit-*.md 2>/dev/null | head -1)
 if [[ "$rc" == "0" ]] && [[ -f "$report" ]] \
-   && grep -qE '^\| monitor-b ' "$report" \
-   && grep -qE 'monitor-b.*orphan: not referenced' "$report" \
-   && ! grep -qE 'monitor-a.*orphan: not referenced' "$report"; then
-  pass "monitor-b flagged as Class A orphan, monitor-a not"
+   && grep -qE '\*\*1\*\* of \*\*2\*\* cron detectors' "$report" \
+   && ! grep -qE 'Invariant .* HOLDS' "$report"; then
+  pass "Class A counted 1 of 2 (routed detector excluded); invariant correctly does not hold"
 else
   fail "rc=$rc"
-  if [[ -f "$report" ]]; then
-    echo "    --- ## Orphans section dump ---" >&2
-    sed -n '/^## Orphans/,/^## /{p}' "$report" | head -30 >&2
-  fi
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
 fi
 rm -rf "$TMP3"
 
@@ -179,94 +185,30 @@ fi
 rm -rf "$TMP5"
 
 # ------------------------------------------------------------------------
-# T6 — machine-readable id JSON tail: report contains an HTML-comment
-# manifest of rule ids (per plan Phase 2.1) so Phase 5 import can consume
-# it without dashboard scraping.
+# T6 / T7 (id manifest + README extraction handshake) were DELETED in #7590.
+# The `<!-- ids: ... -->` manifest fed a first-time `terraform import` that is
+# complete; the marker has no live consumer. Repointing it at workflows/ would
+# have silently changed its identifier space while keeping its name, so it was
+# retired rather than migrated. See Decision 4 in the plan.
 # ------------------------------------------------------------------------
-echo "T6: machine-readable id manifest"
-TMP6=$(mktemp -d)
-printf '[]' > "$TMP6/monitors.json"
-cat > "$TMP6/rules.json" <<'EOF'
-[
-  {"id": "9001", "name": "auth-exchange-code-burst", "conditions": [], "filters": [], "actions": []},
-  {"id": "9002", "name": "auth-signout-burst", "conditions": [], "filters": [], "actions": []}
-]
-EOF
-SENTRY_AUTH_TOKEN=fake \
-  SENTRY_ORG=jikigai \
-  SENTRY_PROJECT=web-platform \
-  SENTRY_API_HOST=de.sentry.io \
-  SENTRY_FIXTURE_MONITORS="$TMP6/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP6/rules.json" \
-  AUDIT_OUT_DIR="$TMP6" \
-  bash "$SCRIPT" >/dev/null 2>&1
-report=$(ls "$TMP6"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-# Parse the manifest as JSON rather than byte-regexp — decouples test from
-# quoting/spacing quirks of jq's compact form.
-manifest_line=$(grep -oE '<!-- ids: .* -->' "$report" 2>/dev/null | head -1)
-manifest_json=$(printf '%s' "$manifest_line" | sed -E 's/^<!-- ids: //;s/ -->$//')
-if [[ -n "$manifest_json" ]] && \
-   printf '%s' "$manifest_json" | jq -e 'type == "array" and (index("9001")) and (index("9002"))' >/dev/null 2>&1; then
-  pass "id manifest parses as JSON array containing both ids"
-else
-  fail "manifest parse failed"
-  echo "    --- last 3 lines of report ---" >&2
-  tail -3 "$report" >&2 2>/dev/null || true
-fi
-rm -rf "$TMP6"
 
 # ------------------------------------------------------------------------
-# T7 — Manifest ↔ README import-procedure handshake. Pipe the script's
-# emitted manifest through the same `grep|sed|tr|tr` pipeline the README's
-# import runbook uses, and assert the resulting whitespace-separated id
-# list matches the rules fixture. Catches drift in either direction.
+# T8 — Class B: a cron detector naming a monitor that does not exist live.
+# REFIXTURED in #7590: the binding is the detector's `.name` (detectors carry
+# no `slug` field), not a `monitor.slug` filter key on a rule.
 # ------------------------------------------------------------------------
-echo "T7: manifest survives README's extraction pipeline"
-TMP7=$(mktemp -d)
-printf '[]' > "$TMP7/monitors.json"
-cat > "$TMP7/rules.json" <<'EOF'
-[
-  {"id": "1234", "name": "auth-exchange-code-burst", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]},
-  {"id": "5678", "name": "auth-callback-no-code-burst", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]}
-]
-EOF
-SENTRY_AUTH_TOKEN=fake \
-  SENTRY_ORG=jikigai \
-  SENTRY_PROJECT=web-platform \
-  SENTRY_API_HOST=de.sentry.io \
-  SENTRY_FIXTURE_MONITORS="$TMP7/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP7/rules.json" \
-  AUDIT_OUT_DIR="$TMP7" \
-  bash "$SCRIPT" >/dev/null 2>&1
-report=$(ls "$TMP7"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-# Mirror README import-procedure extraction byte-for-byte:
-ids=$(grep -oE '<!-- ids: \[(.*)\] -->' "$report" | head -1 | \
-      sed -E 's/.*\[//;s/\].*//' | tr -d '"' | tr ',' ' ')
-ids_sorted=$(printf '%s\n' $ids | sort | tr '\n' ' ' | sed 's/ $//')
-if [[ "$ids_sorted" == "1234 5678" ]]; then
-  pass "README extraction yields exactly the fixture's rule ids"
-else
-  fail "extraction yielded: '$ids_sorted' (expected '1234 5678')"
-  echo "    --- manifest line ---" >&2
-  grep '<!-- ids:' "$report" >&2 2>/dev/null || true
-fi
-rm -rf "$TMP7"
-
-# ------------------------------------------------------------------------
-# T8 — Class B orphan detection (alert references missing monitor).
-# Plan §2.1.5 enumerated three classes; the script previously only emitted
-# Class A. Class B is required for the runbook to be load-bearing.
-# ------------------------------------------------------------------------
-echo "T8: Class B orphan — alert references missing monitor"
+echo "T8: Class B — cron detector names a missing monitor"
 TMP8=$(mktemp -d)
 cat > "$TMP8/monitors.json" <<'EOF'
 [
   {"slug": "live-monitor", "name": "Live", "type": "cron_job", "config": {"schedule": "0 * * * *"}}
 ]
 EOF
-cat > "$TMP8/rules.json" <<'EOF'
+printf '[]' > "$TMP8/workflows.json"
+cat > "$TMP8/detectors.json" <<'EOF'
 [
-  {"id": "9100", "name": "Alert for ghost", "conditions": [], "filters": [{"key":"monitor.slug","value":"ghost-monitor"}], "actions": [{"id":"NotifyEmailAction"}]}
+  {"id": "8100", "name": "live-monitor",  "type": "monitor_check_in_failure", "workflowIds": ["1"]},
+  {"id": "8101", "name": "ghost-monitor", "type": "monitor_check_in_failure", "workflowIds": ["1"]}
 ]
 EOF
 SENTRY_AUTH_TOKEN=fake \
@@ -274,31 +216,32 @@ SENTRY_AUTH_TOKEN=fake \
   SENTRY_PROJECT=web-platform \
   SENTRY_API_HOST=de.sentry.io \
   SENTRY_FIXTURE_MONITORS="$TMP8/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP8/rules.json" \
+  SENTRY_FIXTURE_RULES="$TMP8/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP8/detectors.json" \
   AUDIT_OUT_DIR="$TMP8" \
   bash "$SCRIPT" >/dev/null 2>&1
 report=$(ls "$TMP8"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE 'Class B' "$report" && grep -qE '`ghost-monitor`' "$report"; then
-  pass "Class B orphan 'ghost-monitor' detected"
+if grep -qE 'Class B' "$report" && grep -qE '`ghost-monitor`' "$report" \
+   && ! grep -qE '^- `live-monitor` — a cron detector' "$report"; then
+  pass "Class B orphan 'ghost-monitor' detected; 'live-monitor' not flagged"
 else
   fail "Class B section missing or ghost-monitor not flagged"
-  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
 fi
 rm -rf "$TMP8"
 
 # ------------------------------------------------------------------------
-# T9 — Class C orphan detection (alert with empty actions[]).
-# Covers the UI-side regression where an operator removes the action target
-# from a Sentry alert and Terraform's lifecycle.ignore_changes hides the
-# drift.
+# T9 — Class C: a workflow with no actions anywhere. REFIXTURED in #7590 onto
+# the workflows shape, where `.triggers` is an OBJECT (verified live) and
+# routing may ALSO live under `.actionFilters[].actions[]`.
 # ------------------------------------------------------------------------
-echo "T9: Class C orphan — alert with empty actions[]"
+echo "T9: Class C — workflow with no actions"
 TMP9=$(mktemp -d)
 printf '[]' > "$TMP9/monitors.json"
-cat > "$TMP9/rules.json" <<'EOF'
+cat > "$TMP9/workflows.json" <<'EOF'
 [
-  {"id": "7777", "name": "auth-exchange-code-burst", "conditions": [], "filters": [], "actions": []},
-  {"id": "7778", "name": "auth-signout-burst",     "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]}
+  {"id": "7777", "name": "auth-exchange-code-burst", "triggers": {"actions": []}, "actionFilters": []},
+  {"id": "7778", "name": "auth-signout-burst",       "triggers": {"actions": [{"id":"NotifyEmailAction"}]}, "actionFilters": []}
 ]
 EOF
 SENTRY_AUTH_TOKEN=fake \
@@ -306,76 +249,45 @@ SENTRY_AUTH_TOKEN=fake \
   SENTRY_PROJECT=web-platform \
   SENTRY_API_HOST=de.sentry.io \
   SENTRY_FIXTURE_MONITORS="$TMP9/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP9/rules.json" \
+  SENTRY_FIXTURE_RULES="$TMP9/workflows.json" \
   AUDIT_OUT_DIR="$TMP9" \
   bash "$SCRIPT" >/dev/null 2>&1
 report=$(ls "$TMP9"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-if grep -qE 'Class C' "$report" && grep -qE 'rule id `7777`' "$report" && ! grep -qE 'rule id `7778`' "$report"; then
-  pass "Class C flagged 7777 (empty actions), not 7778 (has action)"
+if grep -qE 'Class C' "$report" && grep -qE 'workflow id `7777`' "$report" && ! grep -qE 'workflow id `7778`' "$report"; then
+  pass "Class C flagged 7777 (no actions), not 7778 (has action)"
 else
   fail "Class C detection mis-fired"
-  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
 fi
 rm -rf "$TMP9"
 
 # ------------------------------------------------------------------------
-# T10 — Non-numeric rule ids are filtered from the manifest. Defense-in-
-# depth against a compromised Sentry response shipping shell metacharacters.
+# T10 (non-numeric id filtering) was DELETED in #7590 with the manifest it
+# guarded. The defense it provided — never word-splitting a vendor-supplied id
+# into a shell consumer — is preserved by there being no such consumer at all.
 # ------------------------------------------------------------------------
-echo "T10: non-numeric rule ids filtered from manifest"
-TMP10=$(mktemp -d)
-printf '[]' > "$TMP10/monitors.json"
-cat > "$TMP10/rules.json" <<'EOF'
-[
-  {"id": "1234", "name": "good", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]},
-  {"id": "1; rm -rf .", "name": "evil", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]},
-  {"id": "abc", "name": "stringy", "conditions": [], "filters": [], "actions": [{"id":"NotifyEmailAction"}]}
-]
-EOF
-SENTRY_AUTH_TOKEN=fake \
-  SENTRY_ORG=jikigai \
-  SENTRY_PROJECT=web-platform \
-  SENTRY_API_HOST=de.sentry.io \
-  SENTRY_FIXTURE_MONITORS="$TMP10/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP10/rules.json" \
-  AUDIT_OUT_DIR="$TMP10" \
-  bash "$SCRIPT" >/dev/null 2>&1
-report=$(ls "$TMP10"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-manifest_json=$(grep -oE '<!-- ids: .* -->' "$report" | head -1 | sed -E 's/^<!-- ids: //;s/ -->$//')
-if printf '%s' "$manifest_json" | jq -e '. == ["1234"]' >/dev/null 2>&1; then
-  pass "manifest contains only the numeric id"
-else
-  fail "manifest = $manifest_json (expected exactly [\"1234\"])"
-fi
-rm -rf "$TMP10"
 
 # ------------------------------------------------------------------------
-# T11 — Class B narrow extraction: a `TaggedEventFilter`-shaped rule
-# whose `key` is NOT `monitor.slug` must NOT produce a Class B orphan,
-# even if its `value` happens to be kebab-shaped (matches the regex used
-# by the existing slug-shape guard). Mirrors the production rule shape
-# emitted by `apps/web-platform/scripts/configure-sentry-alerts.sh`
-# (filters carry `{"key":"feature","value":"auth"}` etc.).
+# T11 — Class B narrow extraction: only `monitor_check_in_failure` detectors
+# bind a monitor slug. The live org also carries `error`, `issue_stream` and
+# `uptime_domain_failure` detectors whose names are ordinary prose; treating
+# those as monitor bindings would flood the report with false orphans — the
+# same false-positive class the pre-#7590 narrow extraction existed to stop,
+# rebased onto the new schema.
 # ------------------------------------------------------------------------
-echo "T11: Class B narrow extraction — generic TaggedEventFilter does not false-flag"
+echo "T11: Class B narrow extraction — non-cron detectors do not false-flag"
 TMP11=$(mktemp -d)
 cat > "$TMP11/monitors.json" <<'EOF'
 [
   {"slug": "scheduled-daily-triage", "name": "Daily triage", "type": "cron_job", "config": {"schedule": "0 4 * * *"}}
 ]
 EOF
-cat > "$TMP11/rules.json" <<'EOF'
+printf '[]' > "$TMP11/workflows.json"
+cat > "$TMP11/detectors.json" <<'EOF'
 [
-  {
-    "id": "9200",
-    "name": "auth-exchange-code-burst",
-    "conditions": [{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":50}],
-    "filters": [
-      {"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},
-      {"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"action","match":"eq","value":"exchangeCodeForSession"}
-    ],
-    "actions": [{"id":"NotifyEmailAction"}]
-  }
+  {"id": "9200", "name": "scheduled-daily-triage", "type": "monitor_check_in_failure", "workflowIds": ["1"]},
+  {"id": "9201", "name": "auth", "type": "error", "workflowIds": []},
+  {"id": "9202", "name": "soleur-ai", "type": "uptime_domain_failure", "workflowIds": []}
 ]
 EOF
 SENTRY_AUTH_TOKEN=fake \
@@ -383,56 +295,53 @@ SENTRY_AUTH_TOKEN=fake \
   SENTRY_PROJECT=web-platform \
   SENTRY_API_HOST=de.sentry.io \
   SENTRY_FIXTURE_MONITORS="$TMP11/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP11/rules.json" \
+  SENTRY_FIXTURE_RULES="$TMP11/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP11/detectors.json" \
   AUDIT_OUT_DIR="$TMP11" \
   bash "$SCRIPT" >/dev/null 2>&1
 report=$(ls "$TMP11"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-# `auth` is a tag-filter value, NOT a monitor.slug binding. The narrow
-# extraction must skip it. Anything containing "Class B" or a backtick-
-# wrapped `auth` orphan ref is a false-positive regression.
+# `auth` and `soleur-ai` are non-cron detector names, NOT monitor bindings.
 if [[ -f "$report" ]] \
    && ! grep -qE 'Class B' "$report" \
-   && ! grep -qE '`auth`' "$report"; then
-  pass "tag-filter value 'auth' did not flag as Class B orphan"
+   && ! grep -qE '`auth`' "$report" \
+   && ! grep -qE '`soleur-ai`' "$report" \
+   && grep -qE '\*\*0\*\* of \*\*1\*\* cron detectors' "$report"; then
+  pass "non-cron detector names did not flag as Class B; cron count scoped to 1"
 else
-  fail "tag-filter value false-flagged as Class B"
-  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+  fail "non-cron detector name false-flagged as Class B"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
 fi
 rm -rf "$TMP11"
 
 # ------------------------------------------------------------------------
-# T12 — Class C shape-branch: Metric Alerts store routing under
-# `.triggers[].actions[]`, not top-level `.actions[]`. A Metric Alert with
-# non-empty `triggers[].actions[]` must NOT flag as Class C; a Metric
-# Alert whose triggers all have empty actions[] (paging unpaired by 2026
-# auto-migration) MUST flag. Without the shape branch every Metric Alert
-# false-positives because `.actions // []` is `[]`.
+# T12 — Class C disjunction: a workflow routes if it has actions under
+# `.triggers.actions[]` OR `.actionFilters[].actions[]`. Each arm is fixtured
+# ALONE, because a fixture satisfying both proves only that the set is
+# non-empty: dropping either arm would stay green, and the arm that reads
+# `actionFilters` is exactly the one a triggers-only check would false-flag.
 # ------------------------------------------------------------------------
-echo "T12: Class C alert-shape branch — Metric Alert routing handled"
+echo "T12: Class C disjunction — each routing arm fixtured alone"
 TMP12=$(mktemp -d)
 printf '[]' > "$TMP12/monitors.json"
-cat > "$TMP12/rules.json" <<'EOF'
+cat > "$TMP12/workflows.json" <<'EOF'
 [
   {
     "id": "8001",
-    "name": "metric-alert-with-routing",
-    "triggers": [
-      {"label": "critical", "actions": [{"id":"sentry.integrations.slack","targetIdentifier":"#alerts"}]}
-    ]
+    "name": "routes-via-triggers-only",
+    "triggers": {"actions": [{"id":"sentry.integrations.slack","targetIdentifier":"#alerts"}]},
+    "actionFilters": []
   },
   {
     "id": "8002",
-    "name": "metric-alert-orphan-routing",
-    "triggers": [
-      {"label": "critical", "actions": []}
-    ]
+    "name": "routes-nowhere",
+    "triggers": {"actions": []},
+    "actionFilters": []
   },
   {
     "id": "8003",
-    "name": "issue-alert-has-routing",
-    "conditions": [],
-    "filters": [],
-    "actions": [{"id":"NotifyEmailAction"}]
+    "name": "routes-via-actionfilters-only",
+    "triggers": {"actions": []},
+    "actionFilters": [{"actions": [{"id":"NotifyEmailAction"}]}]
   }
 ]
 EOF
@@ -441,20 +350,17 @@ SENTRY_AUTH_TOKEN=fake \
   SENTRY_PROJECT=web-platform \
   SENTRY_API_HOST=de.sentry.io \
   SENTRY_FIXTURE_MONITORS="$TMP12/monitors.json" \
-  SENTRY_FIXTURE_RULES="$TMP12/rules.json" \
+  SENTRY_FIXTURE_RULES="$TMP12/workflows.json" \
   AUDIT_OUT_DIR="$TMP12" \
   bash "$SCRIPT" >/dev/null 2>&1
 report=$(ls "$TMP12"/sentry-migration-audit-*.md 2>/dev/null | head -1)
-# 8002 has the unpaired routing → MUST flag. 8001 has routing → MUST NOT
-# flag. 8003 is an Issue Alert WITH routing → MUST NOT flag (regression
-# guard for the existing T9 contract).
-if grep -qE 'rule id `8002`' "$report" \
-   && ! grep -qE 'rule id `8001`' "$report" \
-   && ! grep -qE 'rule id `8003`' "$report"; then
-  pass "8002 (unpaired Metric Alert) flagged; 8001/8003 (paired) not flagged"
+if grep -qE 'workflow id `8002`' "$report" \
+   && ! grep -qE 'workflow id `8001`' "$report" \
+   && ! grep -qE 'workflow id `8003`' "$report"; then
+  pass "8002 (no routing) flagged; 8001 (triggers arm) and 8003 (actionFilters arm) not"
 else
-  fail "Class C shape branch mis-fired"
-  sed -n '/^## Orphans/,/^## /p' "$report" >&2 2>/dev/null || true
+  fail "Class C disjunction mis-fired"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
 fi
 rm -rf "$TMP12"
 
@@ -519,7 +425,1940 @@ else
 fi
 rm -rf "$TMP14"
 
+# ========================================================================
+# Transport-seam tests (#7590).
+#
+# The SENTRY_FIXTURE_* seams `cat` a file and return BEFORE curl runs, so they
+# cannot express an HTTP status, a response header or a retry sequence — the
+# three things every defect in #7590 lives in. These tests stub `curl` on PATH
+# instead, matching the established repo dialect
+# (apps/cla-evidence/scripts/upload-evidence.test.sh).
+#
+# The stub emulates the two call-site shapes the SUT actually uses:
+#   * body-returning  — Gate 1 and every fetch read stdout as the BODY
+#   * status-returning — Gates 2/3 pass `-o /dev/null -w '%{http_code}'` and
+#                        read stdout as the STATUS
+# A wrapper that injected its own `-w` would corrupt the first shape; one that
+# injected `-o` would blank it. That is the P0 this seam exists to catch.
+# ========================================================================
+
+# Writes $1/curl. Each test supplies $1/respond.sh, which receives URL, METHOD
+# and N (1-based invocation count) in the environment and prints one line:
+#   <status><TAB><extra-headers-file|-><TAB><body-file|-><TAB><exit_code>
+#
+# The fourth field is OPTIONAL and defaults to 0. A non-zero value makes the
+# stub emulate a TRANSPORT failure — curl's own exit (28 on `--max-time`), no
+# status line, no headers, no body — rather than an HTTP response.
+#
+# That axis is not decoration. `curl_retry`'s idempotency guard has two arms,
+# a status arm and a transport arm, and the SUT's own comment records that the
+# transport arm is the half that matters: a timed-out POST whose write already
+# landed is the case observed live, whereas a 5xx at least proves the server
+# answered. Before this field the stub ended in an unconditional `exit 0`, so
+# NO test could drive rc != 0 and both arms of that guard — plus the safe-GET
+# transport retry — were pinned by nothing and reverted green.
+mk_curl_stub() {
+  local dir="$1"
+  mkdir -p "$dir"
+  : > "$dir/requests.txt"
+  : > "$dir/violations.txt"
+  : > "$dir/require_disable"   # argv assertion ON by default; T18d clears it
+  printf '0' > "$dir/count"
+  cat > "$dir/curl" <<STUB
+#!/usr/bin/env bash
+STUB_DIR="$dir"
+STUB
+  cat >> "$dir/curl" <<'STUB'
+# #7997 transport-confinement assertion. Gated on a FILE in the stub's own dir,
+# NOT an env var: STUB_DIR is baked in at creation, so the SUT cannot disarm this
+# by scrubbing its child environment. Measured -- with an env gate, wrapping the
+# curl call in `env -i` (the obvious next hardening step on this very ticket)
+# silently turned the assertion off and left an unconfined credentialed request
+# passing. The gate is ON by default; T18d clears it for its BARE probe, which is
+# correct by design, so only that one invocation is exempt.
+if [[ -f "$STUB_DIR/require_disable" ]]; then
+  if [[ "${1:-}" != "--disable" || "${2:-}" != "--noproxy" || "${3:-}" != "*" ]]; then
+    printf 'STUB_ARGV_VIOLATION first3=[%s %s %s]\n' "${1:-}" "${2:-}" "${3:-}" \
+      >> "$STUB_DIR/violations.txt"
+  fi
+  # The prefix above is only half the property. Measured on the sibling suite:
+  # appending `--proxy http://exfil.tld:8080 -k` to a correctly-prefixed call
+  # site left every argv assertion green while the bearer went through an
+  # attacker proxy with verification off. A prefix pin cannot say "and nothing
+  # later re-opens this", so scan the WHOLE argv for the values that must never
+  # appear -- and require the two overridable flags to occur exactly once, since
+  # a second --noproxy/--proto silently supersedes the first.
+  _np=0; _pr=0
+  for _a in "$@"; do
+    case "$_a" in
+      -x|--proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5 \
+        |--socks5-hostname|--socks5-basic|--socks5-gssapi \
+        |-K|--config \
+        |--proto-default|--proto-redir \
+        |--resolve|--connect-to|--unix-socket|--abstract-unix-socket|--url \
+        |-k|--insecure|--proxy-insecure|--ssl-no-revoke|--cacert|--capath \
+        |--doh-url|--doh-insecure|--location-trusted \
+        |--no-globoff)
+        printf 'STUB_ARGV_REOPEN token=[%s]\n' "$_a" >> "$STUB_DIR/violations.txt" ;;
+    esac
+    [[ "$_a" == "--noproxy" ]] && _np=$((_np + 1))
+    [[ "$_a" == "--proto"   ]] && _pr=$((_pr + 1))
+  done
+  [[ "$_np" -eq 1 ]] || printf 'STUB_ARGV_REOPEN noproxy_count=[%s]\n' "$_np" >> "$STUB_DIR/violations.txt"
+  [[ "$_pr" -eq 1 ]] || printf 'STUB_ARGV_REOPEN proto_count=[%s]\n' "$_pr" >> "$STUB_DIR/violations.txt"
+fi
+hdr=""; url=""; out=""; prev=""; method="GET"; wants_w=0
+for a in "$@"; do
+  [[ "$prev" == "-D" ]] && hdr="$a"
+  [[ "$prev" == "-X" ]] && method="$a"
+  [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$a" == "-w" ]] && wants_w=1
+  case "$a" in http://*|https://*) url="$a" ;; esac
+  prev="$a"
+done
+n=$(cat "$STUB_DIR/count" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$STUB_DIR/count"
+printf '%s %s\n' "$method" "$url" >> "$STUB_DIR/requests.txt"
+printf '%s\n' "${SSLKEYLOGFILE-<unset>} ${CURL_CA_BUNDLE-<unset>} ${LD_PRELOAD-<unset>} ${OPENSSL_CONF-<unset>}" > "$STUB_DIR/env.txt"
+spec=$(URL="$url" METHOD="$method" N="$n" bash "$STUB_DIR/respond.sh")
+status=$(printf '%s' "$spec" | cut -f1)
+hfile=$(printf '%s' "$spec" | cut -f2)
+bfile=$(printf '%s' "$spec" | cut -f3)
+ec=$(printf '%s' "$spec" | cut -f4)
+[[ -z "$ec" ]] && ec=0
+# Transport failure: exit before writing ANYTHING. curl_retry truncates the
+# header file before each attempt, so leaving it untouched is what a real
+# `--max-time` abort leaves behind, and is what drives the `000` status path.
+if (( ec != 0 )); then
+  exit "$ec"
+fi
+if [[ -n "$hdr" ]]; then
+  printf 'HTTP/2 %s\r\n' "$status" > "$hdr"
+  [[ "$hfile" != "-" && -f "$hfile" ]] && cat "$hfile" >> "$hdr"
+  printf '\r\n' >> "$hdr"
+fi
+body=""
+[[ "$bfile" != "-" && -f "$bfile" ]] && body=$(cat "$bfile")
+[[ -n "$out" ]] && printf '%s' "$body" > "$out"
+if (( wants_w == 1 )); then
+  printf '%s' "$status"
+elif [[ -z "$out" ]]; then
+  printf '%s' "$body"
+fi
+exit 0
+STUB
+  chmod +x "$dir/curl"
+}
+
+# Happy-path responder: gates pass, all collections empty. Tests override the
+# single URL they care about.
+mk_default_respond() {
+  local dir="$1"
+  printf '{"id":"123"}' > "$dir/org.json"
+  printf '[]' > "$dir/empty.json"
+  cat > "$dir/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$dir"
+STUB
+  cat >> "$dir/respond.sh" <<'STUB'
+case "$URL" in
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+  chmod +x "$dir/respond.sh"
+}
+
+run_sut_stubbed() {  # $1 = stub dir; remaining args = extra env assignments
+  local dir="$1"; shift
+  env PATH="$dir:$PATH" \
+    SENTRY_AUTH_TOKEN=fake \
+    SENTRY_ORG=jikigai \
+    SENTRY_PROJECT=web-platform \
+    SENTRY_API_HOST=de.sentry.io \
+    NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+    SENTRY_TF_DIR="$dir/tf" \
+    AUDIT_OUT_DIR="$dir" \
+    "$@" \
+    bash "$SCRIPT" 2>&1
+}
+
 # ------------------------------------------------------------------------
+# T15 — Class A, FAR direction. T3 fixtures one-of-two unrouted; this
+# fixtures the direction where a too-aggressive predicate gives a false
+# positive. A check that ignored `workflowIds` entirely would report 2 here
+# and 2 in T3, passing neither — but a check inverted to "has workflowIds"
+# would report 1 in T3 and pass it. Both directions are required.
+# ------------------------------------------------------------------------
+echo "T15: Class A far direction — all detectors routed yields zero"
+TMP15=$(mktemp -d)
+cat > "$TMP15/monitors.json" <<'EOF'
+[
+  {"slug": "monitor-a", "name": "A", "type": "cron_job", "status": "active", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "monitor-b", "name": "B", "type": "cron_job", "status": "active", "config": {"schedule": "0 0 * * *"},
+   "environments": [{"name": "production", "isMuted": false}]}
+]
+EOF
+printf '[]' > "$TMP15/workflows.json"
+cat > "$TMP15/detectors.json" <<'EOF'
+[
+  {"id": "1", "name": "monitor-a", "type": "monitor_check_in_failure", "workflowIds": ["w1"]},
+  {"id": "2", "name": "monitor-b", "type": "monitor_check_in_failure", "workflowIds": ["w2"]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP15/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP15/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP15/detectors.json" \
+  AUDIT_OUT_DIR="$TMP15" bash "$SCRIPT" >/dev/null 2>"$TMP15/stderr.txt"
+report=$(ls "$TMP15"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && ! grep -qE '^- `monitor-[ab]` — ' "$report"; then
+  pass "all-routed fixture yields Class A count 0 of 2, no slug listed"
+else
+  fail "Class A far direction"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -12 >&2 || true
+fi
+
+# T15b — the healthy state is SILENT on stderr. Nothing unrouted, nothing
+# disabled, and nothing muted — CHECKED, not assumed: monitor-a carries a
+# top-level `isMuted: false`, monitor-b an environment-level one. A payload
+# with no `isMuted` anywhere is "unknown", not 0 (T19e).
+echo "T15b: all routed, nothing muted — no routing ::warning::"
+if [[ -f "$report" ]] \
+   && grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && grep -qE 'Disabled monitors: \*\*0\*\*' "$report" \
+   && ! grep -q '::warning::Sentry cron routing' "$TMP15/stderr.txt"; then
+  pass "healthy state: muted and disabled counts 0 reported, no routing warning on stderr"
+else
+  fail "routing ::warning:: fired (or muted count missing) in the all-routed case"
+  cat "$TMP15/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP15"
+
+# ------------------------------------------------------------------------
+# T16 — a 410 with deprecation headers must NAME ITS OWN CAUSE. The
+# assertion anchors on the replacement-endpoint substring, a content anchor:
+# a bare `grep -q ERROR` would also be satisfied by the pre-#7590 message and
+# would discriminate nothing.
+# ------------------------------------------------------------------------
+echo "T16: 410 + deprecation headers self-names"
+TMP16=$(mktemp -d); mk_curl_stub "$TMP16"; mk_default_respond "$TMP16"
+mkdir -p "$TMP16/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP16/tf/m.tf"
+printf 'x-sentry-deprecation-date: 2026-05-14T00:00:00+00:00\r\nx-sentry-replacement-endpoint: /api/0/organizations/jikigai/workflows/\r\n' > "$TMP16/dep.hdr"
+printf '{"message":"This API no longer exists."}' > "$TMP16/gone.json"
+cat > "$TMP16/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP16"
+STUB
+cat >> "$TMP16/respond.sh" <<'STUB'
+case "$URL" in
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '410\t%s\t%s\n' "$d/dep.hdr" "$d/gone.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP16/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP16"); rc=$?
+set -e
+# The replacement-endpoint assertion is anchored on its LABEL, not on the bare
+# path: the same path also appears on the `url:` line, so `grep -q
+# '/organizations/jikigai/workflows/'` was satisfied whether or not the
+# replacement header was ever emitted. Deleting the replacement line from the
+# diagnostic left this test GREEN until the mutation battery caught it
+# (cq-assert-anchor-not-bare-token).
+if [[ "$rc" != "0" ]] \
+   && grep -q 'http_status:  410' <<<"$out" \
+   && grep -q 'api_host:     de.sentry.io' <<<"$out" \
+   && grep -q 'url:          https://de.sentry.io/api/0/organizations/jikigai/workflows/' <<<"$out" \
+   && grep -q 'x-sentry-replacement-endpoint: /api/0/organizations/jikigai/workflows/' <<<"$out" \
+   && grep -q 'x-sentry-deprecation-date:    2026-05-14' <<<"$out" \
+   && grep -qi 'MIGRATE' <<<"$out"; then
+  pass "410 diagnostic carries status, host, URL, deprecation date, replacement and a verdict"
+else
+  fail "410 diagnostic incomplete (rc=$rc)"
+  printf '%s\n' "$out" | tail -20 >&2
+fi
+rm -rf "$TMP16"
+
+# ------------------------------------------------------------------------
+# T17 — deprecation headers on a 200. The non-canonical input the contract
+# explicitly permits: this is the state the deprecated endpoints were in for
+# three months while nothing read the header. Must warn and still exit 0.
+# ------------------------------------------------------------------------
+echo "T17: deprecation headers on a 200 warn without failing"
+TMP17=$(mktemp -d); mk_curl_stub "$TMP17"; mk_default_respond "$TMP17"
+mkdir -p "$TMP17/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP17/tf/m.tf"
+# Date far in the future: warn only, no escalation.
+printf 'X-Sentry-Deprecation-Date: 2099-01-01T00:00:00+00:00\r\nX-Sentry-Replacement-Endpoint: /api/0/organizations/jikigai/successor/\r\n' > "$TMP17/dep.hdr"
+cat > "$TMP17/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP17"
+STUB
+cat >> "$TMP17/respond.sh" <<'STUB'
+case "$URL" in
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t%s\t%s\n' "$d/dep.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP17/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP17"); rc=$?
+set -e
+# Mixed-case header names are deliberate: `-D` preserves wire casing, so a
+# case-SENSITIVE match would silently never fire.
+if [[ "$rc" == "0" ]] \
+   && grep -q 'DEPRECATED' <<<"$out" \
+   && grep -q 'workflows/' <<<"$out" \
+   && grep -q '2099-01-01' <<<"$out"; then
+  pass "200 + deprecation headers warns (case-insensitively) and exits 0"
+else
+  fail "tripwire did not warn on a 200 (rc=$rc)"
+  printf '%s\n' "$out" | tail -15 >&2
+fi
+rm -rf "$TMP17"
+
+# ------------------------------------------------------------------------
+# T17b — escalation. The SAME input inside the window must exit non-zero.
+# A perpetual warning is what failed in 2026-07: versions.tf records this very
+# family answering 410 and being written off as transient.
+# ------------------------------------------------------------------------
+echo "T17b: deprecation inside the escalation window fails"
+TMP17B=$(mktemp -d); mk_curl_stub "$TMP17B"; mk_default_respond "$TMP17B"
+mkdir -p "$TMP17B/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP17B/tf/m.tf"
+printf 'x-sentry-deprecation-date: 2026-05-14T00:00:00+00:00\r\n' > "$TMP17B/dep.hdr"
+cat > "$TMP17B/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP17B"
+STUB
+cat >> "$TMP17B/respond.sh" <<'STUB'
+case "$URL" in
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t%s\t%s\n' "$d/dep.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP17B/respond.sh"
+# (a) OPTED IN — the advisory caller (sentry-audit-gate.yml sets this).
+set +e
+out=$(run_sut_stubbed "$TMP17B" SENTRY_DEPRECATION_FAIL=1); rc=$?
+set -e
+if [[ "$rc" != "0" ]] && grep -qi 'deprecated and its date is within' <<<"$out"; then
+  pass "T17b: past-dated deprecation escalates when the caller opts in"
+else
+  fail "escalation did not fire under SENTRY_DEPRECATION_FAIL=1 (rc=$rc)"
+  printf '%s\n' "$out" | tail -10 >&2
+fi
+
+# (b) NOT opted in — the apply path. This is the load-bearing direction: the
+# tripwire runs inside curl_retry, which Gates 1-3 also call, so an escalation
+# here would freeze Sentry infra deploys on a vendor's calendar, including the
+# deploy that would ship the migration. Must WARN and exit 0.
+set +e
+out=$(run_sut_stubbed "$TMP17B"); rc=$?
+set -e
+if [[ "$rc" == "0" ]] \
+   && grep -q 'NOT failing' <<<"$out" \
+   && grep -qi 'deprecated and its date is within' <<<"$out"; then
+  pass "T17c: the apply-path default warns and does NOT fail (no deploy freeze)"
+else
+  fail "default posture wrong: expected warn+exit 0, got rc=$rc"
+  printf '%s\n' "$out" | tail -10 >&2
+fi
+rm -rf "$TMP17B"
+
+# ------------------------------------------------------------------------
+# T18 — retry classification AND stdout neutrality.
+#
+# Neutrality is asserted DIRECTLY, by extracting curl_retry and diffing its
+# stdout against bare `curl "$@"` for both call-site shapes. This is the
+# assertion that would have caught the `-w` P0: a wrapper `-w` after "$@" wins
+# (duplicate -w is last-wins) and turns a healthy body into `[...]200`.
+# ------------------------------------------------------------------------
+echo "T18: retry classification + stdout byte-neutrality"
+TMP18=$(mktemp -d); mk_curl_stub "$TMP18"
+awk '/^CURL_BIN=/{on=1} on{print} on && /^curl_retry\(\)/{inr=1} inr && /^}/{exit}' "$SCRIPT" > "$TMP18/lib.sh"
+printf '[{"id":"1"}]' > "$TMP18/body.json"
+
+# --- (a) 500 then 200 on a safe GET: retried, final body returned ---------
+cat > "$TMP18/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP18"
+STUB
+cat >> "$TMP18/respond.sh" <<'STUB'
+if [[ "$N" -eq 1 ]]; then printf '500\t-\t-\n'; else printf '200\t-\t%s\n' "$d/body.json"; fi
+STUB
+chmod +x "$TMP18/respond.sh"
+printf '0' > "$TMP18/count"
+got=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+n_calls=$(wc -l < "$TMP18/requests.txt")
+if [[ "$got" == '[{"id":"1"}]' ]] && [[ "$n_calls" == "2" ]]; then
+  pass "T18a: 5xx on a safe GET is retried and the final body is returned"
+else
+  fail "T18a: got='$got' calls=$n_calls"
+fi
+
+# --- (b) 410 is NEVER retried --------------------------------------------
+cat > "$TMP18/respond.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '410\t-\t-\n'
+STUB
+chmod +x "$TMP18/respond.sh"
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"
+(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' >/dev/null 2>&1)
+n_calls=$(wc -l < "$TMP18/requests.txt")
+if [[ "$n_calls" == "1" ]]; then
+  pass "T18b: 410 is not retried (retrying would mask a sunset as a flake)"
+else
+  fail "T18b: 410 retried $n_calls times"
+fi
+
+# --- (c) a 5xx on a non-idempotent POST is NOT status-retried -------------
+# A retried write whose first attempt landed server-side returns 208, and
+# Gate 3's `!= 201` check would then report a false scope failure.
+cat > "$TMP18/respond.sh" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$N" -eq 1 ]]; then printf '500\t-\t-\n'; else printf '208\t-\t-\n'; fi
+STUB
+chmod +x "$TMP18/respond.sh"
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"
+(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -X POST "https://de.sentry.io/api/0/x/releases/"' >/dev/null 2>&1)
+n_calls=$(wc -l < "$TMP18/requests.txt")
+if [[ "$n_calls" == "1" ]]; then
+  pass "T18c: a write probe is not status-retried (208-after-retry cannot arise)"
+else
+  fail "T18c: POST status-retried $n_calls times"
+fi
+
+# --- (d) stdout byte-identity, BOTH call-site shapes ----------------------
+cat > "$TMP18/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP18"
+STUB
+cat >> "$TMP18/respond.sh" <<'STUB'
+printf '200\t-\t%s\n' "$d/body.json"
+STUB
+chmod +x "$TMP18/respond.sh"
+printf '0' > "$TMP18/count"
+body_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+rm -f "$TMP18/require_disable"   # bare probe is exempt BY DESIGN (argv has no flags)
+body_bare=$("$TMP18/curl" -s "https://de.sentry.io/api/0/x/" 2>/dev/null)
+status_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+status_bare=$("$TMP18/curl" -s -o /dev/null -w '%{http_code}' "https://de.sentry.io/api/0/x/" 2>/dev/null)
+if [[ "$body_wrapped" == "$body_bare" ]] && [[ "$body_wrapped" == '[{"id":"1"}]' ]] \
+   && [[ "$status_wrapped" == "$status_bare" ]] && [[ "$status_wrapped" == "200" ]]; then
+  pass "T18d: curl_retry stdout is byte-identical to bare curl in BOTH shapes"
+else
+  fail "T18d: body '$body_wrapped' vs '$body_bare'; status '$status_wrapped' vs '$status_bare'"
+fi
+
+# ------------------------------------------------------------------------
+# T18e/T18f — the TRANSPORT axis. T18a-d perturb curl's *status*; every one of
+# them runs against a stub that exited 0, so `rc` in curl_retry was 0 in every
+# fixture the suite owned. Three properties lived on the untested axis:
+#
+#   * a safe GET whose transport fails IS retried to the ceiling (T18e)
+#   * a non-idempotent write whose transport fails is NOT (T18f) — the arm the
+#     SUT's own comment calls the half that matters, because a `--max-time`
+#     abort on a POST that already landed server-side is the case observed live
+#   * the never-exit contract survives a transport failure (T18e's rc arm) —
+#     every call site is `x=$(curl_retry …)` under `set -euo pipefail`, so a
+#     propagated exit 28 aborts at the assignment, which is the exact cryptic
+#     failure #7590 spent an investigation misreading
+#
+# `sleep` is stubbed on PATH and its argv RECORDED, not discarded: a no-op
+# clock would void the backoff contract silently, so the recorded sequence is
+# asserted (two sleeps, 5 then 10) rather than merely made fast.
+# ------------------------------------------------------------------------
+mkdir -p "$TMP18/bin"
+cat > "$TMP18/bin/sleep" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP18/sleeps.txt"
+exit 0
+STUB
+chmod +x "$TMP18/bin/sleep"
+
+# Responder for both: every request is a transport failure (curl exit 28), the
+# `--max-time 10` shape both real call sites use.
+cat > "$TMP18/respond.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '000\t-\t-\t28\n'
+STUB
+chmod +x "$TMP18/respond.sh"
+
+# --- (e) transport failure on a safe GET: 3 attempts, backoff 5 then 10 ---
+echo "T18e: transport failure on a safe GET is retried to the ceiling"
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
+got=$(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
+  'set -euo pipefail; source ./lib.sh; rc=0; o=$(curl_retry -s --max-time 10 "https://de.sentry.io/api/0/x/") || rc=$?; printf "%s|rc=%s" "$o" "$rc"' 2>/dev/null)
+n_calls=$(wc -l < "$TMP18/requests.txt")
+sleeps=$(tr '\n' ' ' < "$TMP18/sleeps.txt" | sed 's/ *$//')
+if [[ "$n_calls" == "3" ]] && [[ "$got" == "|rc=0" ]] && [[ "$sleeps" == "5 10" ]]; then
+  pass "T18e: 3 attempts, backoff 5s then 10s, empty stdout, exit 0 (assignment never aborts)"
+else
+  fail "T18e: calls=$n_calls got='$got' sleeps='$sleeps' (want 3 / '|rc=0' / '5 10')"
+fi
+
+# --- (f) transport failure on a non-idempotent write: exactly 1 attempt ---
+# Two fixtures, because curl_retry marks a request unsafe by EITHER of two
+# independent signals and a single fixture satisfying both cannot tell which
+# one is load-bearing: dropping either would stay green.
+echo "T18f: transport failure on a write is not retried, by either unsafe signal"
+# (f1) DECLARED unsafe, argv otherwise indistinguishable from a safe GET.
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" CURL_RETRY_UNSAFE=1 bash -c \
+  'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
+f1_calls=$(wc -l < "$TMP18/requests.txt"); f1_sleeps=$(wc -l < "$TMP18/sleeps.txt")
+# (f2) INFERRED unsafe from argv alone, no declaration — the backstop that
+# catches a future author who adds a write and forgets the prefix.
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
+  'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -X POST -d "{\"v\":1}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
+f2_calls=$(wc -l < "$TMP18/requests.txt"); f2_sleeps=$(wc -l < "$TMP18/sleeps.txt")
+if [[ "$f1_calls" == "1" ]] && [[ "$f1_sleeps" == "0" ]] \
+   && [[ "$f2_calls" == "1" ]] && [[ "$f2_sleeps" == "0" ]]; then
+  pass "T18f: a timed-out write is sent once — declared (f1) and inferred (f2) alike"
+else
+  fail "T18f: declared=$f1_calls/$f1_sleeps inferred=$f2_calls/$f2_sleeps (want 1/0 each)"
+fi
+rm -rf "$TMP18"
+
+# ------------------------------------------------------------------------
+# T19 — Class A lists the UNROUTED slugs, and says so on stderr. Every cron
+# detector is meant to be bound to a workflow, so the healthy state is ZERO
+# unrouted and an unrouted detector is the exception that must be named.
+#
+# T3's 1-of-2 shape: m1 unrouted, m2 routed. The workflow EXISTS and has an
+# action, so neither Class C nor Class E adds noise to the report or stderr.
+# stderr is captured to ITS OWN file: the `::warning::` is a job-log signal and
+# must not leak into the report, which is the Article 30 evidence artifact.
+# ------------------------------------------------------------------------
+# One shared workflows fixture, written once to a mktemp-rooted path (T19-T19d
+# never mutate it), so the helper below writes no fixture file of its own.
+T19_WORKFLOWS=$(mktemp)
+printf '%s' '[{"id": "9001", "name": "cron-monitor-failure", "triggers": {"actions": [{"id": "NotifyEmailAction"}]}, "actionFilters": []}]' > "$T19_WORKFLOWS"
+# $1 = fixture dir holding monitors.json + detectors.json. Writes the report
+# into $1 and stderr to $1/stderr.txt; the SUT's stdout is discarded.
+t19_run() {
+  local d="$1"
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+    SENTRY_API_HOST=de.sentry.io \
+    SENTRY_FIXTURE_MONITORS="$d/monitors.json" \
+    SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+    SENTRY_FIXTURE_DETECTORS="$d/detectors.json" \
+    AUDIT_OUT_DIR="$d" bash "$SCRIPT" >/dev/null 2>"$d/stderr.txt"
+}
+# The ONE routing warning line, isolated from the SUT's other `::warning::`s.
+t19_warning() { grep -E '^::warning::Sentry cron routing:' "$1/stderr.txt" 2>/dev/null || true; }
+
+echo "T19: Class A lists the unrouted slug, not the routed one"
+TMP19=$(mktemp -d)
+cat > "$TMP19/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19"
+report=$(ls "$TMP19"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE '\*\*1\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qE '^- `m1` — ' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'Healthy state: \*\*0\*\* unrouted' "$report" \
+   && grep -q 'cron_monitor_alert_unrouted' "$report" \
+   && grep -q 'bound to no workflow' "$report" \
+   && ! grep -q 'bound to the cron-monitor-failure' "$report" \
+   && ! grep -qE 'Invariant .* HOLDS' "$report"; then
+  pass "unrouted m1 listed as a bullet, routed m2 not; healthy state stated as 0"
+else
+  fail "Class A did not list exactly the unrouted slug"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+
+echo "T19b: the unrouted slug is named in a stderr ::warning::, never in the report"
+w19=$(t19_warning "$TMP19")
+if [[ -n "$w19" ]] \
+   && grep -qE '^::warning::Sentry cron routing: pre-apply state' <<<"$w19" \
+   && grep -qE '1 cron detector\(s\) bound to no workflow' <<<"$w19" \
+   && ! grep -q 'cron-monitor-failure' <<<"$w19" \
+   && grep -qw 'm1' <<<"$w19" \
+   && ! grep -qw 'm2' <<<"$w19" \
+   && ! grep -q '::warning::' "$report"; then
+  pass "stderr ::warning:: names m1 (not m2) and is absent from the report"
+else
+  fail "routing ::warning:: missing, wrong, or leaked into the report: [${w19}]"
+  cat "$TMP19/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19"
+
+# ------------------------------------------------------------------------
+# T19c — the unrouted slug comes from the STRUCTURED binding, not `.name`.
+# Every other Class A fixture binds via the `.name` fallback, where slug and
+# name are identical, so a listing built from `.name` alone would pass them
+# all. Here the detector was renamed in the UI: `.name` no longer slugifies to
+# the monitor, `dataSources[].queryObj.slug` still does.
+# ------------------------------------------------------------------------
+echo "T19c: unrouted listing is slug-first (structured binding), not .name"
+TMP19C=$(mktemp -d)
+cat > "$TMP19C/monitors.json" <<'JSON'
+[{"slug": "real-unrouted", "name": "Real", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19C/detectors.json" <<'JSON'
+[
+  {
+    "id": "1901",
+    "name": "renamed-in-the-ui",
+    "type": "monitor_check_in_failure",
+    "workflowIds": [],
+    "dataSources": [{"queryObj": {"slug": "real-unrouted"}}]
+  }
+]
+JSON
+t19_run "$TMP19C"
+report=$(ls "$TMP19C"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19c=$(t19_warning "$TMP19C")
+if grep -qE '^- `real-unrouted` — ' "$report" \
+   && ! grep -q 'renamed-in-the-ui' "$report" \
+   && grep -q 'real-unrouted' <<<"$w19c" \
+   && ! grep -q 'renamed-in-the-ui' <<<"$w19c"; then
+  pass "structured slug listed in report and warning; UI display name used in neither"
+else
+  fail "unrouted listing did not prefer the structured slug: [${w19c}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19C"
+
+# ------------------------------------------------------------------------
+# T19d — a MUTED environment. Sentry mutes a monitor per environment, and a
+# muted monitor sends nothing even when it is routed, so routing alone is not
+# the whole answer. Every detector here IS routed, so the warning can only
+# have come from the muted count — that isolates the muted arm from Class A.
+# m2 carries an environment with `isMuted: false`, which must not count.
+# ------------------------------------------------------------------------
+echo "T19d: a muted monitor environment is counted, listed and warned"
+TMP19D=$(mktemp -d)
+cat > "$TMP19D/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+   "environments": [{"name": "production", "isMuted": true, "lastCheckIn": "2026-09-24T00:00:00Z"}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "config": {"schedule": "0 0 * * *"},
+   "environments": [{"name": "production", "isMuted": false, "lastCheckIn": "2026-09-24T00:00:00Z"}]}
+]
+JSON
+cat > "$TMP19D/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19D"
+report=$(ls "$TMP19D"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19d=$(t19_warning "$TMP19D")
+if grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$w19d" \
+   && ! grep -q 'bound to no workflow' <<<"$w19d" \
+   && ! grep -qw 'm2' <<<"$w19d" \
+   && ! grep -q '::warning::' "$report"; then
+  pass "muted m1 counted and listed in the report; stderr warning names m1 only"
+else
+  fail "muted environment not surfaced: [${w19d}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19D"
+
+# ------------------------------------------------------------------------
+# T19e — `isMuted` ABSENT from the whole payload is "unknown", never 0.
+# A zero here would be indistinguishable from "checked, none muted" (T15b),
+# which is the fail-open this row exists to kill. Both detectors are routed,
+# so the warning can only come from the unknown muted state.
+# ------------------------------------------------------------------------
+echo "T19e: no monitor carries isMuted — muted count is unknown, not 0"
+TMP19E=$(mktemp -d)
+cat > "$TMP19E/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "status": "active", "config": {"schedule": "0 * * * *"},
+   "environments": [{"name": "production", "lastCheckIn": "2026-09-24T00:00:00Z"}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "status": "active", "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19E/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19E"
+report=$(ls "$TMP19E"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19e=$(t19_warning "$TMP19E")
+if grep -qF 'Muted monitors: **unknown** (no monitor in the payload carries isMuted)' "$report" \
+   && ! grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && grep -qF 'no monitor in the payload carries isMuted' <<<"$w19e" \
+   && ! grep -q 'bound to no workflow' <<<"$w19e"; then
+  pass "absent isMuted reported as unknown in the report and the warning"
+else
+  fail "absent isMuted read as a healthy zero: [${w19e}]"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19E"
+
+# ------------------------------------------------------------------------
+# T19f — a STRING element in environments[] must not blank the muted list.
+# Unguarded, `.isMuted` on a string is a jq error; read through a process
+# substitution that error is invisible and the list comes back empty, i.e.
+# "Muted monitors: 0" while m1 is muted in production.
+# ------------------------------------------------------------------------
+echo "T19f: a non-object environments[] element does not hide a muted monitor"
+TMP19F=$(mktemp -d)
+cat > "$TMP19F/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+   "environments": ["garbage", {"name": "production", "isMuted": true}]},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19F/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+set +e; t19_run "$TMP19F"; rc19f=$?; set -e
+report=$(ls "$TMP19F"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if [[ "$rc19f" -eq 0 ]] \
+   && grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production$' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$(t19_warning "$TMP19F")"; then
+  pass "string environments[] element skipped; m1 still counted as muted"
+else
+  fail "string environments[] element hid the muted monitor (rc=$rc19f)"
+  cat "$TMP19F/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19F"
+
+# ------------------------------------------------------------------------
+# T19g — a DISABLED monitor sends nothing while routed, like a muted one.
+# ------------------------------------------------------------------------
+echo "T19g: a disabled monitor is counted, labelled disabled, and warned"
+TMP19G=$(mktemp -d)
+cat > "$TMP19G/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "status": "disabled", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "status": "active", "isMuted": false, "config": {"schedule": "0 0 * * *"}}
+]
+JSON
+cat > "$TMP19G/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19G"
+report=$(ls "$TMP19G"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19g=$(t19_warning "$TMP19G")
+if grep -qE 'Disabled monitors: \*\*1\*\*' "$report" \
+   && grep -qE 'Muted monitors: \*\*0\*\*' "$report" \
+   && grep -qE '^- `m1` — disabled$' "$report" \
+   && ! grep -qE '^- `m2` — ' "$report" \
+   && grep -qE 'disabled[^;]*: m1([ .;]|$)' <<<"$w19g" \
+   && ! grep -qw 'm2' <<<"$w19g"; then
+  pass "disabled m1 counted and labelled; warning names m1 only"
+else
+  fail "disabled monitor not surfaced: [${w19g}]"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19G"
+
+# ------------------------------------------------------------------------
+# T19h — an unrouted detector with NO resolvable binding (no structured slug,
+# no name) is still counted AND listed, and still fires the warning. Gating on
+# the resolved-slug list would count it (1 of 2) yet stay silent.
+# ------------------------------------------------------------------------
+echo "T19h: an unresolvable unrouted detector is listed and warned, not dropped"
+TMP19H=$(mktemp -d)
+cat > "$TMP19H/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19H/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "77", "name": null, "type": "monitor_check_in_failure", "workflowIds": []}
+]
+JSON
+t19_run "$TMP19H"
+report=$(ls "$TMP19H"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19h=$(t19_warning "$TMP19H")
+if grep -qE '\*\*1\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -qF -- '- `<unresolved detector id=77>` — ' "$report" \
+   && grep -qF '1 cron detector(s) bound to no workflow' <<<"$w19h" \
+   && grep -qF '<unresolved detector id=77>' <<<"$w19h"; then
+  pass "unresolvable detector counted, listed and warned as <unresolved detector id=77>"
+else
+  fail "unresolvable unrouted detector dropped from the list/warning: [${w19h}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19H"
+
+# ------------------------------------------------------------------------
+# T19i — workflow-command injection. `.name` is free text; a CR in it must
+# not reach the job log as a line of its own. Only slug-shaped values are
+# listed; anything else is a placeholder naming the detector id.
+# ------------------------------------------------------------------------
+echo "T19i: a hostile detector .name cannot inject a workflow command"
+TMP19I=$(mktemp -d)
+cat > "$TMP19I/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19I/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]},
+  {"id": "88", "name": "bad\r::error title=x::y", "type": "monitor_check_in_failure", "workflowIds": []}
+]
+JSON
+t19_run "$TMP19I"
+report=$(ls "$TMP19I"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19i=$(t19_warning "$TMP19I")
+if [[ -n "$w19i" ]] \
+   && grep -qF '<non-slug detector id=88>' <<<"$w19i" \
+   && ! grep -q $'\r' <<<"$w19i" \
+   && ! grep -qF '::error' <<<"$w19i" \
+   && ! grep -q $'\r' "$TMP19I/stderr.txt" \
+   && ! grep -qE '^::error' "$TMP19I/stderr.txt" \
+   && grep -qF -- '- `<non-slug detector id=88>` — ' "$report"; then
+  pass "hostile name replaced by <non-slug detector id=88>; no CR, no ::error in the warning"
+else
+  fail "detector .name reached the job log unsanitised: [$(printf '%q' "$w19i")]"
+  cat -A "$TMP19I/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19I"
+
+# ------------------------------------------------------------------------
+# T19j — TWO unrouted + one routed: both named, count 2, the routed one not.
+# ------------------------------------------------------------------------
+echo "T19j: two unrouted detectors are both listed and the warning counts 2"
+TMP19J=$(mktemp -d)
+cat > "$TMP19J/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 1 * * *"}},
+  {"slug": "m3", "name": "M3", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 2 * * *"}}
+]
+JSON
+cat > "$TMP19J/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "3", "name": "m3", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19J"
+report=$(ls "$TMP19J"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+w19j=$(t19_warning "$TMP19J")
+if grep -qE '\*\*2\*\* of \*\*3\*\* cron detectors' "$report" \
+   && grep -qE '^- `m1` — ' "$report" && grep -qE '^- `m2` — ' "$report" \
+   && ! grep -qE '^- `m3` — ' "$report" \
+   && grep -qF '2 cron detector(s) bound to no workflow' <<<"$w19j" \
+   && grep -qw 'm1' <<<"$w19j" && grep -qw 'm2' <<<"$w19j" \
+   && ! grep -qw 'm3' <<<"$w19j"; then
+  pass "m1 and m2 listed and warned with count 2; routed m3 in neither"
+else
+  fail "two unrouted detectors not both surfaced: [${w19j}]"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -20 >&2 || true
+fi
+rm -rf "$TMP19J"
+
+# ------------------------------------------------------------------------
+# T19k — muted in the SECOND environment only. A check of environments[0]
+# alone reads staging (not muted) and misses production.
+# ------------------------------------------------------------------------
+echo "T19k: a monitor muted in its second environment is counted, env named"
+TMP19K=$(mktemp -d)
+cat > "$TMP19K/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"},
+  "environments": [{"name": "staging", "isMuted": false}, {"name": "production", "isMuted": true}]}]
+JSON
+cat > "$TMP19K/detectors.json" <<'JSON'
+[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}]
+JSON
+t19_run "$TMP19K"
+report=$(ls "$TMP19K"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: production$' "$report"; then
+  pass "muted-in-second-environment counted; muted in: production (not staging)"
+else
+  fail "second-environment mute missed"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19K"
+
+# ------------------------------------------------------------------------
+# T19l — a MONITOR-level mute with no environments at all.
+# ------------------------------------------------------------------------
+echo "T19l: a monitor-level isMuted with no environments reads all environments"
+TMP19L=$(mktemp -d)
+cat > "$TMP19L/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": true, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19L/detectors.json" <<'JSON'
+[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}]
+JSON
+t19_run "$TMP19L"
+report=$(ls "$TMP19L"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qE 'Muted monitors: \*\*1\*\*' "$report" \
+   && grep -qE '^- `m1` — muted in: all environments$' "$report" \
+   && grep -qE 'muted[^;]*: m1([ .;]|$)' <<<"$(t19_warning "$TMP19L")"; then
+  pass "monitor-level mute counted as muted in: all environments"
+else
+  fail "monitor-level mute missed"
+  sed -n '/^_Silent monitors/,/^$/p' "$report" 2>/dev/null >&2 || true
+fi
+rm -rf "$TMP19L"
+
+# ------------------------------------------------------------------------
+# T19m — one unrouted AND one muted: ONE warning line carrying both parts.
+# ------------------------------------------------------------------------
+echo "T19m: unrouted + muted produce a single warning line with both parts"
+TMP19M=$(mktemp -d)
+cat > "$TMP19M/monitors.json" <<'JSON'
+[
+  {"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}},
+  {"slug": "m2", "name": "M2", "type": "cron_job", "isMuted": true, "config": {"schedule": "0 1 * * *"}}
+]
+JSON
+cat > "$TMP19M/detectors.json" <<'JSON'
+[
+  {"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []},
+  {"id": "2", "name": "m2", "type": "monitor_check_in_failure", "workflowIds": ["9001"]}
+]
+JSON
+t19_run "$TMP19M"
+n19m=$(grep -cE '^::warning::Sentry cron routing:' "$TMP19M/stderr.txt" || true)
+w19m=$(t19_warning "$TMP19M")
+if [[ "$n19m" -eq 1 ]] \
+   && grep -qE 'bound to no workflow[^;]*: m1([ .;]|$)' <<<"$w19m" \
+   && grep -qE '; [^;]*muted[^;]*: m2([ .;]|$)' <<<"$w19m"; then
+  pass "one routing warning line names unrouted m1 and muted m2"
+else
+  fail "unrouted + muted not joined into one line (lines=$n19m): [${w19m}]"
+fi
+rm -rf "$TMP19M"
+
+# ------------------------------------------------------------------------
+# T19n — the routing warning survives a Class D exit. The tf root declares
+# only `other`; state is known and empty; m1 is live, undeclared, not in
+# state (Class D -> exit 1) AND unrouted. The warning must still be emitted.
+# ------------------------------------------------------------------------
+echo "T19n: the routing warning is emitted even when the Class D gate exits 1"
+TMP19N=$(mktemp -d)
+mkdir -p "$TMP19N/tf"
+cat > "$TMP19N/tf/monitors.tf" <<'TF'
+resource "sentry_cron_monitor" "other" {
+  name = "other"
+}
+TF
+: > "$TMP19N/state-slugs.txt"
+cat > "$TMP19N/monitors.json" <<'JSON'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "isMuted": false, "config": {"schedule": "0 * * * *"}}]
+JSON
+cat > "$TMP19N/detectors.json" <<'JSON'
+[{"id": "1", "name": "m1", "type": "monitor_check_in_failure", "workflowIds": []}]
+JSON
+set +e
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP19N/monitors.json" \
+  SENTRY_FIXTURE_RULES="$T19_WORKFLOWS" \
+  SENTRY_FIXTURE_DETECTORS="$TMP19N/detectors.json" \
+  SENTRY_TF_DIR="$TMP19N/tf" SENTRY_STATE_SLUGS_FILE="$TMP19N/state-slugs.txt" \
+  AUDIT_OUT_DIR="$TMP19N" bash "$SCRIPT" >/dev/null 2>"$TMP19N/stderr.txt"
+rc19n=$?
+set -e
+w19n=$(t19_warning "$TMP19N")
+if [[ "$rc19n" -eq 1 ]] \
+   && grep -q 'unreclaimable (Class D)' "$TMP19N/stderr.txt" \
+   && grep -qE 'bound to no workflow[^;]*: m1([ .;]|$)' <<<"$w19n"; then
+  pass "Class D exit 1 and the routing warning naming m1 both present"
+else
+  fail "Class D exit hid the routing warning (rc=$rc19n): [${w19n}]"
+  cat "$TMP19N/stderr.txt" >&2 || true
+fi
+rm -rf "$TMP19N"
+rm -f "$T19_WORKFLOWS"
+
+# ------------------------------------------------------------------------
+# T20d — a Link with rel="next" and NO `results` field. This is the arm the
+# code argues hardest for and the one nothing covered: collapsing "cannot tell"
+# into "done" is the fail-open the whole mechanism exists to prevent, and its
+# sibling (an unparseable cursor, T20e) already warned and counted. Two
+# structurally identical parse failures must not get opposite verdicts.
+# ------------------------------------------------------------------------
+echo "T20d: a Link with no results= field is refused, not read as done"
+TMP20D=$(mktemp -d); mk_curl_stub "$TMP20D"; mk_default_respond "$TMP20D"
+mkdir -p "$TMP20D/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP20D/tf/m.tf"
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/?&cursor=100:1:0>; rel="next"; cursor="100:1:0"\r\n' > "$TMP20D/noresults.hdr"
+cat > "$TMP20D/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20D"
+STUB
+cat >> "$TMP20D/respond.sh" <<'STUB'
+case "$URL" in
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/noresults.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20D/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20D"); rc=$?
+set -e
+report=$(ls "$TMP20D"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qi "no 'results' field" <<<"$out" \
+   && grep -q 'Enumeration complete:\*\* NO' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "absent results= refused, counted, and the clean verdict suppressed"
+else
+  fail "absent results= read as end-of-pagination (rc=$rc)"
+  printf '%s\n' "$out" | tail -6 >&2
+fi
+rm -rf "$TMP20D"
+
+# ------------------------------------------------------------------------
+# T20e — the sibling parse failure: rel="next", results="true", no parseable
+# cursor. Same class as T20d, and it must get the same verdict.
+# ------------------------------------------------------------------------
+echo "T20e: an unparseable cursor is refused, not read as done"
+TMP20E=$(mktemp -d); mk_curl_stub "$TMP20E"; mk_default_respond "$TMP20E"
+mkdir -p "$TMP20E/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP20E/tf/m.tf"
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/>; rel="next"; results="true"\r\n' > "$TMP20E/nocursor.hdr"
+cat > "$TMP20E/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20E"
+STUB
+cat >> "$TMP20E/respond.sh" <<'STUB'
+case "$URL" in
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/nocursor.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20E/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20E"); rc=$?
+set -e
+report=$(ls "$TMP20E"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qi 'no parseable cursor' <<<"$out" \
+   && grep -q 'Enumeration complete:\*\* NO' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "unparseable cursor refused and counted — same verdict as T20d"
+else
+  fail "unparseable cursor mis-handled (rc=$rc)"
+  printf '%s\n' "$out" | tail -6 >&2
+fi
+rm -rf "$TMP20E"
+
+# ------------------------------------------------------------------------
+# T24 — Class E: a cron detector routing to a workflow that does not exist.
+# Class A asks whether workflowIds is EMPTY, and a dangling id is not empty, so
+# before this an operator deleting a workflow in the UI left every bound
+# detector reading as fully routed while nothing paged. Both directions
+# fixtured: one reference resolves, one does not.
+# ------------------------------------------------------------------------
+echo "T24: Class E — dangling workflowIds detected, resolved ones not"
+TMP24=$(mktemp -d)
+cat > "$TMP24/monitors.json" <<'EOF'
+[
+  {"slug": "routed-ok",   "name": "A", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "routed-dead", "name": "B", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+EOF
+cat > "$TMP24/workflows.json" <<'EOF'
+[{"id": "5001", "name": "live-workflow", "triggers": {"actions": [{"id": "NotifyEmailAction"}]}, "actionFilters": []}]
+EOF
+cat > "$TMP24/detectors.json" <<'EOF'
+[
+  {"id": "1", "name": "routed-ok",   "type": "monitor_check_in_failure", "workflowIds": ["5001"]},
+  {"id": "2", "name": "routed-dead", "type": "monitor_check_in_failure", "workflowIds": ["9999"]}
+]
+EOF
+set +e
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP24/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP24/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP24/detectors.json" \
+  AUDIT_OUT_DIR="$TMP24" bash "$SCRIPT" >/dev/null 2>&1
+rc=$?
+set -e
+report=$(ls "$TMP24"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# 9999 dangles and must be named; 5001 resolves and must NOT be. A predicate
+# that flagged every reference would name both and pass a one-sided check.
+if [[ "$rc" == "0" ]] \
+   && grep -q 'workflow id `9999`' "$report" \
+   && ! grep -q 'workflow id `5001`' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "dangling workflowId flagged, resolved one not; clean verdict suppressed"
+else
+  fail "Class E mis-fired (rc=$rc)"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -14 >&2 || true
+fi
+rm -rf "$TMP24"
+
+# ------------------------------------------------------------------------
+# T21 — extraction-failure guard. Zero cron detectors against a non-empty
+# live monitor list is a BROKEN EXTRACTION, not a clean org. Under the old
+# predicate this state produced a loud artifact (all monitors flagged); under
+# the new one it would produce a clean report and exit 0 — quiet, green and
+# wrong. That inversion is why this guard is load-bearing.
+# ------------------------------------------------------------------------
+echo "T21: zero cron detectors against live monitors is an extraction failure"
+TMP21=$(mktemp -d)
+cat > "$TMP21/monitors.json" <<'EOF'
+[{"slug": "m1", "name": "M1", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+EOF
+printf '[]' > "$TMP21/workflows.json"
+printf '[]' > "$TMP21/detectors.json"
+set +e
+out=$(SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP21/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP21/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP21/detectors.json" \
+  AUDIT_OUT_DIR="$TMP21" bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+report=$(ls "$TMP21"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if [[ "$rc" != "0" ]] && grep -qi 'orphan extraction is broken' <<<"$out" \
+   && { [[ ! -f "$report" ]] || ! grep -q 'No orphans detected' "$report"; }; then
+  pass "extraction failure named; clean-state string never emitted"
+else
+  fail "extraction guard did not fire (rc=$rc)"
+  printf '%s\n' "$out" | tail -8 >&2
+fi
+rm -rf "$TMP21"
+
+# ------------------------------------------------------------------------
+# T20 — pagination is FOLLOWED, not truncated.
+#
+# Cursor-following is mandatory rather than loud-fail because `detectors/`
+# grows 1:1 with cron monitors: a truncation failure would, by ordinary
+# growth, red this audit before the terraform plan step that deploys the fix.
+# ------------------------------------------------------------------------
+echo "T20: detectors pagination is followed"
+TMP20=$(mktemp -d); mk_curl_stub "$TMP20"; mk_default_respond "$TMP20"
+mkdir -p "$TMP20/tf"
+printf 'resource "sentry_cron_monitor" "a" {\n  name = "m1"\n}\nresource "sentry_cron_monitor" "b" {\n  name = "m2"\n}\n' > "$TMP20/tf/m.tf"
+cat > "$TMP20/monitors.json" <<'EOF'
+[{"slug":"m1","name":"M1","type":"cron_job","config":{"schedule":"0 * * * *"}},
+ {"slug":"m2","name":"M2","type":"cron_job","config":{"schedule":"0 0 * * *"}}]
+EOF
+printf '[{"id":"1","name":"m1","type":"monitor_check_in_failure","workflowIds":["w"]}]' > "$TMP20/det_p1.json"
+printf '[{"id":"2","name":"m2","type":"monitor_check_in_failure","workflowIds":["w"]}]' > "$TMP20/det_p2.json"
+# Absolute Link pointing at a DIFFERENT host than $api_host — which is what
+# Sentry actually returns (verified live: targets are sentry.io even when the
+# request went to <org>.sentry.io). A host-equality check would refuse every
+# real pagination; only cursor-extract-and-rebuild is both safe and correct.
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/?&cursor=100:1:0>; rel="next"; results="true"; cursor="100:1:0"\r\n' > "$TMP20/next.hdr"
+cat > "$TMP20/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20"
+STUB
+cat >> "$TMP20/respond.sh" <<'STUB'
+case "$URL" in
+  *detectors/*cursor=*)        printf '200\t-\t%s\n' "$d/det_p2.json" ;;
+  */detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/next.hdr" "$d/det_p1.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*) printf '200\t-\t%s\n' "$d/monitors.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20"); rc=$?
+set -e
+report=$(ls "$TMP20"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# The cursor must be rebuilt onto $api_host, never onto the header's host.
+off_host=$(grep -c 'https://sentry.io' "$TMP20/requests.txt" || true)
+if [[ "$rc" == "0" ]] \
+   && grep -qE '\*\*0\*\* of \*\*2\*\* cron detectors' "$report" \
+   && grep -q 'cursor=100:1:0' "$TMP20/requests.txt" \
+   && [[ "$off_host" == "0" ]] \
+   && grep -q 'Enumeration complete:\*\* yes' "$report"; then
+  pass "both detector pages audited; cursor rebuilt onto \$api_host, never the header's host"
+else
+  fail "pagination not followed (rc=$rc off_host=$off_host)"
+  cat "$TMP20/requests.txt" >&2
+  grep -E 'cron detectors|Enumeration' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP20"
+
+# ------------------------------------------------------------------------
+# T20b — a hostile Link target is REFUSED and the refusal poisons the clean
+# verdict. curl parses everything before an `@` as userinfo, so following
+# `<@attacker.tld/…>` would issue a real off-box request carrying
+# SENTRY_AUTH_TOKEN. Asserting on the stub's recorded hosts — not on the
+# absence of an error, which a silently-followed redirect also satisfies.
+# ------------------------------------------------------------------------
+echo "T20b: hostile Link target refused and clean verdict suppressed"
+TMP20B=$(mktemp -d); mk_curl_stub "$TMP20B"; mk_default_respond "$TMP20B"
+mkdir -p "$TMP20B/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP20B/tf/m.tf"
+printf 'link: <@attacker.tld/api/0/organizations/jikigai/detectors/>; rel="next"; results="true"; cursor="100:1:0"\r\n' > "$TMP20B/evil.hdr"
+cat > "$TMP20B/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20B"
+STUB
+cat >> "$TMP20B/respond.sh" <<'STUB'
+case "$URL" in
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/evil.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20B/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20B"); rc=$?
+set -e
+report=$(ls "$TMP20B"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+bad_hosts=$(grep -cE 'attacker\.tld' "$TMP20B/requests.txt" || true)
+if [[ "$bad_hosts" == "0" ]] \
+   && grep -qi 'userinfo-injection' <<<"$out" \
+   && grep -q 'Enumeration complete:\*\* NO' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "no request to attacker.tld; refusal counted; clean-state string suppressed"
+else
+  fail "hostile Link handling wrong (bad_hosts=$bad_hosts rc=$rc)"
+  grep -E 'attacker|Enumeration|No orphans' "$TMP20B/requests.txt" "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP20B"
+
+# ------------------------------------------------------------------------
+# T20c — MAX_PAGES ceiling bounds an endpoint that always returns a cursor,
+# and hitting it counts as truncation rather than completing quietly.
+# ------------------------------------------------------------------------
+echo "T20c: MAX_PAGES ceiling bounds the cursor loop"
+TMP20C=$(mktemp -d); mk_curl_stub "$TMP20C"; mk_default_respond "$TMP20C"
+mkdir -p "$TMP20C/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP20C/tf/m.tf"
+printf 'link: <https://de.sentry.io/api/0/organizations/jikigai/detectors/?&cursor=9:9:9>; rel="next"; results="true"; cursor="9:9:9"\r\n' > "$TMP20C/loop.hdr"
+cat > "$TMP20C/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20C"
+STUB
+cat >> "$TMP20C/respond.sh" <<'STUB'
+case "$URL" in
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/loop.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20C/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20C" SENTRY_AUDIT_MAX_PAGES=3); rc=$?
+set -e
+report=$(ls "$TMP20C"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+n_det=$(grep -c 'detectors/' "$TMP20C/requests.txt" || true)
+if [[ "$n_det" == "3" ]] \
+   && grep -q 'MAX_PAGES ceiling' <<<"$out" \
+   && grep -q 'Enumeration complete:\*\* NO' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "loop stopped at the ceiling (3 requests); truncation counted; no clean verdict"
+else
+  fail "MAX_PAGES ceiling not enforced (n_det=$n_det rc=$rc)"
+  printf '%s\n' "$out" | tail -8 >&2
+fi
+rm -rf "$TMP20C"
+
+# ------------------------------------------------------------------------
+# T20f — accumulation ABOVE the argv ceiling, and the page-size parameter.
+#
+# T20 already proves two pages are followed and merged, but it does it with
+# two ~90-byte pages, so it is blind to both halves of the pagination fix:
+#
+#   * Reverting the file-backed accumulator to
+#     `acc=$(jq -n --argjson a "$acc" --argjson b "$body" '$a + $b')` passes a
+#     whole page as ONE argv entry, which Linux caps at MAX_ARG_STRLEN
+#     (32 * 4096 = 131072 B). Two tiny pages never reach it. Measured on this
+#     box: 128640 B accumulates, 134000 B dies `Argument list too long`.
+#     Crucially that failure lands UPSTREAM of the shape check, so it bypasses
+#     the whole self-naming diagnostic and the operator gets one cryptic line
+#     and no report at all.
+#   * Dropping `?per_page=100` leaves `cursor=` intact, so T20's cursor
+#     assertion still matches. Nothing read the page size.
+#
+# The fixture therefore asserts its OWN precondition first: if a later edit
+# shrinks these pages back under the ceiling the test does not quietly become
+# a duplicate of T20, it fails as a fixture defect.
+# ------------------------------------------------------------------------
+echo "T20f: pages above the argv ceiling accumulate, and per_page is sent"
+TMP20F=$(mktemp -d); mk_curl_stub "$TMP20F"; mk_default_respond "$TMP20F"
+mkdir -p "$TMP20F/tf"
+printf 'resource "sentry_cron_monitor" "a" {\n  name = "m1"\n}\nresource "sentry_cron_monitor" "b" {\n  name = "m2"\n}\n' > "$TMP20F/tf/m.tf"
+cat > "$TMP20F/monitors.json" <<'EOF'
+[{"slug":"m1","name":"M1","type":"cron_job","config":{"schedule":"0 * * * *"}},
+ {"slug":"m2","name":"M2","type":"cron_job","config":{"schedule":"0 0 * * *"}}]
+EOF
+printf '[{"id":"w","name":"W","triggers":{"actions":[{"targetType":"issue_owners"}]},"actionFilters":[]}]' \
+  > "$TMP20F/workflows.json"
+# Synthesized, not captured (cq-test-fixtures-synthesized-only): invented ids,
+# low-entropy filler. 200 rows of ~760 B puts each page well past 131072 B.
+mk_det_page() {  # $1 out, $2 cron slug, $3 id prefix
+  jq -nc --arg slug "$2" --arg p "$3" '
+    [{id: ($p + "-cron"), name: $slug, type: "monitor_check_in_failure",
+      workflowIds: ["w"], dataSources: [{queryObj: {slug: $slug}}]}]
+    + [range(0;200) | {id: ($p + "-" + (.|tostring)), name: ($p + "-filler-" + (.|tostring)),
+        type: "metric_issue", workflowIds: ["w"], description: ("x" * 700)}]
+  ' > "$1"
+}
+mk_det_page "$TMP20F/det_p1.json" m1 p1
+mk_det_page "$TMP20F/det_p2.json" m2 p2
+p1_bytes=$(wc -c < "$TMP20F/det_p1.json")
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/?&cursor=100:1:0>; rel="next"; results="true"; cursor="100:1:0"\r\n' > "$TMP20F/next.hdr"
+cat > "$TMP20F/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20F"
+STUB
+cat >> "$TMP20F/respond.sh" <<'STUB'
+case "$URL" in
+  *detectors/*cursor=*)        printf '200\t-\t%s\n' "$d/det_p2.json" ;;
+  */detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/next.hdr" "$d/det_p1.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/monitors.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/workflows.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20F/respond.sh"
+if (( p1_bytes <= 131072 )); then
+  fail "T20f FIXTURE DEFECT: page 1 is ${p1_bytes} B, at or under MAX_ARG_STRLEN (131072) — this fixture can no longer distinguish the file-backed accumulator from --argjson"
+else
+  set +e
+  out=$(run_sut_stubbed "$TMP20F"); rc=$?
+  set -e
+  report=$(ls "$TMP20F"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+  det_reqs=$(grep -c 'detectors/' "$TMP20F/requests.txt" || true)
+  det_paged=$(grep 'detectors/' "$TMP20F/requests.txt" | grep -c 'per_page=100' || true)
+  if [[ "$rc" == "0" ]] \
+     && [[ "$det_reqs" == "2" ]] && [[ "$det_paged" == "2" ]] \
+     && grep -q 'cursor=100:1:0' "$TMP20F/requests.txt" \
+     && grep -qE '^- Total detectors: 402$' "$report" \
+     && grep -qE '^- Cron detectors \(`monitor_check_in_failure`\): 2$' "$report" \
+     && grep -q 'Enumeration complete:\*\* yes' "$report"; then
+    pass "T20f: ${p1_bytes} B x2 merged to 402 detectors; every detectors request carried per_page=100"
+  else
+    fail "T20f: rc=$rc p1_bytes=$p1_bytes det_reqs=$det_reqs det_paged=$det_paged"
+    grep -E 'Total detectors|Cron detectors|Enumeration' "$report" >&2 2>/dev/null || true
+    printf '%s\n' "$out" | tail -6 >&2
+  fi
+fi
+rm -rf "$TMP20F"
+
+# ------------------------------------------------------------------------
+# T23 — the STRUCTURED binding wins over the display name, and the choice is
+# reported. This is the fixture where the two disagree: `.name` has been
+# renamed in the UI while `dataSources[].queryObj.slug` still points at the
+# real monitor. Binding on `.name` would invent a Class B orphan out of a
+# cosmetic edit. They are identical in the live org today, which is exactly
+# why a fixture is needed to pin the preference.
+# ------------------------------------------------------------------------
+echo "T23: structured binding preferred over display name"
+TMP23=$(mktemp -d)
+cat > "$TMP23/monitors.json" <<'EOF'
+[{"slug": "real-slug", "name": "Real", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+EOF
+printf '[]' > "$TMP23/workflows.json"
+cat > "$TMP23/detectors.json" <<'EOF'
+[
+  {
+    "id": "2301",
+    "name": "renamed-in-the-ui",
+    "type": "monitor_check_in_failure",
+    "workflowIds": ["w1"],
+    "dataSources": [{"queryObj": {"slug": "real-slug"}}]
+  }
+]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP23/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP23/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP23/detectors.json" \
+  AUDIT_OUT_DIR="$TMP23" bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP23"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if ! grep -qE '`renamed-in-the-ui`' "$report" \
+   && ! grep -qE 'Class B' "$report" \
+   && grep -q 'Monitor binding: structured' "$report"; then
+  pass "structured slug used; UI rename did not fabricate a Class B orphan; choice reported"
+else
+  fail "structured binding not preferred"
+  grep -E 'Monitor binding|Class B|renamed' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP23"
+
+# ------------------------------------------------------------------------
+# T23b — the fallback still fires when the structured field is absent, and
+# says so. Every pre-#7590 fixture in this file is shaped that way, so this
+# also pins that those keep working.
+# ------------------------------------------------------------------------
+echo "T23b: fallback engages when the structured field is absent"
+TMP23B=$(mktemp -d)
+cat > "$TMP23B/monitors.json" <<'EOF'
+[{"slug": "only-name", "name": "Only", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+EOF
+printf '[]' > "$TMP23B/workflows.json"
+cat > "$TMP23B/detectors.json" <<'EOF'
+[{"id": "2302", "name": "only-name", "type": "monitor_check_in_failure", "workflowIds": ["w1"]}]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP23B/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP23B/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP23B/detectors.json" \
+  AUDIT_OUT_DIR="$TMP23B" bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP23B"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -q 'Monitor binding: fallback' "$report" && ! grep -qE 'Class B' "$report"; then
+  pass "fallback engaged and reported; no false orphan"
+else
+  fail "fallback path wrong"
+  grep -E 'Monitor binding|Class B' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP23B"
+
+# ------------------------------------------------------------------------
+# T23c — PARTIAL rollout: some cron detectors carry the structured slug and
+# some do not. Under the earlier all-or-nothing fallback this was the silent
+# failure: the structured count was non-zero so the fallback never engaged,
+# and every detector without the field dropped out of the binding set — Class B
+# under-reporting a real orphan with no signal. Per-detector resolution removes
+# the state; this fixture is what proves it, and no mutation of the old
+# implementation could have reached it.
+# ------------------------------------------------------------------------
+echo "T23c: partial structured rollout resolves per detector"
+TMP23C=$(mktemp -d)
+cat > "$TMP23C/monitors.json" <<'EOF'
+[
+  {"slug": "has-structured", "name": "A", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "name-only",      "name": "B", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+EOF
+printf '[]' > "$TMP23C/workflows.json"
+cat > "$TMP23C/detectors.json" <<'EOF'
+[
+  {"id": "1", "name": "renamed-in-ui", "type": "monitor_check_in_failure", "workflowIds": ["w"],
+   "dataSources": [{"queryObj": {"slug": "has-structured"}}]},
+  {"id": "2", "name": "name-only", "type": "monitor_check_in_failure", "workflowIds": ["w"]},
+  {"id": "3", "name": "ghost-only-via-name", "type": "monitor_check_in_failure", "workflowIds": ["w"]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP23C/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP23C/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP23C/detectors.json" \
+  AUDIT_OUT_DIR="$TMP23C" bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP23C"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# The structured detector binds by its slug (its .name is a decoy that would
+# have produced a false orphan); the name-only detector still binds; and the
+# name-only detector naming a MISSING monitor is still caught as Class B —
+# which the all-or-nothing form would have dropped entirely.
+if grep -q 'Monitor binding: MIXED — 1/3 structured' "$report" \
+   && ! grep -qE '`renamed-in-ui`' "$report" \
+   && ! grep -qE '^- `name-only` — a cron detector' "$report" \
+   && grep -qE '`ghost-only-via-name`' "$report"; then
+  pass "mixed rollout: structured wins per detector, name-only still binds, orphan still caught"
+else
+  fail "partial structured rollout mis-resolved"
+  grep -E 'Monitor binding|Class B|renamed-in-ui|ghost-only' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP23C"
+
+# ------------------------------------------------------------------------
+# T25 — resource-count parity between the .tf root and the prose that cites it.
+#
+# Review found the SAME count asserted as 49 (script, twice, "verified against
+# the live org"), 50 (README), and 55 (script, also "verified live") — and 23
+# vs 29 for issue alerts. Every one read as verified; ground truth is 55 and 29.
+# None of them had a parity test, which is why they could drift silently while
+# looking authoritative.
+#
+# This derives from the .tf root and asserts the prose agrees. It is
+# deliberately narrow: it pins the counts that are CITED, not every number.
+# ------------------------------------------------------------------------
+echo "T25: prose counts match the Terraform root"
+TF_DIR="$SCRIPT_DIR/../infra/sentry"
+# `grep -c` exits 1 for any file with zero matches, and under `set -eu` that
+# kills the suite at the assignment — the same class this PR fixed in the
+# script. The non-vacuity check below is what turns a genuinely-zero result
+# into a loud failure rather than a silent pass.
+n_cron=$( { grep -h -c '^resource "sentry_cron_monitor"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
+n_alert=$( { grep -h -c '^resource "sentry_issue_alert"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
+# TWO alert types since #7650 Phase 2, and the split is the load-bearing fact.
+# Deriving only `sentry_issue_alert` would demand the README say "2 issue
+# alerts" — true to this derivation and FALSE as prose, because the root still
+# governs 29 alert rules. The anchors are disjoint: `"sentry_alert"` carries a
+# closing quote, so it cannot match `"sentry_issue_alert"`, and vice versa.
+n_salert=$( { grep -h -c '^resource "sentry_alert"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
+readme="$TF_DIR/README.md"
+t25_ok=1
+# Non-vacuity: the derivation must actually find resources.
+# `n_alert` is NOT in the floor: since #8451 zero `sentry_issue_alert` is the
+# correct state (the legacy alert-rule API is removed). The prose check below
+# still pins it — a README still citing a sentry_issue_alert count reds.
+if (( n_cron < 1 )) || (( n_salert < 1 )); then
+  fail "T25: derived 0 resources from $TF_DIR — the anchor broke, not the prose"
+  t25_ok=0
+else
+  if ! grep -q "\*\*${n_cron} cron monitors\*\*" "$readme"; then
+    fail "T25: README cron-monitor count disagrees with the tf root (${n_cron})"; t25_ok=0
+  fi
+  if ! grep -q "\*\*${n_salert} \`sentry_alert\` rules\*\*" "$readme"; then
+    fail "T25: README sentry_alert count disagrees with the tf root (${n_salert})"; t25_ok=0
+  fi
+  if (( n_alert > 0 )); then
+    if ! grep -q "\*\*${n_alert} \`sentry_issue_alert\` rules\*\*" "$readme"; then
+      fail "T25: README sentry_issue_alert count disagrees with the tf root (${n_alert})"; t25_ok=0
+    fi
+  elif grep -qE "\*\*[0-9]+ \`sentry_issue_alert\` rules\*\*" "$readme"; then
+    fail "T25: README still cites a sentry_issue_alert rule count; the tf root declares none"; t25_ok=0
+  fi
+  # The TOTAL is cited too, and it is the number a reader carries away. Pinning
+  # only the two parts would let "29 alert rules" rot into 28 unnoticed.
+  n_alert_total=$(( n_salert + n_alert ))
+  if ! grep -q "(${n_alert_total} alert rules total)" "$readme"; then
+    fail "T25: README alert-rule TOTAL disagrees with the tf root (${n_alert_total})"; t25_ok=0
+  fi
+  # The script's Class D comment cites the cron count three times in one
+  # sentence; any stale figure there is the shape that shipped as "verified".
+  if ! grep -q "${n_cron} \`resource \"sentry_cron_monitor\"\` blocks" "$SCRIPT"; then
+    fail "T25: the script's Class D comment cites a stale cron count (tf root says ${n_cron})"; t25_ok=0
+  fi
+fi
+(( t25_ok == 1 )) && pass "prose counts agree with the tf root (${n_cron} cron, ${n_salert} sentry_alert, ${n_alert} sentry_issue_alert)"
+
+# ------------------------------------------------------------------------
+# T22 — ASSEMBLY: no Sentry call bypasses the curl_retry chokepoint.
+#
+# Guard 1's property is "every response carrying a deprecation header produces
+# a warning". The tripwire attaches to curl_retry, so a new call site written
+# as bare `curl` is silently unmonitored — no fixture can catch that, because
+# the defect is the ABSENCE of a call. This asserts the ENUMERATION, not a
+# snapshot of today's list: the two known bypasses are exempted BY REASON, and
+# any third one fails until someone states why it is allowed.
+#
+# Comment lines are stripped first: this file discusses `curl` in prose in
+# several places, and a body-grep sees comments too.
+# ------------------------------------------------------------------------
+echo "T22: assembly — every Sentry call goes through curl_retry"
+# `grep -v` exits 1 when it emits nothing, and this is a bare assignment under
+# `set -eu` — the class this PR fixed in the script itself, caught here by
+# scripts/lint-shell-capture-exit.
+sut_code=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
+
+# Count EXECUTIONS, not spellings.
+#
+# The first version counted a bare `curl` token and filtered out any line
+# mentioning `CURL_BIN`. Both halves were wrong, and BOTH bypasses were proven
+# to ship at full green: `"$CURL_BIN" … https://…/teams/` was deleted by the
+# CURL_BIN filter before counting, and `"curl" …` escaped the
+# `[^_[:alnum:]$"]` prefix class because `"` is inside it. Each is a real
+# Sentry request carrying the production token, outside the tripwire — the
+# exact defect T22 exists to catch, in T22.
+#
+# The property: curl is EXECUTED in exactly three places — once inside
+# curl_retry via the seam variable, and twice at the enumerated exemptions.
+n_seam=$(grep -cE '(^|[[:space:]]|\$\()"?\$\{?CURL_BIN\}?"?[[:space:]]' <<<"$sut_code" || true)
+bare_lines=$(grep -nE '(^|[[:space:]]|\$\()"?curl"?[[:space:]]' <<<"$sut_code" \
+  | grep -vE 'curl_retry' || true)
+n_bare=$(printf '%s' "$bare_lines" | grep -c . || true)
+bare_ctx=$(grep -E -A3 '(^|[[:space:]]|\$\()"?curl"?[[:space:]]' <<<"$sut_code" \
+  | grep -vE 'curl_retry' || true)
+
+# Exempt, with reasons:
+#   1. the region-probe loop — runs BEFORE api_host is resolved, so there is no
+#      validated host to attach a tripwire to, and it probes /users/me/.
+#   2. Gate 3's cleanup DELETE — best-effort teardown whose response is
+#      discarded by design (`|| true`), so it carries no verdict.
+# HONEST SCOPE: those two DO issue real Sentry requests whose headers the
+# tripwire never reads. This asserts every request THROUGH THE CHOKEPOINT is
+# monitored — not that every Sentry response is.
+if [[ "$n_seam" == "1" ]] && [[ "$n_bare" == "2" ]] \
+   && grep -q 'users/me/' <<<"$bare_ctx" \
+   && grep -q 'X DELETE' <<<"$bare_ctx"; then
+  pass "curl executes in exactly 3 places: the curl_retry seam + the 2 enumerated bypasses"
+else
+  fail "curl execution sites changed: seam=$n_seam (expect 1), bare=$n_bare (expect 2)"
+  printf '%s\n' "$bare_lines" >&2
+  echo "    If you added a Sentry call, route it through curl_retry (so the" >&2
+  echo "    deprecation tripwire sees it) or add it here WITH a reason." >&2
+fi
+
+# ------------------------------------------------------------------------
+# NO anti-vacuity floor here, deliberately — and this is a constraint, not a
+# preference.
+#
+# A `MIN_ASSERTIONS` floor was written, and `scripts/guard-vacuity-floor.test.sh`
+# rejected it: adding one makes this suite "floor-bearing", this directory is
+# in that guard's DEFERRED set, and its deferral ledger is a SHRINK-ONLY
+# ratchet. Its three sanctioned outs are all closed to this PR — "cover it" is
+# directory-granular and adding a single file trips the double-count arm;
+# "promote the directory" is blocked on a per-scope construction ratchet that
+# does not exist yet; and raising the number is explicitly forbidden by that
+# file, which records the last bump as made against its own instruction and
+# says the correct response to a second occurrence is to build the seam, not
+# to add another line. The seam is tracked in #7585.
+#
+# What is lost is small here: this suite runs under `set -eu` and ends in
+# `exit $((FAIL > 0 ? 1 : 0))`, so a harness that dies early exits non-zero and
+# the runner sees RED anyway. A floor would only add protection against
+# assertions being silently SKIPPED while the script still reaches its end.
+# The stronger property — that each assertion actually discriminates — is not
+# something a floor can check at all; that is what the 21-mutation battery in
+# the PR body is for, including a row that guts `pass()` accounting.
+
+# ------------------------------------------------------------------------
+# T26-T34 — #7997 transport confinement + destination pinning.
+#
+# These run NON-FIXTURE on purpose. SENTRY_FIXTURE_MONITORS skips the entire
+# 4-gate block, which would make both halves of every assertion below
+# satisfiable by a delete mutant — a fixture-mode row asserts nothing about a
+# guard that sits on the live path.
+# ------------------------------------------------------------------------
+echo "T26: hostile SENTRY_API_HOST is refused before any request"
+T26=$(mktemp -d); mk_curl_stub "$T26" >/dev/null
+set +e
+out26=$(run_sut_stubbed "$T26" SENTRY_API_HOST=attacker.tld 2>&1); rc26=$?
+set -e
+n26=$(wc -l < "$T26/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc26" -eq 2 ]] && grep -q 'refusing destination host' <<<"$out26" && [[ "$n26" -eq 0 ]]; then
+  pass "T26 attacker.tld refused, exit 2, zero requests"
+else
+  fail "T26 expected exit 2 + zero requests, got rc=$rc26 requests=$n26 :: $(head -c 200 <<<"$out26")"
+fi
+
+echo "T27: hostile SENTRY_ORG is refused before any request"
+T27=$(mktemp -d); mk_curl_stub "$T27" >/dev/null
+set +e
+out27=$(run_sut_stubbed "$T27" SENTRY_ORG='jikigai/../../evil' 2>&1); rc27=$?
+# '/' not '@': the org lands in `organizations/${SENTRY_ORG}/`, and a fixture
+# whose offending char is outside even a widened class cannot discriminate.
+set -e
+n27=$(wc -l < "$T27/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc27" -eq 2 ]] && grep -q 'refusing org' <<<"$out27" && [[ "$n27" -eq 0 ]]; then
+  pass "T27 hostile org refused, exit 2, zero requests"
+else
+  fail "T27 expected exit 2 + zero requests, got rc=$rc27 requests=$n27 :: $(head -c 200 <<<"$out27")"
+fi
+
+echo "T28: a caller-named curl binary is refused"
+T28=$(mktemp -d); mk_curl_stub "$T28" >/dev/null
+set +e
+out28=$(run_sut_stubbed "$T28" CURL_BIN=/tmp/exfil 2>&1); rc28=$?
+set -e
+if [[ "$rc28" -eq 2 ]] && grep -q 'refusing curl-binary' <<<"$out28"; then
+  pass "T28 CURL_BIN=/tmp/exfil refused, exit 2"
+else
+  fail "T28 expected exit 2, got rc=$rc28 :: $(head -c 200 <<<"$out28")"
+fi
+
+echo "T29: every stubbed request is transport-confined (--disable first)"
+T29=$(mktemp -d); mk_curl_stub "$T29" >/dev/null
+set +e
+run_sut_stubbed "$T29" >/dev/null 2>&1
+set -e
+v29=$(wc -l < "$T29/violations.txt" 2>/dev/null || echo 0)
+r29=$(wc -l < "$T29/requests.txt" 2>/dev/null || echo 0)
+if [[ "$v29" -eq 0 && "$r29" -gt 0 ]]; then
+  pass "T29 $r29 request(s), 0 argv violations"
+else
+  fail "T29 $v29 violation(s) across $r29 request(s): $(head -c 300 "$T29/violations.txt")"
+fi
+
+echo "T30: region discovery still selects the org subdomain (candidate 1)"
+T30=$(mktemp -d); mk_curl_stub "$T30" >/dev/null
+cat > "$T30/respond.sh" <<'R'
+case "$URL" in
+  https://jikigai.sentry.io/api/0/users/me/*) printf '200\t\t{}' ;;
+  *users/me/*) printf '404\t\t{}' ;;
+  *) printf '200\t\t[]' ;;
+esac
+R
+set +e
+env -u SENTRY_API_HOST PATH="$T30:$PATH" STUB_REQUIRE_DISABLE=1 \
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T30/tf" AUDIT_OUT_DIR="$T30" \
+  bash "$SCRIPT" >/dev/null 2>&1
+set -e
+if grep -q 'jikigai\.sentry\.io/api/0/users/me/' "$T30/requests.txt"; then
+  pass "T30 candidate 1 probed and selected"
+else
+  fail "T30 org subdomain never probed: $(head -c 300 "$T30/requests.txt")"
+fi
+
+echo "T31: region discovery reaches candidates 2-4 when 1 fails"
+T31=$(mktemp -d); mk_curl_stub "$T31" >/dev/null
+cat > "$T31/respond.sh" <<'R'
+case "$URL" in
+  https://sentry.io/api/0/users/me/*) printf '200\t\t{}' ;;
+  *users/me/*) printf '404\t\t{}' ;;
+  *) printf '200\t\t[]' ;;
+esac
+R
+set +e
+env -u SENTRY_API_HOST PATH="$T31:$PATH" STUB_REQUIRE_DISABLE=1 \
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T31/tf" AUDIT_OUT_DIR="$T31" \
+  bash "$SCRIPT" >/dev/null 2>&1
+set -e
+got31=0
+for h in jikigai.sentry.io eu.sentry.io de.sentry.io sentry.io; do
+  grep -q "https://$h/api/0/users/me/" "$T31/requests.txt" && got31=$((got31+1))
+done
+v31=$(wc -l < "$T31/violations.txt" 2>/dev/null || echo 0)
+if [[ "$got31" -eq 4 ]] && [[ "$v31" -eq 0 ]]; then
+  pass "T31 all four candidates probed in order, 0 argv violations"
+else
+  fail "T31 got $got31/4 candidates and $v31 argv violation(s): $(head -c 200 "$T31/violations.txt")"
+fi
+
+echo "T32: the all-fail arm names the candidate set"
+T32=$(mktemp -d); mk_curl_stub "$T32" >/dev/null
+cat > "$T32/respond.sh" <<'R'
+case "$URL" in *users/me/*) printf '401\t\t{}' ;; *) printf '200\t\t[]' ;; esac
+R
+set +e
+out32=$(env -u SENTRY_API_HOST PATH="$T32:$PATH" STUB_REQUIRE_DISABLE=1 \
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T32/tf" AUDIT_OUT_DIR="$T32" \
+  bash "$SCRIPT" 2>&1); rc32=$?
+set -e
+if [[ "$rc32" -ne 0 ]] && grep -q 'not valid against any candidate host' <<<"$out32" \
+   && grep -q 'jikigai.sentry.io' <<<"$out32" && grep -q 'sentry.io' <<<"$out32"; then
+  pass "T32 all-fail arm rendered from the candidate array"
+else
+  fail "T32 rc=$rc32 :: $(head -c 300 <<<"$out32")"
+fi
+
+echo "T33: a discovered host outside the candidate set is refused"
+T33=$(mktemp -d); mk_curl_stub "$T33" >/dev/null
+set +e
+out33=$(run_sut_stubbed "$T33" SENTRY_API_HOST=jikigai.sentry.io.evil.tld 2>&1); rc33=$?
+set -e
+n33=$(wc -l < "$T33/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc33" -eq 2 ]] && [[ "$n33" -eq 0 ]]; then
+  pass "T33 suffix-extended lookalike refused, zero requests"
+else
+  fail "T33 expected exit 2 + zero requests, got rc=$rc33 requests=$n33 :: $(head -c 200 <<<"$out33")"
+fi
+
+echo "T34: a legitimate candidate host is still accepted"
+T34=$(mktemp -d); mk_curl_stub "$T34" >/dev/null
+set +e
+out34=$(run_sut_stubbed "$T34" SENTRY_API_HOST=de.sentry.io 2>&1); rc34=$?
+set -e
+n34=$(wc -l < "$T34/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc34" -ne 2 ]] && [[ "$n34" -gt 0 ]]; then
+  pass "T34 de.sentry.io accepted, $n34 request(s) made"
+else
+  fail "T34 a valid candidate was refused: rc=$rc34 requests=$n34 :: $(head -c 200 <<<"$out34")"
+fi
+
+echo "T37: the resolver/trust-anchor prologue reaches the child (audit-side F17)"
+# The fidelity suite has F17; this suite had no counterpart, so deleting the
+# whole unset prologue here left it 45/45 green.
+T37=$(mktemp -d); mk_curl_stub "$T37" >/dev/null
+set +e
+env PATH="$T37:$PATH" SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T37/tf" AUDIT_OUT_DIR="$T37" \
+  SSLKEYLOGFILE=/tmp/should-not-survive CURL_CA_BUNDLE=/tmp/bad-ca \
+  LD_PRELOAD=/tmp/evil.so OPENSSL_CONF=/tmp/evil.cnf \
+  bash "$SCRIPT" >/dev/null 2>&1
+set -e
+if [[ "$(cat "$T37/env.txt" 2>/dev/null)" == "<unset> <unset> <unset> <unset>" ]]; then
+  pass "T37 SSLKEYLOGFILE/CURL_CA_BUNDLE/LD_PRELOAD/OPENSSL_CONF all scrubbed before the request"
+else
+  fail "T37 the child saw: $(cat "$T37/env.txt" 2>/dev/null) (want all <unset>)"
+fi
+
+echo "T38: the candidate set has exactly four members"
+# T31 greps for four fixed substrings, so it is satisfied by any SUPERSET --
+# appending a fifth host left the suite green. Pin the cardinality.
+# Count ARRAY MEMBERS, not sentry.io matches -- a member that is not a
+# sentry.io host (which is exactly the dangerous addition) would otherwise be
+# invisible. Measured: the sentry.io-counting form passed with a fifth member
+# `exfil.example.com` appended.
+n38=$(grep -oE 'readonly SENTRY_HOST_CANDIDATES=\([^)]*\)' "$SCRIPT" \
+        | sed -E 's/.*\(//; s/\)//' | tr ' ' '\n' | grep -c . || true)
+if [[ "$n38" -eq 4 ]]; then
+  pass "T38 SENTRY_HOST_CANDIDATES has exactly 4 members"
+else
+  fail "T38 SENTRY_HOST_CANDIDATES has $n38 member(s), expected 4 — a new member widens the accepted destination set"
+fi
+
+echo "T36: PREFIX-extended lookalikes are refused (kills the suffix-glob mutation)"
+# Every other hostile-host row extends the host on the RIGHT
+# (jikigai.sentry.io.evil.tld). A suffix-glob membership test -- `== *"$_c"` --
+# still refuses those, so the whole set survived that mutation at 46/46 green.
+# These extend on the LEFT, which is the direction a suffix glob admits.
+T36=$(mktemp -d); mk_curl_stub "$T36" >/dev/null
+t36_bad=0; t36_detail=""
+for h in evilsentry.io xeu.sentry.io notde.sentry.io evil-jikigai.sentry.io; do
+  set +e
+  o=$(run_sut_stubbed "$T36" SENTRY_API_HOST="$h" 2>&1); r=$?
+  set -e
+  n=$(wc -l < "$T36/requests.txt" 2>/dev/null || echo 0)
+  if [[ "$r" -ne 2 ]] || ! grep -q 'refusing destination host' <<<"$o" || [[ "$n" -ne 0 ]]; then
+    t36_bad=$((t36_bad + 1)); t36_detail+=" [$h rc=$r requests=$n]"
+  fi
+  : > "$T36/requests.txt"
+done
+if [[ "$t36_bad" -eq 0 ]]; then
+  pass "T36 all 4 prefix-extended lookalikes refused, zero requests"
+else
+  fail "T36 $t36_bad of 4 prefix-extended lookalikes ACCEPTED:$t36_detail"
+fi
+
+echo "T40: a SHAPE-VALID org outside the allowlist is refused"
+# The merge with #7989 narrowed this gate from an RFC 1035 shape check to a
+# two-slug allowlist. Measured at that moment: the whole suite stayed 50/50
+# green, i.e. NO row distinguished the narrower control from the weaker one, so
+# silently reverting to the shape check would have been invisible. These slugs
+# are all perfectly well-formed RFC 1035 labels -- they pass the OLD predicate
+# and must fail the NEW one. That difference is the entire point of the merge
+# resolution, so it gets an assertion.
+T40=$(mktemp -d); mk_curl_stub "$T40" >/dev/null
+t40_bad=0; t40_detail=""
+for o in jikigai-us jikigai2 acme sentry jikigai-eu-staging; do
+  set +e
+  o40=$(run_sut_stubbed "$T40" SENTRY_ORG="$o" 2>&1); r40=$?
+  set -e
+  n40=$(wc -l < "$T40/requests.txt" 2>/dev/null || echo 0)
+  if [[ "$r40" -ne 2 ]] || ! grep -q 'refusing org' <<<"$o40" || [[ "$n40" -ne 0 ]]; then
+    t40_bad=$((t40_bad + 1)); t40_detail+=" [$o rc=$r40 requests=$n40]"
+  fi
+  : > "$T40/requests.txt"
+done
+if [[ "$t40_bad" -eq 0 ]]; then
+  pass "T40 all 5 shape-valid non-allowlisted orgs refused, zero requests"
+else
+  fail "T40 $t40_bad of 5 shape-valid orgs were ACCEPTED — the gate is a shape check, not an allowlist:$t40_detail"
+fi
+
+echo "T39: the Gate-3 DELETE call site is reached, and IS confined"
+# Every other #7997 row stops long before Gate 3: none of them supplies a
+# responder, so the very first request errors and the run dies with one entry in
+# requests.txt. That left the ONLY non-idempotent credentialed call in this file
+# -- the best-effort `DELETE .../releases/${probe_ver}/` that cleans up Gate 3's
+# write probe -- with no argv assertion at all: mutating its flags out survived
+# the whole battery green. The rows that DO reach it (T16/T17/T20*) write
+# violations.txt and never read it, which is the same blindness one level down.
+#
+# So: drive the happy path all the way through Gate 4, then read the ledger.
+T39=$(mktemp -d); mk_curl_stub "$T39" >/dev/null; mk_default_respond "$T39"
+mkdir -p "$T39/tf"
+set +e
+run_sut_stubbed "$T39" >/dev/null 2>&1
+set -e
+v39=$(wc -l < "$T39/violations.txt" 2>/dev/null || echo 0)
+# Assert the DELETE was actually ISSUED, not merely that nothing complained --
+# a run that never reaches Gate 3 also records zero violations, and the two are
+# indistinguishable from the ledger alone.
+d39=$(grep -c '^DELETE https://.*/releases/audit-probe-' "$T39/requests.txt" 2>/dev/null || true)
+if [[ "$d39" -ge 1 && "$v39" -eq 0 ]]; then
+  pass "T39 Gate-3 cleanup DELETE issued ($d39) and every call site confined, 0 argv violations"
+else
+  fail "T39 DELETE-count=$d39 (want >=1), violations=$v39: $(head -c 300 "$T39/violations.txt")"
+fi
+
+echo "T35: the PRODUCTION pairing is accepted (must-PASS, not a refusal row)"
+# Every CI caller passes SENTRY_ORG=jikigai-eu / SENTRY_API_HOST=jikigai-eu.sentry.io
+# (apply-sentry-infra.yml, sentry-audit-gate.yml, reusable-release.yml, and the
+# operator runbook via Doppler soleur/prd). Before this row the suite contained
+# ZERO occurrences of that pairing: every new row was a REFUSAL, so an
+# over-aggressive guard that rejected production would have shipped green.
+T35=$(mktemp -d); mk_curl_stub "$T35" >/dev/null
+set +e
+out35=$(run_sut_stubbed "$T35" SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io 2>&1); rc35=$?
+set -e
+n35=$(wc -l < "$T35/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc35" -ne 2 ]] && ! grep -qE '^ERROR: refusing (org|destination host|curl-binary) ' <<<"$out35" \
+   && [[ "$n35" -gt 0 ]]; then
+  pass "T35 production pairing accepted: no refusal, $n35 request(s) made"
+else
+  fail "T35 the production pairing was REFUSED: rc=$rc35 requests=$n35 :: $(grep -oE '^ERROR: refusing.*' <<<"$out35" | head -1)"
+fi
+
+# ------------------------------------------------------------------------
+# HARNESS SELF-TEST + FLOOR. Measured: neutering pass()/fail() to `:` made this
+# suite print "Results: 0 passed, 0 failed" and exit 0 -- green having asserted
+# nothing. The trailing note below argued a floor adds little because `set -eu`
+# catches an early death; that is true and it is not this case, where the script
+# reaches its end normally.
+#
+# Both checks emit with printf and exit DIRECTLY. Routing either through pass()
+# or fail() would dispatch the detector through the thing it detects, which is
+# the exact defect scripts/guard-vacuity-floor.test.sh exists to catch.
+_h_p=$PASS; _h_f=$FAIL
+{ pass "harness self-test (unwound)"; fail "harness self-test (unwound)"; } >/dev/null 2>&1
+if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: verdict helpers cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$PASS" "$_h_f" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_h_p; FAIL=$_h_f
+if [[ $((PASS + FAIL)) -lt 65 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 65.\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 exit $((FAIL > 0 ? 1 : 0))

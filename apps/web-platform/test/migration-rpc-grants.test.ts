@@ -67,7 +67,10 @@ const GRANDFATHER_REVOKE_GAPS = new Set<string>();
 // FUNCTION NAME (not file) so a future differently-named DEFINER fn added to the same
 // file is NOT silently exempted; tracked for follow-up cleanup, NOT touched here
 // (out-of-feature-scope per `wg-when-an-audit-identifies-pre-existing`).
-//   - sum_user_mtd_cost (027) — the original known entry.
+//   - sum_user_mtd_cost (027) — REMOVED 2026-09-07 by migration 136, which repins it
+//     to `search_path = public, pg_temp`. The entry had to go in the SAME PR: this
+//     gate short-circuits on set membership, so the repin was unenforceable while
+//     the name stayed here (#1055).
 //   - increment_conversation_cost (017, 4-arg v1) — surfaced by THIS PR's
 //     case-insensitive + body-form-agnostic detector. The old regex required
 //     SECURITY DEFINER *before* `AS $$`, but this fn is `AS $$ … $$ … SECURITY
@@ -75,7 +78,6 @@ const GRANDFATHER_REVOKE_GAPS = new Set<string>();
 //     which DOES pin pg_temp) but the v1 overload was never DROP FUNCTION'd.
 const LEGACY_SEARCH_PATH_NO_PG_TEMP = new Set([
   "increment_conversation_cost",
-  "sum_user_mtd_cost",
 ]);
 
 const corpus = loadForwardCorpus(MIGRATIONS_DIR);

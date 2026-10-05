@@ -107,6 +107,10 @@ function healthyPreconditions(): PreconditionInputs {
     caaCount: 0,
     challengeTxtPresent: true,
     alwaysUseHttps: "off",
+    // #7640 — the GitHub-Pages topology this routine was written for: four
+    // apex A-records pointing at 185.199.x. Post-Cloudflare-Pages cutover the
+    // apex is a CNAME and the routine must refuse (AC25).
+    apexRecordTypes: ["A", "A", "A", "A"],
   };
 }
 
@@ -161,6 +165,11 @@ function propagatedDns(): DnsPropagationInputs {
     acmeWwwStatus: 404,
     acmeApexServer: "GitHub.com",
     acmeWwwServer: "GitHub.com",
+    // Default fake = the post-flip state GitHub agrees is issuable, so the
+    // orchestration scenarios below exercise the paths PAST the gate.
+    httpsEligibleApex: true,
+    httpsEligibleWww: true,
+    healthCaaError: null,
   };
 }
 
@@ -308,6 +317,100 @@ describe("checkReissuePreconditions", () => {
   });
 });
 
+// =============================================================================
+// #7640 — TOPOLOGY precondition (AC25)
+// =============================================================================
+//
+// After the Cloudflare Pages cutover the apex is a CNAME, not four A-records.
+// EVERY other precondition still passes in that topology (Pages returns 404 on
+// the ACME path, CAA is still empty, the challenge TXT is still published), so
+// without this gate the routine half-runs: `listToggleRecords` queries
+// `[apex, "A"]` and finds nothing, the apex is untouched, and the only record
+// actually de-proxied is **www** — dropping HSTS, the HTTPS-upgrade rule, WAF
+// and bot management on a host `domains.md` mandates be proxied. It cannot undo
+// that: `restoreStateInner` refuses to restore a subset (< EXPECTED_TOGGLE_
+// RECORDS), so the de-proxying is ONE-WAY. Refusing to start is the only safe
+// behaviour.
+
+describe("checkReissuePreconditions — apex topology gate (#7640, AC25)", () => {
+  it("apex is a CNAME (post-cutover) → fails apexTopologyIsA", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["CNAME"],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("apexTopologyIsA");
+    expect(r.results.apexTopologyIsA).toBe(false);
+    // Non-vacuity: these must be the ONLY reasons it blocks. Exact equality is
+    // deliberate — if an UNRELATED precondition also failed here, this test
+    // would pass for the wrong reason and would keep passing if the topology
+    // gate were deleted.
+    //
+    // `toggleSetIsComplete` joins it here rather than diluting it: a CNAME apex
+    // yields one address record, so the toggle set is 2 against an expected 5.
+    // Both gates are supposed to fire on this topology, and the set still goes
+    // red if either is removed.
+    expect(r.failed).toEqual(["apexTopologyIsA", "toggleSetIsComplete"]);
+  });
+
+  // The regression test for the #7640 PR4a hazard. This is the shape a TYPE
+  // check cannot see, and it is why `toggleSetIsComplete` exists: shrinking the
+  // apex `for_each` from four keys to one leaves the apex an `A`, so
+  // `apexTopologyIsA` PASSES and every other precondition holds. Before the
+  // cardinality gate the routine proceeded, de-proxied both records, and then
+  // could not restore them — taking an HSTS-preloaded apex to a hard TLS
+  // failure against an origin certificate that expired 2026-08-16.
+  it("PR4a shape: apex is ONE A-record → apexTopologyIsA passes, toggleSetIsComplete fails", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["A", "MX", "MX", "TXT", "TXT", "TXT", "TXT"],
+    });
+    // The type gate is satisfied — this is precisely the blind spot.
+    expect(r.results.apexTopologyIsA).toBe(true);
+    // The cardinality gate is the only thing that refuses.
+    expect(r.results.toggleSetIsComplete).toBe(false);
+    expect(r.ok).toBe(false);
+    expect(r.failed).toEqual(["toggleSetIsComplete"]);
+  });
+
+  it("four apex A-records (pre-PR4a) → toggleSetIsComplete passes", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["A", "A", "A", "A", "MX", "MX", "TXT"],
+    });
+    expect(r.results.toggleSetIsComplete).toBe(true);
+    expect(r.ok).toBe(true);
+  });
+
+  it("apex A-records (GitHub Pages topology) → passes apexTopologyIsA", () => {
+    const r = checkReissuePreconditions(healthyPreconditions());
+    expect(r.ok).toBe(true);
+    expect(r.results.apexTopologyIsA).toBe(true);
+  });
+
+  it("an unreadable/empty apex read FAILS CLOSED (refuse, never assume A)", () => {
+    // Unlike `alwaysUseHttps` (which coalesces an unreadable value to a PASS
+    // because the ACME carve-out is the authoritative signal), there is no
+    // second signal for topology. An empty read means "we do not know what the
+    // apex is", and a one-way de-proxying is not something to guess at.
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: [],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("apexTopologyIsA");
+  });
+
+  it("a MIXED apex (an A plus a stray CNAME) still blocks", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["A", "CNAME"],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("apexTopologyIsA");
+  });
+});
+
 describe("setRecordsProxied — partial-toggle abort", () => {
   it("throws PartialToggleError on the failing record", async () => {
     const { deps } = makeFake({ failToggleOffIds: ["a3"] });
@@ -387,6 +490,37 @@ describe("runReissueSteps — Scenario 5 (precondition blocked)", () => {
 
     expect(result.outcome).toBe("precondition_blocked");
     expect(result.preconditionResults?.caaPermissive).toBe(false);
+    expect(calls.setRecordProxied).toHaveLength(0);
+    expect(calls.setPagesCname).toHaveLength(0);
+  });
+
+  // #7640 / AC25 — the whole point of the topology gate, asserted end-to-end
+  // rather than only on the pure helper.
+  it("CNAME apex → NON-BENIGN precondition_blocked and www is never de-proxied", async () => {
+    const { deps, calls } = makeFake({
+      preconditions: {
+        ...healthyPreconditions(),
+        apexRecordTypes: ["CNAME"],
+      },
+    });
+    const result = await runReissueSteps(
+      makeStep(),
+      deps,
+      deps.logger,
+      remediationCtx(),
+    );
+
+    expect(result.outcome).toBe("precondition_blocked");
+    expect(result.preconditionResults?.apexTopologyIsA).toBe(false);
+    // NON-benign: it must page, not merely log. A benign terminal here would
+    // let the post-cutover topology sit unnoticed while an operator keeps
+    // firing the manual trigger.
+    expect(BENIGN_OUTCOMES.has(result.outcome)).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.errorSummary).toContain("precondition_blocked");
+    // ‼️ THE ANTI-VACUITY ASSERTION. Without the topology precondition this
+    // exact fake reaches setRecordsProxied(false) and issues 5 PATCHes — the
+    // one-way de-proxying of www. Zero writes is only reachable WITH the gate.
     expect(calls.setRecordProxied).toHaveLength(0);
     expect(calls.setPagesCname).toHaveLength(0);
   });
@@ -699,10 +833,107 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     acmeWwwStatus: 404,
     acmeApexServer: "GitHub.com",
     acmeWwwServer: "GitHub.com",
+    // The happy baseline is GitHub AGREEING it will issue. Every pre-existing
+    // case below asserts some OTHER field's effect, so they must start from an
+    // eligible baseline or they would all collapse to `retry` for the new
+    // reason and stop testing what they were written to test.
+    httpsEligibleApex: true,
+    httpsEligibleWww: true,
+    healthCaaError: null,
   };
 
   it("all-185.199.x + no AAAA + GitHub-shaped ACME → propagated", () => {
     expect(checkDnsPropagated(base).status).toBe("propagated");
+  });
+
+  // ── is_https_eligible gate (2026-08-16 apex outage regression) ─────────────
+  //
+  // The outage's defining property: EVERY inference-based check passed while
+  // GitHub still refused to issue. These pin the authoritative signal so that
+  // combination can never again read as "propagated" — which is what led to the
+  // wrong conclusion that the authorization was wedged server-side.
+
+  it("THE 2026-08-16 SIGNATURE: every dig-based check passes but GitHub says ineligible → retry, not propagated", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      httpsEligibleApex: false,
+      httpsEligibleWww: false,
+    });
+    // Must NOT be "propagated" — that is the bug.
+    expect(v.status).toBe("retry");
+    expect(v.reason).toContain("is_https_eligible=false");
+  });
+
+  it("names WHICH host is ineligible rather than collapsing the two", () => {
+    // www is the half nobody checks, and the cert covers both as one order.
+    const wwwOnly = checkDnsPropagated({ ...base, httpsEligibleWww: false });
+    expect(wwwOnly.status).toBe("retry");
+    expect(wwwOnly.reason).toContain("www");
+    expect(wwwOnly.reason).not.toContain("apex + www");
+
+    const apexOnly = checkDnsPropagated({ ...base, httpsEligibleApex: false });
+    expect(apexOnly.status).toBe("retry");
+    expect(apexOnly.reason).toContain("apex");
+
+    const both = checkDnsPropagated({
+      ...base,
+      httpsEligibleApex: false,
+      httpsEligibleWww: false,
+    });
+    expect(both.reason).toContain("apex + www");
+  });
+
+  it("a FAILED health read is retry, never a false 'ineligible'", () => {
+    // Coalescing an unreachable endpoint to `false` would abort a healthy
+    // remediation on a transient blip — the fail-closed trap the AAAA and
+    // A-record guards already document.
+    for (const inputs of [
+      { ...base, httpsEligibleApex: null },
+      { ...base, httpsEligibleWww: null },
+      { ...base, httpsEligibleApex: null, httpsEligibleWww: null },
+    ]) {
+      const v = checkDnsPropagated(inputs);
+      expect(v.status).toBe("retry");
+      expect(v.reason).toContain("inconclusive");
+    }
+  });
+
+  it("a CAA error is TERMINAL (failed), not retry — waiting cannot clear it", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      healthCaaError: "caa forbids issuance by letsencrypt.org",
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toContain("CAA");
+  });
+
+  it("CAA is checked even when eligibility is unknown — the remedies differ", () => {
+    // A CAA rejection with an unreadable eligibility flag must still report CAA,
+    // because "fix your CAA record" and "wait for the flip" are different jobs.
+    const v = checkDnsPropagated({
+      ...base,
+      httpsEligibleApex: null,
+      httpsEligibleWww: null,
+      healthCaaError: "caa_error",
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toContain("CAA");
+  });
+
+  it("eligibility does not mask an earlier, more specific failure", () => {
+    // A surviving AAAA is terminal and must keep reporting as such even though
+    // GitHub happens to say eligible — otherwise the specific diagnosis is lost.
+    const v = checkDnsPropagated({
+      ...base,
+      resolved6: ["2606:50c0:8000::153"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toContain("AAAA");
+  });
+
+  it("the propagated reason states GitHub's agreement, not just our inference", () => {
+    expect(checkDnsPropagated(base).reason).toContain("is_https_eligible=true");
   });
 
   it("Cloudflare answers → retry (propagation may still be in flight)", () => {
@@ -1524,5 +1755,24 @@ describe("#6698 live deps are real, not a dead twin (AC8b)", () => {
     const src = deps.gatherDnsPropagation.toString();
     expect(src).toContain("setServers");
     expect(src).toContain("resolve6");
+  });
+
+  // #7640 / AC25 — the topology precondition is only real if the LIVE deps
+  // actually read the apex record type. A pure-helper test alone would pass
+  // against a `gatherPreconditions` that hardcodes `apexRecordTypes: ["A"]`.
+  it("buildLiveDeps.gatherPreconditions reads the live apex record type", () => {
+    const deps = buildLiveDeps({
+      installationToken: "t",
+      cfToken: "c",
+      zoneId: "z",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const src = deps.gatherPreconditions.toString();
+    expect(src).toContain("apexRecordTypes");
+    // It must query Cloudflare's dns_records WITHOUT the `type=A` filter that
+    // `listToggleRecords` uses — that filter is precisely what makes a CNAME
+    // apex invisible.
+    expect(src).toContain("dns_records?name=");
+    expect(src).not.toContain("dns_records?name=${encodeURIComponent(APEX_NAME)}&type=A");
   });
 });

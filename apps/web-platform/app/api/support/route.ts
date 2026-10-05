@@ -21,6 +21,7 @@ import { resolveOrCreateSupportConversation } from "@/server/support-conversatio
 import { formatSupportSseFrame } from "@/lib/support-sse";
 import { sanitizeErrorForClient } from "@/server/error-sanitizer";
 import { reportSilentFallback } from "@/server/observability";
+import { verifiedUserId } from "@/server/request-auth";
 import type { WSMessage } from "@/lib/types";
 
 // Hard cap on how long the SSE response is held open waiting for the turn to
@@ -37,16 +38,13 @@ export async function POST(request: Request): Promise<Response> {
   if (!originValid) return rejectCsrf("api/support", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
   }
-  const userId = user.id;
 
   // SECURITY BOUNDARY (ADR-113 "Live rollout gate"): the live Concierge backend
   // is gated behind `support-live`, default OFF. The front-end only calls this

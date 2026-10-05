@@ -235,7 +235,14 @@ BARE=$(new_lockdir); git init -q --bare "$BARE" >/dev/null 2>&1   # REAL bare re
                                        # so the #4826 hardened guard's `rev-parse
                                        # --is-bare-repository` returns "true" and the surgery
                                        # proceeds (the guard skips non-bare / fake dirs).
-printf '[core]\n\tbare = true\n\tsentinel = untouched\n' > "$BARE/config"   # keep bare=true
+# RE-POINTED for #7394 (polarity reversed), NOT deleted: this is the only coverage of the
+# lockless writer under a wedged lock (#5934 / #5912), and that property is unchanged.
+# What changed is the OBSERVABLE. The surgery used to WRITE repositoryformatversion=1 and
+# extensions.worktreeConfig=true, and this test read those keys back as proof the lockless
+# path ran. Both writes are gone — the extension is the half that wedges worktrees — so the
+# test now seeds the extension and proves it was REMOVED through the same lockless path.
+# Bonus: that exercises the --unset-all branch of atomic_git_config's FR2 fast path.
+printf '[core]\n\tbare = true\n\tsentinel = untouched\n\trepositoryformatversion = 1\n[extensions]\n\tworktreeConfig = true\n' > "$BARE/config"
 mkdir "$BARE/config.lock"             # non-regular -> would EEXIST a native write
 touch -d "$OLD_MTIME" "$BARE/config.lock"
 GIT_ROOT="$BARE"
@@ -245,8 +252,8 @@ EBC_RC=$?
 set -e
 if (( EBC_RC == 0 )); then echo "  PASS: ensure_bare_config returns 0 (self-healed via lockless writer)"; PASS=$((PASS + 1));
 else echo "  FAIL: ensure_bare_config must self-heal (rc 0) on a non-regular lock"; sed 's/^/    /' "$TMP/ebc.err"; FAIL=$((FAIL + 1)); fi
-assert_eq "1" "$(git config --file "$BARE/config" --get core.repositoryformatversion 2>/dev/null || echo MISS)" "repositoryformatversion written via lockless path"
-assert_eq "true" "$(git config --file "$BARE/config" --get extensions.worktreeConfig 2>/dev/null || echo MISS)" "extensions.worktreeConfig written via lockless path"
+assert_eq "MISS" "$(git config --file "$BARE/config" --get extensions.worktreeConfig 2>/dev/null || echo MISS)" "extensions.worktreeConfig REMOVED via lockless path (#7394 polarity)"
+assert_eq "true" "$(git config --file "$BARE/config" --get core.bare 2>/dev/null || echo MISS)" "core.bare retained in the shared config (#7394 polarity)"
 assert_eq "untouched" "$(git config --file "$BARE/config" --get core.sentinel 2>/dev/null || echo MISS)" "pre-existing config content preserved (cp -p seed)"
 assert_eq "true" "$([[ -d "$BARE/config.lock" ]] && echo true || echo false)" "non-regular lock left untouched (never auto-removed)"
 if compgen -G "$BARE/config*.soleur-tmp.*" >/dev/null 2>&1; then
@@ -265,7 +272,13 @@ echo "Test 8b: a stale REGULAR lock that survives the sweep still FAILS LOUD (20
 # EEXISTs against the held regular lock and must make ensure_bare_config return non-zero
 # (a genuine in-flight writer / stuck lock must never be routed around).
 BARE2=$(new_lockdir); git init -q --bare "$BARE2" >/dev/null 2>&1   # REAL bare repo (see Test 8)
-printf '[core]\n\tbare = true\n\tsentinel = untouched\n' > "$BARE2/config"
+# The fixture MUST require a write for this test to mean anything (#7394). Under the
+# reversed polarity a bare repo that is already in the durable state performs ZERO writes,
+# so the pre-#7394 fixture (core.bare only) would return 0 without ever touching the lock —
+# and this assertion would have passed for the wrong reason on a repo where the lock was
+# never contended at all. Seeding the extension restores the precondition the test needs:
+# exactly one write must be attempted, and the held regular lock must block it.
+printf '[core]\n\tbare = true\n\tsentinel = untouched\n\trepositoryformatversion = 1\n[extensions]\n\tworktreeConfig = true\n' > "$BARE2/config"
 printf 'held-by-a-real-writer\n' > "$BARE2/config.lock"   # REGULAR + fresh -> sweep leaves it
 GIT_ROOT="$BARE2"
 set +e
@@ -274,7 +287,7 @@ EBC2_RC=$?
 set -e
 if (( EBC2_RC != 0 )); then echo "  PASS: ensure_bare_config fails loud on a surviving regular lock"; PASS=$((PASS + 1));
 else echo "  FAIL: ensure_bare_config must fail (rc!=0) on a surviving regular lock"; FAIL=$((FAIL + 1)); fi
-assert_eq "__MISS__" "$(git config --file "$BARE2/config" --get core.repositoryformatversion 2>/dev/null || echo __MISS__)" "shared config NOT mutated (native write correctly blocked by the held lock)"
+assert_eq "true" "$(git config --file "$BARE2/config" --get extensions.worktreeConfig 2>/dev/null || echo __MISS__)" "shared config NOT mutated (native write correctly blocked by the held lock)"
 
 # ---------------------------------------------------------------------------
 echo "Test 9: cleanup_merged_worktrees-style caller CONTINUES past a wedged ensure_bare_config"

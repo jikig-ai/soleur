@@ -6,16 +6,52 @@
 
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
+# Refuse before writing, rather than let an empty operand retarget a git write at whatever
+# repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
+# operates on the current directory, which under TEST_GROUP=scripts is the developer's live
+# worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
+#
+# Rejects, beyond empty: bare `/` AND its aliases `//` and `/.` (a `/*` arm accepts all three, and
+# `rm -rf "/"/*` is the worst outcome in this corpus — a one-character bypass of a stated
+# rejection); any path containing `..`, which can resolve back inside the real repo; and
+# /proc, /sys, /dev, because `/proc/self/cwd` is absolute, passes every other arm, and resolves
+# to precisely "whatever repository the caller happens to be standing in".
+#
+# Still no `realpath`: it breaks on a symlinked /tmp, which this corpus uses. So a symlink to
+# $HOME is ACCEPTED — stated here rather than left implied, because the arms above make this
+# look like a containment check and it is not.
+#
+# The body below is a COPY. The canonical definition lives in
+# plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# asserts this copy is byte-equal to it. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/cla-signed-author-gate.sh"
 UNSIGNED="noreply@anthropic.com"
 
 PASS=0; FAIL=0; TOTAL=0
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 init_git_repo() {
   local dir="$1"
+  assert_fixture_dir "$dir"
   git -C "$dir" init -q
   git -C "$dir" symbolic-ref HEAD refs/heads/main
   git -C "$dir" config user.email test@test.local
@@ -28,6 +64,7 @@ init_git_repo() {
 make_branch() {
   local tmp="$1" branch="$2" author_email="$3"
   local work="$tmp/work" origin="$tmp/origin.git" inc="$tmp/inc"
+  assert_fixture_dir "$tmp"
   mkdir -p "$work" "$inc"
   git init -q --bare "$origin"
   init_git_repo "$work"

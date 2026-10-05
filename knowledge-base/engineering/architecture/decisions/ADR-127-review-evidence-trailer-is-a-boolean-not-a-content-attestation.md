@@ -95,7 +95,7 @@ Pinned by `plugins/soleur/skills/review/test/emit-review-trailer.test.sh` (12 as
 drift).** Rejected on two grounds.
 
 The decisive one: it closes nothing as scoped. The gate is a three-signal **OR**
-and every leg is a boolean. The legacy `review: ` subject pattern is checked
+and every leg is a boolean. The legacy `review: ` subject pattern is checked <!-- markdownlint-disable-line MD038 -->
 *before* the trailer, so content-binding the trailer leaves the demonstrated
 bypass working verbatim as `git commit --allow-empty -m "review: x"`. Signal 1
 is a boolean over the branch diff; Signal 3 (a `code-review`-labelled issue
@@ -141,6 +141,7 @@ still close nothing.
 
 - Issue #6724, PR #6727
 - `plugins/soleur/skills/review/scripts/emit-review-trailer.sh` (producer)
-- `.claude/hooks/pre-merge-rebase.sh`, `.openhands/hooks/pre-merge-rebase.sh`,
-  `plugins/soleur/skills/ship/SKILL.md` (consumers)
+- `.claude/hooks/pre-merge-rebase.sh`, `plugins/soleur/skills/ship/SKILL.md`
+  (consumers; an `.openhands/hooks/pre-merge-rebase.sh` mirror was a third until
+  the port was retired 2026-09-23, ADR-245)
 - ADR-015 (decoupled work/ship for review gates) — same domain, prior art

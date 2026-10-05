@@ -32,7 +32,12 @@ rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 
 # The 4 allowed replaces (server + 2 id-referencing dependents + the token whose ForceNew
 # access change CAUSES the recreate, #6178), each delete+create.
-SERVER_REPLACE="$(rc_obj 'hcloud_server.inngest' '"delete","create"')"
+# #8754: the replacement server carries the deny-all firewall in firewall_ids at create, and the
+# firewall rides the plan as a no-op dependency whose id the gate reads. Synthesized id.
+FW_ID=424242
+FW_NOOP="{\"address\":\"hcloud_firewall.inngest\",\"change\":{\"actions\":[\"no-op\"],\"before\":{\"id\":\"${FW_ID}\"},\"after\":{\"id\":\"${FW_ID}\"}}}"
+srv_replace() { printf '{"address":"hcloud_server.inngest","change":{"actions":["delete","create"],"after":%s}}' "$1"; }
+SERVER_REPLACE="$(srv_replace "{\"firewall_ids\":[${FW_ID}]}"),${FW_NOOP}"
 NET_REPLACE="$(rc_obj 'hcloud_server_network.inngest' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"delete","create"')"
 TOKEN_REPLACE="$(rc_obj 'doppler_service_token.inngest' '"delete","create"')"
@@ -76,6 +81,32 @@ if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T2: a Redis AOF volume destroy must ABORT (rc=1)"
 else
   pass
+fi
+
+# --- Test 2b: FAIL — the ADR-142 ADDITIVE target volume destroyed (#6894). The TWIN of T2.
+#     `luks_volume_destroyed` is a separate counter from `redis_volume_destroyed` on purpose:
+#     the additive volume is admitted to the allow-set for CREATE (the recovery route), so the
+#     out-of-scope counter cannot see a destroy at that address and would report 0. Without
+#     this arm the twin backstop is ungraded, and an edit deleting it leaves the suite green. ---
+LUKS_VOL_DELETE="$(rc_obj 'hcloud_volume.inngest_redis_luks' '"delete","create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${LUKS_VOL_DELETE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T2b: an ADR-142 additive-target volume destroy must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 2c: PASS — the additive target volume CREATED (the admitted recovery shape), together
+#     with its attachment replacing. Proves the admission is real and not merely absent-from-plan:
+#     if the allow-set entry were dropped this plan would abort `out_of_scope`, and if the twin
+#     backstop over-matched (counting create as well as delete) it would abort here too. ---
+LUKS_VOL_CREATE="$(rc_obj 'hcloud_volume.inngest_redis_luks' '"create"')"
+LUKS_VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${LUKS_VA_REPLACE},${LUKS_VOL_CREATE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T2c: additive-target create + attachment replace must PASS (rc=0) — the admitted recovery shape"
 fi
 
 # --- Test 3: FAIL — an out-of-scope resource change (a stray web-1 update) ---
@@ -138,6 +169,13 @@ PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
 
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
+
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
 
@@ -154,6 +192,93 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   's/^  plan_gate_assert_classifiable .*/  :/' \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
   inngest_host_replace_gate "$TMP/pg-d5.json"
+
+
+# ── #6894 CTO ruling (Option C): PER-ADDRESS PERMITTED ACTIONS ────────────────────
+# Allow-set membership said an address may APPEAR; nothing said what it may DO. RED-FIRST, measured
+# on the gate as it stood before these counters: a server replace plus an UPDATE (resize) of the
+# live AOF volume printed `inngest_host_replace_gate: PASS` (rc=0) — an update is neither a delete
+# nor outside the allow-set. Every row below asserts the specific `reason=` token.
+rp() { mk_plan "$TMP/plan.json" "[$(IFS=,; printf '%s' "$*")]"; }
+RCHK() { gate_check "$1" inngest_host_replace_gate "$2" "$3" "$TMP/plan.json"; }
+BASE_REPLACE="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE}"
+
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"update"')"
+RCHK "C1 (the reproduction): server replace + live AOF volume UPDATE => ABORT redis_volume_touched" 1 "reason=redis_volume_touched "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"create"')"
+RCHK "C2 (must-PASS): live AOF volume bare CREATE of an ABSENT volume (before null) => PASS (the #7695 recovery route)" 0 "inngest_host_replace_gate: PASS"
+rp "$BASE_REPLACE" '{"address":"hcloud_volume.inngest_redis","change":{"actions":["create"],"before":{"id":"1"}}}'
+RCHK "C2b: a CREATE whose before is a live object => ABORT redis_volume_touched (only an absent volume may be created)" 1 "reason=redis_volume_touched "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"delete","create"')"
+RCHK "C2c: live AOF volume REPLACE => ABORT (a re-create is a destroy)" 1 "reason="
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"forget"')"
+RCHK "C3: live AOF volume FORGET => ABORT redis_volume_destroyed" 1 "reason=redis_volume_destroyed "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"no-op"')"
+RCHK "C4 (must-PASS): live AOF volume present as an explicit no-op => PASS" 0 "inngest_host_replace_gate: PASS"
+
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"update"')"
+RCHK "C5: additive LUKS volume UPDATE => ABORT luks_volume_touched" 1 "reason=luks_volume_touched "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"forget"')"
+RCHK "C6: additive LUKS volume FORGET => ABORT luks_volume_destroyed" 1 "reason=luks_volume_destroyed "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks' '"no-op"')" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
+RCHK "C7 (must-PASS): LUKS volume no-op + its attachment replaced => PASS" 0 "inngest_host_replace_gate: PASS"
+
+rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"update"')"
+RCHK "C8: live attachment bare UPDATE => ABORT attachment_touched" 1 "reason=attachment_touched "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"update"')"
+RCHK "C9: LUKS attachment bare UPDATE => ABORT attachment_touched" 1 "reason=attachment_touched "
+rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"delete"')"
+RCHK "C10: live attachment bare DELETE (detach, no re-attach) => ABORT attachment_touched" 1 "reason=attachment_touched "
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"forget"')"
+RCHK "C11: LUKS attachment FORGET => ABORT attachment_touched" 1 "reason=attachment_touched "
+rp "${SERVER_REPLACE},${NET_REPLACE}" "$(rc_obj 'hcloud_volume_attachment.inngest_redis' '"create","delete"')" "$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"create"')"
+RCHK "C12 (must-PASS): create-before-destroy attachment replace + a bare LUKS attachment create => PASS" 0 "inngest_host_replace_gate: PASS"
+
+rp "$BASE_REPLACE" "$(rc_obj 'random_password.inngest_redis_luks' '"no-op"')"
+RCHK "C13: random_password.inngest_redis_luks present as no-op => ABORT luks_passphrase_in_graph" 1 "reason=luks_passphrase_in_graph "
+rp "$BASE_REPLACE" "$(rc_obj 'doppler_secret.inngest_redis_luks_key' '"no-op"')"
+RCHK "C14: doppler_secret.inngest_redis_luks_key present as no-op => ABORT luks_passphrase_in_graph" 1 "reason=luks_passphrase_in_graph "
+
+# SUBSTRING: `hcloud_volume.inngest_redis` is a prefix of `hcloud_volume.inngest_redis_luks`, and that
+# of `…_luks_staging`. T1c pins exact equality for the token address only; this pins it for volumes.
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis_luks_staging' '"create"')"
+RCHK "C15: a prefix-sharing volume address => ABORT inngest_out_of_scope_changes" 1 "reason=inngest_out_of_scope_changes "
+
+# ── #8754: the replacement server must be BORN bound to hcloud_firewall.inngest ─────────
+# firewall_ids is Optional+Computed, so a config that drops it plans no firewall change at all; the
+# create's `.change.after.firewall_ids` is the one place a replace plan shows the binding. Fail
+# closed when the firewall's id cannot be read from its own plan entry.
+NET_VA="${NET_REPLACE},${VA_REPLACE}"
+rp "$(srv_replace '{"firewall_ids":[]}')" "$FW_NOOP" "$NET_VA"
+RCHK "F1: server create with firewall_ids=[] => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace '{"firewall_ids":[99]}')" "$FW_NOOP" "$NET_VA"
+RCHK "F2: server create bound to ANOTHER firewall id => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace '{}')" "$FW_NOOP" "$NET_VA"
+RCHK "F3: server create with firewall_ids absent => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID},99]}")" "$FW_NOOP" "$NET_VA"
+RCHK "F4: server create bound to the firewall AND another => ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "$NET_VA"
+RCHK "F5: hcloud_firewall.inngest absent from the plan (id unreadable) => fail-closed ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" '{"address":"hcloud_firewall.inngest","change":{"actions":["no-op"],"before":{},"after":{}}}' "$NET_VA"
+RCHK "F6: the firewall's id unknown in its plan entry => fail-closed ABORT firewall_not_bound" 1 "reason=firewall_not_bound "
+rp "$(srv_replace "{\"firewall_ids\":[${FW_ID}]}")" "{\"address\":\"hcloud_firewall.inngest\",\"change\":{\"actions\":[\"no-op\"],\"before\":{\"id\":\"${FW_ID}\"},\"after\":null}}" "$NET_VA"
+RCHK "F7 (must-PASS): firewall id read from .before when .after is null => PASS" 0 "inngest_host_replace_gate: PASS"
+
+# EMPTY-EVALUATING COUNTER (Guard 3's row, carried over). Built on the C1 input, where
+# redis_volume_touched is the SOLE catcher: emptied, and without plan_gate_assert_numeric,
+# [[ "" -eq 0 ]] is TRUE and the gate would PASS the resize again.
+rp "$BASE_REPLACE" "$(rc_obj 'hcloud_volume.inngest_redis' '"update"')"
+awk -v n="jq -r '.redis_volume_touched'" '{ if (index($0, n)) sub(n, "jq -r '"'"'empty'"'"'"); print }' "$GATE" > "$TMP/mutated-numeric.sh"
+if cmp -s "$TMP/mutated-numeric.sh" "$GATE"; then
+  fail "C16: the empty-counter mutation matched NOTHING in the gate; the extraction shape drifted"
+else
+  _rc=0; _out="$(bash -c "source '$PREAMBLE'; source '$TMP/mutated-numeric.sh'; inngest_host_replace_gate '$TMP/plan.json'" 2>&1)" || _rc=$?
+  if [[ "$_rc" -eq 1 && "$_out" == *"counter parse failed"* && "$_out" == *"redis_volume_touched=''"* ]]; then
+    pass
+  else
+    fail "C16: an empty counter must ABORT naming it, not satisfy every threshold (rc=${_rc}): ${_out}"
+  fi
+fi
 
 
 
@@ -175,11 +300,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 11 ]]; then
+if [[ "$_ran" -lt 40 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 11. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 40. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 11)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 40)\n' "$_ran"
 fi
 
 echo ""

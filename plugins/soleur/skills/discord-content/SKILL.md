@@ -3,6 +3,10 @@ name: discord-content
 description: "This skill should be used when creating and posting community content to Discord. Generates brand-consistent posts and posts via webhook after approval."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Discord Content
 
 Create and post brand-consistent community content to Discord. Content is generated from a user-provided topic, validated against the brand guide, and posted via webhook after explicit user approval.
@@ -17,7 +21,7 @@ Check if `knowledge-base/marketing/brand-guide.md` exists.
 
 **If missing:**
 > No brand guide found. Run the brand architect agent first to establish brand identity:
-> `Use the brand-architect agent to define our brand.`
+> `Use the soleur:marketing:brand-architect agent to define our brand.`
 
 Stop execution.
 
@@ -27,6 +31,7 @@ Check if the `DISCORD_WEBHOOK_URL` environment variable is set.
 
 **If missing:**
 > `DISCORD_WEBHOOK_URL` is not set. To configure:
+>
 > 1. Open Discord server > Server Settings > Integrations > Webhooks
 > 2. Click "New Webhook" and configure the target channel
 > 3. Copy the webhook URL
@@ -50,6 +55,7 @@ Read the brand guide sections that inform content generation:
 2. Read `## Channel Notes > ### Discord` -- apply Discord-specific guidelines (if the section exists)
 
 Generate a draft post that:
+
 - Addresses the user's topic
 - Matches the brand voice from `## Voice`
 - Follows Discord channel guidelines from `## Channel Notes`
@@ -102,6 +108,7 @@ Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.
 > Failed to post to Discord (HTTP [status_code]).
 >
 > Draft content (copy-paste manually):
+>
 > ```
 > [full draft content]
 > ```

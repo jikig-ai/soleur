@@ -3,7 +3,7 @@ title: "Acceptable Use Policy"
 type: acceptable-use-policy
 jurisdiction: FR, EU
 generated-date: 2026-02-20
-last-updated: 2026-06-04
+last-updated: 2026-09-15
 ---
 
 # Acceptable Use Policy
@@ -12,13 +12,13 @@ last-updated: 2026-06-04
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission (the blocklist is illustrative, not exhaustive; a non-blocked command can auto-run and change or delete files), with the git-backed-recovery and visible-in-chat mitigations and the trust-only-what-you-connect responsibility; cross-references Terms Section 3a.7 / Section 10.4 and the in-product autonomous-execution disclosure banner (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" for the delegated-credential prompt routing feature (PR-B #4508 / #4232); Grantor must hold Delegation Consent Side Letter from each Grantee; cost-telemetry-only visibility; Art. 26 joint controllership; cross-references DPD Section 2.3(w) and Terms Section 3b; previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
+**Last Updated:** September 15, 2026 *(Section 2 scope now names browser automation through a Playwright MCP server.)* Previous: September 13, 2026 *(Harness-neutral Plugin definition: a locally installed plugin for supported AI coding CLIs including Claude Code, Grok Build, Codex, and Devin CLI; xAI is not a Jikigai processor.)* Previous: August 11, 2026 *(Section 4.6 restated: sharing prohibitions now name trademarks, admit a lawful basis other than consent, and state expressly that breach may cost you the share link and the account. Section 5.6 corrected to name the runtime feature flag that actually gates BYOK delegation.)* Previous: August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission (the blocklist is illustrative, not exhaustive; a non-blocked command can auto-run and change or delete files), with the git-backed-recovery and visible-in-chat mitigations and the trust-only-what-you-connect responsibility; cross-references Terms Section 3a.7 / Section 10.4 and the in-product autonomous-execution disclosure banner (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" for the delegated-credential prompt routing feature (PR-B #4508 / #4232); Grantor must hold Delegation Consent Side Letter from each Grantee; cost-telemetry-only visibility; Art. 26 joint controllership; cross-references DPD Section 2.3(w) and Terms Section 3b; previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
 ## 1. Introduction
 
-This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform"), including the Claude Code plugin ("the Plugin") and the hosted web application at app.soleur.ai ("the Web Platform"), providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai), [app.soleur.ai](https://app.soleur.ai), and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
+This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform"), including the locally installed plugin for supported AI coding CLIs (including Claude Code, Grok Build, Codex, and Devin CLI) ("the Plugin") and the hosted web application at app.soleur.ai ("the Web Platform"), providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai), [app.soleur.ai](https://app.soleur.ai), and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
 By installing, configuring, or using Soleur, you ("User," "you," "your") agree to comply with this Policy. If you do not agree, you must discontinue use of the Platform immediately.
 
@@ -30,10 +30,10 @@ This Policy applies to all users globally, with specific provisions addressing c
 
 This Policy applies to all use of the Soleur platform, including but not limited to:
 
-- Interaction with Soleur's 45 AI agents and 45 skills;
+- Interaction with Soleur's specialist AI agents and skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Autonomous (auto-run) execution of shell commands by the Web Platform agent without a per-command approval step, as described in Section 5.7 and Terms & Conditions Section 3a.7;
-- Browser automation via the agent-browser subsystem;
+- Browser automation via the agent-browser subsystem or a Playwright MCP server driven by Soleur agents or skills;
 - API interactions initiated by or through Soleur agents;
 - Use of the compounding knowledge base;
 - Cloud-hosted conversation sessions via the Web Platform;
@@ -105,7 +105,7 @@ You must not:
 
 You must comply with the terms of service, acceptable use policies, and usage guidelines of all third-party services accessed through or in conjunction with Soleur, including but not limited to:
 
-- **Anthropic / Claude:** You must comply with [Anthropic's Acceptable Use Policy](https://www.anthropic.com/policies/aup) and Usage Policy when using Soleur, which operates as a Claude Code plugin and relies on Anthropic's API;
+- **Anthropic / Claude:** You must comply with [Anthropic's Acceptable Use Policy](https://www.anthropic.com/policies/aup) and Usage Policy when using Soleur, which, when used with Claude Code, relies on Anthropic's API. When you use Grok Build, you must also comply with xAI's terms. xAI is not a Jikigai processor or sub-processor;
 - **GitHub:** You must comply with [GitHub's Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) and Acceptable Use Policies when Soleur interacts with GitHub repositories, issues, pull requests, or APIs;
 - **Other APIs and Services:** You must ensure that any API keys, tokens, or credentials used by Soleur agents are obtained and used in compliance with the applicable service provider's terms; and
 - **Rate Limits and Quotas:** You must not configure or direct Soleur agents to exceed the rate limits, quotas, or fair-use thresholds of any third-party service.
@@ -126,10 +126,10 @@ The Web Platform allows you to share knowledge base documents via public links. 
 
 - (a) Share documents containing confidential or proprietary information belonging to third parties without authorization from the information owner;
 - (b) Share documents containing personally identifiable information (PII) of third parties without their explicit consent or another lawful basis under applicable data protection law;
-- (c) Share documents containing material that infringes the intellectual property rights of any third party, including copyrighted content, trade secrets, or proprietary methodologies; or
-- (d) Use the sharing feature to distribute content that would otherwise violate Section 4.2 (Harmful or Illegal Content) of this Policy.
+- (c) Share documents containing material that infringes the intellectual property rights of any third party, including copyrighted content, trademarks, trade secrets, or proprietary methodologies; or
+- (d) Use the sharing feature to distribute content that would otherwise violate Section 4.2 (Harmful or Illegal Content) of this Policy, including defamatory or misleading content.
 
-You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content and is not liable for content you choose to make publicly accessible.
+You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content and is not liable for content you choose to make publicly accessible. Violation of this Section may result in share-link revocation and account suspension under Section 6.
 
 <!-- End: KB sharing -->
 
@@ -175,7 +175,7 @@ and may, at our discretion, result in removal of the affected content
 under Section 6.2 (Consequences of Violation) of this Policy.
 
 If you require a service that processes Special-Category Data as a defined
-purpose, contact us at legal@jikigai.com before submitting such content; we
+purpose, contact us at <legal@jikigai.com> before submitting such content; we
 will assess whether a separate data-processing arrangement is feasible.
 
 ### 4.8 California Sensitive Personal Information
@@ -235,6 +235,8 @@ under §4.7.
 - Maintaining appropriate backups of your data and code; and
 - Configuring appropriate access controls on your local environment.
 
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
+
 **Web Platform (Cloud Execution).** The Web Platform operates on cloud infrastructure managed by Jikigai. You are solely responsible for:
 
 - Securing your account credentials for app.soleur.ai;
@@ -260,6 +262,8 @@ When using Soleur in a manner that involves personal data:
 - You must have a lawful basis for processing any personal data that Soleur agents may access or generate;
 - You must not direct Soleur agents to collect, scrape, or process personal data in violation of applicable law; and
 - You are the data controller for any personal data processed through your use of the Platform.
+
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ### 5.4 Automated agent actions taken on your behalf
 
@@ -287,7 +291,7 @@ Where the team-workspace feature is enabled for your organization (gated by `FLA
 
 ### 5.6 BYOK delegation responsibilities
 
-Where the BYOK delegation feature is enabled for your organization (gated by `BYOK_DELEGATIONS_ENABLED`), the following additional responsibilities apply:
+Where the BYOK delegation feature is enabled for your organization (gated by the `byok-delegations` runtime feature flag), the following additional responsibilities apply:
 
 - **Grantor (Workspace Owner) responsibilities:** You must hold a current Delegation Consent Side Letter (available from Jikigai at <legal@jikigai.com>, distinct from the workspace co-member Side Letter in Section 5.5) from each Co-Member ("Grantee") before granting them a BYOK delegation. You may not use delegation to circumvent a Grantee's usage limits or to surveil a Grantee's prompt content. The cost telemetry you receive is limited to: token count, cost in USD cents, timestamp, and agent role. Prompt content, response content, and conversation history are NOT accessible to you via delegation.
 - **Grantee (Co-Member) responsibilities:** By accepting a BYOK delegation, you consent to the Grantor receiving itemized cost telemetry for each AI agent run funded by the delegation (as described in the Delegation Consent Side Letter and the Data Protection Disclosure Section 2.3(w)). You remain responsible for the content of prompts submitted through the delegation.
@@ -311,6 +315,8 @@ The Web Platform's hosted agent can run shell commands in your connected workspa
 ### 6.1 Monitoring
 
 The Plugin operates locally and we do not monitor Plugin usage in real time. The Web Platform operates on cloud infrastructure managed by Jikigai, which enables server-side monitoring of service usage, access patterns, and compliance with this Policy. We reserve the right to investigate reported violations of this Policy across both the Plugin and the Web Platform.
+
+**What this covers.** The paragraph above describes the Plugin running on **your** own machine, under **your** own API key, for **your** own purposes — which is how it works unless you have asked us for an operator-assisted session. It does not describe operator-assisted sessions, where a Jikigai machine or a Jikigai-held credential is used. Those are described in the Data Protection Disclosure, Section 2.1c.
 
 ### 6.2 Consequences of Violation
 

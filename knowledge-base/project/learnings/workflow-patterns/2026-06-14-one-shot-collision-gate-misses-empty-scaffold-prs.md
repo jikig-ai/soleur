@@ -52,7 +52,7 @@ Adopt the pre-existing empty worktree instead of fighting the duplicate:
    `origin/main` ref lagged and first read 0 spuriously), and `git log
    origin/main..<branch>` = just the init commit.
 2. Confirmed no active lease: no `.soleur-lease` file, dir stale >24h.
-3. Acquired a lease (`source .claude/hooks/lib/session-state.sh; acquire_lease
+3. Acquired a lease (`source "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"; acquire_lease
    <branch> one-shot 240`) and `cd` into it.
 4. Ran the whole plan→work→review pipeline into that worktree, landing on the
    existing draft PR #5258 — so the run produced **zero duplicate PRs**.

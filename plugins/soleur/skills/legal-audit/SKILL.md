@@ -3,6 +3,14 @@ name: legal-audit
 description: "This skill should be used when auditing existing legal documents for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. It scans a project for legal documents and displays findings inline."
 ---
 
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Legal Compliance Auditor
 
 Scan a project's existing legal documents and audit them for compliance gaps, outdated clauses, missing disclosures, and cross-document consistency. Findings are displayed inline in the conversation.
@@ -24,7 +32,7 @@ Present the discovered documents and use the **AskUserQuestion tool** to confirm
 
 "Found N legal documents. Audit all of them, or select specific files?"
 
-If no legal documents are found, report: "No legal documents found in this project. Use `/legal-generate` to create them.
+If no legal documents are found, report: "No legal documents found in this project. Use `soleur:legal-generate` to create them.
 
 > **Or:** If you're handling an inbound MSA, DSAR, AI-vendor terms review, OSS-license question, or breach notice, see `knowledge-base/legal/recommended-tools.md` for downstream specialist tools."
 
@@ -41,14 +49,14 @@ Read each document in the confirmed scope.
 
 ## Phase 2: Audit
 
-Invoke the `legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
+Invoke the `soleur:legal:legal-compliance-auditor` agent via the **Task tool** with all documents and jurisdiction context.
 
 If the user's input includes the word `benchmark` (either via `args` parameter or natural language), append the benchmark trigger to the Task prompt. Otherwise, send the standard audit prompt unchanged.
 
 **Standard audit prompt:**
 
 ```
-Task legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
+Task soleur:legal:legal-compliance-auditor: "Audit the following legal documents for [jurisdiction] compliance.
 
 Documents:
 [Include full content of each document]
@@ -110,3 +118,44 @@ This dual surfacing closes the failure mode where a founder under deadline press
 - Cross-document consistency checks only run when 2+ documents are in scope
 - If a document references another document type that does not exist in the project, flag it as a CRITICAL finding
 - Do not modify the audited documents -- only report findings and suggest fixes
+
+## CI gates over `docs/legal/**` (#7387)
+
+Five gates ride this path. Reproduce any of them locally before pushing:
+
+- `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` — added scope blocks:
+  referent/section agreement, attachment, discharge. `--print-vocab` lists every accepted
+  phrasing; a locality assertion whose referent it does not recognise is reported as
+  NOT CHECKED rather than silently skipped.
+- `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` — canonical↔mirror drift
+  ratchet. Reducing drift always passes; growth, reordering, and in-place edits of an
+  already-drifting line fail. A revert or an urgent publication that must land despite it sets
+  `SOLEUR_LEGAL_DRIFT_ACCEPT='<reason>'`, which downgrades to a warning and records the reason.
+- `apps/web-platform/scripts/check-tc-document-sha.sh` — raw-file SHA pin; re-pin
+  `apps/web-platform/lib/legal/legal-doc-shas.ts` after any canonical edit.
+- `apps/web-platform/test/legal-doc-consistency.test.ts` — heading-sequence parity.
+- The `EXPECTED_COUNT` sentinel in the SHA guard, cross-checked by a vitest harness.
+
+**Gates measure agreement, not truth (#7349).** All five gates compare the two surfaces against
+each other. None asks whether the agreed text is correct, so two byte-identical copies of a false
+sentence pass every one of them. Three defects shipped past a full green run in #7349 that way: a
+controllership statement drift-reduction copied onto the published page, a duplicated clause left
+behind by a half-applied replacement, and "eleven processing activities" in a document whose
+register carries thirty-five. Read the prose; do not read the drift number and stop.
+
+**`BODY_EQUIVALENCE_DOCS` is a one-way ratchet.** `terms-and-conditions`, `acceptable-use-policy`
+and `disclaimer` are enrolled; each was verified at ZERO normalised drift immediately before
+enrolment, because enrolling a drifted document turns a required check red on arrival. Once
+enrolled, any edit landing on one surface only reds that check — which is the point. `--print-vocab`
+and a mutation check (inject a line, confirm the guard fails, remove it) are the two ways to prove
+an enrolment is live rather than decorative.
+
+**Two measurement traps that cost real rounds in #7349.** `collapse()` normalises `[0-9]+ AI
+agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record and the published
+page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's <!-- markdownlint-disable-line MD038 -->
+plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
+
+**The mirror is the published surface.** `docs/legal/<doc>.md` is the canonical record;
+`plugins/soleur/docs/pages/legal/<doc>.md` is what users read at soleur.ai/legal/. `docs/legal/`
+is in no Eleventy input tree and is read by no route, so a canonical-only edit changes nothing a
+user sees — and exits 2 as an unpaired document.

@@ -32,6 +32,7 @@ dependencies: []
 ## Technical Details
 
 **Affected files:**
+
 - `test/x-community.test.ts`
 
 ## Acceptance Criteria

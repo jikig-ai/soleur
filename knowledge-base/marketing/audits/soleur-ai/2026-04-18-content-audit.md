@@ -249,7 +249,7 @@ Suggested Q&A set:
 
 **Suggested:** Each cost should cite Payscale, BLS, or Levels.fyi inline as a superscript footnote. Example row:
 
-> CTO / VP Engineering — $18,000/mo [¹](#ref-1) — Included — Code review, architecture decisions, security audits, deployment.
+> CTO / VP Engineering — $18,000/mo `[¹](#ref-1)` — Included — Code review, architecture decisions, security audits, deployment.
 
 With a Sources section at the bottom of the page listing each cited range.
 

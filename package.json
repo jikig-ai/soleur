@@ -1,14 +1,27 @@
 {
+  "name": "soleur",
   "type": "module",
   "scripts": {
     "test": "bash scripts/test-all.sh",
     "docs:dev": "npx @11ty/eleventy --serve",
-    "docs:build": "npx @11ty/eleventy"
+    "docs:build": "npx @11ty/eleventy",
+    "prepare": "bash scripts/ensure-kb-index.sh --soft"
   },
   "devDependencies": {
     "@11ty/eleventy": "^3.1.5",
     "@11ty/eleventy-plugin-rss": "^2.0.4",
     "markdown-it": "^14.2.0",
+    "markdownlint-cli": "0.49.1",
     "yaml": "^2.8.2"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.2",
+    "gray-matter": {
+      "js-yaml": "^3.15.1"
+    },
+    "brace-expansion": "^1.1.16",
+    "markdownlint-cli": {
+      "brace-expansion": "^5.0.8"
+    }
   }
 }

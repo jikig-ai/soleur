@@ -24,6 +24,7 @@ echo ""
 # Test 1: Normal (non-bare) repo sets GIT_ROOT and IS_BARE=false
 echo "Test 1: Normal repo sets GIT_ROOT and IS_BARE=false"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 RESULT=$(cd "$TEST_DIR" && source "$HELPER" && echo "GIT_ROOT=$GIT_ROOT IS_BARE=$IS_BARE")
 assert_contains "$RESULT" "GIT_ROOT=$TEST_DIR" "GIT_ROOT points to repo root"
@@ -61,6 +62,7 @@ echo ""
 # Test 5: GIT_ROOT points to an existing directory
 echo "Test 5: GIT_ROOT points to an existing directory"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 EXISTS=$(cd "$TEST_DIR" && source "$HELPER" && [[ -d "$GIT_ROOT" ]] && echo "yes" || echo "no")
 assert_eq "yes" "$EXISTS" "GIT_ROOT is a valid directory"
@@ -70,6 +72,7 @@ echo ""
 # Test 6: Subdirectory resolves GIT_ROOT to repo root
 echo "Test 6: Subdirectory resolves GIT_ROOT to repo root"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 mkdir -p "$TEST_DIR/a/b/c"
 RESULT=$(cd "$TEST_DIR/a/b/c" && source "$HELPER" && echo "$GIT_ROOT")
@@ -80,6 +83,7 @@ echo ""
 # Test 7: Helper does not modify shell options (no set -e/u/o)
 echo "Test 7: Helper does not modify caller's shell options"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 # Capture shell options before and after sourcing
 OPTS=$(cd "$TEST_DIR" && set +euo pipefail 2>/dev/null; BEFORE=$(set +o); source "$HELPER"; AFTER=$(set +o); [[ "$BEFORE" == "$AFTER" ]] && echo "unchanged" || echo "changed")
@@ -90,6 +94,7 @@ echo ""
 # Test 8: GIT_COMMON_ROOT equals GIT_ROOT in normal (non-worktree) repo
 echo "Test 8: GIT_COMMON_ROOT equals GIT_ROOT in normal repo"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 COMMON=$(cd "$TEST_DIR" && source "$HELPER" && echo "$GIT_COMMON_ROOT")
 ROOT=$(cd "$TEST_DIR" && source "$HELPER" && echo "$GIT_ROOT")
@@ -100,6 +105,7 @@ echo ""
 # Test 9: GIT_COMMON_ROOT points to parent repo in worktree
 echo "Test 9: GIT_COMMON_ROOT points to parent repo in worktree"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 # CI runners may lack user identity; configure for this temp repo only
 git -C "$TEST_DIR" config user.email "test@test.local"
@@ -128,6 +134,7 @@ echo ""
 # Test 11: _resolve_common_dir is not leaked into caller namespace
 echo "Test 11: _resolve_common_dir is not leaked"
 TEST_DIR=$(mktemp -d)
+assert_fixture_dir "$TEST_DIR"
 git -C "$TEST_DIR" init -q
 LEAKED=$(cd "$TEST_DIR" && source "$HELPER" && [[ -v _resolve_common_dir ]] && echo "leaked" || echo "clean")
 assert_eq "clean" "$LEAKED" "_resolve_common_dir not leaked into caller"

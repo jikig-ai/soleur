@@ -51,7 +51,8 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { getPluginPath } from "@/server/plugin-path";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
-import { AUDIT_MODEL } from "@/server/inngest/model-tiers";
+import { AUDIT_CLI_ARGS } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -76,8 +77,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // dead grant. #5199.
 export const CLAUDE_CODE_FLAGS = [
   "--print",
-  "--model",
-  AUDIT_MODEL,
+  ...AUDIT_CLI_ARGS,
   "--max-turns",
   "60",
   "--allowedTools",
@@ -213,6 +213,24 @@ async function uploadFindings(args: {
     { fn: "cron-ux-audit", findingsUploaded: true, screenshotCount: screenshots.length },
     "findings uploaded to ux-audit-artifacts bucket",
   );
+  // #7980 — the Sentry cron monitor is LIVENESS, not success. If the pinned
+  // @playwright/mcp rejected `--snapshot-mode none` (or any other arg), the MCP
+  // server would fail to connect, `claude -p` would still exit 0, and the audit
+  // would run with zero screenshots at a green monitor. The logger.info line
+  // above is INFO and Vector's WARN+ filter drops it, so the zero case must be
+  // mirrored as a queryable WARNING (layer 2 pino→Sentry + layer 3 Vector WARN+;
+  // cq-silent-fallback-must-mirror-to-sentry, hr-observability-layer-citation).
+  // Post-merge observation: `scripts/betterstack-query.sh --since 24h --grep
+  // zero-screenshots` after the first fire.
+  if (screenshots.length === 0) {
+    warnSilentFallback(new Error("cron-ux-audit captured zero screenshots"), {
+      feature: "cron-ux-audit",
+      op: "zero-screenshots",
+      message:
+        "findings uploaded but zero screenshots captured — Playwright MCP may have failed to connect; cron monitor stays green (liveness, not success)",
+      extra: { fn: "cron-ux-audit", findingsUploaded: true },
+    });
+  }
 }
 
 // =============================================================================
@@ -259,8 +277,23 @@ export async function cronUxAuditHandler({
 
   // --- Step 2: bot-fixture-seed ---
   await step.run("bot-fixture-seed", async () => {
+    // `turbopackIgnore` is REQUIRED, not stylistic. This is the canonical note for all
+    // three sites; the bot-signin and bot-fixture-reset steps carry the same annotation and
+    // point back here.
+    //
+    // The specifier is a runtime value: `getPluginPath()` resolves the plugin payload on
+    // DISK, outside the Next build graph, so there is nothing for a bundler to statically
+    // resolve and nothing it should try to inline. Webpack tolerated this; Turbopack fails
+    // the build with `Module not found: Can't resolve <dynamic>` (measured on the Next bump
+    // in the Dependabot PR, which reported exactly 3 errors — these three call sites).
+    //
+    // The annotation tells Turbopack to leave the import alone and emit it as a runtime
+    // import, which is precisely the intended semantics. Do NOT "fix" this by making the
+    // path a static string literal: the plugin payload is not part of this app's bundle and
+    // must not be, and a literal would resolve at build time against a tree that does not
+    // contain it.
     const botFixturePath = join(getPluginPath(), "skills/ux-audit/scripts/bot-fixture.ts");
-    const mod = await import(botFixturePath) as { seed: () => Promise<void> };
+    const mod = await import(/* turbopackIgnore: true */ botFixturePath) as { seed: () => Promise<void> };
     await mod.seed();
   });
 
@@ -305,10 +338,26 @@ export async function cronUxAuditHandler({
               // runtime supply-chain fetch. Its playwright-core (1.61.0-alpha) is
               // aligned with the baked Chromium (the Dockerfile installs that
               // exact revision via `npx playwright@1.61.0-alpha-… install`).
-              // 0.0.75 (not the newer 0.0.76) clears the bun minimum-release-age
+              // 0.0.75 (not the newer 0.0.76) clears the .npmrc min-release-age
               // supply-chain policy (3-day floor) so both lockfiles resolve it.
               "@playwright/mcp@0.0.75",
+              // #7980 — the trailing `--snapshot-mode none` below: PA-31 §(g) of
+              // knowledge-base/legal/article-30-register.md. Measured 2026-09-14
+              // on the pinned 0.0.75 (Phase 0 step 4, the fleet-copy row):
+              // `browser_navigate` — which this cron holds, alongside
+              // Read/Glob/Grep — writes the raw accessibility tree of the
+              // authenticated bot-session page (input values included) to
+              // <cwd>/.playwright-mcp/page-*.yml and returns a link, i.e. one
+              // `Read` away from Anthropic-bound content. `--snapshot-mode none`
+              // is accepted by 0.0.75 and stops that write. This overlay is NOT
+              // routed through playwright-mcp-redact-proxy.py (python3 is not on
+              // the cron image path and the fleet holds no browser_snapshot), so
+              // the flag is the remedy here. Keep the three literals contiguous
+              // and the flag LAST — the cron-ux-audit.test.ts row anchors on
+              // `--user-data-dir=…` immediately followed by the flag pair.
               `--user-data-dir=${playwrightProfileDir}`,
+              "--snapshot-mode",
+              "none",
             ],
           },
         },
@@ -330,8 +379,9 @@ export async function cronUxAuditHandler({
 
     // --- Step 5: bot-signin → write storageState to workspace ---
     await step.run("bot-signin", async () => {
+      // turbopackIgnore: runtime plugin-payload import — see the note at the bot-fixture-seed step.
       const botSigninPath = join(getPluginPath(), "skills/ux-audit/scripts/bot-signin.ts");
-      const mod = await import(botSigninPath) as {
+      const mod = await import(/* turbopackIgnore: true */ botSigninPath) as {
         signIn: () => Promise<{ access_token: string; refresh_token: string; expires_in: number; expires_at: number; token_type: string; user: unknown }>;
         writeStorageState: (session: unknown, outPath: string, supabaseUrl: string, siteUrl: string) => void;
       };
@@ -425,8 +475,9 @@ export async function cronUxAuditHandler({
 
     // --- Step 8: bot-fixture-reset ---
     await step.run("bot-fixture-reset", async () => {
+      // turbopackIgnore: runtime plugin-payload import — see the note at the bot-fixture-seed step.
       const botFixturePath = join(getPluginPath(), "skills/ux-audit/scripts/bot-fixture.ts");
-      const mod = await import(botFixturePath) as { reset: () => Promise<void> };
+      const mod = await import(/* turbopackIgnore: true */ botFixturePath) as { reset: () => Promise<void> };
       await mod.reset();
     });
 
@@ -476,6 +527,7 @@ export const cronUxAudit = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 9 1 * *" },

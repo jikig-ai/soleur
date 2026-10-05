@@ -80,11 +80,21 @@ export const SENSITIVE_KEY_NAMES = [
   "sender",
   "from",
   "to",
+  // ADR-269 routing key: normalized To/received_for addresses ride in the same
+  // event_data (a co-addressed third party's address is PII, PA-27 (d)).
+  "recipients",
   // Attachment filenames are third-party-controlled PII (e.g.
   // "DSAR_jane_doe.pdf") and ride along in event_data via the same
   // middleware setExtra path — scrub the array key and the per-item key.
   "attachments",
   "filename",
+  // Plaintext addresses (#8532 PR-0). notifications.ts logs `email` and
+  // `inviteeEmail` on every send and failure; `recipient` is the outbound
+  // vocabulary. The published privacy policy states the outbound recipient
+  // address is never stored, and journald on the web host is a store.
+  "email",
+  "inviteeEmail",
+  "recipient",
   // HTTP transport
   "cookie",
   "x-nonce",

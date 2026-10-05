@@ -177,8 +177,9 @@ interpolation in cloud-init-git-data.yml, which item 1 above still requires. Not
 replacement asserts a different fact than item 1 does, so item 1's threading check is not
 automatically covered by it.
 
-THEN clear the DO-NOT-DISPATCH banner at the top of
-knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+THEN re-read the release record at the top of
+knowledge-base/engineering/operations/runbooks/git-data-birth.md (the DO-NOT-DISPATCH
+banner it replaced was cleared by PR #8128, merged 2026-09-14).
 
 Do NOT work around this by applying from a laptop. An untargeted apply runs neither the
 destroy-guard nor the stock preflight, and a plan of that shape taken 2026-07-27 carried
@@ -189,15 +190,16 @@ HOLD
     return 1
   fi
 
-  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2), and clearing the runbook banner — is NOT machine-checked here. The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
+  echo "git_data_birth_readiness_gate: RELEASED — ${hits} non-comment \${sentry_dsn} interpolation(s) found in ${cloud_init}; the host has an off-host emitter wired. NOTE: this gate enforces only the THREADING half of item 1 of the ADR-149 release checklist — a non-comment line that merely references the variable satisfies it. EVERY OTHER item on the ADR-149 release checklist — Doppler scope reachability, address registration, the post-apply signal, GIT_DATA_SSH_HOST production, the firewall-attachment entailment correction, this gate's own mandated replacement by a direct assertion on the emitter resource (operator decision 2026-07-27, DC-2) — is NOT machine-checked here (the runbook banner that used to close the list was cleared by PR #8128, merged 2026-09-14). The rung-2 boot rehearsal is checked SEPARATELY by git_data_rung2_rehearsal_gate, which the dispatch job runs alongside this one."
   return 0
 }
 
 # ── THE SECOND INTERLOCK: rung-2 boot evidence (#6982 A3) ─────────────────────────────
 #
 # WHY THIS EXISTS. #6982 shipped the emitter, so the sentinel gate above now RELEASES. That
-# retired the ONLY mechanical hold on the birth route, leaving the dispatch held by prose:
-# the DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149 checklist. ADR-149's own
+# retired the ONLY mechanical hold on the birth route at the time, leaving the dispatch held
+# by prose: the (since-cleared) DO-NOT-DISPATCH banner in git-data-birth.md and the ADR-149
+# checklist. ADR-149's own
 # Alternatives table rejects exactly that posture — "a capability held only by prose is held
 # until the first person who reads the runbook and not the plan" — and the workflow's own
 # comment now reads "THE BIRTH-READINESS INTERLOCK IS RELEASED", which INVITES the dispatch
@@ -258,15 +260,35 @@ HOLD
 # same basename in different directories would collapse into one line and silently narrow the
 # binding, which is the same fail-open the floor exists to catch.
 #
-# Usage:  git_data_rung2_user_data_sha256 <cloud-init-git-data.yml>
-#         # prints the 64-hex hash on stdout and returns 0; on failure prints a
-#         # fail-closed ABORT diagnostic on stdout and returns 1.
-git_data_rung2_user_data_sha256() {
+# ── ONE DERIVATION, TWO CONSUMERS (#8043 NFR2 / Guard 4) ─────────────────────────────
+#
+# The enumeration below used to be the first half of git_data_rung2_user_data_sha256. It is
+# now its own function because a SECOND consumer arrived: the evidence-provenance guard
+# (git_data_rung2_evidence_provenance_gate) needs the same 13-file roster the hash binds —
+# and needs it to be the SAME walk, not a second list that agrees today. A provenance guard
+# over a hand-listed subset passes the moment a payload is bound that the list does not name,
+# which is the "attests a byte set that is not what ships" class one function over. The hash
+# consumes this function's output; so does the guard; there is nothing else to drift.
+#
+# The split is HASH-NEUTRAL by construction: every ABORT check that used to run before the
+# hash loop still runs here, in the same order, with the same messages, and the hash function
+# below hashes exactly the lines this prints. Measured at the split: the digest of the same
+# tree through the old function and through this pair was byte-identical (the value itself is
+# not cited — it moves with every bound-file edit, and a reader reproducing at a later commit
+# would get a different number for the same true statement).
+#
+# Usage:  git_data_rung2_bound_files <cloud-init-git-data.yml>
+#         # prints the ABSOLUTE path of every file that composes user_data, one per line —
+#         # the template, the render module's .tf/.tf.json files, and every file()-bound
+#         # payload — and returns 0; on failure prints a fail-closed ABORT diagnostic on
+#         # stdout and returns 1. Order: template, main.tf, siblings (glob order), payloads
+#         # (sorted). The hash sorts its own lines, so this order is not load-bearing there.
+git_data_rung2_bound_files() {
   local cloud_init="${1:-}"
   local tf_dir module_dir module_tf _inputs=() _f _n_uniq
 
   if [[ -z "$cloud_init" || ! -f "$cloud_init" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is nothing to hash."
+    echo "git_data_rung2_bound_files: ABORT — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is nothing to hash."
     return 1
   fi
 
@@ -274,7 +296,7 @@ git_data_rung2_user_data_sha256() {
   module_dir="${tf_dir}/modules/git-data-userdata"
   module_tf="${module_dir}/main.tf"
   if [[ ! -r "$module_tf" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — cannot read ${module_tf}, so the payload set backing the evidence hash is unknown. The render module is where the templatefile map lives (#7025 R7); if it moved again, this derivation and every consumer of it must move with it. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — cannot read ${module_tf}, so the payload set backing the evidence hash is unknown. The render module is where the templatefile map lives (#7025 R7); if it moved again, this derivation and every consumer of it must move with it. Fail-closed."
     return 1
   fi
 
@@ -299,8 +321,56 @@ git_data_rung2_user_data_sha256() {
   # default would decide what boots for any caller that stops passing it explicitly, and
   # outputs.tf is where a second arch derivation could be written unseen. Binding the
   # directory costs one glob and is free only while no evidence file exists yet.
-  for _f in "${module_dir}"/*.tf; do
-    [[ -r "$_f" && "$_f" != "$module_tf" ]] && _inputs+=("$_f")
+  #
+  # THIS LOOP APPENDS CONDITIONALLY, so it is a chokepoint and must ABORT rather than drop.
+  #
+  # Measured against `origin/main`, and stated precisely because an earlier draft of this
+  # comment got it wrong in the flattering direction: on the LIVE tree the shipped code aborted
+  # (`contains 9 … but only 11 resolved`) whether or not a sibling was readable — that abort IS
+  # #7485. The rc=0-over-a-narrower-set fail-open reproduced on a module directory with ONE
+  # sibling (inputs 11, resolved 9, refs 9, old floor `-lt 11` satisfied), and on one with the
+  # siblings absent entirely. So the two literals did NOT cancel on the live tree, and the
+  # shipped code was more broken than "it happened to work here" implies.
+  #
+  # THE ENUMERATION IS GUARDED, NOT JUST THE FILES. A directory that is executable but not
+  # readable (`chmod 111`) leaves `main.tf` openable BY NAME — so the `-r "$module_tf"` check
+  # above passes — while pathname expansion silently yields the unexpanded patterns, both fail
+  # `[[ -e || -L ]]`, and every sibling drops. Measured: rc=0 with digest 3a1d7198…, which is
+  # byte-identical to the digest with both siblings DELETED. The function cannot distinguish
+  # "deleted, and the hash correctly reflects it" from "present but unenumerable", so the
+  # unreadable-directory case has to refuse before the loop runs.
+  if [[ ! -r "$module_dir" || ! -x "$module_dir" ]]; then
+    echo "git_data_rung2_bound_files: ABORT — the render module directory '${module_dir}' cannot be listed (needs both read and execute). Its Terraform files would be silently omitted from the hash, producing a well-formed digest over a NARROWER set than ships. Fail-closed."
+    return 1
+  fi
+  #
+  # ABSENT vs UNREADABLE IS LOAD-BEARING AND IS WRITTEN EXPLICITLY. No `nullglob` is set here,
+  # so a pattern matching nothing yields the literal string — and the live module has no
+  # `.tf.json` at all, so `*.tf.json` iterates once on an unexpanded literal. A naive
+  # `[[ -r ]] || abort` would therefore abort on `main`: the very defect being fixed,
+  # reintroduced at the new contributor. Testing only `-e` is the opposite error — it silently
+  # skips a dangling symlink, a file Terraform fails on but the hash would quietly exclude.
+  #
+  #   candidate                        -e     -L     verdict
+  #   unexpanded literal (no matches)  false  false  skip
+  #   present, readable                true   —      hash it
+  #   present, unreadable              true   —      abort
+  #   dangling symlink                 false  true   abort
+  #
+  # `.tf.json` IS INCLUDED because Terraform loads it exactly as it loads `.tf`; the old glob
+  # missed it, so a render knob written there decided what boots while staying out of the hash.
+  #
+  # NO SIBLING FLOOR. A deleted sibling is a real directory change the hash correctly reflects,
+  # and a floor here would be precisely the stale literal this change removes — it would break
+  # the first time `variables.tf` is legitimately folded into `main.tf`.
+  for _f in "${module_dir}"/*.tf "${module_dir}"/*.tf.json; do
+    [[ -e "$_f" || -L "$_f" ]] || continue
+    [[ "$_f" == "$module_tf" ]] && continue
+    if [[ ! -r "$_f" ]]; then
+      echo "git_data_rung2_bound_files: ABORT — module Terraform file '${_f}' cannot be read (present and unreadable, or a dangling symlink), so the render inputs backing the evidence hash are incomplete. Hashing the rest would produce a well-formed digest over a NARROWER set than ships. Fail-closed."
+      return 1
+    fi
+    _inputs+=("$_f")
   done
   # Payload paths are written relative to the MODULE (`${path.module}/../../<name>`), so they
   # resolve against module_dir — not against tf_dir, which would land two levels too high and
@@ -309,55 +379,233 @@ git_data_rung2_user_data_sha256() {
   # Key class is `[A-Za-z0-9_]+`, not `[a-z_]+`: a binding named `boot_probe2` or `bootProbe`
   # was silently unextracted, so its payload rendered into user_data while edits to it left the
   # hash unchanged (the floor did not fire — the original ten were all still present).
-  # ONE RULE, used for both the extraction and the count below: every `file("${path.module}/…")`
-  # on a NON-COMMENT line, excluding `templatefile(` (the template is added separately, above).
+  # ONE RULE: every `file("${path.module}/…")` on a NON-COMMENT line, excluding `templatefile(`
+  # (the template is added separately, above). It had a second consumer — a referenced-vs-
+  # resolved count — which #7485 deleted, because counting a drop is strictly weaker than
+  # refusing at the drop: the count could report that two integers disagreed, never WHICH
+  # payload was missing. Comment-stripping and the `templatefile(` exclusion remain load-bearing
+  # for the extraction itself, independently of that deleted consumer.
   # Deliberately wrapper-agnostic — `replace(file(…))`, bare `file(…)`, `trimspace(file(…))`,
   # `base64encode(file(…))` all resolve, because the previous key-anchored form silently
   # skipped any binding whose wrapper or key shape it did not anticipate, and a skipped payload
   # renders into user_data while edits to it leave the evidence hash unchanged.
-  # THE WHOLE `file`-FAMILY, not just `file(`. `filebase64(` was invisible to BOTH sides of
-  # the referenced-vs-resolved check below (9 refs, 9 resolved, floor satisfied at 11), so a
-  # tenth payload bound that way rendered into user_data while edits to it left the hash
-  # unchanged — measured. The count check could never catch it, because its blind spot WAS
-  # this regex's blind spot; widening the regex is the only fix that closes both sides.
+  # THE WHOLE `file`-FAMILY, not just `file(`. A payload bound via `filebase64(` was invisible
+  # to the extraction, so it rendered into user_data while edits to it left the hash unchanged
+  # — measured. This was ALSO the standing argument for why the referenced-vs-resolved count
+  # could never catch that class: the count called this same extractor on both sides, so its
+  # blind spot WAS this regex's blind spot. Widening the regex is what closed it; the count
+  # contributed nothing and is gone.
+  #
+  # THE HONEST BOUND on this predicate is a SINGLE-LINE LITERAL form, and as of #7534 the
+  # non-canonical forms are INADMISSIBLE rather than INVISIBLE. Four forms fall outside it:
+  # a multi-line `file(\n "…"\n)`; an indirected `file(local.p)`; a second `templatefile()`;
+  # and — the fourth, undocumented until #7534 — a single-line literal whose prefix is not
+  # `${path.module}/`, i.e. `file("${path.root}/x")`, `file("../x")`, `file(abspath(…))`,
+  # each of which resolves in Terraform and renders into user_data. Before #7534 every one of
+  # them rendered while the nine literal payloads still resolved and the floor still passed,
+  # so the evidence attested a byte set that was not what shipped.
+  #
+  # The canonical-shape assertion below closes that by NARROWING the admissible module shape
+  # rather than widening the extractor: full HCL parsing cannot reach `file(local.p)` either
+  # (that needs evaluating the module, not parsing it), so the "complete" option is itself
+  # partial while costing a new binary dependency inside a gate whose contract is fail-closed.
+  # The residual, stated honestly: a future change that legitimately needs a non-canonical
+  # form reddens this gate, and a human must restore the canonical form or extend the gate
+  # deliberately. That is the intended trade — for an evidence gate, refusing is correct and
+  # hashing an incomplete set is not.
+  # ONE comment-strip, consumed by BOTH the canonical-shape assertion and the extractor.
+  # They must not each run their own: a divergence about what counts as a comment would
+  # reintroduce exactly the class #7534 closes — a binding one side sees and the other does
+  # not. The sed BLANKS comment lines rather than deleting them, so line numbers in the
+  # abort messages below are the real ones in "$module_tf".
+  local _stripped _shape_src _f
+  _stripped=$(sed 's/^[[:space:]]*#.*$//' "$module_tf")
+
+  # THE SHAPE ASSERTION QUANTIFIES OVER THE WHOLE MODULE DIRECTORY, not over main.tf.
+  #
+  # Scoping it to main.tf was a measured FAIL-OPEN, and it is the #7534 defect class
+  # reproduced one file over: Terraform loads every `.tf`/`.tf.json` in the module dir, so
+  # `locals { x = file("${path.root}/../../evil.sh") }` in outputs.tf RENDERS INTO user_data
+  # while main.tf stays canonical — the gate produced a digest with no abort, and editing
+  # evil.sh afterwards did not move it. The sibling FILES are hashed (the input set globs
+  # them), but the PAYLOADS they bind were never in the set, which is precisely the
+  # "attests a byte set that is not what ships" failure this gate exists to refuse.
+  #
+  # `_shape_src` is the comment-stripped concatenation of every loaded file; `_stripped`
+  # stays main.tf-only because the PAYLOAD EXTRACTOR must keep resolving `${path.module}`
+  # against the module dir exactly as before. The two are deliberately different scopes: the
+  # extractor answers "which payloads does the canonical binding site name", the shape
+  # assertion answers "can anything ANYWHERE in this module bind outside that form".
+  _shape_src=""
+  for _f in "$module_dir"/*.tf "$module_dir"/*.tf.json; do
+    [[ -e "$_f" || -L "$_f" ]] || continue          # unexpanded glob literal (no nullglob)
+    [[ -r "$_f" ]] || continue
+    _shape_src+="$(sed 's/^[[:space:]]*#.*$//' "$_f")"$'\n'
+  done
+
   _payload_refs() {
-    sed 's/^[[:space:]]*#.*$//' "$module_tf" \
+    printf '%s\n' "$_stripped" \
       | grep -oE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\("\$\{path\.module\}/[^"]+"' \
       | sed -E 's/.*\("\$\{path\.module\}\///; s/"$//'
   }
-  while IFS= read -r _f; do
-    [[ -n "$_f" && -r "${module_dir}/${_f}" ]] && _inputs+=("${module_dir}/${_f}")
-  done < <(_payload_refs | sort -u)
 
-  # A floor: the template + the module .tf + nine payloads.
-  if [[ "${#_inputs[@]}" -lt 11 ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — resolved only ${#_inputs[@]} user_data input(s) (expected the template + the render module + 9 payloads). The payload-set extraction from ${module_tf} drifted. Fail-closed."
+  # Every `file`-family occurrence NOT in the strict single-line `"${path.module}/…"` form.
+  # Line-scoped so the abort can name a location; a line carrying both a strict and a
+  # non-strict call is reported, which is the safe direction for a fail-closed gate.
+  # THE WHOLE `file`-PREFIXED FAMILY, not an enumerated alternation. `filesha1(`,
+  # `filebase64sha256(`, `filebase64sha512(`, `fileset(` and `fileexists(` all sat OUTSIDE
+  # `(base64|sha256|sha512|md5)?` on BOTH sides of the count comparison, so each was silent
+  # in both operands and the gate could not see it — an enumerated member set rotting exactly
+  # the way this file's own comments say enumerated member sets rot. `templatefile(` is
+  # excluded explicitly because it is checked separately above (and the previous
+  # `(^|[^A-Za-z])` boundary excluded it only incidentally).
+  _nonstrict_file_sites() {
+    printf '%s\n' "$_shape_src" \
+      | grep -nE '(^|[^A-Za-z])file[a-z0-9]*\(' \
+      | grep -vE 'templatefile\(' \
+      | grep -vE '(^|[^A-Za-z])file[a-z0-9]*\("\$\{path\.module\}/[^"]+"'
+  }
+  #
+  # THE SECOND CONDITIONAL CHOKEPOINT, and the one the deleted arithmetic below used to police
+  # by counting. Aborting HERE — where the drop actually happens — names the offending payload,
+  # which the count never could: it could only report that two integers disagreed.
+  #
+  # THE `-n "$_f"` GUARD IS RETAINED. Written as a bare `-r` test, an empty `_f` yields
+  # `-r "${module_dir}/"`, which is TRUE for a directory — so a blank extraction line would
+  # append the module directory itself to the hash input set.
+  # ── #7534 — CANONICAL MODULE SHAPE, asserted BEFORE the extraction is trusted ────────
+  #
+  # The extractor is provably complete over a NARROWED module shape, and these two checks are
+  # what narrow it. Any deviation ABORTs in the same voice as the per-payload abort below,
+  # naming the offending occurrence — the lesson that abort already encodes, and the one the
+  # deleted referenced-vs-resolved arithmetic could never satisfy (it could report that two
+  # integers disagreed, never WHICH binding).
+  #
+  # (1) EXACTLY ONE `templatefile(`, with the known argument. `grep -o | wc -l` counts
+  #     OCCURRENCES; `grep -c` counts LINES, so two calls on one physical line would read as
+  #     one and a second template would slip through the check written to catch it.
+  local _n_tf
+  _n_tf=$(printf '%s\n' "$_shape_src" | grep -oE 'templatefile\(' | wc -l | tr -d '[:space:]')
+  if [[ "$_n_tf" != "1" ]]; then
+    echo "git_data_rung2_bound_files: ABORT — ${module_tf} contains ${_n_tf} \`templatefile(\` occurrence(s); the canonical shape has exactly 1. A second template renders into user_data and is invisible to the payload extractor, so the evidence digest would attest a byte set that is not what ships. Restore the canonical single-template shape, or extend this gate deliberately. Fail-closed."
+    return 1
+  fi
+  #     The argument must be a strict single-line "${path.module}/…" literal — the SAME form
+  #     the payload rule requires, for the same reason: the template's bytes are hashed by
+  #     path, so a statically-resolvable path is what makes the digest bind what ships.
+  #
+  #     THE FORM IS PINNED, NOT THE FILENAME. The plan prescribed asserting the exact
+  #     "${path.module}/../../cloud-init-git-data.yml" literal; measured, that is both wrong
+  #     and unusable. Unusable: every synthesized module tree in this gate's own suite binds
+  #     "${path.module}/../../ci.yml" (per cq-test-fixtures-synthesized-only), so the filename
+  #     pin ABORTs 31 arms on this branch (measured 2026-09-03 by re-adding it on a sandbox
+  #     copy: 46 passed, 31 failed). An earlier revision said "25 arms — including the
+  #     must-PASS rows #7534 adds"; 25 is the figure on origin/main, so it EXCLUDES those
+  #     rows rather than including them. The conclusion is unchanged and stronger at 31.
+  #     Wrong on the merits too: a MOVED template
+  #     that keeps this form still hashes correctly, because the digest binds the file at the
+  #     resolved path. Only INDIRECTION (`templatefile(local.t)`, a multi-line call, a
+  #     non-`path.module` prefix) breaks the binding, and that is exactly what this form check
+  #     catches. A filename pin would assert a different property — identity, not
+  #     admissibility — and would buy the digest nothing.
+  # A HERESTRING, NOT A PIPE, AND THE VERDICT IS SPLIT. The pipe-fed `grep -q` this replaces
+  # is the #9210 flake — grep -q closes the pipe on first match, the producer takes EPIPE,
+  # and pipefail reports a non-zero pipeline even though the pattern MATCHED (the run log's
+  # `printf: write error: Broken pipe` immediately before this arm's ABORT). rc >= 2 means
+  # the matcher could not evaluate at all: an instrument failure, reported as such so the
+  # next transport flake does not arrive dressed as a shape violation.
+  local _shape_rc=0
+  grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"' <<< "$_shape_src" || _shape_rc=$?
+  if [[ "$_shape_rc" -ge 2 ]]; then
+    echo "git_data_rung2_bound_files: ABORT — could not evaluate the \`templatefile(\` shape check on ${module_tf}: the matcher exited ${_shape_rc} instead of returning a verdict. An instrument failure is not a shape violation; refuse to guess. Fail-closed."
+    return 1
+  fi
+  if [[ "$_shape_rc" -eq 1 ]]; then
+    echo "git_data_rung2_bound_files: ABORT — ${module_tf}'s sole \`templatefile(\` argument is not a single-line \"\${path.module}/…\" literal. An indirected or multi-line template reference is not statically resolvable, so the evidence digest cannot bind the bytes that render into user_data. Fail-closed."
     return 1
   fi
 
-  # REFERENCED vs RESOLVED. Both sides now use `_payload_refs`, so this is NOT a tautology
-  # over the same predicate: extraction additionally requires each referent to be READABLE, so
-  # a difference means the module references a payload that is not on disk. That is a genuine
-  # signal — a missing payload would otherwise silently shrink what the evidence binds to,
-  # and the floor cannot see it once the module also grows a replacement.
-  local _n_refs _n_resolved
-  # COMMENTS STRIPPED, and `templatefile(` excluded. Both were live defects in the first
-  # version of this very check: it matched `templatefile("${path.module}/…` (a substring) AND
-  # matched the header comment in this module that DOCUMENTS the mechanism — reporting 11
-  # references against 9 payloads and aborting on a correct tree. The extraction `sed` above
-  # is comment-safe by anchoring on `^[[:space:]]*[A-Za-z0-9_]+=`, so the count has to be too,
-  # or the two disagree the moment anyone explains the mechanism in prose.
-  # (cq-assert-anchor-not-bare-token — the same trap, in the guard added to catch a different one.)
-  _n_refs="$(_payload_refs | sort -u | grep -c . || true)"
-  _n_resolved=$(( ${#_inputs[@]} - 2 ))   # minus the cloud-init and the module .tf itself
-  if [[ "$_n_refs" -ne "$_n_resolved" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} contains ${_n_refs} file(\${path.module}/…) reference(s) but only ${_n_resolved} resolved into the hash input set. A payload the extraction cannot see would render into user_data while edits to it left the evidence hash unchanged. Fail-closed."
+  # (2) EVERY `file`-family occurrence matched the strict single-line literal form.
+  #
+  #     The boundary `(^|[^A-Za-z])` is load-bearing on BOTH sides and is the extractor's own:
+  #     without it `templatefile(` counts as a `file(` and the rule aborts on the shipped
+  #     module. Measured against the comment-stripped main.tf: naive = 10, boundary-aware = 9,
+  #     strict-resolved = 9.
+  #
+  #     The resolved side is counted PRE-`sort -u`. Post-dedup it would false-ABORT the moment
+  #     two bindings legitimately referenced the same payload — occurrences 10, deduped 9 —
+  #     which is a shape this rule has no business rejecting. The floor below is the one that
+  #     is deliberately post-dedup, because it counts distinct payload FILES.
+  local _n_occ _n_strict
+  _n_occ=$(printf '%s\n' "$_shape_src" | grep -oE '(^|[^A-Za-z])file[a-z0-9]*\(' | grep -vcE 'templatefile\(' || true)
+  # Counted over the SHAPE source, so both operands quantify over the same text. The
+  # extractor (_payload_refs) stays main.tf-scoped for RESOLUTION; this is a count of
+  # strict-form occurrences anywhere in the module.
+  _n_strict=$(printf '%s\n' "$_shape_src" | grep -oE '(^|[^A-Za-z])file[a-z0-9]*\("\$\{path\.module\}/[^"]+"' | grep -vc 'templatefile(' || true)
+  if [[ "$_n_occ" != "$_n_strict" ]]; then
+    echo "git_data_rung2_bound_files: ABORT — ${module_tf} has ${_n_occ} \`file\`-family occurrence(s) but only ${_n_strict} in the strict single-line \"\${path.module}/…\" form. The remainder render into user_data while the extractor cannot see them, so the evidence digest would not move when they change. Offending site(s), as line:content in ${module_tf}:"
+    _nonstrict_file_sites | sed 's/^/  /'
+    echo "git_data_rung2_bound_files: restore the canonical form, or extend this gate deliberately. Fail-closed."
+    return 1
+  fi
+
+  local _n_payloads=0
+  while IFS= read -r _f; do
+    [[ -n "$_f" ]] || continue
+    if [[ ! -r "${module_dir}/${_f}" ]]; then
+      echo "git_data_rung2_bound_files: ABORT — ${module_tf} references payload '${_f}', but '${module_dir}/${_f}' cannot be read (absent, or present and unreadable). That payload renders into user_data, so hashing without it would bind the evidence to fewer files than ship. Fail-closed."
+      return 1
+    fi
+    _inputs+=("${module_dir}/${_f}")
+    _n_payloads=$((_n_payloads + 1))
+  done < <(_payload_refs | sort -u)
+
+  # A FLOOR ON THE PAYLOAD COUNT — not on `#_inputs`, whose composition is what went stale.
+  #
+  # The old floor was `#_inputs -lt 11`. With two siblings present that reads `4 + N < 11`, so
+  # it fired only when N < 7: the shipped floor TOLERATED LOSING TWO OF THE NINE PAYLOADS. It
+  # was loose, not merely stale.
+  #
+  # THIS IS HONESTLY STILL A LITERAL, and the honest statement is that it goes LOOSE by one
+  # when a tenth payload lands — it will not abort, it will tolerate losing one. There is no
+  # automatic trigger for that and this code does not pretend otherwise: when the payload set
+  # grows, THIS LITERAL IS WHERE THE NEW COUNT GOES. It is one literal instead of two, which is
+  # an improvement, not immunity.
+  #
+  # It stays alongside the per-reference abort because the two are orthogonal: deleting five
+  # bindings from main.tf leaves every REMAINING reference resolving perfectly while the hash
+  # binds four files fewer than ship.
+  if [[ "$_n_payloads" -lt 9 ]]; then
+    echo "git_data_rung2_bound_files: ABORT — the payload extraction from ${module_tf} resolved only ${_n_payloads} payload(s); ship binds 9. The extraction drifted, or bindings were removed. If the payload set legitimately grew or shrank, the floor literal in git_data_rung2_bound_files() is where the new count belongs. Fail-closed."
     return 1
   fi
 
   _n_uniq="$(printf '%s\n' "${_inputs[@]}" | while IFS= read -r _f; do basename "$_f"; done | LC_ALL=C sort -u | wc -l)"
   if [[ "$_n_uniq" -ne "${#_inputs[@]}" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — the ${#_inputs[@]} user_data inputs carry only ${_n_uniq} distinct basenames. The hash is basename-keyed for path invariance, so a collision would silently bind the evidence to fewer files than ship. Fail-closed."
+    echo "git_data_rung2_bound_files: ABORT — the ${#_inputs[@]} user_data inputs carry only ${_n_uniq} distinct basenames. The hash is basename-keyed for path invariance, so a collision would silently bind the evidence to fewer files than ship. Fail-closed."
+    return 1
+  fi
+
+  printf '%s\n' "${_inputs[@]}"
+  return 0
+}
+
+# Usage:  git_data_rung2_user_data_sha256 <cloud-init-git-data.yml>
+#         # prints the 64-hex hash on stdout and returns 0; on failure prints a
+#         # fail-closed ABORT diagnostic on stdout and returns 1.
+git_data_rung2_user_data_sha256() {
+  local cloud_init="${1:-}"
+  local _roster _inputs=() _f
+  # EVERY refusal lives in the enumeration; this function only hashes what it is handed.
+  if ! _roster="$(git_data_rung2_bound_files "$cloud_init")"; then
+    printf '%s\n' "$_roster"
+    return 1
+  fi
+  while IFS= read -r _f; do
+    [[ -n "$_f" ]] && _inputs+=("$_f")
+  done <<<"$_roster"
+  if [[ "${#_inputs[@]}" -eq 0 ]]; then
+    echo "git_data_rung2_user_data_sha256: ABORT — the bound-file enumeration returned 0 inputs without refusing. Hashing nothing would produce a well-formed digest of an empty set. Fail-closed."
     return 1
   fi
 
@@ -405,7 +653,823 @@ git_data_rung2_user_data_sha256() {
 # and anything outside this list refuses. The list is CLOSED — an unrecognised name refuses
 # too, because a typo'd or newly-introduced var is exactly where "not on a deny list" and
 # "safe" come apart.
-GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_volume_id doppler_token doppler_config_name git_transport_pubkey git_provision_pubkey git_remove_pubkey"
+#
+# THE THREE PUBKEYS ARE NOT AN IDENTITY DIVERGENCE — THEY ARE A CAPABILITY ONE (#8009).
+#
+# The other five members name WHICH host, WHICH volume, WHICH credential — they select an
+# instance and say nothing about what the host is authorized to do. git_transport_pubkey,
+# git_provision_pubkey and git_remove_pubkey are different in kind: together they ARE the
+# host's SSH authorization map, deciding which identity may invoke the Article 17 erasure
+# path. Their presence here is still correct — rung2-rehearsal/rehearsal.tf sets all three
+# to one tls_private_key, so the rehearsal genuinely does diverge on them and the evidence
+# must declare it — but the reason is not the reason the other five are here.
+#
+# The consequence is what matters, and it is why this list ALONE is not enough. Because the
+# rehearsal collapses the three deliberately, a production edit that collapses them is a
+# NO-OP there: boot_complete still emits, no fatal appears, the evidence still records PASS,
+# and RUNG2_TEMPLATE_SHA256 moves so the file even looks freshly re-rehearsed. Allowing the
+# divergence is correct; inferring from it that the divergence is harmless is not. That
+# inference is closed by git_data_authorization_map_gate, a STATIC assertion over the
+# production root which needs no rehearsal to run — see the head of this file.
+#
+# (#7226, ADR-237) host_ssh_ed25519_private_key / host_ssh_ed25519_public_key join as IDENTITY
+# divergences: the rehearsal mints its own SSH host key (it must never hold production's), and
+# what boots with it — the ssh_keys install and the boot proof — is template text the hash binds.
+GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="host_name git_data_volume_id git_data_luks_volume_id doppler_token doppler_config_name git_transport_pubkey git_provision_pubkey git_remove_pubkey host_ssh_ed25519_private_key host_ssh_ed25519_public_key"
+
+# ── GUARD 4 (#8043 NFR2): A VOIDED ATTESTATION CANNOT BE MADE TO LOOK FRESH ──────────
+#
+# THE PROPERTY. git-data-rung2-boot-evidence.env is never MODIFIED in the same change as any
+# of the hash-bound files it attests. It may be DELETED in such a change (this batch's own
+# shape: the attestation is void, and deleting the file says so), or CREATED by a rehearsal
+# PR that touches none of them.
+#
+# WHY THE GATE BELOW CANNOT SEE THIS ON ITS OWN. git_data_rung2_rehearsal_gate binds the
+# evidence to the template by hash, and that binding is what makes a stale attestation
+# self-invalidating. It does NOT bind the evidence to a REHEARSAL: its only provenance check
+# is that RUNG2_EVIDENCE_URL is shaped like an Actions run URL for this repo — it never
+# fetches the run. So a change that edits a payload and hand-edits RUNG2_TEMPLATE_SHA256 to
+# the moved digest, leaving the URL alone, is hash-VALID evidence citing a rehearsal that
+# never booted the shipped bytes. The hash says "fresh"; the attestation is void; the birth
+# route releases. This guard makes that shape a HOLD.
+#
+# ONE DERIVATION. The roster this guard quantifies over is git_data_rung2_bound_files — the
+# SAME walk the hash consumes — so the set the guard watches cannot drift from the set the
+# digest binds. That is the reason the enumeration was split out of the hash function.
+#
+# TWO ARMS, ONE FUNCTION, ONE INTERSECTION.
+#
+#   birth  (ARM 1, BLOCKING) — wired INSIDE git_data_rung2_rehearsal_gate, so every caller
+#          of that gate gets it for free: the birth job (apply-web-platform-infra.yml
+#          git-data-host-create), the rehearsal route, and the CI freshness step. It inspects
+#          the ONE commit that last touched the evidence (`git log -1 -- <evidence>`) and
+#          HOLDs if that commit also touched any bound file (`git diff-tree --no-commit-id
+#          --name-only -r --root -m <sha>`). `--root` is load-bearing: without it a root
+#          commit diffs as NOTHING, so the one commit that provably touched all fourteen
+#          files would intersect as empty. `-m` makes a merge commit diff against each
+#          parent rather than as nothing, which over-approximates toward HOLD.
+#   range  (ARM 2, ADVISORY) — the same intersection over `git diff --name-only
+#          --diff-filter=AM <range>`, for a CI step that sees the whole PR before it merges.
+#          A DELETION of the evidence is the permitted shape and is deliberately outside the
+#          filter. It runs in infra-validation.yml's deploy-script-tests job, which is not a
+#          required check — a visible red, not a merge gate.
+#
+# FAIL-CLOSED ON EVERYTHING IT CANNOT MEASURE, and every such case is NAMED, because "could
+# not measure" and "measured clean" must never share a message:
+#   - a SHALLOW checkout (`git rev-parse --is-shallow-repository` = true). Provenance cannot
+#     be read from a depth-1 clone, and actions/checkout is depth-1 unless told otherwise.
+#     This is what makes forgetting `fetch-depth: 0` on the birth job fail CLOSED (a HOLD
+#     naming the shallow clone) rather than open (a pass over history it could not see).
+#   - the evidence has no commit at all (untracked, or never committed): there is no
+#     provenance to read. This is also what an operator hits running the gate on a freshly
+#     downloaded evidence file BEFORE committing it — commit it alone, then re-run.
+#   - the evidence differs from its committed state (a working-tree edit): the commit that
+#     `git log` names is not the bytes the gate is reading.
+#   - a range whose base does not resolve — including the all-zeros branch-create sentinel
+#     that `github.event.before` carries on a first push. `git diff` against it FAILS and
+#     prints nothing, which a naive reader takes for "no changes". It is a HOLD, and it is
+#     worded so it cannot be mistaken for the empty-diff pass.
+#   - a roster below its structural floor. The enumeration yields at least 11 entries by
+#     construction (template + main.tf + the 9-payload floor), so fewer means the derivation
+#     itself broke — and an empty roster intersects as empty, which would be a fail-open.
+#   - a bound file outside the evidence's repository (no shared toplevel): the paths cannot
+#     be compared, so nothing was measured.
+#
+# COMPARED BY REPO-RELATIVE PATH, derived from `git rev-parse --show-toplevel` of the
+# evidence's own directory and each input's PHYSICAL path — never from the caller's cwd or
+# `--show-prefix` of wherever the caller happens to stand. Production calls this with
+# ${GITHUB_WORKSPACE}/… ; the suite calls it from a temp dir; a laptop calls it from anywhere.
+#
+# RESIDUAL, STATED SO NOBODY READS THIS AS A PROOF. ARM 1 inspects ONE commit. A PR that
+# edits a bound file in commit A and the hash in commit B and lands by ANY NON-SQUASH
+# METHOD — rebase-merge OR merge-commit (all three methods are enabled on this repo; with
+# `--no-ff`, `git log -1 -- <evidence>` still resolves to B by history simplification,
+# measured) — presents an evidence commit touching no bound file, and passes ARM 1; only
+# ARM 2 sees it, pre-merge, and ARM 2 is advisory. Nor can ARM 1 tell a hand-authored
+# evidence file landed alone (after a permitted deletion) from a rehearsal PR's.
+# Closing that required resolving the run RUNG2_EVIDENCE_URL names and binding its head SHA.
+#
+# THAT SHIPPED IN #8010, AND THIS PARAGRAPH IS NARROWED RATHER THAN RETIRED. The rehearsal
+# gate now resolves the run, requires it to be a successful main-branch workflow_dispatch of
+# the rehearsal workflow, and re-hashes the tree AT ITS head_sha — so the two shapes above no
+# longer release: a non-squash landing and a hand-authored evidence file both have to name a
+# run that rehearsed THESE bytes, and if they can do that, the rehearsal happened.
+#
+# WHAT REMAINS TRUE OF THIS GUARD SPECIFICALLY: ARM 1 still inspects ONE commit, and it still
+# cannot distinguish those shapes BY ITSELF. It is a local, offline, zero-request check that
+# speaks before any network call, and that ordering is deliberate — a payload author's
+# ordinary mistake should be reported by the cheap arm. Read it as the first of two
+# independent bindings, not as the whole one.
+#
+# Usage:  git_data_rung2_evidence_provenance_gate <cloud-init> <evidence> [birth]
+#         git_data_rung2_evidence_provenance_gate <cloud-init> <evidence> range <rev>...
+#         # 0=PASS, 1=HOLD. One line on stdout naming the verdict and its reason. <rev>... is
+#         # handed to `git diff` verbatim: `origin/main...HEAD`, or `<before> HEAD`.
+
+# _git_data_repo_rel <path> <toplevel> — the repo-relative form of <path>, whose DIRECTORY
+# must exist (the file itself need not: a deleted evidence file still has a repo path).
+# Physical (`cd -P`) so `${module_dir}/../../name` and a symlinked checkout both normalise
+# to what git prints. Returns 1 when <path> is not under <toplevel>.
+_git_data_repo_rel() {
+  local _p="$1" _top="$2" _d _full
+  _d="$(cd -P "$(dirname "$_p")" 2>/dev/null && pwd -P)" || return 1
+  [[ -n "$_d" && "${_d}/" == "${_top}/"* ]] || return 1
+  _full="${_d}/$(basename "$_p")"
+  # Parameter expansion, not sed: the toplevel is a path, and a path is not a regex.
+  printf '%s\n' "${_full#"${_top}"/}"
+}
+
+git_data_rung2_evidence_provenance_gate() {
+  local cloud_init="${1:-}" evidence="${2:-}" mode="${3:-birth}"
+  local _me="git_data_rung2_evidence_provenance_gate"
+  local _n=$#
+  if [[ "$_n" -ge 3 ]]; then shift 3; else shift "$_n"; fi   # "$@" is now <rev>... (range only)
+
+  if [[ -z "$cloud_init" || ! -f "$cloud_init" ]]; then
+    echo "${_me}: HOLD — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is no bound-file roster to compare against."
+    return 1
+  fi
+  if [[ -z "$evidence" ]]; then
+    echo "${_me}: HOLD — no evidence path supplied. Fail-closed."
+    return 1
+  fi
+  case "$mode" in
+    birth|range) ;;
+    *) echo "${_me}: HOLD — unknown mode '${mode}' (expected 'birth' or 'range'). Fail-closed: a misspelt arm must not select the more permissive one."; return 1 ;;
+  esac
+
+  # THE ROSTER, from the one derivation. Every ABORT in the enumeration is a HOLD here.
+  local _roster _bound=() _f
+  if ! _roster="$(git_data_rung2_bound_files "$cloud_init")"; then
+    echo "${_me}: HOLD — the bound-file roster could not be derived, so no provenance was measured. ${_roster}"
+    return 1
+  fi
+  while IFS= read -r _f; do
+    [[ -n "$_f" ]] && _bound+=("$_f")
+  done <<<"$_roster"
+  if [[ "${#_bound[@]}" -lt 11 ]]; then
+    echo "${_me}: HOLD — the derived bound-file roster has only ${#_bound[@]} entries; the enumeration yields at least 11 by construction (template + main.tf + the 9-payload floor). The derivation is broken, and an empty roster intersects as empty — which would release. Fail-closed."
+    return 1
+  fi
+
+  # THE REPOSITORY, from the evidence's own directory — never the cwd.
+  local _ev_dir _top
+  _ev_dir="$(dirname "$evidence")"
+  if [[ ! -d "$_ev_dir" ]]; then
+    echo "${_me}: HOLD — the evidence directory '${_ev_dir}' does not exist, so there is no repository to read provenance from. Fail-closed."
+    return 1
+  fi
+  if ! _top="$(git -C "$_ev_dir" rev-parse --show-toplevel 2>/dev/null)" || [[ -z "$_top" ]]; then
+    echo "${_me}: HOLD — '${_ev_dir}' is not inside a git work tree, so the evidence has no readable provenance. Fail-closed."
+    return 1
+  fi
+  local _shallow
+  _shallow="$(git -C "$_top" rev-parse --is-shallow-repository 2>/dev/null || echo unknown)"
+  if [[ "$_shallow" != "false" ]]; then
+    echo "${_me}: HOLD — SHALLOW CHECKOUT (is-shallow-repository=${_shallow}). Provenance cannot be read from a clone that does not carry the commit history; actions/checkout is depth-1 unless the step sets fetch-depth: 0. Fail-closed rather than passing over history this gate could not see."
+    return 1
+  fi
+
+  # REPO-RELATIVE PATHS for the evidence and every bound file.
+  local _ev_rel _b _rel _bound_rel=()
+  if ! _ev_rel="$(_git_data_repo_rel "$evidence" "$_top")"; then
+    echo "${_me}: HOLD — the evidence path '${evidence}' is outside the repository at ${_top}. Fail-closed."
+    return 1
+  fi
+  for _b in "${_bound[@]}"; do
+    if ! _rel="$(_git_data_repo_rel "$_b" "$_top")"; then
+      echo "${_me}: HOLD — bound file '${_b}' is outside the evidence's repository (${_top}), so its provenance cannot be compared with the evidence's. Nothing was measured. Fail-closed."
+      return 1
+    fi
+    _bound_rel+=("$_rel")
+  done
+
+  # THE CHANGED SET, per arm.
+  local _changed="" _sha=""
+  if [[ "$mode" == "birth" ]]; then
+    if [[ ! -f "$evidence" ]]; then
+      echo "${_me}: HOLD — no evidence file at ${evidence}. Fail-closed."
+      return 1
+    fi
+    # UNTRACKED and DIRTY are told apart, because their remedies differ: an untracked file
+    # is the operator running the gate on a freshly downloaded evidence file before the
+    # commit (commit it alone, then re-run); a dirty tracked file is an edit on top of a
+    # commit (revert it, or land it alone). Both are refused.
+    if [[ -z "$(git -C "$_top" ls-files -- "$_ev_rel" 2>/dev/null)" ]]; then
+      echo "${_me}: HOLD — ${_ev_rel} is not tracked, so no commit touches it and its provenance cannot be read. Commit the evidence in a commit that touches none of the hash-bound files, then re-run. Fail-closed."
+      return 1
+    fi
+    if [[ -n "$(git -C "$_top" status --porcelain -- "$_ev_rel" 2>/dev/null)" ]]; then
+      echo "${_me}: HOLD — ${_ev_rel} differs from its committed state (an uncommitted edit). The bytes this gate would read are not the bytes any commit attests, so there is no provenance to check. Revert the edit, or land it in a commit that touches ONLY the evidence, then re-run. Fail-closed."
+      return 1
+    fi
+    _sha="$(git -C "$_top" log -1 --format=%H -- "$_ev_rel" 2>/dev/null || true)"
+    if [[ ! "$_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "${_me}: HOLD — no commit touches ${_ev_rel} (git log -1 returned '${_sha}'), so its provenance cannot be read. Fail-closed."
+      return 1
+    fi
+    if ! _changed="$(git -C "$_top" diff-tree --no-commit-id --name-only -r --root -m --no-renames "$_sha" 2>/dev/null)"; then
+      echo "${_me}: HOLD — could not list the files touched by ${_sha}, the commit that last modified ${_ev_rel}. Fail-closed."
+      return 1
+    fi
+  else
+    if [[ "$#" -eq 0 ]]; then
+      echo "${_me}: HOLD — range mode was called with no range. Fail-closed: an absent range is not an empty diff."
+      return 1
+    fi
+    local _rev
+    for _rev in "$@"; do
+      if [[ "$_rev" == *0000000000000000000000000000000000000000* ]]; then
+        echo "${_me}: HOLD — the range names the all-zeros branch-create sentinel ('${_rev}'), so the base is unresolvable. \`git diff\` against it fails and prints nothing, which is NOT an empty diff. Fail-closed."
+        return 1
+      fi
+    done
+    if ! _changed="$(git -C "$_top" diff --name-only --diff-filter=AM --no-renames "$@" -- 2>/dev/null)"; then
+      echo "${_me}: HOLD — the range '$*' does not resolve in ${_top} (a missing base, an unfetched ref, or a merge base a shallow history cannot reach). Nothing was measured. Fail-closed."
+      return 1
+    fi
+    local _ev_in_range=0 _c
+    while IFS= read -r _c; do
+      [[ "$_c" == "$_ev_rel" ]] && _ev_in_range=1
+    done <<<"$_changed"
+    if [[ "$_ev_in_range" -eq 0 ]]; then
+      echo "${_me}: PASS — ${_ev_rel} is untouched (not added or modified) in range '$*'; a deletion is the permitted shape and is not in the filter. Bound-file edits without an evidence edit are the STALE EVIDENCE case, which the rehearsal gate's hash check reports."
+      return 0
+    fi
+  fi
+
+  # THE INTERSECTION. Same loop for both arms.
+  local _hits="" _c
+  while IFS= read -r _c; do
+    [[ -n "$_c" ]] || continue
+    for _rel in "${_bound_rel[@]}"; do
+      [[ "$_c" == "$_rel" ]] && _hits+="${_c} "
+    done
+  done <<<"$_changed"
+  if [[ -n "$_hits" ]]; then
+    if [[ "$mode" == "birth" ]]; then
+      echo "${_me}: HOLD — VOIDED ATTESTATION. ${_ev_rel} was last modified in commit ${_sha}, which also changed hash-bound input(s): ${_hits}. An evidence file edited in the same change as the bytes it attests is not a rehearsal record of those bytes — the rehearsal ran on the bytes BEFORE the edit, if it ran at all — and the URL-shape check cannot tell the difference. The permitted shapes are: delete the evidence in a change that edits bound files (the birth then HOLDs for lack of evidence, honestly), or create it in a rehearsal change that edits none. Re-run the rung-2 rehearsal against the current tree and land its evidence in its own commit. Fail-closed."
+    else
+      echo "${_me}: HOLD — VOIDED ATTESTATION. Range '$*' adds or modifies ${_ev_rel} AND changes hash-bound input(s): ${_hits}. An evidence file edited alongside the bytes it attests is not a rehearsal record of those bytes. Either delete the evidence in this change (the birth then HOLDs honestly) or land the rehearsal's evidence in its own change that touches none of the bound files."
+    fi
+    return 1
+  fi
+  if [[ "$mode" == "birth" ]]; then
+    echo "${_me}: PASS — ${_ev_rel} was last modified in commit ${_sha}, which touched none of the ${#_bound_rel[@]} hash-bound inputs."
+  else
+    echo "${_me}: PASS — range '$*' modifies ${_ev_rel} and none of the ${#_bound_rel[@]} hash-bound inputs (a rehearsal-PR shape)."
+  fi
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# (#8010) RESOLVING THE RUN — the helpers git_data_rung2_rehearsal_gate calls after Guard 4.
+#
+# WHAT WAS WRONG. Before this, the gate asserted that a well-formed, template-bound
+# ASSERTION existed — never that a rehearsal passed. It stripped comments before reading (so
+# the host name and every ARTIFACT query block were not load-bearing), it never resolved the
+# Actions run id (the URL check is a shape match), and `RUNG2_SENTRY_CROSSCHECK` was read by
+# no consumer at all. Measured: a four-line hand-written file naming a nonexistent run
+# released it identically to a real capture.
+#
+# WHAT THESE BUY, AND WHAT THEY DO NOT. The run id now names an artifact that either exists
+# in this repository's run history or does not; its head_sha binds the run to the BYTES; the
+# artifact list separates a real capture from a dry_run. None of that makes the pointer
+# unforgeable — a person who can push to main can still dispatch a real rehearsal of
+# different bytes — and the head-SHA binding is precisely what makes that attempt fail.
+#
+# THE COULD-NOT-MEASURE VOCABULARY IS SEPARATE FROM THE REFUSAL VOCABULARY, and that is the
+# property most of the code below exists to preserve. `RUN_OFFLINE`, `RUN_RATE_LIMITED`,
+# `RUN_UNRESOLVABLE`, `RUN_SHA_UNREACHABLE`, `RUN_HASH_UNCOMPUTABLE`,
+# `RUN_ARTIFACT_RECORD_UNREADABLE`, `SENTRY_VERDICT_UNREADABLE` and `TOOLING_MISSING` mean
+# the instrument failed. `RUN_NOT_FOUND`, `RUN_WRONG_WORKFLOW`, `RUN_WRONG_EVENT`,
+# `RUN_NOT_MAIN`, `RUN_NOT_COMPLETED`, `RUN_NOT_SUCCESS`, `RUN_HASH_MISMATCH`,
+# `RUN_NO_EVIDENCE_ARTIFACT`, `SENTRY_VERDICT_FATAL`, `SENTRY_UNAVAILABLE_UNACKED` and
+# `SENTRY_ACK_MISMATCH` mean the evidence was measured and refused. They never share wording.
+
+# THE BASE IS A CONSTANT, NOT AN OVERRIDE — measured, this was the PR's own defect class.
+#
+# It shipped as `${GIT_DATA_RUNG2_API_BASE:-…}` one line above a comment promising that "one
+# leaked env var in a pull_request-triggered workflow cannot redirect the gate's only network
+# call". Three review seats independently pointed a local server at it: the bearer arrived in
+# CLEARTEXT over http://, `_git_data_rung2_check_run` returned OK from a fabricated body, and
+# `_seam_note` stayed EMPTY — so the RELEASED line was byte-identical to a live measurement.
+# Two `env:` lines on the pull_request-triggered freshness step both exfiltrated the job token
+# and forged the verdict.
+#
+# Every other defence here protects the TRANSPORT (`--disable`, `--noproxy '*'`, no `-L`, the
+# xtrace clear). None protected the DESTINATION. The double gate and the SEAM ACTIVE
+# announcement covered one of the two env routes into the fetch and missed this one.
+#
+# A test needing a different endpoint uses SOLEUR_RUNG2_RUN_FETCH, which is double-gated and
+# announced. There is no second route.
+readonly GIT_DATA_RUNG2_API_BASE="https://api.github.com/repos/jikig-ai/soleur/actions"
+GIT_DATA_RUNG2_WORKFLOW_PATH=".github/workflows/git-data-rung2-rehearsal.yml"
+# Artifact RECORDS outlive the bytes, but retention past this window is undocumented and was
+# measured once — so beyond it an empty list is could-not-measure, never a refusal.
+GIT_DATA_RUNG2_ARTIFACT_WINDOW_DAYS=90
+
+# EVERY EVIDENCE-DERIVED VALUE IS SANITIZED BEFORE IT IS PRINTED.
+#
+# The HOLD lines below interpolate values read from the evidence file, the Actions runner
+# percent-DECODES workflow-command data, and the #8210 probe forwards this text into a public
+# issue comment. So a value carrying `%0A::stop-commands::` or `%0A::add-mask::` is a
+# workflow-command injection with two sinks. Strip control characters and the Unicode line
+# separators, escape the three bytes that can reconstruct a command, then truncate.
+_git_data_rung2_safe() {
+  local _v="${1-}" _max="${2:-200}"
+  # `tr` does the whole control-character job, INCLUDING CR and LF — the `${_v//$'\r'/%0D}`
+  # and `${_v//$'\n'/%0A}` lines this used to carry were unreachable, and their comment
+  # credited them with the defence `tr` actually provides.
+  #
+  # U+2028/U+2029 are stripped with `tr -d` over their literal UTF-8 bytes rather than a
+  # `sed 's/\xe2\x80\xa8//g'`: `\xNN` is a GNU extension, so on BSD/macOS sed that expression
+  # matches the literal characters `xe2…` and both separators survive — on precisely the
+  # workstation path `--disable` exists for (learning 2026-04-17-log-injection-unicode-line-separators).
+  _v="$(printf '%s' "$_v" | LC_ALL=C tr -d '\000-\037\177')"
+  # STRING replacement, not `tr -d`: tr deletes a byte SET, so feeding it the six UTF-8 bytes
+  # of U+2028/U+2029 would strip \342 and \200 out of every other multi-byte character too
+  # (an em-dash is \342\200\224). Build each separator as a literal and replace it whole.
+  local _sep
+  _sep="$(printf '\342\200\250')"; _v="${_v//"$_sep"/}"
+  _sep="$(printf '\342\200\251')"; _v="${_v//"$_sep"/}"
+  # TRUNCATE FIRST, then escape: escaping first can cut a `%25` mid-sequence and emit a
+  # half-escape that means something else to whatever decodes it.
+  _v="${_v:0:$_max}"
+  printf '%s' "${_v//%/%25}"
+}
+
+# THE GATE ANNOTATES ITSELF when it could not measure.
+#
+# The three CI call sites print "… is HELD: no rung-2 boot evidence for the CURRENT
+# cloud-init-git-data.yml" on ANY non-zero rc; that text is pinned by
+# plugins/soleur/test/terraform-target-parity.test.ts and two of the three files cannot be
+# edited this cycle. Without this line an instrument failure tells an operator to commit
+# evidence that already exists. Emitting from a sourced library follows the dominant
+# precedent here (tests/scripts/lib/preapply-entrypoint-gate.sh's _err()).
+# THE COULD-NOT-MEASURE SET, as data rather than as prose. The probe and two runbooks restate
+# it; `git_data_rung2_token_sets` below is what they are checked against, so a member added
+# here cannot silently fall through a consumer's stale copy.
+GIT_DATA_RUNG2_CANNOT_MEASURE_TOKENS="TOOLING_MISSING RUN_OFFLINE RUN_RATE_LIMITED RUN_UNRESOLVABLE RUN_SHA_UNREACHABLE RUN_HASH_UNCOMPUTABLE RUN_ARTIFACT_RECORD_UNREADABLE RUN_FLOOR_UNREADABLE SENTRY_VERDICT_UNREADABLE"
+GIT_DATA_RUNG2_MEASURED_TOKENS="RUN_NOT_FOUND RUN_WRONG_WORKFLOW RUN_WRONG_EVENT RUN_NOT_MAIN RUN_NOT_COMPLETED RUN_NOT_SUCCESS RUN_HASH_MISMATCH RUN_NO_EVIDENCE_ARTIFACT RUN_ID_REGRESSED SENTRY_VERDICT_FATAL SENTRY_UNAVAILABLE_UNACKED SENTRY_ACK_MISMATCH"
+
+_git_data_rung2_annotate() {
+  [[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
+  # THE FILTER IS THE POINT, AND IT SHIPPED MISSING.
+  #
+  # Measured by three seats: the three generic call sites pass whatever token the helper
+  # returned, so `RUN_NOT_MAIN`, `RUN_NOT_SUCCESS`, `RUN_NOT_FOUND`, `RUN_WRONG_WORKFLOW`,
+  # `RUN_WRONG_EVENT`, `RUN_NOT_COMPLETED` and `RUN_NO_EVIDENCE_ARTIFACT` — every member of
+  # the MEASURED set — printed "could not MEASURE". That inverts this library's own
+  # load-bearing claim ("They never share wording") on the one surface an operator reads, and
+  # it inverts their response: a forged or stale evidence file read as an instrument failure.
+  #
+  # An unknown token is annotated as could-not-measure deliberately: a token this function has
+  # never heard of is, by construction, one whose classification nobody recorded.
+  local _t
+  for _t in $GIT_DATA_RUNG2_MEASURED_TOKENS; do
+    if [[ "$1" == "$_t" ]]; then
+      printf '::error::git_data_rung2_rehearsal_gate REFUSED the rung-2 evidence [%s]: %s\n' \
+        "$1" "$(_git_data_rung2_safe "$2" 300)" >&2
+      return 0
+    fi
+  done
+  printf '::error::git_data_rung2_rehearsal_gate could not MEASURE the rung-2 evidence [%s]: %s\n' \
+    "$1" "$(_git_data_rung2_safe "$2" 300)" >&2
+}
+
+# git_data_rung2_token_sets <cannot|measured> — the exported sets, for consumers that must
+# classify a token they did not emit (the #8210 probe, its suite, the runbook parity arm).
+# Deriving beats restating: three hand-maintained copies agreed 8/8 at review time and nothing
+# asserted they would keep agreeing.
+git_data_rung2_token_sets() {
+  case "${1:-}" in
+    cannot)   printf '%s\n' $GIT_DATA_RUNG2_CANNOT_MEASURE_TOKENS ;;
+    measured) printf '%s\n' $GIT_DATA_RUNG2_MEASURED_TOKENS ;;
+    *) return 2 ;;
+  esac
+}
+
+# _git_data_rung2_fetch <path-suffix>
+#   The ONLY thing the test seam replaces. Prints the body, then the HTTP status on the last
+#   line — body + status only, which is why no caller parses headers.
+#   Exit: 0 answered (read the status line) | 7 transport failure | 8 refused to run
+_git_data_rung2_fetch() {
+  local _suffix="$1"
+  # XTRACE IS SAVED AND CLEARED ON ENTRY, restored before every return. This library inherits
+  # the caller's shell options, and a caller running `set -x` would otherwise print the
+  # bearer as an array element of the curl command line.
+  local _x="$-"; set +x
+  local _restore='case "$_x" in *x*) set -x ;; esac'
+
+  # THE DOUBLE GATE (mirrors SOLEUR_SENTRY_READER in the capture script). The override is
+  # honoured only when SOLEUR_TEST_MODE is also set, so one leaked env var in a
+  # pull_request-triggered workflow cannot redirect the gate's only network call.
+  #
+  # IT IS CHECKED HERE AND APPLIED AT THE TRANSPORT, INSIDE THE LOOP BELOW. A seam in front
+  # of the loop would have replaced the whole function, leaving the auth choice, the 5xx
+  # retry and the anonymous retry with no behavioural coverage — and the anonymous retry is
+  # the path that actually runs in CI today, because none of the four call sites grants `actions: read`.
+  local _seam=""
+  if [[ -n "${SOLEUR_RUNG2_RUN_FETCH:-}" ]]; then
+    if [[ -n "${SOLEUR_TEST_MODE:-}" ]]; then
+      _seam="$SOLEUR_RUNG2_RUN_FETCH"
+    else
+      eval "$_restore"
+      printf 'the fetch override SOLEUR_RUNG2_RUN_FETCH is set but SOLEUR_TEST_MODE is NOT, so it is not honoured and the real path runs\n'
+      return 8
+    fi
+  fi
+
+  local _tok="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  local _attempt=0 _rc _resp _code _err
+  # A BASH ARRAY, never `${_tok:+-H "…"}`: that expansion word-splits WITHOUT quote removal,
+  # so the header arrives as three broken words and is never sent.
+  local -a _auth=()
+  [[ -n "$_tok" ]] && _auth=(-H "Authorization: Bearer ${_tok}")
+  # Under the seam, a stub cannot observe a header — so "a bearer was in play" is expressed
+  # by SOLEUR_RUNG2_STUB_BEARER, and the retry logic below reads the same array either way.
+  [[ -n "$_seam" && -n "${SOLEUR_RUNG2_STUB_BEARER:-}" ]] && _auth=(-H "Authorization: Bearer stub")
+  local _anon_retried=0
+
+  while :; do
+    _attempt=$((_attempt + 1))
+    if [[ -n "$_seam" ]]; then
+      # The stub's contract is the real one: body, then the HTTP status on the last line,
+      # and a non-zero rc for a transport failure. Everything below this point — the status
+      # interpretation, the retry decisions, the anonymous fall-through — is the production
+      # code path, exercised for real.
+      _resp="$("$_seam" "$_suffix" 2>/dev/null)"; _rc=$?
+      [[ "$_rc" -ne 0 ]] && _rc=7
+    else
+      # Every path out of this block removes it explicitly (the `rm -f` below runs on both the
+      # success and the failure arm, and the two early returns above it precede the
+      # allocation), and a sourced library must not install an EXIT trap over its caller's
+      # (ADR-129 rule (c), stated in this file's own header). The residual is a hard kill,
+      # which no trap would survive either.
+      #
+      # THE MARKER IS ON THE LINE IMMEDIATELY ABOVE THE ALLOCATION, and that placement is
+      # load-bearing: lint-trap-tempfile-ownership's escaped() honours only the offending line
+      # and the ONE above it. This annotation originally opened the explanation five lines up,
+      # which reads to the linter as no annotation at all -- the full-repo scan flagged it while
+      # this file's own 236-assertion suite was green, because a repo-global ratchet is invisible
+      # to a file-selected suite.
+      # lint-trap-ownership: ok — bounded; every return path rm -f's it, and a sourced library must not trap EXIT over its caller's (ADR-129 rule (c)).
+      _err="$(umask 077; mktemp -t rung2-fetch.XXXXXXXX)" || { eval "$_restore"; return 8; }
+      # --disable: the gate also runs on a workstation, where a ~/.curlrc could otherwise add
+      # flags this function did not choose. --noproxy '*': the same reasoning for the
+      # environment's proxy variables.
+      _resp="$(curl --disable --noproxy '*' -sS --max-time 20 -w $'\n%{http_code}' \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'X-GitHub-Api-Version: 2022-11-28' \
+        "${_auth[@]}" \
+        "${GIT_DATA_RUNG2_API_BASE}/${_suffix}" 2>"$_err")"; _rc=$?
+      rm -f "$_err"
+    fi
+
+    if [[ "$_rc" -ne 0 ]]; then
+      # rc 6 (DNS) and 7 (connect) FAST-FAIL: an offline operator must not be sent after a
+      # token they do not need, and must not wait out a retry to hear it.
+      if [[ "$_rc" -eq 6 || "$_rc" -eq 7 ]]; then eval "$_restore"; return 7; fi
+      if [[ "$_attempt" -lt 2 ]]; then sleep "${SOLEUR_RUNG2_RETRY_SLEEP:-5}"; continue; fi
+      eval "$_restore"; return 7
+    fi
+
+    _code="$(printf '%s' "$_resp" | tail -n1)"
+    case "$_code" in
+      5*) if [[ "$_attempt" -lt 2 ]]; then sleep "${SOLEUR_RUNG2_RETRY_SLEEP:-5}"; continue; fi ;;
+      401|403)
+        # THE OPERATIVE CI PATH TODAY: none of the four call sites grants `actions: read`, and this data is
+        # public. A rejected bearer retries ONCE anonymously rather than reporting a refusal
+        # that is really an authorization gap. A rate-limit body is excluded — dropping the
+        # bearer makes a rate limit strictly worse.
+        # Deliberately UNSPLIT (unlike the verdict arms): this is a retry heuristic, not a
+        # verdict — a matcher rc >= 2 resolves to "not a rate-limit body" and drops the
+        # bearer once (bounded by _anon_retried), and the de-permissioned direction is the
+        # safe one for an instrument failure.
+        local _rl_body
+        _rl_body="$(sed '$d' <<< "$_resp")"
+        if [[ "$_anon_retried" -eq 0 && ${#_auth[@]} -gt 0 ]] \
+           && ! grep -qiE 'rate limit' <<< "$_rl_body"; then
+          _anon_retried=1; _auth=(); _attempt=0; continue
+        fi
+        ;;
+    esac
+    eval "$_restore"
+    printf '%s\n' "$_resp"
+    # A bearer that was rejected and then produced a 404 anonymously is a could-not-measure
+    # condition, never a measured absence — see _git_data_rung2_check_run.
+    [[ "$_anon_retried" -eq 1 ]] && return 3
+    return 0
+  done
+}
+
+# _git_data_rung2_run_id <url>
+#   The shape regex on RUNG2_EVIDENCE_URL is UNANCHORED, so `…/runs/123abc` satisfies it and a
+#   naive `${url##*/}` would read the id as `123` — resolving a DIFFERENT, real run. The id is
+#   therefore terminated explicitly by `/`, `?`, `#` or end-of-string, and then validated
+#   before it is ever interpolated into a URL: R7's property must not rest on quoting.
+_git_data_rung2_run_id() {
+  local _u="$1" _id
+  _id="$(printf '%s' "$_u" | sed -nE 's#^https://github\.com/jikig-ai/soleur/actions/runs/([0-9]+)([/?#].*)?$#\1#p')"
+  [[ "$_id" =~ ^[0-9]{1,20}$ ]] || return 1
+  printf '%s' "$_id"
+}
+
+# ── (#8010) GUARD 5: THE MONOTONIC RUN FLOOR — the downgrade shape ──────────────────
+#
+# Steps D and E are hash-EQUALITY checks, not RECENCY checks. So an author can revert the
+# payload tree to an older revision, cite the genuine older run that rehearsed exactly those
+# bytes, and this gate RELEASES honestly: the live hash matches, the head_sha re-hash matches,
+# the artifact exists, the Sentry verdict is CLEAN. Every asserted fact is true and the host
+# ends up running older code.
+#
+# THE PAYLOAD IS ALREADY IN THIS REPOSITORY'S HISTORY, which is why this ships now rather than
+# as a residual: `git show f64b0ebc2^:apps/web-platform/infra/git-data-rung2-boot-evidence.env`
+# is the pre-#8312 evidence naming run 34768256297. Restoring it beside a revert of #8312's
+# /dev/mapper/git-data reopen-at-boot hunks is a two-command attack.
+#
+# WHY A FLOOR AND NOT ANCESTRY. `merge-base --is-ancestor` was considered at plan time and cut,
+# correctly: the revert commit is a DESCENDANT of head_sha, so ancestry passes. A wall-clock
+# age bound was also cut, correctly: it taxes an unchanged file forever. This floor is
+# CHANGE-TRIGGERED — it compares against the version of the evidence file this one REPLACES, so
+# it costs nothing while nothing moves, and neither cut's reasoning reaches it.
+#
+# _git_data_rung2_run_floor <evidence-abs-path>
+#   Prints the prior committed version's run id, or nothing when there is no prior version.
+#   Prints "UNREADABLE|<detail>" and returns 1 when the history exists but cannot be read.
+_git_data_rung2_run_floor() {
+  local _ev="$1" _top _rel _last _prev
+  _top="$(git -C "$(dirname "$_ev")" rev-parse --show-toplevel 2>/dev/null)" || {
+    printf 'UNREADABLE|%s is not inside a git work tree, so the previous attested run id could not be read.\n' "$_ev"; return 1; }
+  _rel="${_ev#"$_top"/}"
+  # WALK THE PATH'S HISTORY, SKIPPING THE COMMIT THAT HOLDS THE CURRENT CONTENT.
+  #
+  # Guard 4 runs BEFORE this step and refuses an untracked or uncommitted evidence file, so by
+  # the time we get here `git log -- <path>` newest-first has the CURRENT version at entry 0.
+  # The floor is the next entry in which the file EXISTS.
+  #
+  # The existence test is what makes a deletion still set the floor, and that is load-bearing
+  # rather than an edge case: Guard 4 states a voided attestation is DELETED, never rewritten,
+  # so the entry between the current version and the prior one is routinely the commit that
+  # REMOVED the file. Skipping only the first entry would land on that deletion, find nothing,
+  # and reset the floor — making "void the attestation, then re-add an older one" the bypass.
+  local _shas _sha_i _seen=0
+  _shas="$(git -C "$_top" log --format=%H -- "$_rel" 2>/dev/null)"
+  # NEVER COMMITTED: there is no floor, and that is not a failure. The very first evidence file
+  # has nothing to regress against.
+  [[ -z "$_shas" ]] && return 0
+  while IFS= read -r _sha_i; do
+    [[ -n "$_sha_i" ]] || continue
+    if [[ "$_seen" -eq 0 ]]; then _seen=1; continue; fi   # entry 0 holds the CURRENT content
+    _prev="$(git -C "$_top" show "${_sha_i}:${_rel}" 2>/dev/null)" || continue
+    sed -n 's#^[[:space:]]*\(export[[:space:]]\+\)\?RUNG2_EVIDENCE_URL[[:space:]]*=.*/runs/\([0-9]\{1,\}\).*#\2#p' <<<"$_prev" | head -1
+    return 0
+  done <<<"$_shas"
+  # Exactly one commit touches this path: a first-ever evidence file. No floor, not a failure.
+  return 0
+}
+
+# _git_data_rung2_downgrade_acked <body> <run-id> — the deliberate-replay escape hatch.
+# Same grammar as the Sentry ack (run-bound, non-empty reason, no '#'), and at-most-once, so
+# an ack cannot be copied forward into the next evidence file.
+_git_data_rung2_downgrade_acked() {
+  local _body="$1" _run_id="$2" _n _ack _id _reason
+  _n="$(grep -cE "^[[:space:]]*(export[[:space:]]+)?RUNG2_EVIDENCE_DOWNGRADE_ACK[[:space:]]*=" <<<"$_body" || true)"
+  [[ "$_n" -eq 1 ]] || return 1
+  _ack="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_EVIDENCE_DOWNGRADE_ACK[[:space:]]*=' <<<"$_body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' || true)"
+  [[ "$_ack" == *:* ]] || return 1
+  _id="${_ack%%:*}"
+  [[ "$_id" == "$_run_id" ]] || return 1
+  _reason="${_ack#*:}"
+  _reason="${_reason#"${_reason%%[![:space:]]*}"}"
+  _reason="${_reason%"${_reason##*[![:space:]]}"}"
+  [[ -n "$_reason" ]] || return 1
+  return 0
+}
+
+# _git_data_rung2_check_run <run-id>
+#   Interprets one run body with jq and never re-implements the transport.
+#   Prints "<token>|<detail>" and returns 1 on refusal; on success prints "OK|<head_sha>".
+_git_data_rung2_check_run() {
+  local _id="$1" _out _rc _code _body
+  _out="$(_git_data_rung2_fetch "runs/${_id}")"; _rc=$?
+  case "$_rc" in
+    7) printf 'RUN_OFFLINE|no network path to api.github.com (DNS or connect failed). No token will fix this; re-run the gate where the API is reachable.\n'; return 1 ;;
+    8) printf 'RUN_UNRESOLVABLE|%s\n' "$_out"; return 1 ;;
+  esac
+  _code="$(printf '%s' "$_out" | tail -n1)"
+  _body="$(printf '%s' "$_out" | sed '$d')"
+
+  if [[ "$_code" == "403" || "$_code" == "429" ]] && grep -qiE 'rate limit' <<<"$_body"; then
+    printf 'RUN_RATE_LIMITED|the Actions API rate-limited this read, so the run was not resolved. Export GH_TOKEN (any token with public read) and re-run, or grant the call site `actions: read` — tracked as #8397 (the four call sites read this API anonymously), and the token->remedy table is in knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.\n'
+    return 1
+  fi
+  if [[ "$_code" == "404" ]]; then
+    # A bearer that was rejected and then 404d ANONYMOUSLY is could-not-measure: if this
+    # repository is ever made private, reporting a measured absence would read to the
+    # operator as forgery when the truth is an authorization gap.
+    if [[ "$_rc" -eq 3 ]]; then
+      printf 'RUN_UNRESOLVABLE|the supplied token was rejected and the anonymous retry returned 404, so this is an authorization gap, NOT a measured absence. Re-run with a token that can read this repository.\n'
+    else
+      printf 'RUN_NOT_FOUND|the Actions API has no run %s in jikig-ai/soleur. The evidence names a run that does not exist.\n' "$_id"
+    fi
+    return 1
+  fi
+  if [[ "$_code" != "200" ]]; then
+    printf 'RUN_UNRESOLVABLE|the Actions API answered HTTP %s, which this gate cannot interpret. Nothing was measured — this says nothing about the evidence or the host. Wait and re-run the gate; if it persists, export GH_TOKEN and re-run to rule out an authorization gap.\n' "$_code"
+    return 1
+  fi
+
+  local _f
+  # `// empty`, NOT `// "null"`. The literal-default form let a RENAMED OR DROPPED field flow
+  # into the equality tests below, so GitHub changing its schema would have emitted
+  # RUN_WRONG_WORKFLOW / RUN_WRONG_EVENT / RUN_NOT_MAIN / RUN_NOT_COMPLETED / RUN_NOT_SUCCESS —
+  # MEASURED refusals for an instrument failure, which the #8210 probe then renders daily as
+  # "the answer is no". Only `head_sha` had the shape check that routed it correctly.
+  # `created_at` is field 8 so step E does not re-fetch this body (see its own comment).
+  if ! _f="$(jq -r '[(.id|tostring), (.path // empty), (.event // empty), (.head_branch // empty), (.status // empty), (.conclusion // empty), (.head_sha // empty), (.created_at // empty)] | @tsv' <<<"$_body" 2>/dev/null)"; then
+    printf 'RUN_UNRESOLVABLE|the Actions API answered 200 with a body this gate could not parse as a run object. Nothing was measured — this says nothing about the evidence or the host. Wait and re-run; a persistent parse failure means the API shape changed and this gate needs updating.\n'
+    return 1
+  fi
+  local _rid _path _event _branch _status _concl _sha _created
+  # Read with `cut`, not `IFS=$'\t' read`: tab is IFS-WHITESPACE, so `read` COLLAPSES runs of
+  # tabs and drops empty middle fields — every field after an absent one would shift left.
+  _rid="$(cut -f1 <<<"$_f")";    _path="$(cut -f2 <<<"$_f")"
+  _event="$(cut -f3 <<<"$_f")";  _branch="$(cut -f4 <<<"$_f")"
+  _status="$(cut -f5 <<<"$_f")"; _concl="$(cut -f6 <<<"$_f")"
+  _sha="$(cut -f7 <<<"$_f")";    _created="$(cut -f8 <<<"$_f")"
+
+  # AN ABSENT FIELD IS AN UNUSABLE ANSWER, NOT A WRONG ONE. With `// empty` above, a field
+  # GitHub renamed or dropped arrives as the empty string, and this is where that becomes a
+  # could-not-measure token instead of a confident refusal naming the wrong cause.
+  local _fname _fval
+  for _fname in path:"$_path" event:"$_event" head_branch:"$_branch" \
+                status:"$_status" conclusion:"$_concl"; do
+    _fval="${_fname#*:}"
+    if [[ -z "$_fval" ]]; then
+      printf 'RUN_UNRESOLVABLE|the Actions API answered 200 but its run object carries no %s field. The schema this gate parses has changed; nothing was measured.\n' "${_fname%%:*}"
+      return 1
+    fi
+  done
+
+  # STRING comparison: run ids exceed both bash's and jq's double precision.
+  if [[ "$_rid" != "$_id" ]]; then
+    printf 'RUN_UNRESOLVABLE|the Actions API returned run id %s for a request for %s. Nothing usable was measured.\n' "$(_git_data_rung2_safe "$_rid" 40)" "$_id"
+    return 1
+  fi
+  if [[ "$_path" != "$GIT_DATA_RUNG2_WORKFLOW_PATH" ]]; then
+    printf 'RUN_WRONG_WORKFLOW|run %s belongs to %s, not %s. A run of a different workflow proves nothing about a boot.\n' "$_id" "$(_git_data_rung2_safe "$_path" 120)" "$GIT_DATA_RUNG2_WORKFLOW_PATH"
+    return 1
+  fi
+  # A future schedule/push trigger on the rehearsal workflow would produce identity-passing
+  # runs that boot nothing, so the trigger is asserted rather than assumed.
+  if [[ "$_event" != "workflow_dispatch" ]]; then
+    printf 'RUN_WRONG_EVENT|run %s was triggered by %s, not workflow_dispatch. Only a dispatched rehearsal boots a throwaway host.\n' "$_id" "$(_git_data_rung2_safe "$_event" 40)"
+    return 1
+  fi
+  if [[ "$_branch" != "main" ]]; then
+    printf 'RUN_NOT_MAIN|run %s was dispatched from %s, not main. The rehearsal must run the payload main carries; dispatch with --ref main.\n' "$_id" "$(_git_data_rung2_safe "$_branch" 80)"
+    return 1
+  fi
+  if [[ "$_status" != "completed" ]]; then
+    printf 'RUN_NOT_COMPLETED|run %s is %s. WAIT for it to finish and re-run this gate — do NOT re-dispatch; a second rehearsal costs a host and the first one may still pass.\n' "$_id" "$(_git_data_rung2_safe "$_status" 40)"
+    return 1
+  fi
+  if [[ "$_concl" != "success" ]]; then
+    printf 'RUN_NOT_SUCCESS|run %s concluded %s. Re-dispatch the rehearsal. Note the common shape: the evidence artifact uploads BEFORE teardown, so a failed teardown reds a run whose capture was good — read the run before spending another host.\n' "$_id" "$(_git_data_rung2_safe "$_concl" 40)"
+    return 1
+  fi
+  if [[ ! "$_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    printf 'RUN_UNRESOLVABLE|run %s reports head_sha %s, which is not a 40-hex commit id. Nothing usable was measured.\n' "$_id" "$(_git_data_rung2_safe "$_sha" 60)"
+    return 1
+  fi
+  printf 'OK|%s|%s\n' "$_sha" "$_created"
+  return 0
+}
+
+# _git_data_rung2_check_artifacts <run-id>
+#   THE CAPTURE DISCRIMINATOR. The upload step is gated on both the capture rc and the reset
+#   probe rc being 0, so the artifact's existence is the durable statement that this run
+#   captured a PASS — which is what separates it from a dry_run or teardown_only dispatch.
+#   Runs AFTER the local git checks, so the common refusals cost one request, not two.
+_git_data_rung2_check_artifacts() {
+  local _id="$1" _created="$2" _out _rc _code _body _n _age_ok=1
+  # Age is computed BEFORE the call so both the empty-list and the unreadable-endpoint arms
+  # can use it: past the window, neither is a measured refusal.
+  if [[ -n "$_created" ]]; then
+    local _then _now
+    _then="$(date -u -d "$_created" +%s 2>/dev/null || printf '')"
+    _now="$(date -u +%s)"
+    if [[ -n "$_then" ]] && (( (_now - _then) > GIT_DATA_RUNG2_ARTIFACT_WINDOW_DAYS * 86400 )); then
+      _age_ok=0
+    fi
+  fi
+  _out="$(_git_data_rung2_fetch "runs/${_id}/artifacts")"; _rc=$?
+  if [[ "$_rc" -eq 7 || "$_rc" -eq 8 ]]; then
+    printf 'RUN_ARTIFACT_RECORD_UNREADABLE|the artifacts endpoint for run %s could not be read, so the capture discriminator was not measured.\n' "$_id"
+    return 1
+  fi
+  _code="$(printf '%s' "$_out" | tail -n1)"
+  _body="$(printf '%s' "$_out" | sed '$d')"
+  if [[ "$_code" != "200" ]]; then
+    printf 'RUN_ARTIFACT_RECORD_UNREADABLE|the artifacts endpoint for run %s answered HTTP %s. Nothing was measured — this says nothing about the evidence. Wait and re-run; export GH_TOKEN if it persists.\n' "$_id" "$_code"
+    return 1
+  fi
+  # EXACT name match: git-data-rung2-capture-log is what a NON-PASS run uploads, and a
+  # substring match would accept it.
+  if ! _n="$(jq -r '[.artifacts[]? | select(.name == "git-data-rung2-boot-evidence")] | length' <<<"$_body" 2>/dev/null)"; then
+    printf 'RUN_ARTIFACT_RECORD_UNREADABLE|the artifacts endpoint for run %s answered 200 with an unparseable body. Nothing was measured.\n' "$_id"
+    return 1
+  fi
+  if [[ "$_n" -ge 1 ]]; then
+    printf 'OK|git-data-rung2-boot-evidence\n'
+    return 0
+  fi
+  if [[ "$_age_ok" -eq 0 ]]; then
+    printf 'RUN_ARTIFACT_RECORD_UNREADABLE|run %s lists no evidence artifact, but it is older than %s days and artifact-RECORD retention past that window is undocumented (measured once: a record survived ~110 days). An empty list here is could-not-measure, not a refusal.\n' "$_id" "$GIT_DATA_RUNG2_ARTIFACT_WINDOW_DAYS"
+    return 1
+  fi
+  printf 'RUN_NO_EVIDENCE_ARTIFACT|run %s uploaded no artifact named git-data-rung2-boot-evidence. That upload is gated on the capture AND the reset probe both succeeding, so its absence means this dispatch captured nothing — a dry_run or teardown_only run, or one whose capture failed.\n' "$_id"
+  return 1
+}
+
+# _git_data_rung2_hash_at_sha <toplevel> <repo-rel-dir> <cloud-init-basename> <head_sha>
+#   Re-hashes the bound files AT THE COMMIT THE RUN RAN. Prints "OK|<sha256>" or
+#   "<token>|<detail>".
+_git_data_rung2_hash_at_sha() {
+  local _top="$1" _rel_dir="$2" _base="$3" _sha="$4"
+  if ! git -C "$_top" cat-file -e "${_sha}^{commit}" 2>/dev/null; then
+    printf 'RUN_SHA_UNREACHABLE|commit %s is not in this clone, so the bytes the run rehearsed could not be read. Run `git fetch origin main` and re-run; a shallow clone (CI checkout with fetch-depth: 1) cannot reach it at all. THIS GATE DOES NOT FETCH: a gate must not mutate the repository it judges, and an unbounded fetch is an offline stall.\n' "$_sha"
+    return 1
+  fi
+  local _treeish
+  # The TREE-ISH form is load-bearing, measured both ways: `git archive <sha> -- <dir>` emits
+  # repo-root-relative entries (so <tmp>/<basename> would not exist), and where the cloud-init
+  # directory IS the repo root the repo-relative dir is the empty string — `git archive <sha>
+  # -- ""` is fatal. `<sha>:<dir>` roots the archive at the directory; `<sha>:` covers the root.
+  if [[ -z "$_rel_dir" || "$_rel_dir" == "." ]]; then _treeish="${_sha}:"; else _treeish="${_sha}:${_rel_dir}"; fi
+  local _tmp
+  # lint-trap-ownership: ok — the library must not install an EXIT trap over its caller's
+  # (ADR-129 rule (c)), and the closest precedent (scripts/lib/git-data-boot-signal-poll.sh)
+  # records that an explicit variable-rooted `rm -rf` was CONSIDERED AND REJECTED: it is an
+  # operand the P1b relative-operand guard cannot prove safe, so it trades a bounded leak for
+  # an unprovable destructive operation. The residual is one directory per gate call.
+  _tmp="$(mktemp -d -t rung2-archive.XXXXXXXX)" || {
+    printf 'RUN_HASH_UNCOMPUTABLE|could not create a scratch directory to extract the archived tree. Nothing was measured — check free space and TMPDIR, then re-run.\n'; return 1; }
+  # Declare the owner the tmp reaper can check (#7004): pid= is the session
+  # harness owner when soleur_scratch_session_begin ran, else this process —
+  # the dir deliberately outlives the call (the bounded-leak trade documented
+  # above), so the marker is what lets Reaper 3 reclaim it once the owner dies.
+  printf 'pid=%s\nschema=1\nns=%s\n' "${SOLEUR_SCRATCH_OWNER_PID:-$$}" \
+    "$(readlink /proc/self/ns/pid 2>/dev/null || printf 'pid:[unknown]')" \
+    > "$_tmp/.soleur-owned" 2>/dev/null || true
+  # `core.attributesfile=/dev/null` DISABLES THE GLOBAL/SYSTEM ATTRIBUTES FILE, AND NOTHING
+  # MORE — the earlier comment here claimed it stopped a future `export-ignore`/`export-subst`
+  # entry from making archived bytes differ from the worktree bytes, and that is false.
+  # Measured: with `d/.gitattributes` carrying `b.yml export-ignore`,
+  # `git -c core.attributesfile=/dev/null archive "$SHA:d"` still honours it and omits b.yml,
+  # because `git archive` reads attributes from the tree it is archiving.
+  #
+  # The flag is kept because it removes ONE input the operator's machine controls. The in-tree
+  # case is left fail-closed rather than defended: a dropped file changes the digest, so the
+  # verdict is RUN_HASH_MISMATCH — correct direction, wrong named cause. No `.gitattributes`
+  # exists under the infra directory today (checked), and the honest fix if one ever lands is
+  # to hash blobs directly (see the note below).
+  if ! git -C "$_top" -c core.attributesfile=/dev/null archive "$_treeish" 2>/dev/null \
+       | tar -x --no-same-owner --no-same-permissions -C "$_tmp" 2>/dev/null; then
+    printf 'RUN_HASH_UNCOMPUTABLE|the tree at %s could not be extracted (the path %s may not exist at that commit).\n' "$_sha" "${_rel_dir:-<repo root>}"
+    return 1
+  fi
+  # THE ARCHIVED TREE COMES FROM AN ATTACKER-INFLUENCEABLE COMMIT. A mode-120000 entry
+  # pointing at /etc/shadow or back into the live worktree is both an arbitrary read and a
+  # same-hash laundering shape, so symlinks and hardlinks are refused before anything is READ —
+  # `tar -x` has already MATERIALISED the entry by this point, but materialising a symlink does
+  # not follow it, and the only thing that would follow it is the `sha256sum` below. Measured
+  # end to end at review: the extraction really does produce a mode-120000 `leak.yml ->
+  # /etc/passwd`, and this sweep refuses it before any digest is taken.
+  #
+  # THE NON-ALLOCATING ALTERNATIVE, recorded rather than taken: `git cat-file blob <sha>:<path>`
+  # per bound file needs no tmpdir, no tar, and no sweep (a blob is never a symlink — the MODE
+  # lives in the tree entry), and it would also retire the `.gitattributes` caveat above. It is
+  # not taken here because the roster derivation lives inside
+  # `git_data_rung2_user_data_sha256`, which this gate and the capture script deliberately
+  # SHARE — re-deriving it against a tree-ish would fork that single source, which is the
+  # property the delegation exists to protect. Tracked as the follow-up in #8397.
+  local _bad
+  _bad="$(find "$_tmp" \( -type l -o \( -type f -links +1 \) \) -print -quit 2>/dev/null)"
+  if [[ -n "$_bad" ]]; then
+    printf 'RUN_HASH_UNCOMPUTABLE|the tree archived at %s contains a symlink or hardlink entry (%s); it was refused before hashing.\n' "$_sha" "$(_git_data_rung2_safe "${_bad#"$_tmp"/}" 120)"
+    return 1
+  fi
+  local _out
+  if ! _out="$(git_data_rung2_user_data_sha256 "${_tmp}/${_base}" 2>&1)"; then
+    printf 'RUN_HASH_UNCOMPUTABLE|the tree archived at %s could not be hashed: %s\n' "$_sha" "$(printf '%s' "$_out" | head -1)"
+    return 1
+  fi
+  printf 'OK|%s\n' "$_out"
+  return 0
+}
 
 # Usage:  git_data_rung2_rehearsal_gate <cloud-init-git-data.yml> [evidence-file]
 #         # 0=RELEASED, 1=HOLD
@@ -430,12 +1494,15 @@ git_data_rung2_rehearsal_gate: HOLD — the git-data birth route is INTERLOCKED 
 
 WHY: no rung-2 boot evidence at ${evidence}.
 
-The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. That was
-the only MECHANICAL hold on this route. What still holds it is the DO-NOT-DISPATCH banner in
-knowledge-base/engineering/operations/runbooks/git-data-birth.md — prose, in a different
-file from this button. This gate exists so that hold is mechanical too.
+The emitter shipped in #6982, so the \${sentry_dsn} threading interlock released. This gate
+is the mechanical hold for the BOOT-EVIDENCE precondition: it holds until boot evidence for
+the CURRENT template is committed (the birth job runs it beside the sentinel, authorization-map,
+plan-shape and stock-preflight gates, and behind the environment approval). The release record and the dispatch procedure live in
+knowledge-base/engineering/operations/runbooks/git-data-birth.md.
 
-WHAT IS MISSING: the rendered cloud-init has never been booted on real hardware. #6982
+WHAT IS MISSING: no committed boot evidence is bound to the CURRENT rendered template (a
+rehearsal PASSED for an earlier hash on 2026-09-13 and the host was born 2026-09-14, but a
+template edit re-HOLDs this gate until the new hash boots). Historically, #6982
 reached rung 1 only — a CONTAINER harness that never boots the rendered template — and that
 was deliberately NOT inherited as a rung-2 pass. So the first real boot of this template
 would be the production host that holds every connected user's source code.
@@ -447,11 +1514,38 @@ outside the hcloud_server.git_data address), then commit ${evidence} containing:
   RUNG2_EVIDENCE_URL=<workflow run or write-up URL>
   RUNG2_TEMPLATE_SHA256=<hash-of-hashes over the template + every file()-bound payload>
 
-Carried by #7025, which owns rung 2 as its own precondition. Nothing has been planned or
-created.
+Carried by #7025, which owns rung 2 as its own precondition; the rehearsal route is
+.github/workflows/git-data-rung2-rehearsal.yml (see runbook git-data-rung2-rehearsal.md).
 HOLD
     return 1
   fi
+
+  # THE SEAM ANNOUNCES ITSELF ON EVERY VERDICT LINE. infra-validation.yml triggers on
+  # pull_request, so a PR author controls that step's env: block — without this, two
+  # innocuous-looking env lines would produce a RELEASED line indistinguishable from a real
+  # one. Computed once here so HOLD and RELEASED cannot drift apart.
+  local _seam_note=""
+  if [[ -n "${SOLEUR_RUNG2_RUN_FETCH:-}" && -n "${SOLEUR_TEST_MODE:-}" ]]; then
+    _seam_note=" SEAM ACTIVE — ${SOLEUR_RUNG2_RUN_FETCH} answered every API read; this verdict is NOT a live measurement."
+  fi
+
+  # ── (#8010) STEP A: TOOLING, BEFORE ANYTHING THAT CAN STALL ──────────────────────
+  #
+  # Checked first so a toolchain gap is reported as one, rather than discovered after a
+  # twenty-second network timeout and read as an API problem. ABORT, not HOLD: a gate that
+  # cannot run its own instruments has measured nothing.
+  local _bin
+  # `find` and `sha256sum` are here because they are USED, not because they are plausible:
+  # a seat shadowed `find` and the symlink/hardlink refusal in the archive path stopped firing
+  # while the gate went on to hash the tree. A tooling list is a claim about what this library
+  # calls, and it is checked by the suite against the binaries it actually invokes.
+  for _bin in jq curl tar find sha256sum; do
+    if ! command -v "$_bin" >/dev/null 2>&1; then
+      _git_data_rung2_annotate TOOLING_MISSING "${_bin} is not on PATH"
+      echo "git_data_rung2_rehearsal_gate: ABORT [TOOLING_MISSING] — ${_bin} is not on PATH, and this gate resolves the evidence's Actions run and re-hashes the tree that run booted. On a runner, the job needs a setup step that installs it; on a workstation, install it with your package manager. Fail-closed: a gate that cannot run its own instruments has measured nothing.${_seam_note}"
+      return 1
+    fi
+  done
 
   # Strip whole-line AND trailing comments, same two forms the sentinel gate strips.
   body="$(sed 's/^[[:space:]]*#.*$//; s/[[:space:]]#.*$//' "$evidence" 2>/dev/null)"
@@ -469,7 +1563,19 @@ HOLD
   # refused nothing. Declaring "nothing diverged" must be explicit (`RUNG2_VAR_DIVERGENCE=none`),
   # never inferred from silence.
   local _k _n
-  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE; do
+  # (#8010) RUNG2_SENTRY_CROSSCHECK JOINS THIS LOOP. It was written by the capture, asserted
+  # by the capture's own suite, and read by NO consumer: `UNAVAILABLE` and junk both released.
+  # The loop's absence-is-a-HOLD semantics are exactly right for it — a verdict that is not
+  # recorded is not a verdict — while the OPTIONAL ack key needs at-most-once semantics and
+  # gets its own loop below. The two counts are genuinely independent: this pattern ends in
+  # `[[:space:]]*=`, which `RUNG2_SENTRY_CROSSCHECK_ACK=` does not match.
+  #
+  # (#5274) THE TWO REPLACE-ARM KEYS JOIN IT TOO. The rehearsal workflow runs the replace arm (boot
+  # #2 adopting a LUKS volume a predecessor formatted, against the plaintext volume boot #1 read)
+  # unconditionally after the reboot arm, and uploads the evidence ONLY when that arm passed — so
+  # every file the route can produce carries both, exactly once. A file without them is capture
+  # #1 alone: a PASS for a birth that never proved the replace path production will take.
+  for _k in RUNG2_BOOT_REHEARSAL RUNG2_EVIDENCE_URL RUNG2_TEMPLATE_SHA256 RUNG2_VAR_DIVERGENCE RUNG2_SENTRY_CROSSCHECK RUNG2_REPLACE_BOOT RUNG2_REPLACE_SENTRY_CROSSCHECK; do
     # `(export[[:space:]]+)?` is load-bearing. Measured: an evidence file carrying
     #   RUNG2_BOOT_REHEARSAL=PASS
     #   export RUNG2_BOOT_REHEARSAL=FAIL
@@ -486,6 +1592,12 @@ HOLD
 
   if ! grep -qE '^[[:space:]]*RUNG2_BOOT_REHEARSAL[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
     echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_BOOT_REHEARSAL=PASS in non-comment text. Fail-closed: an evidence file that does not claim a pass is not a pass."
+    return 1
+  fi
+  # (#5274) …AND THE REPLACE BOOT PASSED. Same exact-line discipline as the check above; the
+  # cardinality loop has already refused a file carrying this key twice (PASS beside FAIL).
+  if ! grep -qE '^[[:space:]]*RUNG2_REPLACE_BOOT[[:space:]]*=[[:space:]]*PASS[[:space:]]*$' <<<"$body"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} does not assert RUNG2_REPLACE_BOOT=PASS in non-comment text. The rehearsal must prove boot #2 too — the replace that ADOPTS a LUKS volume a predecessor formatted, reading the plaintext volume boot #1 only ever read — and this file does not say it did. Fail-closed: re-run the whole rehearsal; its replace arm appends this key to capture #1's file."
     return 1
   fi
 
@@ -563,7 +1675,7 @@ HOLD
       [[ "$_tok" == "$_a" ]] && { _allowed=1; break; }
     done
     if [[ "$_allowed" -eq 0 ]]; then
-      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} declares that the rehearsal diverged from production on '${_tok}', which is not an identity-shaped render var. The evidence hash binds the template and the nine payloads; it does NOT bind templatefile arguments, so a divergence here yields hash-valid evidence for a boot that is not the boot production would get. Permitted: ${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /, }. Fail-closed."
+      echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} declares that the rehearsal diverged from production on '${_tok}', which is not a declared-divergent render var. The permitted set is not homogeneous: five members are identity-shaped (they name WHICH host, volume or credential), while the three pubkeys are a CAPABILITY divergence — they are the host's SSH authorization map, and the rehearsal collapses them onto one key by design (#8009). The evidence hash binds 13 files (the template, the render module's own .tf files, and the nine file()-bound payloads); it does NOT bind templatefile arguments, so a divergence here yields hash-valid evidence for a boot that is not the boot production would get. Permitted: ${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /, }. Fail-closed."
       return 1
     fi
   done
@@ -587,10 +1699,1019 @@ HOLD
   live_sha="$_sha_out"
 
   if [[ "$claimed_sha" != "$live_sha" ]]; then
-    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of user_data sha256 ${claimed_sha}, but the files composing user_data now hash to ${live_sha}. Something that ships to the host changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence."
+    echo "git_data_rung2_rehearsal_gate: HOLD — STALE EVIDENCE. ${evidence} attests a rehearsal of user_data sha256 ${claimed_sha}, but the files composing user_data now hash to ${live_sha}. Something that ships to the host changed after it was rehearsed, so the boot that was proven is not the boot that would happen. Re-run the rung-2 rehearsal against the current template and update the evidence. Since #8010 that means four things it did not before — dispatch it with --ref main, wait for the WHOLE run to conclude success (the artifact uploads before teardown), append the Sentry acknowledgement BEFORE \`git add\` if the run reports one is required, and land the evidence in its own commit. The sequence is in knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md."
     return 1
   fi
 
-  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} (${url}); declared render-var divergence: ${divergence}. NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
+  # ── GUARD 4, ARM 1 (#8043 NFR2): the evidence's own provenance, checked AFTER the hash ──
+  #
+  # A hash match says the evidence names the bytes that would ship. It does not say a
+  # rehearsal ever booted them: a payload edit plus a hand-edited RUNG2_TEMPLATE_SHA256 in the
+  # same commit matches perfectly. So the last question is who wrote the evidence — the ONE
+  # commit that last touched it must have touched none of the inputs it attests.
+  #
+  # AFTER the hash, deliberately. A stale hash and a voided attestation are different defects
+  # with different remedies; the hash check's STALE EVIDENCE message is the one an ordinary
+  # payload PR should see, and this arm speaks only once the hash has nothing left to say —
+  # which is exactly when the forged shape would otherwise release. Every refusal below is
+  # fail-closed and named (shallow clone, uncommitted evidence, unresolvable commit); see the
+  # function's header for the full list and for the non-squash-merge residual that is #8010's.
+  local _prov_out
+  if ! _prov_out="$(git_data_rung2_evidence_provenance_gate "$cloud_init" "$evidence" birth)"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — the evidence is hash-valid but its provenance refuses it. ${_prov_out}"
+    return 1
+  fi
+
+
+  # ── (#8010) STEP B: THE SENTRY VERDICT (local, no network) ───────────────────────
+  #
+  # The producible value set was read from the WRITER, not from memory:
+  # `grep -n '_SENTRY_VERDICT=' scripts/followthroughs/git-data-rung2-evidence-capture.sh`
+  # yields UNAVAILABLE (the default), CLEAN and FATAL, and the writer emits
+  # ${_SENTRY_VERDICT:-NOT_RUN} — so the closed set is {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}
+  # and every member below is classified. Anything else is an unknown verdict, which is a
+  # could-not-measure condition and not a pass.
+  local _ack_n _sentry _ack _ack_id _ack_reason
+  # AT-MOST-ONCE on the optional key, in its own loop. It cannot ride the required loop
+  # above, whose absence-is-a-HOLD semantics would refuse every file that legitimately has
+  # no ack. Both cardinality checks run BEFORE the value case.
+  _ack_n="$(grep -cE "^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK_ACK[[:space:]]*=" <<<"$body" || true)"
+  if [[ "$_ack_n" -gt 1 ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD — ${evidence} carries ${_ack_n} 'RUNG2_SENTRY_CROSSCHECK_ACK' line(s); at most 1 is permitted. Fail-closed: this gate reads first-wins while dotenv semantics are last-wins, so a duplicated ack means the file's meaning differs between this gate and every other reader of it."
+    return 1
+  fi
+  _sentry="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  # `|| true`: the ack is OPTIONAL, so this pipeline returns 1 under `pipefail` on the common
+  # path (no ack present). Same errexit reasoning as the `_rel_dir` guard below.
+  _ack="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK_ACK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//' || true)"
+
+  # The run id is parsed here because the ack is keyed to it: an ack is a statement about ONE
+  # run, and an ack that survives being copied into the next evidence file is not an ack.
+  local _run_id
+  if ! _run_id="$(_git_data_rung2_run_id "$url")"; then
+    _git_data_rung2_annotate RUN_UNRESOLVABLE "the run id in ${url} is not parseable"
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_UNRESOLVABLE] — no run id could be parsed from RUNG2_EVIDENCE_URL '$(_git_data_rung2_safe "$url" 160)'. The shape check above is deliberately UNANCHORED (GitHub's own links carry /job/<id> and /attempts/<n> suffixes), so a trailing-garbage id passes it; this gate refuses such an id rather than silently truncating it to a different, real run. Fail-closed: nothing was measured.${_seam_note}"
+    return 1
+  fi
+
+  # ── (#8010) STEP B2: THE MONOTONIC RUN FLOOR (local, zero requests) ──────────────
+  local _floor _floor_out
+  if ! _floor_out="$(_git_data_rung2_run_floor "$evidence")"; then
+    _git_data_rung2_annotate RUN_FLOOR_UNREADABLE "${_floor_out#*|}"
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_FLOOR_UNREADABLE] — ${_floor_out#*|} Nothing was measured about this evidence: the gate could not read which run the previous version of this file attested, so it cannot tell a fresh rehearsal from a replay of an older one. Run \`git fetch origin main\` (or check out with fetch-depth: 0) and re-run.${_seam_note}"
+    return 1
+  fi
+  _floor="$_floor_out"
+  # THE DOWNGRADE ACK OBEYS THE SAME '#' RULE THE HOLD BELOW STATES. _git_data_rung2_downgrade_acked
+  # reads the COMMENT-STRIPPED body, so `ACK=<id>:see #8399 for why` arrives as reason "see" —
+  # non-empty, so the ack is ACCEPTED on text nobody wrote, and a deliberate-replay hatch releases
+  # on a truncated justification. The Sentry ack already refuses this by name a few lines below and
+  # is pinned by M3c; this arm had the rule in its message and not in its code.
+  local _dack_raw
+  _dack_raw="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_EVIDENCE_DOWNGRADE_ACK[[:space:]]*=' "$evidence" | head -1 || true)"
+  if [[ -n "$_floor" && "$_run_id" -lt "$_floor" && "$_dack_raw" == *"#"* ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_ID_REGRESSED] — the downgrade acknowledgement in ${evidence} contains '#'. This gate strips from ' #' onward before reading, so such a reason would be SILENTLY TRUNCATED and the replay would be authorised by text nobody wrote. Re-word the reason without '#'.${_seam_note}"
+    return 1
+  fi
+  if [[ -n "$_floor" && "$_run_id" -lt "$_floor" ]] && ! _git_data_rung2_downgrade_acked "$body" "$_run_id"; then
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_ID_REGRESSED] — ${evidence} names run ${_run_id}, but the version of this file it replaces named run ${_floor}. Every fact this file asserts may be true and the bytes still be OLDER than the last attested ones: that is the downgrade shape — revert the payload, then cite the genuine older run that really did boot it. Re-run the rehearsal from main against the current payload. If this replay is DELIBERATE, append RUNG2_EVIDENCE_DOWNGRADE_ACK=${_run_id}:<why older bytes are being reinstated> in this file's own commit (the reason may not contain '#').${_seam_note}"
+    return 1
+  fi
+
+  # (#5274) THE REPLACE BOOT'S CROSS-CHECK, over the same closed set and with the same refusals.
+  # It is recorded by the replace arm over ITS window (stamped before the replace), so it is a
+  # second, independent verdict — not a restatement of the one above. FATAL is measured and
+  # un-ackable, NOT_RUN and anything unknown are could-not-measure and un-ackable, and UNAVAILABLE
+  # is routed through the ONE acknowledgement arm below: an ack is keyed to the RUN, and both reads
+  # belong to one run, so one well-formed RUNG2_SENTRY_CROSSCHECK_ACK covers either or both.
+  local _rsentry _sentry_case="$_sentry" _unavail_keys=""
+  _rsentry="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_REPLACE_SENTRY_CROSSCHECK[[:space:]]*=' <<<"$body" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/[[:space:]]*$//')"
+  # `if`, not `&&`: a false test would return 1 under a caller's errexit (see the `_rel_dir` guard).
+  if [[ "$_sentry" == "UNAVAILABLE" ]]; then _unavail_keys="RUNG2_SENTRY_CROSSCHECK"; fi
+  case "$_rsentry" in
+    CLEAN) : ;;
+    UNAVAILABLE)
+      _unavail_keys="${_unavail_keys:+${_unavail_keys} and }RUNG2_REPLACE_SENTRY_CROSSCHECK"
+      if [[ "$_sentry" == "CLEAN" ]]; then _sentry_case="UNAVAILABLE"; fi
+      ;;
+    FATAL)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_FATAL] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK=FATAL: the second channel MEASURED a fatal for this host during the replace boot (boot #2). That is a measured failure of the boot, not a gap in the instrument, so no acknowledgement can release it. Read the run's Sentry events for the host named in the evidence header after the replace, fix the cause, and re-run the rehearsal.${_seam_note}"
+      return 1 ;;
+    NOT_RUN)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN: the replace boot's cross-check never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, or no reader on the rehearsal runner). There is nothing to acknowledge, so no RUNG2_SENTRY_CROSSCHECK_ACK can release this — re-run the rehearsal on a runner where the second channel is reachable.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_REPLACE_SENTRY_CROSSCHECK=NOT_RUN (the cross-check never ran)"
+      return 1 ;;
+    *)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_REPLACE_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_rsentry" 60)', which is outside the closed set the capture can write {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}. An unknown verdict is not a pass and no acknowledgement can rescue it — re-run the rehearsal, and if this value keeps appearing the capture script and this gate have drifted apart.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_REPLACE_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_rsentry" 60)'"
+      return 1 ;;
+  esac
+
+  case "$_sentry_case" in
+    CLEAN)
+      # An ack beside CLEAN is IGNORED, not refused: it satisfies no property here, and a
+      # refusal would be ceremony.
+      : ;;
+    FATAL)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_FATAL] — ${evidence} records RUNG2_SENTRY_CROSSCHECK=FATAL: the second channel MEASURED a fatal for this host. That is a measured failure of the boot, not a gap in the instrument, so no acknowledgement can release it. Read the run's Sentry events for the host named in the evidence header, fix the cause, and re-run the rehearsal.${_seam_note}"
+      return 1 ;;
+    UNAVAILABLE)
+      if [[ -z "$_ack" ]]; then
+        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — ${evidence} records ${_unavail_keys}=UNAVAILABLE: the Sentry cross-check ran and could not be trusted, so the PASS rests on Better Stack alone. Before #8010 this released silently. To proceed, append RUNG2_SENTRY_CROSSCHECK_ACK=${_run_id}:<why the second channel may be skipped for THIS run> in the evidence file's own commit (the reason may not contain '#', which this gate's trailing-comment strip would truncate). The rehearsal workflow prints the exact line to append. See knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md.${_seam_note}"
+        return 1
+      fi
+      # READ THE RAW LINE, not `body`. The comment strip has already removed everything from
+      # ' #' onward, so a reason carrying '#' arrives here SHORTENED and non-empty — the
+      # gate would release on a reason no human wrote. Refused by name instead.
+      local _ack_raw
+      _ack_raw="$(grep -E '^[[:space:]]*(export[[:space:]]+)?RUNG2_SENTRY_CROSSCHECK_ACK[[:space:]]*=' "$evidence" | head -1)"
+      if [[ "$_ack_raw" == *"#"* ]]; then
+        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — the acknowledgement in ${evidence} contains '#'. This gate strips from ' #' onward before reading (the same two comment forms the sentinel gate strips), so such a reason would be SILENTLY TRUNCATED and the gate would release on text nobody wrote. Re-word the reason without '#'.${_seam_note}"
+        return 1
+      fi
+      _ack_id="${_ack%%:*}"
+      _ack_reason="${_ack#*:}"
+      _ack_reason="${_ack_reason#"${_ack_reason%%[![:space:]]*}"}"
+      _ack_reason="${_ack_reason%"${_ack_reason##*[![:space:]]}"}"
+      if [[ "$_ack" != *:* || "$_ack_id" != "$_run_id" ]]; then
+        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_ACK_MISMATCH] — the acknowledgement in ${evidence} is keyed to run '$(_git_data_rung2_safe "$_ack_id" 40)', but RUNG2_EVIDENCE_URL names run ${_run_id}. An ack is a statement about ONE run; an ack that survives being copied into the next evidence file acknowledges nothing. Required form: RUNG2_SENTRY_CROSSCHECK_ACK=${_run_id}:<reason>.${_seam_note}"
+        return 1
+      fi
+      if [[ -z "$_ack_reason" ]]; then
+        echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_UNAVAILABLE_UNACKED] — the acknowledgement in ${evidence} names run ${_run_id} but carries an EMPTY reason. An acknowledgement with no reason is a checkbox, not a decision: say why the second channel may be skipped for this run. The reason may not contain '#' — this gate strips from ' #' onward, so such a reason would be silently truncated and is refused by name instead.${_seam_note}"
+        return 1
+      fi
+      ;;
+    NOT_RUN)
+      # A DISTINCT ARM, because the old catch-all printed "which is outside the closed set
+      # {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}" *for NOT_RUN* — a sentence listing the value
+      # inside the set it declared the value outside of. NOT_RUN is a value the capture writes
+      # DELIBERATELY (its jq-missing, token-unset and reader-missing branches), so it is a
+      # measured statement that the second channel never ran, and no ack can rescue it.
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_SENTRY_CROSSCHECK=NOT_RUN: the cross-check never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, or no reader on the rehearsal runner). There is nothing to acknowledge, so no RUNG2_SENTRY_CROSSCHECK_ACK can release this — re-run the rehearsal on a runner where the second channel is reachable.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_SENTRY_CROSSCHECK=NOT_RUN (the cross-check never ran)"
+      return 1 ;;
+    *)
+      echo "git_data_rung2_rehearsal_gate: HOLD [SENTRY_VERDICT_UNREADABLE] — ${evidence} records RUNG2_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_sentry" 60)', which is outside the closed set the capture can write {CLEAN, UNAVAILABLE, FATAL, NOT_RUN}. An unknown verdict is not a pass and no acknowledgement can rescue it — re-run the rehearsal, and if this value keeps appearing the capture script and this gate have drifted apart.${_seam_note}"
+      _git_data_rung2_annotate SENTRY_VERDICT_UNREADABLE "RUNG2_SENTRY_CROSSCHECK='$(_git_data_rung2_safe "$_sentry" 60)'"
+      return 1 ;;
+  esac
+
+  # ── (#8010) STEP C: RESOLVE THE RUN (network, one GET) ───────────────────────────
+  local _chk _tok _detail _head_sha _created
+  _chk="$(_git_data_rung2_check_run "$_run_id")" || {
+    _tok="${_chk%%|*}"; _detail="${_chk#*|}"
+    _git_data_rung2_annotate "$_tok" "$_detail"
+    echo "git_data_rung2_rehearsal_gate: HOLD [${_tok}] — ${_detail}${_seam_note}"
+    return 1
+  }
+  _head_sha="$(printf '%s' "${_chk#*|}" | cut -d'|' -f1)"
+  _created="$(printf '%s' "${_chk#*|}" | cut -d'|' -f2)"
+
+  # ── (#8010) STEP D: BIND THE RUN TO THE BYTES (local git) ────────────────────────
+  #
+  # Every check in step C proves the run is REAL. None of them proves it booted THESE bytes:
+  # RUNG2_TEMPLATE_SHA256 is a pure function of tracked files, so a payload author who
+  # re-derives it locally produces evidence that passes the live-hash check above while
+  # naming a run that rehearsed something else. This is what closes that.
+  local _top _rel_dir _hash_out
+  if ! _top="$(git -C "$(dirname "$cloud_init")" rev-parse --show-toplevel 2>/dev/null)"; then
+    _git_data_rung2_annotate RUN_SHA_UNREACHABLE "the cloud-init path is not inside a git work tree"
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_SHA_UNREACHABLE] — ${cloud_init} is not inside a git work tree, so the bytes run ${_run_id} rehearsed cannot be read. Nothing was measured. Re-run the gate from inside the repository checkout.${_seam_note}"
+    return 1
+  fi
+  _rel_dir="$(_git_data_repo_rel "$cloud_init" "$_top")" || _rel_dir=""
+  _rel_dir="$(dirname "${_rel_dir:-.}")"
+  # `if`, not `&&`: `[[ … ]] && x=""` returns 1 whenever the test is FALSE, which is the
+  # production path (a cloud-init in a subdirectory). Harmless under every current call site —
+  # all four suspend errexit — but both runbooks document the BARE invocation, and a reader who
+  # pastes that under `set -euo pipefail` would get a silent abort with no verdict line.
+  if [[ "$_rel_dir" == "." ]]; then _rel_dir=""; fi
+  _hash_out="$(_git_data_rung2_hash_at_sha "$_top" "$_rel_dir" "$(basename "$cloud_init")" "$_head_sha")" || {
+    _tok="${_hash_out%%|*}"; _detail="${_hash_out#*|}"
+    _git_data_rung2_annotate "$_tok" "$_detail"
+    echo "git_data_rung2_rehearsal_gate: HOLD [${_tok}] — ${_detail}${_seam_note}"
+    return 1
+  }
+  local _run_sha="${_hash_out#*|}"
+  if [[ "$_run_sha" != "$live_sha" ]]; then
+    echo "git_data_rung2_rehearsal_gate: HOLD [RUN_HASH_MISMATCH] — run ${_run_id} ran at head_sha ${_head_sha}, whose user_data hashes to ${_run_sha}; the tree here hashes to ${live_sha}. The evidence names a REAL, successful, main-branch rehearsal — of different bytes. Re-run the rehearsal from main against the current payload.${_seam_note}"
+    return 1
+  fi
+
+  # ── (#8010) STEP E: THE CAPTURE DISCRIMINATOR (network, one GET) ─────────────────
+  #
+  # Placed after the local git checks, not beside the first GET: the common refusals (stale
+  # evidence, a laundered hash) then cost one request instead of two.
+  # THE THIRD GET IS GONE, and it was worse than an extra request. It re-fetched a body step C
+  # already had, `|| true`-swallowed every failure, and an empty `_created` left `_age_ok=1` —
+  # so if THAT read was the rate-limited one, an aged run with no artifact record yielded
+  # RUN_NO_EVIDENCE_ARTIFACT, a MEASURED refusal, for the exact could-not-measure condition the
+  # 90-day window exists to express. `created_at` now rides field 8 out of step C.
+  local _art_out
+  _art_out="$(_git_data_rung2_check_artifacts "$_run_id" "$_created")" || {
+    _tok="${_art_out%%|*}"; _detail="${_art_out#*|}"
+    _git_data_rung2_annotate "$_tok" "$_detail"
+    echo "git_data_rung2_rehearsal_gate: HOLD [${_tok}] — ${_detail}${_seam_note}"
+    return 1
+  }
+
+  echo "git_data_rung2_rehearsal_gate: RELEASED — rung-2 boot evidence at ${evidence} attests PASS for user_data sha256 ${live_sha} ($(_git_data_rung2_safe "$url" 160)); declared render-var divergence: ${divergence}; provenance: ${_prov_out#*: }. RUN: ${_run_id} concluded success at head_sha ${_head_sha}, whose tree re-hashes to the same digest; it uploaded ${_art_out#*|}; Sentry cross-check ${_sentry}; replace boot PASS, its Sentry cross-check ${_rsentry}${_ack:+ (acknowledged)}.${_seam_note} NOTE: this gate checks the rung-2 boot rehearsal ONLY. It says nothing about the other ADR-149 checklist items, which the sentinel gate's own message enumerates."
   return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────────────
+# git_data_authorization_map_gate — CPO condition C1 / #8009.
+#
+# THE PROPERTY. On the production render path the three SSH forced-command slots on the
+# git-data host — transport, provision, erase — are held by three pairwise-distinct public
+# keys, AND the private half of each is published under the Doppler name whose consumer
+# holds exactly that authority.
+#
+# The second clause is not decoration. Distinctness of the PUBLIC halves is satisfiable
+# while the map is fully inverted: three distinct keys can render into the template while
+# the app's transport secret carries the erase key. A guard naming only the first clause
+# certifies something other than what its own HOLD message claims.
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT. It is a STATIC assertion over the Terraform
+# source: it proves what the production root RENDERS. It does not, and cannot, prove what
+# the live host HONOURS — that is a property of a running sshd and of files the host owns,
+# and it is why #8009's siblings (the authorized_keys2 fall-through, the hooksPath
+# ownership, the AcceptEnv pin) are tracked separately rather than closed here. No live
+# host exists to probe: birthing it is what this gate stands in front of.
+#
+# WHY STATIC IS THE RIGHT SHAPE ANYWAY. The rung-2 rehearsal collapses all three slots onto
+# one tls_private_key by design, so it never exercised this map — and because they were
+# ALREADY identical there, a production edit collapsing them is a NO-OP in the rehearsal:
+# boot_complete still emits, no fatal appears, the evidence still records PASS, and
+# RUNG2_TEMPLATE_SHA256 moves so the file even looks freshly re-rehearsed. Only a static
+# assertion over the production root can see it, and it needs no paid rehearsal to run.
+#
+# SCOPING IS POSITIVE (ADR-149 D3). The root is derived from the argument, and the *.tf glob
+# is NON-RECURSIVE. That is what keeps rung2-rehearsal/rehearsal.tf — which collapses the
+# three slots deliberately — outside the assembly, without naming it in an exclusion list
+# that would rot the moment a second such root appeared.
+#
+# Usage:  git_data_authorization_map_gate <cloud-init-git-data.yml>
+# Exit:   0 RELEASED | 1 HOLD (property violated) | 2 ABORT (cannot measure — fail-closed)
+#
+# ABORT IS NOT HOLD. A gate that cannot parse its inputs has measured nothing, and reporting
+# that as a clean release is the exact defect class this gate exists to close. Every
+# unparseable, ambiguous or unexpectedly-shaped input returns 2 with a message naming which.
+git_data_authorization_map_gate() {
+  local cloud_init="${1:-}"
+
+  # THE THREE AUTHORITIES, HARDCODED FROM THE DESIGN — never parsed back out of
+  # the artifact under test. Deriving this set from the template would make the assertion
+  # S == S. The forced-command script name and the Doppler secret name are anchored to a
+  # THIRD artifact: apps/web-platform/server/git-data-replication.ts, whose header prose
+  # documents GIT_PROVISION_SSH_PRIVATE_KEY -> git-data-provision.sh and the transport
+  # equivalent. Neither file under test is the authority for this table.
+  #
+  # WHERE EACH AUTHORITY IS ACTUALLY DESIGNED, stated precisely because a false citation
+  # propagates further than a missing one: ADR-068 designs TRANSPORT and PROVISION (its
+  # CTO-ruling amendment introduces the provision key as "A SECOND ED25519 key"). It does NOT
+  # design the ERASE authority — it names GIT_REMOVE_SSH_PRIVATE_KEY exactly once, inside a
+  # blast-radius argument for the scoped Doppler token, and git-data-remove.sh not at all. The
+  # erase authority is designed in git-data-replication.ts's removeGitDataRepo, which is also
+  # the third artifact this table is anchored to, and ships as a payload per ADR-152.
+  local -a _authorities=(
+    "transport|git-data-transport-wrapper.sh|GIT_TRANSPORT_SSH_PRIVATE_KEY"
+    "provision|git-data-provision.sh|GIT_PROVISION_SSH_PRIVATE_KEY"
+    "remove|git-data-remove.sh|GIT_REMOVE_SSH_PRIVATE_KEY"
+  )
+  # The literal 3 lives here and nowhere else in this function: it must agree across the
+  # slot count, the terminal count, the resource count and the secret count, and four
+  # independent 3s is four places to drift.
+  local _n_authorities="${#_authorities[@]}"
+
+  if [[ -z "$cloud_init" || ! -r "$cloud_init" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — cloud-init template missing or not supplied ('${cloud_init}'). Fail-closed: with no template there is no authorization map to read."
+    return 2
+  fi
+
+  local root module_tf
+  root="$(cd "$(dirname "$cloud_init")" && pwd)" || {
+    echo "git_data_authorization_map_gate: ABORT — cannot resolve the Terraform root containing '${cloud_init}'."
+    return 2
+  }
+  module_tf="${root}/modules/git-data-userdata/main.tf"
+  if [[ ! -r "$module_tf" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — cannot read ${module_tf}. The render module is where the templatefile argument map lives; if it moved, this gate and every consumer of it must move with it. Fail-closed."
+    return 2
+  fi
+
+  # M14 — Terraform MERGES *override.tf / *override.tf.json over the primary config at load
+  # time. This gate reads the files it is handed, so an override re-pointing a local at
+  # apply time is invisible to it. Refuse rather than release a verdict about a
+  # configuration that is not the one Terraform will load.
+  local _ovr
+  for _ovr in "$root"/*override.tf "$root"/*override.tf.json; do
+    [[ -e "$_ovr" ]] || continue
+    echo "git_data_authorization_map_gate: ABORT — an override file is present in the root ($(basename "$_ovr")). Terraform merges *override.tf over the primary configuration, so the authorization map this gate can read is not the map that would be applied. Fail-closed."
+    return 2
+  done
+
+  # A ROOT *.tf.json IS LOADED EXACTLY AS A *.tf, AND THIS GATE CANNOT PARSE JSON.
+  # Reading only *.tf here while git_data_rung2_user_data_sha256 — in this same file —
+  # globs both extensions is an asymmetry a second module can hide in: a `module` block
+  # declared in extra.tf.json is invisible to the single-instance check below while
+  # Terraform renders it happily. Refuse rather than release a verdict about a
+  # configuration this gate has only partly read.
+  local _json
+  for _json in "$root"/*.tf.json; do
+    [[ -e "$_json" ]] || continue
+    echo "git_data_authorization_map_gate: ABORT — the root contains $(basename "$_json"). Terraform loads *.tf.json exactly as it loads *.tf, and this gate parses HCL only — so the authorization map it can read is a strict subset of the one that would be applied. Fail-closed."
+    return 2
+  done
+
+  # ── Link 1: the authorized_keys slots ───────────────────────────────────────────────
+  #
+  # Extracted as the CONTIGUOUS non-blank run inside the write_files entry for
+  # /home/git/.ssh/authorized_keys. The block is read whole rather than grepped for
+  # `command=` lines, because M26 is a line with NO `command=`: grepping for forced
+  # commands cannot see a key that is not one, and that key falls through to the raw
+  # `git-shell -c "$SSH_ORIGINAL_COMMAND"` path the transport wrapper exists to replace.
+  local _ak_block
+  _ak_block="$(awk '
+    # `want` IS RESET BY THE NEXT LIST ITEM. Without that it latched forever, so an entry
+    # whose content is NOT a `content: |` literal — e.g. the `encoding: b64` +
+    # `content: ${...}` shape this same template already uses for its script payloads —
+    # made the extractor skip ahead and read the NEXT entry`s block instead. The gate then
+    # RELEASED, naming three distinct keys that were not on authorized_keys at all. Zero
+    # extraction was already an ABORT; extraction from the WRONG entry was not.
+    $0 ~ /^[[:space:]]*-[[:space:]]*path:/ { want=0 }
+    $0 ~ /^[[:space:]]*-[[:space:]]*path:[[:space:]]*\/home\/git\/\.ssh\/authorized_keys[[:space:]]*$/ { want=1; next }
+    want && $0 ~ /^[[:space:]]*(encoding|content):[[:space:]]*[^|[:space:]]/ { print "__NOT_A_LITERAL_BLOCK__"; exit }
+    want && $0 ~ /^[[:space:]]*content:[[:space:]]*\|[[:space:]]*$/ { inblock=1; next }
+    inblock {
+      # The block ends at the next YAML key at the entry indent level (owner:, permissions:)
+      # or at the next list item.
+      if ($0 ~ /^[[:space:]]*(owner|permissions|defer|append|encoding):/ || $0 ~ /^[[:space:]]*-[[:space:]]/) { exit }
+      if ($0 ~ /^[[:space:]]*$/) next
+      print
+    }
+  ' "$cloud_init")"
+
+  if [[ "$_ak_block" == "__NOT_A_LITERAL_BLOCK__" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — the /home/git/.ssh/authorized_keys entry in ${cloud_init} does not use a literal \`content: |\` block (it is base64, an interpolation, or another encoding). This gate reads the authorization map as text; it cannot see through an encoded payload, and releasing here would certify a map it never read. Fail-closed."
+    return 2
+  fi
+  if [[ -z "$_ak_block" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — found no /home/git/.ssh/authorized_keys content block in ${cloud_init}. Extraction yielded nothing, which is a broken instrument, not an empty authorization map. Fail-closed."
+    return 2
+  fi
+
+  # EXACTLY ONE write_files ENTRY MAY WRITE THAT PATH. The extractor above stops at the end
+  # of the FIRST matching entry, and cloud-init applies write_files IN ORDER — so a second
+  # entry for the same path later in the file is what actually lands on the host, and the
+  # gate would have certified the first one. Measured rc=0 with a second entry granting the
+  # transport key the erase command.
+  # NOTHING ELSE IN THE TEMPLATE MAY TOUCH THAT FILE. write_files is not the only statement
+  # that writes it: `runcmd` runs AFTER write_files, so one appended line there adds a key
+  # the gate's block-scoped read can never see. The property is "what this template puts on
+  # authorized_keys", not "what the first write_files entry says".
+  # CAPTURED STAGE BY STAGE, never `producer | grep -q` in the `if`: under pipefail an early
+  # `grep -q` exit EPIPEs the producer, and this arm's non-negated `if` then reads a mid-pipe
+  # death as "no outside references" — the #9210 mechanism, applied to the fail-OPEN arm:
+  # where site 1 false-ABORTed, this sweep would silently skip its HOLD. Each stage is
+  # captured separately because pipefail reports only the RIGHTMOST non-zero member, so a
+  # stage's rc >= 2 (instrument failure) would be masked behind a later stage's rc 1.
+  local _ak_outside _ak_rc=0
+  _ak_outside="$(grep -nE '/home/git/\.ssh/authorized_keys' "$cloud_init")" || _ak_rc=$?
+  if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
+    _ak_outside="$(printf '%s\n' "$_ak_outside" | grep -vE ':[[:space:]]*-[[:space:]]*path:')" || _ak_rc=$?
+  fi
+  if [[ "$_ak_rc" -lt 2 && -n "$_ak_outside" ]]; then
+    _ak_outside="$(printf '%s\n' "$_ak_outside" | grep -vE ':[[:space:]]*#')" || _ak_rc=$?
+  fi
+  if [[ "$_ak_rc" -ge 2 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not evaluate the /home/git/.ssh/authorized_keys outside-write_files sweep on ${cloud_init}: the extraction exited ${_ak_rc}. An instrument failure is not a measured absence of runcmd/bootcmd references. Fail-closed."
+    return 2
+  fi
+  if [[ -n "$_ak_outside" ]]; then
+    echo "git_data_authorization_map_gate: HOLD — ${cloud_init} references /home/git/.ssh/authorized_keys outside its write_files path declaration (a runcmd, a bootcmd, or another statement). cloud-init runs runcmd AFTER write_files, so any such statement decides the final authorization map and this gate reads only the write_files block."
+    printf '%s\n' "$_ak_outside" | sed 's/^/  /'
+    return 1
+  fi
+
+  local _n_ak
+  _n_ak="$(grep -cE '^[[:space:]]*-[[:space:]]*path:[[:space:]]*/home/git/\.ssh/authorized_keys[[:space:]]*$' "$cloud_init" || true)"
+  if [[ "${_n_ak:-0}" -ne 1 ]]; then
+    echo "git_data_authorization_map_gate: HOLD — ${_n_ak} write_files entries target /home/git/.ssh/authorized_keys; exactly 1 is canonical. cloud-init applies write_files in order, so a later entry overwrites the map this gate read."
+    return 1
+  fi
+
+  # OWNER AND PERMISSIONS ARE PART OF THE MAP. The extractor terminates ON the `owner:` line,
+  # so neither was ever in the gate's view. A world-writable or group-writable authorized_keys
+  # is an authorization map anything on the host can rewrite; sshd's StrictModes refuses it at
+  # runtime, which is a backstop this gate neither knows about nor should depend on.
+  local _ak_meta
+  _ak_meta="$(awk '
+    $0 ~ /^[[:space:]]*-[[:space:]]*path:[[:space:]]*\/home\/git\/\.ssh\/authorized_keys[[:space:]]*$/ { want=1; next }
+    want && $0 ~ /^[[:space:]]*(owner|permissions):/ { print; n++ }
+    want && n >= 2 { exit }
+  ' "$cloud_init")"
+  # (#8043 F7) ROOT-OWNED. This arm used to require `owner: git:git` on the rationale that "an
+  # authorization map owned by anyone else is either unreadable by sshd or writable by a second
+  # principal" — MEASURED FALSE in the pinned ubuntu-24.04 image: a `root:root 0644` map inside a
+  # `root:git 0750` .ssh authenticates the git key, and StrictModes permits uid 0. What git:git
+  # actually meant was that the CONSTRAINED PRINCIPAL owned its own authorization map and could
+  # rewrite it in place. The mode is 0644, NOT 0600: sshd opens the file under the target
+  # user's uid, so `root:root 0600` is "Permission denied" (measured) and every push is refused.
+  if ! grep -qE "^[[:space:]]*owner:[[:space:]]*root:root[[:space:]]*$" <<< "$_ak_meta"; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry is not owned by root:root. The forced commands run as the git user, and a map the git account owns is a map the constrained principal can rewrite in place — the shortest persistence path for code execution as git (#8043 F7). sshd reads the file as the git uid, so root ownership at 0644 stays readable."
+    return 1
+  fi
+  if ! grep -qE "^[[:space:]]*permissions:[[:space:]]*'0644'[[:space:]]*$" <<< "$_ak_meta"; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys write_files entry does not declare permissions '0644'. Under root ownership 0600 is UNREADABLE by sshd (it opens the map as the target user; measured 'Permission denied' in the pinned image) and refuses every push; any group- or world-WRITABLE mode makes the map rewritable by a second principal. 0644 is the one mode that is both readable by the git uid and writable by root only."
+    return 1
+  fi
+
+  local _ak_lines
+  _ak_lines="$(printf '%s\n' "$_ak_block" | wc -l | tr -d ' ')"
+  if [[ "$_ak_lines" -ne "$_n_authorities" ]]; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys block holds ${_ak_lines} non-blank line(s); ADR-068 pins exactly ${_n_authorities}, one per authority. A line beyond the three is an SSH identity nobody's forced command fences; a line short of them is a missing authority."
+    return 1
+  fi
+
+  # Each line must be a forced command with the canonical option set. M26 is a line with no
+  # `command=` at all; M27 is an extra option appended to one — invisible to a script-name
+  # assertion, and live the moment anything sets PermitUserEnvironment yes.
+  # AN EXACT-MATCH CONTRACT ACROSS A HASH-BOUND BOUNDARY. This literal must equal the option
+  # string in cloud-init-git-data.yml's authorized_keys block. That file is hash-bound and this
+  # one is not, so a legitimate future option addition reddens this gate BEFORE the template can
+  # be changed — which is the intended fail-closed direction (an added option is exactly M27),
+  # but it means the fix is deliberate co-editing, not a surprise. Widening this to a
+  # subset-match would forfeit M27 entirely.
+  # (#8211) no-user-rc added in lockstep with cloud-init-git-data.yml's authorized_keys
+  # block. This is the deliberate co-edit the paragraph above prescribes: the template is
+  # hash-bound and this file is not, so the gate HELD on the live root until this literal
+  # matched. no-user-rc stops sshd sourcing ~/.ssh/rc for the git user, one more way a
+  # file on the store could execute at session start beside the forced command.
+  local _canon_opts='no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty,no-user-rc'
+  declare -A _slot_var=()          # script name -> template variable name
+  local _line _script _tvar
+  while IFS= read -r _line; do
+    [[ -n "$_line" ]] || continue
+    if [[ ! "$_line" =~ ^[[:space:]]*command=\"/usr/local/bin/([A-Za-z0-9._-]+)\",([^[:space:]]*)[[:space:]]+\$\{([A-Za-z0-9_]+)\}[[:space:]]*$ ]]; then
+      echo "git_data_authorization_map_gate: HOLD — an authorized_keys line is not a canonical forced-command entry terminating in a single \${…} interpolation: '${_line}'. A key on this file that no forced command fences reaches the raw git-shell path, which is the unfenced surface git-data-transport-wrapper.sh exists to replace."
+      return 1
+    fi
+    _script="${BASH_REMATCH[1]}"
+    if [[ "${BASH_REMATCH[2]}" != "$_canon_opts" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — the forced-command options for ${_script} are '${BASH_REMATCH[2]}', not the canonical '${_canon_opts}'. An added option is invisible to a script-name assertion and becomes live the moment sshd permits it — environment= plus PermitUserEnvironment is a rooted rm -rf assembled out of two individually-invisible edits."
+      return 1
+    fi
+    _tvar="${BASH_REMATCH[3]}"
+    _slot_var["$_script"]="$_tvar"
+  done <<< "$_ak_block"
+
+  # Every authority the design names must have a slot, and there must be no slot beyond them.
+  local _entry _auth _dopname
+  for _entry in "${_authorities[@]}"; do
+    IFS='|' read -r _auth _script _dopname <<< "$_entry"
+    if [[ -z "${_slot_var[$_script]:-}" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — no authorized_keys slot pins /usr/local/bin/${_script} (the ${_auth} authority). ADR-068 pins one forced command per authority."
+      return 1
+    fi
+  done
+  if [[ "${#_slot_var[@]}" -ne "$_n_authorities" ]]; then
+    echo "git_data_authorization_map_gate: HOLD — the authorized_keys block resolves to ${#_slot_var[@]} distinct forced command(s); ADR-068 pins ${_n_authorities}. Two slots naming one script is a duplicate authority, not a distinct one."
+    return 1
+  fi
+
+  # ── Link 2: the templatefile() argument map ─────────────────────────────────────────
+  #
+  # Links 2 and 3 are pure identity maps (git_transport_pubkey = var.git_transport_pubkey;
+  # git_transport_pubkey = local.git_transport_pubkey). You TRAVERSE an identity map; you do
+  # not assert on it. Five independent per-link assertions would be five extractors, five
+  # normalisers and five messages over three files — and would still miss a hop nobody
+  # anticipated. Resolving instead means an unanticipated hop BREAKS THE WALK rather than
+  # slipping past five checks, and the diagnostic names the hop at which two chains met.
+  local _mod_src
+  if ! _mod_src="$(_git_data_hcl_nocomment "$module_tf")"; then
+    echo "git_data_authorization_map_gate: ABORT — ${module_tf} carries an HCL // or /* comment outside a string. This gate strips only # comments, so it cannot be trusted to have read the file as Terraform would. Fail-closed."
+    return 2
+  fi
+
+  # SCOPED TO THE templatefile() CALL, NOT TO main.tf. Scanning the whole module file for
+  # `X = var.Y` was last-wins, so a trailing `locals { git_remove_pubkey = var.git_remove_pubkey }`
+  # restored the identity binding AFTER the real map entry had been permuted, and the gate
+  # RELEASED with the render collapsed (measured). The map that renders is the one inside
+  # templatefile(); nothing else in the file participates.
+  # THE GATE MUST READ THE TEMPLATE THE MODULE ACTUALLY RENDERS. Nothing tied the file
+  # passed in to the path inside templatefile(), so link 1 and link 2 were joined by
+  # assumption: re-point the module at cloud-init-git-data-v2.yml and the gate happily
+  # certifies the map in the file it was handed while the host boots the other one. The
+  # sibling parity test already binds the READINESS gate's path this way; the binding was
+  # never extended to this gate.
+  local _tpl_ref _ci_base
+  _ci_base="$(basename "$cloud_init")"
+  _tpl_ref="$(grep -oE 'templatefile\("\$\{path\.module\}/[^"]+"' <<< "$_mod_src" | head -1 | sed 's|.*/||; s|"$||')"
+  if [[ -z "$_tpl_ref" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not resolve the template path from ${module_tf}'s templatefile( call, so the gate cannot confirm it is reading the file the module renders. Fail-closed."
+    return 2
+  fi
+  if [[ "$_tpl_ref" != "$_ci_base" ]]; then
+    echo "git_data_authorization_map_gate: HOLD — the render module renders '${_tpl_ref}', but this gate was pointed at '${_ci_base}'. It would have certified an authorization map in a file the host never boots."
+    return 1
+  fi
+
+  local _tf_map
+  # `[(]`, NOT `\(`. This pattern is a DYNAMIC awk regex (`$0 ~ open_re`), and the two awk
+  # implementations disagree about a backslash-escaped paren: mawk treats `\(` as a literal
+  # paren, while gawk STRIPS the backslash and then cannot compile the bare `(` —
+  # `fatal: invalid regexp: Unmatched ( or \(`. Ubuntu ships mawk, GitHub runners ship gawk,
+  # so `\(` passes every local run and makes the gate ABORT on every CI run: it could never
+  # RELEASE, which also means the birth-dispatch interlock could never pass. A bracket
+  # expression is literal in both engines. Pinned by the gawk-hostile-escape arm in the suite.
+  _tf_map="$(_git_data_hcl_block "$_mod_src" 'templatefile[(]')"
+  if [[ -z "$_tf_map" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — no templatefile( call found in ${module_tf}. The render module is where the argument map lives; extraction yielded nothing, which is a broken instrument, not an empty map. Fail-closed."
+    return 2
+  fi
+  declare -A _tvar_modvar=()       # template variable -> module variable
+  while IFS= read -r _line; do
+    if [[ "$_line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*var\.([A-Za-z0-9_]+)[[:space:]]*$ ]]; then
+      if [[ -n "${_tvar_modvar[${BASH_REMATCH[1]}]:-}" ]]; then
+        echo "git_data_authorization_map_gate: ABORT — the templatefile argument map in ${module_tf} binds '${BASH_REMATCH[1]}' more than once. Terraform would reject a duplicate key, so this gate is reading something it does not understand rather than a map that could render. Fail-closed."
+        return 2
+      fi
+      _tvar_modvar["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+    fi
+  done <<< "$_tf_map"
+
+  # ── Links 3, 4, 5: the root ─────────────────────────────────────────────────────────
+  #
+  # NON-RECURSIVE by construction — this is the positive scoping of D3. rung2-rehearsal/
+  # lives one directory down and collapses all three slots deliberately; a recursive walk
+  # would make this gate permanently red, and an exclusion list naming that directory would
+  # rot the moment a second such root appeared.
+  local _root_src="" _f _one
+  local _n_tf=0
+  for _f in "$root"/*.tf; do
+    [[ -e "$_f" ]] || continue
+    if ! _one="$(_git_data_hcl_nocomment "$_f")"; then
+      echo "git_data_authorization_map_gate: ABORT — ${_f} carries an HCL // or /* comment outside a string. This gate strips only # comments, so it cannot be trusted to have read the root as Terraform would. Fail-closed."
+      return 2
+    fi
+    _root_src+="$_one"$'\n'
+    _n_tf=$((_n_tf + 1))
+  done
+  if [[ "$_n_tf" -eq 0 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — no *.tf files found in ${root}. Extraction yielded nothing, which is a broken instrument, not an empty root. Fail-closed."
+    return 2
+  fi
+
+  # M15 — exactly ONE module instance renders user_data, and hcloud_server.git_data's
+  # user_data is pinned to THAT instance's whole expression. A second
+  # module "git_data_userdata_v2" with collapsed arguments, with the server re-pointed at
+  # it, leaves this gate reading the block it was told to read and releasing. Pinning the
+  # WHOLE base64gzip(module.<label>.rendered) expression — not just the label — is what
+  # stops a coalesce() or a conditional slipping a second render in beside it.
+  local _n_mod_labels _mod_label
+  _n_mod_labels="$(awk '
+    /^[[:space:]]*module[[:space:]]+"[A-Za-z0-9_]+"[[:space:]]*\{/ { inmod=1; depth=0 }
+    inmod {
+      n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
+      if ($0 ~ /source[[:space:]]*=[[:space:]]*"\.\/modules\/git-data-userdata"/) hit=1
+      if (depth<=0) { if (hit) c++; inmod=0; hit=0 }
+    }
+    END { print c+0 }
+  ' <<< "$_root_src")"
+  if [[ "$_n_mod_labels" -ne 1 ]]; then
+    echo "git_data_authorization_map_gate: HOLD — ${_n_mod_labels} module instance(s) in ${root} declare source = \"./modules/git-data-userdata\"; the canonical shape has exactly 1. A second render module is a second authorization map, and this gate would read only the one it was pointed at."
+    return 1
+  fi
+  _mod_label="$(awk '
+    /^[[:space:]]*module[[:space:]]+"[A-Za-z0-9_]+"[[:space:]]*\{/ { inmod=1; depth=0; lbl=$0; sub(/^[^"]*"/,"",lbl); sub(/".*$/,"",lbl) }
+    inmod {
+      n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
+      if ($0 ~ /source[[:space:]]*=[[:space:]]*"\.\/modules\/git-data-userdata"/) hit=1
+      if (depth<=0) { if (hit) { print lbl; exit } ; inmod=0; hit=0 }
+    }
+  ' <<< "$_root_src")"
+
+  # A HERESTRING, NOT A PIPE. `producer | grep -q` under `set -o pipefail` is a FALSE
+  # NEGATIVE whenever the match is early and the producer exceeds the 64 KiB pipe buffer:
+  # grep -q closes the pipe on first match, the producer takes SIGPIPE (141), and pipefail
+  # promotes that to a failing pipeline EVEN THOUGH GREP MATCHED. Measured here — the root
+  # source is ~160 KB and git-data.tf sorts early, so this gate HELD on a canonical tree
+  # under `set -uo pipefail` while RELEASING under a plain shell. The suite and every CI
+  # `run:` block set pipefail, so the shipped behaviour was the broken one. A herestring is
+  # backed by a temp file the SHELL owns and reaps, so it cannot take SIGPIPE at all — and it
+  # is the idiom this function already uses for the same string at its two `while read` loops.
+  # An earlier fix materialized the root by hand instead. That worked, but it put a SECOND
+  # representation of one string in the function and made every future `return` owe one of 18
+  # cleanup calls with no trap to catch a miss — a standing correctness tax on a fail-closed
+  # gate. One mechanism for one string.
+  # EXTRACTED, NOT GREPPED. This predicate claims something about hcloud_server.git_data, and
+  # a root-wide grep mentions neither the resource type nor its label — so the canonical
+  # string parked in ANY unrelated block (an output, a locals, a null_resource trigger)
+  # satisfied it while the real server rendered something else entirely. Measured rc=0.
+  # Absence of the server is its own ABORT: a rename made the ignore_changes awk below
+  # silently vacuous while this grep still matched, and nothing noticed the resource the
+  # whole gate is about had ceased to exist.
+  local _server_block
+  _server_block="$(_git_data_hcl_block "$_root_src" '^resource[[:space:]]+"hcloud_server"[[:space:]]+"git_data"[[:space:]]*\{')"
+  if [[ -z "$_server_block" ]]; then
+    echo "git_data_authorization_map_gate: ABORT — no resource \"hcloud_server\" \"git_data\" block found in ${root}. Every predicate below is about that server; with it absent or renamed the gate would be certifying a map for a host nothing creates. Fail-closed."
+    return 2
+  fi
+  if ! grep -qE "^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.${_mod_label}\.rendered\)[[:space:]]*$" <<< "$_server_block"; then
+    echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data's own user_data is not exactly base64gzip(module.${_mod_label}.rendered). The gate resolves the authorization map through that module; if the server renders anything else, the map this gate proved is not the map that boots."
+    return 1
+  fi
+
+  # EXACTLY ONE SERVER MAY RENDER A MODULE. A second hcloud_server fed by a second module —
+  # under any source path, so the single-instance check above cannot see it — is a second
+  # git-data host whose authorization map this gate never walks. Measured rc=0.
+  local _n_rendering
+  _n_rendering="$(grep -cE '^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.[A-Za-z0-9_]+\.rendered\)[[:space:]]*$' <<< "$_root_src" || true)"
+  if [[ "${_n_rendering:-0}" -ne 1 ]]; then
+    echo "git_data_authorization_map_gate: HOLD — ${_n_rendering} resources in ${root} render a module into user_data; exactly 1 is canonical. A second rendering server is a second host with its own authorization map, and this gate walks only the one it was pointed at."
+    return 1
+  fi
+
+  # M25 — the guard's own premise. ADR-115 bars git-data from the reboot primitive and
+  # user_data is ForceNew, so a REPLACE is the only post-birth route by which a re-rendered
+  # authorized_keys block reaches the host. An ignore_changes on user_data silently deletes
+  # that premise: the map could then drift with no apply able to correct it, and every
+  # interlock downstream of this one would be guarding a path nothing travels.
+  # THE LIST, NOT ONE LINE. Requiring `ignore_changes` and `user_data` on the same physical
+  # line missed the ordinary multi-line list form that `terraform fmt` preserves — and
+  # git-data.tf already carries `ignore_changes = [ssh_keys]`, so adding a second element is
+  # exactly the edit a person makes. Measured rc=0. This joins the whole extracted server
+  # block and matches across newlines instead.
+  # Same conversion as the sites above: capture the flattened block, then herestring-grep —
+  # and split the verdict, because this arm is also non-negated (a mid-pipe death was a
+  # missed HOLD — fail-open on the gate's own premise).
+  local _flat_server _ic_rc=0
+  _flat_server="$(tr '\n' ' ' <<< "$_server_block")"
+  grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\[[^]]*\buser_data\b' <<< "$_flat_server" || _ic_rc=$?
+  if [[ "$_ic_rc" -ge 2 ]]; then
+    echo "git_data_authorization_map_gate: ABORT — could not evaluate the lifecycle.ignore_changes sweep on hcloud_server.git_data in ${root}: the matcher exited ${_ic_rc}. An instrument failure is not a measured absence. Fail-closed."
+    return 2
+  fi
+  if [[ "$_ic_rc" -eq 0 ]]; then
+    echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data declares lifecycle.ignore_changes on user_data. That deletes this gate's own premise: user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so a replace is the ONLY route by which a corrected authorization map reaches the host. With it ignored, the map can drift with no apply able to correct it."
+    return 1
+  fi
+
+  # Link 3 — the module call's pubkey arguments, scoped to the ONE module block M15 pinned.
+  local _mod_block
+  _mod_block="$(awk -v lbl="$_mod_label" '
+    $0 ~ "^[[:space:]]*module[[:space:]]+\"" lbl "\"[[:space:]]*\\{" { inmod=1; depth=0 }
+    inmod {
+      print
+      n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
+      if (depth<=0) exit
+    }
+  ' <<< "$_root_src")"
+  declare -A _modvar_local=()      # module variable -> local name
+  while IFS= read -r _line; do
+    if [[ "$_line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*local\.([A-Za-z0-9_]+)[[:space:]]*$ ]]; then
+      _modvar_local["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
+    fi
+  done <<< "$_mod_block"
+
+  # Link 4 — the locals. Read from the WHOLE root, not from git-data.tf, which is what makes
+  # M23 (a pubkey local moved to a sibling .tf in the same root and re-pointed) visible:
+  # Terraform merges locals across every file in the root, so a file-scoped gate would be
+  # reading a subset of the configuration that actually applies.
+  # SCOPED TO `locals {}` BLOCKS. The previous scan read every line of the root regardless of
+  # its enclosing block and was last-wins, so an ordinary diagnostic `output` block naming the
+  # three keys silenced a genuine collapse of the real local — measured rc=0 on the headline
+  # collapse this gate exists to catch. Root-WIDE is still right (Terraform merges locals
+  # across every file in the root, which is what makes a sibling-file relocation visible);
+  # root-wide WITHOUT block-scoping is what was wrong.
+  declare -A _local_terminal=()    # local name -> tls_private_key.<name>
+  declare -A _local_attr=()        # local name -> attribute read
+  declare -A _local_rhs=()         # local name -> raw RHS, for diagnostics
+  local _locals_src _rhs _lname _nref
+  # More than one `locals` block is legal and common, so collect them all.
+  _locals_src="$(awk '
+    /^[[:space:]]*locals[[:space:]]*\{/ && depth == 0 { inb = 1 }
+    inb {
+      print
+      n = gsub(/\{/, "{"); m = gsub(/\}/, "}"); depth += n - m
+      if (depth <= 0) { inb = 0 }
+    }
+  ' <<< "$_root_src")"
+  while IFS= read -r _line; do
+    [[ "$_line" =~ ^[[:space:]]*([A-Za-z0-9_]+_pubkey)[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]] || continue
+    _lname="${BASH_REMATCH[1]}"
+    _rhs="${BASH_REMATCH[2]}"
+    if [[ -n "${_local_rhs[$_lname]:-}" ]]; then
+      echo "git_data_authorization_map_gate: ABORT — the root binds local '${_lname}' more than once (Terraform would reject that, so this gate is not reading a configuration that could apply). Fail-closed rather than picking a winner."
+      return 2
+    fi
+    _local_rhs["$_lname"]="$_rhs"
+    # AMBIGUITY IS NOT A TERMINAL. A compound RHS — a ternary, a coalesce(), a try() — can
+    # name several keys, and taking the first match silently picked one at random while the
+    # OTHER branch is what renders under the default. Measured: a `var.x ? remove : transport`
+    # ternary released with the remove slot carrying the transport key. If the gate cannot say
+    # which key wins, it must not say the map is correct.
+    _nref="$(grep -o 'tls_private_key\.' <<< "$_rhs" | wc -l | tr -d ' ')"
+    if [[ "${_nref:-0}" -gt 1 ]]; then
+      echo "git_data_authorization_map_gate: ABORT — local.${_lname} references ${_nref} tls_private_key resources in one expression: ${_rhs}. Which key renders depends on a value this static gate cannot evaluate, so it cannot certify the map. Fail-closed."
+      return 2
+    fi
+    if [[ "$_rhs" =~ tls_private_key\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+) ]]; then
+      _local_terminal["$_lname"]="tls_private_key.${BASH_REMATCH[1]}"
+      _local_attr["$_lname"]="${BASH_REMATCH[2]}"
+    fi
+    # PREDICATE 2 RUNS ON EVERY RHS, NOT ONLY WHERE EXTRACTION FAILED. It used to live inside
+    # the "no terminal" branch, so any expression that mentioned a tls_private_key at all
+    # skipped it — and `coalesce(tls_private_key.git_remove.public_key_openssh, var.emergency)`
+    # therefore passed with a variable as a live fallback terminal.
+    if [[ "$_rhs" == *var.* || "$_rhs" == *data.* || "$_rhs" == *file\(* || "$_rhs" == *ssh-* ]]; then
+      echo "git_data_authorization_map_gate: HOLD — local.${_lname} mixes a NON-RESOURCE terminal into its expression: ${_rhs}. Every slot must terminate at a tls_private_key.<name> this root creates. A variable carrying a default, a data source, a file() or an inline literal can hold any key at all — including another slot's — and no address-distinctness predicate can see it."
+      return 1
+    fi
+  done <<< "$_locals_src"
+
+  # Link 5 — the private-half distribution. This is the half the application actually holds:
+  # git-data-replication.ts reads GIT_TRANSPORT_SSH_PRIVATE_KEY for ordinary push and fetch,
+  # GIT_PROVISION_SSH_PRIVATE_KEY to provision, and GIT_REMOVE_SSH_PRIVATE_KEY to erase. It
+  # is the ONLY edge in the whole map with zero pre-existing coverage: the app-side tests
+  # vi.stubEnv the env NAMES with stub values, which proves the app reads the right variable
+  # and is structurally incapable of seeing which Terraform resource fills it.
+  # KEYED ON (name, project, config) — NOT ON name ALONE, AND NOT LAST-WINS.
+  #
+  # Keying on the Doppler NAME across the whole root meant two blocks publishing one name
+  # collided and the last file in the lexical glob won. Measured: permuting the real `prd`
+  # secret to the transport key and adding an innocuous `config = "dev"` mirror of the same
+  # name RELEASED the gate — while the `prd` secret, the only one in the birth job's -target
+  # list, published the transport key as the app's Art. 17 erasure credential. That is
+  # verbatim the inversion link 5 exists to catch.
+  #
+  # The config matters on its own: the three secrets must land in `prd`, because that is the
+  # config the host and the app read. A secret retargeted at `dev` publishes nothing the
+  # production app will ever see, and the previous scan could not tell.
+  declare -A _secret_terminal=()   # Doppler secret NAME -> tls_private_key.<name>
+  declare -A _secret_attr=()
+  declare -A _secret_rhs=()
+  declare -A _secret_seen=()       # NAME -> count of prd bindings, to refuse duplicates
+  local _sec_name _sec_cfg _sec_val _sec_label
+  while IFS='|' read -r _sec_label _sec_name _sec_cfg _sec_val; do
+    [[ -n "$_sec_name" ]] || continue
+    # A stray publisher of any of the three PRIVATE halves under an unexpected name hands the
+    # key to whatever reads that name. The authority loop below only ever visits the three
+    # known names, so without this it is invisible.
+    if [[ "$_sec_val" =~ tls_private_key\.(git_transport|git_provision|git_remove)\.private_key_openssh ]]; then
+      case "$_sec_name" in
+        GIT_TRANSPORT_SSH_PRIVATE_KEY|GIT_PROVISION_SSH_PRIVATE_KEY|GIT_REMOVE_SSH_PRIVATE_KEY) ;;
+        *)
+          echo "git_data_authorization_map_gate: HOLD — doppler_secret.${_sec_label} publishes the PRIVATE half of tls_private_key.${BASH_REMATCH[1]} under the name '${_sec_name}', which is outside the three-authority map. Whatever consumer reads that name holds that authority, and no distinctness predicate over the three known names can see it."
+          return 1 ;;
+      esac
+    fi
+    case "$_sec_name" in
+      GIT_TRANSPORT_SSH_PRIVATE_KEY|GIT_PROVISION_SSH_PRIVATE_KEY|GIT_REMOVE_SSH_PRIVATE_KEY) ;;
+      *) continue ;;
+    esac
+    # ONLY THE prd BINDING IS THE MAP. A dev/staging mirror of the same name is legitimate,
+    # so it is SKIPPED rather than refused -- refusing it would be over-aggression, and it
+    # would also mask the real defect by short-circuiting before the prd binding is judged.
+    # A secret retargeted AWAY from prd needs no special case: its name then has no prd
+    # binding at all and the walk breaks at link 5 on its own.
+    [[ "$_sec_cfg" == "prd" ]] || continue
+    _secret_seen["$_sec_name"]=$(( ${_secret_seen[$_sec_name]:-0} + 1 ))
+    if [[ "${_secret_seen[$_sec_name]}" -gt 1 ]]; then
+      echo "git_data_authorization_map_gate: ABORT — ${_sec_name} is published by more than one doppler_secret in config prd. Which value Doppler ends up holding is apply-order dependent, so this gate cannot say which key the application would authenticate with. Fail-closed."
+      return 2
+    fi
+    # SAME AMBIGUITY RULE AS LINK 4. It was applied there and not here, and `try(remove,
+    # transport)` renders the FALLBACK on any error while reading as address-distinct and
+    # bijective to every other predicate. A rule stated once must be applied to every site
+    # whose precondition it names.
+    local _nsref
+    _nsref="$(grep -o 'tls_private_key\.' <<< "$_sec_val" | wc -l | tr -d ' ')"
+    if [[ "${_nsref:-0}" -gt 1 ]]; then
+      echo "git_data_authorization_map_gate: ABORT — doppler_secret.${_sec_label} references ${_nsref} tls_private_key resources in one expression: ${_sec_val}. Which private half is published depends on a value this static gate cannot evaluate. Fail-closed."
+      return 2
+    fi
+    _secret_rhs["$_sec_name"]="$_sec_val"
+    if [[ "$_sec_val" =~ tls_private_key\.([A-Za-z0-9_]+)\.([A-Za-z0-9_]+) ]]; then
+      _secret_terminal["$_sec_name"]="tls_private_key.${BASH_REMATCH[1]}"
+      _secret_attr["$_sec_name"]="${BASH_REMATCH[2]}"
+    fi
+  done < <(awk '
+    /^resource[[:space:]]+"doppler_secret"[[:space:]]+"[A-Za-z0-9_]+"[[:space:]]*\{/ {
+      inres=1; depth=0; nm=""; val=""; cfg=""; lbl=$0
+      sub(/^[^"]*"[^"]*"[[:space:]]+"/, "", lbl); sub(/".*$/, "", lbl)
+    }
+    inres {
+      n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
+      if ($0 ~ /^[[:space:]]*name[[:space:]]*=[[:space:]]*"/)   { nm=$0;  sub(/^[^"]*"/,"",nm);  sub(/".*$/,"",nm) }
+      if ($0 ~ /^[[:space:]]*config[[:space:]]*=[[:space:]]*"/) { cfg=$0; sub(/^[^"]*"/,"",cfg); sub(/".*$/,"",cfg) }
+      if ($0 ~ /^[[:space:]]*value[[:space:]]*=/)               { val=$0; sub(/^[[:space:]]*value[[:space:]]*=[[:space:]]*/,"",val); sub(/[[:space:]]*$/,"",val) }
+      if (depth<=0) { if (nm != "" && val != "") print lbl "|" nm "|" cfg "|" val; inres=0 }
+    }
+  ' <<< "$_root_src")
+
+  # The resource blocks named by the walk must actually EXIST in the root (M11). Three
+  # dangling aliases satisfy every reference-distinctness predicate while resolving to
+  # nothing Terraform will create.
+  declare -A _resource_exists=()
+  while IFS= read -r _line; do
+    [[ "$_line" =~ ^resource[[:space:]]+\"tls_private_key\"[[:space:]]+\"([A-Za-z0-9_]+)\" ]] || continue
+    _resource_exists["tls_private_key.${BASH_REMATCH[1]}"]=1
+  done <<< "$_root_src"
+
+  # ── The resolution walk ─────────────────────────────────────────────────────────────
+  declare -A _slot_terminal=()     # authority -> tls_private_key.<name> reached from link 1
+  declare -A _seen_terminal=()
+  local _tvar2 _modvar _lname2 _term _attr
+
+  for _entry in "${_authorities[@]}"; do
+    IFS='|' read -r _auth _script _dopname <<< "$_entry"
+
+    _tvar2="${_slot_var[$_script]}"
+    _modvar="${_tvar_modvar[$_tvar2]:-}"
+    if [[ -z "$_modvar" ]]; then
+      echo "git_data_authorization_map_gate: ABORT — the walk broke at link 2 for the ${_auth} authority: the template variable \${${_tvar2}} has no 'X = var.Y' binding in ${module_tf}. The gate resolves rather than asserting per-link precisely so an unanticipated hop breaks the walk instead of slipping past. Fail-closed."
+      return 2
+    fi
+    _lname2="${_modvar_local[$_modvar]:-}"
+    if [[ -z "$_lname2" ]]; then
+      echo "git_data_authorization_map_gate: ABORT — the walk broke at link 3 for the ${_auth} authority: module \"${_mod_label}\" passes no 'X = local.Y' for module variable ${_modvar}. Fail-closed."
+      return 2
+    fi
+    _term="${_local_terminal[$_lname2]:-}"
+    if [[ -z "$_term" ]]; then
+      _rhs="${_local_rhs[$_lname2]:-<no local of that name in the root>}"
+      # PREDICATE 2 — every terminal must be a tls_private_key.<name> address. A var., a
+      # data. source, a file() or a hardcoded "ssh-ed25519 …" literal is address-free and
+      # would otherwise fall THROUGH the extractor rather than be rejected by it.
+      if [[ "$_rhs" == *var.* || "$_rhs" == *data.* || "$_rhs" == *file\(* || "$_rhs" == *ssh-* ]]; then
+        echo "git_data_authorization_map_gate: HOLD — the ${_auth} authority resolves to a NON-RESOURCE terminal: local.${_lname2} = ${_rhs}. Every slot must terminate at a tls_private_key.<name> this root creates. A variable carrying a default, a data source, a file() or an inline literal can hold any key at all — including the same key as another slot — and no address-distinctness predicate can see it."
+        return 1
+      fi
+      echo "git_data_authorization_map_gate: ABORT — the walk broke at link 4 for the ${_auth} authority: local.${_lname2} = ${_rhs} yields no tls_private_key.<name>.<attr>. Resolving 2 of 3 slots is a broken instrument, not a two-key authorization map. Fail-closed."
+      return 2
+    fi
+    _attr="${_local_attr[$_lname2]}"
+
+    # PREDICATE 5 (public half) — a pubkey local reading .private_key_openssh is
+    # address-distinct, terminal-valid and bijective, and it bakes a PRIVATE key into
+    # user_data, which is gzipped into Hetzner instance metadata.
+    if [[ "$_attr" != "public_key_openssh" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — the ${_auth} slot reads tls_private_key.*.${_attr}; the authorized_keys file takes public_key_openssh. Reading a private attribute here bakes the private half into user_data, which Hetzner stores as instance metadata."
+      return 1
+    fi
+    # PREDICATE 3 — the named resource must exist (M11).
+    if [[ -z "${_resource_exists[$_term]:-}" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — the ${_auth} authority resolves to ${_term}, but no such resource block exists in ${root}. Three dangling aliases are pairwise distinct and create nothing."
+      return 1
+    fi
+    _slot_terminal["$_auth"]="$_term"
+    _seen_terminal["$_term"]=1
+  done
+
+  # PREDICATE 1 — slot count == distinct terminal count == the design's count. De-duplication
+  # keys on the extracted ADDRESS, never the raw RHS string: M9 (an alias or extra whitespace
+  # making two RHS strings differ) and M24 (the same resource read through two different
+  # attributes) both produce byte-different right-hand sides for one key.
+  if [[ "${#_seen_terminal[@]}" -ne "$_n_authorities" ]]; then
+    local _map=""
+    for _entry in "${_authorities[@]}"; do
+      IFS='|' read -r _auth _script _dopname <<< "$_entry"
+      _map+="${_auth} -> ${_slot_terminal[$_auth]}; "
+    done
+    echo "git_data_authorization_map_gate: HOLD — the ${_n_authorities} forced-command slots resolve to only ${#_seen_terminal[@]} distinct key(s): ${_map}A collapse here hands one SSH identity more than one authority. If the transport key gains git-data-remove.sh, sshd matches by key and takes the FIRST match, so it never surfaces as a failure — only as the identity the web app uses for ordinary push and fetch being able to erase a user's repositories."
+    return 1
+  fi
+
+  # PREDICATE 4 — THE AUTHORITY MAP IS AN ORDERED COMPOSITION, NOT A BIJECTION.
+  #
+  # This is the predicate that earns the whole five-link walk. A permutation — transport and
+  # provision exchanging terminals, or a 3-cycle through the three doppler_secret values — is
+  # perfectly bijective, three-distinct, all-resources-present, and passes every cardinality
+  # predicate above while handing each authority the wrong key. The assertion is therefore
+  # per-authority and joined on the extracted address, so it stays independent of how the
+  # resource is spelled.
+  for _entry in "${_authorities[@]}"; do
+    IFS='|' read -r _auth _script _dopname <<< "$_entry"
+    _term="${_secret_terminal[$_dopname]:-}"
+    if [[ -z "$_term" ]]; then
+      _rhs="${_secret_rhs[$_dopname]:-<no doppler_secret publishes that name>}"
+      echo "git_data_authorization_map_gate: ABORT — the walk broke at link 5 for the ${_auth} authority: the Doppler secret ${_dopname} resolves to '${_rhs}', which yields no tls_private_key.<name>.<attr>. This is the half the application actually holds; an unresolvable terminal here means the gate cannot say which key the app would authenticate with. Fail-closed."
+      return 2
+    fi
+    _attr="${_secret_attr[$_dopname]}"
+    # PREDICATE 5 (private half) — a doppler_secret publishing .public_key_openssh hands the
+    # app a public key as its authentication material. Green under every address-only predicate.
+    if [[ "$_attr" != "private_key_openssh" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — ${_dopname} publishes tls_private_key.*.${_attr}; the application authenticates with private_key_openssh. Publishing a public key as authentication material is address-distinct and bijective, and the app cannot authenticate with it."
+      return 1
+    fi
+    if [[ -z "${_resource_exists[$_term]:-}" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — ${_dopname} resolves to ${_term}, but no such resource block exists in ${root}."
+      return 1
+    fi
+    if [[ "$_term" != "${_slot_terminal[$_auth]}" ]]; then
+      echo "git_data_authorization_map_gate: HOLD — THE AUTHORIZATION MAP IS PERMUTED at the ${_auth} authority. The forced command /usr/local/bin/${_script} is held by ${_slot_terminal[$_auth]}, but the application reads its ${_auth} credential from ${_dopname}, which publishes the private half of ${_term}. Both halves are three-distinct and perfectly bijective, so every cardinality check passes — and each authority holds the wrong key. If ${_dopname} is the transport credential, every ordinary push authenticates into whichever forced command ${_term} holds."
+      return 1
+    fi
+  done
+
+  local _summary=""
+  for _entry in "${_authorities[@]}"; do
+    IFS='|' read -r _auth _script _dopname <<< "$_entry"
+    _summary+="${_script} + ${_dopname} -> ${_slot_terminal[$_auth]}; "
+  done
+  echo "git_data_authorization_map_gate: RELEASED — the ${_n_authorities} forced-command slots in $(basename "$cloud_init") resolve through the render module and ${root}'s locals to ${#_seen_terminal[@]} pairwise-distinct tls_private_key resources, and each authority's private half is published under the matching Doppler name: ${_summary}"
+  echo "git_data_authorization_map_gate: NOTE — this proves what the production root RENDERS, not what a live host HONOURS. It is a static assertion over Terraform source: no live host is probed, and none exists to probe. Runtime routes to the erase capability that a static walk structurally cannot see — an authorized_keys2 fall-through, hooksPath ownership, an unpinned AcceptEnv — are tracked separately and are NOT closed by this gate. On the git-data-host-replace path this gate is supplied by the branch it polices (that job has no environment: and therefore no deployment_branch_policy), so it holds against an accidental collapse merged and dispatched from main, and NOT against a deliberate actor with repository write access."
+  return 0
+}
+
+# _git_data_hcl_block <text> <awk-regex-for-the-opening-line> — emit the whole block,
+# brace-balanced, including its opening line. Emits nothing when the block is absent.
+#
+# WHY THIS EXISTS AS A SHARED PRIMITIVE. Every fail-open this gate has had was a scan that
+# was ROOT-wide where the property is BLOCK-scoped: a `locals` predicate satisfied by an
+# `output` block that merely mentions the same names, a `doppler_secret` map keyed on the
+# secret NAME across every file, a `user_data` pin satisfied by the canonical string parked
+# anywhere in the root. Root-scoping is right for FINDING declarations Terraform merges
+# across files; it is wrong for deciding what a particular resource is bound to. Both scans
+# are needed and they are not the same scan.
+_git_data_hcl_block() {
+  awk -v open_re="$2" '
+    $0 ~ open_re && depth == 0 { inb = 1 }
+    inb {
+      print
+      n = gsub(/\{/, "{"); m = gsub(/\}/, "}"); depth += n - m
+      if (depth <= 0) { inb = 0 }
+    }
+  ' <<< "$1"
+}
+
+# _git_data_hcl_nocomment <file> — strip `#` comments from HCL, QUOTE-AWARE.
+#
+# Returns 0 with the stripped text on stdout, or 9 if the file carries a `//` or `/*`
+# comment outside a string — which this stripper deliberately does NOT handle.
+#
+# WHY QUOTE-AWARENESS IS THE WHOLE POINT, AND WHY THE // ARM ABORTS RATHER THAN STRIPS.
+# Measured on the live root (2026-09-10): 81 occurrences of `//` across 19 of 48 .tf files,
+# and NONE of them is an HCL comment — every one is either inside a string (`"https://…"`,
+# `"tcp://10.0.1.30:5000"`) or inside a `#` comment quoting one. So a naive `//`-strip would
+# corrupt URLs into truncated strings, and a naive `//`-ABORT would make this gate BORN RED
+# on the live tree and stay red until someone deleted the arm — a gate that reds on every
+# pull request is a gate that gets removed, not a gate that protects anything.
+#
+# Handling `#` first, and only outside strings, is what makes both classes disappear: a `//`
+# inside a `#` comment is never reached, and a `//` inside a string is never a comment. What
+# remains — a genuine `//` comment outside any string — this function refuses to guess about,
+# because stripping it correctly requires the block-comment handling it does not implement,
+# and a stripper that silently mis-parses its input yields a well-formed verdict about a
+# configuration that is not the one Terraform loads.
+_git_data_hcl_nocomment() {
+  local f="${1:-}"
+  [[ -r "$f" ]] || return 9
+  awk '
+    # HEREDOC BODIES ARE DATA, NOT HCL — pass them through untouched. Terraform heredocs
+    # (<<EOT / <<-EOT) carry arbitrary text, so applying comment rules to them is wrong in
+    # both directions: a body line containing a URL trips the `//` arm and ABORTs the whole
+    # interlock (fail-closed but spurious), and a body line with an odd unescaped quote
+    # leaves this per-line parser mid-string so a real trailing `#` comment survives into
+    # the text every predicate then scans. No heredoc exists in the root today; this exists
+    # so the first one to land does not silently change what the gate sees.
+    heredoc != "" {
+      if ($0 ~ ("^[[:space:]]*" heredoc "[[:space:]]*$")) { heredoc = "" }
+      print ""
+      next
+    }
+    match($0, /<<[-~]?"?'"'"'?[A-Za-z_][A-Za-z0-9_]*/) {
+      tag = substr($0, RSTART, RLENGTH)
+      sub(/^<<[-~]?"?'"'"'?/, "", tag)
+      heredoc = tag
+    }
+    {
+      line = $0
+      out = ""
+      instr = 0
+      i = 1
+      n = length(line)
+      while (i <= n) {
+        c = substr(line, i, 1)
+        nxt = (i < n) ? substr(line, i + 1, 1) : ""
+        if (instr) {
+          if (c == "\\") { out = out c nxt; i += 2; continue }
+          if (c == "\"") { instr = 0 }
+          out = out c; i++; continue
+        }
+        if (c == "\"") { instr = 1; out = out c; i++; continue }
+        # `#` outside a string starts a comment: drop the rest of the line. Checked BEFORE
+        # the `//` arm, so a `//` quoted inside a `#` comment is never seen as one.
+        if (c == "#") { break }
+        if (c == "/" && nxt == "/") { exit 9 }
+        if (c == "/" && nxt == "*") { exit 9 }
+        out = out c; i++
+      }
+      print out
+    }
+  ' "$f"
 }

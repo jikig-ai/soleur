@@ -62,8 +62,8 @@ rg -n -i \
 Expected hits (these are the runbook and scrubber docs quoting the
 patterns — not dashboards):
 
-- `knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md`
-- `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+- `knowledge-base/engineering/operations/runbooks/plausible-pii-erasure.md`
+- `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
 - `knowledge-base/project/plans/2026-04-17-fix-analytics-track-path-pii-plan.md`
 - `knowledge-base/project/plans/2026-04-18-docs-path-pii-followups-plausible-erasure-and-filter-audit-plan.md`
 - `knowledge-base/project/specs/feat-fix-analytics-track-path-pii/`
@@ -125,7 +125,7 @@ operator notification that completes the #2508 close-out:
 > forwarding to Plausible since 2026-04-17. Any saved dashboard, BI
 > query, or shared-link filter pinned to a raw-PII path has silently
 > stopped matching events from that date forward. See
-> `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
+> `knowledge-base/engineering/operations/runbooks/plausible-dashboard-filter-audit.md`
 > for the audit + remediation procedure. Report a broken dashboard in
 > this thread by 2026-05-17 so we can decide whether to re-open #2508.
 

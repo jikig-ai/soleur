@@ -22,8 +22,8 @@
 #   3. Every RED is attributed to a named check, and the anchor must appear ON A [FAIL] LINE.
 #      Matching anywhere in combined output is weaker than it looks: a guard whose §2 emitted
 #      its findings as plain prints while an unrelated floor supplied the exit code would still
-#      satisfy a substring test. Both greps read a FILE (never a pipe into `grep -q` on the
-#      producer), so the SIGPIPE-fails-open trap in the header does not apply.
+#      satisfy a substring test. The anchor check is mutation_scorer_failed_on
+#      (lib/mutation-scorer.sh), which captures the [FAIL] lines once and matches in bash -- no pipe.
 #   4. TWO POSITIVE CONTROLS, in both directions: a benign edit stays GREEN, and a
 #      legitimately dual-delivered NEW artifact stays GREEN. Without the second, a guard that
 #      over-fires on any addition would score a clean run.
@@ -56,6 +56,11 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 REAL_INFRA="$ROOT/apps/web-platform/infra"
+# The scorer is located from THIS file, never from the cwd's checkout (`git rev-parse` would load
+# another checkout's copy when run from there).
+# shellcheck source=apps/web-platform/infra/lib/mutation-scorer.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/mutation-scorer.sh" \
+  || { echo "HARNESS ABORT: could not source mutation-scorer.sh" >&2; exit 2; }
 GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 [[ -f "$GUARD" ]] || { echo "FATAL: $GUARD not found" >&2; exit 2; }
 
@@ -73,10 +78,10 @@ GUARD="$REAL_INFRA/web-host-provisioner-parity.test.sh"
 # keep the battery correct under drift -- on any divergence the battery ABORTS. What the pair
 # buys is that adding an input is a deliberate two-file edit whose omission is loud, rather than
 # a silent widening of what the sandbox covers.
-EXPECTED_INPUTS=(server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh)
+EXPECTED_INPUTS=(server.tf cloud-init.yml web-probe-envwrite.sh soleur-host-bootstrap.sh webhook.service)
 
 mapfile -t DERIVED_INPUTS < <(
-  sed -n 's/^for f in \(.*\); do$/\1/p' "$GUARD" | head -1 | tr ' ' '\n' | sed '/^$/d'
+  sed -n 's/^for f in \(.*\); do$/\1/p' "$GUARD" | sed -n '1p' | tr ' ' '\n' | sed '/^$/d'
 )
 if [[ "${DERIVED_INPUTS[*]-}" != "${EXPECTED_INPUTS[*]}" ]]; then
   echo "FATAL: the guard's preflight input list has drifted." >&2
@@ -99,7 +104,21 @@ INPUTS=("${DERIVED_INPUTS[@]}")
 #
 # So the invariant is now stated positively and closed on all three: the guard opens files ONLY
 # through `def read(n)`, and EVERY call site passes a string literal.
-n_join=$(grep -cF 'os.path.join(INFRA' "$GUARD")
+# (#7226) The guard now runs TWO python programs. These read()-discipline invariants are about
+# the §0-§5 parity program, whose inputs are the five files above, so they are scoped to its
+# heredoc. Guard 2 is a separate program with its own universe (every tracked *.tf / *.tf.json
+# in the REPOSITORY, found by `git ls-files`); its read discipline is pinned separately below, and
+# the sandbox is a scratch git repository carrying every such file at its repo path, so its
+# checks run against the real file set.
+MAIN_PROG="$(mktemp -t provparity-main.XXXXXXXX)" || exit 2
+G2_PROG="$(mktemp -t provparity-g2.XXXXXXXX)" || exit 2
+sed -n "/<<'PYEOF'\$/,/^PYEOF\$/p" "$GUARD" > "$MAIN_PROG"
+sed -n "/<<'G2EOF'\$/,/^G2EOF\$/p" "$GUARD" > "$G2_PROG"
+if [[ ! -s "$MAIN_PROG" || ! -s "$G2_PROG" ]]; then
+  echo "FATAL: could not extract the guard's PYEOF and G2EOF programs -- the scoping below would be vacuous." >&2
+  exit 2
+fi
+n_join=$(grep -cF 'os.path.join(INFRA' "$MAIN_PROG")
 if [[ "$n_join" != "1" ]]; then
   echo "FATAL: expected exactly one 'os.path.join(INFRA' in the guard (the read() helper), found $n_join." >&2
   echo "  A second reader can take an input this battery never sandboxes. Route it through read()." >&2
@@ -107,7 +126,7 @@ if [[ "$n_join" != "1" ]]; then
 fi
 
 # No `open(` outside the read() helper. The helper's own line is the single permitted match.
-n_open=$(grep -c 'open(' "$GUARD")
+n_open=$(grep -c 'open(' "$MAIN_PROG")
 if [[ "$n_open" != "1" ]]; then
   echo "FATAL: expected exactly one 'open(' in the guard (inside def read), found $n_open." >&2
   echo "  A direct open() bypasses read() and can take an input this battery never sandboxes." >&2
@@ -117,8 +136,8 @@ fi
 # Every `read(` call site passes a STRING LITERAL. `grep -c 'read('` counts the `def read(n)`
 # line too, so the literal-site count must be exactly one fewer. A `read(SOME_VAR)` breaks this
 # (6 vs 4) while leaving the two assertions above satisfied -- that is the bypass review drove.
-n_read_call=$(grep -c 'read(' "$GUARD")
-n_read_lit=$(grep -c 'read("' "$GUARD")
+n_read_call=$(grep -c 'read(' "$MAIN_PROG")
+n_read_lit=$(grep -c 'read("' "$MAIN_PROG")
 if [[ "$((n_read_call - 1))" != "$n_read_lit" ]]; then
   echo "FATAL: the guard has $((n_read_call - 1)) read() call sites but only $n_read_lit pass a" >&2
   echo "  string literal. A non-literal filename is invisible to the sandbox-membership check" >&2
@@ -158,30 +177,75 @@ while IFS= read -r rf; do
     *" $rf "*) ;;
     *) echo "FATAL: the guard reads '$rf', which is not in the sandboxed input set." >&2; exit 2 ;;
   esac
-done < <(grep -oE 'read\("[^"]+"\)' "$GUARD" | sed -e 's/^read("//' -e 's/")$//' | sort -u)
+done < <(grep -oE 'read\("[^"]+"\)' "$MAIN_PROG" | sed -e 's/^read("//' -e 's/")$//' | sort -u)
 if [[ "$n_reads" -lt "${#INPUTS[@]}" ]]; then
   echo "FATAL: found only $n_reads read() call sites for ${#INPUTS[@]} declared inputs -- the" >&2
   echo "  read()-site extraction drifted, so this assertion is passing vacuously." >&2
   exit 2
 fi
 
+# Guard 2 reads files ONLY through one `git ls-files` enumeration and one read_text() on its
+# results. A second reader (an open(), a literal path, an rglob) could take a file the scratch
+# repository below does not carry, so each shape is pinned and nothing else may open a file.
+if [[ "$(grep -c '"ls-files"' "$G2_PROG")" != 1 || "$(grep -c 'read_text(' "$G2_PROG")" != 1 \
+      || "$(grep -c 'open(' "$G2_PROG")" != 0 || "$(grep -c 'glob(' "$G2_PROG")" != 0 ]]; then
+  echo "FATAL: Guard 2 must read files only via one git ls-files enumeration and one read_text()." >&2
+  exit 2
+fi
+# Every tracked (or new, unignored) .tf / .tf.json in the repo, as a path RELATIVE TO THE INFRA
+# DIR: web-platform infra files keep their short name (server.tf), the rest are reached through
+# ../../../ so the same SANDBOX/PRISTINE-relative copy and restore loops carry them.
+mapfile -t TF_FILES < <(git -C "$ROOT" ls-files --cached --others --exclude-standard -- '*.tf' '*.tf.json' \
+  | grep -v '/\.terraform/' | sed -e 's#^apps/web-platform/infra/##' -e t -e 's#^#../../../#' | LC_ALL=C sort)
+if (( ${#TF_FILES[@]} < 70 )); then
+  echo "FATAL: found only ${#TF_FILES[@]} .tf/.tf.json files to sandbox for Guard 2 (expected >= 70)." >&2
+  exit 2
+fi
+# server.tf is already an INPUT; the rest are Guard 2-only.
+SANDBOX_FILES=("${INPUTS[@]}")
+for f in "${TF_FILES[@]}"; do
+  [[ " ${INPUTS[*]} " == *" $f "* ]] || SANDBOX_FILES+=("$f")
+done
+
 pass=0
 fail=0
+# The INDEPENDENT case counter (ADR-193 #2). `ok`/`no` are the VERDICT helpers and must never
+# touch it: a counter that moves inside them moves WITH the verdict, so stubbing one drops the
+# row and its count together and the conservation identity below holds under the exact fault it
+# exists to catch. It is incremented once per assertion in the ASSERTION helpers (expect_red,
+# expect_green, expect_probe_red, expect_probe_green) and at the two inline call sites that
+# reach `ok`/`no` without one (the baseline and M33b). Never inside `$( )` -- a subshell
+# discards it.
+cases=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 
-SANDBOX="$(mktemp -d -t provparity.XXXXXXXX)" || exit 2
-PRISTINE="$(mktemp -d -t provparity-pristine.XXXXXXXX)" || exit 2
+# The sandbox is apps/web-platform/infra INSIDE a scratch git repository (TF_REPO), so Guard 2's
+# repo-wide `git ls-files` walk sees the sandboxed server.tf and every other Terraform root.
+TF_REPO="$(mktemp -d -t provparity.XXXXXXXX)" || exit 2
+PRISTINE_REPO="$(mktemp -d -t provparity-pristine.XXXXXXXX)" || exit 2
+SANDBOX="$TF_REPO/apps/web-platform/infra"
+PRISTINE="$PRISTINE_REPO/apps/web-platform/infra"
+mkdir -p "$SANDBOX" "$PRISTINE" || exit 2
+# `git_fixture_env` exports the ceiling (the parent of $TF_REPO, which also holds the sibling
+# PRISTINE_REPO), a synthesized identity and config hermeticity into THIS shell, so the scratch
+# repository's `git init` and the guard's `git ls-files` inside it cannot reach an enclosing repo.
+# shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$ROOT/plugins/soleur/test/lib/git-fixture-env.sh" \
+  || { echo "FATAL: could not source the fixture git environment" >&2; exit 2; }
+git_fixture_env "$TF_REPO" || { echo "FATAL: git_fixture_env refused the fixture root $TF_REPO" >&2; exit 2; }
+git -C "$TF_REPO" init -q || exit 2
 OUT="$(mktemp -t provparity-out.XXXXXXXX)" || exit 2
-trap 'rm -rf "$SANDBOX" "$PRISTINE" "$OUT"' EXIT INT TERM HUP
+trap 'rm -rf "$TF_REPO" "$PRISTINE_REPO" "$OUT" "$MAIN_PROG" "$G2_PROG"' EXIT INT TERM HUP
 
-for f in "${INPUTS[@]}"; do
+for f in "${SANDBOX_FILES[@]}"; do
+  mkdir -p "$(dirname "$SANDBOX/$f")" "$(dirname "$PRISTINE/$f")" || exit 2
   cp "$REAL_INFRA/$f" "$SANDBOX/$f" || exit 2
   cp "$REAL_INFRA/$f" "$PRISTINE/$f" || exit 2
 done
 
 # Runs the real guard against the sandbox; combined output lands in $OUT for attribution.
-run_guard() { SOLEUR_INFRA_DIR="$SANDBOX" bash "$GUARD" >"$OUT" 2>&1; }
+run_guard() { SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" bash "$GUARD" >"$OUT" 2>&1; }
 # restore() FAILS LOUDLY. An unchecked `cp` here is a silent-corruption vector, not a tidiness
 # nit: when it fails, the sandbox keeps the PREVIOUS case's mutation and every later case runs
 # against a fixture nobody chose. The observable symptom is a case reporting "guard still PASSED
@@ -190,7 +254,7 @@ run_guard() { SOLEUR_INFRA_DIR="$SANDBOX" bash "$GUARD" >"$OUT" 2>&1; }
 # three different failure sets across three consecutive runs of an unchanged tree.
 restore() {
   local f
-  for f in "${INPUTS[@]}"; do
+  for f in "${SANDBOX_FILES[@]}"; do
     cp "$PRISTINE/$f" "$SANDBOX/$f" || {
       echo "FATAL: could not restore $f into the sandbox (disk pressure? $TMPDIR)." >&2
       echo "  Every result after this point would be measured against the previous case's" >&2
@@ -216,6 +280,7 @@ mutations_run=0
 # expect_red <label> <file> <expected-anchor> <mutator>
 expect_red() {
   local label="$1" file="$2" anchor="$3" script="$4"
+  cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then
     no "$label: mutator errored (anchor drifted?) -- the mutation never landed"; restore; return
@@ -226,7 +291,7 @@ expect_red() {
   mutations_run=$((mutations_run + 1))
   if run_guard; then
     no "$label: guard still PASSED with the invariant broken -- it cannot detect this"
-  elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor'. Either it failed for an unrelated reason
@@ -240,6 +305,7 @@ expect_red() {
 # expect_green <label> <file> <mutator> -- direction control
 expect_green() {
   local label="$1" file="$2" script="$3"
+  cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then no "$label: mutator errored"; restore; return; fi
   if cmp -s "$SANDBOX/$file" "$PRISTINE/$file"; then
@@ -252,8 +318,10 @@ expect_green() {
 
 # ── Baseline ─────────────────────────────────────────────────────────────────────────
 restore
+cases=$((cases + 1))
 if run_guard; then
   ok "baseline: guard is GREEN against the unmutated tree"
+  G2_BASE="$(sed -n 's/^\[ok\] G2: swept \([0-9]*\) SSH connection blocks.*/\1/p' "$OUT")"
 else
   no "baseline: guard is RED against the UNMUTATED tree; every RED below is meaningless"
   echo "=== provisioner-parity mutation: $pass passed, $fail failed ===" >&2
@@ -262,7 +330,7 @@ fi
 
 # ── §1: resource enumeration and host-pinning ────────────────────────────────────────
 expect_red "M1 (§1 floor: a provisioner deleted)" server.tf \
-  "1: swept only 14 SSH-connected" '
+  "1: swept only 18 SSH-connected" '
 import re
 m = re.search(r"resource \"terraform_data\" \"orphan_reaper_install\" \{", s)
 assert m, "anchor missing"
@@ -271,20 +339,96 @@ s = s[:m.start()] + s[end+1:]
 '
 
 expect_red "M2 (§1: fanned out over var.web_hosts -- the #7000 change)" server.tf \
-  "for_each'd=['disk_monitor_install']" '
+  "fanned(for_each-or-count)=['disk_monitor_install']" '
 old = "resource \"terraform_data\" \"disk_monitor_install\" {"
 assert old in s
 s = s.replace(old, old + "\n  for_each = var.web_hosts", 1)
+'
+
+# The OTHER fan-out/kill-switch meta-arg: `count = 0` silently disables the sibling with
+# every row green (review enumeration 3i). Swept together with for_each.
+expect_red "M2b (§1: count = 0 silently disables the web-2 sibling)" server.tf \
+  "fanned(for_each-or-count)=['deploy_pipeline_fix_web2']" '
+old = "resource \"terraform_data\" \"deploy_pipeline_fix_web2\" {"
+assert old in s
+s = s.replace(old, old + "\n  count = 0", 1)
 '
 
 # §1 has TWO clauses -- `fanned` (M2) and `unpinned`. Nothing covered `unpinned`, so it was
 # deletable. This is the shape it exists for: the host is repointed away from web-1 WITHOUT a
 # for_each, so the fan-out check does not fire and only the pin check can catch it.
 expect_red "M3 (§1: host repointed off web-1 without for_each)" server.tf \
-  "not-web-1-pinned=" '
+  "not-web-1-or-web-2-pinned=" '
 old = "    host        = hcloud_server.web[\"web-1\"].ipv4_address\n    user        = \"root\"\n    private_key = var.ci_ssh_private_key         # null in operator-local context"
 assert old in s
 s = s.replace(old, "    host        = local.web1_ip\n    user        = \"root\"\n    private_key = var.ci_ssh_private_key         # null in operator-local context", 1)
+'
+
+# ── #9151: the web-2 sibling class (§1's second host clause + the credential boundary) ────
+# Repointing the sibling's dial to web-1 removes it from W2_DIALERS, so the presence check
+# (deploy_pipeline_fix_web2 present=) fires -- the class rule, not the pin check.
+expect_red "M4a (§1: web-2 sibling repointed to web-1)" server.tf \
+  "deploy_pipeline_fix_web2 present=False" '
+old = "    host        = hcloud_server.web[\"web-2\"].ipv4_address"
+assert old in s
+s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address", 1)
+'
+
+# Credential material in the sibling body: a copy-pasted bootstrap carries
+# webhook_doppler_token_env, and only the credential-exclusion check sees it.
+expect_red "M4b (§1: credential material injected into the web-2 sibling)" server.tf \
+  "credential-material references" '
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+assert old in s
+s = s.replace(old, "    local.webhook_doppler_token_env,\n" + old, 1)
+'
+
+# The RAW variable spelling (review enumeration 1g): the four-token list named
+# `webhook_doppler_token_env` but not `var.doppler_token` itself — the widened
+# `doppler_token|DOPPLER_TOKEN` set must catch it.
+expect_red "M4c (§1: raw var.doppler_token injected into the web-2 sibling)" server.tf \
+  "credential-material references" '
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+assert old in s
+s = s.replace(old, "    var.doppler_token,\n" + old, 1)
+'
+
+# The pre-encoded twin spelling (review enumeration 1h): `local.soleur_doppler_token_env_b64`
+# is base64'd credential material spelled with underscores, invisible to a
+# `webhook_doppler_token_env`-only grep.
+expect_red "M4d (§1: soleur_doppler_token_env_b64 injected into the web-2 sibling)" server.tf \
+  "credential-material references" '
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+assert old in s
+s = s.replace(old, "    local.soleur_doppler_token_env_b64,\n" + old, 1)
+'
+
+# The hooks.json channel (review enumeration 1j): the sibling delivers local.hooks_json
+# verbatim, so a credential reference added to its templatefile arg map rides a
+# SANCTIONED delivery — the block-level grep cannot see it.
+expect_red "M4e (§1: credential arg injected into hooks_json templatefile)" server.tf \
+  "templatefile args gained a credential reference" '
+old = "hooks_json = templatefile(\"${path.module}/hooks.json.tmpl\", {\n    webhook_deploy_secret = var.webhook_deploy_secret\n  })"
+assert old in s
+s = s.replace(old, "hooks_json = templatefile(\"${path.module}/hooks.json.tmpl\", {\n    webhook_deploy_secret = var.webhook_deploy_secret\n    doppler_token = var.doppler_token\n  })", 1)
+'
+
+# `script`/`scripts` remote-exec args (review enumeration 2a): an uploaded script writes
+# arbitrary paths the inline sweep cannot see — reported, never swept.
+expect_red "M4f (§2: a remote-exec scripts= arg is unprovable, not skippable)" server.tf \
+  "uses remote-exec" '
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+assert old in s
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    scripts = [\"${path.module}/web-probe-envwrite.sh\"]\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
+'
+
+# A same-line `inline = ["..."]` (review enumeration 2b): the old `\n\s*\]` terminator
+# missed single-line arrays entirely.
+expect_red "M4g (§2: single-line inline array is still swept)" server.tf \
+  "/etc/soleur/singleline-inline.conf is written by" '
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+assert old in s
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
 # Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
@@ -673,8 +817,12 @@ s = s.replace(a, a + """
 # own exact baseline too, so removing a bootstrap-installed destination moves the intersection.
 # Measured: 2 [FAIL] lines. That is the deliberate cost of margin-zero floors on overlapping
 # sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
+# The expected count tracks FLOOR_DESTS - 1 and must be re-derived whenever the baseline
+# moves: 56 while the baseline was 57, 58 since #7539 took it to 59. A stale literal here does
+# not fail loudly -- the guard still goes red, just via a different message -- so the battery
+# reports "red but NOT via <expected>" and the mutation stops being attributed to this floor.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 51 destinations" '
+  "2: swept only 74 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"
@@ -690,7 +838,7 @@ s = s.replace(blk, "", 1)
 # quietly covers 3 units instead of 4, and §2 still extracts the destination from the surviving
 # `>` redirect -- so ONLY the floor can catch it.
 expect_red "M31 (§4 floor: heredoc opener reformatted out of the identity check)" server.tf \
-  "4: byte-identity checked on only 3 bodies" '
+  "4: byte-identity checked on only 4 bodies" '
 q = chr(39)
 old = "cat > /etc/systemd/system/disk-monitor.timer << " + q + "TIMEREOF" + q
 assert old in s
@@ -702,7 +850,7 @@ s = s.replace(old, "cat >/etc/systemd/system/disk-monitor.timer <<" + q + "TIMER
 # silently shrinks the parsed path set. The four entries chosen are the only write_files paths
 # that are NOT also SSH destinations, so the floor fires alone.
 expect_red "M32 (§0 floor: write_files key order hides paths from the extraction)" cloud-init.yml \
-  "0: cloud-init write_files parsed to only 9 paths" '
+  "0: cloud-init write_files parsed to only 10 paths" '
 for tgt in ["/etc/ssh/sshd_config.d/01-hardening.conf",
             "/etc/sudoers.d/deploy-chown",
             "/etc/systemd/system/webhook.service",
@@ -732,6 +880,7 @@ s = s.replace(old, "host_script_files_v2 = [", 1)
 # sentence the guard wrote for exactly this case. So the discriminating assertion is the ABSENCE
 # of a traceback alongside the presence of the summary.
 restore
+cases=$((cases + 1))
 if apply_mutation server.tf '
 old = "host_script_files = ["
 assert old in s
@@ -771,7 +920,7 @@ s = s.replace(old, ins + old, 1)
 # -- the exact "clean sweep of nothing" the new floor exists to name. §2 co-fires with fifteen
 # uncovered destinations, which is inherent: §3 quantifies over an intersection §2 also owns.
 expect_red "M35 (§3 floor: the seed-baked check quietly stops checking anything)" soleur-host-bootstrap.sh \
-  "3: the seed-baked check ran over only 21" '
+  "3: the seed-baked check ran over only 27" '
 old = "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/system/$f\""
 assert old in s
 s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/units.d/$f\"", 1)
@@ -790,6 +939,7 @@ probe_reds=0
 # THEN check what the probe did or did not do to it (P4).
 expect_probe_red() {
   local label="$1" anchor="$2" probe="$3" mfile="${4:-}" mscript="${5:-}"
+  cases=$((cases + 1))
   restore
   if [[ -n "$mfile" ]]; then
     if ! apply_mutation "$mfile" "$mscript"; then
@@ -801,9 +951,9 @@ expect_probe_red() {
   fi
   probes_run=$((probes_run + 1))
   probe_reds=$((probe_reds + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
+  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     no "$label: guard still PASSED with the hygiene rule broken -- the check asserts nothing"
-  elif grep -F "[FAIL]" "$OUT" | grep -qF -- "$anchor"; then
+  elif mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
     ok "$label: guard went RED on '$anchor'"
   else
     no "$label: guard went red but NOT via '$anchor' -- unrelated reason. Output: $(<"$OUT")"
@@ -813,9 +963,10 @@ expect_probe_red() {
 
 expect_probe_green() {
   local label="$1" probe="$2"
+  cases=$((cases + 1))
   restore
   probes_run=$((probes_run + 1))
-  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
+  if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_TF_REPO="$TF_REPO" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
     ok "$label: guard stayed GREEN on a well-formed entry"
   else
     no "$label: guard went RED on a WELL-FORMED probe entry, so the two REDs above prove only
@@ -899,12 +1050,353 @@ s = s.replace(anchor, anchor + """
   }""", 1)
 '
 
-# ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
-FLOOR=38
-if [[ "$mutations_run" -ge "$FLOOR" ]]; then
-  ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
+# ── §4b: webhook.service REPO-UNIT vs CLOUD-INIT MIRROR drift (#7220 review) ──────────
+#
+# webhook.service is dual-written — a `provisioner "file"` from the committed repo file to web-1,
+# an inline cloud-init write_files body on a fresh host — and nothing compared the two, though
+# BOTH carried a "MUST stay in lockstep" comment. §4 could not reach it because §4 only pairs
+# HEREDOC-written units against write_files.
+#
+# The comparison is directive-wise: measured, the two bodies are NOT byte-identical (the mirror
+# carries an abbreviated comment because cloud-init.yml is base64gzip'd against a Hetzner
+# user_data byte cap) while all 20 directives match. So a mutation must move a DIRECTIVE; a
+# comment-only edit to the mirror is legitimate and is the green control below.
+expect_red "I1 (a directive added to the repo unit only)" webhook.service '/etc/systemd/system/webhook.service DRIFTED' '
+old = "StartLimitIntervalSec=0"
+assert old in s
+s = s.replace(old, old + "\nStartLimitBurst=99", 1)
+'
+
+expect_red "I2 (a directive DROPPED from the cloud-init mirror only)" cloud-init.yml '/etc/systemd/system/webhook.service DRIFTED' '
+old = "      After=network.target\n"
+assert old in s
+s = s.replace(old, "", 1)
+'
+
+# The green control that keeps the directive-wise choice honest: a comment-only divergence is
+# EXPECTED between these two copies and must not fire. A byte-identity implementation would fail
+# here, and the pressure to clear it would push comments back into the byte-capped file.
+expect_green "I3 (a comment-only edit to the byte-capped mirror)" cloud-init.yml '
+old = "      Description=Webhook deploy listener"
+assert old in s
+s = s.replace(old, "      # mirror-only note added by the mutation battery\n" + old, 1)
+'
+
+# ── PRIVILEGE-WRAPPER AND sudo-LIST-MODE CLASSIFICATION (#7220 review) ───────────────
+#
+# The `sudo -l` exemption and the wrapper handling had NO fixture in EITHER direction, and both
+# were wrong. Measured against the pre-fix guard, with the phantom path grepped out of the
+# output so the branch's pre-existing failure could not be mistaken for a detection:
+#
+#   * the exemption searched the WHOLE segment for `-\w*l`, so four real root deliveries were
+#     silently exempted — the old guard did not name any of them;
+#   * and the segment was classified on the WRAPPER, so
+#     `runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload` (a probe THIS PR adds) was
+#     credited as DELIVERING /usr/bin/systemctl, demanding a fresh-boot writer for a binary the
+#     base image ships. That is the branch's real 12-passed/1-failed state against main's 13/0.
+#
+# Both directions are fixtured, because a guard that only over-fires and a guard that only
+# under-fires are equally broken and the two fixes pull against each other.
+
+# --- direction 1: QUERIES and INVOCATIONS must stay GREEN ---
+# Under the pre-fix guard each of these credited a system binary as a delivered artifact.
+expect_green "W1 (a wrapper chain around a READ verb is not a delivery)" server.tf '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"runuser -u deploy -- sudo -n /usr/bin/systemctl is-active vector.service >/dev/null || true\"," + s[j:]
+'
+
+expect_green "W2 (sudo list mode via an absolute /usr/bin/sudo)" server.tf '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"/usr/bin/sudo -l -U deploy /usr/bin/systemctl daemon-reload >/dev/null\"," + s[j:]
+'
+
+expect_green "W3 (sudo list mode as a BUNDLED option run, -ln)" server.tf '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo -ln -U deploy /usr/bin/systemctl daemon-reload >/dev/null\"," + s[j:]
+'
+
+# --- direction 2: REAL DELIVERIES wearing an `l` option must go RED ---
+# Each phantom path has no fresh-boot writer, so §2 must name it. Verified that the pre-fix
+# guard named NONE of them.
+expect_red "W4 (sudo cp -al is a delivery, not a list)" server.tf '/usr/local/bin/phantom-cp.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo cp -al /tmp/staged /usr/local/bin/phantom-cp.sh\"," + s[j:]
+'
+
+expect_red "W5 (sudo rsync -al is a delivery)" server.tf '/usr/local/bin/phantom-rsync.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo rsync -al /tmp/staged /usr/local/bin/phantom-rsync.sh\"," + s[j:]
+'
+
+# `bash`/`sh` stay in READONLY_VERBS so `bash /usr/local/bin/x.sh` (an INVOCATION) is not a
+# delivery; the `-c` payload is unwrapped instead. Dropping bash/sh from READONLY_VERBS outright
+# also passes the real corpus, and is rejected precisely because this distinction would be lost.
+expect_red "W6 (sudo bash -cl unwraps its -c payload)" server.tf '/usr/local/bin/phantom-shc.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo bash -cl \\\"install -m0755 /tmp/staged /usr/local/bin/phantom-shc.sh\\\"\"," + s[j:]
+'
+
+expect_red "W7 (sudo useradd -l is a delivery, not a list)" server.tf '/usr/local/bin/phantom-useradd.sh' '
+anchor = "    inline = ["
+i = s.index("resource \"terraform_data\" \"disk_monitor_install\" {")
+j = s.index(anchor, i) + len(anchor)
+s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcuser\"," + s[j:]
+'
+
+# ── GUARD 2 (#7226, ADR-237): every Terraform connection block pins host_key ─────────────
+# Rows 1-6 of the plan's Guard 2 matrix, each attributed to its own [FAIL] text. Row 3's floor is
+# reached by renaming server.tf's blocks away (ci-ssh-key.tf's block and workspaces-luks.tf's three
+# remain, so the walk reports 4 -- #8632 added the second, #8706 the third, #9123 the fourth
+# (workspaces_boot_unlock_install)). Row 4 edits a DIFFERENT .tf, which only Guard 2's directory walk can see.
+expect_red "G2-1 (host_key deleted from the FIRST block)" server.tf "(host_key x0)" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "", 1)
+'
+
+expect_red "G2-2 (host_key deleted from the LAST block only)" server.tf "(host_key x0)" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+i = s.rindex(old)
+s = s[:i] + s[i + len(old):]
+'
+
+expect_red "G2-3 (floor: the walk stops finding server.tf blocks)" server.tf \
+  "G2: swept only 4 SSH connection blocks" '
+assert s.count("  connection {\n") >= 19
+s = s.replace("  connection {\n", "  connexion {\n")
+'
+
+# A web-2 DIALER born outside server.tf (review enumeration 1k/2h): G2's host_key rules
+# would keep it pinned, but §1's sibling-class credential/destination checks are
+# server.tf-scoped — the residence rule fires instead.
+expect_red "G2-18 (a web-2-dialing connection block in a DIFFERENT .tf)" tunnel.tf \
+  "outside server.tf" '
+s += """
+resource "terraform_data" "g2_phantom_web2" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-2"].ipv4_address
+    user = "root"
+    host_key = local.web_2_ssh_host_key
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+expect_red "G2-4 (a new connection block without host_key in a DIFFERENT .tf)" tunnel.tf \
+  "tunnel.tf:" '
+s += """
+resource "terraform_data" "g2_phantom" {
+  connection {
+    type = "ssh"
+    host = hcloud_server.web["web-1"].ipv4_address
+    user = "root"
+  }
+  provisioner "remote-exec" {
+    inline = ["set -e", "true"]
+  }
+}
+"""
+'
+
+expect_red "G2-5 (host_key MOVED between blocks: totals equal, per-block check fires)" server.tf \
+  "(host_key x2)" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert s.count(old) >= 2
+i = s.index(old)
+s = s[:i] + s[i + len(old):]
+j = s.index(old)
+s = s[:j] + old + s[j:]
+'
+
+expect_red "G2-6 (a web-1 block pins host_key to something other than the local)" server.tf \
+  "G2: web-1 connection block pins host_key to something other than" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = var.ci_ssh_private_key\n", 1)
+'
+
+expect_red "G2-7 (the local loses one(): a second key line would slip through)" server.tf \
+  "local.web_1_ssh_host_key (apps/web-platform/infra/server.tf:" '
+old = "    one([for l in split("
+assert old in s
+s = s.replace(old, "    element([for l in split(", 1).replace("startswith(trimspace(l), \"#\")]),\n  )", "startswith(trimspace(l), \"#\")], 0),\n  )", 1)
+'
+
+# Must-PASS controls: attribute order and spacing are free, and comments are not blocks.
+expect_green "G2-C1 (host_key first, unaligned spacing, still one per block)" server.tf '
+old = "  connection {\n    type        = \"ssh\"\n"
+assert old in s
+s = s.replace("    host_key    = local.web_1_ssh_host_key\n", "", 1)
+s = s.replace(old, "  connection {\n    host_key=local.web_1_ssh_host_key\n    type        = \"ssh\"\n", 1)
+'
+
+# Allow-set rows: null, "" and an ad-hoc expression are each outside it.
+expect_red "G2-8 (host_key = null)" server.tf "G2: host_key outside the allow-set" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = null\n", 1)
+'
+expect_red "G2-9 (host_key = \"\")" server.tf "(host_key = \"\")" '
+old = "    host_key    = local.web_1_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = \"\"\n", 1)
+'
+# Repo-wide walk: a Terraform root OUTSIDE apps/web-platform/infra. Only `git ls-files` over the
+# whole repository reaches it; the old INFRA.rglob walk did not.
+expect_red "G2-10 (a non-web-1 block in infra/github with an ad-hoc host_key)" ../../../infra/github/main.tf \
+  "infra/github/main.tf:" '
+s += """
+resource "terraform_data" "g2_elsewhere" {
+  connection {
+    type     = "ssh"
+    host     = "192.0.2.10"
+    host_key = var.some_other_key
+  }
+  provisioner "remote-exec" {
+    inline = ["true"]
+  }
+}
+"""
+'
+expect_red "G2-11 (a connection block with NO host_key in infra/github)" ../../../infra/github/main.tf \
+  "(host_key x0)" '
+s += "\nresource \"terraform_data\" \"g2_nokey\" {\n  connection {\n    host = \"192.0.2.11\"\n  }\n}\n"
+'
+# Whitespace normalisation: `hcloud_server.web[ "web-1" ]` still names web-1. Anchored on the
+# web-1-specific message, which only fires when the reference is recognised.
+expect_red "G2-12 (web-1 reference with inner whitespace, host_key not the web-1 local)" server.tf \
+  "G2: web-1 connection block pins host_key to something other than" '
+old = "    host        = hcloud_server.web[\"web-1\"].ipv4_address\n"
+assert old in s
+i = s.index(old)
+s = s[:i] + "    host        = hcloud_server.web[ \"web-1\" ].ipv4_address\n" + s[i + len(old):]
+key = "    host_key    = local.web_1_ssh_host_key\n"
+j = s.index(key, i)
+s = s[:j] + "    host_key    = var.ci_ssh_private_key\n" + s[j + len(key):]
+'
+
+# ── #9151 web-2 rows: the sibling's own pin rules, mutation-proven like the web-1 set ────
+expect_red "G2-15 (web-2 sibling connection without host_key)" server.tf "(host_key x0)" '
+old = "    host_key    = local.web_2_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "", 1)
+'
+
+expect_red "G2-16 (web-2 block pins the web-1 local -- the cross-host swap)" server.tf \
+  "G2: web-2 connection block pins host_key to something other than" '
+old = "    host_key    = local.web_2_ssh_host_key\n"
+assert old in s
+s = s.replace(old, "    host_key    = local.web_1_ssh_host_key\n", 1)
+'
+
+expect_red "G2-17 (web_2 local loses one(): a second key line would slip through)" server.tf \
+  "local.web_2_ssh_host_key (apps/web-platform/infra/server.tf:" '
+i = s.index("web_2_ssh_host_key = regex(")
+j = s.index("one([for l in split(", i)
+s = s[:j] + "element([for l in split(" + s[j + len("one([for l in split("):]
+k = s.index("startswith(trimspace(l), \"#\")]),\n  )", j)
+s = s[:k] + "startswith(trimspace(l), \"#\")], 0),\n  )" + s[k + len("startswith(trimspace(l), \"#\")]),\n  )"):]
+'
+
+expect_green "G2-C4 (a comment-only edit inside the web-2 sibling is not a violation)" server.tf '
+i = s.index("resource \"terraform_data\" \"deploy_pipeline_fix_web2\" {")
+j = s.index("\n  triggers_replace", i)
+s = s[:j] + "  # benign comment added by the mutation battery\n" + s[j:]
+'
+
+# .tf.json: a NEW file (so it is created and removed inline, not through restore()).
+G2_JSON="$SANDBOX/zz-g2.tf.json"
+_g2_json_row() { # <label> <json> <expect: red|green> <anchor>
+  local label="$1" json="$2" want="$3" anchor="${4:-}"
+  cases=$((cases + 1))
+  restore
+  printf '%s\n' "$json" > "$G2_JSON"
+  mutations_run=$((mutations_run + 1))
+  if run_guard; then
+    if [[ "$want" == green ]]; then ok "$label: guard stayed GREEN"
+    else no "$label: guard still PASSED -- a .tf.json connection block is invisible to it"; fi
+  elif [[ "$want" == red ]] && mutation_scorer_failed_on "$OUT" '\[FAIL\]' "$anchor"; then
+    ok "$label: guard went RED on '$anchor'"
+  else
+    no "$label: unexpected verdict (want $want, anchor '$anchor'). Output: $(<"$OUT")"
+  fi
+  rm -f "$G2_JSON"
+  restore
+}
+_g2_json_row "G2-13 (.tf.json connection without host_key)" \
+  '{"resource":{"terraform_data":{"j":{"connection":{"type":"ssh","host":"192.0.2.12"}}}}}' red "zz-g2.tf.json:"
+_g2_json_row "G2-14 (.tf.json connection with host_key null)" \
+  '{"resource":{"terraform_data":{"j":{"connection":[{"host":"192.0.2.13","host_key":null}]}}}}' red "(host_key = null)"
+_g2_json_row "G2-C3 (.tf.json connection pinned to the local stays GREEN)" \
+  '{"resource":{"terraform_data":{"j":{"connection":{"host":"192.0.2.14","host_key":"${local.web_1_ssh_host_key}"}}}}}' green
+
+cases=$((cases + 1))
+restore
+if apply_mutation tunnel.tf '
+s += "\n# connection { host = x }\n// connection {\n/* connection {\n  host_key = 1\n} */\n"
+' && ! cmp -s "$SANDBOX/tunnel.tf" "$PRISTINE/tunnel.tf"; then
+  mutations_run=$((mutations_run + 1))
+  if run_guard && grep -qF "[ok] G2: swept ${G2_BASE:-?} SSH connection blocks" "$OUT"; then
+    ok "G2-C2 (comment mentions of 'connection {' in tunnel.tf are not counted: still ${G2_BASE})"
+  else
+    no "G2-C2: commented 'connection {' text changed the verdict or the count (baseline ${G2_BASE:-unset}). Output: $(<"$OUT")"
+  fi
 else
-  no "battery ran only $mutations_run landed mutations (floor $FLOOR) -- anchors drifted; the untested invariants are unproven"
+  no "G2-C2: mutation did not land"
+fi
+restore
+
+# ── Accounting conservation (ADR-193 #3) ────────────────────────────────────────────────
+# Ordered BEFORE the three floors (ADR-193 #4). A neutered `ok` deflates `pass` while `cases`
+# keeps moving, so the floors would ALSO trip and would report "anchors drifted" -- a diagnosis
+# that sends the reader to the guard's failure text when the fault is in this battery's own
+# accounting. This says "a verdict was discarded" instead.
+#
+# Reported with printf >&2 + exit 1 DIRECTLY, never through `ok`/`no`. A check that reports by
+# calling the verdict helper increments the very counter the trailer's exit status reads, so
+# neutering the helper silences the assertion rows AND the check meant to notice the silence:
+# the battery prints a clean total and exits 0. The literal `[FATAL] accounting` is load-bearing
+# -- guard-vacuity-floor's ARM 10 builds its conservation population by grepping that exact
+# string, so different wording is invisible to it (#7588).
+if [[ $((pass + fail)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: pass+fail (%d) != cases (%d).\n' "$((pass + fail))" "$cases" >&2
+  if [[ $((pass + fail)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded -- that is what a neutered ok()/no() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
+fi
+
+# ── Non-vacuity floors on the battery itself (ADR-193 #1) ───────────────────────────────
+# All three report with printf >&2 + exit 1 DIRECTLY. They previously called `ok`/`no`, which is
+# the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
+# cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
+# meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
+FLOOR=57  # +5 #9151 mutation arms (M4a, M4b, G2-15, G2-16, G2-17; G2-C4 is a green control and does not increment) +7 review-pass arms (M2b, M4c, M4d, M4e, M4f, M4g, G2-18). Re-derive from the battery log when adding rows.
+if (( mutations_run < FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
+    "$mutations_run" "$FLOOR" >&2
+  printf '  Anchors drifted or arms were deleted; the untested invariants are unproven.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
 fi
 
 # The probes are counted separately: they never touch a file, so `mutations_run`'s
@@ -916,17 +1408,20 @@ fi
 # a floor on the thing it names.
 PROBE_FLOOR=7
 PROBE_RED_FLOOR=6
-if [[ "$probes_run" -ge "$PROBE_FLOOR" ]]; then
-  ok "battery ran $probes_run ALLOWLIST hygiene probes (floor $PROBE_FLOOR)"
-else
-  no "battery ran only $probes_run ALLOWLIST hygiene probes (floor $PROBE_FLOOR) -- §5 is unproven"
+if (( probes_run < PROBE_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (probes): only %d ALLOWLIST hygiene probe(s) ran, expected >= %d.\n' \
+    "$probes_run" "$PROBE_FLOOR" >&2
+  printf '  §5 is unproven: the probe arms were deleted or never reached.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
 fi
-if [[ "$probe_reds" -ge "$PROBE_RED_FLOOR" ]]; then
-  ok "battery ran $probe_reds RED-arm probes (floor $PROBE_RED_FLOOR)"
-else
-  no "battery ran only $probe_reds RED-arm probes (floor $PROBE_RED_FLOOR) -- the green controls
-    cannot stand in for them; §5's failure arms are unproven"
+if (( probe_reds < PROBE_RED_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (probe RED arms): only %d RED-arm probe(s) ran, expected >= %d.\n' \
+    "$probe_reds" "$PROBE_RED_FLOOR" >&2
+  printf '  The GREEN controls cannot stand in for them; §5 failure arms are unproven.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
 fi
 
-echo "=== provisioner-parity mutation: $pass passed, $fail failed ==="
+echo "=== provisioner-parity mutation: $pass passed, $fail failed ($cases cases) ==="
 [[ "$fail" -eq 0 ]]

@@ -165,11 +165,25 @@ merge, exactly like #6895:
 
 ## Sequencing
 
+<!-- lint-infra-ignore start -->
+<!--
+  #7695: `lint-infra-no-human-steps.py` is FILE-scoped under `--changed`, so appending the
+  2026-09-03 addendum below pulled this pre-existing paragraph into the diff's scan set and it
+  fired. The wrap is a scoping fix, NOT a suppression of a real finding: the paragraph describes a
+  reviewer-gated `workflow_dispatch` — the sanctioned route the linter exists to steer people
+  TOWARD — and prescribes no SSH, no console, and no host-local command. The one imperative in it
+  ("the operator runs the reviewer-gated apply_target=inngest-host cutover dispatch") is a menu
+  ack, which `hr-menu-option-ack-not-prod-write-auth` treats as the correct shape.
+
+  Deliberately NOT rewritten to dodge the matcher: the paragraph is load-bearing prose in a dated
+  architecture record, and wording it around a lint is how a record stops saying what it means.
+-->
 Nothing destructive happens live before terraform. The only pre-terraform live action is the
 read-only baseline enumerate, which runs as the cutover's first step. The quiesce/freeze/copy/
 mount-swap are entirely encoded in the gated cutover window — the code-only PR merges inert, and the
 second volume + LUKS + copy only materialize when the operator runs the reviewer-gated `apply_target
 =inngest-host` cutover dispatch.
+<!-- lint-infra-ignore end -->
 
 ## Open operator items (defaulted; revisit before the cutover)
 
@@ -178,3 +192,182 @@ second volume + LUKS + copy only materialize when the operator runs the reviewer
    pattern), rather than folding into #6897's plaintext-backstop sweep. Operator may re-home.
 2. **Canary abort mode.** Defaulted to **hard-abort** on any reminder-count/`DBSIZE` mismatch
    (recommended). Operator may relax to warn-and-continue (not recommended).
+
+## Addendum — 2026-09-03 (#7695): the premise this decision rests on is now MEASURABLE, and when it reads empty the decision is VACUOUS rather than amended
+
+Appended, not edited. Nothing above changes — `## Decision` in particular is untouched, and it
+remains binding for every state of the world it was written about. What this addendum records is
+that one of its **premises** has become a measured quantity rather than an assumption, and that the
+premise can be FALSE.
+
+### The premise
+
+§Context asserts, as the reason the #6895 registry pattern is FORBIDDEN here, that the inngest AOF
+is **sole-copy non-disposable state**, and that a `-replace` therefore means "every in-flight job
+lost". That is an unconditional claim about the volume, and at the time it was the only reading
+available: nothing in the repo could measure how much state the volume actually held.
+
+### What changed
+
+`SOLEUR_INNGEST_SERVER_PROBE` now emits (from `probe_schema=3`; the schema is 8 as of #8017) a `redis_keys` count summed from
+`INFO keyspace` across every database, alongside `data_mount_src` (the `findmnt` source of
+`/mnt/data`), `data_bytes`, `host_role` and `redis_active`. So the sentence "the volume holds
+sole-copy state" is now a proposition with a truth value, on a specific row, from a specific boot.
+
+### The bounded reading
+
+**When `redis_keys` reads 0 on a mount-pinned, identity-pinned, newest-row basis, ADR-142's
+sole-copy premise is VACUOUS for that reading — there is no state to preserve, so a
+preserve-and-copy migration preserves nothing.** All three qualifiers are load-bearing and none may
+be dropped:
+
+- **mount-pinned** — `data_mount_src` must equal the by-id path of the physical volume being
+  destroyed (or the mapper, post-recut). `redis_keys` is a statement about a Redis *process*; the
+  recut destroys a *block device*. Today's mount is `mount … || true` with `nofail`, so a failed
+  mount leaves `/mnt/data` on the ephemeral root disk and Redis reports an empty store **while the
+  volume holds a populated AOF**. Without this pin the emptiness claim is about the wrong object.
+- **identity-pinned** — `inngest-bootstrap.sh` is the SHARED renderer for the dedicated host and
+  the co-located web host, so an unpinned read can be a fact about a machine that is not this one.
+- **newest-row** — a `boot_id` equal to the newest row's, or "dark and empty" can be a fact about a
+  host that no longer exists.
+
+### Why this BOUNDS the decision rather than amending it
+
+The two decisions govern **disjoint worlds**, and the gate decides which world you are in at
+dispatch time rather than at authoring time:
+
+- `redis_keys > 0` (or any unreadable/unpinned reading) ⇒ ADR-142 governs, unamended. The
+  destructive path is REFUSED OUTRIGHT — and note that enumeration is then unavailable too, because
+  `inngest-enumerate-reminders.sh` queries `127.0.0.1:8288`, which is not bound on a dark host.
+  Non-empty AND non-enumerable means preserve-and-copy is the only lawful route.
+- `redis_keys == 0` under all three pins ⇒ there is nothing for the byte-copy to carry, and the
+  cheaper destructive recut is available. ADR-199 governs that world and cites this addendum as its
+  precondition.
+
+An amendment would have widened ADR-142's own decision to sometimes permit a destroy, which would
+have made the sole-copy protection conditional on a reader's judgement. Bounding it instead leaves
+ADR-142 categorical and puts the conditionality in a gate that must MEASURE before it may proceed.
+
+### Recorded BEFORE the arm can open, deliberately
+
+This addendum lands in the same merge as the apparatus and the gates — before any dispatch exists
+that could act on the reading. A record written after a destructive action would be a
+justification; written before, it is a precondition that the gate's twenty predicates enforce.
+`tests/scripts/lib/inngest-host-dark-gate.sh` is where those pins are executable.
+
+## Amendment — 2026-09-18 (#6894): the preserve-and-copy route is BUILT, and it is additive rather than in-place
+
+This decision said what must happen ("provision a second volume, quiesce, copy bytes, swap the
+mount") and left the shape of it open. The apparatus that implements it made four choices the
+decision did not dictate. They are recorded here because each one closes a failure this estate has
+already paid for, and because a future reader comparing the code to this ADR would otherwise read
+them as drift.
+
+### 1. ADDITIVE, not in-place: the plaintext volume survives the swap
+
+The second volume (`hcloud_volume.inngest_redis_luks`) is created and attached ALONGSIDE the live
+one, and the live one is neither destroyed nor detached by the cutover. The swap is a mount move,
+so the rollback is a mount move plus a reverse copy — not a restore from a snapshot taken at an
+unknown moment.
+
+The cost is a **plaintext copy of the AOF remaining attached** after the cutover, which is the exact
+thing this ADR exists to retire. That is deliberate and bounded: it is the rollback backstop for the
+window in which a rollback is plausible, it is tracked with an expiry in **#8285**, and the store
+actually being on the wrong volume is DETECTED (`logtail_exploration_alert.inngest_luks_wrong_volume`,
+below) rather than assumed.
+
+### 2. The authority is a POINTER in Doppler, never a signature on a device
+
+`INNGEST_LUKS_ACTIVE_VOLUME_ID` on `soleur-inngest/prd` names the volume that holds the store. The
+boot resolver reads it first and treats a LUKS signature only as corroboration; a pointer naming an
+absent device REFUSES rather than falling through to the plaintext arm.
+
+The reason is measured, not stylistic: a root-disk marker does not survive a host replace (#7228 —
+the flip's done-owner marker, and the stranding it caused), and an unprivileged `blkid -p` returns
+rc 2 on a LUKS device, which is the SAME answer it gives for "no signature at all". A design that
+authorises by signature therefore cannot tell "encrypted" from "could not look", and the wrong
+answer wipes user data. Doppler outlives the host; that is the whole argument.
+
+### 3. The trigger is a SEPARATE flag from the flip's, with its own FSM
+
+`INNGEST_LUKS_CUTOVER` (armed → copying → copied → swapped → done, plus rollback → rolled-back and a
+terminal aborted), polled by `inngest-luks-cutover.service` every 30s. It is NOT
+`INNGEST_CUTOVER_FLIP`, which owns the one authorized `FLUSHALL`. A copy that preserves data does not
+belong behind the flag that destroys it: sharing them would mean one terminal value authorising two
+opposite actions, and the wrong one is unrecoverable.
+
+Consequence for Fork L, recorded because it is easy to undo by accident: the copy is the WHOLE mount,
+not `redis/`. The flip FSM's flush latch lives at `/mnt/data/inngest-cutover/flip-done.latch`, and a
+swap onto a device without it reads, to that latch, as a recut — which would re-open a second
+`FLUSHALL` against a populated store. T2 names that path explicitly.
+
+### 4. The copy is PROVEN equal before the swap, and again before the rollback
+
+T2 compares listing, per-file sha256 and total bytes over a frozen source, and runs a read-only
+`redis-check-aof` on the copy. Each reading's READABILITY is a separate predicate from its
+comparison — an unreadable tree prints a sentinel rather than an empty listing that would compare
+equal to another empty listing. The rollback runs the same machinery with the roles reversed, so
+going back is exactly as data-safe as going forward, including writes taken after the cutover.
+
+### What this amendment does NOT change
+
+The decision itself. `-replace` of `hcloud_volume.inngest_redis` remains forbidden while the store is
+populated; the 2026-09-03 addendum's bounding (an empty, pinned, newest-row reading hands the world
+to ADR-199) is untouched. This amendment describes the route this ADR always required, now that it
+exists.
+
+### Where it lives
+
+| Element | Path |
+| --- | --- |
+| On-host FSM | `apps/web-platform/infra/inngest-luks-cutover.sh` (+ `.service`, `.timer`) |
+| Its suite | `apps/web-platform/infra/inngest-luks-cutover.test.sh` |
+| Boot resolver (pointer-authoritative) | `apps/web-platform/infra/cloud-init-inngest.yml` — both the first-boot runcmd stage and `/usr/local/bin/inngest-luks-open.sh`, which is a `write_files` payload embedded in that same file rather than a file in this repo |
+| Operator verbs | `op=luks-cutover` / `op=luks-rollback` in `.github/workflows/cutover-inngest.yml` + `scripts/cutover-inngest.sh` |
+| Wrong-volume alert | `apps/web-platform/infra/betterstack-logs-alerts.tf` (ships paused; armed post-cutover) |
+| Runbook | `knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md` |
+| Backstop retirement | #8285 (expires 2026-10-22) |
+
+## Amendment — 2026-09-21 (#8296): the cutover ran, and apparatus scope item 8 named the wrong row
+
+Appended, not edited. Nothing above is changed.
+
+### The cutover was observed
+
+The additive cutover described in the 2026-09-18 amendment ran on 2026-09-20. The terminal
+`SOLEUR_INNGEST_LUKS_CUTOVER` row landed at 15:29:10Z (`reason=cutover-complete`, `flag=done`,
+`phase=swapped`, `exit_code=0`, `k_freeze=1366`, `e_freeze=1355`). The first post-cutover
+`SOLEUR_INNGEST_SERVER_PROBE` row from `host_role=dedicated`, at 15:36:40Z, reads
+`data_mount_src=/dev/mapper/inngest-redis`, `data_mount_devid=scsi-0HC_Volume_106903269`,
+`redis_active`, 1437 keys. The store now lives on `hcloud_volume.inngest_redis_luks`.
+`hcloud_volume.inngest_redis` is attached and intact as the plaintext rollback backstop, retired
+under #8285 (expires 2026-10-22).
+
+The record followed the detector, not the other way round. PR-1 of #8296 armed
+`logtail_exploration_alert.inngest_luks_wrong_volume` on the push apply of `b53173a04`
+(run 35605929787), and the alert read back `paused=false` at 2026-09-21T14:18:56Z. Only after
+that did PR-2 flip the ledger.
+
+### Correction: apparatus scope item 8
+
+Item 8 of "Apparatus scope for the code-only PR" says to flip `hcloud_volume.inngest_redis`'s
+`mechanism` to `luks` and add a backstop exception row for the old volume. That is the opposite of
+what the 2026-09-18 amendment requires, and it would have recorded the plaintext backstop as
+encrypted. The additive route never encrypts `hcloud_volume.inngest_redis`; it copies the store onto
+a second volume. So the row that flips is **`hcloud_volume.inngest_redis_luks`**, and
+`hcloud_volume.inngest_redis` keeps `mechanism: plaintext-exception` and is rewritten as the
+retained backstop, with its `expires_on` unmoved. PR-2 of #8296 did exactly that. Read item 8
+through this correction.
+
+### What this amendment does NOT change
+
+The decision, and the status. The ledger row keeps `live_verification` at `unavailable:`: the probe
+row proves which device backs `/mnt/data`, not that it is crypto_LUKS.
+
+Two earlier lines of this ADR now read through this amendment. The Status paragraph's "Supersedes the
+`plaintext-exception` for `hcloud_volume.inngest_redis`" is wrong for the same reason as item 8:
+that row keeps its exception as the backstop, and it is the sibling row whose exception went away.
+The "Where it lives" row's "(ships paused; armed post-cutover)" is still true as history: the alert
+did ship paused and was armed after the cutover (ADR-218, 2026-09-21 amendment). One known gap in
+that detector is open: a probe pipeline that goes silent reads as healthy (`treat_as_zero`), tracked
+in #8516.

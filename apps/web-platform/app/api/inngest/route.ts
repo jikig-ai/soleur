@@ -7,9 +7,10 @@
 //
 // Phase 2 ships with `functions: []`. Phase 3 will fill `cfoOnPaymentFailed`.
 // Once functions are registered, the signature gate (validateSignature in
-// node_modules/inngest/components/InngestCommHandler.js:1465) runs BEFORE
-// any function dispatches — preserving the "401 before dispatch" invariant
-// asserted by test/server/inngest/signature-verify.test.ts.
+// node_modules/inngest/components/InngestCommHandler.js) runs BEFORE any
+// function dispatches. Since #8611 (streaming) the 401 travels inside the
+// streamed JSON envelope under an HTTP 201 — asserted by
+// test/server/inngest/signature-verify.test.ts.
 //
 // Per cq-nextjs-route-files-http-only-exports: only HTTP method handlers
 // are exported. RV6 (DHH/Simplicity): single-function-registry inlined;
@@ -17,14 +18,17 @@
 
 import { serve } from "inngest/next";
 import { inngest } from "@/server/inngest/client";
-import { agentOnSpawnRequested } from "@/server/inngest/functions/agent-on-spawn-requested";
+import { detachFromConsumerCancel, streamRequestInfo } from "@/server/inngest/stream-detach";
+import { agentOnSpawnRequested, agentOnSpawnSettle } from "@/server/inngest/functions/agent-on-spawn-requested";
 import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-failed";
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
+import { cronActionsQueueHealthDispatch } from "@/server/inngest/functions/cron-actions-queue-health-dispatch";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
 import { slaIssueProcess } from "@/server/inngest/functions/sla-issue-process";
 import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
 import { cronArchitectureDiagramSync } from "@/server/inngest/functions/cron-architecture-diagram-sync";
+import { cronBotPrReaper } from "@/server/inngest/functions/cron-bot-pr-reaper";
 import { cronBugFixer } from "@/server/inngest/functions/cron-bug-fixer";
 import { cronCampaignCalendar } from "@/server/inngest/functions/cron-campaign-calendar";
 import { cronCloudTaskHeartbeat } from "@/server/inngest/functions/cron-cloud-task-heartbeat";
@@ -36,13 +40,12 @@ import { cronContentPublisher } from "@/server/inngest/functions/cron-content-pu
 import { cronContentVendorDrift } from "@/server/inngest/functions/cron-content-vendor-drift";
 import { cronDailyTriage } from "@/server/inngest/functions/cron-daily-triage";
 import { cronDevMigrationDrift } from "@/server/inngest/functions/cron-dev-migration-drift";
+import { cronMachineryDrain } from "@/server/inngest/functions/cron-machinery-drain";
 import { cronDomainModelDrift } from "@/server/inngest/functions/cron-domain-model-drift";
 import { cronEmailIngressProbe } from "@/server/inngest/functions/cron-email-ingress-probe";
 import { cronExpensesVerifyBy } from "@/server/inngest/functions/cron-expenses-verify-by";
 import { cronFollowThroughMonitor } from "@/server/inngest/functions/cron-follow-through-monitor";
 import { cronGhPagesCertReissue } from "@/server/inngest/functions/cron-gh-pages-cert-reissue";
-import { cronGhPagesCertState } from "@/server/inngest/functions/cron-gh-pages-cert-state";
-import { cronGhcrTokenMinter } from "@/server/inngest/functions/cron-ghcr-token-minter";
 import { cronGithubAppDriftGuard } from "@/server/inngest/functions/cron-github-app-drift-guard";
 import { cronGithubCidrRefresh } from "@/server/inngest/functions/cron-github-cidr-refresh";
 import { cronGrowthAudit } from "@/server/inngest/functions/cron-growth-audit";
@@ -54,6 +57,7 @@ import { cronLegalAudit } from "@/server/inngest/functions/cron-legal-audit";
 import { cronLinkedinTokenCheck } from "@/server/inngest/functions/cron-linkedin-token-check";
 import { cronMainHealthMonitor } from "@/server/inngest/functions/cron-main-health-monitor";
 import { cronMembershipHealth } from "@/server/inngest/functions/cron-membership-health";
+import { cronMergeQueueStallDispatch } from "@/server/inngest/functions/cron-merge-queue-stall-dispatch";
 import { cronNag4216Readiness } from "@/server/inngest/functions/cron-nag-4216-readiness";
 import { cronOauthProbe } from "@/server/inngest/functions/cron-oauth-probe";
 import { cronPlausibleGoals } from "@/server/inngest/functions/cron-plausible-goals";
@@ -61,12 +65,14 @@ import { cronReviewReminder } from "@/server/inngest/functions/cron-review-remin
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronRulePrune } from "@/server/inngest/functions/cron-rule-prune";
 import { cronRulesetBypassAudit } from "@/server/inngest/functions/cron-ruleset-bypass-audit";
+import { cronSentryAlertDrift } from "@/server/inngest/functions/cron-sentry-alert-drift";
 import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
 import { cronStrategyReview } from "@/server/inngest/functions/cron-strategy-review";
 import { cronSupabaseAdvisorScan } from "@/server/inngest/functions/cron-supabase-advisor-scan";
 import { cronSupabaseDiskIo } from "@/server/inngest/functions/cron-supabase-disk-io";
+import { cronSupabaseWatchdogDispatch } from "@/server/inngest/functions/cron-supabase-watchdog-dispatch";
 import { cronTerraformDrift } from "@/server/inngest/functions/cron-terraform-drift";
 import { cronUxAudit } from "@/server/inngest/functions/cron-ux-audit";
 import { cronWeeklyAnalytics } from "@/server/inngest/functions/cron-weekly-analytics";
@@ -122,17 +128,22 @@ if (!IS_BUILD_PHASE && !SIGNING_KEY) {
 const SERVE_HOST =
   process.env.NODE_ENV === "production" ? "https://app.soleur.ai" : undefined;
 
-export const { GET, POST, PUT } = serve({
+const handlers = serve({
   client: inngest,
   functions: [
     agentOnSpawnRequested,
+    // #8803: settles runs agentOnSpawnRequested never finished. Its `-failure`
+    // function is registered by the SDK from the onFailure key.
+    agentOnSpawnSettle,
     cfoOnPaymentFailed,
     cronActionRequiredSla,
+    cronActionsQueueHealthDispatch,
     slaIssueProcess,
     cronAgentNativeAudit,
     cronAnthropicCostReport,
     cronAnthropicCreditProbe,
     cronArchitectureDiagramSync,
+    cronBotPrReaper,
     cronBugFixer,
     cronCampaignCalendar,
     cronCloudTaskHeartbeat,
@@ -144,13 +155,12 @@ export const { GET, POST, PUT } = serve({
     cronContentVendorDrift,
     cronDailyTriage,
     cronDevMigrationDrift,
+    cronMachineryDrain,
     cronDomainModelDrift,
     cronEmailIngressProbe,
     cronExpensesVerifyBy,
     cronFollowThroughMonitor,
     cronGhPagesCertReissue,
-    cronGhPagesCertState,
-    cronGhcrTokenMinter,
     cronGithubAppDriftGuard,
     cronGithubCidrRefresh,
     cronGrowthAudit,
@@ -162,6 +172,7 @@ export const { GET, POST, PUT } = serve({
     cronLinkedinTokenCheck,
     cronMainHealthMonitor,
     cronMembershipHealth,
+    cronMergeQueueStallDispatch,
     cronNag4216Readiness,
     cronOauthProbe,
     cronPlausibleGoals,
@@ -169,12 +180,14 @@ export const { GET, POST, PUT } = serve({
     cronRoadmapReview,
     cronRulePrune,
     cronRulesetBypassAudit,
+    cronSentryAlertDrift,
     cronSeoAeoAudit,
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
     cronStrategyReview,
     cronSupabaseAdvisorScan,
     cronSupabaseDiskIo,
+    cronSupabaseWatchdogDispatch,
     cronTerraformDrift,
     cronUxAudit,
     cronWeeklyAnalytics,
@@ -194,8 +207,23 @@ export const { GET, POST, PUT } = serve({
     workspaceReconcileOnPush,
   ],
   signingKey: SIGNING_KEY ?? "build-phase-placeholder",
+  // #8611 / ADR-243: the self-hosted server calls steps at SERVE_HOST, which is Cloudflare-proxied
+  // with a ~100s origin timeout. A step that held its request longer got a 524, `retries` re-ran it
+  // while the first Claude child was still alive, and the run failed anyway. Streaming answers 201
+  // at once and writes a heartbeat byte every 3 s, so the proxy never times out; the real status
+  // (including a signature 401) travels in the streamed JSON envelope. Evidence:
+  // knowledge-base/project/specs/archive/20260923-200917-feat-anthropic-spend-reduction/streaming-spike.md.
+  streaming: "force",
   // #5159 (see SERVE_HOST note above): pin the registered serve URL to the
   // canonical public origin so a loopback re-register PUT plans crons. Omitted
   // when NEXT_PUBLIC_APP_URL is unset (dev/build) → SDK infers from the request.
   ...(SERVE_HOST ? { serveHost: SERVE_HOST, servePath: "/api/inngest" } : {}),
 });
+
+export const { GET, PUT } = handlers;
+
+// POST carries the streamed step responses. detachFromConsumerCancel keeps the SDK stream from ever
+// seeing a client disconnect: on inngest 3.54.2 that would leak a heartbeat timer whose throws exit
+// the process via server/crash-handlers.ts (ADR-243).
+export const POST = async (...args: Parameters<typeof handlers.POST>): Promise<Response> =>
+  detachFromConsumerCancel(await handlers.POST(...args), streamRequestInfo(args[0]));

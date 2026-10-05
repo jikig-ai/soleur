@@ -58,7 +58,9 @@ import {
   resolveOutputAwareOk,
   ensureScheduledAuditIssue,
   finalizeOutputAwareHeartbeat,
-  DeployInProgressError,
+  deferDeployOnFinalAttempt,
+  unwrapSetupVerdict,
+  type WorkspaceSetupVerdict,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -71,6 +73,7 @@ import {
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
+import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
 // =============================================================================
 // Constants
@@ -94,7 +97,7 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // options marker). The prompt is the SOLE positional argument after `--`.
 //
 // Mirrors .github/workflows/scheduled-roadmap-review.yml `claude_args`:
-//   --model claude-sonnet-5
+//   --model claude-sonnet-5-5
 //   --max-turns 40
 //   --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch
 const CLAUDE_CODE_FLAGS = [
@@ -158,6 +161,8 @@ ISSUE CLOSURE SAFETY: BEFORE closing or reassigning ANY issue:
 ROADMAP.MD CONFLICT GUARD: BEFORE editing knowledge-base/product/roadmap.md, run:
   gh pr list --state open --search 'roadmap.md in:files' --json number,title,headRefName
 If any open PR touches roadmap.md, do NOT make conflicting edits. Instead, post a comment on that PR with your suggested updates and skip the roadmap.md edit in your own PR.
+
+FOG AND SCOPE RULE: The \`## Not Yet Specified\` and \`## Out of Scope\` sections of roadmap.md are bullet lists maintained only by the product-roadmap workshop. Never file issues for, reorder, or delete their entries. An open issue with an open blockedBy edge is waiting, not stale: never close it or flag it for inactivity.
 
 ## Output
 
@@ -252,19 +257,15 @@ export async function cronRoadmapReviewHandler({
   );
 
   // --- Step 2: setup ephemeral workspace (clone + settings + sentinel) ---
-  // Track ephemeralRoot in handler-scope so teardown runs regardless of
-  // downstream success/failure.
-  let ephemeralRoot: string | null = null;
-  let spawnCwd: string | null = null;
+  let verdict: WorkspaceSetupVerdict;
   try {
-    const workspace = await step.run("setup-workspace", async () => {
-      return setupEphemeralWorkspace({ installationToken, cronName: "cron-roadmap-review" });
-    });
-    ephemeralRoot = workspace.ephemeralRoot;
-    spawnCwd = workspace.spawnCwd;
+    verdict = await step.run("setup-workspace", async () =>
+      deferDeployOnFinalAttempt(
+        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-roadmap-review" }),
+        { attempt, maxAttempts },
+      ),
+    );
   } catch (err) {
-    // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no heartbeat.
-    if (err instanceof DeployInProgressError) throw err;
     // Redact token if it sneaks into the error message (defense-in-depth).
     const e = err as Error;
     const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -281,6 +282,9 @@ export async function cronRoadmapReviewHandler({
     });
     return { ok: false };
   }
+
+  // Outside the catch, before the try/finally — see unwrapSetupVerdict (#8726).
+  const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-roadmap-review");
 
   // Wrap the entire post-setup pipeline in try/finally so the ephemeral
   // workspace is torn down even if claude-eval throws at the Inngest step
@@ -313,7 +317,7 @@ export async function cronRoadmapReviewHandler({
         "claude-eval",
         async (): Promise<SpawnResult> => {
           return spawnClaudeEval({
-            spawnCwd: spawnCwd!,
+            spawnCwd: spawnCwd,
             installationToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(ROADMAP_REVIEW_PROMPT, runStartedAt),
@@ -360,10 +364,8 @@ export async function cronRoadmapReviewHandler({
         }),
       );
     } catch (err) {
-      // #5728 G1 — benign deploy-in-progress defer (ADR-078): rethrow bare, no
-      // heartbeat. Any OTHER throw is a real failure — flag it;
+      // #5728 — any throw here is a real failure — flag it;
       // finalizeOutputAwareHeartbeat decides error-vs-retry below.
-      if (err instanceof DeployInProgressError) throw err;
       threw = true;
       const e = err as Error;
       const redactedMsg = redactToken(e.message ?? "", installationToken);
@@ -404,8 +406,7 @@ export async function cronRoadmapReviewHandler({
       // the re-spawned agent burns real Anthropic spend against a path that no
       // longer exists. One honest terminal RED beats a retry that cannot succeed.
       // Scoped precisely: throws BEFORE the try (token mint, setup-workspace
-      // itself) are unaffected and still retry into a fresh workspace, and
-      // DeployInProgressError still rethrows bare.
+      // itself) are unaffected and still retry into a fresh workspace.
       //
       // This cron routes persistence through the agent's own hook-guarded commit
       // rather than safeCommitAndPr, so it gains no `livenessOk` remedy — but its
@@ -478,6 +479,7 @@ export const cronRoadmapReview = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
   },
   [
     { cron: "0 9 * * 1" },

@@ -44,36 +44,48 @@ export function isDirtyPollState(pollLine: string): boolean {
 
 /**
  * When true, stop CI-only polling and resync branch with origin/main first.
- * BEHIND means auto-merge will not fire until head catches up to base.
+ * BEHIND: auto-merge will not fire until head catches up to base.
+ * DIRTY: GitHub computed a conflict; locally-clean DIRTY (kb-index) still resyncs.
  */
 export function shouldResyncBeforePoll(mergeStateStatus: string): boolean {
-  return mergeStateStatus === MERGE_STATE_BEHIND;
+  return (
+    mergeStateStatus === MERGE_STATE_BEHIND ||
+    mergeStateStatus === MERGE_STATE_DIRTY
+  );
 }
 
-/** Harness-specific BEHIND resync instructions. */
+/**
+ * Harness-specific BEHIND/DIRTY resync instructions. The script discriminates:
+ * DIRTY auto-syncs only when `git merge-tree` proves the local merge clean
+ * (kb-index class); a real conflict exits 6 for manual resolution.
+ */
 export function behindSyncInstructions(harness: Harness): string {
-  const script = "bash plugins/soleur/scripts/sync-pr-behind.sh";
+  // ADR-179: the installed plugin root, never a repo-relative path (a customer
+  // repo has no plugins/soleur/ tree).
+  const script = 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"';
   switch (harness) {
     case "grok":
       return [
-        "**BEHIND resync (Grok Build)**",
-        `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\`, **STOP** CI-only polling.`,
+        "**BEHIND/DIRTY resync (Grok Build)**",
+        `- When \`gh pr view --jq '.mergeStateStatus'\` returns \`BEHIND\` or \`DIRTY\`, **STOP** CI-only polling.`,
         `- From the PR worktree: \`${script} <PR-number>\` (fetch → merge origin/main → push).`,
-        `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged\`.`,
+        `- \`DIRTY\` auto-syncs only when the local merge is clean; a real conflict exits for manual resolution.`,
+        `- Match AwaitShell \`pattern\`: \`BEHIND detected|auto-sync.*pushed|BEHIND resolved|BEHIND unchanged|merge conflict|\\[pr-behind-sync\\] kind=|\\[ship\\.phase7\\.\`.`,
+        `- Exit 11 is a no-op: \`kind=noop\` is GitHub state lag. \`kind=queued\` means the PR is IN the merge queue and nothing was pushed (a push dequeues it): it exits 0 here and 11 only with \`--step\` — keep polling for MERGED, never push, update-branch or --admin it; re-poll, then re-run. Exit 13 (\`kind=dequeued\`) means it left the queue unmerged (a failed merge_group run or a removal; auto-merge may still read armed) — follow the recovery on that line. Exit 12 (\`kind=wrong_branch\`) means this worktree is not the PR's branch — cd to it. Any other \`kind=\` line names its next action.`,
         `- Re-poll after push; do NOT ask the operator to update the branch.`,
       ].join("\n");
 
     case "claude":
       return [
-        "**BEHIND resync (Claude Code)**",
-        `- When mergeStateStatus is \`BEHIND\`, run ship Phase 7 auto-sync inside the Monitor loop, or \`${script} <PR-number>\` from the worktree.`,
-        `- FORBIDDEN: heartbeating on pending checks while BEHIND — auto-merge is blocked.`,
+        "**BEHIND/DIRTY resync (Claude Code)**",
+        `- When mergeStateStatus is \`BEHIND\` or \`DIRTY\`, the ship Phase 7 Monitor loop calls \`sync-pr-behind.sh <PR-number> --step\` once per attempt; outside that loop run \`${script} <PR-number>\` from the worktree (DIRTY auto-syncs only when locally clean).`,
+        `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked — unless the script reported \`kind=queued\` (exit 11 with \`--step\`): a PR in the merge queue is not blocked, the queue merges it, so keep heartbeating and never sync it; \`kind=dequeued\` (exit 13) stops the poll with the recovery.`,
       ].join("\n");
 
     default:
       return [
-        "**BEHIND resync**",
-        `- mergeStateStatus \`BEHIND\` → merge origin/main into the branch and push before continuing.`,
+        "**BEHIND/DIRTY resync**",
+        `- mergeStateStatus \`BEHIND\` or \`DIRTY\` → merge origin/main into the branch and push before continuing (DIRTY only when the local merge is clean — run \`${script}\`).`,
       ].join("\n");
   }
 }

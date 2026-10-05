@@ -9,7 +9,7 @@
 // of-truth in sync with the upstream filter at workflow run-time.
 
 import { readFileSync } from "node:fs";
-import { isAllowlistBypass, parseAllowlistFromYaml } from "./allowlist";
+import { isAllowlistBypass, parseAllowlistLine } from "./allowlist";
 import { buildBypassRecord } from "./allowlist-bypass";
 
 const env = (k: string): string => {
@@ -22,14 +22,23 @@ const env = (k: string): string => {
 };
 
 function readAllowlist(): string[] {
+  // The read and the exit stay HERE; the expression itself lives in
+  // allowlist.ts as the pure `parseAllowlistLine()`, so a guard can drive it
+  // against the real tracked workflow (Guard 1 / #7597). The chokepoint stays
+  // singular — there is exactly one implementation, and this is its only caller.
+  //
+  // BASE-REF INVARIANT: cla-evidence.yml checks out `base.sha` and never the PR
+  // head, so this cwd-relative read resolves against the BASE tree. That is
+  // what stops a contributor authorizing themselves by editing the allowlist in
+  // the same pull request the allowlist governs. Do not make this path absolute
+  // to the PR head, and do not move the checkout `ref:`.
   const yml = readFileSync(".github/workflows/cla.yml", "utf8");
-  // Match `allowlist: "..."` line. Quoted form only (matches the existing file).
-  const m = yml.match(/^\s*allowlist:\s*["']([^"']+)["']\s*$/m);
-  if (!m) {
+  const parsed = parseAllowlistLine(yml);
+  if (!parsed) {
     process.stderr.write("::error::could not parse `allowlist:` line in cla.yml\n");
     process.exit(1);
   }
-  return parseAllowlistFromYaml(m[1]);
+  return parsed;
 }
 
 function main(): void {

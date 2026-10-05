@@ -128,7 +128,7 @@ fi
 # miss class. Failing-open here re-introduces the regression window. The
 # deny prompts the operator to retry the fetch (which usually surfaces the
 # underlying network issue) and re-issue.
-if ! git -C "$WORK_DIR" fetch origin "$CURRENT_BRANCH" >/dev/null 2>&1; then
+if ! git -C "$WORK_DIR" fetch --no-tags origin "$CURRENT_BRANCH" >/dev/null 2>&1; then
   emit_incident "wg-ship-push-before-merge" deny \
     "Before \`gh pr merge\`, all local commits MUST be" "$CMD"
   jq -n --arg branch "$CURRENT_BRANCH" '{

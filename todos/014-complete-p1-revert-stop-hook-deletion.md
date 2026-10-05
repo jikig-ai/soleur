@@ -25,11 +25,13 @@ The diff deletes 17 lines of functional TTL-check code from `plugins/soleur/hook
 **Approach:** `git checkout origin/main -- plugins/soleur/hooks/stop-hook.sh knowledge-base/project/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`
 
 **Pros:**
+
 - Clean separation of concerns
 - Preserves the shipped TTL feature
 - No risk of regression
 
 **Cons:**
+
 - None
 
 **Effort:** 1 minute
@@ -39,6 +41,7 @@ The diff deletes 17 lines of functional TTL-check code from `plugins/soleur/hook
 ## Technical Details
 
 **Affected files:**
+
 - `plugins/soleur/hooks/stop-hook.sh`
 - `knowledge-base/project/learnings/2026-03-09-ralph-loop-crash-orphan-recovery.md`
 
@@ -55,4 +58,5 @@ The diff deletes 17 lines of functional TTL-check code from `plugins/soleur/hook
 **By:** Architecture, Simplicity review agents
 
 **Actions:**
+
 - Identified out-of-scope deletion of TTL logic from stop-hook.sh

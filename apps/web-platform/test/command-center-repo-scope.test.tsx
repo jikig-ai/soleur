@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { enrichConversationFixtures } from "./helpers/mock-supabase";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // Originally RED phase for plan
 // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap.
@@ -106,6 +107,12 @@ const mockChannel = vi.fn().mockReturnValue({
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the client auth read moved to getSession() (local cookie
+      // read).
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { user: { id: "user-1" } } },
+        error: null,
+      }),
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },
         error: null,
@@ -142,6 +149,14 @@ vi.mock("@/lib/supabase/client", () => ({
 }));
 
 // --- Tests ------------------------------------------------------------------
+
+// Phase 5: the active-repo read rides the shared SWR entry
+// (swrKeys.workspaceActiveRepo). Wrap each renderHook in a fresh SWR cache so
+// one test's resolved repo cannot leak into the next through the module-level
+// default cache.
+const swrWrapper = ({ children }: { children: React.ReactNode }) => (
+  <SwrTestProvider>{children}</SwrTestProvider>
+);
 
 describe("useConversations — repo scoping (source: /api/workspace/active-repo)", () => {
   beforeEach(() => {
@@ -207,7 +222,9 @@ describe("useConversations — repo scoping (source: /api/workspace/active-repo)
     };
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: swrWrapper,
+    });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -245,7 +262,9 @@ describe("useConversations — repo scoping (source: /api/workspace/active-repo)
     };
 
     const { useConversations } = await import("@/hooks/use-conversations");
-    const { result } = renderHook(() => useConversations());
+    const { result } = renderHook(() => useConversations(), {
+      wrapper: swrWrapper,
+    });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);

@@ -61,10 +61,25 @@ FAIL=0
 # the entire mutation battery -- the suite's own anti-vacuity mechanism -- and still exited 0.
 # A part-level floor makes that a loud "Part C shrank" instead of a silent pass, and gives a
 # better failure message than a total ever could.
-MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-117}"
+# FLOORS CATCH DELETION, NOT COLLAPSE. The `FAIL > 0` early exit precedes every floor check
+# below, so a block that degrades into a single failing assertion can never trip one. They are
+# a tripwire against a block being REMOVED, and nothing more -- do not read a green floor as
+# evidence that the assertions still mean what they meant.
+MIN_ASSERTIONS="${DRIFT_MIN_ASSERTIONS:-161}"
 MIN_A="${DRIFT_MIN_A:-57}"
-MIN_B="${DRIFT_MIN_B:-49}"
-MIN_C="${DRIFT_MIN_C:-11}"
+# 49 -> 81 (#7304): B14 both-direction execution x3 arms + self-check, B14b,
+# B15/B15b/B15c, B16/B16b/B16c, B17/B17b/B17c.
+# 81 -> 84 (#8149 review): B8f (callee jobs.release has no needs: the extractor cannot
+# see), B9d (verify-doppler-secrets dominated by the serial branch), B9e (no
+# strategy.max-parallel in ci.yml -- a serialised matrix the extractor cannot see).
+MIN_B="${DRIFT_MIN_B:-84}"
+# 11 -> 13 (#7304): axis11 (errexit clear) + axis12 (outcome conjunct).
+# 13 -> 18 (#8149): axis13/14/15 (B9 honest merge-to-deploy path: CI term, additive
+# resolve-target, release in the max) + green1/green2 (must-PASS rows: release absorbed by
+# the max, test-scripts at the derived boundary).
+# 18 -> 20 (#8149 review): C-tail (the additive tail read raw, independent of the
+# extractor under test) + axis16 (verify-doppler-secrets raised past the serial branch).
+MIN_C="${DRIFT_MIN_C:-20}"
 COUNT_A=0
 COUNT_B=0
 COUNT_C=0
@@ -77,6 +92,16 @@ fail() {
   FAIL=$((FAIL + 1))
 }
 assert_eq() { if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1" "$2" "$3"; fi; }
+# Instrument self-test (#8149 review): drive both helpers once and require both
+# counters to move, reported by a direct exit. A fail() rewritten to take the
+# pass branch keeps every per-part floor intact, so nothing else here sees it.
+_p0=$PASS; _f0=$FAIL
+pass "instrument" >/dev/null; fail "instrument" >/dev/null
+if [[ "$PASS" -ne $((_p0 + 1)) || "$FAIL" -ne $((_f0 + 1)) ]]; then
+  echo "FAIL: instrument self-test -- pass()/fail() did not move their counters" >&2
+  exit 2
+fi
+PASS=$_p0; FAIL=$_f0
 assert_contains() {
   # assert_contains <desc> <needle-ERE> <haystack>
   if printf '%s' "$3" | grep -Eq -- "$2"; then pass "$1"; else fail "$1" "matches /$2/" "$3"; fi
@@ -570,9 +595,11 @@ if hb:
 
 # --- B8: pathspec parity vs the release workflow -----------------------------
 #
-# The critical path is NOT a serial sum (#7160). `release` and `await-ci` declare no `needs:`,
-# so they run in PARALLEL and the declared bound is:
-#     max(release, await-ci) + migrate + verify-migrations + deploy
+# The critical path is NOT a serial sum (#7160). `release` and CI declare no `needs:` on each
+# other — since #5806 they are in different workflows, both started by the same push —
+# so they run in PARALLEL; the deploy arm then runs `resolve-target` serially after whichever
+# finishes last (ADR-217 D3(b)), so the declared bound is (one formula, every site — #8149):
+#     max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy
 #
 # Two properties this computation must preserve, both previously violated in the UNSAFE
 # direction:
@@ -630,6 +657,11 @@ try:
         try:
             callee = yaml.safe_load(open(callee_path))
             cjob = ((callee.get("jobs") or {}).get("release") or {})
+            # The formula reads ONLY jobs.release of the callee. A needs: predecessor
+            # inside the callee would run before it, unread; B8f pins that there is none.
+            cneeds = cjob.get("needs") or []
+            cneeds = [cneeds] if isinstance(cneeds, str) else list(cneeds)
+            emit("RELEASE_CALLEE_NEEDS", ",".join(str(x) for x in cneeds))
             if "timeout-minutes" not in cjob:
                 release_ceiling = DEFAULT_JOB_TIMEOUT_MIN
             else:
@@ -643,9 +675,112 @@ try:
             ceiling_err = ("could not read reusable workflow %s: %s"
                            % (callee_rel, str(e).replace("\n", " ")))
 
-    crit = max(release_ceiling, job_timeout("await-ci"))
+    # --- CI declared path (#5806 / ADR-217; IN the assertion since #8149, see below) ---
+    # WAS job_timeout("await-ci"). That job is GONE: the deploy now fires on a
+    # workflow_run completed event from ci.yml rather than polling for CI inside
+    # this workflow. job_timeout() returns the GitHub 360 default for an ABSENT
+    # job, so leaving the old term here would compute max(60, 360) + 135 = 495,
+    # over the 207 threshold, and drive B9 RED on the very change that is correct.
+    #
+    # ITS FIRST REPLACEMENT WAS ALSO WRONG, and in the more dangerous direction.
+    # It used ci_timeout("test-scripts") + ci_timeout("test") = 70, described as
+    # "the quantity the deploy waits for". It is not. await-ci polled for the
+    # test CHECK, so to-test was correct for THAT mechanism and was carried across
+    # the rewrite unchanged. workflow_run types:[completed] fires when the WHOLE
+    # ci.yml run concludes. Measured on this tree: to-test 70m, whole run 720m.
+    # B9 was green at 205 <= 207 on a term that was wrong by an order of magnitude.
+    #
+    # THE DESIGN CHANGE THIS EXPOSES, stated rather than hidden by arithmetic:
+    # await-ci CAPPED the wait at its own ceiling however long CI took. #5806
+    # deliberately removes that cap (issue item (a): "no fixed ceiling"). So the
+    # declared end-to-end path is no longer bounded by this workflow at all -- it
+    # is bounded by ci.yml, where 19 of 25 jobs declare no timeout-minutes and
+    # therefore carry the GitHub 360m default (#8020). Declared whole-pipeline
+    # path is ~855m against a 207m threshold, and no arithmetic here makes that
+    # false.
+    #
+    # At the time, B9 asserted over the arm this pipeline CONTROLS -- everything
+    # downstream of the workflow_run event -- and B9b ratcheted the arm it did not.
+    # Folding an unasserted 720 into crit would have reddened every run over a
+    # pre-existing condition. #8020 then closed that condition (every ci.yml job
+    # declares a measured ceiling), and #8149 put the term into crit -- see the
+    # DECISION block below. B9b/B9c stay: B9c now also protects the CI term in
+    # B9 from a blind extractor.
+    #
+    # NOTE FOR EDITORS: no apostrophes in this block. It is interpolated inside a
+    # single-quoted shell string, where one apostrophe ends the string and the
+    # shell parses the remainder as commands.
+    ci_undeclared = []
+    ci_declared_path = 0
+    ci_path = os.path.join(os.path.dirname(os.path.abspath(rel_path)), "ci.yml")
+    try:
+        ci = yaml.safe_load(open(ci_path))
+        cijobs = ci.get("jobs") or {}
+        for name, j in sorted(cijobs.items()):
+            if not isinstance(j, dict) or "timeout-minutes" not in j:
+                ci_undeclared.append(name)
+            else:
+                try:
+                    int(j["timeout-minutes"])
+                except (TypeError, ValueError):
+                    ci_undeclared.append(name)
+
+        def ci_tmo(name):
+            j = cijobs.get(name) or {}
+            try:
+                return int(j["timeout-minutes"])
+            except (KeyError, TypeError, ValueError):
+                return DEFAULT_JOB_TIMEOUT_MIN
+
+        def ci_needs(name):
+            n = (cijobs.get(name) or {}).get("needs") or []
+            return [n] if isinstance(n, str) else list(n)
+
+        memo = {}
+
+        def ci_path_to(name, seen=()):
+            if name in memo:
+                return memo[name]
+            if name in seen or name not in cijobs:
+                return 0
+            ups = ci_needs(name)
+            best = max([ci_path_to(u, seen + (name,)) for u in ups] or [0])
+            memo[name] = ci_tmo(name) + best
+            return memo[name]
+
+        ci_declared_path = max([ci_path_to(n) for n in cijobs] or [0])
+        # A serialised matrix (strategy.max-parallel) multiplies a job ceiling by its
+        # leg count, which no per-job timeout-minutes read can see; B9e pins absence.
+        ci_max_parallel = [name for name, j in sorted(cijobs.items())
+                           if isinstance(j, dict) and isinstance(j.get("strategy"), dict)
+                           and "max-parallel" in j["strategy"]]
+        emit("CI_MAX_PARALLEL_JOBS", ",".join(ci_max_parallel))
+    except Exception as e:
+        if not ceiling_err:
+            ceiling_err = "could not read ci.yml: %s" % str(e).replace("\n", " ")
+    emit("CI_DECLARED_PATH_MIN", ci_declared_path)
+    emit("CI_UNDECLARED_COUNT", len(ci_undeclared))
+    emit("CI_UNDECLARED_JOBS", ",".join(ci_undeclared))
+
+    # DECISION (2026-09-14, #8149, ADR-217 D4 addendum): option (a) -- the CI term IS in
+    # this sum since #8149 (DECISION 2026-09-14, option (a); the reasoning -- why the
+    # additive and three-way-max forms were both wrong, and what stays outside the formula
+    # -- lives ONCE in ADR-217 Decision 4 addendum; do not restate it here). One formula:
+    #     crit = max(ci_declared_path, release) + resolve-target + migrate
+    #            + verify-migrations + deploy
+    # ci_declared_path is the memoised longest needs: path over every ci.yml job (360 default
+    # for an undeclared job); resolve-target is ADDITIVE, not a max() member. B9d asserts
+    # the one assumption this sum makes (verify-doppler-secrets, which runs alongside the
+    # chain, is dominated by it).
+    # (No apostrophes in this block: it is interpolated inside a single-quoted shell string,
+    # where one apostrophe ends the string.)
+    crit = max(ci_declared_path, release_ceiling) + job_timeout("resolve-target")
     for j in ("migrate", "verify-migrations", "deploy"):
         crit += job_timeout(j)
+    # Every term the formula summed, plus the parallel branch it assumes dominated, so
+    # B9 can print the vector on failure and B9d can assert the dominance (#8149 review).
+    for j in ("resolve-target", "migrate", "verify-migrations", "deploy", "verify-doppler-secrets"):
+        emit("CEILING_" + j.upper().replace("-", "_") + "_MIN", job_timeout(j))
 
     # Emitted AFTER every job_timeout call, not before. job_timeout also writes ceiling_err (an
     # expression-valued timeout-minutes on any of the four caller-side jobs), so emitting above
@@ -748,6 +883,110 @@ if runs:
     with open(os.environ.get("DRIFT_STEP_BODY_OUT", "/dev/null"), "w") as fh:
         fh.write(runs[0][1].get("run") or "")
 
+# --- B16: the issue step body, likewise for EXECUTION ---------------------------
+# The plan justifies widening the errexit fix beyond the capture on the grounds that four
+# list_rc handlers are dead code. Nothing executed them, so that claim was unpinned.
+for _s in by_id("issue"):
+    with open(os.environ.get("DRIFT_ISSUE_BODY_OUT", "/dev/null"), "w") as fh:
+        fh.write(_s.get("run") or "")
+    break
+
+# --- B14b: the simulation premise behind executing bodies under `bash -e` --------
+# Executing an extracted body under `bash -e` is faithful ONLY while this workflow declares no
+# shell: key. If one is added, the real invocation becomes
+# `bash --noprofile --norc -eo pipefail {0}` and the execution tests keep passing while
+# simulating a runner that no longer exists. Note `shell: bash` does NOT clear -e either -- this
+# counter exists to force a re-read of the harness, not to bless any particular value.
+_shell_steps = len([s for (_, s) in steps if s.get("shell")])
+_defaults = (wf.get("defaults") or {}).get("run") or {}
+if _defaults.get("shell"):
+    _shell_steps += 1
+for _j in jobs.values():
+    _jd = (_j.get("defaults") or {}).get("run") or {}
+    if _jd.get("shell"):
+        _shell_steps += 1
+emit("STEPS_WITH_SHELL_KEY", _shell_steps)
+
+# --- B15: every run: body in this workflow clears inherited errexit -------------
+def _set_verdict(args):
+    # True = clears -e, False = re-arms it, None = says nothing. `-o NAME` / `+o NAME` are
+    # consumed as PAIRS so `set -o errexit` is seen as the re-arm it is.
+    verdict = None
+    toks = args.split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-o", "+o") and i + 1 < len(toks):
+            if toks[i + 1] == "errexit":
+                verdict = t.startswith("+")
+            i += 2
+            continue
+        if t.startswith(("-", "+")) and not t.startswith("--") and "e" in t[1:]:
+            verdict = t.startswith("+")
+        i += 1
+    return verdict
+
+def errexit_clear_position(body):
+    # Returns (clear_index, first_statement_index) over the COMMENT-STRIPPED body, or
+    # (None, ...) when nothing clears errexit.
+    #
+    # POSITION, not presence. Asserting only presence was measured vacuous: moving the
+    # `set +e` in the notify step from the top of the body to AFTER the `fi` kept the count
+    # at 0 and left the whole suite green, while errexit was armed for the entire
+    # jq/curl sequence the clear exists to protect. The plan flagged exactly this residual
+    # ("B15 asserts presence, not position") and assumed the Phase 4 linter covered it --
+    # it cannot, because that gate anchors on a `$?` read and these bodies have none.
+    clear_i = None
+    first_stmt = None
+    for i, ln in enumerate(body.split("\n")):
+        if not ln.strip():
+            continue
+        m = re.match(r"^\s*set\s+(.*)$", ln)
+        if m:
+            if clear_i is None and _set_verdict(m.group(1)) is True:
+                clear_i = i
+            continue
+        if first_stmt is None:
+            first_stmt = i
+    return clear_i, first_stmt
+
+_bodies = [s for (_, s) in steps if isinstance(s.get("run"), str)]
+emit("RUN_BODY_COUNT", len(_bodies))
+
+_no_clear = 0
+_late_clear = 0
+for _s in _bodies:
+    _c, _f = errexit_clear_position(code(_s))
+    if _c is None:
+        _no_clear += 1
+    elif _f is not None and _c > _f:
+        _late_clear += 1
+emit("BODIES_WITHOUT_ERREXIT_CLEAR", _no_clear)
+emit("BODIES_WITH_LATE_ERREXIT_CLEAR", _late_clear)
+
+# --- B17: the empty-string coercion fail-open ----------------------------------
+# Actions == is LOOSE: differing operand types are cast to Number, an unset output is the empty
+# string, and the empty string casts to 0 -- so \x27\x27 == \x270\x27 is TRUE. A step that died
+# before writing $GITHUB_OUTPUT therefore satisfies every == \x270\x27 gate. Measured on run
+# 31054501973: the check-error FILING step (!= 0 && != 1) was skipped while its exact complement,
+# the CLOSER (== 0 || == 1), RAN. Leading with steps.check.outcome is what discriminates
+# "the step ran and measured 0" from "the step never ran".
+# Selector is `steps.check.outputs.` -- the WHOLE consumer set, not just the exit_code ones.
+# Keying on exit_code excluded the `verdict == \x27CLEAN\x27` gate, leaving that one consumer
+# unpinned while the prose above it claimed EVERY consumer leads with the conjunct. The guard
+# was narrower than its own name. (No apostrophes in this block -- see the code() docstring.)
+_gates = [norm(s.get("if", "")) for (_, s) in steps
+          if "steps.check.outputs." in norm(s.get("if", ""))]
+emit("EXITCODE_GATE_COUNT", len(_gates))
+emit("EXITCODE_GATES_WITHOUT_OUTCOME_CONJUNCT",
+     len([g for g in _gates if "steps.check.outcome == \x27success\x27" not in g]))
+# A substring test cannot see a NEUTERED conjunct: `(steps.check.outcome == \x27success\x27
+# || true) && …` keeps the substring and is vacuous. Count gates whose conjunct sits inside a
+# disjunction, which is the cheap shape that defeats the check above.
+emit("EXITCODE_GATES_WITH_VACUOUS_CONJUNCT",
+     len([g for g in _gates
+          if re.search(r"\(\s*steps\.check\.outcome == \x27success\x27\s*\|\|", g)]))
+
 # --- B10: schedule + job timeout ---------------------------------------------
 on = wf.get("on", wf.get(True, {})) or {}
 sched = on.get("schedule") or []
@@ -771,8 +1010,13 @@ run_part_b() {
   fi
   pass "B0 the workflow file exists"
 
-  local EX="$TMP/extract.env"
+  # Overridable so the Part C parent can read the emits a CHILD produced (RELEASE_CRITICAL_PATH_MIN,
+  # CI_DECLARED_PATH_MIN, RELEASE_CEILING_MIN) after the child exits -- the child $TMP is gone
+  # by then. The B9 axes derive their expected figures from the control child emits rather
+  # than from pinned numbers, so a legitimate ceiling move does not red a must-PASS row.
+  local EX="${DRIFT_EXTRACT_OUT:-$TMP/extract.env}"
   export DRIFT_STEP_BODY_OUT="$TMP/check-body.sh"
+  export DRIFT_ISSUE_BODY_OUT="$TMP/issue-body.sh"
   if ! python3 -c "$PYEXTRACT" "$WORKFLOW" "$RELEASE_WORKFLOW" > "$EX" 2>"$TMP/extract.err"; then
     fail "B0b PyYAML extraction succeeded" "rc=0" "$(cat "$TMP/extract.err")"
     return 0
@@ -904,43 +1148,135 @@ run_part_b() {
   # a changed graph: insert a job before `deploy`, or raise the dominated verify-doppler-secrets
   # (10m) to 200, and the formula still returns 195 while the real bound is larger.
   assert_eq "B8e the set of jobs with a needs-path to deploy is unchanged" \
-    "await-ci,migrate,release,verify-doppler-secrets,verify-migrations" \
+    "migrate,release,resolve-target,verify-doppler-secrets,verify-migrations" \
     "${X_DEPLOY_NEEDS_CLOSURE:-<unset>}"
+
+  # B8f -- the callee topology the formula does not read. release_ceiling is the callee's
+  # jobs.release.timeout-minutes and nothing else; a needs: predecessor added inside
+  # reusable-release.yml would run before it, unread, and the declared path would be short.
+  assert_eq "B8f callee jobs.release declares no needs: (the release ceiling is its whole declared path)" \
+    "" "${X_RELEASE_CALLEE_NEEDS-<unset>}"
 
   # B9 -- threshold safety, in the SAFE direction: a pipeline timeout INCREASE fails the
   # suite, so the threshold can never silently become smaller than legitimate latency.
   #
-  # The compared value is a CRITICAL PATH with a max() term, not a serial sum: `release` and
-  # `await-ci` start in parallel, so it is max(release, await-ci) + migrate + verify-migrations
-  # + deploy. With `release` undeclared that is 495, not the 555 a serial reading gives.
+  # The compared value is the declared MERGE-TO-DEPLOY critical path, one formula at every
+  # site (#8149, ADR-217 D4 addendum): `release` and CI start in parallel (in different
+  # workflows since #5806) and the deploy arm runs `resolve-target` serially after whichever
+  # finishes last, so it is
+  #   max(ci_declared_path, release) + resolve-target + migrate + verify-migrations + deploy.
+  # With `release` undeclared the max() reads 360, not the sum a serial reading gives.
   #
-  # SCOPE (#7160): this bounds DECLARED EXECUTION only. The checker's own clock starts at the
-  # oldest undeployed commit's committer epoch, and runner queue wait, concurrency
-  # serialization between back-to-back merges, and push-to-start latency all sit outside any
-  # job timeout. The threshold's tolerance for those remains empirical, not provable.
+  # OUTSIDE the formula, deliberately, and not covered by the 5 m slack in the constant:
+  # concurrency-group serialisation between back-to-back merges (reusable-release.yml's
+  # `release-<component>`, and the deploy arm's `migrate-web-platform`,
+  # `verify-migrations-web-platform` and `web-1-swap` groups) and runner-queue wait -- the
+  # list and the SCOPE (#7160) reasoning are in the .sh header, ADR-217 D4 addendum owns the
+  # why. This bounds DECLARED EXECUTION only.
+  #
+  # The `B9 threshold` PREFIX is load-bearing: Part C matches `FAIL: B9 threshold` by prefix
+  # and axis13 reads this FAIL label out of the live test text, so renaming it reds there.
   if [[ -n "${THRESH_MIN:-}" && "${X_RELEASE_CRITICAL_PATH_MIN:-x}" =~ ^[0-9]+$ ]]; then
     if [[ "$THRESH_MIN" -ge "${X_RELEASE_CRITICAL_PATH_MIN}" ]]; then
-      pass "B9 threshold (${THRESH_MIN}m) >= release declared critical path (${X_RELEASE_CRITICAL_PATH_MIN}m)"
+      pass "B9 threshold (${THRESH_MIN}m) >= declared merge-to-deploy critical path (${X_RELEASE_CRITICAL_PATH_MIN}m)"
     else
-      fail "B9 threshold >= release declared critical path" \
+      fail "B9 threshold >= declared merge-to-deploy critical path" \
         ">= ${X_RELEASE_CRITICAL_PATH_MIN}" "$THRESH_MIN"
+      # Print the vector the total was summed from (a total alone cannot say WHICH term
+      # moved), and pick the remedy by cause: a deploy-arm term reading the 360 default
+      # is a DELETED ceiling, and raising the threshold to cover it is the wrong fix.
+      local _b9_terms="ci=${X_CI_DECLARED_PATH_MIN:-?} release=${X_RELEASE_CEILING_MIN:-?} resolve-target=${X_CEILING_RESOLVE_TARGET_MIN:-?} migrate=${X_CEILING_MIGRATE_MIN:-?} verify-migrations=${X_CEILING_VERIFY_MIGRATIONS_MIN:-?} deploy=${X_CEILING_DEPLOY_MIN:-?}"
+      local _b9_undeclared="" _t
+      for _t in "resolve-target:${X_CEILING_RESOLVE_TARGET_MIN:-}" "migrate:${X_CEILING_MIGRATE_MIN:-}" \
+                "verify-migrations:${X_CEILING_VERIFY_MIGRATIONS_MIN:-}" "deploy:${X_CEILING_DEPLOY_MIN:-}"; do
+        [[ "${_t#*:}" == "360" ]] && _b9_undeclared="${_b9_undeclared} ${_t%%:*}"
+      done
+      echo "    terms: ${_b9_terms} (a 360 is the GitHub default for a job with NO timeout-minutes)"
+      if [[ -n "$_b9_undeclared" ]]; then
+        echo "    remedy: restore timeout-minutes on:${_b9_undeclared} in .github/workflows/web-platform-release.yml -- the ceiling was deleted, do NOT raise the threshold to cover a 360"
+      else
+        echo "    remedy: raise DRIFT_SUSTAINED_THRESHOLD_MIN in scripts/prod-version-drift-check.sh to >= ${X_RELEASE_CRITICAL_PATH_MIN}m in the SAME commit as the ceiling raise and add a dated line to its header; the workflow re-derives CI_BUDGET_MIN from it, no other edit"
+      fi
     fi
   else
-    fail "B9 threshold and release critical path both readable" "integers" \
+    fail "B9 threshold and merge-to-deploy critical path both readable" "integers" \
       "thresh=${THRESH_MIN:-<unset>} path=${X_RELEASE_CRITICAL_PATH_MIN:-<unset>}"
   fi
 
+  # B9b -- RATCHET on the arm B9 deliberately does not assert.
+  # #5806 removes await-ci, and with it the CAP that bounded how long this
+  # pipeline would wait for CI. The wait is now bounded only by ci.yml, where
+  # jobs without timeout-minutes carry the GitHub 360m default. That is an
+  # accepted consequence (issue item (a)), NOT a licence for it to grow: every
+  # further undeclared job adds up to another 360m to the declared distance
+  # between a merge and a deploy, and the 207m drift alert is the only thing
+  # that would ever notice -- 3.5h after the fact.
+  #
+  # A COUNT, not a list, is the ratchet: renaming a job must not red this, but
+  # adding an unbounded one must. The baseline was 19 at #5806 and is now ZERO —
+  # #8020 was closed inline in the same PR by DERIVING each ceiling from measured
+  # job durations (10 successful main runs; every job under 4.2m against the
+  # platform's 360m default). At zero this stops being a ratchet and becomes an
+  # absolute floor: any new unbounded job reds.
+  CI_UNDECLARED_BASELINE=0
+  if [[ "${X_CI_UNDECLARED_COUNT:-x}" =~ ^[0-9]+$ ]]; then
+    if [[ "${X_CI_UNDECLARED_COUNT}" -le "$CI_UNDECLARED_BASELINE" ]]; then
+      pass "B9b ci.yml jobs without timeout-minutes (${X_CI_UNDECLARED_COUNT}) <= baseline ${CI_UNDECLARED_BASELINE} (#8020)"
+    else
+      fail "B9b ci.yml jobs without timeout-minutes must not grow past the #5806 baseline -- each adds up to 360m to the declared merge-to-deploy distance (#8020). Undeclared: ${X_CI_UNDECLARED_JOBS:-<unset>}" \
+        "<= ${CI_UNDECLARED_BASELINE}" "${X_CI_UNDECLARED_COUNT}"
+    fi
+  else
+    fail "B9b ci.yml undeclared-ceiling count readable" "integer" "${X_CI_UNDECLARED_COUNT:-<unset>}"
+  fi
+  # B9c -- the baseline must not be vacuous. If the extractor silently stopped
+  # finding ci.yml, the count would be 0 and B9b would pass forever while
+  # measuring nothing. A ratchet whose instrument can go blind is not a ratchet.
+  if [[ "${X_CI_DECLARED_PATH_MIN:-0}" -gt 0 ]]; then
+    pass "B9c ci.yml declared whole-run path is derived (${X_CI_DECLARED_PATH_MIN}m), so B9b measured a real file"
+  else
+    fail "B9c ci.yml declared whole-run path must be derivable -- a zero path means ci.yml was not read, and B9b would then ratchet against nothing" \
+      "> 0" "${X_CI_DECLARED_PATH_MIN:-<unset>}"
+  fi
+
+  # B9d -- the parallel branch the formula assumes DOMINATED. deploy needs both the serial
+  # chain (resolve-target -> migrate -> verify-migrations) and verify-doppler-secrets, which
+  # has no needs: and runs alongside that chain. The formula sums only the chain, so it is
+  # exact iff verify-doppler-secrets <= resolve-target + migrate + verify-migrations. B8e pins
+  # the SET of deploy prerequisites; this pins the ceiling the set membership alone cannot.
+  if [[ "${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN:-x}" =~ ^[0-9]+$ && "${X_CEILING_RESOLVE_TARGET_MIN:-x}" =~ ^[0-9]+$ \
+        && "${X_CEILING_MIGRATE_MIN:-x}" =~ ^[0-9]+$ && "${X_CEILING_VERIFY_MIGRATIONS_MIN:-x}" =~ ^[0-9]+$ ]]; then
+    local _serial=$(( X_CEILING_RESOLVE_TARGET_MIN + X_CEILING_MIGRATE_MIN + X_CEILING_VERIFY_MIGRATIONS_MIN ))
+    if [[ "$X_CEILING_VERIFY_DOPPLER_SECRETS_MIN" -le "$_serial" ]]; then
+      pass "B9d verify-doppler-secrets (${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN}m) is dominated by the serial branch (${_serial}m), so the formula is exact"
+    else
+      fail "B9d verify-doppler-secrets must stay <= resolve-target + migrate + verify-migrations -- above it the parallel branch, not the summed chain, is the critical path and B9 under-counts" \
+        "<= ${_serial}" "${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN}"
+    fi
+  else
+    fail "B9d deploy-arm ceilings readable" "integers" \
+      "verify-doppler-secrets=${X_CEILING_VERIFY_DOPPLER_SECRETS_MIN:-<unset>} resolve-target=${X_CEILING_RESOLVE_TARGET_MIN:-<unset>} migrate=${X_CEILING_MIGRATE_MIN:-<unset>} verify-migrations=${X_CEILING_VERIFY_MIGRATIONS_MIN:-<unset>}"
+  fi
+
+  # B9e -- no ci.yml job serialises its matrix. strategy.max-parallel multiplies a leg
+  # ceiling by the leg count and no per-job timeout-minutes read can see it; extend the
+  # extractor before adding one.
+  assert_eq "B9e no ci.yml job declares strategy.max-parallel (a serialised matrix the path extractor cannot see)" \
+    "" "${X_CI_MAX_PARALLEL_JOBS-<unset>}"
+
   # B10 -- schedule/monitor coherence. A job timeout above the tick interval, combined with
   # cancel-in-progress: false, would queue every subsequent tick behind a wedged run.
-  assert_eq "B10 schedule is every 30 minutes" "*/30 * * * *" "${X_CRON:-}"
+  # Cadence is hourly since #8450 (runner-concurrency trim, paired with the monitor's
+  # 360-min margin); the pin moves with the schedule, not the other way round.
+  assert_eq "B10 schedule is hourly" "0 * * * *" "${X_CRON:-}"
   assert_eq "B10b workflow_dispatch is available (needed to exercise the alert path)" "1" "${X_HAS_DISPATCH:-0}"
   assert_eq "B10c overlapping ticks serialize rather than cancel" "False" "${X_CONCURRENCY_CANCEL:-<unset>}"
   assert_eq "B10d permissions: issues: write" "write" "${X_PERM_ISSUES:-<unset>}"
   assert_eq "B10e permissions: contents: read" "read" "${X_PERM_CONTENTS:-<unset>}"
-  if [[ "${X_JOB_TIMEOUT:-999}" =~ ^[0-9]+$ ]] && [[ "${X_JOB_TIMEOUT}" -le 30 ]]; then
-    pass "B10f job timeout (${X_JOB_TIMEOUT}m) <= the 30m tick interval"
+  if [[ "${X_JOB_TIMEOUT:-999}" =~ ^[0-9]+$ ]] && [[ "${X_JOB_TIMEOUT}" -le 60 ]]; then
+    pass "B10f job timeout (${X_JOB_TIMEOUT}m) <= the 60m tick interval"
   else
-    fail "B10f job timeout <= tick interval" "<= 30" "${X_JOB_TIMEOUT:-<unset>}"
+    fail "B10f job timeout <= tick interval" "<= 60" "${X_JOB_TIMEOUT:-<unset>}"
   fi
 
   # B11 -- closure. Both were entirely unpinned: Part B read only `if:` and `uses.with`.
@@ -1009,6 +1345,201 @@ run_part_b() {
     fail "B13 the check step body was extracted for execution" "a non-empty file" "absent"
   fi
 
+  # B14 -- THE CAPTURE REACHES ITS CONSUMERS, on every verdict class. Executed, not grepped.
+  #
+  # This is the assertion #7304 was missing. GitHub runs a run: block with no shell: key under
+  # `bash -e {0}`, so errexit is ALREADY ON, and `set -uo pipefail` only ADDS flags. The capture
+  # `out="$(...)"; rc=$?` therefore aborted the shell AT that line whenever the checker exited
+  # non-zero -- which is exactly the two verdicts that alert. Measured: 8/8 scheduled runs failed
+  # emitting zero output, while the CLEAN path passed through unaffected the entire time.
+  #
+  # That asymmetry is why this runs all three arms. A fix verified only on exit 0 is
+  # indistinguishable from no fix at all, because exit 0 already worked.
+  #
+  # Running under `bash -e` is load-bearing: a bare `bash` would make this test pass against the
+  # BROKEN body. B14b pins the premise that `bash -e` is still what the runner uses.
+  if [[ -s "$TMP/check-body.sh" ]]; then
+    # ONE invocation, shared by the self-check probe and every arm, so they cannot diverge.
+    local BASH_E=(bash -e)
+
+    # Self-check: prove THIS bash actually aborts an assignment-from-failing-substitution under
+    # errexit. If it did not, every arm below would pass for the wrong reason and B14 would be
+    # silently vacuous rather than depending on axis11 to notice.
+    local probe14
+    probe14="$("${BASH_E[@]}" -c 'set -uo pipefail; x="$(exit 1)"; echo REACHED' 2>&1 || true)"
+    assert_not_contains "B14 self-check: inherited errexit aborts the capture in this bash" \
+      "REACHED" "$probe14"
+
+    local keys14 stub_arm code14 sbx14 gho14 out14 rc14 want_verdict
+    IFS=',' read -ra keys14 <<< "${X_EXTRACTED_KEYS:-}"
+    if [[ "${#keys14[@]}" -lt 2 ]]; then
+      fail "B14 the extracted output-key set is usable for stub generation" \
+        "at least 2 keys from B12" "${X_EXTRACTED_KEYS:-<none>}"
+    else
+      for code14 in 0 1 2; do
+        case "$code14" in
+          0) want_verdict="CLEAN" ;;
+          1) want_verdict="DRIFT_SUSTAINED" ;;
+          2) want_verdict="CHECK_ERROR" ;;
+        esac
+
+        # A FRESH sandbox and a FRESH $GITHUB_OUTPUT per arm. The body APPENDS (>>), so a shared
+        # file would let the exit-1 arm's grep find exit_code=0 left behind by the exit-0 arm and
+        # pass for the wrong reason. The exact-line-count assertion catches both that
+        # contamination and a partially-written output.
+        sbx14="$TMP/b14-$code14"
+        gho14="$TMP/b14-gho-$code14"
+        rm -rf "$sbx14"; mkdir -p "$sbx14/scripts" || { fail "B14 sandbox setup (exit $code14)" "mkdir rc=0" "failed"; break; }
+        : > "$gho14"
+
+        # The stub's key set is GENERATED from the keys the workflow actually greps out (B12's
+        # X_EXTRACTED_KEYS) rather than hand-copied. A hand-written list would be a THIRD
+        # independent copy of the key contract -- checker, workflow, stub -- so a rename would
+        # turn B12 red while this stub silently rotted into testing nothing.
+        {
+          printf '%s\n' '#!/usr/bin/env bash'
+          for stub_arm in "${keys14[@]}"; do
+            [[ -z "$stub_arm" ]] && continue
+            case "$stub_arm" in
+              *VERDICT) printf 'echo "%s=%s"\n' "$stub_arm" "$want_verdict" ;;
+              # The stub marker proves the STUB produced this result -- not a stale real checker,
+              # not an empty run, not a leftover file.
+              *REASON)  printf 'echo "%s=%s"\n' "$stub_arm" "STUB_MARKER_7304" ;;
+              *)        printf 'echo "%s=stub_value"\n' "$stub_arm" ;;
+            esac
+          done
+          printf 'exit %s\n' "$code14"
+        } > "$sbx14/scripts/prod-version-drift-check.sh"
+
+        cp "$TMP/check-body.sh" "$sbx14/body.sh"
+        out14="$(cd "$sbx14" && GITHUB_OUTPUT="$gho14" "${BASH_E[@]}" ./body.sh 2>&1)"; rc14=$?
+
+        assert_eq "B14 (exit $code14) the step body itself exits 0 -- the verdict travels as DATA" \
+          "0" "$rc14"
+        assert_eq "B14 (exit $code14) \$GITHUB_OUTPUT records the checker's exit code" \
+          "exit_code=$code14" "$(grep '^exit_code=' "$gho14" || echo '<ABSENT -- the step died at the capture>')"
+        assert_eq "B14 (exit $code14) \$GITHUB_OUTPUT records the verdict" \
+          "verdict=$want_verdict" "$(grep '^verdict=' "$gho14" || echo '<ABSENT>')"
+        assert_eq "B14 (exit $code14) the stub marker reached \$GITHUB_OUTPUT" \
+          "reason=STUB_MARKER_7304" "$(grep '^reason=' "$gho14" || echo '<ABSENT>')"
+        # Exact, not >=: contamination and truncation are both caught, and the count is
+        # stub-deterministic so pinning it costs no flake.
+        assert_eq "B14 (exit $code14) \$GITHUB_OUTPUT has exactly one line per contract key plus exit_code" \
+          "$(( ${#keys14[@]} + 1 ))" "$(grep -c . "$gho14" || true)"
+        # This count's only real power is 0-vs-N: did the run-log echo loop execute AT ALL. Do
+        # not "strengthen" it into a content assertion -- B13 already owns the sanitiser's
+        # behaviour, and duplicating it here would couple two tests to one fixture.
+        assert_eq "B14 (exit $code14) every checker line reached the run log" \
+          "${#keys14[@]}" "$(printf '%s\n' "$out14" | grep -c '^drift| ' || true)"
+
+        case "$code14" in
+          1) assert_eq "B14 (exit 1) exactly one ::error:: names the stale build" \
+               "1" "$(printf '%s\n' "$out14" | grep -c '^::error::Production is serving a stale build' || true)" ;;
+          2) assert_eq "B14 (exit 2) exactly one ::error:: names the cannot-evaluate case" \
+               "1" "$(printf '%s\n' "$out14" | grep -c '^::error::Version-drift check could NOT be evaluated' || true)" ;;
+          0) assert_eq "B14 (exit 0) the quiet verdict emits NO ::error::" \
+               "0" "$(printf '%s\n' "$out14" | grep -c '^::error::' || true)" ;;
+        esac
+      done
+    fi
+  else
+    fail "B14 the check step body was extracted for execution" "a non-empty file" "absent"
+  fi
+
+  # B14b -- pin B14's OWN simulation premise.
+  #
+  # B14's fidelity claim ("bash -e is what the runner uses") holds only because this workflow
+  # declares no shell: key anywhere. Add one and the real invocation becomes
+  # `bash --noprofile --norc -eo pipefail {0}` -- at which point B14 keeps passing while
+  # simulating a runner that no longer exists. Three lines, and it is what stops this whole
+  # execution battery from rotting silently.
+  assert_eq "B14b no step declares a shell: key (so \`bash -e\` remains the faithful simulation)" \
+    "0" "${X_STEPS_WITH_SHELL_KEY:-<unextracted>}"
+
+  # B15 -- EVERY run: body in this workflow clears inherited errexit, not just the capture.
+  #
+  # Deliberately NOT subsumed by the repo-wide lint gate, and this comment is the reason: the
+  # gate anchors on a `$?` / ${PIPESTATUS[n]} read, because that read is what proves the author
+  # meant to handle failure. The notify and notify_error bodies are `jq -n` steps with no such
+  # read, so the gate can NEVER fire on them. If a future edit drops set +e from notify, B15 is
+  # the only thing in the repo that catches it. Do not delete this as "covered by the linter".
+  #
+  # Asserts the NUMERATOR, never the ratio: pinning "0 of 7" would make adding a legitimate
+  # eighth step fail for a completely misleading reason.
+  assert_eq "B15 every run: body clears inherited errexit (count lacking it)" \
+    "0" "${X_BODIES_WITHOUT_ERREXIT_CLEAR:-<unextracted>}"
+  assert_contains "B15b the body count is non-zero (a workflow with no bodies passes B15 vacuously)" \
+    "^[1-9]" "${X_RUN_BODY_COUNT:-0}"
+  # B15c -- POSITION, which B15 alone cannot see. Measured: moving the notify step's `set +e`
+  # below its `fi` kept B15's count at 0 and the whole suite green, while errexit stayed armed
+  # across the jq/curl sequence the clear exists to protect. A clear that lands after the first
+  # statement protects nothing above it.
+  assert_eq "B15c no body clears errexit AFTER its first statement (presence is not position)" \
+    "0" "${X_BODIES_WITH_LATE_ERREXIT_CLEAR:-<unextracted>}"
+
+  # B16 -- the list_rc safety branch is actually REACHABLE.
+  #
+  # The stated justification for widening this fix beyond the capture is that four documented
+  # "A FAILED LOOKUP IS NOT 'NOTHING FOUND'" handlers were dead code under inherited errexit.
+  # Nothing executed them, so that claim was asserted rather than measured. This runs the issue
+  # body with `gh` stubbed to fail and requires the branch to be reached.
+  if [[ -s "$TMP/issue-body.sh" ]]; then
+    local sbx16 gho16 out16
+    sbx16="$TMP/b16"; gho16="$TMP/b16-gho"
+    rm -rf "$sbx16"; mkdir -p "$sbx16/bin"
+    : > "$gho16"
+    # Fails on `issue list` (the lookup under test) and succeeds on `label create`, so the branch
+    # is reached via the rc path rather than by breaking the step outright.
+    {
+      printf '%s\n' '#!/usr/bin/env bash'
+      printf '%s\n' 'case "$1 $2" in'
+      printf '%s\n' '  "label create") exit 0 ;;'
+      printf '%s\n' '  "issue list")   echo "gh: API rate limit exceeded" >&2; exit 1 ;;'
+      printf '%s\n' '  *)              echo "UNEXPECTED gh invocation: $*" >&2; exit 64 ;;'
+      printf '%s\n' 'esac'
+    } > "$sbx16/bin/gh"
+    chmod +x "$sbx16/bin/gh"
+    cp "$TMP/issue-body.sh" "$sbx16/body.sh"
+    out16="$(cd "$sbx16" && PATH="$sbx16/bin:$PATH" GITHUB_OUTPUT="$gho16" \
+      GH_REPO="owner/repo" DETAIL="d" MISSING_COUNT="1" PATHSPEC_DOC="p" \
+      PROD_HEALTH_URL="https://example.invalid/health" MISSING_SHAS="abc" RUN_URL="https://example.invalid/run" \
+      bash -e ./body.sh 2>&1 || true)"
+
+    assert_contains "B16 a FAILED lookup is reported, not collapsed into 'nothing found'" \
+      "^::error::Could not query existing drift issues" "$out16"
+    assert_eq "B16b the failed-lookup branch records itself rather than filing a duplicate" \
+      "first_detection=lookup_failed" "$(grep '^first_detection=' "$gho16" || echo '<ABSENT -- branch unreachable>')"
+    assert_not_contains "B16c a failed lookup must NEVER route to the create branch" \
+      "UNEXPECTED gh invocation" "$out16"
+  else
+    fail "B16 the issue step body was extracted for execution" "a non-empty file" "absent"
+  fi
+
+  # B17 -- the empty-string coercion fail-open, which set +e does NOT fix.
+  #
+  # Actions == is LOOSE: operands of differing types are both cast to Number, an unset step
+  # output is '', and '' casts to 0 -- so '' == '0' is TRUE. A step that dies before writing
+  # $GITHUB_OUTPUT therefore satisfies every == '0' gate downstream. Measured on run
+  # 31054501973: `File or update the check-error issue` (gated != '0' && != '1') was SKIPPED
+  # while its exact logical complement `Close the check-error issue ...` (gated == '0' || == '1')
+  # RAN -- i.e. on a dead tick this workflow would auto-close the issue reporting its own
+  # breakage, posting an empty verdict.
+  #
+  # This also means B4 was never testing the empty case: it asks which steps are reachable when
+  # exit_code is '0', not when the step never ran. B17 is what covers that.
+  assert_eq "B17 every steps.check.outputs consumer leads with the outcome conjunct (count lacking it)" \
+    "0" "${X_EXITCODE_GATES_WITHOUT_OUTCOME_CONJUNCT:-<unextracted>}"
+  # The population is SIX -- the five exit_code gates plus the verdict==CLEAN gate. Pinning the
+  # exact number is what stops the selector silently narrowing again: an earlier revision keyed
+  # on `exit_code` and reported a clean 5, excluding the consumer whose conjunct was therefore
+  # unasserted while the prose claimed full coverage.
+  assert_eq "B17b all six steps.check.outputs consumers are in B17's population" \
+    "6" "${X_EXITCODE_GATE_COUNT:-0}"
+  # B17c -- a substring test cannot see a neutered conjunct. `(outcome == 'success' || true) &&`
+  # keeps the substring B17 looks for and is vacuous.
+  assert_eq "B17c no consumer's outcome conjunct is neutered inside a disjunction" \
+    "0" "${X_EXITCODE_GATES_WITH_VACUOUS_CONJUNCT:-<unextracted>}"
+
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
   if [[ -f "$MONITORS_TF" ]]; then
@@ -1044,6 +1575,7 @@ run_child() {
     DRIFT_TEST_WORKFLOW="$sbx/.github/workflows/scheduled-prod-version-drift.yml" \
     DRIFT_TEST_RELEASE_WORKFLOW="$sbx/.github/workflows/web-platform-release.yml" \
     DRIFT_TEST_MONITORS_TF="$sbx/apps/web-platform/infra/sentry/cron-monitors.tf" \
+    DRIFT_EXTRACT_OUT="$sbx/extract.env" \
     bash "$sbx/scripts/prod-version-drift-check.test.sh" 2>&1
   )
 }
@@ -1059,6 +1591,13 @@ make_sandbox() {
   cp "$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml" "$dst/.github/workflows/" || return 1
   cp "$RELEASE_WORKFLOW" "$dst/.github/workflows/web-platform-release.yml" || return 1
   cp "$MONITORS_TF" "$dst/apps/web-platform/infra/sentry/cron-monitors.tf" || return 1
+  # B9 reads CI's declared longest needs: path out of ci.yml since #5806 replaced the
+  # `await-ci` term with it, so the sandbox must carry ci.yml too. Without it the
+  # extraction falls back to the GitHub 360 default, B9 reds in EVERY sandbox arm,
+  # and the C0 control fails — which is the harness reporting a defect in itself,
+  # not in the tree. Same class as the reusable-workflow copy below: a suite that
+  # RELOCATES its subject must carry every file that subject resolves.
+  cp "$REPO_ROOT/.github/workflows/ci.yml" "$dst/.github/workflows/ci.yml" || return 1
 
   # B8 resolves jobs.release.uses and reads the CALLEE's timeout-minutes, so the sandbox must
   # carry the reusable workflow too. Without it every mutation child hits an unresolvable
@@ -1083,7 +1622,7 @@ PY
   return 0
 }
 
-# mutate_and_assert_red <axis-name> <target-relative-path> <python-mutator> [expected-FAIL-label]
+# mutate_and_assert_red <axis-name> <target-relative-path> <python-mutator> [expected-FAIL-label] [expected-ERE]
 #
 # The 4th argument is what makes an axis evidence about the PROPERTY rather than about the file
 # merely being broken. Scoring on "the child exited non-zero" accepts any failure, including a
@@ -1092,28 +1631,47 @@ PY
 # that for its whole life: its regex stopped at the `)` inside `:(exclude)...`, emitting
 # unparseable bash, so it never tested pathspec parity at all. With a label, an axis that stops
 # reaching its own property fails LOUDLY instead of passing for the wrong reason.
-mutate_and_assert_red() {
-  local axis="$1" rel="$2" mutator="$3" expect_label="${4:-}"
-  local sbx="$TMP/mut-$axis"
+#
+# The 5th argument (#8149) is an ERE the child output must ALSO match, scored in the same
+# assertion as the label. The B9 axes use it for the expected `>= <crit>` figure: a label
+# alone says "B9 went red", which a mutation landing on the WRONG job (or the wrong formula)
+# also satisfies; the figure says B9 went red for the intended term at the intended size.
+# mutate_into_sandbox <row> <target-relative-path> <python-mutator>
+#
+# The prologue both verdict helpers share (#8149 review: it was duplicated verbatim): build
+# the sandbox, keep a pristine copy of the target, run the mutator, and REQUIRE the mutation
+# to have landed -- a no-op sed that scores as "caught" is how a battery becomes the false
+# confidence it exists to remove. Returns 1 (after recording the FAIL) on any setup defect;
+# on success MUT_SBX names the sandbox and the caller runs the child.
+MUT_SBX=""
+mutate_into_sandbox() {
+  local row="$1" rel="$2" mutator="$3"
+  local sbx="$TMP/mut-$row"
+  MUT_SBX=""
   rm -rf "$sbx"
   if ! make_sandbox "$sbx"; then
-    fail "C-$axis sandbox setup" "cp/mkdir rc=0" "setup failed (disk full?)"
-    return 0
+    fail "C-$row sandbox setup" "cp/mkdir rc=0" "setup failed (disk full?)"
+    return 1
   fi
   local target="$sbx/$rel"
-  local pristine="$TMP/pristine-$axis"
-  cp "$target" "$pristine" || { fail "C-$axis pristine copy" "rc=0" "cp failed"; return 0; }
-
-  if ! python3 -c "$mutator" "$target" 2>"$TMP/mut-err-$axis"; then
-    fail "C-$axis mutator ran" "rc=0" "$(cat "$TMP/mut-err-$axis")"
-    return 0
+  local pristine="$TMP/pristine-$row"
+  cp "$target" "$pristine" || { fail "C-$row pristine copy" "rc=0" "cp failed"; return 1; }
+  if ! python3 -c "$mutator" "$target" 2>"$TMP/mut-err-$row"; then
+    fail "C-$row mutator ran" "rc=0" "$(cat "$TMP/mut-err-$row")"
+    return 1
   fi
-  # THE MUTATION MUST HAVE LANDED. A no-op sed that scores as "caught" is how a battery
-  # becomes the false confidence it exists to remove.
   if diff -q "$pristine" "$target" >/dev/null 2>&1; then
-    fail "C-$axis mutation LANDED (file actually changed)" "a differing file" "byte-identical"
-    return 0
+    fail "C-$row mutation LANDED (file actually changed)" "a differing file" "byte-identical"
+    return 1
   fi
+  MUT_SBX="$sbx"
+  return 0
+}
+
+mutate_and_assert_red() {
+  local axis="$1" rel="$2" mutator="$3" expect_label="${4:-}" expect_re="${5:-}"
+  mutate_into_sandbox "$axis" "$rel" "$mutator" || return 0
+  local sbx="$MUT_SBX"
 
   local child_out
   child_out="$(run_child "$sbx")"
@@ -1128,6 +1686,11 @@ mutate_and_assert_red() {
   # assertion for THAT property to be among the failures.
   if [[ -n "$expect_label" ]]; then
     if printf '%s' "$child_out" | grep -q "FAIL: ${expect_label}"; then
+      if [[ -n "$expect_re" ]] && ! printf '%s' "$child_out" | grep -Eq -- "$expect_re"; then
+        fail "C-$axis caught by ${expect_label} at the expected figure" "a line matching /${expect_re}/" \
+          "B9 red at a different figure: $(printf '%s' "$child_out" | grep -m2 -E '^    (expected|actual):' | tr '\n' ';')"
+        return 0
+      fi
       pass "C-$axis caught by ${expect_label}, the assertion it targets"
     else
       fail "C-$axis caught by ${expect_label}" "a FAIL line naming ${expect_label}" \
@@ -1136,6 +1699,69 @@ mutate_and_assert_red() {
   else
     pass "C-$axis $rel sabotage is caught (child exit $rc)"
   fi
+}
+
+# mutate_and_assert_green <row-name> <target-relative-path> <python-mutator> <expected-crit-m>
+#
+# The must-PASS twin of mutate_and_assert_red (#8149): same sandbox, same landing check, but
+# the child must exit 0 AND print the B9 PASS line at the EXPECTED figure. Exit 0 alone is
+# satisfied by a child that never reached Part B, and a PASS line at some other figure means
+# the formula absorbed the mutation for the wrong reason.
+mutate_and_assert_green() {
+  local row="$1" rel="$2" mutator="$3" expect_crit="$4"
+  mutate_into_sandbox "$row" "$rel" "$mutator" || return 0
+  local sbx="$MUT_SBX"
+  local child_out
+  child_out="$(run_child "$sbx")"
+  local rc=$?
+  local want="^  PASS: B9 threshold \\([0-9]+m\\) >= .* \\(${expect_crit}m\\)\$"
+  if [[ "$rc" == "0" ]] && printf '%s' "$child_out" | grep -Eq -- "$want"; then
+    pass "C-$row $rel must-PASS mutation stays green with B9 at the expected ${expect_crit}m"
+  else
+    fail "C-$row $rel must-PASS mutation stays green with B9 at the expected ${expect_crit}m" \
+      "child exit 0 and a line matching /${want}/" \
+      "exit $rc: $(printf '%s' "$child_out" | grep -m3 -E '^  (FAIL|PASS: B9 threshold)' | tr '\n' ';')"
+  fi
+}
+
+# ceiling_mutator <job> <new-value> -- prints a python program for mutate_and_assert_{red,green}.
+#
+# VALUE-AGNOSTIC, KEY-ANCHORED. It matches the `timeout-minutes:` KEY inside the `^  <job>:`
+# block (the block ends at the next 2-space-indented line) and writes the new value, so the
+# axis lands whatever the tree currently declares. A bare-text match on `timeout-minutes:`
+# can land in prose: job comments in the same block name the key. `re.subn` with count=1
+# and `assert n == 1` makes a non-landing mutation
+# fail the MUTATOR, never the byte-diff. (No apostrophes: single-quoted shell string.)
+ceiling_mutator() {
+  printf '%s\n' \
+    'import sys,re' \
+    'p=sys.argv[1]; s=open(p).read()' \
+    "job=\"$1\"; val=\"$2\"" \
+    'm=re.search(r"(?m)^  " + re.escape(job) + r":[ \t]*$", s)' \
+    'assert m, "ceiling mutator: job block ^  %s: not found" % job' \
+    'start=m.end()' \
+    'nxt=re.compile(r"(?m)^  \S").search(s, start)' \
+    'end=nxt.start() if nxt else len(s)' \
+    'blk,n=re.subn(r"(?m)^    timeout-minutes:[ \t]*\d+[ \t]*$", "    timeout-minutes: " + val, s[start:end], count=1)' \
+    'assert n == 1, "ceiling mutator: timeout-minutes key matched %d times inside job block %s (a comment is not a key)" % (n, job)' \
+    'open(p,"w").write(s[:start] + blk + s[end:])'
+}
+
+# child_emit <sandbox> <KEY> -- one value out of the emit file run_child asked the child to keep.
+child_emit() {
+  { grep -E "^$2=" "$1/extract.env" 2>/dev/null || true; } | head -1 | cut -d= -f2-
+}
+
+# yaml_job_timeout <workflow> <job> -- a raw declared ceiling, read independently of the SUT
+# extractor so the expected figures below are not derived by the formula they test.
+yaml_job_timeout() {
+  python3 - "$1" "$2" <<'PYJT'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+j = (d.get("jobs") or {}).get(sys.argv[2]) or {}
+v = j.get("timeout-minutes", "")
+print(v if isinstance(v, int) and not isinstance(v, bool) else "")
+PYJT
 }
 
 run_part_c() {
@@ -1214,12 +1840,24 @@ open(p,"w").write("\n".join(ls))' "A6 oldest_epoch_from_log picks the OLDEST"
 
   # Axis 5 -- replace an alert condition with a bare !cancelled(). True on success too, so
   # this emails on every healthy tick.
+  # The pattern is deliberately tolerant of ADDITIONAL leading conjuncts. It was originally
+  # anchored on the exact string `!cancelled() && steps.check.outputs.exit_code == '1'`, and
+  # #7304 then inserted `steps.check.outcome == 'success' &&` between the two -- at which point
+  # the regex matched nothing, the mutation silently did not land, and this axis stopped being
+  # evidence about B3b. A mutator keyed on an exact expression shape is coupled to every future
+  # edit of that expression; key it on the two ENDS instead.
   mutate_and_assert_red "axis5-bare-not-cancelled" "$WF" '
 import sys,re
-p=sys.argv[1]; s=open(p).read()
-s=re.sub(r"\$\{\{ !cancelled\(\) && steps\.check\.outputs\.exit_code == .1. \}\}",
-         "${{ !cancelled() }}", s, count=1)
-open(p,"w").write(s)' "B3b every alerting step carries a verdict conjunct" "A6 oldest_epoch_from_log picks the OLDEST" "B8b the checker"
+p=sys.argv[1]; ls=open(p).read().split("\n"); n=0
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if not l.lstrip().startswith("if:"): continue
+    l2,k=re.subn(r"\$\{\{ !cancelled\(\)[^}]*exit_code == .1. \}\}",
+                 "${{ !cancelled() }}", l, count=1)
+    if k:
+        ls[i]=l2; n+=1; break
+assert n == 1, "axis5 mutator did not match a drift-gated if: CONDITION (comment-only match?)"
+open(p,"w").write("\n".join(ls))' "B3b every alerting step carries a verdict conjunct"
 
   # Axis 6 -- delete the label bootstrap. gh issue create --label hard-fails on an undefined
   # label, so the verdict would reach the email channel only.
@@ -1240,11 +1878,23 @@ open(p,"w").write(s)' "B6 exactly two close steps"
   # Axis 8 -- flip the heartbeat first conjunct from the step OUTCOME to the output value.
   # A step that dies before writing its output leaves it empty; an output-only test reads
   # that as a value rather than as a death (#7138, one layer up).
+  # CODE-ONLY AND HEARTBEAT-ANCHORED, per axis 3. This mutator used to replace the first
+  # occurrence of the conjunct anywhere in the file, which worked only while the heartbeat was
+  # its ONLY occurrence. #7304 added the same conjunct to six if: gates AND documented it in
+  # prose above them, so a first-occurrence replace would now rewrite a COMMENT -- the mutation
+  # "lands" (the file differs), B7c stays green, and the axis reports SURVIVED against a
+  # perfectly correct artifact. The status expression is the one whose `${{` opens directly on
+  # the conjunct; every if: gate opens on `!cancelled()`.
   mutate_and_assert_red "axis8-heartbeat-first-conjunct" "$WF" '
 import sys
-p=sys.argv[1]; s=open(p).read()
-s=s.replace("steps.check.outcome == \x27success\x27","steps.check.outputs.exit_code != \x27\x27",1)
-open(p,"w").write(s)' "B7c heartbeat status"
+p=sys.argv[1]; ls=open(p).read().split("\n"); n=0
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if "${{ steps.check.outcome == \x27success\x27" in l:
+        ls[i]=l.replace("steps.check.outcome == \x27success\x27",
+                        "steps.check.outputs.exit_code != \x27\x27",1); n+=1; break
+assert n == 1, "axis8 mutator did not match the heartbeat status expression"
+open(p,"w").write("\n".join(ls))' "B7c heartbeat status"
 
   # Axis 9 -- shallow checkout. Puts the checker in permanent CHECK_ERROR on the COMMON path,
   # because origin/main HEAD is frequently not a path-matching commit. Code-only, per axis 3:
@@ -1265,7 +1915,181 @@ open(p,"w").write("\n".join(ls))' "B2b checkout declares fetch-depth: 0"
 import sys,re
 p=sys.argv[1]; s=open(p).read()
 s=re.sub(r"\[\[ \"\$sha\" =~ \^\[0-9a-f\]\{40\}\$ \]\]", "true", s, count=1)
-open(p,"w").write(s)' "A11 body {}" "B2b checkout declares fetch-depth: 0"
+open(p,"w").write(s)' "A11 body {}"
+
+  # Axis 11 -- delete the errexit clear from the check body: the #7304 outage itself, restored.
+  #
+  # This is the control that makes B14 evidence rather than decoration. Without it, B14 could
+  # degrade into asserting that a working body works, and nothing would notice -- which is the
+  # precise shape of the original bug, where the CLEAN path passed unchanged for eight
+  # consecutive runs while the two alerting verdicts were dark.
+  #
+  # MUTATES CODE ONLY, NEVER PROSE, per axis 3 and axis 9. The rationale comment above this very
+  # statement contains the literal `set +e` (it has to -- it explains why the statement is
+  # required), so a naive s.replace("set +e", "", 1) rewrites the COMMENT: the file differs, so
+  # diff -q reports the mutation landed, the child stays GREEN, and the axis reports SURVIVED
+  # while the artifact is in fact correct. Match a whole line that IS the statement.
+  mutate_and_assert_red "axis11-drop-errexit-clear" "$WF" '
+import sys,re
+p=sys.argv[1]; ls=open(p).read().split("\n"); out=[]; n=0
+for l in ls:
+    if n==0 and not l.lstrip().startswith("#") and re.match(r"^\s*set \+e\s*$", l):
+        n+=1; continue
+    out.append(l)
+assert n == 1, "axis11 mutator did not remove a set +e STATEMENT (comment-only match?)"
+open(p,"w").write("\n".join(out))' "B14 (exit 1)"
+
+  # Axis 12 -- strip the outcome conjunct from an exit_code gate: the empty-string coercion
+  # fail-open, re-armed. `\x27\x27 == \x270\x27` is TRUE in an Actions expression, so without
+  # this conjunct a check step that died before writing its output satisfies every == 0 gate --
+  # and the workflow auto-closes the issue reporting its own breakage. Observed on run
+  # 31054501973. Code-only for the same reason as axis 11: the conjunct is documented in prose
+  # directly above the gates it guards.
+  mutate_and_assert_red "axis12-drop-outcome-conjunct" "$WF" '
+import sys
+p=sys.argv[1]; ls=open(p).read().split("\n"); n=0
+for i,l in enumerate(ls):
+    if l.lstrip().startswith("#"): continue
+    if l.lstrip().startswith("if:") and "steps.check.outputs.exit_code" in l \
+       and "steps.check.outcome == \x27success\x27 && " in l:
+        ls[i]=l.replace("steps.check.outcome == \x27success\x27 && ","",1); n+=1; break
+assert n == 1, "axis12 mutator did not strip a conjunct from an exit_code gate"
+open(p,"w").write("\n".join(ls))' "B17"
+
+  # --- B9 honest merge-to-deploy path (#8149, ADR-217 D4 addendum, 2026-09-14) ---------------
+  #
+  # One formula, every site:
+  #     crit = max(ci_declared_path, release_ceiling) + resolve-target + migrate
+  #            + verify-migrations + deploy
+  # Three RED axes prove the three shape properties of that formula (the CI term is IN the
+  # sum; resolve-target is ADDITIVE, not inside the max; release is a max() member), and two
+  # must-PASS rows prove the max() absorbs a dominated release and that the boundary value is
+  # exactly the boundary. Every expected figure is DERIVED from the control child emits plus
+  # raw ceilings read straight out of the sandbox YAML, never pinned, so a legitimate future
+  # ceiling move does not turn a must-PASS row into a confusing red.
+  local CI=".github/workflows/ci.yml"
+  local REL=".github/workflows/web-platform-release.yml"
+  local ctl_crit ctl_ci ctl_rel ctl_thr rt mg vm dp vds ts rel_callee_rel
+  ctl_crit="$(child_emit "$TMP/control" RELEASE_CRITICAL_PATH_MIN)"
+  ctl_ci="$(child_emit "$TMP/control" CI_DECLARED_PATH_MIN)"
+  ctl_rel="$(child_emit "$TMP/control" RELEASE_CEILING_MIN)"
+  ctl_thr="$({ grep -oE '^DRIFT_SUSTAINED_THRESHOLD_MIN=[0-9]+' "$SUT" || true; } | { grep -oE '[0-9]+$' || true; } | head -1)"
+  rt="$(yaml_job_timeout "$TMP/control/$REL" resolve-target)"
+  mg="$(yaml_job_timeout "$TMP/control/$REL" migrate)"
+  vm="$(yaml_job_timeout "$TMP/control/$REL" verify-migrations)"
+  dp="$(yaml_job_timeout "$TMP/control/$REL" deploy)"
+  vds="$(yaml_job_timeout "$TMP/control/$REL" verify-doppler-secrets)"
+  ts="$(yaml_job_timeout "$TMP/control/$CI" test-scripts)"
+  rel_callee_rel="$(python3 - "$TMP/control/$REL" <<'PYCALLEE'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+u = ((d.get("jobs") or {}).get("release") or {}).get("uses") or ""
+print(u.removeprefix("./") if u.startswith("./") else "")
+PYCALLEE
+  )"
+  local b9_rows="C-tail axis13-raise-ci-test-scripts-ceiling axis14-raise-resolve-target-ceiling axis15-raise-release-ceiling axis16-raise-verify-doppler-secrets-ceiling green1-release-absorbed-by-max green2-test-scripts-at-boundary"
+  if ! [[ "$ctl_crit" =~ ^[0-9]+$ && "$ctl_ci" =~ ^[0-9]+$ && "$ctl_rel" =~ ^[0-9]+$ \
+          && "$ctl_thr" =~ ^[0-9]+$ && "$rt" =~ ^[0-9]+$ && "$mg" =~ ^[0-9]+$ && "$vm" =~ ^[0-9]+$ \
+          && "$dp" =~ ^[0-9]+$ && "$vds" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && -n "$rel_callee_rel" ]]; then
+    local row
+    for row in $b9_rows; do
+      fail "C-$row expected figure derivable from the control child emits and the sandbox YAML" \
+        "integers for crit/ci/release/threshold/resolve-target/migrate/verify-migrations/deploy/verify-doppler-secrets/test-scripts and a local release callee" \
+        "crit=${ctl_crit:-<unset>} ci=${ctl_ci:-<unset>} release=${ctl_rel:-<unset>} threshold=${ctl_thr:-<unset>} resolve-target=${rt:-<unset>} migrate=${mg:-<unset>} verify-migrations=${vm:-<unset>} deploy=${dp:-<unset>} verify-doppler-secrets=${vds:-<unset>} test-scripts=${ts:-<unset>} callee=${rel_callee_rel:-<unset>}"
+    done
+    return 0
+  fi
+  # The additive tail (resolve-target + migrate + verify-migrations + deploy) is read RAW out
+  # of the sandbox YAML, independent of the extractor under test; the control crit minus the
+  # max() head must equal it (C-tail). Deriving the tail from the emit alone let a SUT that
+  # dropped a term keep every row green (#8149 review, mutant S1): the expected figures
+  # would have shifted with the defect.
+  local max_head add_tail emit_tail
+  max_head=$(( ctl_ci > ctl_rel ? ctl_ci : ctl_rel ))
+  add_tail=$(( rt + mg + vm + dp ))
+  emit_tail=$(( ctl_crit - max_head ))
+  if [[ "$emit_tail" -eq "$add_tail" ]]; then
+    pass "C-tail control crit minus max(ci, release) equals the four raw ceilings summed (${add_tail}m)"
+  else
+    fail "C-tail control crit minus max(ci, release) equals resolve-target + migrate + verify-migrations + deploy read raw from the sandbox YAML -- a term is missing from, or doubled in, the formula" \
+      "$add_tail" "$emit_tail"
+  fi
+  # Every mutated value is DERIVED so the row keeps proving its claim whatever the tree
+  # declares (a pinned 130 stopped proving "CI is in the sum" once release exceeded it):
+  #   axis13: the smallest test-scripts that (a) lifts ci above release, so the max() takes
+  #           the CI arm, and (b) lifts crit past the threshold, so B9 reds;
+  #   axis14: the smallest resolve-target that lifts crit past the threshold by one;
+  #   axis15: the smallest release that (a) exceeds ci and (b) lifts crit past the threshold;
+  #   axis16: verify-doppler-secrets one above the serial branch it must stay under;
+  #   green1: release == ci, absorbed by the max() exactly (crit unchanged);
+  #   green2: test-scripts at the value that puts crit EXACTLY at the threshold.
+  # ci_declared_path with test-scripts moved to <v>: the memoised longest path shifts by the
+  # same delta, because test-scripts is on that path (B9c reads it as test-scripts + test).
+  local ci_base v13 ci13 exp13 v14 exp14 v15 exp15 exp1 v2 exp2 v16
+  ci_base=$(( ctl_ci - ts ))
+  v13=$(( ctl_rel - ci_base + 1 ))
+  [[ $(( ctl_thr - add_tail - ci_base + 1 )) -gt "$v13" ]] && v13=$(( ctl_thr - add_tail - ci_base + 1 ))
+  ci13=$(( ci_base + v13 ))
+  exp13=$(( ci13 + add_tail ))
+  v14=$(( rt + ctl_thr - ctl_crit + 1 ))
+  exp14=$(( ctl_crit - rt + v14 ))
+  v15=$(( ctl_ci + 1 ))
+  [[ $(( ctl_thr - add_tail + 1 )) -gt "$v15" ]] && v15=$(( ctl_thr - add_tail + 1 ))
+  exp15=$(( v15 + add_tail ))
+  exp1=$(( ctl_ci + add_tail ))
+  v2=$(( ctl_thr - add_tail - ci_base ))
+  exp2=$ctl_thr
+  v16=$(( rt + mg + vm + 1 ))
+
+  # Axis 13 -- raise the CI leg. GREEN before #8149 (the CI term was absent from the sum):
+  # proves the term is IN the sum. Its expected label is read out of the LIVE test text rather
+  # than restated, and the prefix is asserted: every B9 axis matches `FAIL: B9 threshold` by
+  # prefix, so a rename of the label un-couples the battery loudly here instead of silently.
+  # Anchored on the CALL SITE (line-leading whitespace then `fail "B9 threshold >= `), never on
+  # the bare phrase: this file also quotes the phrase in prose, and a bare grep took the first
+  # occurrence by file ORDER (#8149 review). Exactly one call site must match.
+  local b9_pat b9_label b9_n
+  b9_pat='^[[:space:]]+fail "B9 threshold >= '
+  b9_label="$({ grep -oE "${b9_pat}"'[^"]*"' "$SCRIPT_DIR/prod-version-drift-check.test.sh" || true; } | sed -E 's/^[[:space:]]+fail "//; s/"$//')"
+  b9_n="$(printf '%s' "$b9_label" | grep -c . || true)"
+  if [[ "$b9_n" != "1" ]]; then
+    fail "C-axis13-raise-ci-test-scripts-ceiling exactly one fail call site carries the B9 threshold prefix (every B9 axis matches FAIL: B9 threshold by prefix)" \
+      "1 call site" "$b9_n: ${b9_label//$'\n'/;}"
+  else
+    mutate_and_assert_red "axis13-raise-ci-test-scripts-ceiling" "$CI" \
+      "$(ceiling_mutator test-scripts "$v13")" "$b9_label" "^    expected: >= ${exp13}( |\$)"
+  fi
+
+  # Axis 14 -- raise resolve-target. GREEN before #8149 (max(60,70) + 135 = 205 <= 207: the
+  # term sat inside the max()): proves the term is ADDITIVE.
+  mutate_and_assert_red "axis14-raise-resolve-target-ceiling" "$REL" \
+    "$(ceiling_mutator resolve-target "$v14")" "B9 threshold" "^    expected: >= ${exp14}( |\$)"
+
+  # Axis 15 -- raise the release ceiling on the CALLEE past the CI leg: a second max() member
+  # after a compliant first. Already caught before #8149; the FIGURE is what changed.
+  mutate_and_assert_red "axis15-raise-release-ceiling" "$rel_callee_rel" \
+    "$(ceiling_mutator release "$v15")" "B9 threshold" "^    expected: >= ${exp15}( |\$)"
+
+  # Axis 16 -- raise verify-doppler-secrets one minute past the serial branch: B9d reds.
+  # crit does not move (the formula sums the chain, not this branch), which is exactly why
+  # the dominance needs its own assertion.
+  mutate_and_assert_red "axis16-raise-verify-doppler-secrets-ceiling" "$REL" \
+    "$(ceiling_mutator verify-doppler-secrets "$v16")" "B9d verify-doppler-secrets" "^    expected: <= $(( rt + mg + vm ))( |\$)"
+
+  # green1 -- release raised to the CI leg must PASS: max() absorbs it. An additive form would
+  # have read 275 and reddened. (A "lower a term" row was considered and dropped: lowering a
+  # term of a monotone sum can never red a green control, so it discriminates nothing.)
+  mutate_and_assert_green "green1-release-absorbed-by-max" "$rel_callee_rel" \
+    "$(ceiling_mutator release "$ctl_ci")" "$exp1"
+
+  # green2 -- test-scripts at the derived boundary must PASS with crit == threshold.
+  if [[ "$v2" -le 0 ]]; then
+    fail "C-green2-test-scripts-at-boundary derived boundary value is positive (DRIFT_SUSTAINED_THRESHOLD_MIN - resolve-target - migrate - verify-migrations - deploy - (ci_declared_path - test-scripts))" \
+      "> 0" "$v2 (threshold=$ctl_thr tail=$add_tail ci=$ctl_ci test-scripts=$ts)"
+  else
+    mutate_and_assert_green "green2-test-scripts-at-boundary" "$CI" \
+      "$(ceiling_mutator test-scripts "$v2")" "$exp2"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1289,9 +2113,25 @@ if [[ "$FAIL" -gt 0 ]]; then
   echo "FAILED: $FAIL assertion(s)"
   exit 1
 fi
+# The global floor is only non-slack while it EQUALS the sum of the per-part floors. That held
+# by coincidence before #7304 (117 = 57+49+11) and nothing asserted it, so raising one part's
+# floor without the global would have left the global slack by exactly the amount added -- the
+# hole this whole block exists to close. Checked only on a full run, since a subset invocation
+# legitimately overrides the parts it is not running.
+if [[ "$PARTS" == "ABC" && "$MUTATION_CHILD" == "0" ]]; then
+  _floor_sum=$(( MIN_A + MIN_B + MIN_C ))
+  if [[ "$MIN_ASSERTIONS" -ne "$_floor_sum" ]]; then
+    echo "FAILED: MIN_ASSERTIONS=$MIN_ASSERTIONS != MIN_A+MIN_B+MIN_C=$_floor_sum — the global floor is slack by the difference"
+    exit 1
+  fi
+fi
 # An assertion-count regression means a block was deleted -- "nothing failed" is not the same
 # as "everything was checked".
-if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
+# FULL RUNS ONLY. The global floor is asserted above to EQUAL MIN_A+MIN_B+MIN_C, so on a subset
+# run (DRIFT_TEST_PARTS=AB -- scripts/prod-version-drift-b9-probe.sh, the preflight Check 10
+# probe, which needs exit 0) it is the sum of parts that did not run and could only ever fail.
+# The per-part floors below are what guard a subset run; children override them to 0.
+if [[ "$PARTS" == "ABC" && "$MUTATION_CHILD" == "0" && "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAILED: assertion count $TOTAL regressed below MIN_ASSERTIONS=$MIN_ASSERTIONS"
   exit 1
 fi

@@ -259,4 +259,4 @@ addressable surface by construction: minting or editing a token requires
 operator-minted tokens are not `cloudflare_api_token` resources and cannot be
 Terraform-managed at all. This is distinct from the AP-019 carve-out, which
 mutates a genuinely Terraform-declared value (a `proxied` DNS toggle) and
-self-reverts — there is nothing here for Terraform to reconcile.
+self-reverts (**that ground is VOID from the #7640 apex cutover — see the AP-019 note in principles-register.md; post-cutover `listToggleRecords()` returns a subset and `restoreStateInner` refuses to restore it, making the toggle one-way**) — there is nothing here for Terraform to reconcile.

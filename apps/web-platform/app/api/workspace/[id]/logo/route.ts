@@ -8,6 +8,7 @@ import {
   startPruneInterval,
   logRateLimitRejection,
 } from "@/server/rate-limiter";
+import { verifiedUserId } from "@/server/request-auth";
 
 // GET /api/workspace/[id]/logo — stable proxy (#4916). Membership-gates then
 // 302-redirects to a freshly-minted short-TTL (300s) signed URL. The browser
@@ -30,21 +31,19 @@ const proxyLimiter = new SlidingWindowCounter({ windowMs: 60_000, maxRequests: 6
 startPruneInterval(proxyLimiter);
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   const { id } = await params;
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(request);
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (!proxyLimiter.isAllowed(user.id)) {
-    logRateLimitRejection("workspace-logo.proxy", user.id);
+  if (!proxyLimiter.isAllowed(userId)) {
+    logRateLimitRejection("workspace-logo.proxy", userId);
     return NextResponse.json(
       { error: "Too many requests" },
       { status: 429, headers: { "Retry-After": "60" } },
@@ -55,13 +54,13 @@ export async function GET(
   // authenticated; distinguishes 403 (non-member) from 404 (member, no logo).
   const memberRes = await supabase.rpc("is_workspace_member", {
     p_workspace_id: id,
-    p_user_id: user.id,
+    p_user_id: userId,
   });
   if (memberRes.error) {
     reportSilentFallback(memberRes.error, {
       feature: FEATURE,
       op: "member-check",
-      extra: { userId: user.id, workspaceId: id },
+      extra: { userId, workspaceId: id },
     });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
@@ -85,7 +84,7 @@ export async function GET(
     reportSilentFallback(signed.error ?? new Error("no signedUrl"), {
       feature: FEATURE,
       op: "sign-url",
-      extra: { userId: user.id, workspaceId: id },
+      extra: { userId, workspaceId: id },
     });
     return NextResponse.json({ error: "Bad gateway" }, { status: 502 });
   }

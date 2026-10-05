@@ -47,7 +47,7 @@ jobs:
       # for the polyfill helper's continued necessity. Do NOT switch to
       # `npm install --no-save <pkg>@latest` here.
       - name: Install web-platform deps (pinned)
-        run: npm ci --prefix apps/web-platform
+        run: npm ci --ignore-scripts --prefix apps/web-platform
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3

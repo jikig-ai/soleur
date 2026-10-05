@@ -37,6 +37,7 @@ Brand-survival threshold for PR-H: `single-user incident`. A duplicate Today car
 **Adopt `messages.source_ref` (nullable text column) + `messages_active_draft_dedup_idx` (partial-unique index on `(user_id, source, source_ref)` WHERE `status = 'draft'` AND `source_ref IS NOT NULL`). Webhook + Inngest + KB-drift ingest all INSERT without `ON CONFLICT`; supabase-js error.code === `23505` (PG_UNIQUE_VIOLATION) → 200 duplicate; mirror of Stripe's `processed_stripe_events` pattern (route.ts:117-127). Retention of `processed_github_events` is natural via Postgres autovacuum + 30-day partition rotation — no explicit TTL daemon; self-hosted Inngest's 24h `event.id` dedup window is FIXED (not configurable), so the DB-side dedup is the load-bearing replay defense beyond the Inngest window.**
 
 `source_ref` shapes:
+
 - GitHub PR review: `pr-<repo>-<number>` (e.g., `pr-jikig-ai-soleur-4066`)
 - GitHub CI failure: `ci-<workflow_run_id>`
 - GitHub issue triage: `issue-<repo>-<number>`

@@ -61,7 +61,8 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
 
 2. **Alert-filtered stage names are frozen.** `sentry_issue_alert.web_terminal_boot_fatal` is
    `filter_match = "any"` over four bare `tagged_event { key = "stage" }` filters with no `level`
-   filter. Renaming one darks the alert silently.
+   filter. Renaming one darks the alert silently. **Updated 2026-09-24:** five since #7071 added
+   `pull`, and since #8036 1d the rule fires on the first event (`value = 0`).
 
 3. **A non-fatal breadcrumb may never reuse — or string-prefix — an alert-filtered stage name.**
    `"stage=doppler_download_attempt"` contains `"stage=doppler_download"`, which would make the
@@ -84,6 +85,7 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
 
 The emitter sanitizes in a fixed, load-bearing order:
 
+<!-- markdownlint-disable MD038 -->
 | Step | Why |
 |---|---|
 | drop `^Using ` preamble lines | The pinned Doppler CLI v3.75.3 writes two `Using DOPPLER_* from the environment` lines totalling 173 B of the 246 B auth-failure stderr. A leading-bytes cap ships pure noise and truncates the cause away — this is what made `head -c 200` the wrong instrument. |
@@ -94,6 +96,7 @@ The emitter sanitizes in a fixed, load-bearing order:
 | trim leading/trailing whitespace | Defensive. The "Sentry drops untrimmed values" claim is undocumented, so this is cheap insurance, not a fix for a known vendor behaviour. |
 | `tail -c 180` | Under the documented 200-char tag-value limit. An over-long value is **silently truncated at 2xx**, not rejected — so the cap guards against losing the cause inside a surviving event, not against losing the event. |
 | printable-ASCII pass **after** the cap | `tail -c` is byte-wise and can split a multi-byte sequence. Ordering matters: the pass must run after the cut, not before. |
+<!-- markdownlint-enable MD038 -->
 
 The producer additionally scrubs `dp\.[a-z]*\.[A-Za-z0-9_-]*` before any write. The measurement
 that the CLI does not echo its token is pinned to v3.75.3, and CLI-version behaviour is itself an
@@ -281,6 +284,22 @@ printable-ASCII pass this ADR already pins.
 
 ### Channel split without a flag
 
+> **Superseded in part 2026-09-03 (#7460, ADR-198):** the Better Stack ingest token is now BAKED
+> into git-data's `user_data` at `0600 root:root`, so the split no longer falls where this section
+> describes it. **Eight** of the nine boot stages now reach Better Stack; only the `bootcmd`
+> beacon remains Sentry-only, and that one is structural — it fires before `write_files`, so the
+> shared emitter does not exist yet and no token changes it.
+>
+> **The invariant this section actually protects is preserved and strengthened**, which is why
+> this is a partial supersession and not a reversal: *a fatal never depends on Doppler to be
+> reported.* Sentry remains unconditional from the baked DSN, and Better Stack gained coverage it
+> did not have. The channel split was a CONSEQUENCE of the pre-Doppler constraint, not a goal —
+> and this ADR's own alternatives table has no "bake the ingest token" row (A4 is the different
+> journald→Vector path), so #7460 is not a previously-rejected mechanism resurfacing.
+>
+> The message literals this ADR freezes are unchanged. #7460 adds a NEW emit
+> (`stage:betterstack_ingest`) and new tags; it renames nothing.
+
 Sentry is unconditional from the **baked** DSN. Better Stack fires only when
 `BETTERSTACK_LOGS_TOKEN` is present in the environment — true **only** under `doppler run`.
 So *"early stages and fatals are Sentry-only; boot-completion and gc faults are both"* falls
@@ -296,8 +315,83 @@ fatal channel into noise on day one and makes the real fatal indistinguishable. 
 **three** arming sites (top-level runcmd, the LUKS heredoc, the bootstrap re-arm) and the
 guard is mandatory at each.
 
+## Addendum — 2026-08-04: the git-data exception widens to diagnostic CAPTURE plumbing (#7227)
+
+The 2026-07-27 addendum recorded git-data as a forced exception to this ADR's decision:
+`git-data-emit` ships **inside** `user_data` because that host has no bake path. That
+exception covered the **emitter**. This addendum extends it to the **capture plumbing that
+feeds the emitter** — a scoped detail file, its per-stage truncation, and per-command stderr
+routing — all of which now also live in `user_data` on this host, for the same reason.
+
+### Why the plumbing could not stay where it was
+
+The parent `runcmd` shell runs **outside** `doppler run`, so `GIT_DATA_LUKS_KEY` is absent
+from `git-data-emit`'s environment and its value-based redactor `_devalue` degrades to `cat`.
+Every parent-shell handler was passing `/var/log/cloud-init-output.log` — a shared,
+multi-stage, unbounded log — as its detail source, and the rung-2 capture route projects
+`detail` into a **public** Actions log on a **public** repo. The fix is a detail source
+bounded by construction, which has to be seeded and truncated by the same shell that fails.
+
+### What this costs, measured
+
+`user_data` is a governed axis on this host, so the price is recorded rather than assumed.
+Measured with Terraform's own `base64gzip` (`git-data-userdata-budget.sh`), which is the
+byte-exact truth — **not** `plugins/soleur/test/cloud-init-user-data-size.test.ts`, whose
+Node-zlib model is an approximation and says so in its own header:
+
+| | stored | cap | headroom |
+| --- | --- | --- | --- |
+| before (current `origin/main`) | 25,968 B | 32,768 B | 6,800 B |
+| after (#7216 + #7227) | 30,376 B | 32,768 B | 2,392 B |
+
+Net **+4,408 stored bytes**. Comments in `cloud-init-git-data.yml` are **not** render-stripped
+(ADR-152 covers only the nine `file()`-bound payloads), so prose is charged at full weight —
+comment blocks are capped at ~6 lines here and the durable statements live in the guards
+(`B18`, `R3(3b)`) rather than in the paragraphs. Diagnostics added to
+`git-data-bootstrap.sh` are free, because that file IS render-stripped.
+
+The next diagnostics change on this host should treat 2,392 B as the working budget, and
+should prefer `git-data-bootstrap.sh` over the template wherever the code can live there.
+
+**The Node model is not a second opinion on this number — it is currently blind to nine tenths
+of the payload.** `plugins/soleur/test/cloud-init-user-data-size.test.ts` asserts a *sub-cap*
+budget of 28,000 against its own model, and that model reads **kilobytes low** — far more than a
+zlib-flavour difference explains (one instrumented reading during #7227 put it ~6.9 kB under
+Terraform's figure; treat the magnitude as indicative and re-measure before relying on it).
+The cause is a stale regex, not compression: `modeledValue` substitutes real bytes
+only for `base64encode(file("${path.module}/…"))`, and the module emits
+`replace(file(…), local.git_data_rationale_strip, "")` — **9 occurrences of the latter, 0 of
+the former** — so all nine payloads fall through to an 80-character `x`-run. The test named
+*"reads REAL script content, not x-run placeholders (guards R2)"* hand-writes the obsolete
+expression as a string literal, so it is green against a shape production stopped emitting.
+`git-data-userdata-budget.sh` (Terraform's own `base64gzip`) is the only ceiling that binds.
+
+Corollary for the advice above: diagnostics moved into `git-data-bootstrap.sh` are free only
+for **comments**. ADR-152 strips comments from the nine payloads, not code — the `>&2` this
+change adds to `log()` is real stored bytes.
+
+### Correction to the 2026-07-27 addendum: TWO arming sites, not three
+
+That addendum's closing section states git-data has "**three** arming sites (top-level
+runcmd, the LUKS heredoc, the bootstrap re-arm)". The bootstrap re-arm is **gone** as of
+#7227 and the count is now **two**.
+
+`bootstrap_err` was byte-identical to `on_err` but for a title `$STAGE` already supplies, so
+deriving `MSG` from `$STAGE` made it redundant. Deleting it also fixed a latent live bug —
+nothing disarmed it after the bootstrap stage, so a `gc_timer` failure emitted the title
+"git-data bootstrap FAILED" — and removed a `_detail` local-name collision that defeated the
+name-keyed guard search in `R3(3b)`. Its `trap - EXIT` + re-arm pair went with it rather than
+being re-pointed at `on_err`, because that pair was a **no-op**: `trap luks_err EXIT` sits
+inside the heredoc and binds the `doppler run` child, so the parent's `on_err` was never
+replaced in the first place.
+
+The `rc` guard requirement itself is unchanged and still mandatory at every site that exists;
+`git-data-luks.test.sh` A22 asserts the equality (`guards == arming sites`) rather than a
+fixed number, with a non-vacuity floor moved 3 → 2 alongside this change.
+
 ## References
 
+- #7216 / #7227 — the rc-branching fix and the parent-shell diagnostic path this addendum records.
 - #6969 — the dark boot this ADR responds to.
 - ADR-082 Item 5 — the terminal-block boot-emit trap this extends (its own status is unchanged).
 - ADR-145 — the `web-host-create` birth path whose first real use surfaced the gap.

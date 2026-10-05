@@ -255,6 +255,7 @@ and returned:
 | 5 — Attestation text | APPROVE-WITH-AMENDMENT (non-blocking) | Consent legally sufficient + Art. 7(1)-demonstrable. Copy refinement (split into two sentences) recommended but **deferred** to the parallel `feat-team-workspace-legal-scaffolding` track (already flagged in the code comment); NOT a discharge blocker. |
 
 **Substantive judgment calls:**
+
 - **B1 lawful-basis split** — DEFENSIBLE. Access prong (6(1)(a)) governs the Owner's own controller-side content; derived-signals prong (6(1)(f)) unchanged; Co-Member own-data stays under PA-2 contract basis; basis is non-retroactive (080 skip).
 - **B2 third-party personal data in repos** — DEFER to re-evaluation trigger ACCEPTABLE for v1; recommendation (non-blocking) to cross-reference the AUP §4.7 Art-9/10 prohibition + `redactGithubSourcedText` as the active control.
 - **B3 consent bundling** — VALID under Art. 7 (no Art. 7(4)/Recital-43 vice: one indivisible operation, consent not the gate to an unrelated service); unbundling NOT required.

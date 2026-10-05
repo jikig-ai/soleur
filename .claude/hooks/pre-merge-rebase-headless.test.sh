@@ -8,6 +8,41 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
+# Refuse before writing, rather than let an empty operand retarget a git write at whatever
+# repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
+# operates on the current directory, which under TEST_GROUP=scripts is the developer's live
+# worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
+#
+# Rejects, beyond empty: bare `/` AND its aliases `//` and `/.` (a `/*` arm accepts all three, and
+# `rm -rf "/"/*` is the worst outcome in this corpus — a one-character bypass of a stated
+# rejection); any path containing `..`, which can resolve back inside the real repo; and
+# /proc, /sys, /dev, because `/proc/self/cwd` is absolute, passes every other arm, and resolves
+# to precisely "whatever repository the caller happens to be standing in".
+#
+# Still no `realpath`: it breaks on a symlinked /tmp, which this corpus uses. So a symlink to
+# $HOME is ACCEPTED — stated here rather than left implied, because the arms above make this
+# look like a containment check and it is not.
+#
+# The body below is a COPY. The canonical definition lives in
+# plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# asserts this copy is byte-equal to it. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/pre-merge-rebase.sh"
 
@@ -15,8 +50,8 @@ PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
-command -v jq  >/dev/null 2>&1 || { echo "SKIP: jq missing";  exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq  >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 # Build a minimal work repo with review evidence so we get past the
 # review-evidence gate and reach the detached-HEAD warn at line 110.
@@ -29,6 +64,7 @@ command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 # test would never be reached.
 make_repo() {
   local work="$1" origin="$2"
+  assert_fixture_dir "$work"
   git -C "$work" init -q
   git -C "$work" symbolic-ref HEAD refs/heads/main
   git -C "$work" config user.email t@t
@@ -43,7 +79,7 @@ make_repo() {
   git init -q --bare -b main "$origin"
   git -C "$work" remote add origin "$origin"
   git -C "$work" push -q origin main
-  git -C "$work" fetch -q origin
+  git -C "$work" fetch --no-tags -q origin
 
   # Review evidence on a commit ahead of origin/main.
   git -C "$work" checkout -q -b feat-headless

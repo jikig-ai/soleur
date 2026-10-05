@@ -291,12 +291,23 @@ done
 
 # ---------------------------------------------------------------------------
 # 9 — base-image digest parity against the LEADER. Both helper headers say "pin to
-#     the same base as apps/web-platform/Dockerfile", and Renovate's dockerfile
-#     manager bumps the Dockerfile digest and AUTOMERGES (renovate.json5:
-#     default:automergeDigest + platformAutomerge). The helpers are outside every
-#     configured manager, so a helper-vs-helper check stays green while BOTH go
-#     stale against the image actually deployed — silently breaking ADR-079's
-#     capture-env == replay-env == deploy-image invariant.
+#     the same base as apps/web-platform/Dockerfile", so a helper-vs-helper check
+#     stays green while BOTH go stale against the image actually deployed —
+#     silently breaking ADR-079's capture-env == replay-env == deploy-image
+#     invariant. Anchoring on the leader is what makes the check meaningful.
+#
+#     CORRECTED 2026-08-05 (#7282): this header used to justify itself with
+#     "Renovate's dockerfile manager bumps the Dockerfile digest and AUTOMERGES
+#     (renovate.json5: default:automergeDigest + platformAutomerge)". That
+#     mechanism does not exist here — Renovate has NEVER run against this repo
+#     (zero Renovate-authored PRs in its entire history, no Dependency Dashboard),
+#     and renovate.json5 was an inert config file, removed in #7282.
+#     The correction does not weaken this guard, it strengthens the case for it:
+#     the old rationale said drift arrives as a fast automerged bot bump, so the
+#     danger was the helpers lagging a leader that MOVES. In reality NOTHING moves
+#     the Dockerfile digest, so the real risk is the whole set rotting together
+#     while a helper-vs-helper check reports agreement. Leader-anchoring is correct
+#     either way; only the threat model was wrong.
 #     Anchored on the pin site (FROM / IMG=), and each helper must carry EXACTLY
 #     one digest: a second occurrence in a comment would otherwise let the real
 #     pin be removed while the guard passed.

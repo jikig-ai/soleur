@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
-# pre-push hook: run tests affected by the current branch's changes.
-# Blocks the push if any test fails.
+# pre-push hook: run the affected test gate for the current branch's changes.
+# Blocks the push if any suite fails.
 #
 # Install: git config core.hooksPath scripts/hooks
 #
 # How it works:
-#   1. Diffs the current branch against origin/main to find changed files
-#   2. Maps changed source files to their corresponding test files
-#   3. Runs only the affected tests (fast — not the full suite)
-#   4. Blocks the push if any test fails
+#   1. Diffs the current branch against origin/HEAD to find changed files
+#   2. Delegates to `test-all.sh --affected` (#8322), which runs the suites
+#      the diff can move — classified through the maintained edge index —
+#      plus every always-on repo-global ratchet. Roughly half the ~45-minute
+#      serial battery on the measured baseline (the always-on ratchets alone
+#      account for ~22.5 minutes of it).
+#   3. Blocks the push if the gate exits non-zero
+#
+# Why the delegation: this hook previously mapped changed files to test files
+# by basename stem and ran them directly — a hand-rolled file→suite index that
+# drifted silently whenever a suite's naming deviated from the convention.
+# `--affected` is the same idea with a maintained index, fail-safe
+# classification (unclassified suites run rather than vanish), and an
+# operator-visible `--full` escape when the whole battery is wanted.
 #
 # Skips gracefully when:
-#   - bun is not installed
-#   - No test files are affected by the changes
+#   - bun is not installed (stage 2 only — stage 1 needs no bun)
+#   - The branch carries no changes vs its base
 #   - Pushing to a non-main remote (e.g., forks)
 
 set -euo pipefail
@@ -21,114 +31,39 @@ set -euo pipefail
 # in hook environments. These cause test-spawned git commands (e.g., in
 # workspace.test.ts) to operate on the parent repo instead of temp dirs,
 # potentially contaminating the feature branch with rogue commits.
-unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
-
-# Skip if bun is not available
-if ! command -v bun &>/dev/null; then
-  exit 0
-fi
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
 
 # Determine base branch
 base_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@') || base_branch="main"
 
-# Get changed files relative to base branch
-changed_files=$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null) || true
-
-if [[ -z "$changed_files" ]]; then
+# Skip when the branch carries no changes vs its base — nothing to gate. Only a
+# SUCCESSFUL empty diff skips: a missing/stale ref makes the diff error (empty
+# output), and an undecidable diff must still reach the lane — it does its own
+# fetch first and cannot be shortcut by a stale remote-tracking ref.
+if _push_diff="$(git diff --name-only "origin/$base_branch"...HEAD 2>/dev/null)" && [[ -z "$_push_diff" ]]; then
   exit 0
 fi
 
-# Collect affected test files
-declare -A seen_tests
-test_files=()
+# Stage 1 (#9400): the affected-ratchets lane — fetch origin/main, merge it into
+# an ephemeral detached scratch worktree (this branch and tree are never
+# mutated), and run the ratchet members the diff can trip on the MERGED tree.
+# It owns its own fetch and scratch lifecycle; the env scrub above already
+# covers the git-location family it re-derives. A member RED stops the push
+# here with a per-member receipt; infra aborts (exit 2) block too — a lane that
+# could not evaluate cannot certify. Deliberately ABOVE the bun check: the lane
+# needs only git/bash/python3, so bun-less core.hooksPath hosts still get the
+# ratchet net even though stage 2 skips.
+echo "pre-push: stage 1 — affected-ratchets lane (scripts/pre-push-ratchet-lane.sh)."
+bash scripts/pre-push-ratchet-lane.sh
+echo ""
 
-while IFS= read -r file; do
-  [[ -z "$file" ]] && continue
-
-  # If a test file was directly changed, include it (skip if deleted)
-  if [[ "$file" == *.test.ts || "$file" == *.test.js || "$file" == *.test.sh ]]; then
-    if [[ -f "$file" && -z "${seen_tests[$file]:-}" ]]; then
-      seen_tests["$file"]=1
-      test_files+=("$file")
-    fi
-    continue
-  fi
-
-  # Map source files to test files by basename
-  # scripts/content-publisher.sh -> test/content-publisher.test.ts
-  # plugins/soleur/skills/community/scripts/x-community.sh -> test/x-community.test.ts
-  base=$(basename "$file")
-  stem="${base%.*}"  # strip extension
-
-  # Search common test locations
-  while IFS= read -r tf; do
-    [[ -z "$tf" ]] && continue
-    if [[ -z "${seen_tests[$tf]:-}" ]]; then
-      seen_tests["$tf"]=1
-      test_files+=("$tf")
-    fi
-  done < <(git ls-files "test/${stem}.test.*" "*/test/${stem}.test.*" 2>/dev/null)
-done <<< "$changed_files"
-
-if [[ ${#test_files[@]} -eq 0 ]]; then
+# Skip stage 2 (the bun-dependent affected battery) if bun is not available.
+if ! command -v bun &>/dev/null; then
   exit 0
 fi
 
-echo "pre-push: Running ${#test_files[@]} affected test file(s):"
-for tf in "${test_files[@]}"; do
-  echo "  - $tf"
-done
+echo "pre-push: running the affected test gate (test-all.sh --affected)."
+echo "        For the full battery: bash scripts/test-all.sh --full"
 echo ""
 
-# Split by runner: .test.sh -> bash, .test.ts/.test.js -> bun
-bun_tests=()
-bash_tests=()
-for tf in "${test_files[@]}"; do
-  if [[ "$tf" == *.test.sh ]]; then
-    bash_tests+=("$tf")
-  else
-    bun_tests+=("$tf")
-  fi
-done
-
-failed=0
-
-if [[ ${#bun_tests[@]} -gt 0 ]]; then
-  # Separate web-platform tests (need vitest) from bun tests
-  vitest_tests=()
-  pure_bun_tests=()
-  for bt in "${bun_tests[@]}"; do
-    if [[ "$bt" == apps/web-platform/test/*.tsx || "$bt" == apps/web-platform/test/*.ts || "$bt" == apps/web-platform/lib/*.test.ts ]]; then
-      vitest_tests+=("$bt")
-    else
-      pure_bun_tests+=("$bt")
-    fi
-  done
-
-  if [[ ${#pure_bun_tests[@]} -gt 0 ]]; then
-    if ! bun test "${pure_bun_tests[@]}"; then
-      failed=1
-    fi
-  fi
-
-  if [[ ${#vitest_tests[@]} -gt 0 ]]; then
-    if ! (cd apps/web-platform && npx vitest run "${vitest_tests[@]/#apps\/web-platform\//}" 2>&1); then
-      failed=1
-    fi
-  fi
-fi
-
-for bt in "${bash_tests[@]}"; do
-  if ! bash "$bt"; then
-    failed=1
-  fi
-done
-
-if [[ $failed -ne 0 ]]; then
-  echo ""
-  echo "pre-push: BLOCKED — tests failed. Fix them before pushing."
-  exit 1
-fi
-
-echo ""
-echo "pre-push: All affected tests passed."
+exec bash scripts/test-all.sh --affected

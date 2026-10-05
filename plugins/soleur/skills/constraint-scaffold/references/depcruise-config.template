@@ -88,7 +88,7 @@ function walk(dir, acc) {
       let target;
       try {
         target = fs.statSync(full); // follows the symlink
-      } catch (e) {
+      } catch {
         continue; // broken/dangling link: not a readable source file
       }
       if (target.isFile() && SOURCE_EXT.test(entry.name)) {

@@ -6,7 +6,8 @@
 // the main saved-tfplan apply and only land via an explicit `-target=` over the
 // CF Tunnel SSH bridge. This test asserts each such resource appears in the UNION
 // of:
-//   • apply-web-platform-infra.yml's SSH `-target=` set (the 7 server.tf siblings)
+//   • apply-web-platform-infra.yml's SSH `-target=` set (the server.tf siblings,
+//     applied over the CF Tunnel SSH bridge; count derived, never restated)
 //   • apply-deploy-pipeline-fix.yml's `-target=` set (deploy_pipeline_fix +
 //     infra_config_handler_bootstrap)
 //   • the exclusion allowlist (root_authorized_keys — stays operator-local per the
@@ -46,8 +47,18 @@
 // `connection`-blocks here put `type` first, so it holds as of #4844.
 //
 // Test harness: bun:test (matches sibling tests in plugins/soleur/test/*.ts).
+//
+// THIS SUITE'S NAME UNDERSTATES ITS CONTENTS, deliberately and with the cost recorded. Beyond
+// `-target=` parity it also owns two invariants of `apply-web-platform-infra.yml` that have
+// nowhere better to live: the workflow's NOTIFICATION CHANNEL (`the ssh_token_gate green-skip has
+// a channel (#7539)`, and since #7586 `apply-web-platform-infra has a failure channel`) and its
+// ARM-gate BUDGET (`the ARM gate's deadlines fit its job`, #7587). They are here rather than in a
+// new file because the channel guards share `extractJobBlock` / `extractStep` with the parity
+// guards and must not drift from them — a second file would re-implement both helpers and the two
+// copies would diverge. The workflow points back at this file from the ARM gate's own comment.
 
 import { describe, test, expect, beforeAll } from "bun:test";
+import { parse as parseYaml } from "yaml";
 import { resolve, join } from "path";
 import {
   readFileSync,
@@ -58,9 +69,14 @@ import {
   rmSync,
 } from "fs";
 import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
+/** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
+// Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
+// same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
+const TEST_FLOOR = 275;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -83,7 +99,15 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // SSH-provisioned resource raises the count without a brittle exact-match edit —
 // the union-coverage assertion is what enforces correctness; this only guards
 // against the predicate silently collapsing to zero (e.g. a parser regression).
-const MIN_SSH_PROVISIONED = 10; // #6122: +terraform_data.registry_insecure_config (zot insecure-registries, running-host SSH delivery)
+// #7539: raised 10 -> 17, the MEASURED size of the set. The old floor left a
+// headroom of 7 -- eight of the seventeen are unpinned by the name list below,
+// so a resource could silently drop out of the SSH set with the whole suite
+// green. That matters beyond this sentinel: Guard 1 intersects against
+// collectSshProvisioned(), so a narrowed set silently narrows the guard too.
+// Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
+// #8706: raised 17 -> 18 for terraform_data.luks_monitor_install (workspaces-luks.tf).
+// #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 19;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -202,6 +226,8 @@ function extractWorkflowInvariants(workflowText: string): {
 
 let sshProvisioned: string[];
 let coveredUnion: Set<string>;
+let webPlatformTargets: Set<string>;
+let deployPipelineFixTargets: Set<string>;
 
 beforeAll(() => {
   expect(existsSync(INFRA_DIR)).toBe(true);
@@ -210,10 +236,10 @@ beforeAll(() => {
 
   sshProvisioned = collectSshProvisioned();
 
-  const webPlatformTargets = extractTargets(
+  webPlatformTargets = extractTargets(
     readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
   );
-  const deployPipelineFixTargets = extractTargets(
+  deployPipelineFixTargets = extractTargets(
     readFileSync(DEPLOY_PIPELINE_FIX_WORKFLOW, "utf8"),
   );
   coveredUnion = new Set<string>([
@@ -251,6 +277,668 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+
+  // #9151 — apply-deploy-pipeline-fix.yml is the web-2 sibling's SOLE carrier: it
+  // alone opens the bastion `ssh -L` forward + second OUTPUT REDIRECT that makes
+  // hcloud_server.web["web-2"].ipv4_address routable for Terraform's Go SSH
+  // client. A -target line in apply-web-platform-infra.yml (whose bridge carries
+  // no web-2 route) would hang that run to the SSH timeout — the same class as
+  // for_each over var.web_hosts (#7000), one hop further out.
+  test("deploy_pipeline_fix_web2 is targeted ONLY by apply-deploy-pipeline-fix.yml (#9151)", () => {
+    expect(sshProvisioned).toContain("deploy_pipeline_fix_web2");
+    expect(deployPipelineFixTargets.has("deploy_pipeline_fix_web2")).toBe(true);
+    expect(webPlatformTargets.has("deploy_pipeline_fix_web2")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guard 1 (#7539): the bridge-less stage may not target an SSH-provisioned
+// resource.
+//
+// The `apply` job runs TWO terraform stages separated by a CREDENTIAL boundary.
+// Stage 1 ("Terraform plan (allow-list, non-SSH resources only)" → "Terraform
+// apply" of the saved tfplan) runs BEFORE `./.github/actions/cf-tunnel-ssh-bridge`
+// exports TF_VAR_ci_ssh_private_key. Stage 2 ("Terraform apply (SSH-provisioned
+// resources, over the bridge)") runs after it and owns every SSH-provisioned
+// resource. server.tf resolves `agent = var.ci_ssh_private_key == null`, so an
+// SSH-provisioned resource targeted in stage 1 bakes `agent = true` and dies:
+// `SSH agent requested but SSH_AUTH_SOCK not-specified`. It fails DIRECTLY (its
+// own provisioner) and can also drag a dependency in via `-target` transitivity,
+// which is a REQUEST and not a bound.
+//
+// The property is a BRIGHT LINE over `terraform_data` rather than over the SSH
+// predicate. Measured: 17 of 18 `terraform_data` resources in the infra root are
+// SSH-provisioned, and NOTHING else in the root carries a `provisioner` block at
+// all — so the line is strictly stronger here, needs no dependency graph, and
+// cannot be narrowed by a resource silently dropping out of
+// collectSshProvisioned(). A future genuinely-local terraform_data on the push
+// path costs one PUSH_PATH_TERRAFORM_DATA_ALLOWLIST entry with a stated reason.
+//
+// PARSER ASSUMPTIONS (this extractor fails OPEN, like its siblings above):
+//   • The end anchor is the bridge step's `uses:` VALUE, never a step title — a
+//     legitimate rename must not hard-fail the guard
+//     (cq-cite-content-anchor-not-line-number).
+//   • Targets match on COMMENT-STRIPPED text and only on flag-shaped lines
+//     (`^\s*-target=`). Both are load-bearing: the range contains prose mentions
+//     of `-target=` (an ALLOW-LIST MAINTENANCE comment and a `::warning::`
+//     string) that a naive substring match counts. H1 pins this.
+//   • An unresolvable range is a FAILURE, never an empty pass (M4).
+//
+// See ADR-154 (§ bridge-less stage amendment).
+
+/** Deliberately empty: no local `terraform_data` legitimately sits on a
+ *  bridge-less path today. An addition needs a one-line reason, like
+ *  EXCLUSION_ALLOWLIST. Kept non-vacuous by an M-row that allowlists a
+ *  synthetic offender and asserts it is admitted — a zero-cardinality set with
+ *  no test is an escape hatch nobody has ever proven is wired. */
+const BRIDGELESS_TERRAFORM_DATA_ALLOWLIST = new Set<string>([]);
+
+/** Bridge step anchor — the composite's `uses:` VALUE, not any step title. */
+const BRIDGE_USES_RE =
+  /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/;
+
+/** Every top-level job id (a 2-space `<id>:` key that owns `runs-on`/`steps`). */
+function listJobIds(workflowText: string): string[] {
+  const ids: string[] = [];
+  let inJobs = false;
+  for (const line of workflowText.split("\n")) {
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true;
+      continue;
+    }
+    if (!inJobs) continue;
+    if (/^[A-Za-z]/.test(line)) break; // left the `jobs:` mapping
+    const m = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (m) ids.push(m[1]);
+  }
+  return ids;
+}
+
+/**
+ * For ONE job: the text that runs WITHOUT `TF_VAR_ci_ssh_private_key` — i.e.
+ * everything before its first `cf-tunnel-ssh-bridge` step, or the WHOLE job
+ * when it never opens a bridge. Returns null only when the job block itself
+ * does not resolve; callers MUST treat null as a failure, never as empty.
+ *
+ * Scoping to the whole job set rather than the literal id "apply" is
+ * load-bearing: `vector_redeliver` has the identical two-stage shape and is
+ * compliant only by step ORDER (its own header calls that "LOAD-BEARING"), and
+ * the file has grown to 18 jobs by accretion.
+ */
+function bridgelessRangeForJob(
+  workflowText: string,
+  jobId: string,
+): string | null {
+  const job = extractJobBlock(workflowText, jobId);
+  if (!job.trim()) return null;
+  const lines = job.split("\n");
+  const bridge = lines.findIndex((l) => BRIDGE_USES_RE.test(l));
+  if (bridge === 0) return null; // a job that opens with the bridge is malformed
+  return bridge === -1 ? job : lines.slice(0, bridge).join("\n");
+}
+
+/**
+ * `terraform_data` addresses reachable from a `-target=`/`-replace=` flag.
+ *
+ * Quoting tolerance is NOT optional — the sibling `extractAllTargets` says so
+ * in its own comment, and this file's workflow uses 69 single-quoted and 14
+ * double-quoted `-target=` flags against 139 bare ones. A bare-only,
+ * line-leading matcher lets the #7539 regression re-land verbatim in the
+ * house style. `-replace=` is included because it drives the same provisioner
+ * run and the workflow already carries 13 of them.
+ */
+function terraformDataTargets(text: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(text).matchAll(
+    /-(?:target|replace)=['"]?(?:module\.[A-Za-z0-9_]+\.)*terraform_data\.([A-Za-z0-9_]+)/g,
+  )) {
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** Every `-target=`/`-replace=` of any type — the dispatch floor's input. */
+function countTargets(text: string): number {
+  return [...stripComments(text).matchAll(/-(?:target|replace)=/g)].length;
+}
+
+/**
+ * Offenders across EVERY job: `{job, addr}` for each `terraform_data` reachable
+ * from a bridge-less range. Throws when a job block fails to resolve, so an
+ * unparseable workflow fails closed rather than reporting "no offenders".
+ */
+function bridgelessOffenders(
+  workflowText: string,
+): Array<{ job: string; addr: string }> {
+  const jobs = listJobIds(workflowText);
+  if (jobs.length === 0) throw new Error("no jobs resolved from the workflow");
+  const out: Array<{ job: string; addr: string }> = [];
+  for (const job of jobs) {
+    const range = bridgelessRangeForJob(workflowText, job);
+    if (range === null) throw new Error(`job block did not resolve: ${job}`);
+    for (const addr of terraformDataTargets(range)) {
+      if (!BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.has(addr)) out.push({ job, addr });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every resource TYPE in the infra root that carries a `provisioner` block.
+ *
+ * Guard 1 is stated as a bright line over `terraform_data` rather than over the
+ * SSH predicate, and that is only STRICTLY STRONGER while this set is exactly
+ * {terraform_data}. The premise was true and unpinned until #7539's review: an
+ * SSH-provisioned `null_resource`, or a `provisioner` added to
+ * `hcloud_server.web`, would sit outside the line with the whole suite green.
+ * Pinning the premise is strictly better than widening the predicate for it —
+ * it fails in the PR that introduces the violation, naming the resource, and it
+ * needs no edit to the fail-open HCL parser four other assertions depend on.
+ */
+function resourceTypesWithProvisioners(
+  files: string[] = listInfraTfFiles(),
+): string[] {
+  const types = new Set<string>();
+  for (const f of files) {
+    let current: string | null = null;
+    for (const line of stripComments(readFileSync(f, "utf8")).split("\n")) {
+      const h = line.match(/^resource\s+"([A-Za-z0-9_]+)"\s+"[A-Za-z0-9_]+"\s*\{/);
+      if (h) {
+        current = h[1];
+        continue;
+      }
+      if (current && /^\s*provisioner\s+"[a-z-]+"\s*\{/.test(line)) {
+        types.add(current);
+      }
+    }
+  }
+  return [...types].sort();
+}
+
+/**
+ * Every workflow that opens a CF Tunnel SSH bridge — DERIVED, never restated.
+ *
+ * Guard 1 originally read one workflow while five use the bridge. A hardcoded
+ * list would reproduce the defect this file exists to catch: the deferral filed
+ * during review proposed a trigger reading "when a THIRD workflow adopts the
+ * shape", and three already had. Deriving means a sixth is guarded on arrival.
+ */
+function bridgeWorkflowPaths(): string[] {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+    .map((f) => resolve(dir, f))
+    .filter((abs) =>
+      /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/m.test(
+        readFileSync(abs, "utf8"),
+      ),
+    )
+    .sort();
+}
+
+describe("bridge-less stage may not target an SSH-provisioned resource (#7539)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+
+  test("every job block resolves (an unparseable workflow fails CLOSED)", () => {
+    const jobs = listJobIds(wf);
+    // Floor derived from the measured value (18 jobs), not a round number: a
+    // job-enumeration that silently narrows takes the whole guard with it.
+    expect(jobs.length).toBeGreaterThanOrEqual(15);
+    for (const j of jobs) {
+      expect(bridgelessRangeForJob(wf, j)).not.toBeNull();
+    }
+  });
+
+  test("dispatch floor: the ranges hold targets (a guard that scans nothing must FAIL)", () => {
+    const scanned = listJobIds(wf)
+      .map((j) => countTargets(bridgelessRangeForJob(wf, j)!))
+      .reduce((a, b) => a + b, 0);
+    // Measured 219 across all bridge-less ranges at authoring time. Bounded
+    // NEAR the measurement, not at a fraction of it: a floor that tolerates
+    // losing half the range does not floor the tail, which is where #7539 lived.
+    expect(scanned).toBeGreaterThanOrEqual(180);
+  });
+
+  test("the bridge anchor resolves in the apply job (content anchor, not a title)", () => {
+    // The apply job MUST have a bridge; a range equal to the whole job would
+    // mean the anchor stopped resolving and every post-bridge target became an
+    // offender — loud, but for the wrong reason. Pin it positively.
+    const applyJob = extractJobBlock(wf, "apply");
+    expect(BRIDGE_USES_RE.test(applyJob.split("\n").find((l) => BRIDGE_USES_RE.test(l)) ?? "")).toBe(true);
+    expect(bridgelessRangeForJob(wf, "apply")!.length).toBeLessThan(applyJob.length);
+  });
+
+  test("no terraform_data is targeted before a CF Tunnel SSH bridge, in ANY job", () => {
+    expect(bridgelessOffenders(wf)).toEqual([]);
+  });
+
+  test("the bright line's PREMISE is pinned: only terraform_data carries provisioners", () => {
+    // If this ever fails, Guard 1 stopped being strictly stronger than the SSH
+    // predicate and the named type must be admitted to the walk.
+    expect(resourceTypesWithProvisioners()).toEqual(["terraform_data"]);
+  });
+
+  test("EVERY bridge-using workflow is guarded, not just this one", () => {
+    const paths = bridgeWorkflowPaths();
+    // Floor derived from the measured five; a derivation that silently narrows
+    // takes the coverage with it.
+    expect(paths.length).toBeGreaterThanOrEqual(5);
+    for (const abs of paths) {
+      expect(bridgelessOffenders(readFileSync(abs, "utf8"))).toEqual([]);
+    }
+  });
+});
+
+// The green-skip channel (#7539). When CI_SSH_ACCESS_TOKEN_ID is absent,
+// ssh_token_gate sets ssh_apply_skip=true and the bridge, the post-bridge apply
+// AND the heartbeat ARM gate all skip — the run goes GREEN having delivered
+// nothing. These assert the notification arm is actually wired, so it cannot be
+// silently un-wired: an arm that exists but references a dead output, or whose
+// body omits the recovery command, reproduces the ::warning:: problem in email.
+/**
+ * One `- name: <title>` step within a job block, bounded at the next same-indent
+ * step header (or the end of the job). Returns null when absent.
+ *
+ * Bounded by the NEXT HEADER rather than by a length comparison: the first draft
+ * asserted `slice.length < remainder.length` as its non-vacuity guard, which
+ * false-REDs when the step is legitimately the LAST one in the job — coupling the
+ * guard to step ORDER, which is not the property.
+ */
+function extractStep(jobText: string, titleMatch: RegExp): string | null {
+  const lines = jobText.split("\n");
+  const start = lines.findIndex(
+    (l) => /^ {6}- name:/.test(l) && titleMatch.test(l),
+  );
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {6}- name:/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+// The green-skip channel (#7539). When CI_SSH_ACCESS_TOKEN_ID cannot be read,
+// ssh_token_gate sets ssh_apply_skip=true and the bridge, the post-bridge apply
+// AND the heartbeat ARM gate all skip — the run goes GREEN having delivered
+// nothing.
+//
+// Every assertion here is scoped to the NOTIFY STEP and anchored on syntax a
+// comment cannot produce. The first draft used job-wide `toContain` on bare
+// tokens, under which the `if:` could be moved to a decoy step and the whole
+// SSH_STAGE branch deleted, both at full green.
+describe("the ssh_token_gate green-skip has a channel (#7539)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const applyJob = extractJobBlock(wf, "apply");
+  const notify = extractStep(applyJob, /Notify ops/);
+  const summary = extractStep(applyJob, /Post-apply summary/);
+  const gate = extractStep(applyJob, /Check CI-SSH token presence/);
+
+  test("the notify step exists and USES the ops-email action (anchored, not a substring)", () => {
+    expect(notify).not.toBeNull();
+    expect(notify!).toMatch(/^\s*uses:\s*\.\/\.github\/actions\/notify-ops-email\s*$/m);
+  });
+
+  test("the skip gate is ON that step — not on a decoy elsewhere in the job", () => {
+    // Anchored on the `if:` LINE, not the step body. The body carries a comment
+    // explaining why this is `!cancelled()` and not `always()` — a body-wide
+    // `not.toContain("always()")` is satisfied by that comment, which is the exact
+    // collision this file documents (cq-assert-anchor-not-bare-token). Measured:
+    // the first draft of this assertion failed on its own explanatory comment.
+    const ifLine = notify!
+      .split("\n")
+      .find((l) => /^\s*if:/.test(stripLineComment(l)));
+    expect(ifLine).toBeDefined();
+    expect(ifLine!).toMatch(
+      /steps\.ssh_token_gate\.outputs\.ssh_apply_skip\s*==\s*'true'/,
+    );
+    // `!cancelled()`, never `always()`: always() also fires on a CANCELLED run,
+    // where the body's "completed green" headline is false.
+    expect(ifLine!).toContain("!cancelled()");
+    expect(ifLine!).not.toContain("always()");
+  });
+
+  test("it references a real step id, and that gate emits BOTH outputs it is read for", () => {
+    expect(gate).not.toBeNull();
+    expect(applyJob).toMatch(/^\s*id:\s*ssh_token_gate\s*$/m);
+    expect(gate!).toContain('echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"');
+    expect(gate!).toContain('echo "ssh_skip_cause=${SKIP_CAUSE}" >> "$GITHUB_OUTPUT"');
+  });
+
+  test("the gate MEASURES the cause instead of assuming it (no bare `|| true` collapse)", () => {
+    // A `|| true` here folds an expired DOPPLER_TOKEN into "the secret is absent",
+    // and the email then states that as fact.
+    expect(gate!).not.toMatch(/TOKEN_ID=\$\(doppler secrets get [^)]*\|\| true\)/);
+    expect(gate!).toContain("SKIP_CAUSE=unreadable");
+    expect(gate!).toContain("SKIP_CAUSE=absent");
+  });
+
+  test("the email carries a RUNNABLE recovery command, not a pointer to one", () => {
+    expect(notify!).toContain("gh workflow run apply-web-platform-infra.yml");
+    expect(notify!).toContain("apply_target=manual-rerun");
+    // and it reports the measured cause rather than a hardcoded one
+    expect(notify!).toContain("ssh_skip_cause");
+  });
+
+  test("the run summary BRANCHES on the skip (job.status alone reads success)", () => {
+    expect(summary).not.toBeNull();
+    // Assert the branch itself, not just the echo literal: deleting the whole
+    // if/elif/else leaves `**SSH stage:**` matching while SSH_STAGE renders empty.
+    expect(summary!).toMatch(/if\s+\[\s*"\$\{SSH_SKIP\}"\s*=\s*"true"\s*\]/);
+    expect(summary!).toContain("SSH_STAGE=");
+    expect(summary!).toContain("**SSH stage:**");
+  });
+});
+
+describe("git_data_host_create: the boot-signal poll is gated on the apply outcome (#8010)", () => {
+  // The poll used to be `if: always()`: on run 34822248580 a plan the birth gate REFUSED
+  // (apply skipped) still spent the full 10-minute budget and told the operator to re-dispatch.
+  // These arms pin the predicate and drive the Dispatch summary's verdict `case` under real
+  // bash across the outcome cross-product, so the fail-closed branches are exercised rather
+  // than string-matched.
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const job = extractJobBlock(wf, "git_data_host_create");
+  const apply = extractStep(job, /Terraform apply \(git-data birth\)/);
+  const poll = extractStep(job, /Poll for the git-data boot-completion signal/);
+  const summary = extractStep(job, /Dispatch summary/);
+
+  test("the apply and poll steps carry the ids the predicate and the summary read", () => {
+    expect(apply).not.toBeNull();
+    expect(poll).not.toBeNull();
+    expect(apply!).toMatch(/^\s*id:\s*apply\s*$/m);
+    expect(poll!).toMatch(/^\s*id:\s*poll\s*$/m);
+  });
+
+  test("the poll's if: line is the enumerated, cancellation-aware predicate — never always()", () => {
+    const ifLine = poll!
+      .split("\n")
+      .find((l) => /^\s*if:/.test(stripLineComment(l)));
+    expect(ifLine).toBeDefined();
+    expect(ifLine!).toContain("!cancelled()");
+    expect(ifLine!).toMatch(
+      /steps\.apply\.outcome == 'success' \|\| steps\.apply\.outcome == 'failure'/,
+    );
+    expect(ifLine!).not.toContain("always()");
+    expect(ifLine!).not.toContain("!= 'skipped'");
+  });
+
+  test("the summary verdict case fails closed on every unverified pair (executed under bash)", () => {
+    expect(summary).not.toBeNull();
+    const m = /if \[\[ -z "\$APPLY_OUTCOME"[\s\S]*?esac/.exec(summary!);
+    expect(m).not.toBeNull();
+    // Dedent the YAML block scalar so bash sees the script as the runner would.
+    const block = m![0].split("\n").map((l) => l.replace(/^ {10}/, "")).join("\n");
+    // [apply, poll, rc, annotation stdout must contain ("" = must print nothing)]. The
+    // annotation column is what tells the cancelled arm from the `*` default, which share rc 0.
+    const table: Array<[string, string, number, string]> = [
+      ["success", "success", 0, ""],
+      ["success", "failure", 0, ""],
+      ["success", "skipped", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["success", "cancelled", 1, "::error::apply succeeded but the boot-signal poll did not run"],
+      ["skipped", "skipped", 0, "::notice::boot-signal poll SKIPPED"],
+      ["failure", "failure", 0, ""],
+      ["failure", "skipped", 0, ""],
+      ["cancelled", "skipped", 0, "::warning::apply was cancelled mid-flight"],
+      ["neutral", "skipped", 0, "::warning::unrecognised outcome pair"],
+      ["", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["success", "", 1, "::error::apply/poll outcome is EMPTY"],
+      ["", "skipped", 1, "::error::apply/poll outcome is EMPTY"],
+    ];
+    for (const [a, p, rc, note] of table) {
+      const r = spawnSync("bash", ["-eo", "pipefail", "-c", block], {
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", APPLY_OUTCOME: a, POLL_OUTCOME: p },
+        encoding: "utf8",
+      });
+      expect(`${a}/${p} -> rc=${r.status}`).toBe(`${a}/${p} -> rc=${rc}`);
+      if (note === "") expect(`${a}/${p} -> [${r.stdout}]`).toBe(`${a}/${p} -> []`);
+      else expect(`${a}/${p} -> ${r.stdout}`).toContain(note);
+    }
+  });
+});
+
+// Mutation + harness battery. Each M-row asserts the guard reports RED for a
+// mutated fixture; each H-row asserts it PASSES a legitimate non-canonical one.
+// These run in CI forever rather than being hand-applied once at authoring time.
+describe("Guard 1 mutation battery (#7539)", () => {
+  const BRIDGE = "        uses: ./.github/actions/cf-tunnel-ssh-bridge";
+
+  /** Minimal synthetic workflow with the same two-stage shape as the real one. */
+  function synth(opts: {
+    preBridge?: string[];
+    postBridge?: string[];
+    bridgeLine?: string;
+  }): string {
+    return [
+      "jobs:",
+      "  preflight:",
+      "    runs-on: ubuntu-latest",
+      "  apply:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: Terraform plan (allow-list, non-SSH resources only)",
+      "        run: |",
+      "          terraform plan \\",
+      ...(opts.preBridge ?? []).map((t) => `            ${t}`),
+      "      - name: CF Tunnel SSH bridge (gated)",
+      opts.bridgeLine ?? BRIDGE,
+      "      - name: Terraform apply (SSH-provisioned resources, over the bridge)",
+      "        run: |",
+      "          terraform apply \\",
+      ...(opts.postBridge ?? []).map((t) => `            ${t}`),
+      "  inngest_host:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+  }
+
+  /** A compliant baseline: SSH addresses only after the bridge. */
+  const COMPLIANT = synth({
+    preBridge: [
+      "-target=doppler_secret.alpha \\",
+      "-target=betteruptime_heartbeat.beta \\",
+      "-target=cloudflare_ruleset.gamma \\",
+    ],
+    postBridge: [
+      "-target=terraform_data.journald_persistent \\",
+      "-target=terraform_data.fail2ban_tuning \\",
+    ],
+  });
+
+  const addrs = (wf: string) => bridgelessOffenders(wf).map((o) => o.addr);
+
+  test("control: the compliant baseline is GREEN (a red baseline voids every row)", () => {
+    expect(bridgelessOffenders(COMPLIANT)).toEqual([]);
+  });
+
+  test("M1: the #7539 regression itself — the misplaced address before the bridge", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "-target=terraform_data.inngest_consumer_probe_install \\",
+      ],
+      postBridge: ["-target=terraform_data.journald_persistent \\"],
+    });
+    expect(addrs(mutant)).toEqual(["inngest_consumer_probe_install"]);
+  });
+
+  test("M2: a SECOND offender after a compliant first (catches a check that stops at hit one)", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "-target=terraform_data.inngest_consumer_probe_install \\",
+        "-target=terraform_data.fail2ban_tuning \\",
+      ],
+    });
+    expect(addrs(mutant)).toEqual([
+      "inngest_consumer_probe_install",
+      "fail2ban_tuning",
+    ]);
+  });
+
+  // M3a-c: TOKEN SHAPE. The real workflow writes 69 single-quoted and 14
+  // double-quoted `-target=` flags against 139 bare ones, and 13 `-replace=`.
+  // A bare-only, line-leading matcher lets the regression re-land in the
+  // file's own majority style — measured, it did: the first draft of this
+  // guard passed all three of these green.
+  test("M3a: SINGLE-QUOTED — the style 69 of the file's own -target flags use", () => {
+    const mutant = synth({
+      preBridge: ["-target='terraform_data.inngest_consumer_probe_install' \\"],
+    });
+    expect(addrs(mutant)).toEqual(["inngest_consumer_probe_install"]);
+  });
+
+  test("M3b: DOUBLE-QUOTED", () => {
+    const mutant = synth({
+      preBridge: ['-target="terraform_data.journald_persistent" \\'],
+    });
+    expect(addrs(mutant)).toEqual(["journald_persistent"]);
+  });
+
+  test("M3c: -replace= drives the same provisioner run as -target=", () => {
+    const mutant = synth({
+      preBridge: ["-replace=terraform_data.cosign_trusted_root \\"],
+    });
+    expect(addrs(mutant)).toEqual(["cosign_trusted_root"]);
+  });
+
+  test("M3d: a SECOND flag on one line, and a module-prefixed address", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha -target=terraform_data.fail2ban_tuning \\",
+        "-target=module.web.terraform_data.orphan_reaper_install \\",
+      ],
+    });
+    expect(addrs(mutant)).toEqual([
+      "fail2ban_tuning",
+      "orphan_reaper_install",
+    ]);
+  });
+
+  test("M4: an address in the bridge-less APPLY step, not the plan step (the range hole)", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: Terraform plan (allow-list, non-SSH resources only)",
+      "        run: terraform plan -target=doppler_secret.alpha",
+      "      - name: Terraform apply",
+      "        run: |",
+      "          terraform apply \\",
+      "            -target=terraform_data.cosign_trusted_root \\",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  inngest_host:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(addrs(mutant)).toEqual(["cosign_trusted_root"]);
+  });
+
+  test("M5: a SECOND job with its own bridge, reordered so the target precedes it", () => {
+    // `vector_redeliver` in the real file has exactly this shape and is
+    // compliant only by step ORDER. An apply-job-only guard is blind to it.
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "      - name: Terraform apply",
+      "        run: terraform apply -target=terraform_data.journald_persistent",
+      "  vector_redeliver:",
+      "    steps:",
+      "      - name: Terraform plan (scoped)",
+      "        run: terraform plan -target=terraform_data.journald_persistent",
+      "      - name: CF Tunnel SSH bridge",
+      BRIDGE,
+      "  entrypoint_audit:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([
+      { job: "vector_redeliver", addr: "journald_persistent" },
+    ]);
+  });
+
+  test("M6: a NEW job with no bridge at all — the whole job is bridge-less", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  hotfix_seccomp:",
+      "    steps:",
+      "      - name: Terraform apply",
+      "        run: terraform apply -target=terraform_data.docker_seccomp_config",
+      "  entrypoint_audit:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([
+      { job: "hotfix_seccomp", addr: "docker_seccomp_config" },
+    ]);
+  });
+
+  test("M7: an unresolvable JOB SET fails CLOSED, never empty-passes", () => {
+    expect(() => bridgelessOffenders("name: no jobs here\non: push\n")).toThrow(
+      /no jobs resolved/,
+    );
+  });
+
+  test("M8: the allowlist escape hatch is WIRED (a zero-cardinality set is unproven)", () => {
+    const mutant = synth({
+      preBridge: ["-target=terraform_data.local_only_thing \\"],
+    });
+    expect(addrs(mutant)).toEqual(["local_only_thing"]);
+    BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.add("local_only_thing");
+    try {
+      expect(bridgelessOffenders(mutant)).toEqual([]);
+    } finally {
+      BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.delete("local_only_thing");
+    }
+    expect(addrs(mutant)).toEqual(["local_only_thing"]);
+  });
+
+  test("H1: comment-stripping is live (now load-bearing — the matcher is unanchored)", () => {
+    // With an unanchored matcher, stripComments is what keeps a DOCUMENTED
+    // target from reading as an applied one. The first draft anchored on
+    // `^\s*-target=`, which made this strip a measured no-op.
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "# -target=terraform_data.journald_persistent (documented, not applied)",
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+
+  test("H2: a legitimate non-canonical workflow PASSES (the guard is not diffing the real file)", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=github_actions_secret.zeta \\",
+        "-target='random_id.eta' \\",
+      ],
+      postBridge: [
+        "-target=terraform_data.synthetic_probe_install \\",
+        "-target=terraform_data.synthetic_monitor_install \\",
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+
+  test("H3: a job with no terraform at all stays GREEN", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  entrypoint_audit:",
+      "    steps:",
+      "      - name: Audit",
+      "        run: echo ok",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([]);
   });
 });
 
@@ -502,12 +1190,17 @@ function stripDispatchJobs(workflowText: string): string {
   // rather than merely uniform: ALL EIGHTEEN of its -targets are
   // OPERATOR_APPLIED_EXCLUSIONS (ADR-103), so folding them into `allTargets` would assert
   // per-merge coverage for a fan-out the per-merge apply deliberately never touches.
+  // inngest_volume_recut (#7695): the dispatch-only recut of the inngest Redis AOF volume. Its 2
+  // -targets (hcloud_volume.inngest_redis + its attachment) are BOTH already
+  // OPERATOR_APPLIED_EXCLUSIONS, so stripping is coverage-neutral today — but strip it per the
+  // uniform rule: a dispatch writer surface must never broaden the per-merge coverage anchor, so a
+  // FUTURE recut -target that is NOT an exclusion cannot silently mask a per-merge miss.
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_volume_recut");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -574,8 +1267,10 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.git_data",
   "hcloud_firewall.git_data",
   "hcloud_firewall_attachment.git_data",
-  "betteruptime_heartbeat.git_data_prd",
-  "doppler_secret.git_data_heartbeat_url_prd",
+  // betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd left this set
+  // (#8754): the "operator full apply" route they were excluded for no longer exists, so they ride
+  // the per-merge -target list, where the same apply's arm step measures a beat before arming. The
+  // birth route still refuses them (GIT_DATA_BIRTH_REFUSED).
   // #5274 Phase 3 (ADR-068) — the multi-host cluster's new resources all ride the
   // operator's MAINTENANCE-WINDOW apply, exactly like hcloud_server.web + the
   // git-data keys above, NOT the #5566 per-PR-CI class:
@@ -584,10 +1279,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets belong to
-  //     the web-host cluster (SANs = web host private IPs) and ride the same
-  //     cluster apply (doppler_secret, not the CI-published token types the test
-  //     forces).
+  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
+  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
+  //     amendment) and exist only after the multi-host flip, which must move all
+  //     four to a -target list in the same change (doppler_secret, not the
+  //     CI-published token types the test forces).
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
@@ -639,14 +1335,28 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the `doppler_secret.git_data_ssh_host` proposal outright; it does not. It bites only
   // under the remedy "give the new secret a per-PR -target line", which is not the remedy
   // any of its five sibling secrets use — they sit in THIS set with no per-PR target at
-  // all. Sourcing the value from a static local (local.git_data_private_ip) instead of the
-  // computed NIC attribute removes the last edge that could reach the server. So the
-  // secret ships in #6982 as an exclusion + a birth -target, with no wedge.
+  // all. So the secret ships in #6982 as an exclusion + a birth -target, with no wedge.
+  //
+  // (#7772) THE SENTENCE THAT STOOD HERE described the rejected design. It said the value is
+  // sourced "from a static local (local.git_data_private_ip) instead of the computed NIC
+  // attribute", which "removes the last edge that could reach the server". DC-3 mandated the
+  // opposite and DC-5 was reversed before merge: git-data.tf reads
+  // `hcloud_server_network.git_data.ip`. The no-wedge conclusion is unaffected and stands on
+  // the reason above it — this exclusion means no per-PR -target, so the computed edge is
+  // never in a per-merge plan closure. `local.git_data_private_ip` still exists and is still
+  // load-bearing, but for network.tf's own `ip =` assignment, not for this secret.
   "doppler_config.git_data_prd",
   // (#6982) Both ride the git-data-host-create dispatch, never the per-PR apply — same
   // class as every git-data sibling above.
   "doppler_secret.git_data_ssh_host",
   "doppler_secret.git_data_betterstack_logs_token",
+  // (#7226, ADR-237) The git-data SSH HOST key and its published pin (GIT_DATA_SSH_HOST_KEY).
+  // They rotate WITH the host: the replace job -replace's the key and -targets the pin, the
+  // birth job -targets both. A per-PR -target on either would publish a pin the live host does
+  // not carry (plan R1), so both are exclusions and Guard 4 below asserts neither is on the
+  // per-PR list.
+  "tls_private_key.git_data_host_ssh",
+  "doppler_secret.git_data_ssh_host_key",
   // #6588 (ADR-119) — the ADDITIVE LUKS-at-rest /workspaces volume + its at-rest key +
   // its scoped read-only token ALL ride the operator's `workspaces-luks-cutover` dispatch
   // apply, NOT the #5566 per-PR-CI class. Same class as hcloud_volume.workspaces +
@@ -670,10 +1380,9 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "doppler_secret.workspaces_luks_key",
   "hcloud_volume.workspaces_luks",
   "hcloud_volume_attachment.workspaces_luks",
-  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret. Same
-  // class as betteruptime_heartbeat.git_data_prd + doppler_secret.git_data_heartbeat_url_prd
-  // (both excluded, applied together by the operator apply; the heartbeat is paused until the
-  // operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
+  // #6604 — the daily luks-monitor probe's Better Stack heartbeat + its Doppler URL secret (the
+  // same class the git-data heartbeat pair was until #8754 moved it to the per-merge -target list;
+  // this heartbeat is paused until the operator unpauses at cutover). NOT part of the five-resource cutover gate allow-set, and never
   // rides the gated cutover -target set — so it does not affect the cutover destroy-guard.
   "betteruptime_heartbeat.workspaces_luks",
   "doppler_secret.workspaces_luks_heartbeat_url",
@@ -724,7 +1433,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // doppler_secret.zot_heartbeat_url_prd removed (#6438 B3): it was a reserved-but-inert secret for
   // a never-built off-host probe; the web-host consumer probe now mints its own per-host heartbeat +
   // URL secret (betteruptime_heartbeat.web_zot_consumer / doppler_secret.web_zot_consumer_url, which
-  // DO ride the per-PR -target list), so this exclusion is obsolete.
+  // DO ride the per-PR -target list). The orphaned secret itself is destroyed by a bare per-merge
+  // -target (#8754, pinned by the PR-B describe below), so it needs no exclusion.
   "doppler_service_token.registry",
   // #6122 (ADR-096) — the CI-push ingress (CTO ruling 2026-07-06): CI reaches the private-net
   // zot host via the EXISTING `web` Cloudflare Tunnel + a NEW dedicated CF Access service token,
@@ -751,9 +1461,18 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_server.inngest",
   "hcloud_volume.inngest_redis",
   "hcloud_volume_attachment.inngest_redis",
+  // #6894 / ADR-142. The ADDITIVE target volume and its attachment. Both are
+  // operator-applied via `apply_target=inngest-host`; neither is in the per-merge
+  // allowlist, because creating a volume is a billable resource change that wants
+  // the dispatch gate rather than a merge side effect. They are listed here the
+  // moment the resources exist — check_resource_partition reds on any managed
+  // address that is neither reachable nor excluded, so the coverage test would go
+  // red on the commit that declares the volume if these two lines lagged it.
+  "hcloud_volume.inngest_redis_luks",
+  "hcloud_volume_attachment.inngest_redis_luks",
   "hcloud_server_network.inngest",
   "hcloud_firewall.inngest",
-  "hcloud_firewall_attachment.inngest",
+  // hcloud_firewall_attachment.inngest left this set (#8754): it is a removed{} forget now.
   "random_id.inngest_signing_key_dedicated",
   "random_id.inngest_event_key_dedicated",
   "random_password.inngest_redis_password_dedicated",
@@ -767,13 +1486,12 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the additive inngest_host dispatch job (stripDispatchJobs excludes that job from the
   // coverage set, so this exclusions entry — not the -target line — is the load-bearing coverage).
   "doppler_secret.inngest_betterstack_logs_token",
-  // #6780 (ADR-134) — the promoted config-refresh digest pointer, minted into the ISOLATED
-  // soleur-inngest/prd project (inngest-config-digest.tf). DELIBERATELY has NO per-PR CI -target:
-  // the boot isolation self-check on soleur-inngest/prd is EXACT-SET, so this secret can be applied
-  // ONLY atomically with the cloud-init regex+floor admission that rides the #6178 cutover — a
-  // per-PR apply would brick the sole scheduler at its next boot. Rides the operator/cutover apply,
-  // exactly like the sibling isolated-inngest secrets above; `doppler_secret`, not a CI-published
-  // token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
+  // #6780 (ADR-135) — the promoted config-refresh digest pointer, minted into the ISOLATED
+  // soleur-inngest/prd project (inngest-config-digest.tf). No per-PR -target: it is count-gated on a
+  // non-empty TF_VAR (#8754), and promotion is a separate-principal apply (HARD-6) whose route is not
+  // built yet (#9060). The cloud-init regex already admits the name; the remaining coupling is the
+  // isolation floor 5->6 bump, which rides the first promotion. `doppler_secret`, not a
+  // CI-published token type. (`github_repository_environment.inngest_config_signing`, by contrast, IS host-
   // independent and carries a normal -target — see apply-web-platform-infra.yml.)
   "doppler_secret.inngest_config_digest",
   "doppler_service_token.inngest",
@@ -868,6 +1586,38 @@ describe("terraform -target parity — ALL managed resources are reachable (non-
     expect(allTargets.has("github_actions_secret.supabase_access_token")).toBe(
       true,
     );
+  });
+
+  test("#6931: the fresh-boot LUKS credentials are CI-targeted in the DEFAULT apply, never an operator-applied exclusion", () => {
+    // They MUST exist in state before any web-2 birth: a resource created INSIDE a birth plan is an
+    // out-of-scope create to web-host-birth-gate.sh and aborts the birth. `allTargets` is built from
+    // the workflow with every dispatch job stripped, so membership here means the per-merge push
+    // apply creates them, which is what makes the birth plan a no-op for them. The marker write
+    // token feeds a github_actions_secret, so the #5566 rule forbids excluding it as well.
+    const freshBoot = [
+      "doppler_service_token.workspaces_luks_fresh_boot",
+      // #9377 — the web-class escrow split: config, token, bucket and the three secrets must exist in state
+      // before any web-2 birth (a create inside a birth plan is out of scope for web-host-birth-gate.sh).
+      "doppler_config.workspaces_luks_web",
+      "doppler_service_token.workspaces_luks_fresh_boot_web",
+      "cloudflare_r2_bucket.workspaces_luks_header_web",
+      // The web-class passphrase generator (#9377 decision A1): the key secret's value is its `.result`, so it
+      // must ride the same default apply (a `-target` pulls dependencies, but the explicit target keeps the
+      // push-apply's plan stable and the declared/targeted parity honest).
+      "random_password.workspaces_luks_web",
+      "doppler_secret.workspaces_luks_web_key",
+      "doppler_secret.workspaces_luks_web_header_bucket",
+      "doppler_secret.workspaces_luks_web_header_r2_endpoint",
+      "doppler_config.workspaces_luks_marker",
+      "doppler_service_token.workspaces_luks_marker_write",
+      "github_actions_secret.doppler_token_workspaces_luks_marker",
+    ];
+    for (const a of freshBoot) {
+      expect(allResources, `${a} must be a declared resource`).toContain(a);
+      expect(allTargets.has(a), `${a} must be in the default push-apply -target list`).toBe(true);
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(a), `${a} must not be an operator-applied exclusion`).toBe(false);
+      expect(OPERATOR_APPLIED_TOKEN_EXCLUSIONS.has(a), `${a} must not be an operator-applied token exclusion`).toBe(false);
+    }
   });
 
   test("every github_actions_secret + doppler_service_token is targeted (CI-publish types), except operator-applied host tokens", () => {
@@ -1289,37 +2039,66 @@ const GIT_DATA_REPLACE_TARGETS = [
   "hcloud_volume_attachment.git_data",
   "hcloud_volume_attachment.git_data_luks",
   "hcloud_firewall_attachment.git_data",
+  // (#7226, ADR-237) The pin is re-published by the replace that rotates the key.
+  "doppler_secret.git_data_ssh_host_key",
 ];
-const GIT_DATA_REPLACE_REPLACE = "hcloud_server.git_data";
-// The two data volumes preserved by OMISSION — asserted ABSENT from the -target set.
+// (#7226, ADR-237) The replace rotates the SSH host key in LOCKSTEP with the host: dropping the
+// key's -replace re-uses a key a rooted host could have exfiltrated (ADR-220 D6).
+const GIT_DATA_REPLACE_REPLACES = ["hcloud_server.git_data", "tls_private_key.git_data_host_ssh"];
+// (#8211 PR2 / ADR-220 D6) The ROTATE arm's conditional additions — the LUKS store trio
+// move together, only under apply_target=git-data-host-rotate (EXTRA_REPLACE/EXTRA_TARGET
+// in the plan step). A partial set here is a stranding, not a rotate.
+const GIT_DATA_ROTATE_REPLACES = ["hcloud_volume.git_data_luks", "random_password.git_data_luks"];
+const GIT_DATA_ROTATE_TARGETS = [
+  "hcloud_volume.git_data_luks",
+  "random_password.git_data_luks",
+  "doppler_secret.git_data_luks_key",
+];
+// The data volumes preserved by OMISSION from the BASE set — the LUKS volume joins the set
+// only inside the rotate arm's conditional, so each is asserted ABSENT from the
+// unconditional -target lines and PRESENT in the rotate arm.
 const GIT_DATA_PRESERVED_VOLUMES = [
   "hcloud_volume.git_data",
-  "hcloud_volume.git_data_luks",
 ];
 
-describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volumes preserved by omission)", () => {
+describe("git-data-host-replace dispatch -target/-replace set (scoped; plaintext volume preserved by omission)", () => {
   let gitDataTargets: string[];
   let gitDataJobBlock: string;
   let replaceAddrs: string[];
+  let gitDataRotateTargets: string[];
+  let rotateReplaces: string[];
 
   beforeAll(() => {
     const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
     gitDataJobBlock = extractJobBlock(wf, "git_data_host_replace");
-    gitDataTargets = extractTargetsWithKeys(gitDataJobBlock);
-    replaceAddrs = extractReplaceAddrs(gitDataJobBlock);
+    // (#8211 PR2) The rotate arm's -target/-replace additions live in EXTRA_TARGET /
+    // EXTRA_REPLACE arrays, applied only when apply_target == 'git-data-host-rotate'.
+    // Base = the unconditional lines; rotate = the EXTRA_ lines.
+    const baseBlock = gitDataJobBlock
+      .split("\n")
+      .filter((l) => !l.includes("EXTRA_"))
+      .join("\n");
+    const rotateBlock = gitDataJobBlock
+      .split("\n")
+      .filter((l) => l.includes("EXTRA_"))
+      .join("\n");
+    gitDataTargets = extractTargetsWithKeys(baseBlock);
+    replaceAddrs = extractReplaceAddrs(baseBlock);
+    gitDataRotateTargets = extractTargetsWithKeys(rotateBlock);
+    rotateReplaces = extractReplaceAddrs(rotateBlock);
   });
 
-  test("the git_data_host_replace job -targets EXACTLY the 5 git-data-replace resources", () => {
+  test("the git_data_host_replace job -targets EXACTLY the git-data-replace resources (5 + the host-key pin)", () => {
     expect([...gitDataTargets].sort()).toEqual(
       [...GIT_DATA_REPLACE_TARGETS].sort(),
     );
   });
 
-  test("the -replace address is EXACTLY the git-data server", () => {
-    expect(replaceAddrs).toEqual([GIT_DATA_REPLACE_REPLACE]);
+  test("the -replace addresses are EXACTLY the git-data server and its SSH host key (lockstep, #7226)", () => {
+    expect([...replaceAddrs].sort()).toEqual([...GIT_DATA_REPLACE_REPLACES].sort());
   });
 
-  test("the target set EXACTLY equals the gate's 5-member allow-set (job↔gate parity)", () => {
+  test("the -target ∪ -replace set EXACTLY equals the gate's allow-set (job↔gate parity)", () => {
     // The load-bearing invariant: the workflow's -target lines must correspond 1:1 to the sourced
     // gate's allow-set. Extract the allow[] array from the gate lib and compare.
     const gateSrc = readFileSync(
@@ -1331,19 +2110,72 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     const allowMembers = [...allowBlock![1].matchAll(/"([^"]+)"/g)].map(
       (m) => m[1],
     );
-    expect([...allowMembers].sort()).toEqual([...gitDataTargets].sort());
+    expect([...allowMembers].sort()).toEqual(
+      [...new Set([...gitDataTargets, ...replaceAddrs])].sort(),
+    );
   });
 
-  test("NEITHER data volume is in the -target set (preserved by omission)", () => {
+  // (#8211 PR2) Rotate arm: the EXTRA_TARGET/EXTRA_REPLACE lines hold EXACTLY the LUKS
+  // trio, and the gate's rotate-extension allow list equals the same set.
+  test("the rotate arm carries EXACTLY the LUKS store trio (volume + passphrase + key)", () => {
+    expect([...gitDataRotateTargets].sort()).toEqual([...GIT_DATA_ROTATE_TARGETS].sort());
+    expect([...rotateReplaces].sort()).toEqual([...GIT_DATA_ROTATE_REPLACES].sort());
+  });
+
+  test("the rotate set equals the gate's rotate-extension allow list (job↔gate parity)", () => {
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/git-data-host-replace-gate.sh"),
+      "utf8",
+    );
+    const rotBlock = gateSrc.match(/\$mode == "rotate" then\s*\[([^\]]+)\]/);
+    expect(rotBlock).not.toBeNull();
+    const rotMembers = [...rotBlock![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect([...rotMembers].sort()).toEqual(
+      [...new Set([...gitDataRotateTargets, ...rotateReplaces])].sort(),
+    );
+  });
+
+  test("the rotate precondition reads the GIT-DATA Better Stack table, not the shared default", () => {
+    // git-data emits to its own source 2734275 (t520508_soleur_git_data_prd_logs); the
+    // betterstack-query.sh default is the shared inngest source, which answers zero rows
+    // for host_name=soleur-git-data forever — the precondition would fail closed every
+    // dispatch. The env pin (BS_TABLE="$BS_GIT_DATA_TABLE") is the anchored contract.
+    // The read itself lives in scripts/lib/git-data-boot-signal-poll.sh —
+    // git_data_served_empty_read pins the table/env there; the step must call it.
+    expect(gitDataJobBlock).toContain("git_data_served_empty_read");
+    const libSrc = readFileSync(
+      resolve(REPO_ROOT, "scripts/lib/git-data-boot-signal-poll.sh"),
+      "utf8",
+    );
+    expect(libSrc).toContain('BS_TABLE="$BS_GIT_DATA_TABLE"');
+    expect(libSrc).toContain('BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"');
+    expect(libSrc).toContain("JSONExtractString(raw,'stage') = 'boot_complete'");
+    expect(libSrc).toContain("JSONExtractString(raw,'host_name') = 'soleur-git-data'");
+    expect(libSrc).toContain("--only-secrets");
+  });
+
+  test("the rotate arm is conditional on apply_target=git-data-host-rotate", () => {
+    // The EXTRA_* additions apply only when the dispatch selected the rotate target —
+    // the bash check inside the plan step is what gates them.
+    expect(gitDataJobBlock).toContain('inputs.apply_target }}" == "git-data-host-rotate"');
+  });
+
+  test("the gate is invoked with the mode argument (rotate passes through)", () => {
+    expect(gitDataJobBlock).toMatch(/git_data_host_replace_gate\s+tfplan\.json\s+"?\$?GATE_MODE/);
+  });
+
+  test("the plaintext data volume is in NEITHER the base nor the rotate set (preserved by omission)", () => {
     // The deliberate divergence from registry (whose store volume IS in-scope for a resize). An
-    // untargeted resource cannot be planned for destroy, so omission is what preserves the stores.
+    // untargeted resource cannot be planned for destroy, so omission is what preserves it.
+    // The LUKS volume is NOT here — rotate legitimately replaces it, inside the EXTRA_ arm.
     for (const vol of GIT_DATA_PRESERVED_VOLUMES) {
       expect(gitDataTargets).not.toContain(vol);
+      expect(gitDataRotateTargets).not.toContain(vol);
     }
   });
 
   test("every git-data-replace target's base address is an OPERATOR_APPLIED_EXCLUSION", () => {
-    for (const t of gitDataTargets) {
+    for (const t of [...gitDataTargets, ...replaceAddrs, ...gitDataRotateTargets, ...rotateReplaces]) {
       const base = t.replace(/\[.*$/, "");
       expect(OPERATOR_APPLIED_EXCLUSIONS.has(base)).toBe(true);
     }
@@ -1371,6 +2203,234 @@ describe("git-data-host-replace dispatch -target/-replace set (scoped; BOTH volu
     for (const addr of GIT_DATA_REPLACE_TARGETS) {
       expect(MOVED_OPERATOR_CONSUMED.has(addr)).toBe(false);
     }
+  });
+});
+
+// ─── (#7226, ADR-237) host-key pinning: the per-PR list, the probe, the redeploy jobs ────
+//
+// Guard 4 row 6: neither git-data pin address may ride the per-PR apply — a routine merge
+// would publish a pin the live host does not carry (plan R1). The merge-time web-1 probe
+// (terraform_data.web_1_host_key_probe) MUST ride it, with the pinned Terraform version fed in,
+// because a Terraform bump can change x/crypto's host-key algorithm order (plan R4) and the
+// probe's trigger folds the version in. And each git-data birth/replace is followed by a
+// secret-free job that forces a web release so the app loads the rotated pin (plan D6).
+const GIT_DATA_PIN_ADDRS = ["tls_private_key.git_data_host_ssh", "doppler_secret.git_data_ssh_host_key"];
+const PIN_REDEPLOY_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/git-data-pin-redeploy.yml");
+// Every workflow that plans/applies the MAIN root (apps/web-platform/infra). Each must feed
+// TF_VAR_terraform_version equal to its own TERRAFORM_VERSION, or web_1_host_key_probe's trigger
+// differs per workflow and the drift job reports a phantom probe replacement.
+const MAIN_ROOT_TF_WORKFLOWS = [
+  "apply-web-platform-infra.yml",
+  "apply-deploy-pipeline-fix.yml",
+  "scheduled-terraform-drift.yml",
+  "infra-validation.yml",
+  // #9377: the dispatch-only, create-only escrow workflow plans and applies the main root (single-use; retired
+  // with the #9372 checklist, which takes this entry out and the census count back to 3).
+  "apply-web-escrow-create.yml",
+];
+
+describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const applyJob = extractJobBlock(wf, "apply");
+  const sshApply = extractStep(applyJob, /Terraform apply \(SSH-provisioned resources, over the bridge\)/) ?? "";
+
+  test("the per-PR SSH apply step resolves and targets the web-1 host-key probe", () => {
+    expect(sshApply.length).toBeGreaterThan(0);
+    expect(extractAllTargets(sshApply).has("terraform_data.web_1_host_key_probe")).toBe(true);
+  });
+
+  test("Guard 4 row 6: neither pin address is on ANY per-merge -target list", () => {
+    const perMerge = extractAllTargets(stripDispatchJobs(wf));
+    for (const a of GIT_DATA_PIN_ADDRS) expect(perMerge.has(a)).toBe(false);
+    expect(perMerge.has("terraform_data.web_1_host_key_probe")).toBe(true);
+    // Every OTHER main-root planner too (apply-deploy-pipeline-fix applies per merge; the
+    // drift / validation plans must never grow a -target on a pin address either).
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const t = extractAllTargets(stripDispatchJobs(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")));
+      for (const a of GIT_DATA_PIN_ADDRS) expect([f, a, t.has(a)]).toEqual([f, a, false]);
+    }
+  });
+
+  test("the birth job -targets both pin addresses; the replace job -replace's the key and -targets the pin", () => {
+    const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
+    for (const a of GIT_DATA_PIN_ADDRS) expect(birth.has(a)).toBe(true);
+    const replaceJob = extractJobBlock(wf, "git_data_host_replace");
+    expect(extractReplaceAddrs(replaceJob)).toContain("tls_private_key.git_data_host_ssh");
+    expect(extractAllTargets(replaceJob).has("doppler_secret.git_data_ssh_host_key")).toBe(true);
+  });
+
+  for (const job of ["git_data_host_create", "git_data_host_replace"]) {
+    test(`${job}: prints ONLY a regex-validated SHA256 fingerprint to the summary after apply`, () => {
+      const block = stripComments(extractJobBlock(wf, job));
+      expect(block).toContain("terraform output -raw git_data_ssh_host_key_fingerprint");
+      expect(block).toMatch(/\[\[ "\$fp" =~ \^SHA256:\[A-Za-z0-9\+\/\]\{43\}\$ \]\]; then echo "git-data host key fingerprint: \$fp" >> "\$GITHUB_STEP_SUMMARY"; echo "::notice title=git-data-pin::git-data host key fingerprint: \$fp"; else/);
+    });
+  }
+
+  test("the apply workflow carries NO release-poll redeploy JOB (a job, not a step, would hold the fleet-wide apply lock)", () => {
+    const jobs = Object.keys((parseYaml(wf) as { jobs: Record<string, unknown> }).jobs);
+    // (#8211 PR2) The inline pin_load STEPS run track.sh — a minutes-long webhook poll
+    // inside the (short) apply job, which is exactly what the lock can afford. What stays
+    // barred is a redeploy JOB or the release-dispatch machinery (gh workflow run /
+    // workflow_run polling), which is the 70-minute shape that forced the follower split.
+    expect(jobs.filter((j) => /redeploy/.test(j))).toEqual([]);
+    const stripped = stripComments(wf);
+    expect(stripped).not.toContain("source-run-gate.sh");
+    expect(stripped).not.toContain("gh workflow run web-platform-release");
+  });
+
+  test("every main-root Terraform workflow feeds TF_VAR_terraform_version == its TERRAFORM_VERSION", () => {
+    for (const f of MAIN_ROOT_TF_WORKFLOWS) {
+      const doc = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows", f), "utf8")) as {
+        env?: Record<string, unknown>;
+        jobs?: Record<string, { env?: Record<string, unknown>; steps?: Array<{ name?: string; env?: Record<string, unknown> }> }>;
+      };
+      const env = doc.env ?? {};
+      expect(typeof env.TERRAFORM_VERSION).toBe("string");
+      expect([f, env.TF_VAR_terraform_version]).toEqual([f, env.TERRAFORM_VERSION]);
+      // A job- or step-level env: override of either key to another value would split the
+      // probe trigger per job. Undefined (inherit) is the only other accepted value.
+      for (const [jn, job] of Object.entries(doc.jobs ?? {})) {
+        const scopes: Array<[string, Record<string, unknown> | undefined]> = [[`${f}:${jn}`, job?.env]];
+        for (const [i, st] of (job?.steps ?? []).entries()) scopes.push([`${f}:${jn}:step${i}(${st?.name ?? ""})`, st?.env]);
+        for (const [where, e] of scopes) {
+          for (const k of ["TF_VAR_terraform_version", "TERRAFORM_VERSION"]) {
+            if (e && k in e) expect([where, k, e[k]]).toEqual([where, k, env.TERRAFORM_VERSION]);
+          }
+        }
+      }
+    }
+  });
+
+  // #6604 step 7 — a workflow that WRITES the main root's state without planning (a dispatched
+  // `terraform state rm|mv|push`, e.g. workspaces-plaintext-forget.yml) is invisible to the planner
+  // census below, but a Terraform version other than the apply workflows' could upgrade the state format
+  // under them. Discovered, not listed, so PR B deleting the forget workflow needs no edit here.
+  test("every main-root state-write-only workflow pins TERRAFORM_VERSION == apply-web-platform-infra's", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const STATE_WRITE = /terraform\s+state\s+(rm|mv|push)\b/;
+    const MAIN_ROOT = /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m;
+    // Non-vacuity: the discovery pattern must match the shape it exists for.
+    expect(STATE_WRITE.test("          terraform state rm \"${addrs[@]}\"")).toBe(true);
+    const applyEnv = (parseYaml(readFileSync(resolve(dir, "apply-web-platform-infra.yml"), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+    expect(typeof applyEnv.TERRAFORM_VERSION).toBe("string");
+    const writers = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        return STATE_WRITE.test(t) && MAIN_ROOT.test(t);
+      });
+    for (const f of writers) {
+      const env = (parseYaml(readFileSync(join(dir, f), "utf8")) as { env?: Record<string, unknown> }).env ?? {};
+      expect([f, env.TERRAFORM_VERSION]).toEqual([f, applyEnv.TERRAFORM_VERSION]);
+    }
+  });
+
+  test("the main-root workflow census is complete (a new planner cannot skip the variable)", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    // Every spelling of "this workflow runs Terraform in the main root": an INFRA_DIR env, a
+    // static matrix entry, a literal working-directory, or `terraform -chdir=`. Sub-roots
+    // (apps/web-platform/infra/<sub>) do not match: each pattern ends at the root.
+    const MAIN_ROOT_FORMS = [
+      /INFRA_DIR:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /^\s*-\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /working-directory:\s*["']?apps\/web-platform\/infra["']?\s*$/m,
+      /-chdir=["']?apps\/web-platform\/infra(?![\w\/-])/,
+    ];
+    const found = readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .filter((f) => {
+        const t = stripComments(readFileSync(join(dir, f), "utf8"));
+        const plans = /terraform\s+(-chdir=\S+\s+)?(plan|apply)\b/.test(t);
+        return plans && MAIN_ROOT_FORMS.some((re) => re.test(t));
+      })
+      .sort();
+    // Exact: infra-validation.yml is the one planner the census cannot see (its matrix is
+    // computed at runtime from a changed-files job), so it is listed by hand; every other
+    // entry must be found, and nothing else may be.
+    expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
+    expect(found.length).toBe(4);
+  });
+
+  // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
+  // git-data-pin-redeploy.yml + dispatch-web-redeploy/source-run-gate.sh are DELETED: the
+  // follower's only reason for a separate workflow was a 70-minute release-run poll that
+  // could not sit inside the apply lock. The webhook mechanism (track.sh: POST
+  // /hooks/deploy + deploy-status frame poll) is minutes, so the pin-load is a STEP inside
+  // each git-data job, after the verified boot poll. These pins hold the arm's shape:
+  describe("inline git-data pin-load (the retired follower, inlined)", () => {
+    const wfd = parseYaml(wf) as Record<string, any>;
+    const gitDataJobs = ["git_data_host_create", "git_data_host_replace"];
+    const pinLoad = (doc: Record<string, any>, job: string) =>
+      ((doc.jobs?.[job]?.steps ?? []) as any[]).filter((s) => s.id === "pin_load");
+    const trackUsers = (doc: Record<string, any>) =>
+      Object.keys(doc.jobs ?? {}).filter((j) =>
+        ((doc.jobs[j].steps ?? []) as any[]).some((s) => String(s.run ?? "").includes("dispatch-web-redeploy/track.sh")),
+      );
+    const freshLockDoc = () => parseYaml(wf) as Record<string, any>;
+    function pinLoadParity(doc: Record<string, any>): string[] {
+      const v: string[] = [];
+      for (const job of gitDataJobs) {
+        const hits = pinLoad(doc, job);
+        if (hits.length !== 1) {
+          v.push(`PL1 ${job}: ${hits.length} pin_load steps`);
+          continue;
+        }
+        const s = hits[0];
+        if (!String(s.run ?? "").includes("dispatch-web-redeploy/track.sh")) v.push(`PL1 ${job}: the pin_load step does not run track.sh`);
+        if (!String(s.if ?? "").includes("steps.poll.outcome == 'success'")) v.push(`PL1 ${job}: the pin_load step's if: dropped the poll-success gate`);
+        if (!String(s.if ?? "").includes("plan_only")) v.push(`PL1 ${job}: the pin_load step's if: dropped the plan_only guard`);
+      }
+      return v;
+    }
+
+    test("PL1: both git-data jobs run track.sh as id: pin_load, only on a verified boot", () => {
+      for (const job of gitDataJobs) {
+        const hits = pinLoad(wfd, job);
+        expect(hits.length, `${job}: exactly one pin_load step`).toBe(1);
+        const s = hits[0];
+        expect(String(s.run ?? "")).toContain("dispatch-web-redeploy/track.sh");
+        // A pin-load before boot-complete would redeploy the fleet to trust a key whose
+        // host never came up — the poll verdict is the gate.
+        expect(String(s.if ?? "")).toContain("steps.poll.outcome == 'success'");
+        expect(String(s.if ?? "")).toContain("plan_only");
+      }
+    });
+
+    test("PL1 RED: a pin_load missing its poll gate, or a pin-load step not running track.sh, is a violation", () => {
+      const doc = freshLockDoc();
+      const s = pinLoad(doc, "git_data_host_replace")[0];
+      s.if = "";
+      expect(pinLoadParity(doc)).toEqual([
+        "PL1 git_data_host_replace: the pin_load step's if: dropped the poll-success gate",
+        "PL1 git_data_host_replace: the pin_load step's if: dropped the plan_only guard",
+      ]);
+      const doc2 = freshLockDoc();
+      pinLoad(doc2, "git_data_host_replace")[0].run = "echo hello";
+      expect(pinLoadParity(doc2)).toEqual([
+        "PL1 git_data_host_replace: the pin_load step does not run track.sh",
+      ]);
+    });
+
+    test("PL2: the pin-load reads webhook creds from prd_terraform only, and fans out to every web host", () => {
+      for (const job of gitDataJobs) {
+        const s = pinLoad(wfd, job)[0];
+        const run = String(s.run ?? "");
+        expect(run).toContain("-p soleur -c prd_terraform");
+        expect(run).toContain("WEBHOOK_DEPLOY_SECRET");
+        // The peers CSV must be present — a single-host swap leaves the fleet MIXED.
+        expect(String((s.env as any)?.WEB_HOST_PRIVATE_IPS ?? "")).toBe("10.0.1.10,10.0.1.11");
+      }
+    });
+
+    test("PL3: track.sh runs ONLY from the two git-data pin-load steps, in the whole apply workflow", () => {
+      expect(trackUsers(wfd).sort()).toEqual(gitDataJobs.slice().sort());
+    });
+
+    test("PL4: the retired follower is really gone — no git-data-pin-redeploy workflow, no source-run-gate.sh", () => {
+      expect(existsSync(PIN_REDEPLOY_WORKFLOW)).toBe(false);
+      expect(existsSync(resolve(REPO_ROOT, ".github/actions/dispatch-web-redeploy/source-run-gate.sh"))).toBe(false);
+    });
   });
 });
 
@@ -1593,6 +2653,101 @@ describe("web-host-create dispatch -target set + birth-gate pairing (#6730)", ()
     expect(gateBases.length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
     expect(gateBases).toEqual([...WEB_HOST_BIRTH_TARGET_BASES].sort());
   });
+
+  // ── The gate's allow-set, judged by PURE functions so each rule has a mutation row (below). ──
+  const birthGateSrc = (): string =>
+    readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/web-host-birth-gate.sh"), "utf8");
+  const allowBody = (src: string): string => {
+    const m = /def allow\(\$k\):\s*\[([\s\S]*?)\n\];/.exec(src);
+    if (!m) throw new Error("def allow($k) not found in the birth gate");
+    return m[1];
+  };
+  // Address-shaped members only (the escaped-quote fragments between members are not addresses).
+  const allowMembers = (src: string): string[] =>
+    [...allowBody(src).matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+      .map((m) => m[1])
+      .filter((a) => /^[a-z0-9_]+\.[a-z0-9_]+/.test(a));
+  const allowBases = (src: string): string[] => [...new Set(allowMembers(src).map((a) => a.replace(/\[.*$/, "")))].sort();
+  // Keyed members interpolate the REQUEST'S key (`[\"\($k)\"]`); the fleet singletons carry no key at all. A
+  // hardcoded key (`[\"web-3\"]`) would let a sibling host's address ride every birth, and base-only parity
+  // cannot see it.
+  const keyFormOk = (src: string): boolean =>
+    allowMembers(src).every((a) => {
+      const base = a.replace(/\[.*$/, "");
+      const unkeyed = WEB_HOST_BIRTH_UNKEYED.includes(base);
+      return unkeyed ? a === base : a === `${base}[\\"\\($k)\\"]`;
+    });
+  const allowOk = (src: string): boolean =>
+    JSON.stringify(allowBases(src)) === JSON.stringify([...WEB_HOST_BIRTH_TARGET_BASES].sort()) && keyFormOk(src);
+
+  test("the allow-set equals the target bases AND every keyed member interpolates the request's key", () => {
+    expect(allowMembers(birthGateSrc()).length).toBe(WEB_HOST_BIRTH_TARGET_BASES.length);
+    expect(allowOk(birthGateSrc())).toBe(true);
+  });
+
+  test("MUTATION: widening the allow-set with the LUKS attachment or the LUKS volume is seen", () => {
+    const src = birthGateSrc();
+    expect(allowOk(src)).toBe(true); // control
+    for (const extra of ["hcloud_volume_attachment.workspaces_luks", "hcloud_volume.workspaces_luks", "hcloud_volume.workspaces_sibling"]) {
+      const mutated = src.replace('"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]"\n];', `"doppler_secret.web_nic_guard_url[\\"\\($k)\\"]",\n      "${extra}"\n];`);
+      expect(mutated).not.toBe(src);
+      expect(allowOk(mutated)).toBe(false);
+    }
+  });
+
+  test("MUTATION: narrowing the allow-set, or hardcoding a key in a keyed member, is seen", () => {
+    const src = birthGateSrc();
+    const dropped = src.replace('      "hcloud_firewall_attachment.web",\n', "");
+    expect(dropped).not.toBe(src);
+    expect(allowOk(dropped)).toBe(false);
+    const hardcoded = src.replace('"hcloud_volume.workspaces[\\"\\($k)\\"]"', '"hcloud_volume.workspaces[\\"web-3\\"]"');
+    expect(hardcoded).not.toBe(src);
+    expect(allowOk(hardcoded)).toBe(false);
+    const keyedSingleton = src.replace('"cloudflare_record.app"', '"cloudflare_record.app[\\"\\($k)\\"]"');
+    expect(keyedSingleton).not.toBe(src);
+    expect(allowOk(keyedSingleton)).toBe(false);
+  });
+
+  // The web-1 refusal literal is the Terraform literal of the singleton LUKS attachment. The replace gate's
+  // twin is bound to its workflow copy; this one had no binding at all, so renaming web-1 in var.web_hosts /
+  // the attachment would leave the refusal pointing at a stale string and reopen the #6964 stranding.
+  const luksAttachmentKey = (tf: string): string => {
+    const code = stripComments(tf);
+    const start = code.indexOf('resource "hcloud_volume_attachment" "workspaces_luks"');
+    if (start === -1) throw new Error("hcloud_volume_attachment.workspaces_luks not found");
+    const body = code.slice(start, code.indexOf("\n}\n", start));
+    const m = /server_id\s*=\s*hcloud_server\.web\["([^"]+)"\]\.id/.exec(body);
+    if (!m) throw new Error("the attachment's server_id is not hcloud_server.web[<literal key>].id");
+    return m[1];
+  };
+  const birthPinnedKey = (src: string): string => {
+    const m = /_WEB_HOST_BIRTH_LUKS_PINNED_KEY="([^"]+)"/.exec(src);
+    if (!m) throw new Error("_WEB_HOST_BIRTH_LUKS_PINNED_KEY not found in the birth gate");
+    return m[1];
+  };
+  const luksTf = (): string => readFileSync(resolve(INFRA_DIR, "workspaces-luks.tf"), "utf8");
+
+  test("the birth gate's LUKS-pinned refusal key equals the key the singleton LUKS attachment is hard-bound to", () => {
+    expect(luksAttachmentKey(luksTf())).toBe("web-1");
+    expect(birthPinnedKey(birthGateSrc())).toBe(luksAttachmentKey(luksTf()));
+    // ...and equals the replace gate's twin (two gates, one literal).
+    const replaceSrc = readFileSync(resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"), "utf8");
+    expect(birthPinnedKey(birthGateSrc())).toBe(/_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(replaceSrc)![1]);
+  });
+
+  test("MUTATION: a drifted gate literal, or a renamed attachment key, is seen", () => {
+    const src = birthGateSrc();
+    const tf = luksTf();
+    const driftedGate = src.replace('_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-1"', '_WEB_HOST_BIRTH_LUKS_PINNED_KEY="web-9"');
+    expect(driftedGate).not.toBe(src);
+    expect(birthPinnedKey(driftedGate)).not.toBe(luksAttachmentKey(tf));
+    const renamedTf = tf.replace('server_id = hcloud_server.web["web-1"].id', 'server_id = hcloud_server.web["web-9"].id');
+    expect(renamedTf).not.toBe(tf);
+    expect(birthPinnedKey(src)).not.toBe(luksAttachmentKey(renamedTf));
+    // A comment that quotes the old literal must not satisfy the extractor.
+    const commentOnly = tf.replace('server_id = hcloud_server.web["web-1"].id', '# server_id = hcloud_server.web["web-1"].id\n  server_id = var.x');
+    expect(() => luksAttachmentKey(commentOnly)).toThrow();
+  });
 });
 
 // ─── web-host-replace dispatch: the replace path's -target set + gate pairing ──
@@ -1623,6 +2778,12 @@ const WEB_HOST_REPLACE_PRESERVED = [
   "hcloud_volume.workspaces_luks",
   "random_password.workspaces_luks",
   "doppler_secret.workspaces_luks_key",
+  // The web-class key copy (#9377), which now carries its OWN generator's value (random_password.workspaces_luks_web),
+  // not web-1's: it must stay out of the -target set, and the gate's luks_passphrase_touched names it too.
+  "doppler_secret.workspaces_luks_web_key",
+  // The web-class passphrase generator (#9377 decision A1): a replace of it rotates a passphrase whose old value
+  // survives nowhere, so no replace job may name it.
+  "random_password.workspaces_luks_web",
   // The apex A record is pinned to web-1's ipv4_address. This job REFUSES web-1, so the
   // record must never move; its presence in the -target set would be the difference between
   // "replace a standby" and "re-point production DNS".
@@ -1809,6 +2970,35 @@ describe("web-host-replace dispatch -target set + replace-gate pairing (#6969)",
     expect(gateBases).toEqual([...WEB_HOST_REPLACE_TARGET_BASES].sort());
   });
 
+  test("the gate's keyed arms extension is exactly the LUKS attachment and the apex record (#9356)", () => {
+    // The arms-key extension widens the allow-set for ONE key beyond the workflow's -target
+    // list, on purpose: the arms are dead code while the refusal holds, and the workflow's
+    // -target list is NOT edited by the arms PR (byte budget + the refusal). So this is NOT a
+    // -target parity check; it pins the extension's exact membership, so a third address
+    // cannot ride in under "arms" without turning this red. hcloud_volume.workspaces_luks and the
+    // passphrase resources must never appear in it (they remain prohibitions).
+    const gateSrc = readFileSync(
+      resolve(REPO_ROOT, "tests/scripts/lib/web-host-replace-gate.sh"),
+      "utf8",
+    );
+    const defArms = /def allow_arms:\s*\[([\s\S]*?)\n\];/.exec(gateSrc);
+    expect(defArms).not.toBeNull();
+    const armsAddrs = [...defArms![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    expect(armsAddrs).toEqual(["cloudflare_record.app", "hcloud_volume_attachment.workspaces_luks"]);
+    // Neither extension member is a -target of the replace job (non-vacuity of the "NOT edited" claim).
+    const jobTargets = extractAllTargets(jobBlock);
+    expect(jobTargets.size).toBeGreaterThan(0);
+    for (const addr of armsAddrs) {
+      expect(jobTargets.has(addr)).toBe(false);
+    }
+    // The extension applies to the same key the refusal names: a different arms key would
+    // silently arm a host the refusal does not protect.
+    const armsKey = /_WEB_HOST_REPLACE_LUKS_ARMS_KEY="([^"]+)"/.exec(gateSrc);
+    const pinnedKey = /_WEB_HOST_REPLACE_LUKS_PINNED_KEY="([^"]+)"/.exec(gateSrc);
+    expect(armsKey).not.toBeNull();
+    expect(armsKey![1]).toBe(pinnedKey![1]);
+  });
+
   test("the gate's LUKS-pinned refusal key matches the job's fail-fast key", () => {
     // The gate is the load-bearing refusal; the job's input validation repeats it only so
     // the operator reads the reason at the top of the run instead of after a digest resolve
@@ -1872,10 +3062,115 @@ describe("betteruptime_team_member.ops is a per-merge -targeted managed resource
 //     Terraform pins reviewers.users, but nothing else fails RED pre-merge if a
 //     future edit empties it — this test is that guard. ────────────────────────
 describe("github_repository_environment declares a non-empty reviewers.users (DP-11 F8)", () => {
+  // (#8209, ADR-241 D2) THE PROPERTY WIDENED, not weakened.
+  //
+  // This guard was written when every environment in this root was a cutover GATE whose
+  // protection WAS the reviewer, so "reviewers.users is non-empty" and "this environment
+  // is protected" were the same sentence. ADR-241 introduces a second, deliberately
+  // reviewer-less class: `infra-privileged` serves the UNATTENDED Tier-B jobs
+  // (apply-on-merge, the scheduled drift check), which a reviewer gate would block by
+  // design. Adding a reviewer to satisfy the old spelling would have broken the thing
+  // the environment exists to do.
+  //
+  // The real hazard was never "zero reviewers" on its own — it is an environment that
+  // auto-approves AND admits any branch. A main-only deployment-branch policy makes
+  // "auto-approve" mean "auto-approve a run that is already on main", which is a
+  // protection, just a different one. So the invariant is now: EVERY environment
+  // carries at least one of the two, and an environment with NEITHER is RED.
+  //
+  // That widening is a DISJUNCTION, and a disjunction is strictly WEAKER than either
+  // side — so on its own it would have silently retired the old property for every
+  // environment that already satisfied it. `REVIEWERS_RATCHET` below is what keeps the
+  // old property where it applied: the two-of-two limb is available only to
+  // environments that never gated on a human. (An earlier draft of this comment claimed
+  // the widening was "strictly STRONGER". It was not, and emptying
+  // `web_platform_infra_apply`'s reviewer list passed under it.)
+  // Returns, per environment, the SET of branch_patterns its deployment policies declare.
+  //
+  // A set rather than a boolean, because the property is "`main` is the ONLY pattern",
+  // not "`main` is AMONG the patterns". Those differ by one appended resource:
+  //
+  //   resource "github_repository_environment_deployment_policy" "infra_privileged_any" {
+  //     environment    = github_repository_environment.infra_privileged.environment
+  //     branch_pattern = "*"
+  //   }
+  //
+  // GitHub UNIONs deployment policies, so that one block re-opens the environment to
+  // every branch while a `main` policy is still present and still correct. An extractor
+  // that `continue`s past a non-`main` pattern cannot see it: the appended resource is
+  // invisible rather than disqualifying, and the guard stays green while the boundary
+  // #8209 buys is gone. Collect every pattern and let the caller demand exactly {"main"}.
+  //
+  // `files` is a parameter — the same seam `collectSshProvisioned` carries — so the
+  // direction test below can drive a SYNTHETIC tree through the REAL walk. Without it
+  // nothing can exercise the must-trip side: every policy on the live tree says "main",
+  // so deleting the pattern test entirely leaves this suite green.
+  const policyPatternsFor = (
+    files: string[] = listInfraTfFiles(),
+  ): Map<string, Set<string>> => {
+    const found = new Map<string, Set<string>>();
+    const re =
+      /resource\s+"github_repository_environment_deployment_policy"\s+"[A-Za-z0-9_]+"\s*\{([\s\S]*?)\n\}/g;
+    for (const file of files) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      let m: RegExpExecArray | null;
+      re.lastIndex = 0;
+      while ((m = re.exec(stripped)) !== null) {
+        const body = m[1];
+        const ref = body.match(
+          /environment\s*=\s*github_repository_environment\.([A-Za-z0-9_]+)\.environment/,
+        );
+        if (!ref) continue;
+        const pat = body.match(/branch_pattern\s*=\s*"([^"]*)"/);
+        // A policy with no readable pattern is counted as an UNKNOWN pattern, not
+        // skipped: "I could not parse it" must not render as "it is main-only".
+        const set = found.get(ref[1]) ?? new Set<string>();
+        set.add(pat ? pat[1] : "__UNPARSED__");
+        found.set(ref[1], set);
+      }
+    }
+    return found;
+  };
+  const policyPatterns = policyPatternsFor();
+  const isMainOnly = (env: string): boolean => {
+    const pats = policyPatterns.get(env);
+    return pats !== undefined && pats.size === 1 && pats.has("main");
+  };
+  const mainOnlyPolicyEnvs = new Set(
+    [...policyPatterns.keys()].filter((e) => isMainOnly(e)),
+  );
+
+  // Environments that carried a non-empty `reviewers.users` before #8209 widened the
+  // property below. They keep it.
+  //
+  // WHY A RATCHET AND NOT A RE-DERIVATION: the widened limb is `reviewers OR main-only
+  // policy`, and a disjunction is strictly WEAKER than either side. Before #8209 the
+  // property was `reviewers`, full stop — so emptying `web_platform_infra_apply`'s
+  // reviewer list (a UI click, or deleting four lines of HCL) would now PASS on the
+  // branch-policy limb, converting the sole human authorization for a host birth into
+  // an auto-approve with no test going red. That is the exact harm the `#6730` comment
+  // above says declaring the environment in terraform exists to prevent, and the
+  // widening would have re-opened it.
+  //
+  // So the disjunction is available only to environments that never had reviewers. For
+  // everything in this set the property is unchanged: reviewers, and a branch policy on
+  // top of them is additive.
+  //
+  // MEASURED off the tree, not guessed: these are every environment that carries a
+  // non-empty `reviewers.users` today. The loop below asserts each one is still IN the
+  // population, so renaming or deleting an environment cannot quietly drop it out of the
+  // ratchet — a ratchet nobody can fail is the same as no ratchet.
+  const REVIEWERS_RATCHET = new Set([
+    "workspaces_luks_cutover",
+    "inngest_cutover",
+    "inngest_config_signing",
+    "web_platform_infra_apply",
+  ]);
+
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
     const header =
       /resource\s+"github_repository_environment"\s+"([A-Za-z0-9_]+)"\s*\{/g;
-    const envs: { name: string; users: string }[] = [];
+    const envs: { name: string; users: string; body: string }[] = [];
     for (const file of listInfraTfFiles()) {
       const stripped = stripComments(readFileSync(file, "utf8"));
       let m: RegExpExecArray | null;
@@ -1901,7 +3196,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
         }
         const body = stripped.slice(openBrace, end + 1);
         const rev = body.match(/reviewers\s*\{[^}]*users\s*=\s*\[([^\]]*)\]/);
-        envs.push({ name, users: (rev?.[1] ?? "").trim() });
+        envs.push({ name, users: (rev?.[1] ?? "").trim(), body });
       }
     }
 
@@ -1916,16 +3211,122 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // authorization for a host birth into an auto-approve, with no test going red.
     // Declaring it in terraform is what brings it under the loop below.
     expect(names).toContain("web_platform_infra_apply");
+    // (#8209) The reviewer-less Tier-B environment must be IN the population, or the
+    // widened property below is vacuous for exactly the class it was widened for.
+    expect(names).toContain("infra_privileged");
+    // And the policy extractor must have found something, or every environment would
+    // trivially satisfy the branch-policy limb and the check would pass for the wrong
+    // reason. A zero-match extractor is the worst outcome: it still prints a verdict.
+    expect(
+      mainOnlyPolicyEnvs.size,
+      "the deployment-policy extractor matched NOTHING — the branch-policy limb below would be vacuous",
+    ).toBeGreaterThan(0);
 
+    const seenRatchet = new Set<string>();
     for (const env of envs) {
       const ids = env.users
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+
+      if (REVIEWERS_RATCHET.has(env.name)) {
+        seenRatchet.add(env.name);
+        expect(
+          ids.length,
+          `github_repository_environment.${env.name} is in REVIEWERS_RATCHET and its reviewers.users is EMPTY. ` +
+            `This environment gated on a human before #8209; the branch-policy limb is not available to it. ` +
+            `Removing its reviewers converts a human authorization into an auto-approve (DP-11 F8; #6730).`,
+        ).toBeGreaterThan(0);
+        continue;
+      }
+
+      // A reviewer-less environment relies entirely on the branch policy, so the policy
+      // must be main-ONLY (see policyPatternsFor) AND the environment must actually be
+      // configured to consult custom policies. `custom_branch_policies = false` makes
+      // every named pattern inert; `protected_branches = true` admits every protected
+      // branch regardless of pattern. Both are one-word edits that GitHub accepts and
+      // that leave the `main` policy resource sitting there looking correct.
+      const dbp = env.body.match(/deployment_branch_policy\s*\{([^}]*)\}/);
+      const custom =
+        dbp !== null && /custom_branch_policies\s*=\s*true/.test(dbp[1]);
+      const notProtected =
+        dbp !== null && /protected_branches\s*=\s*false/.test(dbp[1]);
+      const policyIntact = isMainOnly(env.name) && custom && notProtected;
       expect(
-        ids.length,
-        `github_repository_environment.${env.name} has an EMPTY reviewers.users — a zero-reviewer environment auto-approves (DP-11 F8)`,
-      ).toBeGreaterThan(0);
+        ids.length > 0 || policyIntact,
+        `github_repository_environment.${env.name} has no reviewers, so it is gated only by its branch policy — ` +
+          `and that gate is not intact. Needs all three: exactly one deployment policy whose branch_pattern is ` +
+          `"main" (saw ${JSON.stringify([...(policyPatterns.get(env.name) ?? [])])}), ` +
+          `custom_branch_policies = true (saw ${custom}), protected_branches = false (saw ${notProtected}). ` +
+          `Otherwise any branch can deploy to it and read its secrets (DP-11 F8; #8209 ADR-241 D2).`,
+      ).toBe(true);
+    }
+
+    // A ratchet entry that is not in the population enforces nothing. This is the
+    // difference between "this environment still requires a human" and "an environment
+    // by that name was renamed away and nobody noticed".
+    for (const name of REVIEWERS_RATCHET) {
+      expect(
+        seenRatchet.has(name),
+        `REVIEWERS_RATCHET names ${name}, but no github_repository_environment by that name was found in the ` +
+          `infra root. Either it was renamed (update the ratchet and confirm the new name still has reviewers) ` +
+          `or it was deleted. An unmatched ratchet entry is an unenforced one.`,
+      ).toBe(true);
+    }
+  });
+
+  // The must-trip side of the branch-policy limb. Every deployment policy on the live
+  // tree says `branch_pattern = "main"`, so on the real tree the limb is green whether
+  // the pattern test works or is deleted outright — the guard above can only ever
+  // demonstrate its pass branch. `policyPatternsFor(files)` takes the file list for
+  // exactly this reason: a synthetic tree goes through the REAL walk, not a re-derived
+  // copy of it that could drift from the thing shipping.
+  test("a second, wider deployment policy DISQUALIFIES an environment (branch-policy limb)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tf-policy-direction-"));
+    try {
+      const f = join(dir, "synthetic.tf");
+      const mainPolicy = `
+resource "github_repository_environment_deployment_policy" "synthetic_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.synthetic.environment
+  branch_pattern = "main"
+}
+`;
+      writeFileSync(f, mainPolicy);
+      expect(
+        [...(policyPatternsFor([f]).get("synthetic") ?? [])],
+        "a lone main policy must read as exactly {main} — otherwise the negative below proves nothing",
+      ).toEqual(["main"]);
+
+      // GitHub UNIONs deployment policies. Appending this re-opens the environment to
+      // every branch while the `main` policy is still present and still correct.
+      writeFileSync(
+        f,
+        mainPolicy +
+          `
+resource "github_repository_environment_deployment_policy" "synthetic_any" {
+  repository     = "soleur"
+  environment    = github_repository_environment.synthetic.environment
+  branch_pattern = "*"
+}
+`,
+      );
+      const pats = policyPatternsFor([f]).get("synthetic");
+      expect(pats, "the second policy was not seen at all").toBeDefined();
+      expect(
+        pats!.size === 1 && pats!.has("main"),
+        `appending a branch_pattern = "*" policy left the environment reading as main-only ` +
+          `(patterns: ${JSON.stringify([...pats!])}). Any branch could deploy to it and read its secrets.`,
+      ).toBe(false);
+
+      // And a commented-out wider policy must NOT disqualify — the walk strips comments,
+      // so this pins the extractor against the opposite error (reporting a phantom).
+      writeFileSync(f, mainPolicy + `\n# branch_pattern = "*"\n`);
+      expect([...(policyPatternsFor([f]).get("synthetic") ?? [])]).toEqual([
+        "main",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -1957,8 +3358,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
  * registry-luks-recut dispatch (#6929) — the sanctioned guest-side-LUKS recut.
  *
  * The load-bearing property is the ATOMIC 3-WAY `-replace`. Replacing the host alone preserves
- * the still-plaintext store volume, so cloud-init hits the `blkid` else->FATAL arm and DARKS the
- * registry; replacing the volume alone leaves the old host mounting a device that no longer
+ * the store volume (a host replace, not a recut); replacing the volume alone leaves the old host mounting a device that no longer
  * exists. They move together or not at all.
  */
 describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
@@ -2022,8 +3422,26 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
     expect(jobBlock).toContain("expected_registry_store_volume_id");
   });
 
-  test("declares NO environment: (a zero-reviewer environment auto-approves — DP-11 F8)", () => {
-    expect(/^\s+environment:/m.test(jobBlock)).toBe(false);
+  test("declares no environment that auto-approves from any branch (DP-11 F8)", () => {
+    // (#8209, ADR-241 D2) THE PROPERTY, RESTATED — this test used to assert `environment:`
+    // was ABSENT, and its own title gave the reason: "a zero-reviewer environment
+    // auto-approves". That reason is the real property, and absence was only one way to
+    // satisfy it. This job now declares `infra-privileged`, which has no reviewer but IS
+    // pinned to `main`, so it cannot auto-approve a branch dispatch — the hazard the
+    // original assertion was written against.
+    //
+    // The teeth are preserved by composition, not by trust: the DP-11 F8 suite above reds
+    // on ANY environment carrying neither reviewers nor a main-only policy, so the
+    // allowlist here cannot be widened into a fake gate without that suite failing.
+    const m = /^\s+environment:\s*(\S+)\s*$/m.exec(jobBlock);
+    if (m) {
+      expect(
+        m[1],
+        `registry_luks_recut declares environment: ${m[1]}. Only a reviewer-gated environment ` +
+          `or the main-pinned infra-privileged is admissible here; anything else can auto-approve ` +
+          `a dispatch from an arbitrary branch onto a destructive recut (DP-11 F8).`,
+      ).toBe("infra-privileged");
+    }
   });
 
   test("pins timeout-minutes below GitHub's 360-minute default", () => {
@@ -2041,6 +3459,221 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
     }
     // Non-vacuity: unstripped, the whole-file scan DOES see them.
     expect(extractAllTargets(wf).has("hcloud_server.registry")).toBe(true);
+  });
+});
+
+/**
+ * `apply_target=inngest-volume-recut` (#7695) is the ONE dispatch in this workflow that must prove
+ * something about the WORLD before it plans. Everything below pins the six registration sites AC B6
+ * enumerates, the enum<->job binding of B7, and the shared-mutex property of B9.
+ *
+ * B9 IS ASSERTED AS A PROPERTY, NOT AS A STRING, and the deviation is deliberate. The plan named a
+ * NEW `inngest-cutover` concurrency literal for four jobs. A GitHub job may declare exactly ONE
+ * concurrency group, and `cutover-inngest.yml` already serializes on `deploy-inngest-restart`
+ * together with `deploy-inngest-image.yml` and `restart-inngest-server.yml` — so minting a new
+ * literal and putting it on the cutover job would have REMOVED that job from the group it shares
+ * with the deploy pipeline, letting a deploy restart inngest-server mid-cutover. That is a strictly
+ * worse race than the one B9 set out to close ("a mutex on one side of a race is not a mutex" is
+ * the plan's own framing). Joining the EXISTING literal covers six surfaces instead of four and
+ * orphans none. Asserting the property — all four surfaces carry ONE identical group — rather than
+ * the literal is also what keeps this guard alive across a future rename.
+ */
+describe("inngest-volume-recut dispatch: registration, binding, and the shared mutex (#7695)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = extractJobBlock(wf, "inngest_volume_recut");
+
+  test("B6/B7: the enum option and its bound job BOTH exist", () => {
+    // The binding is asserted in BOTH directions on purpose. An option with no job is a menu entry
+    // that silently no-ops (every job's `if:` is false, the run is green, nothing happened) — the
+    // worst outcome for a destructive target. A job with no option is unreachable and rots.
+    expect(wf).toMatch(/^ {10}- inngest-volume-recut$/m);
+    expect(jobBlock.length).toBeGreaterThan(0);
+    expect(jobBlock).toContain("inputs.apply_target == 'inngest-volume-recut'");
+  });
+
+  test("B7 (non-vacuity): the binding check can distinguish present from absent", () => {
+    // Without this, the two `toContain`s above would pass against a workflow where the option and
+    // the job merely happen to coexist for unrelated reasons.
+    const noOption = wf.replace(/^ {10}- inngest-volume-recut$/m, "");
+    expect(/^ {10}- inngest-volume-recut$/m.test(noOption)).toBe(false);
+    const noJob = stripJob(wf, "inngest_volume_recut");
+    expect(noJob).not.toContain("inputs.apply_target == 'inngest-volume-recut'");
+  });
+
+  test("-targets are exactly the AOF volume and its attachment", () => {
+    const targets = extractAllTargets(jobBlock);
+    expect([...targets].sort()).toEqual([
+      "hcloud_volume.inngest_redis",
+      "hcloud_volume_attachment.inngest_redis",
+    ]);
+  });
+
+  test("carries exactly one -replace flag, on the volume", () => {
+    // Anchored on the flag syntax, not a bare address: the same address appears as a `-target=` on
+    // the next line and throughout the job's prose, so a bare-token grep would pass against a job
+    // that lost its -replace entirely and therefore planned a no-op.
+    const replaced = [...jobBlock.matchAll(/-replace='([^']+)'/g)].map((m) => m[1]);
+    expect(replaced).toEqual(["hcloud_volume.inngest_redis"]);
+  });
+
+  test("sources BOTH gates and states there is no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("tests/scripts/lib/inngest-volume-recut-gate.sh");
+    expect(jobBlock).toContain("tests/scripts/lib/inngest-host-dark-gate.sh");
+    expect(jobBlock).toMatch(/^\s*if ! inngest_volume_recut_gate /m);
+    expect(jobBlock).toMatch(/^\s*if ! inngest_host_dark_gate /m);
+    // Anchored on the phrase inside the job BODY, not the header comment: extractJobBlock starts
+    // at the `  inngest_volume_recut:` line, so a header-comment anchor would be asserting text
+    // the block does not contain — and a reader "fixing" that would reach for the header rather
+    // than for the operator-visible ::error:: where the claim actually has to hold.
+    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
+  });
+
+  test("Guard 2 runs BEFORE the plan", () => {
+    // A serving host must cost nothing and reach no terraform at all. If the plan ran first, a
+    // refusal would still be correct but would have already touched state — and the ordering is
+    // exactly the kind of thing a later edit reorders without noticing.
+    const darkAt = jobBlock.indexOf("inngest_host_dark_gate");
+    const planAt = jobBlock.indexOf("terraform plan -no-color");
+    expect(darkAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(-1);
+    expect(darkAt).toBeLessThan(planAt);
+  });
+
+  test("does NOT re-derive an inline copy of Guard 1's counter logic in the plan step", () => {
+    // The gate must be the SAME BYTES the test suite exercises. An inline jq over
+    // resource_changes inside the PLAN step would be a second, untested implementation.
+    // (The APPLY step's jq backstops are deliberate and separate — they re-read the SAVED plan
+    // after the gate has already passed, so they are redundancy, not a second decision.)
+    const planStep = jobBlock.slice(
+      jobBlock.indexOf("Terraform plan (inngest-redis volume recut"),
+      jobBlock.indexOf("Terraform apply (inngest-redis volume recut"),
+    );
+    expect(planStep.length).toBeGreaterThan(0);
+    expect(planStep).not.toContain("resource_changes");
+  });
+
+  test("requires the typed confirm and the id-pin before planning", () => {
+    expect(jobBlock).toContain("RECUT-INNGEST-VOLUME");
+    expect(jobBlock).toContain("expected_inngest_volume_id");
+  });
+
+  test("B8: RECUT-INNGEST-VOLUME is distinct from every other confirm literal", () => {
+    // A token typed for one target must never authorize another. Derived from the workflow rather
+    // than from a hand-kept list, so a future target that reuses the literal reddens here.
+    const literals = [...wf.matchAll(/"\$CONFIRM" != "([A-Z-]+)"/g)].map((m) => m[1]);
+    expect(literals).toContain("RECUT-INNGEST-VOLUME");
+    // Exactly ONE job gates on it. A GLOBAL uniqueness assertion would be wrong and was measured
+    // so: RECUT-REGISTRY-LUKS legitimately appears twice, because registry_pull_path_gate and
+    // registry_luks_recut are two jobs bound to the SAME apply_target and must accept the same
+    // token. The property that matters is per-TOKEN, not per-occurrence — a token typed for one
+    // TARGET must not authorize a different one.
+    expect(literals.filter((l) => l === "RECUT-INNGEST-VOLUME")).toHaveLength(1);
+    // …and no OTHER target's token collides with it.
+    const others = literals.filter((l) => l !== "RECUT-INNGEST-VOLUME");
+    expect(others.length).toBeGreaterThan(0); // non-vacuity: there ARE siblings to be distinct from
+    expect(others).not.toContain("RECUT-INNGEST-VOLUME");
+  });
+
+  test("B6: the `confirm` input DESCRIPTION names this target as environment-gated", () => {
+    // The description enumerates which targets carry an `environment:` reviewer gate. Leaving it
+    // stale makes the workflow's own documentation assert something false about the one field an
+    // operator reads before firing a destroy.
+    const confirmDesc = /confirm:\n\s*description: "([^"]*)"/.exec(wf);
+    expect(confirmDesc).not.toBeNull();
+    expect(confirmDesc![1]).toContain("inngest-volume-recut");
+  });
+
+  test("declares the required-reviewer environment (the SOLE authorization)", () => {
+    expect(jobBlock).toMatch(/^ {4}environment: inngest-cutover$/m);
+  });
+
+  test("asserts the reviewer set is non-empty at dispatch time (DP-11 F8)", () => {
+    // A zero-reviewer environment AUTO-APPROVES, which silently demotes layer 1 — the only
+    // authorization in the chain — to decoration while every other layer still reports green. It
+    // lives in the GitHub API, so no test in this repo can observe it; the job must read it.
+    expect(jobBlock).toContain("environments/inngest-cutover");
+    expect(jobBlock).toContain("required_reviewers");
+  });
+
+  test("B9: the recut, inngest_host, inngest_host_replace and cutover-inngest share ONE mutex", () => {
+    const CUTOVER_WORKFLOW = resolve(
+      REPO_ROOT,
+      ".github/workflows/cutover-inngest.yml",
+    );
+    const groupOf = (block: string): string | null => {
+      const m = /^ {4}concurrency:\n {6}group: (\S+)\n {6}cancel-in-progress: (\S+)$/m.exec(block);
+      return m ? `${m[1]}|${m[2]}` : null;
+    };
+    const surfaces: Array<[string, string | null]> = [
+      ["inngest_volume_recut", groupOf(jobBlock)],
+      ["inngest_host", groupOf(extractJobBlock(wf, "inngest_host"))],
+      ["inngest_host_replace", groupOf(extractJobBlock(wf, "inngest_host_replace"))],
+      [
+        "cutover-inngest.yml:cutover",
+        groupOf(
+          extractJobBlock(readFileSync(CUTOVER_WORKFLOW, "utf8"), "cutover"),
+        ),
+      ],
+    ];
+    // Every surface declares one, and every declaration is the SAME literal with
+    // cancel-in-progress: false. GitHub does NOT error on divergent group strings — they silently
+    // fail to serialize — which is why this is asserted rather than assumed.
+    for (const [name, g] of surfaces) {
+      expect(g, `${name} declares no job-level concurrency group`).not.toBeNull();
+    }
+    const groups = new Set(surfaces.map(([, g]) => g));
+    expect([...groups]).toEqual(["deploy-inngest-restart|false"]);
+  });
+
+  test("pins timeout-minutes below GitHub's 360-minute default", () => {
+    const m = /timeout-minutes:\s*(\d+)/.exec(jobBlock);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeLessThanOrEqual(30);
+  });
+
+  test("stripDispatchJobs removes this job's -targets from the coverage set", () => {
+    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
+    // Non-vacuity: unstripped, the whole-file scan DOES see them.
+    expect(extractAllTargets(wf).has("hcloud_volume.inngest_redis")).toBe(true);
+    expect(strippedTargets.has("hcloud_volume.inngest_redis")).toBe(false);
+    // The ATTACHMENT survives stripDispatchJobs, and that is NOT this job's doing:
+    // inngest_host_replace also -targets it and is one of the two inngest dispatch jobs
+    // deliberately "left folded-in historically" (see the stripDispatchJobs comment). Asserting
+    // its absence here would be asserting someone else's property and would redden on a change
+    // this job does not own — so the claim is narrowed to what this strip actually removes, and
+    // the attachment is checked against a text with that sibling removed too.
+    const alsoNoReplace = extractAllTargets(
+      stripJob(stripDispatchJobs(wf), "inngest_host_replace"),
+    );
+    expect(alsoNoReplace.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
+  });
+
+  test("B6: inngest_host_replace carries the ADDITIVE attachment, and neither durable volume (#6894)", () => {
+    // A replace re-creates the server, so every attachment that interpolates the server id is
+    // ForceNew. An attachment NOT -targeted here is simply left behind: the new host boots with that
+    // volume DETACHED. For the additive LUKS volume that is harmless before the cutover and fatal
+    // after it — the pointer then names a volume that is not attached, the resolver refuses, and
+    // Redis stays down. The job's own comment claimed the target for a whole phase while the -target
+    // list carried only three lines; this is the pin that comment never had.
+    const replaceJob = extractJobBlock(wf, "inngest_host_replace");
+    const targets = extractAllTargets(replaceJob);
+    expect(targets.has("hcloud_server.inngest")).toBe(true); // non-vacuity: the extraction reached the job
+    expect(targets.has("hcloud_volume_attachment.inngest_redis")).toBe(true);
+    expect(targets.has("hcloud_volume_attachment.inngest_redis_luks")).toBe(true);
+    // Both VOLUMES are preserved by OMISSION — targeting either would put a sole-copy store one
+    // replace away from a destroy.
+    expect(targets.has("hcloud_volume.inngest_redis")).toBe(false);
+    expect(targets.has("hcloud_volume.inngest_redis_luks")).toBe(false);
+  });
+
+  test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
+    // The passphrase must exist before any host boots that reads it, so it is minted at MERGE.
+    // It must NOT be in the recut job's -target set: Guard 1 refuses any update/delete/forget on
+    // it, and targeting it here would put a rotation one plan away from the volume it opens.
+    expect(extractAllTargets(jobBlock).has("random_password.inngest_redis_luks")).toBe(false);
+    const perMerge = extractAllTargets(stripDispatchJobs(wf));
+    expect(perMerge.has("random_password.inngest_redis_luks")).toBe(true);
+    expect(perMerge.has("doppler_secret.inngest_redis_luks_key")).toBe(true);
   });
 });
 
@@ -2077,6 +3710,320 @@ describe("registry gate allow-sets match their jobs' -target sets", () => {
       expect(targets).toEqual(allow);
     });
   }
+});
+
+/**
+ * inngest_host SHAPE GATE (#6894, ADR-142 Guard 3): wired into the job, and its allow-set IS the
+ * job's -target set.
+ *
+ * The gate's allow-set is a literal in the same repo as the workflow it grades, so one diff could
+ * widen both — this is the outside anchor the plan's Guard Contract names, and it mirrors the
+ * registry parity block above. The call assertion follows the inngest-volume-recut "sources BOTH
+ * gates" test: anchored on the `if !` call form over COMMENT-STRIPPED text, so a
+ * `# shellcheck source=` directive or prose cannot satisfy it.
+ */
+describe("inngest_host dispatch: shape gate wired and allow-set === -target set (#6894)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = stripComments(extractJobBlock(wf, "inngest_host"));
+  const CALL = /^\s*if ! inngest_host_shape_gate tfplan\.json; then$/m;
+
+  test("sources and CALLS inngest_host_shape_gate, with no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("inputs.apply_target == 'inngest-host'"); // non-vacuity: the right job
+    expect(jobBlock).toMatch(
+      /^\s*source "\$\{GITHUB_WORKSPACE\}\/tests\/scripts\/lib\/inngest-host-shape-gate\.sh"$/m,
+    );
+    expect(jobBlock).toMatch(CALL);
+    expect([...jobBlock.matchAll(new RegExp(CALL.source, "gm"))].length).toBe(1);
+    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
+  });
+
+  test("non-vacuity: the call check can tell a wired job from an unwired one", () => {
+    const unwired = jobBlock.replace(CALL, "          if false; then");
+    expect(CALL.test(unwired)).toBe(false);
+  });
+
+  test("the gate runs on the saved plan BEFORE the apply consumes it", () => {
+    const callAt = jobBlock.search(CALL);
+    const applyAt = jobBlock.indexOf("terraform apply -no-color -input=false tfplan");
+    expect(callAt).toBeGreaterThan(-1);
+    expect(applyAt).toBeGreaterThan(callAt);
+  });
+
+  test("the gate's def allow === the job's -target set", () => {
+    const lib = readFileSync(
+      join(REPO_ROOT, "tests/scripts/lib/inngest-host-shape-gate.sh"),
+      "utf8",
+    );
+    const defAllow = /def allow:\s*\[([\s\S]*?)\]/.exec(lib);
+    expect(defAllow).not.toBeNull();
+    const allow = [...defAllow![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    const targets = [...extractAllTargets(extractJobBlock(wf, "inngest_host"))].sort();
+    expect(targets.length).toBe(17); // non-vacuity floor (#8754 dropped the inngest attachment)
+    expect(allow).toEqual(targets);
+    // The passphrase pair is per-merge -targeted and must never join this allow-set.
+    expect(allow).not.toContain("random_password.inngest_redis_luks");
+    expect(allow).not.toContain("doppler_secret.inngest_redis_luks_key");
+  });
+});
+
+/**
+ * One shell command out of a job block: its first line (the first line matching `start`) through
+ * the first line with no trailing backslash. `\\$`, not `\\\s*$`: bash does not continue a line
+ * whose backslash is followed by a space, so neither does this. Throws unless exactly one line
+ * matches, so a second matching command can never silently become the one under test.
+ */
+function commandIn(jobBlock: string, start: RegExp): string {
+  const lines = jobBlock.split("\n");
+  const hits = lines.filter((l) => start.test(l)).length;
+  if (hits !== 1) throw new Error(`commandIn: ${hits} lines match ${start}, expected exactly 1`);
+  const i = lines.findIndex((l) => start.test(l));
+  const end = lines.findIndex((l, j) => j >= i && !/\\$/.test(l));
+  return lines.slice(i, end < 0 ? lines.length : end + 1).join("\n");
+}
+
+/**
+ * #8754: under -target, `removed { from = hcloud_firewall_attachment.inngest … }` is planned only
+ * if its address is targeted, so the forget must ride the `apply` job's SAVED plan (`terraform plan
+ * … -out=tfplan`, the one the destroy guard grades), not the post-bridge `terraform apply`. The
+ * block's shape is Guard 1's (inngest-host.test.sh); the inngest_host job's side is the
+ * allow === targets check above.
+ */
+describe("#8754 inngest firewall attachment forget rides the per-merge saved plan", () => {
+  const ADDR = "hcloud_firewall_attachment.inngest";
+  const applyJob = stripComments(extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply"));
+  const savedPlan = commandIn(applyJob, /^\s*terraform plan\b.*-out=tfplan/);
+  const postBridge = commandIn(applyJob, /^\s*terraform apply -auto-approve -input=false \\$/);
+
+  test("the address is -targeted inside the saved-plan command", () => {
+    expect(extractAllTargets(savedPlan).has("hcloud_firewall_attachment.web")).toBe(true); // non-vacuity
+    expect(extractAllTargets(savedPlan).has(ADDR)).toBe(true);
+  });
+
+  test("and not in the post-bridge terraform apply, nor in inngest_host_replace", () => {
+    expect(extractAllTargets(postBridge).has("terraform_data.disk_monitor_install")).toBe(true); // non-vacuity
+    expect(extractAllTargets(postBridge).has(ADDR)).toBe(false);
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    expect(extractAllTargets(extractJobBlock(wf, "inngest_host_replace")).has(ADDR)).toBe(false);
+  });
+});
+
+/**
+ * #8754 PR-B: the standing drift tail. Every address below sat in every drift report since #7316
+ * because no workflow could apply it (classification: the #8754 plan's per-resource table). The
+ * per-merge SAVED plan is the route that now converges the ones that should exist, so the positive
+ * rows read that command. The negative rows ("never targeted", "never overridden") read the whole
+ * write surface: every workflow that plans this root, in either `-target` spelling.
+ */
+describe("#8754 PR-B standing tail converges on the per-merge saved plan", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  // Every workflow that runs terraform against this root, comment-stripped.
+  const writeSurface = [WEB_PLATFORM_WORKFLOW, DEPLOY_PIPELINE_FIX_WORKFLOW]
+    .map((p) => stripComments(readFileSync(p, "utf8")))
+    .join("\n");
+  // Terraform accepts `-target=ADDR` and `-target ADDR`; extractAllTargets sees only the first.
+  // The leading `[a-z]` skips `--target 127.0.0.1:5000`-style flags of other tools.
+  const anyFormTargets = new Set(
+    [...writeSurface.matchAll(/(?<![\w-])--?target(?:=|\s+)['"]?([a-z][a-z0-9_]*\.[A-Za-z0-9_]+)/g)].map((m) => m[1]),
+  );
+  const tf = (name: string): string => stripComments(readFileSync(join(INFRA_DIR, name), "utf8"));
+  // The body of the first top-level block whose header matches, brace-matched. "" when absent, so
+  // a renamed or deleted block reds the row that reads it instead of passing on nothing.
+  const block = (text: string, header: RegExp): string => {
+    const m = header.exec(text);
+    if (!m) return "";
+    let depth = 0;
+    for (let i = text.indexOf("{", m.index); i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}" && --depth === 0) return text.slice(m.index, i + 1);
+    }
+    return "";
+  };
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const missingFrom = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => !set.has(a));
+  const presentIn = (addrs: string[], set: Set<string>): string[] => addrs.filter((a) => set.has(a));
+
+  test("the saved plan and the write surface are found (non-vacuity), and no config hides in *.tf.json", () => {
+    expect(planTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    expect(planTargets.size).toBeGreaterThan(100);
+    expect(anyFormTargets.has("cloudflare_bot_management.soleur_ai")).toBe(true);
+    // listInfraTfFiles reads *.tf only; Terraform also loads *.tf.json, where a resource or a
+    // removed block would escape every row below.
+    expect(readdirSync(INFRA_DIR).filter((f) => f.endsWith(".tf.json"))).toEqual([]);
+  });
+
+  test("the git-data heartbeat pair is per-merge targeted, no longer an exclusion, and still refused by the birth", () => {
+    const pair = ["betteruptime_heartbeat.git_data_prd", "doppler_secret.git_data_heartbeat_url_prd"];
+    const birth = extractAllTargets(extractJobBlock(wf, "git_data_host_create"));
+    expect(birth.has("hcloud_server.git_data")).toBe(true); // non-vacuity
+    expect(missingFrom(pair, planTargets)).toEqual([]);
+    expect(pair.filter((a) => OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    expect(presentIn(pair, birth)).toEqual([]);
+  });
+
+  test("the deployment policy is adopted by import into a NEW, destroy-proof address and the phantom address is forgotten", () => {
+    const OLD = "github_repository_environment_deployment_policy.web_platform_infra_apply_main";
+    const NEW = `${OLD}_adopted`;
+    const src = tf("web-host-birth-environment.tf");
+    // Both addresses ride the saved plan: an import or a removed block is planned only when its
+    // address is targeted, and the old address must be targeted for its forget to be planned.
+    expect(missingFrom([OLD, NEW], planTargets)).toEqual([]);
+    const res = block(src, /^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main_adopted"\s*\{/m);
+    expect(res).toMatch(/^\s*branch_pattern\s*=\s*"main"\s*$/m);
+    // The adopting merge carries a count-based [ack-destroy]; this keeps it off the pin.
+    expect(res).toMatch(/^\s*prevent_destroy\s*=\s*true\s*$/m);
+    expect(allTf).not.toMatch(/^resource\s+"github_repository_environment_deployment_policy"\s+"web_platform_infra_apply_main"\s*\{/m);
+    const imp = block(src, /^import\s*\{/m);
+    expect(imp).toMatch(new RegExp(`^\\s*to\\s*=\\s*${escapeRe(NEW)}\\s*$`, "m"));
+    expect(imp).toMatch(/^\s*id\s*=\s*"soleur:web-platform-infra-apply:49861552"\s*$/m);
+    const rem = block(src, /^removed\s*\{/m);
+    expect(rem).toMatch(new RegExp(`^\\s*from\\s*=\\s*${escapeRe(OLD)}\\s*$`, "m"));
+    expect(rem).toMatch(/^\s*destroy\s*=\s*false\s*$/m);
+  });
+
+  test("the orphaned ZOT_HEARTBEAT_URL secret is destroyed by a bare -target, never kept or forgotten", () => {
+    const ADDR = "doppler_secret.zot_heartbeat_url_prd";
+    expect(planTargets.has(ADDR)).toBe(true);
+    // A bare target on an address with no configuration plans its DESTROY. A resource block (under
+    // this address or any other that names the secret) would keep the value in Doppler prd; a
+    // removed block would forget it and leave the value there too.
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    expect(allTf).not.toMatch(/resource\s+"doppler_secret"\s+"zot_heartbeat_url_prd"/);
+    expect(allTf).not.toMatch(/^\s*name\s*=\s*"ZOT_HEARTBEAT_URL"\s*$/m);
+    expect(allTf).not.toMatch(/from\s*=\s*doppler_secret\.zot_heartbeat_url_prd\b/);
+  });
+
+  test("bot management declares the live SBFM values and does not ignore them", () => {
+    const res = block(tf("bot-management.tf"), /^resource\s+"cloudflare_bot_management"\s+"soleur_ai"\s*\{/m);
+    expect(res).toMatch(/^\s*fight_mode\s*=\s*false\s*$/m); // non-vacuity
+    expect(res).toMatch(/^\s*sbfm_definitely_automated\s*=\s*"allow"\s*$/m);
+    expect(res).toMatch(/^\s*sbfm_verified_bots\s*=\s*"allow"\s*$/m);
+    // Declared, not ignored: a dashboard flip to "block" must stay visible as drift.
+    expect(res).not.toMatch(/ignore_changes/);
+  });
+
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+    const src = tf("proxy-tls.tf");
+    const quartet: Array<[string, string]> = [
+      ["tls_private_key", "proxy_server"],
+      ["tls_self_signed_cert", "proxy_server"],
+      ["doppler_secret", "proxy_tls_key"],
+      ["doppler_secret", "proxy_tls_cert"],
+    ];
+    const ungated = quartet
+      .filter(([type, name]) => !/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m.test(
+        block(src, new RegExp(`^resource\\s+"${type}"\\s+"${name}"\\s*\\{`, "m")),
+      ))
+      .map(([type, name]) => `${type}.${name}`);
+    expect(ungated).toEqual([]);
+    const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
+    expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+  });
+
+  test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
+    const res = block(tf("inngest-config-digest.tf"), /^resource\s+"doppler_secret"\s+"inngest_config_digest"\s*\{/m);
+    expect(res).toMatch(/^\s*count\s*=\s*var\.inngest_config_digest\s*!=\s*""\s*\?\s*1\s*:\s*0\s*$/m);
+    const v = block(tf("variables.tf"), /^variable\s+"inngest_config_digest"\s*\{/m);
+    expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
+  });
+
+  test("no workflow targets the gated resources or overrides their gate variables", () => {
+    const gated = [
+      "tls_private_key.proxy_server",
+      "tls_self_signed_cert.proxy_server",
+      "doppler_secret.proxy_tls_key",
+      "doppler_secret.proxy_tls_cert",
+      "doppler_secret.inngest_config_digest",
+    ];
+    expect(presentIn(gated, anyFormTargets)).toEqual([]);
+    expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
+    expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
+    expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);
+  });
+
+  test("the infra-validation plan job can read deployment policies, and gains no write scope", () => {
+    const iv = parseYaml(readFileSync(resolve(REPO_ROOT, ".github/workflows/infra-validation.yml"), "utf8")) as {
+      jobs: Record<string, { permissions?: Record<string, string> }>;
+    };
+    const perms = iv.jobs.plan?.permissions ?? {};
+    expect(perms.actions).toBe("read");
+    expect(perms.contents).toBe("read");
+    const writes = Object.entries(perms).filter(([, v]) => v === "write").map(([k]) => k);
+    expect(writes).toEqual(["pull-requests"]);
+  });
+});
+
+/**
+ * #8714 task 5.4 (ADR-096): retire the GHCR token minter and the host-side GHCR credential
+ * plumbing. The four Doppler objects are destroyed by the per-merge apply through BARE -targets:
+ * the address stays in the saved plan while no configuration declares it, which plans its delete
+ * (precedent: doppler_secret.zot_heartbeat_url_prd, #9062). A resource block would keep the value
+ * in Doppler prd; a `removed { destroy = false }` block would forget it and leave the value there,
+ * and even `destroy = true` needs the -target to be planned. Removing the -target lines (and this
+ * describe) is a follow-up AFTER the destroy has applied (the lines then plan nothing).
+ */
+describe("#8714 5.4 GHCR minter retirement: bare -targets destroy the four Doppler objects", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(stripComments(extractJobBlock(wf, "apply")), /^\s*terraform plan\b.*-out=tfplan/);
+  const planTargets = extractAllTargets(savedPlan);
+  const allTf = listInfraTfFiles().map((f) => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const RETIRED: Array<[string, string]> = [
+    ["doppler_secret", "ghcr_read_user"],
+    ["doppler_secret", "ghcr_read_token"],
+    ["doppler_service_token", "ghcr_minter"],
+    ["doppler_secret", "ghcr_minter_doppler_token"],
+  ];
+  const addrs = RETIRED.map(([t, n]) => `${t}.${n}`);
+
+  test("all four addresses stay in the per-merge saved plan, so their deletes are planned", () => {
+    expect(planTargets.has("doppler_secret.github_app_id")).toBe(true); // non-vacuity
+    expect(addrs.filter((a) => !planTargets.has(a))).toEqual([]);
+  });
+
+  test("no .tf declares, forgets, or re-names any of them", () => {
+    expect(allTf).toContain('resource "doppler_secret" "zot_pull_token"'); // non-vacuity
+    const declared = RETIRED.filter(([t, n]) => new RegExp(`resource\\s+"${t}"\\s+"${n}"`).test(allTf)).map(
+      ([t, n]) => `${t}.${n}`,
+    );
+    expect(declared).toEqual([]);
+    const forgotten = addrs.filter((a) => new RegExp(`from\\s*=\\s*${escapeRe(a)}\\b`).test(allTf));
+    expect(forgotten).toEqual([]);
+    // Any address, not just the four: a second resource publishing one of these names would keep it.
+    const names = ["GHCR_READ_USER", "GHCR_READ_TOKEN", "GHCR_MINTER_DOPPLER_TOKEN"].filter((n) =>
+      new RegExp(`^\\s*name\\s*=\\s*"${n}"\\s*$`, "m").test(allTf),
+    );
+    expect(names).toEqual([]);
+  });
+
+  test("each retired address is targeted BARE (an instance key would target nothing in state)", () => {
+    const keyed = extractTargetsWithKeys(savedPlan);
+    expect(keyed).toContain("doppler_secret.github_app_id"); // non-vacuity
+    expect(addrs.filter((a) => !keyed.includes(a))).toEqual([]);
+  });
+
+  test("no config file anywhere under infra/ names a retired object, in any spelling", () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? e.name === ".terraform" ? [] : walk(resolve(d, e.name))
+          : /\.tf(\.json)?$/.test(e.name) ? [resolve(d, e.name)] : [],
+      );
+    const TOKEN = /\bghcr_(read|minter)/i;
+    const files = walk(INFRA_DIR);
+    expect(files.some((f) => f.endsWith("/sentry/cron-monitors.tf"))).toBe(true); // the walk recursed
+    // The regex matches the retirement note in inngest-host.tf before comment-stripping (non-vacuity).
+    expect(TOKEN.test(readFileSync(resolve(INFRA_DIR, "inngest-host.tf"), "utf8"))).toBe(true);
+    const hits = files.filter((f) => TOKEN.test(stripComments(readFileSync(f, "utf8"))));
+    expect(hits.map((f) => f.slice(INFRA_DIR.length + 1))).toEqual([]);
+  });
+
+  test("the ghcr_read_* root variables are gone", () => {
+    expect(allTf).toMatch(/^variable\s+"image_name"\s*\{/m); // non-vacuity
+    expect(allTf).not.toMatch(/^variable\s+"ghcr_read_(user|token)"\s*\{/m);
+  });
 });
 
 /**
@@ -2138,42 +4085,93 @@ describe("each registry dispatch job sources exactly its own gate lib", () => {
  *     information and could prevent nothing;
  *   - the liveness poll must follow the apply, since it asserts the NEW host beats.
  */
-describe("registry_luks_recut step order is a safety property", () => {
+describe("registry recut step order is a safety property", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
-  // Step names in declaration order, read from the job block. Anchored on the `- name:` step
-  // key at its exact indent so prose inside a `run:` body cannot be mistaken for a step.
-  const names = [
-    ...extractJobBlock(wf, "registry_luks_recut").matchAll(
-      /^ {6}- name: (.+)$/gm,
-    ),
-  ].map((m) => m[1].trim());
 
-  const idx = (needle: string) => names.findIndex((n) => n.includes(needle));
+  // Step names in declaration order for a job. Anchored on the `- name:` step key at its exact
+  // indent so prose inside a `run:` body cannot be mistaken for a step.
+  const stepsOf = (job: string) =>
+    [...extractJobBlock(wf, job).matchAll(/^ {6}- name: (.+)$/gm)].map((m) =>
+      m[1].trim(),
+    );
 
-  test("all ordered steps are present", () => {
-    // Non-vacuity floor: if the extraction found nothing, every findIndex below returns -1 and
-    // the ordering assertions would pass on an all -1 array.
-    expect(names.length).toBeGreaterThanOrEqual(6);
+  // The authorization half moved into its own job (#7277 B2), so this property now SPANS TWO
+  // JOBS. It is expressed per-job plus an explicit `needs:` edge rather than collapsed into one
+  // list, because the ordering that matters after the split is a job dependency, not a step
+  // index — a step-index assertion inside one job cannot see it at all.
+  //
+  // This suite went RED and unnoticed for the whole life of the branch: the D10 step was renamed
+  // from "Pre-destroy pull-path health gate" to "Pre-destroy authorization gate (D10 VERDICT)"
+  // and the needle was not. The non-vacuity floor caught it (findIndex returned -1), which is
+  // the only reason it failed loudly instead of passing on an all -1 array. Needles below are
+  // deliberately the SHORTEST stable substring of each step name, so a future retitling that
+  // keeps the step's meaning does not red the suite for a cosmetic reason.
+  const gateSteps = stepsOf("registry_pull_path_gate");
+  const recutSteps = stepsOf("registry_luks_recut");
+  const gIdx = (needle: string) => gateSteps.findIndex((n) => n.includes(needle));
+  const rIdx = (needle: string) => recutSteps.findIndex((n) => n.includes(needle));
+
+  test("the recut job depends on the authorization gate job", () => {
+    // The load-bearing edge. Without it the destroy can run with no verdict at all, and every
+    // step-order assertion below would still pass.
+    expect(extractJobBlock(wf, "registry_luks_recut")).toMatch(
+      /^ {4}needs: registry_pull_path_gate$/m,
+    );
+  });
+
+  test("all ordered steps are present in both jobs", () => {
+    // Non-vacuity floor: if either extraction found nothing, every findIndex returns -1 and the
+    // ordering assertions would pass on an all -1 array.
+    expect(gateSteps.length).toBeGreaterThanOrEqual(6);
+    expect(recutSteps.length).toBeGreaterThanOrEqual(5);
     for (const needle of [
       "Validate typed confirm",
-      "Pre-destroy pull-path health gate",
+      "Resolve recovery posture",
+      "D10 PREPARE",
+      "Start throwaway registry",
+      "D10 VERDICT",
+      "Upload pinned restore manifest",
+    ]) {
+      expect(gIdx(needle)).toBeGreaterThanOrEqual(0);
+    }
+    for (const needle of [
+      "Validate typed confirm",
       "destroy-guard",
       "Pre-apply zero-touch assert",
       "Terraform apply",
       "Post-apply liveness assert",
     ]) {
-      expect(idx(needle)).toBeGreaterThanOrEqual(0);
+      expect(rIdx(needle)).toBeGreaterThanOrEqual(0);
     }
   });
 
-  test("confirm < pull-path < destroy-guard < zero-touch < apply < liveness", () => {
+  test("gate job: confirm < posture < PREPARE < throwaway < VERDICT", () => {
     const order = [
-      idx("Validate typed confirm"),
-      idx("Pre-destroy pull-path health gate"),
-      idx("destroy-guard"),
-      idx("Pre-apply zero-touch assert"),
-      idx("Terraform apply"),
-      idx("Post-apply liveness assert"),
+      gIdx("Validate typed confirm"),
+      gIdx("Resolve recovery posture"),
+      gIdx("D10 PREPARE"),
+      gIdx("Start throwaway registry"),
+      gIdx("D10 VERDICT"),
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  test("gate job: the manifest is uploaded AFTER the verdict, not between PREPARE and VERDICT", () => {
+    // #7277 B5. PREPARE writes the manifest, the VERDICT step re-derives over the SAME path and
+    // rehearses against what it derived, and the restore job downloads this artifact. Uploading
+    // between them captured PREPARE's inventory while the rehearsal proved VERDICT's — a
+    // divergence with NO other observable, since both runs are green and nothing compares the
+    // two sets. Ordering is the fix, so ordering is what must be pinned.
+    expect(gIdx("Upload pinned restore manifest")).toBeGreaterThan(gIdx("D10 VERDICT"));
+  });
+
+  test("recut job: confirm < destroy-guard < zero-touch < apply < liveness", () => {
+    const order = [
+      rIdx("Validate typed confirm"),
+      rIdx("destroy-guard"),
+      rIdx("Pre-apply zero-touch assert"),
+      rIdx("Terraform apply"),
+      rIdx("Post-apply liveness assert"),
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
@@ -2181,7 +4179,26 @@ describe("registry_luks_recut step order is a safety property", () => {
   test("the zero-touch assert runs BEFORE the apply, not after", () => {
     // Pinned separately from the chain above because this is the one ordering the plan's v1 got
     // wrong, and a chain assertion would not name it if it regressed.
-    expect(idx("Pre-apply zero-touch assert")).toBeLessThan(idx("Terraform apply"));
+    expect(rIdx("Pre-apply zero-touch assert")).toBeLessThan(rIdx("Terraform apply"));
+  });
+
+  test("the gate job performs no terraform action", () => {
+    // The split is only worth anything if the gate job cannot destroy. Asserted as negative
+    // space: a gate job that acquired an apply/destroy step would silently re-create the exact
+    // coupling the split removed, and no ordering assertion would notice.
+    //
+    // MEASURED ON A COMMENTS-STRIPPED COPY. The first version of this assertion matched the
+    // PROSE `push a timeout into \`terraform apply\` or D11` in the next job's explanatory header
+    // — a false RED on a correct workflow, and the same bare-token trap
+    // (cq-assert-anchor-not-bare-token) this PR fixed twice elsewhere. A guard that forbids a
+    // literal the surrounding file must also DOCUMENT has to anchor on something a comment
+    // cannot produce.
+    const gate = extractJobBlock(wf, "registry_pull_path_gate")
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    expect(gate).not.toMatch(/terraform\s+(apply|destroy)/);
+    expect(gate).not.toMatch(/^\s+-target=/m);
   });
 });
 
@@ -2238,16 +4255,32 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // about the config CONTAINING the key. Omit these and luksOpen fails — silently.
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
-  // (#6982) SIBLING, dependency-free by design. Publishes GIT_DATA_SSH_HOST from a STATIC
-  // local, never from hcloud_server_network.git_data.ip — that is what makes it plannable
-  // with the host absent and keeps it clear of any upstream closure onto the server.
-  // ADR-149 cut it from #6977 believing the opposite; see its resource comment. Omit it and
-  // every account deletion files a FALSE Art. 17 erasure-failed event from birth onward.
+  // (#6982) SIBLING. Publishes GIT_DATA_SSH_HOST from `hcloud_server_network.git_data.ip` —
+  // the COMPUTED NIC attribute, which is what ADR-149's DC-3 mandates and what git-data.tf
+  // actually does (`value = hcloud_server_network.git_data.ip`).
+  //
+  // (#7772) THIS COMMENT SAID THE OPPOSITE and was corrected here. It claimed the value came
+  // from a STATIC local "never from hcloud_server_network.git_data.ip", and closed by saying
+  // ADR-149 "cut it from #6977 believing the opposite" — describing the position DC-3
+  // REVERSED before merge, in a birth-route artifact, about a birth-route resource. The
+  // reversal is safe precisely because this secret's only -target line IS the birth job,
+  // which already targets both hcloud_server.git_data and hcloud_server_network.git_data:
+  // the edge drags nothing new into any plan that exists, and there is no pre-birth window to
+  // protect because the secret is created BY the dispatch. The mandated form is also strictly
+  // stronger — a birth that landed the server but not the NIC can no longer publish an
+  // address nothing answers on.
+  //
+  // Omit it and every account deletion files a FALSE Art. 17 erasure-failed event from birth
+  // onward. That part was always true and is unchanged.
   "doppler_secret.git_data_ssh_host",
   // (#6982) SIBLING. The Better Stack ingest token in prd_git_data, read by the
   // post-Doppler emits (boot-completion, gc faults). Omit it and the queryable copy of the
   // boot signal never ships, which is what the follow-through probe reads.
   "doppler_secret.git_data_betterstack_logs_token",
+  // (#7226, ADR-237) The Terraform-minted SSH host key cloud-init installs, and its pin in prd.
+  // PRESENCE members (create-or-no-op), not entailed: neither references the server's id.
+  "tls_private_key.git_data_host_ssh",
+  "doppler_secret.git_data_ssh_host_key",
 ];
 
 // Asserted ABSENT from the -target set. Both are refused by the gate's out-of-scope arm
@@ -2444,11 +4477,35 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(jobBlock).toMatch(
       /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
     );
+    // #8009 adds a THIRD interlock (CPO condition C1). It inherits every pin above rather
+    // than repeating their history: the rung-2 gate is structurally incapable of catching a
+    // collapsed authorization map, because rehearsal.tf sets all three pubkeys to one
+    // tls_private_key by design -- so a production collapse is a NO-OP in the rehearsal and
+    // the evidence still records PASS. This gate is the only mechanical check on that class.
+    expect(jobBlock).toMatch(
+      /^\s*git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+" \|\| rc=\$\?$/m,
+    );
+    // `rc=0` BEFORE THE CALL, AND `|| rc=$?` ON IT. Actions runs the block under -eo
+    // pipefail, so the bare `cmd; rc=$?` form aborts AT the call and every reporting line
+    // below it never runs. Pinning the capture shape is pinning that the step can report.
+    expect(jobBlock).toMatch(/^\s*rc=0$/m);
+    // ABORT (2) MUST NOT BE REPORTED AS A VERDICT ABOUT THE KEY MAP. The gate is tri-state
+    // and its suite pins that; a single branch here asserted the HOLD claim on all ten
+    // could-not-measure paths, which is the defect class this gate exists to close, one
+    // layer up. Both branches must exist and the rc=2 one must name it as an INSTRUMENT
+    // failure.
+    expect(jobBlock).toMatch(/^\s*if \[\[ "\$rc" -eq 2 \]\]; then$/m);
+    expect(jobBlock).toMatch(/COULD NOT MEASURE/);
+    expect(jobBlock).toMatch(/^\s*if \[\[ "\$rc" -ne 0 \]\]; then$/m);
 
     // The interlocks are separate STEPS, so each can be disarmed without touching its body
     // at all. Pin the three ways for BOTH: a conditional, continue-on-error, or a missing
     // non-zero exit.
-    for (const stepName of ["Birth-readiness interlock", "Rung-2 rehearsal interlock"]) {
+    for (const stepName of [
+      "Birth-readiness interlock",
+      "Rung-2 rehearsal interlock",
+      "Authorization-map interlock",
+    ]) {
       const step = new RegExp(`- name: ${stepName}[\\s\\S]*?(?=\\n      - name: )`).exec(jobBlock);
       expect(step, `step not found: ${stepName}`).not.toBeNull();
       expect(step![0]).not.toMatch(/^\s*if:/m);
@@ -2584,8 +4641,124 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(interlockAt).toBeGreaterThan(-1);
     expect(rung2At).toBeGreaterThan(-1);
     expect(planAt).toBeGreaterThan(-1);
+    // The third interlock (#8009) is static -- it reads Terraform SOURCE, never a plan -- so
+    // it can and must refuse before any provider is contacted, exactly like its two siblings.
+    const authmapAt = jobBlock.search(/^\s*git_data_authorization_map_gate\b/m);
+    expect(authmapAt).toBeGreaterThan(-1);
     expect(interlockAt).toBeLessThan(planAt);
     expect(rung2At).toBeLessThan(planAt);
+    expect(authmapAt).toBeLessThan(planAt);
+    // A job-level continue-on-error would make all three interlocks non-blocking at once,
+    // outside every step body the per-step loop inspects.
+    expect(jobBlock).not.toMatch(/^\s{4}continue-on-error:/m);
+  });
+
+  test("git_data_host_replace ALSO carries the authorization-map interlock (#8009 D9)", () => {
+    // D9. user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so
+    // after the birth a REPLACE is the ONLY route by which a re-rendered authorized_keys
+    // block reaches the host. The realistic incident is therefore not a collapsed BIRTH --
+    // that fires once, ever -- but a collapsed REPLACE, on the path with no human approver.
+    //
+    // The limitation ships stated rather than implied, here and in the step's own ::error::
+    // and the runbook.
+    //
+    // (#8209, ADR-241 D2) UPDATED. This job used to carry no `environment:` and therefore no
+    // deployment_branch_policy, so a workflow_dispatch ran the SELECTED REF's scripts and the
+    // gate was supplied by the branch it polices. The "fleet-wide policy call" this comment
+    // deferred has now been made: the five replace-class targets carry
+    // `environment: infra-privileged`, pinned to `main`, so a non-main dispatch is refused
+    // before the job starts. The limitation is NARROWED, not removed — a deliberate actor who
+    // can land a commit on `main` still reaches it — which is why the assertion below still
+    // pins that the message says so.
+    const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
+    expect(replaceBlock).toMatch(
+      /^\s*git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+" \|\| rc=\$\?$/m,
+    );
+    expect(replaceBlock).toMatch(/^\s*if \[\[ "\$rc" -eq 2 \]\]; then$/m);
+    expect(replaceBlock).toMatch(/COULD NOT MEASURE/);
+    const step = /- name: Authorization-map interlock[\s\S]*?(?=\n      - name: )/.exec(
+      replaceBlock,
+    );
+    expect(step, "Authorization-map interlock step not found in git_data_host_replace").not.toBeNull();
+    expect(step![0]).not.toMatch(/^\s*if:/m);
+    expect(step![0]).not.toMatch(/continue-on-error/);
+    expect(step![0]).toMatch(/^\s*exit 1$/m);
+    // The stated limitation is part of the contract, not decoration: a future edit that
+    // silently drops it would leave the gate implying protection it does not have.
+    expect(step![0]).toMatch(/does NOT hold against a deliberate actor/);
+
+    // ORDERING, NOT JUST PRESENCE. The birth job pins authmapAt < planAt; this job pinned
+    // only that the step EXISTS. Measured: moving the interlock below `Terraform apply
+    // (git-data-host -replace)` left this suite 194/0 green — so on the one path with no
+    // human approver, the gate could run after the host had already been replaced with the
+    // collapsed map. A gate that refuses after the fact is not a gate.
+    const rAuthmap = replaceBlock.search(/^\s*git_data_authorization_map_gate\b/m);
+    const rPlan = replaceBlock.search(/^\s*terraform plan -no-color/m);
+    const rApply = replaceBlock.search(/^\s*terraform apply -no-color/m);
+    expect(rAuthmap).toBeGreaterThan(-1);
+    expect(rPlan).toBeGreaterThan(-1);
+    expect(rApply).toBeGreaterThan(-1);
+    expect(rAuthmap).toBeLessThan(rPlan);
+    expect(rAuthmap).toBeLessThan(rApply);
+
+    // H2 — A JOB-LEVEL `continue-on-error` DISARMS ALL THREE INTERLOCKS AT ONCE, and it
+    // sits outside every step body the assertions above read. The step-level loop claims to
+    // pin "the three ways" a step can be disarmed; this is a fourth, one level up.
+    expect(replaceBlock).not.toMatch(/^\s{4}continue-on-error:/m);
+
+    // H3 — `exit 1` PRESENCE IS NOT REACHABILITY. A real `exit 1` parked in an unrelated
+    // later branch of the same step satisfies /^\s*exit 1$/m while the gate's own failure
+    // branch merely echoes. Pin that the non-zero exit is INSIDE the refusal branch.
+    expect(step![0]).toMatch(
+      /if \[\[ "\$rc" -ne 0 \]\]; then\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
+    );
+  });
+
+  test("git_data_host_replace ALSO carries the rung-2 rehearsal interlock (#8210)", () => {
+    // Until #8210 only git_data_host_create called this gate, so an un-rehearsed cloud-init
+    // payload could reach the LIVE host by replace from any ref — the route that creates the
+    // store was held while the route that REPLACES it was not. That asymmetry is load-bearing
+    // now for the same reason D9 above is: user_data is ForceNew and ADR-115 bars git-data from
+    // the reboot primitive, so a replace is the ONLY route by which a payload change (including
+    // a boot-time control like the LUKS reopen) reaches the host, and it re-runs first boot
+    // there. An un-rehearsed template's first real boot would be on the production host.
+    const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
+    expect(replaceBlock).toMatch(
+      /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
+
+    // The same three disarm shapes the sibling interlocks are pinned against: an `if:` on the
+    // step, a continue-on-error, or a refusal branch that echoes without exiting.
+    const step = /- name: Rung-2 rehearsal interlock[\s\S]*?(?=\n      - name: )/.exec(
+      replaceBlock,
+    );
+    expect(step, "Rung-2 rehearsal interlock step not found in git_data_host_replace").not.toBeNull();
+    expect(step![0]).not.toMatch(/^\s*if:/m);
+    expect(step![0]).not.toMatch(/continue-on-error/);
+    expect(step![0]).toMatch(
+      /if ! git_data_rung2_rehearsal_gate[\s\S]*?\n\s*echo "::error::[\s\S]*?\n\s*exit 1\n/,
+    );
+
+    // THE CHECKOUT DEPTH IS PART OF THE INTERLOCK. Guard 4 reads the evidence file's commit
+    // provenance and HOLDs on a shallow clone; actions/checkout is depth-1 unless the step
+    // sets fetch-depth: 0. The create job has carried it since #8043; the review of #8210 found
+    // the interlock copied onto this job WITHOUT it, which held the replace route permanently
+    // — "until PM2" in every document, forever in fact. Pinned as the FIRST checkout step of
+    // the job carrying `fetch-depth: 0` under `with:`.
+    const replaceCheckout = /- uses: actions\/checkout@[0-9a-f]+[^\n]*\n((?:\s{8,}[^\n]*\n)*)/.exec(
+      replaceBlock,
+    );
+    expect(replaceCheckout, "checkout step not found in git_data_host_replace").not.toBeNull();
+    expect(replaceCheckout![1]).toMatch(/^\s*fetch-depth:\s*0\s*$/m);
+
+    // ORDERING. A gate that runs after the plan lets a held route pay for a plan and read a
+    // secret before refusing; after the apply it is not a gate at all.
+    const rRung2 = replaceBlock.search(/^\s*if ! git_data_rung2_rehearsal_gate\b/m);
+    const rPlan = replaceBlock.search(/^\s*terraform plan -no-color/m);
+    const rApply = replaceBlock.search(/^\s*terraform apply -no-color/m);
+    expect(rRung2).toBeGreaterThan(-1);
+    expect(rRung2).toBeLessThan(rPlan);
+    expect(rRung2).toBeLessThan(rApply);
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
@@ -2680,5 +4853,1852 @@ describe("apply_target enum <-> description parity (#6977)", () => {
       (opt) => !new RegExp(`(?<![\\w-])${opt}(?![\\w-])`).test(desc![1]),
     );
     expect(undocumented).toEqual([]);
+  });
+});
+
+// ============================================================================================
+// #7586 / #7587 — the apply workflow's FAILURE CHANNEL and its ARM-gate BUDGET.
+//
+// These two describes are co-located here rather than in a new suite because this file already
+// owns this workflow's channel invariant (the `#7539` green-skip describe above) and its
+// `extractJobBlock` / `extractStep` helpers. See the header note at the top of the file.
+//
+// Both guards share one anti-vacuity helper so "the guard must not pass on an empty scan" is
+// asserted once per guard rather than restated as four separate rows.
+// ============================================================================================
+
+/**
+ * Anti-vacuity floor. A guard that scanned zero subjects and exited clean is indistinguishable
+ * from a guard over a healthy repo — this is the difference. Every scan below routes through it.
+ */
+function expectNonEmptyDispatch(count: number, min = 1): void {
+  expect(count).toBeGreaterThanOrEqual(min);
+}
+
+// --- A small GitHub-expression evaluator ------------------------------------------------------
+//
+// The guard EVALUATES the predicate; it does not string-match it. A canonical-string match makes
+// harness row H2 (operand reordering, semantics identical) fail BY CONSTRUCTION, while a
+// token-presence check passes mutation rows 1/3/4 over a semantically broken predicate. So the
+// `if:` expression is parsed and run over the full cross product of conclusions and triggers, and
+// the truth table is what is asserted.
+//
+// `==` is deliberately GitHub's LOOSE equality, not `===`: when the operand types differ Actions
+// casts both to Number, which is how an unset output (`null`) compares EQUAL to `'0'`. Nothing in
+// this predicate depends on that, but an evaluator that quietly used strict equality would be
+// modelling a different language than the one the runner executes.
+
+type GhVal = string | number | boolean | null;
+
+function ghToNumber(v: GhVal): number {
+  if (v === null) return 0;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "number") return v;
+  if (v.trim() === "") return 0;
+  return Number(v);
+}
+
+function ghEquals(a: GhVal, b: GhVal): boolean {
+  if (typeof a === typeof b && a !== null && b !== null) {
+    if (typeof a === "string") return a.toLowerCase() === (b as string).toLowerCase();
+    return a === b;
+  }
+  const x = ghToNumber(a);
+  const y = ghToNumber(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return false;
+  return x === y;
+}
+
+type Tok = { t: "op" | "str" | "path" | "fn"; v: string };
+
+function tokenizeGh(src: string): Tok[] {
+  const out: Tok[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (two === "&&" || two === "||" || two === "==" || two === "!=") {
+      out.push({ t: "op", v: two });
+      i += 2;
+      continue;
+    }
+    if (c === "(" || c === ")" || c === "!") {
+      out.push({ t: "op", v: c });
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      let j = i + 1;
+      let s = "";
+      while (j < src.length) {
+        if (src[j] === "'" && src[j + 1] === "'") {
+          s += "'";
+          j += 2;
+          continue;
+        }
+        if (src[j] === "'") break;
+        s += src[j];
+        j++;
+      }
+      if (j >= src.length) throw new Error(`unterminated string literal in: ${src}`);
+      out.push({ t: "str", v: s });
+      i = j + 1;
+      continue;
+    }
+    const m = /^[A-Za-z_][A-Za-z0-9_.-]*/.exec(src.slice(i));
+    if (!m) throw new Error(`unexpected character '${c}' in: ${src}`);
+    i += m[0].length;
+    if (src[i] === "(") {
+      const close = src.indexOf(")", i);
+      if (close === -1) throw new Error(`unterminated call ${m[0]}( in: ${src}`);
+      // Only zero-argument status functions appear in this repo's job-level predicates. A call
+      // with arguments would be silently mis-parsed, so refuse it rather than guess.
+      if (src.slice(i + 1, close).trim() !== "") {
+        throw new Error(`unsupported call with arguments: ${m[0]}(...)`);
+      }
+      out.push({ t: "fn", v: m[0] });
+      i = close + 1;
+      continue;
+    }
+    out.push({ t: "path", v: m[0] });
+  }
+  return out;
+}
+
+/**
+ * Evaluate a GitHub job-level `if:` expression.
+ *
+ * `ctx` maps context paths (`github.event_name`, `needs.apply.result`, …) to values; an
+ * unknown path resolves to `null`, exactly as a missing context does on the runner.
+ *
+ * Status functions are resolved from `jobStatus`. Any function this evaluator does not model
+ * THROWS rather than defaulting — a guard that silently treats an unmodelled function as `true`
+ * would report a truth table for an expression nobody wrote.
+ */
+function evalGhIf(src: string, ctx: Record<string, GhVal>): boolean {
+  const toks = tokenizeGh(src);
+  let p = 0;
+  const peek = (): Tok | undefined => toks[p];
+  const eat = (v: string): boolean => {
+    if (toks[p] && toks[p].t === "op" && toks[p].v === v) {
+      p++;
+      return true;
+    }
+    return false;
+  };
+
+  const primary = (): GhVal => {
+    const t = peek();
+    if (!t) throw new Error(`unexpected end of expression in: ${src}`);
+    if (t.t === "op" && t.v === "(") {
+      p++;
+      const v = orExpr();
+      if (!eat(")")) throw new Error(`missing ')' in: ${src}`);
+      return v;
+    }
+    if (t.t === "op" && t.v === "!") {
+      p++;
+      return !truthy(primary());
+    }
+    if (t.t === "str") {
+      p++;
+      return t.v;
+    }
+    if (t.t === "fn") {
+      p++;
+      // `always()` is the only status function these predicates use. Everything else — including
+      // `success()`, `failure()` and `cancelled()` — is refused rather than guessed at, because a
+      // job-level predicate carrying one would need the whole workflow's status to evaluate.
+      if (t.v === "always") return true;
+      throw new Error(`unmodelled status function ${t.v}() in: ${src}`);
+    }
+    p++;
+    return Object.prototype.hasOwnProperty.call(ctx, t.v) ? ctx[t.v] : null;
+  };
+
+  const truthy = (v: GhVal): boolean => {
+    if (typeof v === "boolean") return v;
+    if (v === null) return false;
+    if (typeof v === "number") return v !== 0;
+    return v !== "";
+  };
+
+  const cmpExpr = (): GhVal => {
+    const left = primary();
+    const t = peek();
+    if (t && t.t === "op" && (t.v === "==" || t.v === "!=")) {
+      p++;
+      const right = primary();
+      const eq = ghEquals(left, right);
+      return t.v === "==" ? eq : !eq;
+    }
+    return left;
+  };
+
+  const andExpr = (): GhVal => {
+    let v = cmpExpr();
+    while (eat("&&")) {
+      const r = cmpExpr();
+      v = truthy(v) ? r : v;
+    }
+    return v;
+  };
+
+  const orExpr = (): GhVal => {
+    let v = andExpr();
+    while (eat("||")) {
+      const r = andExpr();
+      v = truthy(v) ? v : r;
+    }
+    return v;
+  };
+
+  const result = orExpr();
+  if (p !== toks.length) throw new Error(`trailing tokens in: ${src}`);
+  return truthy(result);
+}
+
+// --- Guard 1: a non-green apply run has a channel (#7586) ---------------------------------------
+
+const NOTIFY_JOB_ID = "notify-apply-failure";
+const CONCLUSIONS = ["success", "failure", "cancelled", "skipped"] as const;
+
+/** The three trigger shapes the workflow can present to this job. */
+const TRIGGERS: Array<{ name: string; event: string; target: GhVal }> = [
+  { name: "push", event: "push", target: null },
+  { name: "manual-rerun", event: "workflow_dispatch", target: "manual-rerun" },
+  { name: "other-dispatch", event: "workflow_dispatch", target: "inngest-host" },
+];
+
+/**
+ * The PROPERTY, written independently of the implementation: every run in which the `apply` job
+ * does not reach `success`, and every run in which `apply` is skipped because `preflight` did not
+ * succeed, must reach the notification — on the merge path AND on the manual-rerun recovery path
+ * the email itself prescribes.
+ */
+function channelShouldFire(preflight: string, apply: string, event: string, target: GhVal): boolean {
+  const onACoveredTrigger = event === "push" || target === "manual-rerun";
+  const everythingIsFine = preflight === "success" && (apply === "success" || apply === "skipped");
+  return onACoveredTrigger && !everythingIsFine;
+}
+
+/** Evaluate a candidate predicate over the whole cross product; return the rows it gets wrong. */
+function channelTruthTableViolations(ifExpr: string): string[] {
+  const bad: string[] = [];
+  let rows = 0;
+  for (const trigger of TRIGGERS) {
+    for (const preflight of CONCLUSIONS) {
+      for (const apply of CONCLUSIONS) {
+        rows++;
+        const actual = evalGhIf(ifExpr, {
+          "github.event_name": trigger.event,
+          "inputs.apply_target": trigger.target,
+          "needs.preflight.result": preflight,
+          "needs.apply.result": apply,
+        });
+        const want = channelShouldFire(preflight, apply, trigger.event, trigger.target);
+        if (actual !== want) {
+          bad.push(`${trigger.name}/preflight=${preflight}/apply=${apply}: got ${actual}, want ${want}`);
+        }
+      }
+    }
+  }
+  expectNonEmptyDispatch(rows, CONCLUSIONS.length * CONCLUSIONS.length * TRIGGERS.length);
+  return bad;
+}
+
+/**
+ * The full verdict over a workflow's TEXT, so the mutation rows can feed it a fixture with the
+ * job deleted (row 2 / H1) rather than only a mutated predicate.
+ *
+ * `needs` is pinned INSIDE the same verdict that quantifies over it. Quantifying over `needs:`
+ * alone is not enough: shrinking the array would shrink the obligation, so an edit that drops
+ * `preflight` from BOTH `needs:` and the predicate would satisfy a `needs:`-relative guard while
+ * restoring the exact defect row 3 exists to catch (mutation row 5).
+ */
+function channelGuardViolations(wfText: string): string[] {
+  const doc = parseYaml(wfText) as {
+    jobs?: Record<string, { needs?: string[] | string; if?: string }>;
+  };
+  const job = doc.jobs?.[NOTIFY_JOB_ID];
+  if (!job) return [`no \`${NOTIFY_JOB_ID}\` job — the workflow has no failure channel at all`];
+  if (typeof job.if !== "string" || job.if.trim() === "") {
+    return [`\`${NOTIFY_JOB_ID}\` declares no \`if:\``];
+  }
+  const needs = Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : [];
+  const out: string[] = [];
+  if (JSON.stringify(needs) !== JSON.stringify(["preflight", "apply"])) {
+    out.push(`needs is ${JSON.stringify(needs)}, expected ["preflight","apply"]`);
+  }
+  out.push(...channelTruthTableViolations(job.if));
+  return out;
+}
+
+describe("apply-web-platform-infra has a failure channel", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const doc = parseYaml(wf) as {
+    jobs?: Record<
+      string,
+      {
+        needs?: string[];
+        if?: string;
+        "timeout-minutes"?: number;
+        permissions?: Record<string, string>;
+        steps?: Array<Record<string, unknown>>;
+      }
+    >;
+  };
+  const job = doc.jobs?.[NOTIFY_JOB_ID];
+
+  test("the job exists, and its predicate is CORRECT over the whole conclusion x trigger space", () => {
+    expect(job).toBeDefined();
+    expect(channelGuardViolations(wf)).toEqual([]);
+  });
+
+  test("AC1: budget, permissions and the `needs:` pin", () => {
+    // EXACTLY 5, not "<= 10" (#7661 G7). The run-level mutex sum appears in three comments in this
+    // file; raising this job to 10 kept a `toBeLessThanOrEqual` guard green while falsifying all
+    // three at once. The sum itself is re-derived in the ladder describe.
+    expect(job!["timeout-minutes"]).toBe(5);
+    // A job-level `permissions:` block REPLACES the workflow-level one, so `contents: read` must
+    // be re-declared alongside the grant this job adds. EXHAUSTIVE, not `toMatchObject` (#7661 G9):
+    // a subset matcher passes on `{contents:"read",actions:"read","id-token":"write"}`, so a later
+    // edit widening the grant would not red. The sibling AC2/AC9 test already uses this shape.
+    expect(job!.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(job!.needs).toEqual(["preflight", "apply"]);
+  });
+
+  test("AC2: every step is NAMED, and EVERY step runs on every path the job fires on", () => {
+    const steps = job!.steps ?? [];
+    expectNonEmptyDispatch(steps.length, 2);
+    // `extractStep` matches `^ {6}- name:`, so an unnamed step is invisible to this suite and
+    // nothing about it could be asserted. `uses:`-only checkout is the one exception.
+    const named = steps.filter((s) => typeof s.name === "string");
+    expectNonEmptyDispatch(named.length, 2);
+    const email = steps.find((s) => s.uses === "./.github/actions/notify-ops-email");
+    expect(email).toBeDefined();
+    const cause = steps.find((s) => s.id === "cause");
+    expect(cause).toBeDefined();
+
+    // #7654 A1. A step with no `if:` carries an implicit `success()`. `continue-on-error` changes
+    // the OUTCOME of the step it sits on; it does not gate the step. So without `always()` here, a
+    // failed checkout or a failed `cause` step SKIPS the email and the red run notifies nobody —
+    // the Cut List C1 lesson this job's own header cites, repeated one level down.
+    for (const s of [cause!, email!]) {
+      expect(typeof s.if === "string" && /\balways\(\)/.test(s.if as string)).toBe(true);
+    }
+
+    // #7654 A2. NOT `continue-on-error`. `notify-ops-email` already collapses every non-2xx from
+    // Resend into a `::warning::` and exits 0, so the stated rationale ("a Resend outage must not
+    // red an already-red run") was protecting against nothing. What it DID suppress is the
+    // composite's only hard failure — a missing `RESEND_API_KEY` — which is the one case where
+    // this job's conclusion can distinguish "the alarm fired" from "the alarm silently did not".
+    expect(email!["continue-on-error"]).toBeUndefined();
+  });
+
+  test("AC2d: the composite's only hard-fail branch is a MISSING KEY, so suppressing it is the loss", () => {
+    // The A2 assertion above is only meaningful if the composite really does exit 0 on a non-2xx
+    // and non-zero on an unset key. Read it rather than assume it.
+    const composite = readFileSync(
+      resolve(REPO_ROOT, ".github/actions/notify-ops-email/action.yml"),
+      "utf8",
+    );
+    expectNonEmptyDispatch(composite.length, 1);
+    expect(composite).toMatch(/RESEND_API_KEY[\s\S]{0,200}?exit 1/);
+    expect(composite).toMatch(/HTTP_CODE[\s\S]{0,400}?::warning::/);
+  });
+
+  test("AC2b: no `run:` body in this job contains `terraform apply` or `-target=`", () => {
+    // LOAD-BEARING, not stylistic. The predicate names `manual-rerun`, so
+    // stock-preflight-coverage.test.ts's `jobFor("manual-rerun")` now returns TWO hits and
+    // disambiguates them with `appliesTerraform`, which greps exactly these two tokens over
+    // `run:` bodies. A `run:`-built email body mentioning either makes that suite red — and the
+    // "what did NOT land" prose is precisely the text most likely to contain them.
+    const runs = (job!.steps ?? []).map((s) => (typeof s.run === "string" ? s.run : "")).join("\n");
+    expectNonEmptyDispatch(runs.length, 1);
+    expect(runs).not.toMatch(/\bterraform\s+apply\b/);
+    expect(runs).not.toContain("-target=");
+  });
+
+  test("AC2c: the cause token is shape-validated with a STATED shape, and written under a random delimiter", () => {
+    const cause = (job!.steps ?? []).find((s) => s.id === "cause");
+    expect(cause).toBeDefined();
+    const body = String(cause!.run ?? "");
+    expectNonEmptyDispatch(body.length, 1);
+    // Errexit is inherited from `/usr/bin/bash -e {0}`; this body reads exit statuses as DATA.
+    expect(body).toMatch(/^\s*set \+e\s*$/m);
+    expect(body).toMatch(/tr -d '\\r\\n'/); // 1. CR/LF stripped outright
+    // 2. the ONE non-ASCII character this workflow's step names use is transliterated before a
+    // byte-wise `tr -cd` can shred it (#7655 B8: `unpause→verify-status→rollback` became
+    // `unpauseverify-statusrollback`, a non-word, on exactly the step this job most expects to
+    // print). `,` and `#` are in the keep-set for the same reason and are inert after the escape.
+    expect(body).toMatch(/sed 's\/→\/->\/g'/);
+    expect(body).toMatch(/tr -cd 'A-Za-z0-9 \._:\(\)\/,#-'/); // 3. charset clamped
+    expect(body).toMatch(/cut -c1-80/); // 4. length clamped
+    // 4. HTML-escaped before it reaches Resend's `html` field.
+    expect(body).toContain("&amp;");
+    expect(body).toContain("&lt;");
+    expect(body).toContain("&gt;");
+    // 5. A RANDOM heredoc delimiter — a fixed one is forgeable by a value containing it.
+    expect(body).toMatch(/delim=.*(openssl rand|RANDOM)/);
+    expect(body).toMatch(/failing_step<<%s/);
+    // It must NOT try to read `apply` step outputs: that job declares no `outputs:`.
+    expect(body).not.toContain("needs.apply.outputs");
+  });
+
+  /** The `case "$swept"` table that resolves the sweep prose, as {value: sentence}. */
+  function sweepArms(causeBody: string): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const m of causeBody.matchAll(/^\s*([a-z|*]+)\)\s*\n\s*sweep_msg='([\s\S]*?)' ;;/gm)) {
+      for (const v of m[1].split("|")) out[v] = m[2];
+    }
+    return out;
+  }
+
+  test("AC2: the email body carries the four elements a non-technical reader needs", () => {
+    const email = (job!.steps ?? []).find((s) => s.uses === "./.github/actions/notify-ops-email");
+    const withBlock = email!.with as Record<string, string>;
+    const body = withBlock.body;
+    expectNonEmptyDispatch(body.length, 1);
+
+    // (1) The what-to-do prose is resolved in the `cause` step, so what the BODY must carry is the
+    // interpolation — and the branch itself is asserted below, on the table.
+    expect(body).toContain("steps.cause.outputs.action_msg");
+    // (2) The failing step's name.
+    expect(body).toContain("steps.cause.outputs.failing_step");
+    // (3) Whether uptime alerting may be paused — both the machine value and the prose.
+    expect(body).toContain("steps.cause.outputs.sweep_conclusion");
+    expect(body).toContain("steps.cause.outputs.sweep_msg");
+    expect(body).toMatch(/uptime (monitors?|alerting)/i);
+    // (4) That the previously-applied infrastructure is still serving.
+    expect(body).toMatch(/still serving/i);
+    // …plus a runnable recovery command, not a pointer to one.
+    expect(body).toContain("gh workflow run apply-web-platform-infra.yml");
+    expect(body).toContain("apply_target=manual-rerun");
+    // …and a lever the TARGET OPERATOR can actually pull (#7655 B7). `gh workflow run` needs the
+    // GitHub CLI installed and authenticated with `workflow` scope; the audience for this email
+    // is non-technical, and one click from the run URL the email already prints does the job.
+    expect(body).toMatch(/Re-run failed jobs/i);
+    expect(body).toMatch(/Actions/);
+  });
+
+  test("AC7: EVERY value `sweep_conclusion` can take has its own sentence (#7655 B1)", () => {
+    // The producer enumerates four values plus a floor; the body branched on TWO, so `cancelled`,
+    // `skipped` and `unknown` all landed in "the sweep did not run, so nothing was left
+    // half-armed". `cancelled` is precisely the state where the sweep was cut mid-loop and
+    // monitors ARE live-and-unfed, and `unknown` is reached when the jobs API read FAILED — the
+    // same step that emits `::warning::Could not read the jobs API` then asserted, two elements
+    // later, a fact it had just said it could not read. AP-021.
+    const cause = (job!.steps ?? []).find((s) => s.id === "cause");
+    const causeBody = String(cause!.run ?? "");
+    const arms = sweepArms(causeBody);
+
+    // The producer's own enumeration, read from the validating `case` rather than restated.
+    const validated = /case "\$swept" in\s*\n\s*([a-z|]+)\)/.exec(causeBody);
+    expect(validated).not.toBeNull();
+    const values = [...validated![1].split("|"), "*"];
+    expect(values.sort()).toEqual(["*", "cancelled", "failure", "skipped", "success"]);
+    expectNonEmptyDispatch(Object.keys(arms).length, 5);
+    for (const v of values) expect(Object.keys(arms)).toContain(v);
+
+    // No sentence may assert a fact the job did not MEASURE. The retired branch read "The
+    // heartbeat re-pause sweep did not run, so nothing was left half-armed by it."
+    for (const v of ["cancelled", "*"]) {
+      expect(arms[v]).not.toMatch(/nothing was left half-armed/i);
+    }
+    expect(arms.cancelled).not.toMatch(/did not run/i);
+    // The `unknown` arm may only mention "did not run" to DENY that it means that.
+    expect(arms["*"]).toMatch(/not the same as saying it did not run/i);
+    // `cancelled` must name the live-and-unfed risk, not reassure.
+    expect(arms.cancelled).toMatch(/CUT OFF|cut off/);
+    expect(arms.cancelled).toMatch(/switched ON|live/i);
+    // `unknown` must say it could not find out — which is a different fact from "it did not run".
+    expect(arms["*"]).toMatch(/could not find out|cannot tell you/i);
+  });
+
+  test("AC7b: the branch that calls an item URGENT prescribes a lever that can clear it (#7655 B4)", () => {
+    // The only action the email offered was `gh workflow run … manual-rerun`, and on the next run
+    // `arm_one`'s op/state gate no-ops any monitor that is not `paused`. A live-and-unfed monitor
+    // is not `paused`, so the prescribed lever provably cannot re-pause the thing the email calls
+    // the one urgent item.
+    const cause = (job!.steps ?? []).find((s) => s.id === "cause");
+    const arms = sweepArms(String(cause!.run ?? ""));
+    for (const v of ["failure", "cancelled"]) {
+      expect(arms[v]).toMatch(/Better Stack/);
+      expect(arms[v]).toMatch(/Pause/);
+      expect(arms[v]).not.toMatch(/manual-rerun/);
+    }
+    // …and the `failure` arm says outright that the re-run will not fix it.
+    expect(arms.failure).toMatch(/will NOT clear it|not fix it/i);
+
+    // The premise: the gate really does skip a non-paused monitor.
+    const script = readFileSync(resolve(INFRA_DIR, "arm-heartbeats.sh"), "utf8");
+    expect(script).toMatch(/if \[\[ "\$HB_STATUS" != "paused" \]\]; then[\s\S]{0,200}?already armed/);
+  });
+
+  test("AC7c: the `success` arm describes work that the sweep actually does on its dominant path", () => {
+    // The sweep's first line of work is an early exit, and it also concludes `success`. The old
+    // prose told the operator that monitors "were switched back off" (none were switched on) and
+    // that "the counts are in the run summary" (the summary heredoc was unreachable past the early
+    // exit). The script now reports `outcome=noop` and WRITES the summary on that path, and the
+    // sentence no longer claims work that did not happen (#7655 B2).
+    const cause = (job!.steps ?? []).find((s) => s.id === "cause");
+    const arms = sweepArms(String(cause!.run ?? ""));
+    expect(arms.success).toMatch(/nothing to switch off in the first place/i);
+    const script = readFileSync(resolve(INFRA_DIR, "arm-heartbeats.sh"), "utf8");
+    expect(script).toMatch(/sweep_report 0 0 0 noop/);
+  });
+
+  test("AC7d: the what-to-do prose has a PREFLIGHT arm, not a two-way ternary (#7655 B5)", () => {
+    // On a preflight failure `apply` is SKIPPED, the jobs API finds no `apply` steps, and
+    // `failing_step` renders `unresolved` — while the two-armed ternary told the operator to read
+    // "the step named above". One of the three modes this job exists to cover produced an
+    // incoherent email.
+    const cause = (job!.steps ?? []).find((s) => s.id === "cause");
+    const causeBody = String(cause!.run ?? "");
+    expect(causeBody).toMatch(/if \[\[ "\$\{PREFLIGHT_RESULT\}" != "success" \]\]; then/);
+    expect(causeBody).toMatch(/elif \[\[ "\$\{APPLY_RESULT\}" == "cancelled" \]\]; then/);
+    const arms = [...causeBody.matchAll(/action_msg='([\s\S]*?)'\n/g)].map((m) => m[1]);
+    expect(arms.length).toBe(3);
+    expect(arms[0]).toMatch(/BEFORE it applied anything/);
+    expect(arms[0]).toMatch(/unresolved/);
+    expect(arms[0]).not.toMatch(/step named above/);
+    // …and the two context values it branches on reach it as env, never as shell interpolation.
+    const env = (cause!.env ?? {}) as Record<string, string>;
+    expect(env.PREFLIGHT_RESULT).toContain("needs.preflight.result");
+    expect(env.APPLY_RESULT).toContain("needs.apply.result");
+  });
+
+  test("AC7e: the blast-radius sentence cannot be false on a partial apply (#7655 B6)", () => {
+    // "soleur.ai and app.soleur.ai are unaffected by this" was unconditional. `terraform apply`
+    // leaves already-applied resources applied, the per-merge allow-list includes
+    // `cloudflare_record.app` and the zone/DNSSEC/firewall resources, and the backend has no state
+    // lock — so a run cancelled mid-apply can also lose the state write-back. A false "nothing is
+    // down" is worse than no email.
+    const email = (job!.steps ?? []).find((s) => s.uses === "./.github/actions/notify-ops-email");
+    const body = (email!.with as Record<string, string>).body;
+    expect(body).not.toMatch(/are unaffected by this/);
+    expect(body).toMatch(/leaves behind whatever\s*\n?\s*it had already created/);
+    expect(body).toMatch(/before assuming\s*\n?\s*nothing moved/);
+    // The premise: those resources really are in the per-merge target set.
+    const applyBlock = extractJobBlock(readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"), "apply");
+    expect(applyBlock).toContain("cloudflare_record.app");
+    // …and the backend really is unlocked, which is what makes the cancelled case sharper.
+    expect(readFileSync(resolve(INFRA_DIR, "main.tf"), "utf8")).toMatch(/use_lockfile\s*=\s*false/);
+  });
+
+  test("AC2/AC9: the body's interpolations are an ALLOW-LIST, not whatever was to hand", () => {
+    const email = (job!.steps ?? []).find((s) => s.uses === "./.github/actions/notify-ops-email");
+    const body = (email!.with as Record<string, string>).body;
+    const allowed = new Set([
+      "github.sha",
+      "github.run_id",
+      "github.repository",
+      "github.server_url",
+      "needs.apply.result",
+      "needs.preflight.result",
+      "steps.cause.outputs.failing_step",
+      "steps.cause.outputs.sweep_conclusion",
+      "steps.cause.outputs.sweep_msg",
+      "steps.cause.outputs.action_msg",
+    ]);
+    const refs = new Set<string>();
+    for (const m of body.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+      for (const r of m[1].matchAll(/\b(github|inputs|needs|steps|secrets|env|runner|job)\.[A-Za-z0-9_.]+/g)) {
+        refs.add(r[0]);
+      }
+    }
+    expectNonEmptyDispatch(refs.size, 4);
+    // Never a raw step log, `curl` output or a shell trace: the ARM gate reads
+    // BETTERSTACK_API_TOKEN and handles monitor ids, and terraform error strings carry resource
+    // identifiers and Doppler variable names. The destination is a plaintext, no-expiry mailbox.
+    expect([...refs].filter((r) => !allowed.has(r))).toEqual([]);
+  });
+});
+
+describe("Guard 1 mutation battery (#7586)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const REAL = (parseYaml(wf) as { jobs: Record<string, { if: string }> }).jobs[NOTIFY_JOB_ID].if;
+
+  /** A minimal workflow carrying only the job this guard is about. */
+  function synthNotify(opts: { ifExpr?: string; needs?: string[]; omitJob?: boolean }): string {
+    if (opts.omitJob) return "name: x\njobs:\n  apply:\n    runs-on: ubuntu-24.04\n";
+    const needs = JSON.stringify(opts.needs ?? ["preflight", "apply"]);
+    const expr = (opts.ifExpr ?? REAL).replace(/\n/g, " ");
+    return [
+      "name: x",
+      "jobs:",
+      "  apply:",
+      "    runs-on: ubuntu-24.04",
+      `  ${NOTIFY_JOB_ID}:`,
+      `    needs: ${needs}`,
+      `    if: ${JSON.stringify(expr)}`,
+      "    runs-on: ubuntu-24.04",
+      "",
+    ].join("\n");
+  }
+
+  test("control: the REAL predicate, re-parsed through the synthetic shape, is clean", () => {
+    // A red baseline would make every row below indistinguishable from a caught mutation.
+    expect(channelGuardViolations(synthNotify({}))).toEqual([]);
+  });
+
+  test("M1 RED: `needs.apply.result == 'failure'` — the infra-validation precedent — is silent on cancelled", () => {
+    const v = channelGuardViolations(synthNotify({ ifExpr: "always() && needs.apply.result == 'failure'" }));
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("apply=cancelled"))).toBe(true);
+  });
+
+  test("M2 RED: deleting the job leaves the guard with ZERO subjects, and it must say so", () => {
+    const v = channelGuardViolations(synthNotify({ omitJob: true }));
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0]).toContain("no failure channel at all");
+  });
+
+  test("M3 RED: dropping the `needs.preflight.result` clause misses the red run that leaves apply SKIPPED", () => {
+    const v = channelGuardViolations(
+      synthNotify({
+        ifExpr:
+          "always() && (github.event_name == 'push' || inputs.apply_target == 'manual-rerun') && " +
+          "!(needs.apply.result == 'success' || needs.apply.result == 'skipped')",
+      }),
+    );
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("preflight=failure") && s.includes("apply=skipped"))).toBe(true);
+  });
+
+  test("M4 RED: narrowing the trigger to `push` only leaves the manual-rerun recovery with no channel", () => {
+    const v = channelGuardViolations(
+      synthNotify({
+        ifExpr:
+          "always() && github.event_name == 'push' && " +
+          "!(needs.preflight.result == 'success' && (needs.apply.result == 'success' || needs.apply.result == 'skipped'))",
+      }),
+    );
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.startsWith("manual-rerun/"))).toBe(true);
+  });
+
+  test("M5 RED: dropping `preflight` from `needs:` AND its clause, in one edit, still reds", () => {
+    // Without the `needs` pin this mutation reds NEITHER guard: the predicate would be
+    // self-consistent with a shrunken `needs:` array, which is how the plan's own first draft
+    // shipped the defect M3 exists to catch.
+    const v = channelGuardViolations(
+      synthNotify({
+        needs: ["apply"],
+        ifExpr:
+          "always() && (github.event_name == 'push' || inputs.apply_target == 'manual-rerun') && " +
+          "!(needs.apply.result == 'success' || needs.apply.result == 'skipped')",
+      }),
+    );
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("expected [\"preflight\",\"apply\"]"))).toBe(true);
+  });
+
+  test("H1 RED: a fixture with no notify job cannot go vacuously green", () => {
+    expect(channelGuardViolations(synthNotify({ omitJob: true }))).not.toEqual([]);
+  });
+
+  test("H2 PASS: reordering the operands is semantics-preserving and MUST NOT red", () => {
+    // The contract is the truth table, not a canonical byte string. A guard that only accepts the
+    // shipped spelling rejects a correct implementation — which is why this guard evaluates.
+    const reordered =
+      "always() && " +
+      "!((needs.apply.result == 'skipped' || needs.apply.result == 'success') && needs.preflight.result == 'success') && " +
+      "(inputs.apply_target == 'manual-rerun' || github.event_name == 'push')";
+    expect(channelGuardViolations(synthNotify({ ifExpr: reordered }))).toEqual([]);
+  });
+});
+
+// --- Guard 2: the ARM gate's deadlines fit its job (#7587, re-derived #7657) --------------------
+
+const ARM_SCRIPT = resolve(INFRA_DIR, "arm-heartbeats.sh");
+const ARM_STATE_FILE_LITERAL = "$RUNNER_TEMP/armed-unconfirmed";
+const SPEC_DIR_NAME = "feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline";
+
+/**
+ * Resolve the measurement log WITHOUT pinning it to its pre-archive path.
+ *
+ * `archive-kb` `git mv`s a finished spec directory to `specs/archive/<timestamp>-<name>/` as
+ * routine housekeeping. A guard that hard-codes the live path therefore reds `main` the first time
+ * anyone tidies up -- the guard breaks on a legitimate edit, which is the definition of a false
+ * RED. Measured before this fix: archiving the directory took this suite from 177/0 to
+ * 158 pass / 4 fail / 1 error, with 15 tests never reaching an assertion.
+ *
+ * Search the live path first, then the archive (suffix match, because the archive prefixes a
+ * timestamp). Throw naming BOTH candidates if neither exists -- a missing pin must fail LOUD, never
+ * fall back to a literal, because the whole point of the pin is that the ladder and the measurement
+ * cannot drift apart.
+ */
+function resolveSpecMeasurements(): string {
+  const live = resolve(REPO_ROOT, "knowledge-base/project/specs", SPEC_DIR_NAME, "measurements.md");
+  if (existsSync(live)) return live;
+
+  const archiveRoot = resolve(REPO_ROOT, "knowledge-base/project/specs/archive");
+  if (existsSync(archiveRoot)) {
+    const hit = readdirSync(archiveRoot)
+      .filter((d) => d.endsWith(SPEC_DIR_NAME))
+      .sort()
+      .pop();
+    if (hit) {
+      const archived = resolve(archiveRoot, hit, "measurements.md");
+      if (existsSync(archived)) return archived;
+    }
+  }
+
+  throw new Error(
+    `measurements.md not found for ${SPEC_DIR_NAME}: looked at ${live} and under ${archiveRoot}/*${SPEC_DIR_NAME}/. ` +
+      `The LADDER-PIN values live there; the ladder guard cannot run without them.`,
+  );
+}
+
+const SPEC_MEASUREMENTS = resolveSpecMeasurements();
+
+/**
+ * Identify the re-pause sweep WITHOUT keying on its step name — a rename is a legitimate edit and
+ * would false-RED a name-keyed guard. (The step's name IS separately coupled to the `cause` step's
+ * name-keyed jq filter, below; that is a different obligation and it fails CLOSED.)
+ *
+ * Both the ARM step and the sweep now invoke the same script, so "does not mention
+ * arm-heartbeats.sh" no longer separates them. The discriminator is the MODE: `--sweep` vs `--arm`.
+ */
+function isSweepStep(s: Record<string, unknown>): boolean {
+  return (
+    typeof s.if === "string" &&
+    /\balways\(\)/.test(s.if) &&
+    typeof s.run === "string" &&
+    s.run.includes(ARM_STATE_FILE_LITERAL) &&
+    /arm-heartbeats\.sh"?\s+--sweep\b/.test(s.run)
+  );
+}
+
+/**
+ * A constant read OUT of the shipped script, never restated here.
+ *
+ * Two spellings are accepted, both of which appear in `arm-heartbeats.sh`: a bare `NAME=15`, and
+ * the defaulted `NAME="${NAME:-10}"` form the optional contract vars use. FAILS CLOSED — a term
+ * the ladder cannot resolve is a term the ladder would otherwise silently drop, which is how a
+ * budget guard starts certifying a number smaller than the code will spend.
+ */
+function scriptConst(scriptText: string, name: string): number {
+  const bare = new RegExp(`^${name}=(\\d+)\\s*$`, "m").exec(scriptText);
+  if (bare) return Number(bare[1]);
+  const dflt = new RegExp(`^${name}="\\$\\{${name}:-(\\d+)\\}"\\s*$`, "m").exec(scriptText);
+  if (dflt) return Number(dflt[1]);
+  throw new Error(`arm-heartbeats.sh declares no resolvable ${name}`);
+}
+
+/**
+ * The pre-gate ceiling, PINNED to the measurement rather than carried as a bare literal.
+ *
+ * It used to be `const P95_PRE_GATE_S = 111` with nothing cross-checking it, and it failed OPEN: a
+ * larger true value makes the guard more permissive. It also was not a p95 — it was the maximum of
+ * six samples, mislabelled. Re-measured over the 42 most recent merge applies that reached the ARM
+ * step (8–111 s; nearest-rank p95 at n = 42 is 81 s), and the ladder deliberately uses the MAX.
+ * The value is read from the measurement log's machine-readable pin, so the two cannot drift.
+ */
+function pinnedFromMeasurements(name: string): number {
+  const md = readFileSync(SPEC_MEASUREMENTS, "utf8");
+  const m = new RegExp(`LADDER-PIN:\\s*${name}=(\\d+)\\b`).exec(md);
+  if (!m) throw new Error(`measurements.md carries no LADDER-PIN for ${name}`);
+  return Number(m[1]);
+}
+
+/**
+ * Everything in the `apply` job that runs AFTER the ARM step and must still fit inside the job.
+ *
+ * The old inequality budgeted only the pre-gate window, leaving whatever was left for the re-pause
+ * sweep, the bridge teardown and the post-apply summary combined — and the correlation is
+ * adversarial, because the sweep only has work to do when the ARM step was cut, i.e. exactly when
+ * the least budget remains (#7657 D3).
+ *
+ * Derived, not restated: `sites × curl_max_time` is the sweep's own re-PATCH ceiling (one PATCH per
+ * arm call site, each `--max-time`d by the shared `hb_patch_paused`), plus the `timeout N` on the
+ * sweep step's Doppler mint read out of the workflow, plus a flat allowance for the two remaining
+ * `always()` steps.
+ */
+const TEARDOWN_AND_SUMMARY_BUDGET_S = 60;
+
+function mintTimeoutSeconds(sweepBody: string): number {
+  const m = /\btimeout\s+(\d+)\s+doppler\b/.exec(sweepBody);
+  if (!m) throw new Error("the sweep step's Doppler mint carries no `timeout N` — an unbounded term the job budget cannot price");
+  return Number(m[1]);
+}
+
+/**
+ * Every `arm_one` deadline, resolved to an integer.
+ *
+ * The call list does NOT fan out with `for_each` — each monitor is a hand-written line, by design
+ * — so this scan is textual, and that is precisely the property mutation row 3 defends. Comments
+ * are stripped first: the block comments above these calls quote deadlines in prose, and a
+ * comment-blind scan would sum the documentation.
+ */
+function armOneDeadlines(scriptText: string): number[] {
+  const stripped = scriptText
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  const out: number[] = [];
+  for (const m of stripped.matchAll(/^arm_one\s+'[^']+'\s+'[^']+'\s+("?\$?\{?[A-Za-z0-9_]+\}?"?)\s*(?:\|\||$)/gm)) {
+    const raw = m[1].replace(/["${}]/g, "");
+    if (/^\d+$/.test(raw)) {
+      out.push(Number(raw));
+      continue;
+    }
+    // A deadline passed as a variable is resolved from its assignment, and FAILS CLOSED if the
+    // assignment cannot be found — an unresolvable term silently dropped from the sum is how a
+    // budget guard starts certifying a smaller number than the code will spend.
+    const assign = new RegExp(`^${raw}=(\\d+)\\s*$`, "m").exec(stripped);
+    if (!assign) throw new Error(`arm_one deadline '${raw}' could not be resolved to an integer`);
+    out.push(Number(assign[1]));
+  }
+  return out;
+}
+
+/** `arm_one <address> <label> <deadline>` as a triple, so a deadline can be checked against its monitor. */
+function armOneCalls(scriptText: string): Array<{ addr: string; deadline: number }> {
+  const stripped = scriptText.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  const out: Array<{ addr: string; deadline: number }> = [];
+  for (const m of stripped.matchAll(/^arm_one\s+'([^']+)'\s+'[^']+'\s+("?\$?\{?[A-Za-z0-9_]+\}?"?)\s*(?:\|\||$)/gm)) {
+    const raw = m[2].replace(/["${}]/g, "");
+    const n = /^\d+$/.test(raw)
+      ? Number(raw)
+      : Number((new RegExp(`^${raw}=(\\d+)\\s*$`, "m").exec(stripped) ?? [])[1]);
+    if (!Number.isFinite(n)) throw new Error(`unresolvable deadline for ${m[1]}`);
+    out.push({ addr: m[1], deadline: n });
+  }
+  return out;
+}
+
+/** `period` + `grace` per `betteruptime_heartbeat` resource NAME, read from the .tf source. */
+function heartbeatWindows(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const f of listInfraTfFiles()) {
+    const text = stripComments(readFileSync(f, "utf8"));
+    for (const m of text.matchAll(/resource\s+"betteruptime_heartbeat"\s+"([a-z0-9_]+)"\s*\{([\s\S]*?)\n\}/g)) {
+      const period = /^\s*period\s*=\s*(\d+)/m.exec(m[2]);
+      const grace = /^\s*grace\s*=\s*(\d+)/m.exec(m[2]);
+      if (period && grace) out[m[1]] = Number(period[1]) + Number(grace[1]);
+    }
+  }
+  return out;
+}
+
+/** Minutes from a `timeout-minutes:` value, failing closed on a missing budget. */
+function timeoutSeconds(v: unknown, what: string): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+    throw new Error(`${what} declares no usable timeout-minutes (got ${JSON.stringify(v)})`);
+  }
+  return v * 60;
+}
+
+interface LadderTerms {
+  pollIntervalS: number;
+  curlMaxTimeS: number;
+  rollbackAttempts: number;
+  maxPreGateS: number;
+  mintTimeoutS: number;
+}
+
+/**
+ * The per-call-site wall clock the `elapsed` accounting does NOT see. See arm-heartbeats.sh.
+ *
+ * Three round-trips are unconditional (the pre-loop GET, the unpause PATCH, and the final
+ * iteration's own GET — the part that overshoots the deadline), plus one poll interval, plus the
+ * rollback, which retries `ARM_ROLLBACK_ATTEMPTS` times. The retry count is READ FROM THE SCRIPT:
+ * adding an attempt has to move the budget, or the budget is fiction.
+ */
+function perSiteOverheadS(t: LadderTerms): number {
+  return t.pollIntervalS + (3 + t.rollbackAttempts) * t.curlMaxTimeS;
+}
+
+function postGateBudgetS(sites: number, t: LadderTerms): number {
+  return sites * t.curlMaxTimeS + t.mintTimeoutS + TEARDOWN_AND_SUMMARY_BUDGET_S;
+}
+
+/** The ladder verdict, pure so the mutation rows can drive it directly. */
+function ladderViolations(jobS: number, stepS: number, deadlines: number[], t: LadderTerms): string[] {
+  expectNonEmptyDispatch(deadlines.length, 1);
+  // (1) the step ceiling must cover the work the script can actually do — ADDITIVELY. The
+  // overhead is per CALL SITE, so `Σ × 1.1` was the wrong shape: it happened to be generous for
+  // six large deadlines and would under-budget a seventh small one. Measured: under the old form
+  // the step ceiling broke at ≥ 9 s of vendor round-trip.
+  const work = deadlines.reduce((a, b) => a + b, 0) + deadlines.length * perSiteOverheadS(t);
+  const out: string[] = [];
+  if (stepS < work) {
+    out.push(`arm_step_timeout ${stepS}s < worst-case script wall clock ${work}s (Σdeadlines ${deadlines.reduce((a, b) => a + b, 0)} + ${deadlines.length} × ${perSiteOverheadS(t)})`);
+  }
+  // (2) the job must have room for what runs BEFORE the gate AND for what runs after it. The
+  // sweep is the last-chance rollback and it runs precisely when the ARM step was cut.
+  const post = postGateBudgetS(deadlines.length, t);
+  if (jobS - stepS < t.maxPreGateS + post) {
+    out.push(`job_timeout - arm_step_timeout = ${jobS - stepS}s < pre-gate ${t.maxPreGateS}s + post-gate ${post}s`);
+  }
+  // …and the step ceiling must be STRICTLY below the job's, or the gate is cancelled WITH the job
+  // rather than failing inside it, which is #7587's shape.
+  if (!(stepS < jobS)) out.push(`arm_step_timeout ${stepS}s is not strictly below job_timeout ${jobS}s`);
+  return out;
+}
+
+/**
+ * The ARM step together with the comment block directly above it.
+ *
+ * `extractJobBlock(wf, "apply")` is NOT a usable scope for "the workflow points a reader at what
+ * asserts this gate": it resets only on `/^ {2}[A-Za-z0-9_-]+:/`, so every 2-space-indented
+ * comment in the file — including the `notify-apply-failure` header — is inside it, and the
+ * assertion was satisfied by pointers that have nothing to do with the ARM step (#7656 C7).
+ */
+function armStepWithHeader(wfText: string): string {
+  const lines = wfText.split("\n");
+  let start = lines.findIndex((l) => /^ {6}- name: Arm web-host probe heartbeats/.test(l));
+  if (start < 0) throw new Error("the ARM step could not be located in the workflow");
+  const stepLine = start;
+  while (start > 0 && /^ {6}#/.test(lines[start - 1])) start--;
+  let end = stepLine + 1;
+  while (end < lines.length && !/^ {6}- name:/.test(lines[end]) && !/^ {6}#/.test(lines[end])) end++;
+  return lines.slice(start, end).join("\n");
+}
+
+describe("the ARM gate's deadlines fit its job", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const script = readFileSync(ARM_SCRIPT, "utf8");
+  const doc = parseYaml(wf) as {
+    jobs: Record<string, { "timeout-minutes"?: number; steps?: Array<Record<string, unknown>> }>;
+  };
+  const applyJob = doc.jobs.apply;
+  const armStep = (applyJob.steps ?? []).find(
+    (s) => typeof s.name === "string" && /Arm web-host probe heartbeats/.test(s.name as string),
+  );
+  const sweepStep = (applyJob.steps ?? []).filter(isSweepStep)[0];
+
+  function terms(): LadderTerms {
+    return {
+      pollIntervalS: scriptConst(script, "ARM_POLL_INTERVAL_S"),
+      curlMaxTimeS: scriptConst(script, "ARM_CURL_MAX_TIME_S"),
+      rollbackAttempts: scriptConst(script, "ARM_ROLLBACK_ATTEMPTS"),
+      maxPreGateS: pinnedFromMeasurements("MAX_PRE_GATE_S"),
+      mintTimeoutS: mintTimeoutSeconds(String(sweepStep?.run ?? "")),
+    };
+  }
+
+  test("the two-part inequality holds, with every term measured or read from the script", () => {
+    expect(armStep).toBeDefined();
+    expect(sweepStep).toBeDefined();
+    const jobS = timeoutSeconds(applyJob["timeout-minutes"], "the apply job");
+    const stepS = timeoutSeconds(armStep!["timeout-minutes"], "the ARM step");
+    const deadlines = armOneDeadlines(script);
+    // Every hand-written call site, not just the ones reachable on today's merge path: a call site
+    // absent from tfstate today is still a call site, and the ceiling has to hold when it is not.
+    expect(deadlines.length).toBe(6);
+    expect(ladderViolations(jobS, stepS, deadlines, terms())).toEqual([]);
+  });
+
+  test("the LAST-CHANCE ROLLBACK carries its own ceiling, and it fits the post-gate budget", () => {
+    // The ARM step got a ceiling and the sweep did not, on the one step whose work correlates with
+    // the ARM step having been cut (#7657 D3).
+    const sweepS = timeoutSeconds(sweepStep!["timeout-minutes"], "the re-pause sweep step");
+    const t = terms();
+    expect(sweepS).toBeGreaterThanOrEqual(
+      armOneDeadlines(script).length * t.curlMaxTimeS + t.mintTimeoutS,
+    );
+    // …and it must not eat the whole post-gate reservation.
+    expect(sweepS).toBeLessThanOrEqual(postGateBudgetS(armOneDeadlines(script).length, t));
+  });
+
+  test("every deadline is period + grace − reserve, derived from the .tf source", () => {
+    // The reserve was 10 and the real gap between the unpause landing and the re-pause landing is
+    // `poll_interval + 2 × curl_max_time`, so at ≥ 2 s of vendor round-trip the old formula
+    // re-paused AFTER the first absence alert had already fired (#7657 D5).
+    const t = terms();
+    const reserve = t.pollIntervalS + 2 * t.curlMaxTimeS;
+    const windows = heartbeatWindows();
+    expectNonEmptyDispatch(Object.keys(windows).length, 4);
+    const calls = armOneCalls(script);
+    expectNonEmptyDispatch(calls.length, 6);
+    for (const { addr, deadline } of calls) {
+      const name = /^betteruptime_heartbeat\.([a-z0-9_]+)/.exec(addr)?.[1];
+      expect(name).toBeDefined();
+      const window = windows[name!];
+      expect(window).toBeDefined();
+      // Every arm must roll back BEFORE the first absence alert. The inngest arm sits far below
+      // the formula on purpose (#7228), which is still inside the bound.
+      expect(deadline).toBeLessThanOrEqual(window - reserve);
+      if (name !== "inngest_consumer") expect(deadline).toBe(window - reserve);
+    }
+  });
+
+  test("the `inngest_consumer` deadline is EXACTLY 30, and every other deadline is unchanged", () => {
+    // Not "<= 60": the reclaimed ~200 s and the 1-in-6 arming probability both plug in 30, so a
+    // looser bound would pass while falsifying the arithmetic.
+    const stripped = script.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    expect(stripped).toMatch(/^ARM_INNGEST_DEADLINE=30$/m);
+    expect(armOneDeadlines(script)).toEqual([200, 440, 200, 440, 200, 30]);
+  });
+
+  test("the workflow's own ladder arithmetic matches the derived numbers", () => {
+    // #7661 G7: 1660/1860/2100 appeared in three comments and were pinned by nothing, so the
+    // inequality guard stayed green on the exact edit that made the prose wrong. Every literal the
+    // comment states is now re-derived here and compared.
+    const jobS = timeoutSeconds(applyJob["timeout-minutes"], "the apply job");
+    const stepS = timeoutSeconds(armStep!["timeout-minutes"], "the ARM step");
+    const t = terms();
+    const deadlines = armOneDeadlines(script);
+    const sum = deadlines.reduce((a, b) => a + b, 0);
+    const work = sum + deadlines.length * perSiteOverheadS(t);
+    const header = armStepWithHeader(wf);
+    const budget = extractJobBlock(wf, "apply").split("\n").slice(0, 80).join("\n");
+    for (const n of [String(sum), String(work), String(stepS), String(jobS), String(perSiteOverheadS(t))]) {
+      expect(`${budget}\n${header}`).toContain(n);
+    }
+    // …and the mutex sum the file states in three places is the sum of the three jobs that can
+    // execute on a push, `preflight` included (#7657 D6).
+    const preflightS = timeoutSeconds(
+      (doc.jobs.preflight as { "timeout-minutes"?: number })["timeout-minutes"],
+      "the preflight job",
+    );
+    const notifyS = timeoutSeconds(
+      (doc.jobs["notify-apply-failure"] as { "timeout-minutes"?: number })["timeout-minutes"],
+      "the notify job",
+    );
+    const mutexMin = (preflightS + jobS + notifyS) / 60;
+    expect(mutexMin).toBe(47);
+    // Every comment line in the file that states an ADDITIVE minute sum. There are three copies —
+    // the apply header, the notify-apply-failure header, and the registry_luks_recut accounting
+    // paragraph 1,300 lines away — and they used to be able to drift apart silently.
+    const claims = wf.split("\n").filter((l) => /^\s*#.*\+.*=\s*\d+ min\b/.test(l));
+    expectNonEmptyDispatch(claims.length, 3);
+    for (const c of claims) expect(c).toContain(`= ${mutexMin} min`);
+  });
+
+  test("the sweep DELEGATES to the script rather than re-implementing it, and is coupled to the ARM step", () => {
+    const sweeps = (applyJob.steps ?? []).filter(isSweepStep);
+    expectNonEmptyDispatch(sweeps.length, 1);
+    expect(sweeps.length).toBe(1);
+    const body = sweeps[0].run as string;
+    const armBody = String(armStep!.run ?? "");
+
+    // #7659 F1: the body is not here. No second PATCH implementation, no second API-base literal.
+    expect(body).not.toContain("uptime.betterstack.com");
+    expect(body).not.toMatch(/curl\b/);
+    expect(body).toMatch(/arm-heartbeats\.sh"?\s+--sweep\b/);
+
+    // #7656 C2: writer and reader are one mechanism split across a process boundary, and NOTHING
+    // pinned the ARM step's env to the literal the sweep reads. Changing the writer to
+    // `…-v2` left both suites green while the sweep short-circuited on every run.
+    const writer = /ARMED_UNCONFIRMED="([^"]+)"/.exec(armBody);
+    const reader = new RegExp(`ARMED_UNCONFIRMED="([^"]+)"`).exec(body);
+    expect(writer).not.toBeNull();
+    expect(reader).not.toBeNull();
+    expect(writer![1]).toBe(ARM_STATE_FILE_LITERAL);
+    expect(reader![1]).toBe(writer![1]);
+    // …and the early exit reads the same path.
+    expect(body).toContain(`[[ -s "${ARM_STATE_FILE_LITERAL}" ]] || exit 0`);
+
+    // AC4: it exits early BEFORE reading Doppler, so an apply with no work does not re-mint a
+    // credential it does not need and raise a mint-failure alarm on a run with nothing to sweep.
+    const firstWork = body
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#") && !/^set [+-]/.test(l))[0];
+    expect(firstWork).toContain(ARM_STATE_FILE_LITERAL);
+    expect(firstWork).toContain("exit 0");
+    expect(body.indexOf(ARM_STATE_FILE_LITERAL)).toBeLessThan(body.indexOf("doppler secrets get"));
+
+    // AC4: its own credential, re-minted, bounded and masked.
+    expect((sweeps[0].env as Record<string, string>)?.DOPPLER_TOKEN).toBeDefined();
+    expect(body).toContain("doppler secrets get BETTERSTACK_API_TOKEN");
+    expect(body).toMatch(/printf '::add-mask::%s\\n'/);
+    expect(body).not.toMatch(/^\s*set -x\s*$/m);
+    // #7661 G11: the token reaches the CLI through its own env var, never on argv.
+    expect(body).not.toMatch(/--token\s/);
+    expect(armBody).not.toMatch(/--token\s/);
+
+    // AC5: errexit is inherited from `bash -e {0}`, and the sweep reads its own mint failure as
+    // DATA — an empty token is an `outcome=mint-unreadable` report, not an abort with no diagnosis.
+    expect(body).toMatch(/^\s*set \+e\s*$/m);
+  });
+
+  test("the sweep's NAME still satisfies the name-keyed filter the email's cause step greps with", () => {
+    // #7656 C3. The guard above deliberately does not key on the step name — but PRODUCTION does:
+    // `select(.name | ascii_downcase | test("re-pause"))`. Tolerating a rename here while the
+    // producer cannot tolerate it converts a false-RED into a silent false-GREEN: `sweep_conclusion`
+    // degrades permanently to `unknown`, and the email branches on it.
+    const notify = doc.jobs["notify-apply-failure"] as { steps?: Array<Record<string, unknown>> };
+    const cause = (notify.steps ?? []).find((s) => s.id === "cause");
+    expect(cause).toBeDefined();
+    const filter = /ascii_downcase\s*\|\s*test\("([^"]+)"\)/.exec(String(cause!.run ?? ""));
+    expect(filter).not.toBeNull();
+    expect(String(sweepStep!.name ?? "").toLowerCase()).toMatch(new RegExp(filter![1]));
+  });
+
+  test("AC5: the script clears errexit explicitly and uses no bare arithmetic command", () => {
+    expect(script).toMatch(/^set \+e\b/m);
+    // A bare `(( … ))` exits non-zero whenever the expression evaluates to 0, which under an
+    // inherited errexit kills the rollback path mid-sweep.
+    const stripped = script.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    expect(stripped).not.toMatch(/^\s*\(\(/m);
+    // The counter advances from the CLOCK, not from the sleep. Asserted behaviourally in
+    // apps/web-platform/infra/arm-heartbeats.test.sh (mutation row M1); this is the cheap
+    // structural companion, not the proof.
+    expect(stripped).toContain("elapsed=$(( $(now_s) - started ))");
+    // No `trap` (Cut List C6): bash keeps only the last EXIT handler, an INT/TERM handler returns
+    // and then fires EXIT too, and bash defers the handler until the foreground `sleep` returns.
+    expect(stripped).not.toMatch(/^\s*trap\b/m);
+    // ONE PATCH implementation, with real status-code semantics rather than `-f` (#7658 E6).
+    expect(stripped.match(/curl\b/g)?.length).toBe(2);
+    expect(stripped).toMatch(/-w '%\{http_code\}'/);
+    expect(stripped).toMatch(/\[\[ "\$HB_PATCH_CODE" =~ \^2 \]\]/);
+    // The sweep's outcome vocabulary is closed and documented in the same file.
+    for (const word of ["noop", "repaused", "partial", "mint-unreadable"]) {
+      expect(script).toContain(word);
+    }
+  });
+
+  test("the workflow points a reader at what asserts this gate — from the STEP, not the whole job", () => {
+    const armBody = String(armStep!.run ?? "");
+    expect(armBody).toContain("apps/web-platform/infra/arm-heartbeats.sh");
+    // Scoped to the ARM step plus its own comment header. Against `extractJobBlock(wf, "apply")`
+    // this assertion was satisfied by two unrelated pre-existing comments and survived deleting
+    // both real pointers (#7656 C7).
+    const header = armStepWithHeader(wf);
+    expectNonEmptyDispatch(header.length, 1);
+    expect(header).toContain("arm-heartbeats.test.sh");
+    expect(header).toContain("terraform-target-parity.test.ts");
+  });
+});
+
+describe("Guard 2 mutation battery (#7587)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const script = readFileSync(ARM_SCRIPT, "utf8");
+  const doc = parseYaml(wf) as {
+    jobs: Record<string, { "timeout-minutes"?: number; steps?: Array<Record<string, unknown>> }>;
+  };
+  const applyJob = doc.jobs.apply;
+  const armStep = (applyJob.steps ?? []).find(
+    (s) => typeof s.name === "string" && /Arm web-host probe heartbeats/.test(s.name as string),
+  )!;
+  const sweepStep = (applyJob.steps ?? []).filter(isSweepStep)[0];
+  const REAL_DEADLINES = armOneDeadlines(script);
+  // LIVE, not restated (#7656 C6). The battery's control used to re-assert `35 * 60` and
+  // `31 * 60`, so `control: the shipped ladder is clean` was a statement about the pure function
+  // and not about what ships — lowering the real `timeout-minutes` reddened exactly one test
+  // elsewhere while every row here, control included, stayed green.
+  const JOB_S = timeoutSeconds(applyJob["timeout-minutes"], "the apply job");
+  const STEP_S = timeoutSeconds(armStep["timeout-minutes"], "the ARM step");
+  const T: LadderTerms = {
+    pollIntervalS: scriptConst(script, "ARM_POLL_INTERVAL_S"),
+    curlMaxTimeS: scriptConst(script, "ARM_CURL_MAX_TIME_S"),
+    rollbackAttempts: scriptConst(script, "ARM_ROLLBACK_ATTEMPTS"),
+    maxPreGateS: pinnedFromMeasurements("MAX_PRE_GATE_S"),
+    mintTimeoutS: mintTimeoutSeconds(String(sweepStep?.run ?? "")),
+  };
+
+  test("control: the SHIPPED ladder is clean, read live from the workflow", () => {
+    expect(JOB_S).toBe(41 * 60);
+    expect(STEP_S).toBe(35 * 60);
+    expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, T)).toEqual([]);
+  });
+
+  test("M1 RED: lowering the job back to 15 min while leaving the deadlines alone — #7587 restored", () => {
+    const v = ladderViolations(15 * 60, STEP_S, REAL_DEADLINES, T);
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("pre-gate") || s.includes("not strictly below"))).toBe(true);
+  });
+
+  test("M2 RED: deleting every `arm_one` call leaves the scan with NOTHING to check", () => {
+    const gutted = script.replace(/^arm_one .*$/gm, ": removed");
+    expect(armOneDeadlines(gutted)).toEqual([]);
+    // expectNonEmptyDispatch is what converts "0 checked, exit 0" into a failure.
+    expect(() => ladderViolations(JOB_S, STEP_S, armOneDeadlines(gutted), T)).toThrow();
+  });
+
+  test("M3 RED: a SECOND call whose own deadline is fine but pushes the SUM past the ceiling", () => {
+    // A check that validates only the first call site is the defect class this row names.
+    const v = ladderViolations(JOB_S, STEP_S, [...REAL_DEADLINES, 440], T);
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0]).toContain("worst-case script wall clock");
+  });
+
+  test("M3b RED: a SEVENTH call site with a TINY deadline still reds — the overhead is per site", () => {
+    // This is the row `Σ × 1.1` could not carry: a multiplier on the deadline sum grows with the
+    // deadlines, while the real overhead grows with the number of call sites. Six 15 s round-trips
+    // and a poll interval cost 70 s whether the deadline is 440 or 1.
+    const clean = ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, T);
+    expect(clean).toEqual([]);
+    const headroom = STEP_S - (REAL_DEADLINES.reduce((a, b) => a + b, 0) + REAL_DEADLINES.length * perSiteOverheadS(T));
+    expect(headroom).toBeLessThan(perSiteOverheadS(T));
+    const v = ladderViolations(JOB_S, STEP_S, [...REAL_DEADLINES, 1], T);
+    expect(v.some((s) => s.includes("worst-case script wall clock"))).toBe(true);
+  });
+
+  test("M4 RED: removing the ARM step's own ceiling — the gate reverts to being cancelled WITH the job", () => {
+    // A REAL mutation of the shipped YAML, not a bare call to the helper (#7656 C6): the previous
+    // row asserted `timeoutSeconds(undefined, …)` throws, which never touched the workflow and was
+    // the identical assertion H3 makes one test later.
+    const mutated = parseYaml(wf) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+    const step = (mutated.jobs.apply.steps ?? []).find(
+      (s) => typeof s.name === "string" && /Arm web-host probe heartbeats/.test(s.name as string),
+    )!;
+    delete step["timeout-minutes"];
+    expect(() => timeoutSeconds(step["timeout-minutes"], "the ARM step")).toThrow(/no usable timeout-minutes/);
+    // …and the guard that reads it is the one above, so prove the same helper accepts the REAL one.
+    expect(timeoutSeconds(armStep["timeout-minutes"], "the ARM step")).toBe(STEP_S);
+  });
+
+  test("M4b RED: removing the SWEEP's ceiling — the last-chance rollback becomes unbounded again", () => {
+    const mutated = parseYaml(wf) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+    const step = (mutated.jobs.apply.steps ?? []).filter(isSweepStep)[0];
+    expect(step).toBeDefined();
+    delete step["timeout-minutes"];
+    expect(() => timeoutSeconds(step["timeout-minutes"], "the re-pause sweep step")).toThrow();
+  });
+
+  test("M5 RED: DELETING the sweep step is visible — it is found by always() + the state file, not by name", () => {
+    // A real deletion, fed back through `isSweepStep` (#7656 C6: the previous row sliced an array
+    // of length 1 from index 1 and asserted the result was empty, which is true of any array).
+    const mutated = parseYaml(wf) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+    const before = (mutated.jobs.apply.steps ?? []).filter(isSweepStep);
+    expect(before.length).toBe(1);
+    mutated.jobs.apply.steps = (mutated.jobs.apply.steps ?? []).filter((s) => !isSweepStep(s));
+    expect((mutated.jobs.apply.steps ?? []).filter(isSweepStep).length).toBe(0);
+  });
+
+  test("M5b RED: a sweep that re-implements the PATCH inline is not a delegating sweep", () => {
+    const decoy = { if: "always()", run: `[[ -s "${ARM_STATE_FILE_LITERAL}" ]] || exit 0\ncurl -X PATCH https://uptime.betterstack.com/api/v2/heartbeats/1\n` };
+    expect(isSweepStep(decoy)).toBe(false);
+  });
+
+  test("M6 RED: shrinking the per-round-trip ceiling in the SCRIPT changes the ladder's verdict", () => {
+    // The terms are parsed out of the script, so a script edit has to move the arithmetic. If it
+    // does not, the ladder is restating literals again.
+    const widened: LadderTerms = { ...T, curlMaxTimeS: T.curlMaxTimeS * 3 };
+    expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, widened).length).toBeGreaterThan(0);
+    expect(() => scriptConst(script.replace(/^ARM_CURL_MAX_TIME_S=\d+$/m, "# removed"), "ARM_CURL_MAX_TIME_S")).toThrow();
+    // …and adding a rollback attempt has to cost the budget, or the retry term is decorative.
+    const retried: LadderTerms = { ...T, rollbackAttempts: T.rollbackAttempts + 3 };
+    expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, retried).length).toBeGreaterThan(0);
+  });
+
+  test("M7 RED: a post-gate budget of zero — the shape the old inequality shipped — is caught", () => {
+    // Term (2) used to read `jobS - stepS >= p95(pre-gate)` and nothing else, so 129 s were left
+    // for the sweep, the bridge teardown and the post-apply summary combined (#7657 D3).
+    const noPost = JOB_S - STEP_S - T.maxPreGateS;
+    expect(noPost).toBeGreaterThanOrEqual(postGateBudgetS(REAL_DEADLINES.length, T));
+    // A job sized on the OLD inequality: room for the pre-gate window and nothing else.
+    const tight = STEP_S + T.maxPreGateS + 10;
+    const v = ladderViolations(tight, STEP_S, REAL_DEADLINES, T);
+    expect(v.some((x) => x.includes("post-gate"))).toBe(true);
+  });
+
+  test("H3 RED: a job with NO timeout-minutes must fail CLOSED, never read as unbounded-and-fine", () => {
+    expect(() => timeoutSeconds(undefined, "the apply job")).toThrow(/no usable timeout-minutes/);
+    expect(() => timeoutSeconds(0, "the apply job")).toThrow();
+    expect(() => timeoutSeconds("31", "the apply job")).toThrow();
+  });
+
+  test("H4 PASS: a non-canonical step ceiling that still satisfies the inequality MUST NOT red", () => {
+    // The contract is the inequality, not a literal. 36 min is not what ships and is fine.
+    expect(ladderViolations(JOB_S, 36 * 60, REAL_DEADLINES, T)).toEqual([]);
+  });
+
+  test("H5 RED: an unresolvable deadline variable fails closed rather than dropping the term", () => {
+    const broken = script.replace(/^ARM_INNGEST_DEADLINE=30$/m, "# assignment removed");
+    expect(() => armOneDeadlines(broken)).toThrow(/could not be resolved/);
+  });
+
+  test("H6 RED: an unpinned pre-gate measurement fails closed rather than defaulting", () => {
+    // The old `const P95_PRE_GATE_S = 111` failed OPEN: a larger true value made the guard more
+    // permissive and nothing cross-checked it against the measurement log.
+    expect(pinnedFromMeasurements("MAX_PRE_GATE_S")).toBe(111);
+    expect(() => pinnedFromMeasurements("NO_SUCH_PIN")).toThrow(/no LADDER-PIN/);
+  });
+});
+
+// ─── #9377 decision A2: job reach of the web-class passphrase pair ─────────────────────────────────
+//
+// The non-ackable rotation HALT (luks_passphrase_rotations) lives in ONE job: `apply`. If a second job could
+// reach the web-class passphrase or its Doppler copy, a rotation could be applied there without the HALT (the
+// 2026-09-24 learning: a rotation resource reachable by more than one workflow without its gate). So the pair
+// must be `-target`ed by `apply` and by NO other job in this workflow, nor by ANY other workflow file, and `apply`
+// must carry the HALT, evaluated before the destroy_count sum. The transitive reach (`-target` pulls dependencies)
+// was traced by reading the closures at plan time; these rows pin the direct reach.
+//
+// apply-deploy-pipeline-fix.yml SHARES the destroy-guard filter (destroy-guard-filter-web-platform.jq) but reads only
+// host_creates, non_terraform_data_deletes and reboot_updates from it: it has NO luks_passphrase_rotations HALT, so a
+// -target/-replace of the pair there would rotate it unguarded. That is why the scan below covers EVERY workflow
+// file and not just apply-web-platform-infra.yml.
+//
+// The HALT itself is pinned structurally (luksHaltViolations), not by text: inserting
+// `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its `exit 1` kept the earlier text pins green.
+const LUKS_FILTER = resolve(REPO_ROOT, "tests/scripts/lib/destroy-guard-filter-web-platform.jq");
+const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
+/**
+ * The ONE workflow file other than apply-web-platform-infra.yml that may -target the pair (#9377): the dispatch-only,
+ * create-only apply-web-escrow-create.yml, and only in the shape the "exempt workflow file" row below pins. Single-use:
+ * the retirement checklist on #9372 removes this constant, the file and the MAIN_ROOT_TF_WORKFLOWS entry together.
+ */
+const EXEMPT_PAIR_WORKFLOW = "apply-web-escrow-create.yml";
+const escRe = (a: string) => a.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+/** Whole-line `#` comments out. (stripComments is HCL-flavoured and also eats `//`, which shell lines may contain.) */
+const stripShellLineComments = (t: string) =>
+  t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+/** The six counted addresses, read from the filter's own `luks_passphrase_addrs` so the list has ONE source. */
+function luksPassphraseAddrs(jqSource: string): string[] {
+  const m = /def luks_passphrase_addrs: \[([^\]]*)\];/.exec(jqSource);
+  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+}
+
+/** Addresses from `addrs` that `text` does not name as a whole token (so `...workspaces_luks` is not satisfied by `..._web`). */
+function missingAddrs(text: string, addrs: string[]): string[] {
+  return addrs.filter((a) => !new RegExp(`(?<![A-Za-z0-9_])${escRe(a)}(?![A-Za-z0-9_])`).test(text));
+}
+
+/** Join `\`-continued physical lines into logical lines (whitespace collapsed), as the shell reads them. */
+const joinContinuations = (t: string): string => t.replace(/\\\r?\n[ \t]*/g, " ");
+
+/**
+ * ALLOW-LIST of the statements permitted from the START of the apply step's `run:` block through the end of the luks
+ * HALT. A deny-list ("no line with exit/return") cannot see `[[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0`
+ * or `echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0`, nor anything BEFORE the `counts=$(jq …)` line, so every logical
+ * line in that span must match one of the shapes below, and the required statements must appear once each, in order.
+ * `lines` are comment-stripped job lines; `readIdx`/`start`/`end` locate the counter read, the HALT `if` and its `fi`.
+ */
+function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: number, end: number): string[] {
+  const v: string[] = [];
+  let runIdx = -1;
+  for (let i = (readIdx >= 0 ? readIdx : start) - 1; i >= 0; i--) {
+    if (/^\s*run:\s*[|>][-+]?\s*$/.test(lines[i])) {
+      runIdx = i;
+      break;
+    }
+  }
+  if (runIdx < 0) return ["the apply step's `run: |` header was not found above the counter read"];
+  const logical = joinContinuations(lines.slice(runIdx + 1, end + 1).join("\n"))
+    .split("\n")
+    .map((l) => l.trim().replace(/\s+/g, " "))
+    .filter((l) => l !== "");
+  const PLAN_RE = /^doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -out=tfplan( -var="[^"$`;&|]*(?:\$\{CI_SSH_PUB\}[^"$`;&|]*)?"| -target=[A-Za-z0-9_.\[\]-]+)+$/;
+  const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
+  const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
+  const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
+  const COUNTERS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"];
+  const READS = [...COUNTERS, "plan_ok"];
+  const KNOWN_VARS = new Set([...READS, "rc", "luks_passphrase_rotations"]);
+  /** A complete `echo "::error::..."` whose body cannot run code: no unescaped quote/backtick, no `$(`, and every `$` is a plain known variable. */
+  const echoOk = (t: string): boolean => {
+    if (!(t.startsWith('echo "::error::') && t.endsWith('"'))) return false;
+    const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+    if (/["`]/.test(inner)) return false;
+    const rest = inner.replace(/\$\{([A-Za-z_]+)\}|\$([A-Za-z_]+)/g, (_m, x, y) => (KNOWN_VARS.has(x ?? y) ? "" : "\u0000"));
+    return !/[$\u0000]/.test(rest);
+  };
+  const numericOk = (t: string): boolean => {
+    const m = /^if ((?:\[\[ ! "\$[a-z_]+" =~ \^\[0-9\]\+\$ \]\](?: \|\| )?)+); then$/.exec(t);
+    if (!m) return false;
+    const names = [...m[1].matchAll(/"\$([a-z_]+)"/g)].map((x) => x[1]);
+    return COUNTERS.every((c) => names.includes(c)) && names.every((n) => COUNTERS.includes(n));
+  };
+  type Step =
+    | { kind: "stmt"; name: string; test: (t: string) => boolean }
+    | { kind: "reads" }
+    | { kind: "block"; name: string; header: (t: string) => boolean; grep: boolean; exit: string };
+  const eq = (x: string) => (t: string) => t === x;
+  // A CLOSED SEQUENCE: every line from the step start through the luks HALT's `fi` is consumed by exactly one step below,
+  // in this order, and nothing else may appear. `exit`, `fi` and the `rc` block exist only at their one expected place,
+  // so an inserted `exit $rc`, a second `if [[ $rc -ne 0 ]]` with an extra `fi`, or an echo/grep carrying a
+  // `${a[x=0]}` expansion has no slot to occupy (an allow-list of line SHAPES passed all four).
+  const steps: Step[] = [
+    { kind: "stmt", name: "set -euo pipefail", test: eq("set -euo pipefail") },
+    { kind: "stmt", name: "set +e", test: eq("set +e") },
+    { kind: "stmt", name: "the doppler-wrapped terraform plan", test: (t) => PLAN_RE.test(t) },
+    { kind: "stmt", name: "rc=$?", test: eq("rc=$?") },
+    { kind: "block", name: "the plan-failure block", header: eq("if [[ $rc -ne 0 ]]; then"), grep: false, exit: "exit $rc" },
+    { kind: "stmt", name: "set -e", test: eq("set -e") },
+    { kind: "stmt", name: "terraform show -no-color", test: eq("terraform show -no-color tfplan > tfplan.txt") },
+    { kind: "stmt", name: "terraform show -json", test: eq("terraform show -json tfplan > tfplan.json") },
+    { kind: "stmt", name: "the counts= jq read", test: eq(COUNTS) },
+    { kind: "reads" },
+    { kind: "block", name: "the plan_ok check", header: eq('if [[ "$plan_ok" != "true" ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the numeric validation (every counter)", header: numericOk, grep: false, exit: "exit 1" },
+    { kind: "block", name: "the undecidable HALT", header: eq('if [[ "$undecidable_entries" -gt 0 ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the luks HALT", header: eq('if [[ "$luks_rotations" -gt 0 ]]; then'), grep: true, exit: "exit 1" },
+  ];
+  const WHY = "a statement outside the destroy-guard allow-list between the step start and the luks HALT";
+  let at = 0;
+  const peek = () => logical[at] ?? "<end of the span>";
+  walk: for (const st of steps) {
+    if (st.kind === "stmt") {
+      if (!st.test(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    } else if (st.kind === "reads") {
+      const seen: string[] = [];
+      for (let k = 0; k < READS.length; k++) {
+        const m = READ_RE.exec(peek());
+        const ok = m && (m[1] === m[2] || (m[1] === "luks_rotations" && m[2] === "luks_passphrase_rotations")) && !seen.includes(m[1]) && READS.includes(m[1]);
+        if (!ok) {
+          v.push(`${WHY} (expected one of the ${READS.length} counter reads, each once): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        seen.push(m![1]);
+        at++;
+      }
+    } else {
+      if (!st.header(peek())) {
+        v.push(`${WHY} (expected ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      let echoes = 0;
+      while (logical[at]?.startsWith("echo ")) {
+        if (!echoOk(logical[at])) {
+          v.push(`${WHY} (an echo that can run code or expands an unknown variable in ${st.name}): ${logical[at].slice(0, 90)}`);
+          break walk;
+        }
+        echoes++;
+        at++;
+      }
+      if (echoes === 0) {
+        v.push(`${WHY} (${st.name} has no ::error:: echo): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      if (st.grep) {
+        if (!GREP_RE.test(peek())) {
+          v.push(`${WHY} (expected the literal six-address grep -F in ${st.name}): ${peek().slice(0, 90)}`);
+          break walk;
+        }
+        at++;
+      }
+      if (peek() !== st.exit) {
+        v.push(`${WHY} (expected '${st.exit}' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+      if (peek() !== "fi") {
+        v.push(`${WHY} (expected 'fi' closing ${st.name}): ${peek().slice(0, 90)}`);
+        break walk;
+      }
+      at++;
+    }
+  }
+  if (v.length === 0 && at !== logical.length) v.push(`${WHY} (trailing lines after the luks HALT's fi): ${peek().slice(0, 90)}`);
+  const fiCount = logical.filter((t) => t === "fi").length;
+  const ifCount = logical.filter((t) => t.startsWith("if ")).length;
+  if (fiCount !== ifCount) v.push(`${WHY} (if/fi imbalance: ${ifCount} if vs ${fiCount} fi)`);
+  return v;
+}
+
+/**
+ * Structural violations of the apply job's luks_rotations HALT, on the job's comment-stripped code. The shape the
+ * host_creates HALT checker (web-host-escrow-preflight-census.test.ts) enforces, with a stricter body: EVERY
+ * executable line in the body must be an `echo "::error::..."`, the plan-line grep to stderr, or the final `exit 1`,
+ * all at one indent, so a conditional or short-circuit exit cannot hide in it.
+ */
+function luksHaltViolations(code: string): string[] {
+  const lines = code.split("\n");
+  const ifRe = /^(\s*)if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/;
+  const start = lines.findIndex((l) => ifRe.test(l));
+  if (start < 0) return ['no `if [[ "$luks_rotations" -gt 0 ]]; then` HALT (exact, unconditioned) found'];
+  const indent = ifRe.exec(lines[start])![1];
+  const v: string[] = [];
+  const indentOf = (l: string) => /^(\s*)/.exec(l)![1];
+  const readIdx = lines.findIndex((l) => /^\s*luks_rotations=\$\(echo "\$counts" \| jq -r '\.luks_passphrase_rotations'\)\s*$/.test(l));
+  const sumIdx = lines.findIndex((l) => /^\s*destroy_count=\$\(\(resource_deletes\b/.test(l));
+  if (readIdx < 0) v.push("the luks_rotations counter is not read from the destroy-guard filter output");
+  else if (indentOf(lines[readIdx]) !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
+  if (sumIdx < 0) v.push("the destroy_count sum was not found");
+  else if (indentOf(lines[sumIdx]) !== indent) v.push("the destroy_count sum is at a different level than the HALT");
+  if (readIdx >= 0 && start < readIdx) v.push("the HALT precedes the counter read");
+  if (sumIdx >= 0 && start > sumIdx) v.push("the HALT is positioned AFTER the destroy_count sum ([ack-destroy] could then reach it)");
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i] === `${indent}fi`) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return [...v, "the HALT block has no closing fi at its own indent"];
+  const body = lines.slice(start + 1, end).filter((l) => l.trim() !== "");
+  const bodyIndent = `${indent}  `;
+  const last = body[body.length - 1];
+  if (last !== `${bodyIndent}exit 1`) v.push("the HALT body does not END in an unconditional `exit 1`");
+  for (const l of body) {
+    if (indentOf(l) !== bodyIndent) {
+      v.push(`HALT body line nested or mis-indented (a conditional around the exit?): ${l.trim().slice(0, 60)}`);
+      continue;
+    }
+    const t = l.trim();
+    if (t === "exit 1") continue;
+    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
+      const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+      if (/["`]|\$\(/.test(inner)) v.push(`an echo in the HALT body can run code (unescaped quote, backtick or $( ): ${t.slice(0, 60)}`);
+      continue;
+    }
+    if (/^grep -F\b[^;&|]* tfplan\.txt >&2( \|\| true)?$/.test(t)) continue;
+    v.push(`executable line in the HALT body that is not an echo, the plan-line grep or the final exit 1: ${t.slice(0, 80)}`);
+  }
+  if (body.some((l) => /\bexit 0\b/.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body can `exit 0`");
+  if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
+  // Everything from the START of the apply step's run block through the HALT: an allow-list, not a heuristic.
+  v.push(...destroyGuardPrefixViolations(lines, readIdx, start, end));
+  return v;
+}
+
+describe("the web-class passphrase pair is reachable only from the apply job, which carries the rotation HALT (#9377)", () => {
+  let wf: string;
+  let jobIds: string[];
+  let applyCode: string;
+
+  function jobIdsOf(text: string): string[] {
+    const idx = text.indexOf("\njobs:\n");
+    if (idx < 0) return [];
+    const ids: string[] = [];
+    for (const line of text.slice(idx).split("\n")) {
+      const m = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
+      if (m) ids.push(m[1]);
+    }
+    return ids;
+  }
+  const baseOf = (a: string) => a.replace(/\[.*$/, "");
+  const reachesByFlag = (code: string, a: string) =>
+    new RegExp(`-(?:replace|target)(?:=\\s*|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
+
+  beforeAll(() => {
+    wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    jobIds = jobIdsOf(wf);
+    applyCode = stripShellLineComments(extractJobBlock(wf, "apply"));
+  });
+
+  test("the job census is non-vacuous (apply plus the dispatch jobs were all extracted)", () => {
+    expect(jobIds).toContain("apply");
+    for (const dispatch of ["web_host_create", "web_host_replace", "workspaces_luks_cutover", "workspaces_luks_recut", "inngest_volume_recut"]) {
+      expect(jobIds, `${dispatch} must be among the extracted jobs`).toContain(dispatch);
+    }
+    expect(jobIds.length).toBeGreaterThanOrEqual(15);
+    const applyTargets = extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf);
+    expect(applyTargets.length).toBeGreaterThanOrEqual(50);
+  });
+
+  test("the apply job -targets both members of the pair", () => {
+    const applyTargets = new Set(extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf));
+    for (const a of WEB_PASSPHRASE_PAIR) {
+      expect(applyTargets.has(a), `${a} must be in the apply job's -target list`).toBe(true);
+    }
+  });
+
+  test("NO other job in the workflow -targets or -replaces either member of the pair", () => {
+    for (const id of jobIds.filter((j) => j !== "apply")) {
+      const text = extractJobBlock(wf, id);
+      expect(text, `job ${id} must extract non-empty`).not.toEqual("");
+      // Scan the JOINED logical lines: a `\`-continuation between the flag and its value must not evade the scan.
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `job ${id} must not -target ${a}`).toBe(false);
+      }
+      // -replace, and a bare mention in a command line, are the other ways to reach it.
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(reachesByFlag(code, a), `job ${id} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("NO other workflow FILE -targets or -replaces either member of the pair, except the single EXEMPT_PAIR_WORKFLOW pinned by the next row (apply-deploy-pipeline-fix shares the filter but has no luks HALT)", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    expect(readdirSync(dir), "the exempt file must exist, or the exemption covers nothing").toContain(EXEMPT_PAIR_WORKFLOW);
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml" && f !== EXEMPT_PAIR_WORKFLOW);
+    expect(files, "the scan must cover the sibling main-root planners").toContain("apply-deploy-pipeline-fix.yml");
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      const text = readFileSync(join(dir, f), "utf8");
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of WEB_PASSPHRASE_PAIR) {
+        expect(targets.has(a), `${f} must not -target ${a}`).toBe(false);
+        expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("the exempt workflow file reaches the pair only in the create-only shape: dispatch-only, exactly the five header-web addresses, no -replace, the allow-set and the seven counters, gate before names before a plan_only-guarded apply of the saved plan (#9377)", () => {
+    type Step = { id?: string; run?: string; if?: string };
+    const text = readFileSync(resolve(REPO_ROOT, ".github/workflows", EXEMPT_PAIR_WORKFLOW), "utf8");
+    const doc = parseYaml(text) as { on?: Record<string, unknown>; jobs?: Record<string, { steps?: Step[] }> };
+    expect(Object.keys(doc.on ?? {})).toEqual(["workflow_dispatch"]);
+    expect(Object.keys(doc.jobs ?? {})).toEqual(["create"]);
+    const steps = doc.jobs?.create?.steps ?? [];
+    // The five addresses come from the Terraform file that declares them, NOT from the workflow.
+    const tf = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/workspaces-luks-header-web.tf"), "utf8");
+    const five = [...tf.matchAll(/^resource\s+"([a-z_0-9]+)"\s+"([A-Za-z0-9_]+)"/gm)].map((m) => `${m[1]}.${m[2]}`).sort();
+    expect(five.length, "the header-web file must declare exactly five resources").toBe(5);
+    for (const a of WEB_PASSPHRASE_PAIR) expect(five).toContain(a);
+    const code = joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n")));
+    const targets = [...code.matchAll(/-target=(\S+)/g)].map((m) => m[1]).sort();
+    expect(targets).toEqual(five);
+    expect(code).not.toMatch(/-replace\b/);
+    const at = (id: string) => steps.findIndex((st) => st.id === id);
+    // Comment-stripped: a comment naming a counter must not satisfy the assertion that the counter is graded.
+    const gate = stripShellLineComments(String(steps[at("gate")]?.run ?? ""));
+    for (const a of five) expect(gate, `the gate's allow-set must name ${a}`).toContain(`"${a}"`);
+    const counters = /^\s*COUNTERS="([^"]*)"/m.exec(gate)?.[1]?.split(/\s+/) ?? [];
+    for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_passphrase_rotations", "undecidable_entries", "apex_move_orphans"]) {
+      expect(counters, `the gate's COUNTERS assignment must grade ${c}`).toContain(c);
+    }
+    expect(gate).toContain("plan_ok");
+    expect(gate).toContain("destroy-guard-filter-web-platform.jq");
+    // Exactly one plan, one show and one apply across ALL run bodies, in any spacing and with any -chdir.
+    const verbs = [...joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n"))).matchAll(/\bterraform\b(?:\s+-\S+)*\s+([a-z][a-z-]*)/g)].map((m) => m[1]).sort();
+    expect(verbs).toEqual(["apply", "init", "plan", "show"]);
+    const [iPlan, iGate, iNames, iApply] = [at("plan"), at("gate"), at("names"), at("apply")];
+    expect(iPlan).toBeGreaterThan(-1);
+    expect(iPlan < iGate && iGate < iNames && iNames < iApply).toBe(true);
+    expect(steps[iApply].if).toBe("inputs.plan_only != true");
+    const apply = stripShellLineComments(String(steps[iApply].run ?? ""));
+    expect(apply).toMatch(/terraform apply\b[^\n]*-auto-approve[^\n]*\btfplan\s*$/m);
+    expect(apply).not.toMatch(/-target|-replace/);
+  });
+
+  test("the reach scan sees a flag and its value split by a line continuation (instrument rows)", () => {
+    const a = "random_password.workspaces_luks_web";
+    const scan = (t: string) => {
+      const code = joinContinuations(stripComments(t));
+      return reachesByFlag(code, a) || extractTargetsWithKeys(code).map(baseOf).includes(a);
+    };
+    expect(scan("terraform apply \\\n  -replace=random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=\\\n  random_password.workspaces_luks_web tfplan")).toBe(true);
+    expect(scan("terraform apply \\\n  -target=random_password.workspaces_luks_web_x tfplan")).toBe(false);
+    expect(scan("terraform apply \\\n  -target=hcloud_server.web tfplan")).toBe(false);
+    // Without the join the continuation forms evade (the defect this row closes).
+    expect(reachesByFlag(stripComments("terraform apply \\\n  -target \\\n  random_password.workspaces_luks_web tfplan"), a)).toBe(false);
+  });
+
+  test("the apply job carries the rotation HALT, parsed, validated and BEFORE the destroy_count sum", () => {
+    expect(applyCode).toContain("luks_rotations=$(echo \"$counts\" | jq -r '.luks_passphrase_rotations')");
+    expect(applyCode.search(/if \[\[ "\$luks_rotations" -gt 0 \]\]; then/), "the HALT must exist").toBeGreaterThan(-1);
+    expect(applyCode.indexOf("destroy_count=$((resource_deletes"), "the destroy_count sum must exist").toBeGreaterThan(-1);
+    // Structural: unconditional, ack-free, ends in `exit 1`, positioned before the sum (see luksHaltViolations).
+    expect(luksHaltViolations(applyCode)).toEqual([]);
+  });
+
+  // MUTANTS of the checker itself: each is an implementation that satisfies the old text pins while defeating the
+  // HALT. A checker row that stays green on any of these proves nothing.
+  describe("luksHaltViolations rejects each way of defeating the HALT", () => {
+    const mutate = (code: string, edit: (lines: string[], start: number, end: number, read: number, sum: number) => string[]): string => {
+      const lines = code.split("\n");
+      const start = lines.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+      const ind = /^(\s*)/.exec(lines[start])![1];
+      const end = lines.findIndex((l, i) => i > start && l === `${ind}fi`);
+      const read = lines.findIndex((l) => l.includes("luks_rotations=$(echo"));
+      const sum = lines.findIndex((l) => l.includes("destroy_count=$((resource_deletes"));
+      expect(start, "the HALT must be locatable for the mutant").toBeGreaterThan(-1);
+      return edit(lines, start, end, read, sum).join("\n");
+    };
+    const exitIdx = (lines: string[], end: number) => end - 1;
+
+    test("control: the unmutated code is clean (an always-red checker would pass every row below)", () => {
+      expect(luksHaltViolations(applyCode)).toEqual([]);
+    });
+    test("an ALLOW_LUKS short-circuit before the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("executable line in the HALT body");
+    });
+    test("an exit 0 in place of the exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = l[exitIdx(l, e)].replace("exit 1", "exit 0")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("a conditional exit 1 is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => ((l[exitIdx(l, e)] = '            [[ -z "${ALLOW_LUKS:-}" ]] && exit 1'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("an exit 1 nested under a condition is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1, '            if [[ -z "${ALLOW_LUKS:-}" ]]; then', "              exit 1", "            fi", "            exit 1"), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/nested or mis-indented|executable line in the HALT body/);
+    });
+    test("an acknowledgement token in an executable body line is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            ack_ok=${ack_destroy:-false}'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("acknowledgement/skip path");
+    });
+    test("a body without an exit is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 1), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    const ALLOW = "outside the destroy-guard allow-list";
+    test("an early short-circuit exit between the counter read and the HALT is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ -n "${ALLOW_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter rewrite keyed on the commit message (no exit, no return) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          [[ "$HEAD_MSG" == *"[ack-luks]"* ]] && luks_rotations=0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an echo-prefixed short-circuit (echo x; [[ ... ]] && exit 0) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r + 1, 0, '          echo x; [[ -n "${SKIP_LUKS:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit on the line BEFORE the counts=$(jq …) read skips the whole guard and is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const c = l.findIndex((x) => x.includes("counts=$(jq -f"));
+        l.splice(c, 0, '          [[ -n "${SKIP_GUARD:-}" ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a short-circuit at the very start of the step (before the plan runs) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => {
+        let run = r;
+        while (run > 0 && !/^\s*run:\s*[|>]/.test(l[run])) run--;
+        l.splice(run + 1, 0, '          [[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] && exit 0');
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("an exit 0 inside the undecidable HALT body is refused", () => {
+      const m = mutate(applyCode, (l) => {
+        const u = l.findIndex((x) => x.includes('"$undecidable_entries" -gt 0'));
+        const x = l.findIndex((y, i) => i > u && /^\s*exit 1\s*$/.test(y));
+        l[x] = l[x].replace("exit 1", "exit 0");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("a counter read swapped to a different key (luks_rotations from resource_deletes) is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => ((l[r] = l[r].replace(".luks_passphrase_rotations", ".resource_deletes")), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    // The four one-line edits that an allow-list of line SHAPES accepted AND that run past the HALT (each is also run,
+    // unchecked, by T64m in the counter suite, which shows rc 0: the checker rows below are what stops them).
+    test("(a) an `exit $rc` inserted just before the HALT if (rc is 0 after a good plan) is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          exit $rc"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(b) a second `if [[ $rc -ne 0 ]]` wrapped around the HALT with an extra fi is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(e + 1, 0, "          fi"), l.splice(s, 0, "          if [[ $rc -ne 0 ]]; then"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(c) an echo that assigns through an array subscript inside a parameter expansion is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, '          echo "::error::${a[luks_rotations=0]:-}"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(d) a plan-line grep that assigns through an array subscript is refused", () => {
+      const m = mutate(applyCode, (l, s) => (l.splice(s, 0, "          grep -F x${a[luks_rotations=0]:-} tfplan.txt >&2 || true"), l));
+      expect(luksHaltViolations(m).join("\n")).toContain(ALLOW);
+    });
+    test("(e) an arithmetic or command-substitution expansion inside an echo is refused", () => {
+      for (const bad of ['echo "::error::$((luks_rotations=0))"', 'echo "::error::$(true)"', 'echo "::error::`true`"', 'echo "::error::${HOME}"']) {
+        const m = mutate(applyCode, (l, s) => (l.splice(s, 0, `          ${bad}`), l));
+        expect(luksHaltViolations(m).join("\n"), bad).toContain(ALLOW);
+      }
+    });
+    test("(f) a stray fi or a grep that is not the literal six-address -F form is refused", () => {
+      const stray = mutate(applyCode, (l, s) => (l.splice(s, 0, "          fi"), l));
+      expect(luksHaltViolations(stray).join("\n")).toContain(ALLOW);
+      const grep = mutate(applyCode, (l) => {
+        const g = l.findIndex((x) => /^\s*grep -F -e random_password\.inngest_redis_luks/.test(x));
+        l[g] = "          grep -F -e random_password.inngest_redis_luks -e 'Plan:' tfplan.txt >&2 || true";
+        return l;
+      });
+      expect(luksHaltViolations(grep).join("\n")).toContain(ALLOW);
+    });
+    test("removing the luks_rotations numeric validation from the validation line is refused (every counter is required)", () => {
+      const m = mutate(applyCode, (l) => {
+        const n = l.findIndex((x) => x.includes('! "$luks_rotations" =~ ^[0-9]+$'));
+        expect(n, "the numeric validation line must be locatable").toBeGreaterThan(-1);
+        l[n] = l[n].replace(' || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]', "");
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("numeric validation");
+    });
+    test("removing ANY single counter from the numeric validation is refused", () => {
+      for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"]) {
+        const m = mutate(applyCode, (l) => {
+          const n = l.findIndex((x) => x.includes(`! "$${c}" =~ ^[0-9]+$`));
+          const before = l[n];
+          l[n] = l[n].replace(new RegExp(` \\|\\| \\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\]|\\[\\[ ! "\\$${c}" =~ \\^\\[0-9\\]\\+\\$ \\]\\] \\|\\| `), "");
+          expect(l[n], `the ${c} removal must land`).not.toBe(before);
+          return l;
+        });
+        expect(luksHaltViolations(m).join("\n"), c).toContain("numeric validation");
+      }
+    });
+    test("a removed counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r) => (l.splice(r, 1), l));
+      expect(luksHaltViolations(m).join("\n")).toMatch(/counter read for luks_rotations is missing|is not read from the destroy-guard/);
+    });
+    test("a HALT moved after the destroy_count sum is refused", () => {
+      const m = mutate(applyCode, (l, s, e, r, sum) => {
+        const block = l.splice(s, e - s + 1);
+        const newSum = l.findIndex((x) => x.includes("destroy_count=$((resource_deletes"));
+        l.splice(newSum + 1, 0, ...block);
+        return l;
+      });
+      expect(luksHaltViolations(m).join("\n")).toContain("AFTER the destroy_count sum");
+    });
+    test("a HALT nested one level deeper than the counter read is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(s, e - s + 1, ...l.slice(s, e + 1).map((x) => `  ${x}`)), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("different level");
+    });
+    test("an echo that can run code (an unescaped quote closing the string) is refused", () => {
+      const m = mutate(applyCode, (l, s, e) => (l.splice(exitIdx(l, e), 0, '            echo "::error::x"; [[ -n "${ALLOW_LUKS:-}" ]] && exit 0; echo "y"'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("can run code");
+    });
+  });
+
+  test("the HALT names every counted address and its plan-line grep reaches all of them (derived from the filter, not retyped)", () => {
+    const addrs = luksPassphraseAddrs(readFileSync(LUKS_FILTER, "utf8"));
+    expect(addrs.length, "luks_passphrase_addrs must parse (six members)").toBeGreaterThanOrEqual(6);
+    for (const a of ["random_password.workspaces_luks", "random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_key", "doppler_secret.workspaces_luks_web_key"]) {
+      expect(addrs, `${a} must be a counted address`).toContain(a);
+    }
+    const halt = applyCode.split("\n");
+    const start = halt.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
+    const end = halt.findIndex((l, i) => i > start && /^ {10}fi\s*$/.test(l));
+    const body = halt.slice(start, end);
+    const message = body.find((l) => l.includes("terraform plan would UPDATE, DELETE or FORGET")) ?? "";
+    const grepLine = body.find((l) => /^\s*grep -F\b/.test(l)) ?? "";
+    expect(message, "the HALT headline must exist").not.toBe("");
+    expect(grepLine, "the plan-line grep must exist").not.toBe("");
+    expect(missingAddrs(message, addrs), "the HALT headline must name every counted address").toEqual([]);
+    expect(missingAddrs(grepLine, addrs), "the plan-line grep must name every counted address").toEqual([]);
+    expect(grepLine, "the plan-line grep must not truncate the lines it exists to show").not.toMatch(/\|\s*head\b/);
+    // Instrument rows: dropping ONE address from the text must red, including the one that is a prefix of another.
+    const dropped = message.replace("random_password.workspaces_luks, ", "");
+    expect(dropped).not.toBe(message);
+    expect(missingAddrs(dropped, addrs)).toEqual(["random_password.workspaces_luks"]);
+    const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
+    expect(droppedWeb).not.toBe(message);
+    expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
+  });
+});
+
+// --- suite-level anti-vacuity (#7656 C8) --------------------------------------------------------
+// The bash side has had a minimum-cardinality floor since it was written; this file had none. A
+// `test.skip` typo, a stray `.only`, or a narrowed filter reports "0 fail" and reads as success —
+// the outermost gap, and the one `expectNonEmptyDispatch` cannot see, because it only fires from
+// inside a test that RAN.
+describe("this suite itself cannot be silently narrowed", () => {
+  const selfText = readFileSync(resolve(import.meta.dir, "terraform-target-parity.test.ts"), "utf8");
+
+  test("no test or describe is skipped, focused, or stubbed out", () => {
+    expectNonEmptyDispatch(selfText.length, 1);
+    for (const bad of [".skip(", ".only(", ".todo(", ".failing("]) {
+      const hits = selfText.split("\n").filter((l) => l.includes(`test${bad}`) || l.includes(`describe${bad}`));
+      expect(hits).toEqual([]);
+    }
+  });
+
+  test("the declared test count is at or above the shipped floor", () => {
+    // Hand-ratcheted to the exact shipped count, like the bash suite's ASSERT_FLOOR. Exact rather
+    // than "shipped minus a margin": a margin is the room a silent narrowing hides in, and
+    // deleting a test on purpose should cost one deliberate edit here.
+    const declared = selfText.match(/^\s*test\(/gm)?.length ?? 0;
+    expect(declared).toBeGreaterThanOrEqual(TEST_FLOOR);
   });
 });

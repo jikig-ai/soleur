@@ -22,30 +22,30 @@ const SKILLS_DIR = resolve(PLUGIN_ROOT, "skills");
 // `${...}` text) → pinned model. One entry per allowlisted call site.
 const PIN_ALLOWLIST: Record<string, Record<string, string>> = {
   "review/workflows/review.workflow.js": {
-    "classify": "sonnet",
-    "file:${fid}": "haiku",
+    "classify": "standard",
+    "file:${fid}": "cheap",
   },
   "plan-review/workflows/plan-review.workflow.js": {
-    "detect-threshold": "sonnet",
+    "detect-threshold": "standard",
   },
   "deepen-plan/workflows/deepen-plan.workflow.js": {
-    "parse": "sonnet",
+    "parse": "standard",
   },
   "resolve-parallel/workflows/resolve-parallel.workflow.js": {
-    "analyze": "sonnet",
-    "commit": "sonnet",
+    "analyze": "standard",
+    "commit": "standard",
   },
   "resolve-todo-parallel/workflows/resolve-todo-parallel.workflow.js": {
-    "analyze": "sonnet",
-    "commit": "sonnet",
+    "analyze": "standard",
+    "commit": "standard",
   },
   "resolve-pr-parallel/workflows/resolve-pr-parallel.workflow.js": {
-    "fetch:round-${round}": "haiku",
-    "commit:round-${round}": "sonnet",
+    "fetch:round-${round}": "cheap",
+    "commit:round-${round}": "standard",
   },
   "drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js": {
-    "cluster": "sonnet",
-    "report": "sonnet",
+    "cluster": "standard",
+    "report": "standard",
   },
 };
 
@@ -173,11 +173,11 @@ describe("workflow model-pin allowlist (ADR-053)", () => {
     expect(total).toBe(12);
   });
 
-  test("only sonnet/haiku are pinnable tiers (never opus/fable/inherit literals)", () => {
+  test("only cheap/standard are pinnable tiers (never strong/advisor/inherit/SKU literals)", () => {
     for (const rel of scripts) {
       const src = readFileSync(join(SKILLS_DIR, rel), "utf-8");
       const bad = allModelLiterals(src).filter(
-        (v) => v !== "sonnet" && v !== "haiku",
+        (v) => v !== "cheap" && v !== "standard",
       );
       expect(bad).toEqual([]);
     }

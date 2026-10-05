@@ -49,10 +49,10 @@ Prioritize legal actions and dispatch specialist agents.
 
 | Agent | When to delegate |
 |-------|-----------------|
-| legal-compliance-auditor | Audit existing documents for compliance gaps and cross-document consistency. For benchmarking against regulatory checklists and peer SaaS policies, suggest `legal-audit benchmark`. |
-| legal-document-generator | Generate new or regenerate outdated legal documents |
+| soleur:legal:legal-compliance-auditor | Audit existing documents for compliance gaps and cross-document consistency. For benchmarking against regulatory checklists and peer SaaS policies, suggest `legal-audit benchmark`. |
+| soleur:legal:legal-document-generator | Generate new or regenerate outdated legal documents |
 
-**Common sequential workflow:** audit (legal-compliance-auditor) -> generate/fix (legal-document-generator) -> re-audit (legal-compliance-auditor). Many tasks only need 1 agent -- do not force the full pipeline.
+**Common sequential workflow:** audit (soleur:legal:legal-compliance-auditor) -> generate/fix (soleur:legal:legal-document-generator) -> re-audit (soleur:legal:legal-compliance-auditor). Many tasks only need 1 agent -- do not force the full pipeline.
 
 When delegating to multiple independent agents, use a single message with multiple Task tool calls.
 
@@ -64,5 +64,52 @@ When delegating to multiple independent agents, use a single message with multip
 - When assessing features that cross domain boundaries (e.g., data processing with infrastructure implications), flag the cross-domain implications but defer non-legal concerns to respective leaders.
 - When users request benchmarking against a specific company, verify the document types match before proceeding. Brand reputation does not equal document-type relevance (e.g., Stripe Atlas provides corporate formation docs, not SaaS policies).
 - **claude-for-legal lift/delegate/bridge:** read `knowledge-base/project/brainstorms/2026-05-15-claude-for-legal-evaluation-brainstorm.md` first — triad converged on no-integration. Criteria in [#3786](https://github.com/jikig-ai/soleur/issues/3786).
-- **Renames of `recommended-tools.md` or its H2 anchors:** grep `clo.md` + `legal-audit/SKILL.md` + `commands/go.md` for inbound references and update atomically — `legal-recommended-tools.test.ts` will fail commit otherwise.
-- **You are the v1 counsel-review attestation authority — not the human operator.** For the Soleur-as-tenant-zero v1 posture, when a `single-user incident` PR amends legal docs (the ship Phase 5.5 *Counsel-Review CLO-Attestation Gate*, or a `clo-attestation` issue routed via `/soleur:go`), YOU perform the review and return a per-artifact verdict + a DISCHARGED/BLOCKED disposition, writing the audit to `knowledge-base/legal/audits/`. Do NOT defer the sign-off to the operator (a non-lawyer founder) — that is the recurring bug at `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`. This does not contradict "draft material requiring professional legal review" above: your attestation is the v1 *internal* sign-off; the operator retains an optional veto, and **external** counsel re-review is reserved for the audit's frontmatter re-evaluation triggers (first arms-length user, EEA-out, regulated industry). When you cross-check disclosure prose, verify every implementation-detail claim against the actual migration/RPC/TS body — legal prose hallucinated against the code is a known drift class (PR #4353/#4558).
+- **Renames of `recommended-tools.md` or its H2 anchors:** grep `agents/legal/clo.md` + `legal-audit/SKILL.md` + `commands/go.md` for inbound references and update atomically — `legal-recommended-tools.test.ts` will fail commit otherwise.
+- **You are the v1 counsel-review attestation authority — not the human operator.** For the Soleur-as-tenant-zero v1 posture, when a `single-user incident` PR amends legal docs (the ship Phase 5.5 *Counsel-Review CLO-Attestation Gate*, or a `clo-attestation` issue routed via `soleur:go`), YOU perform the review and return a per-artifact verdict + a DISCHARGED/BLOCKED disposition, writing the audit to `knowledge-base/legal/audits/`. Do NOT defer the sign-off to the operator (a non-lawyer founder) — that is the recurring bug at `knowledge-base/project/learnings/workflow-patterns/2026-05-18-clo-attestation-auto-route-instead-of-human-task.md`. This does not contradict "draft material requiring professional legal review" above: your attestation is the v1 *internal* sign-off; the operator retains an optional veto, and **external** counsel re-review is reserved for the audit's frontmatter re-evaluation triggers (first arms-length user, EEA-out, regulated industry). When you cross-check disclosure prose, verify every implementation-detail claim against the actual migration/RPC/TS body — legal prose hallucinated against the code is a known drift class (PR #4353/#4558).
+
+- **Amending a register row or a determination's frontmatter: apply the correction IN-CELL and append a `> **Superseded <date> (#N): …**` marker under every superseded sentence in every sibling file.** A Corrections blockquote that says "the cell now reads" is a claim about the file it sits in — grep the cell before writing it. And "provisional" (an instrument still to be run) and "inconclusive?" (was it measured) are separate axes: a limb closed by controller DECISION drops the first and keeps the second (`breach-register.md` 2026-06-29 row precedent). **Why:** PR #8153 — the #7791 defect class reproduced in a CLO-authored record; 11 of 16 review findings. See `knowledge-base/project/learnings/2026-09-14-closing-a-limb-by-decision-is-not-closing-it-clean-and-the-cell-still-has-to-change.md`.
+- **Cite code in a register cell or attestation by function or constant name, never by line number.** A later edit to the cited file shifts the lines under a signed record and the citation silently points at different code. When a record already cites run files, a re-run must write NEW filenames, not overwrite the cited ones. **Why:** #7980 — a relay fix moved every proxy citation ~20 lines after the re-attestation cited them, and a re-run overwrote the two records it had just quoted. See `knowledge-base/project/learnings/2026-09-14-my-proxy-allowlisted-the-messages-it-relayed-and-relayed-them-verbatim.md`.
+
+- **An addendum or register row written INSIDE the PR whose merge fires its trigger must be conditioned on that merge** ("fires on the merge of PR #N, which widens…"), never past tense ("PR #N widened…"). The record is append-only and the PR can still close unmerged; add a frontmatter pointer key for the addendum as earlier addenda did (#8207, `knowledge-base/project/learnings/2026-09-15-my-legal-record-said-the-change-had-landed-inside-the-pr-that-lands-it.md`).
+- **A correction that turns a present-tense "today" claim into a past interval must anchor the interval's START.** Rewriting "the serving path today is X" as "until <date>, the serving path was X" silently extends the claim backwards over history it never covered; anchor it ("at the time of the <date> correction, and until <date>") and check the ADRs for earlier states before approving. **Why:** #8872 — three review seats found ADR-100's late-July repoint falsified the unbounded "until September 15".
+
+## CI gates over `docs/legal/**` (#7387)
+
+Five gates ride this path. Reproduce any of them locally before pushing:
+
+- `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` — added scope blocks:
+  referent/section agreement, attachment, discharge. `--print-vocab` lists every accepted
+  phrasing; a locality assertion whose referent it does not recognise is reported as
+  NOT CHECKED rather than silently skipped.
+- `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` — canonical↔mirror drift
+  ratchet. Reducing drift always passes; growth, reordering, and in-place edits of an
+  already-drifting line fail. A revert or an urgent publication that must land despite it sets
+  `SOLEUR_LEGAL_DRIFT_ACCEPT='<reason>'`, which downgrades to a warning and records the reason.
+- `apps/web-platform/scripts/check-tc-document-sha.sh` — raw-file SHA pin; re-pin
+  `apps/web-platform/lib/legal/legal-doc-shas.ts` after any canonical edit.
+- `apps/web-platform/test/legal-doc-consistency.test.ts` — heading-sequence parity.
+- The `EXPECTED_COUNT` sentinel in the SHA guard, cross-checked by a vitest harness.
+
+**Gates measure agreement, not truth (#7349).** All five gates compare the two surfaces against
+each other. None asks whether the agreed text is correct, so two byte-identical copies of a false
+sentence pass every one of them. Three defects shipped past a full green run in #7349 that way: a
+controllership statement drift-reduction copied onto the published page, a duplicated clause left
+behind by a half-applied replacement, and "eleven processing activities" in a document whose
+register carries thirty-five. Read the prose; do not read the drift number and stop.
+
+**`BODY_EQUIVALENCE_DOCS` is a one-way ratchet.** `terms-and-conditions`, `acceptable-use-policy`
+and `disclaimer` are enrolled; each was verified at ZERO normalised drift immediately before
+enrolment, because enrolling a drifted document turns a required check red on arrival. Once
+enrolled, any edit landing on one surface only reds that check — which is the point. `--print-vocab`
+and a mutation check (inject a line, confirm the guard fails, remove it) are the two ways to prove
+an enrolment is live rather than decorative.
+
+**Two measurement traps that cost real rounds in #7349.** `collapse()` normalises `[0-9]+ AI
+agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record and the published
+page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's <!-- markdownlint-disable-line MD038 -->
+plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
+
+**The mirror is the published surface.** `docs/legal/<doc>.md` is the canonical record;
+`plugins/soleur/docs/pages/legal/<doc>.md` is what users read at soleur.ai/legal/. `docs/legal/`
+is in no Eleventy input tree and is read by no route, so a canonical-only edit changes nothing a
+user sees — and exits 2 as an unpaired document.

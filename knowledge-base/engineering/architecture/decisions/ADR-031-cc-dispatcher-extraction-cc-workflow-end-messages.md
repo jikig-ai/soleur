@@ -37,11 +37,13 @@ Prior extractions establish the cadence: PR #3608 (`mirrorWithDebounce` → `obs
 ## Consequences
 
 **Positive.**
+
 - Diff is maximally reviewable: the new module is data-only, the dispatcher edit is a -36-line block delete plus a single named import.
 - The exhaustiveness rail now lives next to the data it constrains; future readers see the copy-authoring obligation in the same file.
 - Re-establishes the per-extraction cadence after the multi-file drain in PR #3802.
 
 **Negative / out of scope.**
+
 - The `cc-dispatcher.ts:212` local re-derive (`export type WorkflowEndStatus = WorkflowEnd["status"]`) stays — still consumed by `TERMINAL_WORKFLOW_END_STATUSES`, `ABORT_FLUSH_STATUSES`, and `AbortFlushStatus`. Removing it would touch the abort-flush logic, which carries actual behavior risk; that's a separate ADR.
 - The `lib/types.ts` vs. runner enum drift (9 wire-protocol values vs. 7 emitted) is real and pre-existing. This PR does not reconcile it; a follow-up `code-review`-labeled issue captures the choice (extend the runner to emit the missing two, or narrow the wire enum).
 

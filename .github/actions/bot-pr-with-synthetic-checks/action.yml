@@ -158,9 +158,14 @@ runs:
         # reachability can also widen without touching this array — a change to
         # a generator's OUTPUT FORMAT (e.g. weakness-miner.sh emitting learning
         # titles instead of bare basenames) moves the other input silently.
+        #
+        # `test` is content-scoped too since #6907: it aggregates the
+        # encryption-posture sweep, whose surface is the ledger, every *.tf,
+        # every file under apps/*/infra/, and the docs/legal/ disclosed_as
+        # anchors the ledger cites. That surface is disjoint from
+        # {weakness-digest.md} today; re-derive it before adding a path here.
         ALLOWED_PATHS=(
           "knowledge-base/project/weakness-digest.md"
-          "knowledge-base/project/rule-metrics.json"
         )
         for p in "${PATHS[@]}"; do
           allowed=false
@@ -231,14 +236,27 @@ runs:
         # here rather than argued from unreachability. Deleting this block
         # fabricates a pass over a reachable surface; parity test 8 enforces it.
         #
-        # Non-.md staged paths (rule-metrics.json) are filtered by the scanner
-        # itself — passing the full "${PATHS[@]}" is correct.
+        # Every ALLOWED_PATHS member is now .md (rule-metrics.json left the array with
+        # #8377, which untracked it — a bot PR can no longer stage it at all). Passing the
+        # full "${PATHS[@]}" stays correct: the scanner filters by extension itself, so the
+        # call does not depend on the array being .md-only and does not need revisiting if a
+        # non-.md path is added back.
         if ! command -v python3 >/dev/null 2>&1; then
           echo "::error::python3 not found — cannot run lint-credential-path-literals over the bot diff (#6882 earned green requires it)."
           exit 1
         fi
         if ! python3 scripts/lint-credential-path-literals.py "${PATHS[@]}"; then
           echo "::error::lint-credential-path-literals found a resolvable credential-file path in the bot diff — refusing to create the PR or post synthetics (#6882 earned green)."
+          exit 1
+        fi
+        # Refuse off-main runs (#6907 review). The branch below is cut from the
+        # ref the workflow checked out, and ALLOWED_PATHS bounds only what THIS
+        # step stages, not the PR diff. A workflow_dispatch on any other branch
+        # would carry that branch's commits into a PR whose every required
+        # check (including `test`, which now holds the encryption-posture sweep)
+        # is fabricated green below — the unreachability argument would not hold.
+        if [ "${GITHUB_REF:-}" != "refs/heads/main" ]; then
+          echo "::error::bot-pr-with-synthetic-checks must run from refs/heads/main (got '${GITHUB_REF:-unset}'): an off-main branch would ship its own commits under fabricated required checks."
           exit 1
         fi
         DATE_SUFFIX="$(date -u +%Y-%m-%d)"
@@ -283,9 +301,11 @@ runs:
         # PR stalled at mergeState=BLOCKED forever. The file-vs-file parity test
         # (plugins/soleur/test/required-checks-canonical-parity.test.sh) keeps
         # the SSOT ≡ the canonical ruleset JSON, and a composite→SSOT guard in
-        # the same test catches any future re-hardcode here. `CodeQL` (GHAS
-        # 57789) is intentionally omitted from the SSOT — a 15368 synthetic
-        # cannot satisfy a GHAS gate; CodeQL concludes `neutral` for bot PRs.
+        # the same test catches any future re-hardcode here. `CodeQL` is NOT a
+        # required check (advisory since #9454: the merge queue is adopted and
+        # CodeQL cannot report on `merge_group`), so it is in no required set and
+        # not in the SSOT. If it is ever re-tightened (GHAS 57789) it stays out of
+        # the SSOT — a 15368 synthetic cannot satisfy a GHAS-bound gate.
         #
         # Parser: leading-`#`-only comment rule (kept in sync with
         # scripts/lint-bot-synthetic-completeness.sh) — preserves multi-word

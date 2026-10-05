@@ -19,15 +19,33 @@
 set -uo pipefail
 
 N=5733
-comments=$(gh issue view "$N" --repo jikig-ai/soleur --json comments --jq '.comments[].body' 2>/dev/null) || {
-  echo "TRANSIENT: could not read #$N comments" >&2
+
+# TRUSTED-VERDICT FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC
+# repo with issues open to the world, and this probe's exit code makes the sweeper act on
+# the tracker. An unfiltered `.comments[].body` accepts a verdict from ANY authenticated
+# GitHub user: one HTTP POST of `RESULT: PASS` was enough (#7448).
+#
+# The filter is `scripts/lib/trusted-verdict.sh`, NOT an inline `authorAssociation` select.
+# `authorAssociation` is computed against the READING token's visibility, so under the
+# sweeper's `GITHUB_TOKEN` a member whose org membership is PRIVATE renders as CONTRIBUTOR
+# and their verdict is dropped silently — see the lib's header and #6617. Re-inlining an
+# `authorAssociation` select here is blocked mechanically by scripts/lint-followthrough-varq-ban.sh.
+# shellcheck source=../lib/trusted-verdict.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/trusted-verdict.sh"
+
+comments=$(trusted_verdict_bodies "$N") || {
+  echo "TRANSIENT: could not read #$N comments or resolve a commenter's permission. NOT evidence of absence." >&2
   exit 2
 }
 
-if printf '%s\n' "$comments" | grep -qE '^RESULT: PASS'; then
+# LAST verdict wins, and `\b` is load-bearing. Two independent greps with PASS tested first
+# accepted `RESULT: PASSing on this for now` (no word boundary) and let an early PASS outrank a
+# later FAIL, so a regression recorded after a pass could never reopen the tracker. See #7448.
+last="$(printf '%s\n' "$comments" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+if [[ "$last" =~ ^RESULT:\ PASS ]]; then
   exit 0
 fi
-if printf '%s\n' "$comments" | grep -qE '^RESULT: FAIL'; then
+if [[ "$last" =~ ^RESULT:\ FAIL ]]; then
   echo "FAIL: operator reported RESULT: FAIL on #$N — strand persists; capture the agent_readiness_self_stop .git shape and open a data-driven follow-up." >&2
   exit 1
 fi

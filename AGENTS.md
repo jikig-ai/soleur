@@ -23,8 +23,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: hr-autonomous-loop-skill-api-budget-disclosure]
 - [id: hr-every-new-terraform-root-must-include-an]
 - [id: hr-tf-variable-no-operator-mint-default]
-- [id: hr-new-skills-agents-or-user-facing]
-- [id: hr-before-shipping-ship-phase-5-5-runs]
 - [id: hr-when-a-workflow-concludes-with-an]
 - [id: hr-before-asserting-github-issue-status]
 - [id: hr-never-run-commands-with-unbounded-output]
@@ -47,14 +45,16 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: hr-observability-layer-citation]
 - [id: hr-github-app-auth-not-pat]
 - [id: hr-monitor-not-run-in-background-for-polling]
+- [id: hr-dispatch-async-must-arm-watch]
+- [id: hr-technical-fork-is-not-an-operator-question]
 - [id: hr-verify-repo-capability-claim-before-assert]
 - [id: hr-pipeline-skills-never-inline-after-go-route]
+- [id: hr-third-party-content-grep-on-undertaking]
 
 ## Workflow Gates
 
 - [id: wg-every-feature-listed-in-a-roadmap-phase]
 - [id: wg-when-closing-a-phase-milestone-update]
-- [id: wg-when-fixing-a-workflow-gates-detection]
 - [id: wg-zero-agents-until-user-confirms]
 - [id: wg-verified-work-ships-without-asking]
 - [id: wg-never-bump-version-files-in-feature]
@@ -75,11 +75,9 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: wg-use-closes-n-in-pr-body-not-title-to]
 - [id: wg-after-merging-a-pr-that-adds-or-modifies]
 - [id: wg-plan-prescribed-skills-must-run-inline]
-- [id: wg-architecture-decision-is-a-plan-deliverable]
 - [id: wg-end-of-work-emit-resume-prompt]
 - [id: wg-block-pr-ready-on-undeferred-operator-steps]
 - [id: wg-pm-class-followthrough-for-operator-dogfood]
-- [id: wg-record-recurring-vendor-expense-before-ready]
 - [id: wg-ui-feature-requires-pen-wireframe]
 
 ## Code Quality
@@ -108,7 +106,6 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: rf-before-spawning-review-agents-push-the]
 - [id: rf-before-shipping-verify-1-review-comments]
 - [id: rf-when-a-reviewer-or-user-says-to-keep-a]
-- [id: rf-review-finding-default-fix-inline]
 
 ## Passive Domain Routing
 

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
 import { existsSync } from "fs";
 import { join } from "path";
 import { parseErrorPayload } from "@/server/git-auth";
@@ -7,19 +7,17 @@ import {
   resolveActiveWorkspacePath,
   resolveCurrentWorkspaceId,
 } from "@/server/workspace-resolver";
+import { verifiedUserId } from "@/server/request-auth";
 
 /**
  * GET /api/repo/status
  *
  * Returns the user's repository connection status.
  */
-export async function GET() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+export async function GET(request: Request) {
+  const userId = await verifiedUserId(request);
 
-  if (!user) {
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -31,7 +29,7 @@ export async function GET() {
   // member viewing a shared/team workspace). Resolve the active workspace
   // (claim → solo fallback, never a sibling) and read the repo cols there.
   // `health_snapshot` is NOT relocated by ADR-044 — it stays on `users`.
-  const activeWorkspaceId = await resolveCurrentWorkspaceId(user.id, serviceClient);
+  const activeWorkspaceId = await resolveCurrentWorkspaceId(userId, serviceClient);
   const [wsRes, userRes] = await Promise.all([
     serviceClient
       .from("workspaces")
@@ -41,7 +39,7 @@ export async function GET() {
     serviceClient
       .from("users")
       .select("health_snapshot")
-      .eq("id", user.id)
+      .eq("id", userId)
       .maybeSingle(),
   ]);
 
@@ -68,7 +66,7 @@ export async function GET() {
   let hasKnowledgeBase = false;
   if (status === "ready") {
     const workspacePath = await resolveActiveWorkspacePath(
-      user.id,
+      userId,
       serviceClient,
     );
     hasKnowledgeBase = existsSync(join(workspacePath, "knowledge-base"));
@@ -80,7 +78,7 @@ export async function GET() {
     const { data: syncConv } = await serviceClient
       .from("conversations")
       .select("id")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .eq("domain_leader", "system")
       .eq("status", "active")
       .order("created_at", { ascending: false })

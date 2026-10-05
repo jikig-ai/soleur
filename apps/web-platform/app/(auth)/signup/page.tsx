@@ -8,7 +8,8 @@ import { OtpCodeStep } from "@/components/auth/OtpCodeStep";
 import { safeReturnTo } from "@/lib/safe-return-to";
 import { useOtpFlow } from "@/lib/auth/useOtpFlow";
 import { SIGNUP_REASON_NO_ACCOUNT } from "@/lib/auth/error-messages";
-import Link from "next/link";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 
 export default function SignupPage() {
   return (
@@ -160,17 +161,18 @@ function SignupForm() {
             </span>
           </label>
 
-          <button
+          <Button
+            variant="gold"
             type="submit"
-            disabled={loading || !tcAccepted || cooldownActive}
-            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
+            loading={loading}
+            loadingLabel="Sending"
+            disabled={!tcAccepted || cooldownActive}
+            className="w-full"
           >
             {cooldownActive
               ? `You can request a new code in ${cooldownSeconds}s`
-              : loading
-                ? "Sending..."
-                : "Send verification code"}
-          </button>
+              : "Send verification code"}
+          </Button>
         </form>
 
         <div className="relative flex items-center gap-4">
@@ -203,9 +205,9 @@ function SignupForm() {
 
         <p className="text-center text-sm text-soleur-text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="text-soleur-text-primary hover:underline">
+          <NavLink href="/login" className="text-soleur-text-primary hover:underline">
             Sign in
-          </Link>
+          </NavLink>
         </p>
       </div>
     </main>

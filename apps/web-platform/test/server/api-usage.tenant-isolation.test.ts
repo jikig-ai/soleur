@@ -6,10 +6,12 @@
  *   - `:96` SELECT conversations (MTD list — cost-bearing rows for the
  *     user's API-usage dashboard)
  *
- * The `:104` `sum_user_mtd_cost` RPC is PERMANENT service-role — REVOKE
- * EXECUTE FROM authenticated (migration 027:68). A tenant-JWT call to
- * that RPC must 42501 (insufficient_privilege); this suite asserts the
- * deny.
+ * Both service-role RPCs are PERMANENT — REVOKE EXECUTE FROM authenticated:
+ * `sum_user_mtd_cost` (migration 027:68) and its per-workflow partition
+ * `sum_user_mtd_cost_by_workflow` (migration 136, #1055). A tenant-JWT call
+ * to either must 42501 (insufficient_privilege); this suite asserts both
+ * denies. The second is AC5b — grant drift on the new function would make a
+ * founder's whole spend partition readable with any authenticated JWT.
  *
  * Opt-in via TENANT_INTEGRATION_TEST=1. Same env-var matrix as the
  * canonical PR-B `agent-runner.tenant-isolation.test.ts`.
@@ -54,7 +56,7 @@ function requireEnv(name: string): string {
 }
 
 describe.skipIf(!INTEGRATION_ENABLED)(
-  "tenant isolation — api-usage.ts (1 site + REVOKED RPC)",
+  "tenant isolation — api-usage.ts (1 site + 2 REVOKED RPCs)",
   () => {
     let service: SupabaseClient;
     let aClient: SupabaseClient;
@@ -161,6 +163,22 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // tenant JWTs must NOT call it. This is the load-bearing reason the
       // file stays on `.service-role-allowlist` as PERMANENT.
       const { error } = await aClient.rpc("sum_user_mtd_cost", {
+        uid: userA.id,
+        since: "2026-01-01T00:00:00.000Z",
+      });
+      expect(error).not.toBeNull();
+      expect(
+        error!.code === "42501" || /permission/i.test(error!.message),
+      ).toBe(true);
+    });
+
+    test("`sum_user_mtd_cost_by_workflow` RPC under tenant JWT is denied (42501)", async () => {
+      // AC5b (#1055). Migration 136 REVOKEs EXECUTE FROM PUBLIC, anon and
+      // authenticated, GRANTing only service_role. This is the committed
+      // regression test for that grant chain: the function returns every
+      // bucket of a user's month-to-date spend, so a widened grant is a
+      // cross-tenant read of the whole partition, not just one row.
+      const { error } = await aClient.rpc("sum_user_mtd_cost_by_workflow", {
         uid: userA.id,
         since: "2026-01-01T00:00:00.000Z",
       });

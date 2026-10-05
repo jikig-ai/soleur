@@ -3,15 +3,25 @@ name: plan-review
 description: "This skill should be used when having multiple specialized agents review a plan in parallel. It spawns DHH, Kieran, and code simplicity reviewers to provide diverse feedback on implementation plans."
 ---
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/plan-review.workflow.js`](./workflows/plan-review.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/plan-review/workflows/plan-review.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill lives at [`workflows/plan-review.workflow.js`](./workflows/plan-review.workflow.js) — deterministic fan-out, journaled resume, schema-validated output. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/plan-review/workflows/plan-review.workflow.js", args: ... })`. The prose skill below stays the default; the two coexist during calibration. **Known divergence:** the port's consolidation prompt still carries the older "is this over-architected? what should be cut?" panel framing. (The `code-simplicity` lens string was aligned in #9398 — it now names the per-mechanism requirement question against `## Scope Check`.) See [`knowledge-base/project/specs/feat-review-workflow-prototype/spec.md`](../../../../knowledge-base/project/specs/feat-review-workflow-prototype/spec.md).
 
 # Plan Review
 
-Have @agent-dhh-rails-reviewer @agent-kieran-rails-reviewer @agent-code-simplicity-reviewer review this plan in parallel.
+Have soleur:engineering:review:dhh-rails-reviewer soleur:engineering:review:kieran-rails-reviewer soleur:engineering:review:code-simplicity-reviewer review this plan in parallel.
 
-When the plan declares `Brand-survival threshold: single-user incident` in its `## User-Brand Impact` section, also include @agent-soleur:engineering:review:architecture-strategist and @agent-soleur:product:spec-flow-analyzer in the parallel batch — the 3-agent baseline catches overengineering and convention drift; the 5-agent panel catches blast-radius and flow gaps.
+**Prompt `soleur:engineering:review:code-simplicity-reviewer` per mechanism, not per plan.** Its question is *"which requirement does this mechanism satisfy, and does a simpler mechanism already satisfy it?"* — never "is this plan good?". A reviewer asked to assess quality optimizes the design it was handed; asked to justify each mechanism against a requirement, it can recommend deleting one. Feed it the **Property List** and **Cut List** from the plan's `## Research Insights` section so "which requirement" has something to check against; if the plan carries neither, report that absence as the first finding rather than inferring a requirement. Also feed it the `## Scope Check` section — `### Ask Mapping` and `### Plan-Item Provenance` give it the verbatim ask list, so an `inferred` item or a mechanism answering no ask is a named finding rather than a re-derivation. (`soleur:engineering:review:code-simplicity-reviewer` renders `### Goal Verification` per its own `plan-review` carve-out — without that carve-out this instruction is silently no-opped.) **Why:** #7418 / ADR-176 — a six-agent plan-review panel returned eight P0s and every one of them made the proposed cursor *better*, with `soleur:engineering:review:code-simplicity-reviewer` in that panel; the same agent class, asked post-implementation whether the design was necessary at all, said delete it — at roughly ten times the cost to act on.
 
-When consolidating a 5-agent panel's findings, treat the simplification panel (DHH + code-simplicity) and the correctness panel (Kieran + architecture-strategist + spec-flow) as orthogonal axes. **When BOTH panels fire on the same scope, prefer delete over fix** — a feature that simultaneously triggers "too complex, remove" and "has 4 specific bugs" is over-architected; cutting it dissolves the bugs. Many "paper-resolution" findings (FRs added without implementation) vanish when the cuts land. **Why:** 2026-05-11 #2720 plan v1→v2 — 953→829 lines, 4 P0 issues dissolved when the matrix-split cut landed; see `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
+When the plan declares `Brand-survival threshold: single-user incident` in its `## User-Brand Impact` section, also include soleur:engineering:review:architecture-strategist and soleur:product:spec-flow-analyzer in the parallel batch — the 3-agent baseline catches overengineering and convention drift; the 5-agent panel catches blast-radius and flow gaps.
+
+When consolidating a 5-agent panel's findings, treat the simplification panel (DHH + code-simplicity) and the correctness panel (Kieran + soleur:engineering:review:architecture-strategist + spec-flow) as orthogonal axes. **When BOTH panels fire on the same scope, prefer delete over fix** — a feature that simultaneously triggers "too complex, remove" and "has 4 specific bugs" is over-architected; cutting it dissolves the bugs. Many "paper-resolution" findings (FRs added without implementation) vanish when the cuts land. **Why:** 2026-05-11 #2720 plan v1→v2 — 953→829 lines, 4 P0 issues dissolved when the matrix-split cut landed; see `knowledge-base/project/learnings/2026-05-11-five-agent-plan-review-panel-and-architectural-false-trails.md`.
 
 ## Named CEO/design/devex panel (relevance-gated)
 
@@ -19,25 +29,62 @@ The eng panel above reviews for engineering quality (simplicity, convention, cor
 
 | Panel axis | Agent(s) | Lens (reviews the finished plan for) |
 |---|---|---|
-| **CEO / business** | `@agent-soleur:product:cpo` + `@agent-soleur:marketing:cmo` | cpo: product strategy, positioning, scope-vs-roadmap fit. cmo: market/GTM implications, brand-voice, messaging risk. |
-| **design** | `@agent-soleur:product:design:ux-design-lead` | user-flow completeness, UX decay, design-taste risk in user-facing surfaces. |
-| **devex / eng-strategy** | `@agent-soleur:engineering:cto` | developer/operator experience, maintenance/DX cost, build-vs-buy, ongoing engineering strategy — **distinct** from `architecture-strategist`'s blast-radius/structural lens. Give `cto` a devex lens string, not a structural one, so the two do not duplicate. |
+| **CEO / business** | `soleur:product:cpo` + `soleur:marketing:cmo` | soleur:product:cpo: product strategy, positioning, scope-vs-roadmap fit. soleur:marketing:cmo: market/GTM implications, brand-voice, messaging risk. |
+| **design** | `soleur:product:design:ux-design-lead` | user-flow completeness, UX decay, design-taste risk in user-facing surfaces. |
+| **devex / eng-strategy** | `soleur:engineering:cto` | developer/operator experience, maintenance/DX cost, build-vs-buy, ongoing engineering strategy — **distinct** from `soleur:engineering:review:architecture-strategist`'s blast-radius/structural lens. Give `soleur:engineering:cto` a devex lens string, not a structural one, so the two do not duplicate. |
 
 **Relevance gate — INDEPENDENT of the plan's own `## Domain Review` verdict.** The named panel exists to catch what plan Phase 2.5 got wrong, so it MUST NOT trust that phase's verdict as its trigger (a UI plan mis-judged `Product: NONE` would inherit the exact miss). Compute activation from an **independent** read of the plan's actual content; use the `## Domain Review` + Product/UX Gate tier only as a *hint*, never as the sole gate:
 
-1. **Mechanical UI-surface scan (independent):** scan the plan's `## Files to Create` + `## Files to Edit` against the UI-surface glob superset (`components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx`, plus the shared UI-term list). Any hit → force `ux-design-lead` + `cpo` active regardless of the Domain Review verdict.
-2. **Fresh relevance read (independent):** judge relevance from the plan *body* (Overview, Files, User-Brand Impact), not by parsing a "Domains relevant: none" line — product/scope language → `cpo`; market/GTM/brand/user-copy language → `cmo`; user-facing/flow/visual language → `ux-design-lead`; code/infra/tooling Files-to-Edit → `cto`.
+1. **Mechanical UI-surface scan (independent):** scan the plan's `## Files to Create` + `## Files to Edit` against the UI-surface glob superset (`components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx`, plus the shared UI-term list). Any hit → force `soleur:product:design:ux-design-lead` + `soleur:product:cpo` active regardless of the Domain Review verdict.
+2. **Fresh relevance read (independent):** judge relevance from the plan *body* (Overview, Files, User-Brand Impact), not by parsing a "Domains relevant: none" line — product/scope language → `soleur:product:cpo`; market/GTM/brand/user-copy language → `soleur:marketing:cmo`; user-facing/flow/visual language → `soleur:product:design:ux-design-lead`; code/infra/tooling Files-to-Edit → `soleur:engineering:cto`.
 3. **Threshold bias:** when the plan declares `Brand-survival threshold: single-user incident`, bias toward activating (stakes are high — the eng panel already escalated).
 4. If **none** activate (trivial non-engineering docs plan), only the eng panel runs — today's behavior is preserved.
 
-**Every named-panel reviewer is prompted for structured advisory only — NO `AskUserQuestion`.** cpo/cmo default to orchestrator mode and will otherwise emit `AskUserQuestion`, which hangs a headless `one-shot` (a Task subagent cannot answer it, and the agent `.md` body does not reach anonymous Task spawns). The prohibition MUST live in the prompt text, mirroring the plan Phase 2.5 Product/UX gate's "Output a structured advisory — do not use AskUserQuestion."
+**Every named-panel reviewer is prompted for structured advisory only — NO `AskUserQuestion`.** soleur:product:cpo/cmo default to orchestrator mode and will otherwise emit `AskUserQuestion`, which hangs a headless `one-shot` (a Task subagent cannot answer it, and the agent `.md` body does not reach anonymous Task spawns). The prohibition MUST live in the prompt text, mirroring the plan Phase 2.5 Product/UX gate's "Output a structured advisory — do not use AskUserQuestion."
+
+## Standing panel checks (every review, no relevance gate)
+
+> **Rule `cq-ac-must-not-depend-on-concurrent-sessions` — migrated out of `AGENTS.rules.md` on 2026-09-10 (PR #8034).**
+> Domain-scoped per `cq-agents-md-tier-gate`: the violation it prevents can only
+> occur in this phase, which already enforces it, so it no longer costs every
+> session's always-loaded budget. This is now its canonical home.
+>
+> An acceptance criterion whose truth depends on unrelated concurrent processes — a sibling worktree, another session, ambient machine state — is not a property of the code and MUST be re-expressed as a deterministic test [id: cq-ac-must-not-depend-on-concurrent-sessions] [skill-enforced: plan-review Standing panel checks]. Litmus: could a process the plan never mentions flip it with no line of the diff changing? Then it measures the machine. **Why:** 2026-08-11 — "fires no contention banner" cost a second ~45-min re-run that verified an environment, not code.
+
+Run these against the plan regardless of change class. They are cheap, textual, and each has
+exactly one right answer, so all findings here classify **Mechanical** and auto-apply.
+
+1. **Acceptance criteria must not depend on unrelated concurrent processes**
+   (`cq-ac-must-not-depend-on-concurrent-sessions`). Read every entry under `## Acceptance
+   Criteria` and ask: *could a process this plan never mentions — a sibling worktree, another
+   agent session, ambient machine state, whatever else happens to be running — flip this from
+   true to false without a single line of the diff changing?* If yes, the criterion measures the
+   machine rather than the change, and it must be rewritten as a deterministic test over a
+   synthetic fixture.
+
+   The tell is an AC that asserts the ABSENCE of an ambient signal: "the run fires no contention
+   banner", "no sibling process is detected", "`/tmp` has N MB free", "the suite completes in
+   under N minutes". Each is unfalsifiable when it passes (you learn only that nothing else ran)
+   and uninformative when it fails.
+
+   Rewrite by moving the property into a fixture the plan controls. "Fires no contention banner"
+   becomes "with a synthetic procfs containing zero sibling runs, `tc_preamble` emits no
+   `SIBLING_RUN_DETECTED`" — which is a claim about the code, runs in milliseconds, and cannot be
+   invalidated by a colleague starting a build.
+
+   **Why this is worth a standing check:** on 2026-08-11 an AC of exactly this shape ("the
+   sanctioned full-gate run fires neither banner") cost a second ~45-minute full-gate re-run
+   after a sibling worktree started a suite one second after the clearance check. The re-run
+   verified an environmental condition, not the code, and the substantive property was already
+   proven deterministically by a synthetic-procfs unit test. Catching it at plan review costs one
+   sentence; catching it at verification costs the whole run.
 
 ## Classifier routing (taste findings are surfaced, never silently applied)
 
 Consolidation tags **each** consolidated decision with `decisionClass ∈ {mechanical, taste, user-challenge}` per **[decision-principles.md](../brainstorm-techniques/references/decision-principles.md)** (ADR-084), routing through that doc's **four never-Mechanical classes** (dropping operator-requested scope; a new sub-processor/paid dep; a new recurring cost; an irreversible data op) — not a fresh classification path:
 
 - **Eng-panel** correctness/simplification findings (bug, convention-drift, flow-gap, blast-radius) → **Mechanical** (one right answer / purely-technical), **auto-appliable**. Exception: a `simplify-cut` of **operator-requested scope** is never-Mechanical → Taste / User-Challenge.
-- **Named-panel findings default to Taste** (fail-safe): a cpo/cmo/ux/cto finding touching **user-visible / money / scope** is Taste unless it is *clearly* Mechanical (a factual/typo/broken-link fix). Product/market/design findings are almost never Mechanical — bias them to **surface**, never silently auto-apply. This is the single safety point of the panel; on ambiguity it fails toward surfacing.
+- **Named-panel findings default to Taste** (fail-safe): a CPO/CMO/UX/CTO finding touching **user-visible / money / scope** is Taste unless it is *clearly* Mechanical (a factual/typo/broken-link fix). Product/market/design findings are almost never Mechanical — bias them to **surface**, never silently auto-apply. This is the single safety point of the panel; on ambiguity it fails toward surfacing.
 - Any finding arguing the operator's **stated scope/direction** should change (drop/merge/split/add) → **User-Challenge** — never auto-decide.
 - **Security/feasibility regression** → the ADR-084 sanctioned exception: attached → urgent `AskUserQuestion`; headless → terminal halt before merge + an `action-required`+`security` issue.
 

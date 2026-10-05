@@ -31,7 +31,18 @@
 # not pay for it. Hetzner's cap is a hard 32,768 B ForceNew gate and comments were 61% of the
 # raw payload; without this, every safety comment competes with a fail-closed invariant for
 # space, which on a host where a green apply and a dark host are indistinguishable is the
-# wrong trade. cloud-init-git-data.yml itself is NOT stripped.
+# wrong trade.
+#
+# THE TEMPLATE IS NOW STRIPPED TOO, BY A SECOND AND DELIBERATELY DIFFERENT EXPRESSION
+# (#7264). ADR-152 rules that these two expressions are "deliberately not shared, and must
+# not be", and gives the reason: the nine payloads have no `#`-directive but do have a
+# shebang, so preserving `#!` alone is correct for them — and WRONG for a cloud-init
+# template, because `#cloud-config` is a directive that is a comment by syntax. Stripping it
+# does not fail: the apply succeeds, the host boots, and cloud-init never recognises the
+# payload, so none of it runs — the dark-host indistinguishability ADR-149 names, reached
+# through the mechanism ADR-152 introduced. `git_data_template_rationale_strip` below is the
+# registry's expression (zot-registry.tf), which preserves `#!` AND any `#`-directive by
+# construction rather than by enumeration. Do not merge the two.
 #
 # ANCHORED AT LINE START, and `#!` is preserved by construction. `${var#...}` and other
 # mid-line `#` are untouched because the match must begin the line; a `#`-anywhere rule
@@ -46,7 +57,8 @@
 # physical line (its var parser is line-based). git-data-userdata-budget.sh mirrors this
 # expression byte-for-byte; git-data-render-strip-parity.test.sh is what keeps them equal.
 locals {
-  git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
+  git_data_rationale_strip          = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
+  git_data_template_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
 }
 
 # THE DOPPLER ARCH PAIR IS DERIVED HERE, and that location is the point.
@@ -68,14 +80,21 @@ locals {
 }
 
 locals {
-  rendered = templatefile("${path.module}/../../cloud-init-git-data.yml", {
-    git_data_bootstrap               = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
+  rendered = replace(templatefile("${path.module}/../../cloud-init-git-data.yml", {
+    git_data_bootstrap = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
+    # (#8211 PR2) The REAL CAS-fence hook ships and installs at birth — the flip's
+    # d6_replace_stale precondition means a replace always precedes the flag write, and a
+    # hook copied out-of-band is reverted to the reject-all placeholder by the next routine
+    # replace (a silent total replication outage). The placeholder's deny-all posture is
+    # preserved in substance: the real hook fail-closed-rejects every non-CAS push, and
+    # before the flag flips no transport credential exists to push with.
+    git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
     # /usr/local/bin like the bootstrap (ADR provisioning amendment).
     git_data_provision = replace(file("${path.module}/../../git-data-provision.sh"), local.git_data_rationale_strip, "")
-    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaces the raw
-    # git-shell forced command; delivered to /usr/local/bin like the others.
+    # The TRANSPORT allowlist forced-command wrapper (Sub-PR 3.D) — replaced the raw
+    # git-shell forced command, and since #8043 is the key's whole confinement (login
+    # shell /bin/sh); delivered to /usr/local/bin like the others.
     git_data_transport_wrapper = replace(file("${path.module}/../../git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     # The FIXED erasure forced-command wrapper (rm -rf <id>.git), Art. 17 (3.A;
     # app-side call lands in 3.D). Delivered to /usr/local/bin like the others.
@@ -86,10 +105,21 @@ locals {
     git_data_gc_service         = replace(file("${path.module}/../../git-data-gc.service"), local.git_data_rationale_strip, "")
     git_data_gc_failure_service = replace(file("${path.module}/../../git-data-gc-failure.service"), local.git_data_rationale_strip, "")
     git_data_gc_timer           = replace(file("${path.module}/../../git-data-gc.timer"), local.git_data_rationale_strip, "")
+    # (#8210) The boot-time LUKS reopen: script + unit + OnFailure reporter. Same strip, same
+    # one-line shape — git-data-luks.test.sh's boot_path_files() and the birth gate's hash both
+    # derive their rosters by grepping these bindings.
+    git_data_luks_reopen                 = replace(file("${path.module}/../../git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_service         = replace(file("${path.module}/../../git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_failure_service = replace(file("${path.module}/../../git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_timer           = replace(file("${path.module}/../../git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
     # trimspace()'d by the CALLER — see local.git_transport_pubkey in git-data.tf.
     git_transport_pubkey = var.git_transport_pubkey
     git_provision_pubkey = var.git_provision_pubkey
     git_remove_pubkey    = var.git_remove_pubkey
+    # (#7226, ADR-237) The SSH HOST key pair: the ssh_keys: block installs it, the boot proof
+    # fingerprints the public half. Identity-class divergence (variables.tf).
+    host_ssh_ed25519_private_key = var.host_ssh_ed25519_private_key
+    host_ssh_ed25519_public_key  = var.host_ssh_ed25519_public_key
     # Mount the bare-repo volume by its specific id (server.tf/cloud-init.yml
     # by-id pattern). Known at plan time; the attachment is a separate resource.
     git_data_volume_id = var.git_data_volume_id
@@ -129,7 +159,16 @@ locals {
     # when Doppler is the broken stage, which on this host is the most likely stage to
     # break. It is semi-public (already in the client bundle; variables.tf says so) and
     # lands in tfstate + metadata-retrievable user_data — accepted, and the reason the
-    # LUKS passphrase and the Better Stack INGEST token are deliberately NOT baked.
+    # LUKS passphrase is deliberately NOT baked.
+    #
+    # SUPERSEDED IN PART BY #7460 (ADR-198): the Better Stack INGEST token IS now baked, and
+    # this comment used to name it alongside the LUKS passphrase. That sentence sat INSIDE a
+    # digest input — main.tf is one of the files the evidence hash binds — so leaving it would
+    # have attested a falsehood. The two credentials are NOT the same case: the ingest token's
+    # ceiling is write-only append to a telemetry sink, while the passphrase decrypts every
+    # user's source at rest AND defends a control the privacy policy publicly claims. ADR-198
+    # states that as a three-part capability test rather than as a derivability argument,
+    # because the derivability argument licenses baking the passphrase too.
     #
     # This interpolation is also the birth-readiness INTERLOCK's sentinel:
     # git-data-birth-readiness-gate.sh refuses to plan while `${sentry_dsn}` is absent
@@ -137,10 +176,11 @@ locals {
     # threading it here IS the work — the sentinel cannot be faked by a comment.
     sentry_dsn             = var.sentry_dsn
     betterstack_ingest_url = var.betterstack_ingest_url
+    betterstack_logs_token = var.betterstack_logs_token
     # Baked at RENDER time, so it is a create-time constant rather than a runtime-
     # guaranteed invariant — it discriminates git-data's rows from its siblings on the
     # shared Better Stack source 2457081. The rehearsal diverges here BY DESIGN: it is
     # what lets the capture script isolate a rehearsal boot's rows from prod's.
     host_name = var.host_name
-  })
+  }), local.git_data_template_rationale_strip, "")
 }

@@ -1,0 +1,5 @@
+{"total_count":3,"check_runs":[
+{"id":8003,"name":"Analyze (python)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}},
+{"id":9003,"name":"Analyze (python)","status":"completed","conclusion":"failure","app":{"slug":"github-actions"}},
+{"id":9001,"name":"Analyze (actions)","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}
+]}

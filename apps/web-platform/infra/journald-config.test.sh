@@ -110,7 +110,7 @@ echo "--- AC3: server.tf provisioner wiring (running-host path) ---"
 # grep -cE not grep -qE (same SIGPIPE-under-pipefail class as above): this NEGATIVE assert would
 # fail OPEN if the b64 arg were ever re-inlined — grep -q matches early, SIGPIPEs the streaming awk,
 # the pipeline flakes non-zero, and `!` inverts that into a spurious PASS, masking the regression.
-# grep -c reads all input (no early close) so the `!` reflects the real match state. `>/dev/null`
+# printf|grep -c|>/dev/null, not printf|grep -q: grep -c reads all input (no early close) so the `!` reflects the real match state.
 # drops the count so the `!` sees only the exit code.
 assert "journald_soleur_conf_b64 is NOT passed to the cloud-init templatefile" \
   "! { awk '/user_data = templatefile\(\"\\\$\{path.module\}\/cloud-init.yml\"/,/^  \}\)/' '$SERVER_TF' | grep -cE 'journald_soleur_conf_b64' >/dev/null; }"
@@ -130,36 +130,36 @@ BLOCK=$(awk '
 ' "$SERVER_TF")
 assert "block is non-empty" "[[ -n \"\$BLOCK\" ]]"
 assert "triggers_replace hashes journald-soleur.conf (re-delivery on drop-in change; now a join with vector.toml)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)'"
+  "grep -qE 'file\(\"\\\$\{path\.module\}/journald-soleur\.conf\"\)' <<<\"\$BLOCK\""
 assert "SSH connection block (type=ssh)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
+  "grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"' <<<\"\$BLOCK\""
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context
 # toggle `agent = var.ci_ssh_private_key == null` (operator ssh-agent locally,
 # explicit Doppler key in CI). The conditional regex below cannot false-match
 # the #4829 dual-context comment (which reads literal `agent = true`).
 assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
+  "grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null' <<<\"\$BLOCK\""
 assert "connection host = hcloud_server.web[\"web-1\"].ipv4_address" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address'"
+  "grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address' <<<\"\$BLOCK\""
 assert "file provisioner pushes drop-in to /etc/systemd/journald.conf.d/00-soleur.conf" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/etc/systemd/journald\.conf\.d/00-soleur\.conf\"'"
+  "grep -qE 'destination[[:space:]]*=[[:space:]]*\"/etc/systemd/journald\.conf\.d/00-soleur\.conf\"' <<<\"\$BLOCK\""
 # The drop-in dir is NOT created by default on Ubuntu and scp won't create
 # parents — a preceding remote-exec mkdir is load-bearing or the first apply
 # fails. (Regression guard for the review P1.)
 assert "remote-exec creates the drop-in dir before the file provisioner pushes into it" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'mkdir -p /etc/systemd/journald\.conf\.d'"
+  "grep -qE 'mkdir -p /etc/systemd/journald\.conf\.d' <<<\"\$BLOCK\""
 assert "remote-exec creates /var/log/journal" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'mkdir -p /var/log/journal'"
+  "grep -qE 'mkdir -p /var/log/journal' <<<\"\$BLOCK\""
 assert "remote-exec restarts systemd-journald" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'systemctl restart systemd-journald'"
+  "grep -qE 'systemctl restart systemd-journald' <<<\"\$BLOCK\""
 assert "remote-exec flushes the journal" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'journalctl --flush'"
+  "grep -qE 'journalctl --flush' <<<\"\$BLOCK\""
 # Positive post-assertions (fail2ban_tuning pattern): prove persistence took,
 # don't just observe it.
 assert "remote-exec positively asserts /var/log/journal exists" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'test -d /var/log/journal'"
+  "grep -qE 'test -d /var/log/journal' <<<\"\$BLOCK\""
 assert "remote-exec asserts persistent storage via journalctl --header" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'journalctl --header'"
+  "grep -qE 'journalctl --header' <<<\"\$BLOCK\""
 
 # --- AC5: runcmd creates /var/log/journal BEFORE the container starts ---
 echo ""
@@ -244,7 +244,7 @@ assert "P3-6 a failed /var/log/journal creation reports via the Vector-INDEPENDE
 # Ordering is load-bearing: created AFTER the fact, Vector's journald sources have already
 # opened (or failed to open) the directory. Assert the mkdir precedes the vector restart.
 assert "P3-6 the journal dir is created BEFORE vector.service is restarted (ordering)" \
-  "[[ \$(grep -nE '^[[:space:]]*mkdir -p /var/log/journal$' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | head -1) -lt \$(grep -nE '^[[:space:]]*systemctl restart vector\\.service' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | head -1) ]]"
+  "[[ \$(grep -nE '^[[:space:]]*mkdir -p /var/log/journal$' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | sed -n '1p') -lt \$(grep -nE '^[[:space:]]*systemctl restart vector\\.service' '$SCRIPT_DIR/inngest-bootstrap.sh' | cut -d: -f1 | sed -n '1p') ]]"
 # Scope the identifier check to the [sources.host_scripts_journald] BLOCK (the Source 4 include list),
 # not the whole file — a name relocated into a comment / exclude / other sink would defeat a file-wide
 # grep while breaking Source-4 delivery (test-design + pattern review).
@@ -298,13 +298,70 @@ assert "vector side: Source 4 allowlists \"inngest-nftables\"" \
 assert "vector side: Source 4 allowlists \"inngest-server-probe\"" \
   "grep -qE '^[[:space:]]*\"inngest-server-probe\",\$' <<<\"\$HSJ\""
 
-# CF-4 negative: inngest-boot-phone-home.sh is a pure `curl` POST straight to the Better Stack
-# HTTP ingest — it never calls `logger`, so it has NO journald channel and an allowlist entry
-# for it would be a permanently-dead no-op that reads like coverage. Keep it out.
-assert "CF-4: \"inngest-boot-phone-home\" is NOT in the Source 4 allowlist (no journald channel)" \
-  "! grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$HSJ\""
-assert "CF-4 corroboration: inngest-boot-phone-home.sh never calls logger" \
-  "! grep -qE '^[[:space:]]*logger[[:space:]]' <<<\"\$(awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh\$/{f=1;next} f&&/^  - path: /{f=0} f' '$INNGEST_CI')\""
+# --- #7695 (A5 extension): the LUKS boot-stage tag, asserted on BOTH sides -----------------
+LUKS_UNIT_BLOCK="$(awk '/^  - path: \/etc\/systemd\/system\/inngest-luks-open\.service$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+assert "LUKS reopen unit block extracted from cloud-init-inngest.yml" \
+  "[[ -n \"\$LUKS_UNIT_BLOCK\" ]]"
+# Same exact-value contract as the trio above: a unit tag with no allowlist entry is a silent
+# DROP, and an allowlist entry with no emitting unit is a silent NO-OP. Two emitters share this
+# tag on purpose (the cloud-init runcmd stage and the boot-reopen unit), so the unit-side
+# assertion checks the reopen unit specifically -- it is the one whose absence would only show
+# up on a SECOND boot, which is exactly the case cloud-init runcmd cannot cover.
+assert "unit side: inngest-luks-open.service declares SyslogIdentifier=inngest-luks-stage" \
+  "grep -qE '^[[:space:]]*SyslogIdentifier=inngest-luks-stage\$' <<<\"\$LUKS_UNIT_BLOCK\""
+assert "emitter side: the cloud-init LUKS stage logs under the same tag" \
+  "grep -qE 'logger -t inngest-luks-stage' '$INNGEST_CI'"
+assert "vector side: Source 4 allowlists \"inngest-luks-stage\"" \
+  "grep -qE '^[[:space:]]*\"inngest-luks-stage\",\$' <<<\"\$HSJ\""
+
+# --- #6894: the LUKS cutover unit's tag — DERIVED from the unit, then required on both sides -----
+# Equality against the unit's OWN value rather than a literal repeated here: renaming the tag in one
+# file and not the other is the silent-drop this block exists to catch, and a literal in the test
+# would have to be renamed too — i.e. it would be a third copy, not a check.
+CUTOVER_UNIT="$SCRIPT_DIR/inngest-luks-cutover.service"
+CUTOVER_TAG="$(sed -n 's/^SyslogIdentifier=\([A-Za-z0-9._-]*\)$/\1/p' "$CUTOVER_UNIT" 2>/dev/null | sed -n '1p')"
+assert "unit side: inngest-luks-cutover.service declares exactly one SyslogIdentifier (read: '$CUTOVER_TAG')" \
+  "[[ -n \"\$CUTOVER_TAG\" && \$(grep -c '^SyslogIdentifier=' '$CUTOVER_UNIT') -eq 1 ]]"
+assert "vector side: Source 4 allowlists the cutover unit's own SyslogIdentifier" \
+  "[[ -n \"\$CUTOVER_TAG\" ]] && grep -qxF \"  \\\"\$CUTOVER_TAG\\\",\" <<<\"\$HSJ\""
+assert "emitter side: inngest-luks-cutover.sh logs under the unit's tag (LOG_TAG)" \
+  "[[ -n \"\$CUTOVER_TAG\" ]] && grep -qxF \"readonly LOG_TAG=\\\"\$CUTOVER_TAG\\\"\" '$SCRIPT_DIR/inngest-luks-cutover.sh'"
+
+# CF-4 (#7228): INVERTED from a negative pair to a POSITIVE one, in the direction the EMITTER
+# dictates. It used to assert that "inngest-boot-phone-home" was ABSENT from the allowlist, on
+# the explicitly stated condition that the script "never calls logger, so an allowlist entry
+# would be a permanently-dead no-op that reads like coverage". That condition no longer holds:
+# the emitter is the single delivery path for every SOLEUR_INNGEST_BOOT_STAGE marker and all
+# three of its failure modes were `exit 0` with no output, so it could not report that the boot
+# trace had died — the cq-silent-fallback-must-mirror-to-sentry violation #7228 exists to fix.
+# It now emits on its own failure arms, so the entry is live rather than dead.
+#
+# journald is the correct channel BECAUSE the emitter's own POST is what failed, and the two are
+# independent at the credential level: the emitter reads the cloud-init-staged token file, while
+# vector.service resolves BETTERSTACK_LOGS_TOKEN from Doppler at ExecStart. The failure that
+# silences the emitter therefore leaves this channel up.
+#
+# Same lockstep shape as R1-1.8 below: an allowlist entry with no matching emitter is a dead
+# no-op, and an emitter whose tag is not allowlisted is silence that reads as health. Both
+# halves are asserted, and the tag is DERIVED from the emitter on one side rather than restated
+# twice — two hardcoded copies would agree with each other while both disagreeing with reality.
+PHONE_HOME_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+PHONE_HOME_TAG="$(grep -oP '^[[:space:]]*logger -t \K[a-z0-9-]+' <<<"$PHONE_HOME_BODY" | sed -n '1p' || true)"
+assert "CF-4a: inngest-boot-phone-home.sh DOES call logger on its failure arms (it must report its own death)" \
+  "[[ -n \"\$PHONE_HOME_TAG\" ]]"
+assert "CF-4b: its tag ('${PHONE_HOME_TAG:-<none>}') IS in the Source 4 allowlist (an unallowlisted tag is silence that reads as health)" \
+  "[[ -n \"\$PHONE_HOME_TAG\" ]] && grep -qE \"^[[:space:]]*\\\"\$PHONE_HOME_TAG\\\",\\\$\" <<<\"\$HSJ\""
+# The half that keeps the channel BOUNDED. Every marker call site would otherwise ship a journald
+# row on a perfectly healthy boot (~15/boot of pure duplication — the POST already carries the
+# marker), converting a failure channel into a standing quota cost. The success path must not
+# reach a logger call: assert every logger invocation in the body sits inside a failure branch.
+assert "CF-4c: the emitter is SILENT ON SUCCESS (every logger call is inside a failure arm, not the main path)" \
+  "[[ \$(grep -cP '^[[:space:]]*logger -t ' <<<\"\$PHONE_HOME_BODY\") -eq \$(grep -cP '^[[:space:]]*logger -t .*reason=' <<<\"\$PHONE_HOME_BODY\") ]]"
+# P1-SEC, applied to the tag this change opens: the new route carries this script's output to
+# Better Stack, and on the missing-token arm the redaction at :125 has not run yet. So $detail
+# must never appear on a logger line.
+assert "CF-4d: no logger row in the emitter carries \$detail (redaction has not run on the early arms)" \
+  "! grep -qP '^[[:space:]]*logger -t .*\\\$detail' <<<\"\$PHONE_HOME_BODY\""
 
 echo ""
 echo "--- P1-SEC: the inngest-redis channel opened above is a CREDENTIAL path ---"
@@ -417,7 +474,7 @@ CI_DEPLOY_SH="$SCRIPT_DIR/ci-deploy.sh"
 # `readonly LOG_TAG=` took the suite from "79/79 passed" to no summary line, no FAIL:, and all
 # nine later assertions (R1-1.8a/b/c, R3-4.5a–f) never executing. The guard fired by killing the
 # run that would have reported it. The emptiness check on the next line is the real assertion.
-CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | head -1 | cut -d'"' -f2 || true)"
+CI_DEPLOY_TAG="$(grep -oE '^readonly LOG_TAG="[^"]+"' "$CI_DEPLOY_SH" | sed -n '1p' | cut -d'"' -f2 || true)"
 
 assert "R1-1.8a: ci-deploy.sh declares exactly ONE literal LOG_TAG (derivation is unambiguous)" \
   "[[ -n \"\$CI_DEPLOY_TAG\" ]] && [[ \"\$(grep -cE '^readonly LOG_TAG=' \"\$CI_DEPLOY_SH\")\" == 1 ]]"
@@ -475,14 +532,14 @@ assert "R3-4.5c: the probe EMITS SOLEUR_PROBE_CANARY (the allowlist entry is not
 assert "R3-4.5d: the canary is emitted from an ExecStartPre OUTSIDE the doppler wrapper" \
   "grep -qE '^ExecStartPre=-?/usr/local/bin/web-zot-consumer-probe\.sh --canary-only\$' \"\$ZOT_PROBE_UNIT\""
 assert "R3-4.5e: that ExecStartPre line does NOT route through doppler run" \
-  "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -q 'doppler'"
+  "! grep -E '^ExecStartPre=' \"\$ZOT_PROBE_UNIT\" | grep -c 'doppler' >/dev/null"
 # ORDERING, anchored on the BRANCH rather than on any occurrence of the flag name. The previous
-# form took `grep -n -- '--canary-only' | head -1`, and the first occurrence in the probe is a
+# form took `grep -n -- '--canary-only' | sed -n '1p'`, and the first occurrence in the probe is a
 # COMMENT (line 86) explaining the flag, twelve lines above the code that implements it (line
 # 100). So moving the real branch BELOW the credential FATAL guards — the precise regression
 # this arm names — left it green while the mutant FATALed instead of emitting. Mutation-verified.
 assert "R3-4.5f: the --canary-only BRANCH precedes the credential FATAL guards" \
-  "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | head -1 | cut -d: -f1)\" ]]"
+  "[[ \"\$(grep -nE '^if \\[ \"\\\$\\{1:-\\}\" = \"--canary-only\" \\]' \"\$ZOT_PROBE_SH\" | sed -n '1p' | cut -d: -f1)\" -lt \"\$(grep -n 'ZOT_PULL_USER/ZOT_PULL_TOKEN unset' \"\$ZOT_PROBE_SH\" | sed -n '1p' | cut -d: -f1)\" ]]"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

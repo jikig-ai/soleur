@@ -24,16 +24,21 @@
 #   - Variables: 7 → 3 (doppler_token_tf, betterstack_api_token, betterstack_paid_tier).
 
 locals {
-  # Pinned via Phase 0.3 — bump in this PR diff (visibility preserved).
-  # Source: https://github.com/inngest/inngest/releases/tag/v1.19.4
-  inngest_cli_version = "v1.19.4"
-  inngest_cli_sha256  = "d023b26659275fdbe9348b6518077ce1ea9906a449898e49ddced91bfc6fd757"
+  # Freshness owner (#7463): the analysis of record is inngest-cli.provenance.md
+  # (## Bump procedure); enforcement is inngest-cli-staleness.test.sh (per-PR) and
+  # detection is the `Detect inngest CLI pin drift` step in rule-audit.yml (1st/15th
+  # poll — added by #7463 PR-B). Nothing auto-writes this pin — the
+  # monitor files an issue and a human opens the CI-gated PR.
+  # Source: https://github.com/inngest/inngest/releases/tag/v1.45.1
+  inngest_cli_version = "v1.45.1"
+  inngest_cli_sha256  = "52c07d837088a6712acd15b8edd4191f961b69884541f468a3c1b9bb4348a4e5"
   # #6178: the amd64 SHA above is the default (co-located web host + amd64 dedicated host).
   # The dedicated inngest host is DUAL-ARCH (local.inngest_arch, inngest-host.tf): on an arm64
   # (cax*) type it downloads the linux_arm64 tarball and verifies against the arm64 checksum
-  # below (the amd64 SHA would fail that verify). Both from the same signed checksums.txt v1.19.4:
-  #   https://github.com/inngest/inngest/releases/download/v1.19.4/checksums.txt
-  inngest_cli_sha256_arm64 = "30a3f01474cb2266c24545cdc83930baeae14232d629c87aeeb8f21118948199"
+  # below (the amd64 SHA would fail that verify). Both from the same release-shipped
+  # checksums.txt v1.45.1 (a plain sha256sum manifest, not GPG-signed):
+  #   https://github.com/inngest/inngest/releases/download/v1.45.1/checksums.txt
+  inngest_cli_sha256_arm64 = "58db59dbe39afd7472c7c59bd7cc9f82f5da5810dabdac40b2bde3a8338aa7b5"
 }
 
 # ---------------- Inngest signing/event keys (random) ----------------
@@ -198,7 +203,7 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # and a doppler_secret would clobber the real value on first create (ignore_changes
 # only engages after the resource is in state). Rotation: rotate the project DB
 # password in the Supabase dashboard → re-set INNGEST_POSTGRES_URI in Doppler prd
-# (stdin, never argv). Live-verified: inngest v1.19.4 connects + migrates on :5432
+# (stdin, never argv). Live-verified: inngest v1.45.1 connects + migrates on :5432
 # (runbook § Durable backend, verdict 0.5).
 #
 # SECURITY POSTURE — RLS lockdown (2026-06-29, ADR-030 I8). This project's public
@@ -246,6 +251,23 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # STOPS both co-located inngests; the dedicated host (10.0.1.40) uses its OWN dark
 # pooler (soleur-dev), so prod-pooler inngest load goes to ~0.
 #
+# ⚠ SUPERSEDED IN PART (#7462, 2026-08-20) — the last clause above is FALSE and is left in
+# place only so this correction has something to cite. The dedicated host has NOT pointed at
+# soleur-dev since 2026-07-23T15:46Z: `op=arm` overwrites INNGEST_POSTGRES_URI with the PROD
+# DSN and `op=rollback` has no inverse for that write, so the prod DSN is the post-first-arm
+# steady state of the "dark" slot (ADR-100 addendum 2026-08-20). Post-flip, prod-pooler inngest
+# load therefore does NOT go to ~0 — it moves to the dedicated host.
+#
+# THE BUDGET BELOW IS UNAFFECTED, and that is a measurement rather than a hope. ADR-105 never
+# rested on the ~0 claim: its Precondition section names the durable resolution as "collapses to
+# ONE prod-pool writer permanently", not to zero, and its arithmetic is one writer at P×5 ≤ 20 <
+# pool_size 30. The dedicated host honours that cap — inngest-bootstrap.sh writes
+# `--postgres-max-open-conns` into the durable-backend ExecStart, and inngest-server-flip-guard.sh
+# uses that same flag as its durable sentinel. So the post-flip operating point is exactly the one
+# ADR-105 already models, and the sentence above was inconsistent with the ADR it anchors even
+# before the DSN write made it stale. Correcting it RECONCILES the two; it does not obsolete
+# either, and no separate pool-arithmetic finding follows from it.
+#
 # DECISION (#6258, supersedes #5562): KEEP `default_pool_size` at 30 — do NOT revert to
 # 15. The #5562 revert's premise (that the client cap bounds inngest's *total* under 15) is
 # falsified by the per-pool model above: tightening the upstream pool to 15 while inngest's
@@ -262,8 +284,9 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # probe) against inngest's worst-case TOTAL footprint (INNGEST_CLIENT_CAP = P × per-pool
 # cap 5 ≤ 20) — independent of whatever default_pool_size is set to.
 #
-# WHY a comment and not a TF resource: no Supabase provider is declared in
-# main.tf, and this pooler attribute lives on the OUT-OF-BAND inngest project
+# WHY a comment and not a TF resource: the `supabase` provider declared in
+# main.tf (#9168) manages ONLY `soleur-web-platform` — this pooler attribute
+# lives on the OUT-OF-BAND inngest project
 # (ref pigsfuxruiopinouvjwy, see the INNGEST_POSTGRES_URI paragraph above) that
 # Terraform never minted. Codifying one pooler attribute would require adding a
 # whole provider for an out-of-band project — disproportionate. Mirrors the
@@ -363,6 +386,71 @@ resource "doppler_secret" "inngest_heartbeat_url_prd" {
 
   lifecycle {
     ignore_changes = [value] # URL is stable per heartbeat resource lifetime.
+  }
+}
+
+# ---------------- #7228: consumer-side serviceability heartbeat ----------------
+# WHY A SECOND HEARTBEAT RATHER THAN REPOINTING THE FIRST. `inngest_prd` above is fed by a
+# systemd timer that runs `curl "$INNGEST_HEARTBEAT_URL"` on the host — it asserts A TIMER FIRED
+# and nothing else. That is why it stayed green for the twelve days (2026-07-30 → 2026-08-11) in
+# which the dedicated host never bound :8288 and every app dispatch failed with ECONNREFUSED
+# (#7228). Splitting or repointing it would mint a second signal with the same defect. This beat
+# is fed from the CONSUMER side instead — inngest-consumer-probe.sh on the web host, which pings
+# only after reading a NON-EMPTY function registry out of 10.0.1.40:8288/v0/gql — so a green beat
+# here means the scheduler actually serves.
+#
+# AND IT MUST BE A NEW `doppler_secret`, NEVER A VALUE EDIT. Every doppler_secret in this file
+# carries `ignore_changes = [value]` (see the header note above). Repointing
+# `inngest_heartbeat_url_prd.value` at a different heartbeat would therefore plan NO change and
+# apply NOTHING, while every acceptance check that greps for the new wiring still passed — a
+# silent no-op wearing a green badge, which is the same class of failure as the monitor it
+# replaces.
+#
+# Independent of the dedicated host by construction: the feeder runs on web-1, so this ships
+# detection on MERGE, with no `apply_target=inngest-host-replace` and no cutover window.
+resource "betteruptime_heartbeat" "inngest_consumer" {
+  name = "soleur-inngest-consumer-prd"
+  # period/grace mirror web_zot_consumer (web-probe.tf): a 60s probe cadence with a 180s period
+  # tolerates three consecutive missed runs, so a single slow GQL response or timer skew never
+  # pages, while a genuine outage alarms inside ~4 minutes.
+  period    = 180
+  grace     = 60
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
+  # `paused` in SOURCE; the ONLY unpause path is the ADR-117 measured-beat arm gate in
+  # apply-web-platform-infra.yml, which PATCHes paused=false, polls for status=up (proving a REAL
+  # beat landed), and rolls back to paused if none arrives. Deliberately NOT the UI step the
+  # `inngest_prd` comment above still offers — that predates ADR-117, and an operator UI step
+  # would be an undeferred manual action (hr-never-label-any-step-as-manual-without). #6537 is
+  # the precedent this guards against: a probe that "claimed to have shipped" and left its
+  # monitor inert for nine days.
+  paused     = true
+  sort_index = 0
+
+  lifecycle {
+    # The arm gate's unpause MUST NOT be reverted by a later apply.
+    ignore_changes = [paused]
+  }
+}
+
+resource "doppler_secret" "inngest_consumer_url" {
+  project = "soleur"
+  config  = "prd"
+  # Consumed by inngest-consumer-probe.service via indirect expansion over
+  # INNGEST_CONSUMER_URL_KEY (server.tf bakes the name into /etc/default/inngest-consumer-probe),
+  # so this is a GENUINELY read secret, not the reserved-but-inert shape that
+  # doppler_secret.zot_heartbeat_url_prd was deleted for (#6438 B3).
+  name       = "INNGEST_CONSUMER_URL"
+  value      = betteruptime_heartbeat.inngest_consumer.url
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value]
   }
 }
 

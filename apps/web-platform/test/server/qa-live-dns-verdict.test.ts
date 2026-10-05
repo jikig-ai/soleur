@@ -21,6 +21,13 @@ const LIVE_PROXIED = {
   acmeWwwStatus: 404,
   acmeApexServer: "cloudflare",
   acmeWwwServer: "cloudflare",
+  // Measured live on 2026-08-19 via `GET /repos/jikig-ai/soleur/pages/health`
+  // while apex+www were proxied — the same reading that finally explained the
+  // 2026-08-16 outage. GitHub reports the domain HTTPS-INELIGIBLE purely because
+  // it resolves to Cloudflare, with `caa_error: null` and `reason: null`.
+  httpsEligibleApex: false,
+  httpsEligibleWww: false,
+  healthCaaError: null,
 };
 
 describe("gate against a LIVE proxied-state observation", () => {
@@ -49,7 +56,32 @@ describe("gate against a LIVE proxied-state observation", () => {
       resolve6Error: "ENODATA",
       acmeApexServer: "GitHub.com",
       acmeWwwServer: "GitHub.com",
+      // ‼️ Eligibility must flip too, and it is the SLOW half. GitHub
+      // re-evaluates on its own schedule, so in practice this lags the resolver
+      // answers by far longer than the DNS records take to propagate. Overriding
+      // it here is what makes this case "what a fully-registered flip looks
+      // like" rather than "what DNS alone looks like".
+      httpsEligibleApex: true,
+      httpsEligibleWww: true,
     });
     expect(v.status).toBe("propagated");
+  });
+
+  it("DNS alone is NOT enough — the exact state the 2026-08-16 hand-run reached", () => {
+    // Records flipped and propagated on both public resolvers, ACME path
+    // GitHub-shaped, AAAA gone — every signal the routine had at the time — yet
+    // GitHub had not yet marked the domain eligible. The old gate called this
+    // "propagated" and marched on to a poll that could never succeed.
+    const v = checkDnsPropagated({
+      ...LIVE_PROXIED,
+      resolved4: ["185.199.108.153", "185.199.111.153"],
+      resolved6: [],
+      resolve6Error: "ENODATA",
+      acmeApexServer: "GitHub.com",
+      acmeWwwServer: "GitHub.com",
+      // still false — the flip has not registered with GitHub yet
+    });
+    expect(v.status).toBe("retry");
+    expect(v.reason).toContain("is_https_eligible=false");
   });
 });

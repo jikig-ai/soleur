@@ -247,6 +247,13 @@ PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
 
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
+
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
 
@@ -264,8 +271,193 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
   workspaces_luks_cutover_gate "$TMP/pg-d5.json"
 
+# ── #9377: the web-class passphrase pair is named in luks_passphrase_touched ─────────────────────────
+#
+# The cutover provisions web-1's workspaces_luks resources and never creates the web-class pair
+# (random_password.workspaces_luks_web + doppler_secret.workspaces_luks_web_key ride the push-apply), so ANY
+# positive action on them here, create included, is a touch on the web host class's passphrase. The addresses are
+# in a named set that out_of_scope EXCLUDES, so luks_passphrase_touched is their SOLE catcher and each name is
+# independently load-bearing (proved by deleting just that name from the gate).
+WEBPW_CREATE="$(rc_obj 'random_password.workspaces_luks_web' '"create"')"
+WEBKEY_CREATE="$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"create"')"
+WEBKEY_NOOP="$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"no-op"')"
+WEBPW_UPDATE="$(rc_obj 'random_password.workspaces_luks_web' '"update"')"
+WEBKEY_UPDATE="$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"update"')"
+
+write_plan "${PASS_SET},${WEBKEY_CREATE}"
+gate_check "W1 (#9377): a CREATE of the web-class key copy in the first provision => ABORT (the full four-verb rule)" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBPW_UPDATE}"
+gate_check "W2 (#9377): an UPDATE of the web-class passphrase => ABORT" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBKEY_NOOP}"
+gate_check "W3 (#9377): the web-class key copy as an explicit no-op still PASSES (must-pass: only positive actions count)" \
+  workspaces_luks_cutover_gate 0 "PASS" "$TMP/plan.json"
+
+# The COUNT, not just the verdict: a delete or a forget of the web pair also trips resource_deletes, so the plan
+# aborts either way and a mutant dropping `delete`/`forget` from the web term kept every row green. The status
+# line's luks_passphrase_touched=1 is the observable that differs (1 -> 0). Also pins the operator-facing ABORT
+# text that names the pair.
+write_plan "${PASS_SET},$(rc_obj 'random_password.workspaces_luks_web' '"delete"')"
+gate_check "W6 (#9377): a DELETE of the web-class passphrase is COUNTED by luks_passphrase_touched (=1), not only by resource_deletes" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"forget"')"
+gate_check "W7 (#9377): a FORGET of the web-class key copy is COUNTED by luks_passphrase_touched (=1), not only by resource_deletes" \
+  workspaces_luks_cutover_gate 1 "luks_passphrase_touched=1" "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBKEY_UPDATE}"
+gate_check "W8 (#9377): the ABORT text names the web-class passphrase pair" \
+  workspaces_luks_cutover_gate 1 "any touch on the web-class passphrase pair" "$TMP/plan.json"
+
+write_plan "${PASS_SET},${WEBPW_CREATE}"
+gate_mutate_and_check "W4 (#9377): luks_passphrase_touched names random_password.workspaces_luks_web (sole guard)" \
+  's/\.address == "random_password\.workspaces_luks_web" or //' \
+  workspaces_luks_cutover_gate "$TMP/plan.json"
+write_plan "${PASS_SET},${WEBKEY_UPDATE}"
+gate_mutate_and_check "W5 (#9377): luks_passphrase_touched names doppler_secret.workspaces_luks_web_key (an update, which no delete counter sees; sole guard)" \
+  's/ or \.address == "doppler_secret\.workspaces_luks_web_key")$/)/' \
+  workspaces_luks_cutover_gate "$TMP/plan.json"
 
 
+
+
+# ── #6921/#8077: workspaces-cutover.sh never STARTS a quiesced inngest-server ────────
+#
+# op=quiesce-web leaves inngest-server.service stopped + DISABLED (the cutover's quiesce signal;
+# only op=rollback's `enable` clears it). A `systemctl start` runs a disabled unit, so every start
+# writer on the web host other than `enable` must refuse that shape. workspaces-cutover.sh has
+# TWO: resume_writers' reconcile (attended) and the dead-man `systemd-run … /bin/sh -c` string's
+# remount-success arm (UNATTENDED — the path nobody watches). Both are pinned structurally over
+# COMMENT-STRIPPED text AND executed: the dead-man string is rendered by the real arm_dead_man and
+# run under `sh` against PATH stubs, because it is a string passed to `sh -c` and a quoting slip in
+# the escaped guard would be invisible to a grep yet break the unattended restore.
+CUTOVER="${DIR}/../../apps/web-platform/infra/workspaces-cutover.sh"
+Q_TMP="$TMP/quiesce"; mkdir -p "$Q_TMP/state" "$Q_TMP/mnt" "$Q_TMP/stg" "$Q_TMP/bin"
+
+# Q1 — resume_writers: the reconcile start is preceded by the is-enabled == disabled guard, and the
+# skip is logged with the contract marker on the luks tag.
+awk '/^resume_writers\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$CUTOVER" | grep -v '^[[:space:]]*#' > "$Q_TMP/rw.sh" || true
+q_rw_n=$(wc -l < "$Q_TMP/rw.sh" | tr -d '[:space:]')
+if [ "$q_rw_n" -gt 20 ]; then pass; else fail "Q1a: resume_writers body not extracted (got $q_rw_n lines) — every Q1 row below would be vacuous"; fi
+q_start_ln=$(grep -nF 'systemctl start inngest-server.service' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+q_guard_ln=$(grep -nE '"\$\(systemctl is-enabled inngest-server\.service 2>/dev/null( \|\| true)?\)" = disabled' "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+Q_MARK='SOLEUR_WORKSPACES_LUKS_INNGEST_START_SKIPPED feature=workspaces-luks op=workspaces-luks-inngest-start-skipped reason=quiesced'
+q_skip_ln=$(grep -nF "logger -t \"\$LUKS_LOG_TAG\" -- \"$Q_MARK" "$Q_TMP/rw.sh" | head -1 | cut -d: -f1 || true)
+if [ -n "$q_start_ln" ] && [ -n "$q_guard_ln" ] && [ "$q_guard_ln" -lt "$q_start_ln" ]; then pass
+else fail "Q1b: resume_writers' inngest-server start (line ${q_start_ln:-none}) is not preceded by the is-enabled = disabled guard (line ${q_guard_ln:-none})"; fi
+if [ -n "$q_skip_ln" ] && [ -n "$q_guard_ln" ] && [ "$q_guard_ln" -lt "$q_skip_ln" ]; then pass
+else fail "Q1c: the quiesced skip is not logged as '$Q_MARK' on \$LUKS_LOG_TAG after the guard"; fi
+
+# Q2 — resume_writers EXECUTED (sourced; guard => functions only) with a stub systemctl.
+q_resume() {  # $1 = is-enabled answer -> call log at $Q_TMP/rw-$1.log
+  : > "$Q_TMP/rw-$1.log"
+  (
+    export WORKSPACES_STATE_DIR="$Q_TMP/state" WORKSPACES_MOUNT="$Q_TMP/mnt" WORKSPACES_STAGING="$Q_TMP/stg"
+    # shellcheck source=/dev/null
+    source "$CUTOVER" >/dev/null 2>&1
+    Q_LOG="$Q_TMP/rw-$1.log"; Q_EN="$1"
+    mountpoint() { return 0; }
+    systemctl() {
+      printf 'systemctl %s\n' "$*" >> "$Q_LOG"
+      case "${1:-}" in
+        is-active) return 3 ;;
+        is-enabled) printf '%s\n' "$Q_EN"; [ "$Q_EN" = enabled ] && return 0; return 1 ;;
+      esac
+      return 0
+    }
+    logger() { printf 'logger %s\n' "$*" >> "$Q_LOG"; }
+    emit_drift() { :; }; log() { :; }
+    resume_writers
+  ) >/dev/null 2>&1
+}
+q_resume disabled
+if grep -qF 'systemctl is-enabled inngest-server.service' "$Q_TMP/rw-disabled.log" \
+   && ! grep -qF 'systemctl start inngest-server.service' "$Q_TMP/rw-disabled.log" \
+   && grep -qF "$Q_MARK" "$Q_TMP/rw-disabled.log"; then pass
+else fail "Q2a: resume_writers on a DISABLED inactive inngest-server must query is-enabled, log the skip, and never start it"; fi
+if grep -qF 'systemctl start webhook.service' "$Q_TMP/rw-disabled.log"; then pass
+else fail "Q2b: the quiesced skip must not suppress the rest of resume_writers (webhook.service not restarted)"; fi
+q_resume enabled
+if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/rw-enabled.log" \
+   && ! grep -qF 'INNGEST_START_SKIPPED' "$Q_TMP/rw-enabled.log"; then pass
+else fail "Q2c: an inactive but ENABLED inngest-server must still be reconciled (started)"; fi
+
+# Q3 — the dead-man string (source, comment-stripped): its only inngest-server start is guarded inline.
+q_dm_src=$(grep -v '^[[:space:]]*#' "$CUTOVER" | grep -F '/bin/sh -c "' | grep -F 'SOLEUR_WORKSPACES_LUKS_DEADMAN' || true)
+q_dm_starts=$(printf '%s' "$q_dm_src" | grep -oF 'systemctl start inngest-server.service' | wc -l | tr -d '[:space:]')
+q_dm_guarded=$(printf '%s' "$q_dm_src" | grep -oF '[ \"\$(systemctl is-enabled inngest-server.service 2>/dev/null)\" = disabled ] || systemctl start inngest-server.service' | wc -l | tr -d '[:space:]')
+if [ -n "$q_dm_src" ] && [ "$q_dm_starts" -ge 1 ] && [ "$q_dm_starts" -eq "$q_dm_guarded" ]; then pass
+else fail "Q3: the dead-man sh -c string starts inngest-server unguarded (starts=$q_dm_starts guarded=$q_dm_guarded) — the unattended path would re-arm a quiesced scheduler"; fi
+# Q3b — the dead-man skip carries the SAME contract marker as the reconcile (one grep finds both).
+q_dm_skip=$(printf '%s' "$q_dm_src" | grep -oF "= disabled ] && logger -t \${LUKS_LOG_TAG} -- '$Q_MARK'" | wc -l | tr -d '[:space:]')
+if [ "$q_dm_skip" -eq 1 ]; then pass
+else fail "Q3b: the dead-man sh -c string does not log '$Q_MARK' behind the is-enabled = disabled test (got $q_dm_skip)"; fi
+
+# Q4 — the dead-man string RENDERED by the real arm_dead_man, parsed and EXECUTED under sh.
+(
+  export WORKSPACES_STATE_DIR="$Q_TMP/state" WORKSPACES_MOUNT="$Q_TMP/mnt" WORKSPACES_STAGING="$Q_TMP/stg"
+  # #6604 step 7 (PR #9286): arm_dead_man refuses to arm without a restorable recorded plaintext
+  # device. Seed the record the cutover's rollback rehearsal writes, and answer the physical probe
+  # like an intact ext4 plaintext (the same seams workspaces-luks-harness.sh uses). The composing
+  # _plaintext_record_status stays REAL. The fire bakes the blkid path, so point it at a stub.
+  printf 'PLAINTEXT_DEV=/dev/sdz9\n' >> "$Q_TMP/state/state"
+  # shellcheck source=/dev/null
+  source "$CUTOVER" >/dev/null 2>&1
+  _plaintext_dev_type() { printf ext4; }
+  _plaintext_blkid_bin() { printf '%s' "$Q_TMP/bin/blkid"; }
+  DRY_RUN=0
+  systemd-run() { local a; for a in "$@"; do printf '%s\0' "$a"; done > "$Q_TMP/dm.args"; }
+  # #9045: arm_dead_man now queries the units before and after systemd-run and fails closed unless
+  # the timer reads waiting. Answer like a fresh host (nothing loaded) until the run, then like a
+  # just-armed timer — never the REAL host's systemd, which this suite must not touch.
+  systemctl() {
+    case "${1:-} $*" in
+      "show "*workspaces-luks-deadman.timer*SubState*) if [ -f "$Q_TMP/dm.args" ]; then echo waiting; else echo dead; fi ;;
+      "show "*) echo inactive ;;
+    esac
+    return 0
+  }
+  emit_drift() { :; }
+  logger() { :; }
+  arm_dead_man
+) >/dev/null 2>&1
+q_dm_cmd=""; q_next=0
+if [ -f "$Q_TMP/dm.args" ]; then
+  while IFS= read -r -d '' q_a; do
+    if [ "$q_next" = 1 ]; then q_dm_cmd="$q_a"; break; fi
+    [ "$q_a" = "-c" ] && q_next=1
+  done < "$Q_TMP/dm.args"
+fi
+case "$q_dm_cmd" in
+  *'systemctl start inngest-server.service'*) pass ;;
+  *) fail "Q4a: arm_dead_man rendered no sh -c string carrying the inngest-server start (got ${#q_dm_cmd} bytes) — Q4 rows would be vacuous" ;;
+esac
+if sh -n -c "$q_dm_cmd" 2>/dev/null; then pass; else fail "Q4b: the rendered dead-man string does not parse under sh -n (quoting broke the unattended restore)"; fi
+for q_b in logger docker umount cryptsetup mount; do
+  printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/dm-exec.log"\nexit 0\n' "$q_b" "$Q_TMP" > "$Q_TMP/bin/$q_b"
+done
+printf '#!/bin/sh\nprintf "blkid %%s\\n" "$*" >> "%s/dm-exec.log"\necho ext4\n' "$Q_TMP" > "$Q_TMP/bin/blkid"
+cat > "$Q_TMP/bin/systemctl" <<STUB
+#!/bin/sh
+printf 'systemctl %s\n' "\$*" >> "$Q_TMP/dm-exec.log"
+if [ "\$1" = is-enabled ]; then printf '%s\n' "\$Q_EN"; [ "\$Q_EN" = enabled ] && exit 0; exit 1; fi
+exit 0
+STUB
+chmod +x "$Q_TMP/bin/"*
+: > "$Q_TMP/dm-exec.log"
+Q_EN=disabled PATH="$Q_TMP/bin:$PATH" sh -c "$q_dm_cmd" >/dev/null 2>&1 || true
+if grep -qF 'systemctl is-enabled inngest-server.service' "$Q_TMP/dm-exec.log" \
+   && ! grep -qF 'systemctl start inngest-server.service' "$Q_TMP/dm-exec.log" \
+   && grep -qF 'systemctl start webhook.service' "$Q_TMP/dm-exec.log" \
+   && grep -qF 'result=ok reason=plaintext_remounted' "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4c: executed dead-man with a DISABLED inngest-server must skip only its start (and still restore webhook + log result=ok)"; fi
+# Q4e — …and the rendered skip reaches logger as ONE argv carrying the exact marker (quoting intact).
+if grep -qxF "logger -t luks-monitor -- $Q_MARK" "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4e: executed dead-man with a DISABLED inngest-server did not log '$Q_MARK' via logger -t luks-monitor"; fi
+: > "$Q_TMP/dm-exec.log"
+Q_EN=enabled PATH="$Q_TMP/bin:$PATH" sh -c "$q_dm_cmd" >/dev/null 2>&1 || true
+if grep -qF 'systemctl start inngest-server.service' "$Q_TMP/dm-exec.log" \
+   && ! grep -qF 'INNGEST_START_SKIPPED' "$Q_TMP/dm-exec.log"; then pass
+else fail "Q4d: executed dead-man with an ENABLED inngest-server must still start it (and log no skip)"; fi
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
@@ -281,14 +473,16 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
 # floor that depends on the thing it guards is not a floor.
 #
-# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
-# suite on every legitimately-added assertion and train people to bump it unread.
+# EXACT, NOT A FLOOR (#8077 review) — a row that silently stops dispatching (an early `exit`, an
+# arm whose `if` never reaches pass/fail) keeps a `-lt` floor green while the count drops by one.
+# The cost is deliberate: adding a row means bumping this number in the same diff.
+readonly EXPECTED_ASSERTIONS=42
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 18 ]]; then
+if [[ "$_ran" -ne "$EXPECTED_ASSERTIONS" ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 18. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: %s assertions ran, expected exactly %s. Arms were added, deleted, skipped, or the suite exited early.\n' "$_ran" "$EXPECTED_ASSERTIONS"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 18)\n' "$_ran"
+  printf '  ok   anti-vacuity: exactly %s assertions ran\n' "$_ran"
 fi
 
 echo ""

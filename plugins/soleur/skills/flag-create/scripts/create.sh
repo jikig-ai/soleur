@@ -2,13 +2,66 @@
 # Create a new runtime feature flag in Flagsmith + wire it into the codebase.
 #
 # Contract: SKILL.md in the parent directory.
-# Usage: bash create.sh <kebab-name> [--description "..."] [--dev-on] [--prd-on] [--dry-run]
+# Usage: bash create.sh <kebab-name> [--description "..."] [--dev-on] [--prd-on] [--flagsmith-only] [--dry-run]
+#
+# Run the write in your OWN terminal: the ack below needs a person to type yes.
+# An agent runs only `--dry-run` and prints this command for the operator.
+#
+# Exit codes:
+#   0 — success / dry-run
+#   1 — usage / name / already-registered failure, or the operator did not type
+#       yes at the ack (stdout: SOLEUR_BOOTSTRAP_ABORTED stage=ack; nothing mutated)
+#   2 — prerequisite missing, or an option value that looks like a flag
+#   3 — Flagsmith API error
+#   4 — file edit / audit append failed
+#   5 — Doppler write failed
+#  64 — no TTY on stdin for a write run (stdout: SOLEUR_BOOTSTRAP_INPUT_REQUIRED);
+#       refused before any credential fetch or network call (#8486)
 
 set -euo pipefail
+
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (the Flagsmith management key, and the
+# soleur/prd SUPABASE_SERVICE_ROLE_KEY the audit helper binds) is acquired by
+# `doppler secrets get` BELOW this point, so a conditional arm would test an empty
+# variable at guard time, open, and then trace the acquisition itself. The refusal
+# prints on STDOUT because agent runtimes surface stdout and swallow stderr
+# (knowledge-base/project/constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of these credentials works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
 
 # Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
+
+# Human-presence gate (#8486, ADR-249). Every production write below waits on the
+# operator-script library's class-2 ack, which has NO skip variable and no flag:
+# it needs a person typing `yes` at a terminal, so an agent's tool subprocess
+# (no TTY) is refused with exit 64 before any credential fetch. Clear anything an
+# inherited environment could use to pre-empt the library's double-source guard
+# or to stand in for its ack before sourcing it. (BASH_ENV runs before this
+# script and cannot be cleared from inside it — recorded in ADR-249 as a
+# hijack-class residual.)
+unset _SOLEUR_OPERATOR_SCRIPT_LOADED SOLEUR_OP_ACKED
+unset -f soleur_op_ack_or_die soleur_op_input_required soleur_op_aborted
+# shellcheck source=../../../scripts/lib/operator-script.sh
+source "$SCRIPT_DIR/../../../scripts/lib/operator-script.sh"
+[[ ${SOLEUR_OP_LIB_API:-0} -eq 1 ]] || {
+  printf 'SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=%s\n' "${SOLEUR_OP_LIB_API:-0}"
+  exit 64
+}
 
 readonly FLAGSMITH_PROJECT_ID=39082
 readonly FLAGSMITH_ENV_DEV_ID=90722
@@ -30,7 +83,11 @@ while [[ $# -gt 0 ]]; do
     --dev-on)         DEV_ON=1; shift ;;
     --prd-on)         PRD_ON=1; shift ;;
     --flagsmith-only) FLAGSMITH_ONLY=1; shift ;;
-    --description)    DESCRIPTION="$2"; shift 2 ;;
+    --description)
+      # A value that looks like a flag is refused, so `--description --dry-run`
+      # can never read as a dry run to one parser and a write to another (#8486).
+      [[ $# -ge 2 && "$2" != --* ]] || { echo "--description needs a value that does not start with --" >&2; exit 2; }
+      DESCRIPTION="$2"; shift 2 ;;
     --*)              echo "unknown flag: $1" >&2; exit 1 ;;
     *)                NAME="$1"; shift ;;
   esac
@@ -40,6 +97,9 @@ done
 [[ ! "$NAME" =~ ^[a-z][a-z0-9-]*[a-z0-9]$ ]] && { echo "name must be lowercase kebab-case (got: $NAME)" >&2; exit 1; }
 
 ENV_VAR="FLAG_$(echo "$NAME" | tr 'a-z-' 'A-Z_')"
+
+# --- no TTY, no write: refuse before any credential fetch or network call ---
+if [[ $DRY_RUN -eq 0 ]]; then [[ -t 0 ]] || soleur_op_input_required "destructive-write-ack(no-skip-variable-by-design)" ack; fi
 
 # --flagsmith-only (gap 1, #4581 PR-2): the flag is ALREADY code-wired (in
 # RUNTIME_FLAGS + .env.example) — this run only creates the Flagsmith feature.
@@ -62,7 +122,7 @@ fi
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
 [[ -z "$TOKEN" ]] && { echo "FLAGSMITH_MANAGEMENT_API_KEY not in Doppler soleur/cli_ops" >&2; exit 2; }
 
-fs_api() { curl -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"; }
+fs_api() { curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"; }
 
 # Pre-check: not already a feature in Flagsmith.
 EXISTING=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/features/?q=${NAME}" \
@@ -91,8 +151,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-read -p "Proceed? Type 'yes': " ACK
-[[ "$ACK" == "yes" ]] || { echo "aborted" >&2; exit 0; }
+soleur_op_ack_or_die "Create flag '${NAME}' in Flagsmith and wire it into the code and Doppler (dev + prd) now? Type yes: "
 
 # --- audit append (WORM) ---------------------------------------------------
 ACTOR=$(doppler secrets get OPERATOR_EMAIL -p soleur -c cli_ops --plain 2>/dev/null | tr '[:upper:]' '[:lower:]')

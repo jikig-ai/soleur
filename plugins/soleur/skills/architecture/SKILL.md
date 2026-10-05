@@ -3,9 +3,17 @@ name: architecture
 description: "This skill should be used when managing Architecture Decision Records or C4 diagrams."
 ---
 
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
+
 # Architecture as Code
 
 Create, manage, and query Architecture Decision Records (ADRs) and maintain an interactive [LikeC4](https://likec4.dev/) architecture model. ADRs are version-controlled markdown; the C4 model is version-controlled LikeC4 DSL (`.c4`). All artifacts live in `knowledge-base/engineering/architecture/`.
+
+<!-- operator-typed-render:start -->
+**Any message this skill PRINTS that tells the operator to run a skill or command renders at emit time.** The doc names it canonically (`soleur:<name>`, ADR-226); before printing, render it as the active harness's **operator-typed form** per `formatSkillInvocation` (`plugins/soleur/lib/harness.ts`), which owns the per-harness slash and sigil forms — the operator types that string into a fresh session where no routing contract is in context, so a bare canonical name is model-discretion there rather than a dispatch. This covers abort messages, `AskUserQuestion` prompts and options, `Display`/`echo` lines and resume prompts alike; an agent-read instruction stays canonical.
+<!-- operator-typed-render:end -->
 
 ## Sub-commands
 
@@ -40,7 +48,7 @@ Verify the knowledge-base directory exists:
 
 ```bash
 if [[ ! -d "knowledge-base" ]]; then
-  echo "No knowledge-base/ directory found. Create one first or run /soleur:sync."
+  echo "No knowledge-base/ directory found. Create one first or run soleur:sync."
   # Stop execution
 fi
 ```
@@ -53,6 +61,15 @@ mkdir -p knowledge-base/engineering/architecture/diagrams
 ```
 
 **Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, abort with: "Error: architecture skill cannot run on main/master. Checkout a feature branch first."
+
+**Vocabulary.** Before committing a word that names a concept, check it against `knowledge-base/project/glossary.md` and use the sense its pointer settles; if the word is materially ambiguous and has no entry, hedge in the artifact and name the ambiguity. The instruction is stated once in [glossary-format.md](../kb-glossary/references/glossary-format.md) §The consumer pointer and is not restated here.
+
+**Rejected-concepts substrate.** Before recording a decision that refuses a *concept* rather than a
+*mechanism*, read [ADR-234](../../../../knowledge-base/engineering/architecture/decisions/ADR-234-rejected-concepts-are-a-distinct-kb-substrate.md):
+an ADR's `## Alternatives Considered` table is scoped to the mechanisms of one decision, so a
+concept-level refusal belongs in the no-list at `knowledge-base/project/rejected/` instead, where the
+intake pre-check can find it by concept. The two are siblings, not substitutes — the no-list cites ADR
+tables as a store the lookup also checks, and imports nothing from them.
 
 ---
 
@@ -84,10 +101,9 @@ Create a new ADR with the next sequential number.
 
    If the contributor picks "Unsure," ask each of the 5 triggers as its own yes/no AskUserQuestion. Compute: any yes → rich, all no → terse.
 
-   **Pipeline mode default.** If running inside `/soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
+   **Pipeline mode default.** If running inside `soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
 
-6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. Fill in frontmatter:
-   - `adr: ADR-<NNN>`
+6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. The filename is the sole ordinal authority; do not add an `adr:` frontmatter key. Fill in frontmatter:
    - `title: <title>`
    - `status: active`
    - `date: <today YYYY-MM-DD>`
@@ -131,7 +147,7 @@ Display all ADRs with their status, number, title, and date.
    ls knowledge-base/engineering/architecture/decisions/ADR-*.md 2>/dev/null
    ```
 
-2. **If no ADRs exist:** Display "No ADRs found. Run `/soleur:architecture create` to create one."
+2. **If no ADRs exist:** Display "No ADRs found. Run `soleur:architecture create` to create one."
 
 3. **For each ADR file:** Read the YAML frontmatter and extract `adr`, `title`, `status`, `date`.
 
@@ -246,10 +262,9 @@ The model lives as a LikeC4 project under
 
 Incremental edits to the consolidated model. Each is a focused patch to the
 `.c4` files (no Mermaid). After any patch, run `render` (see below) to
-**validate** the source. You do NOT need to hand-regenerate `model.likec4.json`:
-the `c4-model-regenerate` pre-commit hook re-renders and re-stages it from the
-edited `.c4` sources on commit (run the repo-root `regenerate-c4-model.sh` —
-see `render` below — only when committing outside that hook).
+**validate** the source, then regenerate `model.likec4.json` with `render` and commit it
+with the `.c4` change. (In the Soleur repository itself a `c4-model-regenerate`
+pre-commit hook does this on commit; other repositories have no such hook.)
 
 - **add-container `<id>`** / **add-component `<id>`** — add an element inside the
   correct parent in `model.c4` (`container` / `database` / `component` kind),
@@ -269,35 +284,43 @@ renders. The Knowledge Base viewer does NOT run the `likec4` toolchain at
 runtime (it would pull vite/esbuild into production deps); it reads the
 committed, layouted `model.likec4.json`.
 
-**You normally do not run this by hand.** Regeneration of `model.likec4.json`
-is **automatic on commit** via the `c4-model-regenerate` pre-commit hook
-(`lefthook.yml`): any staged `.c4` change re-renders and re-stages the artifact,
-and a CI freshness test (`plugins/soleur/test/c4-model-freshness.test.sh`) is the
-merge-gating backstop if the hook is bypassed. Use `render` only to **validate**
-or for an **ad-hoc/out-of-hook** regen:
+**Run this after every `.c4` edit and commit the result.** Only the Soleur repository
+regenerates on commit automatically (its `c4-model-regenerate` lefthook hook, backed by
+`plugins/soleur/test/c4-model-freshness.test.sh` in CI); in any other repository an
+unregenerated `model.likec4.json` stays stale until someone runs this:
 
 ```bash
 # Canonical regen (pinned, off-tree-validated, idempotent) — same primitive the
-# pre-commit hook runs:
-bash scripts/regenerate-c4-model.sh
+# pre-commit hook and the merge resolver run; renders the current repository:
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/render-c4-model.sh"
 
 # Or validate only (line-numbered diagnostics) without rewriting the artifact:
+# --no-use-dot keeps the drift check on the same wasm layout the artifact was
+# rendered with — a dot-layout verdict would disagree with committed bytes.
 cd knowledge-base/engineering/architecture/diagrams
-npx -y likec4@1.50.0 validate .
+npx -y likec4@1.50.0 validate --no-use-dot .
 ```
 
 The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile`
-+ `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
+
+- `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
 `c4-likec4-version-pin.test.ts`. Never pin to a floating tag (the unpinned
 `likec4` / a moving release) — a CLI/client schema skew silently corrupts the
-rendered diagram. `regenerate-c4-model.sh` renders
-off-tree and refuses to publish an empty/invalid model, so a broken `.c4` can
-never clobber the good committed artifact.
+rendered diagram. `render-c4-model.sh` renders
+off-tree and refuses to publish an empty/invalid/zero-view model, so a broken
+`.c4` or a failed layout can never clobber the good committed artifact.
 
 On success, report element / relationship / view counts (read the
 `elements` / `relations` / `views` key counts from `model.likec4.json`). On
-failure, surface the line-numbered diagnostics and fix the `.c4` source before
-continuing.
+failure, branch on the refusal class — do NOT uniformly "fix the source":
+
+- **Source validation error or empty/degenerate model** — surface the
+  line-numbered diagnostics and fix the `.c4` source before continuing.
+- **"elements but no views — a layout failure"** — the `.c4` source is
+  innocent; editing it cannot help. Read the render log tail the refusal
+  prints, retry the render once, and if it persists reproduce with the
+  `export json --no-use-dot` command the message names, then report the
+  outcome rather than hand-editing the model.
 
 ---
 
@@ -375,6 +398,14 @@ Assess a feature or plan against the NFR register to identify which non-function
 10. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR, deviating from a principle), ask: "Create an ADR to document these decisions?" Principle alignment will be pre-filled from the assessment.
 
 ---
+
+## Sharp Edges
+
+- **A re-open or review trigger keyed on an issue CLOSING fires at the merge of the PR that fixes it, when zero post-fix data exists.** Bind an ADR trigger to a sample floor or a date ("≥N rows after the fix merged, or T+6 weeks"), have the fixing PR carry `Ref #N`, and close the issue only after the re-run. **Why:** #8399 — ADR-229's "when #8470 closes, re-run the triage" would have reported all-clear on an empty sample. See `knowledge-base/project/learnings/2026-09-21-a-re-open-trigger-keyed-on-an-issue-closing-fires-at-the-fixing-merge.md`.
+
+- **An ADR ordinal derived across ALL `origin/*` refs still goes stale within a day — re-derive immediately before merge, and scope the renumber sweep to YOUR files.** `ls decisions/` is not enough (it misses sibling branches) and neither is a one-time cross-ref sweep (a sibling merges, or claims the next two, while your PR is in review). Derive with `for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do git ls-tree --name-only "$r" knowledge-base/engineering/architecture/decisions/; done | grep -oE 'ADR-[0-9]+' | sort -u -t- -k2 -n | tail`, and re-run it as the last step before merge. When renumbering, sweep only the files YOUR branch owns — the colliding ADR's own citations (plugin scripts, `model.c4`, `model.likec4.json`, session-state) must not move, and a blanket search-replace will take them. **Why:** #7441 — ADR-178 was free across 65 refs at plan time; #7426 landed it the next day and 179/180 were claimed by two sibling branches by the time it was re-checked, so it renumbered to 181 with 27 citations swept and 8 deliberately left alone.
+
+- **Regenerating a generated artifact during a merge: render from the merged tree's git objects into private staging, never in the live worktree.** Every worktree state a mid-merge render can meet (interrupt, concurrent edit, a likec4 config loaded as code, a symlink out of the repo) needs its own guard; `git merge-tree --write-tree` plus `git cat-file blob` removes those states by construction. The resolver's design is recorded in the ADR-235 amendment of 2026-09-23. See `knowledge-base/project/learnings/2026-09-23-every-guard-i-wrote-defended-a-worktree-the-render-never-needed.md`.
 
 ## ADR vs Learning
 

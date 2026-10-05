@@ -22,7 +22,7 @@
 // — a JS `try…finally` is WRONG here because step.sleep suspends via a
 // control-flow throw that would run `finally` prematurely at the first
 // suspension. That reasoning is unchanged by the added sleeps: there is still no
-// `finally`. There is no in-repo `onFailure` precedent; the config key is
+// `finally`. There was no in-repo `onFailure` precedent when this was written; the config key is
 // verified against pinned inngest 3.54.2.
 // The read-only preflight lives in its OWN preceding step so the atomic mutating
 // step holds an HTTP connection only for the toggle→settle→reset window (the
@@ -31,6 +31,16 @@
 // AP-001 exception: this is an off-Terraform live-infra mutation (transient,
 // self-reverting, single-attempt, human-gated). Registered as AP-019 in
 // principles-register.md and governed by ADR-125.
+//
+// ‼️ The "self-reverting" ground is VOID from the #7640 apex cutover onward, and
+// that is what the apex-topology precondition below exists to enforce. Once the
+// apex is a CNAME, listToggleRecords() — which queries exactly [apex, "A"] and
+// [www, "CNAME"] — returns fewer than EXPECTED_TOGGLE_RECORDS (5), so
+// restoreStateInner refuses to restore a subset and the de-proxying of www
+// becomes ONE-WAY. The routine's own fail-loud safety guarantee is precisely
+// what removes the self-reversion this exception was granted for. The other four
+// AP-019 grounds are unaffected; see principles-register.md ## Notes for the
+// scope of the void and the condition that lifts it.
 //
 // v1 = manual-trigger only (POST /api/internal/trigger-cron). Self-heal
 // auto-invoke + a drift/apply freeze-lock are deferred to a flag-gated v2
@@ -87,6 +97,16 @@ const STEADY_PROXIED = true;
 // type-aware assertion is tracked as a follow-up. Compare the parallel drift
 // class in 2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md.
 export const EXPECTED_TOGGLE_RECORDS = 5;
+
+/**
+ * DNS record types that participate in ORIGIN SELECTION for a hostname.
+ *
+ * The apex topology read is deliberately un-filtered (a `type=A` query cannot
+ * see a CNAME apex, which is the state the precondition exists to detect), so
+ * it returns MX, TXT and anything else living at the apex name. Only these
+ * three decide where a request is served from.
+ */
+const APEX_ADDRESS_RECORD_TYPES = new Set(["A", "AAAA", "CNAME"]);
 
 // Preflight allowlist: only a genuinely-stuck cert is touched. Toggling a
 // healthy in-flight order (authorization_pending / dns_changed / new) can
@@ -268,6 +288,14 @@ export interface PreconditionInputs {
   caaCount: number;
   challengeTxtPresent: boolean;
   alwaysUseHttps: string;
+  /**
+   * #7640 — the LIVE record types at the apex, read from Cloudflare with NO
+   * `type=` filter. Deliberately not derived from `listToggleRecords`, which
+   * queries `[APEX_NAME, "A"]`: that filter is exactly what makes a CNAME apex
+   * invisible to this routine. An empty array means the read failed or the
+   * apex is absent — see `checkReissuePreconditions`, which fails CLOSED on it.
+   */
+  apexRecordTypes: string[];
 }
 
 /**
@@ -305,6 +333,33 @@ export interface DnsPropagationInputs {
    */
   acmeApexServer: string;
   acmeWwwServer: string;
+  /**
+   * GitHub's OWN verdict on whether it will order a certificate, read from
+   * `GET /repos/{owner}/{repo}/pages/health` (`domain.is_https_eligible` and
+   * `alt_domain.is_https_eligible`). `null` = the health read failed.
+   *
+   * ‼️ THIS IS THE AUTHORITATIVE SIGNAL AND IT WAS MISSING UNTIL 2026-08-19.
+   * Every other field in this interface INFERS eligibility from the outside —
+   * resolver answers, absence of AAAA, the shape of a `Server:` header. The
+   * health endpoint reports the actual precondition GitHub evaluates, so it can
+   * confirm in one read what the inference chain can only approximate.
+   *
+   * During the 2026-08-16 apex outage the whole inference chain passed (A-records
+   * GitHub anycast on both public resolvers, no AAAA, ACME path GitHub-shaped)
+   * while GitHub still refused to issue. Had the routine read this field it
+   * would have reported `is_https_eligible=false` directly instead of leaving
+   * the operator to conclude, wrongly, that the authorization was wedged
+   * server-side and needed GitHub Support.
+   */
+  httpsEligibleApex: boolean | null;
+  httpsEligibleWww: boolean | null;
+  /**
+   * `caa_error` from the same health read. GitHub evaluates CAA itself, so this
+   * settles in one field what an external `dig CAA` walk can only guess at —
+   * and CAA failure is otherwise indistinguishable from a short window, since
+   * both leave the cert flat at `bad_authz`.
+   */
+  healthCaaError: string | null;
 }
 
 export type DnsPropagationVerdict =
@@ -454,9 +509,66 @@ export function checkDnsPropagated(
     };
   }
 
+  // ── GitHub's own verdict, checked LAST and treated as decisive (2026-08-19) ──
+  //
+  // Everything above infers eligibility from outside. This is GitHub reporting
+  // the precondition it actually evaluates, so it overrides a passing inference
+  // chain — which is exactly the case that burned us: on 2026-08-16 every check
+  // above passed while GitHub still would not issue.
+  //
+  // A CAA rejection is TERMINAL: waiting cannot clear it, and continuing would
+  // spend a Let's Encrypt validation attempt to learn nothing. Reported
+  // separately from ineligibility because the remedy is completely different
+  // (fix the CAA record vs. wait for the flip to register).
+  if (inputs.healthCaaError) {
+    return {
+      status: "failed",
+      reason:
+        `GitHub reports a CAA error (${inputs.healthCaaError}) — the zone forbids ` +
+        `the issuing CA, so no window length can succeed. Fix CAA before remediating.`,
+    };
+  }
+
+  // A failed health READ is not evidence of ineligibility — `retry`, never
+  // `failed`. Coalescing an unreachable endpoint to "not eligible" would abort
+  // a healthy remediation on a transient blip, the same fail-open/fail-closed
+  // trap the AAAA and A-record guards above already document.
+  if (inputs.httpsEligibleApex === null || inputs.httpsEligibleWww === null) {
+    return {
+      status: "retry",
+      reason:
+        "pages/health read inconclusive — cannot confirm GitHub considers the " +
+        "domain HTTPS-eligible (could not ask, not a negative answer)",
+    };
+  }
+
+  // BOTH hosts must be eligible: the certificate covers apex AND www as one
+  // order, so an ineligible www fails the whole issuance even with a perfect
+  // apex. Attributed per-host — collapsing them with `&&` would lose which half
+  // is blocking, and www is the half nobody thinks to check.
+  if (!inputs.httpsEligibleApex || !inputs.httpsEligibleWww) {
+    const blocked = [
+      !inputs.httpsEligibleApex ? "apex" : null,
+      !inputs.httpsEligibleWww ? "www" : null,
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    return {
+      status: "retry",
+      reason:
+        `GitHub still reports is_https_eligible=false for ${blocked} — the ` +
+        `DNS-only flip has not registered with GitHub yet. GitHub re-evaluates ` +
+        `on its OWN schedule, so this can lag public DNS by far longer than the ` +
+        `resolvers suggest; that lag is what the 2026-08-16 hand-run mistook for ` +
+        `a permanently wedged authorization.`,
+    };
+  }
+
   return {
     status: "propagated",
-    reason: `public resolvers return GitHub anycast (${inputs.resolved4.join(", ")}), no AAAA, ACME path GitHub-shaped`,
+    reason:
+      `public resolvers return GitHub anycast (${inputs.resolved4.join(", ")}), no AAAA, ` +
+      `ACME path GitHub-shaped, and GitHub reports is_https_eligible=true for apex + www`,
   };
 }
 
@@ -547,6 +659,76 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
     // anyway — so an unreadable setting must not block. #6657 live-run: the DNS-only
     // token made this precondition false with `=== "off"` and blocked the remediation.
     alwaysUseHttpsOff: inputs.alwaysUseHttps !== "on",
+    // ‼️ #7640 — TOPOLOGY PRECONDITION. This whole routine is written for the
+    // GitHub Pages topology: four apex A-records at 185.199.x plus the www
+    // CNAME. After the Cloudflare Pages cutover the apex is a CNAME, and every
+    // OTHER precondition above still passes in that topology (Pages returns 404
+    // on the ACME path, CAA is still empty, the challenge TXT is still
+    // published). So without this check the routine HALF-RUNS: `listToggleRecords`
+    // asks for `[APEX_NAME, "A"]`, gets nothing, leaves the apex alone — and the
+    // only record it actually de-proxies is **www**, dropping HSTS, the
+    // HTTPS-upgrade rule, WAF and bot management on a host `domains.md` mandates
+    // be proxied. It cannot put it back: `restoreStateInner` refuses to restore
+    // a subset (`records.length < EXPECTED_TOGGLE_RECORDS`), so the de-proxying
+    // is ONE-WAY and the fail-loud guarantee is what makes it so. Refusing to
+    // start is the only safe behaviour, and `precondition_blocked` is NOT in
+    // BENIGN_OUTCOMES, so it pages rather than logging quietly.
+    //
+    // Fails CLOSED on an empty read, unlike `alwaysUseHttpsOff` above: that one
+    // has a second authoritative signal (the ACME carve-out), this one has none.
+    // "We could not read the apex" must never be treated as "the apex is A".
+    //
+    // ONLY ADDRESS RECORDS ARE CONSIDERED, and that is load-bearing rather than
+    // tidiness. The live read is deliberately NOT `type=`-filtered (a `type=A`
+    // query is exactly what makes a CNAME apex invisible — the bug this
+    // precondition exists to catch), so it returns EVERY record at the apex
+    // name. Measured against the live zone on 2026-08-20 that is 10 records:
+    // 4 A, 2 MX, 4 TXT. A bare `.every(t => t === "A")` over that array is
+    // FALSE on the CURRENT GitHub Pages topology, which would block the routine
+    // from this PR's merge — the precise inversion of the intent, since the
+    // hazard only begins at the cutover. MX and TXT do not participate in origin
+    // selection; A, AAAA and CNAME do.
+    apexTopologyIsA: (() => {
+      const addressTypes = inputs.apexRecordTypes
+        .map((t) => t.toUpperCase())
+        .filter((t) => APEX_ADDRESS_RECORD_TYPES.has(t));
+      return (
+        addressTypes.length > 0 && addressTypes.every((t) => t === "A")
+      );
+    })(),
+
+    // ‼️ A *TYPE* CHECK CANNOT PROTECT AGAINST A *COUNT* CHANGE (#7640 PR4a).
+    //
+    // The mirror of the warning above `EXPECTED_TOGGLE_RECORDS`. That one says a
+    // count cannot see a record TYPE that was never in dns.tf; this says the
+    // converse, and the converse is the one that shipped.
+    //
+    // `apexTopologyIsA` is type-shaped: it asks whether every apex ADDRESS
+    // record is an `A`. ADR-194's PR4a shrinks the apex `for_each` from four
+    // keys to one WITHOUT changing the type, so post-PR4a the live topology is
+    // 1 apex `A` + 1 www `CNAME` — `apexTopologyIsA` is still TRUE, every other
+    // precondition still holds, and the routine proceeds. `setRecordsProxied(…,
+    // false)` then runs unconditionally, and `restoreStateInner` reads
+    // 2 < EXPECTED_TOGGLE_RECORDS and refuses to restore a subset.
+    //
+    // The de-proxying is therefore ONE-WAY, one merge EARLIER than the header
+    // above says it can be — and the consequence is worse than the post-cutover
+    // case that header analyses. Unproxied, the apex resolves straight to
+    // 185.199.108.153, whose GitHub Pages origin certificate expired 2026-08-16
+    // and is never renewed. The `ssl = "full"` Configuration Rule that holds the
+    // site up acts at the Cloudflare EDGE, which de-proxying bypasses — so on an
+    // HSTS-preloaded apex every visitor gets a hard TLS failure with no edge
+    // left to rescue them.
+    //
+    // Asserting the SET SIZE up front converts that silent one-way flip into a
+    // loud refusal before any mutation runs. `+ 1` is the www CNAME, the one
+    // member of the toggle set that is not an apex address record.
+    toggleSetIsComplete: (() => {
+      const apexAddressCount = inputs.apexRecordTypes
+        .map((t) => t.toUpperCase())
+        .filter((t) => APEX_ADDRESS_RECORD_TYPES.has(t)).length;
+      return apexAddressCount + 1 === EXPECTED_TOGGLE_RECORDS;
+    })(),
   };
   const failed = Object.entries(results)
     .filter(([, ok]) => !ok)
@@ -914,6 +1096,13 @@ export async function runReissueSteps(
       acmeWwwStatus: dns.acmeWwwStatus,
       acmeApexServer: dns.acmeApexServer,
       acmeWwwServer: dns.acmeWwwServer,
+      // Expected FALSE here — the records are still proxied at this point. The
+      // baseline is what makes the post-flip transition legible: false→true
+      // proves the flip registered with GitHub, and false→false across the whole
+      // window is the 2026-08-16 signature.
+      httpsEligibleApex: dns.httpsEligibleApex,
+      httpsEligibleWww: dns.httpsEligibleWww,
+      healthCaaError: dns.healthCaaError,
       detail: "baseline before the DNS-only flip",
     });
     return dns;
@@ -1010,6 +1199,13 @@ export async function runReissueSteps(
           acmeWwwStatus: inputs.acmeWwwStatus,
           acmeApexServer: inputs.acmeApexServer,
           acmeWwwServer: inputs.acmeWwwServer,
+          // The decisive fields. Emitted per attempt so a future stall is
+          // readable straight off Better Stack: `is_https_eligible=false` on
+          // every tick names the blocker outright, where the 2026-08-16 run left
+          // the operator inferring (wrongly) from a silent cert state.
+          httpsEligibleApex: inputs.httpsEligibleApex,
+          httpsEligibleWww: inputs.httpsEligibleWww,
+          healthCaaError: inputs.healthCaaError,
           ok: v.status === "propagated",
           outcome: v.status,
           detail: v.reason,
@@ -1146,7 +1342,7 @@ export async function runReissueSteps(
 
 // =============================================================================
 // Live-IO dep construction (Octokit + Cloudflare fetch), mirroring
-// cf-cache-purge.ts (Bearer + AbortController) + cron-gh-pages-cert-state.ts.
+// cf-cache-purge.ts (Bearer + AbortController).
 // =============================================================================
 
 async function cfFetch(
@@ -1343,12 +1539,49 @@ export function buildLiveDeps(args: {
       } catch {
         alwaysUseHttps = "unknown";
       }
+      // #7640 — read the apex WITHOUT a `type=` filter. `listToggleRecords`
+      // asks for `type=A`, which returns [] against a CNAME apex and so cannot
+      // distinguish "post-cutover topology" from "GitHub Pages topology, read
+      // failed". `[]` here is the FAIL-CLOSED value: checkReissuePreconditions
+      // blocks on it.
+      let apexRecordTypes: string[] = [];
+      try {
+        const res = await cfFetch(
+          `/zones/${zoneId}/dns_records?name=${encodeURIComponent(APEX_NAME)}`,
+          { method: "GET", token: cfToken },
+        );
+        if (res.ok) {
+          apexRecordTypes = (
+            (res.body as { result?: Array<{ type?: string }> })?.result ?? []
+          )
+            .map((r) => r.type ?? "")
+            .filter(Boolean);
+        } else {
+          reportSilentFallback(
+            new Error(`CF apex topology read failed: status=${res.status}`),
+            {
+              feature: SENTRY_FEATURE,
+              op: "gather-apex-topology",
+              extra: { name: APEX_NAME, status: res.status },
+            },
+          );
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: SENTRY_FEATURE,
+          op: "gather-apex-topology",
+          message: "CF apex topology read threw — failing closed",
+          extra: { name: APEX_NAME },
+        });
+        apexRecordTypes = [];
+      }
       return {
         acmeApexStatus,
         acmeWwwStatus,
         caaCount,
         challengeTxtPresent,
         alwaysUseHttps,
+        apexRecordTypes,
       };
     },
     // ‼️ REAL implementation, not a stub. The gate's type member, its step, and
@@ -1410,9 +1643,48 @@ export function buildLiveDeps(args: {
           return { status: -1, server: "" };
         }
       };
-      const [apex, www] = await Promise.all([
+      // GitHub's OWN eligibility verdict (2026-08-19). Every other observation
+      // here infers whether GitHub will issue; this asks it. Failure coalesces
+      // to `null` — NOT `false` — so `checkDnsPropagated` can distinguish "GitHub
+      // says no" from "we could not ask", the same fail-open/fail-closed split
+      // the resolver legs above already make.
+      const health = async (): Promise<{
+        apex: boolean | null;
+        www: boolean | null;
+        caaError: string | null;
+      }> => {
+        try {
+          const { Octokit } = await import("@octokit/core");
+          const octokit = new Octokit({ auth: installationToken });
+          const res = await octokit.request(
+            "GET /repos/{owner}/{repo}/pages/health",
+            {
+              owner: REPO_OWNER,
+              repo: REPO_NAME,
+              request: { signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) },
+            },
+          );
+          const d = res.data as {
+            domain?: { is_https_eligible?: boolean; caa_error?: string | null };
+            alt_domain?: { is_https_eligible?: boolean };
+          };
+          // An ABSENT field is unknown, not false — `?? null` rather than
+          // `?? false`, or a schema change would silently read as ineligible and
+          // stall every future run at the gate.
+          return {
+            apex: d.domain?.is_https_eligible ?? null,
+            www: d.alt_domain?.is_https_eligible ?? null,
+            caaError: d.domain?.caa_error ?? null,
+          };
+        } catch {
+          return { apex: null, www: null, caaError: null };
+        }
+      };
+
+      const [apex, www, eligibility] = await Promise.all([
         probe(APEX_NAME),
         probe(WWW_NAME),
+        health(),
       ]);
       return {
         resolved4,
@@ -1425,6 +1697,9 @@ export function buildLiveDeps(args: {
         // lives in checkDnsPropagated, per this file's gather/check split.
         acmeApexServer: apex.server,
         acmeWwwServer: www.server,
+        httpsEligibleApex: eligibility.apex,
+        httpsEligibleWww: eligibility.www,
+        healthCaaError: eligibility.caaError,
       };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

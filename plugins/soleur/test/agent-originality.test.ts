@@ -26,8 +26,11 @@
 
 import { describe, test, expect } from "bun:test";
 import { discoverAgents, parseComponent, getComponentName } from "./helpers";
-
-const SHINGLE_N = 8;
+// The scorer moved to ./lib/shingles.ts (#8289) so a second consumer could reuse
+// it rather than re-implement it. The attribution header above and the
+// calibration record below stay here — this file owns both decisions; the lib
+// points back at them rather than restating them.
+import { shingles, jaccard } from "./lib/shingles";
 
 // Parse an env-overridable percentage threshold, FAIL-CLOSED. A non-numeric or
 // out-of-range value (typo, stray quote) must NOT silently disable the gate:
@@ -48,26 +51,6 @@ function pct(name: string, fallback: number): number {
 
 const FAIL = pct("AGENT_ORIGINALITY_FAIL", 50);
 const WARN = pct("AGENT_ORIGINALITY_WARN", 30);
-
-function neutralize(text: string): string {
-  return text.toLowerCase().replace(/[^a-z0-9\s]+/g, " ");
-}
-
-function shingles(text: string, n = SHINGLE_N): Set<string> {
-  const words = neutralize(text).split(/\s+/).filter(Boolean);
-  const out = new Set<string>();
-  for (let i = 0; i + n <= words.length; i++) {
-    out.add(words.slice(i, i + n).join(" "));
-  }
-  return out;
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let inter = 0;
-  for (const s of a) if (b.has(s)) inter++;
-  return inter / (a.size + b.size - inter);
-}
 
 // Positive control for the scorer itself. The roster check below is green-path
 // only: if `shingles`/`jaccard` ever regressed (e.g. returned empty sets), the

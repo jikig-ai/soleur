@@ -3,10 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { DelegationAcceptanceModal } from "@/components/settings/delegation-acceptance-modal";
+import { Button } from "@/components/ui/button";
 
 export interface DelegationBannerProps {
   grantorDisplayName: string;
-  todaySpentCents: number;
+  /**
+   * `null` = the spend read failed (#7829). Renders as an explicit "spend
+   * unavailable" rather than `$0.00 of $X today`, which would tell the grantee
+   * their funded budget is untouched when it may be nearly exhausted.
+   */
+  todaySpentCents: number | null;
   dailyCapCents: number;
   hourlyCapCents: number | null;
   delegationId: string;
@@ -63,13 +69,14 @@ export function DelegationBanner({
           {grantorDisplayName} has offered to fund your runs. Accept the
           Delegation Consent Side Letter to activate.
         </span>
-        <button
+        <Button
+          variant="gold"
           type="button"
           onClick={() => setOpen(true)}
           className="ml-auto rounded-md bg-soleur-accent-gold-fg px-3 py-1 text-xs font-medium text-soleur-bg-surface-1 hover:opacity-90"
         >
           Review &amp; accept
-        </button>
+        </Button>
         {open && (
           <DelegationAcceptanceModal
             delegationId={delegationId}
@@ -96,17 +103,25 @@ export function DelegationBanner({
         Running on {grantorDisplayName}&apos;s key
       </span>
       <span className="text-soleur-text-muted">—</span>
-      <span>
-        ${(todaySpentCents / 100).toFixed(2)} of $
-        {(dailyCapCents / 100).toFixed(0)} today
-      </span>
-      <button
+      {todaySpentCents === null ? (
+        <span className="text-soleur-text-muted">
+          Today&apos;s spend is unavailable — unknown, not $0.00. Your $
+          {(dailyCapCents / 100).toFixed(0)} daily cap still applies.
+        </span>
+      ) : (
+        <span>
+          ${(todaySpentCents / 100).toFixed(2)} of $
+          {(dailyCapCents / 100).toFixed(0)} today
+        </span>
+      )}
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setOpen(true)}
         className="ml-auto text-xs underline hover:text-soleur-accent-gold-fg/80"
       >
         Manage
-      </button>
+      </Button>
       {open && (
         <DelegationAcceptanceModal
           delegationId={delegationId}

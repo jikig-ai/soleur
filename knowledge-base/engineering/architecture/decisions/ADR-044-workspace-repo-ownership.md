@@ -58,6 +58,7 @@ A GitHub App `installation_id` is fundamentally an **(account that owns the repo
 Decision: the credential lives on `workspaces` only. Retaining a parallel `users.github_installation_id` permanently would re-create exactly the dual-source-of-truth drift surface this ADR forbids for `repo_url` — so the user scalar is **not** a stable end-state. It survives only as a transient onboarding-discovery artifact during the soak (dual-written via `mirrorRepoColsToSoloWorkspace`, so it does not drift while it exists).
 
 End-state (executed at the decommission migration — see tasks.md Phase 6):
+
 - **Connect flow** resolves the installation from the repo, not a stored user scalar: `GET /repos/{owner}/{repo}/installation` (the connect routes already call the GitHub API, so this is near-free).
 - **Onboarding "has the user connected GitHub?" gate** moves from `users.github_installation_id IS NOT NULL` to on-demand `GET /user/installations` (user token).
 - The decommission migration drops `users.github_installation_id` + the migration-052 partial-UNIQUE index; the user scalar becomes vestigial.
@@ -243,6 +244,7 @@ repo_status}` readers. The binding ruling (engineering CTO):
 deferred service-role-context migrations, all tracked in **#5470** (PR-2b-blocker).
 PR #5466 multi-agent review found these are **three** read sites + one write site, not
 two — all service-role contexts where the `auth.uid()`-gated RPC is unusable:
+
 - `server/inngest/functions/agent-on-spawn-requested.ts` — reads `users.github_installation_id`.
 - `server/inngest/functions/cron-workspace-sync-health.ts` — reads `users.github_installation_id`.
 - `app/api/webhooks/github/route.ts` — resolves `founderId` via `.eq("github_installation_id", …)`
@@ -332,6 +334,7 @@ in one branch as two reviewable commits (PR-A webhook, PR-B session-sync). Ref #
 `users.github_installation_id` **1:N reverse-lookup** (`.eq("github_installation_id", …)`).
 The full reader sweep surfaced TWO more stranded readers the original framing missed,
 bringing the relocated set to **FOUR** sites:
+
 - **3rd** — `app/api/repo/detect-installation/route.ts` did a
   `users.select("github_installation_id")` **self-read** (`.eq("id", user.id)`), a
   column-location cutover (not a 1:N lookup); it now reads via
@@ -387,6 +390,7 @@ fresh uuid, never == a member's user_id).
 
 **Fail-closed by match count** (implemented as the `resolveSoloFounderForInstallation`
 discriminated union `{found|none|ambiguous|db-error}`):
+
 - **0 rows** → `logger.warn` + `releaseDedupRow()` + **404** (GitHub does not retry 4xx).
 - **1 row** → proceed to Step 6 with `founderId = w.id`.
 - **>1 rows** (two users + same fork — genuinely reachable now the column is NON-UNIQUE) →
@@ -462,6 +466,7 @@ canonical copy lives on `workspaces.*`.
 
 **Pre-drop safety gates (verified 2026-06-18, work-start, against `origin/main` /
 PROD):**
+
 - **Drift gate COUNT = 0 against PROD** (read-only, `DATABASE_URL_POOLER`):
   `SELECT count(*) FROM users u JOIN workspaces w ON w.id=u.id WHERE
   u.repo_url IS DISTINCT FROM w.repo_url OR u.github_installation_id IS DISTINCT
@@ -635,6 +640,7 @@ the repo, and the cold dispatch path's existing in-process clone outcome was
 
 No `.c4` model edit. C4 enumeration for this change (all already covered or
 below the model's system/container granularity):
+
 - **Actors:** GitHub (webhook sender) is modeled as the `github` `#external`
   system; the workspace Owner and the shared-workspace **Member** are both
   covered by the existing `founder` actor, whose description already states

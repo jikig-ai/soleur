@@ -16,6 +16,7 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Accepted** (2026-05-22). Landed as a two-PR sequence:
+
 - **PR #4331** (merged 2026-05-22): identity-aware resolution path, `users.role` column, ADR, provider+hook, tests.
 - **PR #2** (this commit's PR): three Soleur skills (`soleur:flag-create`, `soleur:flag-set-role`, `soleur:user-set-role`) + one-time Flagsmith setup runbook at `plugins/soleur/skills/flag-bootstrap/SETUP.md`. Segments `role-prd` (id 1129195) and `role-dev` (id 1129194) created in Flagsmith project `web-platform` (id 39082); dead `command-center-soleur-go` feature archived. Operational interface is live.
 
@@ -51,6 +52,7 @@ Identity = { userId: string | null, role: "prd" | "dev" }
 ```
 
 Resolved at every request edge by `resolveIdentity(supabase)`:
+
 - Anonymous (logged-out) → `{ null, "prd" }`. Anonymous = "prd everyone" matches the role semantics; logged-out visitors see the same flag state as any prd-role authenticated user.
 - Authenticated → `auth.uid()` + `select role from users where id = ...`.
 - Auth probe failures, missing rows, or unrecognised role values → safe default `role="prd"`. Fail-safe (no dark-launch on the resolve path).
@@ -62,6 +64,7 @@ Resolved at every request edge by `resolveIdentity(supabase)`:
 ### Flagsmith segment model
 
 Two segments (PR #2 bootstraps via management API):
+
 - `role-prd` — trait `role == "prd"` OR identity unknown.
 - `role-dev` — trait `role == "dev"`.
 
@@ -72,6 +75,7 @@ Each flag's per-segment enable state is what skills mutate. No identity-level ov
 The `FLAG_*` env var **mirrors the flag's prd-segment Flagsmith state**. When Flagsmith is unreachable (network, SDK timeout, missing key), every user — regardless of role — resolves through `envFallback()` which reads the env var directly.
 
 Consequences:
+
 - **Dev-only feature mid-test** (Flagsmith: prd=off, dev=on / Doppler: `FLAG_X=0`) → outage → dev role temporarily loses preview, prd never sees it. Acceptable: no dark-launch.
 - **Promoted feature** (Flagsmith: prd=on, dev=on / Doppler: `FLAG_X=1`) → outage → everyone sees it. Matches steady state.
 - **Disabled feature** (Flagsmith: prd=off, dev=off / Doppler: `FLAG_X=0`) → outage → off everywhere. Matches.

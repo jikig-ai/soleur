@@ -12,6 +12,33 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# INNGEST_MANUAL_TRIGGER_SECRET is acquired by `doppler secrets get` BELOW this
+# point, so a conditional arm would test an empty variable at guard time, open,
+# and then trace the acquisition itself.
+#
+# STREAM CONTRACT: this script's stdout is a DATA channel — it prints `HTTP <code>`
+# then the response body, and SKILL.md's preflight block grep-parses
+# `SOLEUR_TRIGGER_CRON_HALT reason=…` markers on stdout. So the refusal is emitted
+# in that documented marker shape rather than as a bare `[FATAL] …` line, which the
+# preflight consumer would read as a data row. Stdout, not stderr, because agent
+# runtimes surface stdout and swallow stderr (constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf 'SOLEUR_TRIGGER_CRON_HALT reason=xtrace-credential-bound issue=7797\n'
+    printf 'trigger-cron: refusing to run under xtrace — this script handles a live credential and -x would print it. No event has been fired and no secret has been read.\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of the manual-trigger secret works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 ROUTE_URL="https://app.soleur.ai/api/internal/trigger-cron"
 SECRET_NAME="INNGEST_MANUAL_TRIGGER_SECRET"
 DOPPLER_PROJECT="soleur"
@@ -121,7 +148,10 @@ fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '%s\n' "# dry-run (config=$CONFIG): would POST to $ROUTE_URL"
   printf '%s\n' "TOKEN=\$(doppler secrets get $SECRET_NAME -p $DOPPLER_PROJECT -c $CONFIG --plain)"
-  printf '%s\n' "curl -sS -X POST $ROUTE_URL \\"
+  # The printed recipe carries a live bearer, so it must TEACH the confined form:
+  # `--disable` literally first (it aborts ~/.curlrc parsing, and later is too
+  # late) and `--noproxy '*'` (#7873).
+  printf '%s\n' "curl --disable --noproxy '*' -sS -X POST $ROUTE_URL \\"
   printf '%s\n' "  -H \"Authorization: Bearer \$TOKEN\" -H 'content-type: application/json' \\"
   printf '%s\n' "  -d '$BODY' -w '\\n%{http_code}\\n'"
   exit 0
@@ -141,7 +171,7 @@ fi
 # See ADR-009 Amendment.
 RESP=$(mktemp -t trigger-cron-resp.XXXXXXXX)
 trap 'rm -f "$RESP"' EXIT INT TERM
-HTTP_CODE=$(curl -sS -o "$RESP" -w '%{http_code}' \
+HTTP_CODE=$(curl --disable --noproxy '*' -sS -o "$RESP" -w '%{http_code}' \
   -X POST "$ROUTE_URL" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \

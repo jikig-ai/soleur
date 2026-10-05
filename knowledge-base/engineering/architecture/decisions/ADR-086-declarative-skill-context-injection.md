@@ -10,6 +10,7 @@
 gstack's `gbrain` loads context *declaratively* — a command/skill declares which knowledge files it needs and they load automatically. Soleur wanted the mechanism (FR6) in its committed-knowledge frame (no `~/.gstack` per-machine storage; AP-006), as the substrate the taste-learning feature (#5990) rides — its committed `taste-profile` is the first real consumer.
 
 **OQ2 (the load-bearing decision): where does resolution happen?** Two candidates:
+
 - **Eager** — extend the SessionStart loader `session-rules-loader.sh` to scan all ~90 skills' frontmatter at session start.
 - **Lazy** — a new `PostToolUse(Skill)` hook resolves only the invoked skill's `context_queries`.
 
@@ -40,7 +41,7 @@ The hook shipped first as a CLI `.claude/` shell hook; web-agent Concierge sessi
 
 ## Composition fallback
 
-Registered as a sibling `Skill` matcher block (independently enable/disable-able). **Composition is confirmed safe by the Claude Code official docs** (https://code.claude.com/docs/en/hooks.md §"Add context for Claude"): *"When several hooks return additionalContext for the same event, Claude receives all of the values"* — matching hooks run in parallel and every `additionalContext` is delivered (a single value >10,000 chars is written to a session file and passed as a path + preview, never dropped). So `phase-surface-hint.sh` is **not** clobbered by this sibling hook; with a ~1-line pointer payload the shared budget is a non-issue. The single-emitter fallback below is therefore **not needed** — retained only as a hypothetical guard: if a future CC version ever last-writer-wins multiple emitters, the fallback is a **new dedicated single-emitter hook** owning both concerns — NOT grafting content-referencing into phase-surface-hint (which would re-entangle the two trust models this ADR keeps separate).
+Registered as a sibling `Skill` matcher block (independently enable/disable-able). **Composition is confirmed safe by the Claude Code official docs** (<https://code.claude.com/docs/en/hooks.md> §"Add context for Claude"): *"When several hooks return additionalContext for the same event, Claude receives all of the values"* — matching hooks run in parallel and every `additionalContext` is delivered (a single value >10,000 chars is written to a session file and passed as a path + preview, never dropped). So `phase-surface-hint.sh` is **not** clobbered by this sibling hook; with a ~1-line pointer payload the shared budget is a non-issue. The single-emitter fallback below is therefore **not needed** — retained only as a hypothetical guard: if a future CC version ever last-writer-wins multiple emitters, the fallback is a **new dedicated single-emitter hook** owning both concerns — NOT grafting content-referencing into phase-surface-hint (which would re-entangle the two trust models this ADR keeps separate).
 
 ## Alternatives considered
 
@@ -71,4 +72,3 @@ Two things this ADR relies on still hold:
 - The byte-budget discipline the rejection appeals to also stands, though its
   headline number moved (`B_ALWAYS` 23000 → 46000) because the measurement was
   re-scoped to what every session actually loads, not because the budget loosened.
-

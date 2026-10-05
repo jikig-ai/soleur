@@ -79,7 +79,7 @@ if ! hook_parse_input "$__HI_RAW"; then
   exit 0
 fi
 
-tool_name="$HOOK_TOOL_NAME"
+tool_kind="$HOOK_TOOL_KIND"
 file_path="$HOOK_FILE_PATH"
 
 # Only fire on Write/Edit/MultiEdit to plan/spec markdown.
@@ -87,7 +87,8 @@ file_path="$HOOK_FILE_PATH"
 # this case both omitted it, so ANY plan written via MultiEdit skipped the
 # guard entirely. Siblings (guardrails.sh, no-memory-write.sh,
 # kb-domain-allowlist-guard.sh) already register Write|Edit|MultiEdit|NotebookEdit.
-case "$tool_name" in
+# Kind-canonical (#8205): Devin's write/edit land here as Write/Edit.
+case "$tool_kind" in
   Write|Edit|MultiEdit) ;;
   *) allow ;;
 esac
@@ -187,7 +188,7 @@ acked() {
   # whole document, so its content is the complete post-write state: consulting
   # the pre-write file there would allow a Write that DELETES the ack while
   # adding a violation, using the very ack it is removing as the justification.
-  case "$tool_name" in
+  case "$tool_kind" in
     Edit|MultiEdit) ;;
     *) return 1 ;;
   esac

@@ -48,3 +48,31 @@ Related: [[2026-05-19-inngest-substrate-five-bug-cascade]], [[2026-06-02-sentry-
 ## Tags
 category: integration-issues
 module: apps/web-platform/server/inngest
+
+## Correction — 2026-08-09 (#7307): "covered by the downstream GHA monitor" is a premise to VERIFY
+
+This file states the durable rule that a dispatch-only cron does not need its own
+`SENTRY_MONITOR_SLUG` because "end-to-end liveness is covered by the downstream GHA
+monitor (no GHA heartbeat within the margin → red)". That premise was generalized
+from `scheduled-terraform-drift`, which does have such a monitor — and it was
+**false for `main-health-monitor` at the time it was written**. That workflow had
+no `sentry_cron_monitor` at all, and the plan of the day applied Design A to it
+anyway.
+
+The cost: for four months the executor could not report a broken `main` — a job
+timeout is recorded `cancelled` (never `failure`) so the `== 'failure'`-gated filer
+never fired, and `| tee` under the default `bash -e {0}` shell (pipefail OFF)
+discarded the suite's exit code, so a red suite reported `success` and the closer
+auto-closed human-filed trackers. Absence-of-an-issue was the whole liveness
+argument, and absence was indistinguishable from health.
+
+**Before applying Design A to a dispatch-only cron, grep `cron-monitors.tf` for the
+EXECUTOR workflow's `monitor-slug` and confirm a monitor actually exists.** If it
+does not, the executor needs one (#7307 added `sentry_cron_monitor.main_health_monitor`).
+
+What this correction does NOT overturn: the argument that a **dispatcher**-owned
+monitor would be worse still holds — a 2xx-with-no-run goes green, so the check-in
+must come from the executor. The new monitor is executor-owned, so both statements
+are compatible. The on-point precedent already in `cron-monitors.tf` is
+`scheduled_domain_model_drift` (#5872), which took its own monitor for exactly this
+reason at a weekly cadence.

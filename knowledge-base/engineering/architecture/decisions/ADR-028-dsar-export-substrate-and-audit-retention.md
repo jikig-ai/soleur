@@ -32,6 +32,7 @@ plaintext-credential leakage.
 process, mirroring `agent-runner.ts:698-714` (`startStuckActiveReaper`).
 
 **Alternatives considered**:
+
 - (a) `pg_cron` + `pg_net` — rejected because `pg_net` is not installed on
   either dev or prd Supabase project (R5 of plan); installing it adds a
   new extension surface for a single use case.
@@ -85,6 +86,7 @@ on every table read + `assertReadScope(rows, expectedUserId, table_name)`
 runtime invariant on every result set.
 
 **Alternatives considered (rev-1 design rejected at AC11 panel review)**:
+
 - (a) **`owner_jwt_encrypted bytea` column** — store the requester's JWT
   encrypted-at-rest at enqueue, decrypt at run. **Rejected**: creates a
   new credential vault — reversible session credentials with hours-long
@@ -105,6 +107,7 @@ runtime invariant on every result set.
   signature — plan C3 unfold of #3638; lands separately).
 
 **Implications**:
+
 - Service-role usage in DSAR worker adds new call sites to
   `.service-role-allowlist` (CI gate, PR-B); these are reviewed for
   tenant isolation impact at PR time.
@@ -121,6 +124,7 @@ Runtime is **Node 22** (the production runtime for the Next.js server
 process).
 
 **Evidence** (`scripts/spike/dsar-streaming-upload-report.md`):
+
 | Mode | Δ RSS coefficient | Notes |
 |------|-------------------|-------|
 | `supabase.storage.upload(WebReadableStream)` | ≈ 1.09 × payload + 12 MB | SDK buffers body before fetch |
@@ -128,6 +132,7 @@ process).
 
 **Why disk-then-upload regardless of Node 22 outcome**: even if Node 22's
 undici streams cleanly, the disk intermediate buys us:
+
 - Per-file `O_NOFOLLOW + fstat` ino verify (AC17) during archive build,
   enforced once at write time rather than during upload.
 - SHA-256 of the bundle is computed during archive write (same fd-pass
@@ -150,6 +155,7 @@ verify; upload via raw `fetch` POST with `Content-Length` +
 ### D5 — Substrate side-effects: pg_cron schedules
 
 **Decision**: ship **two** pg_cron schedules in migration 041:
+
 - `dsar-export-pii-retention-sweep` — daily 03:00 UTC; deletes
   `dsar_export_audit_pii` rows older than 24 months (TR13).
 - `dsar-export-bundle-ttl-sweep` — hourly; updates `dsar_export_jobs`
@@ -167,6 +173,7 @@ ceremony).
 
 **Decision**: the WORM trigger on `dsar_export_audit_pii` raises P0001
 on any UPDATE/DELETE EXCEPT when all three of:
+
 1. GUC `app.dsar_audit_anonymise_in_progress` is set (any non-empty value)
 2. `current_user = 'service_role'`
 3. The SET-site for the GUC appears exactly **once** in the codebase, in

@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import path from "path";
 import { fileURLToPath } from "url";
+import { REPO_WIDE_SUITES } from "./test/repo-wide-suites";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,6 +14,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // pool is faster but reintroduces the contention class). Default on.
 const componentPool =
   process.env.WEBPLAT_TEST_USE_THREADS === "1" ? undefined : "forks";
+
+// #8261 — Node >=25 ships a built-in `globalThis.localStorage` getter (returns
+// undefined without --localstorage-file). Vitest 4.1's `getWindowKeys` skips
+// globals that already exist unless they are in its own key list, which has
+// `Storage` but not `localStorage`/`sessionStorage`, so happy-dom's storage
+// never lands and component tests throw on `localStorage.getItem`. Turn Node's
+// web storage off in the workers. Node 22.x (22.3/22.4/22.12 measured) has no
+// such global, so it gets []. The descriptor check does not invoke the getter.
+// Not NODE_OPTIONS: Node 22.3 rejects the flag there.
+const workerExecArgv = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "localStorage",
+)
+  ? ["--no-experimental-webstorage"]
+  : [];
 
 export default defineConfig({
   esbuild: {
@@ -35,13 +51,45 @@ export default defineConfig({
     // Inherits to both `unit` and `component` projects via `extends: true`.
     testTimeout: 16_000,
     hookTimeout: 20_000,
+    // Inherits to every project via `extends: true`; no project sets its own.
+    execArgv: workerExecArgv,
+    // Guard 3 (#7833): abort the run if vitest STARTED holding an inherited git-location
+    // environment. Registered here rather than in each project's `setupFiles` because those
+    // re-execute per test file under `isolate: true` (measured: 1114 executions, ~1.7s wall), while
+    // the property is about the process that inherited the env — which is this one.
+    globalSetup: ["./test/global-setup-git-tripwire.ts"],
     projects: [
+      {
+        extends: true,
+        test: {
+          name: "repo-wide",
+          environment: "node",
+          // Suites whose subject is the REPOSITORY, not this app: they read
+          // plugin scripts, workflow YAML and the knowledge base. Split out of
+          // `unit` (#7498) so `unit` can be declined on diffs that touch
+          // nothing here without silently declining these too — they exist to
+          // catch drift in exactly those diffs.
+          //
+          // Membership is an explicit list rather than a glob because the set
+          // is not a directory: 6 of 72 `cron-*.test.ts` escape the app and 66
+          // do not, so no path shape separates them. The list is kept honest by
+          // test/repo-wide-containment.test.ts, which recomputes it from disk.
+          include: [...REPO_WIDE_SUITES],
+          setupFiles: ["test/setup-node.ts"],
+          isolate: true,
+        },
+      },
       {
         extends: true,
         test: {
           name: "unit",
           environment: "node",
           include: ["test/**/*.test.ts", "lib/**/*.test.ts"],
+          // The repo-wide project's files, removed from this one. Without the
+          // exclude they would run TWICE — and worse, the copy running here
+          // would be gated, so a green `unit` would carry a stale verdict for
+          // them on any diff that declines it.
+          exclude: [...REPO_WIDE_SUITES],
           // Default WORKSPACES_ROOT to a writable temp dir (server startup paths
           // now unconditionally mkdir the resolved workspace dir before sandbox
           // construction; the prod default "/workspaces" is not writable in CI).

@@ -21,11 +21,25 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # to the SUT it would be silent AND green: never run, never red (#3366).
 SUT="$(cd "${DIR}/../scripts" && pwd)/emit-review-trailer.sh"
 
+# assert_fixture_dir — the operand guard for the fixture repos below
+# (fixture-dir-operand-assert.test.sh scans this file).
+# shellcheck source=../../../test/test-helpers.sh
+source "${DIR}/../../../test/test-helpers.sh" || { echo "FATAL: test-helpers.sh" >&2; exit 2; }
+set +e  # the helper sets -e; restore this suite's verdict-counting contract
+
 TMP="$(mktemp -d -t emitrt.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
 passes=0
 fails=0
+# The INDEPENDENT case counter (ADR-193 #2). It moves in assert() — the ASSERTION helper —
+# and NEVER in pass()/fail(), the VERDICT helpers. That split is the whole point: a counter
+# incremented inside the verdict helpers moves WITH the verdict, so stubbing fail() drops the
+# row and its count together and the conservation identity below holds under the exact fault
+# it exists to catch. Never increment this inside `$( )`; a subshell discards it.
+CASES=0
+
+# VERDICT helpers — they own passes/fails and nothing else.
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() {
   fails=$((fails + 1))
@@ -34,9 +48,24 @@ fail() {
   return 0
 }
 
+# ASSERTION helper — owns CASES. $1 = description, $2 = condition (eval'd), $3 = failure detail.
+assert() {
+  CASES=$((CASES + 1))
+  if eval "$2"; then
+    pass "$1"
+  else
+    fail "$1" "${3:-$2}"
+  fi
+}
+
 printf '\n=== emit-review-trailer coverage field ===\n\n'
 
-[[ -f "$SUT" ]] || { fail "SUT exists at $SUT"; printf '\n=== 0 passed, 1 failed ===\n\n'; exit 1; }
+# Reported DIRECTLY, not through fail(): with the SUT absent there is nothing to assert, so a
+# verdict-helper report here would be a row in a suite that never ran.
+[[ -f "$SUT" ]] || {
+  printf '\n[FATAL] SUT missing at %s — nothing to test.\n' "$SUT" >&2
+  exit 1
+}
 
 # A fresh repo on a feature branch with a `main` to scope against. The script refuses to run
 # on main/master, and its idempotence check scopes to `origin/main..HEAD`-equivalent, so both
@@ -66,10 +95,9 @@ coverage_of() {  # $1 = repo dir -> the parsed Reviewed-Coverage trailer value
 # ── ARM 1: full coverage ──────────────────────────────────────────────────────────
 d="$(new_repo full)"
 out="$(cd "$d" && bash "$SUT" --findings 0 --agents-ran 9 --agents-expected 9 2>&1)"; rc=$?
-if [[ "$rc" -eq 0 ]]; then pass "full coverage exits 0"; else fail "full coverage exits 0" "rc=$rc out=$out"; fi
+assert "full coverage exits 0" '[[ "$rc" -eq 0 ]]' "rc=$rc out=$out"
 cov="$(coverage_of "$d")"
-if [[ "$cov" == *"full 9/9 agents"* ]]; then pass "records 'full 9/9 agents'"; else
-  fail "records 'full 9/9 agents'" "got: '$cov'"; fi
+assert "records 'full 9/9 agents'" '[[ "$cov" == *"full 9/9 agents"* ]]' "got: '$cov'"
 
 # ── ARM 2: degraded coverage, with the missing agents NAMED ───────────────────────
 #
@@ -80,26 +108,17 @@ d="$(new_repo degraded)"
 out="$(cd "$d" && bash "$SUT" --findings 3 --agents-ran 2 --agents-expected 9 \
         --agents-missing security-sentinel,test-design-reviewer 2>&1)"; rc=$?
 cov="$(coverage_of "$d")"
-if [[ "$rc" -eq 0 && "$cov" == *"degraded 2/9 agents"* ]]; then
-  pass "records 'degraded 2/9 agents'"
-else
-  fail "records 'degraded 2/9 agents'" "rc=$rc got: '$cov'"
-fi
-if [[ "$cov" == *"security-sentinel"* && "$cov" == *"test-design-reviewer"* ]]; then
-  pass "names the missing agents in the trailer value"
-else
-  fail "names the missing agents in the trailer value" "got: '$cov'"
-fi
+assert "records 'degraded 2/9 agents'" \
+  '[[ "$rc" -eq 0 && "$cov" == *"degraded 2/9 agents"* ]]' "rc=$rc got: '$cov'"
+assert "names the missing agents in the trailer value" \
+  '[[ "$cov" == *"security-sentinel"* && "$cov" == *"test-design-reviewer"* ]]' "got: '$cov'"
 
 # ── ARM 3: zero agents => inline-fallback ─────────────────────────────────────────
 d="$(new_repo zero)"
 (cd "$d" && bash "$SUT" --findings 1 --agents-ran 0 --agents-expected 8 >/dev/null 2>&1)
 cov="$(coverage_of "$d")"
-if [[ "$cov" == *"inline-fallback 0/8 agents"* ]]; then
-  pass "zero agents records 'inline-fallback'"
-else
-  fail "zero agents records 'inline-fallback'" "got: '$cov'"
-fi
+assert "zero agents records 'inline-fallback'" \
+  '[[ "$cov" == *"inline-fallback 0/8 agents"* ]]' "got: '$cov'"
 
 # ── ARM 4: THE COUNTS OVERRIDE A CALLER'S LABEL ───────────────────────────────────
 #
@@ -108,11 +127,8 @@ fi
 d="$(new_repo overclaim)"
 (cd "$d" && bash "$SUT" --agents-ran 2 --agents-expected 10 --mode full >/dev/null 2>&1)
 cov="$(coverage_of "$d")"
-if [[ "$cov" == *degraded* && "$cov" != *full* ]]; then
-  pass "counts override an overclaiming --mode full"
-else
-  fail "counts override an overclaiming --mode full" "got: '$cov'"
-fi
+assert "counts override an overclaiming --mode full" \
+  '[[ "$cov" == *degraded* && "$cov" != *full* ]]' "got: '$cov'"
 
 # ── ARM 5: ABSENT measurement is 'unknown', NOT 'full' ────────────────────────────
 #
@@ -122,8 +138,7 @@ fi
 d="$(new_repo legacy)"
 (cd "$d" && bash "$SUT" --findings 0 >/dev/null 2>&1)
 cov="$(coverage_of "$d")"
-if [[ "$cov" == "unknown" ]]; then pass "absent measurement records 'unknown', not 'full'"; else
-  fail "absent measurement records 'unknown', not 'full'" "got: '$cov'"; fi
+assert "absent measurement records 'unknown', not 'full'" '[[ "$cov" == "unknown" ]]' "got: '$cov'"
 
 # ── ARM 6: the coverage trailer PARSES (it is last, so it splits first) ───────────
 #
@@ -132,12 +147,11 @@ if [[ "$cov" == "unknown" ]]; then pass "absent measurement records 'unknown', n
 # every consumer while looking like evidence in `git log`.
 d="$(new_repo parse)"
 (cd "$d" && bash "$SUT" --agents-ran 4 --agents-expected 4 >/dev/null 2>&1)
-if [[ -n "$(coverage_of "$d")" ]] \
-   && [[ -n "$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '[:space:]')" ]]; then
-  pass "both Reviewed-By-Soleur and Reviewed-Coverage parse as trailers"
-else
-  fail "both trailers parse" "$(git -C "$d" log -1 --format=%B)"
-fi
+cov="$(coverage_of "$d")"
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
+by="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '[:space:]')"
+assert "both Reviewed-By-Soleur and Reviewed-Coverage parse as trailers" \
+  '[[ -n "$cov" && -n "$by" ]]' "$(git -C "$d" log -1 --format=%B)"
 
 # ── ARM 7: malformed input is REFUSED before any commit ───────────────────────────
 #
@@ -148,38 +162,226 @@ for bad in "--agents-ran abc --agents-expected 5" \
            "--agents-ran 5 --agents-expected 2" \
            "--mode enthusiastic"; do
   d="$(new_repo "bad$(echo "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   before="$(git -C "$d" rev-parse HEAD)"
   # shellcheck disable=SC2086
   out="$(cd "$d" && bash "$SUT" $bad 2>&1)"; rc=$?
   after="$(git -C "$d" rev-parse HEAD)"
-  if [[ "$rc" -eq 2 && "$before" == "$after" ]]; then
-    pass "refuses '$bad' with no commit"
-  else
-    fail "refuses '$bad' with no commit" "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
-  fi
+  # CASES moves here, once per loop iteration, because assert() is called once per iteration —
+  # the counter has to track the arms that actually run, not the arms written in the source.
+  assert "refuses '$bad' with no commit" '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
 done
+
+# ── ARM 9: sequential-fallback SURVIVES the count derivation ────────────────────
+#
+# sequential-fallback is not a count axis — it attests the plugin subagent
+# surface was absent (Devin Cloud) and the roles ran sequentially inline. A
+# cloud review that ran all N roles sequentially passes N/N; letting the
+# derivation "upgrade" that to `full` would emit a trailer claiming
+# independent-agent coverage that never ran, and the /ship gate (which keys on
+# the sequential-fallback PREFIX) would never fire. The explicit mode must win.
+d="$(new_repo seqfallback)"
+out="$(cd "$d" && bash "$SUT" --agents-ran 9 --agents-expected 9 \
+        --mode sequential-fallback 2>&1)"; rc=$?
+cov="$(coverage_of "$d")"
+assert "explicit sequential-fallback + N/N counts is NOT upgraded to full" \
+  '[[ "$rc" -eq 0 && "$cov" == sequential-fallback* && "$cov" == *"9/9 agents"* ]]' \
+  "rc=$rc got: '$cov'"
+assert "ship-gate prefix still matches (starts-with sequential-fallback)" \
+  '[[ "$cov" == sequential-fallback* ]]' "got: '$cov'"
+
+d="$(new_repo seqfallback_partial)"
+out="$(cd "$d" && bash "$SUT" --agents-ran 5 --agents-expected 9 \
+        --mode sequential-fallback 2>&1)"; rc=$?
+cov="$(coverage_of "$d")"
+assert "explicit sequential-fallback + partial counts is NOT rewritten to degraded" \
+  '[[ "$rc" -eq 0 && "$cov" == sequential-fallback* && "$cov" == *"5/9 agents"* ]]' \
+  "rc=$rc got: '$cov'"
 
 # ── ARM 8: still refuses to run on main ──────────────────────────────────────────
 # Guards against the coverage plumbing having disturbed the pre-existing branch guard.
-d="$(new_repo onmain)"; git -C "$d" checkout -q main
+d="$(new_repo onmain)"
+: "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+git -C "$d" checkout -q main
 out="$(cd "$d" && bash "$SUT" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
-if [[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]; then
-  pass "still skips on main (pre-existing guard intact)"
-else
-  fail "still skips on main" "rc=$rc out=$out"
+assert "still skips on main (pre-existing guard intact)" \
+  '[[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]' "rc=$rc out=$out"
+
+# ── Guard 2 (ADR-267): --risk-tier emits Reviewed-Risk-Tier from the resolved enum only ──
+tier_of() {  # $1 = repo dir -> the parsed Reviewed-Risk-Tier trailer value
+  git -C "$1" log -1 --format='%(trailers:key=Reviewed-Risk-Tier,valueonly)' | tr -d '\n'
+}
+
+# Every resolved-tier value produces a trailer that PARSES — a value that does not parse is
+# invisible to `git log --format=%(trailers:...)` while looking like evidence to a human.
+for tier in "none" "single-user incident" "aggregate pattern"; do
+  d="$(new_repo "tier$(printf '%s' "$tier" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  out="$(cd "$d" && bash "$SUT" --risk-tier "$tier" 2>&1)"; rc=$?
+  t="$(tier_of "$d")"
+  assert "--risk-tier '$tier' emits a parseable trailer" \
+    '[[ "$rc" -eq 0 && "$t" == "$tier" ]]' "rc=$rc parsed='$t' out=$out"
+done
+
+# `undeclared` is a classifier parse state, never a resolved tier — rejected like any other
+# invalid value, BEFORE any commit exists to carry it.
+for bad in "bogus" "undeclared" "Full"; do
+  d="$(new_repo "badtier$(printf '%s' "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  before="$(git -C "$d" rev-parse HEAD)"
+  out="$(cd "$d" && bash "$SUT" --risk-tier "$bad" 2>&1)"; rc=$?
+  after="$(git -C "$d" rev-parse HEAD)"
+  assert "--risk-tier '$bad' refused, no commit" \
+    '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
+done
+
+# Absent flag → absent field. A fabricated `unknown` literal would be a claim the caller
+# never measured (same honesty rule as Reviewed-Coverage's 'unknown').
+d="$(new_repo notier)"
+(cd "$d" && bash "$SUT" --findings 0 >/dev/null 2>&1)
+t="$(tier_of "$d")"
+assert "no --risk-tier → field absent, not 'unknown'" '[[ -z "$t" ]]' "parsed='$t'"
+
+# Coverage must remain the LAST trailer line — it is the first casualty of a
+# split trailers paragraph, and RISK_TIER_LINE now interpolates above it.
+d="$(new_repo lastline)"
+(cd "$d" && bash "$SUT" --risk-tier none --agents-ran 3 --agents-expected 3 >/dev/null 2>&1)
+last="$(git -C "$d" log -1 --format=%B | git interpret-trailers --parse | tail -1)"
+assert "Reviewed-Coverage stays the last trailer line" \
+  '[[ "$last" == "Reviewed-Coverage:"* ]]' "last='$last'"
+
+# ── Guard 3 (ADR-267): --fix-round emits fix-scoped keys, never Reviewed-Coverage ──
+#
+# The whole point of the separate keys: a targeted round covering `full` over the
+# fix range would misread as branch-level coverage on ship's gate, and the main
+# trailer's idempotence skip would swallow the emission anyway.
+
+# --fix-round requires --since; --since requires --fix-round — an orphaned flag is a
+# scope error, not a default to the whole branch.
+for bad in "--fix-round" "--since HEAD"; do
+  d="$(new_repo "frbad$(printf '%s' "$bad" | tr -cd 'a-z0-9')")"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
+  before="$(git -C "$d" rev-parse HEAD)"
+  out="$(cd "$d" && bash "$SUT" $bad 2>&1)"; rc=$?
+  after="$(git -C "$d" rev-parse HEAD)"
+  assert "refuses '$bad' with no commit" \
+    '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
+done
+
+# --since must resolve to a commit — an unresolvable sha cannot land in a range trailer.
+d="$(new_repo frbadsha)"
+before="$(git -C "$d" rev-parse HEAD)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since 'not-a-sha' 2>&1)"; rc=$?
+after="$(git -C "$d" rev-parse HEAD)"
+assert "--fix-round --since <unresolvable> refused, no commit" \
+  '[[ "$rc" -eq 2 && "$before" == "$after" ]]' "rc=$rc out=$out"
+
+# A resolvable-but-not-ancestor --since (stale post-rebase sha) must refuse —
+# otherwise the recorded range spans unrelated history.
+d="$(new_repo frnonancestor)"
+assert_fixture_dir "$d"
+git -C "$d" checkout -qb sideline main
+git -C "$d" commit -q --allow-empty -m "work not on this branch"
+stale="$(git -C "$d" rev-parse HEAD)"
+git -C "$d" checkout -q feat-x
+before="$(git -C "$d" rev-parse HEAD)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$stale" 2>&1)"; rc=$?
+after="$(git -C "$d" rev-parse HEAD)"
+assert "--fix-round --since <non-ancestor> refused, no commit" \
+  '[[ "$rc" -eq 2 && "$out" == *"not an ancestor"* && "$before" == "$after" ]]' "rc=$rc out=$out"
+
+# The load-bearing arm: branch already carries the MAIN trailer (the normal
+# post-panel state) — a fix round must still emit, with the fix keys, WITHOUT a
+# second Reviewed-Coverage claim.
+d="$(new_repo frhappy)"
+base="$(git -C "$d" rev-parse HEAD)"
+(cd "$d" && bash "$SUT" --agents-ran 7 --agents-expected 7 >/dev/null 2>&1)   # main-panel trailer
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agents-expected 3 \
+        --risk-tier none 2>&1)"; rc=$?
+fr="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Round,valueonly)' | tr -d '\n')"
+rng="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+cov2="$(coverage_of "$d")"
+by2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '\n')"
+t2="$(tier_of "$d")"
+assert "fix round emits after main trailer (not swallowed by idempotence)" \
+  '[[ "$rc" -eq 0 && "$fr" == *"3/3"* ]]' "rc=$rc fr='$fr' out=$out"
+assert "fix round records the range and carries NO Reviewed-Coverage" \
+  '[[ "$rng" == "$base"..* && -z "$cov2" ]]' "rng='$rng' cov='$cov2'"
+assert "fix round does not re-emit Reviewed-By-Soleur" \
+  '[[ -z "$by2" ]]' "by='$by2'"
+assert "fix round still records the risk tier" \
+  '[[ "$t2" == "none" ]]' "t='$t2'"
+
+# Same range twice → idempotent skip (the range is the dedup key, not the branch).
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 3 --agents-expected 3 2>&1)"; rc=$?
+n_commits="$(git -C "$d" rev-list --count main..feat-x)"
+assert "repeat fix round over the same range skips" \
+  '[[ "$rc" -eq 0 && "$out" == *"already exists"* && "$n_commits" -eq 2 ]]' \
+  "rc=$rc commits=$n_commits out=$out"
+
+# A SECOND round after more fix commits is a different range — the left edge
+# alone must not suppress it (idempotence keys on the full since..head).
+assert_fixture_dir "$d"
+git -C "$d" commit -q --allow-empty -m "fix: second round commit"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
+fr2="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+assert "second round over an extended range still emits" \
+  '[[ "$rc" -eq 0 && "$fr2" == "$base"..* ]]' "rc=$rc range='$fr2' out=$out"
+
+# A `review:`-subjected FIX commit is a real fix (SKILL.md's own convention),
+# not an attestation — it must extend the effective range, not be excluded.
+assert_fixture_dir "$d"
+git -C "$d" commit -q --allow-empty -m "review: fix finding (P2)"
+out="$(cd "$d" && bash "$SUT" --fix-round --since "$base" --agents-ran 2 --agents-expected 2 2>&1)"; rc=$?
+fr3="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-Fix-Range,valueonly)' | tr -d '\n')"
+fixsha="$(git -C "$d" rev-parse 'HEAD^')"
+assert "a review:-subjected fix commit extends the range (not excluded)" \
+  '[[ "$rc" -eq 0 && "$fr3" == "$base".."$fixsha" ]]' "rc=$rc range='$fr3' want-end=$fixsha out=$out"
+
+# ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
+# a floor reading them would ALSO trip and would report the misleading "arms were deleted".
+# This says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY,
+# never through pass()/fail(): a check that reports by calling a verdict helper increments the
+# very counter the exit status reads, so neutering the helper silences the rows AND the check
+# meant to notice the silence. The literal `[FATAL] accounting` is load-bearing —
+# guard-vacuity-floor's ARM 10 builds its conservation population by grepping that string.
+if [[ $((passes + fails)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != CASES (%d).\n' \
+    "$((passes + fails))" "$CASES" >&2
+  if [[ $((passes + fails)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was discarded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf '\n=== emit-review-trailer coverage: %d passed, %d failed (%d assertions) ===\n\n' \
+    "$passes" "$fails" "$CASES"
+  exit 1
 fi
 
-# ── Minimum-cardinality floor ────────────────────────────────────────────────────
-# A floor, not equality: developer-incremented, so `-eq` would redden the suite on every
-# added arm. Counts passes+fails so a genuine failure reports as a failure rather than as an
-# empty suite.
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 12 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 12.\n' "$_ran"
-else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 12)\n' "$_ran"
+# ── Anti-vacuity floor (ADR-193 #1) ──────────────────────────────────────────────
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously read `passes + fails` and reported via `fails=$((fails + 1))` — a tautology on
+# both counts: the operand moved WITH the verdict, and the report went into a counter that a
+# neutered fail() had already stopped feeding. Stub the assertion machinery and the suite
+# printed a clean total and exited 0.
+#
+# A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
+# arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
+# assertions, update this number".
+TRAILER_MIN_ASSERTIONS=34
+if (( CASES < TRAILER_MIN_ASSERTIONS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  printf '\n=== emit-review-trailer coverage: %d passed, %d failed (%d assertions) ===\n\n' \
+    "$passes" "$fails" "$CASES"
+  exit 1
 fi
 
-printf '\n=== emit-review-trailer coverage: %d passed, %d failed ===\n\n' "$passes" "$fails"
+printf '\n=== emit-review-trailer coverage: %d passed, %d failed (%d assertions) ===\n\n' \
+  "$passes" "$fails" "$CASES"
 [[ "$fails" -eq 0 ]]

@@ -15,6 +15,8 @@
 import { describe, test, expect } from "bun:test";
 import { resolve } from "path";
 import { spawnSync } from "child_process";
+import { gitFixtureEnv } from "./lib/git-fixture-env";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const GATE = resolve(REPO_ROOT, "scripts/ship-incident-pir-gate.sh");
@@ -23,6 +25,7 @@ const FIX = resolve(REPO_ROOT, "plugins/soleur/test/fixtures/ship-incident-pir-g
 /** Run the shipped gate against a fixture; returns true iff it signalled. */
 function signals(fixture: string): boolean {
   const res = spawnSync("bash", [GATE], {
+    env: gitCleanEnv(),
     input: require("fs").readFileSync(resolve(FIX, fixture), "utf8"),
     encoding: "utf8",
   });
@@ -34,6 +37,22 @@ function signals(fixture: string): boolean {
     return true;
   }
   expect(res.status).toBe(1); // clean no-signal, not a harness failure
+  return false;
+}
+
+/**
+ * Same status contract as `signals()`, against in-memory text. Some properties
+ * are not expressible as a file fixture: the PR/plan concatenation seam is a
+ * TWO-document property, and the template anti-rot check has to read the
+ * template at runtime rather than snapshot it.
+ */
+function signalsText(text: string): boolean {
+  const res = spawnSync("bash", [GATE], { input: text, encoding: "utf8", env: gitCleanEnv() });
+  if (res.status === 0) {
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    return true;
+  }
+  expect(res.status).toBe(1);
   return false;
 }
 
@@ -115,12 +134,562 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("release-tooling-plan-no-delivery-outage.md")).toBe(false);
   });
 
+  // The `prod` substring class. Bare `prod` in PROD_RE matched `producer`,
+  // `produced`, `product` and `reproduced` — all four are ordinary plan
+  // vocabulary, so the production conjunct was satisfied by essentially every
+  // plan and the gate reduced to its outage half alone. Measured on the PR that
+  // found it: 14 `prod` hits in the haystack, ZERO of them the word. A
+  // `post-mortem` reference to a LOCAL test-runner retrospective then demanded a
+  // PIR for an event that never happened — the #6813 label-not-claim class,
+  // recurring on the other conjunct.
+  test("a post-mortem whose only prod tokens are `produce*` substrings does NOT signal", () => {
+    expect(signals("postmortem-word-with-only-produce-substrings.md")).toBe(false);
+  });
+
+  // The other direction, so the boundary guard cannot be widened into a deletion
+  // of the alternative. `production` is exercised by every positive fixture
+  // above; this one pins the standalone word `prod`, which no other fixture uses
+  // and which a careless `prod(uction)` (no `?`) would silently drop.
+  test("a real production incident using the bare word `prod` DOES signal", () => {
+    expect(signals("postmortem-with-real-prod-word.md")).toBe(true);
+  });
+
+  // The `live` substring class — the same defect one token over in the same
+  // alternation. Unguarded, `live` matches `lives` on the right and
+  // `delivery`/`delivered`/`deliverables` on the left, all of which are ordinary
+  // prose in this repo ("the gate lives in a real script"). Fixing only `prod`
+  // would have been the soundness-for-completeness swap this gate keeps
+  // re-learning: the class named, one instance closed, the twin left open.
+  test("a post-mortem whose only live tokens are substrings does NOT signal", () => {
+    expect(signals("postmortem-word-with-only-live-substrings.md")).toBe(false);
+  });
+
+  test("a real production incident using the bare word `live` DOES signal", () => {
+    expect(signals("postmortem-with-real-live-word.md")).toBe(true);
+  });
+
   // The gate must own its own exit semantics: a no-signal run exits 1 cleanly,
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).
   test("a no-signal run exits 1 cleanly with no stdout", () => {
-    const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8" });
+    const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8", env: gitCleanEnv() });
     expect(res.status).toBe(1);
     expect(res.stdout.trim()).toBe("");
+  });
+
+  // ── #7801 — the hypothetical-paragraph strip ───────────────────────────────
+  //
+  // #6813 stripped the hypothetical FRAMING LINE but not the sentences that
+  // follow it in the SAME `## User-Brand Impact` paragraph, so a plan that
+  // merely CITES a past, closed incident as design precedent still read as an
+  // outage report. The strip is now paragraph-scoped: bounded by a blank line,
+  // a heading, or a new list item, and re-opened by an actuality idiom.
+  //
+  // Both directions are pinned on purpose. F2-F8 assert a real outage claim
+  // STILL signals — trading this false positive for a false negative is the
+  // worse outcome for a gate whose posture is fire-when-uncertain, and those
+  // seven already passed before the fix precisely so the widening cannot
+  // overshoot without reddening something.
+
+  // F1 — the reported bug.
+  test("a precedent citation inside the hypothetical paragraph does NOT signal", () => {
+    expect(signals("precedent-citation-inside-hypothetical-paragraph.md")).toBe(false);
+  });
+
+  // F2 — the re-admit: once a paragraph says the event HAPPENED, the remainder
+  // of it is an incident report. Its production token deliberately sits in
+  // `## Overview`, OUTSIDE the stripped paragraph — PROD_RE matches the whole
+  // haystack, so a fixture whose only prod token sat inside would read `no`
+  // under both scripts and make this assertion vacuous.
+  test("an actuality idiom inside the paragraph re-admits the outage claim", () => {
+    expect(signals("real-outage-claimed-inside-hypothetical-paragraph.md")).toBe(true);
+  });
+
+  // F3 — a blank line is a boundary.
+  test("a real outage after the hypothetical paragraph DOES signal", () => {
+    expect(signals("real-outage-after-hypothetical-paragraph.md")).toBe(true);
+  });
+
+  // F4 — a new list item is a new markdown block.
+  test("a real outage in a sibling bullet DOES signal", () => {
+    expect(signals("real-outage-in-sibling-bullet.md")).toBe(true);
+  });
+
+  // F5 — a heading is a boundary even with no blank line before it.
+  test("a real outage after a heading boundary DOES signal", () => {
+    expect(signals("real-outage-after-heading-boundary.md")).toBe(true);
+  });
+
+  // F6 — a nested sub-bullet resets too. Deliberate, and the fail-toward-fire
+  // direction.
+  test("a real outage in a nested sub-bullet DOES signal", () => {
+    expect(signals("real-outage-in-nested-sub-bullet.md")).toBe(true);
+  });
+
+  // F7 — the fence strip must leave a block boundary behind. Without it a fenced
+  // block abutting the paragraph merges the paragraph with whatever follows the
+  // fence, and the claim after it goes dark.
+  test("a real outage after a fence abutting the paragraph DOES signal", () => {
+    expect(signals("real-outage-after-fenced-block-abutting-paragraph.md")).toBe(true);
+  });
+
+  // F8 — the trigger is ANCHORED. Unanchored, a single subordinate clause
+  // ("safe even if this lands out of order") would silence the rest of an
+  // arbitrary paragraph.
+  test("a mid-sentence conditional does not open a stripped paragraph", () => {
+    expect(signals("midsentence-conditional-does-not-open-a-paragraph.md")).toBe(true);
+  });
+
+  // F9 — pins the tightened hash rule. A bare /^[[:space:]]*#/ boundary treats a
+  // `#6691` continuation line as a heading, which reopens the window and lets the
+  // outage claim through — defeating this fix on a REFLOW of its own target class.
+  test("a reflowed citation whose continuation starts with an issue ref does NOT signal", () => {
+    expect(signals("reflowed-citation-with-issue-ref-continuation.md")).toBe(false);
+  });
+
+  // F10 — the DOCUMENTED RESIDUAL, pinned as a characterization test rather than
+  // left as an undocumented hole. Precedent-citation and self-report are lexically
+  // undecidable inside the paragraph, so a real past-tense outage report phrased
+  // without an actuality idiom is swallowed. If a future change closes this hole,
+  // this expectation flips — deliberately, and visibly.
+  test("a real outage inside the paragraph without an actuality idiom is swallowed (residual)", () => {
+    expect(signals("real-outage-inside-paragraph-without-actuality-idiom.md")).toBe(false);
+  });
+
+  // F11 — the plan template emits a BULLETED label (`- **If this lands broken…`), and until the
+  // #7801 review no fixture used that shape: every one wrote the unbulleted form. So the
+  // production input shape was the untested one. The trigger regex admits an optional list
+  // marker, which is what consumes it.
+  test("the template's own BULLETED label is consumed by the trigger", () => {
+    expect(signals("bulleted-label-consumed-by-trigger.md")).toBe(false);
+  });
+
+  // F12 — `already occurred` is the measured winner's own inflection. It is kept for the
+  // fail-safe direction and pinned here, rather than carried on the assertion that it is a
+  // plausible near-miss: the header sets the bar at "a corpus hit AND a fixture".
+  test("the `already occurred` inflection also re-admits", () => {
+    expect(signals("actuality-occurred-inflection.md")).toBe(true);
+  });
+
+  // F13 — the re-admit OUTRANKS the line-scoped drop rules. As two pipeline stages the line
+  // filter ran after the paragraph strip and deleted lines the re-admit had restored, so one
+  // trailing conditional clause silenced a stated actuality. Merging both into one awk, with the
+  // re-admit above the drop rules, is what fixes it; this fixture is what pins it.
+  test("an actuality claim outranks a conditional clause in the same sentence", () => {
+    expect(signals("actuality-outranks-conditional-clause.md")).toBe(true);
+  });
+
+  // The documented residual is OBSERVABLE, not merely fixtured. `exit 1` is byte-identical
+  // whether the gate found nothing or suppressed an outage line inside a stripped paragraph, and
+  // ship/SKILL.md now tells the reader this note exists — so the claim needs something behind it.
+  test("suppressing an outage line inside the paragraph emits a stderr note", () => {
+    const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
+      input: require("fs").readFileSync(
+        resolve(FIX, "real-outage-inside-paragraph-without-actuality-idiom.md"), "utf8"),
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(1);                       // still a no-signal
+    expect(res.stderr).toContain("PIR-STRIP-SUPPRESSED");
+    expect(res.stdout.trim()).toBe("");               // and the note never reaches stdout
+  });
+
+  // F14 — an UNBALANCED fence must not eat the document tail. The parity toggle would otherwise
+  // leave every later line inside a block that never closes and drop it at exit 1 with no note —
+  // byte-identical to a clean no-signal, and reachable from an odd ``` count in a pasted PR body,
+  // which would delete the entire linked plan. Buffered lines are re-emitted when the toggle is
+  // still open at EOF; a BALANCED fence still hides its contents, which is the strip's purpose.
+  test("an unbalanced fence does not swallow the document tail", () => {
+    expect(signals("unbalanced-fence-does-not-swallow-the-tail.md")).toBe(true);
+  });
+
+  // Template anti-rot. The trigger is anchored on the wording the plan template
+  // actually emits, so if that wording or its `- **` prefix drifts the anchor
+  // stops matching and the gate silently reverts to firing on every plan. Reading
+  // the template at runtime is the only mechanism that catches that drift.
+  test("the anchored trigger matches the plan template's own wording", () => {
+    const tpl = require("fs").readFileSync(
+      resolve(REPO_ROOT, "plugins/soleur/skills/plan/references/plan-issue-templates.md"),
+      "utf8",
+    );
+    const triggers = tpl
+      .split("\n")
+      .filter((l: string) => /^- \*\*If this (lands broken|leaks)/.test(l))
+      .slice(0, 2);
+    expect(triggers.length).toBe(2); // the template still emits both trigger lines
+    const body = triggers
+      .map((t: string) => `${t}\n  The 2026-08-16 apex outage took the production site down.`)
+      .join("\n");
+    expect(signalsText(`# p\n\n## User-Brand Impact\n\n${body}\n`)).toBe(false);
+  });
+
+  // Fail-toward-PIR. On a customer's unpinned awk a failed strip stage otherwise
+  // empties the haystack -> exit 1 -> byte-identical to a clean no-signal, on a
+  // surface (the customer's own CLI, observability layer 7) where no CI is
+  // present to notice. Probing by emptying PATH would fail for the wrong reason:
+  // `env PATH=/nonexistent bash` cannot find bash at all.
+  test("a failing strip stage fails TOWARD a PIR rather than silently", () => {
+    const fs = require("fs");
+    const dir = fs.mkdtempSync(resolve(require("os").tmpdir(), "pir-gate-awk-"));
+    const stub = resolve(dir, "awk");
+    fs.writeFileSync(stub, "#!/bin/sh\nexit 2\n");
+    fs.chmodSync(stub, 0o755);
+    const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
+      input: "nothing to see here\n",
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+  });
+
+  // The guard above must distinguish a BROKEN pipeline from an EMPTY one. The
+  // terminal `grep -v` exits 1 when it selects no lines, which is the ordinary
+  // outcome for a PR with an empty body or one whose every line is filtered — so
+  // a bare `if ! haystack=...` guard reports an incident for a PR with no text at
+  // all. That is the fail-open direction the guard was added to close, inverted
+  // into a false positive on the most ordinary input there is. Measured against
+  // the bare guard: `empty` and `every line filtered` both signal (those two are
+  // the discriminators), while `whitespace only` passes either way — its blank
+  // lines are lines `grep -v` selects, so grep exits 0. It is kept as a boundary
+  // case, not counted as proof.
+  test.each([
+    ["empty", ""],
+    ["whitespace only", "\n\n"],
+    ["every line filtered", "If this lands broken\n"],
+  ])("a %s haystack is a clean no-signal, not a pipeline failure", (_label, input) => {
+    const res = spawnSync("bash", [GATE], { input, encoding: "utf8", env: gitCleanEnv() });
+    expect(res.status).toBe(1);
+    expect(res.stdout.trim()).toBe("");
+  });
+
+  // The seam ship itself creates: `printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT"` joins
+  // the two documents with a SINGLE newline, so the PR body's last line and the
+  // plan's first line become adjacent with no blank line between them. No file
+  // fixture can observe this — every fixture is one document.
+  test("the PR/plan concatenation seam does not swallow the plan", () => {
+    const prText = "fix: apex\n\n**If this lands broken, the user experiences:** an error page.";
+    const planText =
+      "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.";
+    expect(signalsText(`${prText}\n${planText}`)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #8334 — the outage scan was negation-blind. On PR #8320 the ONLY outage-vocabulary hit in the
+// whole corpus was `not that the feature has stopped working`, a denial, and the gate asked for
+// a PIR. `neg_strip()` blanks an occurrence when `no`/`not` governs it directly (whitespace only,
+// at most one article between), or `not that`/`rather than` precedes it by at most three words —
+// in both cases with no clause boundary between. Every other occurrence survives.
+// #8474 — the first draft let a cue reach across a dash, a conjunction or an adjective, and so
+// suppressed real outage reports (fail-OPEN on a safety gate). The `mf-*` rows are those reports;
+// the `boundary-*` rows put the token exactly three words past `rather than` behind ONE boundary
+// each, so every boundary class is individually load-bearing.
+// Every denial fixture carries a production token elsewhere, so a no-signal verdict can only
+// come from the outage half being denied — never from a missing production conjunct.
+const NEGATION_TABLE_MIN = 58;
+describe("negation-aware outage scan (#8334)", () => {
+  const NEGATION_TABLE: Array<[string, boolean]> = [
+    // the only outage token is denied -> no signal
+    ["negated-outage-only.md", false],
+    ["denial-specimen-8334.md", false],
+    ["two-tokens-both-denied.md", false],
+    ["actuality-line-only-token-denied.md", false],
+    // one fixture per kept cue / phrase (`no` and `not that` are pinned above). `never`,
+    // `without`, `n't` and `instead of` were dropped at zero corpus hits (see the gate header).
+    ["negation-cue-not.md", false],
+    ["negation-cue-rather-than.md", false],
+    // a real report survives a denial that does not govern it -> signal
+    ["negation-in-prior-clause-real-report.md", true],
+    ["negated-and-real-token-same-line.md", true],
+    ["no-alert-when-prod-went-down.md", true],
+    // No ACTIVE cue in this one: it guards the DROPPED `n't` cue — re-adding `n't` would deny it.
+    ["didnt-notice-deploy-was-blocked.md", true],
+    ["cue-two-words-from-token-still-signals.md", true],
+    ["real-report-with-unrelated-negation.md", true],
+    // a cue near an outage token with nothing denied and no production token -> clean no-signal
+    ["clean-cue-near-unscoped-outage.md", false],
+    // #8474 must-fire: real reports the first draft of the strip suppressed
+    ["mf-juno-is-not-a-cue.md", true],
+    ["mf-juno-outage-word-boundary.md", true],
+    ["mf-no-colon-went-down.md", true],
+    ["mf-no-comma-went-down.md", true],
+    ["mf-no-hyphen-blame-post-mortem.md", true],
+    ["mf-no-hyphen-notice-outage.md", true],
+    ["mf-no-hyphen-outage-streak.md", true],
+    ["mf-no-hyphen-warning-outage.md", true],
+    ["mf-no-period-went-down.md", true],
+    ["mf-no-then-adjective-outage.md", true],
+    ["mf-not-hyphen-understood-outage.md", true],
+    ["mf-not-that-beyond-word-window.md", true],
+    ["mf-not-that-then-and-boundary.md", true],
+    ["mf-not-that-then-but-boundary.md", true],
+    ["mf-not-that-then-emdash-real-report.md", true],
+    ["mf-not-then-verb-outage.md", true],
+    ["mf-notifications-is-not-a-cue.md", true],
+    ["mf-question-no-emdash-was-down.md", true],
+    ["mf-rather-than-then-after-boundary.md", true],
+    ["mf-rather-than-then-emdash-boundary.md", true],
+    ["mf-rather-than-then-while-boundary.md", true],
+    ["mf-status-no-emdash-outage.md", true],
+    ["mf-table-cell-no-users-could-not.md", true],
+    // #8474 one per clause-boundary class
+    ["boundary-bang.md", true],
+    ["boundary-close-paren.md", true],
+    ["boundary-colon.md", true],
+    ["boundary-comma.md", true],
+    ["boundary-conj-after.md", true],
+    ["boundary-conj-and.md", true],
+    ["boundary-conj-because.md", true],
+    ["boundary-conj-before.md", true],
+    ["boundary-conj-but.md", true],
+    ["boundary-conj-so.md", true],
+    ["boundary-conj-then.md", true],
+    ["boundary-conj-when.md", true],
+    ["boundary-conj-while.md", true],
+    ["boundary-double-hyphen.md", true],
+    ["boundary-em-dash.md", true],
+    ["boundary-en-dash.md", true],
+    ["boundary-open-paren.md", true],
+    ["boundary-period.md", true],
+    ["boundary-pipe.md", true],
+    ["boundary-question.md", true],
+    ["boundary-semicolon.md", true],
+    ["boundary-spaced-hyphen.md", true],
+  ];
+  test.each(NEGATION_TABLE)("%s signals=%p", (fixture, want) => {
+    expect(signals(fixture as string)).toBe(want as boolean);
+  });
+
+  // The table is hand-maintained; a floor keeps a deletion from silently shrinking the guarded set
+  // (the mutation battery asserts the same of its own FIXTURES list).
+  test("the negation table has not shrunk", () => {
+    expect(NEGATION_TABLE.length).toBeGreaterThanOrEqual(NEGATION_TABLE_MIN);
+  });
+
+  // AC11: a suppression is never silent. exit 1 alone is byte-identical to a clean no-signal.
+  test("a denied outage line is disclosed on stderr and the run exits 1", () => {
+    const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
+      input: require("fs").readFileSync(resolve(FIX, "negated-outage-only.md"), "utf8"),
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('ship-incident-pir-gate: PIR-OUTAGE-NEGATION-SUPPRESSED — "');
+    expect(res.stderr).toContain("There was no outage;");
+    expect(res.stdout.trim()).toBe("");
+  });
+
+  // The converse (#8474): the note must be ABSENT when nothing was denied. An unconditional
+  // sentinel never moves the verdict (the sentinel line is dropped whole), so only stderr sees it.
+  // Both inputs put a cue and an outage token on the SAME line, so they reach the sentinel code.
+  test.each([
+    ["clean no-signal run", "clean-cue-near-unscoped-outage.md", 1],
+    ["signalled run", "no-alert-when-prod-went-down.md", 0],
+  ])("no negation note on a %s that denied nothing", (_label, fixture, rc) => {
+    const res = spawnSync("bash", [GATE], {
+      env: gitCleanEnv(),
+      input: require("fs").readFileSync(resolve(FIX, fixture as string), "utf8"),
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(rc as number);
+    expect(res.stderr).not.toContain("PIR-OUTAGE-NEGATION-SUPPRESSED");
+  });
+
+  // #8474: the first draft re-scanned the whole line prefix per token — cubic, 46 s on a 38 KB
+  // dense line. The line below (58 KB, 2000 denied tokens, every one reaching the full judge
+  // because it carries a cue) runs in ~0.15 s now; the bound is ~30x that, so it trips on a
+  // complexity regression, not on a slow runner.
+  test("a dense cue-bearing line is judged in linear time", () => {
+    const line = "not an outage in production, ".repeat(2000) + "\n";
+    const t0 = Date.now();
+    const res = spawnSync("bash", [GATE], { input: line, encoding: "utf8", env: gitCleanEnv() });
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(res.status).toBe(1); // every token denied
+  });
+
+  // neg_strip's second fast path skips any line holding none of a list of literals, on the claim
+  // that every OUTAGE_RE alternative contains one. Drift fails toward the PIR (a token the list
+  // misses is never denied), but it would silently disable the strip for that token — pin it.
+  test("every OUTAGE_RE alternative contains one of the fast-path literals", () => {
+    const src: string = require("fs").readFileSync(GATE, "utf8");
+    const re = /^OUTAGE_RE='\((.*)\)'$/m.exec(src);
+    expect(re).not.toBeNull();
+    const alts: string[] = [];
+    let depth = 0, cur = "";
+    for (const ch of re![1]) {
+      if (ch === "(") depth++;
+      if (ch === ")") depth--;
+      if (ch === "|" && depth === 0) { alts.push(cur); cur = ""; } else cur += ch;
+    }
+    alts.push(cur);
+    const line = src.split("\n").find((l) => l.includes('index(l, "down")'));
+    expect(line).toBeDefined();
+    const hints = [...line!.matchAll(/index\(l, "([^"]+)"\)/g)].map((m) => m[1]);
+    expect(hints.length).toBeGreaterThan(5);
+    expect(alts.length).toBeGreaterThan(10);
+    expect(alts.filter((a) => !hints.some((h) => a.includes(h)))).toEqual([]);
+  });
+
+  // The sentinel line is removed WHOLE, so a PR body that starts a line with the sentinel text
+  // could otherwise delete its own outage report from the haystack. The strip scrubs the marker
+  // out of input lines before anything else sees them.
+  test("input text carrying the sentinel marker cannot hide a real report", () => {
+    expect(
+      signalsText("__PIR_NEG_SUPPRESSED__ The billing API went down in production on 2026-09-01.\n"),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `--pr` corpus construction (#7987).
+//
+// The corpus used to be assembled by PROSE in ship/SKILL.md: grep a plan path out
+// of the PR body, `cat` it, concatenate. When the body cites no plan the second
+// half is the empty string and the gate reports "no incident signal" having read
+// zero bytes of plan — a mandatory gate silently plan-blind (it still fired on body-only outage vocabulary; it could not see the plan, and did not say so), whose output is
+// byte-identical to a real all-clear.
+//
+// The pin below is the exact PR #7987 shape and is a MATCHED PAIR: the SAME plan
+// sits on disk in both cases, and only the LINK in the body differs. Case 1 alone
+// would also pass if the gate had simply become more eager; case 2 alone would
+// also pass if it had stopped reading plans entirely.
+describe("--pr corpus construction", () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, chmodSync } = require("fs");
+  const { tmpdir } = require("os");
+
+  /** A throwaway git repo with a plan on disk and a `gh` stub that returns `body`. */
+  function sandbox(body: string, planText: string) {
+    const dir = mkdtempSync(resolve(tmpdir(), "pirgate-"));
+    // gitFixtureEnv, not a bare spawn. This helper runs `git init`, and an inherited
+    // GIT_DIR/GIT_WORK_TREE beats both the cwd AND the path operand -- so without the
+    // scrub this fixture initialises nothing and any later write lands in the caller's
+    // repository. That is the #7835 incident, and this suite acquired the exposure in
+    // the same PR that fixes the gates guarding against it: `fixture-env-adoption`
+    // caught it in CI as a difference-set member accounted for by neither the waiver
+    // nor the deferred list. Adopted rather than waived.
+    spawnSync("git", ["init", "-q", "-b", "feat-fixture", dir], { env: gitFixtureEnv(dir) });
+    mkdirSync(resolve(dir, "knowledge-base/project/plans"), { recursive: true });
+    writeFileSync(resolve(dir, "knowledge-base/project/plans/fixture-plan.md"), planText);
+    mkdirSync(resolve(dir, "bin"), { recursive: true });
+    // The stub validates argv rather than answering unconditionally: a fake that
+    // dispatches on nothing cannot detect the gate querying the wrong thing.
+    writeFileSync(
+      resolve(dir, "bin/gh"),
+      `#!/usr/bin/env bash\n` +
+        `case "$*" in\n` +
+        `  *"pr view"*--json*title,body*) cat <<'EOF'\n${body}\nEOF\n    ;;\n` +
+        `  *) echo "gh-stub: unexpected: $*" >&2; exit 64 ;;\n` +
+        `esac\n`,
+    );
+    chmodSync(resolve(dir, "bin/gh"), 0o755);
+    return dir;
+  }
+
+  function runPr(dir: string, pr = "7987") {
+    return spawnSync("bash", [GATE, "--pr", pr], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...gitFixtureEnv(dir), PATH: `${resolve(dir, "bin")}:${process.env.PATH}` },
+    });
+  }
+
+  // The plan reports a real production outage; the body alone says nothing.
+  const OUTAGE_PLAN =
+    "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.\n";
+  // REAL newlines, not a literal backslash-n. The stub heredoc previously emitted
+  // one physical line, which made the paragraph strip, the blank-line boundary, the
+  // heading boundary and the fence strip all INERT against every fixture — so
+  // flattening newlines in the corpus builder left the whole suite green while a
+  // real multi-line incident report shipped a silent all-clear.
+  const BODY_WITH_LINK =
+    "fix(apex): restore the origin\n\nSee knowledge-base/project/plans/fixture-plan.md for detail.";
+  const BODY_NO_LINK = "fix(apex): restore the origin\n\nNo plan is linked from this body.";
+
+  test("body LINKS the plan → the plan is read and the outage signals", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    expect(res.stderr).toContain("PIR-CORPUS —");
+  });
+
+  test("body OMITS the link → no signal, but the gate SAYS it read the body alone", () => {
+    const res = runPr(sandbox(BODY_NO_LINK, OUTAGE_PLAN));
+    expect(res.status).toBe(1);
+    // The defect was not the verdict — it was that this verdict was
+    // indistinguishable from having scanned everything.
+    expect(res.stderr).toContain("PIR-CORPUS-BODY-ONLY");
+  });
+
+  test("an unreadable PR fails TOWARD the PIR rather than reporting all-clear", () => {
+    const dir = sandbox(BODY_WITH_LINK, OUTAGE_PLAN);
+    writeFileSync(resolve(dir, "bin/gh"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(resolve(dir, "bin/gh"), 0o755);
+    const res = runPr(dir);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    expect(res.stderr).toContain("PIR-CORPUS-UNREADABLE");
+  });
+
+  // MATCHED PAIR, and the first half must cite a file that EXISTS. The earlier
+  // fixture cited `…/plans/../../../../etc/passwd.md`, which does not exist, so
+  // `realpath -e` failed one step BEFORE the allowlist and the test passed without
+  // ever exercising the boundary: widening the case arm to `"$root"/*` left the
+  // whole suite green. The second half is what stops the fix being "refuse
+  // everything".
+  test("a REAL file outside the plans dir is refused by the allowlist, not read", () => {
+    const dir = sandbox(
+      // THREE `..`: from knowledge-base/project/plans/ that is the repo root, which is
+    // where OUTSIDE.md is written. With two the path resolved to
+    // knowledge-base/OUTSIDE.md — a file that does not exist — so `realpath -e`
+    // failed one step before the allowlist and this test was vacuous a SECOND time,
+    // in the commit fixing exactly that. Mutation-proven: widening the case arm to
+    // `"$root"/*` now reds this case.
+    "fix: x\n\nknowledge-base/project/plans/../../../OUTSIDE.md",
+      OUTAGE_PLAN,
+    );
+    // A readable file that resolves INSIDE the repo but OUTSIDE plans/specs.
+    writeFileSync(resolve(dir, "OUTSIDE.md"), OUTAGE_PLAN);
+    const res = runPr(dir);
+    expect(res.stderr).toContain("refusing to read it");
+    expect(res.status).toBe(1);
+  });
+
+  test("a real file INSIDE the plans dir is still read (the guard narrows, not disables)", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
+    expect(res.stderr).toContain("PIR-CORPUS —");
+    expect(res.status).toBe(0);
+  });
+
+  test("a plan path quoted inside a FENCED block does not shadow the real link", () => {
+    const dir = sandbox(
+      "fix: x\n\nUsage:\n\n```\nknowledge-base/project/plans/decoy-plan.md\n```\n\nPlan: knowledge-base/project/plans/fixture-plan.md",
+      OUTAGE_PLAN,
+    );
+    writeFileSync(
+      resolve(dir, "knowledge-base/project/plans/decoy-plan.md"),
+      "# decoy\n\nnothing notable here.\n",
+    );
+    const res = runPr(dir);
+    expect(res.stderr).toContain("fixture-plan.md");
+    expect(res.stderr).not.toContain("decoy-plan.md");
+    expect(res.status).toBe(0);
+  });
+
+  test("--pr with an EMPTY value exits 2 (a usage error is not an all-clear)", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN), "");
+    expect(res.status).toBe(2);
+  });
+
+  test("--pr rejects a non-numeric argument", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN), "7987; rm -rf /");
+    expect(res.status).toBe(2);
+  });
+
+  test("stdin mode is unchanged when --pr is absent", () => {
+    const res = spawnSync("bash", [GATE], { input: OUTAGE_PLAN, encoding: "utf8", env: gitCleanEnv() });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
   });
 });

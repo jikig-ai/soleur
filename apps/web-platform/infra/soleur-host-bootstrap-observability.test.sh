@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# (#7024 class) a pipe into `grep -q` SIGPIPEs its producer on an early match, and pipefail
+# turns that into FALSE; _qgrep reads all of its input and discards it instead.
+_qgrep() { grep "$@" >/dev/null; }
 
 # Observability probe guard for the web-2 fresh-boot blind spot (#6090).
 #
@@ -55,16 +58,20 @@ JOB="$(awk '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ /^  web_host_create:/) } /^  #/ {
 pass=0; fail=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+# Instrument self-test: both helpers must move their counters, or every verdict below is void.
+ok "instrument self-test (pass arm)" >/dev/null; no "instrument self-test (fail arm)" 2>/dev/null
+[ "$pass" -eq 1 ] && [ "$fail" -eq 1 ] || { printf 'instrument self-test broken\n'; exit 2; }
+pass=0; fail=0
 
 # Deliberately-nonzero grep inside a command substitution must not trip `set -e`
 # (accumulate-then-exit foot-gun): the trailing `|| true` keeps a no-match empty.
-line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; } || true; }
+line_of() { { grep -nF -- "$2" "$1" 2>/dev/null | sed -n '1p' | cut -d: -f1; } || true; }
 
 # ── AC0: the extraction above is actually job-scoped ──────────────────────────────
 # Every assertion that greps $JOB inherits its correctness from this one. Measured,
 # not assumed: the block must be non-empty, must open on our own header, and must
 # carry no two-space `#` — the marker of another job's preamble leaking in.
-if [[ -n "$JOB" ]] && head -1 <<<"$JOB" | grep -qE '^  web_host_create:' \
+if [[ -n "$JOB" ]] && head -1 <<<"$JOB" | _qgrep -E '^  web_host_create:' \
    && ! grep -qE '^  #' <<<"$JOB"; then
   ok "AC0: web_host_create block is job-scoped (opens on its header, no foreign preamble)"
 else
@@ -72,13 +79,14 @@ else
 fi
 
 # ── AC1 (B): cosign ENFORCE is not on the fresh-boot path (documentation guard) ──
-# The default is warn; no repo site sets enforce outside a test; cosign verify is
-# absent from cloud-init. (A regression that wired enforce into cloud-init would
+# Since #6129 ci-deploy.sh defaults to enforce: a failed verify keeps the OLD container live on a
+# running host. The fresh-boot path must stay free of cosign verify, because there is no old
+# container to fall back to there. (A regression that wired enforce into cloud-init would
 # reintroduce the exact silent-abort class this PR investigates.)
-if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DIR/ci-deploy.sh"; then
-  ok "AC1: IMAGE_VERIFY_MODE default is warn (cosign ENFORCE not live)"
+if grep -qE 'IMAGE_VERIFY_MODE:-enforce' "$DIR/ci-deploy.sh"; then
+  ok "AC1: IMAGE_VERIFY_MODE default is enforce in ci-deploy.sh only (#6129)"
 else
-  no "AC1: expected IMAGE_VERIFY_MODE:-warn default in ci-deploy.sh"
+  no "AC1: expected IMAGE_VERIFY_MODE:-enforce default in ci-deploy.sh (#6129)"
 fi
 # #6122: match a cosign INVOCATION, not the word in a comment. cloud-init.yml's
 # daemon.json block documents "cosign digest-pinning is the integrity guard, not TLS"
@@ -105,8 +113,9 @@ else
 fi
 
 # ── AC3: bootstrap emit path prefers the baked DSN before any doppler fetch ──
-# One shared _sentry_emit resolves DSN preferring SOLEUR_SENTRY_DSN; emit_fail and
-# ghcr_login_warn both route through it.
+# One shared _sentry_emit resolves DSN preferring SOLEUR_SENTRY_DSN; emit_fail and the
+# bootstrap_complete breadcrumb both route through it (ghcr_login_warn, its third caller, was
+# deleted with the GHCR login by #8036 1d).
 if grep -qE '\$\{SOLEUR_SENTRY_DSN:-' "$BOOT"; then
   ok "AC3: bootstrap resolves DSN preferring \${SOLEUR_SENTRY_DSN:-<doppler>}"
 else
@@ -125,7 +134,7 @@ if grep -qE '_sentry_emit' "$BOOT"; then
     no "AC3: DSN preference assignment should appear once (found $n_pref) — factor into _sentry_emit"
   fi
 else
-  no "AC3: expected a shared _sentry_emit helper used by emit_fail + ghcr_login_warn"
+  no "AC3: expected a shared _sentry_emit helper used by emit_fail + the bootstrap_complete breadcrumb"
 fi
 
 # ── AC4: bootstrap_complete breadcrumb precedes the sentinel ──
@@ -142,13 +151,13 @@ fi
 # ── AC5 (fail-open — structural enclosure, NOT per-line || true) ──
 # The emit boundary is centralized in _sentry_emit; assert it is enclosed in a
 # ( set +e … ) || true subshell so no emit can trip set -e and brick the boot.
-if awk '/_sentry_emit\(\)/{f=1} f&&/\( set \+e/{s=1} f&&s&&/\) \|\| true/{print "found"; exit}' "$BOOT" | grep -q found; then
+if awk '/_sentry_emit\(\)/{f=1} f&&/\( set \+e/{s=1} f&&s&&/\) \|\| true/{print "found"; exit}' "$BOOT" | _qgrep found; then
   ok "AC5: _sentry_emit body is enclosed in ( set +e … ) || true (fail-open)"
 else
   no "AC5: _sentry_emit must wrap its DSN-resolve+POST in ( set +e … ) || true"
 fi
 # emit_fail disarms the EXIT trap before emitting (so a slow curl cannot re-enter).
-if awk '/^emit_fail\(\)/{f=1} f&&/trap - EXIT/{print "found"; exit}' "$BOOT" | grep -q found; then
+if awk '/^emit_fail\(\)/{f=1} f&&/trap - EXIT/{print "found"; exit}' "$BOOT" | _qgrep found; then
   ok "AC5: emit_fail runs trap - EXIT before emitting"
 else
   no "AC5: emit_fail must call trap - EXIT first"
@@ -168,7 +177,7 @@ fi
 # Non-vacuity: the set +e must appear AFTER the extraction's rm -rf "$SEED" and
 # BEFORE the bare cloudflared apt install.
 rm_ln=$(line_of "$CI" 'rm -rf "$SEED"')
-h3_ln=$(grep -nE 'set \+e.*H3' "$CI" | head -1 | cut -d: -f1 || true)
+h3_ln=$(grep -nE 'set \+e.*H3' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 apt_ln=$(line_of "$CI" 'apt-get install -y cloudflared')
 if [ -n "$rm_ln" ] && [ -n "$h3_ln" ] && [ -n "$apt_ln" ] && [ "$rm_ln" -lt "$h3_ln" ] && [ "$h3_ln" -lt "$apt_ln" ]; then
   ok "H3: set +e (line $h3_ln) sits between extraction end ($rm_ln) and cloudflared apt ($apt_ln)"
@@ -205,19 +214,23 @@ fi
 #
 # #6604 RE-POINT (Q6/C10): the /mnt/data mount was pinned from the ambiguous scsi-0HC_Volume_*
 # glob to the stable by-id device (once the LUKS volume attaches the glob binds the wrong device).
-# The survivability this AC protects is NOT inverted — it is STRENGTHENED: it moved from the
-# single runcmd `|| true` into `nofail` in the fstab line, which survives EVERY boot (not just the
-# one runcmd pass), and the runcmd mount chain STILL ends non-fatal (`|| soleur-boot-emit … || true`,
-# a pageable-but-survivable degrade). Assert (a) the bare-glob mount is GONE, (b) the mount is
-# by-id-pinned and still ends `|| true`, (c) fstab carries `nofail`. Anchored on the pin construct
-# + `nofail`, not a bare token (cq-assert-anchor-not-bare-token).
+# The fstab line keeps `nofail`, which survives EVERY boot (not just the one runcmd pass).
+# #6931 RE-POINT: the /mnt/data mount moved from the runcmd chain into the baked
+# workspaces-luks-provision.sh, and its failure is now DELIBERATELY fatal (hard gate + `poweroff -f`
+# before anything writes under /mnt/data) — a host whose data volume is not on the LUKS mapper must
+# not serve, so the old "stays survivable" disposition is intentionally reversed for this one mount.
+# What this AC still protects: no ambiguous glob, the device stays pinned by-id, fstab keeps `nofail`
+# (a boot-time degrade is pageable, never a boot hang), and the fatal path is NAMED (boot-emit stage).
+# The gate's PREDICATE is executed, not grepped, in fresh-boot-parity.test.sh section 20.
+PROV_SH="$DIR/workspaces-luks-provision.sh"
 if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data' "$CI"; then
   no "AC6b: the ambiguous scsi-0HC_Volume_* glob mount for /mnt/data must be REMOVED (#6604 pin by-id)"
-elif grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data \|\| soleur-boot-emit workspaces_mount fatal \|\| true' "$CI" \
-  && grep -qE 'scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data ext4 defaults,nofail ' "$CI"; then
-  ok "AC6b: /mnt/data mount pinned by-id + fstab nofail; survivability strengthened, not inverted"
+elif _pin_line="$(grep -F 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s' "$CI")" && [[ "$_pin_line" == *"'"'${workspaces_volume_id}'"'"* ]] \
+  && grep -qE "^FSTAB_LINE='/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2'\$" "$PROV_SH" \
+  && grep -qE 'workspaces_luks_not_mounted fatal; poweroff -f' "$CI"; then
+  ok "AC6b: /mnt/data is by-id-pinned, fstab keeps nofail, and the fatal path is a NAMED fail-closed gate (#6931)"
 else
-  no "AC6b: /mnt/data mount must be by-id-pinned, end '|| true', and carry fstab 'nofail' (survivable, not fatal)"
+  no "AC6b: /mnt/data must be by-id-pinned, keep fstab 'nofail' and fail closed through the named workspaces_luks_not_mounted gate"
 fi
 # plugin_seed + inngest keep a COMPOSITE trap that still calls cleanup.
 n_comp=$(grep -cE "trap 'rc=\\\$\?; cleanup;" "$CI" || true)
@@ -282,7 +295,7 @@ fi
 # emitted nothing" identically to a host that genuinely did. So the check runs in
 # BOTH directions: every literal in the QUERY must be emitted somewhere, and every
 # canonical emit must appear in the QUERY.
-QUERY_LINE=$({ grep -nE "^\s*QUERY='" "$TRAIL" || true; } | head -1 | cut -d: -f1)
+QUERY_LINE=$({ grep -nE "^\s*QUERY='" "$TRAIL" || true; } | sed -n '1p' | cut -d: -f1)
 if [ -z "$QUERY_LINE" ]; then
   no "AC8: could not locate the QUERY line in $(basename "$TRAIL")"
 else
@@ -291,8 +304,9 @@ else
     "soleur-hostscript-seed failed" \
     "soleur-host-bootstrap failed" \
     "soleur-host-bootstrap complete" \
-    "soleur-cloud-init boot stage"; do
-    if printf '%s' "$QUERY" | grep -qF -- "$msg"; then
+    "soleur-cloud-init boot stage" \
+    "app image served"; do
+    if printf '%s' "$QUERY" | _qgrep -F -- "$msg"; then
       ok "AC8: QUERY includes message \"$msg\""
     else
       no "AC8: the boot-trail reader's QUERY is missing message \"$msg\" (lockstep drift re-opens the blind spot)"
@@ -302,7 +316,8 @@ else
     "soleur-hostscript-seed failed:$CI" \
     "soleur-host-bootstrap failed:$BOOT" \
     "soleur-host-bootstrap complete:$BOOT" \
-    "soleur-cloud-init boot stage:$BOOT"; do
+    "soleur-cloud-init boot stage:$BOOT" \
+    "app image served by zot:$CI"; do
     msg="${pair%%:*}"; src="${pair##*:}"
     if grep -qF -- "$msg" "$src"; then
       ok "AC8: message \"$msg\" is emitted in $(basename "$src")"
@@ -310,6 +325,23 @@ else
       no "AC8: message \"$msg\" not found in $(basename "$src") (query would match nothing)"
     fi
   done
+
+  # (#8651) The reverse pair above is the FULL `app image served by zot`, not the QUERY prefix:
+  # the two GHCR messages share the prefix, so a bare-prefix pair stays green after an app_zot
+  # rename. Pin that the QUERY literal IS a prefix of it (so MSG_RE still matches the beacon),
+  # and that no QUERY literal carries a regex metacharacter — MSG_RE is built from them, and the
+  # fallback message's `(zot miss)` would turn into a regex group.
+  # Both operands are READ, not restated: the QUERY literal from the trail, the beacon message
+  # from the _emit call site — two constants compared to each other can never fail.
+  q_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"app image served[^"]*"' | sed -E 's/message:"([^"]+)"/\1/' | sed -n '1p') || q_lit=""
+  z_msg=$(grep -vE '^[[:space:]]*#' "$CI" | grep -oE '_emit "app image served by zot" "app_zot"' | sed -E 's/_emit "([^"]+)".*/\1/' | sed -n '1p') || z_msg=""
+  if [ -n "$q_lit" ] && [ -n "$z_msg" ] && case "$z_msg" in "$q_lit"*) true ;; *) false ;; esac; then
+    ok "AC8: the QUERY literal '$q_lit' is a prefix of the emitted app_zot message '$z_msg' (MSG_RE matches the beacon)"
+  else no "AC8: QUERY literal '${q_lit:-<none>}' must be a prefix of the emitted app_zot message '${z_msg:-<none>}'"; fi
+  meta=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | sed -E 's/message:"([^"]+)"/\1/' | grep -E '[][(){}.*+?^$|\\]' || true)
+  n_lit=$(printf '%s' "$QUERY" | grep -oE 'message:"[^"]+"' | wc -l | tr -d ' ') || n_lit=0
+  if [ -z "$meta" ] && [ "$n_lit" -ge 5 ]; then ok "AC8: no QUERY message literal carries a regex metacharacter ($n_lit literals)"
+  else no "AC8: QUERY literal(s) with regex metacharacters would corrupt MSG_RE: ${meta:-<none>} (literals=$n_lit)"; fi
 fi
 
 # ── AC8b (EU data plane + always-run breadcrumb surface) ──
@@ -340,12 +372,22 @@ fi
 # job's boot-trail step left every suite green. On a replace that is strictly worse than on a
 # birth — the original host is already destroyed, so "the apply succeeded" and "the probe
 # never ran" render identically, with nothing to fall back to.
+# ONE OPTIONAL CONJUNCT, exhaustively spelled (#8209): `&& inputs.plan_only != true`. A
+# plan_only dispatch is operator step O4b's REHEARSAL -- it stops before the apply, so there
+# is no fresh host and no boot trail to surface; running the reader there would query Sentry
+# for a host that was never created and report its silence as a finding.
+#
+# Spelled as a literal alternative rather than loosened to "contains always()", because the
+# thing this assertion exists to catch is a condition that SUBTRACTS the failure case --
+# `always() && steps.apply.outcome == 'success'` contains `always()` and reintroduces exactly
+# the defect (a host that applied clean but booted dark reads as a success). Any other
+# conjunct, including a second copy of this one, still reds.
 for prov_job in web_host_create web_host_replace; do
   PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
-  if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*$/{print "y"; exit}' <<<"$PROV")" ]]; then
-    ok "AC8b: ${prov_job} fresh-host Sentry surface runs if: always()"
+  if [[ -n "$(awk '/- name: Surface fresh-host Sentry/{f=1; next} f && /^      - name:/{exit} f && !/^[[:space:]]*#/ && /^[[:space:]]*if:[[:space:]]*always\(\)[[:space:]]*(&&[[:space:]]*inputs\.plan_only[[:space:]]*!=[[:space:]]*true[[:space:]]*)?$/{print "y"; exit}' <<<"$PROV")" ]]; then
+    ok "AC8b: ${prov_job} fresh-host Sentry surface runs if: always() (optionally minus a plan_only rehearsal)"
   else
-    no "AC8b: ${prov_job} Sentry surface step must be if: always() (spec-flow F4)"
+    no "AC8b: ${prov_job} Sentry surface step must be if: always(), or always() && inputs.plan_only != true (spec-flow F4)"
   fi
 done
 
@@ -373,14 +415,125 @@ for prov_job in web_host_create web_host_replace; do
   fi
 done
 
-# ── AC13 (#6090 follow-up): the surfacing step sources its token from Doppler ──
-# The GitHub repo secret SENTRY_AUTH_TOKEN is unset, so a step reading it self-skips
-# and logs "Sentry query skipped" — the read never happens and nobody notices.
-if grep -qE 'doppler secrets get SENTRY_AUTH_TOKEN .*-c prd_terraform' "$TRAIL"; then
-  ok "AC13: the surface step resolves SENTRY_AUTH_TOKEN from Doppler prd_terraform (not the unset repo secret)"
+# ── AC13 (#6090 follow-up, retargeted by #7946): the surfacing step binds its token from
+# the WORKFLOW ENV, never from Doppler — and names the unbound case rather than self-skipping.
+#
+# History: the original AC13 pinned a `doppler secrets get SENTRY_AUTH_TOKEN -c prd_terraform`
+# read because the repo secret of that name was unset and a `secrets.*` binding self-skipped
+# silently. That read bound a PERSONAL, human-account-scoped token (#7797 class). #7946
+# moves the reader onto the org-level `actions-read-prd` integration via the repo secret
+# SENTRY_ACTIONS_RO_TOKEN, and the silent-skip class AC13 exists to prevent is closed on
+# the other side: (a) the script names the unbound case in an annotation AND the summary,
+# (b) the workflow is asserted to BIND the secret on both provisioning jobs, so an un-wired
+# step is red here rather than dark in production.
+#
+# (a) The script reads the new name from its environment. Anchored on the expansion.
+if grep -qE '\$\{SENTRY_ACTIONS_RO_TOKEN' "$TRAIL"; then
+  ok "AC13a: the surface step reads SENTRY_ACTIONS_RO_TOKEN from its environment"
 else
-  no "AC13: the surface step must fetch SENTRY_AUTH_TOKEN via doppler -c prd_terraform"
+  no "AC13a: the surface step must read SENTRY_ACTIONS_RO_TOKEN from its environment (found no \${SENTRY_ACTIONS_RO_TOKEN expansion)"
 fi
+# (b) The unbound case is NAMED on two channels from ONE sentence (`msg=`): an
+# `echo "::${level}::…${msg}"` CALL (reachable via `gh run view --log`) and a
+# `tee -a "$GITHUB_STEP_SUMMARY"` write of the same variable. Anchored on the CALLS and the
+# assignment, not the sentence alone (the AC14 lesson).
+if grep -qE '^\s*msg="Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound' "$TRAIL" \
+   && grep -qE '^\s*echo "::\$\{level\}::\$\{WEB_HOST_KEY:-\?\}: \$\{msg\}"' "$TRAIL"; then
+  ok "AC13b: the unbound case emits a ::\${level}:: annotation carrying the one not-bound sentence"
+else
+  no "AC13b: the unbound case must assign the not-bound sentence to \`msg=\` and emit it via \`echo \"::\${level}::…\${msg}\"\`"
+fi
+if grep -qF 'echo "_${msg}_" | tee -a "$GITHUB_STEP_SUMMARY"' "$TRAIL"; then
+  ok "AC13c: the same sentence (\${msg}) is written to GITHUB_STEP_SUMMARY via tee -a"
+else
+  no "AC13c: the not-bound sentence must reach GITHUB_STEP_SUMMARY as \`echo \"_\${msg}_\" | tee -a \"\$GITHUB_STEP_SUMMARY\"\`"
+fi
+# (b2) The bearer is the NEW name and the retired one appears nowhere in the reader.
+if grep -qF 'Authorization: Bearer ${SENTRY_ACTIONS_RO_TOKEN}' "$TRAIL"; then
+  ok "AC13b2: the Sentry read bears SENTRY_ACTIONS_RO_TOKEN"
+else
+  no "AC13b2: the Sentry read must send \`Authorization: Bearer \${SENTRY_ACTIONS_RO_TOKEN}\`"
+fi
+if ! grep -q 'SENTRY_AUTH_TOKEN' "$TRAIL"; then
+  ok "AC13b3: the retired name SENTRY_AUTH_TOKEN appears nowhere in the reader"
+else
+  no "AC13b3: the reader still names the retired credential SENTRY_AUTH_TOKEN ($(grep -c 'SENTRY_AUTH_TOKEN' "$TRAIL") site(s))"
+fi
+# (c) No Doppler READ remains — not the token's, not SENTRY_ORG's, not SENTRY_PROJECT's.
+# Anchored on the read CONSTRUCTS (`doppler secrets …`, `doppler run …`, a DOPPLER_TOKEN
+# binding), not the bare word: the script legitimately names the host's `doppler_retry` /
+# `doppler_download` BOOT STAGES, which are Sentry tag values in lockstep with the cloud-init
+# emitters and are not reads (cq-assert-anchor-not-bare-token).
+if [[ "$(grep -cE 'doppler (secrets|run)|DOPPLER_TOKEN' "$TRAIL" || true)" == "0" ]]; then
+  ok "AC13d: the surface step makes no Doppler read at all (no \`doppler secrets\`/\`doppler run\`/DOPPLER_TOKEN)"
+else
+  no "AC13d: the surface step still carries a Doppler read ($(grep -cE 'doppler (secrets|run)|DOPPLER_TOKEN' "$TRAIL") site(s)) — every Doppler read must be gone, not only the token's"
+fi
+# (d) BEHAVIOURAL: run the script with the secret UNBOUND. It must emit the annotation, write
+# the summary line, exit 0 (a skipped read is not a proven dark boot), and never call doppler
+# — a `doppler` on PATH that records its invocation is the tripwire.
+_ac13_tmp="$(mktemp -d)"
+# The one owning trap in this file (lint-trap-tempfile-ownership): the block below also removes
+# the directory on its normal path, so this exists for a death between allocation and that rm.
+trap 'rm -rf "${_ac13_tmp:-}"' EXIT
+mkdir -p "$_ac13_tmp/bin"
+printf '#!/usr/bin/env bash\necho invoked >> "%s/doppler-called"; exit 1\n' "$_ac13_tmp" > "$_ac13_tmp/bin/doppler"
+chmod +x "$_ac13_tmp/bin/doppler"
+: > "$_ac13_tmp/summary"
+# `|| _ac13_rc=$?`: a non-zero exit is a FINDING here, and under `set -e` a bare
+# `x="$(cmd)"; rc=$?` would abort the suite before the row reports it.
+_ac13_rc=0
+_ac13_out="$(cd "$_ac13_tmp" && env -i PATH="$_ac13_tmp/bin:$PATH" HOME="$HOME" \
+  GITHUB_STEP_SUMMARY="$_ac13_tmp/summary" JOB_STATUS=success WEB_HOST_KEY=web-9 \
+  bash "$TRAIL" 2>&1)" || _ac13_rc=$?
+if [[ "$_ac13_rc" == "0" ]] && grep -q '::error::web-9: Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound' <<<"$_ac13_out"; then
+  ok "AC13e: run with the secret unbound on a SUCCESSFUL job -> ::error:: annotation on stdout and exit 0"
+else
+  no "AC13e: run with the secret unbound on a successful job must exit 0 with an ::error:: naming SENTRY_ACTIONS_RO_TOKEN (rc=$_ac13_rc): $(head -c 400 <<<"$_ac13_out")"
+fi
+_ac13_rc2=0
+_ac13_out2="$(cd "$_ac13_tmp" && env -i PATH="$_ac13_tmp/bin:$PATH" HOME="$HOME" \
+  GITHUB_STEP_SUMMARY="$_ac13_tmp/summary" JOB_STATUS=failure WEB_HOST_KEY=web-9 \
+  bash "$TRAIL" 2>&1)" || _ac13_rc2=$?
+if [[ "$_ac13_rc2" == "0" ]] && grep -q '::warning::web-9: Sentry read skipped — SENTRY_ACTIONS_RO_TOKEN is not bound' <<<"$_ac13_out2"; then
+  ok "AC13e2: run with the secret unbound on a FAILED job -> ::warning:: (not error) and exit 0"
+else
+  no "AC13e2: run with the secret unbound on a failed job must exit 0 with a ::warning:: (rc=$_ac13_rc2): $(head -c 400 <<<"$_ac13_out2")"
+fi
+if grep -q 'SENTRY_ACTIONS_RO_TOKEN.*not bound' "$_ac13_tmp/summary"; then
+  ok "AC13f: run with the secret unbound -> the not-bound sentence landed in GITHUB_STEP_SUMMARY"
+else
+  no "AC13f: the not-bound sentence did not reach GITHUB_STEP_SUMMARY: $(head -c 300 "$_ac13_tmp/summary")"
+fi
+if [[ ! -e "$_ac13_tmp/doppler-called" ]]; then
+  ok "AC13g: run with the secret unbound made NO doppler call"
+else
+  no "AC13g: the script invoked doppler ($(wc -l < "$_ac13_tmp/doppler-called") time(s)) — the personal-token read path is still live"
+fi
+rm -rf "$_ac13_tmp"
+# (e) BOTH provisioning jobs BIND the secret in the boot-trail step's env and no longer carry
+# DOPPLER_TOKEN there — an `if: always()` step holding a prd_terraform-capable credential on
+# every failed or cancelled apply was the wider exposure. Per job, with the AC8d extraction,
+# then narrowed to the boot-trail step so a binding elsewhere in the job cannot satisfy it.
+for prov_job in web_host_create web_host_replace; do
+  PROV="$(awk -v want="^  ${prov_job}:" '/^  [A-Za-z0-9_-]+:/ { cap = ($0 ~ want) } /^  #/ { cap = 0 } cap' "$WF" || true)"
+  STEP="$(awk '/- name: Surface fresh-host Sentry/{f=1} f && /^      - name:/ && !/Surface fresh-host Sentry/{exit} f' <<<"$PROV")"
+  if [[ -z "$STEP" ]]; then
+    no "AC13h: no boot-trail step found in ${prov_job} — nothing to assert the binding on (the step was renamed or removed; AC13i below is skipped for the same reason)"
+  elif grep -qE '^[[:space:]]*SENTRY_ACTIONS_RO_TOKEN: \$\{\{ secrets\.SENTRY_ACTIONS_RO_TOKEN \}\}[[:space:]]*(#.*)?$' <<<"$STEP"; then
+    ok "AC13h: ${prov_job} boot-trail step binds SENTRY_ACTIONS_RO_TOKEN from the repo secret"
+  else
+    no "AC13h: ${prov_job} boot-trail step must bind \`SENTRY_ACTIONS_RO_TOKEN: \${{ secrets.SENTRY_ACTIONS_RO_TOKEN }}\` in its env: block"
+  fi
+  # Anchored on the BINDING (a YAML env key), not the bare word, which a comment may carry.
+  if [[ -z "$STEP" ]]; then
+    no "AC13i: no boot-trail step found in ${prov_job} — cannot assert DOPPLER_TOKEN is unbound (an empty subject is not a pass)"
+  elif ! grep -qE '^[[:space:]]*DOPPLER_TOKEN:' <<<"$STEP"; then
+    ok "AC13i: ${prov_job} boot-trail step no longer binds DOPPLER_TOKEN"
+  else
+    no "AC13i: ${prov_job} boot-trail step still binds DOPPLER_TOKEN — it was there only for the Doppler reads AC13d forbids"
+  fi
+done
 
 # ── AC14 (ADR-128 R1): the DSN is asserted non-empty BEFORE the host is created ──
 # Anchored on an `echo "::error::` CALL carrying the message — not the message alone.
@@ -474,7 +627,7 @@ fi
 # Without a trailing `trap - EXIT`, the inngest composite trap stays armed through the
 # trap-less terminal block and mislabels a doppler_download/docker_run failure as
 # stage=inngest_bootstrap — defeating the "name the exact stage" deliverable.
-if awk '/soleur-boot-emit inngest_bootstrap fatal/{f=1} f&&/trap - EXIT/{print "y"; exit}' "$CI" | grep -q y; then
+if awk '/soleur-boot-emit inngest_bootstrap fatal/{f=1} f&&/trap - EXIT/{print "y"; exit}' "$CI" | _qgrep y; then
   ok "AC10: inngest composite trap is disarmed (trap - EXIT) before the terminal block"
 else
   no "AC10: inngest block must 'trap - EXIT' after its composite trap (else terminal failures mislabel)"
@@ -483,7 +636,7 @@ fi
 # ── AC11 (webhook checksum fail-closed independent of the H3 set +e) ──
 # The signed-release binary's sha256sum must abort on mismatch even though H3 restored
 # set +e for the region (a mismatch must not install an unverified binary).
-if awk '/sha256sum -c -/{if (/webhook_checksum|exit 1/) {print "y"; exit}}' "$CI" | grep -q y; then
+if awk '/sha256sum -c -/{if (/webhook_checksum|exit 1/) {print "y"; exit}}' "$CI" | _qgrep y; then
   ok "AC11: webhook checksum is fail-closed (|| exit 1) independent of the H3 set +e"
 else
   no "AC11: webhook 'sha256sum -c -' must be '|| { … fatal; exit 1; }' (H3 set +e un-gates it otherwise)"
@@ -496,7 +649,7 @@ fi
 # spot. The fix moves on_err to the TOP of runcmd and bumps STAGE per install step. Guard that:
 #   (a) on_err is armed BEFORE the doppler download (early coverage), and
 #   (b) on_err is defined exactly ONCE (moved, not duplicated — no transport drift / no bytes).
-armln=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+armln=$(grep -nE '^\s*trap on_err EXIT' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 dopplerln=$(line_of "$CI" 'tar xzf /tmp/doppler.tar.gz')
 if [ -n "$armln" ] && [ -n "$dopplerln" ] && [ "$armln" -lt "$dopplerln" ]; then
   ok "AC12: on_err trap armed (line $armln) BEFORE the doppler install ($dopplerln) — pre-extraction covered"
@@ -565,9 +718,9 @@ else
 fi
 # Ordering: STAGE must be set BEFORE the hang-capable command (else the fatal mis-attributes), and
 # the apt block must sit AFTER the trap arm (else no emit coverage). Guards a silent regression.
-su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | head -1 | cut -d: -f1 || true)
-auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | head -1 | cut -d: -f1 || true)
-armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | head -1 | cut -d: -f1 || true)
+su_ln=$(grep -nE '^\s*STAGE=apt_update' "$CI" | sed -n '1p' | cut -d: -f1 || true)
+auu_ln=$(grep -nE 'timeout [0-9]+ apt-get update' "$CI" | sed -n '1p' | cut -d: -f1 || true)
+armln2=$(grep -nE '^\s*trap on_err EXIT' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$su_ln" ] && [ "$su_ln" -lt "$auu_ln" ]; then
   ok "AC17: trap-arm ($armln2) < STAGE=apt_update ($su_ln) < apt-get update ($auu_ln) — covered + correctly attributed"
 else
@@ -576,7 +729,7 @@ fi
 # The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
 # active from boot (write_files), so an update before the key deterministically fails (missing
 # signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
-cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | head -1 | cut -d: -f1 || true)
+cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | sed -n '1p' | cut -d: -f1 || true)
 if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
   ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
 else
@@ -593,10 +746,15 @@ if grep -qF '"detail":"%s"' "$CI" && grep -qF '/run/soleur-stage-detail' "$CI"; 
 else
   no "AC18: _emit must include a detail tag from /run/soleur-stage-detail"
 fi
-if grep -qE 'ghcr_login_ok|ghcr_login_fail|ghcr_creds_missing' "$CI"; then
-  ok "AC18: ghcr_login records its outcome (ok / fail+error / creds_missing) to the detail file"
+# #8651 moved the per-login outcome into per-leg detail fields (`zot=[…]` + `ghcr=[…]` on a fatal,
+# `zot_login=`/`ghcr_login=` on the app_zot beacon). INVERTED by #8036 1d: the GHCR leg is deleted,
+# so its fields are residual-zero and the zot leg is the whole detail. `zot_login=` must survive
+# byte-for-byte: web-fresh-boot-zot-8651.sh greps `zot_login=ok` off the success beacon.
+if ! grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E 'ghcr=\[|ghcr_login=' \
+   && grep -qF "printf 'zot_login=%s nic=%s:%s %s'" "$CI" && grep -qF 'Z="zot=[login=$ZL,n=$ZN,cause=$C]"' "$CI"; then
+  ok "AC18: the detail records the zot leg only (zot_login= / zot=[login,n,cause]); no ghcr=[ / ghcr_login= field (#8036 1d)"
 else
-  no "AC18: ghcr_login must write its outcome to /run/soleur-stage-detail"
+  no "AC18: the detail must carry zot_login=%s + zot=[login=\$ZL,n=\$ZN,cause=\$C] and no ghcr=[ / ghcr_login= field"
 fi
 if grep -qF 'pull_err:' "$CI"; then
   ok "AC18: the pull loop appends the docker pull stderr on final failure (names the pull error)"
@@ -604,66 +762,102 @@ else
   no "AC18: the pull loop must capture the docker pull error into /run/soleur-stage-detail"
 fi
 
-# ── AC19 (#6090): ghcr_login prefers BAKED creds + hardens the doppler fallback ──
-# recreate 28826611336 reached stage=pull with detail=ghcr_creds_missing user=n token=n: doppler
-# answered EMPTY at the cold-boot instant, so docker login was skipped → anonymous private pull →
-# 401 → boot aborts before :9000. Fix: bake ${ghcr_read_*} (like ${sentry_dsn}) preferred, with a
-# HARDENED doppler fallback (timeout 45 + 3-try retry loop). server.tf must pass both vars in.
+# ── AC19 (#6090), INVERTED by #8036 1d: the seed block presents NO GHCR credential ──
+# History: recreate 28826611336 reached stage=pull with detail=ghcr_creds_missing (doppler answered
+# EMPTY at the cold-boot instant), so #6090 baked ${ghcr_read_*} into the seed ghcr_login. That
+# PAT is revoked (AP-016) and #8036 1d deleted the login it fed: the bake is now residual-zero, and
+# the credential the seed block DOES bake is the zot pull token (cloud-init-web-zot-seed.test.sh).
 TF="$DIR/server.tf"
-# (1) baked creds preferred (the assignment mirrors the ${sentry_dsn} bake; literal, not expanded)
-bake_u=$'GHCR_USER=\'${ghcr_read_user}\''
-bake_t=$'GHCR_TOKEN=\'${ghcr_read_token}\''
-if grep -qF "$bake_u" "$CI" && grep -qF "$bake_t" "$CI"; then
-  ok "AC19: ghcr_login prefers baked \${ghcr_read_user}/\${ghcr_read_token} (survives a cold-boot empty doppler)"
+# (1) no baked GHCR creds and no seed ghcr_login stage (code lines only)
+if ! grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E '\$\{ghcr_read_(user|token)\}|STAGE=ghcr_login|GHCR_(USER|TOKEN)='; then
+  ok "AC19: cloud-init bakes no \${ghcr_read_user}/\${ghcr_read_token} and has no STAGE=ghcr_login (#8036 1d)"
 else
-  no "AC19: ghcr_login must prefer baked \${ghcr_read_user}/\${ghcr_read_token} before falling back to doppler"
+  no "AC19: cloud-init must not bake \${ghcr_read_*} or carry a STAGE=ghcr_login seed login since #8036 1d"
 fi
-# (2) hardened doppler fallback: timeout 45 + retry loop for BOTH vars, and NO stale timeout-15 form
-if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$CI" \
-   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$CI"; then
-  ok "AC19: doppler fallback hardened — timeout 45 + until-retry loop for both GHCR_READ_USER and GHCR_READ_TOKEN"
+# (2) RETIRED by #8651, asserted ABSENT: the empty-bake doppler fallback loops ran above the
+# terminal `set -a` source with a bare `.` (DOPPLER_TOKEN assigned, never exported — #6985), so
+# they were tokenless since birth and could only ever have fetched the revoked PAT. Baked only.
+if grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E 'until GHCR_(USER|TOKEN)=\$\(timeout [0-9]+ doppler'; then
+  no "AC19: the dead doppler GHCR_READ_* fallback loop is back (tokenless by construction, #6985/#8651)"
 else
-  no "AC19: doppler fallback must use 'until VAR=\$(timeout 45 doppler ... GHCR_READ_*)' retry loops"
+  ok "AC19: no doppler GHCR_READ_* fallback loop (baked creds only, #8651)"
 fi
 if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$CI"; then
   no "AC19: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' fetch still present — must be replaced"
 else
   ok "AC19: no stale 'timeout 15 doppler secrets get GHCR_READ_*' fetch remains"
 fi
-# (3) server.tf passes both baked vars into the web-host cloud-init templatefile map
-if grep -qE '^\s*ghcr_read_user\s*=\s*var\.ghcr_read_user' "$TF" \
-   && grep -qE '^\s*ghcr_read_token\s*=\s*var\.ghcr_read_token' "$TF"; then
-  ok "AC19: server.tf passes ghcr_read_user + ghcr_read_token into the web-host templatefile"
+# (3) INVERTED by #8036 1d: server.tf passes neither GHCR var into the web-host templatefile map
+# (P5: no templatefile() carries a GHCR credential into user_data). Scoped to the map's code lines.
+TF_WEB_MAP=$(python3 - "$TF" <<'PYMAP'
+import re, sys
+s = "\n".join(l for l in open(sys.argv[1]).read().splitlines() if not l.lstrip().startswith("#"))
+m = re.search(r'templatefile\("\$\{path\.module\}/cloud-init\.yml",\s*\{', s)
+if not m:
+    sys.exit(0)
+i, d = m.end(), 1
+while i < len(s) and d:
+    d += {"{": 1, "}": -1}.get(s[i], 0); i += 1
+print(s[m.end():i - 1])
+PYMAP
+)
+if [ -n "$TF_WEB_MAP" ] && grep -qE '^\s*sentry_dsn\s*=' <<<"$TF_WEB_MAP" && ! grep -qE '^\s*ghcr_read_(user|token)\s*=' <<<"$TF_WEB_MAP"; then
+  ok "AC19: server.tf's web-host templatefile map passes no ghcr_read_user/ghcr_read_token (#8036 1d)"
 else
-  no "AC19: server.tf web-host templatefile map must pass ghcr_read_user + ghcr_read_token (coupled to the cloud-init bake)"
+  no "AC19: server.tf's web-host templatefile map must be found and must pass no ghcr_read_* key (map_found=$([ -n "$TF_WEB_MAP" ] && echo y || echo n))"
 fi
 
-# ── AC20 (#6090): the app-pull GHCR login (ci-deploy ghcr_prelude_and_login) is baked too ──
+# ── AC20 (#6090), NARROWED BY #8036 1c (2026-09-23) ──
+#
+# CLAUSES (1) AND (2) — the cloud-init BAKE and its 0600 mode — stayed through 1c (cloud-init's
+# own fresh-boot `ghcr_login` still read that file). #8036 1d deleted that login and the bake, so
+# (1), (2) and the cloud-init half of (5) are INVERTED to residual-zero below.
+#
+# CLAUSES (3), (4) AND THE ci-deploy HALF OF (5) ARE DELETED. They asserted that
+# `ci-deploy.sh`'s GHCR prelude sources the baked file, hardens its Doppler fallback for
+# GHCR_READ_USER/GHCR_READ_TOKEN, and unsets the token afterwards. #8036 1c deleted the
+# host-side GHCR read path outright: `ci-deploy.sh` reads neither the baked file nor either
+# secret, so there is nothing left to source, harden or unset. Their extraction
+# (`CD_PRELUDE_FN="$(awk '/^ghcr_prelude_and_login.../' "$CD")"`) would yield an EMPTY STRING and
+# every `-ge 1` count over it would report 0 — a loud failure rather than a vacuous pass, which
+# is why they are removed rather than left to rot, but removed either way.
+#
+# The property clause (4) protected — a Doppler read must be bounded and observable rather than
+# hand-rolled — is NOT lost: `_doppler_get_observed`'s bounded-timeout construct and its 45s
+# default are still asserted below, now against the SENTRY_* prefetch that still uses them.
+#
+# What follows is the original AC20 preamble, kept for the incident context it carries.
+# ── AC20 (#6090): the app-pull GHCR login is baked too ──
 # The seed-pull fix (AC19) got the host to webhook_bound, but the recreate still RED'd at
 # ok_peer_fanout_degraded: ci-deploy's ghcr_prelude_and_login did a bare `doppler secrets get`
 # for the app pull + cosign verify, empty on the cold host → docker login skipped → anonymous
 # pull → cosign .sig 401 → verify_failed → app never binds :9000. Fix: cloud-init bakes
 # /etc/default/soleur-ghcr-read; ghcr_prelude_and_login prefers it, hardened doppler fallback.
 CD="$DIR/ci-deploy.sh"
-# (1) cloud-init bakes the deploy-readable GHCR cred file with the interpolated vars
-if grep -qF 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s' "$CI" \
-   && grep -qF '/etc/default/soleur-ghcr-read' "$CI" \
-   && grep -qE "'\\\$\{ghcr_read_user\}'[[:space:]]+'\\\$\{ghcr_read_token\}'" "$CI"; then
-  ok "AC20: cloud-init bakes /etc/default/soleur-ghcr-read from \${ghcr_read_user}/\${ghcr_read_token}"
+# (1) INVERTED by #8036 1d: cloud-init no longer writes the GHCR cred file (code lines only).
+if ! grep -vE '^[[:space:]]*#' "$CI" | _qgrep -E 'GHCR_READ_USER=%s|/etc/default/soleur-ghcr-read'; then
+  ok "AC20: cloud-init writes no /etc/default/soleur-ghcr-read (the GHCR cred bake is retired, #8036 1d)"
 else
-  no "AC20: cloud-init must bake /etc/default/soleur-ghcr-read with the interpolated GHCR read-creds"
+  no "AC20: cloud-init must not bake /etc/default/soleur-ghcr-read since #8036 1d (no host presents a GHCR credential at boot)"
 fi
-# (2) the baked file is protected like webhook-deploy (deploy:deploy 0600)
-if grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CD" 2>/dev/null || grep -qE 'chmod 600 /etc/default/soleur-ghcr-read' "$CI"; then
-  ok "AC20: baked GHCR cred file is chmod 600 (deploy-only)"
+# (2) INVERTED by #8036 1d: with no bake there is no file to chmod — and no boot file may create
+# or read the GHCR cred file (web-1's first-boot copy is a disclosed residual; no running-host
+# channel removes it, and the value is revoked).
+if ! grep -vhE '^[[:space:]]*#' "$CI" "$BOOT" "$DIR/cloud-init-inngest.yml" | _qgrep -F 'soleur-ghcr-read'; then
+  ok "AC20: no boot file (cloud-init.yml, soleur-host-bootstrap.sh, cloud-init-inngest.yml) touches soleur-ghcr-read"
 else
-  no "AC20: /etc/default/soleur-ghcr-read must be chmod 600"
+  no "AC20: a boot file still creates or reads /etc/default/soleur-ghcr-read (#8036 1d residual)"
 fi
-# (3) ci-deploy ghcr_prelude_and_login PREFERS the baked file before Doppler
-if grep -qF '/etc/default/soleur-ghcr-read' "$CD"; then
-  ok "AC20: ci-deploy ghcr_prelude_and_login sources the baked /etc/default/soleur-ghcr-read"
+# (3) DELETED by #8036 1c — and replaced by its INVERSE, which is the assertion that would catch
+# the retirement being undone. ci-deploy.sh must NOT read the baked GHCR cred file at all.
+# NON-COMMENT LINES ONLY. A whole-file `grep -qF` fails on `ci-deploy.sh`'s own comment
+# explaining the #6090 bake's history — prose satisfying (here, falsifying) a bare-token anchor,
+# which is the same `cq-assert-anchor-not-bare-token` class clause (4) below documents at length.
+# The property is about what the script READS, so only executable lines can bear on it.
+if ! grep -vE '^[[:space:]]*#' "$CD" | _qgrep -F '/etc/default/soleur-ghcr-read'; then
+  ok "AC20: ci-deploy reads no baked GHCR credential — the host-side read path is retired (#8036 1c)"
 else
-  no "AC20: ci-deploy ghcr_prelude_and_login must prefer the baked /etc/default/soleur-ghcr-read"
+  no "AC20: ci-deploy must NOT reference /etc/default/soleur-ghcr-read since #8036 1c; the deploy path reads no GHCR credential"
 fi
 # (4) the Doppler fallback in ci-deploy is HARDENED (bounded timeout + retry) for both GHCR creds
 #
@@ -692,56 +886,77 @@ fi
 #       by default; an empty read does not). So a call site that silently dropped the argument
 #       would keep matching a looser "calls the helper" grep while losing the whole behaviour.
 CD_GET_FN="$(awk '/^_doppler_get_observed\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
-CD_PRELUDE_FN="$(awk '/^ghcr_prelude_and_login\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
+# #8036 1c: the prelude was SPLIT into three named functions; the Doppler reads live in
+# `prefetch_deploy_secrets`. Extracted by its own name rather than the retired one — an awk range
+# over a function that no longer exists yields an empty string, and every count over it then
+# reads 0, which is a failure naming the wrong cause.
+CD_PREFETCH_FN="$(awk '/^prefetch_deploy_secrets\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$CD" || true)"
 # `^[[:space:]]*[^#[:space:]][^#]*` = the line's first non-blank character is not `#`, and no `#`
 # precedes the match — i.e. this cannot be satisfied by a comment that merely quotes the call.
 AC20_TMO_USE=$(printf '%s\n' "$CD_GET_FN" | grep -cE '^[[:space:]]*[^#[:space:]][^#]*timeout "\$DOPPLER_GET_TIMEOUT" doppler secrets get ' || true)
 AC20_TMO_DEF=$(grep -cE '^readonly DOPPLER_GET_TIMEOUT="\$\{DOPPLER_GET_TIMEOUT:-45\}"' "$CD" || true)
-AC20_RETRY_U=$(printf '%s\n' "$CD_PRELUDE_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+GHCR_READ_USER[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+1([[:space:]]|$)' || true)
-AC20_RETRY_T=$(printf '%s\n' "$CD_PRELUDE_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+GHCR_READ_TOKEN[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+1([[:space:]]|$)' || true)
-if [[ "$AC20_TMO_USE" -ge 1 && "$AC20_TMO_DEF" -ge 1 && "$AC20_RETRY_U" -ge 1 && "$AC20_RETRY_T" -ge 1 ]]; then
-  ok "AC20: ci-deploy doppler fallback hardened — bounded timeout (default 45) in _doppler_get_observed + empty-retry helper for GHCR_READ_USER and GHCR_READ_TOKEN"
+# #8036 1c: the two GHCR empty-retry counts are replaced by the SENTRY_* reads, which are what
+# `prefetch_deploy_secrets` still fetches. All THREE are required, not one: a single-secret
+# assertion passes against a loop that lost two of its members. The positional shape is kept —
+# the 5th argument is the empty-retry flag, and these three pass 0 deliberately (an rc=0 empty
+# read is the server answering cleanly with nothing, which a retry cannot fix, and they have a
+# baked fallback), so the pin is on the ARITY and the helper, not on the flag's value.
+AC20_SENTRY_N=$(printf '%s\n' "$CD_PREFETCH_FN" | grep -cE '^[[:space:]]*_doppler_get_or_report[[:space:]]+"\$k"[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+([[:space:]]|$)' || true)
+AC20_SENTRY_LOOP=$(printf '%s\n' "$CD_PREFETCH_FN" | grep -cE '^[[:space:]]*for k in SENTRY_INGEST_DOMAIN SENTRY_PROJECT_ID SENTRY_PUBLIC_KEY; do' || true)
+# The INVERSE half, and the one that catches the retirement being undone: no GHCR secret may be
+# read anywhere in ci-deploy.sh, in any function.
+AC20_NO_GHCR=$(grep -cE '_doppler_get_or_report[[:space:]]+GHCR_READ_(USER|TOKEN)' "$CD" || true)
+if [[ "$AC20_TMO_USE" -ge 1 && "$AC20_TMO_DEF" -ge 1 && "$AC20_SENTRY_N" -ge 1 && "$AC20_SENTRY_LOOP" -ge 1 && "$AC20_NO_GHCR" -eq 0 ]]; then
+  ok "AC20: ci-deploy doppler reads hardened — bounded timeout (default 45) in _doppler_get_observed, all three SENTRY_* via the observing helper, and ZERO GHCR_READ_* reads (#8036 1c)"
 else
-  no "AC20: ci-deploy ghcr_prelude_and_login must harden the doppler fallback — a bounded per-attempt timeout with a 45s default, and BOTH GHCR creds read via the retrying helper with the empty-retry argument enabled (timeout_in_fn=$AC20_TMO_USE timeout_default_45=$AC20_TMO_DEF user_empty_retry=$AC20_RETRY_U token_empty_retry=$AC20_RETRY_T)"
+  no "AC20: ci-deploy must harden its doppler reads — a bounded per-attempt timeout with a 45s default, the three SENTRY_* secrets read via _doppler_get_or_report, and no GHCR_READ_* read at all (timeout_in_fn=$AC20_TMO_USE timeout_default_45=$AC20_TMO_DEF sentry_helper=$AC20_SENTRY_N sentry_loop=$AC20_SENTRY_LOOP ghcr_reads=$AC20_NO_GHCR)"
 fi
 # (5) token hygiene: baked file is deploy-owned + ci-deploy unsets the token from its env/children
-if grep -qE 'chown deploy:deploy /etc/default/soleur-ghcr-read' "$CI" \
-   && grep -qE 'unset GHCR_READ_TOKEN' "$CD"; then
-  ok "AC20: baked file is chown deploy:deploy + ci-deploy unsets GHCR_READ_TOKEN (token not in child env)"
+# #8036 1c: the ci-deploy half ("unsets GHCR_READ_TOKEN after sourcing") is gone with the source
+# — there is nothing to unset because nothing is read. The cloud-init ownership half stays, and
+# the replacement for the deleted half is stronger than it was: the token must not appear in
+# ci-deploy.sh's runtime at all, which an `unset` after a read never guaranteed.
+AC20_CD_TOKEN=$(grep -vE '^[[:space:]]*#' "$CD" | grep -cE 'GHCR_READ_TOKEN' || true)
+# #8036 1d: the cloud-init ownership half inverts with the bake — no GHCR_READ_TOKEN on any
+# executable line of cloud-init.yml either.
+AC20_CI_TOKEN=$(grep -vE '^[[:space:]]*#' "$CI" | grep -cE 'GHCR_READ_TOKEN|ghcr_read_token' || true)
+if [[ "$AC20_CI_TOKEN" -eq 0 && "$AC20_CD_TOKEN" -eq 0 ]]; then
+  ok "AC20: GHCR_READ_TOKEN appears on no executable line of cloud-init.yml (#8036 1d) or ci-deploy.sh (#8036 1c)"
 else
-  no "AC20: /etc/default/soleur-ghcr-read must be chown deploy:deploy AND ci-deploy must unset GHCR_READ_TOKEN after sourcing"
+  no "AC20: no executable GHCR_READ_TOKEN reference may remain (cloud-init=$AC20_CI_TOKEN ci-deploy=$AC20_CD_TOKEN)"
 fi
 
-# ── AC21 (#6090): soleur-host-bootstrap's ghcr_login is baked too (3rd/final GHCR site) ──
-# The seed pull (AC19) + app pull (AC20) bakes weren't enough: soleur-host-bootstrap.sh had a
-# THIRD unhardened `timeout 15 doppler secrets get GHCR_READ_*` login for the inngest-bootstrap
-# image pull. On a cold host it skipped docker login → anonymous inngest pull → /var/lib/inngest
-# never created. (The "→ webhook.service 226/NAMESPACE → :9000 unbound → peer fan-out degraded"
-# downstream is SEVERED as of #6090 — webhook.service now marks /var/lib/inngest `-`-optional; an
-# absent dir no longer wedges the unit. This bake still matters when web_colocate_inngest is ON.)
-# Fix: bootstrap prefers the baked /etc/default/soleur-ghcr-read, hardened doppler fallback.
-if grep -qF '/etc/default/soleur-ghcr-read' "$BOOT"; then
-  ok "AC21: soleur-host-bootstrap ghcr_login prefers the baked /etc/default/soleur-ghcr-read"
+# ── AC21 (#6090), INVERTED by #8036 1d: soleur-host-bootstrap.sh presents no registry login ──
+# #6090 baked a third GHCR login here (for the colocated inngest-bootstrap pull) plus a zot login
+# read from Doppler. #8036 1d deleted the WHOLE `STAGE=ghcr_login` subshell: the GHCR half could
+# only present the revoked PAT, and the zot half duplicated the seed block's baked zot login while
+# reading its inputs through tokenless Doppler calls (a bare `.` of webhook-deploy exports nothing,
+# #6985). The seed block's login (root, before this script) writes the auths entry every later
+# root pull reuses. Code lines only, so this history cannot satisfy or falsify the rows.
+BOOT_CODE=$(grep -vE '^[[:space:]]*#' "$BOOT" || true)
+# An empty extraction would pass the "no docker login" row vacuously, so it is fatal here.
+[ -n "$BOOT_CODE" ] || { printf '[FATAL] no code lines extracted from %s\n' "$BOOT" >&2; exit 2; }
+if ! _qgrep -E 'docker[[:space:]]+login' <<<"$BOOT_CODE"; then
+  ok "AC21: soleur-host-bootstrap runs no docker login at all (GHCR and duplicate zot login deleted, #8036 1d)"
 else
-  no "AC21: soleur-host-bootstrap ghcr_login must prefer the baked /etc/default/soleur-ghcr-read"
+  no "AC21: soleur-host-bootstrap must run no docker login since #8036 1d (the seed block's baked zot login is the only one)"
 fi
-if grep -qE 'until GHCR_USER=\$\(timeout 45 doppler[^)]*GHCR_READ_USER' "$BOOT" \
-   && grep -qE 'until GHCR_TOKEN=\$\(timeout 45 doppler[^)]*GHCR_READ_TOKEN' "$BOOT"; then
-  ok "AC21: soleur-host-bootstrap doppler fallback hardened — timeout 45 + until-retry for both GHCR creds"
+if ! _qgrep -E 'STAGE=(ghcr|zot)_login|ghcr_login_warn|zot_login_warn|"stage":"(ghcr|zot)_login"' <<<"$BOOT_CODE"; then
+  ok "AC21: no ghcr_login/zot_login stage, warn helper or Sentry tag remains in soleur-host-bootstrap"
 else
-  no "AC21: soleur-host-bootstrap must harden the doppler fallback (timeout 45 + until-retry) for both GHCR creds"
+  no "AC21: the retired ghcr_login/zot_login stage, its warn helpers or their Sentry tags are back in soleur-host-bootstrap"
 fi
-if grep -qE 'timeout 15 doppler secrets get GHCR_READ' "$BOOT"; then
-  no "AC21: stale un-hardened 'timeout 15 doppler secrets get GHCR_READ_*' still present in soleur-host-bootstrap"
+if ! _qgrep -E 'doppler secrets get (GHCR_READ_|ZOT_REGISTRY_URL|ZOT_PULL_)' <<<"$BOOT_CODE"; then
+  ok "AC21: soleur-host-bootstrap reads no GHCR_READ_* / ZOT_* secret from Doppler (tokenless by construction, #6985)"
 else
-  ok "AC21: no stale 'timeout 15 doppler secrets get GHCR_READ_*' in soleur-host-bootstrap"
+  no "AC21: soleur-host-bootstrap must not read GHCR_READ_* / ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler"
 fi
-# Pin the Sentry warning emits to the same AC (so a future fetch/emit reorder keeps them):
-# both failure branches (credential_absent after retries, auth_denied on login reject) stay loud.
-if grep -qF 'ghcr_login_warn credential_absent' "$BOOT" && grep -qF 'ghcr_login_warn auth_denied' "$BOOT"; then
-  ok "AC21: bootstrap ghcr_login still emits ghcr_login_warn on both failure branches (no-SSH Sentry warning)"
+# The stage after journald is boot_emit: emit_fail's attribution is unchanged by the deletion.
+AC21_NEXT=$(grep -oE '^STAGE=[a-z_]+' "$BOOT" | grep -A1 -x 'STAGE=journald' | tail -n +2 || true)
+if [ "$AC21_NEXT" = "STAGE=boot_emit" ]; then
+  ok "AC21: STAGE=journald is followed directly by STAGE=boot_emit (no stage between them)"
 else
-  no "AC21: bootstrap ghcr_login must emit ghcr_login_warn credential_absent + auth_denied on failure"
+  no "AC21: the stage after STAGE=journald must be STAGE=boot_emit (got: ${AC21_NEXT:-<none>})"
 fi
 
 # ── AC22 (#6396): ungated web-host Vector install (decoupled from web_colocate_inngest) ──
@@ -761,8 +976,8 @@ fi
 # (2) cloud-init call site: fail-open + wall-clock-bounded, at end-of-chain. The outer `timeout`
 #     MUST strictly exceed the helper's inner `curl --max-time N` — else a slow cold-boot tarball
 #     fetch is SIGTERM-truncated into a silently-absent Better Stack source (perf review P2).
-outer_to=$( (grep -oE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | grep -oE '[0-9]+') || true )
-inner_ct=$( (grep -oE 'curl -fsSL --max-time [0-9]+' "$BOOT" | head -1 | grep -oE '[0-9]+$') || true )
+outer_to=$( (grep -oE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | sed -n '1p' | grep -oE '[0-9]+') || true )
+inner_ct=$( (grep -oE 'curl -fsSL --max-time [0-9]+' "$BOOT" | sed -n '1p' | grep -oE '[0-9]+$') || true )
 if grep -qE "timeout [0-9]+ sh -c 'soleur-vector-install' \|\| true" "$CI" \
    && [ -n "$outer_to" ] && [ -n "$inner_ct" ] && [ "$outer_to" -gt "$inner_ct" ]; then
   ok "AC22: cloud-init Vector install is fail-open + timeout-bounded; outer timeout ${outer_to}s > inner curl ${inner_ct}s"
@@ -770,8 +985,8 @@ else
   no "AC22: ungated Vector install must be 'timeout N sh -c … || true' with outer N (${outer_to:-?}) > inner curl --max-time (${inner_ct:-?})"
 fi
 # (3) the call site is the LAST runcmd — AFTER the terminal cloud_init_complete breadcrumb
-vi_ln=$( (grep -nE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | head -1 | cut -d: -f1) || true )
-cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | head -1 | cut -d: -f1) || true )
+vi_ln=$( (grep -nE "timeout [0-9]+ sh -c 'soleur-vector-install'" "$CI" | sed -n '1p' | cut -d: -f1) || true )
+cc_ln=$( (grep -nF 'soleur-boot-emit cloud_init_complete info' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 if [ -n "$vi_ln" ] && [ -n "$cc_ln" ] && [ "$vi_ln" -gt "$cc_ln" ]; then
   ok "AC22: Vector install runcmd (line $vi_ln) is AFTER cloud_init_complete (line $cc_ln) — end-of-chain"
 else
@@ -780,7 +995,7 @@ fi
 # (4) web-host unit carries EnvironmentFile=/etc/default/webhook-deploy (the DOPPLER_TOKEN source
 #     — spec-flow P0; NOT the inngest-only /etc/default/inngest-server), and NO After=inngest
 if grep -qE 'EnvironmentFile=/etc/default/webhook-deploy' "$BOOT" \
-   && ! awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" | grep -qF 'After=network-online.target inngest-server.service'; then
+   && ! awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" | _qgrep -F 'After=network-online.target inngest-server.service'; then
   ok "AC22: web-host vector.service uses EnvironmentFile=/etc/default/webhook-deploy (no inngest coupling)"
 else
   no "AC22: web vector.service must carry EnvironmentFile=/etc/default/webhook-deploy (DOPPLER_TOKEN source) + no After=inngest-server.service"
@@ -789,9 +1004,9 @@ fi
 #      host doppler is tarball-installed to /usr/local/bin (cloud-init), so a hardcoded /usr/bin
 #      path is a 203/EXEC crash-loop → Vector never runs → silent absent source (code-quality P1).
 #      Mirrors every sibling web-host unit (cron-egress-firewall.service etc.).
-if awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'ExecStart=/bin/sh -c ' \
-   && awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qF 'command -v doppler' \
-   && ! awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | grep -qE '^ExecStart=/usr/bin/doppler'; then
+if awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | _qgrep -F 'ExecStart=/bin/sh -c ' \
+   && awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | _qgrep -F 'command -v doppler' \
+   && ! awk '/cat > "\$UNIT" <</,/^UNITEOF$/' "$BOOT" | _qgrep -E '^ExecStart=/usr/bin/doppler'; then
   ok "AC22: web vector.service ExecStart resolves doppler via 'command -v' (no hardcoded /usr/bin/doppler crash-loop)"
 else
   no "AC22: web vector.service ExecStart must resolve doppler via 'command -v' (web host has doppler at /usr/local/bin, NOT /usr/bin)"
@@ -799,7 +1014,7 @@ fi
 # (4c) the helper skips when an inngest-OWNED vector.service already exists (deprecated
 #      web_colocate_inngest=true host) — mutual exclusion enforced at runtime, not by runcmd order.
 if awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" \
-   | grep -qE "grep -q '/etc/default/inngest-server' \"\\\$UNIT\""; then
+   | _qgrep -E "grep -q '/etc/default/inngest-server' \"\\\$UNIT\""; then
   ok "AC22: helper skips install when an inngest-owned vector.service is present (no clobber on colocate hosts)"
 else
   no "AC22: soleur-vector-install must skip when /etc/systemd/system/vector.service is inngest-owned (colocate mutual-exclusion)"
@@ -891,8 +1106,8 @@ else
   no "AC23: terminal block must arm 'trap rc=\$?; rm -f \${TMPENV:-}; [ \$rc = 0 ] || soleur-boot-emit \$stage fatal EXIT'"
 fi
 # (2) armed EARLY: stage=terminal_preamble appears BEFORE the hostscripts poweroff test
-tp_ln=$( (grep -nF 'stage=terminal_preamble' "$CI" | head -1 | cut -d: -f1) || true )
-hs_ln=$( (grep -nF 'refusing to start app' "$CI" | head -1 | cut -d: -f1) || true )
+tp_ln=$( (grep -nF 'stage=terminal_preamble' "$CI" | sed -n '1p' | cut -d: -f1) || true )
+hs_ln=$( (grep -nF 'refusing to start app' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 if [ -n "$tp_ln" ] && [ -n "$hs_ln" ] && [ "$tp_ln" -lt "$hs_ln" ]; then
   ok "AC23: stage=terminal_preamble armed (line $tp_ln) before the hostscripts poweroff (line $hs_ln)"
 else
@@ -911,9 +1126,9 @@ else
   no "AC23: the trap stage must advance through doppler_download + docker_run"
 fi
 # (5) disarm (trap - EXIT) AFTER docker_run/rm-TMPENV, BEFORE the self-emitting egress probe
-dr_ln=$( (grep -nF 'stage=docker_run' "$CI" | head -1 | cut -d: -f1) || true )
+dr_ln=$( (grep -nF 'stage=docker_run' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 # find the disarm that sits between docker_run and the egress probe
-ep_ln=$( (grep -nF 'cron-egress-enforce-probe.sh' "$CI" | head -1 | cut -d: -f1) || true )
+ep_ln=$( (grep -nF 'cron-egress-enforce-probe.sh' "$CI" | sed -n '1p' | cut -d: -f1) || true )
 disarm_ln=$( (awk -v a="$dr_ln" -v b="$ep_ln" 'NR>a && NR<b && /^    trap - EXIT$/ {print NR; exit}' "$CI") || true )
 if [ -n "$disarm_ln" ]; then
   ok "AC23: EXIT trap disarmed (line $disarm_ln) between docker_run and the self-emitting egress probe"
@@ -938,5 +1153,14 @@ else
   no "AC23: 'hostscripts_incomplete' must be a real soleur-boot-emit call (not comment prose)"
 fi
 
+# ADR-193 floor at the MEASURED green count (113 on 2026-09-11, #7946 review): a lower bound,
+# so adding rows never trips it, and a gutted suite (a deleted block, an extraction that
+# matched nothing and skipped every row inside its `if`) cannot report 0 failed over nothing.
+# Reported with printf + exit 1 DIRECTLY, never through ok()/no() -- the floor polices those.
+MIN_ASSERTIONS=113
+if (( pass + fail < MIN_ASSERTIONS )); then
+  printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 echo "=== soleur-host-bootstrap-observability: $pass passed, $fail failed ==="
 [ "$fail" -eq 0 ]

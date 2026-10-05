@@ -3,7 +3,7 @@
 **TL;DR:** Edit the host-executed `*.sh` → merge to main → run the
 [`build-inngest-config-bundle`](../../../../.github/workflows/build-inngest-config-bundle.yml)
 workflow (keyless-signs + dual-publishes, emits `IMAGE@DIGEST`) → promote the digest through
-Terraform → the host's config-refresh timer pulls, verifies, and applies it in-place. Confirm
+Terraform (blocked: no automated route yet, #9060) → the host's config-refresh timer pulls, verifies, and applies it in-place. Confirm
 off-box with [`scripts/betterstack-query.sh`](../../../../../scripts/betterstack-query.sh). No host
 login, no host replace (ADR-135, #6780).
 
@@ -46,11 +46,17 @@ from the applied digest.
    `cosign sign-blob`s the manifest (VERSION is a signed field — HARD-2) and dual-publishes to GHCR +
    zot. Its job summary prints `IMAGE@DIGEST`.
 
-3. **Promote the pointer (separate principal — HARD-6).** Set the published digest as the value of
-   `TF_VAR_inngest_config_digest` in Doppler `soleur/prd_terraform`, then let the
+3. **Promote the pointer (separate principal — HARD-6). BLOCKED: stop here until #9060 lands a
+   route.** No automated route applies the pointer today: `doppler_secret.inngest_config_digest` is
+   on no job's `-target` list (pinned by `plugins/soleur/test/terraform-target-parity.test.ts`), so
+   no merge reaches it (an earlier revision of this step said the
    [`apply-web-platform-infra`](../../../../.github/workflows/apply-web-platform-infra.yml) pipeline
-   reconcile `inngest-config-digest.tf`. Terraform is the writer, so no standing CI token can write
-   the isolated `soleur-inngest/prd`. The signing run and this promotion are distinct jobs.
+   reconciles it; it does not). Do NOT set `TF_VAR_inngest_config_digest` in Doppler
+   `soleur/prd_terraform` before then: the resource is `count`-gated on a non-empty digest, so
+   setting it adds a create no route applies. Once the route exists, the promotion sets that value,
+   and the same change bumps the isolation self-check floor from 5 to 6 (see the header of
+   `inngest-config-digest.tf`). Terraform is the writer, so no standing CI token can write the
+   isolated `soleur-inngest/prd`.
 
 4. **Confirm off-box** (no host login):
 

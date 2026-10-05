@@ -192,3 +192,40 @@ consumer has not been written yet, and a per-consumer fix is a rule you have to 
 instead of an invariant you cannot violate. `test/mobile-rail-collapse-leak.test.tsx` pins
 it by probing the published value from inside the rail slot — asserting one consumer's
 rendered output would leave the other three unguarded.
+
+---
+
+## Amendment 2026-08-06 (#7326): the layout's window-event inbox
+
+`(dashboard)/layout.tsx` is the sole owner of both rail-collapse and drawer state, which
+means every component that needs either has to ask for it across a window event rather than
+reach in. There are now three such events, and the amendment above (which named the *owner*
+but not the *protocol*) left no record of how they differ. All three live here so a fourth
+is written against a contract rather than by copying whichever one was found first.
+
+| Event | Direction | Payload | Honoured at |
+|---|---|---|---|
+| `RAIL_EXPAND_EVENT` | expand-only | none (bare `Event`) | un-collapses at `md`+; opens the drawer below `md` |
+| `CHAT_OVERLAY_OPEN_EVENT` | close-only | none (bare `Event`) | every width |
+| `NAV_DRAWER_REVEAL_EVENT` | two-way | `{ open: boolean }` | OPEN below `md` only; CLOSE at every width |
+
+Three properties hold across all of them, and a fourth event must preserve them:
+
+1. **An OPEN is viewport-gated; a CLOSE never is.** `drawerOpen` also drives `<main inert>`
+   and the body scroll lock, neither of which is viewport-scoped — so honouring an open at
+   `md`+ freezes the content pane behind a drawer that is not rendered as one. Refusing a
+   *close* has no such symmetry: it can only strand state.
+2. **Expand-only events carry no payload, and must not learn one.** `RAIL_EXPAND_EVENT`'s
+   existing dispatchers send a bare `Event`; teaching it to read `detail.open` would make
+   every one of them mean "close" by omission. #7326 added a separate two-way event rather
+   than widen it — the cheaper-looking change was the breaking one.
+3. **A reveal that must survive a route change says so explicitly.** `NAV_DRAWER_REVEAL_EVENT`
+   is dispatched by guided-tour steps that ALSO carry a `route`, and `TourProvider` pushes
+   the route first — so the drawer would be shut by the layout's own auto-close-on-pathname
+   one render after it opened. The layout holds a `navRevealed` flag, read through a ref, that
+   suppresses that single auto-close. Every path that force-closes the drawer (the chat
+   takeover, the `md`-crossing handler) must clear the flag, or it strands and suppresses the
+   auto-close for the rest of the session.
+
+Pinned by `test/mobile-rail-collapse-leak.test.tsx` (`#7326 — the guided tour reveals the
+nav drawer it talks about`), including the desktop no-op and the strand cases.

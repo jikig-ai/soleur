@@ -4,14 +4,15 @@
 # (allow-list, non-SSH resources only)" step). Closes #4419 (sibling of
 # #4420 — the github-infra widening).
 #
-# Five nested-block Cloudflare surfaces plus one reboot-update surface are
+# Six nested-block Cloudflare surfaces plus one reboot-update surface are
 # covered:
 #   1. cloudflare_ruleset.*                              .rules
 #   2. cloudflare_zero_trust_tunnel_cloudflared_config.* .config[0].ingress_rule
 #   3. cloudflare_zone_settings_override.*               .settings[0].security_header
 #   4. cloudflare_notification_policy.*                  .email_integration
 #   5. cloudflare_zero_trust_access_policy.*             .include
-#   6. hcloud_server.* reboot-forcing in-place update    placement_group_id /
+#   6. cloudflare_list.*                                 .item (#8364)
+#   7. hcloud_server.* reboot-forcing in-place update    placement_group_id /
 #                                                        server_type (#5911)
 #
 # Deterministic; no network. Uses synthesized fixtures plus one captured
@@ -46,7 +47,7 @@
 #   #         random_id.{b64_*,hex}, github_actions_secret.plaintext_value).
 #   #   (3) .planned_values / .prior_state mirror the same fields.
 #   # The filter only consumes .resource_changes[].change.actions and the
-#   # path-specific nested counts on the 5 vulnerable Cloudflare types — every
+#   # path-specific nested counts on the 6 vulnerable Cloudflare types — every
 #   # other key is dead weight.
 #   jq 'del(.variables, .planned_values, .prior_state, .configuration,
 #          .relevant_attributes)
@@ -101,6 +102,25 @@ _report() {
   fi
 }
 
+# INSTRUMENT SELF-TEST (ADR-193). Drive BOTH arms once each and refuse to
+# continue unless both counters moved.
+#
+# The anti-vacuity floor below counts `pass + fail`, i.e. this helper's own
+# counters — so it backstops DELETION and is blind to DISARMING. Measured by the
+# review panel: rewriting `_report`'s body to `pass=$((pass + 1)); echo "[ok] …"`
+# left this suite reporting `56 passed, 0 failed` with every verdict routed to
+# the PASS arm and the floor satisfied. A mis-routing helper cannot move both
+# counters, which is what this catches and the floor cannot.
+_p0=$pass; _f0=$fail
+_report "instrument self-test: the PASS arm records" ok
+_report "instrument self-test: the FAIL arm records (EXPECTED — subtracted)" FAIL
+if [[ "$pass" -ne $((_p0 + 1)) || "$fail" -ne $((_f0 + 1)) ]]; then
+  printf '[FATAL] instrument self-test: _report did not route both arms (pass %d->%d, fail %d->%d)\n' \
+    "$_p0" "$pass" "$_f0" "$fail" >&2
+  exit 2
+fi
+pass=$((pass - 1)); fail=$((fail - 1))
+
 # Mirror the workflow's bash pipeline exactly. Returns
 # "rdel:ndel:rupd:dcount:rc". Byte-identical to apply-web-platform-infra.yml's
 # regex.
@@ -129,7 +149,7 @@ _run_gate() {
   echo "$rdel:$ndel:$rupd:$dcount:$rc"
 }
 
-# 7th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
+# 8th surface (#6416): the `host_creates` HALT. Deliberately a SECOND, SEPARATE
 # rc source rather than a 6th field threaded through _run_gate, for two reasons:
 #
 #   1. _run_gate's "$rdel:$ndel:$rupd:$dcount:$rc" string encodes the ack
@@ -161,6 +181,27 @@ _run_host_creates_gate() {
     rc=1
   fi
   echo "$hc:$rc"
+}
+
+# 10th surface (#7695): the `luks_passphrase_rotations` HALT. Same shape and same reasoning as
+# _run_host_creates_gate above — a SECOND, ack-INDEPENDENT rc source, taking no head_msg
+# parameter, because the workflow's HALT never reads HEAD_MSG. Returns "lr:rc".
+_run_luks_rotation_gate() {
+  local fixture="$1"
+  local counts lr rc=0
+  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  lr=$(echo "$counts" | jq -r '.luks_passphrase_rotations')
+  if [[ ! "$lr" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$lr" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$lr:$rc"
 }
 
 if [[ ! -f "$FILTER" ]]; then
@@ -218,6 +259,36 @@ t_access_policy_include_removal_trips() {
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" ok
   else
     _report "T5 cloudflare_zero_trust_access_policy include removal trips guard" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# T61: cloudflare_list item removal trips guard (#8364 — the 6th nested
+# surface). legal_redirects carries the whole bulk-redirect set; an item
+# leaving the array strands that legacy URL's edge 301 with no resource
+# delete and no reboot. items 3 → 2.
+t_list_item_removal_trips() {
+  local out; out=$(_run_gate "$FIXTURES/tfplan-cf-list-item-removal.json" "feat: drop a bulk redirect")
+  if [[ "$out" == "0:1:0:1:1" ]]; then
+    _report "T61 cloudflare_list.item removal trips guard (rdel=0 ndel=1 rupd=0 dcount=1 rc=1)" ok
+  else
+    _report "T61 cloudflare_list.item removal trips guard" fail "got '$out' want '0:1:0:1:1'"
+  fi
+}
+
+# T62: item ADDITION (the control arm — before=2, after=3) must NOT page the
+# destroy guard: select(. > 0) filters growth, dcount=0. Derived from the
+# removal fixture by swapping change.before/change.after, so the only variable
+# between T61 and this arm is the direction of the diff.
+t_list_item_addition_passes() {
+  local tmp; tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup; bounded (matches T55's pattern, #6734)
+  jq '.resource_changes[].change |= (. as $c | .before = $c.after | .after = $c.before)' \
+    "$FIXTURES/tfplan-cf-list-item-removal.json" > "$tmp"
+  local out; out=$(_run_gate "$tmp" "feat: add a bulk redirect")
+  rm -f "$tmp"
+  if [[ "$out" == "0:0:0:0:0" ]]; then
+    _report "T62 cloudflare_list item addition is ignored (rdel=0 ndel=0)" ok
+  else
+    _report "T62 cloudflare_list item addition is ignored" fail "got '$out' want '0:0:0:0:0'"
   fi
 }
 
@@ -304,9 +375,9 @@ t_ack_destroy_substring_rejected() {
 }
 
 # ---------------------------------------------------------------------------
-# 6th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
+# 7th surface (#5911): hcloud_server.* reboot-forcing in-place `update`.
 # `placement_group_id` / `server_type` change → power-off reboot of the
-# RUNNING host with ZERO destroys — invisible to resource_deletes + the 5
+# RUNNING host with ZERO destroys — invisible to resource_deletes + the 6
 # Cloudflare nested clauses. reboot_updates (rupd) counts these. Reuses the
 # same `[ack-destroy]` gate (no new token; regex-parity still 6 sites).
 # ---------------------------------------------------------------------------
@@ -409,10 +480,10 @@ t_hcloud_reboot_ack_allows() {
 }
 
 # ---------------------------------------------------------------------------
-# 7th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
+# 8th surface (#6416): `host_creates` — a pure `+ create` of an hcloud_server /
 # hcloud_volume on the per-PR apply path.
 #
-# Why a 7th counter was needed: `-target` is transitive at the RESOURCE level, so
+# Why an 8th counter was needed: `-target` is transitive at the RESOURCE level, so
 # every allow-listed resource referencing ANY hcloud_server.web instance
 # (cloudflare_record.app at dns.tf:16, hcloud_firewall_attachment.web at
 # firewall.tf:93) pulls the whole for_each map — web-2 included. A pure create
@@ -430,7 +501,7 @@ t_hcloud_reboot_ack_allows() {
 # `hcloud_server.web["web-2"]` create — HALTs. Reuses the EXISTING
 # tfplan-hcloud-server-create.json fixture (measured host_creates=1); T18 above
 # asserts the same fixture is invisible to all three legacy counters, so this
-# pair is the whole argument for the 7th surface in two tests.
+# pair is the whole argument for the 8th surface in two tests.
 t_host_create_halts() {
   local out; out=$(_run_host_creates_gate "$FIXTURES/tfplan-hcloud-server-create.json")
   if [[ "$out" == "1:1" ]]; then
@@ -820,6 +891,114 @@ t_deploy_pipeline_fix_carries_host_creates_halt() {
   fi
 }
 
+# ── T63 — deploy-pipeline-fix refuses non-terraform_data deletes (#8705). ─────
+#
+# That workflow's -targets reach hcloud_server.web["web-1"] and, through its user_data, every
+# credential the server's templatefile reads, so a pending credential rename plans as a replace
+# THERE, with no [ack-destroy] path and without re-firing the credential's SSH installers.
+# Mirrors the workflow block: counter from the shared filter, fail-closed numeric validation,
+# HALT on > 0. Returns "n:rc". Fixtures are synthesized inline (cq-test-fixtures-synthesized-only).
+_run_ntd_gate() {
+  local fixture="$1"
+  local counts n rc=0
+  if ! counts=$(jq -f "$FILTER" < "$fixture" 2>/dev/null); then
+    echo "ERROR:99"
+    return
+  fi
+  n=$(echo "$counts" | jq -r '.non_terraform_data_deletes')
+  if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+    echo "PARSE:1"
+    return
+  fi
+  if [[ "$n" -gt 0 ]]; then
+    rc=1
+  fi
+  echo "$n:$rc"
+}
+
+_ntd_case() {
+  local label="$1" plan="$2" want="$3" tmp out
+  tmp=$(mktemp)  # lint-trap-ownership: ok — rm -f inline below; single tmp, no exit between alloc and cleanup (T55's pattern)
+  printf '%s' "$plan" > "$tmp"
+  out=$(_run_ntd_gate "$tmp")
+  rm -f "$tmp"
+  if [[ "$out" == "$want" ]]; then
+    _report "$label" ok
+  else
+    _report "$label" fail "got '$out' want '$want'"
+  fi
+}
+
+t_non_terraform_data_deletes_counter() {
+  _ntd_case "T63a a doppler_service_token create_before_destroy replace counts 1 and HALTs" \
+    '{"resource_changes":[{"mode":"managed","type":"doppler_service_token","address":"doppler_service_token.fixture","change":{"actions":["create","delete"]}}]}' "1:1"
+  _ntd_case "T63b a terraform_data replace (this path's routine) counts 0" \
+    '{"resource_changes":[{"mode":"managed","type":"terraform_data","address":"terraform_data.fixture","change":{"actions":["delete","create"]}}]}' "0:0"
+  _ntd_case "T63c a forget of a non-terraform_data resource counts 1 and HALTs" \
+    '{"resource_changes":[{"mode":"managed","type":"hcloud_volume","address":"hcloud_volume.fixture","change":{"actions":["forget"]}}]}' "1:1"
+  _ntd_case "T63d a no-op and a create count 0" \
+    '{"resource_changes":[{"mode":"managed","type":"hcloud_server","address":"hcloud_server.fixture","change":{"actions":["no-op"]}},{"mode":"managed","type":"random_password","address":"random_password.fixture","change":{"actions":["create"]}}]}' "0:0"
+  local out
+  out=$(_run_ntd_gate "$FIXTURES/tfplan-hcloud-server-location-replace.json")
+  if [[ "$out" =~ ^[1-9][0-9]*:1$ ]]; then
+    _report "T63e the hcloud_server location-replace fixture HALTs" ok
+  else
+    _report "T63e the hcloud_server location-replace fixture HALTs" fail "got '$out'"
+  fi
+  out=$(_run_ntd_gate "$FIXTURES/tfplan-web-platform-real-baseline.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T63f the captured real baseline counts 0 (routine merges stay green)" ok
+  else
+    _report "T63f the captured real baseline counts 0" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_deploy_pipeline_fix_carries_ntd_halt() {
+  local wf code halt_ln apply_ln
+  wf="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
+  code="$(grep -vE '^[[:space:]]*#' "$wf" 2>/dev/null || true)"
+  if grep -qF "ntd_deletes=\$(echo \"\$counts\" | jq -r '.non_terraform_data_deletes') || ntd_rc=\$?" <<<"$code"; then
+    _report "T56e deploy-pipeline-fix parses .non_terraform_data_deletes with a guarded capture" ok
+  else
+    _report "T56e deploy-pipeline-fix parses .non_terraform_data_deletes" fail "no guarded jq -r '.non_terraform_data_deletes' capture"
+  fi
+  if grep -qF '[[ "$ntd_rc" -ne 0 || ! "$ntd_deletes" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes (fail-CLOSED)" ok
+  else
+    _report "T56f deploy-pipeline-fix validates non_terraform_data_deletes" fail "missing the ^[0-9]+\$ / rc guard"
+  fi
+  # `|| true` inside the capture: under this suite's `set -e` a no-match grep would otherwise
+  # abort the run at the assignment, before the row that reports it.
+  halt_ln=$({ grep -nF '[[ "$ntd_deletes" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  apply_ln=$({ grep -nF 'terraform apply -auto-approve -input=false tfplan' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  if [[ -n "$halt_ln" && -n "$apply_ln" && "$halt_ln" -lt "$apply_ln" ]]; then
+    _report "T56g deploy-pipeline-fix HALTs on non_terraform_data_deletes > 0 before its apply" ok
+  else
+    _report "T56g deploy-pipeline-fix HALTs before its apply" fail "halt line='${halt_ln}' apply line='${apply_ln}'"
+  fi
+  local window
+  window="$(awk -v s="${halt_ln:-0}" 'NR >= s && NR < s + 8' <<<"$code")"
+  if [[ -n "$halt_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56h the non_terraform_data_deletes HALT exits non-zero" ok
+  else
+    _report "T56h the non_terraform_data_deletes HALT exits non-zero" fail "no exit 1 within the HALT block"
+  fi
+  if grep -qF "rb_updates=\$(echo \"\$counts\" | jq -r '.reboot_updates') || rb_rc=\$?" <<<"$code" \
+     && grep -qF '[[ "$rb_rc" -ne 0 || ! "$rb_updates" =~ ^[0-9]+$ ]]' <<<"$code"; then
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates (fail-CLOSED)" ok
+  else
+    _report "T56i deploy-pipeline-fix parses and validates .reboot_updates" fail "no guarded, validated capture"
+  fi
+  local rb_ln
+  rb_ln=$({ grep -nF '[[ "$rb_updates" -gt 0 ]]' <<<"$code" || true; } | head -1 | cut -d: -f1)
+  window="$(awk -v s="${rb_ln:-0}" 'NR >= s && NR < s + 5' <<<"$code")"
+  if [[ -n "$rb_ln" && -n "$apply_ln" && "$rb_ln" -lt "$apply_ln" ]] && grep -qE '^[[:space:]]*exit 1$' <<<"$window"; then
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" ok
+  else
+    _report "T56j deploy-pipeline-fix HALTs on reboot_updates > 0 before its apply" fail "reboot line='${rb_ln}' apply line='${apply_ln}'"
+  fi
+}
+
 # ── T55 — the host_creates arm is hcloud_server-scoped (#6919). ──────────────
 #
 # host_creates counts hcloud_server BIRTHS only. hcloud_volume was DROPPED from
@@ -890,6 +1069,8 @@ t_tunnel_ingress_removal_trips
 t_zone_settings_header_removal_trips
 t_notification_email_removal_trips
 t_access_policy_include_removal_trips
+t_list_item_removal_trips
+t_list_item_addition_passes
 t_no_changes_passes
 t_ruleset_resource_delete_no_double_count
 t_mixed_delete_and_nested
@@ -924,7 +1105,568 @@ t_web2_retire_server_replace_aborts
 t_apply_job_host_creates_halt_job_scoped
 t_volume_create_does_not_trip_host_birth_halt
 t_deploy_pipeline_fix_carries_host_creates_halt
+t_non_terraform_data_deletes_counter
+t_deploy_pipeline_fix_carries_ntd_halt
 
+
+# ── #7695: the LUKS passphrase HALT ──────────────────────────────────────────────
+#
+# Both the passphrase and its Doppler mirror are in the per-merge `-target=` allow-list, so a
+# routine merge apply reaches them. A rotation mints a new value while the live volume's LUKS
+# header is still cut from the old one: the store is unopenable, on a host with no SSH and no
+# console, and the AOF it holds is user prompts and agent output.
+
+t_luks_passphrase_replace_halts() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-rotation.json")
+  # TWO, not one: the rotation fixture carries BOTH the random_password replace AND the
+  # doppler_secret `["update"]` that propagates the new value. The counter only started seeing
+  # the second one when `update` was added to its verb set — before that it read 1, and a lone
+  # Doppler-side edit read 0 and reached no gate at all. The HALT itself tests `-gt 0`.
+  if [[ "$out" == "2:1" ]]; then
+    _report "T60 a passphrase REPLACE HALTs (both resources counted, rc=1)" ok
+  else
+    _report "T60 a passphrase REPLACE HALTs" fail "got '$out' want '1:1'"
+  fi
+}
+
+# THE POINT OF THE SEPARATE HALT. A replace trips resource_deletes, so the legacy gate prints
+# "Add [ack-destroy] to acknowledge" — and an author acking a legitimate sibling change in the
+# same merge would ack the passphrase rotation through with it. The legacy gate goes rc=0 under
+# the ack; this one must still refuse.
+t_luks_passphrase_no_ack_bypass() {
+  local msg
+  msg=$'chore: rotate a secret\n\n[ack-destroy]\n\nRefs #7695.'
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-inngest-luks-passphrase-rotation.json" "$msg")
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-rotation.json")
+  if [[ "$legacy" == "1:0:0:1:0" && "$out" == "2:1" ]]; then
+    _report "T60b [ack-destroy] cannot bypass the LUKS passphrase HALT (legacy rc=0, luks rc=1)" ok
+  else
+    _report "T60b [ack-destroy] cannot bypass the LUKS passphrase HALT" fail \
+      "got legacy='$legacy' (want '1:0:0:1:0') luks='$out' (want '2:1')"
+  fi
+}
+
+# A `forget` is the strongest case: resource_deletes is ZERO, so the legacy gate never fires at
+# all and prompts for nothing. The state entry is dropped while the header stays cut from a value
+# nothing records any more — the stranding hazard wearing a different hat (T49).
+t_luks_passphrase_forget_halts() {
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-inngest-luks-passphrase-forget.json" "chore: drop from state")
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-forget.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T60c a state-drop (forget) HALTs even though the legacy gate is silent" ok
+  else
+    _report "T60c a state-drop (forget) HALTs" fail "got legacy='$legacy' (want '0:0:0:0:0') luks='$out' (want '1:1')"
+  fi
+}
+
+# THE MUST-PASS DIRECTION. A first CREATE is legal and expected — the volume is being cut to LUKS
+# for the first time. A HALT that also refused this would make the recut unreachable, which is the
+# too-aggressive failure the recut gate's own three-verb filter exists to avoid.
+t_luks_passphrase_first_create_passes() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-first-create.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T60d a FIRST CREATE of the passphrase pair does NOT halt (lr=0 rc=0)" ok
+  else
+    _report "T60d a FIRST CREATE of the passphrase pair does NOT halt" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_luks_rotations_baseline_zero() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-web-platform-real-baseline.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T60e the real baseline plan carries zero passphrase rotations" ok
+  else
+    _report "T60e the real baseline plan carries zero passphrase rotations" fail "got '$out' want '0:0'"
+  fi
+}
+
+t_luks_rotations_parse_failure_fails_closed() {
+  local tmp; tmp="$(mktemp)"; printf 'not json' > "$tmp"
+  local out; out=$(_run_luks_rotation_gate "$tmp"); rm -f "$tmp"
+  if [[ "$out" == "ERROR:99" ]]; then
+    _report "T60f an unparseable plan fails CLOSED (never a silent zero)" ok
+  else
+    _report "T60f an unparseable plan fails CLOSED" fail "got '$out' want 'ERROR:99'"
+  fi
+}
+
+# The HALT must live in the APPLY job and OUTSIDE the destroy_count sum. A counter the workflow
+# computes and never compares is the silent-and-green failure this whole file exists to catch.
+# T60h — the one degraded shape that stayed SILENT. `any(...)` over `[]` is false, so an entry at
+# a LUKS address with `"actions": []`, `before` populated and `after` null — the shape of a destroy
+# — scored 0 on luks_passphrase_rotations AND 0 on resource_deletes, and the apply reached neither
+# gate. No source edit required: this is a plan-document shape, not a code change. The two sibling
+# degraded shapes (`"actions": null`, no `.change` key) make jq exit non-zero, so they are loud;
+# this one was not. `["no-op"]` and `["create"]` must still score 0 — no-op is the routine merge
+# reading and a first create is the volume's initial LUKS cut — so the arm pins BOTH directions.
+# T60i — the HALT's operator-facing text must name the verbs the counter actually counts. It said
+# "DELETE or FORGET" while the counter had already been widened to include `update` (a Doppler-side
+# value change plans as a bare ["update"]) and then to include an unreadable action list. An
+# operator reading that message during an incident would look for a delete that is not there and
+# conclude the HALT misfired. The message is the only thing they see; the jq is not.
+# T60j — THE CLASS, not the instance (#7695 review F1). I closed `"actions": []` at the two LUKS
+# addresses and left every other counter in the same filter blind to it. MEASURED on the filter
+# before `undecidable_entries` existed, with three such entries at hcloud_volume.inngest_redis,
+# hcloud_server.web["web-1"] and hcloud_volume.workspaces["web-2"] — all `before` populated, `after`
+# null, i.e. three destroys of sole-copy volumes:
+#     {"plan_ok":true,"resource_deletes":0,"host_creates":0,"nested_deletes":0,
+#      "reboot_updates":0,"luks_passphrase_rotations":0}
+# A clean plan. destroy_count 0, so [ack-destroy] was never even demanded.
+t_undecidable_entries_counts_every_address() {
+  local tmp; tmp="$(mktemp)"; local ok=1 detail=''
+  cat > "$tmp" <<'JSON'
+{"resource_changes":[
+{"address":"hcloud_volume.inngest_redis","type":"hcloud_volume","change":{"actions":[],"before":{"id":"12345"},"after":null}},
+{"address":"hcloud_server.web[\"web-1\"]","type":"hcloud_server","change":{"actions":[],"before":{"id":"999"},"after":null}},
+{"address":"hcloud_volume.workspaces[\"web-2\"]","type":"hcloud_volume","change":{"actions":[],"before":{"id":"777"},"after":null}}
+]}
+JSON
+  local got; got="$(jq -f "$FILTER" "$tmp" | jq -r '.undecidable_entries')"
+  [[ "$got" == "3" ]] || { ok=0; detail="three empty-actions destroys scored ${got}, want 3;"; }
+  # The real prod baseline and every shipped fixture must stay 0, or this HALT fires on every merge.
+  local base; base="$(jq -f "$FILTER" "$REPO_ROOT/tests/scripts/fixtures/tfplan-web-platform-real-baseline.json" | jq -r '.undecidable_entries')"
+  [[ "$base" == "0" ]] || { ok=0; detail="${detail} real baseline scored ${base}, want 0;"; }
+  rm -f "$tmp"
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60j undecidable_entries counts an empty actions array at ANY address, and is 0 on the real plan" ok
+  else
+    _report "T60j undecidable_entries counts an empty actions array at ANY address" fail "$detail"
+  fi
+}
+
+# T60k — the HALT is wired, validated, and upstream of the destroy_count sum (so [ack-destroy]
+# cannot reach it). Job-scoped and comment-stripped, per T60g.
+t_undecidable_halt_wired_and_upstream() {
+  local block code ok=1 detail='' halt_off sum_off
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  grep -qF "undecidable_entries=\$(echo \"\$counts\" | jq -r '.undecidable_entries')" <<<"$code" || { ok=0; detail="${detail} not-parsed;"; }
+  grep -qF '! "$undecidable_entries" =~ ^[0-9]+$' <<<"$code" || { ok=0; detail="${detail} not-validated;"; }
+  halt_off="$(grep -n '\[\[ "\$undecidable_entries" -gt 0 \]\]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  sum_off="$(grep -n 'destroy_count=\$((resource_deletes' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  [[ -n "$halt_off" && -n "$sum_off" && "$halt_off" -lt "$sum_off" ]] || { ok=0; detail="${detail} halt_off=${halt_off:-none} sum_off=${sum_off:-none};"; }
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60k the undecidable-entries HALT is parsed, validated and upstream of the destroy_count sum" ok
+  else
+    _report "T60k the undecidable-entries HALT is parsed, validated and upstream of the destroy_count sum" fail "$detail"
+  fi
+}
+
+t_luks_halt_message_names_the_counted_verbs() {
+  # JOB-SCOPED AND COMMENT-STRIPPED, like T60g one function above — which is exactly the treatment
+  # this arm shipped without. MEASURED: commenting out the single `echo "::error::"` line the
+  # operator actually reads during the incident left the suite at 73 passed, 0 failed with T60i
+  # still [ok], because the commented line still carries the message text. T60g reds on the block
+  # but never reads the message, so the one line that matters could be deleted silently. Same
+  # cq-assert-anchor-not-bare-token class this commit family closed eight instances of.
+  local wf="$WORKFLOW_YML" line ok=1 missing='' block code
+  block="$(_job_block "$wf" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  line="$(grep -F 'LUKS passphrase resource(s) (inngest or workspaces' <<<"$code" | head -1 || true)"
+  # It must be an EMISSION, not merely text present in the job.
+  grep -qF 'echo "::error::' <<<"$line" || { ok=0; missing="${missing} not-an-::error::-emission"; }
+  if [[ -z "$line" ]]; then
+    _report "T60i the LUKS HALT message names the verbs the counter counts" fail "the HALT message line is gone"
+    return
+  fi
+  local v
+  for v in UPDATE DELETE FORGET 'could not be read'; do
+    grep -qF "$v" <<<"$line" || { ok=0; missing="${missing} ${v}"; }
+  done
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60i the LUKS HALT message names every verb the counter counts (update/delete/forget/undecidable)" ok
+  else
+    _report "T60i the LUKS HALT message names every verb the counter counts" fail "message omits:${missing}"
+  fi
+}
+
+t_luks_counter_undecidable_actions_fails_closed() {
+  local addr='doppler_secret.inngest_redis_luks_key' got want ok=1 detail=''
+  local shape tmp; tmp="$(mktemp)"
+  for shape in '[]:1' '["delete"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' '["create"]:0'; do
+    want="${shape##*:}"
+    printf '{"resource_changes":[{"address":"%s","type":"doppler_secret","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$addr" "${shape%:*}" > "$tmp"
+    got="$(jq -f "$FILTER" "$tmp" | jq -r '.luks_passphrase_rotations')"
+    [[ "$got" == "$want" ]] || { ok=0; detail="${detail} actions=${shape%:*} got=${got} want=${want}"; }
+  done
+  rm -f "$tmp"
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60h luks_passphrase_rotations fails CLOSED on an undecidable verb set, open on no-op/create" ok
+  else
+    _report "T60h luks_passphrase_rotations fails closed on an undecidable verb set" fail "$detail"
+  fi
+}
+
+t_apply_job_luks_halt_job_scoped() {
+  # The name promised job-scoping; the body did neither job-scoping nor comment-stripping, and
+  # every token it grepped for ALSO appears in the prose that documents the HALT. Measured: the
+  # whole HALT block plus its parse line commented out (14 lines) left this suite at 56 passed,
+  # 0 failed, exit 0 — the arm was reading the workflow's own explanation of the code it deleted.
+  # Same defect T54's header already warned about, in the arm added right below it.
+  local block code halt_off sum_off
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  if [[ -z "$block" ]]; then
+    _report "T60g apply block extracts non-empty" fail "empty block — extractor broken"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+
+  local ok=1
+  grep -qF 'luks_rotations=$(echo "$counts" | jq -r '"'"'.luks_passphrase_rotations'"'"')' <<<"$code" || ok=0
+  grep -qF '[[ "$luks_rotations" -gt 0 ]]' <<<"$code" || ok=0
+  # Offsets are WITHIN the stripped apply block, so the ordering claim is about executable lines in
+  # the job that runs them — not about two file positions that may sit in different jobs entirely.
+  #
+  # `|| true` on both is load-bearing, not defensive noise: this suite runs under `set -euo
+  # pipefail`, so a `grep` matching nothing kills the function in the EXACT case this arm exists to
+  # report. Measured before that fix: the `-gt 999` mutant produced no verdict line and no suite
+  # summary, and the run "failed" rc=1 for the wrong reason.
+  halt_off="$(grep -n '\[\[ "\$luks_rotations" -gt 0 \]\]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  sum_off="$(grep -n 'destroy_count=\$((resource_deletes' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  [[ -n "$halt_off" && -n "$sum_off" && "$halt_off" -lt "$sum_off" ]] || ok=0
+
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60g the apply job HALTs on luks_passphrase_rotations, before the destroy_count sum (job-scoped, comments stripped)" ok
+  else
+    _report "T60g the apply job HALTs on luks_passphrase_rotations, before the destroy_count sum" fail \
+      "halt_off=${halt_off:-none} sum_off=${sum_off:-none} (offsets are within the stripped apply block)"
+  fi
+}
+
+# ── #9377 decision A2: the workspaces passphrase pair joins the non-ackable HALT ─────────────────────
+#
+# random_password.workspaces_luks (web-1), random_password.workspaces_luks_web (web-class) and their two
+# Doppler copies are -target-reachable from the per-merge apply (the web copy and its password directly; web-1's
+# password as a dependency of the web key until the swap, and always as the pair named for defense in depth).
+# A rotation leaves the LUKS header cut from the OLD value with no surviving copy. `[ack-destroy]` cannot tell
+# a passphrase replace from any other delete in the same merge, so it must not reach it. A first CREATE stays
+# legal (no web-class volume is formatted yet).
+WL_ADDRS=(
+  random_password.workspaces_luks
+  random_password.workspaces_luks_web
+  doppler_secret.workspaces_luks_key
+  doppler_secret.workspaces_luks_web_key
+)
+
+t_workspaces_passphrase_replace_halts() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json")
+  if [[ "$out" == "4:1" ]]; then
+    _report "T64 a workspaces passphrase REPLACE HALTs (all four addresses counted, rc=1)" ok
+  else
+    _report "T64 a workspaces passphrase REPLACE HALTs" fail "got '$out' want '4:1'"
+  fi
+}
+
+t_workspaces_passphrase_no_ack_bypass() {
+  local msg=$'chore: unrelated delete\n\n[ack-destroy]\n\nRef #9377.'
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$msg")
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json")
+  if [[ "$legacy" == "2:0:0:2:0" && "$out" == "4:1" ]]; then
+    _report "T64b [ack-destroy] cannot bypass the workspaces passphrase HALT (legacy rc=0, luks rc=1)" ok
+  else
+    _report "T64b [ack-destroy] cannot bypass the workspaces passphrase HALT" fail \
+      "got legacy='$legacy' (want '2:0:0:2:0') luks='$out' (want '4:1')"
+  fi
+}
+
+t_workspaces_passphrase_forget_halts() {
+  local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-forget.json" "chore: drop from state")
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-forget.json")
+  if [[ "$legacy" == "0:0:0:0:0" && "$out" == "1:1" ]]; then
+    _report "T64c a state-drop (forget) of the web key copy HALTs although the legacy gate is silent" ok
+  else
+    _report "T64c a state-drop (forget) of the web key copy HALTs" fail "got legacy='$legacy' (want '0:0:0:0:0') luks='$out' (want '1:1')"
+  fi
+}
+
+# MUST-PASS: the first apply that creates the web-class pair is legal.
+t_workspaces_passphrase_first_create_passes() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json")
+  if [[ "$out" == "0:0" ]]; then
+    _report "T64d a FIRST CREATE of the web-class passphrase pair does NOT halt (lr=0 rc=0)" ok
+  else
+    _report "T64d a FIRST CREATE of the web-class passphrase pair does NOT halt" fail "got '$out' want '0:0'"
+  fi
+}
+
+# One entry at ONE address, every verb shape: each of the four addresses must score on update/delete/forget/
+# unreadable and must NOT score on create/no-op. Removing any one address from the filter reds its row.
+_wl_shape_check() { # <filter file> <address> -> prints a detail string of mismatches (empty = all as wanted)
+  local filter="$1" addr="$2" shape want got detail='' tmp; tmp="$(mktemp)"
+  for shape in '[]:1' '["delete"]:1' '["delete","create"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' '["create"]:0'; do
+    want="${shape##*:}"
+    printf '{"resource_changes":[{"address":%s,"type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$(jq -Rn --arg a "$addr" '$a')" "${shape%:*}" > "$tmp"
+    got="$(jq -f "$filter" "$tmp" | jq -r '.luks_passphrase_rotations')"
+    [[ "$got" == "$want" ]] || detail="${detail} ${addr} actions=${shape%:*} got=${got} want=${want};"
+  done
+  rm -f "$tmp"
+  printf '%s' "$detail"
+}
+
+t_workspaces_passphrase_every_address_counted() {
+  local a detail='' d
+  for a in "${WL_ADDRS[@]}"; do
+    d="$(_wl_shape_check "$FILTER" "$a")"; detail="${detail}${d}"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T64e each of the four workspaces passphrase addresses scores on update/delete/forget/unreadable and not on create/no-op" ok
+  else
+    _report "T64e each of the four workspaces passphrase addresses is counted" fail "$detail"
+  fi
+}
+
+# HARNESS ROWS (instrument self-check): remove ONE address from a copy of the filter and the per-address check
+# for that address MUST go red. A row that stays green with the address removed proves nothing.
+t_workspaces_passphrase_removal_mutants_caught() {
+  local a mut label
+  for a in "${WL_ADDRS[@]}"; do
+    mut="$(mktemp)"
+    sed "s/\"${a}\"/\"${a}-mutant-removed\"/" "$FILTER" > "$mut"
+    if cmp -s "$FILTER" "$mut"; then
+      _report "T64f mutant: removing ${a} from the filter" fail "the mutation did not land (address not literal in the filter)"
+    elif [[ -n "$(_wl_shape_check "$mut" "$a")" ]]; then
+      _report "T64f mutant: removing ${a} from the filter is caught by the per-address check" ok
+    else
+      _report "T64f mutant: removing ${a} from the filter is caught by the per-address check" fail "the mutant filter still scored ${a}"
+    fi
+    rm -f "$mut"
+  done
+}
+
+# NEGATIVE NEIGHBOURS (population). The per-address rows above prove each listed address IS counted; nothing proved a
+# near-name is NOT. Adding `doppler_secret.workspaces_luks_web_header_bucket` to luks_passphrase_addrs kept the suite
+# green, and that secret is -target-reachable and legitimately updatable on a routine merge: it would have turned an
+# ordinary header-bucket edit into an un-ackable HALT. Each neighbour must score ZERO on update and on a replace.
+WL_NEIGHBOURS=(
+  doppler_secret.workspaces_luks_header_bucket
+  doppler_secret.workspaces_luks_header_r2_endpoint
+  doppler_secret.workspaces_luks_web_header_bucket
+  doppler_secret.workspaces_luks_web_header_r2_endpoint
+  doppler_secret.workspaces_luks_heartbeat_url
+  doppler_service_token.workspaces_luks_fresh_boot_web
+  doppler_service_token.workspaces_luks_fresh_boot
+  doppler_service_token.workspaces_luks
+  random_password.workspaces_luks_web_x
+  random_password.workspaces_luks_x
+  doppler_secret.workspaces_luks_web_key_x
+  'random_password.workspaces_luks_web_x["web-2"]'
+  'doppler_secret.workspaces_luks_web_header_bucket["web-2"]'
+  'module.x["a\".b"].random_password.workspaces_luks_web_x'
+)
+
+_wl_neighbour_check() { # <filter file> <address> -> mismatch detail (empty = scored 0 on every mutating verb)
+  local filter="$1" addr="$2" shape got detail='' tmp; tmp="$(mktemp)"
+  for shape in '["update"]' '["delete","create"]' '["delete"]' '["forget"]'; do
+    printf '{"resource_changes":[{"address":%s,"type":"x","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$(jq -Rn --arg a "$addr" '$a')" "$shape" > "$tmp"
+    got="$(jq -f "$filter" "$tmp" | jq -r '.luks_passphrase_rotations')"
+    [[ "$got" == "0" ]] || detail="${detail} ${addr} actions=${shape} got=${got} want=0;"
+  done
+  rm -f "$tmp"
+  printf '%s' "$detail"
+}
+
+t_workspaces_passphrase_neighbours_not_counted() {
+  local a detail='' d
+  for a in "${WL_NEIGHBOURS[@]}"; do
+    d="$(_wl_neighbour_check "$FILTER" "$a")"; detail="${detail}${d}"
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T64h near-name neighbours of the passphrase set (other header secrets, fresh-boot tokens, decoys) score ZERO on update and replace" ok
+  else
+    _report "T64h near-name neighbours of the passphrase set score zero" fail "$detail"
+  fi
+}
+
+# Instrument check: widening the set by ONE neighbour must red the neighbour row (an unmutated control first).
+t_workspaces_passphrase_widening_mutant_caught() {
+  local mut n=doppler_secret.workspaces_luks_web_header_bucket
+  mut="$(mktemp)"
+  sed "s/^  \"doppler_secret.workspaces_luks_web_key\"\$/  \"doppler_secret.workspaces_luks_web_key\",\n  \"${n}\"/" "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T64i mutant: adding a neighbour to luks_passphrase_addrs" fail "the mutation did not land"
+  elif [[ -z "$(_wl_neighbour_check "$FILTER" "$n")" && -n "$(_wl_neighbour_check "$mut" "$n")" ]]; then
+    _report "T64i mutant: adding ${n} to luks_passphrase_addrs is caught by the neighbour row (control green)" ok
+  else
+    _report "T64i mutant: adding a neighbour to luks_passphrase_addrs is caught by the neighbour row" fail "control or mutant verdict wrong"
+  fi
+  rm -f "$mut"
+}
+
+# INDEXED / MODULE-PREFIXED addresses of a listed resource are the same secret (a for_each/count rebirth, #9372, plans
+# `random_password.workspaces_luks_web["web-2"]`). Each form of each of the four addresses must score on a replace and
+# must NOT score on create, exactly like the bare address; the inngest pair is covered by the same normalization.
+t_workspaces_passphrase_indexed_forms_counted() {
+  local a f detail='' d
+  for a in "${WL_ADDRS[@]}" random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key; do
+    for f in "${a}[\"web-2\"]" "${a}[0]" "module.x.${a}" "module.x[\"k.j\"].${a}[0]" "module.a.module.b.${a}" \
+             "module.x[\"a\\\".b\"].${a}" "module.x[\"a\\\"b\"].${a}[0]"; do
+      d="$(_wl_shape_check "$FILTER" "$f")"; detail="${detail}${d}"
+    done
+  done
+  if [[ -z "$detail" ]]; then
+    _report "T64j indexed and module-prefixed forms of each listed passphrase address score like the bare address" ok
+  else
+    _report "T64j indexed and module-prefixed forms of each listed passphrase address are counted" fail "$detail"
+  fi
+}
+
+t_workspaces_passphrase_indexed_fixture_halts() {
+  local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-indexed-rotation.json")
+  if [[ "$out" == "4:1" ]]; then
+    _report "T64k an INDEXED / module-prefixed workspaces passphrase rotation plan HALTs (4 entries counted, rc=1)" ok
+  else
+    _report "T64k an indexed workspaces passphrase rotation plan HALTs" fail "got '$out' want '4:1'"
+  fi
+}
+
+# Instrument check: the normalization is what scores the indexed forms. With it removed (plain `.address`), the
+# indexed fixture must read 0 — otherwise T64j/T64k pass for an unrelated reason.
+t_workspaces_passphrase_normalization_mutant_caught() {
+  local mut got
+  mut="$(mktemp)"
+  sed 's/select(IN(\.address | strings | luks_passphrase_base; luks_passphrase_addrs\[\]))/select(IN(.address; luks_passphrase_addrs[]))/' "$FILTER" > "$mut"
+  if cmp -s "$FILTER" "$mut"; then
+    _report "T64l mutant: dropping the index/module normalization" fail "the mutation did not land"
+    rm -f "$mut"; return
+  fi
+  got="$(jq -f "$mut" "$FIXTURES/tfplan-workspaces-luks-passphrase-indexed-rotation.json" | jq -r '.luks_passphrase_rotations')"
+  if [[ "$got" == "0" && -n "$(_wl_shape_check "$mut" 'random_password.workspaces_luks_web["web-2"]')" ]]; then
+    _report "T64l mutant: dropping the index/module normalization is caught (indexed fixture reads 0, row reds)" ok
+  else
+    _report "T64l mutant: dropping the index/module normalization is caught" fail "mutant read '${got}' on the indexed fixture"
+  fi
+  rm -f "$mut"
+}
+
+# EXECUTED, not text-pinned. T60g/T64g read the HALT's text; inserting `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its
+# `exit 1` left every one of them green. This row runs the REAL apply-step script, comment-stripped, from the START of
+# the step's `run:` block (the plan command included, with `doppler` and `terraform` replaced by PATH stubs that serve
+# the fixture) through the line before the destroy_count sum: every executable line that stands between the step start
+# and the ackable gate. It runs with the step's REAL environment shape (HEAD_MSG, the ack source, set to a message
+# carrying [ack-destroy], [ack-luks] and [skip-web-platform-apply]; plus ALLOW_LUKS and SKIP_LUKS) under `bash -e`
+# (the step has no `shell:` key, so GitHub runs `bash -e {0}`). The rotation plan must exit 1 AND print the offending
+# plan lines from the explicit six-address grep (30 unrelated `_luks` lines precede them in the stub tfplan.txt, so a
+# generic grep | head -20 would hide them); the first-create plan and the real baseline plan must fall through (rc 0).
+# Results are returned in APPLY_SPAN_RC / APPLY_SPAN_OUT (globals, so no output-file operand is needed).
+APPLY_SPAN_RC=''; APPLY_SPAN_OUT=''
+_run_apply_halt_span() { # <fixture> <tfplan.txt> [mutate-sed-expr]
+  local fixture="$1" txt="$2" mut="${3:-}" block code span w
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  # The run block that holds the destroy guard: lines after the LAST `run:` header seen before the destroy_count sum.
+  span="$(awk '/^ *run: *[|>]/ { buf=""; next } /^ *destroy_count=\$\(\(resource_deletes/ { if (buf ~ /counts=\$\(jq -f /) { printf "%s", buf; exit } } { buf = buf $0 "\n" }' <<<"$code")"
+  if [[ -n "$mut" ]]; then span="$(sed -E "$mut" <<<"$span")"; fi
+  w="$(mktemp -d)"
+  mkdir -p "$w/bin"
+  printf '#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n' > "$w/bin/doppler"
+  printf '#!/bin/sh\ncase "$1 $2" in\n  "plan -no-color") : > tfplan ;;\n  "show -no-color") cat "$STUB_TXT" ;;\n  "show -json") cat "$STUB_JSON" ;;\n  *) echo "stub terraform: unexpected: $*" >&2; exit 97 ;;\nesac\n' > "$w/bin/terraform"
+  chmod +x "$w/bin/doppler" "$w/bin/terraform"
+  cp "$fixture" "$w/plan.json"; cp "$txt" "$w/plan.txt"
+  printf '%s\n' "$span" > "$w/span.sh"
+  APPLY_SPAN_RC=0
+  APPLY_SPAN_OUT="$( cd "$w" && env -i PATH="$w/bin:$PATH" HOME="$w" GITHUB_WORKSPACE="$REPO_ROOT" INFRA_DIR="$w" \
+      DOPPLER_TOKEN=stub CI_SSH_PUB=stub STUB_TXT="$w/plan.txt" STUB_JSON="$w/plan.json" \
+      HEAD_MSG=$'chore: unrelated\n\n[ack-destroy]\n[ack-luks]\n[skip-web-platform-apply]' ALLOW_LUKS=1 SKIP_LUKS=1 SKIP_GUARD=1 \
+      bash -e span.sh 2>&1 )" || APPLY_SPAN_RC=$?
+  rm -rf "$w"
+}
+
+t_apply_job_luks_halt_executes() {
+  local txt rc_rot out_rot rc_new rc_base a detail='' i
+  txt="$(mktemp)"
+  for i in $(seq 1 30); do printf '  # hcloud_volume.workspaces_luks_noise%s will be created\n' "$i"; done > "$txt"
+  while IFS= read -r a; do printf '  # %s must be replaced\n' "$a"; done < <(_luks_addrs) >> "$txt"
+  printf 'Plan: 4 to add, 2 to change, 2 to destroy.\n' >> "$txt"
+
+  _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt"
+  rc_rot="$APPLY_SPAN_RC"; out_rot="$APPLY_SPAN_OUT"
+  [[ "$rc_rot" == "1" ]] || detail="${detail} rotation-rc=${rc_rot}(want 1);"
+  grep -q 'LUKS passphrase resource' <<<"$out_rot" || detail="${detail} rotation-halt-message-missing;"
+  while IFS= read -r a; do
+    grep -qE "^  # ${a//./\\.} must be replaced\$" <<<"$out_rot" || detail="${detail} grep-output-lacks:${a};"
+  done < <(_luks_addrs)
+  grep -q 'noise' <<<"$out_rot" && detail="${detail} grep-printed-unrelated-luks-lines;"
+  grep -q '^Plan: ' <<<"$out_rot" || detail="${detail} grep-output-lacks-Plan-line;"
+
+  _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json" "$txt"
+  rc_new="$APPLY_SPAN_RC"
+  [[ "$rc_new" == "0" ]] || detail="${detail} first-create-rc=${rc_new}(want 0):${APPLY_SPAN_OUT:0:200};"
+  _run_apply_halt_span "$FIXTURES/tfplan-web-platform-real-baseline.json" "$txt"
+  rc_base="$APPLY_SPAN_RC"
+  [[ "$rc_base" == "0" ]] || detail="${detail} real-baseline-rc=${rc_base}(want 0):${APPLY_SPAN_OUT:0:200};"
+
+  # Instrument check: the executor must SEE each way of skipping or neutering the HALT. Every mutation below is
+  # applied to the extracted step text and must turn the rotation plan's rc into 0 — otherwise the rows above cannot
+  # red. The first two are keyed on HEAD_MSG, the real ack source: a bypass on a variable the harness never sets
+  # would not fire here (those are the allow-list's job, in the parity suite). The last four are the one-line edits an
+  # allow-list of line SHAPES accepted: each defeats the HALT when run UNCHECKED (rc 0 below), which is why the parity
+  # suite's closed-sequence checker rows for them are load-bearing and not decorative.
+  local -a MUTS=(
+    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1[[ -n "${ALLOW_LUKS:-}" ]] \&\& exit 0\n\1exit 1/'
+    '/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)exit 1 *$/\1exit 0/'
+    's/^( *)(luks_rotations=.*)$/\1\2\n\1[[ "$HEAD_MSG" == *"[ack-luks]"* ]] \&\& luks_rotations=0/'
+    's/^( *)(luks_rotations=.*)$/\1\2\n\1echo x; [[ -n "${SKIP_LUKS:-}" ]] \&\& exit 0/'
+    's/^( *)(counts=.*)$/\1[[ "$HEAD_MSG" == *"[skip-web-platform-apply]"* ]] \&\& exit 0\n\1\2/'
+    's/^( *)(set -euo pipefail)$/\1\2\n\1[[ -n "${SKIP_GUARD:-}" ]] \&\& exit 0/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1exit $rc\n\1\2/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1if [[ $rc -ne 0 ]]; then\n\1\2/;/luks_rotations" -gt 0/,/^ *fi *$/ s/^( *)fi *$/\1fi\n\1fi/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1echo "::error::${a[luks_rotations=0]:-}"\n\1\2/'
+    's/^( *)(if \[\[ "\$luks_rotations" -gt 0 \]\]; then)$/\1grep -F x${a[luks_rotations=0]:-} tfplan.txt >\&2 || true\n\1\2/'
+  )
+  local -a MUT_NAMES=(ALLOW_LUKS-before-exit-1 exit-1-flipped-to-0 HEAD_MSG-counter-rewrite echo-prefixed-SKIP_LUKS-exit before-counts-jq-line step-start-short-circuit exit-rc-before-HALT rc-if-wrapper-plus-extra-fi echo-array-subscript-assignment grep-array-subscript-assignment)
+  for i in "${!MUTS[@]}"; do
+    _run_apply_halt_span "$FIXTURES/tfplan-workspaces-luks-passphrase-rotation.json" "$txt" "${MUTS[$i]}"
+    [[ "$APPLY_SPAN_RC" == "0" ]] || detail="${detail} instrument-${MUT_NAMES[$i]}-rc=${APPLY_SPAN_RC}(want 0);"
+  done
+  rm -f "$txt"
+  if [[ -z "$detail" ]]; then
+    _report "T64m the REAL apply step, run from its start with the real ack env under bash -e, exits 1 on a rotation plan (explicit six-address grep, nothing truncated), falls through on a first create and the real baseline, and the executor sees each of 10 skip/neuter mutations" ok
+  else
+    _report "T64m the real apply step executes the luks HALT as a hard stop" fail "$detail"
+  fi
+}
+
+# The six counted addresses, read from the filter itself so a seventh member cannot be added there and escape the
+# HALT text and the plan-line grep (pattern 3: the list and its consumers share one source).
+_luks_addrs() {
+  sed -n '/^def luks_passphrase_addrs: \[/,/^\];/p' "$FILTER" | grep -o '"[^"]*"' | tr -d '"'
+}
+
+# The body of the apply job's `luks_rotations` HALT (comment-stripped code in $1), from its `if` to the `fi` at the
+# same indent.
+_luks_halt_body() {
+  awk '/^ *if \[\[ "\$luks_rotations" -gt 0 \]\]; then *$/ { on=1 } on { print } on && /^ *fi *$/ { exit }' <<<"$1"
+}
+
+t_apply_job_luks_halt_names_workspaces() {
+  local block code line ok=1 missing='' v
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  # Emissions only (comment-stripped, `echo "::error::` lines): the operator reads these during the incident.
+  local emitted; emitted="$(grep -F 'echo "::error::' <<<"$code" || true)"
+  for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'first create' '[skip-web-platform-apply]'; do
+    grep -qF "$v" <<<"$emitted" || { ok=0; missing="${missing} ${v};"; }
+  done
+  # The offending-lines grep must name EVERY address of the counted set explicitly, derived from the filter's own
+  # luks_passphrase_addrs (a generic `_luks` pattern matches 42 resource names, and the earlier anchor-free regex was
+  # satisfied by the pre-change `inngest_redis_luks` pattern). Boundary-matched, so `random_password.workspaces_luks`
+  # is not satisfied by its `_web` sibling, and the line must not truncate (`head`) the lines it exists to show.
+  local gline a
+  gline="$(_luks_halt_body "$code" | grep -v '^[[:space:]]*echo ' | grep 'tfplan\.txt' || true)"
+  [[ -n "$gline" ]] || { ok=0; missing="${missing} plan-line-grep-absent;"; }
+  [[ "$gline" != *'| head'* && "$gline" != *'|head'* ]] || { ok=0; missing="${missing} plan-line-grep-truncates;"; }
+  while IFS= read -r a; do
+    grep -qE "(^|[^A-Za-z0-9_])${a//./\\.}([^A-Za-z0-9_]|\$)" <<<"$gline" || { ok=0; missing="${missing} grep-lacks:${a};"; }
+  done < <(_luks_addrs)
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T64g the apply job's LUKS HALT names the workspaces pair, the re-key remediation, first-create legality and widens the plan-line grep" ok
+  else
+    _report "T64g the apply job's LUKS HALT names the workspaces pair and its remediation" fail "missing:${missing}"
+  fi
+}
 
 # ── #6997: the shared fail-closed preamble is INVOKED, not merely sourced ─────────
 #
@@ -958,6 +1700,13 @@ PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
 
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
+
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
 
@@ -978,6 +1727,216 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 
 
 
+# ---------------------------------------------------------------------------------------
+# AC72 — PF9b MECHANIZED: the apex `moved` actually re-addressed the survivor (#7640 PR4b)
+# ---------------------------------------------------------------------------------------
+# THE HAZARD THIS EXISTS FOR, AND WHY NOTHING ELSE CATCHES IT.
+#
+# PR4b flips the apex A record to a CNAME at ONE Terraform address, so core
+# serialises Delete->Create and the Cloudflare 81053 collision (an A and a CNAME
+# coexisting at one name) cannot occur. That property depends ENTIRELY on the
+# `moved` block's `from` naming the key that is actually in STATE.
+#
+# Terraform does not error on a `moved` whose source is absent from state. It
+# no-ops. `pages_apex` then plans as a BARE CREATE while the real survivor plans
+# as a SEPARATE delete: two unrelated addresses, dispatched concurrently, hazard
+# fully restored, no error anywhere.
+#
+# Two drift shapes produce exactly that, and both defeat every other gate:
+#   - a CONSISTENT repo-side rename of the pin and the `dns.tf` key, which passes
+#     `apex-single-node-replace.test.sh` 11/11 because that guard is static text;
+#   - a PR4a that merged without CONVERGING ([skip-web-platform-apply], or a
+#     failed apply), leaving state with four instances while the repo says one.
+#
+# `[ack-destroy]` cannot discriminate either, because `destroy_count` is 1 in the
+# CORRECT plan and 1 in the BROKEN one. This clause is the only check in the
+# system that reads what the plan is moving FROM rather than what the text says.
+APEX_MOVE_SURVIVOR='cloudflare_record.github_pages["185.199.108.153"]'
+
+_apex_orphans() { # <fixture> -> the counter, or "ERROR"
+  local out
+  out=$(jq -f "$FILTER" < "$1" 2>/dev/null | jq -r '.apex_move_orphans') || { echo "ERROR"; return; }
+  [[ "$out" =~ ^[0-9]+$ ]] || { echo "ERROR"; return; }
+  echo "$out"
+}
+
+# Both directions, each fixtured ALONE. A suite whose fixtures all trip cannot
+# see a clause that became too aggressive, and one whose fixtures all pass cannot
+# see one that stopped firing.
+# THE TRUTH TABLE. The property is "no pages_apex create alongside ANY
+# github_pages delete" — i.e. NOT TWO ADDRESSES — not "the move resolved".
+# Every conjunct is made load-bearing by at least one fixture that isolates it,
+# because a fixture set that moves only one axis leaves the others satisfied
+# vacuously: the review panel proved that deleting the `.type`, `.name` and
+# `index("create")` conjuncts each left the previous four-row set fully green.
+#
+# fixture      | shape                                              | expect
+# correct      | replace carrying previous_address, no sibling      | 0
+# orphaned     | bare create + a separate github_pages delete       | 1
+# wrongkey     | replace from a DIFFERENT key, no sibling delete    | 0
+# converged    | no pages_apex create at all                        | 0
+# midreplace   | bare create, NO sibling delete (the recovery)      | 0
+# unconverged  | correct previous_address + 3 sibling deletes       | 3
+# otherrecord  | an unrelated create + a github_pages delete        | 0
+# wrongtype    | a non-cloudflare_record labelled pages_apex        | 0
+_ac72_row() { # <fixture> <expected> <description>
+  local got; got="$(_apex_orphans "$FIXTURES/tfplan-web-platform-pr4b-apex-move-$1.json")"
+  [[ "$got" == "$2" ]] \
+    && _report "AC72 [$1]: $3" ok \
+    || _report "AC72 [$1]: $3" FAIL "expected $2, got '$got'"
+}
+
+_ac72_row correct 0 "a correct single-address replace reads 0"
+_ac72_row orphaned 1 "a no-opped move (bare create + a separate github_pages delete) is caught"
+
+# wrongkey reads 0 DELIBERATELY under this property, and the change is a
+# correction rather than a weakening. A replace moved from a different key is
+# still ONE address in flight, so there is no collision to prevent; if state also
+# held the survivor, that survivor would appear as a sibling delete and the
+# `unconverged` row is what catches it. Repo-side byte-identity of the pin
+# remains covered by apex-single-node-replace.test.sh M3, which is where a text
+# assertion belongs.
+_ac72_row wrongkey 0 "a single-address replace from another key is not a two-address hazard"
+_ac72_row converged 0 "once converged (no pages_apex create) the tripwire stays silent"
+
+# THE RECOVERY THE PREVIOUS CLAUSE BLOCKED. A replace that dies between Delete
+# and Create leaves state holding neither address, so the re-run's moved no-ops
+# for a legitimate reason and pages_apex plans as a bare create. There is no
+# surviving A record to collide with. The old clause scored this 1 and HALTed it
+# above the ack — with no bypass — in the single worst state of the migration:
+# apex recordless, NXDOMAIN negative-cached for 1800 s against the zone SOA.
+_ac72_row midreplace 0 "the died-mid-replace recovery is NOT blocked (no sibling delete = no second address)"
+
+# THE CASE THE PREVIOUS CLAUSE MISSED. previous_address is CORRECT here, so a
+# previous_address-only check reads clean, while three orphan siblings plan as
+# separate concurrent deletes. destroy_count is 4, and PR4b's merge commit
+# already carries [ack-destroy] for the healthy destroy_count of 1 — so the ack
+# authorising the intended replace would have authorised these too.
+_ac72_row unconverged 3 "an unconverged PR4a (correct previous_address + 3 orphan siblings) IS caught"
+
+# Conjunct isolation: without `.name`/`.type` these score 1 and HALT a routine
+# apply with an error about the apex.
+_ac72_row otherrecord 0 "an unrelated record's create alongside a github_pages delete is not counted"
+_ac72_row wrongtype 0 "a non-cloudflare_record labelled pages_apex is not counted"
+
+# NON-VACUITY OF THE COUNTER ITSELF. Every clause reads `.resource_changes[]?`,
+# so a structurally empty plan yields 0 for every counter and the workflow's
+# `^[0-9]+$` validation accepts it — a plan JSON that is empty or not an array
+# would pass every gate in the step. Assert the filter refuses to grade one.
+_pv="$(printf '{"format_version":"1.2"}' | jq -f "$FILTER" 2>/dev/null | jq -r '.plan_ok' 2>/dev/null || true)"
+[[ "$_pv" == "false" ]] \
+  && _report "AC72: a plan with no resource_changes array is flagged ungradeable (plan_ok=false)" ok \
+  || _report "AC72: a plan with no resource_changes array is flagged ungradeable" FAIL "plan_ok='$_pv'"
+_pv="$(jq -f "$FILTER" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-correct.json" | jq -r '.plan_ok')"
+[[ "$_pv" == "true" ]] \
+  && _report "AC72: a real plan is gradeable (plan_ok=true) — the flag is not stuck false" ok \
+  || _report "AC72: a real plan is gradeable (plan_ok=true)" FAIL "plan_ok='$_pv'"
+
+# DRIFT PARITY, over the literals that are actually pinned.
+#
+# The filter no longer carries the survivor IP at all: counting the CO-OCCURRENCE
+# of a pages_apex create with a github_pages delete expresses the hazard ("not two
+# addresses") without needing to know which address survived. That removed one of
+# the three copies rather than guarding it — the best outcome available.
+#
+# Two literals remain, and each is asserted across the files that share it:
+#   - the survivor IP: dns.tf's moved.from  <->  the static guard's SURVIVING_APEX_KEY
+#   - the resource NAME: dns.tf's moved.to  <->  the filter's `.name ==` selector
+# A rename touching one side of either pair is the co-mutation class AC72 exists
+# to catch, one level down.
+_guard_key=$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' \
+  "$REPO_ROOT/apps/web-platform/infra/apex-single-node-replace.test.sh" | sed 's/.*="//; s/"$//' || true)
+_dns_key=$(grep -oE 'from = cloudflare_record\.github_pages\["[0-9.]+"\]' \
+  "$REPO_ROOT/apps/web-platform/infra/dns.tf" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [[ -n "$_guard_key" && "$_guard_key" == "$_dns_key" ]]; then
+  _report "AC72: the survivor IP agrees between dns.tf's moved.from and the static guard ($_guard_key)" ok
+else
+  _report "AC72: the survivor IP agrees between dns.tf's moved.from and the static guard" FAIL \
+    "guard='$_guard_key' dns.tf='$_dns_key'"
+fi
+
+_jq_name=$(grep -oE 'select\(\.name == "pages_apex"\)' "$FILTER" | head -1 | grep -oE '"pages_apex"' | tr -d '"' || true)
+_dns_name=$(grep -oE '^  to   = cloudflare_record\.[a-z_0-9]+' \
+  "$REPO_ROOT/apps/web-platform/infra/dns.tf" | sed 's/.*cloudflare_record\.//' || true)
+if [[ -n "$_jq_name" && "$_jq_name" == "$_dns_name" ]]; then
+  _report "AC72: the pages_apex resource NAME agrees between the filter and dns.tf's moved.to ($_jq_name)" ok
+else
+  _report "AC72: the pages_apex resource NAME agrees between the filter and dns.tf's moved.to" FAIL \
+    "filter='$_jq_name' dns.tf='$_dns_name'"
+fi
+
+# THE TRIPWIRE IS NOT ACK-BYPASSABLE. `[ack-destroy]` authorizes a destroy; it
+# cannot authorize a plan whose ordering property is absent, and the counts are
+# identical in both cases — so an ack-gated arm here would be no gate at all.
+# Mirrors the host_creates HALT, which sits above the ack for the same reason.
+_wf="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+_halt_line=$(grep -n 'apex_move_orphans" -gt 0\|apex_move_orphans" -ne 0' "$_wf" | head -1 | cut -d: -f1 || true)
+# One pattern, scoped to the line that READS the ack. The previous primary
+# pattern matched zero lines in the workflow (inside single quotes grep saw a BRE
+# with a literal backslash), so it was dead code that read as protective while a
+# fallback silently did all the work.
+_ack_line=$(grep -n 'HEAD_MSG.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
+if [[ -n "$_halt_line" && -n "$_ack_line" && "$_halt_line" -lt "$_ack_line" ]]; then
+  _report "AC72: the apex-move HALT precedes the [ack-destroy] gate (line $_halt_line < $_ack_line)" ok
+else
+  _report "AC72: the apex-move HALT precedes the [ack-destroy] gate" FAIL \
+    "halt='$_halt_line' ack='$_ack_line'"
+fi
+
+# MUTATION PROOF, not a read-through. Strip the clause from a sandbox copy of the
+# filter and confirm the orphaned fixture stops being detected — an assertion
+# that cannot be driven the other way is not evidence the clause is load-bearing.
+_sbx=$(mktemp -d -t apex-ac72.XXXXXXXX) || { echo "[FATAL] mktemp failed" >&2; exit 2; }
+# bash does NOT stack EXIT handlers — this replaced the suite's earlier
+# `trap 'rm -rf "$TMP"' EXIT`, leaking $TMP on every run. One handler owns both.
+trap 'rm -rf "$TMP" "$_sbx"' EXIT INT TERM HUP
+sed '/apex_move_orphans: (/,/^  ),$/d' "$FILTER" > "$_sbx/mutant.jq"
+if cmp -s "$_sbx/mutant.jq" "$FILTER"; then
+  _report "AC72 mutation: the clause was actually removed from the sandbox copy" FAIL "sed matched nothing — this row scored the baseline"
+else
+  _mut=$(jq -f "$_sbx/mutant.jq" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-orphaned.json" 2>/dev/null | jq -r '.apex_move_orphans' || true)
+  # A SIBLING KEY MUST STILL EVALUATE. `_mut` is empty whenever jq FAILS, which a
+  # syntactically destroyed filter also does — so an empty result alone credits
+  # "I broke the file" as "the clause is load-bearing". Requiring an untouched
+  # counter to still return its expected value separates the two.
+  _sib=$(jq -f "$_sbx/mutant.jq" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-orphaned.json" 2>/dev/null | jq -r '.resource_deletes' || true)
+  [[ "$_sib" == "1" ]] \
+    && _report "AC72 mutation: the mutant filter still parses (sibling counter intact) — the next row is not measuring a broken file" ok \
+    || _report "AC72 mutation: the mutant filter still parses" FAIL "resource_deletes='$_sib', expected 1"
+  [[ "$_mut" == "null" || -z "$_mut" ]] \
+    && _report "AC72 mutation: removing the clause makes the orphaned plan undetectable (the clause is what detects it)" ok \
+    || _report "AC72 mutation: removing the clause makes the orphaned plan undetectable" FAIL "mutant still reported '$_mut'"
+fi
+
+# #7695 — the LUKS passphrase HALT arms. Invoked HERE rather than in the runner list above
+# because their definitions live below it; a call ahead of its definition is a `command not
+# found` under `set -uo pipefail`, which this suite would report as a failure rather than
+# silently skip.
+t_luks_passphrase_replace_halts
+t_luks_passphrase_no_ack_bypass
+t_luks_passphrase_forget_halts
+t_luks_passphrase_first_create_passes
+t_luks_rotations_baseline_zero
+t_luks_rotations_parse_failure_fails_closed
+t_undecidable_entries_counts_every_address
+t_undecidable_halt_wired_and_upstream
+t_luks_halt_message_names_the_counted_verbs
+t_luks_counter_undecidable_actions_fails_closed
+t_apply_job_luks_halt_job_scoped
+t_workspaces_passphrase_replace_halts
+t_workspaces_passphrase_no_ack_bypass
+t_workspaces_passphrase_forget_halts
+t_workspaces_passphrase_first_create_passes
+t_workspaces_passphrase_every_address_counted
+t_workspaces_passphrase_removal_mutants_caught
+t_apply_job_luks_halt_names_workspaces
+t_workspaces_passphrase_neighbours_not_counted
+t_workspaces_passphrase_widening_mutant_caught
+t_workspaces_passphrase_indexed_forms_counted
+t_workspaces_passphrase_indexed_fixture_halts
+t_workspaces_passphrase_normalization_mutant_caught
+t_apply_job_luks_halt_executes
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -995,11 +1954,19 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
-if [[ "$_ran" -lt 46 ]]; then
+# Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
+# + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
+# + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
+# delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64, T64b-g: 4 gates + e + 4 removal mutants + g) = 99, + 6 review-round arms (T64h-m: neighbours, widening mutant,
+# indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 104 assertions ran, floor is 105". The floor sits at the
+# current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
+# silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
+if [[ "$_ran" -lt 105 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 46. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 105. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 46)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 105)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

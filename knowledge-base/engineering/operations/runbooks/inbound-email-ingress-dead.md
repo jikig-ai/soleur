@@ -85,18 +85,22 @@ Verify lower layers before any application-layer conclusion
 an artifact.
 
 - **L7 tunnel + secret (H3/H4) — no SSH:**
+
   ```bash
   curl -sS -o /dev/null -w "HTTP=%{http_code} server=%header{server}\n" \
     -X POST https://app.soleur.ai/api/webhooks/resend-inbound
   ```
+
   Expect **401** (route's own svix-header guard) with `server=cloudflare`.
   - 401 (not 500) ⟹ tunnel + route reachable AND `RESEND_INBOUND_WEBHOOK_SECRET`
     is set (an unset secret returns 500 at Step 1, `route.ts:100`).
   - tunnel 502/404 ⟹ H3 (tunnel/cert) — check `apps/web-platform/infra/tunnel.tf`.
 - **L3 ingress MX (H2a) — no SSH:**
+
   ```bash
   dig +short MX inbound.soleur.ai   # expect: 10 inbound-smtp.eu-west-1.amazonaws.com.
   ```
+
   Drift ⟹ compare against `apps/web-platform/infra/dns.tf`. Resend
   receiving + the `email.received` webhook being enabled is **proven** by any
   live svix POST landing in `processed_resend_events` — a webhook delivery
@@ -122,12 +126,14 @@ an artifact.
   re-registers. If `probe_tokens` stops gaining rows → the cron scheduler /
   8288 listener is down, not ingress.
 - **Sentry monitor history (no SSH, Crons-scoped token):**
+
   ```bash
   T=$(doppler secrets get SENTRY_API_TOKEN -p soleur -c prd --plain)
   curl -sS -H "Authorization: Bearer $T" \
     "https://sentry.io/api/0/organizations/jikigai-eu/monitors/cron-email-ingress-probe/checkins/?per_page=20" \
     | python3 -c "import sys,json;[print(c['dateCreated'],c['status']) for c in json.load(sys.stdin)]"
   ```
+
   `status=error` (fired, asserted, row absent → downstream of send) vs
   `status=missed` (scheduler never fired → Inngest desync).
 

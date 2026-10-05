@@ -11,13 +11,27 @@
 # floor should be. The name lines ARE the count; derive it with the `grep` in the CI-check note
 # below rather than restating it here.
 #
-# THIS FILE REPORTS; IT GATES NOTHING. The token-drift coverage ladder compares the number of
-# configs the credential actually READ against `DOPPLER_CONFIGS_FLOOR`, a literal declared in the
-# token-drift step's own `env:` in `.github/workflows/scheduled-terraform-drift.yml`. This
-# inventory only supplies `coverage_ratio`, the `configs_unread` list and `inventory_age_days`.
-# A short, long or stale inventory changes the printed ratio and nothing else: no arm starts or
-# stops firing, no issue opens or closes. Anything else would let a shrinking list lower its own
-# alarm threshold.
+# THIS FILE GATES NO VERDICT THRESHOLD — BUT SINCE #7234 IT DOES DETERMINE REACH.
+#
+# It has two jobs now, and conflating them is the mistake to avoid:
+#
+#   1. REPORTING (unchanged). The coverage ladder compares the number of configs the credential
+#      actually READ against `DOPPLER_CONFIGS_FLOOR`, a literal declared in the token-drift
+#      step's own `env:` in `.github/workflows/scheduled-terraform-drift.yml`. This inventory
+#      supplies only `coverage_ratio`, the `configs_unread` list and `inventory_age_days`. A
+#      short, long or stale inventory changes the printed ratio and nothing else: no arm starts
+#      or stops firing on account of it. Anything else would let a shrinking list lower its own
+#      alarm threshold.
+#   2. MINTING (new). `apps/web-platform/infra/token-drift-read-tokens.tf` reads this file with
+#      `file()` and derives `local.token_drift_configs` from it, so the name lines below ARE the
+#      `for_each` list for `doppler_service_token.token_drift` — one read token per line. The
+#      scan no longer enumerates the project (no credential here can), so this list is also the
+#      only thing that decides which configs get covered at all.
+#
+# The threshold and the reach are therefore DIFFERENT numbers that must stay equal, and the
+# ratchet below is what keeps a shrink visible. An earlier version of this header said "THIS
+# FILE REPORTS; IT GATES NOTHING" — true when written, false since #7234, and the sentence a
+# reader would have trusted while deleting a line.
 #
 # The file is EXPECTED to drift: `git-data-luks.tf` declares a `prd_git_data` config that will
 # exist after git-data birth, and rehearsal dispatches create ephemeral
@@ -41,7 +55,7 @@
 # thing now, and the suite additionally asserts the raw and deduped counts AGREE, so a duplicate
 # line fails loudly instead of shifting the pin.
 #
-# ── RAISING THE FLOOR: THREE `13`s MOVE TOGETHER, AND NONE IS DERIVED FROM ANOTHER ──────────
+# ── RAISING THE FLOOR: THREE `13`s MOVE TOGETHER (NONE DERIVED FROM ANOTHER), PLUS A SET RATCHET ──
 # Regenerating this file is only ONE of the edits. When the project legitimately grows (git-data
 # birth adding `prd_git_data` is the known case), raise ALL of these in the SAME PR:
 #
@@ -54,13 +68,54 @@
 #   (and `RUNG2_CONFIGS_FLOOR: 13` in the same workflow's rung2-rehearsal-orphan-sweep job,
 #    which declares the same demand for the scratch-config half of that sweep)
 #
-# WHY THE RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and only
-# `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back to
-# 13 configs, lower the declared floor to 13 to match, regenerate this file to 13 names — and
-# pass F1, F2, F3 and the run-time assertion with NO test edited. The ratchet is back at its old
-# notch and the diff shows nothing unusual. The pinned `13`s are the only thing that makes a
-# REDUCTION visible, so raising them is a deliberate edit and never an automated one. Never
-# lower them. See ADR-164, "Known limitations".
+#   4. `plugins/soleur/test/token-drift-workflow-causes.test.sh` — `INVENTORY_REMOVALS_ACK`
+#      (the F4b SET ratchet, and the layer that actually fires above 13)
+#
+# WHY #4 IS A SET AND THE OTHER THREE ARE COUNTS. Since #7234 this list is the `for_each` key
+# set, so the scan's REACH is the set of names, not its cardinality — and the three literals
+# above bound only a COUNT, from BELOW. They cannot see a RENAME at all: swap one name for
+# another and the count never moves, so F2b's equality holds, F3 holds, the run-time `>= 13`
+# holds, and the scan reports a clean 13/13 while one config goes permanently unread and a
+# token is minted for a config that does not exist. They also cannot see a 14→13 round trip,
+# because F3 pins `floor == inventory count` and `FLOOR_HEADROOM=3` admits 14-16.
+#
+# F4b closes all three (rename, shrink, round trip) by asserting this file's name set is a
+# SUPERSET of the same file's at the merge base. Retiring a config for real means naming it in
+# `INVENTORY_REMOVALS_ACK` — a visible edit to a test whose only purpose is to stop that edit.
+#
+# THE DESTROY GUARD IS A BACKSTOP, NOT THE GATE — the sentence here used to say it was the
+# only layer above 13, and to lean on it. Removing a name DESTROYS that config's read token,
+# and `destroy-guard-filter-web-platform.jq` does count planned deletes and HALT without
+# `[ack-destroy]` on its own line in the MERGE COMMIT MESSAGE (this repo squashes from branch
+# commit messages, so a PR-body-only ack never reaches it). But that count sits INSIDE the
+# `[ack-destroy]`-bypassable `destroy_count` sum — the same file's own comments record why
+# `host_creates` and `reboot_updates` were deliberately placed OUTSIDE it — so a PR carrying
+# that ack for an unrelated reason waves the token deletes through with it. #7234's own merge
+# commit is exactly such a PR. The guard also has no `for_each` instance-delete case among its
+# 40 tfplan fixtures. Treat it as defence in depth behind F4b, never as the thing that catches
+# a shrink.
+#
+# ⚠️ ADDING `prd_git_data` NEEDS A `depends_on`, AND NOTHING ELSE WILL TELL YOU. `config =
+# each.key` is a STRING, so Terraform builds NO dependency edge from the token to the config.
+# Every name in this file today belongs to a config that pre-exists outside Terraform — but
+# `git-data-luks.tf` declares `doppler_config.git_data_prd`, and ADR-149 says `prd_git_data`
+# appears at git-data birth. The PR that adds that name here MUST also add
+# `depends_on = [doppler_config.git_data_prd]` to `doppler_service_token.token_drift`, or the
+# token create can be ordered before the config exists and the apply fails on a race that reads
+# as flake.
+#
+# WHY THE COUNT RATCHET DECAYS IF YOU SKIP #2 AND #3. Suppose the floor rightly rises to 14 and
+# only `DOPPLER_CONFIGS_FLOOR` and this file are edited. A LATER PR can then narrow the grant back
+# to 13 configs, lower the declared floor to 13 to match, regenerate this file to 13 names — and
+# pass F1, F2, F3 and the run-time assertion with NO test edited. The COUNT ratchet is back at its
+# old notch and the diff shows nothing unusual. The pinned `13`s are what make a reduction in the
+# COUNT visible, so raising them is a deliberate edit and never an automated one. Never lower them.
+#
+# That PR still reds, on #4: dropping a name makes this file's name set no longer a superset of
+# origin/main's, and F4b names the config it dropped. This paragraph used to end "the pinned `13`s
+# are the ONLY thing that makes a REDUCTION visible" — true when written, false since #7234's F4b,
+# and the sentence that made the round trip look unpreventable rather than merely unprevented.
+# See ADR-164, "Known limitations" (amended), and ADR-168.
 ci
 cli
 cli_ops

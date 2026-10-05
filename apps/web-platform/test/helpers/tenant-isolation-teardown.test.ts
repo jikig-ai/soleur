@@ -97,8 +97,8 @@ describe("tearDownTenantUser fatality classes", () => {
       id: "user-1",
       email: SYNTHETIC_EMAIL,
     });
-    // 21 anonymise RPCs run, then exactly one deleteUser.
-    expect(rpc.mock.calls.length).toBe(21);
+    // 22 anonymise RPCs run, then exactly one deleteUser.
+    expect(rpc.mock.calls.length).toBe(22);
     expect(deleteUser).toHaveBeenCalledOnce();
   });
 

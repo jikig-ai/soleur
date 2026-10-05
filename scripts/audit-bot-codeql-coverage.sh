@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # Audit CodeQL coverage on bot PRs (R15 follow-up D2, #3545).
 #
-# Empirically verifies that the `CodeQL` required status check on the
-# `CI Required` ruleset (#14145388) is being satisfied on bot-authored PRs.
-# CodeQL is pinned to integration_id 57789 (github-advanced-security app);
-# default setup runs on every PR and concludes `neutral` when no analyzable
-# changes are in scope. Per GitHub Docs, `neutral` satisfies required checks.
+# Empirically verifies that CodeQL (integration_id 57789, github-advanced-security
+# app) reports on bot-authored PRs: default setup runs on every PR and concludes
+# `neutral` when no analyzable changes are in scope.
+#
+# STATUS (#9454): CodeQL is ADVISORY. It is NO LONGER a required status check on
+# the `CI Required` ruleset (#14145388): CodeQL cannot report on `merge_group` in
+# any setup mode (github/codeql-action#1537), so a merge queue and a blocking
+# required CodeQL check are mutually exclusive, and the check was removed in the
+# same apply that enabled the queue. This audit therefore no longer protects a
+# merge gate; it remains a coverage signal for the advisory pull_request scan
+# (a bot PR whose CodeQL never ran means the scan is blind there, and the
+# post-merge alert gate, codeql-main-alert-gate.yml, is then the only catch).
+# The historical rationale (a `neutral` conclusion satisfied the old required
+# check per GitHub Docs) is kept only to explain the exit-code semantics below.
 # This audit confirms that behavior across the live bot-workflow inventory.
 #
 # Exit codes:
@@ -82,7 +91,7 @@ enumerate_workflows() {
   local inline=""
   for f in .github/workflows/scheduled-*.yml; do
     [[ -f "$f" ]] || continue
-    [[ "$f" == *"skill-security-scan-pr-trailer"* ]] && continue
+    [[ "$f" == *"pr-quality-guards"* ]] && continue
     if printf '%s\n' "$composite" | grep -qFx "$f"; then continue; fi
     if grep -qE 'check-runs' "$f" && grep -qE '(name=test|"name":[[:space:]]*"test")' "$f"; then
       inline+="$f"$'\n'
@@ -145,8 +154,10 @@ fi
 # Sanity floor (deferred until after enumeration): require >= 1 workflow.
 # Floor lowered from 6 → 1 after TR9 Phase 2 (#3948) migrated 22 scheduled
 # workflows to Inngest cron functions. The remaining GHA bot-pr consumer is
-# rule-metrics-aggregate.yml. The floor exists to catch accidental deletion
-# of the last remaining bot-pr workflow.
+# weakness-miner.yml (it was rule-metrics-aggregate.yml until #8377 deleted that
+# workflow along with the committed rule-metrics.json it produced). The floor exists
+# to catch accidental deletion of the last remaining bot-pr workflow -- and it is now
+# EXACTLY met at 1, so that deletion would trip it immediately, which is the point.
 WORKFLOWS=$(enumerate_workflows)
 COUNT=$(printf '%s\n' "$WORKFLOWS" | grep -v '^$' | wc -l)
 if [[ -z "$WORKFLOWS_OVERRIDE" && "$COUNT" -lt 1 ]]; then
@@ -171,8 +182,8 @@ if [[ -n "${AUDIT_FIXED_WORKFLOWS:-}" ]]; then
 else
   # Fetch a wide page of recent bot PRs once. Bot branches follow
   # `ci/<short-name>-<date>` convention but the short-name slug is NOT
-  # the workflow filename stem (e.g., `rule-metrics-aggregate.yml`
-  # creates `ci/rule-metrics-*` branches). Rather than encode the mapping
+  # the workflow filename stem (e.g., `weakness-miner.yml` creates
+  # `ci/weakness-digest-*` branches). Rather than encode the mapping
   # (which would drift), sample the most-recent LIMIT*N bot PRs flat and
   # attribute each by best-effort stem prefix match for reporting.
   # GitHub GraphQL cost: requesting `commits[]` for N PRs blows the
@@ -275,7 +286,7 @@ TOTAL=$((PASSING + DRIFT + IN_PROGRESS))
 # this jq at the ceiling and the audit dies with `Argument list too long`; dropping the
 # flag makes `gh pr list` unbounded and the failure certain on any mature repo. If the
 # sample is ever widened past a few hundred, spool $DRIFT_ENTRIES to a file and bind
-# `--rawfile … | fromjson` first (see scripts/domain-model-drift.sh).
+# `--rawfile … | fromjson` first (see plugins/soleur/scripts/domain-model-drift.sh).
 #
 # The comment lives HERE, above the invocation, and not inline next to the flag: every
 # line of that jq call ends in a backslash continuation, and a `#` comment inside a

@@ -24,7 +24,7 @@
 # foot-gun). Deliberately-nonzero commands are wrapped in `$(… || true)` so `set -e` never aborts.
 #
 # Run: bash apps/web-platform/infra/registry-luks.test.sh
-# Registered as a step in .github/workflows/infra-validation.yml (infra .test.sh are NOT globbed).
+# Presence under apps/web-platform/infra/ IS registration — derived and run by run-registered-suites.sh (#8736).
 
 set -uo pipefail
 
@@ -152,8 +152,8 @@ p_isolation_card4() {
 # has neither the CLI nor the token).
 p_p1b_order() {
   local f="$1" env_ln luks_ln
-  env_ln="$(grep -nF '> /etc/default/registry-doppler' "$f" | grep -F 'printf' | head -1 | cut -d: -f1)"
-  luks_ln="$(grep -nE 'cryptsetup[[:space:]]+luksFormat' "$f" | head -1 | cut -d: -f1)"
+  env_ln="$(grep -nF '> /etc/default/registry-doppler' "$f" | grep -F 'printf' | sed -n '1p' | cut -d: -f1)"
+  luks_ln="$(grep -nE 'cryptsetup[[:space:]]+luksFormat' "$f" | sed -n '1p' | cut -d: -f1)"
   if [ -n "$env_ln" ] && [ -n "$luks_ln" ] && [ "$env_ln" -lt "$luks_ln" ]; then echo 1; else echo 0; fi
 }
 
@@ -178,8 +178,8 @@ p_resize_mapper() {
 # (line order), so fail-loud => zot never starts => liveness absence.
 p_zot_mount_gate() {
   local f="$1" gate_ln run_ln
-  gate_ln="$(grep -nE 'findmnt -no SOURCE /var/lib/zot \| grep -qx /dev/mapper/registry' "$f" | head -1 | cut -d: -f1)"
-  run_ln="$(grep -nE 'docker run -d --name zot' "$f" | head -1 | cut -d: -f1)"
+  gate_ln="$(grep -nE 'findmnt -no SOURCE /var/lib/zot \| grep -qx /dev/mapper/registry' "$f" | sed -n '1p' | cut -d: -f1)"
+  run_ln="$(grep -nE 'docker run -d --name zot' "$f" | sed -n '1p' | cut -d: -f1)"
   if [ -n "$gate_ln" ] && [ -n "$run_ln" ] && [ "$gate_ln" -lt "$run_ln" ]; then echo 1; else echo 0; fi
 }
 

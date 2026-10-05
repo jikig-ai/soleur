@@ -2,6 +2,7 @@
 title: Decoupled Work/Ship for Review Gates
 status: active
 date: 2026-03-27
+amended_by: [ADR-176]
 ---
 
 # ADR-015: Decoupled Work/Ship for Review Gates

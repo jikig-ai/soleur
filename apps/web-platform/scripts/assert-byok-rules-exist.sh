@@ -2,7 +2,7 @@
 # Issue-alert detector liveness assertion (#4656 item 5; extended #4849).
 #
 # Asserts the expected `sentry_issue_alert` rules exist in Sentry by name via a
-# READ-ONLY project rules-list GET. A silent mis-wire — a dropped `-target` in
+# READ-ONLY org workflows-list GET. A silent mis-wire — a dropped `-target` in
 # the apply workflow, a deleted/muted rule, or a name drift — is otherwise
 # invisible until a real incident fails to page. For `byok-art-33-breach` that
 # means the GDPR Art. 33(1) 72-hour notification clock never starts; for
@@ -30,18 +30,71 @@
 # failure mode this gate catches is ABSENCE — a duplicate name still passes,
 # which is the correct (fail-open-to-present) direction for an existence check.
 #
-# Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT, SENTRY_API_HOST.
+# The paragraph above is CORRECT for these four rules, and was briefly
+# "corrected" into a falsehood on 2026-08-19 (#7590) before being restored.
+# Recording why, because the mistake is one grep away from being made again:
+# `issue-alerts.tf` DID contain (until #7650/#8451 replaced those blocks)
+# `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
+# — but on the `auth-*` resources, which are a DIFFERENT set of rules, then managed
+# by `configure-sentry-alerts.sh` (#4781). The four in
+# EXPECTED_RULES below carry `ignore_changes = [environment]` only, so Terraform
+# genuinely owns their filters. (Since #7650 Phase 2 all four are `sentry_alert`
+# resources, a type that has no `conditions_v2`/`filters_v2`/`actions_v2`
+# attributes at all -- so "they do not declare the v2 attributes empty" is now
+# true vacuously rather than by choice. The ownership conclusion is unchanged.)
+# A file-level grep for `ignore_changes` cannot tell those two sets apart;
+# resolve the attribute per RESOURCE BLOCK before believing either claim.
+#
+# NARROWED FOUR -> ONE (#7650 Phase 2, 2026-09-04). That `auth-*` set was four
+# rules; it is now ONE. auth-signout-burst, auth-exchange-code-burst and
+# auth-callback-no-code-burst were adopted as `sentry_alert` with their real
+# definitions and now carry `ignore_changes = [environment]` only, so Terraform
+# owns their filters exactly as it owns the EXPECTED_RULES four. Only
+# `auth-per-user-loop` is still outside that ownership: since #8451 it is a
+# `sentry_alert` frozen under `ignore_changes = all` (its trigger type is
+# unmodelable at the pinned provider, and any write would zero the threshold),
+# and `configure-sentry-alerts.sh` can no longer write it (its `rules/` endpoint
+# returns 410; repair is a PUT from the committed capture). The
+# distinction above is therefore NARROWER, not gone — the two sets are still
+# disjoint and the per-RESOURCE-BLOCK instruction still stands.
+#
+# SCOPE — org-wide since #7590, previously project-scoped. The replacement
+# endpoint (below) is org-scoped and its payload carries no project binding, so
+# a same-named rule in a different project now satisfies this assertion. That
+# is the same scope dissolution ADR-031 records for the audit script; it is
+# accepted here for the same reason (this org has one project) and is stated
+# rather than left for the next reader to discover from the URL.
+#
+# Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_API_HOST.
 # Test injection (assert-byok-rules-exist.test.sh ONLY):
 #   SENTRY_FIXTURE_RULES — file path; served instead of the live GET.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 # Fail-loud on a cleared/misconfigured org secret (no silent default) — a wrong
-# org would query the wrong project and produce a false liveness verdict. The
+# org would query the wrong org and produce a false liveness verdict. The
 # workflow always passes `secrets.SENTRY_ORG`; this guards the empty-secret case.
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
-: "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
+# SENTRY_PROJECT is deliberately NOT required since #7590: the org-scoped
+# replacement endpoint has no project segment, so the variable has no consumer
+# in this script. A `:?` guard on an unused variable is a contract the next
+# reader has to disprove.
 
 # The issue-alert rules this control depends on. Names are the `name` attribute
 # of the `sentry_issue_alert` resources in
@@ -49,39 +102,113 @@ set -euo pipefail
 EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure" "workspace-sync-health")
 
 fetch_rules() {
-  if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_RULES:+x}" ]]; then
     cat "$SENTRY_FIXTURE_RULES"
     return
   fi
-  # Project issue-alert rules list — NOT the org `/monitors/` (Crons) endpoint,
-  # which excludes issue alerts. `--max-time` bounds the call; `-fsS` fails on
-  # 4xx/5xx so an auth/region error surfaces as a non-zero exit, not a parsed
-  # error body.
-  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai.sentry.io)}"
-  curl -fsS --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${SENTRY_API_HOST}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/"
+  # Org issue-alert list — NOT the org `/monitors/` (Crons) endpoint, which
+  # excludes issue alerts. `--max-time` bounds the call; `-fsS` fails on 4xx/5xx
+  # so an auth/region error surfaces as a non-zero exit, not a parsed error body.
+  #
+  # Migrated 2026-08-19 (#7590) off `projects/{org}/{proj}/rules/`, which Sentry
+  # deprecated on 2026-05-14 and now serves under scheduled BROWNOUTS — 410 for
+  # a window on a recurring schedule, 200 the rest of the time. Because this
+  # step runs POST-apply under `set -euo pipefail` with `-fsS`, a brownout made
+  # `apply-sentry-infra.yml` red AFTER `terraform apply` had already succeeded,
+  # on a vendor's calendar rather than on anything about the apply. Measured
+  # inside a live brownout on 2026-08-19: the old URL returned 410 with
+  # `x-sentry-replacement-endpoint: /api/0/organizations/jikigai-eu/workflows/`
+  # while the new one returned 200 with no deprecation headers and all four
+  # EXPECTED_RULES present, one match each.
+  #
+  # `-fsS` is kept deliberately. The replacement carries no deprecation header,
+  # so there is no brownout to absorb, and `-S` already prints curl's own
+  # `(22) The requested URL returned error: <status>` on a genuine failure.
+  : "${SENTRY_API_HOST:?SENTRY_API_HOST must be set (org-subdomain, e.g. jikigai-eu.sentry.io)}"
+  # TRANSPORT CONFINEMENT (#8451 touched this file, so it pays the
+  # lint-shell-trace-credential-refusal debt; same shape and literals as
+  # scripts/sentry-alert-live-fidelity.sh). Pins sit in the live branch only:
+  # fixture rows never reach them. Exact equality against LITERALS — a pin
+  # reading its expected value from the environment pins nothing (#7997).
+  unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+        HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+        OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+  case "$SENTRY_API_HOST" in
+    "jikigai-eu.sentry.io") ;;
+    *) printf 'ERROR: refusing destination host %s (pinned: jikigai-eu.sentry.io)\n' "$(printf '%s' "${SENTRY_API_HOST//[[:cntrl:]]/}" | cut -b1-120)" >&2; exit 2 ;;
+  esac
+  case "$SENTRY_ORG" in
+    "jikigai-eu") ;;
+    *) printf 'ERROR: refusing org %s (pinned: jikigai-eu)\n' "$(printf '%s' "${SENTRY_ORG//[[:cntrl:]]/}" | cut -b1-120)" >&2; exit 2 ;;
+  esac
+  # `--disable` FIRST, then `--noproxy '*'`; the bearer arrives on stdin via
+  # `--header @-`, so the token is never in argv.
+  printf 'Authorization: Bearer %s\n' "$SENTRY_AUTH_TOKEN" |
+    curl --disable --noproxy '*' --proto '=https' -g -fsS --max-time 10 \
+      --header @- \
+      "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100"
 }
 
 rules_json="$(fetch_rules)"
 
 # Fail closed on a non-array payload (Sentry error envelopes are objects).
 if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$rules_json"; then
-  echo "ERROR: Sentry rules response is not a JSON array — auth/region/endpoint failure. Cannot assert BYOK rule liveness." >&2
+  echo "ERROR: Sentry workflows response is not a JSON array. NOTE: this branch does NOT catch auth/region/HTTP errors — \`curl -fsS\` exits 22 on any >=400 and \`set -e\` aborts at the assignment above, before this check. What reaches here is a 200 carrying a non-array body: schema drift, an HTML interstitial, or a proxy injection. Cannot assert BYOK rule liveness." >&2
   printf '%s\n' "$rules_json" | head -c 500 >&2
   exit 1
 fi
 
+# PAGINATION CEILING. The fetch asks for one page of 100 and does not follow
+# cursors. The org returns 30 workflows today (measured 2026-08-19), but it
+# grew 4 -> 29 issue-alert resources in 76 days, so the ceiling is reachable.
+# If it is ever hit, a rule on page 2 is indistinguishable from an absent one,
+# and the absence branch below would tell the operator a GDPR control is dark
+# when it is live. Fail with THIS message instead, naming the real cause.
+#
+# The sibling `sentry_fetch_collection` in sentry-monitors-audit.sh follows
+# cursors against this same endpoint; porting it here is the real fix and is
+# deliberately not done in this PR — this guard exists so the day the ceiling
+# is reached produces an accurate diagnosis rather than a false alarm.
+if (( $(jq 'length' <<<"$rules_json") >= 100 )); then
+  echo "ERROR: the workflows payload returned >= 100 rows, which is this fetch's unpaginated ceiling — a rule beyond page 1 would read as ABSENT and produce a false 'control is dark' alarm. Do not trust a liveness verdict from this run. Fix: follow the Link rel=\"next\" cursor here, mirroring sentry_fetch_collection in sentry-monitors-audit.sh. Refs #7590." >&2
+  exit 1
+fi
+
+# LIVENESS, not mere existence. Matching on `.name` alone was a fail-open: a
+# rule disabled in the Sentry UI is still present in the payload, so all four
+# controls could be muted and this gate would report green. Measured
+# 2026-08-19 (#7590): a fully-muted fixture exited 0 with "[ok] ... all
+# expected rules present". The header above has claimed since #4656 that this
+# gate catches a "deleted/muted rule"; until now it caught only deleted.
+#
+# The enabled test is written as "no row with this name has `.enabled == true`"
+# rather than "some row has `.enabled == false`", so a payload that stops
+# carrying the field fails CLOSED (reported as muted) instead of silently
+# reverting to existence-by-name.
+#
+# ABSENCE IS REPORTED FIRST. A run can produce both lists, and absence is the
+# stronger finding: it is the one whose remediation differs (an apply can
+# recreate a deleted rule; only live state can re-enable a muted one). Ordering
+# the muted branch first made T2/T3/T7/T8 stop naming the absent rule.
 missing=()
+disabled=()
 for rule in "${EXPECTED_RULES[@]}"; do
   if ! jq -e --arg n "$rule" 'any(.[]; .name == $n)' >/dev/null 2>&1 <<<"$rules_json"; then
     missing+=("$rule")
+  elif ! jq -e --arg n "$rule" 'any(.[]; .name == $n and .enabled == true)' >/dev/null 2>&1 <<<"$rules_json"; then
+    disabled+=("$rule")
   fi
 done
 
 if (( ${#missing[@]} > 0 )); then
   echo "ERROR: issue-alert liveness assertion FAILED — rule(s) absent in Sentry: ${missing[*]}" >&2
-  echo "A silent mis-wire (dropped -target, deleted/muted rule, or name drift) leaves the named control un-paged: byok-art-33-breach → the GDPR Art. 33(1) 72h clock never starts; chat-message-save-failure → message-save outage un-paged; workspace-sync-health → diverged/stale workspace KB clone (and probe self-failure) un-paged. Refs #4656 item 5, #4849, #4882." >&2
+  echo "A silent mis-wire (dropped -target, deleted rule, or name drift) leaves the named control un-paged: byok-art-33-breach → the GDPR Art. 33(1) 72h clock never starts; chat-message-save-failure → message-save outage un-paged; workspace-sync-health → diverged/stale workspace KB clone (and probe self-failure) un-paged. Refs #4656 item 5, #4849, #4882." >&2
+  exit 1
+fi
+
+if (( ${#disabled[@]} > 0 )); then
+  echo "ERROR: issue-alert liveness assertion FAILED — rule(s) PRESENT BUT NOT ENABLED in Sentry: ${disabled[*]}" >&2
+  echo "The rule exists but is muted, so it pages nobody — same user-visible outcome as absence, different repair. An apply will NOT fix it: enablement is live state. Re-enable in the Sentry UI. Refs #7590." >&2
   exit 1
 fi
 

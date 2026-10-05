@@ -15,6 +15,15 @@ while IFS= read -r var; do
   unset "$var" 2>/dev/null || true
 done < <(env | grep -oP '^GIT_\w+' || true)
 
+# ...then re-pin config isolation. These must come AFTER the loop above: the
+# loop unsets every GIT_* var, so an override exported by the caller is wiped.
+# A host with `commit.gpgsign=true` (+ an ssh agent that declines) fails every
+# fixture `git commit` with "failed to write commit object"; `git clone` then
+# only warns "you appear to have cloned an empty repository", so the arms go red
+# for a missing fixture while reading as genuine SUT failures.
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+
 # Route session-state.sh's headless_or_stderr to stderr (not a per-PID log file)
 # so the SUT's heal warnings land in the captured logs we assert on. The log-file
 # branch fires only when CLAUDECODE is set AND stderr is non-TTY (this harness).

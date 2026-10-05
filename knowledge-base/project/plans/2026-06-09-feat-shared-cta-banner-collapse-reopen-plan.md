@@ -24,6 +24,13 @@ brand_survival_threshold: none
 4. **Up-chevron aligned to the repo's existing form.** Use `<polyline points="5 12 12 5 19 12" />` (+ optional stem `<line x1="12" y1="19" x2="12" y2="5" />`), the exact up-chevron already in `chat-input.tsx:691-694`, instead of an arbitrary lucide variant — visual + maintenance consistency.
 
 ### New Considerations Discovered
+> **Superseded 2026-08-20 (#1327):** the bullet below is no longer true. `apps/web-platform`
+> now carries an ESLint 9 flat config (`apps/web-platform/eslint.config.mjs`), `npm run lint`
+> is `eslint .` and runs non-interactively, and CI runs it in the `lint-webplat` job. The
+> finding count is pinned as a ratchet by `apps/web-platform/test/eslint-config.test.ts`.
+> Left in place rather than rewritten because this is a dated planning record; read the
+> original bullet as what was true on 2026-06-09.
+
 - **Lint is a non-functional gate for web-platform** (`knowledge-base/project/learnings/2026-06-05-web-platform-lint-gate-is-non-functional-tsc-vitest-are-authoritative.md`): `next lint` drops into an interactive prompt and CI does not run it. The authoritative gates are `tsc --noEmit` + `vitest run` — already what AC7/AC8 prescribe. Do NOT add a lint AC or treat a lint non-zero exit as a regression.
 - **`safeSession` is a sensitive-path file** (`apps/web-platform/lib/safe-session.ts` matches the preflight Check-6 / deepen Phase-4.6 `SENSITIVE_PATH_RE`). Confirmed at gate-check time that it is NOT in Files-to-Edit, so the `none` threshold needs no scope-out bullet. Re-confirms the "remove usage, keep the file" sharp edge — touching the file would also trip the sensitive-path gate.
 
@@ -174,7 +181,14 @@ Add a frame "Desktop — Collapsed (thin bar)" mirroring the existing "Desktop �
 ### Pre-merge (PR)
 
 - [x] **AC1 — Collapse shows a thin bar, not an empty/unmounted state.** After clicking `cta-banner-dismiss`, `screen.getByTestId("cta-banner-reopen")` is truthy and the "Built with"/"Soleur" label is present in the collapsed strip. Verified by `shared-cta-banner-close.test.tsx` case 2.
+<!-- lint-infra-ignore start -->
+<!-- AC2 is a browser UI criterion, not an infra step: "clicking the reopen button" plus
+     "no reload" co-occur as actor + reboot-shaped imperative, which is what the heuristic
+     matches on. It was pre-existing and unflagged until #1327 touched this file to add the
+     superseding note above, which pulled it into the --changed set. Scoped to the one line
+     rather than the section, and no prose is altered — this is a dated planning record. -->
 - [x] **AC2 — Reopen restores the full banner with the form, no reload.** After collapse, clicking the reopen button makes `screen.getByPlaceholderText(/you@company.com/i)` truthy again and removes `cta-banner-reopen`. Verified by case 4.
+<!-- lint-infra-ignore end -->
 - [x] **AC3 — Reload restores the full banner (no sessionStorage persistence).** Collapse writes nothing to sessionStorage: after collapse, `sessionStorage.getItem("soleur:shared:cta-dismissed") === null` and `sessionStorage.length === 0`. A fresh mount with the old key pre-seeded still renders expanded. Verified by cases 6 + 7. Source-level guard: `grep -c "safeSession\|STORAGE_KEY\|sessionStorage" apps/web-platform/components/shared/cta-banner.tsx` returns `0`.
 - [x] **AC4 — `prefers-reduced-motion` is honored.** Every `transition-*`/`duration-*` utility added in the component is paired with a `motion-reduce:` reset. Source-level guard: `grep -nE "transition-|duration-" apps/web-platform/components/shared/cta-banner.tsx` — for each match on an animated element, a `motion-reduce:transition-none` (and/or `motion-reduce:duration-0`) appears on the same element's `className`. (Manual review of the diff; no runtime assertion since happy-dom does not evaluate `@media`.)
 - [x] **AC5 — Collapsed bar is an accessible, keyboard-operable button with correct aria.** The reopen control is a `<button>` with `aria-label="Reopen Soleur signup banner"` and `aria-expanded="false"`; the expanded close control carries `aria-expanded="true"`. Verified by cases 3 + 5.

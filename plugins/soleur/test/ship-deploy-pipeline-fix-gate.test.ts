@@ -70,6 +70,10 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/10-vector-doppler-token.conf",
   "apps/web-platform/infra/10-inngest-heartbeat-doppler-token.conf",
   "apps/web-platform/infra/10-inngest-server-doppler-token.conf",
+  // #7286 — inngest-redis.service's drop-in. The unconditional-`doppler run` consumer the
+  // #7095 sweep missed; its absence from the credential re-delivery path is what crash-looped
+  // Redis for 16h and took the whole Inngest backbone down with it.
+  "apps/web-platform/infra/10-inngest-redis-doppler-token.conf",
 ];
 
 function buildTriggerRegex(files: string[]): RegExp {
@@ -322,6 +326,147 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
 
     expect(triggerBasenames).toEqual(fixtureBasenames);
   });
+
+  // #9151 — the web-2 sibling's trigger list is a CLOSED subset: every file() it
+  // hashes must be a FILE_MAP member it genuinely delivers (a stray file would be
+  // a trigger with no delivery channel) or its own host-key pin, which changes
+  // the connection it re-dials. Explicitly: push-infra-config.sh (web-1 channel
+  // only) and soleur-doppler-token.tmpl (the credential boundary) are forbidden.
+  test("deploy_pipeline_fix_web2 triggers ⊆ TRIGGER_FILES ∪ {web-2 pin}, minus web-1-only/credential entries", () => {
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "deploy_pipeline_fix_web2"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+
+    const blockMatch = resourceBlock.match(
+      /triggers_replace\s*=\s*sha256\(join\(\s*",\s*"\s*,\s*\[([\s\S]*?)\]\s*\)\s*\)/,
+    );
+    expect(blockMatch).not.toBeNull();
+    const inner = blockMatch![1];
+    const fileBasenames = Array.from(
+      inner.matchAll(/file\(\s*"\$\{path\.module\}\/([^"]+)"\s*\)/g),
+    ).map((m) => m[1]);
+    // Vacuity: the sibling hashes 20+ files; a broken extraction must not pass on [].
+    expect(fileBasenames.length).toBeGreaterThanOrEqual(20);
+
+    const allowed = new Set([
+      ...TRIGGER_FILES.map((p) => p.split("/").pop()!),
+      "web-2-ssh-host-key.pub",
+    ]);
+    const forbidden = new Set([
+      "push-infra-config.sh",
+      "soleur-doppler-token.tmpl",
+      "hooks.json.tmpl", // delivered via local.hooks_json render, not file()
+    ]);
+    for (const b of fileBasenames) {
+      expect(allowed.has(b)).toBe(true);
+      expect(forbidden.has(b)).toBe(false);
+    }
+    // The non-file triggers are the rendered hooks.json (never the .tmpl bytes),
+    // the host id (cattle re-delivery), the pin file, and a sentinel — and NO
+    // credential local.
+    expect(inner).toContain("local.hooks_json");
+    expect(inner).toContain('hcloud_server.web["web-2"].id');
+    expect(inner).not.toContain("webhook_doppler_token_env");
+    expect(inner).not.toContain("soleur-doppler-token");
+  });
+});
+
+// #7104 PR-A — FILE_MAP ⊆ TRIGGER_FILES.
+//
+// The infra-config gate's `DPF_REPLACED == false` arm rests on this containment. When
+// terraform_data.deploy_pipeline_fix is NOT replaced, no push fires and no frame is published,
+// so the gate adjudicates a frame of unbounded age. That is only safe because DPF was not
+// replaced PRECISELY BECAUSE none of its hashed triggers changed — which means no FILE_MAP file
+// changed either, so the per-file content match is guaranteed by construction.
+//
+// If a FILE_MAP dest ever ships from a repo file that is NOT a DPF trigger, that reasoning
+// breaks: the repo file could change while DPF stays un-replaced, the host would keep serving
+// stale content, and the gate would adjudicate it against a repo that has moved on. Measured at
+// implementation time as holding 20/20 (18 direct `file()` triggers + 2 rendered locals), so
+// this test pins a property that is true today rather than asserting an aspiration.
+//
+// Containment is by BASENAME, with the template indirection made explicit: a dest is either
+// delivered verbatim from a repo file of the same basename, or rendered from `<basename>.tmpl`
+// (hooks.json ← hooks.json.tmpl, /etc/default/soleur-doppler-token ← soleur-doppler-token.tmpl).
+describe("infra-config FILE_MAP is contained in TRIGGER_FILES (#7104)", () => {
+  const INFRA_CONFIG_APPLY = resolve(
+    REPO_ROOT,
+    "apps/web-platform/infra/infra-config-apply.sh",
+  );
+
+  // Parsed once so an empty/unparseable FILE_MAP is a loud failure rather than a
+  // vacuously-passing `test.each([])` — a zero-row table reports as a clean run.
+  let fileMapDests: string[];
+
+  beforeAll(() => {
+    expect(existsSync(INFRA_CONFIG_APPLY)).toBe(true);
+    const src = readFileSync(INFRA_CONFIG_APPLY, "utf8");
+    const block = src.match(/^FILE_MAP=\(\s*$([\s\S]*?)^\)\s*$/m);
+    if (!block) {
+      throw new Error(
+        `Could not locate a FILE_MAP=( ... ) block in ${INFRA_CONFIG_APPLY}. ` +
+          "The containment this suite pins cannot be evaluated, so it fails closed " +
+          "rather than reporting a clean run over zero rows.",
+      );
+    }
+    // Entries are "ENV_KEY_B64|/abs/dest/path|mode|owner:group"; comment lines are skipped.
+    fileMapDests = Array.from(
+      block[1].matchAll(/^\s*"[A-Z0-9_]+\|([^|]+)\|/gm),
+    ).map((m) => m[1]);
+  });
+
+  // Extracted so the negative control drives the SAME code path as the real assertion. A
+  // containment check whose fixture never places a dest on the uncovered side cannot report,
+  // and three mutations proved that concretely: a partial parse (`.slice(0, 1)`), a predicate
+  // hardwired to `false &&`, and a trigger set that `has()`-es everything all left this file at
+  // 112 pass / 0 fail.
+  function uncoveredIn(dests: string[]): string[] {
+    const triggerBasenames = new Set(
+      TRIGGER_FILES.map((p) => p.split("/").pop()!),
+    );
+    return dests.filter((dest) => {
+      const base = dest.split("/").pop()!;
+      return !triggerBasenames.has(base) && !triggerBasenames.has(`${base}.tmpl`);
+    });
+  }
+
+  test("FILE_MAP parses EVERY dest, not merely a non-empty prefix", () => {
+    // Cardinality, not `> 0`: a partial parse satisfies a non-empty check while making the
+    // containment hold over a subset. Counted against the block's own rows so it tracks
+    // FILE_MAP growth instead of pinning a literal that would rot.
+    const src = readFileSync(INFRA_CONFIG_APPLY, "utf8");
+    const block = src.match(/^FILE_MAP=\(\s*$([\s\S]*?)^\)\s*$/m)!;
+    const rows = (block[1].match(/^\s*"[A-Z0-9_]+\|/gm) ?? []).length;
+    expect(rows).toBeGreaterThan(0);
+    expect(fileMapDests.length).toBe(rows);
+  });
+
+  test("the containment predicate can actually REPORT an uncovered dest", () => {
+    // Known-negative control. Without it every assertion below is true of a predicate that
+    // structurally cannot report, which is indistinguishable from one that found nothing.
+    expect(uncoveredIn(["/usr/local/bin/definitely-not-a-dpf-trigger.sh"])).toEqual([
+      "/usr/local/bin/definitely-not-a-dpf-trigger.sh",
+    ]);
+    // ...and a known-positive, so the control is not merely "it returns its input".
+    expect(uncoveredIn(["/usr/local/bin/ci-deploy.sh"])).toEqual([]);
+  });
+
+  test("every FILE_MAP dest is covered by a DPF trigger (verbatim or via .tmpl)", () => {
+    const uncovered = uncoveredIn(fileMapDests);
+    // Named rather than counted: a bare length check tells the next reader that
+    // something drifted but not what, and this failure is load-bearing enough to
+    // deserve the dest paths in the message.
+    expect(uncovered).toEqual([]);
+  });
 });
 
 describe("postmerge runbook updates (#3034)", () => {
@@ -399,6 +544,9 @@ describe("apply-deploy-pipeline-fix.yml on.push.paths in sync with TRIGGER_FILES
       // apparmor apply-parity describe below pins the co-target; this line pins
       // the paths reachability.
       "apps/web-platform/infra/apparmor-soleur-bwrap.profile",
+      // #9151 — web-2's host-key pin feeds local.web_2_ssh_host_key + the web-2
+      // sibling's triggers_replace; a re-capture must re-fire the apply.
+      "apps/web-platform/infra/web-2-ssh-host-key.pub",
     ]);
     expect(new Set(paths)).toEqual(expected);
   });
@@ -467,18 +615,10 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
     // Bound to the `terraform apply` invocation (the durable apply, not the plan
     // step) so a future plan-only -target= change cannot satisfy this vacuously.
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // The multi-line `\`-continued apply command ends at the first non-continued
-    // line; bound generously to the next 800 chars (the command spans a handful
-    // of -target= lines plus trailing flags — the two needed -target=s are adjacent).
-    const applyBlock = yml.slice(applyIdx, applyIdx + 800);
-    expect(applyBlock).toContain(
-      "-target=terraform_data.deploy_pipeline_fix",
-    );
-    expect(applyBlock).toContain(
-      "-target=terraform_data.infra_config_handler_bootstrap",
-    );
+    assertPlannedAndAppliedTogether(yml, [
+      "terraform_data.deploy_pipeline_fix",
+      "terraform_data.infra_config_handler_bootstrap",
+    ]);
   });
 
   // Test 3 — cross-workflow blast-radius guard (deepen P2-2). The OTHER infra
@@ -526,6 +666,42 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
   });
 });
 
+// #7104 — the apply no longer carries its own `-target=` list: it applies the SAVED PLAN
+// (`terraform apply ... tfplan`) that the plan step produced. The co-targeting invariant these
+// three tests exist to protect is therefore now guaranteed BY CONSTRUCTION — the applied target
+// set cannot differ from the planned one, because they are the same artifact — but the old
+// assertion (string-match a `terraform apply -target=` command line) no longer has anything to
+// match and would pass vacuously if left as `indexOf(...) >= 0` on a missing needle.
+//
+// This helper re-expresses it so BOTH mutation paths still red:
+//   * dropping a resource from the PLAN's -target= list  -> the target assertion fails
+//   * making the apply re-plan with its own targets      -> the saved-plan assertion fails
+// which is strictly stronger than comparing two command lines that could always drift apart.
+function assertPlannedAndAppliedTogether(yml: string, targets: string[]): void {
+  const planIdx = yml.indexOf("terraform plan -target=");
+  const applyIdx = yml.indexOf("terraform apply ");
+  expect(planIdx).toBeGreaterThanOrEqual(0);
+  expect(applyIdx).toBeGreaterThan(planIdx);
+  // Bound PRECISELY at the step boundary, not by a fixed char window (#5875's finding:
+  // a fixed window spills across the plan -> apply boundary, and the last -target= in a
+  // list could then satisfy the wrong assertion). The plan block ends where the apply
+  // invocation begins; the apply block ends at the next step.
+  const planBlock = yml.slice(planIdx, applyIdx);
+  for (const t of targets) {
+    expect(planBlock).toContain(`-target=${t}`);
+  }
+  // The plan must be SAVED, and the apply must consume that saved plan rather than re-planning.
+  expect(planBlock).toContain("-out=tfplan");
+  const applyRest = yml.slice(applyIdx);
+  const applyStepEnd = applyRest.indexOf("\n      - name:");
+  const applyBlock = applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
+  expect(applyBlock).toContain("tfplan");
+  // A re-planning apply would carry its own -target=/-var, which is exactly the divergence
+  // (and the TOCTOU) the saved-plan design removes.
+  expect(applyBlock).not.toContain("-target=");
+  expect(applyBlock).not.toContain("-var=");
+}
+
 // #5873 — the seccomp coupling triangle. The container seccomp profile
 // (seccomp-bwrap.json) is delivered by terraform_data.docker_seccomp_config,
 // a DIFFERENT resource from deploy_pipeline_fix. For a profile-only edit to
@@ -537,17 +713,7 @@ describe("seccomp profile auto-apply coupling (#5873)", () => {
   test("apply-deploy-pipeline-fix.yml co-targets docker_seccomp_config in BOTH plan and apply", () => {
     expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
-    const planIdx = yml.indexOf("terraform plan -target=");
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // Bound each invocation to its own -target= run of lines (generous 800 chars).
-    expect(yml.slice(planIdx, planIdx + 800)).toContain(
-      "-target=terraform_data.docker_seccomp_config",
-    );
-    expect(yml.slice(applyIdx, applyIdx + 800)).toContain(
-      "-target=terraform_data.docker_seccomp_config",
-    );
+    assertPlannedAndAppliedTogether(yml, ["terraform_data.docker_seccomp_config"]);
   });
 
   test("docker_seccomp_config triggers_replace hashes seccomp-bwrap.json (edit re-fires the apply)", () => {
@@ -584,28 +750,9 @@ describe("apparmor profile auto-apply parity (#5875)", () => {
   test("apply-deploy-pipeline-fix.yml co-targets apparmor_bwrap_profile in BOTH plan and apply", () => {
     expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
-    const planIdx = yml.indexOf("terraform plan -target=");
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThan(planIdx);
-    // Bound PRECISELY, not with a fixed window: the plan invocation ends where the
-    // apply invocation begins, and the apply invocation ends at the next step. A
-    // fixed 800-char window spills across the plan→apply boundary and — because
-    // apparmor_bwrap_profile is the LAST -target= in each list — could let the apply
-    // block's target satisfy the plan assertion, masking a dropped plan -target
-    // (pattern-review finding, #5875). This is the same precise bounding the
-    // loaded-verification describe uses.
-    const planBlock = yml.slice(planIdx, applyIdx);
-    const applyRest = yml.slice(applyIdx);
-    const applyStepEnd = applyRest.indexOf("\n      - name:");
-    const applyBlock =
-      applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
-    expect(planBlock).toContain(
-      "-target=terraform_data.apparmor_bwrap_profile",
-    );
-    expect(applyBlock).toContain(
-      "-target=terraform_data.apparmor_bwrap_profile",
-    );
+    // The precise bounding this test introduced now lives in the shared helper, which
+    // every co-target assertion uses.
+    assertPlannedAndAppliedTogether(yml, ["terraform_data.apparmor_bwrap_profile"]);
   });
 
   test("apparmor_bwrap_profile triggers_replace hashes apparmor-soleur-bwrap.profile (edit re-fires the apply)", () => {
@@ -706,6 +853,22 @@ describe("profile→redeploy loaded-verification guard (#5875 item 4)", () => {
     const nextStep = rest.indexOf("\n      - name:");
     const stepBlock =
       nextStep >= 0 ? yml.slice(redeployStepIdx, redeployStepIdx + 1 + nextStep) : yml.slice(redeployStepIdx);
-    expect(stepBlock).toMatch(/if:\s*success\(\)/);
+    // SHAPE-TOLERANT, because the condition is no longer a bare inline `if: success()`.
+    // #7104 PR-B added a verdict gate alongside it, which makes the condition a folded
+    // block scalar (`if: >-`) — so a regex anchored on `if:` immediately followed by
+    // `success()` fails on a change that STRENGTHENED the very property it guards.
+    //
+    // Both halves are asserted rather than one loose match: `success()` must still be
+    // there (this test's original subject), and the verdict gate must be too. The reason
+    // the second clause matters is that `success()` alone is NOT sufficient — the gate's
+    // 404 first-bootstrap escape hatch exits 0 having adjudicated nothing, which re-armed
+    // this step (a container swap) behind a verification that never happened.
+    expect(stepBlock).toMatch(/if:[\s>|-]*success\(\)/);
+    expect(stepBlock).toMatch(
+      /steps\.infra_config_gate\.outputs\.verdict\s*==\s*'verified'/,
+    );
+    expect(stepBlock).toMatch(
+      /steps\.infra_config_gate_pass2\.outputs\.verdict\s*==\s*'verified'/,
+    );
   });
 });

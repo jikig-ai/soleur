@@ -38,6 +38,23 @@ while IFS= read -r var; do
   unset "$var" 2>/dev/null || true
 done < <(env | grep -oP '^GIT_\w+' || true)
 
+# ...then disable commit signing. Must come AFTER the loop above, which unsets
+# every GIT_* var and would wipe a caller-supplied override.
+#
+# GIT_CONFIG_COUNT rather than GIT_CONFIG_GLOBAL=/dev/null (the isolation the
+# sibling worktree-manager suites use): this suite drives GIT_CONFIG_GLOBAL
+# itself, per command, as the subject of its identity-resolution arms. The
+# COUNT mechanism is orthogonal and still applies under each fake global, so it
+# pins signing off without displacing the thing under test.
+#
+# Without it, a host with `commit.gpgsign=true` and no usable ssh agent fails
+# fixture commits with "failed to write commit object"; `git clone` then only
+# WARNS about an empty repository, so arms go red for a missing fixture while
+# reading as genuine SUT failures.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=commit.gpgsign
+export GIT_CONFIG_VALUE_0=false
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
@@ -314,7 +331,9 @@ echo "Test 14: #6184 PRIMARY — respect the host-seeded OWNER local identity (n
 # at old :615-616. Proxy caveat: a DIRECTORY stand-in exercises the O_CREAT|O_EXCL
 # EEXIST class (same failure git hits on the real rdev=1:3 chardevice); the true
 # chardevice node is only reachable under mknod/root (see Test 9).
-MAIN14=$(mktemp -d "$TMP/main14.XXXXXX"); git init -q -b main "$MAIN14" >/dev/null 2>&1
+MAIN14=$(mktemp -d "$TMP/main14.XXXXXX")
+assert_fixture_dir "$MAIN14"
+git init -q -b main "$MAIN14" >/dev/null 2>&1
 git -C "$MAIN14" config user.email "owner@workspace.example"   # host-seeded OWNER (shared/common)
 git -C "$MAIN14" config user.name "Workspace Owner"
 git -C "$MAIN14" commit -q --allow-empty -m init >/dev/null 2>&1
@@ -350,7 +369,9 @@ echo "Test 15: #6184 set-when-absent — set from global via atomic_git_config l
 # Non-bare + worktree with NO local identity + a global set + a non-regular config.lock.
 # The identity must be set from global through the lockless writer and land in the
 # RESOLVED common-dir config, plus emit the benign DIAG precondition marker.
-MAIN15=$(mktemp -d "$TMP/main15.XXXXXX"); git init -q -b main "$MAIN15" >/dev/null 2>&1
+MAIN15=$(mktemp -d "$TMP/main15.XXXXXX")
+assert_fixture_dir "$MAIN15"
+git init -q -b main "$MAIN15" >/dev/null 2>&1
 git -C "$MAIN15" -c user.email=temp@t -c user.name=temp commit -q --allow-empty -m init >/dev/null 2>&1
 WT15="$MAIN15/wt"; git -C "$MAIN15" worktree add -q "$WT15" -b feat15 >/dev/null 2>&1
 git -C "$MAIN15" config --unset user.email 2>/dev/null || true   # ensure NO local identity in the shared config
@@ -413,19 +434,36 @@ else echo "  PASS: no vacuous success"; PASS=$((PASS + 1)); fi
 
 # ---------------------------------------------------------------------------
 echo "Test 17: #6184 bare-layout regression — ensure_bare_config flow unchanged on a bare repo"
-# Complements Tests 12/13: a genuine bare repo (no .git subdir) still gets the
-# bare-accommodation surgery (extensions.worktreeConfig=true) via the atomic path.
+# Complements Tests 12/13: a genuine bare repo (no .git subdir) still reaches the
+# bare-accommodation path via the atomic writer rather than being skipped.
+#
+# POLARITY REVERSED (#7394). This test used to assert extensions.worktreeConfig == true
+# as proof the bare path had run. That key is the half of the pair that WEDGES worktrees:
+# with it on, git resolves core.bare per-worktree, and since `git worktree add` writes no
+# config.worktree at all, every worktree created afterwards inherits core.bare=true from
+# the shared config and is treated as bare. The invariant is now the inverse — extension
+# ABSENT, core.bare RETAINED in the shared config — and the failure strings say so, because
+# the previous FAIL text ("bare repo lost its extensions.worktreeConfig surgery") would
+# have told a future reader to restore the defect.
 BARE17=$(mktemp -d "$TMP/bare17.XXXXXX")
 git init -q --bare -b main "$BARE17/repo.git" >/dev/null 2>&1
+# Seed the retired state so the assertion below proves REMOVAL, not mere absence.
+git config --file "$BARE17/repo.git/config" core.repositoryformatversion 1
+git config --file "$BARE17/repo.git/config" extensions.worktreeConfig true
 _SAVED_GIT_ROOT="$GIT_ROOT"
 GIT_ROOT="$BARE17/repo.git"
 set +e; ensure_bare_config >"$TMP/ebc17.out" 2>&1; EBC17_RC=$?; set -e
 GIT_ROOT="$_SAVED_GIT_ROOT"
 assert_eq "0" "$EBC17_RC" "ensure_bare_config returns 0 on a genuine bare repo (regression guard)"
-if git config --file "$BARE17/repo.git/config" --get extensions.worktreeConfig 2>/dev/null | grep -qx true; then
-  echo "  PASS: bare accommodation still enables extensions.worktreeConfig (bare path unchanged)"; PASS=$((PASS + 1))
+if git config --file "$BARE17/repo.git/config" --get extensions.worktreeConfig >/dev/null 2>&1; then
+  echo "  FAIL: extensions.worktreeConfig still set — the worktree-wedging pair was not broken (#7394)"; FAIL=$((FAIL + 1))
 else
-  echo "  FAIL: bare repo lost its extensions.worktreeConfig surgery — bare-layout regression"; FAIL=$((FAIL + 1))
+  echo "  PASS: bare accommodation REMOVES extensions.worktreeConfig (reversed polarity)"; PASS=$((PASS + 1))
+fi
+if git config --file "$BARE17/repo.git/config" --get core.bare 2>/dev/null | grep -qx true; then
+  echo "  PASS: core.bare RETAINED in the shared config (the bare root must keep reporting bare)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: core.bare was removed from the shared config — the bare root now reports as a working tree"; FAIL=$((FAIL + 1))
 fi
 
 # ---------------------------------------------------------------------------
@@ -435,7 +473,9 @@ echo "Test 18: #6184 F1 — bot-shaped LOCAL is OVERRIDDEN by a human --global (
 # bot-authored commits that fail the CLA gate (#2815). The bot-aware fix must PREFER the
 # human --global over a bot-shaped local. (RED against the presence-only respect-local rule,
 # which returns 0 and keeps the bot.)
-MAIN18=$(mktemp -d "$TMP/main18.XXXXXX"); git init -q -b main "$MAIN18" >/dev/null 2>&1
+MAIN18=$(mktemp -d "$TMP/main18.XXXXXX")
+assert_fixture_dir "$MAIN18"
+git init -q -b main "$MAIN18" >/dev/null 2>&1
 git -C "$MAIN18" config user.email "1234+github-actions[bot]@users.noreply.github.com"  # inherited BOT local
 git -C "$MAIN18" config user.name "github-actions[bot]"
 git -C "$MAIN18" commit -q --allow-empty -m init >/dev/null 2>&1
@@ -464,7 +504,9 @@ echo "Test 19: #6184 F2 — a bot-shaped --global is REFUSED, never silently wri
 # bot. Writing it would silently misattribute the owner's commits (the Layer-A harm). The
 # fix must REFUSE: emit the wedge sentinel + return 1 (fail loud), NOT author as the bot.
 # (RED against the pre-fix code, which sets from the bot global and returns 0.)
-MAIN19=$(mktemp -d "$TMP/main19.XXXXXX"); git init -q -b main "$MAIN19" >/dev/null 2>&1
+MAIN19=$(mktemp -d "$TMP/main19.XXXXXX")
+assert_fixture_dir "$MAIN19"
+git init -q -b main "$MAIN19" >/dev/null 2>&1
 git -C "$MAIN19" -c user.email=temp@t -c user.name=temp commit -q --allow-empty -m init >/dev/null 2>&1
 WT19="$MAIN19/wt"; git -C "$MAIN19" worktree add -q "$WT19" -b feat19 >/dev/null 2>&1
 git -C "$MAIN19" config --unset user.email 2>/dev/null || true   # LOCAL absent (seed failed)
@@ -572,7 +614,9 @@ echo "Test 23: #5934 D3 — non-bare guard SKIPS surgery under a mask-degraded r
 # & unprivileged with core.bare=true (→ show-toplevel empty AND is-bare "true"), on a repo whose
 # .git IS a directory. The HARDENED guard detects non-bare via `.git`-is-a-directory and SKIPS
 # regardless of rev-parse, so native `git worktree add` (which never writes .git/config) proceeds.
-WS24=$(mktemp -d "$TMP/misfire24.XXXXXX"); git init -q -b main "$WS24" >/dev/null 2>&1
+WS24=$(mktemp -d "$TMP/misfire24.XXXXXX")
+assert_fixture_dir "$WS24"
+git init -q -b main "$WS24" >/dev/null 2>&1
 git -C "$WS24" config core.bare true
 _SAVED_GIT_ROOT="$GIT_ROOT"; _SAVED_PWD="$PWD"
 cd "$WS24"; GIT_ROOT=""              # the exact sandbox failure: empty GIT_ROOT, CWD is the clone
@@ -586,6 +630,14 @@ else
 fi
 assert_eq "__ABSENT__" "$(git config --file "$WS24/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extensions.worktreeConfig NOT set (surgery correctly skipped on the non-bare clone)"
+# [R-kieran2 / #7394] This fixture sets core.bare=true on a `.git`-DIRECTORY clone, which is
+# exactly the state the reversed Phase-2 guard now falls THROUGH on (it decides on core.bare,
+# not on the gitdir's shape). Safety here no longer comes from the skip — it comes from the
+# polarity: both surviving operations are unsets of ABSENT keys, so the fall-through performs
+# zero writes. Assert that structurally, so a future change that re-adds a write to this path
+# reds here rather than silently enabling per-worktree resolution on a normal clone.
+assert_eq "false" "$([[ -e "$WS24/.git/config.worktree" ]] && echo true || echo false)" \
+  "no config.worktree created on the non-bare clone (fall-through stays write-free)"
 
 # ---------------------------------------------------------------------------
 echo "Test 24: #5934 D3 GAP — non-bare guard SKIPS when the mask leaves GIT_ROOT RELATIVE (\".git\")"
@@ -602,7 +654,8 @@ echo "Test 24: #5934 D3 GAP — non-bare guard SKIPS when the mask leaves GIT_RO
 #   RED  (pre-fix): fallback gated on `-z GIT_ROOT` stays inert → git_dir stays ".git" → no skip
 #                   → is-bare "true" → reaches surgery → emits branch=bare-fail/target-masked, rc 1.
 #   GREEN (fixed):  `-d \$PWD/.git` fires UNCONDITIONALLY → git_dir=ABSOLUTE \$PWD/.git → line-532
-#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip, rc 0.
+#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip
+#                   (reason=masked-cannot-determine since #7394), rc 0.
 WS25=$(mktemp -d "$TMP/relroot25.XXXXXX"); git init -q -b main "$WS25" >/dev/null 2>&1
 rm -f "$WS25/.git/config"
 if mknod "$WS25/.git/config" c 1 3 2>/dev/null; then :; else ln -s /dev/null "$WS25/.git/config"; fi
@@ -618,7 +671,11 @@ else
   echo "  PASS: no bare-surgery wedge sentinel — surgery was not reached"; PASS=$((PASS + 1))
 fi
 # The distinguishing positive assertion: the non-bare skip path fired its benign marker.
-if grep -qF 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip' "$TMP/ebc25.out"; then
+# reason= became `masked-cannot-determine` in #7394: under the mask the read cannot
+# establish non-bareness, so claiming `non-bare-skip` as the REASON asserted more than the
+# branch knows. The classification (`branch=non-bare-skip`) and the rc-0 outcome this test
+# exists to pin are unchanged, so anchor on those rather than on the retired reason text.
+if grep -qE 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=[a-z-]+ branch=non-bare-skip' "$TMP/ebc25.out"; then
   echo "  PASS: SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip emitted (non-bare skip fired)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected the SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip marker (skip did not fire)"; FAIL=$((FAIL + 1))
@@ -660,7 +717,9 @@ echo "Test 26: #5934 round-3 — verify_worktree_created: RELATIVE path REJECTED
 # rejects with exit 1, and — the observability gap this PR closes — emits the previously-SILENT
 # SOLEUR_GIT_WORKTREE_VERIFY_FAILED marker carrying BOTH paths. (RED destroys the worktree via
 # the branch's cleanup remove, so it runs last.)
-MAIN26=$(cd "$(mktemp -d "$TMP/verify26.XXXXXX")" && pwd -P); git init -q -b main "$MAIN26" >/dev/null 2>&1
+MAIN26=$(cd "$(mktemp -d "$TMP/verify26.XXXXXX")" && pwd -P)
+assert_fixture_dir "$MAIN26"
+git init -q -b main "$MAIN26" >/dev/null 2>&1
 git -C "$MAIN26" -c user.email=t@t.local -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
 _SAVED_PWD="$PWD"; cd "$MAIN26"
 git worktree add -q ".worktrees/feat-26" -b feat-26 >/dev/null 2>&1
@@ -693,6 +752,50 @@ else
   echo "  FAIL: expected the SOLEUR_GIT_WORKTREE_VERIFY_FAILED path-mismatch marker (observability gap not closed)"; FAIL=$((FAIL + 1))
 fi
 cd "$_SAVED_PWD"
+
+# --- Test 27: #7709 — ensure_worktree_identity REFUSES a degenerate operand ----------------------
+# The only production change in the burn-down PR, and it shipped untested. Its sibling refusal
+# branches (bot-global-refused, common-dir-unresolved) are covered by Tests 16 and 19; this one
+# was not, so a future edit could delete it silently.
+#
+# The predicate is a `case`, not `[[ -z ]]`. Both call sites bind
+# `worktree_path="$WORKTREE_DIR/$safe_branch"` — a literal `/` between two expansions — so the
+# floor value is "/" and an emptiness test can never fire there. "/" is also the DANGEROUS value:
+# `git -C /` walks up to whatever repository contains the filesystem root, and the write path
+# below the guard sets identity into that repository's shared common-dir config (#6184, with the
+# repository swapped). Measured before the fix: `-z` caught 1 of the 4 degenerate spellings.
+echo "Test 27: #7709 ensure_worktree_identity refuses empty AND bare-root operands"
+_t27_fn=$(awk '/^ensure_worktree_identity\(\) \{/,/^\}/' "$SCRIPT")
+for _t27_path in "" "/" "//" "/."; do
+  _t27_out=$(
+    set -uo pipefail
+    headless_or_stderr() { :; }
+    eval "$_t27_fn"
+    ensure_worktree_identity "$_t27_path" 2>&1
+    printf 'RC=%s\n' "$?"
+  )
+  _t27_rc=$(printf '%s' "$_t27_out" | sed -n 's/^RC=//p' | tail -1)
+  if [[ "$_t27_rc" == "1" ]] \
+     && printf '%s' "$_t27_out" | grep -q 'reason=degenerate-worktree-path'; then
+    echo "  PASS: operand '${_t27_path}' refused with rc=1 and the DIAG marker"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL: operand '${_t27_path}' — rc=${_t27_rc}, marker missing"; FAIL=$((FAIL + 1))
+  fi
+done
+# Must-PASS: a real path is NOT refused by this guard (it is not a blanket refusal). The function
+# continues past the case and its later behaviour is Tests 14-19's subject, so assert only that it
+# did not take the degenerate branch.
+_t27_ok=$(
+  set -uo pipefail
+  headless_or_stderr() { :; }
+  eval "$_t27_fn"
+  ensure_worktree_identity "$TMP/t27-real" 2>&1 || true
+)
+if ! printf '%s' "$_t27_ok" | grep -q 'reason=degenerate-worktree-path'; then
+  echo "  PASS: an ordinary absolute path does not trip the degenerate-operand guard"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: the guard refused an ordinary absolute path (blanket refusal)"; FAIL=$((FAIL + 1))
+fi
 
 echo ""
 print_results

@@ -134,7 +134,7 @@ A heartbeat was emitted to a Sentry monitor slug that did not exist in IaC (page
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*
 
 ## Residual vector — #6407 (functions-query transient)
 
@@ -145,6 +145,7 @@ _No action items — incident fully resolved in the source PR with no residual w
 **Compounding failure — the failed remediation.** The dispatched restart sent `restart inngest _ latest` to `ci-deploy.sh`, whose FD-200 advisory `flock -n 200` is non-blocking; a loser wrote `final_write_state 1 "lock_contention"` exit 1, and the restart-verify poll latched it as a terminal failure → `::error::Restart failed` → RED. But `lock_contention` on a restart means another deploy/restart already holds the critical section and will bring inngest current — benign. The sibling web-platform-release deploy poll already treated `lock_contention` as non-terminal (ADR-079 amendment #5960); the restart poll never got that treatment.
 
 **Fix (#6407).**
+
 1. **`/health` corroboration before `inngest_down`.** In `INVENTORY_LIVENESS_ONLY` mode, before emitting the FATAL sentinel on a functions-query failure, `inngest-inventory.sh` probes the SAME loopback server's `/health` (the endpoint `ci-deploy.sh verify_inngest_health` gates on). `/health=200` (server serving; GQL read blipped) → a new **soft** `inngest-inventory: DEGRADED` sentinel → classifier mode `functions_query_degraded` (NO restart, own `[ci/inngest-functions-degraded]` soft issue, heartbeat `ok`). `/health != 200` (wedged/stopped) → keep FATAL → `inngest_down` → restart (recovers a wedge). `systemctl is-active`/ExecStart were rejected — both read for a wedged/stopped unit; `/health` is the only same-signal-class corroborator.
 2. **Persistence-escalation ceiling.** A SUSTAINED `functions_query_degraded` (health-ok but functions permanently wedged) escalates to `inngest_down` after ~45 min (reusing the #6374 age-gate logic against the new issue title) — never soft-masked forever.
 3. **Union-widening.** The new soft mode is routed through EVERY watchdog consumer (probe `case`, `ISSUE_CLASS` case before the `*)→down` default, heartbeat `ok` allowlist, auto-close, persistence gate) so it neither falls through to a false `[ci/inngest-down]` P1 nor rots a soft issue open.

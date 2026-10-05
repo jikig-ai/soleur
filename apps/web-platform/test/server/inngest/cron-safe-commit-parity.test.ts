@@ -88,7 +88,9 @@ const READ_ONLY_PROBES = [
 
 // Dispatch-hybrid crons (#5872 acknowledgment) — a fourth implicit class beyond
 // MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`,
-// `cron-domain-model-drift` and `cron-inngest-config-drift` (#6780, event-only/dormant)
+// `cron-domain-model-drift`, `cron-inngest-config-drift` (#6780, event-only/dormant)
+// and `cron-sentry-alert-drift` (#7650 Phase 2 — the §2.9 Sentry-alert drift
+// detector, same shape as cron-terraform-drift)
 // are SCHEDULERS ONLY: the dispatcher mints a
 // short-lived installation token and POSTs a `workflow_dispatch`, holding no git
 // and opening no PR (the git-touching / issue-filing work runs in the ephemeral
@@ -102,15 +104,51 @@ const READ_ONLY_PROBES = [
 // labels/state via the GitHub API, holding no git and opening no PR; the
 // safe-commit invariant does not apply and it needs no MIGRATED/EXEMPT entry
 // (covered by invariant 1's directory walk).
+//
+// `cron-machinery-drain` (ADR-216) is the same dispatch-hybrid class: it mints a
+// short-lived installation token and POSTs a `workflow_dispatch` to
+// scheduled-machinery-drain.yml, so the weekly issue-flow measurement and the
+// drain itself run in the ephemeral GHA executor while the Node dispatcher holds
+// no git and opens no PR. The safe-commit invariant does not apply, it needs no
+// MIGRATED/EXEMPT entry, and it is covered by invariant 1's directory walk.
+// Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
+// dependent when EXPECTED_CRON_FUNCTIONS grows.
+//
+// `cron-supabase-watchdog-dispatch` (#9168) is the same dispatch-hybrid class:
+// it mints a short-lived installation token (narrowed to actions:write +
+// repositories:[soleur]) and POSTs a `workflow_dispatch` to
+// scheduled-supabase-watchdog.yml. The Node dispatcher holds no git, opens no
+// PR and carries NO Supabase credential — the restart's prod write runs in the
+// ephemeral GHA executor. The safe-commit invariant does not apply, it needs no
+// MIGRATED/EXEMPT entry, and it is covered by invariant 1's directory walk.
+// Acknowledged here per the sibling-set convention.
+//
+// `cron-actions-queue-health-dispatch` (#9273) is the same dispatch-hybrid
+// class: mints a token narrowed to `actions:write` + repositories:[soleur]
+// and POSTs `workflow_dispatch` to scheduled-actions-queue-health.yml — no
+// git, no PR, covered by invariant 1's directory walk.
+// `cron-merge-queue-stall-dispatch` (#9482) is the same dispatch-hybrid
+// class: a token narrowed to `actions:write` + repositories:[soleur], one
+// `workflow_dispatch` POST to merge-queue-stall-check.yml, no git, no PR,
+// covered by invariant 1's directory walk.
+// `cron-bot-pr-reaper` (#9274) is the `cron-action-required-sla` class: it
+// mutates PR/issue state through the GitHub API (update-branch, dedup issue
+// create/close) on a narrowed App token, holding no git and opening no PR —
+// the safe-commit invariant does not apply. Both acknowledged here so the
+// cron-tier2-parity sibling-set sweep sees this dependent when
+// EXPECTED_CRON_FUNCTIONS grows.
 
 // #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
 // live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub
-// Pages cert via the App token and files/comments issues via the poll cron, but
-// it holds NO git and opens NO PR (no safeCommitAndPr path). Like the read-only
+// Pages cert via the App token, but it holds NO git and opens NO PR (no
+// safeCommitAndPr path). Like the read-only
 // probes + dispatch-hybrids, the safe-commit invariant does not apply — it needs
 // no MIGRATED/EXEMPT entry and is covered by invariant 1's directory walk.
 // Acknowledged here so the cron-tier2-parity sibling-set sweep sees this
 // dependent when EXPECTED_CRON_FUNCTIONS grows with a new event-triggered cron.
+// The daily poll cron that used to sit beside it (`cron-gh-pages-cert-state`) was
+// deleted in #9303; that shrinks EXPECTED_CRON_FUNCTIONS and needs no list edit
+// here, because it was never named in any of the lists above.
 
 const cronFiles = readdirSync(FUNCTIONS_DIR).filter((f) =>
   /^(cron|event)-.*\.ts$/.test(f),
@@ -371,18 +409,6 @@ describe("#5199 — restored auto-crons: no gh-api allowlist entry (F4a)", () =>
       ).toEqual([]);
     },
   );
-});
-
-describe("#6031 — cron-ghcr-token-minter is a non-git cron", () => {
-  // The GHCR installation-token minter mints a token and writes to Doppler; it
-  // does NO git operations, so it neither calls safeCommitAndPr nor carries a
-  // CRON_BASH_ALLOWLISTS entry, and is not a deferred Tier-2 cron. Acknowledged
-  // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
-  // grows (cron-tier2-parity set).
-  it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
-    expect(CRON_BASH_ALLOWLISTS["cron-ghcr-token-minter"]).toBeUndefined();
-    expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
-  });
 });
 
 describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", () => {

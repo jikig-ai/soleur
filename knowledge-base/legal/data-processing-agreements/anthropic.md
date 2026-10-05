@@ -1,9 +1,12 @@
 ---
 vendor: Anthropic PBC
-role: independent controller/processor under operator BYOK; processor for the Jikigai-keyed email-triage summarizer (PA-27), for the Anthropic-egressing Inngest function fleet (PA-31), for the community observation and republication activity's collection limb (PA-32), and for the Jikigai-keyed Anthropic API surface in GitHub Actions CI (PA-33)
-status_snapshot_date: 2026-07-31
-register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33]  # Art. 30(1) gap for the in-repo fleet + CI surface closed 2026-07-31 (#7100); the 2026-07-30 INCOMPLETE marker is retired. 2026-08-01 at review: PA-33's predicate widened repo-wide after a Jikigai-keyed egress in the sibling repo jikig-ai/operator-digest was found outside it; now PA-33 member (7), registered from committed source with asset-vs-deployed drift named as a residual
-zero_retention_amendment: unsigned
+role: independent controller/processor under operator BYOK; processor for the Jikigai-keyed email-triage summarizer (PA-27), for the Anthropic-egressing Inngest function fleet (PA-31), for the community observation and republication activity's collection limb (PA-32), for the Jikigai-keyed Anthropic API surface in GitHub Actions CI (PA-33), and — NEW 2026-08-06 (#7331) — as JIKIGAI'S SUB-PROCESSOR for operator-assisted alpha-tester runs (PA-34 controller limb; Art. 30(2) record P-1 processor limb), which is the first engagement where Anthropic sits downstream of Jikigai in a chain whose ultimate controller is a THIRD PARTY rather than the operator
+status_snapshot_date: 2026-08-06
+customer_content_status: restricted-pending-retention-and-counsel-evidence
+latest_disposition_review: 2026-09-20
+register_activity_refs: [PA-22, PA-27, PA-31, PA-32, PA-33, PA-34]  # Art. 30(1) gap for the in-repo fleet + CI surface closed 2026-07-31 (#7100); the 2026-07-30 INCOMPLETE marker is retired. 2026-08-01 at review: PA-33's predicate widened repo-wide after a Jikigai-keyed egress in the sibling repo jikig-ai/operator-digest was found outside it; now PA-33 member (7), registered from committed source with asset-vs-deployed drift named as a residual. 2026-08-06 (#7331): PA-34 added, plus record P-1 in the separate knowledge-base/legal/article-30-2-register.md
+zero_retention_amendment: unsigned  # FIRED CONSEQUENCE 2026-08-06: an alpha tester's repository content egressed under the Jikigai key, so the 30-day retention window now attaches to a THIRD PARTY's data, not only the operator's. Session of 2026-08-06 expires ~2026-09-05.
+user_owned_provider_path: documented-in-product; vendor-account-terms-apply
 ---
 
 # Anthropic PBC — DPA snapshot
@@ -21,9 +24,31 @@ operator BYOK).
 | **DPA effective date** | 2025-02-24 |
 | **Transfer mechanisms** | EU-US DPF + SCCs M2+3 + UK IDTA + Swiss Addendum |
 | **Region (data processed)** | US |
-| **Anthropic Commercial Terms URL** | https://www.anthropic.com/legal/commercial-terms |
-| **Anthropic DPA URL** | https://www.anthropic.com/legal/dpa |
-| **Anthropic Sub-Processors list** | https://www.anthropic.com/legal/subprocessors |
+| **Anthropic Commercial Terms URL** | <https://www.anthropic.com/legal/commercial-terms> |
+| **Anthropic DPA URL** | <https://www.anthropic.com/legal/dpa> |
+| **Anthropic Sub-Processors list** | <https://www.anthropic.com/legal/subprocessors> |
+
+## Customer-content disposition
+
+Claude customer-content processing uses the same evidence gate as Codex. The
+existing Commercial Terms/DPA and transfer mechanisms are recorded, but this
+account's Zero-Retention amendment is still unsigned and the account's
+Commercial-versus-Consumer status remains unverified. Those are blocking
+conditions for Jikigai-keyed third-party repository content. Operator-BYOK
+traffic remains a separate posture and must not be used to imply that
+Jikigai-keyed processing is approved.
+
+Customer-content enablement requires all of the following to be evidenced:
+
+1. Commercial account status and the applicable DPA/Art. 28 terms.
+2. A signed Zero-Retention amendment or an explicitly approved alternative
+   retention restriction.
+3. Transfer geography and safeguards recorded for the actual account.
+4. Remote-erasure and downstream-subprocessor behavior accepted by counsel.
+5. For third-party controller data, the required authorization and notice.
+
+Until then, Claude remains available only for operator-BYOK use and synthetic
+or explicitly redacted internal qualification within the approved scope.
 
 ## Zero-Retention amendment
 
@@ -46,6 +71,23 @@ amendment via:
 
 Until signed: the dashboard surfaces a one-time banner to that effect
 (scope of Non-Goal #2, filed as a follow-up issue).
+
+## User-owned provider path
+
+The web app also supports a user-selected `api-key` authentication mode. In
+that mode the credential belongs to the user and the request is sent under the
+user's Anthropic account, not the Jikigai-managed `ANTHROPIC_API_KEY`. The
+user's Anthropic retention, transfer geography, account administrator, and
+deletion terms therefore govern the provider-side copy. This path does not
+convert the Jikigai-managed path into an approved customer-content surface and
+does not make third-party data lawful without the user's authority to submit
+it. The settings UI identifies the account ownership and warns users to submit
+only data they are authorized to share.
+
+Soleur remains responsible for its own application-side processing, including
+encrypted credential storage, run/audit records, access controls, and deletion
+handling. Shared workspaces must not silently fall back from a user-owned key
+to the restricted Jikigai-managed key.
 
 ## Activities in scope
 
@@ -176,7 +218,55 @@ Admitted to the CLO bar as residual risks, not mitigated claims:
 
 - Anthropic publishes a revised DPA or revises sub-processor list.
 - Operator signs the Zero-Retention amendment (update this file).
-- Soleur takes on data subjects beyond the operator (cohort onboarding).
+- ~~Soleur takes on data subjects beyond the operator (cohort onboarding).~~ — **FIRED 2026-08-06.
+  Actioned below.**
+- Jikigai is engaged as processor by a further third-party controller (each new alpha tester).
+
+## ⚠ Fired trigger — cohort onboarding, 2026-08-06 (#7331)
+
+**The trigger fired and this section is the action, not a note to action it later.**
+
+Alpha onboarding began 2026-08-06. On that date the operator ran Soleur agents on his own machine,
+**under this Jikigai Anthropic key**, against an alpha tester's repository content, at the tester's
+request. See
+`knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md`.
+
+### What changed about Anthropic's role
+
+Until now every Jikigai-keyed activity in `register_activity_refs` had **Jikigai** (or the operator)
+as the ultimate controller. PA-34 is the first where the ultimate controller is a **third party** —
+the alpha tester. Anthropic is therefore Jikigai's **sub-processor** in a chain Jikigai does not
+terminate, and Art. 28(2) applies: **the tester has neither authorised this sub-processor nor been
+given notice of it.** Obtaining that authorisation, with notice of Anthropic's identity, US
+location, and transfer mechanism, is condition C3 of the determination.
+
+Note what this is **not**: an Art. 28(4) breach. Anthropic's own DPA auto-incorporates via
+Commercial Terms §C and carries Art. 28(3) terms, DPF, SCCs Modules 2+3 and the IDTA. Art. 28(4)
+requires the processor to bind its sub-processor to terms mirroring its own contract with the
+controller — and there is **no controller contract yet to mirror**. The obligation is **inchoate,
+not breached**. An earlier draft of this analysis claimed otherwise by conflating this snapshot memo
+with Anthropic's actual DPA; that claim was overruled and is corrected here.
+
+### The retention consequence — the operative fact
+
+`zero_retention_amendment` is **`unsigned`**, so Anthropic's default **30-day retention window**
+applies to everything egressing under this key. As of 2026-08-06 that window holds a **third
+party's** content, not merely the operator's.
+
+For the 2026-08-06 session the window expires approximately **2026-09-05**. That is a date to
+record, not a deadline to chase — nothing needs doing when it passes; the Anthropic-side copy simply
+lapses. Jikigai **cannot** accelerate deletion inside that window while the amendment is unsigned,
+which is what makes an Art. 17 request from a downstream data subject only partly answerable today.
+
+### Actions
+
+| # | Action | Status |
+|---|---|---|
+| 1 | Record the fired trigger and its consequences here | **Done** (this section) |
+| 2 | Behavioural control: no further Jikigai-keyed runs against tester content until an Art. 28(3) instrument exists — use the tester's machine and key, or do not run | **In force** — wired as a hard gate in `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md` |
+| 3 | **Sign the Zero-Retention amendment, or use the tester's key.** Either removes the window entirely and is the cheapest of the remediations | **Open — operator action** |
+| 4 | Confirm this account is on **Commercial** Terms, not Consumer Terms. The entire §C auto-incorporation analysis rests on it, and it has not been verified | **Open — operator action, and it is a premise not a formality** |
+| 5 | Obtain tester sub-processor authorisation + notice (Art. 28(2)) | **Open** — carried in the tester-facing terms |
 
 ## Refs
 

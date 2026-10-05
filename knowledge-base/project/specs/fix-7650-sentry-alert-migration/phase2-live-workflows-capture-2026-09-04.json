@@ -1,0 +1,1935 @@
+[
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [],
+        "logicType": "any-short"
+      }
+    ],
+    "config": {
+      "frequency": 0
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "566201",
+    "name": "Send a notification for high priority issues",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "new_high_priority_issue"
+        },
+        {
+          "comparison": true,
+          "type": "existing_high_priority_issue"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "auth"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 30
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "566671",
+    "name": "auth-per-user-loop",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "5m",
+            "value": 3
+          },
+          "type": "event_unique_user_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "auth"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "signOut"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 60
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "566672",
+    "name": "auth-signout-burst",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "15m",
+            "value": 5
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "auth"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "exchangeCodeForSession"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 61
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "566682",
+    "name": "auth-exchange-code-burst",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "15m",
+            "value": 5
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "auth"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "callback_no_code"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 62
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "566683",
+    "name": "auth-callback-no-code-burst",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "15m",
+            "value": 3
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "byok-delegations"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "art_33_breach",
+              "match": "eq",
+              "value": "true"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 5
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "600195",
+    "name": "byok-art-33-breach",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "NoOne"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "byok-delegations"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "hourly-cap-exceeded,daily-cap-exceeded"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 15
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "600196",
+    "name": "byok-cap-exceeded",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "cc-dispatcher"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "tenant-mint.persistUserMessage,persistUserMessage.workspaceRead,persist-user-message"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 10
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "607768",
+    "name": "chat-message-save-failure",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "workspace-sync-health"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 11
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "609710",
+    "name": "workspace-sync-health",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "kb-share"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "create,list,revoke,preview,preview-invariant"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 13
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "611582",
+    "name": "kb-db-error",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "cron-egress-firewall"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "egress_blocked"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 30
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "624623",
+    "name": "cron-egress-blocked",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "cron-cloud-task-heartbeat"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "stale-bot-pr,stale-bot-pr-scan-failed,stale-bot-pr-comment-failed"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 14
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "630477",
+    "name": "stale-bot-pr",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "outbound-email"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 16
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "636539",
+    "name": "outbound-email-send-failure",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "kb-route-helpers"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "kb-sync.unexpected"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 12
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "636637",
+    "name": "kb-sync-silent-failure",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "container-restart-monitor"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "restart_storm,fresh_crash_loop"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 17
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "638577",
+    "name": "container-restart-burst",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "session-sync"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "in",
+              "value": "kb-sync.protected-fallback-failed"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 18
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "638698",
+    "name": "kb-sync-protected-fallback-failed",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "repo-resolver-divergence"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 20
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "643978",
+    "name": "repo-resolver-divergence",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "cron-supabase-disk-io"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "wal-concentration"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 21
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "666233",
+    "name": "disk-io-wal-concentration",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "agent-sandbox"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "sdk-startup"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 22
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "669246",
+    "name": "sandbox-startup-failure",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 2
+          },
+          "type": "event_unique_user_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "github-webhook"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "founder-ambiguous"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 19
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "671178",
+    "name": "github-webhook-founder-ambiguous",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        },
+        {
+          "comparison": true,
+          "type": "reappeared_event"
+        },
+        {
+          "comparison": true,
+          "type": "regression_event"
+        }
+      ],
+      "logicType": "any-short"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "inbox"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "notify-inbox-action-required"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 15
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "675790",
+    "name": "inbox-action-required-notify-failure",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "registry",
+              "match": "eq",
+              "value": "ghcr-fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "registry",
+              "match": "eq",
+              "value": "zot-gate-degraded"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "inngest_ghcr_fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "app_ghcr_fallback"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "app_ghcr_served"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "config": {
+      "frequency": 23
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "685990",
+    "name": "zot-mirror-fallback-rate",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 0
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "terminal_preamble"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "hostscripts_incomplete"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "doppler_download"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "docker_run"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "pull"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "config": {
+      "frequency": 24
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "695939",
+    "name": "web-host-terminal-boot-fatal",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 1
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "workspaces-luks"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "workspaces-luks-drift"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 25
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "703574",
+    "name": "workspaces-luks-drift",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 0
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "registry",
+              "match": "eq",
+              "value": "local-cache"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 26
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "703994",
+    "name": "local-cache-reload-rate",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 0
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "seccomp-remediation-failed"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 27
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "703995",
+    "name": "seccomp-remediation-failed",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 0
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "feature",
+              "match": "eq",
+              "value": "cron-gh-pages-cert-reissue"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 63
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "705074",
+    "name": "gh-pages-cert-reissue-failed",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 0
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "private_nic_timeout"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "private_nic_probe_fault"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "config": {
+      "frequency": 24
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "707232",
+    "name": "web-host-private-nic-boot-gate",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 1
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "op",
+              "match": "eq",
+              "value": "action-required-sla"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "sla_action",
+              "match": "eq",
+              "value": "expire"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "human_engaged",
+              "match": "eq",
+              "value": "true"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "all"
+      }
+    ],
+    "config": {
+      "frequency": 5
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "715628",
+    "name": "action-required-sla-veto-bypass",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": true,
+          "type": "first_seen_event"
+        }
+      ],
+      "logicType": "all"
+    }
+  },
+  {
+    "actionFilters": [
+      {
+        "actions": [
+          {
+            "config": {
+              "targetDisplay": null,
+              "targetIdentifier": null,
+              "targetType": "issue_owners"
+            },
+            "data": {
+              "fallthroughType": "ActiveMembers"
+            },
+            "type": "email"
+          }
+        ],
+        "conditions": [
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "gitdata_runcmd_early"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "sshd_config"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "volume_mount"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "gitdata_doppler_dl"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "doppler_run"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "luks_open"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "bootstrap"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "gc"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "gc_timer"
+            },
+            "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "gitdata_nftables_metadata"
+            },
+            "type": "tagged_event"
+          }
+        ],
+        "logicType": "any-short"
+      }
+    ],
+    "config": {
+      "frequency": 24
+    },
+    "detectorIds": [
+      "1213799"
+    ],
+    "enabled": true,
+    "environment": null,
+    "id": "728266",
+    "name": "git-data-boot-fatal",
+    "triggers": {
+      "actions": [],
+      "conditions": [
+        {
+          "comparison": {
+            "interval": "1h",
+            "value": 0
+          },
+          "type": "event_frequency_count"
+        }
+      ],
+      "logicType": "all"
+    }
+  }
+]

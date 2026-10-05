@@ -18,6 +18,7 @@ import { reportSilentFallback } from "@/server/observability";
 import { hashUserIdValue } from "@/server/userid-pseudonymize";
 import { triggerHeadlessSync } from "@/server/auto-sync-trigger";
 import { evaluateRepoConnect } from "@/server/repo-connect-guard";
+import { boundedAuthGetUser } from "@/server/request-auth";
 
 /**
  * POST /api/repo/setup
@@ -32,9 +33,8 @@ export async function POST(request: Request) {
   if (!valid) return rejectCsrf("api/repo/setup", origin);
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const authData = await boundedAuthGetUser(supabase);
+  const user = authData?.user;
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

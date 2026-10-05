@@ -97,6 +97,27 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     "volume replace (no server → stock-preflight is a no-op); its own gate forbids touching the live volume/web-1, and /mnt/data serves from a different volume, so a miss is recoverable, not a strand",
   ],
   [
+    "inngest-volume-recut",
+    // #7695 scoped -replace of the inngest Redis AOF volume (job `inngest_volume_recut`). It
+    // `-replace`s a VOLUME and `-target`s the volume + its attachment — NO hcloud_server — so
+    // stock-preflight-gate.sh (which `select(.type == "hcloud_server")`) hits its legitimate-empty
+    // out-of-scope branch and cannot fire. Same class as workspaces-luks-recut: a scoped -replace
+    // of a non-server resource.
+    //
+    // Its OWN Guard 1 asserts inngest_server_touched == 0 — the host is named-live with ZERO
+    // actions — so this arm is structurally incapable of destroying a server, which is the entire
+    // hazard stock-preflight exists to pre-empt. There is no destroy-then-discover-no-stock
+    // surface: the "create" half provisions a VOLUME from Hetzner, and a volume create that fails
+    // leaves the resource out of state, which Guard 1's recovery bare-create arm accepts on a
+    // re-dispatch (the automated remedy, not an operator strand).
+    //
+    // Worth stating because the adjacency invites the wrong conclusion: this target IS destructive,
+    // which is why it carries an `environment:` reviewer gate AND a second gate (inngest_host_dark_gate)
+    // that refuses unless the host is measured dark. That authorization chain is orthogonal to the
+    // server-stock concern this gate covers.
+    "volume replace (no server -> stock-preflight is a no-op); its own gate names hcloud_server.inngest live with ZERO actions, so no server can be destroyed here, and a failed volume create is recoverable by re-dispatch via the gate's bare-create arm",
+  ],
+  [
     "entrypoint-audit",
     // #6767 read-only Cloudflare-rulesets drift audit (job `entrypoint_audit`). It runs
     // NO `terraform apply` — only HTTP GETs to the Cloudflare rulesets API + a `gh issue
@@ -126,6 +147,29 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     // that works while the fleet cannot be rebuilt fail-closed on the very condition that
     // forced its existence — a gate that always fails is an outage, not a tripwire.
     "scoped -replace of a Cloudflare Access service token (no server → stock-preflight is a no-op); its own blast-radius gate FORBIDS every hcloud_*/terraform_data/tls_private_key address, and gating it on server stock would fail-close the one remedy available when stock is zero (ADR-154)",
+  ],
+  [
+    "vector-redeliver",
+    // #7542 scoped delivery of vector.toml to the RUNNING web-1 (job `vector_redeliver`). Its
+    // single `-target` is `terraform_data.journald_persistent`, and its own plan gate permits
+    // EXACTLY one delivery of that address — actions ["create","delete"] or a bare ["create"] —
+    // and refuses every other address in the plan. So the arm creates and replaces NO
+    // hcloud_server, and stock-preflight-gate.sh (which `select(.type == "hcloud_server")`) hits
+    // its legitimate-empty out-of-scope branch. Same class as workspaces-luks-recut and
+    // ci-ssh-token-replace: a scoped replace of a NON-server resource.
+    //
+    // The distinction that matters for THIS gate: a terraform_data replace destroys and
+    // recreates a STATE ENTRY, not a machine. There is no destroy-then-discover-no-stock
+    // surface, because the "create" half provisions nothing from Hetzner's pool — it re-runs
+    // remote-exec against a host that never stopped running. Nothing here can strand on
+    // `resource_unavailable`, which is the entire hazard stock-preflight exists to pre-empt.
+    //
+    // It is also FORBIDDEN the server plane rather than merely missing it: the arm's own plan
+    // gate counts any `hcloud_server`/`hcloud_volume` delete as `host_destroyed` and aborts by
+    // name, and counts every non-allow-set address as out-of-scope. web-1, web-2 and
+    // hcloud_volume.workspaces[*] are all inside the `-target` closure (`-target` is transitive
+    // on dependencies), so this is a live refusal, not a vacuous one.
+    "scoped delivery of a terraform_data state entry (no server created or replaced → stock-preflight is a no-op); the 'create' half re-runs remote-exec against an already-running host, so there is no destroy-then-no-stock strand, and the arm's own plan gate ABORTS on any hcloud_server/hcloud_volume delete or any out-of-scope address",
   ],
 ]);
 
@@ -161,20 +205,47 @@ type Job = { if?: string; steps?: Array<{ name?: string; run?: string }> };
 let options: string[] = [];
 let jobs: Record<string, Job> = {};
 
-/** The job that runs `option`, resolved via its `if:` guard. */
+/** The APPLYING job for `option` — the one whose gating this suite is about. */
 function jobFor(option: string): [string, Job] | undefined {
   // Fully-quoted literal so `inngest-host` cannot match `inngest-host-replace`.
   const needle = `inputs.apply_target == '${option}'`;
   const hits = Object.entries(jobs).filter(([, j]) =>
     (j.if ?? "").includes(needle),
   );
-  return hits.length === 1 ? hits[0] : undefined;
+  if (hits.length === 1) return hits[0];
+
+  // A target may legitimately be served by MORE THAN ONE job: #7277 split the D10
+  // authorization gate out of `registry_luks_recut` into a `needs:`-preceding
+  // `registry_pull_path_gate`, so both carry the same `if:` guard. The one-job-per-option
+  // assumption was an accident of the workflow's shape at the time, not the property.
+  //
+  // The property IS about the job that APPLIES. `stock_preflight_gate` reads `tfplan.json` and
+  // exists to stop a destroy that cannot be re-provisioned; a preceding gate job that carries no
+  // `-target` and runs no terraform action has nothing to gate and no plan to read. Requiring it
+  // there would force a second place that can deny a recut on live vendor state — which is
+  // exactly what the pre-rehearsal probe is deliberately ADVISORY to avoid.
+  //
+  // Resolution stays fail-closed in both directions: zero hits is unresolved (as before), and
+  // TWO APPLYING jobs for one option is also unresolved, because that is a genuinely ambiguous
+  // workflow this suite should not silently pick a winner from.
+  const applying = hits.filter(([, j]) => appliesTerraform(j));
+  return applying.length === 1 ? applying[0] : undefined;
 }
 
 /** Concatenated `run:` bodies of a job's steps. */
 function jobBody(job: Job): string {
   return (job.steps ?? []).map((s) => s.run ?? "").join("\n");
 }
+
+/**
+ * Does this job actually run terraform against real infrastructure?
+ *
+ * Measured on `run:` bodies only — the YAML parse has already discarded comments, so unlike a
+ * raw-text grep this cannot be satisfied by a header that merely DISCUSSES `terraform apply`.
+ * (That exact false positive bit the sibling assertion in terraform-target-parity.test.ts.)
+ */
+const appliesTerraform = (job: Job) =>
+  /\bterraform\s+apply\b/.test(jobBody(job)) || /-target=/.test(jobBody(job));
 
 const callsGate = (job: Job) => /\bstock_preflight_gate\s+tfplan\.json\b/.test(jobBody(job));
 // Anchored on the `source` COMMAND, never the bare filename. Every call site carries a
@@ -186,8 +257,31 @@ const callsGate = (job: Job) => /\bstock_preflight_gate\s+tfplan\.json\b/.test(j
 // five destroy paths. A gate that always fails is an outage, not a tripwire.
 const sourcesGate = (job: Job) =>
   /^\s*source\s+\S*stock-preflight-gate\.sh/m.test(jobBody(job));
+/** The local actions a job `uses:`, so a credential supplied by a composite action is visible. */
+function jobUses(job: Job): string[] {
+  return (job.steps ?? []).map((s) => String((s as { uses?: string }).uses ?? ""));
+}
+
+// (#8209, ADR-241) THE PROPERTY, RESTATED — "the job OBTAINS a Hetzner token", not "the job
+// performs this particular read".
+//
+// The property this guards is unchanged and still the one that matters: the stock preflight
+// gate needs a Hetzner token, and a job that calls it without one aborts EVERY dispatch —
+// an outage wearing a tripwire's clothes, as the assertion below says.
+//
+// What changed is where the token comes from. Before #8209 every gated job read it inline
+// with `doppler secrets get HCLOUD_TOKEN` from `prd_terraform`; those reads are now
+// redundant (the infra-credentials loader exports the name for the whole job) and WRONG
+// after operator step O10, when that name no longer exists in `prd_terraform` and the read
+// resolves empty — so the job would fail closed on a credential it already holds.
+//
+// So the first conjunct becomes a disjunction over the two ways a token can arrive, and the
+// `export` conjunct is untouched. This is NOT a weakening: a job that calls the gate with
+// NEITHER source still fails, which is the whole point, and the loader limb is anchored on
+// the action PATH rather than on a step name, so renaming the step cannot satisfy it.
 const readsToken = (job: Job) =>
-  /doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) &&
+  (/doppler secrets get HCLOUD_TOKEN\b/.test(jobBody(job)) ||
+    jobUses(job).includes("./.github/actions/infra-credentials")) &&
   /\bexport HCLOUD_TOKEN\b/.test(jobBody(job));
 
 beforeAll(() => {

@@ -13,8 +13,11 @@
 // the row renders NON-NAVIGATING rather than dead-ending on a 404.
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePendingRouter } from "@/hooks/use-pending-router";
+import { usePendingAction } from "@/hooks/use-pending-action";
+import { Button } from "@/components/ui/button";
 import { sanitizeDisplayString } from "@/lib/sanitize-display";
+import { inboxRowEligibility } from "@/lib/inbox-archive-eligibility";
 import { relativeTime } from "@/lib/relative-time";
 import {
   buildInboxDeepLink,
@@ -41,8 +44,7 @@ const CONTAINER_CLASS: Record<InboxItemSeverity, string> = {
 };
 
 export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
-  const router = useRouter();
-  const [pending, setPending] = useState(false);
+  const router = usePendingRouter();
   const [confirming, setConfirming] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -53,36 +55,42 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
   const isArchived = item.status === "archived";
   // An action_required item must be acted before it can be archived (mirrors
   // the RPC archive-guard — a misclick must never lose a decision).
-  const canArchive = !isActionRequired || isActed;
+  // Shared predicate (lib/inbox-archive-eligibility) — the SAME rule the
+  // bulk-archive checkbox + server classifier use: archive-guard applies
+  // only to un-acted action_required rows.
+  const canArchive =
+    inboxRowEligibility({
+      severity: item.severity,
+      acted_at: item.acted_at,
+      status: item.status,
+    }) === "ok";
 
   const href = buildInboxDeepLink(item.source, item.source_ref);
   const navigable = href !== null && !isArchived;
 
-  async function runAction(action: "acted" | "archived") {
-    if (pending) return;
-    setPending(true);
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/inbox/${item.id}/state`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      if (res.ok || res.status === 409) {
-        // 409 = the row already transitioned elsewhere; the refetch reconciles.
-        onChanged?.();
-        setConfirming(false);
-      } else {
-        setActionError(
-          action === "acted" ? "Couldn't update — try again." : "Couldn't archive — try again.",
-        );
+  const { run: runAction, pending } = usePendingAction(
+    async (action: "acted" | "archived") => {
+      setActionError(null);
+      try {
+        const res = await fetch(`/api/inbox/${item.id}/state`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action }),
+        });
+        if (res.ok || res.status === 409) {
+          // 409 = the row already transitioned elsewhere; the refetch reconciles.
+          onChanged?.();
+          setConfirming(false);
+        } else {
+          setActionError(
+            action === "acted" ? "Couldn't update — try again." : "Couldn't archive — try again.",
+          );
+        }
+      } catch {
+        setActionError("Network error — try again.");
       }
-    } catch {
-      setActionError("Network error — try again.");
-    } finally {
-      setPending(false);
-    }
-  }
+    },
+  );
 
   const navigate = () => {
     if (!navigable || !href) return;
@@ -110,6 +118,9 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
       onKeyDown={
         navigable
           ? (e) => {
+              // Only the row itself navigates — a bubbled keydown from a
+              // focused inner control (Mark done / Archive) must not.
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 navigate();
@@ -150,36 +161,41 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
             )}
 
             {isActionRequired && !isActed && (
-              <button
+              <Button
+                variant="danger"
                 type="button"
                 aria-label="Mark done"
                 disabled={pending}
+                loading={pending}
                 onClick={(e) => {
                   e.stopPropagation();
-                  void runAction("acted");
+                  runAction("acted");
                 }}
                 className="min-h-[32px] rounded-md border border-red-500/30 px-3 py-1 text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-50"
               >
                 Mark done
-              </button>
+              </Button>
             )}
 
             {confirming ? (
               <span className="inline-flex items-center gap-2">
                 <span className="text-xs text-soleur-text-secondary">Archive this?</span>
-                <button
+                <Button
+                  variant="outlined"
                   type="button"
                   aria-label="Confirm archive"
                   disabled={pending}
+                  loading={pending}
                   onClick={(e) => {
                     e.stopPropagation();
-                    void runAction("archived");
+                    runAction("archived");
                   }}
                   className="min-h-[32px] rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-primary transition-colors hover:bg-soleur-bg-surface-2 disabled:opacity-50"
                 >
                   Confirm
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
                   type="button"
                   aria-label="Cancel archive"
                   disabled={pending}
@@ -190,15 +206,17 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
                   className="min-h-[32px] rounded-md px-2 py-1 text-xs text-soleur-text-secondary hover:text-soleur-text-primary disabled:opacity-50"
                 >
                   Cancel
-                </button>
+                </Button>
               </span>
             ) : (
-              <button
+              <Button
+                variant="outlined"
                 type="button"
                 aria-label="Archive item"
                 // Guard: an un-acted action_required item cannot be archived
                 // until it is marked done (a misclick must not lose a decision).
                 disabled={pending || !canArchive}
+                loading={pending}
                 title={
                   !canArchive ? "Mark it done before archiving" : undefined
                 }
@@ -207,12 +225,12 @@ export function InboxItemRow({ item, onChanged }: InboxItemRowProps) {
                   if (!canArchive) return;
                   // action_required archives always confirm; low-severity is direct.
                   if (isActionRequired) setConfirming(true);
-                  else void runAction("archived");
+                  else runAction("archived");
                 }}
                 className="min-h-[32px] rounded-md border border-soleur-border-default px-3 py-1 text-xs font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 disabled:opacity-50"
               >
                 Archive
-              </button>
+              </Button>
             )}
           </div>
         )}

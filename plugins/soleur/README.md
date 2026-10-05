@@ -6,11 +6,42 @@ A full AI organization across engineering, finance, marketing, legal, operations
 
 Install the plugin:
 
+**Devin CLI:**
+
 ```bash
-claude plugin install soleur
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Start a Devin session and use `/soleur:go <what you want to do>`. Use `-y` to skip the confirmation prompt. If the install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
+
+**Claude Code (marketplace):**
+
+```bash
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
 
 ## The Soleur Workflow
+
+**Local data the plugin writes:** one metadata-only line per `/soleur:go` routing
+decision into `.soleur/decisions.jsonl` at your project root (event names,
+skill/agent labels, timestamps — never prompt text, args, or file paths; the
+directory self-ignores in git and nothing leaves your machine). Opt out with
+`SOLEUR_DISABLE_DECISION_LOG=1`. See
+[ADR-254](../../knowledge-base/engineering/architecture/decisions/ADR-254-tester-owned-local-decision-log.md).
+
+**Codex:** install with `codex plugin marketplace add jikig-ai/soleur --sparse .agents/plugins --sparse plugins/soleur`,
+then `codex plugin add soleur@soleur`. Start a new session, review `/hooks`,
+and use `$soleur:go <intent>`. Codex shares the same skills and agent
+definitions; see [compatibility instructions](codex/INSTRUCTIONS.md).
+
+**Devin CLI:** install with `devin plugins install jikig-ai/soleur#plugins/soleur -y` and update with `devin plugins update soleur`. To work
+on the plugin from this checkout, run `bash scripts/setup-devin.sh`, start a Devin session,
+and use `/soleur:go <intent>`. Devin shares the same skills and agent definitions; see
+[compatibility instructions](devin/INSTRUCTIONS.md). Devin **Cloud** sessions run under
+Soleur Cloud Mode — skills, rules, and MCP carry, but plugin subagents and
+SessionStart/SessionEnd hooks are absent, and degradation is disclosed rather than
+silent; see the [cloud-vs-local capability matrix](devin/INSTRUCTIONS.md#cloud-mode-devin-cloud-sessions).
 
 The recommended way to use Soleur is through the unified entry point:
 
@@ -20,7 +51,16 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-The 6-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
+Claude Code: `/soleur:go`. Grok Build: `/go`.
+
+| Step | Claude Code | Grok Build |
+|------|-------------|------------|
+| Entry | `/soleur:go` | `/go` |
+| Sync | `/soleur:sync` | `/sync` |
+| Help | `/soleur:help` | `/help` |
+| Next skill | Skill tool `soleur:<skill>` | Read `SKILL.md` in this process (`/<skill>`) |
+
+The 6-step workflow (invoked automatically via `/soleur:go` or Skill tool `soleur:<skill>` on Claude Code; via `/go` then Read `SKILL.md` in this process on Grok Build):
 
 ```text
 brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
@@ -40,10 +80,10 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 
 | Component | Count |
 |-----------|-------|
-| Agents | 68 |
+| Agents | 67 |
 | Commands | 3 |
-| Skills | 95 |
-| MCP Servers | 3 |
+| Skills | 103 |
+| MCP Servers | 5 |
 
 ## Agents
 
@@ -147,7 +187,7 @@ Agents are organized by domain, then by function.
 |-------|-------------|
 | `pr-comment-resolver` | Address PR comments and implement fixes |
 
-### Operations (6)
+### Operations (5)
 
 | Agent | Description |
 |-------|-------------|
@@ -219,7 +259,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `content-writer` | Generate full article drafts with brand voice, Eleventy frontmatter, and JSON-LD |
 | `growth` | Content strategy: keyword research, content auditing, gap analysis, fix, AI agent consumability |
 | `legal-audit` | Audit legal documents for compliance gaps, outdated clauses, and cross-document consistency |
-| `legal-generate` | Generate draft legal documents from company context (8 document types, 3 jurisdictions) |
+| `legal-generate` | Generate draft legal documents from company context (14 document types, 3 jurisdictions) |
 | `release-announce` | Announce releases via GitHub Releases (CI posts to Slack) |
 | `release-docs` | Build and update documentation site with current components |
 | `seo-aeo` | Audit, fix, and validate SEO/AEO for Eleventy docs sites |
@@ -266,6 +306,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `cf-token-scope` | Widen a Cloudflare API token's scope via Playwright, then run the ADR-130 retained-scope probe set |
+| `cohort-status` | Print the alpha-tester cohort table: tally, checkpoint state, quiet flags (pull-based, operator-invoked) |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |
 | `git-worktree` | Manage Git worktrees for parallel development |
 | `invoice` | Get paid via your own Stripe account: list who owes you, create/send behind an approval preview, chase overdue (test mode only in v1) |
@@ -289,7 +330,10 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | Server | Description |
 |--------|-------------|
 | `context7` | Framework documentation lookup via Context7 |
+| `cloudflare` | Cloudflare platform access (DNS, Workers, Zero Trust) via OAuth |
 | `vercel` | Vercel platform access (deployments, projects, logs, domains) via OAuth |
+| `stripe` | Stripe platform access (payments, customers, subscriptions) via OAuth |
+| `playwright` | Browser automation via `@playwright/mcp`, routed through `playwright-mcp-redact-proxy.py` (accessibility snapshots redacted in flight; dedicated persistent `soleur-playwright-mcp-profile` browser profile under the XDG cache root). Registered via plugin-root `.mcp.json` on Claude Code ≥2.1.139; requires `python3` and `npx` |
 
 ### Context7
 
@@ -328,20 +372,194 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 
 ## Installation
 
+**Devin CLI:**
+
+```bash
+devin plugins install jikig-ai/soleur#plugins/soleur -y
+```
+
+Use `-y` to skip the confirmation prompt. You must be signed in (`devin auth login`) for plugin installation. If the remote install hangs or fails, clone the repository and install from `./soleur/plugins/soleur`.
+
 **From the marketplace (recommended):**
 
 ```bash
-claude plugin marketplace add jikig-ai/soleur
-claude plugin install soleur
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
 
-**From GitHub (without cloning):**
+This installs the plugin subtree only — about 10 MiB in well under a minute.
+
+<details>
+<summary>Installing from the monorepo directly (slower, and may time out)</summary>
+
+A first-time `claude plugin marketplace add jikig-ai/soleur` clones the whole repository
+(~181 MiB), which takes about 329 seconds — well past the CLI's 120-second default. Add `--sparse`
+so it fetches only what a plugin install needs; that completes in about 78 seconds, inside the
+default limit:
 
 ```bash
-claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
+claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
+claude plugin install soleur@soleur
 ```
 
+**Only on a first add.** If you already have a plain `~/.claude/plugins/marketplaces/soleur`
+checkout, do **not** add `--sparse` to it: applying `--sparse` to an existing checkout does not
+convert it in place, it forces a full re-clone — which on the monorepo is the 329-second operation
+that cannot finish under the 120-second default. Migrate instead, using the commands below. Details
+and recovery: the
+[plugin delivery runbook](../../knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md),
+under `## Symptom 2`.
+
+Once the checkout exists, routine refreshes are incremental `git pull`s rather than fresh clones, so
+the 329 seconds is a one-time cost of adding this way — but it is paid again whenever a refresh
+cannot update in place and restarts as a re-clone.
+
+**Already installed this way?** Switch to the marketplace above — the migration never clones the
+monorepo, so it is not subject to the timeout:
+
+```bash
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
+claude plugin uninstall soleur@soleur
+claude plugin marketplace remove soleur
+```
+
+Restart the CLI afterwards; plugin changes apply on restart. If your original install used
+`--scope project` or `--scope local`, pass the same `--scope` to every command above — the
+default is `user`, and a scope mismatch silently targets an install that isn't there.
+
+Removing the marketplace does **not** reclaim the plugin cache — though it does remove the
+marketplace checkout itself. Measured: after `uninstall` and `marketplace remove` both succeed, the
+378 MiB checkout is gone and the old plugin **cache** survives — 26 MiB on the machine this was
+measured on, with no CLI verb to reclaim it. Expect more the longer the install has been updating:
+each update caches into a new directory and leaves the previous one behind.
+
+**Do this only once the migration above has completed.** First confirm the new install is live
+and the old one is gone:
+
+```bash
+claude plugin list
+```
+
+You should see `soleur@soleur-marketplace` and no `soleur@soleur`. If you still see
+`soleur@soleur`, stop — the migration did not finish, and the directory below is still your
+working install.
+
+Then ask the CLI which paths are actually in use, and delete only what is **not** in that list:
+
+```bash
+claude plugin list --json | jq -r '.[].installPath'
+```
+
+```bash
+rm -rf ~/.claude/plugins/cache/soleur
+```
+
+The old and new cache directories differ by a single suffix — `soleur` versus
+`soleur-marketplace` — so compare against the output above rather than typing from memory.
+Note that scope does not change this path: installs made with `--scope project` or
+`--scope local` still cache under your home directory, so the directory above is yours to
+check regardless of how you installed.
+
+</details>
+
+## Compaction-Aware Session Hooks
+
+When a session's context is compacted, Soleur injects a short directive telling
+the model to re-read the plan and spec rather than trust the paraphrased
+summary, and — on the **second automatic compaction of the same session
+window** — recommends continuing in a fresh session at the next phase boundary.
+Before a compaction it tells the summarizer which resume identifiers to keep
+verbatim.
+
+This replaces the old unconditional "run `/clear` and resume" advice, which
+fired at fixed points regardless of whether any context had been lost.
+
+`plugins/soleur/hooks/compaction-state.sh` is bound twice in `hooks.json`:
+`PreCompact` (matcher `manual|auto`) and `SessionStart` (matcher
+`startup|resume|clear|compact`). It is fully local — nothing leaves the machine, and nothing is written to your
+repository. It is not read-only: it keeps a small per-session counter under
+`TMPDIR` (mode 0700, two files of one word each, reaped after 7 days). Its per-session
+counter lives under `TMPDIR` and is disposable.
+
+**It does nothing in a repository Soleur does not manage.** A plugin hook is
+global, so the hook stays silent unless the enclosing repository carries a
+`knowledge-base/project/plans` or `specs` directory — the artifacts
+`/soleur:plan` writes. Without that check, compacting work on an unrelated
+application would get a summary shaped around PR numbers and operator holds it
+does not have.
+
+This is a *relevance* check, not a security boundary, and the distinction is
+worth stating: any repository can contain a directory of that name, so a
+repository you clone can satisfy it. That is bounded by what the hook emits —
+pointers and integers it derives itself, with every free-text value reduced to a
+conservative character set — and by the fact that a cloned repository already
+reaches the model more directly through `CLAUDE.md`, which Claude Code loads
+unconditionally.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `SOLEUR_DISABLE_COMPACTION_HOOKS` | unset | `1` disables both events entirely — no directive, no summary shaping, nothing written |
+| `jq` (not a setting) | required | Without `jq` on `PATH` the hook emits a static `reason=jq-unavailable` envelope and can produce no recommendation. The Claude Code row below assumes it is present. |
+| `SOLEUR_COMPACTION_COUNT_THRESHOLD` | `2` | Automatic compactions in one session window before a fresh session is recommended. `1` recommends on the first; a high value effectively never recommends. `0` and any non-numeric value fall back to the default — `0` reads as "off" to most people, and honouring it literally would mean "recommend always", so use the kill switch above instead |
+| `SOLEUR_COMPACTION_CLI_VERSION` | derived from `claude --version` | Pins the CLI version stamped into the directive, for drift attribution |
+
+`SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK=1` makes the `unkept-promise-hook.sh` Stop hook exit immediately. The web platform sets it for every agent session (`AGENT_ENV_OVERRIDES` in `apps/web-platform/server/agent-env.ts`) because that hook speaks operator vocabulary a chat user must not see; an operator can export it as a kill switch. Only the exact value `1` opts out.
+
+### Harness support
+
+The compaction lifecycle is a Claude Code API. The other three harnesses
+degrade to **silence**, never to a false claim that the behaviour is present.
+
+| Harness | Compaction hooks | What you get instead |
+|---|---|---|
+| Claude Code | Yes (2.1.76+; measured on 2.1.273) | Evidence-based directive and fresh-session recommendation |
+| Codex | No | The skill-prose fallback: the end-of-work resume prompt still fires, with no `/clear` recommendation |
+| Devin Cloud | No | Same as Codex. Plugin hooks do not fire in cloud sessions at all — see `devin/INSTRUCTIONS.md` §Cloud Mode |
+| Grok Build | No | Same as Codex |
+
 ## Known Issues
+
+### Updating the Marketplace Does Not Update the Installed Plugin
+
+**Issue:** `/plugin marketplace update soleur` advances the marketplace checkout under
+`~/.claude/plugins/marketplaces/` to the new HEAD, but does **not** re-pull the plugin
+install under `~/.claude/plugins/cache/`. The install keeps its own `gitCommitSha` in
+`installed_plugins.json`, and `${CLAUDE_PLUGIN_ROOT}` resolves to that install — not to the
+marketplace checkout. So a fix verified against the marketplace copy reads as shipped while
+every run still executes the old payload.
+
+**Workaround:** run both steps, then confirm the two agree:
+
+```bash
+claude plugin marketplace update soleur-marketplace
+claude plugin update soleur@soleur-marketplace
+```
+
+Both halves name the marketplace deliberately. On current releases the bare plugin name can
+fail with `Plugin not found`; an Anthropic collaborator confirmed `<plugin>@<marketplace>` as
+the reliable form on anthropics/claude-code#76882 (2026-08-17). `soleur-marketplace` is the id
+for the published marketplace; if you added this repository directly it is `soleur`, so run
+`claude plugin list` and use whatever it prints beside `soleur`.
+
+**If that does not converge them, reinstall.** This is now a fallback rather than the only
+mechanism, and the reason it used to be the only one is worth knowing: `plugin.json` carried a
+frozen `0.0.0-dev` sentinel, so the install directory name never changed and `plugin update` had
+no version bump to act on (measured in ADR-178 — an actively-used install carried 64 skills
+against 96 in the repo, three months stale, while reporting success). The manifests became
+keyless on 2026-08-12, and the CLI now records a compound version whose leading half is the
+delivered commit, so the string changes with every commit and `update` has something to compare.
+See ADR-182 for the mechanism and its measurements:
+
+```bash
+claude plugin uninstall soleur@soleur-marketplace && claude plugin install soleur@soleur-marketplace
+```
+
+**Symptom to watch for:** `/soleur:sync` emitting
+`SOLEUR_SYNC_PRODUCER_MISSING producer=<path> … reason=absent-from-verified-root` means the
+verified plugin root does not carry a file that run needed — most often an install that
+predates it. That marker is why this failure now names itself instead of surfacing as an
+unattributed interpreter error (#7474).
 
 ### MCP Servers Not Auto-Loading
 
@@ -375,3 +593,9 @@ See [GitHub Releases](https://github.com/jikig-ai/soleur/releases) for detailed 
 BSL 1.1 (Business Source License). See [LICENSE](LICENSE) for details.
 
 Source-available for all individual and internal company use. The only restriction is offering Soleur as a competing hosted service. Each version converts to Apache-2.0 after 4 years. Versions v3.0.10 and earlier remain Apache-2.0.
+
+## Terms
+
+The licence governs what you may do with the source. Separately, the [Terms and Conditions](https://soleur.ai/legal/terms-and-conditions) govern your use of Soleur and bind on **installation** — not only on signing up to the hosted platform. The [Privacy Policy](https://soleur.ai/legal/privacy-policy), [Acceptable Use Policy](https://soleur.ai/legal/acceptable-use-policy), and [Data Protection Disclosure](https://soleur.ai/legal/data-protection-disclosure) apply on the same basis.
+
+If you install only the plugin and never create a hosted account, you never pass through the platform's accept-terms flow — so this link is the notice. The Data Protection Disclosure is the one worth reading. It explains that where the plugin runs **on your own machine, under your own API key, for your own purposes**, Jikigai is neither a controller nor a processor of the data processed there. All three conditions matter: if Jikigai's own credential pays for a run, or Jikigai observes your content for its own purposes, that position does not apply and a separate instrument is required.

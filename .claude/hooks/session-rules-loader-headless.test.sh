@@ -12,6 +12,12 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/session-rules-loader.sh"
 
@@ -69,7 +75,8 @@ if command -v script >/dev/null; then
   fi
   rm -f "$TYPESCRIPT"
 else
-  echo "  skip: script(1) missing"
+  echo "  UNRESOLVED: script missing — T4 pty case not run; install script (util-linux)"
+  UNRESOLVED_ARMS=1
 fi
 
 # T5: CLAUDECODE unset → HEADLESS_MODE=0 regardless of TTY
@@ -86,4 +93,6 @@ echo "=== Results ==="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
+# An arm that could not run is not a pass (#8616).
+[[ "${UNRESOLVED_ARMS:-0}" -eq 0 ]] || exit 3
 exit 0

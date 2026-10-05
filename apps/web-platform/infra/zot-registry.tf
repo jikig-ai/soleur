@@ -43,21 +43,45 @@ locals {
   # scheme). Published as ZOT_REGISTRY_URL.
   registry_endpoint = "${local.registry_private_ip}:5000"
 
-  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED, v2.1.2. Pulled from
+  # zot's OWN image is third-party (upstream project-zot), DIGEST-PINNED. Pulled from
   # the PUBLIC upstream registry at boot — NEVER from our own zot (bootstrap paradox, Sharp Edges).
+  # That paradox is also the rollback lever: a dark zot cannot block its own replacement.
   # Arch is DERIVED from var.registry_server_type so a single var switches the whole host: `cax*`
   # (Ampere) → arm64, anything else (`cx*`/`cpx*`) → amd64. The arch-agnosticism is real — both are
   # functionally identical for a store-and-serve registry (it never RUNS the amd64 platform images
   # it holds) — but the stock claim that used to sit here is NOT. It read "this lets provisioning
-  # take whichever of cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock"; as of the live
-  # probe 2026-07-26 (#6966) NEITHER has stock: the entire cx line AND the entire cax ARM line are
-  # orderable in 0 of 3 EU DCs. soleur-registry is GRANDFATHERED on its cx23 — it runs fine but
-  # CANNOT BE REBUILT on that type, so a registry recreate is a type decision (the orderable set is
-  # cpx*/ccx* only). Do not read this block as offering a cax11↔cx23 choice. Re-verify BOTH
-  # digests on a version bump: `crane digest ghcr.io/project-zot/zot-linux-{arm64,amd64}:vX.Y.Z`.
+  # take whichever of cax11 (ARM, €5.99) / cx23 (x86, €5.49) has Hetzner stock". THERE IS NO SUCH
+  # CHOICE TO OFFER: cax11 (id 45) was probed NOT available in hel1-dc2 on 2026-08-06 (#7309), as
+  # it has been at every probe that sampled it since 2026-07-15 — the whole `cax` ARM line is out. This
+  # host is pinned to cpx22 (amd64) by var.registry_server_type. Do not read this block as
+  # offering an ARM arm; read it as one derivation with one live branch.
+  #
+  # FRESHNESS OWNER — do NOT put a "run crane digest by hand" instruction back here. A prose
+  # instruction to a human is exactly what let this pin sit at v2.1.2 for 18 releases (#7282).
+  # The analysis of record is `zot-image.provenance.md` (config-compat table, non-adoption
+  # decisions, rollback target, and the '## Bump procedure' to follow on a version change).
+  # Detection is the upstream-poll step in .github/workflows/rule-audit.yml (1st + 15th, files
+  # ONE idempotent issue); enforcement is `zot-image-staleness.test.sh` in infra-validation.
+  # NOTHING auto-writes these two lines: the cron files an issue, a human opens the CI-gated PR.
+  # No bot manages this pin — do not describe one.
+  # DELIVERY: a merged bump reaches the host through registry-host-replace-dispatch.yml, whose gate
+  # renders the user_data at both SHAs and delivers on a byte change (#7582).
+  #
+  # THE ARCH IN EACH NAME MUST MATCH THE ARCH IN ITS VALUE. `local.zot_image` below selects on
+  # registry_arch (amd64 today), so swapping these two values DARKS THE SOLE PULL PATH.
+  # MECHANISM, MEASURED 2026-08-05: zot-linux-amd64 and zot-linux-arm64 are DISTINCT OCI
+  # REPOSITORIES and a manifest digest resolves only within its own, so the pull 404s
+  # (MANIFEST_UNKNOWN) — no wrong-arch binary is ever executed and no container is created.
+  # The host then reports `zot_image_digest=unknown state_status=unknown`, which is the
+  # signature to grep for. (An earlier version of this comment said `exec format error`;
+  # that was wrong, and it sends an operator hunting telemetry that never appears.)
+  # Staleness checks 2/4/5 are arch-keyed for this reason and must not be relaxed to a
+  # "both digests appear somewhere" form, which a swap satisfies. Note they close a swap in
+  # ONE file relative to the other; a swap applied coherently to BOTH the .tf and the sidecar
+  # is caught by the digest<->repository probe in rule-audit.yml, not here.
   registry_arch   = startswith(var.registry_server_type, "cax") ? "arm64" : "amd64"
-  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64@sha256:c3fc47782d98b731d5928a24182b495e28cc92f9dcf1d5317f7dbd632e10bf30"
-  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64@sha256:073f30d99fbdbcd8869334231c9ca45c75e535e4bdc6e28cc8a1541abe7a3f71"
+  zot_image_arm64 = "ghcr.io/project-zot/zot-linux-arm64:v2.1.20@sha256:56230c5a589eb55acc57afc34307f6ea1b2efe5cf8e0057ccca64099ba837ff6"
+  zot_image_amd64 = "ghcr.io/project-zot/zot-linux-amd64:v2.1.20@sha256:95a837a0afacf5b7edc0c92493f04beee6891989b8d2fd50a00cf65a1e6d4fd5"
 
   # zot's container memory cap, DERIVED from the host it will actually run on (ADR-062:
   # cap = host RAM − ~1024m for cron+doppler+sshd+OS). It was previously a hardcoded
@@ -101,6 +125,36 @@ locals {
   # (`n_admitted=…REGISTRY_LUKS_KEY…`, cardinality 4) in cloud-init-registry.yml.
   # keep in sync with vector.toml [sinks.betterstack].uri (same source 2457081 / eu-fsn-3 endpoint).
   betterstack_logs_ingest_url = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+}
+
+# --- zot's BOOT IMAGE: the pinned GitHub release asset (#8714 step 5.3b-iii) ------------------
+# The registry host no longer pulls zot from ghcr.io. `zot_image_amd64` above stays the UPSTREAM
+# RECORD (staleness gate, rule-audit probes, the D10 rehearsal read it); what the host BOOTS is the
+# exact upstream image, packaged by zot-image-oci-archive.sh and published by zot-image-mirror.yml as
+# a prerelease asset, fetched and verified on the host by zot-image-fetch.sh (cloud-init-registry.yml)
+# against T and C below and D from the pin. Mechanism and trust argument: ADR-096 amendment
+# 2026-09-28 (part 2). Every route that creates this host refuses a missing or altered asset first
+# (registry-replace-preflight.sh P6 / --check-asset; ADR-169 amendment 2026-09-28). Bump procedure
+# and recovery: zot-image.provenance.md.
+#
+# amd64 ONLY. The mirror publishes the amd64 image; the precondition on hcloud_server.registry
+# refuses an arm64 registry_server_type rather than booting a host with no asset to fetch.
+#
+# READ VERBATIM, NOT RESTATED: registry-userdata-budget.sh copies the lines between the two markers
+# into its offline render, so the dispatcher's render diff sees exactly these expressions. Keep every
+# line a `name = <expr>` over literals and local.zot_image_amd64 only.
+locals {
+  # zot-mirror:begin
+  zot_mirror_asset_sha256_amd64 = "05b171f2bd500dc84f532ef7736d1550ffaf7464f0d655c86b8238b443568cb2"
+  zot_config_digest_amd64       = "2d7fee5603dfd88b2b90cffd07e6b97e6d7ba5e3d6bd5472e66b23bd5ad59114"
+  zot_mirror_repo               = "jikig-ai/soleur"
+  zot_version                   = regex(":(v[0-9]+\\.[0-9]+\\.[0-9]+)@sha256:", local.zot_image_amd64)[0]
+  zot_manifest_digest           = regex("@sha256:([0-9a-f]{64})$", local.zot_image_amd64)[0]
+  zot_mirror_release            = "zot-image-${local.zot_version}-${substr(local.zot_manifest_digest, 0, 12)}"
+  zot_mirror_asset              = "zot-linux-amd64-${local.zot_version}.oci.tar"
+  zot_mirror_asset_url          = "https://github.com/${local.zot_mirror_repo}/releases/download/${local.zot_mirror_release}/${local.zot_mirror_asset}"
+  zot_local_ref                 = "localhost/soleur-mirror/zot-linux-amd64:${local.zot_version}"
+  # zot-mirror:end
 }
 
 # --- Read-only pull + read/write push credentials (TF-generated, zero human mint) ----
@@ -283,8 +337,9 @@ resource "doppler_service_token" "registry" {
 
 # --- Client/CI-facing secrets: the shared `prd` config ---------------------------------
 # Web hosts (pull) + CI (push) read these from `prd`, their existing runtime/deploy config.
-# TF owns the values → NO ignore_changes (mirrors the ghcr-minter-doppler-token.tf shape, NOT
-# ghcr-read-credential.tf's operator-minted ignore_changes shape).
+# TF owns the values → NO ignore_changes: a Terraform-generated value must reach Doppler in the
+# same apply (unlike an operator-minted value, e.g. resend.tf's resend_receiving_api_key, which
+# carries ignore_changes = [value]).
 resource "doppler_secret" "zot_registry_url" {
   project    = "soleur"
   config     = "prd"
@@ -325,10 +380,68 @@ resource "doppler_secret" "zot_push_token" {
   visibility = "masked"
 }
 
+# (#7278, ADR-152 precedent) THE RATIONALE STRIP for the registry's cloud-init.
+#
+# Removes whole-line `#` comments from the render, so the repo keeps its rationale and
+# user_data does not pay for it: 34,628 B → 9,072 B against Hetzner's hard 32,768 B ForceNew cap
+# (measured with terraform's OWN base64gzip, never `gzip -9` — git-data-userdata-budget.sh:19-22
+# forbids the latter because it OVERSTATES headroom, and on a hard gate an optimistic
+# measurement is worse than none).
+# Measured over-cap BEFORE this issue added anything, which meant every registry provisioning
+# event — the `registry-luks-recut` that activates the restart lever included — failed at the
+# Hetzner API. Comments were ~55% of the payload's lines.
+#
+# WHY THIS EXPRESSION IS NOT git-data's. modules/git-data-userdata/main.tf strips with
+# `/(?m)^[ \t]*#([^!\n][^\n]*)?\n/`, which preserves `#!` and NOTHING ELSE. Ported verbatim here
+# it would delete `#cloud-config` — line 1 of this template, and the token cloud-init uses to
+# recognise a payload at all. The apply would still succeed and the host would still boot; it
+# would simply run none of this file, leaving the LUKS volume locked and zot never started. That
+# is a dark host presenting as a green apply, which is the failure mode ADR-096 exists to avoid.
+#
+# Two structural differences drive it. git-data strips the INJECTED SCRIPTS and explicitly does
+# NOT strip its cloud-init; this host has no injected scripts — every script is inline in the
+# YAML — so the template itself is what must be stripped, `#cloud-config` and all.
+#
+# THE RULE: a `#` line is rationale only when followed by a space/tab, or when bare. That
+# preserves `#cloud-config` and `#!` shebangs by construction rather than by enumeration, and
+# `#cloud-config` is verified to be the ONLY comment line in this file lacking that separator.
+# Anchored at line start, so mid-line `${var#...}` parameter expansions are untouched.
+#
+# RE2, NOT PCRE: terraform's `replace()` compiles Go regexp, which has no lookahead — hence the
+# separator-class formulation rather than the `(?!cloud-config)` an RE2-free engine would allow.
+#
+# Applied AFTER templatefile (see the `replace(...)` wrapper below), so the substituted values —
+# ids, digests, tokens, all single-line scalars — cannot be touched by a line-anchored match.
+#
+# ONE COPY, TWO EXTRACTORS. Both consumers read this EXPRESSION from here rather than restating
+# it, so neither can strip differently than production:
+#   - plugins/soleur/test/cloud-init-user-data-size.test.ts (the required `test` context)
+#   - registry-userdata-budget.sh (added by PR #7283, closing #7282; the byte-exact,
+#     terraform-native measurement)
+# git-data needed a dedicated parity suite to keep its two COPIES of the expression equal; there
+# is nothing HERE to keep equal, and that is a property of the extractors — not of this file.
+#
+# SCOPED PRECISELY, because "nothing to keep equal" is true of the expression and false of the
+# render. registry-userdata-budget.sh still hand-restates the 12-key templatefile var map and the
+# three-stage chain below (the TS test DERIVES the var map instead). A var renamed or removed
+# there is silent; a var ADDED makes templatefile fail, which is fail-closed. That residual is
+# bounded and deliberate — calling it out is the difference between a scoped claim and the
+# unfalsifiable one this block used to carry.
+#
+# (#7299) THE INVARIANT ABOVE IS FALSIFIABLE BY ANY LATER PR, AND WAS. When this comment was
+# written the test was the sole consumer and the claim was true. #7282 then added the budget
+# script as a second consumer that RESTATED the render without this strip — so it measured the
+# unstripped 36,404 B against a 32,768 B cap and reported a phantom breach, which #7299 was filed
+# against as "the registry host cannot be re-provisioned". It could. A consumer that extracts is
+# safe; one that restates re-opens exactly that defect, silently, and no gate here will notice.
+locals {
+  registry_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
+}
+
 # --- The registry host -----------------------------------------------------------------
 resource "hcloud_server" "registry" {
   name        = "soleur-registry"
-  server_type = var.registry_server_type # cax11 (arm64) / cx23 (amd64) — arch derived in locals
+  server_type = var.registry_server_type # cpx22 (amd64) — arch derived in locals, see ~line 49
   location    = var.registry_location    # independent of var.location (#6122: registry is nbg1)
   image       = "ubuntu-24.04"
   keep_disk   = true
@@ -348,7 +461,96 @@ resource "hcloud_server" "registry" {
   # (docker + one container + htpasswd gen; no bake-and-extract), but budget for it anyway
   # and verify the byte-exact size at the first `terraform plan`. Hetzner base64-decodes →
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
-  user_data = base64gzip(templatefile("${path.module}/cloud-init-registry.yml", {
+  #
+  # (#7278) "budget for it anyway and verify the byte-exact size at the first terraform plan"
+  # was never done, and the payload crossed the cap: 34,628 B against 32,768 B, i.e. 1,860 B over
+  # (terraform's own base64gzip). In that
+  # state EVERY registry provisioning event fails at the Hetzner API — including the
+  # `registry-luks-recut` that is the only vehicle able to deliver new host-side code here
+  # (ADR-096 makes this host cloud-init-only). The rationale strip below is what brings it back
+  # under, and plugins/soleur/test/cloud-init-user-data-size.test.ts now carries the registry arm
+  # that was missing, so the next drift fails in CI instead of at a dark host.
+  #
+  # ⚠ THIS EDIT ARMS A PENDING REPLACE. The recreate is now ATTEMPTABLE (#7309) — it was not
+  # when this note was written. Attemptable is not scheduled: see the STOCK REALITY block below.
+  #
+  # `user_data` is ForceNew and this resource DELIBERATELY carries no
+  # `lifecycle.ignore_changes = [user_data]` (see the note ~40 lines below). Changing the render
+  # therefore shows `-/+ hcloud_server.registry` — a destroy-then-create — in any UNTARGETED
+  # plan, which is the operator's full apply and the 12h drift detector, i.e. the ONLY apply
+  # paths these resources have.
+  #
+  # The replace was ALREADY pending before this change (state ≠ over-cap render). What the
+  # rationale strip did is make the CREATE attemptable at all: pre-fix it would have destroyed the
+  # host and then failed at the Hetzner 32 KB error. That is an improvement only if the type is
+  # orderable — which is why #7309 repinned this host's type. See below.
+  #
+  # STOCK REALITY — read from `.server_types.available` (never `.supported`, never the hcloud CLI
+  # location column; both report the SUPPORTED set, which resolves a type you cannot buy).
+  # FIVE probes, hel1-dc2 — this host's datacenter (registry_location = hel1).
+  # A dash means that probe did not sample that type; it is not a reading.
+  #
+  #   2026-07-15 (#6457)    cx23 ✓   cx33 ✓   cax11 —   cpx22 ✓
+  #   2026-07-25 (ADR-143)  cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-07-26 (#6966)    cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-08-04 (#7280)    cx23 ✗   cx33 —   cax11 —   cpx22 ✓
+  #   2026-08-06 (#7309)    cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-08-10 15:12Z     cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓   (#7410, pre-recut probe)
+  #   2026-08-10 19:55Z     cx23 ✓   cx33 ✓   cax11 ✗   cpx22 ✓   (#7410, same session)
+  #
+  # The last two rows are ~4 hours apart and cx23 flips NO->YES between them. That is the
+  # tightest direction change recorded here -- the previous tightest was "inside 24 hours" --
+  # and it is why the recut runbook demands a re-probe IMMEDIATELY before firing rather than
+  # reusing a reading from earlier in the same session. Note also that a NO here is not a
+  # verdict about the type: both readings are the same command against the same datacenter.
+  #
+  # Sources, so a reader can re-derive rather than trust this table:
+  #   2026-07-15  knowledge-base/project/plans/2026-07-15-chore-hetzner-cap-headroom-plan.md,
+  #               anchor "hel1-dc2  orderable NOW:" — a /v1/datacenters availability listing.
+  #   2026-07-25  ADR-143's "Live stock probe" table — its cx23 row reads "YES — in stock".
+  #   2026-07-26  the block this replaces in variables.tf, anchor "STOCK REALITY (live probe
+  #               2026-07-26" — recorded as "0 of 3 EU DCs", which names hel1-dc2 explicitly.
+  #   2026-08-04  the previous revision of THIS block; it was introduced by #7280, not #7287.
+  #               NOTE apply-web-platform-infra.yml, ADR-169 and the recut runbook date the
+  #               same reading 2026-08-05. One is wrong; nothing in the repo resolves it.
+  #               TRIAGED, no issue filed: both dates fall between the 07-26 ✗ and the 08-06 ✓,
+  #               so every count and direction change below is invariant to which is right, and
+  #               neither date gates anything. Re-deriving it would mean reconstructing a probe
+  #               nobody recorded. If a future reading makes the interval load-bearing, resolve
+  #               it then — this note is the record that it was considered, not overlooked.
+  #   2026-08-06  #7309, 3 samples, all three EU DCs.
+  #
+  # cx23 IS orderable in hel1-dc2 as of the newest probe. Do not restate the older "unorderable
+  # in hel1" line as if it were current — it was true on two of four sample days and is not the
+  # reason this host moved. The reason is the SHAPE of that column: cx23 went available →
+  # unavailable → available, i.e. TWO direction changes across twelve days — and the first took
+  # ONE DAY, from "in stock" on 07-25 to orderable in 0 of 3 EU DCs on 07-26. No deprecation
+  # block, no warning. (Quote the span that matches the count: the 11-day window 07-26 → 08-06
+  # contains only ONE change.) A
+  # host replace here is destroy-then-create with no capacity reservation, and a failed create
+  # leaves the registry dark with the revert needing a SECOND create against the same supply.
+  # cpx22 is ✓ on every row. #7309 repinned var.registry_server_type cx23 → cpx22 on exactly
+  # that basis (+€14.00/mo, operator-accepted); cax11 is ✗ at every probe that sampled it.
+  #
+  # NOTE THE cx33 COLUMN — it is the trap, and #7309 fell into it before catching it. cx33 is
+  # ✗ in hel1-dc2 on 2026-08-06 while ✓ in nbg1-dc3 AND fsn1-dc14 on the same samples. A
+  # fleet-wide reading therefore says "cx33 is available" and a hel1-dc2 reading says it is not,
+  # and only the second one answers a question about a host that runs in hel1. Project every
+  # probe onto the DC the host actually occupies before drawing a conclusion from it.
+  #
+  # #6508's plan-time guard does not close this either way: `data.hcloud_server_type.registry`
+  # is a CATALOG lookup, so it resolves any SUPPORTED type regardless of availability. It catches
+  # a nonexistent type (#6288's cx32) and nothing about stock. That is the whole distinction.
+  #
+  # CONSEQUENCE, unchanged by the repin: do not run an untargeted apply against this root without
+  # re-probing stock first. Re-provisioning is the guarded `registry-host-replace` /
+  # `registry-luks-recut` dispatch path, which is destroy-guarded and scoped. This is disclosure,
+  # not a new hazard — but until #6460's DR remediation lands, "the plan shows the registry being
+  # replaced" is a STOP, not a proceed. The repin improves the odds the Hetzner CREATE
+  # call succeeds; a fresh host still meets cloud-init-registry.yml's `blkid` arms (history of
+  # the pre-2026-08-10 FATAL: runbooks/registry-luks-recut-6929.md, "cannot perform a recut").
+  # Improving the odds of one step is not authorization.
+  user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-registry.yml", {
     # Mount the zot storage volume by its specific id (server.tf/cloud-init.yml by-id
     # pattern). Known at plan time; the attachment is a separate resource.
     registry_volume_id = hcloud_volume.registry.id
@@ -356,8 +558,14 @@ resource "hcloud_server" "registry" {
     # can read ZOT_PULL_TOKEN/ZOT_PUSH_TOKEN and build htpasswd. The tokens themselves are
     # NEVER in this user_data (retrievable via the hcloud metadata API).
     doppler_token = doppler_service_token.registry.key
-    # zot's digest-pinned upstream image + the fixed htpasswd usernames (non-secret).
-    zot_image     = local.zot_image
+    # zot's boot image: the pinned release asset + the upstream digests its load must match
+    # (see the zot-mirror locals block). Public, non-secret literals, same class as a digest pin.
+    zot_asset_url       = local.zot_mirror_asset_url
+    zot_asset_sha256    = local.zot_mirror_asset_sha256_amd64
+    zot_manifest_digest = local.zot_manifest_digest
+    zot_config_digest   = local.zot_config_digest_amd64
+    zot_local_ref       = local.zot_local_ref
+    # The fixed htpasswd usernames (non-secret).
     zot_pull_user = local.zot_pull_user
     zot_push_user = local.zot_push_user
     # Host arch (arm64/amd64) → the matching Doppler CLI release build + its checksum.
@@ -391,7 +599,7 @@ resource "hcloud_server" "registry" {
     # Single-sourced with hcloud_server_network.registry.ip (network.tf) — see the drift
     # rationale there; a drifted copy would reboot a healthy host.
     private_ip = local.registry_private_ip
-  }))
+  }), local.registry_rationale_strip, ""))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf rationale) —
@@ -417,6 +625,27 @@ resource "hcloud_server" "registry" {
       random_password.zot_pull,
       random_password.zot_push,
     ]
+
+    # WRONG-ARCH TRIPWIRE — ADR-068 D7, back-filled 2026-08-06 (#7309). Compares the DERIVED
+    # arch against GROUND TRUTH from the live Hetzner catalog for this same var, so a
+    # derivation that does not match the type it claims to describe wedges the PLAN instead
+    # of booting a host that 404s every pull (MANIFEST_UNKNOWN — see local.registry_arch).
+    # git-data.tf carries this and borrowed its derivation from here; this host never had it.
+    # The x86/arm <-> amd64/arm64 mapping is Hetzner's enum, mirrored from git-data.tf:381.
+    # NOTE this is strictly stronger than registry-boot-guard.test.sh's R1/R2/R3, which read
+    # a STRING IN A FILE: those cannot fire for an operator overriding the var via tfvars or
+    # -var, which is the whole reason the var exists.
+    # AMD64-ONLY BOOT IMAGE (#8714 5.3b-iii). The mirror publishes and pins amd64 only, so an arm64
+    # host would boot with no asset to fetch and zot would never start. Refuse at PLAN time.
+    precondition {
+      condition     = local.registry_arch == "amd64"
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but the zot boot image is mirrored for amd64 only (zot-mirror locals: zot_mirror_asset_sha256_amd64 / zot_config_digest_amd64). Publish an arm64 asset and add its pins before selecting a cax* type."
+    }
+
+    precondition {
+      condition     = data.hcloud_server_type.registry.architecture == (local.registry_arch == "arm64" ? "arm" : "x86")
+      error_message = "registry_server_type=${var.registry_server_type} derives ${local.registry_arch}, but Hetzner reports architecture=${data.hcloud_server_type.registry.architecture}. the host would provision against the wrong architecture's Doppler CLI build and zot boot image, darking the sole pull path (ADR-169)."
+    }
 
     # `ssh_keys` is a CREATE-TIME attribute (Hetzner injects it at first boot and never
     # re-reads it), so a changed key ID is unappliable to a running host and Terraform
@@ -564,8 +793,14 @@ resource "betteruptime_heartbeat" "registry_prd" {
 # own comment prescribed deleting it once #6438 resolved. #6438 is now resolved by the WEB-HOST
 # consumer probe, which mints its OWN per-host heartbeat + URL secret (betteruptime_heartbeat.
 # web_zot_consumer / doppler_secret.web_zot_consumer_url in web-probe.tf) — the registry's own
-# registry_prd beat is the registry's self-view, not the consumer's. Removing the reserved secret is
-# the single expected `-target`ed destroy on this apply (AC5).
+# registry_prd beat is the registry's self-view, not the consumer's.
+#
+# (#8754) Deleting the block did not delete the secret: no apply ever `-target`ed the address, so
+# it stayed in state and in Doppler prd and showed as `will be destroyed` in every drift report.
+# apply-web-platform-infra.yml now carries a bare `-target=doppler_secret.zot_heartbeat_url_prd`
+# (no `removed` block: a forget would leave the value in Doppler), which plans the destroy "because
+# not in configuration". Deleting the Doppler copy does not revoke the Better Stack ping URL of
+# `soleur-registry-prd`; it only stops Doppler holding a second copy of it.
 
 # --- Disk-capacity guard (#6122 follow-up) --------------------------------------------------
 # A SECOND heartbeat, distinct from the liveness beat above: the registry host's cron pings it

@@ -1,0 +1,12 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// An arbitrary helper that merely SHARES a name with a marker writer proves nothing.
+function markOwned(_d: string): void {}
+
+export function scratch(): string {
+  const d = mkdtempSync(join(tmpdir(), "demo-"));
+  markOwned(d);
+  return d;
+}

@@ -23,14 +23,18 @@ The CLA Required ruleset (ID 13304872) includes bypass actor `{ "actor_id": 2623
 ## Proposed Solutions
 
 ### Option A: File GitHub issue to investigate (Recommended)
+
 Create a separate GitHub issue to track investigation and potential removal of this bypass actor.
+
 - Pros: Tracked, out of scope for this PR
 - Cons: Remains unresolved until investigated
 - Effort: Small
 - Risk: None
 
 ### Option B: Remove immediately
+
 Remove actor 262318 from the ruleset in this PR.
+
 - Pros: Eliminates unknown bypass path
 - Cons: Could break something if the app is still active through a path we don't see
 - Effort: Small

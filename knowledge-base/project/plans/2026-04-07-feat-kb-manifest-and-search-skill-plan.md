@@ -6,6 +6,12 @@ date: 2026-04-07
 
 # KB Manifest (INDEX.md) and Cross-Domain Search Skill
 
+> **Superseded in part 2026-08-10 (#7399, ADR-174):** the "listing every KB file"
+> scope below was already inexact (`**/archive/` was never indexed) and is now
+> narrower still — inside `knowledge-base/project/specs/<feature>/`, INDEX.md
+> carries only `spec.md` and `tasks.md`. An empty INDEX grep is not proof a file
+> is absent. The rest of this record stands as written.
+
 ## Overview
 
 Add two components to improve knowledge base discoverability: (1) an auto-generated `knowledge-base/INDEX.md` manifest listing every KB file with a one-line description, and (2) a `soleur:kb-search` skill that greps across all KB domains. This addresses the discovery gap where agents don't know what files exist and cross-category searches fail.
@@ -94,6 +100,13 @@ Known constraint: lefthook hangs in worktrees >60s — the script must complete 
 **INDEX.md size:** At ~2,375 files with one line per file, expect ~60-80 KB. Fits easily in Claude's context window.
 
 **learnings-researcher integration:** Update the agent's instructions to check INDEX.md first for file discovery, then fall back to direct grep for content matching. This is an instruction update to `plugins/soleur/agents/engineering/research/learnings-researcher.md`.
+
+> **Superseded 2026-09-08 (#7935, ADR-210):** the `.gitattributes` prohibition below is
+> REVERSED. `knowledge-base/INDEX.md` now carries a `merge=kb-index` driver and the two facet
+> files carry `merge=union`; the hand-run regeneration remedy is what failed three times on PR
+> #7896, silently dropping rows on every `--theirs` resolve. The `--help` text this paragraph
+> asks for has been replaced accordingly. See
+> [ADR-210](../../engineering/architecture/decisions/ADR-210-regenerating-merge-driver-for-committed-generated-artifacts.md).
 
 **Merge conflicts:** INDEX.md is a generated file. Do not use `.gitattributes` merge strategies. After any merge that conflicts on INDEX.md, regenerate by running `bash scripts/generate-kb-index.sh`. Document this in the script's `--help` output.
 

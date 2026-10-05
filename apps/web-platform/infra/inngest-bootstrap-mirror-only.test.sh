@@ -11,8 +11,9 @@
 #
 # Every assertion below defends that biconditional from the *false-green* side, because a
 # run that reports success while mirroring nothing is what causes a pin to a digest zot
-# cannot serve — which sends every fresh boot down the GHCR-fallback branch and fires
-# `inngest_ghcr_fallback` permanently. Precedent for the failure class:
+# cannot serve — and since #8036 item 1d there is no GHCR fallback behind the zot pull, so
+# every fresh inngest boot then ends at `inngest_pull_fatal` and the sole scheduler stays dark
+# until a mirror_only backfill lands. Precedent for the failure class:
 # knowledge-base/engineering/operations/post-mortems/2026-07-29-v0244-1-published-green-with-an-unpullable-image-postmortem.md
 #
 # WHY THE MIRROR IS NOT GATED ON THE BRIDGE. An earlier revision of this file gated the
@@ -103,8 +104,8 @@ by_id = {s.get("id"): s for s in steps if s.get("id")}
 # job under mirror_only (workflow reports SUCCESS, nothing mirrored, no mirror_status, no
 # Slack), and a job-level `continue-on-error: true` reports the workflow green while the
 # mirror step fails. Both are one-line edits and both passed the previous revision 42/0.
-check("the workflow has exactly the `build` job (a second job is an unparsed surface)",
-      sorted(jobs) == ["build"], repr(sorted(jobs)))
+check("the workflow has exactly the `build` + `bump-cloud-init-pin` jobs (a third job is an unparsed surface)",
+      sorted(jobs) == ["build", "bump-cloud-init-pin"], repr(sorted(jobs)))
 _bj = jobs.get("build") or {}
 check("jobs.build carries no job-level if: (it would skip the whole mirror)",
       "if" not in _bj, repr(_bj.get("if")))
@@ -112,6 +113,16 @@ check("jobs.build carries no job-level continue-on-error: (it would mask a red m
       "continue-on-error" not in _bj, repr(_bj.get("continue-on-error")))
 check("jobs.build carries no matrix strategy (it would race duplicate mirrors of one tag)",
       "strategy" not in _bj, repr(_bj.get("strategy")))
+# The pin-bump job (#8359) is the sanctioned second job — it runs AFTER a successful publish
+# and so is out of mirror_only's blast radius, but its own masking surface must stay parsed:
+# a job-level `if:` could skip it silently, and `continue-on-error:` would mask a red bump.
+_pj = jobs.get("bump-cloud-init-pin") or {}
+check("jobs.bump-cloud-init-pin needs: build (it consumes the published tag/digest)",
+      _pj.get("needs") == "build", repr(_pj.get("needs")))
+check("jobs.bump-cloud-init-pin carries no job-level if: (it would skip the pin bump silently)",
+      "if" not in _pj, repr(_pj.get("if")))
+check("jobs.bump-cloud-init-pin carries no job-level continue-on-error: (it would mask a red bump)",
+      "continue-on-error" not in _pj, repr(_pj.get("continue-on-error")))
 
 
 def code_of(body):
@@ -230,6 +241,20 @@ check("the pin-reading step is gated to match the build step it feeds",
       pin is not None and pin.get("if") == GUARD,
       repr(pin.get("if")) if pin else "no step with id: pin")
 
+# #8747: the publish-side ancestry refusal. EXACT string: an inverted operand would refuse
+# every legacy backfill (mirror_only builds nothing and cannot move a digest, and the 16
+# off-main versions (v1.1.14, v1.1.24, v1.1.26-v1.1.39) must stay backfillable) while waving every rebuild
+# through. The step that records the built commit feeds the bump's --signed-commit on
+# EVERY path, so it must carry no `if:` at all.
+refuse = next((s for s in steps if s.get("name") == "Refuse a commit that is not on main (#8747)"), None)
+check("the #8747 ancestry refusal is skipped under mirror_only (exact !inputs.mirror_only)",
+      refuse is not None and refuse.get("if") == GUARD,
+      repr(refuse.get("if")) if refuse else "no step named 'Refuse a commit that is not on main (#8747)'")
+record = next((s for s in steps if s.get("name") == "Record the built commit (#8747)"), None)
+check("the built-commit record step runs on every path (no if:)",
+      record is not None and "if" not in record,
+      repr(record.get("if")) if record else "no step named 'Record the built commit (#8747)'")
+
 # NEGATIVE assertion, and the reason it exists: `mirror_only` skips the build, which makes
 # the GHCR login look vestigial to a future reader -- while it is in fact crane's SOLE
 # source of GHCR READ credential. #7203 established the precedent of gating build-path
@@ -284,6 +309,46 @@ if mirror:
     # advisory message string ("...backfill via ... crane, digest-preserving..."), which
     # code_of does NOT strip -- strings are not comments. Measured: a full revert kept the
     # token alive from that string and passed.
+    # ── #7410 signing: three properties, each of which shipped broken at least once. ─────────
+    #
+    # These span STEPS, so they read the whole workflow text rather than one step's `run` body.
+    _wf_text = open(sys.argv[1]).read()
+
+    # ORDERING, re-derived. The first cut placed the sign step after the zot-mirror step to reuse
+    # the crane that step installs. Measured, that coupled GHCR signing to the zot leg twice over:
+    # `degraded bridge_down` returns BEFORE install_crane, so a bridge failure REDDED a release
+    # whose GHCR push had succeeded; and under mirror_only a bridge failure skipped signing
+    # entirely, in the one mode the signing exists for. Signing now precedes the bridge.
+    #
+    # Asserts the ORDER (sign before bridge) and, separately, that no `degraded` call site can
+    # precede the crane install the sign step depends on -- a pure index check cannot see a
+    # runtime `exit` and that is the bug class this replaces.
+    _sign_at   = _wf_text.find('crane digest "$IMAGE:$TAG"')
+    _bridge_at = _wf_text.find('name: Bridge to zot registry')
+    check("signing happens BEFORE the zot bridge (GHCR signing must not depend on the zot leg)",
+          _sign_at != -1 and _bridge_at != -1 and _sign_at < _bridge_at,
+          f"sign at {_sign_at}, bridge at {_bridge_at} - sign must come first")
+
+    _sign_step_start = _wf_text.find('name: Install crane (pinned) for signing')
+    _sign_block = _wf_text[_sign_step_start:_bridge_at] if _sign_step_start != -1 else ""
+    check("the signing path installs its own crane and calls no degraded()",
+          'curl -fsSL -o "$RUNNER_TEMP/crane.tgz"' in _sign_block
+          and 'degraded ' not in _sign_block,
+          "signing must not route through the mirror step's degrade vocabulary")
+
+    # TARGET. `cosign sign <ref>:<tag>` resolves the tag at sign time, so a tag that moves
+    # between push and sign signs something nobody reviewed.
+    check("cosign signs the DIGEST, never the tag",
+          re.search(r'^\s*cosign\s+sign\s+--yes\s+"\$\{IMAGE\}@\$\{DIGEST\}"', _wf_text, re.M) is not None
+          and re.search(r'^\s*cosign\s+sign\s+[^\n]*"\$IMAGE:\$TAG"', _wf_text, re.M) is None,
+          "expected a digest-form cosign sign and no tag-form one")
+
+    # TOOL VERSION. The cosign version decides the referrers TAG SHAPE; a cosign writing the
+    # legacy `.sig` tag yields a signature D10 A2 404s on, with this workflow green.
+    check("cosign-release is pinned",
+          re.search(r'cosign-release:\s*v\d+\.\d+\.\d+', _wf_text) is not None,
+          "sigstore/cosign-installer must pin cosign-release, not float the default")
+
     check("mirror invokes `crane copy` at call position",
           re.search(r'^\s*retry\s+crane\s+copy\s+"\$IMAGE:\$TAG"\s+"\$ZOT:\$TAG"', code, re.M) is not None,
           "expected `retry crane copy \"$IMAGE:$TAG\" \"$ZOT:$TAG\"` at line start")
@@ -407,7 +472,9 @@ if mirror:
 # The Slack degrade step must carry a STATUS FUNCTION. Without one GitHub prepends an
 # implicit success(), so the step is skipped on exactly the mirror_only degrades it exists
 # to report -- the mode that authorises a root-exec digest pin had no push signal at all.
-slack = next((s for s in steps if "slack" in str(s.get("name", "")).lower()), None)
+# Selected by exact NAME: #8747 added a second Slack step (the publish-refused
+# alert), so "first step whose name mentions slack" no longer means this one.
+slack = next((s for s in steps if s.get("name") == "Post to Slack (inngest mirror status)"), None)
 check("the Slack degrade step exists", slack is not None)
 if slack:
     slack_if = str(slack.get("if") or "")
@@ -498,16 +565,15 @@ PY
     && ok "degraded() emits an ::error:: annotation under mirror_only" \
     || no "degraded() emitted no ::error:: under mirror_only"
 
-  # PUSH path. On `push: tags` the inputs context is empty, so `${{ inputs.mirror_only }}`
-  # renders the EMPTY STRING — not "false". "false" is only ever produced by an explicit
-  # dispatch with the box unchecked, so both prior fixtures tested a value the release path
-  # never sees. This pins the `:-` colon form: rewriting it to `${MIRROR_ONLY-false}` (bare,
-  # substitutes on unset only) would make the empty string fall through to the mirror_only
-  # arm and RED every tag-push release on a transient mirror fault.
+  # EMPTY-STRING path. Before #9262 a `push: tags` run rendered `${{ inputs.mirror_only }}`
+  # as the EMPTY STRING. The build is dispatch-only since #9262 (a dispatch renders true or
+  # false), so this is now a defensive row: it pins the `:-` colon form, since rewriting it
+  # to `${MIRROR_ONLY-false}` (bare, substitutes on unset only) would make an empty value
+  # fall through to the mirror_only arm and RED a release on a transient mirror fault.
   if run_degraded "" empty; then
-    ok "degraded() exits 0 when MIRROR_ONLY is the empty string (the real push-path value)"
+    ok "degraded() exits 0 when MIRROR_ONLY is the empty string (defensive: the pre-#9262 push-path value)"
   else
-    no "degraded() exited non-zero with MIRROR_ONLY='' — this reds every tag-push release on a transient mirror fault"
+    no "degraded() exited non-zero with MIRROR_ONLY='' — an empty value would red a release on a transient mirror fault"
   fi
 
   # The sentinel must never print on ANY path — see run_degraded().
@@ -531,14 +597,19 @@ fi
 CRANE_SHA_EXPECTED="c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b"
 for wf in .github/workflows/build-inngest-bootstrap-image.yml \
           .github/workflows/build-inngest-config-bundle.yml \
-          .github/workflows/reusable-release.yml; do
+          .github/workflows/reusable-release.yml \
+          .github/workflows/apply-web-platform-infra.yml; do
   # Anchored on the ASSIGNMENT, not a whole-file grep. A bare `grep -qF` over raw text is
   # satisfied by a comment recording the OLD pin (`# previous pin: c1434008...`) sitting
   # above a drifted assignment — the same cq-assert-anchor-not-bare-token failure this suite
   # was rewritten to fix, in the one leg that reads raw file text instead of `code`.
   if [[ ! -f "$wf" ]]; then
     no "crane pin parity: $wf not found"
-  elif grep -qE "^[[:space:]]*CRANE_SHA256=\"${CRANE_SHA_EXPECTED}\"" "$wf"; then
+  # EVERY assignment must match, not just one. `grep -q` is first-match-wins, so the moment a
+  # file carries TWO pins (apply-web-platform-infra.yml gained a second when #7277 split the
+  # gate job out of the recut) this degraded into a first-member guard: drift the SECOND copy —
+  # the one the POST-DESTROY restore runs — and this stayed green. Count both sides.
+  elif [[ "$(grep -cE '^[[:space:]]*CRANE_SHA256=' "$wf")" == "$(grep -cE "^[[:space:]]*CRANE_SHA256=\"${CRANE_SHA_EXPECTED}\"" "$wf")" ]]; then
     ok "crane SHA256 pin matches across workflows — $(basename "$wf")"
   else
     no "crane SHA256 pin DRIFTED in $wf (expected an assignment of $CRANE_SHA_EXPECTED)"
@@ -563,7 +634,7 @@ echo "passed: $pass  failed: $fail"
 # most load-bearing structural checks landed exactly on a floor of 30 and still certified the
 # run. A floor catches total neutering; only a tight one catches attrition. Re-derive it when
 # adding assertions — that is the intended maintenance cost.
-MIN_ASSERTIONS=50
+MIN_ASSERTIONS=62
 if (( pass + fail < MIN_ASSERTIONS )); then
   echo "FAIL - only $((pass + fail)) assertions ran (floor $MIN_ASSERTIONS) — a green run here would be vacuous"
   exit 1

@@ -85,6 +85,8 @@ every `cloudflare_*` class in that list is adjudicated here):
 | `cloudflare_zero_trust_access_service_token` | TF-generated ID | No | OUT |
 | `cloudflare_zero_trust_tunnel_cloudflared` | TF-generated ID | No | OUT |
 | `cloudflare_record` | name+type | No — errors/duplicates, never silent whole-replace | OUT |
+| `cloudflare_pages_project` | `(account_id, name)` — natural | No — there is no whole-list surface to replace: `build_config` / `deployment_configs` / `source` are all MaxItems:1 and `domains` is read-only computed (attachment is a separate `cloudflare_pages_domain`) | OUT |
+| `cloudflare_pages_domain` | `(account_id, project_name, domain)` — natural | No — the resource has **no block types at all**: it is a pure attachment record whose only non-computed fields are the three key parts, so there is no child collection for a whole-list PUT to clobber | OUT |
 
 The gate covers exactly `cloudflare_ruleset`. This is NOT a speculative
 "extensible whole-list class registry" (exactly one class exists); it is a
@@ -93,6 +95,28 @@ test in `tests/scripts/test-preapply-entrypoint-gate.sh` FAILs if a dispatch
 `-target` set gains a `cloudflare_ruleset` without a gate, or if a new
 `cloudflare_*` type appears that is neither gate-covered nor adjudicated-OUT
 here — making the coupling *tested*, not prose someone must remember to update.
+
+**Pages classes, and how the row above was decided.** `cloudflare_pages_project`
+is the first class whose key is natural (`account_id` + a project *name*) yet whose
+verdict is still OUT, so the reasoning is recorded rather than left to the table's
+one-line cell. The verdict does NOT rest on the create verb: it rests on there being
+no whole-list surface for a create to replace. Re-derive it, rather than trusting this
+paragraph, with:
+
+```bash
+terraform providers schema -json \
+  | jq '.provider_schemas["registry.terraform.io/cloudflare/cloudflare"]
+        .resource_schemas.cloudflare_pages_project.block.block_types
+        | map_values(.nesting_mode, .max_items)'
+```
+
+Every block is MaxItems:1 and `domains` is read-only computed, so the #6746 hazard
+has nothing to bite on. Domain ATTACHMENT is a different class
+(`cloudflare_pages_domain`). PR1 left it unadjudicated on purpose and predicted
+that introducing it would FAIL the parity test until someone classified it.
+**That is exactly what happened at PR3** — the gate fired on
+`cloudflare_pages_domain`, the row above was added, and the forcing function is
+recorded here as having worked rather than described as something that would.
 
 **Tunnel-config caveat + its forcing function.** `cloudflare_zero_trust_tunnel_cloudflared_config`
 is adjudicated OUT *only while its tunnel is TF-born in the same apply* — the day

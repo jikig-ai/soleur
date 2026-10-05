@@ -1,11 +1,19 @@
 ---
 name: legal-generate
-description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the legal-document-generator agent, and writes markdown output."
+description: "This skill should be used when generating draft legal documents for a project or company. It gathers company context interactively, invokes the soleur:legal:legal-document-generator agent, and writes markdown output."
 ---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # Legal Document Generator
 
-Generate draft legal documents from company context. Supports 8 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
+Generate draft legal documents from company context. Supports 14 document types across US, EU/GDPR, and UK jurisdictions. All output is marked as a draft requiring professional legal review.
 
 ## Supported Document Types
 
@@ -17,6 +25,17 @@ Generate draft legal documents from company context. Supports 8 document types a
 - Data Processing Agreement
 - Data Protection Disclosure
 - Disclaimer / Limitation of Liability
+- Master Services Agreement
+- Mutual NDA
+- One-Way NDA
+- Advisor Agreement
+
+Two more types are available on explicit request only — both carry blocking confirmations, so they are never offered in the menu:
+
+- Employee Offer Letter (CA-exempt scope confirm)
+- Business Associate Agreement (HIPAA/PHI confirm)
+
+Overlapping types fill a vendored template substrate ([references/templates/](references/templates/)); uncovered types and unsupported jurisdictions are generated from scratch by the agent — routing is its decision, not the menu's.
 
 ## Phase 0: Context Gathering
 
@@ -28,18 +47,31 @@ Use the **AskUserQuestion tool** to gather company context. Ask for:
 4. **Jurisdiction** -- which legal frameworks apply (US, EU/GDPR, UK, or multiple)
 5. **Contact information** -- email and/or physical address for legal notices
 
-If the user provides arguments after the skill name (e.g., `/legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
+If the user provides arguments after the skill name (e.g., `soleur:legal-generate privacy-policy`), use that as the document type selection and skip Phase 1.
 
 ## Phase 1: Document Selection
 
-Use the **AskUserQuestion tool** to select a document type from the 8 supported types listed above.
+Use the **AskUserQuestion tool** to select a document type. Offer the four most likely types (e.g. Privacy Policy / Terms & Conditions / Mutual NDA / Master Services Agreement) and rely on the built-in **Other** free-text option for the rest — the menu never lists the gated types.
+
+## Phase 1.5: Substrate Staleness Check
+
+Before invoking the agent, check the freshness of the vendored template corpus:
+
+```bash
+NOTICE_FILE="${CLAUDE_PLUGIN_ROOT}/skills/legal-generate/NOTICE" \
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/gdpr-gate/scripts/notice-frontmatter.sh" days-stale
+```
+
+- **>30 days** — print an advisory banner to stdout: the template corpus has not been verified against upstream recently.
+- **>90 days** — additionally print `POSTURE_FAIL:`; the operator follows the chain in `knowledge-base/engineering/policies/content-vendoring.md` to record it in `compliance-posture.md`.
+- Advisory only — generation proceeds either way; do not block on staleness.
 
 ## Phase 2: Generation
 
-Invoke the `legal-document-generator` agent via the **Task tool** with the company context and selected document type:
+Invoke the `soleur:legal:legal-document-generator` agent via the **Task tool** with the company context and selected document type. The agent resolves the substrate arm (template-fill vs from-scratch) from its own routing table — do not pre-decide it here.
 
 ```
-Task legal-document-generator: "Generate a [document type] for [company name].
+Task soleur:legal:legal-document-generator: "Generate a [document type] for [company name].
 Company: [name]
 Product: [description]
 Data practices: [practices]
@@ -47,22 +79,122 @@ Jurisdiction: [jurisdiction]
 Contact: [contact info]"
 ```
 
+**Gates measure agreement, not truth (#7349).** All five gates compare the two surfaces against
+each other. None asks whether the agreed text is correct, so two byte-identical copies of a false
+sentence pass every one of them. Three defects shipped past a full green run in #7349 that way: a
+controllership statement drift-reduction copied onto the published page, a duplicated clause left
+behind by a half-applied replacement, and "eleven processing activities" in a document whose
+register carries thirty-five. Read the prose; do not read the drift number and stop.
+
+**`BODY_EQUIVALENCE_DOCS` is a one-way ratchet.** `terms-and-conditions`, `acceptable-use-policy`
+and `disclaimer` are enrolled; each was verified at ZERO normalised drift immediately before
+enrolment, because enrolling a drifted document turns a required check red on arrival. Once
+enrolled, any edit landing on one surface only reds that check — which is the point. `--print-vocab`
+and a mutation check (inject a line, confirm the guard fails, remove it) are the two ways to prove
+an enrolment is live rather than decorative.
+
+**Two measurement traps that cost real rounds in #7349.** `collapse()` normalises `[0-9]+ AI
+agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record and the published
+page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's <!-- markdownlint-disable-line MD038 -->
+plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
+
 ## Phase 2.5: Redaction Gate (BLOCKING — runs BEFORE inline presentation)
 
 A generated legal draft can echo a secret or PII that was passed in as company context (a contact email, an API identifier pasted into a data-practices answer). **Presenting the draft inline in Phase 3 is a transcript write boundary** — the same fail-closed rule the incident skill enforces (`incident/SKILL.md` Phase 6): the sentinel must precede inline-emit, not just file-commit. So the redaction gate runs here, before the operator ever sees the draft.
 
 1. Write the generated draft to a `mktemp` file (do NOT emit it inline yet).
+
+Register the cleanup trap **in the same block that allocates the draft**, before anything
+can halt. This PR adds an earlier fail-closed exit, so it increases how often the draft is
+abandoned mid-flight — and the abandoned file is the UN-REDACTED text, which is precisely
+what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a longer
+lifetime than the session (#7450 review-finding C14).
+
+The allocation, the trap and the gate MUST share **one** fence — each fenced block is a
+separate Bash call, so a trap registered in its own block fires when *that* block exits,
+deleting the draft immediately and leaving `$DRAFT` empty for everything after it. The split
+form shipped once and all three of its guarantees were false. The combined fence is in step 2
+below.
+
 2. Run the shared hardened engine against it. Resolve the path from the **deployed plugin root**
-   (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy), falling back to the git-root for CLI/worktree
-   use — NOT a bare `../incident/...` relative path, which depends on the current working directory and,
-   from the wrong CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed exit-2
-   normalization). On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative
-   path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093):
+   (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no
+   fallback arm) — NOT a bare `../incident/...` relative path, which depends on the current working
+   directory and, from the wrong CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed
+   exit-2 normalization). On the Concierge server the deployed-root anchor is load-bearing: a bare
+   CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093).
+   The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after
+   which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner
+   from a file a hostile PR controls (#7450). The **bare anchor is the load-bearing control** — the
+   loader substitutes it with the installed root at delivery, so no ambient environment value reaches
+   this site (measured: `specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md`
+   Arm 4). The identity preflight below is **defence-in-depth** for surfaces where substitution does
+   not govern: it is a *shape* check and cannot tell an install from a checkout carrying the same
+   manifest, which is why ADR-179 §(a) measured a shape check passing while an attacker-chosen payload
+   executed. The stronger root-outside-the-worktree form was evaluated and rejected — see
+   `specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md`. Each halt emits a
+   `SOLEUR_*` marker on stdout so refusals reach telemetry:
 
    ```bash
-   SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
-   [[ -r "$SENTINEL" ]] || { echo "legal-generate: redaction sentinel not found — halt (fail closed)"; exit 2; }
-   bash "$SENTINEL" <draft-tmpfile>
+   DRAFT="$(mktemp)" || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-alloc-failed"
+                          echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
+                          exit 2; }
+   trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+
+   # Write the generated draft into "$DRAFT" here — in THIS fence, before the gate below.
+   # Use a QUOTED heredoc delimiter (`<<'DRAFT_EOF'`): company-context answers can contain
+   # `$(…)`, backticks and `$VAR`, and an unquoted delimiter would EXECUTE the substitutions
+   # on the operator's machine and expand `$VAR` to empty — mutating the text the sentinel is
+   # about to scan, so a secret's shape can be destroyed by the shell instead of the redactor.
+   #   cat > "$DRAFT" <<'DRAFT_EOF'
+   #   <the generated draft, verbatim>
+   #   DRAFT_EOF
+
+   [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+     && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+     || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+          echo "legal-generate: cannot verify the Soleur plugin installation — stopping before any draft is written." >&2
+          echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+          echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+          echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
+          exit 2; }
+   SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
+   [[ -r "$SENTINEL" ]] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
+          echo "legal-generate: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
+          echo "  Expected at: [$SENTINEL]" >&2
+          echo "  The install is partial or out of date. Run 'claude plugin update soleur@soleur-marketplace' (or the id 'claude plugin list' prints, if you added the repository directly), then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+          echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
+          exit 2; }
+   # EMPTINESS IS A FAILURE, NOT A CLEAN SCAN — the sentinel exits 0 on zero bytes, so an
+   # unwritten draft passes the gate vacuously and Phase 3 presents the un-redacted text
+   # inline. Sibling of `linear-fetch`'s `[ -n "$PERSIST_SAFE" ]`.
+   [ -s "$DRAFT" ] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-empty draft=[$DRAFT]"
+          echo "legal-generate: the draft file is empty — nothing was scanned, so nothing is safe to share." >&2
+          echo "  Write the draft into \"\$DRAFT\" in the SAME fence as this gate, then re-run." >&2
+          echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
+          exit 2; }
+   bash "$SENTINEL" "$DRAFT"
+   sentinel_rc=$?
+
+   # Vendor-residue audit — MUST run in THIS fence: the trap above deletes
+   # "$DRAFT" at block exit, so any audit in a later fence greps a dead path
+   # and can never evaluate true. All greps print hits; any hit halts.
+   residue=0
+   grep -inE 'general[-.[:space:]]?legal' "$DRAFT" && residue=1            # vendor marks
+   grep -inE 'attorney[- ]draft|prepared by[^.]{0,30}(attorney|law firm)|reviewed by[^.]{0,30}attorney' "$DRAFT" && residue=1  # credential-claim leakage
+   grep -nE '<mark' "$DRAFT" && residue=1                                 # unfilled substrate slots
+   grep -nP '\[[^\]]+\](?!\()' "$DRAFT" && residue=1                      # bare-bracket remnants (markdown links excluded)
+   grep -nE 'OPTION [AB]|\[Select one|TEMPLATE ' "$DRAFT" && residue=1    # un-deleted decision constructs / scaffold rows
+   # Advisory (cannot hard-halt): a legitimately chosen Option B carries
+   # "DecisionLayer" text. Print hits for the operator; the OPTION/[Select
+   # grep above already halts on an UNRESOLVED choice construct.
+   grep -inE 'decisionlayer|decision science research' "$DRAFT" || true
+   if (( residue )); then
+     echo "SOLEUR_LEGAL_GENERATE_HALT reason=vendor-residue draft=[$DRAFT]"
+     echo "legal-generate: the draft still carries substrate/vendor residue — see the lines above; do not present." >&2
+     exit 2
+   fi
+   exit "$sentinel_rc"
    ```
 
    The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-095).
@@ -75,6 +207,8 @@ A generated legal draft can echo a secret or PII that was passed in as company c
 No un-scanned draft ever crosses the transcript or lands on disk.
 
 ## Phase 3: Output
+
+The vendor-residue audit ran inside the Phase 2.5 fence — `$DRAFT` is deleted by the trap when that block exits, so nothing here may re-grep it. If the fence exited 2 with `reason=vendor-residue`, do not present; report the residue lines it printed.
 
 <decision_gate>
 
@@ -96,4 +230,15 @@ Report: "Draft written to `<path>`. This document requires professional legal re
 - Gather context interactively every time -- do not assume context from previous sessions
 - One document type per invocation -- to generate multiple types, run the skill multiple times
 - Output format is markdown only -- Eleventy .njk wrapping is out of scope for this skill
+- **But the mirror is NOT out of scope for the corpus.** `docs/legal/<doc>.md` is the canonical
+  record; `plugins/soleur/docs/pages/legal/<doc>.md` is the surface users actually read at
+  soleur.ai/legal/. Writing canonical only leaves the published site unchanged AND trips
+  [lint-legal-mirror-drift-baseline.sh](../../../../scripts/lint-legal-mirror-drift-baseline.sh), which exits 2 on a document that exists on
+  exactly one surface. After generating, create the mirror in the same commit.
+- Five CI gates ride `docs/legal/**` (#7387). Reproduce locally before pushing:
+  `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` (added scope blocks:
+  referent agreement, attachment, discharge -- run `--print-vocab` for the accepted phrasings)
+  and `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` (canonical<->mirror
+  drift ratchet). The other three are `check-tc-document-sha.sh` (re-pin `legal-doc-shas.ts`
+  after any canonical edit), `legal-doc-consistency.test.ts`, and the `EXPECTED_COUNT` sentinel.
 - If the user asks for a document type not in the supported list, suggest the closest match or explain that the type is not supported

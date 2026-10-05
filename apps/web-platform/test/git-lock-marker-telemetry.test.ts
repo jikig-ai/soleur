@@ -2,7 +2,7 @@
 // the pure extractor, tool_response coercion, and the PostToolUse hook's fail-open
 // classification (wedge → error, diag-only → warn, non-Bash → no-op).
 import { describe, test, expect } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 import {
   extractGitLockMarkers,
@@ -69,6 +69,31 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(identityDiag)[0]?.wedged).toBe(false);
   });
 
+  test("matches the SOLEUR_BOOTSTRAP_* family (#8287), none classified as a wedge", () => {
+    // Membership by PREFIX: the family is owned by one library whose header is the contract.
+    // Three representative arms — the consumer-side refusals the drift guard actually
+    // collects from provision-hetzner.sh, plus one library-emitted marker — and the
+    // destructive-write acknowledgement, whose INPUT_REQUIRED line names NO variable by
+    // design. None is a wedge: each is a refusal working as designed or a customer-layout
+    // cause, and paging on it is noise.
+    const rows = [
+      "SOLEUR_BOOTSTRAP_LIB_MISSING path=/nonexistent/scripts/lib/operator-script.sh",
+      "SOLEUR_BOOTSTRAP_LIB_INCOMPATIBLE need=1 got=0",
+      "SOLEUR_BOOTSTRAP_BAD_ARG var=SOLEUR_OP_LIB reason=must-be-absolute value=oplib.sh",
+      "SOLEUR_BOOTSTRAP_INPUT_REQUIRED class=2 prompt=Create the billable probe server now?",
+      "SOLEUR_BOOTSTRAP_ENV_NOT_IGNORED path=knowledge-base/project/specs/feat-x/.env",
+      "SOLEUR_BOOTSTRAP_SECRET_VERIFY_FAILED name=HCLOUD_TOKEN repo=org/repo",
+    ];
+    for (const line of rows) {
+      const got = extractGitLockMarkers(line);
+      expect(got.length, `${line} not mirrored`).toBe(1);
+      expect(got[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+    // The prefix must not over-reach onto a bare namespace token or a different family.
+    expect(extractGitLockMarkers("SOLEUR_BOOTSTRAP_").length).toBe(0);
+    expect(extractGitLockMarkers("SOLEUR_BOOTSTRAPPED_SOMETHING x=1").length).toBe(0);
+  });
+
   test("matches both #7102 orphan-reaper sentinels, neither classified as a wedge", () => {
     // Scope note: this asserts REGEX MEMBERSHIP — that a marker reaching this
     // extractor is matched and correctly classified. It does not assert that
@@ -91,6 +116,12 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers(registry)[0]?.wedged).toBe(false);
   });
 
+  test("mirrors SOLEUR_CLEANUP_GH_QUERY_FAILED without paging (#8490: fail-closed, branch kept)", () => {
+    const ghDown = "SOLEUR_CLEANUP_GH_QUERY_FAILED branch=feat-x rc=1";
+    expect(extractGitLockMarkers(ghDown).length).toBe(1);
+    expect(extractGitLockMarkers(ghDown)[0]?.wedged).toBe(false);
+  });
+
   test("matches the #5934 config-target-masked family and classifies it as wedged", () => {
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED)[0]?.wedged).toBe(true);
     expect(extractGitLockMarkers(CONFIG_TARGET_MASKED_REMEDY)[0]?.wedged).toBe(true);
@@ -103,6 +134,61 @@ describe("extractGitLockMarkers", () => {
   test("mirrors the benign SOLEUR_GIT_CONFIG_MASK_SKIP non-bare-skip diagnostic but does NOT page it (D3)", () => {
     expect(extractGitLockMarkers(MASK_SKIP).length).toBe(1);
     expect(extractGitLockMarkers(MASK_SKIP)[0]?.wedged).toBe(false);
+  });
+
+  // #9269 — install_deps skip marker. Warn-and-continue by contract: creation
+  // completes and the worktree is usable in every arm, so it must never page.
+  test("mirrors SOLEUR_WORKTREE_INSTALL_SKIPPED arms without paging", () => {
+    const lines = [
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=registry-unreachable host=registry.npmjs.org endpoint=https___registry.npmjs.org arm=root-npm",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=timeout arm=app-web-platform secs=300",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=opt-out",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=failed arm=app-demo rc=3",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=tool-missing runtime=bun arm=app-demo",
+      "SOLEUR_WORKTREE_INSTALL_SKIPPED reason=no-lockfile arm=root",
+      "SOLEUR_WORKTREE_INSTALL_UNBOUNDED arm=root-npm",
+    ];
+    for (const line of lines) {
+      expect(extractGitLockMarkers(line).length, `${line} must be mirrored`).toBe(1);
+      expect(extractGitLockMarkers(line)[0]?.wedged, `${line} must not page`).toBe(false);
+    }
+  });
+
+  // #7394 — the bare-config polarity markers. Classification is by `branch=`, not by
+  // marker name, because one name covers both a recoverable and an unrecoverable outcome.
+  test("mirrors both SOLEUR_GIT_BARE_POISON branches without paging (the run proceeded)", () => {
+    for (const branch of ["healed", "clean"]) {
+      const line = `SOLEUR_GIT_BARE_POISON git_dir=/w/.git extension=present shared_bare=true wt_override=absent git_version=2.53.0 branch=${branch}`;
+      expect(extractGitLockMarkers(line).length, `branch=${branch} must be mirrored`).toBe(1);
+      expect(
+        extractGitLockMarkers(line)[0]?.wedged,
+        `branch=${branch} is informational — normalization ran and the run continued`,
+      ).toBe(false);
+    }
+  });
+
+  test("pages SOLEUR_GIT_BARE_SELFHEAL only at branch=failed", () => {
+    const ok =
+      "SOLEUR_GIT_BARE_SELFHEAL worktree=feat-a git_dir=/w/.git/worktrees/feat-a git_version=2.53.0 branch=ok";
+    const failed =
+      "SOLEUR_GIT_BARE_SELFHEAL worktree=feat-a git_dir=/w/.git/worktrees/feat-a git_version=2.53.0 branch=failed";
+    // Recovered: the worktree is usable again, so this is a mirrored diagnostic.
+    expect(extractGitLockMarkers(ok).length).toBe(1);
+    expect(extractGitLockMarkers(ok)[0]?.wedged).toBe(false);
+    // Not recovered: git keeps reporting a valid worktree as bare, so every
+    // require_working_tree-gated subcommand refuses until a human fixes permissions.
+    expect(extractGitLockMarkers(failed).length).toBe(1);
+    expect(extractGitLockMarkers(failed)[0]?.wedged).toBe(true);
+  });
+
+  test("does NOT page the create-time seed failure (branch=seed-failed)", () => {
+    // The seed is defense-in-depth and inert while extensions.worktreeConfig is absent,
+    // so it is deliberately reported under a DISTINCT branch value. Were it to reuse
+    // `failed`, a non-fatal pin would page — the "safe degradation becomes noise" class.
+    const seed =
+      "SOLEUR_GIT_BARE_SELFHEAL worktree=feat-a reason=seed-write-failed git_version=2.53.0 branch=seed-failed";
+    expect(extractGitLockMarkers(seed).length).toBe(1);
+    expect(extractGitLockMarkers(seed)[0]?.wedged).toBe(false);
   });
 
   test("adds SOLEUR_FEATURE_PUSH_FAILED + NO_GIT_REPOSITORY to the ingest allowlist (D1b) as wedges", () => {
@@ -129,8 +215,24 @@ describe("extractGitLockMarkers", () => {
       'SOLEUR_GIT_REPO_DIAG ready=false git_dir=dir config_worktree=chardevice config_lock=chardevice rev_parse_rc=128 config_parse_rc=128 err="fatal: bad config line 1 in file .git/config"';
     const [m] = extractGitLockMarkers(repoDiag);
     expect(m?.line).toBe(repoDiag);
-    // SOLEUR_GIT_REPO_DIAG is emitted ONLY on the not-ready path → always a blocked session.
+    // The probe RAN and reported not-ready → a genuinely blocked session.
     expect(m?.wedged).toBe(true);
+  });
+
+  test("SOLEUR_GIT_REPO_DIAG source=probe-unreachable is mirrored but NOT wedged", () => {
+    // #7474. go.md emits this when the probe could not RUN — either the plugin root
+    // did not verify, or it verified and does not carry the probe (a stale install).
+    // Neither says anything about the repo: go.md falls back to inline `git rev-parse`
+    // probes that decide readiness themselves. Classifying these as wedges turns a torn
+    // install on a HEALTHY repo into a platform-integrity error at every session start.
+    for (const reason of ["plugin-root-unverified", "absent-from-verified-root"]) {
+      const line = `SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=${reason}`;
+      const [m] = extractGitLockMarkers(line);
+      // Still mirrored — the operator can see it.
+      expect(m?.line).toBe(line);
+      // But not paged.
+      expect(m?.wedged).toBe(false);
+    }
   });
 
   test("returns [] for output with no markers, and for empty input", () => {
@@ -180,32 +282,121 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
   // this copy is not updated, the new wedge signal would go silently unmirrored — the
   // exact blindness this feature closes. Pin the two in sync: every `echo "SOLEUR_GIT_LOCK_*`
   // literal in the script must be matched by extractGitLockMarkers.
-  test("extractor matches every SOLEUR_GIT_* sentinel echoed by the two shell scripts", () => {
-    const scripts = [
-      "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
-      "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
-    ].map((p) => readFileSync(join(__dirname, p), "utf8"));
+  test("extractor matches every SOLEUR_* sentinel emitted by any plugin skill script or SKILL.md", () => {
+    // DERIVED, not listed (#7898). The two git-worktree paths were the entire
+    // .sh scan set, so a sentinel authored in ANY other skill's scripts/ dir was
+    // invisible here — which is what happened: this PR's SOLEUR_TRANSPORT_DIAG
+    // (7 community scripts) and SOLEUR_FLAG_LIST_HALT (flag-list) were both added
+    // to MARKER_RE and matched by NOTHING in this guard. Measured before the fix:
+    // 33 sentinels collected, both new markers absent. Walking every
+    // skills/*/scripts/*.sh means a new emitter joins the guarded set by existing,
+    // rather than by someone remembering to extend an array.
+    const skillScriptsRoot = join(__dirname, "../../../plugins/soleur/skills");
+    const scripts = readdirSync(skillScriptsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .flatMap((e) => {
+        const dir = join(skillScriptsRoot, e.name, "scripts");
+        if (!existsSync(dir)) return [];
+        return readdirSync(dir)
+          .filter((f) => f.endsWith(".sh"))
+          .map((f) => join(dir, f));
+      })
+      .map((p) => readFileSync(p, "utf8"));
+    // SKILL.md files are scanned too (#7409). The two .sh paths above were the
+    // entire scan set, so a `SOLEUR_*` sentinel authored in agent-executed
+    // SKILL.md prose was invisible to this guard FOREVER — which is exactly what
+    // happened: #7409's degrade-open arms minted a new failure marker across five
+    // skills and it reached no telemetry layer, while the guard stayed green.
+    // Derived from the directory rather than listed, so a new skill cannot add an
+    // unmirrored sentinel by being absent from a hand-maintained array.
+    const skillsDir = join(__dirname, "../../../plugins/soleur/skills");
+    const skillDocs = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => join(skillsDir, e.name, "SKILL.md"))
+      .filter((p) => existsSync(p))
+      .map((p) => readFileSync(p, "utf8"));
     // Both scripts emit `echo "SOLEUR_..."` sentinels; also collect the non-SOLEUR_-prefixed
     // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate),
     // the `SOLEUR_FEATURE_*` push-failure, and the `worktree wedge:` give-up phrase (this PR
     // adds five new bare-echo copies of it — pin the literal so a future rename fails CI here
     // rather than silently un-mirroring). A renamed/added sentinel unmatched by MARKER_RE
     // must fail CI here rather than go silently unmirrored — the exact blindness this closes.
-    const sentinels = scripts.flatMap((s) =>
-      [...s.matchAll(/echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g)].map(
-        (m) => m[1],
-      ),
-    );
-    const unique = [...new Set(sentinels)];
+    // `printf '` as well as `echo "` (#7898). The regex matched only the echo
+    // form, so every marker this repo emits via single-quoted printf — including
+    // both markers added to MARKER_RE by the same PR — was structurally invisible.
+    // A guard that can only see one of the two ways the repo emits a sentinel is
+    // narrower than the property it names.
+    const SENTINEL_RE = /(?:echo "|printf ')(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g;
+    const collect = (s: string) => [...s.matchAll(SENTINEL_RE)].map((m) => m[1]);
+
+    // The two .sh files are a bounded surface: every sentinel they echo belongs to
+    // this telemetry's domain, so collect them wholesale.
+    const scriptSentinels = scripts.flatMap(collect);
+
+    // SKILL.md is NOT bounded that way — a skill file is agent-executed prose for
+    // whatever that skill does, so it carries sentinels from unrelated domains.
+    // Requiring MARKER_RE to mirror all of them makes this guard fail on other
+    // people's work and pressures the fix in the wrong direction: registering a
+    // foreign marker for telemetry nobody asked for. Measured: the unscoped form
+    // demanded `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` (preflight's sandbox
+    // diagnostic, landed on main by a sibling PR) be mirrored as a git-lock marker.
+    // Scope the SKILL.md half to the domains extractGitLockMarkers actually covers.
+    // `_HALT` is in-domain (#7450). The four secret gates' fail-closed refusals are exactly
+    // the "sentinel authored in prose, mirrored nowhere" class this guard exists to catch —
+    // and the guard did NOT catch them, because this prefix filter dropped every one before
+    // the mirror assertion ran. It stayed green while the thing it names happened, which is
+    // the #7409 gap reopened one filter layer down. The comment above is right that an
+    // UNSCOPED filter over-reaches; the fix is to widen the domain deliberately, not to leave
+    // a family the extractor now mirrors sitting outside the check that proves it does.
+    const DOMAIN_RE = /^(SOLEUR_GIT_|SOLEUR_WORKTREE_|SOLEUR_SESSION_STATE_|SOLEUR_[A-Z_]+_HALT$)/;
+    const skillSentinels = skillDocs.flatMap(collect).filter((n) => DOMAIN_RE.test(n));
+
+    const unique = [...new Set([...scriptSentinels, ...skillSentinels])];
     expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
-    // Every emitted sentinel must be mirrored — except the readiness-READY status line,
-    // which is a control signal for go.md (ready path), not a forensic to log.
+    // The SKILL.md scan is the whole point of the #7409 widening, and a prefix
+    // filter is exactly the thing that can silently reduce it to a no-op — which
+    // would reopen the blindness (a sentinel authored in prose, mirrored nowhere)
+    // while leaving this test green. Assert the scan still contributes.
+    expect(
+      new Set(skillSentinels).size,
+      "the SKILL.md scan matched no in-domain sentinel — DOMAIN_RE has drifted from the names skills actually echo, and the #7409 gap is open again",
+    ).toBeGreaterThan(0);
+    // Every emitted sentinel must be mirrored — except SUCCESS-PATH control signals,
+    // which are read locally and are not forensics to log:
+    //   - SOLEUR_GIT_REPO_READY — go.md's readiness gate reads it on the ready path.
+    //   - SOLEUR_WORKTREE_LEASE_LIB_OK (#7409) — the positive counterpart of
+    //     SOLEUR_WORKTREE_LEASE_LIB_MISSING, emitted once per worktree-manager.sh
+    //     load whenever the lease library resolves, i.e. on EVERY invocation in a
+    //     healthy tree (`list` included). It exists so that silence is not ambiguous
+    //     at the operator's terminal — the only observability layer a marketplace
+    //     install has. Mirroring the healthy path of the highest-frequency script in
+    //     the system would be pure volume, and paging on it is meaningless: it
+    //     reports that nothing is wrong. The FAILURE direction stays mirrored via
+    //     ..._LIB_MISSING, so the signal this telemetry exists for is unaffected.
+    //   - SOLEUR_WORKTREE_REAP_CAPABILITY (#8400/#8401) — exactly parallel to
+    //     ..._LEASE_LIB_OK: emitted once per worktree-manager.sh load, i.e. on EVERY
+    //     invocation including `list`, and READ LOCALLY — /soleur:go's session-start
+    //     fence greps the shipped file for this literal before it dispatches
+    //     cleanup-merged. It is a capability declaration, not an observation about
+    //     the machine, so there is no failure direction for it to report. The exemption
+    //     rests on VOLUME alone, and that is stated plainly because an earlier revision
+    //     justified it by claiming the absence "is mirrored by the consumer as
+    //     SOLEUR_SESSION_START_SKIPPED reason=reaper-capability-unverified" — measured
+    //     FALSE twice over: that marker is not in MARKER_RE, and commands/*.md is outside
+    //     this guard's scan set entirely, so the consumer mirrors to nothing. The refusal
+    //     is visible on the operator's terminal (layer 7) and nowhere else, which is the
+    //     honest scope.
+    const SUCCESS_PATH_CONTROL_SIGNALS = new Set([
+      "SOLEUR_GIT_REPO_READY",
+      "SOLEUR_WORKTREE_LEASE_LIB_OK",
+      "SOLEUR_WORKTREE_REAP_CAPABILITY",
+    ]);
     for (const name of unique) {
-      if (name === "SOLEUR_GIT_REPO_READY") continue;
+      if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;
       const sample = `${name} file=.git/config.lock type=chardevice rdev=1:3`;
       expect(
         extractGitLockMarkers(sample).length,
-        `sentinel ${name} echoed by a git-worktree script is not matched by the telemetry extractor — update MARKER_RE`,
+        `sentinel ${name} emitted by a plugin skill (scripts/*.sh or SKILL.md) is not matched by the telemetry extractor — update MARKER_RE`,
       ).toBe(1);
     }
   });

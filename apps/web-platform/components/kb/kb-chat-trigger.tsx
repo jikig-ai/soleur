@@ -1,7 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useContext, useEffect, useRef } from "react";
+import { NavLink } from "@/components/ui/nav-link";
+import { Button } from "@/components/ui/button";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 
 export interface KbChatTriggerProps {
@@ -45,8 +46,13 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   // #7222 — `min-h-[44px]` below `md`. Once the mobile conversation is a
   // full-screen takeover this pill is the ONLY way back into it, so a 26px
   // target is not acceptable; `md:min-h-0` keeps the compact desktop pill.
+  // #7326 — `shrink-0 whitespace-nowrap`: this pill is the fixed side of the
+  // header. Half of the off-screen bug was the breadcrumb refusing to yield
+  // (fixed in kb-content-header); the other half was this pill being willing to
+  // shrink or wrap instead of holding its width. Both halves are needed — either
+  // alone still produces an unreachable control.
   const baseClass =
-    "inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90 md:min-h-0";
+    "inline-flex min-h-[44px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90 md:min-h-0";
 
   const icon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
@@ -56,10 +62,10 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
 
   if (!ctx || !ctx.enabled) {
     return (
-      <Link href={fallbackHref} className={baseClass}>
+      <NavLink href={fallbackHref} className={baseClass}>
         {icon}
         Chat about this
-      </Link>
+      </NavLink>
     );
   }
 
@@ -81,16 +87,25 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   // signal — see the H3 race fix in `chat-surface.tsx` and `kb-chat-content.tsx`.
   const hasThread = ctx.messageCount > 0;
   const label = hasThread ? "Continue thread" : "Ask about this document";
+  // #7326 — the VISIBLE label shortens below `md`; the ACCESSIBLE name never
+  // does. `aria-label` overrides the element's text content entirely, so screen
+  // readers, and any agent driving by accessible name, get the full wording at
+  // every width — only the pixels change. Both spans stay in the DOM (CSS swap,
+  // not a JS branch) so the header does not need a viewport read to render.
+  const shortLabel = hasThread ? "Continue" : "Ask";
 
   return (
-    <button
+    <Button
+      variant="gold"
       ref={buttonRef}
       type="button"
       onClick={onClick}
+      aria-label={label}
       className={baseClass}
     >
       {icon}
-      {label}
+      <span className="md:hidden">{shortLabel}</span>
+      <span className="hidden md:inline">{label}</span>
       {hasThread && (
         <span
           aria-hidden="true"
@@ -98,6 +113,6 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
           className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-soleur-text-on-accent"
         />
       )}
-    </button>
+    </Button>
   );
 }

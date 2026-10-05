@@ -1,0 +1,204 @@
+---
+title: Every mechanism I shipped to prove the fix was itself unproven
+date: 2026-08-16
+issue: 7555
+category: workflow-patterns
+tags: [guards, mutation-testing, observability, fixtures, review]
+---
+
+# Every mechanism I shipped to prove the fix was itself unproven
+
+The one-line fix was correct on the first try: zot v2.1.20 ships 60 s HTTP deadlines, a large layer
+cannot finish inside them, set both to 1800 s. Everything built to *prove* that fix — three guards,
+a soak probe, a delivery dispatcher — was broken, and every one of them was green.
+
+## What was actually wrong
+
+| Mechanism | Defect | How green it looked |
+|---|---|---|
+| The stage pointer (the PR's headline) | Nested behind a multi-line-detail arm; 8 of 9 live call sites pass single-line | emitted **0 times** in production; suite 21/21 |
+| `is_cap_exempt` plaintext fallback | journald splits oversized lines into client-controlled fragments, so it classified attacker bytes | 164/164; 17 forged fragments starved a panic to zero |
+| Exempt lane | FIFO, so one failing push filled it and dropped crash traces | the fixture tested the *opposite* mode (non-exempt rows) |
+| #7556 soak probe | Rows are double-encoded and quote-stripped: `grep -c 'i/o timeout'` = **0** on data with 21 failures | both signals unreachable; fixing one would have *armed* a false auto-close of a P1 |
+| The probe's delivery signal | zot's config line is 2273 chars, `ReadTimeout` at offset 1363, cap 800 | severed before shipping; also not cap-exempt |
+| The dispatcher | `fetch-depth:1` → `git diff` exits 128 → every push fail-closed | only working route was the manual step it exists to remove |
+| …and its trigger | Path-triggered on a 1000-line file, with no `environment:` gate and no `confirm` token anywhere | any future comment typo would replace the production host |
+| Preflight P1 | Aborts on local-cache for 24 h — which a replace outage itself causes | the file's own header rejects this exact shape for D10's A4 |
+| Preflight seams | "tests only" was a comment; `/bin/true` produced a verdict byte-identical to a clean read | on the sole gate before an irreversible host replace |
+
+## The generalizable lesson
+
+**A guard's fixture is a claim about production, and it is the claim nobody checks.** Each of these
+passed because its fixture instantiated a shape production does not produce — a two-line detail, a
+plain-text log row, a well-formed `/v2/` path, a config with both keys present. The assertions were
+fine. The inputs were fiction.
+
+The litmus that would have caught all of them, asked once per fixture: *does a real caller ever
+produce this shape?* Not "is the assertion correct" — that question passes.
+
+Three corollaries, each of which bit here:
+
+1. **A guard whose deletion leaves the suite green pins nothing.** Reverting the PR's thesis is one
+   axis; the axes that matter are the ones the author was not thinking about — fixture *shape*,
+   fixture *direction*, population *growth* (add a member, don't edit one), and *dispatch* (neuter
+   the assertion helpers).
+2. **An anti-vacuity floor must not dispatch through the helper it backstops.** Three suites here
+   called `fail()` to report a short count, so one no-op edit disarmed the assertions and their
+   guard together — 21 assertions collapsed to 12, still green.
+3. **A closure argument is a claim to grep, not to reason about.** The comment asserting the F-5
+   bypass stayed closed was falsified 260 lines above it, in the same file, by text that had been
+   there for months.
+
+## And the instruments were wrong five times
+
+The part worth keeping. While checking the above, five separate measurements returned confident
+wrong answers:
+
+- a mutation battery run against a **red baseline** (sandbox missing render deps) reported two
+  KILLED verdicts that meant nothing;
+- a `fail()`-neuter mutation **did not land** (regex mismatch) and reported SURVIVED;
+- a QA verification grepped `pass:` where the suite emits `PASS:`, reporting two covered scenarios
+  as missing;
+- a gate-status check grepped `LOCK_WAITING` anywhere in the log, so it reported "queued" for a run
+  that had acquired the lock ~400 KB earlier;
+- an empty Better Stack query was nearly read as "the channel is dark" before a 72 h positive
+  control proved the query path worked at all.
+
+Every one presented as a result. The habit that caught them: **run the instrument against a known
+positive AND a known negative before reading its verdict**, and treat a red control as voiding the
+whole battery rather than as one bad row.
+
+## Session Errors
+
+- **Guard 1's pointer was inert in production.** Recovery: hoisted the pointer out of the
+  multi-line-detail arm and rewrote the fixture to the single-line production shape.
+  **Prevention:** when a fixture chooses an input shape, name the live call site it models.
+- **The `_zclass` fallback reopened the #7444 F-5 bypass.** Recovery: narrowed the fallback to the
+  four crash classes, which are the only ones with no JSON route. **Prevention:** grep the file for
+  text that falsifies a closure argument before writing it.
+- **The dispatcher could never deliver, and would have fired on comment edits.** Recovery: compare
+  API + comment-stripped delta gate. **Prevention:** for any `github.event.before` consumer, check
+  `fetch-depth` in the same edit.
+- **The soak probe could not match real bytes.** Recovery: decode first, using the sibling's decode.
+  **Prevention:** build probe fixtures from a captured real response, never from the shape the
+  producer "should" emit.
+- **Exempt-lane starvation, with a fixture testing the opposite mode.** Recovery: sub-quota +
+  the missing fixture. **Prevention:** for any shared budget, fixture the saturating class itself.
+- **Preflight P1 blocked its own recovery; seams were unguarded.** Recovery: manual arm skips P1;
+  ported the sibling's `GITHUB_ACTIONS` seam refusal. **Prevention:** when a file's header rejects a
+  pattern, check the file does not implement it.
+- **`verify` was told an unmeasured cause inside the ADR-166 fix.** Recovery: own family, own
+  wording. **Prevention:** a family split is a claim that the members fail the same way.
+- **Mutation battery run against a red baseline.** Recovery: re-ran in the real tree with a pristine
+  backup. **Prevention:** require a GREEN unmutated control before reading any row.
+- **A mutation that did not land reported SURVIVED.** Recovery: asserted the anchor count before
+  replacing. **Prevention:** `assert s.count(old) == 1` in every mutation script.
+- **QA grep case-mismatched the suite's own output prefix.** Recovery: inspected the real prefixes.
+  **Prevention:** derive the assertion prefix from the suite, never assume a house style.
+- **Gate-status check reported "queued" for an executing run.** Recovery: read log growth instead.
+  **Prevention:** anchor on a token that does not outlive the state it describes.
+- **Launched the gate detached with no watcher armed.** Recovery: armed a Monitor covering rc,
+  vanish, and stall. **Prevention:** a detached run without a watcher is an unmonitored run.
+- **`PUSH_EXIT=0` read `tail`'s exit under a pipe.** Recovery: captured rc on its own line.
+  **Prevention:** never read `$?` after a pipeline whose last stage is `tail`/`head`/`grep`.
+- **A nested heredoc inside a Python triple-quote, and inline mutation quoting, mangled two
+  patches.** Recovery: wrote mutations to files. **Prevention:** write mutation scripts to files
+  rather than nesting them in a heredoc inside another quoting context. One-off.
+
+## Addendum 2026-08-16 — a second round, found by the two seats I had not run
+
+The review above ran 5 of the ~12 seats the `code` classification calls for. At ship time I ran
+the two that were missing and genuinely relevant (`design-risk` was YES: the diff introduces four
+mechanisms), and they found **nine more defects, all green**, in the fixes for the nine above.
+
+The single worst one is the one no reviewer found — I found it while wiring their fix:
+
+**`tests/scripts/test-registry-replace-preflight.sh` measured 18/18 on my machine and 6/18 in CI.**
+The suite's own subject, `registry-replace-preflight.sh`, refuses its command seams when
+`GITHUB_ACTIONS` is set — the production-path guard I had added two commits earlier. CI sets that
+variable for every job. So the suite gating an irreversible production host replace was red
+exactly where it gates and green exactly where I ran it, and every local run I had cited as
+evidence was measuring a different program than CI would.
+
+The generalizable form, and it is sharper than the one above: **a guard that reads the environment
+to decide whether to refuse has TWO behaviours, and a suite that exercises one of them has
+measured half the program.** The litmus, asked once per environment-sensitive branch: *which
+environment does CI provide, and have I run the suite in it?* Not "does the guard work" — that
+question passes.
+
+The others, each the same shape as its round-one sibling one level in:
+
+- The stage pointer, fixed for `copy_*`, still sent `crane_install` — a `curl` and a `sha256sum`
+  **on the runner** — at registry-host disk, contradicting the detail printed beside it. The
+  inngest copy was worse: `unrouted`, whose own text reads "a workflow bug, not an infrastructure
+  fault", pointed at the same disk graph, and a `crane_verify` SUPPLY-CHAIN checksum mismatch did
+  too. The round-one commit said the sweep was done "by CLAIM rather than by file"; it then swept
+  the *replacement* by claim as well.
+- `REGISTRY_PREFLIGHT_MANUAL` was read by the script and set by **no caller**, so the documented
+  recovery from a dark replace did not exist — while the dispatcher's auto-filed comment told a
+  non-technical operator to use it. A `grep -rn` for the variable's own name returns one hit; that
+  grep is the whole test, and I did not run it.
+- `strip_comments` claimed to reproduce terraform's render strip and deleted **pre-existing blank
+  lines** the render preserves, so a blank-line-only edit compared identical and the host kept
+  booting stale bytes — under a message asserting they were identical.
+- P3 refused in the **modal** case (merge fires the release and the dispatcher on the same push),
+  turning every ordinary delivery back into "a human types `gh workflow run`".
+- `MIN_DEADLINE_S` was derived in the advisory guard and hard-coded in the **required** one, so the
+  first re-measurement would leave the merge-blocking check enforcing a stale floor.
+- Three T19/T20 starvation fixtures could not fail: the 8-of-17 sub-quota I added in round one
+  capped the flood below the level the assertion needed to survive. The fix that closed a
+  starvation bug made its own regression tests vacuous.
+- Three comments in the #7556 probe described a `latency:1m0s` pairing that round one deleted. One
+  told a future reader the probe cannot fire on a 1800s cut — the opposite of what the code does,
+  and the opposite of what is wanted.
+
+**The lesson about process, not code:** I judged 5 seats sufficient for a diff with no UI and no
+DB. That judgement was about *blast radius* and the missing seats were about *design*, which is
+orthogonal — and `design-risk` is exactly the flag that says so. Running the panel the
+classification prescribes is cheaper than discovering at ship time that the fix needs a second
+round, and the skill already says the panel is a phase ordering, not a menu.
+
+### Session Errors (round two)
+
+- **A suite green locally and red in CI, because of my own environment guard.** Recovery: `env -u
+  GITHUB_ACTIONS` in the runner; the one test needing the guard sets it explicitly. 23/23 both
+  ways. **Prevention:** when a guard branches on an env var CI sets, run the suite in both shapes
+  before citing either.
+- **Ran 5 of ~12 review seats on a `design-risk: yes` diff.** Recovery: ran the two missing
+  relevant seats at ship time; they found nine defects. **Prevention:** treat `design-risk` as
+  selecting the phase ORDER, never as licence to shrink the panel.
+- **A mutation broke syntax instead of logic and I nearly read its red as a KILL.** Recovery:
+  rewrote it against the actual `case` arms and asserted the anchor count first. **Prevention:**
+  the round-one rule (`assert s.count(old) == 1`) is necessary but not sufficient — also confirm
+  the mutated file still PARSES, or a syntax error masquerades as a killed mutant.
+- **Swept the pointer fix by claim, not by file — twice in the same PR.** Recovery: split
+  `crane_install` and `crane_*`/`unrouted` into families that assert no registry channel.
+  **Prevention:** after fixing a misattribution, enumerate every *other* label the same function
+  routes and state which family each lands in.
+- **A positive control on the QUERY PATH is not a positive control on the WINDOW.** I read an empty
+  Better Stack result as "the channel is dark since 2026-08-14 19:06Z" and filed it as a P1
+  (#7569) whose title said the pull path "is currently unobservable". At ship time — only because
+  the gate forced me to enroll the tracker — I re-measured and found the channel fully alive, with
+  rows minutes old. Recovery: re-scoped #7569 to what is actually established. **Prevention:** the
+  72 h control I ran proved `betterstack-query.sh` *runs*; it did not rule out that script's OWN
+  documented short-answer mode (`remote(..._logs)` is a ~40-minute hot window, older rows in S3).
+  A gap is only a finding when a SECOND independent marker, on a different emitter, shows the same
+  window — which is what eventually made this one real (both `SOLEUR_ZOT_DISK` and
+  `SOLEUR_ZOT_LOG` stop ~08-14 19:00 and resume ~08-16 20:45). Run the control on the WINDOW and
+  the MARKER you are about to make a claim about, not merely on the tool.
+- **A regression detector enrolled on a CLOSED issue never runs.** The probe for this exact channel
+  (`zot-log-channel-7440.sh`) was hosted on #7455, which is closed, and `sweep-followthroughs.sh`
+  lists `--state open` — a permanent silent no-op, documented in the probe's own header and still
+  shipped that way. It is why a ~49-hour telemetry outage was found by hand. Recovery: re-homed the
+  directive onto the open #7569. **Prevention:** when a follow-through probe is kept as a
+  *regression* detector after its original condition closes, it needs a LIVE host issue — closing
+  the tracker retires the detector with it.
+- **Refreshed an acceptance record whose cited counts were stale.** Recovery: re-ran both suites
+  and wrote the observed numbers. **Prevention:** an acceptance record is a measurement; re-run
+  before ship rather than carrying the number that was true when written.
+
+## Related
+
+- `2026-08-13-a-lower-bound-cannot-tell-a-measurement-from-a-constant.md`
+- `2026-08-11-the-pr-that-fixed-narrow-guards-shipped-three-narrow-guards.md`
+- `2026-07-26-an-existence-assertion-that-ran-before-the-file-existed-bricked-every-boot.md`

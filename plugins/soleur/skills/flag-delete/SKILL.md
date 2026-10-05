@@ -1,7 +1,16 @@
 ---
 name: flag-delete
 description: "This skill should be used to delete a runtime feature flag end-to-end (the inverse of flag-create): removes it from Flagsmith, server.ts RUNTIME_FLAGS, .env.example, the flag-set-role flip.sh map, and Doppler dev+prd, with a WORM audit and typed-yes guardrail."
+disable-model-invocation: true
 ---
+
+<!-- soleur-cloud-mode:start -->
+**Cloud Mode (Devin):** before pipeline work run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"`. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the root by IDENTITY, never by script basename: for `d` in `"$HOME/.local/share/devin/cli/plugins/cache"` and `/opt/.devin/plugins`, skip unless `[ -d "$d" ]`, then `MANIFEST="$(find "$d" -path '*/.claude-plugin/plugin.json' -exec grep -l '"name"[[:space:]]*:[[:space:]]*"soleur"' {} + 2>/dev/null | head -1)"`, `ROOT="${MANIFEST%/.claude-plugin/plugin.json}"` — one resolution, two consumers: `$ROOT/scripts/cloud-detect.sh` and `$ROOT/scripts/precommit-guard.sh`. (Shape check, not authentication: a planted `{"name":"soleur"}` dir passes — ADR-179 A11.) `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` applies `<plugin-root>/devin/INSTRUCTIONS.md` §Cloud Mode: emit the `--banner`, fan out sequentially with `Reviewed-Coverage: sequential-fallback` disclosure (never claim an independent review ran), `message_user` ack before any secrets read or production mutation, and run `precommit-guard.sh` before any `git commit` — hooks do not fire in cloud.
+<!-- soleur-cloud-mode:end -->
+
+<!-- grok-harness-invoke:start -->
+**Grok Build (`plugins/soleur/lib/harness.ts` `invokeSkill()`):** Read this SKILL.md in this process and run it to completion. A one-segment `soleur:<name>` in this document names a SKILL — on Grok Build, Read `plugins/soleur/skills/<name>/SKILL.md` in this process; it is not a nested tool_use. A multi-segment id such as `soleur:<domain>:<name>` names an AGENT: spawn it, never Read it, and on Grok Build spawn_subagent takes the id with its colons replaced by hyphens (`agentIdToGrokSubagentType`). **Claude Code:** Skill tool for a skill (`soleur:<name>`), Task tool with `subagent_type` for an agent. Forbidden is executing a subset, not the Read.
+<!-- grok-harness-invoke:end -->
 
 # flag-delete
 
@@ -28,7 +37,7 @@ mutation.
 The flag CRUD set: `soleur:flag-create` (Create), `soleur:flag-set-role`
 (Update — per-role/per-org), `soleur:flag-list` (Read),
 **`soleur:flag-delete` (Delete — this)**. Initial wiring is the
-`flag-bootstrap/SETUP.md` runbook (operator documentation, not an invocable
+`${CLAUDE_PLUGIN_ROOT}/skills/flag-bootstrap/SETUP.md` runbook (operator documentation, not an invocable
 skill).
 
 ## Arguments
@@ -39,7 +48,8 @@ Required positional: `<kebab-flag-name>`.
 Optional: `--dry-run` (enumerate the 5 mutations and exit before any change).
 
 There is intentionally **no** `--yes`/`--force` bypass — the typed-`yes` prompt
-always gates a real delete.
+always gates a real delete, and it needs a person at a terminal, because the audit row accepts only that
+acknowledgement (ADR-249; staged-gate migration is tracked in #9387).
 
 ## Prerequisites
 
@@ -49,9 +59,43 @@ always gates a real delete.
 
 ## Procedure
 
+The agent runs only the preview:
+
 ```bash
-bash plugins/soleur/skills/flag-delete/scripts/delete.sh <flag-name> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-delete/scripts/delete.sh" <flag-name> --dry-run
 ```
+
+## The write is the one typed-`yes` handoff (ADR-249)
+
+The write path asks for a typed `yes` through the operator-script library's TTY
+acknowledgement, because the audit row this script writes records only that kind of
+acknowledgement (ADR-249); moving it to the staged agent-run approval gate that
+generated operator scripts use is tracked in #9387. It has no skip variable and no
+flag. An agent's shell has no TTY, so a write run there stops with exit `64` and `SOLEUR_BOOTSTRAP_INPUT_REQUIRED` on
+stdout, before any credential is fetched. Exit `64` is a refusal, never a success.
+The agent therefore does every other step itself (reads, the dry-run preview,
+preflight, verification) and hands over only the typed-`yes` write:
+
+1. Runs the script with `--dry-run` and shows the preview. That mode needs no TTY
+   and makes no writes.
+2. Prints the exact write command below, in a fenced block, for the operator to type
+   at a terminal prompt (Warp), the one step an agent cannot take. It replaces `<WORKTREE>` with the absolute path of
+   the worktree that holds this change (`git rev-parse --show-toplevel`) and
+   `<ARGS>` with `<flag-name>`, without `--dry-run`. It never prints a
+   `${CLAUDE_PLUGIN_ROOT}` or repo-relative form. The script also edits repo files in the directory it runs from, so an operator running it from the main checkout or another worktree would land the code wiring in the wrong tree while Flagsmith and Doppler change.
+3. Does not run the command, and does not run it through Claude Code's `!` prefix
+   either (whether that gives the command a TTY is unmeasured, ADR-249). The
+   printed command is an undone operator step under
+   `wg-block-pr-ready-on-undeferred-operator-steps`: record it where the pipeline
+   tracks operator steps, and do not mark a PR ready until the operator says it ran.
+
+<!-- operator-write-command -->
+```bash
+cd <WORKTREE> && bash <WORKTREE>/plugins/soleur/skills/flag-delete/scripts/delete.sh <ARGS>
+```
+
+The operator types `yes` at the prompt. Any other answer stops the script with exit
+`1` and `SOLEUR_BOOTSTRAP_ABORTED stage=ack`, before anything is written.
 
 The script (full in [scripts/delete.sh](./scripts/delete.sh)) deletes from **5
 sites** (the issue's 4-site framing misses the `flip.sh` map):
@@ -77,12 +121,15 @@ verify deletion.
 
 ## Exit codes
 
-- `0` — success / dry-run / operator aborted at the prompt.
-- `1` — name validation failure (or flag not in `RUNTIME_FLAGS`).
+- `0` — success / dry-run.
+- `1` — name validation failure (or flag not in `RUNTIME_FLAGS`), or the operator
+  did not type `yes` (`SOLEUR_BOOTSTRAP_ABORTED stage=ack`; nothing mutated).
 - `2` — prerequisite missing.
 - `3` — Flagsmith API error (non-204 DELETE).
 - `4` — file edit or audit append failed.
 - `5` — Doppler delete failed.
+- `64` — a write run with no TTY (`SOLEUR_BOOTSTRAP_INPUT_REQUIRED`): nothing was
+  fetched or changed; hand the command to the operator (above).
 
 ## Recovery from a partial delete
 

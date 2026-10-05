@@ -33,6 +33,7 @@ import {
   redactToken,
   type HandlerArgs,
 } from "./_cron-shared";
+import { githubEgressUrl } from "@/server/github-url";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import {
   sanitizeReleases,
@@ -263,6 +264,11 @@ async function curateViaAnthropic(releases: SanitizedRelease[]): Promise<Highlig
     messages: [{ role: "user", content: buildCuratePrompt(releases) }],
     timeoutMs: ANTHROPIC_TIMEOUT_MS,
     outputConfig: { format: { type: "json_schema", schema: CURATE_OUTPUT_SCHEMA } },
+    // The digest emitted NO cost row at all (the marker is gated on markerSource),
+    // so any detection clause reading its output tokens was fiction (#8392). No
+    // markerRunId: runId is not in scope in this free function, and inventing a
+    // signature change for it is out of scope here.
+    markerSource: "cron-weekly-release-digest",
   });
   if (stopReason === "max_tokens") {
     // The curate step's catch mirrors this to Sentry — no duplicate warn.
@@ -333,7 +339,10 @@ export async function cronWeeklyReleaseDigestHandler(args: HandlerArgs) {
       let truncated = false;
       for (let page = 1; page <= RELEASES_MAX_PAGES; page++) {
         const resp = await fetch(
-          `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+          githubEgressUrl(
+            `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+            "cron-weekly-release-digest",
+          ),
           {
             headers: {
               authorization: `Bearer ${token}`,

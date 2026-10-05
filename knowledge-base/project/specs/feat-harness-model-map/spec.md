@@ -34,7 +34,7 @@ Make Soleur's workflow model pins and research-agent overrides work under **both
 
 ### PR 1 — Planning (this PR)
 
-- ADR-110 (Proposed)
+- ADR-110 (Accepted 2026-09-11, #8064)
 - This spec
 - Issue #6316
 

@@ -12,6 +12,12 @@
 
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/new-scheduled-cron-prefer-inngest.sh"
 
@@ -19,7 +25,8 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 assert_decision() {
   local label="$1" want="$2" payload="$3"
@@ -61,6 +68,11 @@ assert_decision "Write new scheduled workflow denies" "deny" \
 ABS_NEW_PATH="$PWD/.github/workflows/scheduled-fake-cron-for-tests.yml"
 assert_decision "Write new scheduled workflow (absolute path) denies" "deny" \
   "$(mk_write_payload "$ABS_NEW_PATH" "name: Scheduled fake\non:\n  schedule:\n    - cron: '0 0 * * *'")"
+
+# Devin wire name `write` reaches the gate (kind map, #8205).
+assert_decision "Devin write of new scheduled workflow denies" "deny" \
+  "$(jq -nc --arg p "$NEW_PATH" --arg c "name: Scheduled fake\non:\n  schedule:\n    - cron: '0 0 * * *'" \
+     '{tool_name: "write", tool_input: {file_path: $p, content: $c}}')"
 
 # --- (b) Edit of existing scheduled YAML allows ---------------------------
 # Find a scheduled-*.yml that exists on origin/main; skip the assertion if

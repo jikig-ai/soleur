@@ -7,6 +7,18 @@ tags: [dependency-management, ci-cd]
 
 # Learning: Renovate config:recommended silently enables all package managers
 
+> **SUPERSEDED IN PART, 2026-08-05 (#7282).** This document states that `renovate.json5`
+> enables the `dockerfile` manager and extends `default:automergeDigest` + `platformAutomerge`,
+> and its Prevention section instructs the reader to *"check `renovate.json5` for whether a bot
+> mutates it."* **Renovate has never run against this repository** — zero Renovate-authored PRs
+> in its entire history, no Dependency Dashboard issue — so the config was inert and #7282
+> deleted it. The reasoning below is sound and worth keeping; only the mechanism is wrong, and
+> it inverts rather than disappears: with nothing moving the leader, the risk is not a fast
+> automerged bot bump outrunning its followers, it is **the whole set rotting in agreement**,
+> which strengthens the case for leader-anchoring. When applying the Prevention step, ask "what
+> moves this leader, if anything?" rather than grepping a file that no longer exists.
+> See the ADR-096 "Pin freshness" amendment.
+
 ## Problem
 
 Renovate's `config:recommended` preset (formerly `config:base`) enables every built-in manager by default -- npm, pip, Terraform, Docker, GitHub Actions, Maven, Cargo, and dozens more. In a monorepo that intentionally pins only Docker digests and GitHub Actions SHAs, this default floods the repository with unwanted PRs for `package.json` dependencies, Terraform providers, and any other ecosystem Renovate detects. The Renovate docs do not prominently warn that adopting `config:recommended` opts you into ALL managers.

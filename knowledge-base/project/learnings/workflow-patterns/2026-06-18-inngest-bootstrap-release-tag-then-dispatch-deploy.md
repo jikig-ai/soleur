@@ -38,7 +38,8 @@ FOUR coordinated steps. None of them are SSH (`hr-no-ssh-fallback-in-runbooks`):
 
 2. **Bump the cloud-init pin IN LOCKSTEP** (`apps/web-platform/infra/cloud-init.yml`,
    the 3 `soleur-inngest-bootstrap:vX.Y.Z` refs). `cloud-init-inngest-bootstrap.test.sh`
-   AC6 asserts **pin == the semver-max published `vinngest-v*` git tag**. Pushing
+   AC6 asserts **pin == the semver-max published `vinngest-v*` git tag** (superseded
+   2026-09-27, #8782: the semver-max tag merged into `main`; see ADR-232 §7). Pushing
    the tag without the pin bump turns `main` red (pin v1.1.15 ≠ latest tag v1.1.16);
    bumping the pin *before* the tag exists also fails AC6 on the bump PR's own CI.
    So: **push the tag first** (per `hr-tagged-build-workflow-needs-initial-tag-push`),
@@ -104,3 +105,10 @@ FOUR coordinated steps. None of them are SSH (`hr-no-ssh-fallback-in-runbooks`):
 5. **`session-state.md` (untracked one-shot scratch) blocked `cleanup-merged`.** —
    Recovery: `rm` it. **Prevention:** one-off; the next session's idempotent
    cleanup also handles it.
+
+## Addendum — 2026-09-24 (#8747)
+
+Step 1's "tag the commit that carries the change" is superseded: a `vinngest-v*` tag on a commit
+that is not on `main` is now refused by both the publish and the pin bump (ADR-232 §7). Merge the
+carrier-changing PR first, then tag its squash-merge commit on `main` as a new version. See
+`knowledge-base/engineering/operations/runbooks/inngest-server.md` §Bootstrap-image release.

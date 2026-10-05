@@ -3,7 +3,7 @@ title: "Keyboard shortcuts now show the right key on every OS"
 type: feature-launch
 publish_date: 2026-08-18
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#5896"
 ---
 

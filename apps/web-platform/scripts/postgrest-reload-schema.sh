@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Refuse to run under xtrace, unconditionally: `bash -x` would print the
+# bearer into the job log (see #7797), and the --help text below names a
+# runtime acquisition (`doppler secrets get …`), so a refusal conditioned on
+# the variable being set would open exactly when the value is about to be
+# traced. Exit 78 = EX_CONFIG.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # Force a PostgREST schema-cache reload via the Supabase Management API.
 # See postgrest-reload-schema.sh --help for usage.
 # Context: knowledge-base/project/learnings/2026-05-21-postgrest-schema-cache-and-stale-plan-quoted-apply-state.md §1
@@ -22,26 +31,38 @@ The Management API runs the SQL on a Supabase-side connection that shares
 backend identity with PostgREST's LISTEN, so the NOTIFY actually reaches.
 
 Examples:
-  doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
-  doppler run -p soleur -c dev -- bash apps/web-platform/scripts/postgrest-reload-schema.sh --best-effort
+  # prd (token currently in the prd root, inherited by every prd_* branch; least-privilege
+  # move tracked in #7716 item 6):
+  doppler run -p soleur -c prd -- bash apps/web-platform/scripts/postgrest-reload-schema.sh
+  # dev target (no dev config carries the token by design; read it from prd_terraform,
+  # value never expanded in the caller's shell):
+  doppler run -p soleur -c prd_terraform --only-secrets SUPABASE_ACCESS_TOKEN -- \
+    doppler run -p soleur -c dev --preserve-env=SUPABASE_ACCESS_TOKEN -- \
+    bash apps/web-platform/scripts/postgrest-reload-schema.sh
 
 Required environment:
-  SUPABASE_PAT              Personal access token (sbp_…). Mint at
-                            https://supabase.com/dashboard/account/tokens
-                            then `doppler secrets set SUPABASE_PAT=…`.
+  SUPABASE_ACCESS_TOKEN     Supabase Management-API token (sbp_…), the same
+                            account-scoped token the supabase CLI reads.
+                            Doppler: currently the prd root (inherited by prd_*;
+                            least-privilege move → #7716 item 6); absent from
+                            every dev config by design (#8028).
+                            Rotation: knowledge-base/engineering/operations/secret-scanning.md
   NEXT_PUBLIC_SUPABASE_URL  Project URL; ref is parsed from it.
 
 Flags:
-  --best-effort             Soft-fail: missing PAT or any HTTP error exits
-                            0 with a stderr warning. Used by
-                            run-migrations.sh so a missing PAT or transient
-                            upstream issue cannot break a dev apply.
+  --best-effort             Soft-fail ONLY for absence (no token in this
+                            environment → ::notice::, exit 0) and transience
+                            (5xx, network, non-JSON 401/403 → ::warning::,
+                            exit 0). With a token present, a rejected
+                            credential or any config defect still exits 2 —
+                            a dead-but-present token must be loud (#8028).
   --help, -h                Print this message and exit.
 
-Exit codes (strict mode):
-  0 = success (reload acknowledged)
-  1 = transient (HTTP 5xx, curl network failure) — caller may retry
-  2 = auth/config error (missing PAT, HTTP 401/403, bad ref) — operator action
+Exit codes:
+  0 = success (reload acknowledged), or a soaked absence/transience under --best-effort
+  1 = transient (HTTP 5xx, curl network failure, 401/403 without an API JSON body) — caller may retry
+  2 = auth/config error (missing token in strict mode, JSON-bodied 401/403, bad ref) — operator action;
+      under --best-effort this class still exits 2 whenever a token is present
 USAGE
 }
 
@@ -58,23 +79,33 @@ for arg in "$@"; do
 done
 
 # Scrub bearer tokens from any string before it's echoed to stderr/logs.
-# Belt-and-braces: SUPABASE_PAT should never appear in $body/$response from
+# Belt-and-braces: the token should never appear in $body/$response from
 # a well-behaved Supabase API, but a misconfigured curl flag (e.g., --verbose
 # added later) could surface the Authorization header; this gate makes the
-# leak class structurally impossible at the print site.
-scrub_pat() {
-  printf '%s' "$1" | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g'
+# leak class structurally impossible at the print site. Control bytes are
+# stripped (a line beginning with `::` would otherwise be parsed as a runner
+# command) and the message is capped at 512 bytes AFTER redaction — capping
+# first would let a token straddling the cut survive the regex's 20-char
+# floor (review of #8028 measured a 19-char prefix leak).
+scrub_token() {
+  printf '%s' "$1" | sed -E 's/sbp_[A-Za-z0-9]{20,}/sbp_REDACTED/g' | tr -d '[:cntrl:]' | head -c 512
 }
 
-soft_warn() {
-  echo "::warning::postgrest-reload-schema: $(scrub_pat "$1")" >&2
-}
-
+# The single soak rule (#8028). Under --best-effort a failure is soft ONLY
+# when the environment never opted in (no token → ::notice::) or the
+# failure is transient (exit-1 class → ::warning::). Everything else with a
+# token present — a JSON-bodied 401/403, a 404, an unset/unparseable URL, a
+# missing curl — exits with its code so a dead-but-present credential is as
+# loud under the migration runner as it is in strict mode.
 fail_or_skip() {
   local code="$1" msg="$2"
-  msg="$(scrub_pat "$msg")"
-  if [[ "$best_effort" == "1" ]]; then
-    soft_warn "$msg (best-effort: skipping)"
+  msg="$(scrub_token "$msg")"
+  if [[ "$best_effort" == "1" && ( "$code" == "1" || -z "${SUPABASE_ACCESS_TOKEN:-}" ) ]]; then
+    # Absence is informational (dev CI hits it on every PR); transience is a
+    # titled warning so it stands out in the run's annotations list.
+    local level="warning title=PostgREST schema reload skipped (transient)"
+    [[ -n "${SUPABASE_ACCESS_TOKEN:-}" ]] || level="notice"
+    echo "::${level}::postgrest-reload-schema: $msg (best-effort: skipping)" >&2
     exit 0
   fi
   echo "::error::postgrest-reload-schema: $msg" >&2
@@ -83,8 +114,8 @@ fail_or_skip() {
 
 command -v curl >/dev/null 2>&1 || fail_or_skip 2 "curl not found on PATH. Install via 'apt install curl' / 'brew install curl'."
 
-if [[ -z "${SUPABASE_PAT:-}" ]]; then
-  fail_or_skip 2 "SUPABASE_PAT is not set. Mint a PAT at https://supabase.com/dashboard/account/tokens and store via 'doppler secrets set SUPABASE_PAT=…' in each env."
+if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+  fail_or_skip 2 "SUPABASE_ACCESS_TOKEN is not set (Doppler config: ${DOPPLER_CONFIG:-none}). It is currently in the prd root (see #7716 item 6); for a dev target read it from prd_terraform — run with --help for the one-liner."
 fi
 
 if [[ -z "${NEXT_PUBLIC_SUPABASE_URL:-}" ]]; then
@@ -112,7 +143,7 @@ echo "postgrest-reload-schema: resolved NEXT_PUBLIC_SUPABASE_URL → ref=${proje
 # Endpoint is pinned to api.supabase.com — no env override.
 # A `SUPABASE_API_HOST` test seam would let an attacker who controls env
 # (poisoned Doppler config, malicious workflow PR, .envrc injection)
-# redirect this POST and exfiltrate the SUPABASE_PAT (account-level token).
+# redirect this POST and exfiltrate SUPABASE_ACCESS_TOKEN (account-level token).
 # Tests inject via PATH-shimmed fake curl instead — same isolation, no
 # production risk surface.
 endpoint="https://api.supabase.com/v1/projects/${project_ref}/database/query"
@@ -127,15 +158,21 @@ payload='{"query":"NOTIFY pgrst, '\''reload schema'\'';"}'
 # Single curl call; capture body + HTTP status using -w. The trailing
 # `\n%{http_code}` lands as the final line; the fake curl in
 # postgrest-reload-schema.test.sh mirrors this contract.
+# The bearer header is piped in on STDIN (curl reads the header file from
+# `-`) so the token is never in curl's argv (process listings, xtrace);
+# `--disable` FIRST aborts
+# ~/.curlrc parsing and `--noproxy '*'` keeps ALL_PROXY/HTTPS_PROXY from
+# redirecting the request (lint-shell-trace-credential-refusal Rule D).
 # Capture stderr separately to /dev/null so a future flag change (e.g.,
 # adding --verbose) cannot leak the Authorization header into $response
-# and from there into our `::error::` echoes. scrub_pat is the second line
+# and from there into our `::error::` echoes. scrub_token is the second line
 # of defense.
 set +e
-response="$(curl --silent --show-error \
+response="$(printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" \
+  | curl --disable --noproxy '*' --silent --show-error \
   --request POST \
   --url "$endpoint" \
-  --header "Authorization: Bearer ${SUPABASE_PAT}" \
+  --header @- \
   --header "Content-Type: application/json" \
   --data "$payload" \
   --max-time 15 \
@@ -156,7 +193,20 @@ case "$http_code" in
     echo "postgrest-reload-schema: reload acknowledged (ref=${project_ref}, HTTP ${http_code})."
     exit 0 ;;
   401|403)
-    fail_or_skip 2 "auth rejected (HTTP ${http_code}). Verify SUPABASE_PAT scope and that the PAT owner has project access. Response: ${body}" ;;
+    # The Management API answers a rejected credential with a JSON object
+    # (measured 2026-09-13: `{"message":"Unauthorized"}`); an edge/WAF
+    # 401/403 carries HTML or nothing. Only the former proves the token is
+    # dead — the latter is retry-able and must not block a release.
+    if [[ "$body" =~ ^[[:space:]]*\{ ]]; then
+      fail_or_skip 2 "Supabase rejected SUPABASE_ACCESS_TOKEN (HTTP ${http_code}) from Doppler config '${DOPPLER_CONFIG:-none}' (ref=${project_ref}). Rotate it per knowledge-base/engineering/operations/secret-scanning.md §SUPABASE_ACCESS_TOKEN, then re-run this job. Response: ${body}"
+    else
+      fail_or_skip 1 "auth endpoint answered HTTP ${http_code} without an API JSON body (edge/WAF?). Retry; if persistent see https://status.supabase.com. Response: ${body}"
+    fi ;;
+  408|429)
+    # Request timeout / rate limit are transient by definition (RFC 6585);
+    # the account token is shared with three other workflows that can run
+    # alongside a release, so a 429 must not block deploy.
+    fail_or_skip 1 "rate-limited or timed out (HTTP ${http_code}). Retry. Response: ${body}" ;;
   4??)
     # 404 = wrong ref (config); 422 = bad SQL (would only happen if NOTIFY
     # syntax broke — treat as durable). Other 4xx is operator-actionable.

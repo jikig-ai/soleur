@@ -85,7 +85,7 @@ export const REVOCATION_REASON_COPY = {
   policy_violation: {
     label: "Revoked for policy violation",
     description:
-      "Soleur's acceptable use policy was violated. See the policy at /docs/legal/acceptable-use-policy.",
+      "Soleur's acceptable use policy was violated. See the policy at https://soleur.ai/legal/acceptable-use-policy/.",
   },
   quarantine_retroactive: {
     label: "Quarantined retroactively",

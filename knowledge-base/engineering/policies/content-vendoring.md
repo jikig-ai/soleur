@@ -9,6 +9,7 @@ The first registry instance is `gosprinto/compliance-skills`, lifted into `plugi
 In-scope: any file that originated upstream and was committed verbatim or with documented edits to the Soleur repo, where the upstream project remains the canonical authority for the content.
 
 Out-of-scope:
+
 - Code dependencies installed via package managers (`npm`, `bun`, `cargo`). Those are pinned via lockfiles and audited via `npm audit` / `bun audit`.
 - Service-vendor data flows (Hetzner, Supabase, Stripe, Cloudflare, Resend, Doppler) — those are governed by signed DPAs in `compliance-posture.md` §Vendor DPA Status.
 - Content the team writes from scratch and credits as inspired-by.
@@ -20,6 +21,7 @@ Every vendored bundle has a `NOTICE` file at the bundle root with YAML frontmatt
 ```yaml
 ---
 upstream: github.com/<owner>/<repo>
+license: <SPDX id, e.g. MIT|CC0-1.0>   # authority for the §9a emit-strip scope
 pinned-commit: <40-char SHA>
 last-verified: <YYYY-MM-DD>
 registry: knowledge-base/engineering/policies/content-vendoring.md
@@ -29,10 +31,20 @@ lifted-files:
     upstream-blob-sha: <upstream `git hash-object --no-filters` value>
     local-blob-sha: <local `git hash-object --no-filters` value>
     status: active|active-verbatim|active-eu-extended|active-soleur-rewritten|deprecated
+soleur-authored:
+  - path: <repo-relative path inside the bundle>
+    local-blob-sha: <local `git hash-object --no-filters` value>
+    status: soleur-authored|soleur-authored-archived
 ---
 ```
 
-Two blob SHAs per file because the lifted file MUST carry an attribution header on line 1, so its local hash necessarily differs from the upstream hash. The `upstream-blob-sha` feeds the drift workflow; the `local-blob-sha` feeds the lefthook integrity gate. **Frontmatter is the canonical machine-readable form.** Any human-readable table in the body of NOTICE is convenience prose; if the two diverge the frontmatter wins and the table is a bug.
+Two blob SHAs per lifted file because the lifted file MUST carry an attribution header on line 1, so its local hash necessarily differs from the upstream hash. The `upstream-blob-sha` feeds the drift comparison; the `local-blob-sha` feeds the lefthook integrity gate.
+
+`soleur-authored` is the second registry, for reference files written from scratch for the bundle. Same record shape and the same `local-blob-sha` tamper check, but **no upstream provenance**: these never appear in the `upstream-files` view and are never compared against upstream. The split is deliberate rather than a nullable `upstream-path` on one list — provenance must be a DECLARED category, never inferable from a missing field, because a `lifted-files` row for a Soleur-authored file would attest third-party licence provenance for the project's own writing. The attribution header on line 1 is the oracle for which list a file belongs in: every `lifted-files` entry carries it, no `soleur-authored` entry does.
+
+Registering a file in neither list is what the integrity gate rejects; registering it in both is refused outright as ambiguous provenance.
+
+**Frontmatter is the canonical machine-readable form.** Any human-readable table in the body of NOTICE is convenience prose; if the two diverge the frontmatter wins and the table is a bug. That divergence is not hypothetical — the gdpr-gate NOTICE listed eight lifted files in its table and five in its frontmatter for 117 days (`#7710`), so the parity is now asserted by test rather than trusted.
 
 ## 3. Lifting Procedure
 
@@ -40,10 +52,12 @@ When deciding to lift content from an upstream:
 
 1. Verify the license permits redistribution + modification (MIT, Apache-2.0, BSD, ISC, CC-BY are typically fine; AGPL imposes obligations the operator must accept consciously).
 2. Lift the file verbatim first. Each lifted file MUST start with an attribution header on line 1:
+
    ```text
    <!-- Adapted from <owner>/<repo> (<license>) — see NOTICE -->
    ```
-3. Add a row to the bundle NOTICE `lifted-files` block with both blob SHAs computed via `git hash-object --no-filters`.
+
+3. Add a row to the bundle NOTICE with blob SHAs computed via `git hash-object --no-filters`: `lifted-files` (both SHAs) for an upstream-derived file, or `soleur-authored` (`local-blob-sha` only) for one written for the bundle. A file must appear in exactly one of the two — the attribution header on line 1 decides which — and the human-readable table must be updated in the same commit.
 4. Add the lifted-file path to the lefthook `vendor-pin-integrity` glob — the parity assertion in `plugins/soleur/test/vendor-pin-integrity.test.sh` AC5b ensures NOTICE and lefthook stay in sync.
 5. Add a row to `compliance-posture.md` §Vendored Code Provenance with the upstream + license + pinned-commit + lifted-file count + status.
 6. Apply Soleur extensions in subsequent commits with `status:` set per the divergence type (`active-verbatim` if zero edits, `active-eu-extended` if EU-specific additions, `active-soleur-rewritten` if structurally changed).
@@ -52,11 +66,11 @@ When the upstream is no longer reachable (404, archived, deleted), follow the po
 
 ## 4. Drift Detection
 
-Three layers, each catching a distinct failure mode:
+Four layers, each catching a distinct failure mode:
 
 ### 4.1 Cron-driven content drift (workflow)
 
-`.github/workflows/scheduled-content-vendor-drift.yml` runs weekly at `'17 11 * * MON'` (off-peak / off-cluster). It reads NOTICE frontmatter, fetches current upstream blob SHAs via `gh api repos/<o>/<r>/contents/<path>?ref=main`, classifies any drift via `vendor-drift-classify.sh`, and on classifier exit codes 10–16 opens a re-vendor PR via the `bot-pr-with-synthetic-checks` composite. The PR body links to the runbook; the operator merges after review.
+The content-vendor-drift cron (`apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`, an Inngest function since the TR9 Phase-2 migration -- it was `.github/workflows/scheduled-content-vendor-drift.yml`, which no longer exists) runs weekly at `'17 11 * * 1'` (off-peak / off-cluster). It discovers every schema-conforming bundle under `plugins/soleur/skills/*/NOTICE` (parseable frontmatter + `upstream` + `pinned-commit`), and per bundle reads NOTICE frontmatter, fetches current upstream blob SHAs via Octokit against the resolved upstream head commit, and classifies any drift via `vendor-drift-classify.sh`. Security-relevant classes (exits 10–12, 15, 16, or unknown codes — including suspected upstream rollback detected via the compare API) open a deduplicated issue labeled per §5; the low-risk `batched` class (exit 13) routes to the auto-PR arm, which performs a real re-vendor write (`git merge-file --diff3` per drifted file, NOTICE records + `pinned-commit` + `last-verified` bumped in the same commit) — see §6. Arm failures surface as red Sentry check-ins plus `reportSilentFallback` events — no `vendor/cron-failure` issue is filed.
 
 ### 4.2 Pre-commit silent-edit detection (lefthook)
 
@@ -71,6 +85,16 @@ When the cron pipeline silently breaks (workflow disabled, GH outage, PR queued 
 
 Banner + POSTURE_FAIL emit to STDOUT (not stderr) because agent runtimes (Claude Code skill harness, MCP servers) commonly swallow stderr. NOTICE missing / parser deletion / future-dated `last-verified` all resolve to `days_stale=999` → banner fires. The gate exits 0 in all paths (advisory contract preserved).
 
+### 4.4 Pull-request-time upstream verification (CI)
+
+`.github/workflows/vendor-pin-verify.yml` runs `vendor-pin-integrity.sh --verify-upstream` (the `verify-upstream-blobs` job) on every pull request touching the vendored tree. It asserts that each `upstream-blob-sha` in NOTICE resolves to a real, fetchable object in the upstream repository, which closes the co-edit bypass: a PR that edits a lifted file AND its NOTICE pin in the same diff satisfies the local hash check tautologically, because both sides move together.
+
+The merge gate is `vendor-pin-required` (#8203, ADR-032) — an always-run aggregator job that wraps `verify-upstream-blobs` behind a `detect-changes` path filter and is registered as a required status check in the CI Required ruleset. On unrelated PRs the aggregator posts a green with the verification honestly reported as skipped; on vendored-tree diffs a red `verify-upstream-blobs` result fails the required check and blocks merge. Before #8203 the binding's context was never registered, so a red could merge.
+
+Note what this layer does and does not buy. It proves each pinned blob EXISTS upstream; it does not prove the pin is CURRENT. A pin that resolves is not a pin that matches upstream `main` — that is §4.1's job, and conflating the two is why a "verify" step can read as a freshness guarantee it never made.
+
+This layer was omitted from this section's own count until #7710, which is a small instance of the failure the whole document is about: an enforcement surface that exists, runs, and is not written down is one nobody reasons about.
+
 ## 5. Severity Classification
 
 `vendor-drift-classify.sh` reads a unified diff on stdin and emits one of seven exit codes (priority order — first match wins):
@@ -78,7 +102,7 @@ Banner + POSTURE_FAIL emit to STDOUT (not stderr) because agent runtimes (Claude
 | Exit | Class | Trigger | Label set |
 |---|---|---|---|
 | 15 | upstream rollback | new-sha is ancestor of pinned-sha | `vendor/upstream-rollback,needs-human-review` |
-| 12 | upstream archived | `--archived` flag (set by workflow `gh api repos/<o>/<r>` disambiguation) | `vendor/upstream-archived,compliance/critical` |
+| 12 | upstream archived | `--archived` flag (set by the cron's upstream repo-metadata check) | `vendor/upstream-archived,compliance/critical` |
 | 16 | upstream renamed | `--renamed` flag | `vendor/upstream-archived,needs-human-review` |
 | 11 | LICENSE diff | diff touches a path containing `LICENSE` | `vendor/license-changed,compliance/critical` |
 | 10 | security-relevant | regex hit on diff body (added markdown table row, `[CRITICAL]`, `MUST`, `Art. <N>`, `§ <N>`, new file under `references/layers/`) | `vendor/pin-drift,compliance/critical` |
@@ -89,17 +113,50 @@ The classifier is intentionally crude — its job is to route, not to judge. A h
 
 ## 6. Re-vendor Procedure
 
-The drift workflow performs the re-vendor automatically for classifier exits 10/11/13:
+**Automated re-vendor (batched exit-13 route).** The `safe-commit-pr-<slug>` step merges each drifted upstream blob into its lifted path via `git merge-file --diff3`, rewrites that record's `local-blob-sha`/`upstream-blob-sha`, and advances `pinned-commit` + `last-verified` in the same commit, then hands off to `safeCommitAndPr`. Clean merges auto-merge; any conflict produces a create-only PR labeled `needs-human-review` — resolve per the runbook's §2b (remove `--diff3` markers, recompute `local-blob-sha` with `git hash-object --no-filters`, update the NOTICE record, verify both pin-integrity modes, push to the bot branch). The pin advance is fail-closed: any unmeasured or errored registry record refuses the route rather than binding a new `pinned-commit` to unverified content.
 
-1. Fetch upstream-old blob (NOTICE pin) and upstream-new blob (current HEAD).
-2. `git merge-file --diff3 <lifted-path> <upstream-old-tmp> <upstream-new-tmp>` per lifted file.
-3. Conflict-marker gate: `grep -l '<<<<<<<' <lifted-paths>` — if any matches, append `needs-human-review` to the label set; the operator resolves manually per the runbook.
-4. Bump NOTICE `pinned-commit`, per-file `local-blob-sha` + `upstream-blob-sha`, and `last-verified` in the SAME commit as the lifted-file changes — merging the PR ratifies all bumps.
-5. PR body links to this policy and the runbook.
-
-For classifier exits 12/15/16 (archived / rollback / renamed), the workflow opens the PR with `needs-human-review` and does not perform the auto-merge — the operator decides per the runbook.
+**Manual re-vendor.** Classifier exits 10–12, 15, 16 and unknown codes open a deduplicated drift issue and produce NO PR — re-vendoring those classes is by hand per the runbook's §2c steps (fetch upstream blobs, restore the attribution header, recompute both blob SHAs + `pinned-commit` + `last-verified` in the same commit).
 
 **Pre-vendor diff scan** (for first-time lifts of new bundles): currently DEFERRED — see scope-out issue. The first re-vendor PR landing under this policy will introduce the scan as a workflow step before this policy section is filled in. Until then, reviewer eyes + the conflict-marker grep are the manual fallback.
+
+## 6a. Verification-Only Refresh (no drift)
+
+§6 governs the drift-detected path only. It says nothing about the far more common outcome — the comparison ran, every file matched, and there is nothing to re-vendor — and before #7710 no clause covered it. The consequence was not a gap in prose: `last-verified` had no writer at all on the clean path, so the field aged 117 days while the corpus was verified clean every week, and the gdpr-gate's staleness banner fired continuously on a corpus that had never drifted.
+
+**Trigger.** A single run of the content-vendor-drift cron that compared the COMPLETE registry and found every file SAME with zero errors, against an upstream repository that is itself healthy. Formally, the run may advance the field only when all of the following hold:
+
+- the registry is non-empty (`0 of 0` is not evidence of currency);
+- every record the NOTICE **declares** was examined — the count comes from the declared records, not from the parser's emitted view, because a record missing its `upstream-blob-sha` is dropped from that view and would otherwise shrink the denominator alongside the numerator, making a partial comparison read as complete;
+- zero files drifted;
+- zero files errored — a file that could not be fetched is not a file that was verified;
+- the upstream repository is neither archived, renamed, nor unreachable.
+
+Two scope limits, stated here because this is the canonical statement and the
+other surfaces point at it:
+
+- **The registry compared is the upstream-derived one.** `soleur-authored`
+  records carry a `local-blob-sha` checked at commit time; the attestation says
+  nothing about them, while `last-verified` is a single scalar the gate reads
+  as the age of the whole corpus.
+- **A file ADDED upstream is invisible.** The comparison enumerates only the
+  paths the NOTICE already declares and never lists the upstream directory, so
+  a new upstream rule file is undetectable and every registered file still
+  reads SAME.
+
+**Cadence.** A verified-clean run does not write if the field was advanced
+recently — the write is suppressed below 21 days. The banner fires at 30, so
+the observed age never exceeds 21 on the healthy path: one missed run stays
+inside the window, two do not. That 9-day margin is what makes the banner a
+genuine early warning rather than a standing condition, so the suppression
+constant cannot be raised past the banner threshold without breaking it. This is a separate condition because it is invisible to the per-file result: every file compares SAME against an archived upstream, since the blobs at the pinned SHAs still resolve. Without it a run would escalate a `compliance/critical` "upstream archived" issue and advance the attestation in the same pass.
+
+**What advances.** `last-verified` only. No `pinned-commit` change, no `local-blob-sha` change, no content change. The commit's allowlist is the NOTICE path alone, so a verification-only refresh cannot carry a `references/` edit. Note the allowlist is a path PREFIX rather than an exact path, and it does not constrain the commit to a single FIELD within the NOTICE — nothing else on this path dirties that file, but the guarantee is "one path", not "one line".
+
+**Who advances it.** The cron, via a self-merging bot pull request (`safeCommitAndPr`, `mergeMode: "direct"`). The commit message records the pinned commit compared against and the per-state counts.
+
+Writes to `last-verified` are reserved to that automation **by convention, not by mechanism** — an operator editing the field by hand is asserting a comparison no artifact records, which is the state this section exists to end, but nothing currently rejects such an edit: CODEOWNERS auto-requests a reviewer and no ruleset on this repository's default branch requires the review. Stated as a convention rather than a control, because a prose reservation with no enforcement is the same defect class `#7710` documents.
+
+**What it does NOT assert.** That upstream is healthy, maintained, or still the right dependency. An abandoned-but-unarchived upstream returns SAME forever, and this refresh will keep attesting to it. That residual is recorded in ADR-203 rather than papered over.
 
 ## 7. Runtime Staleness Contract
 
@@ -113,7 +170,7 @@ When `gdpr-gate.sh` emits a `POSTURE_FAIL:` line during a regulated PR's `/soleu
 2. Opens a tracking issue with `gh issue create --label compliance/critical --title "[gdpr-gate] >90d stale rules — N days since last-verified"`.
 3. Appends a row to `compliance-posture.md` §Active Compliance Items per the canonical row schema (the gate never writes there directly; this is operator-acknowledged write only).
 4. Commits the row with `compliance: register vendor-pin-staleness for #<issue>`.
-5. Pings the in-flight `ci/vendor-drift-*` PR (or dispatches the workflow manually via `gh workflow run scheduled-content-vendor-drift.yml`) to drive re-vendor.
+5. Pings the in-flight `ci/content-vendor-drift-*` PR (or dispatches the cron manually via `/soleur:trigger-cron` with `cron/content-vendor-drift.manual-trigger` -- `gh workflow run` cannot reach it, there is no workflow) to drive re-vendor.
 
 The current regulated-data PR can ship; the staleness-driven follow-up is a separate work cycle with its own review + merge.
 
@@ -121,11 +178,20 @@ The current regulated-data PR can ship; the staleness-driven follow-up is a sepa
 
 `git hash-object --no-filters` is canonical for both NOTICE entries and the integrity gate. The `--no-filters` flag is load-bearing — it skips gitattributes line-ending normalisation that would otherwise diverge from upstream blob SHAs on Windows / CRLF-configured workspaces. On Windows operators using WSL2 or Linux subsystems this is generally moot; native Windows commits should be made via Git for Windows with `core.autocrlf=input` to keep blob SHAs byte-identical across platforms.
 
+## 9a. Emit-Strip Doctrine (no-attribution licenses only)
+
+Vendored content may carry upstream promotional surfaces — credit footers, marketing links, author plugs. The corpus retains them verbatim: provenance and byte-fidelity are what make the NOTICE pins and drift detection meaningful.
+
+Emit paths are a different surface. When vendored content flows into a user-facing artifact (a generated legal document, a rendered page), the promotional surface is stripped deterministically by a dedicated script — e.g. `legal-generate/scripts/strip-vendor-credit.sh` removes the vendored attribution header and trailing credit block, anchored on the credit-paragraph marker text (never a bare `---`, which also terminates legitimate document sections). The strip fails loud (exit 2) on input lacking the expected marker — an unexpected shape means the corpus drifted or the file isn't what it claims; emit nothing.
+
+**Scope limitation: this doctrine applies only to no-attribution licenses (CC0, public-domain dedications).** A CC-BY or attribution-required bundle MUST carry its notice through to emitted artifacts — stripping is then a license violation, not hygiene. The bundle's NOTICE `license` field is the authority; if it isn't CC0-class, do not build a strip path.
+
 ## 10. Registry
 
 | Bundle | Upstream | License | Pinned | Last Verified | NOTICE | Status |
 |---|---|---|---|---|---|---|
-| gdpr-gate references | `github.com/goSprinto/compliance-skills` | MIT | `7b58d68` | 2026-05-10 | `plugins/soleur/skills/gdpr-gate/NOTICE` | active (5 lifted files) |
+| gdpr-gate references | `github.com/goSprinto/compliance-skills` | MIT | `7b58d68` | 2026-05-10 | `plugins/soleur/skills/gdpr-gate/NOTICE` | active (8 lifted files) |
+| legal-generate templates | `github.com/General-Legal/legal-templates` | CC0-1.0 | `0f7c7bf` | 2026-09-13 | `plugins/soleur/skills/legal-generate/NOTICE` | active (12 lifted files) |
 
 When a new bundle is added: append a row here, write its NOTICE per §2, register the lefthook glob per §4.2, and add the `compliance-posture.md` row per §3 step 5.
 
@@ -134,5 +200,5 @@ When a new bundle is added: append a row here, write its NOTICE per §2, registe
 - Operator runbook: `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md`
 - Compliance posture: `knowledge-base/legal/compliance-posture.md` §Vendored Code Provenance
 - gdpr-gate skill: `plugins/soleur/skills/gdpr-gate/SKILL.md`
-- Drift workflow: `.github/workflows/scheduled-content-vendor-drift.yml`
+- Drift cron: `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` (Inngest; the Sentry monitor slug keeps the pre-migration name `scheduled-content-vendor-drift`)
 - Helper scripts: `plugins/soleur/skills/gdpr-gate/scripts/{notice-frontmatter,vendor-pin-integrity,vendor-drift-classify}.sh`

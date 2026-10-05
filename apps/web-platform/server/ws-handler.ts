@@ -7,7 +7,11 @@ import { basename as pathBasename } from "path";
 import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation, type WSErrorCode } from "@/lib/types";
 import { ByokDelegationError } from "@/server/byok-resolver";
 import type { ConversationContext } from "@/lib/types";
-import { validateConversationContext } from "./context-validation";
+import {
+  crmLeadModePath,
+  isCrmLeadModePath,
+  validateConversationContext,
+} from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   getFreshTenantClient,
@@ -18,6 +22,8 @@ import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "./agent-engine-persistence";
+import { assertLegacyConversationEngineBinding, assertLegacyEngineBinding } from "./agent-engine-route-guard";
 
 // Agent runner stubs -- will be implemented in server/agent-runner.ts
 import {
@@ -31,6 +37,8 @@ import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { ERR_ATTACHMENT_NOT_FOUND } from "./error-messages";
+import { validateAttachmentRef } from "./attachment-pipeline";
 import { createChildLogger } from "./logger";
 import {
   connectionThrottle,
@@ -47,7 +55,7 @@ import {
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
-  forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -462,15 +470,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * (knowledge-base/engineering/architecture/decisions): reap on agent-loop
  * liveness, not socket focus.
  */
-function hasLiveAgentLoop(userId: string, conversationId: string): boolean {
-  if (hasActiveCcQuery(conversationId)) return true;
-  let found = false;
-  forEachSessionForConversation(userId, conversationId, () => {
-    found = true;
-    return true; // stop at the first match
-  });
-  return found;
-}
+// The predicate itself is imported from the shared registry
+// (agent-session-registry.hasLiveAgentLoop) — the stuck-active reaper
+// consults the same cross-lineage check so a slotless-but-live turn is
+// never reaped from either path.
 
 export async function tryLedgerDivergenceRecovery(
   userId: string,
@@ -1022,6 +1025,7 @@ async function createConversation(
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
     context_path: contextPath ?? null,
+    engine_binding_state: "pending",
     ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
 
@@ -1036,7 +1040,7 @@ async function createConversation(
       // visibility-sweep-audit: owner-scoped — 23505 fallback resolves user's own duplicate
       const { data: existing, error: lookupErr } = await tenant
         .from("conversations")
-        .select("id, active_workflow, context_path")
+        .select("id, active_workflow, context_path, engine_binding_state")
         .eq("user_id", userId)
         .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)
@@ -1113,10 +1117,32 @@ async function createConversation(
           "23505 fallback: context_path diverged; first-writer-wins — second-tab path silently discarded",
         );
       }
+      await assertLegacyConversationEngineBinding(
+        new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient),
+        existingRow.id,
+      );
       return existingRow.id;
     }
     throw new Error(`Failed to create conversation: ${error.message}`);
   }
+
+  // Bind the provider before any first-turn dispatch can occur. The repository
+  // resolves the workspace default inside the trusted RPC; this path never
+  // accepts an engine id from the websocket payload.
+  const persistedBinding = await new AgentEnginePersistenceRepository(tenant as unknown as PersistenceClient).bind({
+    workspaceId: wsId,
+    executionKind: "conversation",
+    conversationId: id,
+    createdBy: userId,
+  });
+  // The legacy runner is the only handler currently wired for conversations.
+  // Refuse a future non-Claude default here rather than silently sending that
+  // turn to Claude while Codex qualification/runtime wiring is incomplete.
+  assertLegacyEngineBinding(
+    persistedBinding && typeof persistedBinding === "object" && "binding" in persistedBinding
+      ? (persistedBinding as { binding: unknown }).binding
+      : persistedBinding,
+  );
 
   return id;
 }
@@ -1295,7 +1321,10 @@ export async function dispatchSoleurGoForConversation(
     ReturnType<typeof resolveConciergeDocumentContext>
   > = {};
   const warmCcQuery = hasActiveCcQuery(conversationId);
-  if (context?.path && !warmCcQuery) {
+  // crm-lead is a mode flag. A client path (or the stamped sentinel) is not
+  // a KB document — do not resolve it.
+  const crmLeadTurn = context?.type === "crm-lead" || isCrmLeadModePath(context?.path);
+  if (context?.path && !warmCcQuery && !crmLeadTurn) {
     documentArgs = await resolveConciergeDocumentContext({
       userId,
       contextPath: context.path,
@@ -1315,7 +1344,7 @@ export async function dispatchSoleurGoForConversation(
   // directive builder gracefully falls back to the relative path, which the
   // Bug A2 sandbox fix tolerates for in-workspace files.
   let workspacePath: string | undefined;
-  if (context?.path && !warmCcQuery) {
+  if (context?.path && !warmCcQuery && !crmLeadTurn) {
     try {
       workspacePath = await fetchUserWorkspacePath(userId);
     } catch {
@@ -1325,9 +1354,10 @@ export async function dispatchSoleurGoForConversation(
   }
 
   // #3287 Phase 1 diagnostic — see helper JSDoc.
+  // A crm-lead path is intentionally unresolved; do not report that as a skip.
   emitConciergeDocumentResolutionBreadcrumb({
     conversationId,
-    contextPath: context?.path ?? null,
+    contextPath: crmLeadTurn ? null : (context?.path ?? null),
     hasActiveCcQuery: warmCcQuery,
     documentArgs,
     routingKind: routing.kind,
@@ -1363,6 +1393,7 @@ export async function dispatchSoleurGoForConversation(
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
     routineAuthoring: context?.type === "routine-authoring",
+    crmLead: context?.type === "crm-lead",
     // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
     // validated chat context. `"support"` (the in-app support chat) runs the
     // Concierge read-only with the repo-lifecycle gates bypassed and skills scoped
@@ -1820,6 +1851,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
           if (!lookupErr && existing) {
             const row = existing as { id: string; last_active: string };
+            await assertLegacyConversationEngineBinding(
+              new AgentEnginePersistenceRepository(tenantResume as unknown as PersistenceClient),
+              row.id,
+            );
             const { count: messageCount, error: countErr } = await tenantResume
               .from("messages")
               .select("id", { count: "exact", head: true })
@@ -2048,6 +2083,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           sendToClient(userId, { type: "error", message: "Conversation not found" });
           return;
         }
+
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenantResumeConv as unknown as PersistenceClient),
+          msg.conversationId,
+        );
 
         // FR1 (#5240) — re-align the agent cwd resolver with the
         // conversation's own workspace on resume. `resolveCurrentWorkspaceId`
@@ -2293,12 +2333,28 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
         const stripped = userContent.replace(/@\w+\s*/g, "").trim();
-        if (!stripped) {
+        // `attachments: []` is truthy: test the length, never `!msg.attachments`.
+        if (!stripped && (msg.attachments?.length ?? 0) === 0) {
           sendToClient(userId, {
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
           return;
+        }
+        // First message with ANY attachments (#9297): validate every ref BEFORE
+        // createConversation, text or not. A forged/stale ref (e.g. uploaded
+        // under a pending id a reconnect has since re-minted) must not create
+        // the conversation row or the user message before the attachment
+        // pipeline rejects it.
+        if ((msg.attachments?.length ?? 0) > 0) {
+          try {
+            for (const a of msg.attachments ?? []) {
+              validateAttachmentRef(a, userId, session.pending.id);
+            }
+          } catch (refErr) {
+            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
+            return;
+          }
         }
 
         try {
@@ -2317,26 +2373,52 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             : undefined;
           // createConversation handles unique-violation on (user_id, context_path)
           // by resolving to the existing row (two-tab race).
+          // crm-lead stamps `crm-lead/<id>.mode` on the row and the session
+          // cache. A cache hit treats null as defined (`!== undefined`) and
+          // never re-reads the column, so null here would drop the mode.
+          const insertedContextPath =
+            pendingContext?.type === "crm-lead"
+              ? crmLeadModePath(pendingId)
+              : pendingContextPath;
           const resolvedId = await createConversation(
             userId,
             pendingLeader,
             pendingId,
-            pendingContextPath,
+            insertedContextPath,
             initialActiveWorkflow,
             // feat-wire-concierge-support-chat — a support-context session
             // materializes a repo-less kind='support' conversation (never throws
             // on a missing repo; the repo-less support user is exactly who needs help).
+            // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
+          // Two-tab context_path fallback: the row id differs from the pending
+          // id the client uploaded under, so the pipeline prefix check would
+          // fail closed AFTER the user message row was appended to the other
+          // tab's conversation. Fail closed here instead: countable, and no
+          // empty user message. Session state is left untouched (still pending).
+          if (resolvedId !== pendingId && (msg.attachments?.length ?? 0) > 0) {
+            reportSilentFallback(null, {
+              feature: "attachments",
+              op: "attachments-pending-id-diverged",
+              message: "first-message attachments uploaded under a pending id that diverged from the resolved conversation id",
+              extra: { userId, pendingId, resolvedId, attachmentCount: msg.attachments?.length },
+            });
+            sendToClient(userId, {
+              type: "error",
+              message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
+            });
+            return;
+          }
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns
           // can skip the DB lookup (performance P1-A).
           session.routing = pendingRouting;
-          // Seed the KB context path so chat-case follow-up turns can
-          // rebuild a synthetic ConversationContext for the soleur-go
-          // path (otherwise turn 2+ loses document context).
-          session.contextPath = pendingContextPath ?? null;
+          // Seed the context path so chat-case follow-up turns can rebuild
+          // ConversationContext. For crm-lead this is the mode sentinel,
+          // not a KB path and not null.
+          session.contextPath = insertedContextPath ?? null;
 
           log.info(
             {
@@ -2413,6 +2495,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       }
 
       try {
+        const tenantEngineBinding = await tenantFor(userId, "handleMessage.chat.engine-binding");
+        if (!tenantEngineBinding) throw new Error("conversation engine binding auth probe failed");
+        await assertLegacyConversationEngineBinding(
+          new AgentEnginePersistenceRepository(tenantEngineBinding as unknown as PersistenceClient),
+          session.conversationId!,
+        );
         // Stage 2.12 — route each turn via `parseConversationRouting`.
         // Legacy rows (NULL) flow through the existing agent-runner;
         // sentinel + workflow values dispatch to the soleur-go runner.
@@ -2487,9 +2575,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // injecting the open document. Without this, only the first
           // turn would see the document context (chat-case path serves
           // turn 2+).
-          const chatContext: ConversationContext | undefined = session.contextPath
-            ? { path: session.contextPath, type: "kb-viewer" }
-            : undefined;
+          // Mode sentinel before kb-viewer. A crm-lead path is not a document.
+          const chatContext: ConversationContext | undefined = isCrmLeadModePath(
+            session.contextPath,
+          )
+            ? { type: "crm-lead" }
+            : session.contextPath
+              ? { path: session.contextPath, type: "kb-viewer" }
+              : undefined;
           await dispatchSoleurGoForConversation(
             userId,
             convId,
@@ -2763,6 +2856,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "context_reset":
+    case "c4_diagram_saved": // #8739 — Concierge diagram-save notice (server→client only)
     case "upgrade_pending":
     case "interactive_prompt":
     case "subagent_spawn":
@@ -2807,7 +2901,20 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 // Public entry point — called from server/index.ts
 // ---------------------------------------------------------------------------
 
-export function setupWebSocket(server: HTTPServer) {
+/**
+ * @param allowNextUpgrades dev only. next registers its OWN `upgrade` listener on this
+ *   server (NextCustomServer.setupWebSocketHandler -> `customServer.on('upgrade', ...)`,
+ *   next/dist/server/next.js), so all this flag does is decline to destroy the socket
+ *   first and let that listener run. We do NOT forward to `getUpgradeHandler()`: that
+ *   resolves to NextServer.handleUpgrade, an empty async method whose own comment says
+ *   "The web server does not support web sockets, it's only used for HMR in development"
+ *   (next-server.js). Calling it is inert -- measured: replacing it with `() => {}` still
+ *   yields 101 on /_next/hmr.
+ */
+/** The single upgrade path next serves in dev (router-server.js). */
+const NEXT_HMR_PATH = "/_next/hmr";
+
+export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
   const wss = new WebSocketServer({ noServer: true });
 
   // Handle HTTP -> WebSocket upgrade on /ws path
@@ -2815,6 +2922,33 @@ export function setupWebSocket(server: HTTPServer) {
     const { pathname } = parse(req.url || "", true);
 
     if (pathname !== "/ws") {
+      // next serves its dev HMR socket as an upgrade under `/_next/` (in next 16,
+      // `/_next/hmr`). Node dispatches "upgrade" to EVERY listener, so destroying the
+      // socket here kills next's handshake before its own listener can answer -- the
+      // browser reports "Connection closed before receiving a handshake response" and
+      // next 16's dev client, which waits on that handshake, never finishes bringing the
+      // page to life. The page renders server-side and then sits inert: a checkbox
+      // toggles in the DOM but no React handler runs. That was #7591's whole e2e failure
+      // surface, byte-identical under Turbopack and webpack, which is why the bundler was
+      // a red herring.
+      //
+      // Matched EXACTLY, not by `/_next/` prefix. next's own test is
+      // `req.url.startsWith(\`${hmrPrefix}/_next/hmr\`)` (router-server.js), so the prefix
+      // form declined a whole family of paths next will not serve anyway -- and
+      // `url.parse` does NOT normalise dot segments, so `/_next/../ws` and
+      // `/_next/hmr/../../ws` both satisfy a prefix test. Exact-matching the one path next
+      // actually answers keeps the declined set equal to the served set. (No `basePath` is
+      // configured; if one is ever added this constant must gain that prefix.)
+      //
+      // DEV ONLY, and the gate is load-bearing rather than tidy. In production next's
+      // upgrade path reaches "If there's no matched output, we don't handle the request
+      // as user's custom WS server may be listening on the same path" (router-server.js)
+      // and returns WITHOUT closing the socket. Ungated, an unauthenticated client could
+      // hold a file descriptor open per request on any `/_next/` path, bypassing both
+      // rate limiters below -- which sit after this return.
+      if (allowNextUpgrades && pathname === NEXT_HMR_PATH) {
+        return;
+      }
       socket.destroy();
       return;
     }

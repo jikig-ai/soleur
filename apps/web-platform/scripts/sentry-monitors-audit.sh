@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
 # Sentry Monitors/Alerts migration audit (one-shot, idempotent).
 #
-# Lists every Sentry Monitor and every project Issue Alert Rule, joins the
-# two on monitor.slug references in alert filters, and writes a Markdown
-# report to knowledge-base/legal/audits/sentry-migration-audit-<YYYY-MM-DD>.md
+# Lists every Sentry Monitor, every org Workflow (issue-alert routing) and
+# every org Detector (metric/cron alert definitions), joins monitors to
+# detectors by slug and detectors to workflows by `workflowIds`, and writes a
+# Markdown report to
+# knowledge-base/legal/audits/sentry-migration-audit-<YYYY-MM-DD>.md
 # (or to AUDIT_OUT_DIR if set).
+#
+# Endpoint provenance (#7590) — Sentry deprecated the alert-rule API family
+# on 2026-05-14 and serves it under scheduled BROWNOUTS (HTTP 410 for a short
+# window on a recurring schedule), which is why this audit alternated green
+# and red on an unchanged script. The family was NOT removed outright. Each
+# replacement below is the one Sentry names in its own
+# `x-sentry-replacement-endpoint` response header, read off a live 410:
+#
+#   projects/{org}/{proj}/rules/   -> organizations/{org}/workflows/
+#   organizations/{org}/alert-rules/ -> organizations/{org}/detectors/
+#
+# The mapping is PER-ENDPOINT. Pointing both at `workflows/` would silently
+# mis-map metric alerts onto issue-alert routing. See ADR-031 amendment 13.
 #
 # Idempotency: the report path is keyed by date; same-day re-runs OVERWRITE
 # the prior report at the same path (no append, no duplicate header).
@@ -15,12 +30,34 @@
 #
 # Required env: SENTRY_AUTH_TOKEN, SENTRY_ORG (SENTRY_PROJECT optional).
 #
+# TOKEN-NAMING TRAP: `sentry-audit-gate.yml` feeds the repo secret
+# `SENTRY_IAC_AUTH_TOKEN` into the env var `SENTRY_AUTH_TOKEN`, while Doppler
+# `prd` ALSO holds a genuinely different secret literally named
+# `SENTRY_AUTH_TOKEN`. Reproducing a CI failure locally with Doppler's
+# `SENTRY_AUTH_TOKEN` therefore exercises a different credential than CI uses.
+# Use `SENTRY_IAC_AUTH_TOKEN` when reproducing this gate. (#7590 — this cost a
+# full investigation that concluded, wrongly, that secrets had drifted.)
+#
 # Test injection (used by sentry-monitors-audit.test.sh ONLY):
 #   SENTRY_API_HOST           — bypass region probe; force this host
 #   SENTRY_FIXTURE_MONITORS   — file path; serve as monitors GET response
-#   SENTRY_FIXTURE_RULES      — file path; serve as project rules response
+#   SENTRY_FIXTURE_RULES      — file path; serve as org workflows response
+#   SENTRY_FIXTURE_DETECTORS  — file path; serve as org detectors response.
+#                               When _MONITORS/_RULES are set and this is not,
+#                               the detectors fetch serves `[]` rather than
+#                               reaching the network, so fixture runs stay
+#                               hermetic without every test declaring it.
 #   SENTRY_TF_DIR             — read Class D `.tf` declarations from here
 #   AUDIT_OUT_DIR             — write report here instead of repo legal dir
+#   CURL_BIN                  — transport seam; the binary curl_retry invokes.
+#                               The SENTRY_FIXTURE_* seams `cat` a file and
+#                               return BEFORE curl runs, so they cannot express
+#                               an HTTP status, a response header or a retry
+#                               sequence — the three things #7590's defects all
+#                               live in. Tests that need those stub `curl` on
+#                               PATH (see sentry-monitors-audit.test.sh
+#                               `mk_curl_stub`), matching the established repo
+#                               dialect in apps/cla-evidence/scripts/*.test.sh.
 #
 # Class D state half (PRODUCTION input, not test-only):
 #   SENTRY_STATE_SLUGS_FILE — path to a file of newline-separated monitor slugs
@@ -55,25 +92,332 @@
 # Plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
 # Phase: 1 (script) + 2.1 (operator run) + 2.2 (CI re-run on release)
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}${SENTRY_IAC_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN, SENTRY_IAC_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
-: "${SENTRY_ORG:=jikigai}"
+: "${SENTRY_ORG:?SENTRY_ORG must be set}"
+
+# ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
+# SENTRY_API_HOST, SENTRY_ORG and CURL_BIN are all caller-settable and all land
+# on the path that carries SENTRY_AUTH_TOKEN. Measured on this file's own HEAD
+# before the pin: a stubbed `curl` recorded a live bearer reaching
+# https://attacker.tld/api/0/organizations/jikigai-eu/.
+#
+# `--disable` must be the FIRST argument (it aborts ~/.curlrc parsing and is a
+# no-op later) and `--noproxy '*'` stops ALL_PROXY/HTTPS_PROXY redirecting the
+# request with the destination pin fully intact. Neither reaches the RESOLVER,
+# the TRUST ANCHOR or the TLS key log, which is what the unset prologue closes.
+#
+# The default was `jikigai`, which ADR-031 records as canceled vendor-side; a
+# default that silently addresses a dead org is worse than a refusal.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
+
+# Defined BEFORE its first call. `-b` (bytes), not `-c`: a multi-byte hostile
+# value must not walk past the cap.
+# U+2028/U+2029 are NOT in [[:cntrl:]] under C / C.UTF-8 -- which is the GitHub
+# Actions runner default -- so they are stripped on a UTF-8 laptop and survive in
+# CI. Measured both ways. They are named explicitly rather than locale-pinned so
+# the behaviour does not vary with the caller's environment at all.
+# `-b` (bytes), not `-c`: a multi-byte hostile value must not walk past the cap.
+# `iconv -c` then drops a sequence the byte cut truncated mid-character, because
+# this value can reach a JSON REST body (`gh --body-file`), not only a log.
+# Precomputed, because `$'\u2028'` does NOT ANSI-C-expand inside a
+# `${var//[...]}` glob bracket -- measured: the separator survived verbatim.
+# Explicit UTF-8 BYTES, not $'\u2028': bash renders \u in the CURRENT locale, so
+# under LC_ALL=C it cannot represent the codepoint and yields the wrong bytes --
+# which made the first version of this fix locale-dependent in exactly the way it
+# was written to prevent. Measured both ways.
+_U2028=$'\xe2\x80\xa8'; _U2029=$'\xe2\x80\xa9'
+_safe() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//$_U2028/}"; s="${s//$_U2029/}"
+  printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
+}
+
+# ORG ALLOWLIST, not a shape check (#7997 + #7989/#7797 reconciled at merge).
+# Both PRs pinned this independently: #7997 required an RFC 1035 §2.3.4 label,
+# #7989 required membership of a two-slug set. The SET IS STRICTLY NARROWER, so
+# it wins and the shape check would be dead code behind it. It also closes a
+# residual #7997 had consciously accepted and recorded: SENTRY_HOST_CANDIDATES
+# interpolates the slug into candidate 1, so under a shape-only check
+# `SENTRY_ORG=evil` yields `evil.sentry.io`, which the membership refusal then
+# ACCEPTS by construction. #7997 argued that residual was tenant confusion
+# rather than exfiltration (`*.sentry.io` is Sentry SaaS — a slug buys a tenancy,
+# not an origin); true, and an allowlist removes it anyway.
+#
+# `jikigai` is retained but is NOT a live destination: ADR-031 records both orgs
+# as operator-owned EU-database orgs and the duplicate `jikigai` CANCELED
+# vendor-side on 2026-05-21. It stays only because it is this script's historical
+# default and the value the stub-driven suites fixture. #7989's comment called it
+# "still the US-org value"; that is wrong on both counts and is corrected here.
+# The live slug is `jikigai-eu` (infra/sentry/variables.tf `sentry_org` default).
+#
+# The refusal CONTRACT is #7997's, deliberately, not #7989's `exit 1`: the
+# workflows discriminate a destination refusal from a Sentry fault by matching
+# `^ERROR: refusing (org|destination host|curl-binary) ` at rc=2
+# (reusable-release.yml, sentry-audit-gate.yml), and 50 suite rows assert it.
+case "$SENTRY_ORG" in
+  jikigai|jikigai-eu) ;;
+  *) printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2 ;;
+esac
+
+readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
+
+# Transport seam. Tests override this (or shadow `curl` on PATH) to script a
+# status sequence, response headers and a body — see the header's CURL_BIN note.
+CURL_BIN="${CURL_BIN:-curl}"
+# A caller-named binary receives the bearer as argv. The test seam stays open
+# behind an explicit opt-in the production environment never sets.
+#
+# Spelled as a `case` over a copy, deliberately: T22's execution-site guard
+# counts spellings as a proxy for executions, and this is a COMPARISON. The copy
+# ends its line (no trailing space for the seam pattern) and the arm is `curl)`
+# (followed by `)`, not whitespace), so neither counter moves.
+_cb="$CURL_BIN"
+case "$_cb" in
+  curl) ;;
+  *) [[ -n "${SENTRY_AUDIT_TEST_CURL_BIN:-}" ]] || {
+       printf 'ERROR: refusing curl-binary %s\n' "$(_safe "$_cb")" >&2; exit 2; } ;;
+esac
+
+# Scratch for per-call header dumps. curl_retry publishes the header-file PATH
+# to its caller, so the file must outlive the call; it is reaped on exit.
+AUDIT_SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$AUDIT_SCRATCH"' EXIT
+
+# ── curl_retry metadata contract — FILE-backed, deliberately ──────────────
+# Every call site is `x=$(curl_retry …)`, which runs the function in a
+# SUBSHELL. A shell-variable global-out (zot-inventory's HTTP_CODE shape)
+# therefore does NOT work here: the assignments happen in the child and are
+# discarded on return, leaving the parent with an empty status and a tripwire
+# that warned on stderr while its escalation flag silently reset to 0. That
+# regression was live in this file until the T16/T17b transport-seam tests
+# caught it — the same subshell trap zot-inventory's link_next documents, one
+# level up, because there the FUNCTION was moved out of `$( )` whereas here the
+# call shape is fixed by the callers (Gates 2/3 need the substitution).
+#
+# Files cross the boundary. These live in AUDIT_SCRATCH, which is set before
+# any call, so the child writes and the parent reads.
+CURL_LAST_STATUS_FILE="$AUDIT_SCRATCH/last_status"
+CURL_LAST_HDR_FILE="$AUDIT_SCRATCH/last_hdr"
+DEPRECATION_SEEN_FILE="$AUDIT_SCRATCH/dep_seen"
+DEPRECATION_FATAL_FILE="$AUDIT_SCRATCH/dep_fatal"
+: > "$CURL_LAST_STATUS_FILE"
+: > "$CURL_LAST_HDR_FILE"
+: > "$DEPRECATION_SEEN_FILE"
+: > "$DEPRECATION_FATAL_FILE"
+
+# Status of the most recent curl_retry call, readable from the parent shell.
+curl_retry_status() { cat "$CURL_LAST_STATUS_FILE" 2>/dev/null || true; }
+# Fail once a deprecation date is within this many days (or already past).
+# A perpetual warning is what failed in 2026-07: versions.tf records this
+# family answering 410 on 2026-07-17, written off as transient, because a
+# warning on a green check has no teeth.
+#
+# ESCAPE HATCH DIRECTION — the predicate is `days <= WINDOW`, so RAISING the
+# window WIDENS escalation and LOWERING it suppresses. An earlier revision of
+# this comment (and the operator-facing error below) said "raise the window",
+# which is inverted: an operator following it while CI was red would have made
+# the failure fire more often, not less. To suppress for a date N days out, set
+# the window BELOW N; for an already-past date, below its negative day-count
+# (a date 97 days past needs a window under -97).
+DEPRECATION_FAIL_WINDOW_DAYS="${SENTRY_DEPRECATION_FAIL_WINDOW_DAYS:-30}"
+# ESCALATION IS OFF BY DEFAULT, and that is a deliberate caller-scoped choice.
+#
+# The tripwire runs inside curl_retry, which Gates 1-3 also call. So its reach
+# is NOT limited to the endpoints this audit migrated: a deprecation header on
+# `/organizations/{org}/` — which this script must read to prove org
+# controllability, and cannot migrate away from — would reach it too.
+#
+# `apply-sentry-infra.yml` runs this script BEFORE `terraform plan`. A hard
+# failure there is a vendor-scheduled freeze on Sentry infra deploys, possibly
+# including the deploy that would ship the migration. That is the same
+# "detector blocks its own cure" deadlock the Class D state-half block below
+# spends twenty lines avoiding, and the escape hatch named in the error text
+# is set in NO workflow, so the apply path cannot clear it without merging a
+# workflow edit first.
+#
+# So the teeth belong on the ADVISORY caller (sentry-audit-gate.yml), where a
+# red costs a comment thread and a human is already reading the PR. The
+# unconditional ::warning:: fires everywhere regardless.
+DEPRECATION_FAIL_ENABLED="${SENTRY_DEPRECATION_FAIL:-0}"
+
+# Emit a deprecation warning for any response carrying the header, on ANY
+# status — including 200. This is the whole point: the endpoints that broke
+# #7590 were serving 200 with a deprecation header for three months.
+# Classify only; never exit from here (see curl_retry's contract below).
+sentry_deprecation_tripwire() {  # $1 header-dump path, $2 url
+  local hdr="$1" url="$2" dep repl endpoint now_s dep_s days
+  [[ -s "$hdr" ]] || return 0
+  # `-D` preserves wire casing, so the match must be case-insensitive.
+  dep=$( { grep -iE '^x-sentry-deprecation-date:' "$hdr" 2>/dev/null || true; } | tail -1 \
+    | tr -d '\r' | awk '{print $2}')
+  [[ -z "$dep" ]] && return 0
+  repl=$( { grep -iE '^x-sentry-replacement-endpoint:' "$hdr" 2>/dev/null || true; } | tail -1 \
+    | tr -d '\r' | awk '{print $2}')
+  # Dedupe on the path, not the full URL — a cursor query string would
+  # otherwise make every page of a paginated fetch a distinct "endpoint".
+  endpoint="${url%%\?*}"
+  if ! grep -qFx -- "$endpoint" "$DEPRECATION_SEEN_FILE" 2>/dev/null; then
+    printf '%s\n' "$endpoint" >> "$DEPRECATION_SEEN_FILE"
+    echo "::warning::Sentry endpoint ${endpoint} is DEPRECATED (x-sentry-deprecation-date: ${dep}${repl:+; replacement: ${repl}}). Migrate before it sunsets — this header is served on successful responses too, and ignoring it is what made #7590 present as an intermittent flake." >&2
+  fi
+  now_s=$(date -u +%s)
+  dep_s=$(date -u -d "$dep" +%s 2>/dev/null || echo "")
+  if [[ -z "$dep_s" ]]; then
+    # `date -u -d` is GNU-only; on BSD/macOS it fails. Returning here would
+    # leave the warning firing while the escalation silently never arms —
+    # a platform-conditional downgrade to exactly the toothless warning this
+    # tripwire exists to replace, and indistinguishable from "no deprecation".
+    # A date we cannot read is a finding, not an all-clear.
+    echo "::warning::Sentry sent x-sentry-deprecation-date '${dep}' for ${endpoint} but this host cannot parse it (GNU \`date -d\` unavailable?). Escalation cannot be evaluated — treating as IN-WINDOW." >&2
+    printf '%s %s\n' "$endpoint" "${dep} (unparseable — escalated conservatively)" >> "$DEPRECATION_FATAL_FILE"
+    return 0
+  fi
+  days=$(( (dep_s - now_s) / 86400 ))
+  if (( days <= DEPRECATION_FAIL_WINDOW_DAYS )); then
+    # A marker file, not a variable: this runs inside the `$( )` subshell.
+    printf '%s %s\n' "$endpoint" "$dep" >> "$DEPRECATION_FATAL_FILE"
+  fi
+  return 0
+}
 
 # Retry wrapper for Sentry API calls — the org-subdomain intermittently
 # returns 500/timeout on GET /organizations/{org}/ and POST /releases/.
 # Three attempts with 5s/10s backoff covers the transient 500 pattern
-# observed since 2026-05-19. Returns the last attempt's output.
+# observed since 2026-05-19. Returns the last attempt's output, ALWAYS exit 0.
+#
+# CAPTURE WITH `-D` ONLY. Never add `-w` or `-o` inside this wrapper.
+# curl_retry's stdout is polymorphic: Gates 2/3 pass their own
+# `-o /dev/null -w '%{http_code}'` and read stdout as the STATUS, while Gate 1
+# and every fetch read it as the BODY. A wrapper `-w` placed after "$@" wins
+# (duplicate -w is last-wins) and corrupts every body into `[...]200`, failing
+# the shape check on a healthy 200 — i.e. firing the new diagnostic against a
+# working endpoint. Placed before "$@" it is overridden and classifies nothing.
+# `-D` is stdout-neutral: it writes headers to a file and leaves the caller's
+# own `-w` intact.
+#
+# NEVER EXIT FROM HERE. Every call site is `x=$(curl_retry …)` under
+# `set -euo pipefail`, so a non-zero return aborts at the assignment — the
+# cryptic exit-28 failure the comment block above fetch_monitors exists to
+# prevent. Classification is published through the globals and acted on at the
+# shape check, which knows which fetch it is talking about.
 curl_retry() {
   local max_attempts=3
   local attempt=1
   local backoff=5
   local result=""
+  local rc=0
+  local status=""
+  local hdr url arg prev
+
+  # A FIXED path, not a mktemp: the caller must be able to find this file after
+  # the command substitution returns, and a per-call random name computed in
+  # the child is unknowable to the parent. Callers that need it beyond the next
+  # call snapshot it (see sentry_fetch_collection).
+  hdr="$CURL_LAST_HDR_FILE"
+
+  # Idempotency: a NON-IDEMPOTENT request is never repeated, by EITHER path.
+  #
+  # Gate 3 is a POST /releases/ whose `probe_ver` is computed ONCE, outside
+  # this wrapper, and whose check is `!= 201`. Sentry returns 208 when the
+  # release already exists, so re-sending a write that DID land server-side
+  # yields a deterministic 208 and a false "token may lack project:releases
+  # scope" diagnosis — halting the apply before `terraform plan`.
+  #
+  # The guard covers the TRANSPORT path as well as the status path, and that
+  # is the half that matters most: a `--max-time 10` timeout on a POST whose
+  # write already landed is the live case (curl exit 28 on this exact script
+  # is recorded in the fetch_monitors comment below as having actually
+  # happened), whereas a status-bearing 5xx at least proves the server
+  # answered. An earlier revision of this block consulted `safe` only inside
+  # the `rc == 0` branch, so a timed-out POST was re-sent three times while
+  # this comment and ADR-031 both asserted it could not be.
+  #
+  # Safety is DECLARED by the call site AND inferred from argv — both, because
+  # each alone fails open in a different direction.
+  #
+  # Declaration alone: a future author who adds a write and forgets the prefix
+  # gets it retried. That is the failure this guard exists to prevent, and it
+  # would be reintroduced by the very change meant to make the guard exact.
+  # Inference alone: the previous scan matched only `-X <verb>`, so it missed
+  # `--request POST` and read a bare `curl -d …` (a POST, to curl) as safe —
+  # correct only by coincidence of Gate 3's writing style.
+  #
+  # So: the declaration is authoritative for intent, and the inference is a
+  # backstop covering the write shapes curl accepts. Either one marking the
+  # request unsafe is enough. A false POSITIVE costs one un-retried transient
+  # failure; a false NEGATIVE costs a duplicated write, so the list errs wide.
+  #
+  # It is a BACKSTOP, not a proof: curl's option surface is large and the
+  # joined forms (`-XPOST`, `--request=POST`, `-d@file`) are easy to miss. The
+  # declaration is what makes a write safe — this only catches an author who
+  # forgot it. Do not read the list as exhaustive.
+  local safe=1
+  [[ "${CURL_RETRY_UNSAFE:-0}" == "1" ]] && safe=0
+  prev=""
+  url=""
+  for arg in "$@"; do
+    case "$prev" in
+      -X|--request) case "$arg" in GET|HEAD) ;; *) safe=0 ;; esac ;;
+    esac
+    # Any body-bearing flag makes this a write to curl even with no -X, and the
+    # JOINED forms (`-XPOST`, `--request=POST`, `-d@file`) are argv elements
+    # the space-separated `case "$prev"` above cannot see.
+    case "$arg" in
+      -X[!G]*|--request=*) safe=0 ;;
+      -d|-d?*|--data|--data-ascii|--data-raw|--data-binary|--data-urlencode) safe=0 ;;
+      --json|--form-string|-F|--form|-T|--upload-file) safe=0 ;;
+      --data=*|--data-ascii=*|--data-raw=*|--data-binary=*|--data-urlencode=*) safe=0 ;;
+      --json=*|--form-string=*|--form=*|--upload-file=*) safe=0 ;;
+      https://*|http://*) url="$arg" ;;
+    esac
+    prev="$arg"
+  done
+
   while (( attempt <= max_attempts )); do
-    result=$(curl "$@" 2>/dev/null) && break
+    : > "$hdr"
+    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
+    # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
+    # failure produces no status line at all; normalise that to `000` rather
+    # than the empty string, so it renders the same way `-w '%{http_code}'`
+    # renders it at Gates 2/3 and never prints as `returned HTTP `.
+    status=$(awk '/^HTTP\//{c=$2} END{print c}' "$hdr" 2>/dev/null | tr -d '\r')
+    [[ -z "$status" ]] && status="000"
+    printf '%s' "$status" > "$CURL_LAST_STATUS_FILE"
+    sentry_deprecation_tripwire "$hdr" "$url"
+
+    if (( rc == 0 )); then
+      # Transport succeeded. Retry only transient statuses. 410/404/401/403
+      # are permanent: retrying a 410 would mask a post-sunset removal as a
+      # flake, which is precisely the ambiguity #7590 spent an investigation
+      # failing to resolve.
+      [[ "$status" =~ ^(429|5[0-9][0-9])$ ]] || break
+    fi
+
+    # Unsafe requests stop here regardless of WHY the attempt failed.
+    (( safe == 1 )) || break
+
     if (( attempt < max_attempts )); then
-      echo "::warning::Sentry API attempt $attempt/$max_attempts failed — retrying in ${backoff}s" >&2
+      echo "::warning::Sentry API attempt $attempt/$max_attempts failed (rc=${rc} status=${status}) — retrying in ${backoff}s" >&2
       sleep "$backoff"
       backoff=$(( backoff * 2 ))
     fi
@@ -81,6 +425,91 @@ curl_retry() {
   done
   printf '%s' "$result"
 }
+
+# ── Cursor extraction (Guard 1 / AC11a) ───────────────────────────────────
+# Sets SENTRY_NEXT_CURSOR (empty = no next page). Mutates LINK_UNFOLLOWED, so
+# it must run in the CALLER'S shell — never `$(sentry_next_cursor …)`.
+#
+# THE LINK TARGET IS NEVER FOLLOWED AS GIVEN. Only the `cursor` parameter is
+# extracted; the URL is rebuilt from the already-validated $api_host. Two
+# independent reasons, and the second is why a host-equality check would be
+# WRONG here:
+#
+#  1. Security. curl parses everything before an `@` as userinfo, so a header
+#     of `Link: <@attacker.tld/api/0/…>; rel="next"` resolves to attacker.tld
+#     — a real off-box request carrying SENTRY_AUTH_TOKEN, whose response then
+#     drives further requests. Measured against curl 8.18.0 in
+#     scripts/zot-inventory.sh, which documents the same attack.
+#  2. Correctness. Sentry's Link targets are absolute and point at
+#     `sentry.io` even when the request went to `<org>.sentry.io` (verified
+#     live 2026-08-17). So "reject any target whose host != $api_host" would
+#     refuse EVERY real pagination and silently truncate the audit. Rebuild is
+#     the only form that is both safe and correct.
+LINK_UNFOLLOWED=0
+MAX_PAGES="${SENTRY_AUDIT_MAX_PAGES:-50}"
+
+sentry_next_cursor() {  # $1 header-dump path
+  SENTRY_NEXT_CURSOR=""
+  local hdr="$1" raw seg target cursor
+  [[ -s "$hdr" ]] || return 0
+  raw=$( { grep -iE '^link:' "$hdr" 2>/dev/null || true; } | tail -1 | tr -d '\r')
+  [[ -z "$raw" ]] && return 0
+
+  # Split the header into its comma-separated link-values. Herestrings, not
+  # pipes: `producer | grep -q` takes SIGPIPE on an early match under
+  # `set -o pipefail` and flakes to a false negative.
+  local IFS_SAVE="$IFS"
+  local -a segs=()
+  IFS=',' read -r -a segs <<<"$raw"
+  IFS="$IFS_SAVE"
+
+  for seg in "${segs[@]}"; do
+    grep -qE 'rel="?next"?' <<<"$seg" || continue
+    # Three states, not two. `results="false"` means the next page is empty —
+    # skipping it is correct, not a truncation. But `results` ABSENT is a
+    # PARSE failure, and collapsing it into "done" is the fail-open this
+    # mechanism exists to prevent: the sweep would silently stop and the
+    # report would still say "Enumeration complete: yes". Its sibling failure
+    # ten lines down (an unparseable cursor) already warns and counts; these
+    # are the same class and must agree.
+    if ! grep -qE 'results=' <<<"$seg"; then
+      echo "::warning::Sentry returned a Link 'next' with no 'results' field; cannot tell an empty next page from a truncated sweep. Refusing to follow it. This sweep is INCOMPLETE." >&2
+      LINK_UNFOLLOWED=$(( LINK_UNFOLLOWED + 1 ))
+      return 0
+    fi
+    grep -qE 'results="?true"?' <<<"$seg" || continue
+
+    target=$(sed -E 's/^[[:space:]]*<([^>]*)>.*/\1/' <<<"$seg")
+    if [[ "$target" == *@* ]]; then
+      echo "::warning::Sentry returned a Link 'next' target containing '@' (userinfo-injection shape); refusing it. This sweep is INCOMPLETE." >&2
+      LINK_UNFOLLOWED=$(( LINK_UNFOLLOWED + 1 ))
+      return 0
+    fi
+
+    cursor=""
+    if [[ "$seg" =~ cursor=\"([^\"]+)\" ]]; then
+      cursor="${BASH_REMATCH[1]}"
+    fi
+    # The cursor is interpolated into a URL, so it is validated too. Sentry
+    # cursors are colon-delimited integers (`100:1:0`).
+    if [[ -z "$cursor" || ! "$cursor" =~ ^[A-Za-z0-9:_.~=+-]+$ ]]; then
+      echo "::warning::Sentry returned a Link 'next' with no parseable cursor; refusing to follow it. This sweep is INCOMPLETE." >&2
+      LINK_UNFOLLOWED=$(( LINK_UNFOLLOWED + 1 ))
+      return 0
+    fi
+    SENTRY_NEXT_CURSOR="$cursor"
+    return 0
+  done
+  return 0
+}
+
+# The destination set, declared ONCE and read by both the discovery loop and the
+# membership refusal below — so a host can only be reached by being a member.
+# FOUR members, no us.sentry.io: this set is already wider than the org-scoped
+# contract strictly requires, and the reason it stays wide is that 21 rows in
+# this script's suite pass de.sentry.io. Tightening it to the singleton is a
+# follow-up, not a drive-by.
+readonly SENTRY_HOST_CANDIDATES=("${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io)
 
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Probe order (PR-β §10.2 widened from `de.sentry.io sentry.io` baseline):
@@ -97,8 +526,8 @@ curl_retry() {
 # but the 4-gate block below catches that via the org-GET probe.
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in "${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io; do
-    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  for candidate in "${SENTRY_HOST_CANDIDATES[@]}"; do
+    http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
     if [[ "$http" == "200" ]]; then
@@ -107,10 +536,27 @@ if [[ -z "$api_host" ]]; then
     fi
   done
   if [[ -z "$api_host" ]]; then
-    echo "ERROR: Sentry token not valid against any candidate host (${SENTRY_ORG}.sentry.io, eu.sentry.io, de.sentry.io, sentry.io). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
+    # Rendered from the array, not a second hand-written list that can drift.
+    _cand_list=$(printf '%s, ' "${SENTRY_HOST_CANDIDATES[@]}"); _cand_list="${_cand_list%, }"
+    echo "ERROR: Sentry token not valid against any candidate host (${_cand_list}). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
     exit 1
   fi
 fi
+
+# Whether $api_host came from the caller or from discovery, it must be a member
+# of the declared set. This is the chokepoint: discovery can only ever select a
+# member, so the refusal binds the CALLER-SUPPLIED path.
+_host_ok=0
+for _c in "${SENTRY_HOST_CANDIDATES[@]}"; do
+  [[ "$api_host" == "$_c" ]] && { _host_ok=1; break; }
+done
+[[ "$_host_ok" -eq 1 ]] || {
+  printf 'ERROR: refusing destination host %s\n' "$(_safe "$api_host")" >&2; exit 2; }
+
+# The pin above is a one-time predicate; five later call sites re-read this
+# variable. SENTRY_ORG and SENTRY_HOST_CANDIDATES are already readonly -- this
+# closes the last mutable operand, so the guard is structural, not temporal.
+readonly api_host
 
 # --- 4-gate destination-controllability check (PR-β §10 / C5) -------------
 # Recurrence-prevention controls per #3861 Branch C. Gates verify the auth
@@ -149,7 +595,9 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 3: audit_write_probe (POST release, expect 201 only — Kieran P1-4
   # dropped the 208 branch). Cleans up via DELETE on best-effort.
   probe_ver="audit-probe-$(date +%s)-$$"
-  gate3_http=$(curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  # The ONLY non-idempotent call in this file. Declared, not inferred — see
+  # the idempotency block in curl_retry.
+  gate3_http=$(CURL_RETRY_UNSAFE=1 curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -159,7 +607,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
     exit 1
   fi
-  curl -s --max-time 10 -X DELETE \
+  curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -X DELETE \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
     -o /dev/null 2>/dev/null || true
@@ -250,163 +698,471 @@ fi
 # on re-run). curl_retry always returns 0 (last attempt's output), so a genuine
 # persistent failure surfaces at the JSON-shape validation below with a clear
 # "response is not a JSON array" message + exit 1 — never a cryptic exit 28.
+# Per-fetch metadata, so the shape check below can name WHICH fetch failed and
+# against what URL. Without this the diagnostic cannot tell a 410 on the
+# detectors path from a 500 on the workflows path.
+declare -A FETCH_STATUS=()
+declare -A FETCH_URL=()
+declare -A FETCH_HDR=()
+
+# Global-out, NOT stdout. This function mutates FETCH_* and LINK_UNFOLLOWED,
+# so calling it as `x=$(sentry_fetch_collection …)` would run it in a subshell
+# and silently discard every one of those mutations — a truncated sweep that
+# still renders the clean-state string. Sets FETCH_BODY in the caller's shell.
+FETCH_BODY=""
+sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
+  local label="$1" path="$2"
+  local page=1 body url qs=""
+  # Accumulate pages in a FILE, never in an argv-passed variable.
+  #
+  # The previous form was `acc=$(jq -n --argjson a "$acc" --argjson b "$body" '$a + $b')`.
+  # `--argjson` passes the whole accumulator as ONE argv entry, and Linux caps
+  # a single entry at MAX_ARG_STRLEN (32 * 4096 = 131072 B) — a kernel constant
+  # unrelated to ARG_MAX, so `getconf ARG_MAX` (2097152 here) gives no warning.
+  # Measured: 128640 B accumulates fine, 134000 B dies with
+  # `jq: Argument list too long` and rc=126.
+  #
+  # That fails UPSTREAM of the shape check, so it bypasses the entire
+  # self-naming diagnostic this change exists to build — the operator gets one
+  # cryptic line and no report. It also fires well below the advertised
+  # MAX_PAGES ceiling: at realistic Sentry object sizes the real limit was a
+  # few hundred rows, not 50 pages. `jq -s` reads the file directly, so no
+  # argv is involved and the O(pages^2) re-serialisation goes away too.
+  local pages_file="$AUDIT_SCRATCH/pages.$label"
+  : > "$pages_file"
+  local base="https://${api_host}/api/0/${path}?per_page=100"
+  while :; do
+    url="${base}${qs}"
+    body=$(curl_retry -s --max-time 10 \
+      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" "$url")
+    # Snapshot the shared last-header file under this label. Without the copy
+    # the shape check below would read whichever fetch ran LAST, and would
+    # report the wrong endpoint's deprecation headers against a failure.
+    if ! cp -f "$CURL_LAST_HDR_FILE" "$AUDIT_SCRATCH/hdr.$label" 2>/dev/null; then
+      # Silent here would make the diagnostic drop x-sentry-deprecation-date
+      # and x-sentry-replacement-endpoint — the two fields the release caller
+      # now tells the operator to read FIRST — and make "no deprecation
+      # header" indistinguishable from "header lost".
+      echo "::warning::could not snapshot response headers for ${label}; the failure diagnostic will omit deprecation headers." >&2
+      : > "$AUDIT_SCRATCH/hdr.$label"
+    fi
+    FETCH_STATUS["$label"]="$(curl_retry_status)"
+    FETCH_URL["$label"]="$url"
+    FETCH_HDR["$label"]="$AUDIT_SCRATCH/hdr.$label"
+    if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$body"; then
+      # Hand the raw body back untouched so the shape check can render the
+      # self-naming diagnostic against it, then exit. There is deliberately no
+      # "partial fetch" state: a failed collection means no report is written
+      # at all, which is stronger than writing one that says it did not check.
+      FETCH_BODY="$body"
+      return 0
+    fi
+    printf '%s\n' "$body" >> "$pages_file"
+
+    sentry_next_cursor "${FETCH_HDR[$label]}"
+    [[ -z "$SENTRY_NEXT_CURSOR" ]] && break
+    if (( page >= MAX_PAGES )); then
+      echo "::warning::Sentry ${label} pagination hit the MAX_PAGES ceiling (${MAX_PAGES}); refusing to follow further cursors. This sweep is INCOMPLETE." >&2
+      LINK_UNFOLLOWED=$(( LINK_UNFOLLOWED + 1 ))
+      break
+    fi
+    page=$(( page + 1 ))
+    # `&` not `?`: the base already carries per_page.
+    qs="&cursor=${SENTRY_NEXT_CURSOR}"
+  done
+  FETCH_BODY=$(jq -c -s 'add // []' "$pages_file")
+}
+
+# Cursor-following is MANDATORY for monitors and detectors, not optional.
+# `detectors/` grows 1:1 with cron monitors (55 of 62 rows are
+# monitor_check_in_failure) and monitors went 8 -> 49 -> 55 in two months, so a
+# loud-fail-on-truncation arm would, by ordinary growth, fail this audit BEFORE
+# the terraform plan step in apply-sentry-infra.yml — the only path that
+# deploys the fix. That is the same "detector blocks its own cure" deadlock the
+# Class D state-half comment spends twenty lines avoiding. Monitors additionally
+# feed Class D, the only class with teeth, where silent truncation fails OPEN on
+# unreclaimable spend.
 fetch_monitors() {
-  if [[ -n "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
-    cat "$SENTRY_FIXTURE_MONITORS"
+  if [[ -n "${SENTRY_FIXTURE_MONITORS:+x}" ]]; then
+    FETCH_BODY="$(cat "$SENTRY_FIXTURE_MONITORS")"
     return
   fi
-  curl_retry -s --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/monitors/"
+  sentry_fetch_collection monitors "organizations/${SENTRY_ORG}/monitors/"
 }
 
-fetch_rules() {
-  if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
-    cat "$SENTRY_FIXTURE_RULES"
+# Issue-alert routing. `projects/{org}/{proj}/rules/` -> `organizations/{org}/workflows/`
+# per Sentry's own x-sentry-replacement-endpoint header. The replacement is
+# ORG-scoped, so the old SENTRY_PROJECT branch has no reason to exist and is
+# gone; SENTRY_PROJECT still feeds Gates 2 and 3 and the report frontmatter.
+fetch_workflows() {
+  if [[ -n "${SENTRY_FIXTURE_RULES:+x}" ]]; then
+    FETCH_BODY="$(cat "$SENTRY_FIXTURE_RULES")"
     return
   fi
-  if [[ -z "$SENTRY_PROJECT" ]]; then
-    # Org-wide alert-rules endpoint (metric alerts) — best-effort fallback.
-    curl_retry -s --max-time 10 \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-      "https://${api_host}/api/0/organizations/${SENTRY_ORG}/alert-rules/"
-  else
-    curl_retry -s --max-time 10 \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-      "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/"
-  fi
+  sentry_fetch_collection workflows "organizations/${SENTRY_ORG}/workflows/"
 }
 
-monitors_json=$(fetch_monitors)
-rules_json=$(fetch_rules)
+# Alert definitions. `organizations/{org}/alert-rules/` -> `.../detectors/`,
+# again per Sentry's own header — a DIFFERENT successor than workflows/.
+#
+# Fixture inheritance: when a test supplies the monitors/workflows fixtures but
+# not this one, serve `[]` rather than reaching the network. Without it every
+# pre-existing test (which sets only MONITORS+RULES) would start making live
+# calls and go red.
+fetch_detectors() {
+  if [[ -n "${SENTRY_FIXTURE_DETECTORS:+x}" ]]; then
+    FETCH_BODY="$(cat "$SENTRY_FIXTURE_DETECTORS")"
+    return
+  fi
+  if [[ -n "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+    # Hermetic default for the tests that predate detectors. Test-injection
+    # only: SENTRY_FIXTURE_* are never set in production (see the header), so
+    # this branch cannot fire on a real run.
+    FETCH_BODY='[]'
+    return
+  fi
+  sentry_fetch_collection detectors "organizations/${SENTRY_ORG}/detectors/"
+}
+
+fetch_monitors;  monitors_json="$FETCH_BODY"
+fetch_workflows; rules_json="$FETCH_BODY"
+fetch_detectors; detectors_json="$FETCH_BODY"
 
 # Validate JSON shape; fail closed on garbage.
-for label in monitors rules; do
+#
+# The diagnostic must NAME ITS OWN CAUSE. Before #7590 every one of these
+# failure modes rendered as the identical `<label> response is not a JSON
+# array` line: a brownout 410, a scope failure, an empty project and an
+# exhausted 5xx retry were indistinguishable, and that ambiguity is what made
+# the original investigation spend a full session and reach the wrong
+# conclusion. Emit status, host, URL, the deprecation headers when present, and
+# a VERDICT — because "5xx exhausted" (re-run) and "410 deprecated" (migrate)
+# need different next actions.
+for label in monitors workflows detectors; do
   case "$label" in
-    monitors) payload="$monitors_json" ;;
-    rules)    payload="$rules_json" ;;
+    monitors)  payload="$monitors_json" ;;
+    workflows) payload="$rules_json" ;;
+    detectors) payload="$detectors_json" ;;
   esac
   if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$payload"; then
-    echo "ERROR: ${label} response is not a JSON array" >&2
-    printf '%s\n' "$payload" | head -c 500 >&2
+    status="${FETCH_STATUS[$label]:-unknown}"
+    url="${FETCH_URL[$label]:-unknown}"
+    hdr="${FETCH_HDR[$label]:-}"
+    dep=""; repl=""
+    if [[ -n "$hdr" && -s "$hdr" ]]; then
+      dep=$( { grep -iE '^x-sentry-deprecation-date:' "$hdr" 2>/dev/null || true; } | tail -1 | tr -d '\r' | awk '{print $2}')
+      repl=$( { grep -iE '^x-sentry-replacement-endpoint:' "$hdr" 2>/dev/null || true; } | tail -1 | tr -d '\r' | awk '{print $2}')
+    fi
+    case "$status" in
+      410) verdict="endpoint is GONE (deprecation brownout or post-sunset removal) — MIGRATE to the replacement below; re-running will not help" ;;
+      401|403) verdict="token rejected — check SENTRY_AUTH_TOKEN scopes (note: sentry-audit-gate.yml feeds SENTRY_IAC_AUTH_TOKEN into this var)" ;;
+      404) verdict="endpoint or org/project not found at this host — check SENTRY_API_HOST and SENTRY_ORG" ;;
+      429|5*) verdict="transient upstream failure, retries exhausted — RE-RUN" ;;
+      *) verdict="unclassified — inspect the body head below" ;;
+    esac
+    {
+      echo "ERROR: ${label} response is not a JSON array"
+      echo "  http_status:  ${status:-none}"
+      echo "  api_host:     ${api_host}"
+      echo "  url:          ${url}"
+      echo "  fetch:        ${label}"
+      [[ -n "$dep" ]]  && echo "  x-sentry-deprecation-date:    ${dep}"
+      [[ -n "$repl" ]] && echo "  x-sentry-replacement-endpoint: ${repl}"
+      echo "  verdict:      ${verdict}"
+      echo "  body (first 500 bytes):"
+    } >&2
+    # NOT `printf … | head -c 500`: once the payload exceeds the 64 KiB pipe
+    # buffer, head exits, printf takes SIGPIPE, and under `set -o pipefail`
+    # the pipeline returns 141 — which `set -e` raises BEFORE the `exit 1`
+    # below. The plan declares the non-zero exit as the load-bearing signal,
+    # and 141 vs 1 is a distinction a caller keying on exit codes gets wrong.
+    # Parameter expansion needs no subprocess and cannot SIGPIPE.
+    printf '%s\n' "${payload:0:500}" >&2
+    echo "  --- end body ---" >&2
     exit 1
   fi
 done
 
+# Deprecation escalation (Decision 5). Warned above on every response; fails
+# only once the date is inside the window. After this migration the target
+# endpoints carry no deprecation headers at all, so this is dormant unless
+# Sentry deprecates one of them too.
+if [[ -s "$DEPRECATION_FATAL_FILE" ]] && [[ "$DEPRECATION_FAIL_ENABLED" == "1" ]]; then
+  echo "ERROR: a Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). This caller opted into escalation via SENTRY_DEPRECATION_FAIL=1. To suppress this (only when the endpoint has no shipped replacement yet), LOWER SENTRY_DEPRECATION_FAIL_WINDOW_DAYS below the day-count shown above — raising it widens escalation, it does not relax it. Or unset SENTRY_DEPRECATION_FAIL for this caller. Refs #7590." >&2
+  echo "  affected endpoints (endpoint deprecation-date):" >&2
+  sort -u "$DEPRECATION_FATAL_FILE" | sed 's/^/    /' >&2
+  exit 1
+elif [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
+  echo "::warning::A Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). NOT failing: this caller has not set SENTRY_DEPRECATION_FAIL=1. Affected:" >&2
+  sort -u "$DEPRECATION_FATAL_FILE" | sed 's/^/    /' >&2
+fi
+
 # --- Compute orphans ------------------------------------------------------
-# Class A: monitor whose slug is NOT referenced by any alert rule's filters
-#          or conditions.
-# Class B: alert rule that references a monitor.slug for which no monitor
-#          row exists.
-# Class C: issue-alert rule with an empty actions[] array (paging route
-#          silently removed via Sentry UI). Operator MUST treat as a real
-#          orphan — the routing path is gone even though the rule exists.
+# REMAPPED IN #7590 onto the binding that actually exists.
 #
-# Extraction is structural — jq pulls slug references from
-# .conditions[].value and .filters[].value (where Sentry stores monitor-slug
-# bindings on `TaggedEventFilter` and `EventMonitorCondition`-shaped rules).
-# Falls back to substring search ONLY if the structured pass returns zero,
-# so the report is never blank against rules that bind monitors via a
-# field not yet enumerated.
-
-monitor_slugs=$(jq -r '.[].slug // empty' <<<"$monitors_json")
-
-# Broad extraction — every literal "value" field across each rule's
-# conditions and filters, plus the legacy `monitor_slug` field. Used ONLY
-# for Class A's "is this monitor referenced anywhere?" non-orphan check,
-# where over-counting is safe (it suppresses false-positive Class A) and
-# under-counting is dangerous.
-rule_slug_refs=$(jq -r '
-  .[] | (
-    (.conditions // [])[]?.value? // empty,
-    (.filters // [])[]?.value? // empty,
-    .monitor_slug? // empty
-  )
-' <<<"$rules_json" | sort -u)
-
-# Narrow extraction — only values from filters / conditions whose `key`
-# explicitly binds a monitor slug (`monitor.slug`), plus the legacy
-# `monitor_slug` field. Used for Class B orphan flagging, where
-# over-counting floods false-positives. Production `TaggedEventFilter`
-# rules carry generic shapes like `{"key":"feature","value":"auth"}`
-# whose `.value` is a tag value, NOT a monitor slug; without this gate
-# every tag-bound rule would emit a spurious "alert references missing
-# monitor `auth`" line on every release audit.
+# The old jq targeted `monitor.slug` keys inside rule `.conditions[]`/
+# `.filters[]`. Measured against the live org: that binding matches 0 rows and
+# 0 of 55 monitor slugs appear anywhere in the rules payload. It did not fail
+# to survive the API migration — IT NEVER MATCHED. Class A has therefore
+# flagged every monitor in the org since the day it shipped.
 #
-# Note on the array-build-then-iterate pattern: a bare comma-separated
-# stream of `select | .value? // empty` branches inside `(...)` returns
-# no values in jq 1.6+ when any branch's left-hand iterator is empty
-# (the `?` swallows the empty-stream and the comma operator's union
-# collapses). Wrapping each branch in `[... | ...]` then re-iterating
-# via `[]` makes each branch independent.
-monitor_bound_slug_refs=$(jq -r '
-  .[] | (
-    ([.conditions // [] | .[] | select(.key? == "monitor.slug") | .value])[],
-    ([.filters    // [] | .[] | select(.key? == "monitor.slug") | .value])[],
-    (.monitor_slug? // empty)
-  )
-' <<<"$rules_json" | sort -u)
+# The real routing graph is: monitor <- (name) - cron detector -(workflowIds)-> workflow.
+#
+# Class A: `monitor_check_in_failure` detector whose `workflowIds` is empty
+#          (a monitor whose failures route nowhere).
+# Class B: cron detector naming a monitor that does not exist live.
+# Class C: workflow with no actions at all across triggers + actionFilters
+#          (paging route silently removed via the Sentry UI).
+#
+# Detectors carry NO `slug` field — the binding is `.name`, which Sentry
+# slugifies to the monitor slug. Every cron monitor in this root already uses a
+# kebab-case name, so slugification is the identity; the same relation the
+# Class D block below relies on, verified live: 55 detector names, 55 monitor
+# slugs, exact set match in both directions.
 
-# Fallback substring sweep for forward-compat — only consulted if the
-# structured pass found nothing. Stored in a separate var so we never mix
-# substring matches into the rule_slug_refs set used by Class A non-orphan
-# check.
-rules_serialized=$(jq -c '.' <<<"$rules_json")
+# `sort -u`: pagination concatenates pages, and Sentry's offset cursors shift
+# under concurrent mutation — a monitor deleted between page N and N+1 repeats
+# a row. Undeduped, that double-counts Class D and doubles the dollar figure
+# rendered into the Article 30 artifact. (Unreachable before this change: a
+# single unpaginated page cannot repeat a slug.)
+monitor_slugs=$(jq -r '.[].slug // empty' <<<"$monitors_json" | sort -u)
 
-orphan_monitors=()  # Class A
-orphan_alerts=()    # Class B
+# A synthetic `[]` (the hermetic default for tests that predate detectors) is
+# NOT evidence of a clean org and must not be reported as one. This is the only
+# state that can reach here: a FAILED fetch never gets this far, because the
+# shape check above exits first and writes no report.
+detectors_evaluated=1
+if [[ -z "${SENTRY_FIXTURE_DETECTORS:-}" ]] \
+   && [[ -n "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+  detectors_evaluated=0
+fi
+
+cron_detectors=$(jq -c '[ .[] | select(.type == "monitor_check_in_failure") ]' <<<"$detectors_json")
+cron_detector_count=$(jq 'length' <<<"$cron_detectors")
+
+# Monitor binding: STRUCTURED pass first, substring-free FALLBACK second.
+#
+# `dataSources[].queryObj.slug` is the real binding — an actual slug field on
+# the data source the detector watches. `.name` is a display name that Sentry
+# happens to slugify to the same value; verified live, both give an exact 55/55
+# set match against the live monitors AND are identical to each other today.
+# They are NOT the same thing: renaming a detector in the UI moves `.name` and
+# leaves `queryObj.slug` alone, so preferring the display name would invent a
+# Class B orphan out of a cosmetic edit.
+#
+# The fallback is only consulted when the structured pass yields NOTHING, which
+# preserves the "structured first, fall back once" safety property the old
+# code had (rebased onto the new schema — the old fallback was a substring
+# sweep over a serialized payload, which has no meaning here). The
+# structured-pass count is emitted into the report so that "the structured pass
+# found it" is distinguishable from "the fallback found it"; without that the
+# property is unverifiable by any fixture.
+# PER-DETECTOR, not all-or-nothing. An earlier revision only fell back when the
+# structured pass returned ZERO across the whole payload, which is silently
+# wrong under a PARTIAL rollout: if Sentry ships queryObj.slug on some cron
+# detectors and not others, the count is non-zero, the fallback never engages,
+# and every detector WITHOUT the structured field drops out of the set — so
+# Class B under-reports a real orphan with no signal anywhere. Resolving per
+# detector removes that state by construction rather than warning about it.
+# Held as a jq `def` so Class A's unrouted listing (#8630) resolves a detector
+# to its monitor through the SAME binding, not a second copy that can drift.
+jq_cron_binding='def cron_binding: (.dataSources[]?.queryObj.slug // .name // empty);'
+cron_detector_slugs=$(jq -r "${jq_cron_binding}"' .[] | cron_binding' <<<"$cron_detectors" | sort -u)
+# `select(.dataSources[]?.queryObj.slug)` emits the input ONCE PER truthy
+# value, so one detector with two structured data sources counts as 2 — the
+# report could print `MIXED — 2/1 structured`, which discredits the very
+# counter that exists to make the binding auditable. `any(...)` collapses it.
+structured_slug_count=$(jq '[ .[] | select(any(.dataSources[]?; .queryObj.slug)) ] | length' <<<"$cron_detectors")
+if (( structured_slug_count == cron_detector_count )) && (( cron_detector_count > 0 )); then
+  binding_source="structured (dataSources[].queryObj.slug) for all ${cron_detector_count}"
+elif (( structured_slug_count == 0 )); then
+  binding_source="fallback (.name) for all ${cron_detector_count} — no detector carries a structured slug"
+else
+  binding_source="MIXED — ${structured_slug_count}/${cron_detector_count} structured, remainder via .name"
+fi
+cron_detector_names="$cron_detector_slugs"
+
+# Fail-closed extraction guard, carried from Class D's declared_slugs check.
+# Under the OLD predicate an auth/scope/endpoint regression returning `[]`
+# produced a loud artifact (all 55 flagged). Under the new one it would produce
+# zero orphans, a clean report and exit 0 — a quiet, green, WRONG answer. Zero
+# cron detectors against a non-empty live monitor list is an extraction
+# failure, not a clean org.
+# Class E — a cron detector routing to a workflow that does not exist.
+#
+# Class A asks "is workflowIds EMPTY?" and a DANGLING id is not empty, so an
+# operator deleting a workflow in the Sentry UI leaves every bound detector
+# reading as fully routed while nothing pages. That is the audit's actual
+# question — does a cron failure reach anyone — and neither A nor C could see
+# it. This is the exact dual of Class B (detector -> missing monitor).
+#
+# REPORTED, not fatal. A hard exit here would block the apply that deploys the
+# corrected routing, which is the "detector blocks its own cure" deadlock the
+# Class D state half exists to avoid. It suppresses the clean verdict instead.
+# `tostring` on both sides: workflowIds are strings, workflow .id may be numeric.
+dangling_workflow_refs=()
+if (( detectors_evaluated == 1 )); then
+  while IFS= read -r ref; do
+    [[ -z "$ref" ]] && continue
+    dangling_workflow_refs+=("$ref")
+  done < <(jq -r --argjson w "$(jq -c '[ .[].id | tostring ]' <<<"$rules_json")" '
+    [ .[] | .workflowIds[]? | tostring ] | unique | map(select(. as $i | ($w | index($i)) | not)) | .[]
+  ' <<<"$cron_detectors")
+fi
+
+if (( detectors_evaluated == 1 )) \
+   && [[ "$cron_detector_count" == "0" ]] \
+   && [[ "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
+  echo "ERROR: zero \`monitor_check_in_failure\` detectors parsed from ${FETCH_URL[detectors]:-the detectors endpoint} while the API returned live monitors — orphan extraction is broken; refusing to emit a clean report that checked nothing. Refs #7590." >&2
+  exit 1
+fi
+
+orphan_alerts=()          # Class B
 empty_action_rule_ids=()  # Class C
+class_a_count=0
+class_a_unrouted=0
+class_a_unrouted_labels=()
 
-while IFS= read -r slug; do
-  [[ -z "$slug" ]] && continue
-  if printf '%s\n' "$rule_slug_refs" | grep -qFx -- "$slug"; then
+# Strip every character that could end or forge a workflow-command line (C0
+# controls incl. CR/LF, DEL, NEL, LS, PS) from text bound for a `::warning::`.
+warn_sanitize() {
+  local s
+  s=$(LC_ALL=C tr -d '\000-\037\177' <<<"$1")
+  s="${s//$'\xc2\x85'/}"; s="${s//$'\xe2\x80\xa8'/}"; s="${s//$'\xe2\x80\xa9'/}"
+  printf '%s' "$s"
+}
+
+# Class A — cron detectors whose failures route to no workflow. Healthy is
+# `class_a_count == 0`, so each unrouted detector is named: one label per
+# detector from the count's own predicate (its slug, else a placeholder, since
+# `.name` is free text bound for a `::warning::`). jq to a file + rc, as Class C.
+if (( detectors_evaluated == 1 )); then
+  class_a_unrouted=$(jq '[ .[] | select(((.workflowIds // []) | length) == 0) ] | length' <<<"$cron_detectors")
+  class_a_count="$class_a_unrouted"
+  class_a_out="$AUDIT_SCRATCH/class_a.txt"
+  if ! jq -r "${jq_cron_binding}"'
+    .[] | select(((.workflowIds // []) | length) == 0)
+    | ((.id // "") | tostring | gsub("[^A-Za-z0-9_-]"; "?")) as $id
+    | [cron_binding] as $b
+    | if ($b | length) == 0 then "<unresolved detector id=\($id)>"
+      else $b | map(if type == "string" and test("\\A[a-z0-9][a-z0-9-]*\\z") then .
+                    else "<non-slug detector id=\($id)>" end) | unique | join(",")
+      end
+  ' <<<"$cron_detectors" > "$class_a_out" 2>"$AUDIT_SCRATCH/class_a.err"; then
+    echo "ERROR: Class A extraction failed — the detectors payload did not match the expected shape. Refusing to report unrouted cron detectors from a failed extraction. jq said:" >&2
+    head -c 300 "$AUDIT_SCRATCH/class_a.err" >&2
+    exit 1
+  fi
+  while IFS= read -r label; do
+    class_a_unrouted_labels+=("$label")
+  done < "$class_a_out"
+fi
+
+# Silent monitors — muted or disabled. A muted environment
+# (`environments[].isMuted`, or the monitor-level `isMuted`) or a
+# `status: disabled` monitor sends nothing even when its detector is routed,
+# so Class A alone cannot answer "does a cron failure reach anyone". Reported
+# and warned, never failed on. Extraction fails loud like Class C. Muted is
+# "unknown" when no monitor carries `isMuted` at all: a 0 there would be
+# indistinguishable from "checked, none muted".
+silent_out="$AUDIT_SCRATCH/silent_monitors.txt"
+if ! jq -r '
+  def envs: [ .environments[]? | select(type == "object") ];
+  ( [ .[] | select(has("isMuted") or any(envs[]; has("isMuted"))) ] | length | "carriers\t\(.)" ),
+  ( .[]
+    | (.isMuted == true) as $top
+    | [ envs[] | select(.isMuted == true) | (.name // "?" | tostring) ] as $menvs
+    | ($top or ($menvs | length) > 0) as $muted
+    | (.status == "disabled") as $disabled
+    | select($muted or $disabled)
+    | [ "row",
+        (.slug // "" | tostring | if . == "" then "?" else . end),
+        (if $muted then "1" else "0" end),
+        (if $disabled then "1" else "0" end),
+        (if $top or ($menvs | length) == 0 then "all environments" else ($menvs | join(", ")) end) ]
+    | @tsv )
+' <<<"$monitors_json" > "$silent_out" 2>"$AUDIT_SCRATCH/silent.err"; then
+  echo "ERROR: muted/disabled monitor extraction failed — the monitors payload did not match the expected shape. Refusing to report 'Muted monitors: 0' from a failed extraction. jq said:" >&2
+  head -c 300 "$AUDIT_SCRATCH/silent.err" >&2
+  exit 1
+fi
+muted_carriers=0
+muted_monitor_slugs=()
+disabled_monitor_slugs=()
+silent_monitor_rows=()
+while IFS=$'\t' read -r kind slug is_muted is_disabled envs; do
+  if [[ "$kind" == "carriers" ]]; then
+    muted_carriers="$slug"
     continue
   fi
-  # Structured pass missed it; fall back to substring sweep ONCE before
-  # flagging as orphan (covers Sentry rule shapes the structured pass
-  # doesn't enumerate yet).
-  if ! grep -qF -- "$slug" <<<"$rules_serialized"; then
-    orphan_monitors+=("$slug")
+  [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]] || slug="<non-slug monitor>"
+  row_label=""
+  if [[ "$is_disabled" == "1" ]]; then
+    disabled_monitor_slugs+=("$slug")
+    row_label="disabled"
   fi
-done <<<"$monitor_slugs"
-
-# Class B: every monitor-bound slug ref that does NOT appear in monitor_slugs.
-# Uses the NARROW extraction (`monitor_bound_slug_refs`) so generic tag-filter
-# values (e.g. `{"key":"feature","value":"auth"}`) cannot flood the report
-# with false-positive "alert references missing monitor `auth`" lines.
-monitor_slug_set=$(printf '%s\n' "$monitor_slugs" | sort -u)
-while IFS= read -r ref; do
-  [[ -z "$ref" ]] && continue
-  # Belt-and-braces: also require slug shape (kebab-case, no spaces). The
-  # narrow extraction should already guarantee this, but defends against a
-  # future Sentry API change shipping a monitor.slug binding with a
-  # non-slug-shaped value.
-  [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
-  if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
-    orphan_alerts+=("$ref")
+  if [[ "$is_muted" == "1" ]]; then
+    muted_monitor_slugs+=("$slug")
+    row_label="${row_label:+${row_label}; }muted in: ${envs}"
   fi
-done <<<"$monitor_bound_slug_refs"
+  printf -v silent_row -- '- `%s` — %s' "$slug" "$row_label"
+  silent_monitor_rows+=("$silent_row")
+done < "$silent_out"
+muted_unknown=0
+if (( muted_carriers == 0 )) && [[ "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
+  muted_unknown=1
+fi
 
-# Class C: alert rules with empty routing. Two shapes to handle:
-#   - Issue Alerts have top-level `.actions[]`.
-#   - Metric Alerts (returned from /organizations/<org>/alert-rules/) store
-#     routing under `.triggers[].actions[]` and have NO top-level `.actions`.
-# Without the shape branch, every Metric Alert flags as Class C because
-# `.actions // []` evaluates to `[]` (length 0) — drowning real orphans.
-# Branch by the presence of `.triggers`: if a rule has triggers, count
-# their flattened actions; otherwise check top-level actions.
+# Class B — a cron detector naming a monitor that does not exist live.
+# `cron_detector_slugs` is slug-first with a `.name` fallback (see the binding
+# block above). The slug-shape guard stays, but a discard is now COUNTED and
+# surfaced: silently dropping a non-slug-shaped binding is a fail-open on
+# exactly the event Class B exists to catch. The guard's premise is that
+# `.name` slugifies to the monitor slug — so the trigger for a non-slug-shaped
+# value is not a hypothetical Sentry change, it is a human renaming a detector
+# in the UI to "Nightly Backup Check", which is precisely when that detector's
+# monitor binding is most likely to be broken.
+class_b_discarded=0
+if (( detectors_evaluated == 1 )); then
+  monitor_slug_set=$(printf '%s\n' "$monitor_slugs" | sort -u)
+  while IFS= read -r ref; do
+    [[ -z "$ref" ]] && continue
+    if ! [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      class_b_discarded=$(( class_b_discarded + 1 ))
+      echo "::warning::cron detector binding '$(warn_sanitize "$ref")' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
+      continue
+    fi
+    if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
+      orphan_alerts+=("$ref")
+    fi
+  done <<<"$cron_detector_names"
+fi
+
+# Class C — workflows with no actions anywhere.
+# Workflow routing lives in TWO places and a workflow needs only one of them:
+# `.triggers.actions[]` (an OBJECT, not an array — verified live) and
+# `.actionFilters[].actions[]`. Checking only one would flag every workflow
+# that routes via the other, drowning real orphans — the same defect the old
+# Metric-Alert shape branch existed to avoid.
+# Run jq to a FILE and check its status. Inside `done < <(jq …)` a jq schema
+# error (e.g. `.triggers` arriving as an array) exits 5, the loop reads
+# nothing, and process-substitution status is unobservable to `set -e` — so the
+# report would print "C … clean" having examined zero workflows. Class A uses
+# command substitution and does abort; the two were asymmetric for no reason.
+class_c_out="$AUDIT_SCRATCH/class_c.txt"
+if ! jq -r '
+  .[] | select(
+    (([.triggers.actions[]?] + [.actionFilters[]?.actions[]?]) | length) == 0
+  ) | .id | tostring
+' <<<"$rules_json" > "$class_c_out" 2>"$AUDIT_SCRATCH/class_c.err"; then
+  echo "ERROR: Class C extraction failed — the workflows payload did not match the expected shape. Refusing to report 'no workflows with empty routing' from a failed extraction. jq said:" >&2
+  head -c 300 "$AUDIT_SCRATCH/class_c.err" >&2
+  exit 1
+fi
 while IFS= read -r rid; do
   [[ -z "$rid" ]] && continue
   empty_action_rule_ids+=("$rid")
-done < <(jq -r '
-  .[] | select(
-    if has("triggers") then
-      ([.triggers[]?.actions[]?] | length == 0)
-    else
-      ((.actions // []) | length == 0)
-    end
-  ) | .id | tostring
-' <<<"$rules_json")
+done < "$class_c_out"
 
 # --- Class D: live monitor with no declaring .tf resource block -----------
 # The live→IaC direction (A/B/C all run IaC→live or live→live). Since #6589
@@ -414,14 +1170,34 @@ done < <(jq -r '
 # against the FULL ROOT — so an undeclared live monitor is no longer a
 # harmless bookkeeping gap: it is spend Terraform will never reclaim, because
 # only a resource that once existed in the config can be destroyed by removing
-# it. Live monitors grew 8 → 49 in two months and never decreased while
+# it. Live monitors grew 8 → 49 → 55 and never decreased while
 # deletion was a silent no-op; each undeclared monitor bills $0.78/mo forever.
 #
 # Slug↔declaration relation: Sentry derives the monitor slug by slugifying the
 # resource's `name`. Every `sentry_cron_monitor` in this root already sets a
 # kebab-case `name`, so slugification is the identity and `name` == live slug
-# — verified against the live org: 49 `resource "sentry_cron_monitor"` blocks,
-# 49 `name =` attributes, 49 live monitors, exact set match.
+# — re-verified 2026-08-19 against the live org and the tf root:
+# 56 `resource "sentry_cron_monitor"` blocks, 56 `name =` attributes, 56 live
+# monitors, exact set match in both directions. (This comment read 49 until
+# #7590; the figure had gone stale while still reading as "verified", which is
+# why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
+# fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
+#
+# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01 and 2026-10-04): the tf root now declares
+# 62 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
+# #8450 scheduled-actions-queue-health probe a third, the #9168
+# scheduled-supabase-watchdog monitor a fourth, and the #9274
+# scheduled-bot-pr-reaper monitor a fifth, and the #9482 follow-up (a)
+# scheduled-merge-queue-stall-dispatch monitor a sixth; #9304 deleted the
+# retired scheduled-gh-pages-cert-state monitor. This list names the additions
+# made since the 2026-08-19 live figure and is not a complete ledger, so the
+# declared count above (62) is the figure of record.
+# This is a count of DECLARATIONS, not a re-verification against the live
+# org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
+# runs on merge, so the 2026-08-19 live figure above is left standing rather
+# than silently promoted to the current declared count. T25 derives from the tf root, so it reads this
+# line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -484,7 +1260,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   # Zero declarations parsed against a non-empty live org means the anchor broke
   # (e.g. a reformat moved `resource` off column 0), not that every monitor is
   # orphaned. Erroring here is still fail-closed, but it names the real defect
-  # instead of flooding the operator with 49 bogus orphans.
+  # instead of flooding the operator with one bogus orphan per live monitor.
   if [[ -z "$declared_slugs" && "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
     echo "ERROR: no sentry_cron_monitor declarations parsed from ${tf_dir}/*.tf while the API returned live monitors — Class D extraction is broken; refusing to report every live monitor as an orphan. Refs #6589." >&2
     exit 1
@@ -526,7 +1302,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
 
   state_known=0
   state_slugs=""
-  if [[ -n "${SENTRY_STATE_SLUGS_FILE:-}" ]]; then
+  if [[ -n "${SENTRY_STATE_SLUGS_FILE:+x}" ]]; then
     if [[ ! -f "$SENTRY_STATE_SLUGS_FILE" ]]; then
       echo "ERROR: SENTRY_STATE_SLUGS_FILE is set to '${SENTRY_STATE_SLUGS_FILE}' but no such file exists. Refusing to silently fall back to the state-unknown warn path — the caller believes it provided state. Refs #6589." >&2
       exit 1
@@ -571,7 +1347,19 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   printf -- '- **Sentry org:** %s\n' "$SENTRY_ORG"
   printf -- '- **Probed host:** %s\n' "$api_host"
   printf -- '- **DSN cluster:** %s\n' "$dsn_cluster"
-  printf -- '- **Project filter:** %s\n\n' "${SENTRY_PROJECT:-<org-wide>}"
+  # The fetches are ORG-scoped since #7590, so naming SENTRY_PROJECT as the
+  # filter would assert a scope the fetch no longer applies. SENTRY_PROJECT
+  # still scopes Gates 2 and 3, which is what this now says.
+  printf -- '- **Alert scope:** org-wide (`workflows/` + `detectors/` are org-scoped)\n'
+  printf -- '- **Gate project:** %s\n' "${SENTRY_PROJECT:-<none>}"
+  # Provenance: a future reader diffing the committed report series must be
+  # able to see that the PREDICATE changed rather than the org (Class A goes
+  # 8/8 -> 55/55 across this change under a different definition).
+  printf -- '- **Source endpoints:** `organizations/{org}/monitors/`, `organizations/{org}/workflows/`, `organizations/{org}/detectors/`\n'
+  printf -- '- **Orphan predicate generation:** 2 (#7590 — Class A/B rebound onto cron detectors; generation 1 keyed on `monitor.slug`, which never matched)\n'
+  printf -- '- **Class D state half:** %s\n' \
+    "$( (( class_d_state_unknown == 1 )) && echo "absent — Class D unresolved" || echo "injected" )"
+  printf -- '- **Enumeration complete:** %s\n\n' "$( (( LINK_UNFOLLOWED == 0 )) && echo yes || echo "NO — ${LINK_UNFOLLOWED} unfollowed cursor(s)")"
 
   printf '## Monitors\n\n'
   if [[ "$(jq 'length' <<<"$monitors_json")" == "0" ]]; then
@@ -586,48 +1374,121 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
     printf '\n'
   fi
 
-  printf '## Alert Rules\n\n'
+  printf '## Workflows (issue-alert routing)\n\n'
   if [[ "$(jq 'length' <<<"$rules_json")" == "0" ]]; then
-    printf '_No alert rules returned by the API._\n\n'
+    printf '_No workflows returned by the API._\n\n'
   else
     printf '| id | name |\n'
     printf '|---|---|\n'
-    jq -r '.[] | [(.id|tostring), .name] | @tsv' <<<"$rules_json" | \
+    # `// ""` guards a null name column — the workflows shape is not the rules
+    # shape, and a bare `.name` would render a literal `null` cell.
+    jq -r '.[] | [(.id|tostring), (.name // "")] | @tsv' <<<"$rules_json" | \
       while IFS=$'\t' read -r id name; do
         printf '| %s | %s |\n' "$id" "$name"
       done
     printf '\n'
   fi
 
+  printf '## Detectors (alert definitions)\n\n'
+  if (( detectors_evaluated == 0 )); then
+    printf '_Not evaluated — the detectors payload was not obtained on this run._\n\n'
+  elif [[ "$(jq 'length' <<<"$detectors_json")" == "0" ]]; then
+    printf '_No detectors returned by the API._\n\n'
+  else
+    printf -- '- Cron detectors (`monitor_check_in_failure`): %s\n' "$cron_detector_count"
+    printf -- '- Total detectors: %s\n' "$(jq 'length' <<<"$detectors_json")"
+    # Emitted so a fallback activation is VISIBLE rather than silent — without
+    # it, "the structured pass found the binding" and "the fallback did" are
+    # indistinguishable in the artifact and no fixture can tell them apart.
+    printf -- '- Monitor binding: %s — %s slug(s) from the structured pass\n\n' \
+      "$binding_source" "$structured_slug_count"
+  fi
+
   printf '## Orphans\n\n'
-  total_orphans=$(( ${#orphan_monitors[@]} + ${#orphan_alerts[@]} + ${#empty_action_rule_ids[@]} + ${#orphan_live_monitors[@]} ))
-  if (( total_orphans == 0 )); then
-    printf 'No orphans detected. All four classes (A: monitor without alert; B: alert referencing missing monitor; C: alert with empty actions[]; D: live monitor with no .tf declaration) are clean.\n\n'
+  total_orphans=$(( class_a_count + ${#orphan_alerts[@]} + ${#empty_action_rule_ids[@]} + ${#orphan_live_monitors[@]} + ${#dangling_workflow_refs[@]} ))
+  # The clean-state string is suppressed whenever anything went unmeasured.
+  # Collapsing "could not check" into "clean" in an Article 30 evidence
+  # artifact is the exact failure mode this whole change exists to remove.
+  if (( detectors_evaluated == 0 )); then
+    printf 'Classes A and B **NOT EVALUATED** — the detectors payload was not obtained on this run, so no statement is made about monitor routing. Classes C and D below were evaluated.\n\n'
+  elif (( ${#dangling_workflow_refs[@]} > 0 )); then
+    printf '_Class E (cron detector routing to a workflow that does not exist):_\n\n'
+    for ref in "${dangling_workflow_refs[@]}"; do
+      printf -- '- workflow id `%s` — referenced by a cron detector'"'"'s `workflowIds`; no such workflow exists. Check-in failures for that monitor route nowhere.\n' "$ref"
+    done
+    printf '\n**Remediation:** the workflow was deleted (usually via the Sentry UI) while the detector kept its binding. Re-create the workflow or clear the stale `workflowIds` entry.\n\n'
+  elif [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
+    printf 'An endpoint this audit reads is **DEPRECATED and inside the escalation window** (see `## Endpoint deprecation`). The orphan classes below were computed from data served by a sunsetting endpoint, so no clean verdict is issued.\n\n'
+  elif (( class_b_discarded > 0 )); then
+    printf 'Class B **PARTIALLY EVALUATED** — %d cron detector binding(s) were not slug-shaped and could not be resolved to a monitor. A UI rename produces exactly this, and it is the event Class B exists to catch, so no clean verdict is issued.\n\n' \
+      "$class_b_discarded"
+  elif (( class_d_state_unknown == 1 )) && (( ${#class_d_unresolved[@]} > 0 )); then
+    # Class D is the class with teeth (unreclaimable spend) and it is the one
+    # the clean string used to assert hardest. Without the Terraform state half
+    # a live-but-undeclared monitor is UNRESOLVED, not clean — and passing no
+    # state half is the DEFAULT for two of the three callers, including the one
+    # that uploads this file as the Article 30 release asset. So the artifact
+    # was asserting "D … clean" in the only configuration where D cannot be
+    # measured. Enumerate the candidates here rather than only on stderr.
+    printf 'Class D **NOT EVALUATED** — %d live monitor(s) have no declaring `.tf` block, but Terraform state was not provided, so a pending destroy cannot be told from an unreclaimable orphan. Classes A, B and C below were evaluated.\n\n' \
+      "${#class_d_unresolved[@]}"
+    printf '_Class D candidates (unresolved):_\n\n'
+    for slug in "${class_d_unresolved[@]}"; do
+      printf -- '- `%s`\n' "$slug"
+    done
+    printf '\n'
+  elif (( LINK_UNFOLLOWED > 0 )); then
+    printf 'Enumeration was **INCOMPLETE** (%d unfollowed cursor(s)), so no clean verdict is issued: an unenumerated page can hold an orphan of any class.\n\n' "$LINK_UNFOLLOWED"
+  elif (( total_orphans == 0 )); then
+    printf 'No orphans detected. All four classes (A: cron detector with no routing workflow; B: cron detector naming a missing monitor; C: workflow with no actions; D: live monitor with no .tf declaration) are clean.\n\n'
   fi
 
   if (( ${#orphan_alerts[@]} > 0 )); then
-    printf '_Class B (alert rule referencing a missing monitor):_\n\n'
+    printf '_Class B (cron detector naming a monitor that does not exist):_\n\n'
     for ref in "${orphan_alerts[@]}"; do
-      printf -- '- `%s` — referenced by an alert rule; no monitor with this slug exists.\n' "$ref"
+      printf -- '- `%s` — a cron detector is named for this monitor; no monitor with this slug exists.\n' "$ref"
     done
-    printf '\n**Remediation:** Sentry split likely deleted the monitor; either delete the dangling alert via API or re-create the monitor in `cron-monitors.tf`.\n\n'
+    printf '\n**Remediation:** Sentry split likely deleted the monitor; either delete the dangling detector via API or re-create the monitor in `cron-monitors.tf`.\n\n'
   fi
 
   if (( ${#empty_action_rule_ids[@]} > 0 )); then
-    printf '_Class C (alert rule with empty actions[] — paging route silently removed):_\n\n'
+    printf '_Class C (workflow with no actions — paging route silently removed):_\n\n'
     for rid in "${empty_action_rule_ids[@]}"; do
-      printf -- '- rule id `%s` — `actions` array is empty; threshold breaches will fire no notification.\n' "$rid"
+      printf -- '- workflow id `%s` — no actions across `triggers` or `actionFilters`; breaches will fire no notification.\n' "$rid"
     done
     printf '\n**Remediation:** restore the action target via the Sentry UI (re-add NotifyEmailAction Team or IssueOwners). The Terraform `actions_v2 lifecycle.ignore_changes` posture means TF cannot self-heal this — UI fix is the only path.\n\n'
   fi
 
-  if (( ${#orphan_monitors[@]} > 0 )); then
-    printf '_Class A (monitor without paired routing alert):_\n\n'
-    for slug in "${orphan_monitors[@]}"; do
-      printf -- '- `%s` — orphan: not referenced by any alert rule.\n' "$slug"
-    done
-    printf '\n**Remediation runbook:** plan §2.1.5 — delete monitor or pair with new alert.\n\n'
+  if (( detectors_evaluated == 1 )); then
+    printf '_Class A (cron detector with no routing workflow):_\n\n'
+    printf -- '- **%s** of **%s** cron detectors have an empty `workflowIds`.\n' \
+      "$class_a_count" "$cron_detector_count"
+    printf -- '- Healthy state: **0** unrouted (every cron detector bound to a workflow).\n'
+    if (( class_a_count > 0 )); then
+      printf -- '- A non-zero count means a cron detector is bound to no workflow: either a pending route under the two-PR rule, listed in `cron_monitor_alert_unrouted` in `apps/web-platform/infra/sentry/cron-monitor-alerts.tf`, or live drift.\n\n'
+      printf '_Unrouted cron detectors (by monitor slug):_\n\n'
+      for label in "${class_a_unrouted_labels[@]}"; do
+        printf -- '- `%s` — bound to no workflow; a check-in failure for this monitor notifies no one.\n' "$label"
+      done
+    fi
+    printf '\n'
   fi
+
+  # Printed on every run, detectors payload or not: it reads only the monitors
+  # payload. The count lines are there at zero too, so "checked and none" is
+  # distinguishable from "not checked" (which prints **unknown**).
+  printf '_Silent monitors (muted or disabled: sends nothing, routed or not):_\n\n'
+  if (( muted_unknown == 1 )); then
+    printf -- '- Muted monitors: **unknown** (no monitor in the payload carries isMuted)\n'
+  else
+    printf -- '- Muted monitors: **%s** (monitor-level `isMuted: true`, or at least one environment with it).\n' \
+      "${#muted_monitor_slugs[@]}"
+  fi
+  printf -- '- Disabled monitors: **%s** (`status: disabled`).\n' "${#disabled_monitor_slugs[@]}"
+  if (( ${#silent_monitor_rows[@]} > 0 )); then
+    printf '%s\n' "${silent_monitor_rows[@]}"
+  fi
+  printf '\n'
 
   if (( ${#orphan_live_monitors[@]} > 0 )); then
     printf '_Class D (live monitor with no declaring `.tf` resource block):_\n\n'
@@ -644,20 +1505,78 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
       "apps/web-platform/infra/sentry/cron-monitors.tf"
   fi
 
+  # The deprecation finding must reach the DURABLE artifact, not only a job
+  # log. The report is the Article 30 evidence and, as a release asset, is
+  # retained indefinitely against GHA's 90 days — and on two of three callers
+  # the escalation deliberately does NOT fail, so without this section the only
+  # record of "this data came off a sunsetting endpoint" lives in a green job's
+  # scrollback. LINK_UNFOLLOWED already gets this treatment; deprecation did not.
+  if [[ -s "$DEPRECATION_FATAL_FILE" ]] || [[ -s "$DEPRECATION_SEEN_FILE" ]]; then
+    printf '## Endpoint deprecation\n\n'
+    if [[ -s "$DEPRECATION_SEEN_FILE" ]]; then
+      printf '_Endpoints that returned a deprecation header on this run:_\n\n'
+      while IFS= read -r ep; do
+        [[ -z "$ep" ]] && continue
+        printf -- '- `%s`\n' "$ep"
+      done < <(sort -u "$DEPRECATION_SEEN_FILE")
+      printf '\n'
+    fi
+    if [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
+      printf '_Inside the %s-day escalation window (endpoint — deprecation date):_\n\n' \
+        "$DEPRECATION_FAIL_WINDOW_DAYS"
+      while IFS= read -r row; do
+        [[ -z "$row" ]] && continue
+        printf -- '- `%s`\n' "$row"
+      done < <(sort -u "$DEPRECATION_FATAL_FILE")
+      printf '\n**Escalation posture on this run:** %s\n\n' \
+        "$( [[ "$DEPRECATION_FAIL_ENABLED" == "1" ]] && echo 'ENABLED — this run exits non-zero' || echo 'warn-only (SENTRY_DEPRECATION_FAIL unset) — this run exits 0' )"
+    fi
+  fi
+
   printf '## DPA evidence\n\n'
   printf 'Vendor DPA: https://sentry.io/legal/dpa/\n'
   printf 'Article 30 register entry: knowledge-base/legal/article-30-register.md (PA8).\n\n'
 
-  # Machine-readable id manifest (Phase 5 import consumer).
-  # Defense-in-depth: filter to numeric-only ids. Sentry's contract says
-  # rule ids are numeric, but a compromised response could ship shell
-  # metacharacters; the README's `for id in $ids` consumer would word-split
-  # them. Fail-closed at the producer.
-  ids_array=$(jq -c '[.[].id | tostring | select(test("^[0-9]+$"))]' <<<"$rules_json")
-  printf '<!-- ids: %s -->\n' "$ids_array"
+  # The `<!-- ids: ... -->` manifest was RETIRED in #7590.
+  #
+  # It existed to feed a first-time `terraform import` of issue-alert rules.
+  # That adoption is complete — every alert rule is a `sentry_alert` since #8451
+  # (the count lives in the .tf and README, pinned by T25), not 29
+  # `sentry_issue_alert` — so the manifest has no live consumer, and its README
+  # runbook was stale by 25 resources. Repointing it at the workflows endpoint would
+  # have been worse than deleting it: workflow ids and rule ids are DISJOINT
+  # identifier spaces, so the marker would have kept its name and shape while
+  # silently changing meaning — a live trap for the next reader who trusted it.
 } > "$out_file"
 
 echo "[ok] Wrote audit report: $out_file"
+
+# --- Routing warning (Class A + silent monitors) ---------------------------
+# ONE line on stderr, outside the report (the Article 30 evidence artifact):
+# a job-log signal on every apply run. It describes the state BEFORE this
+# run's apply — the audit runs ahead of `terraform plan`. Emitted before the
+# Class D gate, which exits, so a Class D failure cannot hide it. Gated on the
+# same count the report prints; silent when everything is routed and nothing
+# is muted, disabled, or unknown.
+routing_warn_parts=()
+if (( class_a_count > 0 )); then
+  routing_warn_parts+=("${class_a_count} cron detector(s) bound to no workflow (healthy state is 0, so this is a pending route under the two-PR rule or live drift): ${class_a_unrouted_labels[*]}")
+fi
+if (( muted_unknown == 1 )); then
+  routing_warn_parts+=("muted monitors unknown (no monitor in the payload carries isMuted)")
+elif (( ${#muted_monitor_slugs[@]} > 0 )); then
+  routing_warn_parts+=("${#muted_monitor_slugs[@]} monitor(s) muted in at least one environment (a muted monitor sends nothing): ${muted_monitor_slugs[*]}")
+fi
+if (( ${#disabled_monitor_slugs[@]} > 0 )); then
+  routing_warn_parts+=("${#disabled_monitor_slugs[@]} monitor(s) disabled (a disabled monitor sends nothing): ${disabled_monitor_slugs[*]}")
+fi
+if (( ${#routing_warn_parts[@]} > 0 )); then
+  routing_warn="${routing_warn_parts[0]}"
+  for part in "${routing_warn_parts[@]:1}"; do
+    routing_warn+="; ${part}"
+  done
+  echo "::warning::$(warn_sanitize "Sentry cron routing: pre-apply state (before this run's apply): ${routing_warn}. See ${out_file}.")" >&2
+fi
 
 # --- Class D gate ---------------------------------------------------------
 # Deliberately NOT the A/B/C posture. Those classes only `printf` into the

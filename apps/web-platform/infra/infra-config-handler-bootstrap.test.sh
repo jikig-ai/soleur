@@ -31,19 +31,34 @@ INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 
 PASS=0
 FAIL=0
-TOTAL=0
+# The independent case counter (ADR-193 #2). Incremented in assert() — the ASSERTION helper —
+# BEFORE the verdict is decided, and never inside pass()/fail(), the VERDICT helpers. That
+# split is the whole point: it was previously `TOTAL=$((TOTAL + 1))` sitting in the same body
+# that moved PASS/FAIL, so the count moved WITH the verdict and stubbing the verdict dropped
+# the row and its count together — the conservation identity below then held under the exact
+# fault it exists to catch. Never increment this inside `$( )`; a subshell discards it.
+CASES=0
+
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  [[ -n "${2:-}" ]] && echo "        condition: $2"
+  return 0
+}
 
 assert() {
   local description="$1"
   local condition="$2"
-  TOTAL=$((TOTAL + 1))
+  CASES=$((CASES + 1))
   if eval "$condition"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $description"
+    pass "$description"
   else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $description"
-    echo "        condition: $condition"
+    fail "$description" "$condition"
   fi
 }
 
@@ -78,30 +93,30 @@ assert "block is non-empty" "[[ -n \"\$BLOCK\" ]]"
 echo ""
 echo "--- AC2: SSH connection block matches the 7-sibling shape ---"
 assert "SSH connection block (type = ssh)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'type[[:space:]]*=[[:space:]]*\"ssh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'type[[:space:]]*=[[:space:]]*\"ssh\"' >/dev/null"
 assert "connection host = hcloud_server.web[\"web-1\"].ipv4_address" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'host[[:space:]]*=[[:space:]]*hcloud_server\.web\[\"web-1\"\]\.ipv4_address' >/dev/null"
 assert "connection user = root" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'user[[:space:]]*=[[:space:]]*\"root\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'user[[:space:]]*=[[:space:]]*\"root\"' >/dev/null"
 # `agent = true` was stale post-#4845: server.tf now uses the dual-context
 # toggle `agent = var.ci_ssh_private_key == null` (operator ssh-agent locally,
 # explicit Doppler key in CI). The literal-`true` regex previously false-passed
 # by matching this block's #4829 dual-context comment prose, not real config;
 # the conditional regex below matches only the real `agent = var…` line.
 assert "connection uses the dual-context ssh-agent toggle agent = var.ci_ssh_private_key == null" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'agent[[:space:]]*=[[:space:]]*var\.ci_ssh_private_key[[:space:]]*==[[:space:]]*null' >/dev/null"
 
 # --- AC3: triggers_replace references all three trigger inputs ---
 echo ""
 echo "--- AC3: triggers_replace complete (handler + status script + hooks.json) ---"
 assert "triggers_replace uses the sha256(join(...)) wrapper" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(join\('"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'triggers_replace[[:space:]]*=[[:space:]]*sha256\(join\(' >/dev/null"
 assert "triggers_replace references infra-config-apply.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/infra-config-apply\.sh\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/infra-config-apply\.sh\"\)' >/dev/null"
 assert "triggers_replace references cat-infra-config-state.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"\)' >/dev/null"
 assert "triggers_replace references local.hooks_json" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'local\.hooks_json'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'local\.hooks_json' >/dev/null"
 
 # --- AC4: handler delivered (the load-bearing anti-regression invariant) ---
 echo ""
@@ -113,29 +128,29 @@ echo "--- AC4: resource DELIVERS the handler via provisioner \"file\" ---"
 # were deleted (the exact regression this test exists to catch). Assert both the
 # destination (only ever on the scp block) AND the path.module source.
 assert "file provisioner delivers infra-config-apply.sh to /usr/local/bin (destination)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-apply\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-apply\.sh\"' >/dev/null"
 assert "file provisioner sources infra-config-apply.sh from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-apply\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-apply\.sh\"' >/dev/null"
 assert "file provisioner delivers cat-infra-config-state.sh to /usr/local/bin (destination)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/cat-infra-config-state\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/cat-infra-config-state\.sh\"' >/dev/null"
 assert "file provisioner sources cat-infra-config-state.sh from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/cat-infra-config-state\.sh\"' >/dev/null"
 assert "resource writes /etc/webhook/hooks.json" \
-  "printf '%s' \"\$BLOCK\" | grep -qE '/etc/webhook/hooks\.json'"
+  "printf '%s' \"\$BLOCK\" | grep -cE '/etc/webhook/hooks\.json' >/dev/null"
 # hooks.json is a secret-bearing templatefile() render (not on disk), so it must
 # be delivered via a base64 heredoc, not a provisioner \"file\" source.
 assert "hooks.json delivered via base64encode(local.hooks_json) heredoc" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'base64encode\(local\.hooks_json\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'base64encode\(local\.hooks_json\)' >/dev/null"
 
 # --- AC5: positive post-write assertions (prove it took, don't observe it) ---
 echo ""
 echo "--- AC5: positive assertions in remote-exec ---"
 assert "asserts hooks.json re-registers infra-config-status hook" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'infra-config-status'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'infra-config-status' >/dev/null"
 assert "asserts hooks.json maps cat_infra_config_state_sh_b64 key" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'cat_infra_config_state_sh_b64'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'cat_infra_config_state_sh_b64' >/dev/null"
 assert "asserts the webhook unit is active (is-active)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'systemctl is-active webhook'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'systemctl is-active webhook' >/dev/null"
 
 # --- AC7: #4827 — bridge also bootstraps the escalation helper + sudoers grant ---
 # The webhook handler's prod-mode escalation needs BOTH infra-config-install AND
@@ -146,30 +161,33 @@ assert "asserts the webhook unit is active (is-active)" \
 echo ""
 echo "--- AC7: escalation helper + sudoers delivered over root SSH (#4827) ---"
 assert "triggers_replace references infra-config-install.sh" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/infra-config-install\.sh\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/infra-config-install\.sh\"\)' >/dev/null"
 assert "triggers_replace references deploy-inngest-bootstrap.sudoers" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'file\(\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"\)'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'file\(\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"\)' >/dev/null"
 assert "file provisioner delivers infra-config-install (destination)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-install\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'destination[[:space:]]*=[[:space:]]*\"/usr/local/bin/infra-config-install\"' >/dev/null"
 assert "file provisioner sources infra-config-install.sh from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-install\.sh\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/infra-config-install\.sh\"' >/dev/null"
 assert "file provisioner sources the sudoers grant from path.module" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'source[[:space:]]*=[[:space:]]*\"\\\$\{path\.module\}/deploy-inngest-bootstrap\.sudoers\"' >/dev/null"
 assert "remote-exec visudo-validates the staged sudoers before install" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'visudo -cf /tmp/deploy-inngest-bootstrap\.sudoers\.staged'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'visudo -cf /tmp/deploy-inngest-bootstrap\.sudoers\.staged' >/dev/null"
 assert "remote-exec atomically installs the sudoers grant root:root 0440" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap\.sudoers\.staged /etc/sudoers\.d/deploy-inngest-bootstrap'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'install -o root -g root -m 0440 /tmp/deploy-inngest-bootstrap\.sudoers\.staged /etc/sudoers\.d/deploy-inngest-bootstrap' >/dev/null"
 assert "remote-exec asserts the helper is executable (test -x)" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'test -x /usr/local/bin/infra-config-install'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'test -x /usr/local/bin/infra-config-install' >/dev/null"
 assert "remote-exec asserts the INFRA_CONFIG_INSTALL grant landed" \
-  "printf '%s' \"\$BLOCK\" | grep -qE 'grep -q INFRA_CONFIG_INSTALL /etc/sudoers\.d/deploy-inngest-bootstrap'"
+  "printf '%s' \"\$BLOCK\" | grep -cE 'grep -q INFRA_CONFIG_INSTALL /etc/sudoers\.d/deploy-inngest-bootstrap' >/dev/null"
 
 # --- AC6: wired into CI (infra-validation.yml) ---
 echo ""
 echo "--- AC6: drift-guard wired into infra-validation.yml ---"
 assert "infra-validation.yml exists" "[[ -f '$INFRA_VALIDATION' ]]"
-assert "infra-validation.yml invokes this drift-guard" \
-  "grep -qE 'bash apps/web-platform/infra/infra-config-handler-bootstrap\.test\.sh' '$INFRA_VALIDATION'"
+# Since #8736 presence under apps/web-platform/infra/ IS registration — the
+# deploy-script-tests legs glob-derive this suite — so what to pin is the
+# CONNECTION: the runner invocation the legs execute.
+assert "infra-validation.yml invokes this drift-guard's runner" \
+  "grep -qE 'run: bash apps/web-platform/infra/run-registered-suites\.sh' '$INFRA_VALIDATION'"
 
 # --- AC8 (#7103 R2 3.9): deploy_pipeline_fix depends_on the handler bootstrap ---
 # ORDERING IS A TASK, NOT A HOPE. deploy_pipeline_fix PUSHES the payload to the webhook; this
@@ -197,10 +215,117 @@ DPF_DEPENDS=$(printf '%s\n' "$DPF_BLOCK" \
   | awk '/^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[/{f=1} f{print} f && /\]/{exit}')
 assert "deploy_pipeline_fix declares a depends_on list" "[[ -n \"\$DPF_DEPENDS\" ]]"
 assert "the list names terraform_data.infra_config_handler_bootstrap" \
-  "printf '%s' \"\$DPF_DEPENDS\" | grep -qE 'terraform_data\\.infra_config_handler_bootstrap'"
+  "printf '%s' \"\$DPF_DEPENDS\" | grep -cE 'terraform_data\\.infra_config_handler_bootstrap' >/dev/null"
+
+# --- #7220 B6: the grant is PROVEN, and activation is asserted, not assumed ---
+echo ""
+echo "--- #7220 B6: daemon-reload grant + DropInPaths activation assertions ---"
+
+# AC4 -- a POLICY probe, not just a text grep. Every sibling here asserts the alias NAME
+# appears in the sudoers file, which proves the bytes landed and says nothing about whether
+# sudo actually grants the command: a valid file whose User_Spec is missing, or whose alias
+# never reaches `deploy`, passes a grep and denies at runtime. `sudo -n -l -U deploy <cmd>`
+# resolves the real policy for the real user and exits non-zero if it is not permitted --
+# which is the property #7220 needed and did not have.
+assert "post-write asserts the daemon-reload grant landed in the file" \
+  "printf '%s' \"\$BLOCK\" | grep -cE 'grep -q SYSTEMCTL_DAEMON_RELOAD /etc/sudoers.d/deploy-inngest-bootstrap' >/dev/null"
+# EXECUTES the grant rather than listing it: proves the grant is EFFECTIVE, not merely present,
+# and performs the reload the DropInPaths assertions below depend on. Also asserts the FATAL
+# tail, because in a remote-exec inline block the `|| { ...; exit 1; }` is the only thing that
+# makes the probe a gate rather than an advisory line.
+assert "post-write EXECUTES the daemon-reload grant as deploy (not just lists it)" \
+  "printf '%s' \"\$BLOCK\" | grep -cF 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload' >/dev/null"
+assert "the daemon-reload probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload' | grep -cF 'exit 1' >/dev/null"
+assert "list-mode availability is probed before the policy probes (could-not-measure is its own outcome)" \
+  "printf '%s' \"\$BLOCK\" | grep -cF 'sudo -n -l -U deploy >/dev/null 2>&1 ||' >/dev/null"
+assert "post-write probes sudo policy for the --collect self-restart argv" \
+  "printf '%s' \"\$BLOCK\" | grep -cF 'sudo -n -l -U deploy /usr/bin/systemd-run --collect' >/dev/null"
+# TAIL SWEEP (#7220 review). The daemon-reload probe above already asserted its `exit 1` tail;
+# these three did not, so mutating any of them to `|| true` left this suite fully green while the
+# probe became an advisory log line. In a remote-exec `inline` block there is no implicit errexit
+# and only the LAST command's status is consulted, so the `|| { ...; exit 1; }` tail IS the gate —
+# a probe without it cannot fail the apply no matter what sudo answers.
+assert "the self-restart argv probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy /usr/bin/systemd-run --collect' | grep -cF 'exit 1' >/dev/null"
+assert "the list-mode availability probe is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'sudo -n -l -U deploy >/dev/null 2>&1 ||' | grep -cF 'exit 1' >/dev/null"
+assert "the inngest-heartbeat DropInPaths assertion is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-heartbeat.service' | grep -cF 'exit 1' >/dev/null"
+assert "the inngest-server DropInPaths assertion is fatal, not advisory" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -cF 'exit 1' >/dev/null"
+# And the DropInPaths probes must grep for a NON-EMPTY pattern. `grep -q ''` matches any output,
+# including the output for a unit with no drop-in at all, so the probe would hold in exactly the
+# state AC-B4 exists to detect. The real probes anchor on `doppler-token.conf`; pin that both
+# positively (the anchor is present on each) and negatively (no empty-pattern grep survives).
+assert "the inngest-heartbeat DropInPaths probe greps a real drop-in anchor" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-heartbeat.service' | grep -qF \"grep -q 'doppler-token.conf'\""
+assert "the inngest-server DropInPaths probe greps a real drop-in anchor" \
+  "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -qF \"grep -q 'doppler-token.conf'\""
+assert "no DropInPaths probe was weakened to an empty grep pattern" \
+  "! printf '%s' \"\$BLOCK\" | grep -F DropInPaths | grep -qE \"grep -q ''\""
+
+# AC-B4 -- activation, not just reload. inngest-heartbeat and inngest-server carry drop-ins in
+# FILE_MAP and are absent from RESTART_MAP, so the reload is the only activation step THIS channel
+# performs for them. (Corrected #7220 review: they are NOT absent from the grant set --
+# inngest-server is granted -- and ci-deploy.sh's inngest arm is a second reconciliation channel.
+# The rationale is single-sourced at the AC-B4 comment in server.tf; do not restate it here.)
+# Asserting DropInPaths is the difference between "we fixed reload" and "we fixed what reload
+# was for": it proves systemd ADOPTED the drop-in this channel delivered.
+assert "post-write asserts inngest-heartbeat drop-in is LOADED (DropInPaths)" \
+  "printf '%s' \"\$BLOCK\" | grep -cF 'DropInPaths inngest-heartbeat.service' >/dev/null"
+assert "post-write asserts inngest-server drop-in is LOADED (DropInPaths)" \
+  "printf '%s' \"\$BLOCK\" | grep -cF 'DropInPaths inngest-server.service' >/dev/null"
+
+# ── ASSERTION-COUNT FLOOR (#7220 review) ───────────────────────────────────────────────
+# This suite had NO floor, so deleting assert calls — or an `assert` helper that silently stopped
+# incrementing — would report a clean, smaller run and exit 0. That is the same silent-shrink hole
+# the sibling suites' floors close, and it matters more here: these assertions are the only thing
+# pinning the bootstrap provisioner's sudo probes and DropInPaths tails, which are what prove the
+# #7220 grant is EFFECTIVE rather than merely present on disk.
+#
+# Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms, and
+# read a floor failure on an otherwise-green run as "you added assertions, update this number".
+# --- Accounting conservation (ADR-193 #3) --------------------------------------------
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the pass count, so the
+# floor would ALSO trip and would report "arms were deleted" — the misleading diagnosis. This
+# says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY, never
+# through fail(): a check that reports by calling the verdict helper increments the very
+# counter the exit status reads, so neutering fail() silences the rows AND the check meant to
+# notice the silence. The literal `[FATAL] accounting` is load-bearing — guard-vacuity-floor's
+# ARM 10 builds its conservation population by grepping that exact string (#7588).
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS/$CASES passed ==="
+  exit 1
+fi
+
+# --- Anti-vacuity floor (ADR-193 #1) -------------------------------------------------
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously did `FAIL=$((FAIL + 1))` and fell through to the trailer — so with the assertion
+# machinery neutered the floor "fired" into a counter nobody read before exit, the suite
+# printed a clean total and exited 0. A floor enforced through the suspect cannot witness
+# the suspect.
+#
+# Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms,
+# and read a floor failure on an otherwise-green run as "you added assertions, update this".
+BOOTSTRAP_MIN_ASSERTIONS=50
+if (( CASES < BOOTSTRAP_MIN_ASSERTIONS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$CASES" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  echo "=== Results: $PASS/$CASES passed ==="
+  exit 1
+fi
 
 echo ""
-echo "=== Results: $PASS/$TOTAL passed ==="
+echo "=== Results: $PASS/$CASES passed ==="
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"
   exit 1

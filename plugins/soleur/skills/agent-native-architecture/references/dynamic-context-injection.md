@@ -5,17 +5,20 @@ How to inject dynamic runtime context into agent system prompts. The agent needs
 </overview>
 
 <why_context_matters>
+
 ## Why Dynamic Context Injection?
 
 A static system prompt tells the agent what it CAN do. Dynamic context tells it what it can do RIGHT NOW with the user's actual data.
 
 **The failure case:**
+
 ```
 User: "Write a little thing about Catherine the Great in my reading feed"
 Agent: "What system are you referring to? I'm not sure what reading feed means."
 ```
 
 The agent failed because it didn't know:
+
 - What books exist in the user's library
 - What the "reading feed" is
 - What tools it has to publish there
@@ -60,12 +63,15 @@ func buildSystemPrompt() -> String {
     """
 }
 ```
+
 </pattern>
 
 <what_to_inject>
+
 ## What Context to Inject
 
 ### 1. Available Resources
+
 What data/files exist that the agent can access?
 
 ```swift
@@ -81,6 +87,7 @@ Research folders:
 ```
 
 ### 2. Current State
+
 What has the user done recently? What's the current context?
 
 ```swift
@@ -92,6 +99,7 @@ What has the user done recently? What's the current context?
 ```
 
 ### 3. Capabilities Mapping
+
 What tool maps to what UI feature? Use the user's language.
 
 ```swift
@@ -106,6 +114,7 @@ What tool maps to what UI feature? Use the user's language.
 ```
 
 ### 4. Domain Vocabulary
+
 Explain app-specific terms the user might use.
 
 ```swift
@@ -116,9 +125,11 @@ Explain app-specific terms the user might use.
 - **Reading profile**: A markdown file describing user's reading preferences
 - **Highlight**: A passage the user marked in a book
 ```
+
 </what_to_inject>
 
 <implementation_patterns>
+
 ## Implementation Patterns
 
 ### Pattern 1: Service-Based Injection (Swift/iOS)
@@ -224,14 +235,17 @@ const prompt = Handlebars.compile(template)({
   recentActivity: await activityService.getRecent(10),
 });
 ```
+
 </implementation_patterns>
 
 <context_freshness>
+
 ## Context Freshness
 
 Context should be injected at agent initialization, and optionally refreshed during long sessions.
 
 **At initialization:**
+
 ```swift
 // Always inject fresh context when starting an agent
 func startChatAgent() async -> AgentSession {
@@ -244,6 +258,7 @@ func startChatAgent() async -> AgentSession {
 ```
 
 **During long sessions (optional):**
+
 ```swift
 // For long-running agents, provide a refresh tool
 tool("refresh_context", "Get current app state") { _ in
@@ -257,11 +272,13 @@ tool("refresh_context", "Get current app state") { _ in
 ```
 
 **What NOT to do:**
+
 ```swift
 // DON'T: Use stale context from app launch
 let cachedContext = appLaunchContext  // Stale!
 // Books may have been added, activity may have changed
 ```
+
 </context_freshness>
 
 <examples>
@@ -316,6 +333,7 @@ func getChatAgentSystemPrompt() -> String {
 ```
 
 **Result:** When user says "write a little thing about Catherine the Great in my reading feed", the agent:
+
 1. Sees "reading feed" → knows to use `publish_to_feed`
 2. Sees available books → finds the relevant book ID
 3. Creates appropriate content for the Feed tab
@@ -325,6 +343,7 @@ func getChatAgentSystemPrompt() -> String {
 ## Context Injection Checklist
 
 Before launching an agent:
+
 - [ ] System prompt includes current resources (books, files, data)
 - [ ] Recent activity is visible to the agent
 - [ ] Capabilities are mapped to user vocabulary
@@ -332,6 +351,7 @@ Before launching an agent:
 - [ ] Context is fresh (gathered at agent start, not cached)
 
 When adding new features:
+
 - [ ] New resources are included in context injection
 - [ ] New capabilities are documented in system prompt
 - [ ] User vocabulary for the feature is mapped

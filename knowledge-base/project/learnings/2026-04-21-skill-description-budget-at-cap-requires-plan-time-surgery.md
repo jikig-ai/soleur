@@ -48,7 +48,14 @@ for (const d of dirs) {
     counts.push({d, words});
   }
 }
-console.log('Total:', total, '/ 1800. Headroom:', 1800 - total);
+// Read the cap from the enforcing test rather than hardcoding it — it has been raised several
+// times since this learning was written, and a stale literal here reports a false headroom to
+// every skill that routes an operator to this one-liner (#7418).
+const BUDGET = Number(
+  require('fs').readFileSync('plugins/soleur/test/components.test.ts', 'utf8')
+    .match(/SKILL_DESCRIPTION_WORD_BUDGET\s*=\s*(\d+)/)[1]
+);
+console.log('Total:', total, '/', BUDGET, 'Headroom:', BUDGET - total);
 console.log('Top 5:', counts.sort((a,b) => b.words - a.words).slice(0,5).map(c => c.d + ':' + c.words).join(', '));
 "
 ```

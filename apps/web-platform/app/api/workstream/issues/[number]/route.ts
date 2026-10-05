@@ -18,7 +18,6 @@
 
 import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
-import { createClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import {
   reopenWorkstreamIssue,
@@ -32,6 +31,7 @@ import {
   checkWorkstreamWriteRate,
   classifyWriteError,
 } from "@/server/workstream/workstream-write-throttle";
+import { verifiedUserId } from "@/server/request-auth";
 import {
   STATUS_ORDER,
   type WorkstreamIssue,
@@ -59,11 +59,8 @@ export async function PATCH(
   const { valid, origin } = validateOrigin(req);
   if (!valid) return rejectCsrf("api/workstream/issues/[number]", origin);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const userId = await verifiedUserId(req);
+  if (!userId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -73,7 +70,7 @@ export async function PATCH(
     return NextResponse.json({ error: "invalid_number" }, { status: 400 });
   }
 
-  if (!checkWorkstreamWriteRate(user.id)) {
+  if (!checkWorkstreamWriteRate(userId)) {
     return NextResponse.json(
       { error: "rate_limited" },
       { status: 429, headers: { "Retry-After": "60" } },
@@ -147,16 +144,16 @@ export async function PATCH(
           ? (b.state_reason as CloseReason)
           : undefined;
       issue = await setWorkstreamIssueStatus(
-        user.id,
+        userId,
         issueNumber,
         b.status as WorkstreamStatus,
         stateReason,
       );
     } else if (reopen) {
-      issue = await reopenWorkstreamIssue(user.id, issueNumber);
+      issue = await reopenWorkstreamIssue(userId, issueNumber);
     } else if (hasTitle) {
       issue = await updateWorkstreamIssueTitle(
-        user.id,
+        userId,
         issueNumber,
         b.title as string,
       );
@@ -167,7 +164,7 @@ export async function PATCH(
       if (hasLabels) fields.labels = b.labels as string[];
       if (hasAssignees) fields.assignees = b.assignees as string[];
       if (hasMilestone) fields.milestone = b.milestone as number | null;
-      issue = await updateWorkstreamIssueFields(user.id, issueNumber, fields);
+      issue = await updateWorkstreamIssueFields(userId, issueNumber, fields);
     }
     return NextResponse.json({ issue });
   } catch (e) {
@@ -175,7 +172,7 @@ export async function PATCH(
     if (status >= 500) {
       Sentry.captureException(e, {
         tags: { surface: "workstream-issue-patch" },
-        extra: { userId: user.id, issueNumber },
+        extra: { userId, issueNumber },
       });
     }
     return NextResponse.json({ error: code }, { status });

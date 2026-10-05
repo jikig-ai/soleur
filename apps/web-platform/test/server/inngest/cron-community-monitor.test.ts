@@ -308,7 +308,8 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
 
     // Read-only invariant: the community monitor forwards X read credentials
     // (X_API_KEY etc., positive class above) but MUST NOT forward X_ALLOW_POST
-    // — the posting defense-in-depth guard (x-community.sh:611). Only the
+    // — the posting defense-in-depth guard (x-community.sh, the `X_ALLOW_POST`
+    // check in cmd_post; content anchor, not a line number). Only the
     // publisher (cron-content-publisher.ts) arms posting. A future careless
     // edit that adds X_ALLOW_POST here would silently enable posting from a
     // read-only digest path.

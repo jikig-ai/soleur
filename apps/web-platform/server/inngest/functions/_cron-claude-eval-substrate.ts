@@ -1,9 +1,15 @@
+import { RUN_REPORT_CRONS } from "./_cron-run-reports";
+import {
+  countFilingDenials,
+  emitCronFilingDenyMarker,
+} from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
+import { CLI_EFFORT_FALLBACK_NEEDLE } from "@/server/inngest/model-tiers";
 import {
   upsertRoutineRunProgress,
   heartbeatRoutineRunProgress,
@@ -13,6 +19,7 @@ import {
   buildAuthenticatedCloneUrl,
   DeployInProgressError,
   deployLeaseAgeMsIfFresh,
+  formatTailForSentry,
   redactToken,
   resolveCronWorkspaceRoot,
   warnIfCronWorkspaceLowOnDisk,
@@ -22,6 +29,7 @@ import {
   emitClaudeCostMarker,
   type CaptureStatus,
 } from "@/server/claude-cost-marker";
+import { budgetFlags } from "@/server/inngest/cron-budgets";
 
 export interface SpawnResult {
   ok: boolean;
@@ -34,8 +42,7 @@ export interface SpawnResult {
   // which Vector does NOT ship to Better Stack — capturing the tail here is the
   // only path that reaches Sentry. #4714 follow-up (roadmap/content silent
   // non-zero exits were undiagnosable: app stdout is not in the log warehouse).
-  // Optional: sibling crons (daily-triage, follow-through-monitor) build their
-  // own SpawnResult literals via the inline spawn pattern and do not populate it.
+  // Optional: a spawn that never started (ENOENT) or a synthetic result has none.
   stderrTail?: string;
   // Bounded tail of the child's stdout (redacted). `claude --print` writes its
   // max-turns notice to STDOUT, not stderr — that notice previously reached only
@@ -43,14 +50,13 @@ export interface SpawnResult {
   // turn-exhaustion exit was red-on-the-monitor but not self-diagnosing without
   // SSH. Capturing the tail here folds the notice into the scheduled-output-missing
   // Sentry extra alongside stderrTail. #4773 (follow-up to #4714/#4770).
-  // Optional, same as stderrTail: inline-spawn sibling crons do not populate it.
+  // Optional, same as stderrTail.
   stdoutTail?: string;
   // #cost-attribution (plan Phase 2 / ADR-033 I5): the claude CLI's own
   // authoritative per-run cost + usage + model, parsed from the final `result`
-  // JSON event when the spawn requests `--output-format json`. All optional so
-  // inline-spawn sibling crons that build their own SpawnResult literals stay
-  // compiling (mirrors stdoutTail?/stderrTail?), and so a parse failure / old
-  // text format degrades to `undefined` (fail-open, never fatal).
+  // JSON event when the spawn requests `--output-format json`. All optional so a
+  // parse failure / old text format degrades to `undefined` (fail-open, never
+  // fatal), and synthetic results (makeThrewSpawnResult) need not carry them.
   costUsd?: number;
   usage?: {
     input_tokens: number;
@@ -59,6 +65,12 @@ export interface SpawnResult {
     cache_creation_input_tokens: number;
   };
   model?: string | null;
+  // #8611: the result event's own verdict, so a run stopped by its per-run
+  // `--max-budget-usd` cap (subtype `error_max_budget_usd`) is distinguishable
+  // from a clean exit by classifyEvalFatal, not only by the Better Stack marker.
+  isError?: boolean;
+  subtype?: string;
+  numTurns?: number;
 }
 
 // #5728 — synthetic SpawnResult for the silence-hole audit issue (#4960) when an
@@ -92,12 +104,21 @@ export interface ParsedEvalResult {
     costUsd?: number;
     usage?: SpawnResult["usage"];
     model: string | null;
+    // #8611 — whether the run FAILED (budget cap, credit, max turns) and why. `null` when the
+    // CLI omitted the field or sent a malformed value; never passed through unvalidated.
+    isError: boolean | null;
+    subtype: string | null;
+    numTurns: number | null;
   };
   // The human-readable `result` text (the CLI's final assistant output OR, on
   // an API error, the error message). Folded into stdoutTail so the I8
   // credit/auth/spawn-fault classifier still sees the error string under the
   // JSON output format (arch P1-A).
   resultText: string;
+  // #8076 — filing-shaped PreToolUse denials from the event's
+  // `permission_denials[]` (a hook deny lands there with the full command —
+  // measured 2026-09-11). Command HEADS only; see cron-filing-deny-marker.ts.
+  filingDenials: { count: number; commands: string[]; fieldPresent: boolean };
 }
 
 /**
@@ -130,8 +151,18 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
     };
     modelUsage?: Record<string, unknown>;
     result?: unknown;
+    permission_denials?: unknown;
+    is_error?: unknown;
+    subtype?: unknown;
+    num_turns?: unknown;
   };
   return {
+    // `fieldPresent` splits "no denials" from "the CLI stopped emitting the
+    // array" — absent and empty both count 0, and only one of them is good news.
+    filingDenials: {
+      ...countFilingDenials(r.permission_denials),
+      fieldPresent: Array.isArray(r.permission_denials),
+    },
     cost: {
       costUsd:
         typeof r.total_cost_usd === "number" ? r.total_cost_usd : undefined,
@@ -145,6 +176,16 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
           }
         : undefined,
       model: Object.keys(r.modelUsage ?? {})[0] ?? null,
+      isError: typeof r.is_error === "boolean" ? r.is_error : null,
+      // A closed token shape, so no free text (and no newline) can ride into a log line.
+      subtype:
+        typeof r.subtype === "string" && /^[a-z_]{1,64}$/.test(r.subtype)
+          ? r.subtype
+          : null,
+      numTurns:
+        Number.isInteger(r.num_turns) && (r.num_turns as number) >= 0
+          ? (r.num_turns as number)
+          : null,
     },
     resultText:
       typeof r.result === "string"
@@ -421,6 +462,21 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh", // SKILL Phase 3
     "./node_modules/.bin/vitest run", // SKILL Phase 2/4 — LITERAL test verb (Phase 3.5 rewrite)
   ],
+  // #8611 — the two crons that moved from an inline spawn onto spawnClaudeEval (for the
+  // single-flight guard and the cost marker). They spawn in the server cwd, NOT through
+  // setupEphemeralWorkspace, so no cron-allow.txt is written for them and the hook does not
+  // read these rows today: the live enforcement is the CLI `--allowedTools` in each cron's
+  // CLAUDE_CODE_FLAGS. Each row mirrors that list verb-for-verb (pinned by
+  // cron-claude-eval-mcp-flags.test.ts), so moving either cron onto a workspace later is safe.
+  "cron-daily-triage": ["gh issue list", "gh issue view", "gh issue edit", "gh issue comment"],
+  "cron-follow-through-monitor": [
+    "gh issue list",
+    "gh issue view",
+    "gh issue edit",
+    "gh issue comment",
+    "gh issue close",
+    "gh label create",
+  ],
 };
 
 // #5199 — per-cron mcp__* allowance for the containment hook. The relax-minimal
@@ -449,6 +505,59 @@ export const CRON_MCP_ALLOWLISTS: Record<
     navigateOriginEnv: "NEXT_PUBLIC_APP_URL",
   },
 };
+
+// #8076 / ADR-216 addendum — the run-report directive. A cron whose run
+// completion is verified by its own scheduled issue MUST file it, so the
+// substrate issues `run-report-label <label>` into the per-spawn cron-allow.txt
+// (the agent can neither read nor write that file) and the containment hook
+// honours it as exit 0 of the filing gate iff a REAL --label token equals it.
+// DERIVED from the leaf, never hand-copied: `_cron-run-reports.ts` is the
+// single source and `cron-run-report-labels-parity.test.ts` binds it to the
+// `resolveOutputAwareOk` call sites. Absent for every other cron.
+export const CRON_RUN_REPORT_LABELS: Readonly<Record<string, string>> =
+  Object.freeze(Object.fromEntries(RUN_REPORT_CRONS.map((r) => [r.fn, r.label])));
+
+/**
+ * The exact lines the substrate writes into `.claude/cron-allow.txt` for a
+ * cron: bash prefixes first, then the directive lines the hook's
+ * `parseAllowlist` understands (`mcp-allow`, `navigate-origin`,
+ * `run-report-label`). Pure, so the delivery contract is unit-testable without
+ * a clone. Throws when an mcp cron's navigate origin cannot be resolved — the
+ * unguarded form is the exfil vector the origin pin exists to close.
+ */
+export function buildAllowlistLines(
+  cronName: string,
+  allow: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+): { lines: string[]; navigateOrigin: string | null; runReportLabel: string | null } {
+  const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
+  let navigateOrigin: string | null = null;
+  const lines = [...allow];
+  if (mcpEntry) {
+    for (const tool of mcpEntry.tools) lines.push(`mcp-allow ${tool}`);
+    if (mcpEntry.navigateOriginEnv) {
+      const raw = env[mcpEntry.navigateOriginEnv];
+      try {
+        navigateOrigin = raw ? new URL(raw).origin : null;
+      } catch {
+        navigateOrigin = null;
+      }
+      if (!navigateOrigin) {
+        // Refuse to relax browser_navigate without a resolvable origin pin — the
+        // unguarded form is the exfil vector this whole mechanism exists to close.
+        throw new Error(
+          `[${cronName}] cannot resolve navigate-origin from env ` +
+            `${mcpEntry.navigateOriginEnv} (value: ${raw ?? "<unset>"}) — refusing ` +
+            `to relax mcp browser_navigate without an origin pin. Aborting cron.`,
+        );
+      }
+      lines.push(`navigate-origin ${navigateOrigin}`);
+    }
+  }
+  const runReportLabel = CRON_RUN_REPORT_LABELS[cronName] ?? null;
+  if (runReportLabel) lines.push(`run-report-label ${runReportLabel}`);
+  return { lines, navigateOrigin, runReportLabel };
+}
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
 // `defaultMode:"default"` + `allow:[]` are inert (the hook is the boundary). The
@@ -519,8 +628,19 @@ export function runHookSelfTest(args: {
   // bash allow[0] probe verifies bash delivery.
   mcpAllow?: string[];
   navigateOrigin?: string | null;
+  // #8076 — the run-report directive, passed explicitly (from the map, not
+  // parsed from the file) so probe (a) cross-checks that the file ACTUALLY
+  // delivered it, exactly like the bash allow[0] probe verifies bash delivery.
+  runReportLabel?: string | null;
 }): void {
-  const { spawnCwd, cronName, allow, mcpAllow = [], navigateOrigin = null } = args;
+  const {
+    spawnCwd,
+    cronName,
+    allow,
+    mcpAllow = [],
+    navigateOrigin = null,
+    runReportLabel = null,
+  } = args;
   const nodeBin = resolveNodeBin();
   const hookAbs = join(spawnCwd, HOOK_REL_PATH);
   const allowlistAbs = join(spawnCwd, ALLOWLIST_REL_PATH);
@@ -556,6 +676,51 @@ export function runHookSelfTest(args: {
       throw new Error(
         `[${cronName}] containment hook self-test FAILED: allowlisted verb "${allow[0]}" ` +
           `was NOT allowed (allowlist not delivered). Aborting cron.`,
+      );
+    }
+  }
+
+  // #8076 — the run-report exit, four probes per spawn that carries the
+  // directive: (a) the cron's REQUIRED filing on a real --label token must
+  // ALLOW (a lost directive line is what this detects — the same delivery
+  // cross-check as the mcp probes); (b) the label merely NAMED in --body must
+  // DENY (the bare-token class); (c) a suffixed label must DENY (the comma
+  // anchor). A hook that raw-string-matches the label passes (a) and fails
+  // (b)/(c), which is exactly the regression these exist to catch.
+  if (runReportLabel) {
+    const probeCreate = (rest: string) =>
+      run({ tool_name: "Bash", tool_input: { command: `gh issue create --title t ${rest}` } });
+    const a = probeCreate(`--label ${runReportLabel} --milestone "Post-MVP / Later"`);
+    if (!a.includes('"permissionDecision":"allow"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: the run-report filing ` +
+          `(--label ${runReportLabel}) was NOT allowed (run-report-label directive not ` +
+          `delivered). Aborting cron.`,
+      );
+    }
+    const b = probeCreate(`--body 'run-report-label ${runReportLabel}'`);
+    if (!b.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: the run-report label named ` +
+          `in prose opened exit 0 (bare-token match). Aborting cron.`,
+      );
+    }
+    const c = probeCreate(`--label ${runReportLabel}x`);
+    if (!c.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: a suffixed run-report label ` +
+          `opened exit 0 (comma anchor lost). Aborting cron.`,
+      );
+    }
+    // (d) the REQUIRED filing with a bare `$VAR` in its title must DENY: the
+    // spawn env carries GH_TOKEN, and exit 0 makes the create reachable on
+    // every run, so the metachar layer's `$VAR` deny is the only thing between
+    // the env and the public tracker (#8074 review).
+    const d = probeCreate(`--label ${runReportLabel} --milestone "Post-MVP / Later" --body "$GH_TOKEN"`);
+    if (!d.includes('"permissionDecision":"deny"')) {
+      throw new Error(
+        `[${cronName}] containment hook self-test FAILED: a bare $VAR expansion inside ` +
+          `the run-report filing was ALLOWED (secret-egress route open). Aborting cron.`,
       );
     }
   }
@@ -767,29 +932,11 @@ export async function setupEphemeralWorkspace(args: {
   // The origin is resolved from env HERE (not baked) and pinned in the file so
   // the agent — which cannot read .claude/ — cannot tamper with it.
   const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
-  let navigateOrigin: string | null = null;
-  const allowlistLines = [...allow];
-  if (mcpEntry) {
-    for (const tool of mcpEntry.tools) allowlistLines.push(`mcp-allow ${tool}`);
-    if (mcpEntry.navigateOriginEnv) {
-      const raw = process.env[mcpEntry.navigateOriginEnv];
-      try {
-        navigateOrigin = raw ? new URL(raw).origin : null;
-      } catch {
-        navigateOrigin = null;
-      }
-      if (!navigateOrigin) {
-        // Refuse to relax browser_navigate without a resolvable origin pin — the
-        // unguarded form is the exfil vector this whole mechanism exists to close.
-        throw new Error(
-          `[${cronName}] cannot resolve navigate-origin from env ` +
-            `${mcpEntry.navigateOriginEnv} (value: ${raw ?? "<unset>"}) — refusing ` +
-            `to relax mcp browser_navigate without an origin pin. Aborting cron.`,
-        );
-      }
-      allowlistLines.push(`navigate-origin ${navigateOrigin}`);
-    }
-  }
+  const {
+    lines: allowlistLines,
+    navigateOrigin,
+    runReportLabel,
+  } = buildAllowlistLines(cronName, allow, process.env);
   await writeFile(
     join(claudeDir, "cron-allow.txt"),
     allowlistLines.length ? allowlistLines.join("\n") + "\n" : "",
@@ -818,6 +965,7 @@ export async function setupEphemeralWorkspace(args: {
     allow,
     mcpAllow: mcpEntry?.tools ?? [],
     navigateOrigin,
+    runReportLabel,
   });
 
   return { ephemeralRoot, spawnCwd };
@@ -840,7 +988,97 @@ export async function teardownEphemeralWorkspace(
   }
 }
 
-export async function spawnClaudeEval(args: {
+// #8611 Guard 1 — single-flight per (cronName, runId). A step retry that arrives while the first
+// Claude child is still running JOINS that child instead of spawning a second paid session. A retry
+// that arrives AFTER the child finished — the step stream dropped before Inngest read the result —
+// gets that same result back for SETTLED_TTL_MS instead of a fresh session. A call that throws
+// (setup failure, no child result) is not kept, so a transient failure can retry. The map lives on
+// globalThis (Symbol.for) so a second module instance in the same process shares it. Process-local
+// state (AP-013): correct while ONE web host executes Inngest steps (dns.tf points `app` at web-1
+// only); ADR-243 §2 names what reopens it.
+type SpawnArgs = Parameters<typeof spawnClaudeEvalUnguarded>[0];
+type Flight = { promise: Promise<SpawnResult>; prompt: string };
+const IN_FLIGHT_KEY = Symbol.for("soleur.claudeEvalInFlight");
+// Inngest run ids are ULIDs today. If an SDK/server upgrade changes the shape (#8628), every spawn
+// reports `claude-eval-singleflight-no-runid` and runs unguarded — re-check this at that upgrade.
+const INNGEST_RUN_ID = /^01[0-9A-HJKMNP-TV-Z]{24}$/;
+// How long a finished child's result stays joinable. A dropped-stream retry can wait far longer
+// than Inngest's backoff: while the step awaits its retry the account-wide `cron-platform`
+// concurrency slot (limit 1) is free, so another claude-eval cron (up to 70 min) can take it first.
+// Two hours covers the longest MAX_TURN_DURATION_MS plus that queue. Bounded: ≤ 2 starts/h × 18
+// functions × 2 h = 72 entries of ~16 KB. Revisit with `retries` (#8613) — later backoffs grow.
+export const SETTLED_TTL_MS = 2 * 60 * 60_000;
+function inFlight(): Map<string, Flight> {
+  const g = globalThis as unknown as Record<symbol, Map<string, Flight> | undefined>;
+  return (g[IN_FLIGHT_KEY] ??= new Map());
+}
+
+/** Test seam: empty the single-flight map between cases (settled results otherwise persist). */
+export function __resetClaudeEvalSingleFlightForTests(): void {
+  inFlight().clear();
+}
+
+export function spawnClaudeEval(args: SpawnArgs): Promise<SpawnResult> {
+  const { cronName, runId, prompt } = args;
+  if (!runId || !INNGEST_RUN_ID.test(runId)) {
+    // Never key on `undefined`: two unrelated runs would share one child.
+    reportSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "claude-eval-singleflight-no-runid",
+      message: "claude-eval spawned without a well-formed Inngest runId; single-flight guard skipped",
+      tags: { cron: cronName },
+      extra: { cronName },
+    });
+    return spawnClaudeEvalUnguarded(args);
+  }
+  const key = `${cronName}:${runId}`;
+  const map = inFlight();
+  const live = map.get(key);
+  if (live) {
+    // The key carries no step identity: every caller spawns ONCE per run. A second, different
+    // spawn in the same run (a future plan-then-execute cron) must not silently receive the first
+    // spawn's result — refuse it loudly instead.
+    if (live.prompt !== prompt) {
+      reportSilentFallback(null, {
+        feature: "cron-claude-eval",
+        op: "claude-eval-singleflight-key-collision",
+        message: "a second, different claude-eval spawn in one run collided with the single-flight key",
+        tags: { cron: cronName },
+        extra: { cronName, runId },
+      });
+      return Promise.reject(
+        new Error(`claude-eval ${cronName}: second distinct spawn in run ${runId} (single-flight key is per run)`),
+      );
+    }
+    // Expected, degraded path: the guard did its job (warning, not error, severity).
+    warnSilentFallback(null, {
+      feature: "cron-claude-eval",
+      op: "claude-eval-singleflight-join",
+      message: "claude-eval step re-invoked for a run whose child is live or just finished; returned that child's result",
+      tags: { cron: cronName },
+      extra: { cronName, runId },
+    });
+    return live.promise;
+  }
+  // Set SYNCHRONOUSLY, before any await: a retry landing during the first call's awaits must see it.
+  const promise = spawnClaudeEvalUnguarded(args);
+  const flight: Flight = { promise, prompt };
+  map.set(key, flight);
+  promise.then(
+    () => {
+      // Keep the settled result for a late retry, then forget it. unref: never holds the process open.
+      setTimeout(() => {
+        if (map.get(key) === flight) map.delete(key);
+      }, SETTLED_TTL_MS).unref?.();
+    },
+    () => {
+      if (map.get(key) === flight) map.delete(key);
+    },
+  );
+  return promise;
+}
+
+async function spawnClaudeEvalUnguarded(args: {
   spawnCwd: string;
   installationToken: string;
   flags: string[];
@@ -881,6 +1119,25 @@ export async function spawnClaudeEval(args: {
     );
   }
 
+  // #8611 Fix 3 — the per-run dollar ceiling is owned HERE, derived from the cron's own name, so
+  // no spawn through this chokepoint can run uncapped. Resolved before any side effect (progress
+  // row, heartbeat, child): an unknown cron name throws instead of spawning. A caller-supplied
+  // `--max-budget-usd` is refused — the CLI takes the last value, so it could raise the cap.
+  if (flags.includes("--max-budget-usd")) {
+    throw new Error(
+      `claude-eval ${cronName}: flags must not carry --max-budget-usd; the substrate sets it from cron-budgets.ts (#8611)`,
+    );
+  }
+  const budget = budgetFlags(cronName);
+
+  // Child output is redacted for the installation token AND the operator Anthropic key the child
+  // runs with, so a model answer that quotes its environment never reaches logs or Sentry.
+  const anthropicKey = process.env.ANTHROPIC_API_KEY ?? "";
+  const redactChild = (text: string): string => {
+    const out = redactToken(text, installationToken);
+    return anthropicKey.length >= 20 ? out.replaceAll(anthropicKey, "[REDACTED-ANTHROPIC-KEY]") : out;
+  };
+
   const claudeBin = resolveClaudeBin();
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), maxTurnDurationMs);
@@ -899,6 +1156,8 @@ export async function spawnClaudeEval(args: {
   // model, parsed fail-open from stdout when `--output-format json` is active.
   // Stays null until a `{"type":"result",…}` line parses (→ capture_status:"ok").
   let evalCost: ParsedEvalResult["cost"] | null = null;
+  // #8076 — filing-gate denials seen in the result event (0 until parsed).
+  let evalFilingDenials: ParsedEvalResult["filingDenials"] = { count: 0, commands: [], fieldPresent: false };
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
   // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
   // `--output-format json`) did NOT yield a usable `result` event — a truncated/
@@ -948,7 +1207,7 @@ export async function spawnClaudeEval(args: {
         : ["--output-format", "json"];
       const child = spawn(
         claudeBin,
-        ["--strict-mcp-config", ...outputFormatFlags, ...flags, prompt],
+        ["--strict-mcp-config", ...budget, ...outputFormatFlags, ...flags, prompt],
         {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -962,7 +1221,7 @@ export async function spawnClaudeEval(args: {
       if (child.stdout) {
         const rlOut = createInterface({ input: child.stdout });
         rlOut.on("line", (line) => {
-          const redacted = redactToken(line, installationToken);
+          const redacted = redactChild(line);
           logger.info({ fn: cronName, stream: "stdout" }, redacted);
           // #cost-attribution (plan Phase 2): parse each line as a CLI JSON
           // event, fail-open (pure helper — unit-tested against fixtures). On
@@ -975,10 +1234,8 @@ export async function spawnClaudeEval(args: {
           const parsedResult = parseClaudeResultLine(line);
           if (parsedResult) {
             evalCost = parsedResult.cost;
-            const tailText = redactToken(
-              parsedResult.resultText,
-              installationToken,
-            );
+            evalFilingDenials = parsedResult.filingDenials;
+            const tailText = redactChild(parsedResult.resultText);
             stdoutTail = (stdoutTail + tailText + "\n").slice(
               -STDOUT_TAIL_CAP_BYTES,
             );
@@ -1000,15 +1257,37 @@ export async function spawnClaudeEval(args: {
       }
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
+        // #8603: an unknown `--effort` VALUE is not an error to the CLI — it
+        // warns on stderr and runs at the model's default effort. Mirror that
+        // silent degraded mode to Sentry once per run
+        // (cq-silent-fallback-must-mirror-to-sentry).
+        let effortFallbackReported = false;
         rlErr.on("line", (line) => {
-          const redacted = redactToken(line, installationToken);
+          const redacted = redactChild(line);
           logger.error({ fn: cronName, stream: "stderr" }, redacted);
+          if (
+            !effortFallbackReported &&
+            line.includes(CLI_EFFORT_FALLBACK_NEEDLE)
+          ) {
+            effortFallbackReported = true;
+            warnSilentFallback(null, {
+              feature: "cron-claude-eval",
+              op: "claude-eval-effort-fallback",
+              message:
+                "claude CLI ignored --effort (unknown value); run fell back to the default effort",
+              // Same scrub + cap as every other Sentry tail sink (_cron-shared.ts
+              // formatTailForSentry), not just the installation-token redaction.
+              extra: { fn: cronName, line: formatTailForSentry(redacted) },
+            });
+          }
           // Keep a bounded tail (drop oldest) for the Sentry surface.
           stderrTail = (stderrTail + redacted + "\n").slice(-STDERR_CAP_BYTES);
         });
       }
 
       const finish = (r: SpawnResult) => {
+        // Node may emit `exit` after `error`; one spawn = one marker, one resolve.
+        if (exited) return;
         exited = true;
         if (escalationTimer) clearTimeout(escalationTimer);
         // #5766: stop heartbeating once the child has exited — no tick may land
@@ -1035,7 +1314,30 @@ export async function spawnClaudeEval(args: {
           cache_creation_input_tokens:
             evalCost?.usage?.cache_creation_input_tokens ?? null,
           capture_status: captureStatus,
+          is_error: evalCost?.isError ?? null,
+          subtype: evalCost?.subtype ?? null,
+          num_turns: evalCost?.numTurns ?? null,
         });
+        // #8076 — one positive marker per run that had a filing-shaped deny;
+        // fail-open like the cost marker, and silent at 0 (a heartbeat would
+        // drown the signal). Correlate on `run_id` = the Sentry tag
+        // `inngest.run_id` of the same run's `scheduled-output-missing`.
+        // Also emitted, with `capture_status: "field-absent"`, when a result
+        // event parsed cleanly but carried NO `permission_denials` array: a
+        // CLI that stopped emitting it would otherwise read as "0 denials
+        // forever" (only a parsed result can say this; timeout / no-result /
+        // parse-error runs carry that in the cost marker's capture_status).
+        const denyFieldAbsent = captureStatus === "ok" && !evalFilingDenials.fieldPresent;
+        if (evalFilingDenials.count > 0 || denyFieldAbsent) {
+          emitCronFilingDenyMarker({
+            fn: cronName,
+            run_id: runId ?? cronName,
+            spawn_started_at: new Date(startedAt).toISOString(),
+            count: evalFilingDenials.count,
+            commands: evalFilingDenials.commands,
+            capture_status: denyFieldAbsent ? "field-absent" : "ok",
+          });
+        }
         resolve(r);
       };
 
@@ -1076,10 +1378,13 @@ export async function spawnClaudeEval(args: {
           costUsd: evalCost?.costUsd,
           usage: evalCost?.usage,
           model: evalCost?.model,
+          isError: evalCost?.isError ?? undefined,
+          subtype: evalCost?.subtype ?? undefined,
+          numTurns: evalCost?.numTurns ?? undefined,
         });
       });
       child.on("error", (err) => {
-        const redactedMsg = redactToken(err.message ?? "", installationToken);
+        const redactedMsg = redactChild(err.message ?? "");
         const redacted = new Error(redactedMsg);
         redacted.name = err.name;
         reportSilentFallback(redacted, {

@@ -7,6 +7,9 @@
 # syntactic construct, never a bare token that also appears in a comment (cq-assert-anchor-not-bare-token).
 #
 # Run: bash apps/web-platform/infra/luks-monitor.test.sh
+# SC2218: the harness sourced below redefines ok()/no() (reclaimed on purpose, see the RECLAIM note), so
+# the linter binds the early calls to the later definition. The first definitions at the top are the live ones.
+# shellcheck disable=SC2218
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,7 +18,6 @@ PROBE="$DIR/luks-monitor.sh"
 SERVICE="$DIR/luks-monitor.service"
 TIMER="$DIR/luks-monitor.timer"
 VECTOR="$DIR/vector.toml"
-BOOT="$DIR/soleur-host-bootstrap.sh"
 SENTRY="$DIR/sentry/issue-alerts.tf"
 UPTIME="$DIR/uptime-alerts.tf"
 
@@ -56,21 +58,22 @@ fi
 # Anchor `baked_ln` on the CODE construct (the `[ -r … ]` guard), NOT the bare path — the path also
 # appears in the header COMMENT above the code, so a bare-token `head -1` would match the comment and
 # pass even if the code were reordered doppler-first (the exact vacuity this check exists to prevent).
-baked_ln=$(grep -nE '\[ -r /etc/default/luks-monitor \]' "$EMIT" | head -1 | cut -d: -f1 || true)
-dop_ln=$(grep -nE 'doppler secrets get SENTRY_DSN' "$EMIT" | head -1 | cut -d: -f1 || true)
+baked_ln=$(grep -nE '\[ -r /etc/default/luks-monitor \]' "$EMIT" | sed -n '1p' | cut -d: -f1 || true)
+dop_ln=$(grep -nE 'doppler secrets get SENTRY_DSN' "$EMIT" | sed -n '1p' | cut -d: -f1 || true)
 if [ -n "$baked_ln" ] && { [ -z "$dop_ln" ] || [ "$baked_ln" -lt "$dop_ln" ]; }; then
   ok "workspaces-luks-emit.sh reads the BAKED DSN before any Doppler fallback (DP-9)"
 else
   no "workspaces-luks-emit.sh must read /etc/default/luks-monitor BEFORE the doppler secrets get fallback (DP-9; baked=$baked_ln doppler=$dop_ln)"
 fi
 
-# (c) R9: the probe reads the passphrase via the PINNED scoped-config form, never doppler run/download.
-if have "doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks" "$PROBE"; then
-  ok "luks-monitor.sh reads WORKSPACES_LUKS_KEY via the pinned 'secrets get --config prd_workspaces_luks' form (R9)"
+# (c) R9: the probe reads the passphrase via the PINNED scoped-config form, never doppler run/download. #9377: the
+# config name is PARAMETERIZED (read from the boot env file, validated against a closed set), so the pinned form is
+# `--config "$KEY_CONFIG"`; the un-suffixed name survives only as that variable's documented absent-file default.
+if have 'doppler secrets get WORKSPACES_LUKS_KEY --plain --config "\$KEY_CONFIG"' "$PROBE"; then
+  ok "luks-monitor.sh reads WORKSPACES_LUKS_KEY via the pinned 'secrets get --plain --config \"\$KEY_CONFIG\"' form (R9, #9377)"
 else
-  no "luks-monitor.sh must read WORKSPACES_LUKS_KEY via 'doppler secrets get … --plain --config prd_workspaces_luks' (R9)"
+  no "luks-monitor.sh must read WORKSPACES_LUKS_KEY via 'doppler secrets get … --plain --config \"\$KEY_CONFIG\"' (R9, #9377)"
 fi
-# `.*` NOT `[^\n]*` — in a POSIX ERE `[^\n]` is "not backslash, not the letter n", so a violating
 # `doppler run --name x --config prd_workspaces_luks` (contains an `n`) would slip the guard. grep is
 # already line-scoped, so `.*` is the correct "rest of the line".
 if grep -qE 'doppler (run|secrets download).*--config prd_workspaces_luks' "$PROBE"; then
@@ -113,15 +116,31 @@ else
 fi
 
 # (h) The Sentry drift alert filters on BOTH tags the emit sets, ANDed. Extract the drift resource
-# block and assert WITHIN it (the two `value=` strings + filter_match) — an unscoped grep would pass
-# even if the tags lived in two different alerts or filter_match were "any" (either tag alone pages).
-drift_block="$(awk '/resource "sentry_issue_alert" "workspaces_luks_drift"/{p=1} p{print} p&&/^}/{exit}' "$SENTRY")"
-if printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks"' \
-  && printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks-drift"' \
-  && printf '%s\n' "$drift_block" | grep -qE '^[[:space:]]*filter_match[[:space:]]*=[[:space:]]*"all"'; then
-  ok "sentry_issue_alert.workspaces_luks_drift ANDs (filter_match=all) feature=workspaces-luks AND op=workspaces-luks-drift"
+# block and assert WITHIN it — an unscoped grep would pass even if the tags lived in two different
+# alerts, or if the two were OR-ed (either tag alone then pages, on every LUKS event).
+#
+# REBOUND for #7650 Phase 2: this rule is now `sentry_alert`, not `sentry_issue_alert`. The
+# semantics are unchanged and so is what this asserts — only the spelling moved:
+#   filters_v2 + filter_match = "all"  ->  action_filters[].conditions[] + logic_type = "all"
+# The old anchor did not fail loudly when the type changed; it simply extracted an EMPTY block
+# and reported the alert misconfigured. That is the right direction to fail in, and it is why
+# the anchor is rebound rather than relaxed.
+#
+# The `logic_type` count is part of the assertion, not decoration. Multiple `action_filters`
+# ELEMENTS are OR-ed against each other, so "both tags appear somewhere in this resource, and
+# some element says all" is satisfiable by a config that pages on either tag alone — the exact
+# defect this case exists to catch, reintroduced through the new shape. Requiring exactly ONE
+# element means the single `logic_type = "all"` provably governs both tags. A future second
+# element reds this and forces a human to re-read it.
+drift_block="$(awk '/^resource "sentry_alert" "workspaces_luks_drift"/{p=1} p{print} p&&/^}/{exit}' "$SENTRY")"
+drift_logic_n="$(printf '%s\n' "$drift_block" | grep -cE '^[[:space:]]*logic_type[[:space:]]*=' || true)"
+if printf '%s\n' "$drift_block" | grep -c 'value = "workspaces-luks"' >/dev/null \
+  && printf '%s\n' "$drift_block" | grep -c 'value = "workspaces-luks-drift"' >/dev/null \
+  && [ "$drift_logic_n" = "1" ] \
+  && printf '%s\n' "$drift_block" | grep -cE '^[[:space:]]*logic_type[[:space:]]*=[[:space:]]*"all"' >/dev/null; then
+  ok "sentry_alert.workspaces_luks_drift ANDs (one action_filter, logic_type=all) feature=workspaces-luks AND op=workspaces-luks-drift"
 else
-  no "sentry_issue_alert.workspaces_luks_drift must filter_match=\"all\" on BOTH feature=workspaces-luks and op=workspaces-luks-drift (a single-tag or filter_match=any alert pages on either tag alone)"
+  no "sentry_alert.workspaces_luks_drift must carry exactly ONE action_filters element with logic_type=\"all\" over BOTH feature=workspaces-luks and op=workspaces-luks-drift (a single-tag rule, logic_type=any, or a second OR-ed element all page on either tag alone). Found ${drift_logic_n} logic_type line(s)."
 fi
 
 # (i) The daily-probe heartbeat resource exists (the dead-probe switch — P1-4).
@@ -132,10 +151,13 @@ else
 fi
 
 # (j) The baked structural gate carries RequiresMountsFor=/mnt/data + chattr +i (C2).
-if have 'RequiresMountsFor=/mnt/data' "$BOOT" && have 'chattr \+i' "$BOOT"; then
-  ok "soleur-host-bootstrap.sh bakes the structural gate (RequiresMountsFor=/mnt/data + chattr +i)"
+# (#6931) The baked-but-never-invoked soleur-luks-structural-gate was removed; its properties are now
+# owned by the provisioner cloud-init actually runs.
+PROVISION="$DIR/workspaces-luks-provision.sh"
+if have 'RequiresMountsFor=/mnt/data' "$PROVISION" && have 'chattr \+i' "$PROVISION"; then
+  ok "workspaces-luks-provision.sh carries the structural gate (RequiresMountsFor=/mnt/data + chattr +i)"
 else
-  no "soleur-host-bootstrap.sh must bake RequiresMountsFor=/mnt/data + chattr +i (C2 structural gate)"
+  no "workspaces-luks-provision.sh must carry RequiresMountsFor=/mnt/data + chattr +i (C2 structural gate)"
 fi
 
 # ===========================================================================
@@ -147,6 +169,17 @@ fi
 # under stubs. The guard plus run_monitor_case (mock-PATH stub binaries) is that seam.
 # ===========================================================================
 
+# The canonical fixture-dir guard (byte-identical to every tracked copy; fixture-dir-operand-assert).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
 # shellcheck source=apps/web-platform/infra/workspaces-luks-harness.sh
 . "$DIR/workspaces-luks-harness.sh"
 
@@ -168,6 +201,7 @@ seed_count() { printf 'WORKSPACES_COUNT=%s\n' "$1" >> "$STATE/state"; }
 
 # (k) THE SEAM ITSELF. Sourcing must define the functions and run NOTHING — if this regresses,
 # every behavioural case below silently tests a script that already ran to completion on import.
+# shellcheck disable=SC1090  # $PROBE is the repo file under test
 guard_out="$(. "$PROBE" 2>&1; echo "RC=$?")"
 if [ "$guard_out" = "RC=0" ]; then
   ok "luks-monitor.sh sourced-detection guard: sourcing defines functions and runs no probe"
@@ -226,6 +260,58 @@ if [ "$MON_RC" -ne 0 ] && monOut 'workspace_count_baseline_missing'; then
 else
   no "a missing inventory baseline did not fail closed (rc=$MON_RC): ${MON_OUT:0:300}"
 fi
+
+# (o2)–(o6) #9123 DELIVERED-STATE asserts — the daily probe re-checks what the boot-unlock
+# installer left behind (fstab exactly-one-mapper, the §(e) covered-inode flag). The harness
+# seeds a canonical fixture fstab + healthy peek attrs in mon_prepare/mon_run; each failing arm
+# below rewrites the fixture or sets MON_PEEK_*. Every reason must exit 1 via emit_and_die
+# (at-rest drift class in the verify workflow's classifier).
+mon_prepare "$PROBE"
+: > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mnt_data_lines'; then
+  ok "fstab with zero /mnt/data entries -> fstab_mnt_data_lines (rc=1, drift)"
+else
+  no "empty fstab did not fail fstab_mnt_data_lines (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+printf '/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2\n/dev/mapper/workspaces /mnt/data ext4 ro 0 2\n' > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mnt_data_lines'; then
+  ok "fstab with TWO /mnt/data entries -> fstab_mnt_data_lines (exactly-one assert)"
+else
+  no "duplicate fstab line did not fail fstab_mnt_data_lines (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+printf '/dev/disk/by-label/WRONG /mnt/data ext4 defaults,nofail 0 2\n' > "$MON_DIR/fstab"
+mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'fstab_mapper_line_missing'; then
+  ok "a non-mapper /mnt/data fstab line -> fstab_mapper_line_missing (rc=1, drift)"
+else
+  no "wrong-source fstab did not fail fstab_mapper_line_missing (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+MON_PEEK_FAIL=1 mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'covered_inode_peek_failed'; then
+  ok "peek bind failure -> covered_inode_peek_failed (probe-integrity, proves nothing)"
+else
+  no "a failed peek did not fail covered_inode_peek_failed (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+mon_prepare "$PROBE"
+MON_PEEK_ATTRS='---------------e------' mon_run
+if [ "$MON_RC" -eq 1 ] && monOut 'covered_inode_not_immutable'; then
+  ok "covered inode WITHOUT +i -> covered_inode_not_immutable (rc=1, drift)"
+else
+  no "non-immutable covered inode did not fail covered_inode_not_immutable (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# Positive control for the new asserts: the default fixture fstab + healthy attrs keep the
+# probe green — run_monitor_case "$PROBE" (no flags) in (m) above already proves the healthy
+# arm end-to-end through them.
 
 # (p)(q)(r) INVENTORY, on ONE fixture exercised three ways. The fixture carries exactly the four
 # things session-metrics.ts excludes, plus a stray regular file: an unfiltered `ls | wc -l` reads 6
@@ -360,20 +446,93 @@ shopt -q dotglob && no "wl_count_workspace_dirs leaked dotglob=on to the caller"
   || ok "wl_count_workspace_dirs restores the caller's glob state"
 rm -rf "$wc_root"
 
-# (x) DEAD-MAN OBSERVABILITY (#6812). A successful remount silently undid the 2026-07-20 cutover;
-# the fire, the arm, the disarm, and both remount outcomes must now each emit a marker.
+# (x) DEAD-MAN OBSERVABILITY (#6812, #9045, #9098). A successful remount silently undid the 2026-07-20
+# cutover; the fire, the arm, the disarm, and both remount outcomes must each emit a marker. #9045
+# added the arm's refusal/failure rows, the disarm's verified-failure row, the unarmed-rollback row
+# and one outcome row per abort, and retired the false `reason=canary_passed` (rollback() used to
+# log it). Every row shares the full prefix below, so ONE Better Stack grep finds the whole story.
+# #9098 K: `_deadman_row` now PREPENDS that prefix itself and call sites pass `result=…`, so the
+# fire rows (literal, inside the self-contained systemd-run string) and the _deadman_row rows are
+# checked separately. Every check reads COMMENT-STRIPPED source: a call commented out is gone.
+DM_PFX='SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman'
+DM_SRC="$(grep -vE '^[[:space:]]*#' "$CUT")"
 for pat in \
   "result=fired reason=timer_elapsed" \
-  "result=armed reason=freeze_engaged" \
-  "result=disarmed reason=canary_passed" \
   "result=ok reason=plaintext_remounted" \
-  "result=fail reason=remount_failed"; do
-  if grep -qF "SOLEUR_WORKSPACES_LUKS_DEADMAN feature=workspaces-luks op=workspaces-luks-deadman $pat" "$CUT"; then
+  "result=fail reason=remount_failed" \
+  "result=fail reason=mapper_close_failed" \
+  "result=fail reason=refused_plaintext_wiped" \
+  "result=fail reason=refused_plaintext_record_gone"; do
+  if grep -qF "$DM_PFX $pat" <<<"$DM_SRC"; then
+    ok "dead-man FIRE emits marker: $pat"
+  else
+    no "dead-man FIRE MISSING marker ($pat) — the #6812 blind spot is not closed"
+  fi
+done
+if grep -qF "local row=\"$DM_PFX \$1\"" <<<"$DM_SRC"; then
+  ok "_deadman_row prepends the full dead-man prefix to every row"
+else
+  no "_deadman_row does not prepend '$DM_PFX' — its rows would not be found by the one prefix grep"
+fi
+for pat in \
+  "result=armed reason=freeze_engaged" \
+  "result=arm_refused reason=already_armed" \
+  "result=arm_refused reason=fire_in_progress" \
+  "result=arm_refused reason=plaintext_dev_unrestorable" \
+  "result=arm_failed reason=systemd_run_refused" \
+  "result=arm_failed reason=timer_not_waiting" \
+  'result=disarmed reason=${reason}' \
+  'result=disarm_failed reason=${reason} check=${check}' \
+  "result=disarm_failed reason=rollback_engaged check=fire_stuck" \
+  "result=not_armed reason=rollback_engaged prior=" \
+  "result=already_disarmed reason=rollback_engaged" \
+  'result=cutover_aborted outcome=${outcome}${mode}${abnormal}${fields}${detail}' \
+  'result=cutover_aborted outcome=${outcome} mode=rollback' \
+  'result=cutover_aborted outcome=${2} mode=rollback'; do
+  if grep -qF "_deadman_row \"$pat" <<<"$DM_SRC"; then
     ok "dead-man emits marker: $pat"
   else
     no "dead-man MISSING marker ($pat) — the #6812 blind spot is not closed"
   fi
 done
+# The closed OUTCOME vocabulary of cleanup() (#9098 B): each value is assigned somewhere, and the
+# abnormal-exit field exists. A renamed outcome would silently orphan the runbook's triage row.
+for o in rolled_back rollback_stacked rollback_remount_failed post_canary_luks_retained post_canary_restart_failed \
+         post_canary_mount_not_mapper arm_aborted clean_stray pre_freeze dry_run wipe_aborted refused_plaintext_wiped \
+         refused_plaintext_record_gone; do
+  if grep -qE "(^|[;[:space:]])outcome=${o}([;[:space:]]|\$)" <<<"$DM_SRC"; then
+    ok "cleanup() outcome vocabulary carries outcome=$o"
+  else
+    no "cleanup() outcome=$o is never assigned — its runbook row is orphaned"
+  fi
+done
+for rr in 'rollback_refused_plaintext_wiped refused_plaintext_wiped' 'rollback_refused_plaintext_record_gone refused_plaintext_record_gone' \
+          'rollback_refused_post_cutover refused_post_cutover'; do
+  if grep -qE "^[[:space:]]*_rollback_refuse ${rr} \"" <<<"$DM_SRC"; then
+    ok "ROLLBACK-mode refusal '${rr%% *}' goes through _rollback_refuse with outcome=${rr##* } (never a false pre_freeze)"
+  else
+    no "ROLLBACK-mode refusal '${rr%% *}' does not use _rollback_refuse with outcome ${rr##* } — its row would read pre_freeze"
+  fi
+done
+if grep -qF 'abnormal=" abnormal_exit=1"' <<<"$DM_SRC"; then
+  ok "cleanup() marks a signal/incomplete exit with abnormal_exit=1"
+else
+  no "cleanup() never emits abnormal_exit=1 — a signal-driven abort is indistinguishable from a die"
+fi
+# Each reason of the CLOSED disarm vocabulary has exactly its call site (comment-stripped), and the
+# retired reason is gone: `canary_passed` described a rollback as a pass.
+for site in "disarm_dead_man host_canary_passed" "disarm_dead_man rollback_engaged" "disarm_dead_man arm_aborted"; do
+  if grep -qE "(^|[[:space:];&|{])${site}([[:space:]]|;|\$)" <<<"$DM_SRC"; then
+    ok "dead-man disarm call site present: $site"
+  else
+    no "dead-man disarm call site MISSING: $site — that reason can no longer be emitted"
+  fi
+done
+if grep -qE '(^|[^_])canary_passed' <<<"$DM_SRC"; then
+  no "dead-man still carries the retired bare canary_passed reason (a rollback logged as a pass)"
+else
+  ok "dead-man carries no retired reason=canary_passed"
+fi
 
 # (y) VERDICT-LINE ANCHOR PARITY. The verify workflow's positive control greps the probe output with
 # `^\[luks-monitor\] SOLEUR_WORKSPACES_READYZ ready=true `. That anchor depends on log()'s
@@ -382,10 +541,10 @@ done
 # literal grep pattern from the workflow and run it against a real success emission — producer and
 # consumer pinned to each other, not both to a hand-copied string.
 VERIFY_WF="$DIR/../../../.github/workflows/workspaces-luks-verify.yml"
-wf_anchor="$(grep -oE "grep -cE '\^\\\\\[luks-monitor\\\\\] SOLEUR_WORKSPACES_READYZ ready=true '" "$VERIFY_WF" | head -1 | sed -E "s/^grep -cE '//; s/'$//")"
+wf_anchor="$(grep -oE "grep -cE '\^\\\\\[luks-monitor\\\\\] SOLEUR_WORKSPACES_READYZ ready=true '" "$VERIFY_WF" | sed -n '1p' | sed -E "s/^grep -cE '//; s/'$//")"
 mon_prepare "$PROBE"; mkdir -p "$WSDIR/ws-a"; seed_count 1
 mon_run LUKS_MONITOR_ASSERT_READYZ=1
-if [ -n "$wf_anchor" ] && printf '%s\n' "$MON_OUT" | grep -qE "$wf_anchor"; then
+if [ -n "$wf_anchor" ] && printf '%s\n' "$MON_OUT" | grep -cE "$wf_anchor" >/dev/null; then
   ok "the verify workflow's verdict-line anchor matches the emitted line (producer/consumer pinned)"
 else
   no "the workflow's positive-control anchor [$wf_anchor] does NOT match the emitted verdict line — the workflow would fail closed on every run: ${MON_OUT:0:200}"
@@ -411,6 +570,17 @@ if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
   ok "healthy probe PUSHES the heartbeat and exits 0 (positive control for the two fatal arms)"
 else
   no "healthy probe did not push the heartbeat (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:200}"
+fi
+
+# (t1b) WIRE assert (#9245) — the argv log proves cryptsetup was ASKED; this proves the
+# passphrase actually ARRIVED. The cryptsetup stub drains stdin into $CALLS.escrow-stdin;
+# without the drain the file is absent and this fails DETERMINISTICALLY — not at the
+# scheduler's discretion. `:-` (not `-`) keeps the compare discriminating even against an
+# exported-empty MON_KEY — `"" = ""` would read delivery that never happened.
+if [ "$(cat "$CALLS.escrow-stdin" 2>/dev/null)" = "${MON_KEY:-k}" ]; then
+  ok "escrow passphrase reached cryptsetup on the wire (\$CALLS.escrow-stdin == MON_KEY)"
+else
+  no "escrow passphrase never reached cryptsetup — stdin undrained (captured: $(cat "$CALLS.escrow-stdin" 2>/dev/null || echo '<absent>'))"
 fi
 
 # (t2) ABSENT URL => fatal. The exact state #6808 existed to remove.
@@ -440,6 +610,298 @@ if [ "$MON_RC" -ne 1 ]; then
 else
   no "a heartbeat fault exited 1 — it would file the p0 at-rest drift verdict"
 fi
+
+# (t5) #6931 — the STANDBY profile (a fresh host) skips the shared heartbeat and still goes green. The
+# push is web-1's dead-probe switch; a second pusher would mask a dead web-1 probe.
+mon_prepare "$PROBE"
+mon_run LUKS_MONITOR_PROFILE=standby
+if [ "$MON_RC" -eq 0 ] && ! has 'curl .*betterstack.test' && monOut 'standby profile'; then
+  ok "standby profile: rc 0, NO heartbeat push, and the skip is logged"
+else
+  no "standby profile wrong (rc=$MON_RC, pushes=$(cnt 'curl .*betterstack.test')): ${MON_OUT:0:300}"
+fi
+mon_prepare "$PROBE"
+mon_run LUKS_MONITOR_PROFILE=standby MON_HB_URL=
+if [ "$MON_RC" -eq 0 ] && ! monOut 'heartbeat_url_absent'; then
+  ok "standby profile does not depend on the heartbeat URL (absent URL is not fatal there)"
+else
+  no "standby profile still required the heartbeat URL (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+# (t5b) fail TOWARD the heartbeat: only the exact word changes anything.
+for _prof in standbyx STANDBY ''; do
+  mon_prepare "$PROBE"
+  mon_run "LUKS_MONITOR_PROFILE=$_prof"
+  if [ "$MON_RC" -eq 0 ] && has 'curl .*betterstack.test'; then
+    ok "profile '${_prof:-<empty>}' keeps the heartbeat push (a mis-set profile fails toward the beat)"
+  else
+    no "profile '${_prof:-<empty>}' skipped the heartbeat (rc=$MON_RC)"
+  fi
+done
+
+# (t6) #6931 — the OK row carries the kernel boot id (lower-cased, charset-bound), `unknown` when unreadable.
+mon_prepare "$PROBE"; assert_fixture_dir "$MON_DIR"; printf 'ABCDEF01-2345-6789-ABCD-EF0123456789\n' > "$MON_DIR/boot_id"
+mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/boot_id"
+if [ "$MON_RC" -eq 0 ] && monOut 'boot_id=abcdef01-2345-6789-abcd-ef0123456789)'; then
+  ok "the OK row ends with the lower-cased boot_id"
+else
+  no "OK row lacks the boot_id (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+mon_prepare "$PROBE"
+mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/absent-boot-id"
+if [ "$MON_RC" -eq 0 ] && monOut 'boot_id=unknown)'; then
+  ok "an unreadable boot id is reported as unknown, not omitted"
+else
+  no "unreadable boot id handled wrong (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+
+# (t6b) The boot id is CHARSET- and LENGTH-bound, PROVEN: a fixture with non-hex noise and an over-long
+# tail, judged on the real probe and on copies with each bound removed. The previous fixture was already
+# hex-and-dash, so dropping either `tr -cd` or `head -c 36` left the suite green.
+BID_NOISY='ZZ ABCDEF01-2345-6789-ABCD-EF0123456789;x EXTRA tail'
+BID_WANT='boot_id=abcdef01-2345-6789-abcd-ef0123456789)'
+bid_probe_ok() { # <probe-path>: rc 0 and the OK row ends with exactly the bounded id
+  mon_prepare "$1"; assert_fixture_dir "$MON_DIR"; printf '%s\n' "$BID_NOISY" > "$MON_DIR/boot_id"
+  mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/boot_id"
+  [ "$MON_RC" -eq 0 ] && monOut "$BID_WANT"
+}
+bid_absent_silent() { # <probe-path>: a missing boot id file reads `unknown` and prints NO shell error
+  mon_prepare "$1"; assert_fixture_dir "$MON_DIR"
+  mon_run "LUKS_MONITOR_BOOT_ID_FILE=$MON_DIR/absent-boot-id"
+  [ "$MON_RC" -eq 0 ] && monOut 'boot_id=unknown)' && ! monOut 'No such file'
+}
+BID_MUT="$RUN_SCRATCH/probe-mut"
+assert_fixture_dir "$BID_MUT"
+mkdir -p "$BID_MUT"; cp "$EMIT" "$BID_MUT/workspaces-luks-emit.sh"
+bid_mut() { # <name> <from-literal> <to-literal> <expect: red|green> [check-fn]
+  local name="$1" from="$2" to="$3" want="$4" chk="${5:-bid_probe_ok}" src mut verdict
+  assert_fixture_dir "$BID_MUT"
+  src="$(cat "$PROBE")"; mut="${src/"$from"/"$to"}"
+  if [ "$mut" = "$src" ]; then no "boot_id mutation: $name — the mutation did not land"; return; fi
+  printf '%s\n' "$mut" > "$BID_MUT/luks-monitor.sh"
+  if "$chk" "$BID_MUT/luks-monitor.sh"; then verdict=green; else verdict=red; fi
+  if [ "$verdict" = "$want" ]; then ok "boot_id mutation: $name -> $verdict"; else no "boot_id mutation: $name -> expected $want, got $verdict"; fi
+}
+if bid_probe_ok "$PROBE"; then
+  ok "the OK row's boot_id is charset- and length-bound on a noisy over-long fixture (control)"
+else
+  no "boot_id bound wrong on the noisy fixture (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+if bid_absent_silent "$PROBE"; then
+  ok "a missing boot id file reads unknown and prints no shell error (control)"
+else
+  no "a missing boot id file is noisy or not reported as unknown (rc=$MON_RC): ${MON_OUT:0:300}"
+fi
+bid_mut "stderr redirect after the < (a missing file is noisy)" "tr 'A-F' 'a-f' 2>/dev/null <" "tr 'A-F' 'a-f' <" red bid_absent_silent
+bid_mut "charset bound dropped (tr -cd)" " | tr -cd '0-9a-f-'" "" red
+bid_mut "length bound dropped (head -c 36)" " | head -c 36" "" red
+bid_mut "HARMLESS: a trailing comment" "[ -n \"\$BOOT_ID\" ] || BOOT_ID=unknown" "[ -n \"\$BOOT_ID\" ] || BOOT_ID=unknown # harmless" green
+# The production default is the KERNEL's per-boot id (every case above overrides the seam, so the default is
+# pinned statically and its mutation is judged by the same static check).
+bid_default_ok() { grep -qF '${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}' "$1"; }
+if bid_default_ok "$PROBE"; then
+  ok "the boot id seam defaults to /proc/sys/kernel/random/boot_id"
+else
+  no "the boot id seam default drifted from /proc/sys/kernel/random/boot_id"
+fi
+assert_fixture_dir "$BID_MUT"
+printf '%s\n' "$(sed 's#:-/proc/sys/kernel/random/boot_id}#:-/proc/sys/kernel/random/boot_id2}#' "$PROBE")" > "$BID_MUT/default-drift.sh"
+if ! bid_default_ok "$BID_MUT/default-drift.sh" && ! cmp -s "$PROBE" "$BID_MUT/default-drift.sh"; then
+  ok "boot_id mutation: a drifted default boot id path is caught by the static pin"
+else
+  no "boot_id mutation: a drifted default boot id path SURVIVED"
+fi
+
+# ===========================================================================
+# (z) #8706 — the emit helper's two drop paths are VISIBLE. `[ -n "$dsn" ] || return 0` and the
+# Sentry curl's `|| true` were silent, which kept host drift out of Sentry for nine weeks. Each now
+# logs SOLEUR_WORKSPACES_LUKS_SEND_FAILED under the luks-monitor tag (Vector-allowlisted). Driven
+# for real: the helper is sourced by a caller under `set -euo pipefail` (luks-monitor.sh's and the
+# cutover's options) with PATH-shimmed logger/doppler/curl, and logger records its argv.
+# The baked-DSN path is a fixed host path with no seam, so on a host that HAS a readable
+# /etc/default/luks-monitor the no-DSN case is unreachable and is reported as skipped.
+# ===========================================================================
+EM_DIR="$RUN_SCRATCH/emit-skip"
+assert_fixture_dir "$EM_DIR"
+mkdir -p "$EM_DIR/bin"
+cat > "$EM_DIR/bin/logger" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$EM_LOG"
+STUB
+cat > "$EM_DIR/bin/doppler" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${EM_DSN:-}" ] || exit 1
+printf '%s' "$EM_DSN"
+STUB
+cat > "$EM_DIR/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf 'curl\n' >> "$EM_CALLS"
+exit "${EM_CURL_RC:-0}"
+STUB
+chmod +x "$EM_DIR"/bin/*
+# Synthesized DSN (cq-test-fixtures-synthesized-only): hex key, .example host.
+EM_FAKE_DSN="https://0123456789abcdef0123456789abcdef@o0.ingest.example/0"
+# shellcheck disable=SC2016  # the bash -c body expands $EMIT in the CHILD, by design
+em_run() {
+  assert_fixture_dir "$EM_DIR"
+  : > "$EM_DIR/logger.log"; : > "$EM_DIR/calls.log"
+  EM_OUT="$(
+    env -u SOLEUR_SENTRY_DSN -u WORKSPACES_LUKS_LOG_TAG "$@" \
+      PATH="$EM_DIR/bin:$PATH" EM_LOG="$EM_DIR/logger.log" EM_CALLS="$EM_DIR/calls.log" EMIT="$EMIT" \
+      bash -c 'set -euo pipefail; . "$EMIT"; WL_REASON=mapper_absent workspaces_luks_emit; echo "EMIT_RC=$?"' 2>&1
+  )"; EM_RC=$?
+}
+if [ -r /etc/default/luks-monitor ]; then
+  ok "emit skip-marker cases skipped: this host has a readable /etc/default/luks-monitor (fixed path, no seam)"
+else
+  # (z1) no DSN resolvable -> no_dsn marker under the luks-monitor tag; no Sentry POST; caller continues.
+  em_run EM_DSN=
+  if [ "$EM_RC" -eq 0 ] && [[ "$EM_OUT" == *"EMIT_RC=0"* ]] \
+    && grep -qxF -- "-p user.crit -t luks-monitor -- SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn drift_reason=mapper_absent" "$EM_DIR/logger.log" \
+    && ! grep -q curl "$EM_DIR/calls.log"; then
+    ok "emit with no resolvable DSN logs SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=no_dsn under -t luks-monitor and returns 0 under set -euo pipefail"
+  else
+    no "emit no-DSN drop is not visible (rc=$EM_RC, logger=[$(cat "$EM_DIR/logger.log")]): ${EM_OUT:0:200}"
+  fi
+  # (z2) DSN resolves but the POST fails -> send_failed marker, the DSN/key never logged.
+  em_run EM_DSN="$EM_FAKE_DSN" EM_CURL_RC=22
+  if [ "$EM_RC" -eq 0 ] && [[ "$EM_OUT" == *"EMIT_RC=0"* ]] \
+    && grep -qxF -- "-p user.crit -t luks-monitor -- SOLEUR_WORKSPACES_LUKS_SEND_FAILED reason=send_failed drift_reason=mapper_absent" "$EM_DIR/logger.log" \
+    && ! grep -qF '0123456789abcdef' "$EM_DIR/logger.log" && [[ "$EM_OUT" != *0123456789abcdef* ]]; then
+    ok "emit with a failed Sentry POST logs reason=send_failed (no DSN/key in the row) and returns 0"
+  else
+    no "emit send-failure drop is not visible or leaks the DSN (rc=$EM_RC, logger=[$(cat "$EM_DIR/logger.log")]): ${EM_OUT:0:200}"
+  fi
+  # (z3) POSITIVE CONTROL: DSN resolves and the POST succeeds -> the POST happens and NO skip marker.
+  # Without this, (z1)/(z2) pass against a helper that logs the marker unconditionally.
+  em_run EM_DSN="$EM_FAKE_DSN" EM_CURL_RC=0
+  if [ "$EM_RC" -eq 0 ] && grep -q curl "$EM_DIR/calls.log" && ! grep -qF SEND_FAILED "$EM_DIR/logger.log"; then
+    ok "emit with a DSN and a successful POST sends and logs no skip marker (positive control)"
+  else
+    no "emit success path wrong (rc=$EM_RC, posts=$(grep -c curl "$EM_DIR/calls.log"), logger=[$(cat "$EM_DIR/logger.log")])"
+  fi
+fi
+
+# ===========================================================================
+# (k*) #9377 — the monitor's KEY read follows the boot env file (the web-class split). A web-class host's boot env
+# file (/etc/default/workspaces-luks-boot, written by cloud-init) names prd_workspaces_luks_web; web-1's names
+# prd_workspaces_luks; an absent file or line falls back to prd_workspaces_luks so web-1 is unchanged and cloud-init
+# bytes stay unchanged. Only the KEY read moves: the heartbeat read stays on prd_workspaces_luks because the
+# standby profile (web-2) skips it. Parsing reuses the provisioner's `_one` shape (exactly one ^KEY= line, then sed)
+# with the reopen script's ^[a-z0-9_]+$ shape check, and NEVER `source`s the file. The value is validated against the
+# closed set {prd_workspaces_luks, prd_workspaces_luks_web}; anything else falls back, so a token scoped to the
+# other config then fails the read loudly through doppler_unreachable (Sentry workspaces-luks-drift), never silently.
+# ===========================================================================
+KC_CFG_OLD=prd_workspaces_luks
+KC_CFG_WEB=prd_workspaces_luks_web
+# kc_run <probe> <file-content-or-@absent> [env assignments...]: prepare, drop the boot env fixture, run.
+kc_run() {
+  local probe="$1" content="$2"; shift 2
+  mon_prepare "$probe"; assert_fixture_dir "$MON_DIR"
+  if [ "$content" != "@absent" ]; then printf '%b' "$content" > "$MON_DIR/bootenv"; fi
+  mon_run "LUKS_MONITOR_BOOT_ENV_FILE=$MON_DIR/bootenv" "$@"
+}
+# kc_key_cfg: the --config the recorded WORKSPACES_LUKS_KEY read used (empty = no read happened).
+kc_key_cfg() { grep -E '^doppler secrets get WORKSPACES_LUKS_KEY ' "$CALLS" | sed -n 's/.*--config //p' | head -1; }
+kc_hb_cfg()  { grep -E '^doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL ' "$CALLS" | sed -n 's/.*--config //p' | head -1; }
+BOOT_DEV='WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_123\n'
+
+kc_check() { # <label> <probe> <content> <want key cfg> <want hb cfg>|- [env...]
+  local label="$1" probe="$2" content="$3" want="$4" wanthb="$5"; shift 5
+  kc_run "$probe" "$content" "$@"
+  local got hb; got="$(kc_key_cfg)"; hb="$(kc_hb_cfg)"
+  if [ "$MON_RC" -eq 0 ] && [ "$got" = "$want" ] && { { [ "$wanthb" = "-" ] && [ -z "$hb" ]; } || [ "$hb" = "$wanthb" ]; }; then
+    ok "$label (key config=$got heartbeat config=${hb:-none})"
+  else
+    no "$label: expected key=$want hb=$wanthb rc=0, got key='$got' hb='$hb' rc=$MON_RC: ${MON_OUT:0:200}"
+  fi
+}
+kc_check "K1 no boot env file -> web-1 behaviour unchanged (key read under prd_workspaces_luks)" "$PROBE" "@absent" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K2 boot env names prd_workspaces_luks_web -> the KEY read follows it; the heartbeat read stays on prd_workspaces_luks" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_WEB" "$KC_CFG_OLD"
+kc_check "K3 the standby profile on the web config -> key under the web config, NO heartbeat read at all" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_WEB" "-" LUKS_MONITOR_PROFILE=standby
+kc_check "K4 boot env names the un-suffixed config (web-1's installer) -> key under prd_workspaces_luks" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_OLD}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K5 a config OUTSIDE the closed set (shared prd) is refused -> falls back to prd_workspaces_luks" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K5b the marker config is outside the closed set too" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_marker\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K6 two WORKSPACES_DOPPLER_CONFIG lines (ambiguous) -> falls back" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\nWORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K7 a shape-invalid value (shell metacharacters) -> falls back, never evaluated" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB};touch /x\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K7b an upper-case value fails the ^[a-z0-9_]+\$ shape -> falls back" "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=PRD_WORKSPACES_LUKS_WEB\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K8 the file exists but carries no config line -> falls back" "$PROBE" "${BOOT_DEV}" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K8b a commented-out config line is not a config line -> falls back" "$PROBE" "${BOOT_DEV}#WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+kc_check "K8c an indented config line is not a config line (anchored ^KEY=) -> falls back" "$PROBE" "${BOOT_DEV} WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" "$KC_CFG_OLD" "$KC_CFG_OLD"
+
+# K9 — a web-class host whose boot file lacks the line falls back to the old config, whose read the web-class token
+# cannot satisfy: the probe must fail LOUDLY via the existing doppler_unreachable branch, never go green.
+kc_run "$PROBE" "@absent" MON_KEY=
+if [ "$MON_RC" -ne 0 ] && monOut 'doppler_unreachable'; then
+  ok "K9 an unreadable key (a wrong-scope token after a fallback) fails loud via doppler_unreachable"
+else
+  no "K9 a failed key read did not fail loud via doppler_unreachable (rc=$MON_RC): ${MON_OUT:0:200}"
+fi
+
+# K9b — the failure line names WHICH config was asked for and WHY (a fallback vs a real outage look identical otherwise).
+kc_run "$PROBE" "@absent" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-no-boot-file"; then ok "K9b a missing boot file: the failure line names config=prd_workspaces_luks source=fallback-no-boot-file"; else no "K9b missing-boot-file source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-bad-value"; then ok "K9c a value outside the closed set: the failure line names source=fallback-bad-value"; else no "K9c bad-value source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_OLD} source=fallback-no-config-line"; then ok "K9d a boot file with no config line: the failure line names source=fallback-no-config-line"; else no "K9d no-config-line source not named: ${MON_OUT:0:240}"; fi
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n" MON_KEY=
+if monOut "key read failed: config=${KC_CFG_WEB} source=boot-file"; then ok "K9e a web-scoped boot file whose key read fails: config=prd_workspaces_luks_web source=boot-file (a real outage, not a fallback)"; else no "K9e web boot-file source not named: ${MON_OUT:0:240}"; fi
+
+# K10 — the file is PARSED, never sourced: a boot env file that would run a command if sourced must run nothing.
+kc_run "$PROBE" "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\ntouch $MON_DIR/SOURCED\n"
+if [ ! -e "$MON_DIR/SOURCED" ] && [ "$(kc_key_cfg)" = "$KC_CFG_WEB" ]; then
+  ok "K10 the boot env file is parsed, not sourced (an injected command never ran)"
+else
+  no "K10 the boot env file was sourced or mis-parsed (key config='$(kc_key_cfg)')"
+fi
+
+# K11 — static pins. The boot file path is the one cloud-init writes (cross-artifact), the override is test-seam
+# gated (a stray env var must not redirect a root probe's passphrase read), and nothing sources the file.
+CLOUD_INIT="$DIR/cloud-init.yml"
+if have '^BOOT_ENV_FILE="/etc/default/workspaces-luks-boot"$' "$PROBE" && grep -qF '> /etc/default/workspaces-luks-boot' "$CLOUD_INIT"; then
+  ok "K11a the monitor reads the boot env file cloud-init writes (/etc/default/workspaces-luks-boot)"
+else
+  no "K11a the monitor's boot env file path drifted from the one cloud-init.yml writes"
+fi
+if have '^\[ "\$\{LUKS_MONITOR_TEST_SEAM:-0\}" = "1" \] && BOOT_ENV_FILE="\$\{LUKS_MONITOR_BOOT_ENV_FILE:-\$BOOT_ENV_FILE\}"$' "$PROBE"; then
+  ok "K11b the boot env file override is gated on LUKS_MONITOR_TEST_SEAM=1"
+else
+  no "K11b the boot env file override is not gated on the test seam"
+fi
+if ! grep -vE '^[[:space:]]*#' "$PROBE" | grep -qE '(^|[[:space:];&|(])(source|\.)[[:space:]]+"?\$\{?BOOT_ENV_FILE'; then
+  ok "K11c the monitor never sources the boot env file"
+else
+  no "K11c the monitor sources the boot env file"
+fi
+
+# K12 — MUTATIONS on copies of the probe, judged by the same behavioural cases (each must flip a K-row). The
+# exactly-one-line and shape checks are NOT mutation-rowed: the closed-set `case` subsumes both (a multi-line or
+# metacharacter value can never equal a set member), so removing either alone is an EQUIVALENT mutant that no
+# behavioural row can flip. K6/K7/K7b still pin the behaviour; the closed-set row below is the load-bearing mutation.
+KC_MUT="$RUN_SCRATCH/kc-mut"; assert_fixture_dir "$KC_MUT"; mkdir -p "$KC_MUT"; cp "$EMIT" "$KC_MUT/workspaces-luks-emit.sh"
+kc_mut() { # <name> <from-literal> <to-literal> <content> <want-key-cfg> <expect: red|green>
+  local name="$1" from="$2" to="$3" content="$4" want="$5" exp="$6" src mut verdict got
+  assert_fixture_dir "$KC_MUT"
+  src="$(cat "$PROBE")"; mut="${src/"$from"/"$to"}"
+  if [ "$mut" = "$src" ]; then no "K12 mutation: $name — the mutation did not land"; return; fi
+  printf '%s\n' "$mut" > "$KC_MUT/luks-monitor.sh"
+  kc_run "$KC_MUT/luks-monitor.sh" "$content"
+  got="$(kc_key_cfg)"
+  if [ "$MON_RC" -eq 0 ] && [ "$got" = "$want" ]; then verdict=green; else verdict=red; fi
+  if [ "$verdict" = "$exp" ]; then ok "K12 mutation: $name -> $verdict"; else no "K12 mutation: $name -> expected $exp, got $verdict (key config='$got' rc=$MON_RC)"; fi
+}
+WEBFILE="${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=${KC_CFG_WEB}\n"
+kc_mut "the key read reverted to the literal prd_workspaces_luks (Guard 3 row 4)" '--plain --config "$KEY_CONFIG"' '--plain --config prd_workspaces_luks' "$WEBFILE" "$KC_CFG_WEB" red
+kc_mut "the closed-set check removed (shared prd would be honoured)" 'prd_workspaces_luks|prd_workspaces_luks_web)' 'prd_workspaces_luks|prd_workspaces_luks_web|prd)' "${BOOT_DEV}WORKSPACES_DOPPLER_CONFIG=prd\n" "$KC_CFG_OLD" red
+kc_mut "the web config never selected (parse result ignored)" 'KEY_CONFIG="$_kc"' 'KEY_CONFIG="$KEY_CONFIG"' "$WEBFILE" "$KC_CFG_WEB" red
+kc_mut "HARMLESS: a trailing comment on the fallback line" 'KEY_CONFIG=prd_workspaces_luks' 'KEY_CONFIG=prd_workspaces_luks # harmless' "$WEBFILE" "$KC_CFG_WEB" green
+
+# Anti-vacuity: an EXACT assertion count (deleting a block of cases, e.g. (t5)/(t6), must not leave the suite
+# green; adding one means moving the number). A host with a readable /etc/default/luks-monitor reports the
+# three emit-skip cases as one skip line, hence the adjustment.
+EXPECTED_PASSES=129
+[ -r /etc/default/luks-monitor ] && EXPECTED_PASSES=$((EXPECTED_PASSES - 2))
+if [ "$passes" -ne "$EXPECTED_PASSES" ]; then no "count: ${passes} assertions passed, expected exactly ${EXPECTED_PASSES} — a block of cases was deleted or added without moving the number"; fi
 
 echo ""
 echo "=== luks-monitor.test.sh: ${passes} passed, ${fails} failed ==="

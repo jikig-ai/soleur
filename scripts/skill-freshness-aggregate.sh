@@ -183,7 +183,7 @@ if [[ -s "$INVOCATIONS_MERGED" ]]; then
     # projection to keep per-invocation rows (e.g. dropping group_by to emit a timeline,
     # or adding a `records: .` passthrough) moves the payload back onto invocation count
     # and the report dies with `Argument list too long` — at which point the fix is to
-    # spool to a file and bind `--rawfile … | fromjson` (see scripts/domain-model-drift.sh).
+    # spool to a file and bind `--rawfile … | fromjson` (see plugins/soleur/scripts/domain-model-drift.sh).
     invocations_json=$(printf '%s' "$parsed_records" \
                        | jq -s -c 'group_by(.skill)
                                    | map({

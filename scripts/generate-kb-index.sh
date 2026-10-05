@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
 # generate-kb-index.sh — Generate knowledge-base/INDEX.md from file metadata.
 #
-# Usage: bash scripts/generate-kb-index.sh [--help]
+# Usage: bash scripts/generate-kb-index.sh [--help] [--out DIR]
 #
 # Walks knowledge-base/**/*.md, extracts titles from YAML frontmatter
 # (fallback: first # heading, then kebab-to-title-case filename), and
 # outputs a flat sorted markdown list grouped by top-level domain.
 #
-# Excludes archive/ directories and INDEX.md itself.
+# Excludes archive/ directories and INDEX.md itself. Inside
+# knowledge-base/project/specs/<feature>/, only spec.md and tasks.md are
+# indexed — other flat files there are per-feature working state (#7399).
 #
-# After merge conflicts on INDEX.md, regenerate:
-#   bash scripts/generate-kb-index.sh
+# Flags:
+#   --out DIR   Write INDEX.md, kb-tags.txt and kb-categories.txt into DIR
+#               instead of the knowledge-base/ artifacts.
+#
+# THE THREE ARTIFACTS ARE UNTRACKED CACHES (ADR-235). They are derivable from
+# the tree, so they are gitignored and regenerated on demand by
+# scripts/ensure-kb-index.sh, which every reader calls before reading. There is
+# no merge driver and no committed copy to diff against: a cache that is never
+# committed can never conflict, which is the whole point of ADR-235 superseding
+# ADR-210. Do not re-add a --check flag -- it compared against a committed
+# artifact that no longer exists.
 
 set -euo pipefail
 
@@ -18,14 +29,43 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # KB_DIR is overridable by env so tests can point at a fixture corpus.
 KB_DIR="${KB_DIR:-$REPO_ROOT/knowledge-base}"
+# Strip a trailing slash before KB_DIR is used in any prefix strip. The rel=
+# computation below does "${f#"$KB_DIR/"}", which silently fails to strip on a
+# trailing slash and emits absolute paths into every row.
+KB_DIR="${KB_DIR%/}"
 INDEX_FILE="$KB_DIR/INDEX.md"
 LEARNINGS_DIR="$KB_DIR/project/learnings"
 TAGS_FILE="$KB_DIR/kb-tags.txt"
 CATEGORIES_FILE="$KB_DIR/kb-categories.txt"
 
-if [[ "${1:-}" == "--help" ]]; then
-  sed -n '2,/^$/s/^# //p' "$0"
-  exit 0
+# --out DIR is the primitive, mirroring regenerate-c4-model.sh. It is what
+# scripts/ensure-kb-index.sh regenerates through: generate off to the side, then
+# publish each file with `mv -f`, so a reader never sees a half-written index.
+OUT_DIR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help)
+      sed -n '2,/^$/s/^# //p' "$0"
+      exit 0
+      ;;
+    --out)
+      OUT_DIR="${2:-}"
+      [[ -n "$OUT_DIR" ]] || { echo "ERROR: --out requires a directory" >&2; exit 2; }
+      shift 2
+      ;;
+    *)
+      echo "ERROR: unknown argument '$1' (see --help)" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$OUT_DIR" ]]; then
+  mkdir -p "$OUT_DIR"
+  OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+  INDEX_FILE="$OUT_DIR/INDEX.md"
+  TAGS_FILE="$OUT_DIR/kb-tags.txt"
+  CATEGORIES_FILE="$OUT_DIR/kb-categories.txt"
 fi
 
 if [[ ! -d "$KB_DIR" ]]; then
@@ -34,10 +74,37 @@ if [[ ! -d "$KB_DIR" ]]; then
 fi
 
 # Collect all eligible .md files (exclude archive/, INDEX.md, non-.md, symlinks)
+#
+# The third group implements the spec-directory allowlist (ADR-174):
+# a spec directory contributes its spec.md and its tasks.md — the two files
+# that NAME a feature — plus anything the author deliberately organised into a
+# SUBDIRECTORY. Files sitting flat alongside spec.md/tasks.md are
+# branch-lifetime working state (session-state.md and a long tail of one-off
+# names) and are not indexed.
+#
+# An allowlist, not a denylist: filename invention is the norm here, so any
+# enumerated deny set is stale the next time someone writes a phase0-evidence.md.
+# ADR-174 holds the dated measurements; deliberately not repeated here, because
+# a count in a comment rots and this comment is also --help output.
+#
+# The fourth arm is what keeps the rule FLAT. `-path '*/project/specs/*/*/*'`
+# needs two literal `/` after specs/, so specs/feat-x/tasks.md (one) is excluded
+# while specs/feat-x/case-studies/01-a.md (two) is kept. Without it the
+# exclusion is depth-unbounded and silently drops nested durable content —
+# vendor interface reference under specs/external/, for instance, which lives in
+# dirs that have no spec.md or tasks.md at all and would retain ZERO rows.
+#
+# The patterns are single-quoted and NOT interpolated with $KB_DIR on purpose.
+# `-path "$KB_DIR/project/specs/*"` makes the predicate depend on the TEXTUAL
+# form of KB_DIR: a trailing slash yields a `//` no find-emitted path contains,
+# so the exclusion silently evaluates true for everything and the whole feature
+# no-ops with exit 0 and a green suite.
 mapfile -t all_files < <(
   find "$KB_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' \
     -not -name 'INDEX.md' \
+    \( -not -path '*/project/specs/*' -o -name 'spec.md' -o -name 'tasks.md' \
+       -o -path '*/project/specs/*/*/*' \) \
     | LC_ALL=C sort
 )
 
@@ -85,27 +152,63 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
   done
 ' _ "$KB_DIR" | LC_ALL=C sort > "$tmpfile"
 
-# Build the index from the sorted entries
+# Build the index from the sorted entries.
+#
+# THE LAYOUT IS INLINE, AND HAS NO COUNT HEADER. It used to live in its own
+# library because the retired merge driver had to emit byte-identical content
+# from git's three merge inputs; with the artifact untracked (ADR-235) that
+# driver is gone and this is the only renderer, so the extraction bought nothing
+# and the second file was pure drift surface.
+#
+# The derived count header went with it. It existed because the default text
+# merge folds two branches' identical count text cleanly into a wrong number --
+# a defect that requires a merge, which an untracked file never has. No reader
+# ever parsed it.
+#
+# THE TSV CONTRACT. Rows arrive as `rel<TAB>title`, sorted with `LC_ALL=C sort`
+# BY REL -- not by rendered line, which would order differently because a row
+# renders title-first. Titles arrive ALREADY ESCAPED (the extractor escapes `[`
+# and `]`), so this emits them verbatim. `printf '%s'` and not `echo`: a title
+# legitimately contains backslashes, and `%s` passes them through untouched
+# while `echo` may interpret them under xpg_echo.
+# PUBLISHED ATOMICALLY, mirroring regenerate-c4-model.sh's `--out` contract
+# rather than only its flag shape. A bare `> "$INDEX_FILE"` truncates the TRACKED
+# artifact before the renderer runs, so a SIGINT, a full disk, or an OOM-killed
+# xargs child leaves knowledge-base/INDEX.md destroyed on disk (measured: 156
+# bytes -> 8 bytes of partial output). lefthook runs this generator on every
+# commit touching knowledge-base/, so that window is routine.
+# UNLINK BEFORE REDIRECTING. A redirect FOLLOWS an existing symlink, so a
+# pre-planted `<artifact>.tmp.<pid>` pointing anywhere writable makes this write
+# through it and the following `mv -f` then replaces the tracked artifact with a
+# symlink. The retired merge driver documented this exact class for its own
+# scratch file and applied the same remedy; measured here before the fix, the
+# artifact became a symlink to the planted target.
+_index_tmp="$INDEX_FILE.tmp.$$"
+rm -f "$_index_tmp"
 {
-  echo "# Knowledge Base Index"
-  echo ""
-  echo "> Auto-generated by \`scripts/generate-kb-index.sh\`. Do not edit manually."
-  echo "> Total files: $total"
+  printf '# Knowledge Base Index\n'
+  printf '\n'
+  printf '> Auto-generated by `scripts/generate-kb-index.sh` (untracked cache, ADR-235).\n'
+  printf '> Do not edit manually; run `bash scripts/ensure-kb-index.sh` to refresh.\n'
 
-  current_domain=""
-  while IFS=$'\t' read -r rel title; do
-    domain="${rel%%/*}"
-    if [[ "$domain" != "$current_domain" ]]; then
-      echo ""
-      echo "## $domain"
-      echo ""
-      current_domain="$domain"
+  _render_domain="" _render_rel="" _render_title="" _render_cur=""
+  while IFS=$'\t' read -r _render_rel _render_title; do
+    _render_domain="${_render_rel%%/*}"
+    if [[ "$_render_domain" != "$_render_cur" ]]; then
+      printf '\n## %s\n\n' "$_render_domain"
+      _render_cur="$_render_domain"
     fi
-    echo "- [$title]($rel)"
+    printf -- '- [%s](%s)\n' "$_render_title" "$_render_rel"
   done < "$tmpfile"
-} > "$INDEX_FILE"
+} > "$_index_tmp"
+mv -f "$_index_tmp" "$INDEX_FILE"
 
-echo "Generated $INDEX_FILE ($total files indexed)"
+# DERIVED FROM THE ARTIFACT, not from `${#all_files[@]}`. The find pass and the
+# row pass can disagree, and a count re-derived from the array rather than read
+# back off the rendered file is how main once carried off-by-one headers. This
+# is stdout only -- nothing writes a count into the artifact any more.
+_indexed="$(grep -c '^- \[' "$INDEX_FILE" || true)"
+echo "Generated $INDEX_FILE ($_indexed files indexed)"
 
 # ---------------------------------------------------------------------------
 # Facet extraction: emit kb-tags.txt and kb-categories.txt from learnings/.
@@ -124,17 +227,35 @@ echo "Generated $INDEX_FILE ($total files indexed)"
 #   - Empty `tags: []` emits nothing.
 #   - Files without frontmatter or without these fields are silently skipped.
 #
-# Implementation: single awk invocation per xargs batch. Parallel-safe because
-# each batch writes independent lines to its own stdout stream, which xargs
-# concatenates into the downstream pipe. Lines are always smaller than
-# PIPE_BUF (4 KB), so atomic writes hold. Deduplication happens via
-# `sort -u` after collection (TR9 — no shared append target).
+# Implementation: single awk invocation per xargs batch, run SERIALLY.
+#
+# This walk deliberately has no `-P` flag. It previously ran `-P4` with the
+# redirect below, which is a data race: the redirect is on the whole pipeline,
+# so `$facets_tmp` is a REGULAR FILE and every parallel awk child inherits the
+# same open file description on it. PIPE_BUF atomicity does not apply to
+# regular files at all, and awk block-buffers its stdout, so a 4 KB flush
+# boundary lands mid-line and another child's write splices into the gap.
+# `cut -f2` then keeps the splice and DISCARDS the real value — so a torn line
+# fabricates a tag and destroys a true one.
+#
+# That was not theoretical: it shipped `agent-worcat` (from `agent-workflow,
+# mcp-integration`), `blast-radcat`, `cloudflacat` and ~11 more into
+# kb-tags.txt/kb-categories.txt, and kb-search validates `--tag`/`--category`
+# against those files, so a torn value makes a real tag report as invalid.
+# Measured: 5 runs over one unchanged corpus produced 5 distinct outputs.
+# Serial produces 1, and it is byte-identical to the `stdbuf -oL` fix.
+#
+# Serial is not slower here (2,119 files, measured within noise of -P4), and it
+# needs no `stdbuf`, which is absent from stock macOS. Do not re-add `-P`
+# without either line-buffering the children or giving each batch its own file.
+#
+# Deduplication happens via `sort -u` after collection.
 # ---------------------------------------------------------------------------
 
 if [[ -d "$LEARNINGS_DIR" ]]; then
   find "$LEARNINGS_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' -print0 \
-    | xargs -0 -P4 -n100 awk '
+    | xargs -0 -n100 awk '
       FNR == 1 { c = 0; in_block = 0 }
 
       /^---$/ { c++; next }
@@ -187,8 +308,12 @@ if [[ -d "$LEARNINGS_DIR" ]]; then
 
   # Split the tagged stream into two sorted, unique artifacts.
   # `grep ... || true` avoids set -e tripping when a facet type has no entries.
-  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE"
-  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE"
+  # Same atomic-publish contract as the index above.
+  rm -f "$TAGS_FILE.tmp.$$" "$CATEGORIES_FILE.tmp.$$"   # see the unlink note above
+  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE.tmp.$$"
+  mv -f "$TAGS_FILE.tmp.$$" "$TAGS_FILE"
+  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE.tmp.$$"
+  mv -f "$CATEGORIES_FILE.tmp.$$" "$CATEGORIES_FILE"
 
   tag_count=$(wc -l < "$TAGS_FILE" | tr -d '[:space:]')
   cat_count=$(wc -l < "$CATEGORIES_FILE" | tr -d '[:space:]')

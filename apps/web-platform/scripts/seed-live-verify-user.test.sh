@@ -89,8 +89,14 @@ fi
 #     (output captured into a var, never reaches the terminal — the canonical
 #     seed-dev-users.sh idiom). So we flag echo/printf of a secret var only when
 #     it is NOT piped into a decode/transform tool.
+#   - `::add-mask::` is the ONE echo of a secret that exists to PROTECT it:
+#     the directive must carry the value for Actions to register it, and it is
+#     emitted before first use so everything downstream is masked. Excluding it
+#     is not a hole in this check — a rule that forbade it would forbid the
+#     repo's own masking precedent (registry-pull-path-health.sh).
 secret_echo=$(grep -nE '(echo|printf)[^|]*\$\{?(LIVE_VERIFY_USER_PASSWORD|SUPABASE_SERVICE_ROLE_KEY|SRK)\b' "$SEED" \
-  | grep -vE '\|[[:space:]]*(tr|cut|base64|wc|jq|openssl)' || true)
+  | grep -vE '\|[[:space:]]*(tr|cut|base64|wc|jq|openssl)' \
+  | grep -vF '::add-mask::' || true)
 if [[ -n "$secret_echo" ]]; then
   echo "  FAIL: seed displays a secret variable:" >&2
   printf '%s\n' "$secret_echo" >&2
@@ -110,13 +116,24 @@ fi
 #   constraint (mig 011_repo_connection.sql) admits only
 #   not_connected|cloning|ready|error — a "connected" literal 23514s
 #   (check-constraint violation) and aborts the seed. Target the
-#   tc_accepted_version-bearing object line specifically so this does NOT
-#   conflate with the workspaces PATCH, which legitimately also carries
-#   repo_status: "ready".
-if grep -qE 'tc_accepted_version.*repo_status: "ready"' "$SEED"; then
+#   users PATCH specifically so this does NOT conflate with the workspaces
+#   PATCH, which legitimately also carries repo_status: "ready".
+#
+#   RE-ANCHORED (#7969): the discriminator used to be `tc_accepted_version`,
+#   which is no longer on this line — consent moved to the accept_terms RPC so
+#   the Art. 7(1) ledger row gets written. The anchor was coupled to a field
+#   unrelated to what it asserts, so a correct change to that field broke it
+#   (cq-assert-anchor-not-bare-token). Re-anchored TWICE in one PR, which is
+#   the lesson: the first re-anchor used `workspace_path`, and a later commit
+#   removed that column (migration 112 dropped it; PostgREST answered 42703 and
+#   aborted every run). An anchor has to be a field the assertion is ABOUT, not
+#   one that merely happens to sit on the same line. `workspace_status` is the
+#   users ladder's own field and is absent from the workspaces PATCH, which
+#   carries repo_status + repo_url.
+if grep -qE 'workspace_status: "ready", repo_status: "ready"' "$SEED"; then
   echo "  ok: public.users PATCH uses repo_status: \"ready\""
 else
-  echo "  FAIL: public.users PATCH (tc_accepted_version line) does not carry repo_status: \"ready\"" >&2
+  echo "  FAIL: public.users PATCH (workspace_status line) does not carry repo_status: \"ready\"" >&2
   fail=1
 fi
 
@@ -183,6 +200,139 @@ if [[ -n "$uss_line" && -n "$wm_line" && "$uss_line" -gt "$wm_line" ]]; then
 else
   echo "  FAIL: user_session_state upsert must come after the workspace_members owner lookup (uss=$uss_line wm=$wm_line)" >&2
   fail=1
+fi
+
+# --- #7969: the T&C version must be DERIVED, and consent must go through the RPC ---
+#
+# The principal sat at tc_accepted_version 2.3.0 against a gate requiring 2.5.1,
+# so live-verify redirected to /accept-terms and timed out on a page that could
+# never contain the composer. The literal in this script was correct when it was
+# written; nothing re-derived it after the bump.
+
+TC_SRC_F="$(cd "$(dirname "$SEED")" && pwd)/../lib/legal/tc-version.ts"
+SSOT_VER="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC_F")"
+
+# (a) No restated version literal. A hardcoded semver here is the drift shape.
+if grep -nE '^[[:space:]]*TC_VERSION=["'"'"']?[0-9]+\.[0-9]+\.[0-9]+' "$SEED"; then
+  echo "  FAIL: seed RESTATES a TC_VERSION literal — derive it from lib/legal/tc-version.ts" >&2
+  fail=1
+else
+  echo "  ok: seed does not restate a TC_VERSION literal"
+fi
+
+# (b) It derives from the source of truth, and the derivation actually works.
+derived="$(sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p' "$TC_SRC_F")"
+if [[ -n "$derived" && "$derived" == "$SSOT_VER" ]]; then
+  echo "  ok: TC_VERSION derives from tc-version.ts (got $derived)"
+else
+  echo "  FAIL: the TC_VERSION extraction yields '$derived' — it is broken" >&2
+  fail=1
+fi
+
+# (c) NON-VACUITY CONTROL: the extraction must FAIL on a file that lacks the
+# export. Without this, a `sed` that matches nothing looks identical to success.
+neg="$(printf 'export const SOMETHING_ELSE = "x";\n' \
+  | sed -n 's/^export const TC_VERSION = "\([^"]*\)";$/\1/p')"
+if [[ -z "$neg" ]]; then
+  echo "  ok: extraction yields empty on a file without the export (control fires)"
+else
+  echo "  FAIL: extraction returned '$neg' from a file with no TC_VERSION — it matches too much" >&2
+  fail=1
+fi
+
+# (d) The seed must REFUSE rather than proceed on a broken extraction — an empty
+# version would PATCH the gate column to "" and re-break the harness identically.
+if grep -qE 'is not a semver' "$SEED"; then
+  echo "  ok: seed refuses a non-semver derived version"
+else
+  echo "  FAIL: seed does not validate the derived TC_VERSION — an empty value would ship" >&2
+  fail=1
+fi
+
+# (e) Consent goes through public.accept_terms, not a bare users PATCH. The RPC
+# is what writes the Art. 7(1) tc_acceptances ledger row; PATCHing the column
+# alone records consent with no audit row (observed in prod: column set since
+# 2026-06-17, ledger EMPTY).
+if grep -q 'rpc/accept_terms' "$SEED"; then
+  echo "  ok: consent routed through public.accept_terms (writes the ledger row)"
+else
+  echo "  FAIL: seed does not call rpc/accept_terms — the tc_acceptances ledger row would be missing" >&2
+  fail=1
+fi
+if grep -qE 'tc_accepted_version:[[:space:]]*\$tc' "$SEED"; then
+  echo "  FAIL: seed still PATCHes tc_accepted_version directly — that bypasses the ledger" >&2
+  fail=1
+else
+  echo "  ok: seed no longer PATCHes tc_accepted_version directly"
+fi
+
+# --- #7969: the release workflow must RUN this seed before live-verify ---
+#
+# Deriving the version only makes the NEXT run correct; it does not make a run
+# happen. The harness broke because nothing re-ran the seed after a TC_VERSION
+# bump, so the wiring is the load-bearing half and must not be deletable in
+# silence. Parsed as YAML, not grepped: step ORDER is the property.
+WF_F="$(cd "$(dirname "$SEED")" && pwd)/../../../.github/workflows/web-platform-release.yml"
+# This suite is auto-discovered by scripts/test-all.sh's `apps/web-platform/scripts/*.test.sh`
+# glob and runs in the BLOCKING `test-scripts` CI job, which installs no python
+# packages. PyYAML therefore comes from the runner image, and image drift would
+# otherwise surface as an unexplained bare FAIL on an unrelated PR. Name it.
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "  FAIL: PyYAML missing — cannot verify the release-workflow wiring" >&2
+  fail=1
+elif [[ -f "$WF_F" ]]; then
+  wf_report="$(python3 - "$WF_F" <<'PYEOF'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d["jobs"]["live-verify"]["steps"]
+seed = harness = None
+for i, st in enumerate(steps):
+    run = st.get("run") or ""
+    if "seed-live-verify-user.sh" in run:
+        seed = (i, st)
+    if "live-verify/run.ts" in run:
+        harness = (i, st)
+if seed is None:
+    print("FAIL:the live-verify job does not run seed-live-verify-user.sh")
+elif harness is None:
+    print("FAIL:could not locate the harness step to compare against")
+else:
+    si, sst = seed
+    hi, _ = harness
+    if si >= hi:
+        print(f"FAIL:seed step (index {si}) must precede the harness (index {hi})")
+    elif sst.get("continue-on-error"):
+        # continue-on-error pins `conclusion` to success, making a real failure
+        # unreadable from the API — the step reports via its own rc instead.
+        print("FAIL:seed step uses continue-on-error, which hides its own failure")
+    elif "steps.gate.outputs.triggered" not in str(sst.get("if") or ""):
+        print("FAIL:seed step is not gated on the same trigger as the harness")
+    else:
+        print(f"OK:seed step at index {si} precedes the harness at {hi}, same trigger, honest rc")
+PYEOF
+)"
+  if [[ "$wf_report" == OK:* ]]; then
+    echo "  ok: release workflow runs the seed before live-verify (${wf_report#OK:})"
+  else
+    echo "  FAIL: ${wf_report#FAIL:}" >&2
+    fail=1
+  fi
+else
+  echo "  FAIL: could not locate web-platform-release.yml at $WF_F" >&2
+  fail=1
+fi
+
+# ANTI-VACUITY FLOOR. The registration lint proves this FILE is discovered; it
+# says nothing about whether the file still asserts anything, and the runner
+# finds it by glob — so a gutted suite would report green indefinitely. Counts
+# concluded verdicts, and emits with printf + exit DIRECTLY: routing this
+# through `fail` would dispatch the detector through the thing it detects.
+# Set to the MEASURED count from a green run, not a guessed one: slack between
+# a floor and the real value is budget an edit can spend silently.
+_concluded="$(grep -cE '^[[:space:]]*echo "  (ok|FAIL):' "$0" || true)"
+if [[ "${_concluded:-0}" -lt 39 ]]; then
+  printf 'FATAL: only %s verdict site(s) remain in this suite; expected >= 39.\n' "${_concluded:-0}" >&2
+  exit 1
 fi
 
 if [[ "$fail" -ne 0 ]]; then

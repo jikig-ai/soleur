@@ -99,6 +99,9 @@ ROWS="$("$BQ" "
   GROUP BY host_name, host ORDER BY host_name, n DESC FORMAT JSONEachRow" 2>/dev/null)"
 bq_rc=$?
 if [[ "$bq_rc" -ne 0 ]]; then
+  # MEASURED-BY: $bq_rc, captured immediately after the query. The appendix is an explicit
+  # four-way DISJUNCTION of what a non-zero rc can mean — it deliberately declines to pick
+  # one, which is the honest form of the shape #7578 was filed about.
   echo "TRANSIENT: Better Stack query failed (exit $bq_rc — creds unset / auth / network / query fault)" >&2
   exit 2
 fi

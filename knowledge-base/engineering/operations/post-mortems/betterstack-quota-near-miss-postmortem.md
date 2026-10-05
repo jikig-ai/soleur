@@ -6,13 +6,32 @@ incident_window: "2026-05-21 → 2026-06-10 (volume accumulating since the Vecto
 recovery_at: "2026-06-10 (remediation merged; deploy + AC12 verdict tracked in #5110)"
 suspected_change: "30s host_metrics scrape in apps/web-platform/infra/vector.toml shipping as log events through the generic HTTP sink"
 brand_survival_threshold: none
-status: resolved
+status: recurred  # was `resolved`; see the RECURRED banner below (2026-08-14, #7569)
 triggers:
   - vendor quota threshold email (Better Stack "80% of plan quota")
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "n/a — no personal-data exposure; availability/quota near-miss only, data egress strictly decreased"
 ---
+
+> **RECURRED 2026-08-14 19:06:58Z.** This near-miss became an outage. Better Stack began
+> refusing every ingest POST with `HTTP 402 {"error": "Quota exceeded"}` while the read path kept
+> answering `200`, and the whole source went dark for two days before anyone noticed. See
+> [ADR-192](../../architecture/decisions/ADR-192-an-empty-warehouse-read-is-three-states-not-one.md)
+> and issue #7569. Full PIR:
+> `2026-08-14-betterstack-ingest-402-registry-unobservable-postmortem.md`.
+>
+> This document's 5-Why #5 named the gap — no internal monitor watches vendor quota — and its
+> action item is **#5103**; **#5134** is a deferred increment of #5103 (its own body opens
+> "Deferred from #5103 during brainstorm on 2026-06-10"). An earlier revision of this addendum
+> attributed #5134 directly to 5-Why #5, which this document's own Action Items table
+> falsifies — it lists #5110 and #5103 only. **Both #5103 and #5134 are still open and neither
+> was built.** The recurrence is therefore not a new discovery; it is the predicted one.
+> ADR-192 supersedes #5134's mechanism and deliberately leaves it open rather than claiming a
+> closure it does not deliver.
+>
+> Ingest was restored on 2026-08-16 by an account-level action. The volume that exhausted the
+> quota is unchanged, so this remains a live prediction rather than a closed one.
 
 ## Actor key
 

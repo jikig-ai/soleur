@@ -27,14 +27,14 @@ Cold author outreach touches **CAN-SPAM (US)** and **GDPR consent (EU-based auth
 
 ## Core brief (the payload — same facts to every author)
 
-- **Product:** Soleur — https://soleur.ai
+- **Product:** Soleur — <https://soleur.ai>
 - **Paste-ready blurb (2 sentences, an author can drop into a list):**
 
   > Soleur is a Company-as-a-Service platform: 60+ agents across 8 departments (engineering, marketing, legal, finance, ops, product, sales, support) sharing one compounding knowledge base, so a solo founder runs every function from one organization instead of stitching together separate tools. It is source-available (BSL 1.1), built on Claude Code and MCP, and occupies the organization layer above single-purpose tools — every output is a starting point a human approves, not a final answer.
 
 - **Differentiator (the line that earns a slot):** every other entry on these lists makes one job faster. Soleur is the layer *above* single-purpose tools — a distinct category (the organization layer), not another point tool to compare feature-by-feature.
 - **Proof points (verifiable):** 60+ agents and 60+ skills across 8 departments (live count on soleur.ai); source-available BSL 1.1 → Apache-2.0 after four years; built on Claude Code + MCP; human-in-the-loop by design; honestly early — a small community by design.
-- **Links:** platform https://soleur.ai · our own honest ranking (third-party tools ranked on merit, Soleur placed as the org-layer category, **not #1**) https://soleur.ai/blog/best-ai-tools-for-solo-founders-2026/
+- **Links:** platform <https://soleur.ai> · our own honest ranking (third-party tools ranked on merit, Soleur placed as the org-layer category, **not #1**) <https://soleur.ai/blog/best-ai-tools-for-solo-founders-2026/>
 - **Offer:** full free hands-on access so any mention is tested, not taken on trust.
 
 ## Prioritized target list
@@ -44,6 +44,7 @@ Cold author outreach touches **CAN-SPAM (US)** and **GDPR consent (EU-based auth
 Scored on **inclusion-likelihood × AEO citation weight**. Priority inverts raw traffic: Claude-Code-plugin lists are the strongest fit (Soleur installs as a Claude Code extension), generic solopreneur-tool lists are higher-traffic but a harder editorial sell, competitor-owned lists are near-unwinnable.
 
 ### Tier 1 — high fit + winnable (lead here): Claude Code plugin/skill lists
+
 | Target | URL | Fit | Contact path |
 |---|---|---|---|
 | Composio | composio.dev/content/top-claude-code-plugins | Strong | author byline / dev-rel → X DM |
@@ -52,6 +53,7 @@ Scored on **inclusion-likelihood × AEO citation weight**. Priority inverts raw 
 | Bito | bito.ai/ai-tools/claude-code-plugins | Strong | editorial contact form |
 
 ### Tier 2 — independent testers ("tested & ranked"): free access is the lever
+
 | Target | URL | Fit | Contact path |
 |---|---|---|---|
 | Workborn | workborn.com/best-ai-tools-solopreneurs | Medium | site contact form |
@@ -60,7 +62,9 @@ Scored on **inclusion-likelihood × AEO citation weight**. Priority inverts raw 
 | Carly | usecarly.com/blog/best-ai-tools-solopreneurs | Medium-low (long list → easier inclusion, lower per-slot weight) | site contact form |
 
 ### Tier 3 — generic "AI agent platform" lists: high weight, framing stretch
+
 Frame Soleur as an agent *organization*, not a single-agent builder, or risk a mismatch rejection.
+
 | Target | URL | Fit | Contact path |
 |---|---|---|---|
 | Marketer Milk | marketermilk.com/blog/best-ai-agent-platforms | Medium (stretch on framing) | author byline → site / X DM |
@@ -68,6 +72,7 @@ Frame Soleur as an agent *organization*, not a single-agent builder, or risk a m
 | DataCamp | datacamp.com/blog/best-ai-agents | Medium-low (data-science lens) | author byline → editorial contact |
 
 ### Tier 4 — skip (competitor-owned SEO, rank own product)
+
 Storyflow, Blink, Rocket.new, siift, smartaiforbiz, like2byte. Near-zero inclusion likelihood — they will not add a category-defining rival. Monitor only; spend no touches.
 
 ## Cadence & sequencing
@@ -90,9 +95,9 @@ I read {{list_title}} — the way you separate the genuinely useful from the noi
 
 One gap worth a look: every entry on that list is a single-purpose tool. Soleur is the organization layer above them. It is a Company-as-a-Service platform — 60+ agents across 8 departments (engineering, marketing, legal, finance, ops, product, sales, support) sharing one compounding knowledge base, so the marketing work knows what the legal work decided.
 
-We are early and our community is small. I am not asking for a ranking or a slot. If the category fits how you frame the list, here is the honest version, including our own ranking of where we stand: https://soleur.ai/blog/best-ai-tools-for-solo-founders-2026/
+We are early and our community is small. I am not asking for a ranking or a slot. If the category fits how you frame the list, here is the honest version, including our own ranking of where we stand: <https://soleur.ai/blog/best-ai-tools-for-solo-founders-2026/>
 
-Source-available (BSL 1.1), built on Claude Code and MCP, human-in-the-loop by design: https://soleur.ai
+Source-available (BSL 1.1), built on Claude Code and MCP, human-in-the-loop by design: <https://soleur.ai>
 
 If you'd like to test it first, I'm glad to set you up with free access — and if that access shapes anything you write, disclose it however your editorial policy / the FTC endorsement guidelines call for ("Soleur provided free access for testing" is plenty).
 
@@ -128,8 +133,8 @@ One ask if you do cover us: if the free access shapes what you write, please dis
 
 Soleur is a Company-as-a-Service platform: 60+ agents across 8 departments sharing one compounding knowledge base — the organization layer above the single-purpose tools you usually review. Source-available (BSL 1.1), built on Claude Code and MCP. Every output is a starting point you approve, not a final answer.
 
-Start here: https://soleur.ai
-Our own honest ranking for context: https://soleur.ai/blog/best-ai-tools-for-solo-founders-2026/
+Start here: <https://soleur.ai>
+Our own honest ranking for context: <https://soleur.ai/blog/best-ai-tools-for-solo-founders-2026/>
 
 Reply and I will set you up today.
 
@@ -144,7 +149,7 @@ This is a one-time personal note about your list. If you'd rather not hear from 
 
 ### X / LinkedIn DM (under 60 words)
 
-Hi {{first_name}} — your {{list_title}} covers the single-purpose tools well. Soleur is the layer above them: a Company-as-a-Service platform, 60+ agents across 8 departments on one shared knowledge base. We are early and not asking for a ranking — only a look. Honest take here: https://soleur.ai
+Hi {{first_name}} — your {{list_title}} covers the single-purpose tools well. Soleur is the layer above them: a Company-as-a-Service platform, 60+ agents across 8 departments on one shared knowledge base. We are early and not asking for a ranking — only a look. Honest take here: <https://soleur.ai>
 
 ## Guardrails
 

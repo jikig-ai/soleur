@@ -22,6 +22,11 @@ on:
 permissions:
   actions: write
   contents: read
+  # Required by the `gh issue comment` below. Its absence is silent at author time and shows up
+  # only as `GraphQL: Resource not accessible by integration (addComment)` at the moment the
+  # workflow tries to report — measured on registry-host-replace-dispatch, run 31976455167.
+  # scripts/lint-workflow-issue-write-scope.py now fails the build instead.
+  issues: write
 
 jobs:
   dispatch-restart:

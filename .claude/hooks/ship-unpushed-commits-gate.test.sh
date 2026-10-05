@@ -9,6 +9,41 @@
 
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
+# Refuse before writing, rather than let an empty operand retarget a git write at whatever
+# repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
+# operates on the current directory, which under TEST_GROUP=scripts is the developer's live
+# worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
+#
+# Rejects, beyond empty: bare `/` AND its aliases `//` and `/.` (a `/*` arm accepts all three, and
+# `rm -rf "/"/*` is the worst outcome in this corpus — a one-character bypass of a stated
+# rejection); any path containing `..`, which can resolve back inside the real repo; and
+# /proc, /sys, /dev, because `/proc/self/cwd` is absolute, passes every other arm, and resolves
+# to precisely "whatever repository the caller happens to be standing in".
+#
+# Still no `realpath`: it breaks on a symlinked /tmp, which this corpus uses. So a symlink to
+# $HOME is ACCEPTED — stated here rather than left implied, because the arms above make this
+# look like a containment check and it is not.
+#
+# The body below is a COPY. The canonical definition lives in
+# plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# asserts this copy is byte-equal to it. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/ship-unpushed-commits-gate.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -17,11 +52,12 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
-command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "UNRESOLVED: git missing — this suite asserted nothing; install git"; exit 3; }
 
 init_git_repo() {
   local dir="$1"
+  assert_fixture_dir "$dir"
   git -C "$dir" init -q
   git -C "$dir" symbolic-ref HEAD refs/heads/main
   git -C "$dir" config user.email test@test.local
@@ -34,6 +70,7 @@ init_git_repo() {
 make_synced_branch() {
   local tmp="$1" branch="$2"
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
+  assert_fixture_dir "$tmp"
   mkdir -p "$work" "$incidents"
   git init -q --bare "$origin"
   init_git_repo "$work"
@@ -113,6 +150,7 @@ run_hook() {
 t1_unpushed_commits_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-unpushed")
+  assert_fixture_dir "$work"
   # Add a local commit AFTER the initial push; do not push.
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
@@ -130,6 +168,7 @@ t1_unpushed_commits_deny() {
 t2_clean_state_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean")
+  assert_fixture_dir "$work"
   # No local commits ahead of origin/<branch>.
 
   local payload out exit_code=0
@@ -204,6 +243,7 @@ t5_no_upstream_pass() {
 t6_non_merge_command_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-status")
+  assert_fixture_dir "$work"
   echo "x" > "$work/x.txt"
   git -C "$work" add x.txt
   git -C "$work" commit -q -m "local only"
@@ -220,6 +260,7 @@ t6_non_merge_command_pass() {
 t7_chained_command_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-chained")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "the fix"
@@ -236,6 +277,7 @@ t7_chained_command_deny() {
 t8_substring_false_positive_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-echoes")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local commit"
@@ -256,6 +298,7 @@ t8_substring_false_positive_pass() {
 t9_fetch_failure_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-no-net")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local commit"
@@ -281,15 +324,18 @@ t9_fetch_failure_deny() {
 }
 
 # --- T10: settings.json structural validity (integration) ----------------
-# Skips if settings.json does not yet reference the hook (Phase B not done).
+# settings.json and the hook's registration are repo-owned: their absence is a
+# defect in the tree, so it FAILs rather than skips (#8616 taxonomy).
 t10_settings_json_valid() {
   local settings="$REPO_ROOT/.claude/settings.json"
   if [[ ! -f "$settings" ]]; then
-    echo "SKIP: T10 settings.json not found"
+    echo "FAIL: T10 settings.json not found"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if ! grep -q "ship-unpushed-commits-gate.sh" "$settings"; then
-    echo "SKIP: T10 hook not yet wired in settings.json (Phase B pending)"
+    echo "FAIL: T10 ship-unpushed-commits-gate.sh is not registered in settings.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if jq . "$settings" > /dev/null 2>&1; then
@@ -307,11 +353,13 @@ t10_settings_json_valid() {
 t11_hook_ordering() {
   local settings="$REPO_ROOT/.claude/settings.json"
   if [[ ! -f "$settings" ]]; then
-    echo "SKIP: T11 settings.json not found"
+    echo "FAIL: T11 settings.json not found"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   if ! grep -q "ship-unpushed-commits-gate.sh" "$settings"; then
-    echo "SKIP: T11 hook not yet wired in settings.json (Phase B pending)"
+    echo "FAIL: T11 ship-unpushed-commits-gate.sh is not registered in settings.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
     return
   fi
   # Extract Bash-matcher hook commands in document order.
@@ -328,12 +376,35 @@ t11_hook_ordering() {
     FAIL=$((FAIL + 1))
   fi
   TOTAL=$((TOTAL + 1))
+
+  # Same ordering obligation in the Devin registry (#8205): the ^exec$ block
+  # mirrors the settings Bash set and must keep the same sequence. Absence of
+  # the registration is a FAIL, not a skip — T2 in devin-matcher-parity covers
+  # presence, but inside this suite a silent skip would read as green.
+  local devin_cfg="$REPO_ROOT/.devin/config.json"
+  if [[ ! -f "$devin_cfg" ]] || ! grep -q "ship-unpushed-commits-gate.sh" "$devin_cfg"; then
+    echo "FAIL: T11b ship-unpushed-commits-gate.sh missing from .devin/config.json"
+    FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+  else
+    order=$(jq -r '.hooks.PreToolUse[] | select(.matcher == "^exec$") | .hooks[].command' "$devin_cfg" 2>/dev/null)
+    rebase_line=$(printf '%s\n' "$order" | grep -n "pre-merge-rebase.sh" | head -1 | cut -d: -f1)
+    ship_line=$(printf '%s\n' "$order" | grep -n "ship-unpushed-commits-gate.sh" | head -1 | cut -d: -f1)
+    if [[ -n "$rebase_line" && -n "$ship_line" && "$ship_line" -gt "$rebase_line" ]]; then
+      echo "PASS: T11b .devin hook ordering (ship-unpushed-commits-gate after pre-merge-rebase)"
+      PASS=$((PASS + 1))
+    else
+      echo "FAIL: T11b .devin hook ordering rebase=$rebase_line ship=$ship_line"
+      FAIL=$((FAIL + 1))
+    fi
+    TOTAL=$((TOTAL + 1))
+  fi
 }
 
 # --- T12: emit_incident prefix length ≤50 chars --------------------------
 t12_emit_incident_prefix_length() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-prefix")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local"
@@ -364,6 +435,7 @@ t12_emit_incident_prefix_length() {
 t13_incidents_redirect() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-redirect")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local"
@@ -386,6 +458,7 @@ t13_incidents_redirect() {
 t14_stdout_json_clean() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean-stdout")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local"
@@ -413,6 +486,7 @@ t14_stdout_json_clean() {
 t15_commit_body_fp_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-fp")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "the actual fix"

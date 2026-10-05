@@ -1,8 +1,9 @@
-import { readdirSync, realpathSync } from "fs";
+import { mkdirSync, readdirSync, realpathSync } from "fs";
+import { c4RenderStagingRoot } from "./c4-staging-root";
 import { basename, join } from "path";
 
 import { createChildLogger } from "./logger";
-import { reportSilentFallback } from "./observability";
+import { reportSilentFallback, warnSilentFallback } from "./observability";
 
 // Match the agent-runner logging convention (`createChildLogger` — see
 // agent-runner.ts / agent-runner-query-options.ts) so the shared test mocks
@@ -181,7 +182,30 @@ export function buildAgentSandboxConfig(
   // is denied here at the tool/root level — NOT by prompt. Deduped with the
   // sibling deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
   // stays OFF until a deployed-env QA confirms no internal-KB content leaks.
-  const denyRead = Array.from(new Set([...siblingDeny, ...(opts?.denyReadExtra ?? [])]));
+  //
+  // #8623: the C4 re-render stages OTHER tenants' committed `.c4` sources
+  // under this server-private root for the length of a render. Deny it so no
+  // agent can read a concurrent render's stage. The SDK SKIPS a deny path that
+  // does not exist yet ("Skipping non-existent read deny path"), so create it
+  // first (0700, best-effort) — otherwise the first render after boot would
+  // create an undenied root under a sandbox that started earlier.
+  const c4StagingRoot = c4RenderStagingRoot();
+  let c4StagingRootReady = true;
+  try {
+    mkdirSync(c4StagingRoot, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    // The SDK skips a missing deny path, so a root created LATER (by a render)
+    // would be readable from this session. Surface it rather than swallow it.
+    c4StagingRootReady = false;
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "c4-staging-root",
+      message: "agent-sandbox: C4 staging root could not be created; its read-deny may not apply",
+    });
+  }
+  const denyRead = Array.from(
+    new Set([...siblingDeny, c4StagingRoot, ...(opts?.denyReadExtra ?? [])]),
+  );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
   // agent sandbox). `degraded: true` is the fail-closed broad-deny path a
@@ -197,6 +221,7 @@ export function buildAgentSandboxConfig(
       workspace: basename(workspacePath),
       deniedCount: denyRead.length,
       degraded,
+      c4StagingRootReady,
     },
     "agent-sandbox: computed per-sibling denyRead",
   );

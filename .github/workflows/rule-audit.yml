@@ -26,7 +26,11 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Sized for worst-case serial slack: rule-audit.sh + model-drift + two
+    # 2-minute-bounded pin-drift poll steps. A job timeout marks the running step
+    # `cancelled`, and `if: failure()` does NOT fire on cancellation — an
+    # undersized budget here is the exact silence shape the steps exist to kill.
+    timeout-minutes: 8
 
     steps:
       - name: Checkout repository
@@ -85,6 +89,489 @@ jobs:
             gh issue create --label model-drift \
               --title "model-drift: stale Anthropic model IDs in config" \
               --body-file "$RUNNER_TEMP/model-drift-body.md"
+          fi
+
+      # DETECTION half of the zot pin cadence (#7282). Enforcement is
+      # zot-image-staleness.test.sh on infra-validation.yml (per-PR). This step is the
+      # PR-cadence-independent trigger, and it carries TWO distinct conditions:
+      #   (1) offline age/coherence  — catches "the analysis went stale"
+      #   (2) live upstream poll     — catches "upstream moved and we are behind"
+      # Both are needed. (2) alone rebuilds a single point of failure: if the poll breaks
+      # (revoked token, API shape change, upstream repo rename) it goes quiet, and quiet
+      # reads as healthy. (1) needs no network and reddens off the sidecar's own recorded
+      # date, so it still fires when the poll is dead. (1) alone is what #7282 already was:
+      # a fresh-looking sidecar 18 releases behind.
+      #
+      # Advisory only — this NEVER edits the pin. It files one issue; a human opens the
+      # real, CI-gated, CLA-checked PR. Nothing auto-writes the sole pull path's binary.
+      # (There is no Renovate here: measured 2026-08-05, zero Renovate PRs in this repo's
+      # history and no Dependency Dashboard. renovate.json5 was an inert config and this
+      # PR removes it. Do not "restore" bot-managed pinning without re-verifying that.)
+      # `!cancelled()` is load-bearing, not boilerplate. A step `if:` containing no status
+      # function has `success()` implicitly ANDed in, so without this the zot poll is skipped
+      # on every run where the model-drift step above failed — two unrelated detectors sharing
+      # one workflow, where one breaking silences the other indefinitely while the workflow
+      # keeps emailing about the first. That is the exact silence-reads-as-health shape this
+      # whole change exists to remove. The failure() email below still fires for both.
+      - name: Detect zot pin staleness
+        if: ${{ !cancelled() }}
+        # 2 min: the job's timeout-minutes is SHARED with rule-audit.sh and the model-drift
+        # step, and a JOB timeout marks steps `cancelled`, not `failed` -- so `if: failure()`
+        # on the email step below would NOT fire. A hung `gh api` against a third-party
+        # endpoint would produce no signal at all, which is the silence-reads-as-health shape
+        # this step exists to remove.
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          TF=apps/web-platform/infra/zot-registry.tf
+          DRIFT=""; PROBLEMS=""; NOTES=""
+
+          # --- (1) offline age + coherence -------------------------------------------
+          # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
+          # `bash -eo pipefail`, so a non-zero command substitution kills the step at that
+          # line and every diagnosis below it never runs.
+          set +e
+          OUT="$(bash apps/web-platform/infra/zot-image-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "zot-image-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ]; then
+            echo "zot-image-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+
+          # --- (2) the pinned version -------------------------------------------------
+          # ANCHORED on the assignment, exactly as the offline gate parses it. An unanchored
+          # `grep -oE 'zot-linux-amd64:v[0-9.]+' | head -1` is satisfied by a COMMENT, and a
+          # rollback annotation above the locals ("# rolled back from ...:v2.1.30") made this
+          # step report "pin is current (v2.1.30)" while the host was pinned to v2.1.20 --
+          # fail-open, in the exact class #7282 exists to remove. Two halves of one detector
+          # must not parse the same fact by different rules.
+          set +e
+          PINNED="$(grep -oE '^[[:space:]]*zot_image_amd64[[:space:]]*=[[:space:]]*"ghcr\.io/project-zot/zot-linux-amd64:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}"' "$TF" | grep -oE ':v[0-9]+\.[0-9]+\.[0-9]+@' | tr -d ':@' | head -1)"
+          set -e
+          if [ -z "$PINNED" ]; then
+            echo "could not parse the pinned zot version from $TF (anchored on the assignment); failing step." >&2
+            exit 2
+          fi
+
+          # --- (3) live upstream poll -------------------------------------------------
+          set +e
+          LATEST="$(gh api repos/project-zot/zot/releases/latest --jq .tag_name 2>&1)"
+          API_RC=$?
+          set -e
+          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ] || ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # A dead poll must NOT discard an offline verdict we already hold. The previous
+            # shape exited here, so "poll dead AND pin stale" reported only a step failure --
+            # precisely the "one detector breaking silences the other" behaviour this step's
+            # own rationale argues against. Record it and keep going; the non-zero exit at the
+            # very end still fires the ops email.
+            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC); this run cannot tell whether we are behind."$'\n'
+            LATEST="(unavailable)"
+          elif [ "$PINNED" != "$LATEST" ]; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+          fi
+
+          # --- (4) digest <-> REPOSITORY binding (the offline gate structurally cannot) ---
+          # zot-linux-amd64 and zot-linux-arm64 are DISTINCT OCI repositories and a manifest
+          # digest resolves only within its own. So a swap applied COHERENTLY to both the .tf
+          # and the sidecar passes every offline check -- nothing in the committed file set
+          # binds a digest to an arch -- and that is the shape the bump procedure produces
+          # (one paste session, two files). Measured: correct pairing 200, swapped 404.
+          # Anonymous pull token, no secrets.
+          for A in amd64 arm64; do
+            set +e
+            D="$(grep -oE "^[[:space:]]*zot_image_${A}[[:space:]]*=[[:space:]]*\"ghcr\.io/project-zot/zot-linux-$A:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}\"" "$TF" | grep -oE 'sha256:[0-9a-f]{64}' | head -1)"
+            T="$(curl -sS --max-time 20 "https://ghcr.io/token?scope=repository:project-zot/zot-linux-$A:pull&service=ghcr.io" | jq -r .token)"
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I -H "Authorization: Bearer $T" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://ghcr.io/v2/project-zot/zot-linux-$A/manifests/$D")"
+            PROBE_RC=$?
+            set -e
+            if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
+              PROBLEMS="${PROBLEMS}- could not verify the $A digest against its repository (network/probe failure); this run cannot rule out a swapped pin."$'\n'
+            elif [ "$CODE" = "404" ]; then
+              DRIFT="${DRIFT:+$DRIFT+}swapped"
+              PROBLEMS="${PROBLEMS}- **the $A digest does not exist in the zot-linux-$A repository (HTTP 404).** Coherent-swap signature: the pin looks internally consistent but the pull fails with MANIFEST_UNKNOWN and the sole pull path goes dark. Do NOT apply."$'\n'
+            elif [ "$CODE" != "200" ]; then
+              PROBLEMS="${PROBLEMS}- unexpected HTTP $CODE verifying the $A digest; treat as unverified."$'\n'
+            fi
+          done
+
+          # --- (4b) the registry host's BOOT asset (#8714 5.3b-iii) --------------------
+          # The registry host boots zot from a release asset and refuses to start it unless the
+          # asset's sha256 is the T pinned in zot-registry.tf, so a deleted or replaced asset is a
+          # latent outage that surfaces only at the NEXT host replace. This names it on the cron,
+          # by running the SAME check the replace routes gate on (preflight P6, --check-asset).
+          set +e
+          ASSET_OUT="$(bash scripts/registry-replace-preflight.sh --check-asset 2>&1)"
+          AI_RC=$?
+          set -e
+          if [ "$AI_RC" -ne 0 ]; then
+            ASSET_WHY="$(printf '%s\n' "$ASSET_OUT" | sed -n 's/^::error::registry-replace-preflight: //p' | head -1)"
+            PROBLEMS="${PROBLEMS}- **the zot boot asset check (preflight P6) failed (rc=$AI_RC)**: ${ASSET_WHY:-$(printf '%s' "$ASSET_OUT" | tail -1)} Do NOT replace the registry host until this is resolved."$'\n'
+          fi
+
+          # --- (5) the git-data rehearsal's ubuntu base pin (#7544) --------------------
+          # WHY HERE AND NOT A FOLLOW-THROUGH PROBE. The follow-through substrate is a one-shot
+          # CLOSE-CRITERIA tracker: exit 0 means "close the issue". On the first sweep after the
+          # pin merges, pinned == live by construction, so a probe would close #7544 and then
+          # leave the reopen window (CLOSED_LOOKBACK_DAYS=14) forever. `ubuntu:24.04` does not
+          # move on a 14-day schedule, so the mechanism would terminate precisely BECAUSE drift
+          # was absent. This step is already the right shape: cron-driven, unbounded, polls
+          # upstream against a committed pin, files ONE idempotent action-required issue.
+          #
+          # THE MEDIA-TYPE CHECK LIVES HERE, not in the offline suite, because it needs network.
+          # A platform-specific digest would pin the rehearsal to one architecture; the registry
+          # reports which kind it served, and only an index/manifest-list media type is valid.
+          UB_FILE=apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+          # ANCHORED ON THE ASSIGNMENT, exactly as (2) is, and for the same measured reason: an
+          # unanchored grep is satisfied by a comment, and this file's UBUNTU_BASE stanza
+          # discusses the digest in prose directly above the literal.
+          set +e
+          UB_PINNED="$(grep -oE "^UBUNTU_BASE='ubuntu:24\.04@sha256:[0-9a-f]{64}'" "$UB_FILE" | grep -oE 'sha256:[0-9a-f]{64}')"
+          set -e
+          if [ -z "$UB_PINNED" ]; then
+            PROBLEMS="${PROBLEMS}- could not parse \`UBUNTU_BASE\` from \`$UB_FILE\` (anchored on the assignment); this run cannot tell whether the git-data rehearsal's base image has drifted."$'\n'
+          else
+            set +e
+            UB_TOK_RC=0
+            UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')" || UB_TOK_RC=$?
+            UB_HDR="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer ${UB_T}" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04" 2>/dev/null)"
+            UB_RC=$?
+            set -e
+            UB_LIVE="$(printf '%s' "$UB_HDR" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
+            UB_CT="$(printf '%s' "$UB_HDR" | grep -i '^content-type:' | tr -d '\r' | awk '{print $2}')"
+            # BOTH rcs, token one FIRST. UB_RC covers only the manifest curl: a failed token
+            # fetch leaves UB_T empty, the manifest request then 401s and still exits 0, so
+            # the message reported rc=0 — the reassuring reading of an unmeasured channel.
+            if [ "$UB_TOK_RC" -ne 0 ] || [ -z "$UB_T" ]; then
+              PROBLEMS="${PROBLEMS}- could not obtain a Docker Hub anonymous pull token (rc=$UB_TOK_RC); the \`ubuntu:24.04\` digest was NOT compared this run."$'\n'
+            elif [ "$UB_RC" -ne 0 ] || [ -z "$UB_LIVE" ]; then
+              PROBLEMS="${PROBLEMS}- could not resolve the live \`ubuntu:24.04\` manifest-list digest (rc=$UB_RC); this run cannot rule out base-image drift under the git-data rehearsal."$'\n'
+            elif ! printf '%s' "$UB_CT" | grep -qE 'image\.index\.v1\+json|manifest\.list\.v2\+json'; then
+              PROBLEMS="${PROBLEMS}- the registry served \`$UB_CT\` for \`ubuntu:24.04\`, which is not an index/manifest-list media type; a platform-specific digest would pin the git-data rehearsal to ONE architecture. Treat the comparison below as unverified."$'\n'
+            elif [ "$UB_PINNED" != "$UB_LIVE" ]; then
+              # DRIFT, not a PROBLEM: upstream moving is the condition this exists to report,
+              # and it must not fire the ops-email exit the way a broken probe does.
+              DRIFT="${DRIFT:+$DRIFT+}ubuntu-base"
+              NOTES="${NOTES}- **\`ubuntu:24.04\` has moved under the git-data rung-1 rehearsal.** Pinned \`$UB_PINNED\`, live \`$UB_LIVE\`. R1 classifies ext4 features against an allowlist built for a specific e2fsprogs, so bumping the pin is a DELIBERATE act: re-measure \`mke2fs -V\` inside the new image and reclassify, do not refresh the R1 fixture wholesale. Pin literal: \`UBUNTU_BASE\` in \`$UB_FILE\`."$'\n'
+            fi
+          fi
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ] && [ -z "$NOTES" ]; then
+            echo "zot pin is current ($PINNED), digests resolve in their own repositories, the git-data rehearsal's ubuntu base pin matches the live manifest list, and the analysis is fresh."
+            exit 0
+          fi
+
+          # Which pin(s) does this run actually implicate? The issue is shared and idempotent,
+          # so the body must say which, rather than assuming the zot one.
+          ZOT_IMPLICATED=""
+          case "$DRIFT" in *stale*|*behind*|*swapped*) ZOT_IMPLICATED=1 ;; esac
+          [ -n "$PROBLEMS" ] && case "$PROBLEMS" in *zot*) ZOT_IMPLICATED=1 ;; esac
+          UBUNTU_IMPLICATED=""
+          case "$DRIFT" in *ubuntu-base*) UBUNTU_IMPLICATED=1 ;; esac
+          [ -n "$PROBLEMS" ] && case "$PROBLEMS" in *ubuntu*) UBUNTU_IMPLICATED=1 ;; esac
+
+          # --- file/update ONE idempotent issue ----------------------------------------
+          # `action-required` is load-bearing, not decoration: it is the ONLY label the weekly
+          # operator digest reads. Without it "we are 18 releases behind" lands in a label
+          # nobody queries -- reconstructing this issue's own root cause in a new channel.
+          gh label create zot-pin-drift --color FBCA04 \
+            --description "a committed image pin is stale, behind upstream, or unverifiable — zot (#7282) or the git-data rehearsal's ubuntu base (#7544)" \
+            --force >/dev/null 2>&1 || true
+          {
+            # THE BODY IS PER-PIN NOW. This issue carries two unrelated pins since #7544, and
+            # every actionable line below was zot-shaped: an ubuntu-only drift produced a title
+            # saying "zot registry image", a table of zot versions, "zot is the sole pull path",
+            # and a remediation pointing at the zot provenance sidecar. An operator following it
+            # would bump zot and never touch UBUNTU_BASE — the drift would stay open while the
+            # instruction to fix it read as complete.
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "The pinned zot registry image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            else
+              echo "A committed image pin needs attention (condition: \`${DRIFT:-probe-failure}\`). **The zot pin is NOT implicated in this run** — see the pin-specific section below."
+            fi
+            echo
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "| zot | |"
+              echo "|---|---|"
+              echo "| Pinned | \`$PINNED\` |"
+              echo "| Upstream latest | \`$LATEST\` |"
+              echo
+            fi
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            if [ -n "$NOTES" ]; then echo "$NOTES"; echo; fi
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
+              echo "supply-chain and reliability item, not cosmetic."
+              echo
+            fi
+            if [ -n "$UBUNTU_IMPLICATED" ]; then
+              echo "### ubuntu:24.04 — the git-data rung-1 rehearsal base image"
+              echo
+              echo "Pin literal: \`UBUNTU_BASE\` in \`apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh\`."
+              echo
+              echo "**Do NOT refresh the R1 fixture to make it pass.** R1 classifies the birth"
+              echo "filesystem's ext4 features against an allowlist built for a specific e2fsprogs,"
+              echo "and that classification is the point — the diff is not. Re-measure \`mke2fs -V\`"
+              echo "inside the NEW image, reclassify any feature the allowlist does not carry, then"
+              echo "move the pin. The digest must be the MANIFEST-LIST one:"
+              echo
+              echo '```'
+              echo "docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'"
+              echo '```'
+              echo
+            fi
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            if [ -n "$ZOT_IMPLICATED" ]; then
+            echo "Remediation (zot) — follow \`## Bump procedure\` in"
+            echo "\`apps/web-platform/infra/zot-image.provenance.md\`. Agent entry point:"
+            echo
+            echo '```'
+            echo "/soleur:one-shot \"refresh the zot pin provenance sidecar per apps/web-platform/infra/zot-image.provenance.md section 'Bump procedure'\""
+            echo '```'
+            echo
+            fi
+            echo "_Filed automatically by rule-audit.yml image-pin drift detection (#7282 zot, #7544 ubuntu base)._"
+          } > "$RUNNER_TEMP/zot-pin-drift-body.md"
+          if [ -n "$ZOT_IMPLICATED" ]; then
+            _ISSUE_TITLE="zot-pin-drift: registry image pin needs attention"
+          else
+            _ISSUE_TITLE="image-pin-drift: the git-data rehearsal base image pin needs attention"
+          fi
+          EXISTING="$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
+            echo "Updated existing zot-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label zot-pin-drift --label action-required \
+              --title "${_ISSUE_TITLE}" \
+              --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
+          fi
+
+          # A probe that could not run is a DETECTOR failure: exit non-zero so the ops email
+          # fires. Drift alone exits 0 -- the issue is the channel for that.
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
+          fi
+
+      # DETECTION half of the inngest CLI pin cadence (#7463 PR-B). Enforcement is
+      # apps/web-platform/infra/inngest-cli-staleness.test.sh on deploy-script-tests
+      # (per-PR, offline, 0 fresh / 10 drift / 2 detector-failure). This step is the
+      # PR-cadence-independent trigger, cloned from `Detect zot pin staleness` — same
+      # two-condition split: (1) offline age/coherence catches "the analysis went stale",
+      # (2) the live upstream poll catches "upstream moved and we are behind". Both are
+      # needed: (2) alone rebuilds a single point of failure (a dead poll reads as
+      # healthy); (1) alone is a fresh-looking sidecar 29 releases behind.
+      #
+      # Advisory only — this NEVER edits the pin. It files one idempotent
+      # `inngest-pin-drift` + `action-required` issue; a human opens the real,
+      # CI-gated PR. The thresholds are DELIBERATELY not "any delta": inngest ships
+      # ~weekly (v1.19.4→v1.45.1 spanned ~4 months / 29 stable releases), so
+      # latest-only would mint a permanently-open ticket days after every bump.
+      # File when releases_behind >= 5 OR the pinned release is >= 45 days old.
+      # The same numbers live in inngest-cli.provenance.md — keep them identical.
+      - name: Detect inngest CLI pin drift
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          TF=apps/web-platform/infra/inngest.tf
+          PROV=apps/web-platform/infra/inngest-cli.provenance.md
+          DRIFT=""; PROBLEMS=""; NOTES=""
+
+          # --- (1) offline staleness + coherence --------------------------------------
+          # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
+          # `bash -eo pipefail`, so a non-zero command substitution kills the step at that
+          # line and every diagnosis below it never runs.
+          set +e
+          OUT="$(bash apps/web-platform/infra/inngest-cli-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "inngest-cli-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ]; then
+            echo "inngest-cli-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+
+          # --- (2) the pinned version --------------------------------------------------
+          # ANCHORED on the assignment, exactly as the offline gate parses it — an
+          # unanchored grep is satisfied by a comment. Two halves of one detector must not
+          # parse the same fact by different rules.
+          set +e
+          PINNED="$(grep -oE '^[[:space:]]*inngest_cli_version[[:space:]]*=[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' "$TF" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          set -e
+          if [ -z "$PINNED" ]; then
+            echo "could not parse the pinned inngest CLI version from $TF (anchored on the assignment); failing step." >&2
+            exit 2
+          fi
+
+          # --- (3) live upstream poll: ONE paginated releases read ----------------------
+          # A single `releases` listing answers all three questions: latest stable tag,
+          # the releases-behind delta, and the pinned release's published_at for the age
+          # leg. The jq filter drops drafts, prereleases, and non-semver rows per page;
+          # `sort -V` then reorders by VERSION — the wire order is release-object
+          # created_at desc, NOT version order, so a stable backport (e.g. v1.38.1
+          # shipped after v1.39.0) or a republished pinned tag would otherwise corrupt
+          # both legs. Counting RELEASES, a tag with no published release cannot
+          # inflate the delta, and index-based counting cannot go negative — a
+          # tag-order delta can when upstream retracts.
+          set +e
+          REL="$(gh api --paginate 'repos/inngest/inngest/releases?per_page=100' \
+                 --jq '.[] | select((.draft|not) and (.prerelease|not) and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | [.tag_name, .published_at] | @tsv' \
+                 2>"$RUNNER_TEMP/inngest-poll.err" | sort -t$'\t' -k1,1Vr)"
+          API_RC=$?
+          set -e
+          LATEST=""; BEHIND=""; PIN_DATE=""
+          if [ "$API_RC" -ne 0 ] || [ -z "$REL" ]; then
+            # A dead poll must NOT discard an offline verdict we already hold. Record it
+            # and keep going; the non-zero exit at the end still fires the ops email.
+            POLL_ERR="$(tail -1 "$RUNNER_TEMP/inngest-poll.err" 2>/dev/null || true)"
+            PROBLEMS="${PROBLEMS}- upstream release poll FAILED (rc=$API_RC${POLL_ERR:+: \`$POLL_ERR\`}); this run cannot tell whether we are behind."$'\n'
+            LATEST="(unavailable)"
+          else
+            LATEST="$(printf '%s\n' "$REL" | head -1 | cut -f1)"
+            # 1-based line number of PINNED in the semver-descending stable list, minus
+            # one = count of strictly-newer stable releases.
+            P_LINE="$(printf '%s\n' "$REL" | cut -f1 | grep -nxF "$PINNED" | cut -d: -f1 || true)"
+            if [ -n "$P_LINE" ]; then
+              BEHIND=$((P_LINE - 1))
+            else
+              PROBLEMS="${PROBLEMS}- pinned tag \`$PINNED\` absent from the stable release list; releases-behind not measured."$'\n'
+            fi
+            PIN_DATE="$(printf '%s\n' "$REL" | awk -F'\t' -v t="$PINNED" '$1==t {print $2; exit}')"
+            if [ -z "$PIN_DATE" ]; then
+              PROBLEMS="${PROBLEMS}- could not read the pinned release's published_at for \`$PINNED\`; age leg not measured."$'\n'
+            fi
+          fi
+          AGE_DAYS=""
+          if [ -n "$PIN_DATE" ]; then
+            if ! printf '%s' "$PIN_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
+              # Upstream-shaped string heading for the issue body — do not embed it raw.
+              PROBLEMS="${PROBLEMS}- pinned release published_at is not ISO-shaped; age leg not measured."$'\n'
+              PIN_DATE=""
+            else
+              PIN_EPOCH="$(date -d "$PIN_DATE" +%s 2>/dev/null || true)"
+              if [ -n "$PIN_EPOCH" ]; then
+                AGE_DAYS=$(( ($(date +%s) - PIN_EPOCH) / 86400 ))
+              else
+                PROBLEMS="${PROBLEMS}- pinned release published_at is unparsable; age leg not measured."$'\n'
+                PIN_DATE=""
+              fi
+            fi
+          fi
+          # Threshold: >= 5 releases behind OR pinned release >= 45 days old.
+          if { [ -n "$BEHIND" ] && [ "$BEHIND" -ge 5 ]; } || { [ -n "$AGE_DAYS" ] && [ "$AGE_DAYS" -ge 45 ]; }; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+            NOTES="${NOTES}- pinned \`$PINNED\` vs upstream \`$LATEST\`: releases-behind=${BEHIND:-unmeasured}, release-age-days=${AGE_DAYS:-unmeasured} (threshold: >=5 behind OR >=45 days)."$'\n'
+          fi
+
+          # --- (4) tarball existence probe (both arches) --------------------------------
+          # The host downloads inngest_<ver>_linux_<arch>.tar.gz at boot and sha256-verifies
+          # against the committed checksums, so a deleted/replaced asset is a latent outage
+          # that surfaces only at the NEXT host replace or image build. A coherent pin+sidecar
+          # swap passes every offline check — nothing binds the names to upstream ground
+          # truth — so the probe is the only scheduled check that sees it. It verifies
+          # EXISTENCE, not hash: a coherent same-version sha swap is bounded by the
+          # bootstrap image build's checksums-file verify, not by this step.
+          for ARCH in amd64 arm64; do
+            set +e
+            CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -I \
+              "https://github.com/inngest/inngest/releases/download/$PINNED/inngest_${PINNED#v}_linux_$ARCH.tar.gz")"
+            PROBE_RC=$?
+            set -e
+            if [ "$PROBE_RC" -ne 0 ] || [ -z "$CODE" ] || [ "$CODE" = "000" ]; then
+              PROBLEMS="${PROBLEMS}- could not probe the $ARCH tarball (network/probe failure); this run cannot rule out a missing asset."$'\n'
+            elif [ "$CODE" = "404" ]; then
+              DRIFT="${DRIFT:+$DRIFT+}missing-$ARCH-tarball"
+              PROBLEMS="${PROBLEMS}- **the pinned $ARCH tarball does not exist upstream (HTTP 404).** Coherent-swap signature: the pin looks internally consistent but the boot asset is gone and the next host replace/image build goes dark. Do NOT apply."$'\n'
+            elif [ "$CODE" != "200" ] && [ "$CODE" != "302" ]; then
+              PROBLEMS="${PROBLEMS}- unexpected HTTP $CODE probing the $ARCH tarball; treat as unverified."$'\n'
+            fi
+          done
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ] && [ -z "$NOTES" ]; then
+            echo "inngest CLI pin is current enough ($PINNED vs $LATEST; behind=${BEHIND:-?}, age=${AGE_DAYS:-?}d), both tarballs resolve, and the offline analysis is coherent+fresh."
+            exit 0
+          fi
+
+          # --- file/update ONE idempotent issue -----------------------------------------
+          # `action-required` is load-bearing: it is the ONLY label the weekly operator
+          # digest reads. gh label create --force is the idempotent path (zot precedent).
+          gh label create inngest-pin-drift --color FBCA04 \
+            --description "the committed inngest CLI pin is stale, behind upstream, or its tarball is unverifiable (#7463)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned self-hosted inngest CLI needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned (\`inngest.tf\`) | \`$PINNED\` |"
+            echo "| Upstream latest | \`$LATEST\` |"
+            echo "| Releases behind | ${BEHIND:-unmeasured} |"
+            echo "| Pinned release age | ${AGE_DAYS:-unmeasured} days |"
+            echo
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            if [ -n "$NOTES" ]; then echo "$NOTES"; echo; fi
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Bump procedure\` in"
+            echo "\`$PROV\` (the sidecar is authoritative; it reconciles inngest.tf)"
+            echo "**in that direction**, and read the merge-vs-apply boundary note — the pin"
+            echo "merge is host-inert; the live flip is the operator-gated"
+            echo "\`apply_target=inngest-host-replace\` window tracked in #9224."
+            echo "Agent entry point:"
+            echo
+            echo '```'
+            echo "/soleur:one-shot \"refresh the inngest CLI pin per apps/web-platform/infra/inngest-cli.provenance.md section 'Bump procedure'\""
+            echo '```'
+            echo
+            echo "_Filed automatically by rule-audit.yml inngest-CLI-pin drift detection (#7463)._"
+          } > "$RUNNER_TEMP/inngest-pin-drift-body.md"
+          EXISTING="$(gh issue list --label inngest-pin-drift --state open --search 'sort:created-asc' --limit 100 --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            # Oldest labeled issue is canonical; re-assert the digest label — a stripped
+            # `action-required` would otherwise drop it from the weekly digest while
+            # comments kept landing on it.
+            gh issue edit "$EXISTING" --add-label inngest-pin-drift --add-label action-required >/dev/null 2>&1 || true
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/inngest-pin-drift-body.md"
+            echo "Updated existing inngest-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label inngest-pin-drift --label action-required \
+              --title "inngest-pin-drift: self-hosted CLI pin needs attention" \
+              --body-file "$RUNNER_TEMP/inngest-pin-drift-body.md"
+          fi
+
+          # A probe that could not run is a DETECTOR failure: exit non-zero so the ops
+          # email fires. Drift alone exits 0 — the issue is the channel for that.
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
           fi
 
       - name: Email notification (failure)

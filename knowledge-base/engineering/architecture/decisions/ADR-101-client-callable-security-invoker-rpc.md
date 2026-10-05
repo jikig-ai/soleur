@@ -65,7 +65,7 @@ rows the caller could already read via direct client queries**, use this pattern
   documented, low-risk pattern with an explicit "INVOKER, not DEFINER" precedent to cite.
 - Escalating any such RPC to `SECURITY DEFINER` is a **new trust boundary** and requires its
   own ADR + a `search_path` pin + an explicit WHERE clause that reproduces RLS scope exactly
-  + a data-integrity review — never the default.
+  - a data-integrity review — never the default.
 - Reviewers of future client-callable RPCs verify: INVOKER, no `service_role` grant, and
   every cross-table read correlated on an RLS-bounded outer row (a set-returning
   `LANGUAGE sql SECURITY INVOKER` function applies the caller's row policies to every table —

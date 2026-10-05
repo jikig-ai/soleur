@@ -12,6 +12,10 @@ vi.mock("swr", async (importOriginal) => {
   const actual = await importOriginal<typeof import("swr")>();
   return { ...actual, default: (...args: unknown[]) => useSWRMock(...args) };
 });
+// #9178 — the badge defers its key until post-FCP in production; these tests
+// exercise the keyed fetch contract, so pin the gate open.
+vi.mock("@/hooks/use-post-fcp", () => ({ usePostFcp: () => true }));
+
 
 const eqCalls: Array<[string, unknown]> = [];
 const isCalls: Array<[string, unknown]> = [];
@@ -45,6 +49,13 @@ function makeQuery() {
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
+      // Phase 5: the count fetcher reads auth via getSession() (local cookie
+      // read), not getUser().
+      getSession: () =>
+        Promise.resolve({
+          data: { session: mockUser ? { user: mockUser } : null },
+          error: null,
+        }),
       getUser: () => Promise.resolve({ data: { user: mockUser } }),
     },
     from: () => makeQuery(),

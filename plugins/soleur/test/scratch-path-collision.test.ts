@@ -88,16 +88,10 @@ const ALLOWLIST: readonly Waiver[] = [
     reason: "Comment referencing the same harness dir (menu help text). Documentation, not a prescribed scratch path.",
   },
   {
-    file: "skills/linear-fetch/scripts/persist-safe-integration.test.sh",
+    file: "skills/linear-fetch/test/persist-safe-integration.test.sh",
     text: "/tmp/wt",
     reason:
       "Test-fixture template: an illustrative WORKING DIRECTORY inside a synthesized prompt that mirrors the one-shot subagent shape. Input data under test, not a prescribed scratch path.",
-  },
-  {
-    file: "skills/plan/SKILL.md",
-    text: "/tmp/.doppler",
-    reason:
-      "Incident prose (#6536): names doppler's own real cache dir as the diagnosed root cause (the heartbeat unit lacked PrivateTmp=true). Documents a system path, does not prescribe writing scratch there.",
   },
   // The agent-browser CLI uses a fixed /tmp/agent-browser/ cache dir of its own; these two
   // sites are the documented command to CLEAR that stale cache, not a scratch path this

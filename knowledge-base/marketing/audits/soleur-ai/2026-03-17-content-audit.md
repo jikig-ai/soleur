@@ -405,6 +405,7 @@ All suggestions aligned with the brand voice: bold, declarative, forward-looking
 ---
 
 **Sources consulted for keyword research and competitive landscape:**
+
 - [How AI Tools Are Letting Solo Founders Build Empires in 2026](https://www.siliconindia.com/news/startups/how-ai-tools-are-letting-solo-founders-build-empires-in-2026-nid-238909-cid-19.html)
 - [Polsia: Solo Founder Hits $1M ARR](https://www.teamday.ai/ai/polsia-solo-founder-million-arr-self-running-companies)
 - [Best AI Agents for Solo Founders in 2026](https://www.tldl.io/resources/best-ai-agents-for-solo-founders)

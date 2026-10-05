@@ -31,6 +31,7 @@ The two new battlecards use `_Generated: 2026-03-12._` in their footer while all
 ## Technical Details
 
 **Affected files:**
+
 - `knowledge-base/sales/battlecards/tier-3-paperclip.md` (last line)
 - `knowledge-base/sales/battlecards/tier-3-polsia.md` (last line)
 

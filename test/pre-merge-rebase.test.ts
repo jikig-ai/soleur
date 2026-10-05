@@ -2,6 +2,7 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:tes
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { gitFixtureEnv } from "../plugins/soleur/test/lib/git-fixture-env";
 
 const HOOK_PATH = join(
   import.meta.dirname,
@@ -18,21 +19,35 @@ const HOOK_PATH = join(
 // (foreground branch) instead of a per-PPID log file — the assertions
 // below grep stderr, and the log-file branch is covered by
 // .claude/hooks/pre-merge-rebase-headless.test.sh.
-const {
-  GIT_DIR: _d,
-  GIT_INDEX_FILE: _i,
-  GIT_WORK_TREE: _w,
-  CLAUDECODE: _c,
-  ...cleanEnv
-} = process.env;
+// #7849: the environment comes from the shared helper, not a hand-rolled destructure.
+//
+// The previous form named THREE git-location variables and removed only those. That is the
+// name-list failure mode `git-clean-env.ts` warns about in capitals: it cannot reach
+// GIT_TEMPLATE_DIR or GIT_EXEC_PATH (both proven to execute arbitrary code), GIT_SSH (a
+// GIT_SSH_COMMAND prefix rule structurally cannot match it -- the prefix is longer than the name),
+// or the GIT_TRACE family (which appends to an absolute path, i.e. a write outside the fixture).
+// It was correct for what it listed and blind to everything it did not, which is precisely the
+// fourth-spelling problem #7849 was filed about.
+//
+// The helper is anchored on a scratch directory whose PARENT is tmpdir(), so the computed ceiling
+// is tmpdir() -- byte-identical to what this file pinned by hand, now derived rather than restated,
+// and arriving alongside the prefix sweep, a synthesized identity, config hermeticity and the
+// signing override.
+const ENV_ANCHOR = mkdtempSync(join(tmpdir(), "pmr-env-anchor-"));
+
+// Incident telemetry goes to a sandbox, not the operator's ledger (#7853). This suite drives the
+// real pre-merge-rebase hook, whose deny paths emit rows carrying the fixture's own command string.
+const INCIDENT_SANDBOX = mkdtempSync(join(tmpdir(), "pmr-incidents-"));
+mkdirSync(join(INCIDENT_SANDBOX, ".claude"), { recursive: true });
+
 // `Record<string, string | undefined>` matches `process.env`'s actual shape
 // and lets `beforeAll` mutate `GIT_ENV.PATH` without an `as` cast. See the
 // Signal-3 gh-stub setup below.
 const GIT_ENV: Record<string, string | undefined> = {
-  ...cleanEnv,
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CEILING_DIRECTORIES: tmpdir(),
+  ...gitFixtureEnv(ENV_ANCHOR),
+  CLAUDECODE: undefined,
+  INCIDENTS_REPO_ROOT: INCIDENT_SANDBOX,
+  SOLEUR_TEST_INCIDENT_ROOT: INCIDENT_SANDBOX,
 };
 
 // Inline timeout for the two Signal-3 review-issue tests that previously
@@ -235,7 +250,12 @@ esac
     spawnChecked(["git", "config", "user.email", "test@test.com"], { cwd: repoDir });
     spawnChecked(["git", "config", "user.name", "Test"], { cwd: repoDir });
 
-    spawnChecked(["bash", "-c", "echo 'init' > file.txt && git add file.txt && git commit -m 'init'"], {
+    // Eight lines, not one: since #9401 the sync only runs when the incoming
+    // delta overlaps the branch's file set, so fixtures that need a real merge
+    // put the branch's edit on file.txt's head line and main's on its tail —
+    // an overlap that still merges cleanly (the hunks sit past the 3-line
+    // diff context).
+    spawnChecked(["bash", "-c", "printf 'l1\\nl2\\nl3\\nl4\\nl5\\nl6\\nl7\\nl8\\n' > file.txt && git add file.txt && git commit -m 'init'"], {
       cwd: repoDir,
     });
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
@@ -268,7 +288,7 @@ esac
       { cwd: remoteDir }
     );
     // Re-fetch so local origin/main tracks the reset remote.
-    spawnChecked(["git", "fetch", "origin"], { cwd: repoDir });
+    spawnChecked(["git", "fetch", "--no-tags", "origin"], { cwd: repoDir });
     // Re-reset local main to match the now-reset origin/main.
     spawnChecked(["git", "reset", "--hard", "origin/main"], { cwd: repoDir });
     // Remove untracked files/directories (e.g., todos/ from addReviewEvidence).
@@ -375,15 +395,18 @@ esac
   test("branch behind main triggers merge and push", async () => {
     spawnChecked(["git", "checkout", "-b", "test-behind"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      ["bash", "-c", "echo 'feature' > feature.txt && sed -i '1s/.*/branch-l1/' file.txt && git add feature.txt file.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
     addReviewEvidence(repoDir);
     spawnChecked(["git", "push", "origin", "test-behind"], { cwd: repoDir });
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    // The incoming delta must OVERLAP the branch's file set or the sync is
+    // skipped entirely (#9401): file.txt's tail append overlaps while the new
+    // file keeps the diff non-trivial.
     spawnChecked(
-      ["bash", "-c", "echo 'new-on-main' > main-change.txt && git add main-change.txt && git commit -m 'main advance'"],
+      ["bash", "-c", "echo 'new-on-main' > main-change.txt && echo 'l9' >> file.txt && git add main-change.txt file.txt && git commit -m 'main advance'"],
       { cwd: repoDir }
     );
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
@@ -399,6 +422,48 @@ esac
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.additionalContext).toContain("merged");
     expect(output.hookSpecificOutput.additionalContext).toContain("test-behind");
+  });
+
+  test("disjoint incoming delta skips the sync (#9401)", async () => {
+    spawnChecked(["git", "checkout", "-b", "test-disjoint"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'feature' > feature.txt && git add feature.txt && git commit -m 'feature'"],
+      { cwd: repoDir }
+    );
+    addReviewEvidence(repoDir);
+    spawnChecked(["git", "push", "origin", "test-disjoint"], { cwd: repoDir });
+
+    spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    spawnChecked(
+      ["bash", "-c", "echo 'new-on-main' > main-change.txt && git add main-change.txt && git commit -m 'main advance'"],
+      { cwd: repoDir }
+    );
+    spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
+
+    spawnChecked(["git", "checkout", "test-disjoint"], { cwd: repoDir });
+    const headBefore = new TextDecoder()
+      .decode(spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir }).stdout)
+      .trim();
+
+    const result = await runHook(
+      makeInput("gh pr merge 123 --squash --auto", repoDir)
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON output but got empty stdout").not.toBe("");
+    const output = JSON.parse(result.stdout);
+    // No merge commit, no push: the head SHA a green check suite certified
+    // stays put, and the skip is announced in additionalContext.
+    expect(output.hookSpecificOutput.additionalContext).toContain("delta disjoint");
+    const headAfter = new TextDecoder()
+      .decode(spawnChecked(["git", "rev-parse", "HEAD"], { cwd: repoDir }).stdout)
+      .trim();
+    expect(headAfter).toBe(headBefore);
+    const parents = Bun.spawnSync(
+      ["bash", "-c", "git cat-file -p HEAD | grep -c '^parent '"],
+      { cwd: repoDir, env: GIT_ENV }
+    );
+    expect(new TextDecoder().decode(parents.stdout).trim()).toBe("1");
   });
 
   test("uncommitted changes blocks merge with deny", async () => {
@@ -629,8 +694,10 @@ esac
 
   test("push failure after merge blocks with deny", async () => {
     spawnChecked(["git", "checkout", "-b", "test-pushfail"], { cwd: repoDir });
+    // file.txt edit = the overlap that keeps the sync reachable (#9401);
+    // pushfail.txt keeps the diff non-trivial.
     spawnChecked(
-      ["bash", "-c", "echo 'feature' > pushfail.txt && git add pushfail.txt && git commit -m 'feature'"],
+      ["bash", "-c", "echo 'feature' > pushfail.txt && sed -i '1s/.*/branch-l1/' file.txt && git add pushfail.txt file.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
     addReviewEvidence(repoDir);
@@ -638,7 +705,7 @@ esac
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'advance' > advance2.txt && git add advance2.txt && git commit -m 'advance'"],
+      ["bash", "-c", "echo 'advance' > advance2.txt && echo 'l9' >> file.txt && git add advance2.txt file.txt && git commit -m 'advance'"],
       { cwd: repoDir }
     );
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
@@ -671,7 +738,7 @@ esac
   test("hook is idempotent -- second run after merge shows up-to-date", async () => {
     spawnChecked(["git", "checkout", "-b", "test-idempotent"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'feature' > feature2.txt && git add feature2.txt && git commit -m 'feature'"],
+      ["bash", "-c", "echo 'feature' > feature2.txt && sed -i '1s/.*/branch-l1/' file.txt && git add feature2.txt file.txt && git commit -m 'feature'"],
       { cwd: repoDir }
     );
     addReviewEvidence(repoDir);
@@ -679,7 +746,7 @@ esac
 
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     spawnChecked(
-      ["bash", "-c", "echo 'advance' > advance.txt && git add advance.txt && git commit -m 'advance'"],
+      ["bash", "-c", "echo 'advance' > advance.txt && echo 'l9' >> file.txt && git add advance.txt file.txt && git commit -m 'advance'"],
       { cwd: repoDir }
     );
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });

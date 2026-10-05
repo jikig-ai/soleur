@@ -222,6 +222,7 @@ authoritative record of the edge until then.
 ## Password rotation / revocation (runbook)
 
 Leak response:
+
 1. `terraform -chdir=apps/web-platform/infra apply -replace=random_password.live_verify_user`
    (mints a new password → republishes the Doppler `prd` secret).
 2. `doppler run -p soleur -c prd -- bash apps/web-platform/scripts/seed-live-verify-user.sh`

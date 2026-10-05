@@ -23,13 +23,24 @@
 #
 # Exit 0 under cap, 1 over, 2 if the render itself failed.
 #
-# Usage: bash apps/web-platform/infra/git-data-userdata-budget.sh [--json] [out-rendered]
+# Usage: bash apps/web-platform/infra/git-data-userdata-budget.sh [--json] [out-rendered] [out-raw]
+#   out-rendered receives the STRIPPED render — the bytes the host is actually given, after
+#                local.git_data_template_rationale_strip. This is the host-truth artifact and
+#                is what every boot-fidelity predicate must read.
+#   out-raw      receives the UNSTRIPPED render. Optional. Its consumer is
+#                git-data-template-strip.test.sh, which needs both documents to compare them
+#                (shebang survival, the saving bound, and the per-entry diff). An earlier
+#                version of this comment claimed it existed so the runcmd rehearsal could
+#                "keep one arm on a corpus that still contains comments" -- that suite reads
+#                it only for a comment-count sanity check, and no predicate arm runs against
+#                it, so the discriminating power that sentence promised does not exist.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JSON=0
 [ "${1:-}" = "--json" ] && { JSON=1; shift; }
 OUT="${1:-}"
+RAW_OUT="${2:-}"
 
 command -v terraform >/dev/null 2>&1 || {
   echo "git-data-userdata-budget: SKIP — terraform not on PATH" >&2
@@ -39,6 +50,23 @@ command -v terraform >/dev/null 2>&1 || {
 TFDIR=$(mktemp -d -t gdbudget.XXXXXXXX)
 trap 'rm -rf "$TFDIR"' EXIT
 
+# (#7226, ADR-237) THE SSH HOST KEY PAIR is minted per render, never committed: a throwaway
+# ED25519 key generated here and deleted with $TFDIR. A REAL key rather than a stub string for
+# two reasons: its random base64 is what the host is really handed (a repetitive stub gzips
+# near-free and would overstate headroom), and the runcmd rehearsal installs it in the pinned
+# image so the sshd_config stage's host-key proof is exercised against a key that matches the
+# rendered pin. Without ssh-keygen the stub keeps the SHAPE and LENGTH only.
+if command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -q -t ed25519 -N "" -C "" -f "$TFDIR/hostkey" >/dev/null 2>&1; then
+  :
+else
+  # The armor label is assembled, not written whole, so no secret scanner reads this stub as a key.
+  _pk="OPENSSH PRIVATE""-KEY"; _pk="${_pk/-/ }"
+  { printf -- '-----BEGIN %s-----\n' "$_pk"
+    for _i in 1 2 3 4 5; do printf '%s\n' "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBST"; done
+    printf -- '-----END %s-----\n' "$_pk"; } > "$TFDIR/hostkey"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBHOSTKEYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' > "$TFDIR/hostkey.pub"
+fi
+
 # templatefile()/base64gzip() are builtins, so an EMPTY scratch dir needs no providers, no
 # backend and no credentials — this never touches state. The expression lives in a
 # `locals` block because `terraform console` reads ONE expression per LINE and collapsing
@@ -47,12 +75,18 @@ trap 'rm -rf "$TFDIR"' EXIT
 # Stub values match the SHAPE git-data.tf passes; arch/sha256 are the amd64 branch of
 # local.git_data_arch (cpx22 default). Stub LENGTHS are what matter for a size check, and
 # the real pubkeys/ids/token are all shorter than or equal to these.
+#
+# (#8211) GIT_DATA_BUDGET_VOLUME_ID is a TEST SEAM for the plaintext volume id, and it uses `-`
+# rather than `:-` so an EXPLICITLY EMPTY value is honoured: the render has two branches now
+# (a plaintext volume attached, and none), and the empty one is the state the host reaches once
+# the volume is detached. Both must fit under the cap, so both must be measurable.
 cat > "$TFDIR/main.tf" <<EOF
 locals {
-  git_data_rationale_strip = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
+  git_data_rationale_strip          = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
+  git_data_template_rationale_strip = "/(?m)^[ \\t]*#([ \\t][^\\n]*)?\\n/"
   vars = {
     git_data_bootstrap               = replace(file("${DIR}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
-    git_data_pre_receive_placeholder = replace(file("${DIR}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
+    git_data_pre_receive_placeholder = replace(file("${DIR}/git-data-pre-receive.sh"), local.git_data_rationale_strip, "")
     git_data_provision               = replace(file("${DIR}/git-data-provision.sh"), local.git_data_rationale_strip, "")
     git_data_transport_wrapper       = replace(file("${DIR}/git-data-transport-wrapper.sh"), local.git_data_rationale_strip, "")
     git_data_remove                  = replace(file("${DIR}/git-data-remove.sh"), local.git_data_rationale_strip, "")
@@ -60,10 +94,16 @@ locals {
     git_data_gc_service              = replace(file("${DIR}/git-data-gc.service"), local.git_data_rationale_strip, "")
     git_data_gc_failure_service      = replace(file("${DIR}/git-data-gc-failure.service"), local.git_data_rationale_strip, "")
     git_data_gc_timer                = replace(file("${DIR}/git-data-gc.timer"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen             = replace(file("${DIR}/git-data-luks-reopen.sh"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_service     = replace(file("${DIR}/git-data-luks-reopen.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_failure_service = replace(file("${DIR}/git-data-luks-reopen-failure.service"), local.git_data_rationale_strip, "")
+    git_data_luks_reopen_timer           = replace(file("${DIR}/git-data-luks-reopen.timer"), local.git_data_rationale_strip, "")
     git_transport_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBTRANSPORTKEYAAAAAAAAAAAAAAAAAAAAA"
     git_provision_pubkey             = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBPROVISIONKEYAAAAAAAAAAAAAAAAAAAAA"
     git_remove_pubkey                = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISTUBREMOVEKEYAAAAAAAAAAAAAAAAAAAAAAAA"
-    git_data_volume_id               = "100000001"
+    host_ssh_ed25519_private_key     = file("${TFDIR}/hostkey")
+    host_ssh_ed25519_public_key      = trimspace(file("${TFDIR}/hostkey.pub"))
+    git_data_volume_id               = "${GIT_DATA_BUDGET_VOLUME_ID-100000001}"
     git_data_luks_volume_id          = "100000002"
     # Built by join() rather than written as one literal: a contiguous dp.<type>.<...>
     # string is a real Doppler-service-token SHAPE, and GitHub Push Protection blocks the
@@ -75,12 +115,14 @@ locals {
     doppler_arch                     = "amd64"
     doppler_sha256                   = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
     sentry_dsn                       = "https://stubkey0000000000000000000000@o1234567.ingest.de.sentry.io/7654321"
-    betterstack_ingest_url           = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+    betterstack_ingest_url           = "https://s2734275.eu-central-1a.betterstackdata.com/"
+    betterstack_logs_token           = "stub-betterstack-ingest-token-0000000000"
     host_name                        = "soleur-git-data"
   }
 
   rendered = templatefile("${DIR}/cloud-init-git-data.yml", local.vars)
-  stored   = base64gzip(local.rendered)
+  stripped = replace(local.rendered, local.git_data_template_rationale_strip, "")
+  stored   = base64gzip(local.stripped)
 }
 EOF
 
@@ -96,24 +138,59 @@ if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -q 'known after apply'; then
   exit 2
 fi
 
+raw_render="$TFDIR/raw.yml"
+printf '%s\n' "$raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$raw_render"
+
+# The STRIPPED render is the host-truth artifact. Read it from terraform rather than
+# re-implementing the strip here: a second implementation is exactly the restatement
+# ADR-152's registry precedent records as the defect that produced a phantom cap breach.
+stripped_raw=$(console 'local.stripped')
+# CHECKED, because the guard below would otherwise blame the wrong thing. A failed console
+# here yields an empty render, the `#cloud-config` header guard fires, and it tells the
+# reader to go look at local.git_data_template_rationale_strip -- for a terraform fault. The
+# sibling `stored` read is guarded; this one was not.
+if [ -z "$stripped_raw" ] || [ -s "$TFDIR/err" ]; then
+  echo "git-data-userdata-budget: terraform console failed evaluating local.stripped" >&2
+  sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
+  exit 2
+fi
 rendered="$TFDIR/rendered.yml"
-printf '%s\n' "$raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
+printf '%s\n' "$stripped_raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
 
 stored=$(console 'local.stored' | tr -d '"')
 [ -n "$stored" ] || { echo "git-data-userdata-budget: base64gzip failed" >&2; exit 2; }
 
-raw_bytes=$(wc -c < "$rendered")
+raw_bytes=$(wc -c < "$raw_render")
+stripped_bytes=$(wc -c < "$rendered")
 stored_bytes=${#stored}
 cap=32768
 headroom=$(( cap - stored_bytes ))
 
+# THE HEADER GUARD. `#cloud-config` is a directive that is a comment by syntax, so a strip
+# expression one character too permissive deletes it. Nothing downstream fails loudly: the
+# apply succeeds, the host boots, and cloud-init never recognises the payload. Assert the
+# first line of the STRIPPED render, because that is the document the host is handed.
+if [ "$(head -1 "$rendered")" != "#cloud-config" ]; then
+  echo "git-data-userdata-budget: the stripped render does not begin with '#cloud-config' — cloud-init would not execute it and the host would boot dark. Check local.git_data_template_rationale_strip." >&2
+  exit 1
+fi
+
+# THE NOT-A-NO-OP GUARD (ADR-152's third verification arm). A strip that matched nothing
+# satisfies every preservation check while delivering none of the saving, and the only
+# symptom is a cap breach much later.
+if [ "$stripped_bytes" -ge "$raw_bytes" ]; then
+  echo "git-data-userdata-budget: the strip removed nothing (raw ${raw_bytes} B -> stripped ${stripped_bytes} B). local.git_data_template_rationale_strip is not matching." >&2
+  exit 1
+fi
+
 [ -n "$OUT" ] && cp "$rendered" "$OUT"
+[ -n "$RAW_OUT" ] && cp "$raw_render" "$RAW_OUT"
 
 if [ "$JSON" -eq 1 ]; then
-  printf '{"raw":%s,"stored":%s,"cap":%s,"headroom":%s}\n' \
-    "$raw_bytes" "$stored_bytes" "$cap" "$headroom"
+  printf '{"raw":%s,"stripped":%s,"stored":%s,"cap":%s,"headroom":%s}\n' \
+    "$raw_bytes" "$stripped_bytes" "$stored_bytes" "$cap" "$headroom"
 else
-  echo "git-data user_data: stored=${stored_bytes} B / cap=${cap} B (headroom ${headroom} B, raw ${raw_bytes} B)"
+  echo "git-data user_data: stored=${stored_bytes} B / cap=${cap} B (headroom ${headroom} B, raw ${raw_bytes} B, stripped ${stripped_bytes} B)"
 fi
 
 if [ "$stored_bytes" -ge "$cap" ]; then

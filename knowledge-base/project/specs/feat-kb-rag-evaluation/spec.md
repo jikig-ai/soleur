@@ -14,7 +14,7 @@ Soleur's knowledge base (1,653 files, ~240,000 words) has no discovery mechanism
 
 ## Goals
 
-- G1: Agents can discover all KB files from a single manifest file
+- G1: Agents can discover KB files from a single manifest file (scope narrowed by ADR-174)
 - G2: Cross-domain search returns relevant results regardless of category filing
 - G3: New KB files are created with standardized frontmatter for searchability
 - G4: Manifest stays current without manual intervention
@@ -28,7 +28,7 @@ Soleur's knowledge base (1,653 files, ~240,000 words) has no discovery mechanism
 
 ## Functional Requirements
 
-- **FR1:** Auto-generated `knowledge-base/INDEX.md` listing all KB files with one-line descriptions extracted from YAML frontmatter `title` or first heading
+- **FR1:** [**Superseded in part by ADR-174** — `INDEX.md` no longer lists *all* KB files: `**/archive/` and per-feature working state under `project/specs/` are excluded.] Auto-generated `knowledge-base/INDEX.md` listing KB files with one-line descriptions extracted from YAML frontmatter `title` or first heading
 - **FR2:** INDEX.md includes file path, description, domain, and tags (when available)
 - **FR3:** INDEX.md regeneration triggered automatically (git hook, compound integration, or CI)
 - **FR4:** `soleur:kb-search` skill that runs parallel grep across all KB domains and returns ranked file paths with context
@@ -44,7 +44,7 @@ Soleur's knowledge base (1,653 files, ~240,000 words) has no discovery mechanism
 
 ## Acceptance Criteria
 
-- [ ] `knowledge-base/INDEX.md` exists and lists all KB files with descriptions
+- [ ] `knowledge-base/INDEX.md` exists and lists KB files with descriptions (scope narrowed by ADR-174 — see FR1)
 - [ ] Running the generation script produces identical output on repeated runs (deterministic)
 - [ ] `soleur:kb-search` skill returns relevant results for cross-category queries
 - [ ] New files created by compound/brainstorm/plan skills include standardized frontmatter

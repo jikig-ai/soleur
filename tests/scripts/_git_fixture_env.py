@@ -1,0 +1,143 @@
+"""Fixture git environment for the python test suites under ``tests/scripts``.
+
+The python sibling of ``plugins/soleur/test/lib/git-fixture-env.ts``. See #7833 and
+``knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md``.
+
+A test that builds a temporary git fixture and passes ``-C <dir>`` to every ``git`` call is still
+not scoped to that fixture: when the test process inherits ``GIT_DIR`` / ``GIT_INDEX_FILE`` from a
+git hook environment, the subprocess honours the environment over both its working directory and
+``-C``. ``git init`` then initialises nothing and the fixture's writes land in the surrounding
+repository.
+
+EXCLUSION BY PREFIX, NEVER BY NAME LIST — the rule stated by
+``plugins/soleur/test/lib/git-clean-env.ts`` and honoured here. An earlier revision of this file
+carried a name list, and review found four omissions in one pass: ``GIT_TEMPLATE_DIR`` and
+``GIT_EXEC_PATH`` (both proven to execute arbitrary code — ``git init`` copies template hooks in
+before any config is consulted, so the config hardening below is no defence), ``GIT_SSH`` (which a
+``GIT_SSH_COMMAND`` prefix rule structurally cannot match, the prefix being longer than the name),
+and the ``GIT_TRACE`` family (which appends to an absolute path — a write outside the fixture, i.e.
+the very property this module exists to establish). A list has to be complete against a vocabulary
+git is free to grow; sweeping the namespace is complete by construction.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# Fire the tripwire on import. `python3 -m unittest` does not load conftest.py, so registering
+# it there alone would leave the arm scripts/test-all.sh actually drives unprotected. Every
+# python suite that spawns git imports THIS module, which makes it the real chokepoint.
+from tests.conftest import (
+    assert_no_inherited_git_location,
+    ensure_incident_sandbox,
+    ensure_scratch_session,
+)
+
+assert_no_inherited_git_location("python")
+# Bind a per-run scratch root BEFORE the sandbox below (#9117): measured, a direct
+# `python3 -m unittest tests.scripts.<suite>` left every `mkdtemp` it made (and the sandbox) behind.
+ensure_scratch_session()
+# Redirect incident telemetry at the same chokepoint (#7853). The IMPORT is the chokepoint under
+# `python3 -m unittest`, which loads no conftest -- so this line, not a conftest hook, is what
+# reaches the python suites that spawn a hook or a gate script.
+ensure_incident_sandbox()
+
+#: The variables that redirect WHERE git reads and writes, or that make ``git init`` copy
+#: executable content into the fixture.
+#:
+#: This is NOT used to build the environment — the namespace sweep does that, and a list could only
+#: make it narrower. It exists because the TRIPWIRE and the entry-point scrub need a concrete set to
+#: name: a tripwire cannot refuse every ``GIT_`` variable (``GIT_AUTHOR_NAME`` is harmless and a
+#: hook exports it on every commit), and an ``unset`` needs words.
+#:
+#: Kept in lockstep with ``GIT_LOCATION_VARS`` in ``plugins/soleur/test/lib/git-fixture-env.ts``,
+#: the shell list in ``plugins/soleur/test/test-helpers.sh``, and ``REQUIRED_SCRUB_VARS`` in
+#: ``plugins/soleur/test/hook-git-env-coverage.test.sh``. That lockstep is ENFORCED by
+#: ``plugins/soleur/test/git-env-list-parity.test.sh``, not asserted in a drift comment.
+GIT_LOCATION_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_TEMPLATE_DIR",
+    "GIT_EXEC_PATH",
+)
+
+#: Execution vectors git consults whose names carry no ``GIT_`` prefix, so the sweep cannot reach
+#: them by shape. ``SSH_ASKPASS`` is git's documented fallback when ``GIT_ASKPASS`` and
+#: ``core.askPass`` are unset — an inherited value names a program git will run.
+_NON_GIT_SCRUBBED_VARS = ("SSH_ASKPASS",)
+
+
+def fixture_ceiling(fixture_dir: str | os.PathLike[str]) -> str:
+    """Return the enforceable ``GIT_CEILING_DIRECTORIES`` value for ``fixture_dir``.
+
+    The fixture's PARENT, resolved through symlinks. The fixture-dir spelling does not stop
+    discovery escaping when git's cwd equals it (measurements.md §M-4).
+
+    :raises ValueError: when no enforceable ceiling exists, rather than emitting one git ignores.
+        ``GIT_CEILING_DIRECTORIES`` is ``:``-separated and git discards every non-absolute entry, so
+        a colon anywhere in the path silently voids it; ``"/"`` is discarded for the same reason. A
+        ceiling that looks set and does nothing is worse than none, because it reads as protection.
+    """
+    physical = Path(fixture_dir).resolve()
+    ceiling = str(physical.parent)
+    if not ceiling.startswith("/") or ceiling == "/" or ":" in ceiling:
+        raise ValueError(
+            f"no enforceable GIT_CEILING_DIRECTORIES for {fixture_dir!r} (computed {ceiling!r}). "
+            'git ignores a ceiling that is "/" or non-absolute, and ":" splits it into fragments '
+            "that are all ignored."
+        )
+    return ceiling
+
+
+def git_fixture_env(fixture_dir: str | os.PathLike[str]) -> dict[str, str]:
+    """Build the environment a fixture's ``git`` subprocess should run under.
+
+    ``fixture_dir`` is required and there is deliberately no default. A default of
+    ``tempfile.gettempdir()`` yields a ceiling of ``"/"``, which git ignores — so every caller that
+    omitted the argument would silently lose the ceiling while the code read as if it had one.
+    """
+    ceiling = fixture_ceiling(fixture_dir)
+    physical = Path(fixture_dir).resolve()
+
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("GIT_") and k not in _NON_GIT_SCRUBBED_VARS
+    }
+
+    env["GIT_CEILING_DIRECTORIES"] = ceiling
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    # GIT_CONFIG_GLOBAL replaces ~/.gitconfig and ~/.config/git/config but NOT the sibling XDG git
+    # files: ~/.config/git/attributes and ~/.config/git/ignore are located independently of config
+    # content, so a developer's `* text=auto` still rewrites fixture bytes.
+    env["GIT_ATTR_NOSYSTEM"] = "1"
+    env["XDG_CONFIG_HOME"] = str(physical / ".soleur-fixture-xdg")
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # Synthesized identity (`cq-test-fixtures-synthesized-only`). Required: the sweep removes
+    # GIT_AUTHOR_*/GIT_COMMITTER_* and GIT_CONFIG_GLOBAL=os.devnull removes the developer's, so
+    # without these the fixture's first commit fails `Author identity unknown`.
+    env["GIT_AUTHOR_NAME"] = "Soleur Fixture"
+    env["GIT_AUTHOR_EMAIL"] = "fixture@example.com"
+    env["GIT_COMMITTER_NAME"] = "Soleur Fixture"
+    env["GIT_COMMITTER_EMAIL"] = "fixture@example.com"
+    # Signing, as a config OVERRIDE rather than a global replacement. GIT_CONFIG_GLOBAL=os.devnull
+    # and GIT_CONFIG_NOSYSTEM=1 above do NOT reach a REPO-LOCAL `commit.gpgsign=true`, so a fixture
+    # carrying one fails `gpg failed to sign the data`. GIT_CONFIG_COUNT entries are applied as
+    # command-line `-c` overrides, which outrank repo-local config.
+    #
+    # This arm was MISSING while its TS and shell siblings both carried it — and the python fixtures
+    # do commit (~15 commits under `env=git_fixture_env(repo)` in test_lint_rule_bodies.py), so a
+    # developer with a repo-local commit.gpgsign=true failed those tests. The parity test pins the
+    # constant LIST; nothing pinned the BUILT ENVIRONMENT, which is how three languages diverged
+    # silently. See the built-env parity assertion added alongside this fix.
+    env["GIT_CONFIG_COUNT"] = "1"
+    env["GIT_CONFIG_KEY_0"] = "commit.gpgsign"
+    env["GIT_CONFIG_VALUE_0"] = "false"
+    return env

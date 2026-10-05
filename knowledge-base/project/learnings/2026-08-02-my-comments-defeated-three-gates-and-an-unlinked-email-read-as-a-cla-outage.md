@@ -65,8 +65,31 @@ strings stripped first — it returns 0.
 - **When a mutation axis reports SURVIVED, check the mutation landed in CODE before concluding
   anything about the artifact.** `diff -q` proves the file changed; it does not prove the change
   was reachable.
+- **Anchoring is necessary but not sufficient — an anchored pattern must also be SCOPED to the
+  construct it is about.** `expect(body).toMatch(/^\s*exit 1\s*$/m)` is anchored on syntax no
+  comment can produce, and it was still vacuous: it ran file-wide, and a legitimate non-comment
+  `exit 1` in an unrelated branch several lines away satisfied it, so deleting the entire block
+  the assertion was about left the suite green (#7659). The two failure modes are independent —
+  a comment can satisfy an unanchored pattern, and a *sibling occurrence* can satisfy an anchored
+  one — so both checks are needed. Extract the construct's own block first and assert within it.
 - Corollary for authors: a heavily-commented file is *more* likely to defeat its own gates. The
   documentation is not the problem — the unanchored gate is.
+- **Finding an instance of this class is not sweeping the class.** In #7586/#7587 one bare-token
+  anchor (a `|| true` satisfied by the step's own Doppler line) was found by *executing* the
+  mutation matrix against the real artifact — 15 of 16 rows behaved, that one SURVIVED — fixed,
+  and closed; the anchor immediately beside it had the identical shape and survived another
+  review round. A guard block is written in one sitting, by one author, in one idiom, so its
+  defect distribution is not independent: when one assertion in a block is found vacuous,
+  re-derive **every** assertion in that block before closing the finding. See
+  [the rework that removed three instances shipped four more](./2026-08-13-the-rework-that-removed-three-instances-shipped-four-more.md)
+  and [the channel was silent on the path it was built for](./2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md) §3.
+- **A delete-only mutation battery cannot see an ordering property.** Deleting a write reds any
+  suite that reads the artifact at all; *moving* it reds only a suite that reads the artifact
+  during the window the property is about. In #7587, moving `state_add` from before a poll loop
+  to just after it left 190/190 assertions green, because every case read the state file after
+  the function had returned — the one instant the property can never be violated at. For any
+  "X is recorded *before* Y" or "the record exists *during* W" property, one row must **reorder**
+  and one case must observe **inside** the window.
 
 ## 2. An unlinked git author email silently defeats a login-based CLA allowlist
 

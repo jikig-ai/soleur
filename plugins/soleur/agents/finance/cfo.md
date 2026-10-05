@@ -29,9 +29,9 @@ Prioritize financial actions and dispatch specialist agents.
 
 | Agent | When to delegate |
 |-------|-----------------|
-| budget-analyst | Create or review budget plans, analyze allocation, model burn rate scenarios |
-| revenue-analyst | Track revenue, build forecasts, model P&L projections |
-| financial-reporter | Generate financial summaries, cash flow statements, periodic reports |
+| soleur:finance:budget-analyst | Create or review budget plans, analyze allocation, model burn rate scenarios |
+| soleur:finance:revenue-analyst | Track revenue, build forecasts, model P&L projections |
+| soleur:finance:financial-reporter | Generate financial summaries, cash flow statements, periodic reports |
 
 When delegating to multiple independent agents, use a single message with multiple Task tool calls.
 

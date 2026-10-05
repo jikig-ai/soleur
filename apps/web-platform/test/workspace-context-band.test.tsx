@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import type { OrgMembershipSummary } from "@/server/org-memberships-resolver";
+import { SwrTestProvider } from "./helpers/swr-wrapper";
 
 // next/navigation is only needed because OrgSwitcherContainer's tree is pulled
 // in; the band itself takes `pathname` as a prop (no usePathname coupling).
@@ -71,6 +72,10 @@ function stubFetch(memberships: OrgMembershipSummary[], repoName: string | null)
   );
 }
 
+// #9178 — the band's OrgSwitcherContainer reads memberships via a shared
+// SWR key now; without a provider the global cache leaks one test's stub
+// into the next (multi-org data could render a switcher in the solo chip
+// test). Fresh Map per render = per-test cache isolation.
 describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -82,12 +87,12 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("renders the band shell", () => {
-    render(<WorkspaceContextBand pathname="/dashboard" />);
+    render(<WorkspaceContextBand pathname="/dashboard" />, { wrapper: SwrTestProvider });
     expect(screen.getByTestId("workspace-context-band")).toBeInTheDocument();
   });
 
   it("shows workspace identity (name + repo) on a DRILLED route (/dashboard/settings/members)", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />, { wrapper: SwrTestProvider });
     // multi-org → interactive switcher chip surfaces the active workspace name
     expect(
       await screen.findByText("Soleur Workspace"),
@@ -99,7 +104,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("AC3/AC7: the repo badge is FOLDED INTO the pill (inside the switcher button), not a standalone row", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />, { wrapper: SwrTestProvider });
     const badge = await screen.findByTestId("live-repo-badge");
     // exactly one element carries the repo string — no duplicate standalone row
     expect(screen.getAllByTestId("live-repo-badge")).toHaveLength(1);
@@ -109,7 +114,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("AC1: the workspace pill renders BEFORE the 'Back to menu' chevron in the DOM", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />, { wrapper: SwrTestProvider });
     const pill = await screen.findByRole("button", {
       name: /switch workspace/i,
     });
@@ -122,7 +127,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("AC2 (Sidebar-UX Issue 1): the leading pill top room is tightened to pt-2", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />, { wrapper: SwrTestProvider });
     // wait for the band to hydrate the pill
     await screen.findByRole("button", { name: /switch workspace/i });
     const band = screen.getByTestId("workspace-context-band");
@@ -149,7 +154,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     // (literal token + firstElementChild): if the reserve is re-expressed via a
     // different utility/wrapper, update or delete this tripwire — the e2e is the
     // source of truth.
-    render(<WorkspaceContextBand pathname="/dashboard" />);
+    render(<WorkspaceContextBand pathname="/dashboard" />, { wrapper: SwrTestProvider });
     const band = screen.getByTestId("workspace-context-band");
     const pillWrapper = band.firstElementChild as HTMLElement;
     expect(pillWrapper.className).toContain("md:min-h-[64px]");
@@ -163,7 +168,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
     // w-full min-w-0 card auto-grows into the reclaimed ~32px. jsdom has NO layout
     // engine, so this is a TOKEN tripwire only — the binding geometric proof is the
     // «↔▾ rect-non-intersection gate in nav-states-shell.e2e.ts (ADR-049).
-    render(<WorkspaceContextBand pathname="/dashboard" />);
+    render(<WorkspaceContextBand pathname="/dashboard" />, { wrapper: SwrTestProvider });
     const band = screen.getByTestId("workspace-context-band");
     const pillWrapper = band.firstElementChild as HTMLElement;
     expect(pillWrapper.className).toContain("md:pr-12");
@@ -171,7 +176,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("does NOT reserve the min-height on a DRILLED band (drill !== null already exceeds 64px via back-link + section title)", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings/members" />, { wrapper: SwrTestProvider });
     await screen.findByRole("button", { name: /switch workspace/i });
     const band = screen.getByTestId("workspace-context-band");
     const pillWrapper = band.firstElementChild as HTMLElement;
@@ -181,7 +186,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("Sidebar-UX Issue 3: the section title is spaced off the 'Back to menu' link (pt-3)", () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings" />, { wrapper: SwrTestProvider });
     // The back link (pt-2) and the section heading used to sit in one cramped
     // block; pt-3 on the title row adds a clear inter-row gap (shared band, so
     // this applies to both Settings and Knowledge Base).
@@ -192,7 +197,7 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("renders the back chevron SYNCHRONOUSLY on a drilled route (not async-gated)", () => {
-    render(<WorkspaceContextBand pathname="/dashboard/kb/engineering/x.md" />);
+    render(<WorkspaceContextBand pathname="/dashboard/kb/engineering/x.md" />, { wrapper: SwrTestProvider });
     // present in the FIRST render — no findBy/await
     const back = screen.getByTestId("nav-back-chevron");
     expect(back).toHaveAttribute("href", "/dashboard");
@@ -200,26 +205,26 @@ describe("WorkspaceContextBand — persistent workspace identity (AC1/AC4b)", ()
   });
 
   it("labels the section title on a drilled route", () => {
-    render(<WorkspaceContextBand pathname="/dashboard/settings" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings" />, { wrapper: SwrTestProvider });
     expect(screen.getByTestId("nav-section-title")).toHaveTextContent(
       "Settings",
     );
   });
 
   it("HIDES the back chevron and section title on a non-drill route (top level)", () => {
-    render(<WorkspaceContextBand pathname="/dashboard" />);
+    render(<WorkspaceContextBand pathname="/dashboard" />, { wrapper: SwrTestProvider });
     expect(screen.queryByTestId("nav-back-chevron")).not.toBeInTheDocument();
     expect(screen.queryByTestId("nav-section-title")).not.toBeInTheDocument();
   });
 
   it("still hides back chevron on the admin analytics route (allowlist, RQ6)", () => {
-    render(<WorkspaceContextBand pathname="/dashboard/admin/analytics" />);
+    render(<WorkspaceContextBand pathname="/dashboard/admin/analytics" />, { wrapper: SwrTestProvider });
     expect(screen.queryByTestId("nav-back-chevron")).not.toBeInTheDocument();
   });
 
   it("RQ7: shows a NON-interactive workspace name chip for solo users (no switcher button)", async () => {
     stubFetch([SOLO], "jikig-ai/soleur");
-    render(<WorkspaceContextBand pathname="/dashboard/settings" />);
+    render(<WorkspaceContextBand pathname="/dashboard/settings" />, { wrapper: SwrTestProvider });
     // name is visible (orientation value) ...
     expect(await screen.findByText("Soleur Workspace")).toBeInTheDocument();
     // ... but there is NO interactive switch affordance (nothing to switch to)
@@ -245,7 +250,7 @@ describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () =>
   });
 
   it("renders the monogram tile (non-gold) with the FULL workspace name as the tooltip when collapsed", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />, { wrapper: SwrTestProvider });
     // icon comes from the still-mounted container (resolves after the fetch)
     const icon = await screen.findByTestId("workspace-identity-icon");
     expect(icon).toHaveAttribute("title", "Soleur Workspace");
@@ -255,7 +260,7 @@ describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () =>
   });
 
   it("strips the switch chrome when collapsed — no `Switch workspace` button even with multiple memberships", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />, { wrapper: SwrTestProvider });
     await screen.findByTestId("workspace-identity-icon");
     expect(
       screen.queryByRole("button", { name: /switch workspace/i }),
@@ -265,7 +270,7 @@ describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () =>
   // Declutter: the collapsed rail keeps only the identity anchor (ADR-047) — the
   // decorative gold repo dot and the section title are absent when collapsed.
   it("does NOT render the decorative gold repo dot or the section title when collapsed", async () => {
-    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />);
+    render(<WorkspaceContextBand pathname="/dashboard/kb" collapsed />, { wrapper: SwrTestProvider });
     expect(await screen.findByTestId("workspace-identity-icon")).toBeInTheDocument();
     expect(screen.queryByTestId("live-repo-dot")).toBeNull();
     expect(screen.queryByTestId("nav-section-title")).toBeNull();
@@ -279,6 +284,7 @@ describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () =>
   it("ignores `collapsed` for the mobile variant — full pill, no icon, no data-collapsed", async () => {
     render(
       <WorkspaceContextBand pathname="/dashboard" variant="mobile" collapsed />,
+      { wrapper: SwrTestProvider },
     );
     // mobile renders the full interactive pill (multi-org), not the icon tile
     expect(
@@ -295,6 +301,7 @@ describe("WorkspaceContextBand — collapsed icon identity (remount-fix)", () =>
   it("sets data-collapsed=\"true\" on the rail band only when collapsed", async () => {
     const { rerender } = render(
       <WorkspaceContextBand pathname="/dashboard/kb" collapsed />,
+      { wrapper: SwrTestProvider },
     );
     await screen.findByTestId("workspace-identity-icon");
     expect(screen.getByTestId("workspace-context-band")).toHaveAttribute(
@@ -321,6 +328,7 @@ describe("WorkspaceContextBand — back suppression (Phase 3, #4915)", () => {
         variant="mobile"
         suppressBack
       />,
+      { wrapper: SwrTestProvider },
     );
     expect(screen.queryByTestId("nav-back-chevron")).not.toBeInTheDocument();
     // only the back link is suppressed — the section title still renders
@@ -328,7 +336,7 @@ describe("WorkspaceContextBand — back suppression (Phase 3, #4915)", () => {
   });
 
   it("still renders the back affordance when suppressBack is absent (KB landing / other drills)", () => {
-    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />);
+    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />, { wrapper: SwrTestProvider });
     expect(screen.getByTestId("nav-back-chevron")).toBeInTheDocument();
   });
 });
@@ -345,12 +353,13 @@ describe("WorkspaceContextBand — section-title ownership (Phase 4, #4915)", ()
         variant="mobile"
         suppressSectionTitle
       />,
+      { wrapper: SwrTestProvider },
     );
     expect(screen.queryByTestId("nav-section-title")).not.toBeInTheDocument();
   });
 
   it("renders the band section title when suppressSectionTitle is absent (default)", () => {
-    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />);
+    render(<WorkspaceContextBand pathname="/dashboard/kb" variant="mobile" />, { wrapper: SwrTestProvider });
     expect(screen.getByTestId("nav-section-title")).toBeInTheDocument();
   });
 });

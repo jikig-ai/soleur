@@ -90,7 +90,7 @@ WHEREAS the Grantor operates a Soleur Web Platform workspace and holds a valid B
 
 WHEREAS the Grantor wishes to fund the Grantee's AI agent runs within the shared workspace by delegating access to the Grantor's API key, subject to daily and hourly spending caps;
 
-WHEREAS the BYOK delegation feature (`BYOK_DELEGATIONS_ENABLED`) routes the Grantee's prompt content through the Grantor's API key, creating a joint controllership arrangement under Article 26 of the GDPR for that processing;
+WHEREAS the BYOK delegation feature (runtime flag `byok-delegations`) routes the Grantee's prompt content through the Grantor's API key, creating a joint controllership arrangement under Article 26 of the GDPR for that processing;
 
 WHEREAS the Parties intend the responsibility allocation set out in Section 3 of this text to constitute their Article 26 arrangement, and intend the recorded in-app acceptance to evidence the Grantee's consent under Article 7 of the GDPR;
 
@@ -142,26 +142,29 @@ This arrangement rests on two **distinct** lawful bases, which must not be confl
 ## 4. Cost Telemetry Consent
 
 4.1 The Grantee consents (Article 6(1)(a)) to the Grantor receiving **itemised cost telemetry** for each AI agent run funded by the delegation. This telemetry includes:
-  - Token count (input and output)
-  - Cost in USD cents
-  - Timestamp of invocation
-  - Agent role (domain leader identifier)
+
+- Token count (input and output)
+- Cost in USD cents
+- Timestamp of invocation
+- Agent role (domain leader identifier)
 
 4.2 The Grantor does **NOT** receive access to:
-  - The Grantee's prompt content
-  - The AI assistant's response content
-  - Any conversation history or context
-  - Any personal data beyond what is listed in Section 4.1
+
+- The Grantee's prompt content
+- The AI assistant's response content
+- Any conversation history or context
+- Any personal data beyond what is listed in Section 4.1
 
 ---
 
 ## 5. Recorded In-App Consent (Article 7 GDPR)
 
 5.1 The Grantee provides consent by an affirmative in-app action ("I accept"). There is no paper signature. The acceptance is stored server-side in `byok_delegation_acceptances`, which records:
-  - `side_letter_version` — the server-pinned consent version (currently `1.0.0`) that the acceptance binds to;
-  - `accepted_at` — the timestamp of the affirmative action;
-  - `ip_hash` — a hashed source address;
-  - `user_agent` — the client string at time of acceptance.
+
+- `side_letter_version` — the server-pinned consent version (currently `1.0.0`) that the acceptance binds to;
+- `accepted_at` — the timestamp of the affirmative action;
+- `ip_hash` — a hashed source address;
+- `user_agent` — the client string at time of acceptance.
 
 5.2 This recorded acceptance row is the controller's demonstration that consent was given (Article 7(1)). It supersedes the retired paper-signature lines of template version 1.x.
 

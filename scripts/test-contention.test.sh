@@ -3,6 +3,7 @@
 #
 # Phase 1 (instrumentation): headroom probes, sibling scan, named banners.
 # The Phase 3 advisory-queue arms land with the lock itself.
+# Phase 4 (#7424): the second view over the same scan — SIBLING_SUITE_DETECTED.
 #
 # AUTHORING CONSTRAINTS (from work/SKILL.md, learned the hard way in #6588):
 #   - Never `producer | grep -q` under `set -o pipefail`: an EARLY match makes
@@ -26,6 +27,15 @@ LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
 
 pass_n=0
 fails=0
+cases=0
+# `cases` is incremented at the CALL SITE, never inside pass()/fail(). That placement is the
+# whole substance of the conservation check at the bottom of this file: a counter that moves
+# inside both verdict helpers moves WITH the verdict, so stubbing fail() to a no-op drops the
+# row and its count together and `pass_n + fails == cases` still holds. Measured on this shape
+# before the fix: `fail() { :; }` plus a genuine defect printed a clean total and exited 0.
+#
+# The verdict helpers touch pass_n/fails ONLY. Never increment `cases` inside `$( )` — a
+# command substitution runs in a subshell and the increment is discarded.
 pass() { pass_n=$((pass_n + 1)); echo "  [ok] $1"; }
 fail() { fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
 
@@ -53,20 +63,36 @@ fi
 # but no inner ')' does NOT discriminate first-vs-last and lets that mutation
 # survive; the mutation battery caught exactly that gap in this fixture.
 # ---------------------------------------------------------------------------
+#
+# argv[0], ppid and pgrp are OPTIONAL trailing parameters (defaults `bash`, 0, 0 —
+# byte-identical to the pre-Phase-4 fixture for every 5-argument caller). Phase 4
+# needs all three: argv[0] because a suite is routinely exec'd directly
+# (`./scripts/foo.test.sh`), and ppid/pgrp because sibling-run children are
+# cancelled by ANCESTRY and process group, never by cwd — a fixture that leaves
+# both pinned at 0 cannot express a parent/child relationship at all, so every
+# cancellation arm would be testing an unreachable branch.
+#
+# An EMPTY cwd argument deliberately omits the `cwd` symlink, which is how the
+# real `<unreadable>` case is reproduced (readlink fails, the lib substitutes the
+# literal). Do not "fix" it by pointing the link somewhere: the whole point of
+# T11c is that two processes sharing the `<unreadable>` pseudo-path must not
+# cancel each other.
 CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 make_fake_proc() {
   local root="$1" pid="$2" cwd="$3" elapsed_s="$4" cmd="$5"
+  local argv0="${6:-bash}" ppid="${7:-0}" pgrp="${8:-0}"
   local uptime=100000
   local starttime=$(( (uptime - elapsed_s) * CLK_TCK ))
   mkdir -p "$root/$pid"
   printf '%s 0.00\n' "$uptime" > "$root/uptime"
   # NUL-separated argv, exactly as the kernel presents it.
-  printf 'bash\0%s\0' "$cmd" > "$root/$pid/cmdline"
+  printf '%s\0%s\0' "$argv0" "$cmd" > "$root/$pid/cmdline"
   # 19 filler fields (state .. itrealvalue), so starttime lands at field 20.
-  local filler="S" i
-  for (( i = 2; i <= 19; i++ )); do filler+=" 0"; done
+  # Overall field 4 = ppid and field 5 = pgrp, i.e. filler fields 2 and 3.
+  local filler="S $ppid $pgrp" i
+  for (( i = 4; i <= 19; i++ )); do filler+=" 0"; done
   printf '%s (te) st) %s %s 0 0\n' "$pid" "$filler" "$starttime" > "$root/$pid/stat"
-  ln -sfn "$cwd" "$root/$pid/cwd"
+  [[ -n "$cwd" ]] && ln -sfn "$cwd" "$root/$pid/cwd"
   printf 'MemAvailable:    7000000 kB\n' > "$root/meminfo"
   printf '3.96 9.72 14.60 2/2934 572235\n' > "$root/loadavg"
 }
@@ -97,6 +123,7 @@ echo "=== Phase 1: instrumentation ==="
 
 # --- Arm 1: entry count ----------------------------------------------------
 out="$(tc_env bash -c "source '$LIB'; tc_tmp_entry_count" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$out" == "3" ]]; then
   pass "tc_tmp_entry_count counts entries in TC_TMPDIR"
 else
@@ -106,17 +133,20 @@ fi
 # --- Arm 2: sibling scan ---------------------------------------------------
 tc_env bash -c "source '$LIB'; tc_siblings" > "$TESTROOT/siblings.txt" 2>&1 || true
 S="$TESTROOT/siblings.txt"
+cases=$((cases + 1))
 if [[ "$(grep -cE '^424242	' "$S" || true)" -ge 1 ]]; then
   pass "tc_siblings emits the sibling pid"
 else
   fail "tc_siblings did not emit pid 424242; got: $(cat "$S")"
 fi
+cases=$((cases + 1))
 if [[ "$(grep -cF -- "$SIB_WT" "$S" || true)" -ge 1 ]]; then
   pass "tc_siblings resolves the sibling worktree via /proc/<pid>/cwd"
 else
   fail "tc_siblings did not resolve cwd $SIB_WT; got: $(cat "$S")"
 fi
 # Elapsed must be DERIVED from starttime+uptime, not a constant. 620s synthesized.
+cases=$((cases + 1))
 if [[ "$(grep -cE '	62[0-9]$' "$S" || true)" -ge 1 ]]; then
   pass "tc_siblings derives elapsed seconds from stat starttime + uptime"
 else
@@ -127,6 +157,7 @@ fi
 # Same fixture, but the scanner is told the sibling IS itself. A scanner that
 # ignores TC_SELF_PID passes arm 2 and fails here; that asymmetry is the point.
 out="$(tc_env env TC_SELF_PID=424242 bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ -z "${out//[[:space:]]/}" ]]; then
   pass "tc_siblings excludes its own pid"
 else
@@ -152,6 +183,7 @@ printf '555002 (te) st) %s %s 0 0\n' "$anc_filler" "$(( (100000 - 88) * CLK_TCK 
   > "$ANC_PROC/555002/stat"
 out="$(tc_env env TC_PROC_ROOT="$ANC_PROC" TC_SELF_PID=555002 \
   bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ -z "${out//[[:space:]]/}" ]]; then
   pass "tc_siblings excludes the whole ancestor chain, not just its own pid"
 else
@@ -161,6 +193,7 @@ fi
 # the arm above cannot pass by simply returning nothing.
 out="$(tc_env env TC_PROC_ROOT="$ANC_PROC" TC_SELF_PID=999999 \
   bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cE '^555001	' <<<"$out" || true)" -ge 1 ]]; then
   pass "tc_siblings still reports non-ancestor test-all.sh processes"
 else
@@ -181,6 +214,7 @@ make_fake_proc "$MENTION_PROC" 777001 "$TESTROOT/mention-wt" 10 "x"
 printf 'bash\0-c\0cd /x && echo hi # scripts/test-all.sh\0' \
   > "$MENTION_PROC/777001/cmdline"
 out="$(tc_env env TC_PROC_ROOT="$MENTION_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ -z "${out//[[:space:]]/}" ]]; then
   pass "a process that only MENTIONS test-all.sh is not counted as a run"
 else
@@ -189,6 +223,7 @@ fi
 # A `grep test-all` process must not match either.
 printf 'grep\0-rn\0test-all.sh\0scripts/\0' > "$MENTION_PROC/777001/cmdline"
 out="$(tc_env env TC_PROC_ROOT="$MENTION_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ -z "${out//[[:space:]]/}" ]]; then
   pass "a grep for test-all.sh is not counted as a run"
 else
@@ -198,6 +233,7 @@ fi
 # two arms above cannot pass by matching nothing at all.
 printf 'bash\0scripts/test-all.sh\0scripts\0' > "$MENTION_PROC/777001/cmdline"
 out="$(tc_env env TC_PROC_ROOT="$MENTION_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cE '^777001	' <<<"$out" || true)" -ge 1 ]]; then
   pass "a real 'bash scripts/test-all.sh' invocation still matches"
 else
@@ -230,11 +266,13 @@ mk_pg_proc 666003 42   # same group, ppid=1 (NOT an ancestor) -> must be exclude
 mk_pg_proc 666004 99   # different group -> must be reported
 out="$(tc_env env TC_PROC_ROOT="$PG_PROC" TC_SELF_PID=666002 \
   bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cE '^666003	' <<<"$out" || true)" -eq 0 ]]; then
   pass "a same-process-group non-ancestor subshell is excluded (self-fork phantom)"
 else
   fail "a same-pgid subshell was flagged as a sibling; got: $out"
 fi
+cases=$((cases + 1))
 if [[ "$(grep -cE '^666004	' <<<"$out" || true)" -ge 1 ]]; then
   pass "a DIFFERENT-process-group test-all.sh run is still reported (not over-excluded)"
 else
@@ -243,6 +281,7 @@ fi
 
 # --- Arm 4: a non-test-all.sh process is not a sibling ---------------------
 out="$(tc_env env TC_PROC_ROOT="$OTHER_PROC" bash -c "source '$LIB'; tc_siblings" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ -z "${out//[[:space:]]/}" ]]; then
   pass "tc_siblings ignores processes that are not test-all.sh"
 else
@@ -253,6 +292,7 @@ fi
 tc_env bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble.txt" 2>&1 || true
 P="$TESTROOT/preamble.txt"
 for token in 'avail' 'used' 'siblings' 'load' 'cores'; do
+  cases=$((cases + 1))
   if [[ "$(grep -cEi -- "$token" "$P" || true)" -ge 1 ]]; then
     pass "preamble names '$token'"
   else
@@ -260,6 +300,7 @@ for token in 'avail' 'used' 'siblings' 'load' 'cores'; do
   fi
 done
 # A percentage must actually be rendered, not merely labelled.
+cases=$((cases + 1))
 if [[ "$(grep -cE '[0-9]+% used' "$P" || true)" -ge 1 ]]; then
   pass "preamble renders a real used-percentage value"
 else
@@ -268,6 +309,7 @@ fi
 
 # --- Arm 6: preamble names the sibling's WORKTREE PATH and PID (AC2) -------
 # AC2 is explicit that "a sibling is running" is insufficient.
+cases=$((cases + 1))
 if [[ "$(grep -cF -- "$SIB_WT" "$P" || true)" -ge 1 ]] \
    && [[ "$(grep -cE '424242' "$P" || true)" -ge 1 ]]; then
   pass "preamble names the sibling worktree path AND pid (AC2)"
@@ -280,6 +322,7 @@ fi
 # pid count overstates the contention and makes the banner's number wrong.
 tc_env env TC_PROC_ROOT="$ANC_PROC" TC_SELF_PID=999999 \
   bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-anc.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'siblings: 1 ' "$TESTROOT/preamble-anc.txt" || true)" -ge 1 ]]; then
   pass "sibling count counts distinct worktrees (2 pids in 1 worktree => 1)"
 else
@@ -296,6 +339,7 @@ make_fake_proc "$TWO_PROC" 606001 "$TESTROOT/wt-a" 100 "scripts/test-all.sh"
 make_fake_proc "$TWO_PROC" 606002 "$TESTROOT/wt-b" 200 "scripts/test-all.sh"
 tc_env env TC_PROC_ROOT="$TWO_PROC" TC_SELF_PID=999999 \
   bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-two.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'siblings: 2 ' "$TESTROOT/preamble-two.txt" || true)" -ge 1 ]]; then
   pass "sibling count reaches 2 for two DISTINCT worktrees (dedup not capped at 1)"
 else
@@ -307,11 +351,13 @@ fi
 # stub and holds on any host regardless of real /tmp occupancy.
 tc_env env TC_MIN_AVAIL_MB=99999999 bash -c "source '$LIB'; tc_preamble" \
   > "$TESTROOT/banner-low.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOW_TMP_HEADROOM' "$TESTROOT/banner-low.txt" || true)" -ge 1 ]]; then
   pass "low-headroom banner names the LOW_TMP_HEADROOM condition"
 else
   fail "no LOW_TMP_HEADROOM banner; got: $(cat "$TESTROOT/banner-low.txt")"
 fi
+cases=$((cases + 1))
 if [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$P" || true)" -ge 1 ]]; then
   pass "sibling banner names the SIBLING_RUN_DETECTED condition"
 else
@@ -321,6 +367,7 @@ fi
 # Without this, a lib that unconditionally prints both banners passes above.
 tc_env env TC_PROC_ROOT="$OTHER_PROC" TC_MIN_AVAIL_MB=0 \
   bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/banner-none.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOW_TMP_HEADROOM|SIBLING_RUN_DETECTED' "$TESTROOT/banner-none.txt" || true)" -eq 0 ]]; then
   pass "no banner fires when headroom is ample and no sibling runs"
 else
@@ -348,6 +395,7 @@ chmod +x "$DF_STUB"
 tc_env env TC_PROC_ROOT="$OTHER_PROC" TC_DF_CMD="$DF_STUB" \
   TC_DF_AVAIL_KB=102400 TC_DF_USED_PCT=97 \
   bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/df-low.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOW_TMP_HEADROOM' "$TESTROOT/df-low.txt" || true)" -ge 1 ]] \
    && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/df-low.txt" || true)" -eq 0 ]]; then
   pass "LOW_TMP_HEADROOM fires on low headroom with NO sibling (pinned df)"
@@ -356,6 +404,7 @@ else
 fi
 # The pinned avail/used values must actually render (tc_avail_mb / tc_used_pct
 # are now on the LEFT of a call, not just 'some digit is present').
+cases=$((cases + 1))
 if [[ "$(grep -cE '100MB avail' "$TESTROOT/df-low.txt" || true)" -ge 1 ]] \
    && [[ "$(grep -cE '97% used' "$TESTROOT/df-low.txt" || true)" -ge 1 ]]; then
   pass "preamble renders the pinned df avail (100MB) and used% (97%)"
@@ -366,6 +415,7 @@ fi
 # This is the arm that catches the `avail_mb < FLOOR` → `sib_count > 0` mutation.
 tc_env env TC_DF_CMD="$DF_STUB" TC_DF_AVAIL_KB=3000000 TC_DF_USED_PCT=16 \
   bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/df-ample.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOW_TMP_HEADROOM' "$TESTROOT/df-ample.txt" || true)" -eq 0 ]] \
    && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/df-ample.txt" || true)" -ge 1 ]]; then
   pass "LOW_TMP_HEADROOM is ABSENT under ample headroom even WITH a sibling"
@@ -376,6 +426,7 @@ fi
 # --- Arm 8: epilogue reports a real delta ----------------------------------
 touch "$FAKE_TMP/d" "$FAKE_TMP/e"
 tc_env bash -c "source '$LIB'; tc_epilogue 3" > "$TESTROOT/epilogue.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'delta 2' "$TESTROOT/epilogue.txt" || true)" -ge 1 ]]; then
   pass "tc_epilogue reports the +2 entry delta"
 else
@@ -383,6 +434,7 @@ else
 fi
 # MUTATION CONTROL: an epilogue hardcoding "delta 2" would pass above.
 tc_env bash -c "source '$LIB'; tc_epilogue 5" > "$TESTROOT/epilogue0.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'delta 0' "$TESTROOT/epilogue0.txt" || true)" -ge 1 ]]; then
   pass "tc_epilogue computes the delta rather than hardcoding it"
 else
@@ -395,6 +447,7 @@ fi
 before_n="$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 | wc -l)"
 tc_env bash -c "source '$LIB'; tc_preamble; tc_epilogue 0" >/dev/null 2>&1 || true
 after_n="$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 | wc -l)"
+cases=$((cases + 1))
 if [[ "$before_n" == "$after_n" ]]; then
   pass "the module creates and deletes nothing (observe-only)"
 else
@@ -416,21 +469,94 @@ mkdir -p "$SS_ROOT/locks"
 # (green locally, red in CI: the vitest-unstub-can't-clear-inherited-env class
 # from work/SKILL.md). The CI-exemption arm below re-sets CI=true explicitly.
 lock_env() {
-  env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+  # The TC_* knobs are scrubbed too: a caller running this suite under a
+  # raised-budget wrapper (the ship battery exports TC_LOCK_TIMEOUT=14400
+  # TC_RUNTIME_CEILING_S=39600) would otherwise leak ambient budgets into
+  # arms that assume the shipped defaults — Q11's 6h-old tickets are not
+  # stale under a 39600s ceiling, and Q14's sanitize-to-default arm reads
+  # the ambient TC_LOCK_TIMEOUT. Arms that need a non-default set it after
+  # the scrub via `lock_env env VAR=...`.
+  env -u CI -u TC_LOCK_TIMEOUT -u TC_RUNTIME_CEILING_S -u TC_QUEUE_TIMEOUT \
+      -u TC_QUEUE_POLL_S -u TC_WAIT_HEARTBEAT_S \
+      SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
       TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
       "$@"
+}
+
+# Block until $1 is ACTUALLY held, bounded.
+#
+# The arms below background a holder and then measure how long tc_acquire waits
+# for it. A fixed `sleep 1` assumes the holder wins a scheduling race within one
+# second; under load — which is exactly when this suite runs, since parallel
+# worktrees are the documented workflow — it may not, and the waiter then takes
+# a FREE lock. That fails the elapsed floor for a reason with nothing to do with
+# the code under test, i.e. a flake that reads as a real regression.
+#
+# `flock -w 0` is the observation: it exits non-zero iff the lock is held. It
+# takes and releases the lock itself when free, which is harmless here (the
+# holder is the only other contender) and is what makes it a real probe rather
+# than a guess.
+# $2 caps the poll count (default 200 ~= 10s) so the negative arm can prove the
+# failure direction in ~0.15s instead of blocking the suite for ten seconds.
+await_held() {
+  local f="$1" max="${2:-200}" i
+  for (( i = 0; i < max; i++ )); do
+    if ! flock -w 0 -x "$f" -c true 2>/dev/null; then return 0; fi
+    sleep 0.05
+  done
+  return 1
 }
 
 # --- Arm 10: POSITIVE CONTROL — a free lock is acquirable -------------------
 # Without this control, a broken probe reads as "blocked" and would justify
 # building the stale-holder detection Phase 3.6 proves is dead code (the
 # three-attempt trap in the plan's Sharp Edges).
-out="$(lock_env bash -c "source '$LIB'; tc_acquire 6789-free 3; echo RC=\$?" 2>&1 || true)"
+lock_env bash -c "source '$LIB'; tc_acquire 6789-free 3; echo RC=\$?" \
+  > "$TESTROOT/free.txt" 2>&1 || true
+out="$(cat "$TESTROOT/free.txt")"
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$out" || true)" -ge 1 ]] \
    && [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]]; then
   pass "POSITIVE CONTROL: a free lock is acquired (probe is valid)"
 else
   fail "positive control failed — later lock arms are meaningless: $out"
+fi
+
+# AC1 + AC7. The elapsed must be a MEASURED number, and the banner TOKEN must
+# keep its exact shape: `work/SKILL.md`'s contention grep, ADR-133 and arms
+# 10-13 all match on `LOCK_ACQUIRED`, so only post-colon text may move. The
+# regex pins both at once — prefix, token, quoted name, and a digits-plus-`ms`
+# elapsed. It deliberately requires DIGITS: on a host without EPOCHREALTIME the
+# lib prints `unknown` and this arm is expected to red rather than silently
+# accept a fabricated 0 (this repo's runners are bash 5.x; test-all.sh already
+# depends on EPOCHREALTIME for every suite timing).
+acq_line="$(awk '/LOCK_ACQUIRED/{print; exit}' "$TESTROOT/free.txt")"
+# The UPPER bound is the load-bearing half. Every elapsed assertion in this file
+# was originally a lower bound sampled on one side only, and a lower bound
+# cannot distinguish a measurement from a CONSTANT: replacing the arithmetic
+# with `printf '%sms' 1500` left the whole suite green, so the PR's own headline
+# claim — that the duration is measured rather than asserted — was pinned by
+# nothing. A free lock must read SMALL and a contended one must read LARGE, so
+# no single constant can satisfy both arms at once.
+cases=$((cases + 1))
+if [[ "$acq_line" =~ \[contention\]\ LOCK_ACQUIRED:\ \'[^\']+\'\ after\ ([0-9]+)ms ]] \
+   && (( BASH_REMATCH[1] <= 500 )); then
+  pass "AC1/AC7: LOCK_ACQUIRED keeps its token and carries a measured elapsed (${BASH_REMATCH[1]}ms, free lock reads small)"
+else
+  fail "AC1/AC7: LOCK_ACQUIRED has no measured elapsed <= 500ms in the expected shape; got: $acq_line"
+fi
+
+# AC5 (ordering half). LOCK_WAITING marks "this run reached the wait", so it
+# must PRECEDE the outcome banner. Line numbers via awk, never `grep | head`:
+# an early match makes head close the pipe and pipefail turns the MATCH into a
+# non-zero pipeline (the #6588 class this file's header documents).
+_w_line="$(awk '/LOCK_WAITING/{print NR; exit}' "$TESTROOT/free.txt")"
+_a_line="$(awk '/LOCK_ACQUIRED/{print NR; exit}' "$TESTROOT/free.txt")"
+cases=$((cases + 1))
+if [[ -n "$_w_line" && -n "$_a_line" ]] && (( _w_line < _a_line )); then
+  pass "AC5: LOCK_WAITING precedes the outcome banner (line $_w_line < $_a_line)"
+else
+  fail "AC5: LOCK_WAITING must precede LOCK_ACQUIRED; got waiting='$_w_line' acquired='$_a_line'"
 fi
 
 # --- Arm 11: advisory timeout PROCEEDS, never aborts (AC4) ------------------
@@ -439,18 +565,65 @@ HELD="$SS_ROOT/locks/6789-testall.lock"
 : > "$HELD"
 flock -x "$HELD" -c 'sleep 12' &
 HOLDER=$!
-sleep 1
+if ! await_held "$HELD"; then
+  cases=$((cases + 1))
+  fail "AC4 fixture: the holder never took '6789-testall' — the arms below would measure a free lock"
+fi
 lock_env bash -c "source '$LIB'; tc_acquire 6789-testall 2; echo RC=\$?" \
   > "$TESTROOT/timeout.txt" 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'RC=0' "$TESTROOT/timeout.txt" || true)" -ge 1 ]]; then
   pass "AC4: a lock held past the timeout still returns success (advisory)"
 else
   fail "AC4: contended acquire did not return success; got: $(cat "$TESTROOT/timeout.txt")"
 fi
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/timeout.txt" || true)" -ge 1 ]]; then
   pass "AC4: the advisory banner names LOCK_CONTENDED_PROCEEDING"
 else
   fail "AC4: no advisory banner; got: $(cat "$TESTROOT/timeout.txt")"
+fi
+
+# AC2 + AC7. The contended banner must report the duration it MEASURED, not the
+# budget it was handed. The `>= 1000` floor is the load-bearing part and is what
+# separates this from a shape check: the timeout here is 2 SECONDS, so a real
+# wait reads ~2000ms while the literal `${timeout_s}` reads `2`. Restoring the
+# original lie in EITHER form — `still held after ${timeout_s}s` or a
+# `${timeout_s}ms` substituted into the new text — lands below the floor or
+# fails the shape, so mutation row 1 cannot survive by changing units.
+cont_line="$(awk '/LOCK_CONTENDED_PROCEEDING/{print; exit}' "$TESTROOT/timeout.txt")"
+# Bounded on BOTH sides against the budget the banner itself reports. The lower
+# bound kills mutation "substitute ${timeout_s} for the measurement" (2 vs 2011);
+# the upper bound kills "drop the /1000", which otherwise prints a 33-MINUTE
+# wait against a 2-second budget in the exact line work/SKILL.md's contention
+# grep consumes — and did so at full green.
+_ms=0; _budget=0
+if [[ "$cont_line" =~ \[contention\]\ LOCK_CONTENDED_PROCEEDING:\ \'[^\']+\'.*gave\ up\ after\ ([0-9]+)ms\ of\ ([0-9]+)s ]]; then
+  _ms="${BASH_REMATCH[1]}"; _budget="${BASH_REMATCH[2]}"
+fi
+cases=$((cases + 1))
+if (( _ms >= 1000 && _budget > 0 && _ms <= _budget * 1000 + 3000 )); then
+  pass "AC2/AC7: LOCK_CONTENDED_PROCEEDING reports a measured ${_ms}ms bounded by its own ${_budget}s budget"
+else
+  fail "AC2/AC7: contended elapsed not within [1000, budget*1000+3000]; got: $cont_line"
+fi
+# The original assertion, negatively. The line above could in principle be
+# satisfied while the old unmeasured claim survives ALONGSIDE it, which would
+# leave the false statement in the operator's terminal and in the transcript
+# `work/SKILL.md` tells an agent to grep.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'still held after' "$TESTROOT/timeout.txt" || true)" -eq 0 ]]; then
+  pass "AC2: the unmeasured 'still held after <timeout>s' claim is gone"
+else
+  fail "AC2: the banner still asserts a duration nobody measured: $cont_line"
+fi
+_w_line="$(awk '/LOCK_WAITING/{print NR; exit}' "$TESTROOT/timeout.txt")"
+_c_line="$(awk '/LOCK_CONTENDED_PROCEEDING/{print NR; exit}' "$TESTROOT/timeout.txt")"
+cases=$((cases + 1))
+if [[ -n "$_w_line" && -n "$_c_line" ]] && (( _w_line < _c_line )); then
+  pass "AC5: LOCK_WAITING precedes the contended banner too (line $_w_line < $_c_line)"
+else
+  fail "AC5: LOCK_WAITING must precede LOCK_CONTENDED_PROCEEDING; got '$_w_line' / '$_c_line'"
 fi
 kill "$HOLDER" 2>/dev/null || true
 wait "$HOLDER" 2>/dev/null || true
@@ -458,25 +631,44 @@ wait "$HOLDER" 2>/dev/null || true
 # --- Arm 12: kill switch (AC3) ---------------------------------------------
 out="$(lock_env env SOLEUR_DISABLE_SESSION_STATE=1 \
   bash -c "source '$LIB'; tc_acquire 6789-ks 2; echo RC=\$?" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
    && [[ "$(grep -cE 'LOCK_SKIPPED_DISABLED' <<<"$out" || true)" -ge 1 ]]; then
   pass "AC3: SOLEUR_DISABLE_SESSION_STATE=1 skips acquisition and says so"
 else
   fail "AC3: kill switch not honoured; got: $out"
 fi
+# AC5 (absence half). LOCK_WAITING means "this run reached the wait". A skip path
+# never reaches it, so a LOCK_WAITING here would make the marker fire on every
+# run — the "a banner that always fires carries no information" failure this
+# module's own header exists to prevent.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAITING' <<<"$out" || true)" -eq 0 ]]; then
+  pass "AC5: LOCK_WAITING is absent on the kill-switch skip path"
+else
+  fail "AC5: LOCK_WAITING fired without reaching the wait (kill switch); got: $out"
+fi
 
 # --- Arm 13: CI exemption (AC5) --------------------------------------------
 out="$(lock_env env CI=true \
   bash -c "source '$LIB'; tc_acquire 6789-ci 2; echo RC=\$?" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
    && [[ "$(grep -cE 'LOCK_SKIPPED_CI' <<<"$out" || true)" -ge 1 ]]; then
   pass "AC5: CI set skips acquisition and says so"
 else
   fail "AC5: CI exemption not honoured; got: $out"
 fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAITING' <<<"$out" || true)" -eq 0 ]]; then
+  pass "AC5: LOCK_WAITING is absent on the CI skip path"
+else
+  fail "AC5: LOCK_WAITING fired without reaching the wait (CI); got: $out"
+fi
 # MUTATION CONTROL: without CI, the CI-skip path must NOT fire — otherwise a lib
 # that always skips passes arm 13 while locking nothing, ever.
 out="$(lock_env bash -c "source '$LIB'; tc_acquire 6789-noci 2" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cE 'LOCK_SKIPPED_CI' <<<"$out" || true)" -eq 0 ]]; then
   pass "CI-skip does not fire when CI is unset"
 else
@@ -503,6 +695,7 @@ kill -9 "$KPID" 2>/dev/null || true
 wait "$KPID" 2>/dev/null || true
 sleep 1
 after="$(flock -w 2 -x "$K" -c true 2>&1 && echo FREE || echo BLOCKED)"
+cases=$((cases + 1))
 if [[ "$blocked" == "BLOCKED" && "$after" == "FREE" ]]; then
   pass "AC5b: flock is kernel-released after SIGKILL (no stale detection needed)"
 else
@@ -513,6 +706,7 @@ fi
 # Anchored on the syntactic shapes a hand-rolled scheme needs, over CODE only
 # (this suite's own prose names them). A match means dead code crept in.
 lib_code="$(grep -vE '^[[:space:]]*#' "$LIB")"
+cases=$((cases + 1))
 if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$lib_code" || true)" -eq 0 ]]; then
   pass "Phase 3.6: the lib contains no stale-holder detection path"
 else
@@ -522,18 +716,1645 @@ fi
 # be able to MATCH when the shape IS present, or a typo'd regex reads "clean
 # forever". Feed the extractor a line that contains one of the forbidden tokens.
 _probe_code="$(printf 'if kill -0 "$stale_pid"; then :; fi\n')"
+cases=$((cases + 1))
 if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$_probe_code" || true)" -ge 1 ]]; then
   pass "the stale-holder pattern is live (matches when the shape is present)"
 else
   fail "the stale-holder detection regex matches nothing — the negative arm is vacuous"
 fi
 
-# --- Minimum-cardinality guard ---------------------------------------------
-# A silently-empty run exits 0 with zero coverage, which reads exactly like
-# success. This is the guard for that.
-if [[ "$pass_n" -lt 40 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 40)"
+# --- Arm 16: SLOW ACQUIRE — the outcome no other arm can produce (AC3) ------
+# This is the single outcome the whole change exists to make legible, and
+# nothing else in this file reaches it: arm 10 takes a FREE lock (elapsed is
+# single-digit ms) and arm 11's holder outlives the timeout (never acquires).
+# Without this arm the elapsed assertions are satisfied by two constants — near
+# zero and the full budget — and "a wait that was redeemed" stays unproven.
+#
+# The discriminator is the FLOOR, not the presence of LOCK_ACQUIRED: a holder
+# that never releases turns this into a timeout, so asserting the banner alone
+# would pass on any acquisition at all.
+SLOW="$SS_ROOT/locks/6789-slow.lock"
+: > "$SLOW"
+flock -x "$SLOW" -c 'sleep 3' &
+SLOW_HOLDER=$!
+if ! await_held "$SLOW"; then
+  cases=$((cases + 1))
+  fail "AC3 fixture: the holder never took '6789-slow' — the elapsed floor below would measure a free lock"
+fi
+lock_env bash -c "source '$LIB'; tc_acquire 6789-slow 8; echo RC=\$?" \
+  > "$TESTROOT/slow.txt" 2>&1 || true
+kill "$SLOW_HOLDER" 2>/dev/null || true
+wait "$SLOW_HOLDER" 2>/dev/null || true
+
+slow_line="$(awk '/LOCK_ACQUIRED/{print; exit}' "$TESTROOT/slow.txt")"
+cases=$((cases + 1))
+if [[ "$(grep -cE 'RC=0' "$TESTROOT/slow.txt" || true)" -ge 1 ]] \
+   && [[ -n "$slow_line" ]]; then
+  pass "AC3/AC6: a lock released mid-wait is acquired and still returns 0"
+else
+  fail "AC3: mid-wait release did not acquire; got: $(cat "$TESTROOT/slow.txt")"
+fi
+# Bounded above by the 8s budget: a wait that was REDEEMED necessarily finished
+# inside it, so an inflated elapsed (the dropped `/1000`) fails here too. The
+# floor is 800ms against a 3s holder, i.e. ~2.2s of slack for fixture startup —
+# `await_held` returns on the first successful poll (~50ms typical).
+cases=$((cases + 1))
+if [[ "$slow_line" =~ after\ ([0-9]+)ms ]] \
+   && (( BASH_REMATCH[1] >= 800 && BASH_REMATCH[1] <= 8000 )); then
+  pass "AC3: the redeemed wait reports a non-trivial ${BASH_REMATCH[1]}ms, inside its own budget"
+else
+  fail "AC3: elapsed is not a non-trivial in-budget wait ([800, 8000]ms); got: $slow_line"
+fi
+# A slow acquire must be DISTINGUISHABLE from a timeout, not merely non-empty.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/slow.txt" || true)" -eq 0 ]]; then
+  pass "AC3: a redeemed wait is not reported as a timeout"
+else
+  fail "AC3: mid-wait release also emitted LOCK_CONTENDED_PROCEEDING: $(cat "$TESTROOT/slow.txt")"
 fi
 
-echo "=== test-contention: $pass_n passed, $fails failed ==="
+# --- Arm 17: flock(1) unavailable is LOCK_UNAVAILABLE, never a timeout (AC4) -
+# `acquire_lock` returns the SAME 99 for "waited the whole budget" and "flock is
+# not installed", so before this precheck the contended banner fired on a run
+# that never waited at all — asserting a duration against a wait that did not
+# happen. The precheck removes the ambiguity at its source rather than inferring
+# it from an elapsed threshold.
+#
+# The mask is a curated shim, NOT a shadow of the whole PATH. Shadowing every
+# real PATH entry except flock was the first implementation, and it is exact —
+# but MEASURED it cost 18.9s of this suite's 32s runtime to build ~3,600
+# symlinks on every invocation. That is a 59% tax on a suite registered in the
+# full gate, paid to assert one thing about one binary.
+#
+# The cheap version is only sound if the fixture proves the property the arm
+# actually rests on, and that property is specific: with the precheck deleted
+# (mutation row 2), control must REACH `acquire_lock` — which itself fails on a
+# missing flock and returns 99, producing the timeout banner the arm looks for.
+# Were sourcing session-state.sh to break under the mask for some UNRELATED
+# missing binary, tc_acquire would emit LOCK_UNAVAILABLE anyway and this arm
+# would stay green against that mutation for entirely the wrong reason. So the
+# self-check asserts exactly that, rather than a proxy for it.
+NOFLOCK_BIN="$TESTROOT/noflock-bin"
+mkdir -p "$NOFLOCK_BIN"
+REAL_BASH="$(command -v bash)"
+for _b in dirname basename getconf cat mkdir rm awk sed grep find wc id date \
+          sort cut env stat readlink tr head tail ls touch chmod mktemp git; do
+  _p="$(command -v "$_b" 2>/dev/null || true)"
+  if [[ -n "$_p" ]]; then ln -sfn "$_p" "$NOFLOCK_BIN/$_b"; fi
+done
+
+# FIXTURE SELF-CHECK. Without it, a mask that broke the environment wholesale
+# would still produce LOCK_UNAVAILABLE and the arm below would read as proof of
+# a precheck that does not exist.
+_mask_probe="$(env PATH="$NOFLOCK_BIN" SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" "$REAL_BASH" -c \
+  "command -v flock >/dev/null && echo HAS_FLOCK || echo NO_FLOCK
+   source '$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh' 2>/dev/null || true
+   declare -F acquire_lock >/dev/null && echo ACQUIRE_LOCK_DEFINED || echo ACQUIRE_LOCK_MISSING" 2>&1 || true)"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^NO_FLOCK$' <<<"$_mask_probe" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE '^ACQUIRE_LOCK_DEFINED$' <<<"$_mask_probe" || true)" -ge 1 ]]; then
+  pass "AC4 fixture: the mask hides flock alone — acquire_lock stays reachable under it"
+else
+  fail "AC4 fixture is invalid — mask probe returned: $_mask_probe"
+fi
+
+env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" TC_PROC_ROOT="$FAKE_PROC" \
+    TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" PATH="$NOFLOCK_BIN" \
+    "$REAL_BASH" -c "source '$LIB'; tc_acquire 6789-noflock 2; echo RC=\$?" \
+    > "$TESTROOT/noflock.txt" 2>&1 || true
+# Anchored on THIS branch's message, not the bare `LOCK_UNAVAILABLE` token —
+# cq-assert-anchor-not-bare-token, applied to my own arm. All three
+# LOCK_UNAVAILABLE branches emit that token, so a bare grep passes when the arm
+# reaches a DIFFERENT branch: demonstrated by dropping `dirname` from the shim
+# list, after which the mask broke the lib's own path resolution, this arm still
+# passed, and the flock-precheck mutation survived undetected.
+cases=$((cases + 1))
+if [[ "$(grep -cF 'LOCK_UNAVAILABLE: flock(1) not found on PATH' "$TESTROOT/noflock.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/noflock.txt" || true)" -ge 1 ]]; then
+  pass "AC4/AC6: a missing flock(1) takes the flock branch specifically and still returns 0"
+else
+  fail "AC4: missing flock did not emit the flock-specific LOCK_UNAVAILABLE; got: $(cat "$TESTROOT/noflock.txt")"
+fi
+# The remediation must survive: this early return means session-state.sh's own
+# `brew install util-linux` hint is never reached, and for a non-technical
+# operator that hint is the entire actionable content of the failure.
+cases=$((cases + 1))
+if [[ "$(grep -cF 'brew install util-linux' "$TESTROOT/noflock.txt" || true)" -ge 1 ]]; then
+  pass "AC4: the flock-missing banner carries the remediation it displaced"
+else
+  fail "AC4: no remediation hint on the flock-missing path; got: $(cat "$TESTROOT/noflock.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/noflock.txt" || true)" -eq 0 ]]; then
+  pass "AC4: a missing primitive is not reported as contention"
+else
+  fail "AC4: missing flock was reported as a timeout: $(cat "$TESTROOT/noflock.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAITING' "$TESTROOT/noflock.txt" || true)" -eq 0 ]]; then
+  pass "AC5: LOCK_WAITING is absent when the primitive is unavailable"
+else
+  fail "AC5: LOCK_WAITING fired on a run that never waited: $(cat "$TESTROOT/noflock.txt")"
+fi
+
+# --- Arm 18: the degraded timing path is REACHABLE and still fails open ----
+# The `unknown` branch exists for bash 3.2, where EPOCHREALTIME is unset. Every
+# other arm runs on bash 5.x, so without this one that branch has no coverage at
+# all — and a branch with no coverage is where a justification comment can
+# describe behaviour the code cannot actually produce.
+#
+# `unset EPOCHREALTIME` de-specialises the variable for the rest of that shell,
+# which reproduces the bash-3.2 shape exactly rather than approximating it. The
+# arm runs under `set -euo pipefail` deliberately: that is how scripts/test-all.sh
+# sources this lib, and an UNGUARDED `$EPOCHREALTIME` read is an unbound-variable
+# ABORT there — the function never returns at all. Arm 19's structural check
+# cannot see that, because structurally every `return` is still `return 0`; a
+# function that dies before returning satisfies the grep and violates the
+# contract. This is the behavioural half of AC6, and the lib's own header
+# ("Every function is safe to call under `set -euo pipefail`") is the claim it
+# holds to.
+lock_env bash -c "
+set -euo pipefail
+unset EPOCHREALTIME
+source '$LIB'
+tc_acquire 6789-noclock 2
+echo RC=\$?
+" > "$TESTROOT/noclock.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'RC=0' "$TESTROOT/noclock.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'unbound variable' "$TESTROOT/noclock.txt" || true)" -eq 0 ]]; then
+  pass "AC6: tc_acquire fails open under set -u with no EPOCHREALTIME (bash 3.2 shape)"
+else
+  fail "AC6: tc_acquire did not survive a missing EPOCHREALTIME: $(cat "$TESTROOT/noclock.txt")"
+fi
+# And it must degrade to the HONEST token, not a fabricated zero: `after 0ms` is
+# indistinguishable from a lock that was free on the first try, which is the very
+# defect this change removes.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_ACQUIRED.*after unknown' "$TESTROOT/noclock.txt" || true)" -ge 1 ]]; then
+  pass "AC6: an unmeasurable wait prints 'unknown', never a fabricated 0ms"
+else
+  fail "AC6: degraded path did not print 'unknown': $(cat "$TESTROOT/noclock.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'after 0ms' "$TESTROOT/noclock.txt" || true)" -eq 0 ]]; then
+  pass "AC6: the degraded path fabricates no duration"
+else
+  fail "AC6: degraded path fabricated a 0ms measurement: $(cat "$TESTROOT/noclock.txt")"
+fi
+
+# --- Arm 19: the two skip paths no fixture reached (AC5 + AC6) --------------
+# `TC_SESSION_STATE` was referenced NOWHERE in this file, so `session-state.sh
+# not found` and `acquire_lock not defined` had no behavioural coverage at all —
+# AC5 claims LOCK_WAITING is absent on EVERY skip path and it was sampled on 3
+# of 5. Consequence, measured: moving the LOCK_WAITING emit ABOVE the
+# precondition block left the suite green while the marker fired on runs that
+# never waited, which is the always-firing-banner failure this module's header
+# is built around.
+: > "$TESTROOT/defines-nothing.sh"
+while IFS='|' read -r label state expect; do
+  [[ -n "$label" ]] || continue
+  lock_env env TC_SESSION_STATE="$state" \
+    bash -c "source '$LIB'; tc_acquire 6789-$label 2; echo RC=\$?" > "$TESTROOT/$label.txt" 2>&1 || true
+  cases=$((cases + 1))
+  if [[ "$(grep -cF "$expect" "$TESTROOT/$label.txt" || true)" -ge 1 ]] \
+     && [[ "$(grep -cE 'RC=0' "$TESTROOT/$label.txt" || true)" -ge 1 ]]; then
+    pass "AC6: the '$label' skip path emits its own diagnostic and returns 0"
+  else
+    fail "AC6: '$label' path wrong; got: $(cat "$TESTROOT/$label.txt")"
+  fi
+  cases=$((cases + 1))
+  if [[ "$(grep -cE 'LOCK_WAITING' "$TESTROOT/$label.txt" || true)" -eq 0 ]]; then
+    pass "AC5: LOCK_WAITING is absent on the '$label' skip path"
+  else
+    fail "AC5: LOCK_WAITING fired on '$label', which never reaches the wait"
+  fi
+done <<EOF
+missinglib|$TESTROOT/nope.sh|LOCK_UNAVAILABLE: session-state.sh not found
+nolockfn|$TESTROOT/defines-nothing.sh|LOCK_UNAVAILABLE: acquire_lock not defined
+EOF
+
+# --- Arm 20: the arity guard (AC6) -----------------------------------------
+# A zero-arg call is an unbound-variable ABORT under `set -u` — the same class
+# as the EPOCHREALTIME reads, one construct further out, and one line into the
+# function whose contract is that it cannot abort. `|| true` cannot rescue it,
+# so this arm asserts the guard rather than the rescue.
+out="$(lock_env bash -c "set -euo pipefail; source '$LIB'; tc_acquire; echo RC=\$?" 2>&1 || true)"
+cases=$((cases + 1))
+if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
+   && [[ "$(grep -cF 'unbound variable' <<<"$out" || true)" -eq 0 ]]; then
+  pass "AC6: a zero-arg tc_acquire fails open under set -u instead of aborting"
+else
+  fail "AC6: zero-arg tc_acquire did not fail open; got: $out"
+fi
+
+# --- Arm 21: _tc_ms_since is locale- and garbage-proof ----------------------
+# Driven as a UNIT, so it needs no locale installed on the host. The comma case
+# is the live one: bash renders EPOCHREALTIME with LC_NUMERIC's radix, so before
+# this every banner on a comma-locale machine read `unknown` on a healthy bash 5
+# with a working clock — and three gate arms went RED for a European operator,
+# manufacturing exactly the false-RED that ADR-133 exists to eliminate.
+while IFS='|' read -r label a b expect; do
+  [[ -n "$label" ]] || continue
+  got="$(lock_env bash -c "set -euo pipefail; source '$LIB'; _tc_ms_since '$a' '$b'" 2>&1 || echo "ABORTED")"
+  cases=$((cases + 1))
+  if [[ "$got" == "$expect" ]]; then
+    pass "AC6: _tc_ms_since $label -> $got"
+  else
+    fail "AC6: _tc_ms_since $label expected '$expect', got '$got'"
+  fi
+done <<'EOF'
+dot radix|100.000000|101.500000|1500ms
+comma radix|100,000000|101,500000|1500ms
+mixed radix|100.000000|101,500000|1500ms
+empty (bash 3.2)|||unknown
+trailing-dot garbage|100.|101.|unknown
+non-numeric garbage|x.1|y.2|unknown
+leading-zero microseconds|100.000001|100.002001|2ms
+EOF
+
+# --- Arm 22: await_held actually observes, rather than claiming -------------
+# The helper added to remove a race had no coverage: replacing its whole body
+# with `return 0` left the suite green, so its polarity and its bound rested on
+# nothing and a future edit could silently reinstate the flake. Both directions
+# are sampled — a no-op that always claims success is believed absolutely by a
+# one-sided test.
+AH="$SS_ROOT/locks/6789-awaitheld.lock"
+: > "$AH"
+cases=$((cases + 1))
+if await_held "$AH" 3; then
+  fail "await_held claimed a FREE lock was held (its success arm is unconditional)"
+else
+  pass "await_held returns non-zero for a free lock (it observes, it does not assume)"
+fi
+flock -x "$AH" -c 'sleep 3' &
+AH_HOLDER=$!
+cases=$((cases + 1))
+if await_held "$AH"; then
+  pass "await_held returns zero once the lock is genuinely held"
+else
+  fail "await_held failed to observe a real holder"
+fi
+kill "$AH_HOLDER" 2>/dev/null || true
+wait "$AH_HOLDER" 2>/dev/null || true
+
+# --- Arm 23: every tc_acquire exit path returns 0 (AC6, structurally) -------
+# The behavioural arms above cover the paths a fixture can reach. This one
+# covers the ones it cannot: ADR-133 Decision 3 makes the lock fail-OPEN, so a
+# single `return 1` added later would let an instrument wedge the run it exists
+# to observe. Asserted over the function BODY, not assumed from the arms.
+tc_body="$(awk '/^tc_acquire\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
+# Comments stripped FIRST: the match below is no longer line-anchored, so prose
+# containing the word would otherwise be counted as an exit path.
+tc_code="$(grep -vE '^[[:space:]]*#' <<<"$tc_body" || true)"
+# Matched ANYWHERE on the line, not just at line start. The line-anchored form
+# was blind to every compound exit — `|| { …; return 1; }`, `&& return 1`, a
+# `return` inside a one-line `case`, and bare `return` (which propagates $?) —
+# so a new fail-CLOSED path could be added with the suite fully green, against
+# a function ADR-133 Decision 3 requires to be fail-open.
+ret_lines="$(grep -oE '\breturn\b([[:space:]]+[0-9]+)?' <<<"$tc_code" || true)"
+n_ret="$(grep -c . <<<"$ret_lines" || true)"
+n_zero="$(grep -cE '^return 0$' <<<"$ret_lines" || true)"
+# Cardinality floor set to the ACTUAL count, not a guess with slack in it: at
+# `>= 6` against 7 real paths, deleting an entire exit branch left the suite
+# green and the liveness line cheerfully reported the reduced number.
+_TC_EXPECTED_RETURNS=8
+cases=$((cases + 1))
+if (( n_ret >= _TC_EXPECTED_RETURNS )) && [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$tc_code" || true)" -ge 1 ]]; then
+  pass "AC6 extractor is live: $n_ret return statements found inside tc_acquire (floor $_TC_EXPECTED_RETURNS)"
+else
+  fail "AC6 extractor is vacuous or a path vanished — found $n_ret returns (expected >= $_TC_EXPECTED_RETURNS)"
+fi
+cases=$((cases + 1))
+if (( n_ret == n_zero )); then
+  pass "AC6: all $n_ret tc_acquire exit paths return 0 (fail-open, ADR-133 Decision 3)"
+else
+  fail "AC6: $(( n_ret - n_zero )) tc_acquire exit path(s) do not return 0: $ret_lines"
+fi
+
+echo "=== Phase 4: sibling SUITE probe (SIBLING_SUITE_DETECTED) ==="
+
+# A directly-run suite in another worktree competes for the same tmpfs capacity
+# as this runner, but it is NOT a test-all.sh run, so SIBLING_RUN_DETECTED never
+# sees it. These arms cover the second view over the SAME single /proc walk.
+#
+# Every fixture below pins ppid AND pgrp explicitly. A fixture that leaves them
+# at 0 cannot distinguish "cancelled by ancestry" from "cancelled by accident",
+# because a shared pgrp of 0 would cross-cancel every synthetic process.
+
+suite_view() {  # $1 = proc root
+  tc_env env TC_PROC_ROOT="$1" bash -c "source '$LIB'; tc_suite_siblings" 2>&1 || true
+}
+run_view() {    # $1 = proc root
+  tc_env env TC_PROC_ROOT="$1" bash -c "source '$LIB'; tc_siblings" 2>&1 || true
+}
+preamble_of() { # $1 = proc root, $2 = destination file
+  tc_env env TC_PROC_ROOT="$1" TC_MIN_AVAIL_MB=0 \
+    bash -c "source '$LIB'; tc_preamble" > "$2" 2>&1 || true
+}
+
+# --- T9: a directly-run suite in another worktree IS reported ---------------
+SUITE_PROC="$TESTROOT/proc-suite"
+SUITE_WT="$TESTROOT/suite-wt"
+mkdir -p "$SUITE_WT"
+make_fake_proc "$SUITE_PROC" 811001 "$SUITE_WT" 45 "tests/scripts/test-foo.sh" bash 1 811001
+out="$(suite_view "$SUITE_PROC")"
+cases=$((cases + 1))
+if [[ "$(grep -cE "^811001	${SUITE_WT}	4[45]\$" <<<"$out" || true)" -ge 1 ]]; then
+  pass "T9: tc_suite_siblings emits pid, worktree and derived elapsed for a run suite"
+else
+  fail "T9: tc_suite_siblings line shape wrong; got: $out"
+fi
+# The RUN view must stay blind to it — the two banners answer different questions.
+out="$(run_view "$SUITE_PROC")"
+cases=$((cases + 1))
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "T9: the run view does not see a directly-run suite (views are disjoint)"
+else
+  fail "T9: tc_siblings matched an individual suite; got: $out"
+fi
+preamble_of "$SUITE_PROC" "$TESTROOT/pre-suite.txt"
+PS9="$TESTROOT/pre-suite.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$PS9" || true)" -ge 1 ]]; then
+  pass "T9: preamble reports 'suite siblings: 1'"
+else
+  fail "T9: no suite-siblings count line; got: $(cat "$PS9")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'BANNER SIBLING_SUITE_DETECTED: an individual test suite is running in 1 other worktree' "$PS9" || true)" -ge 1 ]]; then
+  pass "T9: SIBLING_SUITE_DETECTED fires and names the count"
+else
+  fail "T9: no SIBLING_SUITE_DETECTED banner; got: $(cat "$PS9")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$PS9" || true)" -eq 0 ]]; then
+  pass "T9: SIBLING_RUN_DETECTED does NOT fire for an individual suite"
+else
+  fail "T9: the run banner fired for a suite-only fixture; got: $(cat "$PS9")"
+fi
+# The banner must carry the three-way confirmation instruction, not just a name.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'isolated re-run, the matching CI gate, and a clean full re-run' "$PS9" || true)" -ge 1 ]]; then
+  pass "T9: the suite banner states the three-way confirmation protocol"
+else
+  fail "T9: suite banner lacks the confirmation protocol; got: $(cat "$PS9")"
+fi
+
+# --- T9b: argv[0] IS the suite (direct shebang exec) ------------------------
+EXEC_PROC="$TESTROOT/proc-suite-exec"
+mkdir -p "$TESTROOT/suite-wt-b"
+make_fake_proc "$EXEC_PROC" 812001 "$TESTROOT/suite-wt-b" 12 "--verbose" \
+  "./scripts/foo.test.sh" 1 812001
+out="$(suite_view "$EXEC_PROC")"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^812001	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "T9b: './scripts/foo.test.sh' as argv[0] is a suite sibling (*.test.sh rule)"
+else
+  fail "T9b: direct-exec *.test.sh not matched; got: $out"
+fi
+
+# --- T10: the RUNNER itself is not an individual suite ----------------------
+# `test-all.sh` matches `test-*.sh`, so without the explicit exclusion EVERY full
+# run would also count as a suite sibling and the banner would fire on every solo
+# run — the "a banner that always fires carries no information" failure mode.
+out="$(suite_view "$FAKE_PROC")"
+cases=$((cases + 1))
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "T10: 'bash scripts/test-all.sh' is NOT counted as an individual suite"
+else
+  fail "T10: the runner matched the suite predicate; got: $out"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$P" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$P" || true)" -eq 0 ]]; then
+  pass "T10: the run-only preamble reports 0 suite siblings and no suite banner"
+else
+  fail "T10: suite banner/count wrong on a run-only fixture; got: $(cat "$P")"
+fi
+# T10 at the PREDICATE level. MEASURED: the two arms above cannot see the
+# `test-all.sh` exclusion at all, because _tc_scan_procs tests the RUN predicate
+# first and every input that would newly match as a suite already classified as
+# a run — a mutant deleting the exclusion survives both. The exclusion is the
+# second line of defence, and pinning it here is what stops a future reordering
+# of that if/elif from turning every full run into a "suite sibling".
+out="$(tc_env bash -c "source '$LIB'; _tc_is_suite_basename scripts/test-all.sh && echo MATCH || echo NO" 2>&1 || true)"
+cases=$((cases + 1))
+if [[ "$out" == "NO" ]]; then
+  pass "T10: the suite predicate itself excludes test-all.sh (banner cannot self-fire)"
+else
+  fail "T10: _tc_is_suite_basename matched the runner; got: $out"
+fi
+# POSITIVE CONTROL: the same probe MUST match a real suite name, or the arm
+# above reads "excluded" for a predicate that matches nothing at all.
+out="$(tc_env bash -c "source '$LIB'; _tc_is_suite_basename tests/scripts/test-foo.sh && echo MATCH || echo NO" 2>&1 || true)"
+cases=$((cases + 1))
+if [[ "$out" == "MATCH" ]]; then
+  pass "T10 control: the same predicate DOES match a real test-*.sh suite"
+else
+  fail "T10 control: the suite predicate matches nothing — the arm above is vacuous; got: $out"
+fi
+
+# --- T12: a whitespace-bearing `bash -c` string is not an invocation --------
+WS_PROC="$TESTROOT/proc-suite-ws"
+mkdir -p "$TESTROOT/ws-wt"
+make_fake_proc "$WS_PROC" 813001 "$TESTROOT/ws-wt" 8 "x" bash 1 813001
+printf 'bash\0-c\0grep -rn x tests/scripts/test-foo.sh\0' > "$WS_PROC/813001/cmdline"
+out="$(suite_view "$WS_PROC")"
+cases=$((cases + 1))
+if [[ -z "${out//[[:space:]]/}" ]]; then
+  pass "T12: a whitespace-bearing 'bash -c' string is not a suite sibling"
+else
+  fail "T12: the whitespace guard let a command STRING match; got: $out"
+fi
+# MUTATION CONTROL for T12: the same pid with a real token still matches, so the
+# arm above cannot pass by matching nothing at all.
+printf 'bash\0tests/scripts/test-foo.sh\0' > "$WS_PROC/813001/cmdline"
+out="$(suite_view "$WS_PROC")"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^813001	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "T12 control: a real 'bash tests/scripts/test-foo.sh' still matches"
+else
+  fail "T12 control: the whitespace guard rejected a real invocation; got: $out"
+fi
+
+# --- T11: a runner and ITS OWN suite child count once -----------------------
+# The child deliberately sits in a DIFFERENT cwd (suites `cd` into a mktemp
+# sandbox), which is exactly why cancellation is by ancestry and not by a cwd
+# set-difference: the difference would fail to cancel and double-report.
+#
+# The child also carries a DIFFERENT pgrp from the runner. That is not cosmetic:
+# with a shared pgrp the pgid fallback cancels it and this arm survives a mutant
+# that deletes ancestry cancellation entirely (measured — the mutation battery
+# caught exactly that). Distinct pgrps make ancestry the ONLY mechanism that can
+# cancel here, and T11-pgid below is the arm that covers the fallback.
+T11_PROC="$TESTROOT/proc-t11"
+mkdir -p "$TESTROOT/t11-wt" "$TESTROOT/t11-sandbox"
+make_fake_proc "$T11_PROC" 814001 "$TESTROOT/t11-wt" 300 "scripts/test-all.sh" bash 1 814001
+make_fake_proc "$T11_PROC" 814002 "$TESTROOT/t11-sandbox" 20 "tests/scripts/test-foo.sh" \
+  bash 814001 814002
+preamble_of "$T11_PROC" "$TESTROOT/pre-t11.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$TESTROOT/pre-t11.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11.txt" || true)" -eq 0 ]]; then
+  pass "T11: a runner's own suite child is cancelled by ancestry (counted once)"
+else
+  fail "T11: the suite child was double-reported; got: $(cat "$TESTROOT/pre-t11.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/pre-t11.txt" || true)" -ge 1 ]]; then
+  pass "T11: the run banner still fires exactly once for that worktree"
+else
+  fail "T11: run banner/count wrong; got: $(cat "$TESTROOT/pre-t11.txt")"
+fi
+
+# --- T11b: ancestry reaches THROUGH a non-matching wrapper ------------------
+# `timeout N bash <suite>` puts a non-shell at argv[0], so the wrapper matches
+# NEITHER predicate, and `timeout` calls setpgid() so the suite does not even
+# share the runner's process group. Only a walk of the WHOLE ppid chain cancels
+# it; a parent-only check reports the runner's own child as a sibling worktree.
+#
+# MEASURED CORRECTION to the plan's §4.3 third bullet: `env VAR=x bash <suite>`
+# does NOT survive in argv — env EXECs, so /proc/<pid>/cmdline reads `bash
+# <suite>` for all but the first microseconds and the run predicate does match.
+# `timeout` FORKS and stays resident, so it is the shape that genuinely hides a
+# run behind a non-shell argv[0]. Verified 2026-08-11 on this host.
+T11B_PROC="$TESTROOT/proc-t11b"
+mkdir -p "$TESTROOT/t11b-wt" "$TESTROOT/t11b-sandbox"
+make_fake_proc "$T11B_PROC" 815001 "$TESTROOT/t11b-wt" 400 "scripts/test-all.sh" bash 1 815001
+make_fake_proc "$T11B_PROC" 815002 "$TESTROOT/t11b-wt" 30 "x" timeout 815001 815002
+printf 'timeout\0600\0bash\0tests/scripts/test-foo.sh\0' > "$T11B_PROC/815002/cmdline"
+make_fake_proc "$T11B_PROC" 815003 "$TESTROOT/t11b-sandbox" 29 "tests/scripts/test-foo.sh" \
+  bash 815002 815002
+preamble_of "$T11B_PROC" "$TESTROOT/pre-t11b.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$TESTROOT/pre-t11b.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11b.txt" || true)" -eq 0 ]]; then
+  pass "T11b: ancestry walks past a wrapper with a non-shell argv[0] (counted once)"
+else
+  fail "T11b: wrapper-hidden run's suite child was reported; got: $(cat "$TESTROOT/pre-t11b.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11b.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/pre-t11b.txt" || true)" -ge 1 ]]; then
+  pass "T11b: the run banner fires once for the wrapped run"
+else
+  fail "T11b: run banner/count wrong under a wrapper; got: $(cat "$TESTROOT/pre-t11b.txt")"
+fi
+
+# --- T11-pgid: the process-group fallback when the ppid chain is broken -----
+# A `run_suite` child inherits the runner's pgid; if it is reparented (its parent
+# already reaped) the ppid chain no longer reaches the runner at all. Without the
+# pgrp fallback the runner's own child reads as a foreign worktree.
+T11P_PROC="$TESTROOT/proc-t11p"
+mkdir -p "$TESTROOT/t11p-wt" "$TESTROOT/t11p-sandbox"
+make_fake_proc "$T11P_PROC" 816001 "$TESTROOT/t11p-wt" 500 "scripts/test-all.sh" bash 1 816001
+make_fake_proc "$T11P_PROC" 816002 "$TESTROOT/t11p-sandbox" 15 "tests/scripts/test-foo.sh" \
+  bash 1 816001
+preamble_of "$T11P_PROC" "$TESTROOT/pre-t11p.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 0 ' "$TESTROOT/pre-t11p.txt" || true)" -ge 1 ]]; then
+  pass "T11-pgid: a reparented suite child sharing the runner's pgrp is cancelled"
+else
+  fail "T11-pgid: pgrp fallback did not cancel; got: $(cat "$TESTROOT/pre-t11p.txt")"
+fi
+
+# --- T11c: '<unreadable>' cwds must NOT cross-cancel ------------------------
+# tc_siblings substitutes one literal `<unreadable>` for every cwd it cannot
+# read, so a cwd set-difference would let a SINGLE unreadable run subtract EVERY
+# unreadable suite. Neither process here is related to the other.
+T11C_PROC="$TESTROOT/proc-t11c"
+make_fake_proc "$T11C_PROC" 817001 "" 600 "scripts/test-all.sh" bash 1 817001
+make_fake_proc "$T11C_PROC" 817002 "" 60 "tests/scripts/test-foo.sh" bash 1 817002
+preamble_of "$T11C_PROC" "$TESTROOT/pre-t11c.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11c.txt" || true)" -ge 1 ]]; then
+  pass "T11c: the unreadable-cwd run is still reported"
+else
+  fail "T11c: unreadable-cwd run lost; got: $(cat "$TESTROOT/pre-t11c.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$TESTROOT/pre-t11c.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11c.txt" || true)" -ge 1 ]]; then
+  pass "T11c: an unrelated unreadable-cwd suite is NOT cancelled by the run"
+else
+  fail "T11c: '<unreadable>' cwds cross-cancelled; got: $(cat "$TESTROOT/pre-t11c.txt")"
+fi
+
+# --- T11d: over-cancellation control (AC24) ---------------------------------
+# Without this arm an implementation that drops EVERY suite match whenever ANY
+# run match exists passes T10, T11, T11b and T11-pgid.
+T11D_PROC="$TESTROOT/proc-t11d"
+mkdir -p "$TESTROOT/t11d-wt-a" "$TESTROOT/t11d-wt-b"
+make_fake_proc "$T11D_PROC" 818001 "$TESTROOT/t11d-wt-a" 700 "scripts/test-all.sh" bash 1 818001
+make_fake_proc "$T11D_PROC" 818002 "$TESTROOT/t11d-wt-b" 70 "tests/scripts/test-foo.sh" \
+  bash 1 818002
+preamble_of "$T11D_PROC" "$TESTROOT/pre-t11d.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_SUITE_DETECTED' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]]; then
+  pass "T11d: an UNRELATED suite in another worktree survives an unrelated run (AC24)"
+else
+  fail "T11d: over-cancellation dropped an unrelated suite; got: $(cat "$TESTROOT/pre-t11d.txt")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] siblings: 1 ' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'SIBLING_RUN_DETECTED' "$TESTROOT/pre-t11d.txt" || true)" -ge 1 ]]; then
+  pass "T11d: both banners fire independently when both kinds of sibling exist"
+else
+  fail "T11d: run banner missing alongside the suite banner; got: $(cat "$TESTROOT/pre-t11d.txt")"
+fi
+
+# --- T13: no siblings of EITHER kind => neither banner ----------------------
+preamble_of "$OTHER_PROC" "$TESTROOT/pre-t13.txt"
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SIBLING_RUN_DETECTED|SIBLING_SUITE_DETECTED|LOW_TMP_HEADROOM' "$TESTROOT/pre-t13.txt" || true)" -eq 0 ]]; then
+  pass "T13: with no sibling of either kind, NEITHER sibling banner fires"
+else
+  fail "T13: a banner fired with no siblings; got: $(cat "$TESTROOT/pre-t13.txt")"
+fi
+
+# --- Back-compat: tc_siblings' output shape is unchanged (AC5) --------------
+# The enumerator now emits a leading class column; the run view must strip it, or
+# every one of the 22 zero-arg call sites silently shifts a field.
+out="$(run_view "$FAKE_PROC")"
+nf="$(awk -F'\t' 'NF != 3 {n++} END {print n+0}' <<<"$out" || true)"
+cases=$((cases + 1))
+if [[ "$nf" == "0" ]] && [[ "$(grep -cE '^424242	' <<<"$out" || true)" -ge 1 ]]; then
+  pass "AC5: tc_siblings still emits exactly pid<TAB>cwd<TAB>elapsed (no class column)"
+else
+  fail "AC5: tc_siblings output shape changed ($nf malformed lines); got: $out"
+fi
+
+# --- Structural: ONE /proc walk per preamble --------------------------------
+# Two calls are two NON-ATOMIC snapshots, over which the cross-bucket
+# cancellation is computed on inconsistent sets. Anchored on the CALL construct
+# over comment-stripped code, never on a bare token the file also names in prose.
+pre_body="$(awk '/^tc_preamble\(\) \{/,/^\}/' "$LIB" | grep -vE '^[[:space:]]*#' || true)"
+pre_lines="$(grep -c . <<<"$pre_body" || true)"
+scan_calls="$(grep -oE '_tc_scan_procs' <<<"$pre_body" | wc -l || true)"
+view_calls="$(grep -oE '(^|[^_[:alnum:]])tc_(suite_)?siblings' <<<"$pre_body" | wc -l || true)"
+cases=$((cases + 1))
+if [[ "$pre_lines" -ge 20 ]]; then
+  pass "structural probe is non-vacuous: tc_preamble body extracted ($pre_lines lines)"
+else
+  fail "tc_preamble body extraction returned $pre_lines lines — the arm below is vacuous"
+fi
+cases=$((cases + 1))
+if [[ "$scan_calls" == "1" ]] && [[ "$view_calls" == "0" ]]; then
+  pass "tc_preamble derives both counts from ONE _tc_scan_procs snapshot"
+else
+  fail "tc_preamble walks /proc more than once ($scan_calls scan, $view_calls view calls)"
+fi
+
+# --- Per-mount used-bytes attribution (ADR-133 amendment instrument) -------
+# WHY BYTES. The shipped per-suite probe records `tmp_delta=<ENTRY COUNT>`, but
+# ADR-133's capacity verdict is about BYTES — that ADR explicitly rejected
+# count-based reasoning because 4,294 small entries held 160 MB (4.5%) while
+# three trees held 3.1 GiB (88%). So the quantity the advisory lock exists to
+# protect had never been measured by the instrument shipped to measure it.
+#
+# WHY `df` AND NOT `du`. ADR-133's question is about a MOUNT's capacity ("a
+# machine-global RAM-backed 4 GiB /tmp at 86% full"), not a directory's size, and
+# `df` answers it in O(1). A `du` walk was measured on this machine at 2.15 s for
+# /tmp and >115 s for /var/tmp — at the per-suite hook that is ~578 walks per
+# mount, which is the same observer-effect confound that got a background
+# sampler rejected during planning.
+#
+# WHY PER-MOUNT. test-all.sh points TMPDIR at /var/tmp (disk-backed) while
+# pinning TC_TMPDIR at /tmp (the tmpfs), so a probe returning one number for
+# "scratch" would re-create the fail-open the comment at test-all.sh:18-29 was
+# written to prevent: a healthy reading from the wrong mount is
+# indistinguishable from a healthy mount.
+#
+# THE MUTATION CONTROL IS THE PINNED PAIR. The stub keys its output on the PATH
+# argument, so an implementation that ignored its argument, or summed the two
+# mounts, returns the SAME number twice — which the distinctness arm rejects —
+# and neither pinned value equals their sum.
+BYTES_DF_STUB="$TESTROOT/df-bytes-stub.sh"
+cat > "$BYTES_DF_STUB" <<'DFEOF'
+#!/usr/bin/env bash
+# df -P -k shape (header + one data row), keyed on the LAST argument so the two
+# mounts report different Used values. Field 3 is Used in 1024-blocks.
+target="${*: -1}"
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'
+case "$target" in
+  *tmpfs-under-pressure*) printf 'tmpfs 4194304 3500000 694304 84%% /tmp\n' ;;
+  *disk-roomy*)           printf '/dev/fake 999999999 4096 999995903 1%% /\n' ;;
+  *)                      printf 'unparseable\n' ;;
+esac
+DFEOF
+chmod +x "$BYTES_DF_STUB"
+mkdir -p "$TESTROOT/tmpfs-under-pressure" "$TESTROOT/disk-roomy"
+
+cases=$((cases + 1))
+if bash -c "source '$LIB'; declare -F tc_used_bytes >/dev/null 2>&1"; then
+  pass "tc_used_bytes is defined"
+else
+  fail "tc_used_bytes is not defined — the bytes instrument does not exist"
+fi
+
+bytes_of() {
+  TC_DF_CMD="$BYTES_DF_STUB" TC_D="$1" \
+    bash -c "source '$LIB'; tc_used_bytes \"\$TC_D\"" 2>/dev/null || echo ""
+}
+b_tmpfs=$(bytes_of "$TESTROOT/tmpfs-under-pressure")
+b_disk=$(bytes_of "$TESTROOT/disk-roomy")
+
+# 3500000 KiB * 1024 and 4096 KiB * 1024. Pinned exactly: a range would admit
+# the sum (3588194304), which is the specific wrong answer being rejected.
+cases=$((cases + 1))
+if [[ "$b_tmpfs" == "3584000000" ]]; then
+  pass "tc_used_bytes reports the tmpfs mount's used bytes exactly (3584000000)"
+else
+  fail "tmpfs mount reported '$b_tmpfs', expected 3584000000"
+fi
+cases=$((cases + 1))
+if [[ "$b_disk" == "4194304" ]]; then
+  pass "tc_used_bytes reports the disk mount's used bytes exactly (4194304)"
+else
+  fail "disk mount reported '$b_disk', expected 4194304"
+fi
+cases=$((cases + 1))
+if [[ -n "$b_tmpfs" && "$b_tmpfs" != "$b_disk" ]]; then
+  pass "per-mount attribution: the two mounts report DISTINCT byte counts"
+else
+  fail "both mounts reported '$b_tmpfs' — the helper ignores its argument or sums the mounts"
+fi
+cases=$((cases + 1))
+if [[ "$b_tmpfs" != "3588194304" && "$b_disk" != "3588194304" ]]; then
+  pass "neither mount reports the SUM of the two (3588194304)"
+else
+  fail "a mount reported the sum of both mounts"
+fi
+
+# Degrade, never abort: this runs inside the gate's run-boundary hook, so an
+# exception on an unparseable df would take the whole run down mid-flight.
+b_bad=$(bytes_of "$TESTROOT/some-other-path")
+cases=$((cases + 1))
+if [[ "$b_bad" == "0" ]]; then
+  pass "an unparseable df reports 0 rather than failing the run"
+else
+  fail "an unparseable df returned '$b_bad' instead of 0"
+fi
+
+# --- T15: the SUITE view dedupes by WORKTREE, not by pid ---------------------
+# The run view has carried this pair since #6789; the suite view shipped without
+# it, and the gap is not theoretical: replacing `cut -f2 | sort -u | grep -c .`
+# with a bare `grep -c .` (count pids, not worktrees) passed all 66 assertions,
+# while the SAME mutation on the run view reds. The banner's own text says
+# "running in N other worktree(s)", so a pid count makes it say something false.
+T15_PROC="$TESTROOT/proc-t15"
+mkdir -p "$TESTROOT/t15-wt"
+# Two suite processes, ONE worktree -> must collapse to 1.
+make_fake_proc "$T15_PROC" 707001 "$TESTROOT/t15-wt" 30 "tests/scripts/test-foo.sh"
+make_fake_proc "$T15_PROC" 707002 "$TESTROOT/t15-wt" 40 "tests/scripts/test-bar.sh"
+tc_env env TC_PROC_ROOT="$T15_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-t15.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$TESTROOT/preamble-t15.txt" || true)" -ge 1 ]]; then
+  pass "T15: two suite procs in ONE worktree collapse to 'suite siblings: 1'"
+else
+  fail "T15: expected 'suite siblings: 1'; got: $(grep 'suite siblings' "$TESTROOT/preamble-t15.txt" || true)"
+fi
+
+# --- T15b: the suite count REACHES 2 for two distinct worktrees --------------
+# Without a genuine N=2 case, a mutation capping the count at 1 survives, and the
+# banner's plural has never been exercised.
+T15B_PROC="$TESTROOT/proc-t15b"
+mkdir -p "$TESTROOT/t15b-wt-a" "$TESTROOT/t15b-wt-b"
+make_fake_proc "$T15B_PROC" 708001 "$TESTROOT/t15b-wt-a" 30 "tests/scripts/test-foo.sh"
+make_fake_proc "$T15B_PROC" 708002 "$TESTROOT/t15b-wt-b" 40 "tests/scripts/test-bar.sh"
+tc_env env TC_PROC_ROOT="$T15B_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-t15b.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] suite siblings: 2 ' "$TESTROOT/preamble-t15b.txt" || true)" -ge 1 ]]; then
+  pass "T15b: suite count reaches 2 for two DISTINCT worktrees (not capped at 1)"
+else
+  fail "T15b: expected 'suite siblings: 2'; got: $(grep 'suite siblings' "$TESTROOT/preamble-t15b.txt" || true)"
+fi
+
+# V5: `df` FAILING is a different case from `df` succeeding with junk, and only the second was
+# fixtured — BYTES_DF_STUB exits 0 on every arm including its `unparseable` one. So an
+# implementation that dropped the `2>/dev/null` and the `|| kb=""` (`kb=$(... ) || return 1`)
+# satisfied every existing assertion while propagating a non-zero return into test-all.sh's
+# `set -euo pipefail` at a run-boundary hook — which is the "takes the whole run down mid-flight"
+# outcome the helper's own comment says it exists to prevent.
+BYTES_DF_FAIL_STUB="$TESTROOT/df-fail-stub.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BYTES_DF_FAIL_STUB"
+chmod +x "$BYTES_DF_FAIL_STUB"
+# tc_used_bytes emits a trailing newline, so the rc suffix lands on a second line; collapse it
+# rather than comparing against a shape that depends on that newline.
+# `set -o pipefail` IS THE POINT, and without it this arm is vacuous. The capture is a PIPELINE
+# (`df | awk`), whose exit status is awk's — and awk exits 0 on empty input — so a failing df is
+# invisible unless pipefail is set. test-all.sh runs `set -euo pipefail` and sources this lib into
+# that context, so the production shell is the one where df's failure actually propagates.
+# Measured: without pipefail here, replacing `|| kb=""` with `|| return 1` was an EQUIVALENT
+# mutation and this arm passed over it.
+b_failed=$(TC_DF_CMD="$BYTES_DF_FAIL_STUB" TC_D="$TESTROOT" \
+  bash -c "set -o pipefail; source '$LIB'; tc_used_bytes \"\$TC_D\"; printf ' rc=%s' \"\$?\"" 2>/dev/null | tr -d '\n' || echo "ABORTED")
+cases=$((cases + 1))
+if [[ "$b_failed" == "0 rc=0" ]]; then
+  pass "a FAILING df yields 0 and returns success (degrades, never aborts the run)"
+else
+  fail "a failing df produced '$b_failed' — expected '0 rc=0'"
+fi
+
+# V6: nothing asserted that the implementation passes `-P -k`, because the stub ignores its
+# arguments entirely. Dropping `-P` lets a long device name wrap onto a second line, so `NR==2`
+# becomes the device name alone and field 3 is empty -> silently 0 on the PRODUCTION path while
+# every stubbed arm stays green. Dropping `-k` gives `df -h`'s `3.5G`, which fails the numeric
+# guard -> also 0. This arm is the only one that runs the helper against the REAL df.
+# Bounded, not pinned: the value is a measured quantity, so it asserts shape and non-zero only.
+b_real=$(TC_D="$TESTROOT" bash -c "source '$LIB'; tc_used_bytes \"\$TC_D\"" 2>/dev/null || echo "")
+cases=$((cases + 1))
+if [[ "$b_real" =~ ^[0-9]+$ ]] && [[ "$b_real" -gt 0 ]]; then
+  pass "against the REAL df, tc_used_bytes returns a positive integer ($b_real bytes)"
+else
+  fail "against the real df, tc_used_bytes returned '$b_real' — the -P -k contract is broken"
+fi
+
+# POSITIVE CONTROL. The guard below reports THROUGH fail(), so fail() is a single
+# point of failure for this entire file: neutered to a no-op it takes the whole
+# verdict with it. Measured before this control existed: `fail() { :; }` plus
+# deleting the SIBLING_SUITE_DETECTED banner from the lib reported
+# "62 passed, 0 failed", exit 0 -- the flagship feature gone, four assertions
+# silently vanished, and the cardinality guard DETECTING the shortfall and unable
+# to say so. A brace group with a redirect, never `$( )`: command substitution
+# runs in a subshell and the increments would be discarded.
+#
+# `cases` IS ROLLED BACK WITH THEM, and it must be. These two probe calls are ordinary call
+# sites, so they carry the ordinary `cases` increment — but their verdicts are then UNDONE.
+# Leaving the two increments standing would make `pass_n + fails == cases` false by exactly
+# the probe's size (2) on every otherwise-green run, so the conservation check below would
+# fire on every single run and the suite would be permanently RED.
+#
+# Restoring `cases` does NOT weaken the probe. What this control asserts is that the counters
+# MOVED, and that is decided by the `if` BELOW, before any restore happens. The rollback only
+# removes the probe's bookkeeping from the totals afterwards; it cannot retroactively satisfy
+# a condition that has already been evaluated.
+_pc_p=$pass_n; _pc_f=$fails; _pc_c=$cases
+{ cases=$((cases + 1)); pass "positive-control probe"
+  cases=$((cases + 1)); fail "positive-control probe"; } >/dev/null 2>&1
+if [[ "$pass_n" -eq $((_pc_p + 1)) && "$fails" -eq $((_pc_f + 1)) ]]; then
+  pass_n="$_pc_p"; fails="$_pc_f"; cases="$_pc_c"
+  echo "  [control] pass() and fail() both move their counters"
+else
+  echo "  [FATAL] assertion helpers do not move their counters -- every verdict here is void." >&2
+  exit 1
+fi
+
+# --- Anti-vacuity floor ------------------------------------------------------
+# This suite's own dispatch. A harness that silently asserts nothing (a fixture generator that
+# no-ops, an early `return`, a `<<EOF` table that lost its rows) would otherwise report a clean
+# 0/0.
+#
+# It now reads `cases` — the counter incremented at the CALL SITE — rather than
+# `pass_n + fails`. Those two are equal on a healthy run, but they part company on exactly the
+# failure this contract exists to catch: with `fail()` neutered to a no-op, `pass_n + fails`
+# SINKS below the floor and this guard fires with a cardinality message, mislabelling a
+# discarded-verdict defect as a missing-arm one. `cases` keeps its full value there, so the
+# floor stays silent and the accounting check below — the arm that can actually name the
+# defect — is the one that speaks.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(). A floor that reports by
+# calling fail() increments the same counter the exit status reads, so neutering fail() silences
+# the rows AND the floor that exists to notice the silence — the suite prints a total and exits
+# 0. A floor enforced through the suspect cannot witness the suspect.
+#
+# Count BOTH outcomes: a run with genuine failures has a lower pass_n, and testing
+# pass_n alone reported "cardinality guard: only 64 ran (expected >= 66)" on a run
+# whose real problem was two failures -- a strand message for a non-strand.
+# Raised 68 -> 76 with the ADR-181 per-mount bytes arms (6 attribution + 2 contract). At 68 the floor had exactly the slack
+# to swallow that whole block: deleting it left the suite green and silent, which is the defect
+# this guard exists to prevent, applied to the feature that added it.
+# Raised 76 -> 92 with the #7484 measured-wait arms (elapsed assertions on arms 10-11, the
+# slow-acquire arm, the flock-missing arm, the LOCK_WAITING ordering/absence arms and the
+# structural fail-open arm). Derived by running the as-written file, not estimated: a floor
+# guessed from a plan's prose is the same unmeasured claim this change exists to remove.
+# Raised 92 -> 95 with the degraded-timing arm (fail-open under `set -u` with no
+# EPOCHREALTIME, plus the two `unknown`-not-0ms assertions). That branch had a
+# justification comment and zero coverage, and the code could not in fact reach it.
+# Raised 95 -> 110 with the review-round arms (two-sided elapsed bounds, the two
+# previously-unfixtured skip paths, the arity guard, the _tc_ms_since radix
+# table, and await_held's own both-directions coverage). Derived by running the
+# as-written file. Zero slack is deliberate: at `>= 6` against 7, the sibling
+# floor one layer down absorbed the deletion of a whole exit branch.
+# RE-MEASURED, not inherited, when the counter changed from `pass_n + fails` to `cases`: a
+# green run of the as-written file reports `cases` = 110, identical to the old sum because
+# conservation holds on a healthy run. Zero slack is deliberate.
+
+# ===========================================================================
+# Guard 2 (#7869): stale-sibling exclusion from the full-gate refusal count.
+#
+# PROPERTY: a sibling whose measured elapsed_s exceeds the runtime ceiling is
+# excluded from TC_SIBLING_RUN_COUNT before the refusal consults it, and the
+# exclusion is reported. Fresh siblings still refuse.
+#
+# The filter lives at the SINGLE `sibs=` derivation, which feeds the reported
+# rows, the sibling count and the exported count alike — so there is no
+# count-vs-report drift to assert separately.
+#
+# Fixtures are synthesized. Every arm pins TC_RUNTIME_CEILING_S explicitly so a
+# future change to the shipped default cannot silently move these verdicts.
+# ---------------------------------------------------------------------------
+echo "=== Guard 2 (#7869): stale-sibling exclusion ==="
+
+STALE_ROOT="$TESTROOT/proc-stale"
+STALE_WT="$TESTROOT/wt-stale"
+FRESH_WT="$TESTROOT/wt-fresh"
+STALE2_WT="$TESTROOT/wt-stale2"
+mkdir -p "$STALE_WT" "$FRESH_WT" "$STALE2_WT"
+# One stale run (elapsed 20000s) and one fresh run (elapsed 60s), in DIFFERENT
+# worktrees — the count is over distinct worktrees, not pids.
+make_fake_proc "$STALE_ROOT" 900001 "$STALE_WT" 20000 "scripts/test-all.sh"
+make_fake_proc "$STALE_ROOT" 900002 "$FRESH_WT" 60 "scripts/test-all.sh"
+
+# Runs tc_preamble against a given procfs and prints the resulting count on the
+# LAST line, with the preamble output above it. `|| true` inside the
+# substitution: a non-zero here would abort the suite under `set -e` before
+# fail() could print.
+g2_run() {
+  local root="$1" ceiling="$2"
+  env TC_PROC_ROOT="$root" TC_TMPDIR="$FAKE_TMP" TC_SELF_PID=999999 \
+      TC_XDG_DIR="" TC_NPROC=16 TC_RUNTIME_CEILING_S="$ceiling" \
+      bash -c "source '$LIB'; tc_preamble >/dev/null 2>&1; printf '%s\n' \"\${TC_SIBLING_RUN_COUNT:-MISSING}\"" 2>&1 || true
+}
+g2_report() {
+  local root="$1" ceiling="$2"
+  env TC_PROC_ROOT="$root" TC_TMPDIR="$FAKE_TMP" TC_SELF_PID=999999 \
+      TC_XDG_DIR="" TC_NPROC=16 TC_RUNTIME_CEILING_S="$ceiling" \
+      bash -c "source '$LIB'; tc_preamble" 2>&1 || true
+}
+
+# --- H4: the fixture must be non-empty, or every arm below is vacuous -------
+# A zero-sibling procfs would make "count == 1" pass for the wrong reason. This
+# arm pins the fixture's own cardinality FIRST: with the ceiling raised above
+# both runs, BOTH worktrees must be counted.
+G2_BASELINE="$(g2_run "$STALE_ROOT" 99999 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_BASELINE" == "2" ]]; then
+  pass "G2/H4 fixture cardinality: both siblings counted when the ceiling excludes neither"
+else
+  fail "G2/H4 fixture is not exercising two siblings; expected 2, got: $G2_BASELINE"
+fi
+
+# --- M8: the filter exists (removing it restores the raw count) -------------
+G2_FILTERED="$(g2_run "$STALE_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_FILTERED" == "1" ]]; then
+  pass "G2/M8 stale sibling (20000s) excluded from TC_SIBLING_RUN_COUNT at a 14400s ceiling"
+else
+  fail "G2/M8 expected count 1 after excluding the stale sibling, got: $G2_FILTERED"
+fi
+
+# --- The capacity report must STILL SEE the stale sibling --------------------
+# The regression guard for the worst shape this filter can take. Scoping the
+# exclusion to `sibs` itself would answer "can this box absorb another gate?"
+# with the refusal's instrument: `--capacity` printed CAPACITY_OK measured_runs=0
+# with a 46h orphan live, enumerating nothing — an idle verdict on a wedged box,
+# in the one diagnostic the operator is routed to from the lock-wait banner.
+G2_ROWS="$TESTROOT/g2-rows.txt"
+g2_report "$STALE_ROOT" 14400 > "$G2_ROWS"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\]   -> pid 900001 in .*wt-stale \(running' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the STALE sibling is still enumerated as a detail row (capacity stays honest)"
+else
+  fail "G2 capacity regression: the stale sibling vanished from the report; got: $(cat "$G2_ROWS")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\] siblings: 2 other worktree' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the sibling COUNT line still reports both (the machine as it is)"
+else
+  fail "G2 the sibling count line was filtered; got: $(grep 'siblings:' "$G2_ROWS" || true)"
+fi
+# --- H5 / M9: direction. Anchored on the DETAIL-ROW shape, never a bare path --
+# An earlier revision grepped for the fresh worktree's bare path against the
+# merged stdout+stderr — which the exclusion banner's own `cwd=` field satisfies,
+# so an inverted comparison passed it. Three of four direction arms were vacuous.
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\]   -> pid 900002 in .*wt-fresh \(running' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2/H5 the FRESH sibling is enumerated as a detail row"
+else
+  fail "G2/H5 fresh worktree absent from the detail rows; got: $(cat "$G2_ROWS")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED.*pid=900001.*elapsed_s=20000' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the exclusion is REPORTED, naming the excluded pid and its measured elapsed"
+else
+  fail "G2 marker missing/incorrect; got: $(grep 'STALE_SIBLING' "$G2_ROWS" || true)"
+fi
+# Direction, pinned where it is load-bearing: the marker must name the STALE pid,
+# never the fresh one. An inverted comparison reds here AND on the count arm.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED.*pid=900002' "$G2_ROWS" || true)" -eq 0 ]]; then
+  pass "G2/M9 the FRESH sibling is never the one excluded (direction)"
+else
+  fail "G2/M9 inverted direction: the fresh sibling was excluded"
+fi
+
+# --- M12: a SECOND stale sibling is also excluded ---------------------------
+# A filter that stops after the first member is the defect class. Adding a
+# second stale worktree must not raise the count.
+make_fake_proc "$STALE_ROOT" 900003 "$STALE2_WT" 30000 "scripts/test-all.sh"
+G2_TWO_STALE="$(g2_run "$STALE_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_TWO_STALE" == "1" ]]; then
+  pass "G2/M12 a second stale sibling is excluded too (filter does not stop at the first)"
+else
+  fail "G2/M12 expected count 1 with two stale siblings, got: $G2_TWO_STALE"
+fi
+# Control for the arm above: with the ceiling lifted, all three are counted.
+G2_THREE="$(g2_run "$STALE_ROOT" 99999 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_THREE" == "3" ]]; then
+  pass "G2/M12 control: all three worktrees counted when the ceiling excludes none"
+else
+  fail "G2/M12 control expected 3, got: $G2_THREE"
+fi
+
+# --- M10: an UNREADABLE elapsed must still be COUNTED -----------------------
+# WHAT THIS PINS: the END-TO-END property (a run whose starttime cannot be
+# parsed is still counted), via the producer's `elapsed=0` fallback. The filter's
+# `^[0-9]+$` term is pinned separately, by the tab-in-cwd arm below — an earlier
+# revision of this comment called that term unreachable and the mutation
+# equivalent, which was false: `sibs`'s field 3 is not the producer's field.
+UNREAD_ROOT="$TESTROOT/proc-unreadable"
+UNREAD_WT="$TESTROOT/wt-unreadable"
+mkdir -p "$UNREAD_WT"
+make_fake_proc "$UNREAD_ROOT" 910001 "$UNREAD_WT" 60 "scripts/test-all.sh"
+# Corrupt starttime so the elapsed derivation cannot parse it.
+printf '910001 (te) st) S 0 0 %s x 0 0\n' "$(printf '0 %.0s' {4..19})" \
+  > "$UNREAD_ROOT/910001/stat"
+G2_UNREAD="$(g2_run "$UNREAD_ROOT" 1 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_UNREAD" == "1" ]]; then
+  pass "G2/M10 a sibling whose starttime is unparseable is COUNTED in the refusal operand"
+else
+  fail "G2/M10 unreadable-elapsed sibling must count even at a 1s ceiling, got: $G2_UNREAD"
+fi
+
+
+# --- The `^[0-9]+$` term is REACHABLE: a TAB in a worktree path -------------
+# Rows are TAB-separated and projected `$2\t$3\t$4`, so a cwd containing a tab
+# shifts every field right — `$3` becomes a cwd fragment and elapsed falls off
+# the row. Without the numeric term, awk coerces that fragment and a LIVE
+# sibling is excluded. An earlier revision documented this mutant as
+# "equivalent, no fixture can kill it"; this is that fixture.
+TAB_ROOT="$TESTROOT/proc-tab"
+TAB_WT="$TESTROOT/wt$(printf '\t')99999x"
+mkdir -p "$TAB_WT"
+make_fake_proc "$TAB_ROOT" 950001 "$TAB_WT" 60 "scripts/test-all.sh"
+G2_TAB="$(g2_run "$TAB_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_TAB" == "1" ]]; then
+  pass "G2 a tab-in-cwd sibling keeps a non-numeric field 3 COUNTED (the numeric term is load-bearing)"
+else
+  fail "G2 tab-in-cwd sibling was excluded — a live 60s run silently admitted; got: $G2_TAB"
+fi
+
+# --- Threshold band: the cut point, pinned from both sides ------------------
+# Every other arm probes absurd extremes (1 and 99999), which cannot constrain
+# the cut point anywhere in the band the system actually runs in: scaling the
+# comparison, or moving the shipped default, passes them all.
+BAND_ROOT="$TESTROOT/proc-band"
+BAND_AT="$TESTROOT/wt-at"; BAND_UNDER="$TESTROOT/wt-under"
+mkdir -p "$BAND_AT" "$BAND_UNDER"
+make_fake_proc "$BAND_ROOT" 970001 "$BAND_AT"    14400 "scripts/test-all.sh"
+make_fake_proc "$BAND_ROOT" 970002 "$BAND_UNDER" 14399 "scripts/test-all.sh"
+G2_BAND="$(g2_run "$BAND_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_BAND" == "1" ]]; then
+  pass "G2 the cut is AT the ceiling: elapsed==ceiling excluded, ceiling-1 counted (pins >= and the band)"
+else
+  fail "G2 boundary wrong; expected exactly the ceiling-1 sibling to survive, got count: $G2_BAND"
+fi
+
+# --- Guard 2's validity guard: an unusable ceiling disables the FILTER ------
+# Guard 1 has an `abc` arm for this; Guard 2 had none, so `if true` survived —
+# and with an empty ceiling awk compares as STRINGS, excluding every sibling and
+# disabling the capacity gate outright.
+for _bad in "0" "abc" "-5" "12.5"; do
+  G2_BAD="$(g2_run "$STALE_ROOT" "$_bad" | tail -1)"
+  cases=$((cases + 1))
+  if [[ "$G2_BAD" == "3" ]]; then
+    pass "G2 an unusable ceiling ('${_bad}') disables the filter — every sibling counted"
+  else
+    fail "G2 unusable ceiling '${_bad}' still filtered; expected 3 counted, got: $G2_BAD"
+  fi
+done
+# EMPTY is NOT unusable: `${TC_RUNTIME_CEILING_S:-14400}` treats empty as unset, so it
+# resolves to the shipped default. Pinned explicitly because the natural assumption is the
+# opposite, and because this is the only arm where the DEFAULT is the operative value.
+# --- The SHIPPED DEFAULT is pinned against the legitimate-hold band ---------
+# Every other arm passes TC_RUNTIME_CEILING_S explicitly, so the default is never
+# the operative value and moving it (14400 -> 3000) passed the whole suite. The
+# lib's own rationale cites 3775 / 5787 / 5763 s as elapsed readings from runs
+# that were legitimately executing, so a default that excludes a ~5800s sibling
+# would discount live work. This arm makes the default a tested constant.
+DEF_ROOT="$TESTROOT/proc-default"
+DEF_LEGIT="$TESTROOT/wt-legit"
+mkdir -p "$DEF_LEGIT"
+make_fake_proc "$DEF_ROOT" 980001 "$DEF_LEGIT" 5800 "scripts/test-all.sh"
+G2_DEF="$(g2_run "$DEF_ROOT" "" | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_DEF" == "1" ]]; then
+  pass "G2 the shipped default counts a 5800s sibling (inside the documented legitimate band)"
+else
+  fail "G2 the default excludes a legitimately-running 5800s sibling; got count: $G2_DEF"
+fi
+
+G2_EMPTY="$(g2_run "$STALE_ROOT" "" | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_EMPTY" == "1" ]]; then
+  pass "G2 an EMPTY ceiling resolves to the shipped default (not disabled), excluding both stale siblings"
+else
+  fail "G2 empty ceiling did not take the default; expected 1, got: $G2_EMPTY"
+fi
+
+# ===========================================================================
+# Phase 3b — FIFO ticket queue (#8579)
+#
+# The defect these arms pin: flock -w has no application-level queue, so a
+# holder outlasting TC_LOCK_TIMEOUT released EVERY waiter at once. Now each
+# waiter mints a flock-anchored ticket and only the queue head calls
+# acquire_lock. Ordering is made deterministic the way the suite's lock arms
+# do it: a waiter's shell stays alive on a trailing `sleep` after tc_acquire
+# returns (the ticket fd outlives the call inside its owning shell, exactly
+# like _SESSION_LOCK_FDS), and every step gates on `await_held`-style flock -n
+# probes of ticket files or `await_line` log watches — never a wall-clock
+# guess that a process has reached a state.
+# ===========================================================================
+
+echo "=== Phase 3b: FIFO ticket queue (#8579) ==="
+
+# Spawn a queued waiter running tc_acquire under the lock_env variables,
+# holding its shell (and therefore its ticket fd, and the main lock once
+# acquired) for <hold_s> after the call returns. Prints the pid of the REAL
+# bash process — `( exec env ... )` replaces the subshell, so kill -9 on the
+# printed pid is what drops the ticket fd (the Q3/Q5 arms depend on that).
+spawn_waiter() {
+  local tag="$1" lname="$2" budget="$3" hold_s="${4:-30}" qtimeout="${5:-60}"
+  ( exec env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" \
+      TC_PROC_ROOT="$FAKE_PROC" TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" \
+      TC_QUEUE_POLL_S=1 TC_WAIT_HEARTBEAT_S=1 TC_QUEUE_TIMEOUT="$qtimeout" \
+      bash -c "source '$LIB'; tc_acquire '$lname' '$budget'; echo RC=\$?; sleep '$hold_s'" \
+  ) > "$TESTROOT/$tag.log" 2>&1 &
+  echo $!
+}
+
+# Block until $pat appears in file $1 (bounded; polls at 100ms).
+await_line() {
+  local f="$1" pat="$2" max="${3:-150}" i
+  for (( i = 0; i < max; i++ )); do
+    if [[ -f "$f" ]] && grep -qE "$pat" "$f" 2>/dev/null; then return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# Count outcome lines a waiter has emitted (proceed = ACQUIRED or CONTENDED).
+proceed_count() {
+  grep -cE 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' "$1" 2>/dev/null || true
+}
+
+# --- Q1: free lock — WAITING -> QUEUED -> ACQUIRED ordering -----------------
+# `timeout 30` on every synchronous tc_acquire driver: a wedge mutant (is_head
+# never true, dropped budget check) must RED, not stall the suite for the
+# default 3600s queue budget.
+lock_env timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t1 3; echo RC=\$?" \
+  > "$TESTROOT/q-t1.txt" 2>&1 || true
+_w="$(awk '/LOCK_WAITING/{print NR; exit}' "$TESTROOT/q-t1.txt")"
+_q="$(awk '/LOCK_QUEUED/{print NR; exit}' "$TESTROOT/q-t1.txt")"
+_a="$(awk '/LOCK_ACQUIRED/{print NR; exit}' "$TESTROOT/q-t1.txt")"
+cases=$((cases + 1))
+if [[ -n "$_w" && -n "$_q" && -n "$_a" ]] && (( _w < _q && _q < _a )) \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/q-t1.txt" || true)" -ge 1 ]]; then
+  pass "Q1: LOCK_WAITING -> LOCK_QUEUED -> LOCK_ACQUIRED ordering on a free lock, rc=0"
+else
+  fail "Q1: queue ordering broken; got: $(cat "$TESTROOT/q-t1.txt")"
+fi
+# The ticket's fd died with the waiter's shell: the file exists but is
+# flock-free now (kernel release, no reaper — the AC5b property on tickets).
+_t1_ticket="$(find "$SS_ROOT/locks/8579-t1.queue.d" -name '0*' -type f | head -1 || true)"
+cases=$((cases + 1))
+if [[ -n "$_t1_ticket" ]] && flock -w 0 -x "$_t1_ticket" -c true 2>/dev/null; then
+  pass "Q1: the ticket file is released when the waiter's shell exits"
+else
+  fail "Q1: ticket '$_t1_ticket' still held after owner exit (or never minted)"
+fi
+# A mutation minting but never flocking the ticket survives Q1's order check
+# but is caught by the Q2 arm's "B must not proceed" assertion below.
+
+# --- Q2/Q3: the defect's regression arm — serialized release ----------------
+# Main lock held for the whole arm; waiter A's lock budget (2s) expires so A
+# proceeds CONTENDED while STILL HOLDING its ticket. B mints second and must
+# emit no proceed line while A's ticket is held — pre-queue code released B
+# with A. (Guard 1 rows 1 and 5.)
+HELD2="$SS_ROOT/locks/8579-t2.lock"
+: > "$HELD2"
+flock -x "$HELD2" -c 'sleep 90' & H2_PID=$!
+await_held "$HELD2" || { cases=$((cases + 1)); fail "Q2 fixture: holder never took 8579-t2"; }
+A_PID="$(spawn_waiter qa 8579-t2 2 90)"
+B_PID=""
+if await_line "$TESTROOT/qa.log" 'LOCK_CONTENDED_PROCEEDING' 100; then
+  cases=$((cases + 1))
+  pass "Q2 fixture: waiter A proceeded contended while holding ticket 1"
+else
+  cases=$((cases + 1))
+  fail "Q2 fixture: A never proceeded contended; got: $(cat "$TESTROOT/qa.log" 2>/dev/null)"
+fi
+B_PID="$(spawn_waiter qb 8579-t2 2 90)"
+if await_line "$TESTROOT/qb.log" 'LOCK_QUEUED' 100; then
+  cases=$((cases + 1))
+  pass "Q2 fixture: waiter B minted its ticket while A's was held"
+else
+  cases=$((cases + 1))
+  fail "Q2 fixture: B never minted a ticket; got: $(cat "$TESTROOT/qb.log" 2>/dev/null)"
+fi
+# Observation window: A's ticket is still held (its shell sleeps 90s), so B
+# must sit at position 2 emitting NOTHING but heartbeats. 3 s at a 1 s poll
+# is many full queue cycles — long enough that a broken head-check (mutation
+# "return 0 unconditionally") has already proceeded B contended.
+sleep 3
+cases=$((cases + 1))
+if [[ "$(proceed_count "$TESTROOT/qb.log")" -eq 0 ]]; then
+  pass "Q2/Guard-1 row 1: B emitted no proceed line while ticket 1 was held"
+else
+  fail "Q2/Guard-1 row 1: B proceeded while A's ticket was held: $(grep -E 'LOCK_ACQUIRED|LOCK_CONTENDED' "$TESTROOT/qb.log")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'position=2' "$TESTROOT/qb.log" || true)" -ge 1 ]]; then
+  pass "Q2/Guard-1 row 5: B's heartbeat reports position=2 inside the wait window"
+else
+  fail "Q2/Guard-1 row 5: no position=2 beat; got: $(grep HEARTBEAT "$TESTROOT/qb.log" | head -3)"
+fi
+# Q3: kill A's whole shell -> ticket 1 releases via the kernel -> B becomes
+# head and reaches its own (contended) proceed. Release is serialized by
+# ticket release, not by a shared timer.
+kill -9 "$A_PID" 2>/dev/null || true
+wait "$A_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/qb.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q3/AC3: after the head's shell died, B became head and proceeded (no reaper)"
+else
+  fail "Q3/AC3: B never proceeded after A's ticket released; got: $(cat "$TESTROOT/qb.log")"
+fi
+kill "$B_PID" "$H2_PID" 2>/dev/null || true
+wait "$B_PID" "$H2_PID" 2>/dev/null || true
+
+# --- Q4: FIFO order across three waiters (Guard 1 rows 2, 3, 6) -------------
+# C mints a THIRD ticket behind A and B: a head-check that counts only the
+# immediately-previous ticket, or probes `>` instead of `<`, lets C proceed
+# early. Serials can be non-contiguous (a killed middle waiter leaves a gap),
+# so order is asserted as mint order, not adjacency.
+HELD4="$SS_ROOT/locks/8579-t4.lock"
+: > "$HELD4"
+flock -x "$HELD4" -c 'sleep 90' & H4_PID=$!
+await_held "$HELD4" || { cases=$((cases + 1)); fail "Q4 fixture: holder never took 8579-t4"; }
+W1_PID="$(spawn_waiter w1 8579-t4 2 90)"
+await_line "$TESTROOT/w1.log" 'LOCK_QUEUED' 100 || true
+# W1's 2s lock budget expires on the held main lock — it proceeds CONTENDED
+# and its shell exec's into `sleep 90`, keeping ticket 1 held the whole time.
+# (A kill landing mid-acquire_lock would orphan the flock -w CHILD, which
+# inherits the ticket fd and holds it until its own -w resolves — bounded by
+# timeout_s, the same inheritance _SESSION_LOCK_FDS has always had. These
+# arms therefore kill only waiters that are past the acquire call or still in
+# the queue stage.)
+await_line "$TESTROOT/w1.log" 'LOCK_CONTENDED_PROCEEDING' 100 || true
+W2_PID="$(spawn_waiter w2 8579-t4 2 90)"
+await_line "$TESTROOT/w2.log" 'LOCK_QUEUED' 100 || true
+W3_PID="$(spawn_waiter w3 8579-t4 2 90)"
+await_line "$TESTROOT/w3.log" 'LOCK_QUEUED' 100 || true
+sleep 3
+cases=$((cases + 1))
+if [[ "$(proceed_count "$TESTROOT/w2.log")" -eq 0 ]] \
+   && [[ "$(proceed_count "$TESTROOT/w3.log")" -eq 0 ]]; then
+  pass "Q4/Guard-1 rows 2,3: neither W2 nor W3 proceeds while ticket 1 is held"
+else
+  fail "Q4/Guard-1 rows 2,3: a non-head waiter proceeded; w2=$(proceed_count "$TESTROOT/w2.log") w3=$(proceed_count "$TESTROOT/w3.log")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'position=3' "$TESTROOT/w3.log" || true)" -ge 1 ]]; then
+  pass "Q4/Guard-1 row 6: third waiter's heartbeat reports position=3"
+else
+  fail "Q4/Guard-1 row 6: no position=3 beat; got: $(grep -E 'position=' "$TESTROOT/w3.log" | head -3)"
+fi
+# Release serial order: kill the head holder's shell; W2 proceeds (its 2s
+# lock budget contends on HELD4 — the ORDER of proceeds is the assertion).
+kill -9 "$W1_PID" 2>/dev/null || true
+wait "$W1_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/w2.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q4: W2 proceeded next after ticket 1 released (FIFO order held)"
+else
+  fail "Q4: W2 never became head; got: $(cat "$TESTROOT/w2.log")"
+fi
+cases=$((cases + 1))
+if [[ "$(proceed_count "$TESTROOT/w3.log")" -eq 0 ]]; then
+  pass "Q4: W3 still queued while W2 ran (one release at a time)"
+else
+  fail "Q4: W3 proceeded before W2's ticket released — ordering broken"
+fi
+kill -9 "$W2_PID" 2>/dev/null || true
+wait "$W2_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/w3.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q4: W3 proceeded last — release order equals mint order"
+else
+  fail "Q4: W3 never proceeded; got: $(cat "$TESTROOT/w3.log")"
+fi
+kill "$W3_PID" "$H4_PID" 2>/dev/null || true
+wait "$W3_PID" "$H4_PID" 2>/dev/null || true
+
+# --- Q5: SIGKILL of a mid-QUEUE waiter releases its ticket (kernel release) --
+# K1 is the contended head holding ticket 1 through its exec'd sleep; K2 sits
+# in the queue stage (poll loop — no flock -w child), K3 behind it. kill -9
+# K2's shell mid-queue: the kernel releases ticket 2 with no reaper, K3's
+# heartbeat drops to position=2, and killing K1 then promotes K3 to head.
+HELD5="$SS_ROOT/locks/8579-t5.lock"
+: > "$HELD5"
+flock -x "$HELD5" -c 'sleep 90' & H5_PID=$!
+await_held "$HELD5" || { cases=$((cases + 1)); fail "Q5 fixture: holder never took 8579-t5"; }
+K1_PID="$(spawn_waiter k1 8579-t5 2 90)"
+await_line "$TESTROOT/k1.log" 'LOCK_CONTENDED_PROCEEDING' 100 || true
+K2_PID="$(spawn_waiter k2 8579-t5 2 90)"
+await_line "$TESTROOT/k2.log" 'LOCK_QUEUED' 100 || true
+K3_PID="$(spawn_waiter k3 8579-t5 2 90)"
+await_line "$TESTROOT/k3.log" 'LOCK_QUEUED' 100 || true
+sleep 1
+kill -9 "$K2_PID" 2>/dev/null || true
+wait "$K2_PID" 2>/dev/null || true
+# K2's ticket file may outlive it by ~one poll interval (the queue-wait
+# `sleep` child also inherits the fd) — bounded, then released by the kernel.
+cases=$((cases + 1))
+_k2_ticket="$SS_ROOT/locks/8579-t5.queue.d/00000002"
+_t2_free=0
+for (( _i = 0; _i < 50; _i++ )); do
+  if flock -w 0 -x "$_k2_ticket" -c true 2>/dev/null; then _t2_free=1; break; fi
+  sleep 0.1
+done
+if [[ "$_t2_free" == "1" ]]; then
+  pass "Q5/AC3: a mid-queue SIGKILLed waiter's ticket releases via the kernel (no reaper)"
+else
+  fail "Q5/AC3: ticket 2 still held 5s after kill -9 of its owner"
+fi
+cases=$((cases + 1))
+if await_line "$TESTROOT/k3.log" 'position=2' 100; then
+  pass "Q5: K3's heartbeat dropped to position=2 after K2's death"
+else
+  fail "Q5: K3 never observed K2's release; got: $(grep -E 'position=' "$TESTROOT/k3.log" | tail -3)"
+fi
+# The load-bearing negative: K2's slot is now FREE but ticket 1 is still held,
+# so K3 must still NOT proceed. This is the only fixture where "scan every
+# earlier ticket" differs from "check the immediate predecessor" — an
+# is_head that probes only serial-1 files would wrongly promote K3 here.
+cases=$((cases + 1))
+sleep 3
+if [[ "$(proceed_count "$TESTROOT/k3.log")" -eq 0 ]]; then
+  pass "Q5/Guard-1 row 4: K3 stays queued behind held ticket 1 with ticket 2 free (non-contiguous queue)"
+else
+  fail "Q5/Guard-1 row 4: K3 proceeded while ticket 1 was still held — predecessor-only head check"
+fi
+kill -9 "$K1_PID" 2>/dev/null || true
+wait "$K1_PID" 2>/dev/null || true
+cases=$((cases + 1))
+if await_line "$TESTROOT/k3.log" 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' 150; then
+  pass "Q5: K3 became head and proceeded once ticket 1 released"
+else
+  fail "Q5: K3 never proceeded; got: $(cat "$TESTROOT/k3.log")"
+fi
+kill "$K3_PID" "$H5_PID" 2>/dev/null || true
+wait "$K3_PID" "$H5_PID" 2>/dev/null || true
+
+# --- Q6: queue timeout proceeds contended, never aborts (AC4) ----------------
+# B sits behind A's held ticket with TC_QUEUE_TIMEOUT=2. The escape emits the
+# canonical LOCK_CONTENDED token (triage grep) plus queue_timeout=1.
+HELD6="$SS_ROOT/locks/8579-t6.lock"
+: > "$HELD6"
+flock -x "$HELD6" -c 'sleep 90' & H6_PID=$!
+await_held "$HELD6" || { cases=$((cases + 1)); fail "Q6 fixture: holder never took 8579-t6"; }
+G1_PID="$(spawn_waiter g1 8579-t6 30 90)"   # head, holds ticket
+await_line "$TESTROOT/g1.log" 'LOCK_QUEUED' 100 || true
+lock_env env TC_QUEUE_POLL_S=1 TC_WAIT_HEARTBEAT_S=1 TC_QUEUE_TIMEOUT=2 \
+  bash -c "source '$LIB'; tc_acquire 8579-t6 60; echo RC=\$?" \
+  > "$TESTROOT/g2.log" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_QUEUE_TIMEOUT' "$TESTROOT/g2.log" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING.*queue_timeout=1' "$TESTROOT/g2.log" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/g2.log" || true)" -ge 1 ]]; then
+  pass "Q6/AC4: TC_QUEUE_TIMEOUT on a non-head emits LOCK_QUEUE_TIMEOUT + queue_timeout=1, rc=0"
+else
+  fail "Q6/AC4: queue-timeout arm wrong; got: $(cat "$TESTROOT/g2.log")"
+fi
+# Mutation control: the queue-timeout line must NOT be the only banner — the
+# proceed must keep the LOCK_CONTENDED token or work/SKILL.md's triage grep
+# loses the run.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_CONTENDED' "$TESTROOT/g2.log" || true)" -ge 1 ]]; then
+  pass "Q6: the queue-timeout escape keeps the canonical LOCK_CONTENDED token"
+else
+  fail "Q6: queue-timeout emitted no LOCK_CONTENDED — invisible to triage grep"
+fi
+kill "$G1_PID" "$H6_PID" 2>/dev/null || true
+wait "$G1_PID" "$H6_PID" 2>/dev/null || true
+
+# --- Q7: stubbed session-state degrades to direct acquire (AC5) --------------
+# The capacity suite injects a session-state stub defining only acquire_lock —
+# no _session_state_init_dirs, no LOCK_DIR. The queue must say so and fall
+# through, never abort and never mint.
+STUB_SS_Q="$TESTROOT/stub-session-state.sh"
+cat > "$STUB_SS_Q" <<'EOF'
+acquire_lock() { echo "STUB_ACQUIRED name=$1 budget=$2"; return 0; }
+EOF
+lock_env env TC_SESSION_STATE="$STUB_SS_Q" \
+  bash -c "source '$LIB'; tc_acquire 8579-t7 3; echo RC=\$?" \
+  > "$TESTROOT/q-t7.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_QUEUE_DEGRADED' "$TESTROOT/q-t7.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'STUB_ACQUIRED name=8579-t7' "$TESTROOT/q-t7.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/q-t7.txt" || true)" -ge 1 ]]; then
+  pass "Q7/AC5: stubbed session-state emits LOCK_QUEUE_DEGRADED then acquires directly, rc=0"
+else
+  fail "Q7/AC5: degrade path broken; got: $(cat "$TESTROOT/q-t7.txt")"
+fi
+cases=$((cases + 1))
+if [[ ! -d "$SS_ROOT/locks/8579-t7.queue.d" ]]; then
+  pass "Q7: the degraded run mints no queue directory"
+else
+  fail "Q7: a queue dir appeared under a stubbed session-state"
+fi
+
+# --- Q8: every skip path mints nothing (AC6) --------------------------------
+# The Phase-3 skip arms (kill switch, CI, missing lib, missing flock, missing
+# acquire_lock, empty name) already ran above and assert LOCK_WAITING absent.
+# The queue must sit behind the same gauntlet: none of those runs may have
+# created a *.queue.d entry under the shared locks dir.
+cases=$((cases + 1))
+# Names that returned BEFORE the wait: kill switch, CI, no flock, missing
+# session-state lib, missing acquire_lock. (6789-free/-testall/-noci/-noclock
+# are REAL acquire arms — they correctly mint tickets and must not be counted.)
+_skip_qdirs=""
+for _n in 6789-ks 6789-ci 6789-noflock 6789-missinglib 6789-nolockfn; do
+  [[ -d "$SS_ROOT/locks/$_n.queue.d" ]] && _skip_qdirs="$_skip_qdirs $_n.queue.d"
+done
+if [[ -z "$_skip_qdirs" ]]; then
+  pass "Q8/AC6: no skip path created a queue directory"
+else
+  fail "Q8/AC6: skip paths minted queue state:$_skip_qdirs"
+fi
+
+# --- Q9: heartbeat position + LOCK_WAIT_OVERRUN token (AC8) ------------------
+# A queued waiter past its LOCK budget keeps beating; the token switches to
+# LOCK_WAIT_OVERRUN and every beat carries position=N. Budget=2s lock, queue
+# timeout long, heartbeat 1s.
+HELD9="$SS_ROOT/locks/8579-t9.lock"
+: > "$HELD9"
+flock -x "$HELD9" -c 'sleep 90' & H9_PID=$!
+await_held "$HELD9" || { cases=$((cases + 1)); fail "Q9 fixture: holder never took 8579-t9"; }
+P1_PID="$(spawn_waiter p1 8579-t9 30 90)"
+await_line "$TESTROOT/p1.log" 'LOCK_QUEUED' 100 || true
+P2_PID="$(spawn_waiter p2 8579-t9 2 90 30)"
+await_line "$TESTROOT/p2.log" 'LOCK_QUEUED' 100 || true
+sleep 4   # past p2's 2s lock budget while still queued behind ticket 1
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*position=2' "$TESTROOT/p2.log" || true)" -ge 1 ]]; then
+  pass "Q9/AC8: queue-stage beats carry position=2 with the LOCK_WAIT_HEARTBEAT token"
+else
+  fail "Q9/AC8: no position=2 heartbeat; got: $(grep BANNER "$TESTROOT/p2.log" | head -3)"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_OVERRUN.*waited=[0-9]+s of [0-9]+s' "$TESTROOT/p2.log" || true)" -ge 1 ]]; then
+  pass "Q9/AC8: past the lock budget the beat token switches to LOCK_WAIT_OVERRUN (kept the waited= shape)"
+else
+  fail "Q9/AC8: no LOCK_WAIT_OVERRUN beat; got: $(grep BANNER "$TESTROOT/p2.log" | tail -3)"
+fi
+# Pin the heartbeat's bound to the COMBINED queue+lock budget, not a shape:
+# p2 minted with TC_QUEUE_TIMEOUT=30 and a 2s lock budget, so beats must read
+# "of 32s" — a mutant passing only the lock budget would print "of 2s".
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_(HEARTBEAT|OVERRUN).*of 32s' "$TESTROOT/p2.log" || true)" -ge 1 ]]; then
+  pass "Q9: the beat's bound is the combined queue+lock budget (32s), not the lock budget alone"
+else
+  fail "Q9: heartbeat bound is not queue+lock (32s); got: $(grep -oE 'of [0-9]+s' "$TESTROOT/p2.log" | sort -u | tr '\n' ' ')"
+fi
+kill "$P1_PID" "$P2_PID" "$H9_PID" 2>/dev/null || true
+wait "$P1_PID" "$P2_PID" "$H9_PID" 2>/dev/null || true
+
+# --- Q10: structural pins for the queue path (AC9 + Guard 1 assembly) --------
+# The ordering property's single chokepoint is _tc_queue_is_head under .alloc.
+# Pin the load-bearing shapes so a refactor can't silently reintroduce a -w
+# wait (#7697) or drop the critical section. The scan runs from the queue
+# marker through END of tc_acquire — the queue stage lives INSIDE tc_acquire,
+# so a range that stops at its signature would exempt exactly the place the
+# defect would re-enter.
+QSRC="$(awk '/^# FIFO ticket queue \(#8579\)/{f=1} f{print}' "$LIB")"
+cases=$((cases + 1))
+# Strip comment lines first — the block's own header documents the -w ban in
+# prose, and a naive grep counts the documentation as the violation. Pin the
+# POSITIVE invariant, not the token: every flock invocation in the queue path
+# (helpers AND tc_acquire's queue stage) must carry -n. That catches `-w`,
+# `--wait`, and a bare blocking `flock -x file -c …` alike — all members of
+# the unbounded/parked-wait class #7697 measured.
+if [[ "$(grep -vE '^\s*#' <<<"$QSRC" | grep -E 'flock +-' | grep -vcE 'flock +-n' || true)" -eq 0 ]]; then
+  pass "Q10/AC9: every flock in the queue path is a -n probe (no -w/--wait/blocking form)"
+else
+  fail "Q10/AC9: a non-(-n) flock appeared in the queue path — the #7697 masked-SIGALRM defect is reachable again"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE '10#[^0-9]' <<<"$QSRC" || true)" -ge 3 ]]; then
+  pass "Q10: serial comparisons force decimal (10#) — %08d filenames are not valid octal"
+else
+  fail "Q10: serial comparisons lack 10# — 00000008-style serials would arithmetic-error"
+fi
+# The count above is a presence pin; this arm exercises the defect itself:
+# serials minted to 8 would arithmetic-error without 10# on a leading-zero
+# %08d name. Drive _tc_queue_position directly over a serial-9 ticket set.
+cases=$((cases + 1))
+OCT_DIR="$SS_ROOT/locks/8579-oct.queue.d"
+mkdir -p "$OCT_DIR"
+: > "$OCT_DIR/00000008"
+if env -u CI bash -c "source '$LIB'; LOCK_DIR='$SS_ROOT/locks' _tc_queue_position '$OCT_DIR' 9" 2>/dev/null | grep -qx '1'; then
+  pass "Q10: position over a leading-zero serial (00000008) computes without an octal error"
+else
+  fail "Q10: position over 00000008 failed — a %08d serial reached unguarded arithmetic"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cF '_tc_alloc_lock' <<<"$QSRC" || true)" -ge 3 ]]; then
+  pass "Q10: mint AND head-check both run inside the .alloc critical section"
+else
+  fail "Q10: mint or head-check dropped the .alloc guard — created-but-unlocked tickets become observable"
+fi
+# The ticket fd must outlive tc_acquire (held for the RUN's lifetime, like
+# _SESSION_LOCK_FDS). A "cleanup" closing it on return re-creates the
+# simultaneous-release defect one level down — pin that the lib never closes
+# _TC_TICKET_FD on a success path.
+cases=$((cases + 1))
+if [[ "$(grep -cE '_TC_TICKET_FD.*>&-' <<<"$(awk '/^tc_acquire\(\)/,/^}/' "$LIB")" || true)" -eq 0 ]]; then
+  pass "Q10: tc_acquire never closes the ticket fd (kernel release on exit only)"
+else
+  fail "Q10: tc_acquire closes _TC_TICKET_FD — the ticket no longer outlives the call"
+fi
+
+# --- Q11: ticket sweep — old unlocked tickets removed, held never ------------
+# Under .alloc the mint sweeps unlocked tickets older than TC_RUNTIME_CEILING_S.
+# Held tickets of ANY age must survive, and max+1 must never regress below a
+# live ticket (a swept-and-reminted serial colliding with a live one would
+# break the ordering proof).
+SWEEP_DIR="$SS_ROOT/locks/8579-t11.queue.d"
+mkdir -p "$SWEEP_DIR"
+: > "$SWEEP_DIR/00000001"
+: > "$SWEEP_DIR/00000002"
+touch -d '6 hours ago' "$SWEEP_DIR/00000001"          # unlocked + old -> swept
+# 00000002: old but HELD -> never swept
+touch -d '6 hours ago' "$SWEEP_DIR/00000002"
+flock -x "$SWEEP_DIR/00000002" -c 'sleep 30' & HELD_T=$!
+await_held "$SWEEP_DIR/00000002" || { cases=$((cases + 1)); fail "Q11 fixture: held ticket probe failed"; }
+# TC_QUEUE_TIMEOUT=2: the assertions only need the mint (sweep + serial) to
+# have run — without it this arm waits out the held ticket's 30s sleep.
+# TC_RUNTIME_CEILING_S is pinned to the shipped default so the 6h-old fixture
+# is stale (21600 > 14400) even under a raised-budget ambient env.
+lock_env env TC_QUEUE_TIMEOUT=2 TC_RUNTIME_CEILING_S=14400 \
+  timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t11 3; echo RC=\$?" \
+  > "$TESTROOT/q-t11.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ ! -e "$SWEEP_DIR/00000001" ]] && [[ -e "$SWEEP_DIR/00000002" ]]; then
+  pass "Q11: sweep removed the old unlocked ticket and kept the old HELD one"
+else
+  fail "Q11: sweep wrong — 00000001 exists=$([[ -e "$SWEEP_DIR/00000001" ]] && echo y || echo n), 00000002 exists=$([[ -e "$SWEEP_DIR/00000002" ]] && echo y || echo n)"
+fi
+cases=$((cases + 1))
+_new_ticket="$(find "$SWEEP_DIR" -name '0*' -type f -newer "$SWEEP_DIR/00000002" | head -1 || true)"
+if [[ -n "$_new_ticket" ]] && [[ "${_new_ticket##*/}" > "00000002" ]]; then
+  pass "Q11: the fresh serial (${_new_ticket##*/}) is above the live held ticket (no regression)"
+else
+  fail "Q11: mint regressed below the live ticket; dir: $(ls "$SWEEP_DIR")"
+fi
+kill "$HELD_T" 2>/dev/null || true
+wait "$HELD_T" 2>/dev/null || true
+
+# --- Q12: structural — tc_acquire still has only fail-open exits -------------
+# The queue adds paths; every one must still return 0. Arm 23's extractor
+# asserts all returns are 0 — bump nothing there, but pin here that no new
+# `exit`/`return 1` leaked into tc_acquire's body.
+TC_BODY="$(awk '/^tc_acquire\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\s*(exit|return [^0])' <<<"$TC_BODY" || true)" -eq 0 ]]; then
+  pass "Q12/AC6: tc_acquire with the queue stage still fails open on every path"
+else
+  fail "Q12/AC6: a non-zero exit leaked into tc_acquire: $(grep -nE '^\s*(exit|return [^0])' <<<"$TC_BODY")"
+fi
+
+# --- Q13: mint failure degrades to direct acquire (never aborts) -------------
+# Only the no_state_root degrade arm was fixtured above; the mint_failed arm
+# (queue dir resolved, mint broke) is the one that would fire on a wedged
+# .alloc or an unwritable ticket path. Pre-hold .alloc past the 50x50ms retry
+# budget to force it.
+MDIR="$SS_ROOT/locks/8579-t13.queue.d"
+mkdir -p "$MDIR"
+flock -x "$MDIR/.alloc" -c 'sleep 8' & ALLOC_H=$!
+await_held "$MDIR/.alloc" || { cases=$((cases + 1)); fail "Q13 fixture: .alloc never held"; }
+lock_env timeout 30 bash -c "source '$LIB'; tc_acquire 8579-t13 3; echo RC=\$?" \
+  > "$TESTROOT/q-t13.txt" 2>&1 || true
+cases=$((cases + 1))
+if [[ "$(grep -cE 'BANNER LOCK_QUEUE_DEGRADED reason=mint_failed' "$TESTROOT/q-t13.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'LOCK_ACQUIRED|LOCK_CONTENDED_PROCEEDING' "$TESTROOT/q-t13.txt" || true)" -ge 1 ]] \
+   && grep -q 'RC=0' "$TESTROOT/q-t13.txt"; then
+  pass "Q13: a mint failure emits BANNER LOCK_QUEUE_DEGRADED then proceeds, rc=0"
+else
+  fail "Q13: mint-failure arm missing or run aborted; got: $(cat "$TESTROOT/q-t13.txt")"
+fi
+kill "$ALLOC_H" 2>/dev/null || true
+wait "$ALLOC_H" 2>/dev/null || true
+
+# --- Q14: operator-knob sanitization (never-abort / never-wedge) -------------
+# TC_QUEUE_TIMEOUT=0 would satisfy `^[0-9]+$` but never fire
+# `(( budget > 0 && waited >= budget ))` — an unbounded queue wait, the wedge
+# the knob exists to prevent. Non-numeric values are unbound-var aborts under
+# set -u arithmetic. Both must normalize to the defaults.
+cases=$((cases + 1))
+# TC_LOCK_TIMEOUT is pinned because TC_QUEUE_TIMEOUT's default DERIVES from
+# it — an ambient raised budget would read as "not sanitized".
+_knobs="$(env TC_LOCK_TIMEOUT=3600 TC_QUEUE_TIMEOUT=0 TC_QUEUE_POLL_S=0 bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
+if [[ "$_knobs" == "3600 5" ]]; then
+  pass "Q14: zero-valued queue knobs normalize to defaults (no unbounded wait, no busy-spin)"
+else
+  fail "Q14: zero knobs not sanitized; got '$_knobs'"
+fi
+cases=$((cases + 1))
+_knobs="$(env TC_LOCK_TIMEOUT=3600 TC_QUEUE_TIMEOUT=abc TC_QUEUE_POLL_S=abc bash -c "source '$LIB'; echo \"\$TC_QUEUE_TIMEOUT \$TC_QUEUE_POLL_S\"" 2>/dev/null)"
+if [[ "$_knobs" == "3600 5" ]]; then
+  pass "Q14: non-numeric queue knobs normalize to defaults (no set -u arithmetic abort)"
+else
+  fail "Q14: garbage knobs not sanitized; got '$_knobs'"
+fi
+
+MIN_CASES=160
+if [[ "$cases" -lt "$MIN_CASES" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_CASES" >&2
+  echo "=== test-contention: $pass_n passed, $fails failed ($cases assertions) ==="
+  exit 1
+fi
+
+# --- Accounting conservation -------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were discarded",
+# because `cases` keeps its full value when fail() is a no-op. Every assertion records
+# exactly one verdict, so pass_n+fails MUST equal cases. Reported directly for the same
+# reason as the floor.
+if [[ $((pass_n + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: pass_n+fails (%d) != cases (%d).\n' \
+    "$((pass_n + fails))" "$cases" >&2
+  if [[ $((pass_n + fails)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== test-contention: $pass_n passed, $fails failed ($cases assertions) ==="
+  exit 1
+fi
+
+echo "=== test-contention: $pass_n passed, $fails failed ($cases assertions) ==="
 [[ "$fails" -eq 0 ]] || exit 1

@@ -14,6 +14,9 @@ import {
 } from "@/server/routines/list-routines";
 import { runRoutine } from "@/server/routines/run-routine";
 import { EXPECTED_CRON_FUNCTIONS } from "@/server/inngest/cron-manifest";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
+import { readWorkspaceIdFromDb } from "@/server/workspace-resolver";
+import { AgentEnginePersistenceRepository, type PersistenceClient } from "@/server/agent-engine-persistence";
 
 interface BuildRoutineToolsOpts {
   /** The operator the agent acts for — recorded as delegating_principal. */
@@ -48,8 +51,10 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
         "List all Inngest routines (scheduled crons). Returns a flat array; " +
           "each entry carries a one-line description (what the routine does), " +
           "domain (for grouping), ownerRole, a human-readable schedule, the " +
-          "manualTrigger policy (allowed|confirm), and the latest run summary " +
-          "(status, timestamps, duration). Read-only.",
+          "manualTrigger policy (allowed|confirm), the latest run summary " +
+          "(status, timestamps, duration), and for Claude-spawning routines the " +
+          "per-run cost cap (claudeBudgetUsd) and manual-fire throttle (2 starts/hour; " +
+          "excess fires are queued, not rejected). Read-only.",
         {},
         async () => {
           try {
@@ -145,6 +150,12 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
         },
         async (input) => {
           try {
+            const tenant = await getFreshTenantClient(userId);
+            const workspaceId = await readWorkspaceIdFromDb(userId, tenant);
+            if (!workspaceId) return textResponse({ error: "workspace_unbound" }, true);
+            const repository = new AgentEnginePersistenceRepository(
+              tenant as unknown as PersistenceClient,
+            );
             const result = await runRoutine({
               fnId: input.fnId,
               actorClass: "agent",
@@ -153,6 +164,8 @@ export function buildRoutineTools(opts: BuildRoutineToolsOpts) {
               // The gated review-gate is the single confirmation — no double-gate.
               confirmed: true,
               feature: "routine-run-agent",
+              workspaceId,
+              bindRun: (binding) => repository.bind(binding),
             });
             if (!result.ok) {
               return textResponse({ error: result.code }, true);

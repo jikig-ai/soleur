@@ -42,6 +42,17 @@ terraform {
       source  = "BetterStackHQ/better-uptime"
       version = "~> 0.20"
     }
+    # #8097 / ADR-218 — Better Stack's SECOND provider. `better-uptime` covers
+    # monitors/heartbeats/policies and has no Logs-alert resource; `logtail`
+    # exposes `logtail_exploration` + `logtail_exploration_alert`, the native
+    # per-bucket count alert used by betterstack-logs-alerts.tf. Both share
+    # var.betterstack_api_token (a global token; Telemetry read authority
+    # GET-probed 200 at plan time). Pin `~> 11.2`: v11.0.0 replaced chart-level
+    # variables with per-alert `variable_value`, so nothing below it is usable.
+    logtail = {
+      source  = "BetterStackHQ/logtail"
+      version = "~> 11.2"
+    }
     # PR-H (#3244) — github_actions_secret resource for the kb-drift cron
     # workflow's DOPPLER_TOKEN_KB_DRIFT publish. Provider write surface is
     # limited to that one resource type in this root.
@@ -54,6 +65,14 @@ terraform {
     tls = {
       source  = "hashicorp/tls"
       version = "~> 4.0"
+    }
+    # #9168 — supabase_project.prd adoption (supabase-project.tf); manages
+    # instance_size via the billing/addons PATCH (provider v1.9+). Pinned to
+    # the newest release at least 7 days old at pin time (v1.11.0, released
+    # 2026-09-02); do NOT float on latest.
+    supabase = {
+      source  = "supabase/supabase"
+      version = "~> 1.11"
     }
   }
   # >= 1.7, not 1.6: seo-config-rules.tf uses `for_each` inside an `import` block,
@@ -72,6 +91,12 @@ provider "betteruptime" {
   api_token = var.betterstack_api_token
 }
 
+# Same credential as `betteruptime` above (#8097 / ADR-218): one global token
+# serves both the Uptime and the Telemetry (Logs) APIs.
+provider "logtail" {
+  api_token = var.betterstack_api_token
+}
+
 # PR-H (#3244) — GitHub provider for Actions-secret publishing (kb-drift).
 # #4150 + #4144 — switched from PAT auth (var.github_actions_token, deleted) to
 # App-installation auth. The soleur-ai App (id 3261325, org-wide installation
@@ -80,12 +105,41 @@ provider "betteruptime" {
 # installation token at each `terraform plan/apply`. Net narrowing vs.
 # long-lived PAT. See AGENTS.rules.md hr-github-app-auth-not-pat.
 # autonomy-considered: reuse-applied (App credentials already in prd_terraform).
+#
+# (#8209, ADR-241) THREE AUTH MODES, selected by which variables are non-empty. The
+# selector is the CONFIGURATION, not a `tier` variable: Terraform cannot tell a plan
+# from an apply, so a mode is chosen by what credentials the caller supplied.
+#
+#   infra  — `github_infra_app_private_key` set. The dedicated `soleur-infra` App,
+#            delivered only through a Tier-B environment secret. This is the mode every
+#            apply runs in after the operator sequence completes.
+#   token  — `github_plan_actions_credential` set AND no infra key. The PR plan job,
+#            which passes the workflow's own `GITHUB_TOKEN`. Read-only by construction;
+#            a `-refresh=false` plan needs nothing more (probe M8).
+#   legacy — neither set. The soleur-ai App key from `prd_terraform`. This is the BEFORE
+#            state and it keeps every consumer working until the operator finishes; after
+#            operator step O10 that key resolves to the non-PEM `EVICTED_SEE_ADR_241`
+#            sentinel, so only a run that should have used another mode ever reads it.
+#
+# The `for_each` is the exact COMPLEMENT of the `token` condition, so exactly one of
+# `token`/`app_auth` always resolves. That matters because HCL cannot precondition a
+# provider, and integrations/github v6 silently falls back to an ambient `GITHUB_TOKEN`
+# or `gh auth token` when neither resolves — which would authenticate as whoever the
+# runner happens to be rather than failing.
 provider "github" {
   owner = "jikig-ai"
-  app_auth {
-    id              = var.github_app_id
-    installation_id = "122213433"
-    pem_file        = var.github_app_private_key
+  token = var.github_plan_actions_credential != "" && var.github_infra_app_private_key == "" ? var.github_plan_actions_credential : null
+
+  dynamic "app_auth" {
+    for_each = var.github_infra_app_private_key != "" || var.github_plan_actions_credential == "" ? [1] : []
+    content {
+      id = var.github_infra_app_private_key != "" ? var.github_infra_app_id : var.github_app_id
+      # 122213433 is the soleur-ai INSTALLATION id on jikig-ai — NOT the App id
+      # (3261325). It is a literal because it belongs to the legacy mode only; the
+      # infra App's installation id is supplied as a variable from Tier B.
+      installation_id = var.github_infra_app_private_key != "" ? var.github_infra_app_installation_id : "122213433"
+      pem_file        = var.github_infra_app_private_key != "" ? var.github_infra_app_private_key : var.github_app_private_key
+    }
   }
 }
 
@@ -157,4 +211,31 @@ provider "cloudflare" {
 provider "cloudflare" {
   alias     = "r2"
   api_token = var.cf_api_token_r2
+}
+
+# Separate provider for Cloudflare Pages (ADR-194, #7640). Pages is an ACCOUNT-level
+# product reached at /accounts/<id>/pages/projects — a different resource class from the
+# zone-scoped rulesets the other aliases use, which is the case ADR-130's decision test
+# names as "mint the narrow alias instead" rather than widening an existing token. This
+# token carries Account -> Cloudflare Pages -> Edit and no zone permission of any kind.
+# Consumers: cf-pages.tf. Full scope ledger lives on var.cf_api_token_pages.
+provider "cloudflare" {
+  alias     = "pages"
+  api_token = var.cf_api_token_pages
+}
+
+# #9168 — Supabase Management API provider, declared for the supabase_project.prd
+# adoption (supabase-project.tf). Auth MUST come from the variable, not the
+# provider's SUPABASE_ACCESS_TOKEN env fallback: CI injects only TF_VAR_* via
+# `doppler run --name-transformer tf-var`, so an env-var-only configuration is
+# unauthenticated in the apply job. The variable already exists
+# (variables.tf, sourced from Doppler prd_terraform) — no new sensitive var.
+#
+# `endpoint` is pinned explicitly even though it equals the provider default:
+# SUPABASE_API_ENDPOINT is env-overridable, and the access token is an
+# ACCOUNT-level PAT — a redirected endpoint is credential exfil (the property
+# scripts/lint-supabase-deprecated-endpoints.sh's ARM 2 pins repo-wide).
+provider "supabase" {
+  access_token = var.supabase_access_token
+  endpoint     = "https://api.supabase.com"
 }

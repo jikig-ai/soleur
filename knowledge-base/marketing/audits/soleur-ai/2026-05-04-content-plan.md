@@ -214,7 +214,7 @@ Each candidate scored 1-5 on Customer Impact (does this matter to ICP?), Content
 
 **C. Technical SEO polish.**
 
-12. **Pick canonical host.** Recommended: keep apex `soleur.ai`; configure Cloudflare/host to serve apex directly without 301-ing to www. Then sweep canonical / og:url / sitemap / JSON-LD `url` / llms.txt links.
+12. **Pick canonical host.** Recommended: keep apex `soleur.ai`; configure Cloudflare/host to serve apex directly without 301-ing to <www>. Then sweep canonical / og:url / sitemap / JSON-LD `url` / llms.txt links.
 13. **Fix `BlogPosting.image`.** Pass post-specific OG image variable into the `BlogPosting.image` JSON-LD field; stop hardcoding `og-image.png`.
 14. **Reshape `Person.knowsAbout`.** Move "Founder, Soleur" to `jobTitle` (already set). Populate `knowsAbout` with topical areas: `["Distributed systems", "Developer tools", "AI agents", "Claude Code", "Model Context Protocol", "Solo founders", "Agentic engineering"]`. Update on `BlogPosting` and `ProfilePage` schemas.
 

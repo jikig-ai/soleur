@@ -28,11 +28,17 @@
 # MEASURED, that emit cannot reach Better Stack at all: it is a bare `curl` to Sentry inside
 # `bootcmd`, which runs BEFORE `write_files`, so `/usr/local/bin/git-data-emit` does not exist
 # yet and there is no Better Stack call in it. Worse, the emitter's Better Stack block is
-# gated on `BETTERSTACK_LOGS_TOKEN` being in the environment, which happens only under
-# `doppler run` — so on a SUCCESSFUL boot the only row this source ever receives from a
-# git-data host is `boot_complete` itself. An anchor that is a strict prerequisite of the
-# thing it is anchoring is not an anchor; it would have returned zero rows on a perfect
-# rehearsal, forever, and the failure would have read as "dark boot".
+# gated on `BETTERSTACK_LOGS_TOKEN` being in the environment.
+#
+# SUPERSEDED IN PART BY #7460: that token is now BAKED, so the gate is satisfied from
+# `write_files` onward and EIGHT of the nine stages reach this source rather than one. The
+# `bootcmd` beacon stays Sentry-only by construction — it fires before `write_files`, so the
+# shared emitter does not exist yet, and no baked token changes that.
+#
+# The anchor's rationale is UNCHANGED and is why it was never keyed on this host: an anchor
+# that is a strict prerequisite of the thing it is anchoring is not an anchor; it would have
+# returned zero rows on a perfect rehearsal, forever, and the failure would have read as
+# "dark boot". What DID change is the row-window bound — see FATAL_SQL below.
 #
 # So the anchor asks a different question: IS THIS SOURCE ANSWERING AT ALL? One query for any
 # row from any host in the window. If the source is live and this host said nothing, the
@@ -52,8 +58,15 @@
 #     (mis-reporting TRANSIENT for early-boot fatals it could read from Sentry directly) must
 #     be planned against what is actually possible, and a false constraint in this header
 #     would have planned it against a wall that does not exist
-#     (hr-verify-repo-capability-claim-before-assert). #7116 owns that work; do not do it here.
-#     The fatal channel is proven at RUNG 1
+#     (hr-verify-repo-capability-claim-before-assert).
+#
+#     SUPERSEDED 2026-09-02 (#7481). This block used to end "#7116 owns that work; do not do
+#     it here." #7116 is CLOSED — with the work REVERTED, which is why #7481 re-specifies it —
+#     so an agent opening this file to implement the second channel was reading a prohibition
+#     on its own task, citing an issue that no longer owns anything. The read is now
+#     IMPLEMENTED here, via scripts/sentry-issue.sh --host-events, and the paragraph above
+#     stands as the measurement that made it possible rather than as a reason not to.
+#     The fatal channel is additionally proven at RUNG 1
 #     by git-data-runcmd-rehearsal.test.sh, which shows the trap firing and emitting `fatal`;
 #     rung 2's job is the real-host facts rung 1 structurally cannot reach — TLS egress from a
 #     real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
@@ -69,6 +82,23 @@
 #       [--out <path>] [--cloud-init <path>] [--window '30 DAY'] [--verify-only]
 set -uo pipefail
 
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797 / #7858).
+#
+# This capture binds FOUR credentials — the shared and git-data ingest tokens, the warehouse read
+# password, and the Sentry read token — and its output is published into a GitHub Actions log and
+# quoted into the rehearsal's job summary. A `set -x` above it would trace all four. The rule
+# arrived on main from #7858 while this branch was in flight; editing this file forfeits its
+# baseline grandfathering, which is correct: the moment to add the refusal is when the file is
+# being changed anyway.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${BETTERSTACK_QUERY_PASSWORD:+x}${GIT_DATA_BETTERSTACK_LOGS_TOKEN:+x}${SENTRY_ISSUE_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # A TERMINAL SENTINEL, PRINTED ON EVERY EXIT PATH. The workflow wraps this script in
 # `doppler run`, which exits 1 on ITS OWN failures (measured: a bad token, and a bad
 # project/config, both give rc=1) — the same code this script uses for FAIL. Without a
@@ -81,6 +111,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Env override is the TEST SEAM, and the only one: the suite stubs the query transport rather
 # than the decision function, so every arm exercises the real branching.
 QUERY="${BETTERSTACK_QUERY_SH:-${REPO_ROOT}/scripts/betterstack-query.sh}"
+
+# Source identities, declared once and shared with the round-trip probe so that probe's
+# write-refusal is DERIVED from this capture's control rather than restated beside it. Sourced at
+# TOP LEVEL, not inside the failed-read branch: the ingest-probe fallback below runs on the
+# anchor-SUCCEEDED path and needs BS_GIT_DATA_INGEST_URL too, and a conditional source is how a
+# fourth hand-written spelling of that URL survived the library meant to end them.
+# shellcheck source=lib/betterstack-sources.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-sources.sh"
 GATE_LIB="${REPO_ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 
 HOST_NAME=""
@@ -88,35 +126,131 @@ EVIDENCE_URL=""
 CLOUD_INIT="${REPO_ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
 OUT=""
 WINDOW="30 DAY"
+SENTRY_SINCE=""
+SINCE_GIVEN=0
 VERIFY_ONLY=0
+REBOOT_SINCE=""
+REPLACE_SINCE=""
 DIVERGENCE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --host-name)    HOST_NAME="${2:-}"; shift 2 ;;
-    --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 ;;
-    --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 ;;
-    --out)          OUT="${2:-}"; shift 2 ;;
-    --window)       WINDOW="${2:-}"; shift 2 ;;
-    --divergence)   DIVERGENCE="${2:?--divergence needs a value}"; shift 2 ;;
+    # `shift 2 || shift` — a bare `shift 2` with only the flag left FAILS and leaves $#
+    # unchanged, so the parse loop never terminates. Measured in the sibling reader this
+    # session: the process hung until its caller's timeout killed it, which on this route
+    # would burn the poll budget against a paid host with no verdict and no message.
+    --host-name)    HOST_NAME="${2:-}"; shift 2 || shift ;;
+    --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 || shift ;;
+    # SINCE_GIVEN records the FLAG, not its value: the workflow passes `--since "${VAR:-}"`, so an
+    # EMPTY --since is a real call shape, and it would still clobber an append mode's window.
+    --since)        SENTRY_SINCE="${2:-}"; SINCE_GIVEN=1; shift 2 || shift ;;
+    # (#8210) REBOOT MODE. The rung-2 reset arm hard-resets the rehearsal host after
+    # boot_complete settles; this mode then answers ONE question over the post-reset window:
+    # did git-data-luks-reopen.service reopen the mapper unattended? It reuses this script's
+    # source-liveness anchor, its query transport and its Sentry cross-check rather than
+    # standing up a second probe. The timestamp bounds BOTH channels SERVER-side.
+    --reboot-since) REBOOT_SINCE="${2:-}"; SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
+    # (#5274) REPLACE MODE. The rung-2 replace arm replaces the rehearsal host again (P8: boot #2
+    # ADOPTS a LUKS volume a predecessor formatted and abandoned mounted, against the plaintext
+    # volume boot #1 read). This mode runs the ordinary boot_complete verdict over the window
+    # STAMPED IMMEDIATELY BEFORE THAT REPLACE — the host name is reused across seed, boot #1, the
+    # reboot and boot #2, so the window is the only thing separating them — and APPENDS
+    # RUNG2_REPLACE_BOOT=PASS to the evidence capture #1 wrote, rather than writing a new file.
+    --replace-since) REPLACE_SINCE="${2:-}"; SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
+    --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 || shift ;;
+    --out)          OUT="${2:-}"; shift 2 || shift ;;
+    --window)       WINDOW="${2:-}"; shift 2 || shift ;;
+    --divergence)   DIVERGENCE="${2:?--divergence needs a value}"; shift 2 || shift ;;
     --verify-only)  VERIFY_ONLY=1; shift ;;
     --) shift ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 
+# `assert_fixture_dir` guards the evidence path before either writer roots a write at the
+# caller's CWD — the P1b guard (fixture-relative-assert.test.sh) recognises only this helper,
+# executed as a statement. Byte-identical to the canonical definition in
+# plugins/soleur/test/test-helpers.sh, whose equality fixture-dir-operand-assert asserts across
+# every tracked copy; do not reword it here alone. Copied rather than sourced because this is a
+# production probe, not a suite. Its exit 2 is TRANSIENT under the followthrough contract.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 [[ -z "$OUT" ]] && OUT="$(dirname "$CLOUD_INIT")/git-data-rung2-boot-evidence.env"
 
 if [[ -z "$HOST_NAME" ]]; then
-  echo "usage: git-data-rung2-evidence-capture.sh --host-name <name> --evidence-url <url> [--out <path>]" >&2
+  echo "usage: git-data-rung2-evidence-capture.sh --host-name soleur-git-data-rehearsal-<run-id> --evidence-url <url> [--out <path>] [--reboot-since <ISO8601> | --replace-since <ISO8601>]" >&2
+  exit 64
+fi
+# The two append modes answer different questions over different windows; one invocation is one.
+if [[ -n "$REBOOT_SINCE" && -n "$REPLACE_SINCE" ]]; then
+  echo "refusing: --reboot-since and --replace-since are separate invocations (each appends its own key over its own window)." >&2
+  exit 64
+fi
+# (#5274) --since IS REFUSED BESIDE EITHER APPEND MODE, on the flag's presence rather than its value.
+# Both flags write SENTRY_SINCE, the ONE variable that bounds both channels, so the LAST flag on the
+# command line would win: `--replace-since T --since ""` leaves the window EMPTY, the reads fall back
+# to the 30-day --window, and boot #1's compliant row — same host name — passes for boot #2.
+if [[ "$SINCE_GIVEN" -eq 1 && ( -n "$REBOOT_SINCE" || -n "$REPLACE_SINCE" ) ]]; then
+  echo "refusing: --since cannot be combined with --reboot-since or --replace-since — the append mode's timestamp IS the window, and a second flag writing the same bound would let the last one on the command line decide which boot is read." >&2
+  exit 64
+fi
+# EVERY TIMESTAMP FLAG IS SHAPE-CHECKED BY NAME, against ONE regex. Each value is interpolated into
+# the Better Stack SQL and into Sentry's --start, and "which rows the query returns" is the verdict.
+# This used to lean on the --since check alone (the append flags assign SENTRY_SINCE too), which made
+# a flag's validation a side effect of an assignment a one-token edit could drop — and then the
+# unvalidated value was simply never read, widening the window instead of refusing it.
+_ISO_TS_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$'
+for _ts_flag in replace-since reboot-since since; do
+  case "$_ts_flag" in
+    since)         _ts_val="$SENTRY_SINCE" ;;
+    reboot-since)  _ts_val="$REBOOT_SINCE" ;;
+    replace-since) _ts_val="$REPLACE_SINCE" ;;
+  esac
+  if [[ -n "$_ts_val" && ! "$_ts_val" =~ $_ISO_TS_RE ]]; then
+    echo "refusing: --${_ts_flag} must be YYYY-MM-DDTHH:MM:SS (UTC, no zone suffix). Got: ${_ts_val}" >&2
+    exit 64
+  fi
+done
+# The replace arm runs only after capture #1 wrote a PASS; checked BEFORE any query, so a wiring
+# fault is named as one rather than surfacing as whatever verdict the window happens to hold.
+if [[ -n "$REPLACE_SINCE" ]] && ! grep -qxF 'RUNG2_BOOT_REHEARSAL=PASS' "$OUT" 2>/dev/null; then
+  echo "refusing (replace arm): ${OUT} holds no RUNG2_BOOT_REHEARSAL=PASS — the replace arm runs only after capture #1 passed, so this is a wiring fault." >&2
   exit 64
 fi
 
 # THE HOST NAME IS INTERPOLATED INTO SQL, so it is validated rather than trusted. It reaches
 # the WHERE clause of every query below; a name carrying a quote would either break the query
 # or change which rows it selects, and "which rows" is the whole verdict.
-if [[ ! "$HOST_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "refusing: --host-name must match ^[A-Za-z0-9._-]+$ (it is interpolated into the Better Stack SQL). Got: ${HOST_NAME}" >&2
+#
+# (#7227 item 4) AND IT IS CONSTRAINED TO REHEARSAL HOSTS. The charset rule alone says nothing
+# about WHICH host: `soleur-git-data` — the production store holding every connected user's
+# source code — satisfies `^[A-Za-z0-9._-]+$` perfectly. This script's caller projects the
+# `detail` field of every matched row into a PUBLIC Actions log on a PUBLIC repo, so an
+# unconstrained reader is one flag away from exporting production boot telemetry.
+#
+# STRICTLY NARROWER, never merely different: the trailing `[A-Za-z0-9._-]+` keeps the charset
+# property (a prefix check written as a bare glob would accept
+# `soleur-git-data-rehearsal-1" OR 1=1 --`), and the only production call site passes
+# `${REHEARSAL_PREFIX}${GITHUB_RUN_ID}`, which still matches. The trailing HYPHEN in the
+# prefix is load-bearing for the same reason it is in both orphan sweeps: `soleur-git-data`
+# is a prefix of the rehearsal names, so omitting it re-admits production.
+#
+# NO OVERRIDE FLAG. Reading production boot telemetry is a different tool with a different
+# output contract, not a flag on this one — an `--allow-production` escape hatch reopens the
+# hole for exactly the caller most likely to be in a hurry. And the emitter's 180-byte bound
+# is NOT a substitute: it bounds VOLUME, not CONTENT, and it is applied on the host at emit
+# time. This script is a reader and inherits whatever shipped.
+if [[ ! "$HOST_NAME" =~ ^soleur-git-data-rehearsal-[A-Za-z0-9._-]+$ ]]; then
+  echo "refusing: --host-name must match ^soleur-git-data-rehearsal-[A-Za-z0-9._-]+$ — it is interpolated into the Better Stack SQL, AND this route projects matched rows into a public Actions log, so it may only read rehearsal hosts (never the production soleur-git-data). Got: ${HOST_NAME}" >&2
   exit 64
 fi
 
@@ -127,6 +261,31 @@ if [[ ! "$EVIDENCE_URL" =~ ^https://github\.com/jikig-ai/soleur/actions/runs/[0-
   echo "refusing: --evidence-url must be an Actions run URL for this repository (https://github.com/jikig-ai/soleur/actions/runs/<id>), because git_data_rung2_rehearsal_gate refuses anything else. Got: ${EVIDENCE_URL}" >&2
   exit 64
 fi
+
+# (#8010 Guard 4) THE HOST AND THE URL MUST NAME THE SAME RUN. Both shapes above pass
+# independently while still describing two different rehearsals: `--host-name
+# soleur-git-data-rehearsal-17250000001` beside `--evidence-url .../runs/9999999999` is a file
+# whose hash-bound payload was measured on one host and whose provenance points at another
+# run's log, and the gate that reads it resolves the URL's run — so the run it verifies is not
+# the run that produced the bytes. THIS SCRIPT IS THE ONLY WRITER of that pair, so the coupling
+# is pinned here, at the source, rather than only being detected downstream.
+#
+# Exit 64 (usage), not 2: a mismatched pair is a fixed input error that no re-dispatch fixes,
+# and the rehearsal workflow retries rc=2.
+#
+# The URL's run id is the FIRST path segment after `/runs/`, so the non-canonical
+# `.../runs/<id>/attempts/2` form GitHub serves on a re-run still couples.
+_url_run_id="${EVIDENCE_URL#https://github.com/jikig-ai/soleur/actions/runs/}"
+_url_run_id="${_url_run_id%%/*}"
+_url_run_id="${_url_run_id%%\?*}"
+_host_run_id="${HOST_NAME#soleur-git-data-rehearsal-}"
+if [[ "$_host_run_id" != "$_url_run_id" ]]; then
+  echo "refusing: --host-name and --evidence-url name DIFFERENT runs (host suffix '${_host_run_id}', url run id '${_url_run_id}'). The evidence file binds a user_data hash measured on the host to the run whose log proves it; a mismatched pair makes the gate resolve a run that did not produce these bytes. Pass \${REHEARSAL_PREFIX}\${GITHUB_RUN_ID} and this run's own URL." >&2
+  exit 64
+fi
+
+# (#8210, superseded #5274) The timestamp flags are validated above, by name, against the ONE
+# `_ISO_TS_RE` — still a single copy of the regex, which was the concern that cut a second one here.
 
 # `--window` REACHES THE SAME `WHERE` CLAUSE, so it gets the same treatment as --host-name.
 #
@@ -141,15 +300,259 @@ if [[ ! "$WINDOW" =~ ^[0-9]+[[:space:]]+(MINUTE|HOUR|DAY|WEEK|MONTH)$ ]]; then
   exit 64
 fi
 
+# ── THE SECOND CHANNEL (#7481) ──────────────────────────────────────────────────────
+#
+# WHY IT EXISTS. It USED to be that everything before `doppler run` reached SENTRY ONLY, because
+# the emitter's Better Stack block was gated on BETTERSTACK_LOGS_TOKEN and that token arrived
+# only under `doppler run`. #7460 (ADR-198) bakes the token at 0600, so eight of the nine stages
+# now reach Better Stack and only `bootcmd_start` is Sentry-only. The consult still earns its
+# place: the bootcmd beacon, a token that failed to load, and any Better Stack ingest outage all
+# leave Sentry as the only witness. A host that dies at luks_open — which is what the 2026-07-31
+# rehearsal did — is no longer invisible to Better Stack, but every Better-Stack-silent condition
+# report TRANSIENT for a failure Sentry could name. The workflow then retries rc=2 twenty
+# times over ~16 minutes against a paid cpx22 before saying "do not simply re-dispatch".
+#
+# ONE HELPER, NOT SIX PLACEMENTS. The first design enumerated the call sites and got the list
+# wrong twice — it named the two credential-preflight sites where its own justification named
+# the two TRANSPORT-failure sites, which are a different pair. Enumerated member sets rot.
+# Every no-verdict path funnels through transient(), so: one consult implementation; the
+# mutation "revert one site to a bare `exit 2`" is caught by ONE arm grepping for a bare
+# `exit 2` outside this helper with the derivation-fault site excluded by name and a floor on
+# the count; and a seventh no-verdict path added next year is covered by construction.
+# A TEST SEAM, and it is named so it reads as one. The arms in
+# tests/scripts/test-git-data-rung2-evidence-capture.sh must drive the consult through every
+# verdict it can produce — a fatal WITH a cause, a fatal with an EMPTY cause, clean, and each
+# terminal refusal — and none of those are reachable against the live API from a suite that
+# must run offline and hermetically. The override is deliberately NOT a general "point this
+# anywhere" knob in production: nothing sets SOLEUR_SENTRY_READER outside the suite, and the
+# default is the committed reader.
+# GATED ON A TEST MARKER, not on the override alone. This script runs under
+# `doppler run -c prd_terraform`, which exports EVERY name in that config (160 of them), so
+# a bare `${SOLEUR_SENTRY_READER:-…}` is an arbitrary-command sink one config entry away —
+# the same env-injection class this PR pinned PINNED_ORG/PINNED_PROJECT_ID against, which
+# would have been reintroduced by the seam added to test the fix.
+SENTRY_READER="${REPO_ROOT}/scripts/sentry-issue.sh"
+if [[ -n "${SOLEUR_TEST_MODE:-}" && -n "${SOLEUR_SENTRY_READER:-}" ]]; then
+  SENTRY_READER="$SOLEUR_SENTRY_READER"
+fi
+
+# Sentry's window, derived from the SAME --window this script already validates, so the two
+# channels cannot disagree about what period a verdict covers. --since (ISO, passed by the
+# workflow from the timestamp it recorded before applying) pins the read to THIS run instead,
+# which is what actually closes #7481 defect 5: host_name embeds the run id, but a run id is
+# STABLE across GitHub re-run ATTEMPTS, so an unpinned read lets attempt 2 of a fixed host
+# report attempt 1's fatal. Without --since the residual is real and is stated, not hidden.
+_sentry_window_args() {
+  if [[ -n "$SENTRY_SINCE" ]]; then
+    printf '%s\n' "--start" "$SENTRY_SINCE" "--end" "$(date -u +%Y-%m-%dT%H:%M:%S)"
+    return 0
+  fi
+  # THE DEGRADE IS DELIBERATE AND MUST STAY VISIBLE. --since is optional because the workflow
+  # passes "${RUNG2_SENTRY_SINCE:-}": on a path where the apply step did not run there is no
+  # apply timestamp, and the caller MUST NOT die at an unset expansion — measured, requiring it
+  # made every capture invocation exit 3 (WRAPPER FAILURE) and reddened 8 arms in
+  # git-data-rung2-rehearsal.test.sh, i.e. the read never happened and the harness blamed the
+  # doppler wrapper. Falling back to the --window period is correct but WIDER, so the consult
+  # prints which shape it used rather than letting a run-pinned read and a 30-day read look
+  # identical in the log.
+  local n unit
+  n="${WINDOW%% *}"; unit="${WINDOW##* }"
+  case "$unit" in
+    MINUTE) printf '%s\n' "--stats-period" "${n}m" ;;
+    HOUR)   printf '%s\n' "--stats-period" "${n}h" ;;
+    DAY)    printf '%s\n' "--stats-period" "${n}d" ;;
+    WEEK)   printf '%s\n' "--stats-period" "${n}w" ;;
+    # Sentry has no month unit; 30 days is the conservative (wider) reading.
+    MONTH)  printf '%s\n' "--stats-period" "$(( n * 30 ))d" ;;
+    *)      printf '%s\n' "--stats-period" "30d" ;;
+  esac
+}
+
+# Prints the consult's verdict lines. Sets _SENTRY_VERDICT to FATAL | CLEAN | UNAVAILABLE |
+# NOT_RUN.
+#
+# (#8010 item 3) NOT_RUN AND UNAVAILABLE ARE DIFFERENT FACTS, and the difference is now
+# load-bearing. UNAVAILABLE means the cross-check RAN and could not be trusted; NOT_RUN means
+# it never ran at all. They used to commit byte-identical evidence, so a capture on a runner
+# with no jq and no token wrote the same `RUNG2_SENTRY_CROSSCHECK=UNAVAILABLE` as one whose
+# read genuinely degraded — and git_data_rung2_rehearsal_gate now lets a human ACKNOWLEDGE an
+# UNAVAILABLE and release the birth hold. An ack is a statement about a read that happened;
+# it must not be usable to bless a read that never did, so the three structural preflights
+# below report NOT_RUN, which the gate refuses outright and no ack can rescue.
+_sentry_consult() {
+  _SENTRY_VERDICT="UNAVAILABLE"
+  # STRUCTURAL PREFLIGHTS FIRST, so an absent tool or token is a cheap named refusal rather
+  # than a 401 discovered mid-poll or an rc=127 that reads most naturally as "not an array".
+  if ! command -v jq >/dev/null 2>&1; then
+    # MEASURED-BY: the `command -v jq` test on the line directly above. The message names a
+    # cause, and that cause is the branch condition itself — but lint-diagnosis-claims cannot
+    # see a basis that lives in the enclosing `if`, and its baseline ratchets DOWN only, so
+    # the annotation is the sanctioned fix rather than a baseline bump (ADR-166).
+    _SENTRY_VERDICT="NOT_RUN"
+    echo "  second channel: SKIPPED — jq is not installed, so a Sentry result could not be parsed."
+    echo "  **Next:** install jq on the runner. Re-dispatching will not change this."
+    return 0
+  fi
+  if [[ -z "${SENTRY_ISSUE_RO_TOKEN:-}" ]]; then
+    _SENTRY_VERDICT="NOT_RUN"
+    echo "  second channel: SKIPPED — SENTRY_ISSUE_RO_TOKEN is unset, so the Sentry-only stages"
+    echo "  (everything before \`doppler run\`) could not be read. This is NOT evidence the host"
+    echo "  emitted nothing there."
+    echo "  **Next:** add SENTRY_ISSUE_RO_TOKEN to the config this step runs under. Re-dispatching"
+    echo "  will not change this."
+    return 0
+  fi
+  if [[ ! -r "$SENTRY_READER" ]]; then
+    _SENTRY_VERDICT="NOT_RUN"
+    echo "  second channel: SKIPPED — ${SENTRY_READER} not found."
+    echo "  **Next:** this is a repo defect, not a host condition. Re-dispatching will not change it."
+    return 0
+  fi
+
+  local _w=() _out _rc
+  mapfile -t _w < <(_sentry_window_args)
+  if [[ -n "$SENTRY_SINCE" ]]; then
+    echo "  second channel: querying Sentry, window pinned to this run (since ${SENTRY_SINCE})."
+  else
+    echo "  second channel: querying Sentry over the --window period (${WINDOW}) — NOT pinned to"
+    echo "  this run, because no --since was supplied. A re-run ATTEMPT of the same run id can"
+    echo "  therefore surface an earlier attempt's fatal; weigh the timestamps below."
+  fi
+  # STDERR TO ITS OWN STREAM. Merging it into the parsed body meant any stderr byte on an
+  # HTTP-200 read failed the shape guard below and degraded a genuine FATAL to UNAVAILABLE —
+  # which, on the PASS path where UNAVAILABLE deliberately does not block, is a FAIL-OPEN on
+  # the branch that writes gate-releasing evidence. This is the same "status into a separate
+  # stream" discipline the reader itself applies, violated in its consumer.
+  local _errf; _errf="$(mktemp -t rung2-sentry.XXXXXXXX.err)"
+  _out="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" "${_w[@]}" 2>"$_errf")"; _rc=$?
+  local _err; _err="$(cat "$_errf" 2>/dev/null || echo '')"; rm -f "$_errf"
+
+  case "$_rc" in
+    0) : ;;
+    77|78)
+      # DETERMINISTIC AND TERMINAL. A 401/403 is repo/credential-side and identical on every
+      # attempt; retrying it spends the whole poll budget to report the least actionable
+      # verdict, against a paid host.
+      echo "  second channel: UNAVAILABLE — Sentry refused the read (rc=${_rc}; 77=401 scope/membership, 78=403 wrong token)."
+      printf '%s\n' "$_err" | head -3 | sed 's/^/    /'
+      echo "  **Next:** fix SENTRY_ISSUE_RO_TOKEN's scope. This is DETERMINISTIC — re-dispatching"
+      echo "  will reproduce it exactly and burn another paid host."
+      return 0 ;;
+    *)
+      echo "  second channel: UNAVAILABLE — the Sentry read failed (rc=${_rc}). The read did NOT run;"
+      echo "  this is NOT a 'the host emitted nothing to Sentry' result."
+      printf '%s\n' "$_err" | head -3 | sed 's/^/    /'
+      echo "  **Next:** read the lines above. If they name a transport fault, one re-dispatch is"
+      echo "  reasonable; if they name a query or scope fault, it is not."
+      return 0 ;;
+  esac
+
+  # SHAPE BEFORE COUNT (the reader validates it too; this is the consumer's own guard, because
+  # `jq -e` on `null | length` returns 0 AND exits 0 — a count is never the first thing trusted).
+  if ! printf '%s' "$_out" | jq -e 'type == "object" and ((.data | type) == "array")' >/dev/null 2>&1; then
+    echo "  second channel: UNAVAILABLE — Sentry returned a body this route cannot parse."
+    echo "  **Next:** treat as instrument failure, not as a host verdict."
+    return 0
+  fi
+
+  local _n
+  _n="$(printf '%s' "$_out" | jq -r '.data | length')"
+  if [[ "$_n" -eq 0 ]]; then
+    # ZERO ROWS IS TWO STATES, and only one of them is good news. "Sentry holds no fatal for
+    # this host" and "this read reached nothing at all" are byte-identical here — a stale
+    # PINNED_PROJECT_ID, a recreated project, a dark ingest, or an org the token lost
+    # membership in ALL return HTTP 200 with an empty .data. On the PASS path that reads as
+    # "cross-check passed" and releases the birth hold, so the zero is corroborated rather
+    # than trusted. This is what --liveness is for; without this call it was dead code.
+    #
+    # The anchor EXCLUDES this host by design: its own unconditional level:info bootcmd
+    # beacon would otherwise satisfy it, making it vacuous exactly when it matters.
+    #
+    # (#8010 item 2) THE LIVENESS WINDOW IS DECOUPLED FROM THE FATAL WINDOW, DELIBERATELY.
+    # This call used to inherit `_sentry_window_args`, so under `--since` it asked "did any
+    # OTHER host emit inside this run's two minutes?" — a question whose honest answer on a
+    # quiet Sunday is "no", which then downgraded a perfectly good CLEAN to UNAVAILABLE. The
+    # anchor is not asking about this run at all: it asks whether the INSTRUMENT is answering,
+    # and that is a question about the last day. 24h is wide enough that a live project always
+    # has traffic in it and narrow enough that an ingest which died yesterday still shows as
+    # dead. Pinned at the one call site rather than behind a helper — a second helper for a
+    # single caller only invites the next reader to route the fatal read through it too, and
+    # the fatal read MUST stay run-pinned (defect 5: host_name embeds a run id that is stable
+    # across re-run attempts, so an unpinned fatal read surfaces attempt 1's fatal in
+    # attempt 2).
+    local _lout _lrc _lerrf _lcount
+    _lerrf="$(mktemp -t rung2-live.XXXXXXXX.err)"
+    _lout="$(bash "$SENTRY_READER" --liveness "$HOST_NAME" --stats-period 24h 2>"$_lerrf")"; _lrc=$?
+    rm -f "$_lerrf"
+    _lcount=""
+    if [[ "$_lrc" -eq 0 ]]; then
+      _lcount="$(printf '%s' "$_lout" | jq -r '.data[0]["count()"] // empty' 2>/dev/null || echo '')"
+    fi
+    if [[ -z "$_lcount" || ! "$_lcount" =~ ^[0-9]+$ || "$_lcount" -eq 0 ]]; then
+      echo "  second channel: UNAVAILABLE — the fatal read returned zero rows AND the liveness"
+      echo "  anchor could not confirm the source is answering (rc=${_lrc}, count=${_lcount:-none})."
+      echo "  A zero-row read from a dark or misaddressed source is not a clean bill."
+      echo "  **Next:** verify SENTRY_ISSUE_RO_TOKEN's org membership and that the pinned project"
+      echo "  id still resolves. Re-dispatching will not change either."
+      return 0
+    fi
+    _SENTRY_VERDICT="CLEAN"
+    echo "  second channel: Sentry has NO level:fatal event for ${HOST_NAME} in this window,"
+    echo "  and the source is answering (${_lcount} event(s) from other hosts)."
+    return 0
+  fi
+
+  _SENTRY_VERDICT="FATAL"
+  echo "  second channel: Sentry reports ${_n} level:fatal event(s) for ${HOST_NAME}:"
+  # WHAT THE READER PRINTS, not only who reads. A verdict that names the stage and withholds
+  # the cause is this route's ORIGINATING incident: on 2026-07-31 the artifact carried
+  # `stage:luks_open level:fatal` and no `detail`, and the cause (`mount(2) ... ESRCH` from an
+  # ext4 quota feature) had to be re-queried by hand. An EMPTY detail is reported AS empty —
+  # "FAIL, cause unavailable" is honest; a cause-shaped blank is not.
+  printf '%s' "$_out" | jq -r '.data[] |
+      "    stage=\(.stage // "-") rc=\(.rc // "-") at \(.timestamp // "-")\n      detail: " +
+      (if ((.detail // "") | tostring | ltrimstr("[") | rtrimstr("]") | gsub("\\s";"") | length) == 0
+         then "(EMPTY — Sentry carries this fatal but no cause text. An empty JSON array counts as empty here too: that is the DETAIL=[] shape #7204 records.)"
+         else (.detail | tostring) end)' 2>/dev/null | head -20
+  return 0
+}
+
+# transient() — THE ONLY no-verdict exit in this script, and the point at which a
+# Better-Stack-silent condition gets a second opinion before it is called "nothing is known".
+transient() {
+  printf '%s\n' "$@"
+  echo
+  _sentry_consult
+  if [[ "$_SENTRY_VERDICT" == "FATAL" ]]; then
+    echo
+    echo "FAIL (Sentry-derived): ${HOST_NAME} reported a fatal that the Better Stack channel could"
+    echo "not see. This is the failure class #7481 names — the boot died before \`doppler run\`, so"
+    echo "the only channel carrying it is Sentry, and reporting TRANSIENT here would have sent the"
+    echo "operator to re-dispatch a host that failed for a knowable reason."
+    echo
+    echo "NO EVIDENCE FILE WRITTEN."
+    echo "**Next:** fix the cause named above, then re-run the rehearsal against the corrected"
+    echo "template. Do NOT simply re-dispatch — each dispatch spends a paid cpx22."
+    exit 1
+  fi
+  echo
+  echo "TRANSIENT: no verdict. Both channels are silent or unavailable (see above), so this run"
+  echo "declines to read silence as a dark boot."
+  exit 2
+}
+
+# --since is OPTIONAL, but a malformed one is refused rather than silently widening the read — by
+# the `_ISO_TS_RE` loop beside the argument checks above, which covers all three timestamp flags.
+
 # THE PREFLIGHT IS WHAT SEPARATES "I QUERIED AND SAW NOTHING" FROM "I NEVER QUERIED". Without
 # it, a missing credential produces silence that is indistinguishable from a dark boot.
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then
-    echo "TRANSIENT: ${v} is unset — cannot query Better Stack Logs, so this run has no verdict to offer (it is NOT evidence that the host booted dark). Re-run wrapped in: doppler run -p soleur -c prd_terraform -- ..."
-    exit 2
+    transient "TRANSIENT: ${v} is unset — cannot query Better Stack Logs, so this run has no verdict to offer (it is NOT evidence that the host booted dark). Re-run wrapped in: doppler run -p soleur -c prd_terraform -- ..."
   fi
 done
-[[ -x "$QUERY" || -r "$QUERY" ]] || { echo "TRANSIENT: ${QUERY} not found"; exit 2; }
+
+[[ -x "$QUERY" || -r "$QUERY" ]] || transient "TRANSIENT: ${QUERY} not found"
 
 # The archive arm is REQUIRED, not belt-and-braces: remote() alone is the ~40-minute hot
 # window (measured 2026-07-15 for the #6982 probe), and a once-per-boot marker falls out of it
@@ -207,6 +610,25 @@ ANCHOR_SQL="
 # structurally empty, so "all four are blank" carries no information about how far the boot
 # got — the `stage` tag is the only positional fact in a FAIL row. #7204's source brief made
 # exactly that over-read.
+# ONE SCOPE, BOTH QUERIES. The §5.0 argument -- "the fatal question must be unbounded by row
+# chatter" -- only holds if the two queries cover the SAME period. Two copies of the window
+# clause could drift apart silently and the verdict would then read a different period than the
+# evidence claims.
+#
+# ATTEMPT-PINNED whenever --since is supplied. HOST_NAME embeds GITHUB_RUN_ID, which is STABLE
+# across re-runs (#7481 defect 5), and WINDOW defaults to 30 DAY. So on attempt 2 of a run whose
+# template was FIXED, an ORDER BY dt ASC scan surfaces attempt 1's fatal and the rehearsal FAILs
+# forever. The old ORDER BY dt DESC LIMIT 50 hid that by accident; #7460 removed the accident
+# without replacing the isolation. The Sentry consult was already bounded this way (see the
+# --start/--end block below); this is the same bound on the Better Stack side.
+if [[ -n "$SENTRY_SINCE" ]]; then
+  _BS_WHEN="dt > parseDateTimeBestEffort('${SENTRY_SINCE}')"
+else
+  _BS_WHEN="dt > now() - INTERVAL ${WINDOW}"
+fi
+_BS_SCOPE="${_BS_WHEN}
+    AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'"
+
 HOST_SQL="
   SELECT /* __HOSTROWS__ every stage this rehearsal host reported */
          dt,
@@ -218,22 +640,287 @@ HOST_SQL="
          JSONExtractString(raw,'luks_mounted')  AS luks_mounted,
          JSONExtractString(raw,'repo_root')     AS repo_root,
          JSONExtractString(raw,'hooks_path')    AS hooks_path,
-         JSONExtractString(raw,'provision')     AS provision
+         JSONExtractString(raw,'provision')     AS provision,
+         JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+         JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
+         JSONExtractString(raw,'erasure_probe') AS erasure_probe,
+         JSONExtractString(raw,'plaintext_empty') AS plaintext_empty,
+         JSONExtractString(raw,'plaintext_volume') AS plaintext_volume,
+         JSONExtractString(raw,'plaintext_journal') AS plaintext_journal,
+         JSONExtractString(raw,'action')        AS action,
+         JSONExtractString(raw,'target')        AS target,
+         JSONExtractString(raw,'restarts')      AS restarts
   FROM ${_bs_source}
-  WHERE dt > now() - INTERVAL ${WINDOW}
-    AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'
+  WHERE ${_BS_SCOPE}
   ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow"
+
+# THE FATAL ARM MUST NOT BE ROW-WINDOW-BOUNDED (#7460 §5.0).
+#
+# HOST_SQL keeps the NEWEST 50 rows. That was safe only while the channel split held and a
+# healthy boot produced a single row. Now that eight stages emit — and the emitter fires far
+# more often than once per stage (sshd warn, mount, gc-timer, the LUKS trap, per-stage
+# `on_err`) — an EARLY fatal followed by enough later rows drops out of the window. The FAIL
+# arm would then find nothing, fall through to the boot_complete check, and write PASS over an
+# unread fatal.
+#
+# A verdict that depends on how chatty a healthy boot happens to be is not a verdict, so the
+# fatal question gets its own query: same host, same window, filtered server-side to
+# level='fatal', with a bound far above any plausible fatal count rather than above any
+# plausible ROW count. `LIMIT 1000` is a runaway guard, not a window — a boot emitting 1000
+# fatals has already answered the question this script asks.
+FATAL_SQL="
+  SELECT /* __FATALROWS__ every FATAL this rehearsal host reported, unbounded by row chatter */
+         dt,
+         JSONExtractString(raw,'stage')  AS stage,
+         JSONExtractString(raw,'level')  AS level,
+         JSONExtractString(raw,'host_name') AS host,
+         JSONExtractString(raw,'detail') AS detail,
+         JSONExtractString(raw,'rc')     AS rc
+  FROM ${_bs_source}
+  WHERE ${_BS_SCOPE}
+    AND JSONExtractString(raw,'level') = 'fatal'
+  ORDER BY dt ASC LIMIT 1000 FORMAT JSONEachRow"
+
+# (#5274) EVERY boot_complete ROW, UNBOUNDED BY ROW CHATTER — the #7460 §5.0 argument, applied to
+# the boot_complete checks. Guard 2 says EVERY boot_complete row in the window must read
+# plaintext_volume=present AND plaintext_journal=dirty, and "every row" read out of HOST_SQL meant
+# "every row among the newest 50": an OLDER clean or absent boot_complete falls out of that window
+# behind enough later chatter, and the guard then passes over a row it never read. So the
+# boot_complete checks (the terminal booleans AND Guard 2) read this query instead: same host, same
+# window, filtered server-side to stage='boot_complete'.
+#
+# THE BOUND FAILS CLOSED, unlike FATAL_SQL's. A fatal read that hits its runaway guard has already
+# answered its question (there IS a fatal); a boot_complete read that hits it has NOT — the rows
+# past the bound are exactly the ones "every row" is about. So a result AT the bound is refused
+# below rather than read.
+_BC_LIMIT=1000
+BC_SQL="
+  SELECT /* __BOOTCOMPLETEROWS__ every boot_complete this rehearsal host reported, unbounded by row chatter */
+         dt,
+         JSONExtractString(raw,'stage')         AS stage,
+         JSONExtractString(raw,'host_name')     AS host,
+         JSONExtractString(raw,'luks_mounted')  AS luks_mounted,
+         JSONExtractString(raw,'repo_root')     AS repo_root,
+         JSONExtractString(raw,'hooks_path')    AS hooks_path,
+         JSONExtractString(raw,'provision')     AS provision,
+         JSONExtractString(raw,'luks_reopen_unit') AS luks_reopen_unit,
+         JSONExtractString(raw,'fence_on_mapper') AS fence_on_mapper,
+         JSONExtractString(raw,'erasure_probe') AS erasure_probe,
+         JSONExtractString(raw,'plaintext_empty') AS plaintext_empty,
+         JSONExtractString(raw,'plaintext_volume') AS plaintext_volume,
+         JSONExtractString(raw,'plaintext_journal') AS plaintext_journal
+  FROM ${_bs_source}
+  WHERE ${_BS_SCOPE}
+    AND JSONExtractString(raw,'stage') = 'boot_complete'
+  ORDER BY dt ASC LIMIT ${_BC_LIMIT} FORMAT JSONEachRow"
+
+# (#7772 item 1) PIN THE TABLE TO GIT-DATA'S OWN SOURCE. betterstack-query.sh defaults BS_TABLE
+# to `t520508_soleur_inngest_vector_prd_3_logs` — the SHARED source (2457081) this host stopped
+# shipping to. git-data now has its own source, 2734275 / table_name `soleur_git_data_prd`, and
+# the naming convention the query script documents is `t<team>_<table_name>_logs`.
+#
+# WHY THIS IS NOT COSMETIC. Leaving the default in place does not error: the shared table exists
+# and answers, it simply holds no rows from a host that no longer writes there. Every arm of this
+# capture would then read an empty result and report a DARK BOOT — on a rehearsal that cost a real
+# Hetzner host and in fact booted fine. A false FAIL is the expensive direction here, because the
+# operator's next move is to re-dispatch (another paid host) rather than to doubt the query.
+# Exported rather than passed as `--table` so the S3 sibling derives from it (BS_TABLE_S3 defaults
+# to `${BS_TABLE%_logs}_s3`), keeping the hot and archive arms on the same source by construction.
+#
+# THE TABLE IS CREATED LAZILY, ON FIRST INGEST — measured 2026-09-03, minutes after the source was
+# minted: `SELECT count() FROM remote(t520508_soleur_git_data_prd_logs)` answered HTTP 500
+# `Code: 701 … CLUSTER_DOESNT_EXIST`, not an empty result set. The name is right (the API reports
+# team_id=520508 and table_name=soleur_git_data_prd, and the incumbent derives identically); the
+# table just does not exist until something writes to it.
+#
+# So on a rehearsal this arm has THREE outcomes, not two, and only two of them are about the host:
+# rows (the boot emitted), an empty result (the table exists, so something has written to this
+# source before, and THIS boot was dark), and CLUSTER_DOESNT_EXIST (nothing has EVER written to
+# this source). The third reaches `_run_query` as a non-zero transport rc and is reported TRANSIENT
+# — no verdict — which is the correct degradation: it is emphatically not a PASS, and it is not the
+# false FAIL that would send the operator to re-dispatch another paid host. It does mean a fully
+# dark first rehearsal burns its 16-minute poll before saying "no verdict" rather than "dark boot".
+# Accepted rather than special-cased: distinguishing the two costs a vendor-error-string match, and
+# a string match on a vendor 500 is exactly the kind of guard that rots silently.
+#
+# (#7855) SUPERSEDED — see the composed control read below. The reasoning above is sound and its
+# conclusion was still wrong: the discriminator is not the vendor error string at all, it is a
+# CONTROL READ against a different source, with the codes carried only as the reason. The hot and
+# archive arms do in fact fail with different codes (701 vs 669, both measured 2026-09-04), so a
+# string-keyed classifier would have rotted exactly as predicted — by a route this comment did not
+# consider. Recorded in the ADR-192 amendment.
+# On the default path export the hot/archive PAIR from the sources lib, so the evidence file's
+# `# TABLE:` line records the S3 sibling by construction instead of re-deriving
+# betterstack-query.sh's suffix rule here (#8010 item 1). A caller who pins BS_TABLE alone
+# keeps the query script's own derivation, and the evidence says so.
+if [[ -z "${BS_TABLE:-}" ]]; then
+  export BS_TABLE="$BS_GIT_DATA_TABLE" BS_TABLE_S3="$BS_GIT_DATA_TABLE_S3"
+fi
 
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }
 
+# ── AN rc OF 0 IS NOT AN ANSWER (#7855, found at ship) ────────────────────────────
+#
+# `betterstack-query.sh` runs curl with `--fail-with-body`, which returns 0 for an HTTP 200
+# whose body is a ClickHouse MID-STREAM EXCEPTION. Every read below was gated on the rc alone,
+# so such a response was consumed as a result set. Measured, on this script, before the fix:
+# a `__FATALROWS__` read answering
+#
+#     Code: 241. DB::Exception: Memory limit (for query) exceeded ... (MEMORY_LIMIT_EXCEEDED)
+#
+# with rc 0 contains no `"level":"fatal"`, so the FAIL arm did not fire, and the run wrote
+# `RUNG2_BOOT_REHEARSAL=PASS` — a host cleared for birth on a fatal check that never ran. The
+# evidence file's own header says "CLEAN = a fatal read returned zero rows"; it returned an
+# exception. That is the silence-is-health defect this route exists to end, one layer below
+# where the route was looking, and it is the same class as the transport-rc misreading that
+# opened #7855.
+#
+# The predicate already existed for exactly this: `bs_absence_response_is_answer` discriminates
+# on line SHAPE, because every legitimate row of all three queries here begins `{"dt":` (`dt` is
+# the first selected column of ANCHOR_SQL, HOST_SQL and FATAL_SQL) while an exception arrives as
+# a bare line outside the JSONEachRow stream. It was reachable only from inside the
+# anchor-failed arm, which is the one path that cannot need it. Sourced at top level now.
+#
+# shellcheck source=../lib/betterstack-absence.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+
+_require_answer() {  # $1 = the read's output ; $2 = which read, for the operator
+  bs_absence_response_is_answer "$1" && return 0
+  transient "TRANSIENT: the ${2} query returned rc=0, but its body is not a result set — it is a" \
+            "ClickHouse error delivered inside an HTTP 200, which curl reports as success." \
+            "NO VERDICT: an unread query is not an empty one, and reading it as empty is how a" \
+            "fatal check that never ran becomes a PASS. Body follows (carried, not the decision):" \
+            "$(printf '%s\n' "$1" | tail -5)"
+}
+
 # ── ARTIFACT 1: the source-liveness anchor ────────────────────────────────────────
 anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
+# An `if`, not `[[ ... ]] && ...`: a trailing `&&` whose left side is false makes the compound
+# return 1, which `set -e` reads as a failure of the script rather than of the test.
+if [[ "$anchor_rc" -eq 0 ]]; then _require_answer "$anchor_out" "source-liveness anchor"; fi
+#
+# (#7855) A FAILED READ IS THREE STATES, AND ONLY ONE OF THEM IS ABOUT THIS HOST.
+#
+# This arm used to print "the Better Stack query transport exited N (unreachable or
+# unauthorised)" — naming two causes the run had not measured. Run 33888071954 printed it
+# twenty times while the transport was reachable and the credential was valid: the read failed
+# because the SOURCE'S TABLE DOES NOT EXIST. Better Stack creates the ClickHouse table lazily on
+# the first STORED row, so a source that has never stored one answers 500 CLUSTER_DOESNT_EXIST
+# rather than returning an empty result. That is AP-021 exactly — a message may name only a
+# cause the run measured.
+#
+# The discriminator is a CONTROL READ against a source that is not this one. Pairing it with the
+# target read separates:
+#
+#   target fails + control answers with rows  -> nothing has ever been stored to THIS source
+#                                                (or it is misaddressed). About this source.
+#   target fails + control answers with none  -> the warehouse is storing nothing from ANY
+#                                                producer. About the warehouse (#7811).
+#   target fails + control fails              -> the instrument is unusable. About nothing.
+#
+# WHY THE VENDOR ERROR STRING IS NOT THE DECISION. The hot and archive arms fail with DIFFERENT
+# codes (701 CLUSTER_DOESNT_EXIST vs 669 NAMED_COLLECTION_DOESNT_EXIST, both measured
+# 2026-09-04), so a classifier keyed on either string is half a classifier and rots the first
+# time Better Stack renames one. The codes are carried as the REASON; the control read decides.
+#
+# COMPOSED, NOT WIDENED. `bs_absence_classify` takes no arguments and answers about the
+# warehouse; the target-vs-control distinction is the product (anchor_rc != 0) x classify().
+# Composing it here costs one arm of one script. Adding a fourth state to the shared library
+# would need an arity change, and its only other production consumer
+# (scripts/zot-restart-loop-alarm.sh) branches on the token as a STRING at two sites — one
+# `if/if` with no `else`, one `case` with no `*)` — so a new token would fall through both into
+# the live-channel path. See ADR-192.
 if [[ "$anchor_rc" -ne 0 ]]; then
-  echo "TRANSIENT: the Better Stack query transport exited ${anchor_rc} (unreachable or unauthorised). No verdict — this says nothing about the rehearsal host."
-  printf '%s\n' "$anchor_out" | tail -5
-  exit 2
+  # (the absence library is sourced at top level, beside _require_answer)
+
+  # PIN THE CONTROL TO A DIFFERENT SOURCE, AND PIN THE TRANSPORT TO THIS SCRIPT'S OWN.
+  #
+  # This script exports BS_TABLE=<git-data> process-wide (see above), so a classify call that
+  # does not override it would read the ABSENT TARGET as its "control", always answer
+  # TRANSPORT_FAIL, and collapse all three states into one — a silent regression to the
+  # behaviour this block replaces, with the suite otherwise green. The capture suite's
+  # GUARD1/2 arm is the detector for exactly that deletion.
+  #
+  # BETTERSTACK_QUERY_SCRIPT is the library's seam and BETTERSTACK_QUERY_SH is this script's;
+  # pinning the former to $QUERY keeps both legs on ONE transport, so a test that stubs the
+  # capture cannot leave the control read reaching the real network.
+  #
+  # BS_CONTROL_WINDOW is pinned at 6h rather than inherited: it is deliberately far shorter than
+  # this script's own 30-day target WINDOW, because the control asks "is the warehouse storing
+  # NOW", not "has it ever". Pinning it makes that asymmetry a decision on the record instead of
+  # a default nobody chose. It cannot simply reuse $WINDOW — that is a ClickHouse INTERVAL
+  # expression, not a `--since` duration.
+  #
+  # The assignments ride on a COMMAND SUBSTITUTION, whose subshell contains them: classify's
+  # entire contract is stdout plus a return code, so nothing is lost by running it in a
+  # subshell, and BS_TABLE is not disturbed for the arms below.
+  # BOTH LEGS ON ONE CONTRACT, not merely one script. The target read runs `bash "$QUERY"`, which
+  # needs no exec bit; the library refuses a non-executable script with TRANSPORT_FAIL. A $QUERY
+  # that is readable but not executable would therefore make the target read work and the control
+  # read always answer TRANSPORT_FAIL — collapsing all three states into the "instrument unusable"
+  # arm with the suite green. Assert the stronger of the two requirements up front.
+  if [[ ! -x "$QUERY" ]]; then
+    transient "TRANSIENT: the CONTROL READ ALSO FAILED — the query script at ${QUERY} is not executable, so the control leg cannot run and this run cannot classify the target read's failure." \
+              "Target read exited ${anchor_rc}."
+  fi
+
+  _ctl_token="$(
+    BS_TABLE="$BS_CONTROL_TABLE" \
+    BS_TABLE_S3="$BS_CONTROL_TABLE_S3" \
+    BETTERSTACK_QUERY_SCRIPT="$QUERY" \
+    BS_CONTROL_WINDOW=6h \
+      bs_absence_classify
+  )"
+  _anchor_tail="$(printf '%s\n' "$anchor_out" | tail -5)"
+
+  case "$_ctl_token" in
+    LIVE)
+      # A LIVE CONTROL DOES NOT ESTABLISH *WHY* THE TARGET READ FAILED (#7855, found at ship).
+      #
+      # The control leg rules out an unusable instrument and an unusable credential, and nothing
+      # else. It cannot separate "the target's table does not exist" from "the target query failed
+      # for its own reason" — and the target read is the heavier query of the two: it UNIONs
+      # `s3Cluster(primary, $BS_TABLE_S3)`, whose named collection answered 669
+      # NAMED_COLLECTION_DOESNT_EXIST for this very source on 2026-09-04, and a UNION ALL fails if
+      # EITHER arm fails. That is the same measurement that made the round-trip probe drop its
+      # archive arm. So the strong sentence is emitted ONLY when the vendor's own reason says the
+      # thing does not exist; otherwise the arm reports what it has and names no cause.
+      #
+      # This matters beyond tidiness: the rehearsal workflow branches on `NEVER STORED A ROW` and
+      # tells the operator "a re-dispatch is warranted" — a paid host spun up on a query error.
+      if grep -qE 'CLUSTER_DOESNT_EXIST|NAMED_COLLECTION_DOESNT_EXIST|UNKNOWN_TABLE' <<<"$_anchor_tail"; then
+        transient "TRANSIENT: this source's table does not exist — NEVER STORED A ROW. The control source is answering and carrying rows, so the warehouse is up; this source has stored nothing, or the table name is wrong. No verdict about ${HOST_NAME}: a misaddressed source and a host that never shipped look identical from here." \
+                  "Target read exited ${anchor_rc}. Reason follows (carried, and it is what selected this reading):" \
+                  "$_anchor_tail"
+      else
+        transient "TRANSIENT: the target read FAILED FOR A REASON THE CONTROL CANNOT EXPLAIN. The control source is answering and carrying rows, so the transport and the credential both work — but the target read did not fail with a table-absence code, so this run does NOT know that this source has stored nothing. Read the vendor's reason below before concluding anything; a re-dispatch on this reading would be a host spun up on a query error." \
+                  "Target read exited ${anchor_rc}. Reason follows (carried, and it is NOT a table-absence code):" \
+                  "$_anchor_tail"
+      fi
+      ;;
+    INGEST_DARK)
+      # THE HONEST LIMIT OF THIS STATE, recorded rather than papered over. A control read that
+      # comes back empty cannot separate "the warehouse is refusing writes" from "every producer
+      # on the control source stopped at the same moment". Both are alarming and neither is a
+      # fact about this host, so they share an arm and the sentence claims only what the pair of
+      # reads establishes. The inverse residual is on the other side: a SINGLE surviving row
+      # makes the control read LIVE, so this arm under-reports a partially-dark warehouse.
+      # Narrowing either would need a second, independent producer to compare against, which is
+      # the account-wide monitoring #7811 owns — not something this capture can settle.
+      transient "TRANSIENT: the warehouse is DARK FOR EVERY PRODUCER on the source this run sampled. The control read answered and returned no rows at all from ${BS_CONTROL_TABLE} in the last 6h. That source is shared and multi-tenant, so an empty result there is the account-wide signal #7811 tracks — but it is ONE source, and this run did not read a second, so it cannot separate a refusing warehouse from every producer on that source stopping at once. Either way it is not a fact about this source and not a fact about ${HOST_NAME}. A 2xx from the ingest endpoint would not contradict it — an acknowledgement is not storage." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+    *)
+      # TRANSPORT_FAIL, or any token a future library revision adds. Both reads failed, so the
+      # instrument is unusable and nothing was learned — the correct fail-closed default.
+      transient "TRANSIENT: the CONTROL READ ALSO FAILED (classifier said ${_ctl_token:-<empty>}), so this run cannot tell a missing table from a dark warehouse from a broken instrument. Nothing is known, least of all anything about ${HOST_NAME}." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+  esac
 fi
 # DELIBERATELY EXCLUDES THIS HOST'S OWN ROWS (see the SQL). If the anchor could be satisfied
 # by the rehearsal host, then "this host emitted nothing" would make the anchor dead too — and
@@ -249,20 +936,249 @@ fi
 # bare `grep -q 'host'` and reported the source LIVE. The rows are FORMAT JSONEachRow with the
 # column aliased `host`, so the field shape is available and strictly tighter — and this is
 # the one predicate the whole live-vs-silent distinction rests on.
+#
+# (#7772) THE FOREIGN-HOST ANCHOR DIED WITH THE SOURCE SPLIT, AND THE FALLBACK IS AN INGEST PROBE.
+#
+# This predicate asks "is the source answering AT ALL?" by requiring a row from some host OTHER
+# than the rehearsal host. That worked only because source 2457081 was SHARED and its other
+# tenants were chatty (measured 2026-09-03: soleur-web-platform ~1.99M rows, soleur-inngest-prd
+# ~150k). git-data now ships to its OWN source 2734275, whose only possible writers are the prod
+# host (never born) and rehearsal hosts -- which this predicate excludes BY DESIGN, and whose
+# HOST_NAME embeds a per-run id so no two rehearsals share one.
+#
+# So on a single-tenant source the anchor is UNSATISFIABLE: a PERFECT first rehearsal creates the
+# table, writes its rows, is excluded by the `!=` clause, reports ZERO foreign rows, and lands on
+# TRANSIENT -- no evidence file, no verdict, and RUNG2_BOOT_REHEARSAL=PASS structurally
+# unreachable. Each attempt costs a real Hetzner host and an environment approval. The failure is
+# indistinguishable from a dark boot, which is the one distinction this whole arm exists to make.
+#
+# The question is unchanged; the instrument has to change. `betterstack-ingest-probe.sh` answers
+# "is this source live?" directly at the WRITE endpoint, without writing a row (an empty batch),
+# and discriminates 0 accepting / 4 refused (auth or quota) / 2 unreachable. That is strictly
+# better than the foreign-host SELECT even on a shared source: it measures THIS source's
+# liveness rather than inferring it from a neighbour's traffic.
+#
+# The foreign-host read is kept as a SUFFICIENT condition, not a necessary one -- if another host
+# has written recently the source is obviously live, and that costs nothing to accept.
 if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
-  echo "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}."
-  echo "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a"
-  echo "silent host and a dead source look identical from this host's rows alone, so this run"
-  echo "declines to read silence as a dark boot. Check the Better Stack source and credentials."
-  exit 2
+  _probe="${BETTERSTACK_INGEST_PROBE:-${REPO_ROOT}/scripts/betterstack-ingest-probe.sh}"
+  if [[ ! -r "$_probe" ]]; then
+    transient "TRANSIENT: no foreign-host rows, and the ingest probe is unreadable at ${_probe}," \
+              "so this run cannot tell a live-but-silent source from a dead one. Not a verdict" \
+              "about ${HOST_NAME}."
+  fi
+  _probe_rc=0
+  # CAPTURE THE PROBE'S OUTPUT. It carries the verdict token and the exact reason, and discarding
+  # it is what forced the `*)` arm below to guess. #7855 widened that probe's exit 2 from
+  # "unreachable" to five distinct INGEST_PROBE_UNCONFIGURED reasons plus four others, so a bare
+  # "could not reach the source (rc=2)" is now more often wrong than right — AP-021, in the arm
+  # that reports it. The zot workflow already threads `probe_out` this way.
+  _probe_out=""
+  _probe_out="$(BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-$BS_GIT_DATA_INGEST_URL}" \
+    BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
+    bash "$_probe" 2>&1)" || _probe_rc=$?
+  case "$_probe_rc" in
+    0)
+      # The source ACKNOWLEDGED a write. That is not storage (#7855) — measured on this source,
+      # a 2xx-acknowledged marker was never retrievable — so this is weaker than it reads: it
+      # establishes reachability and credential validity, not that this host's rows could have
+      # landed. Falling through to the host read is still right, because the host read is what
+      # produces the verdict, but the verdict it produces inherits this weakness.
+      printf 'anchor: no foreign-host rows; ingest probe says the source ACKNOWLEDGED a write (not storage — see ADR-192)\n' >&2
+      ;;
+    4)
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe reports the source REFUSING" \
+                "writes (auth or quota). A refused sink cannot have recorded this boot, so silence" \
+                "here is a statement about the INSTRUMENT, not about ${HOST_NAME}."
+      ;;
+    *)
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe did not classify the source" \
+                "(rc=${_probe_rc}). Its own verdict follows — read that rather than assuming a" \
+                "transport fault, because rc=2 now covers an unset credential, a refused" \
+                "destination, a throttle and a vendor error as well as unreachability." \
+                "${_probe_out:-<the probe produced no output>}"
+      ;;
+  esac
 fi
 
 # ── ARTIFACT 2: everything this host reported ─────────────────────────────────────
 host_out="$(_run_query "$HOST_SQL")"; host_rc=$?
 if [[ "$host_rc" -ne 0 ]]; then
-  echo "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict."
-  printf '%s\n' "$host_out" | tail -5
-  exit 2
+  transient "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict." \
+            "$(printf '%s\n' "$host_out" | tail -5)"
+fi
+_require_answer "$host_out" "host-rows"
+
+# ── ARTIFACT 2b: every FATAL this host reported, unbounded by row chatter ─────────
+# Separate query, deliberately. See FATAL_SQL. A transport failure here is TRANSIENT for the
+# same reason it is on the other two: an unanswered fatal query cannot be read as "no fatal",
+# and reading it that way is precisely the silence-is-health defect this route exists to end.
+fatal_out="$(_run_query "$FATAL_SQL")"; fatal_rc=$?
+if [[ "$fatal_rc" -ne 0 ]]; then
+  transient "TRANSIENT: the unbounded fatal query exited ${fatal_rc} after the anchor succeeded. No verdict —" \
+            "an unanswered fatal query is NOT a clean bill." \
+            "$(printf '%s\n' "$fatal_out" | tail -5)"
+fi
+_require_answer "$fatal_out" "unbounded fatal"
+
+# ── (#8210) REBOOT MODE: did the mapper reopen unattended after the reset? ─────────
+#
+# Reached only after the anchor, the host read and the unbounded fatal read have all ANSWERED
+# (an unread query is not an empty one — the three _require_answer calls above are what make a
+# zero-row set mean something here).
+#
+# The verdict is over the POST-`since` set ONLY, and that is not a simplification: the
+# production shape ALWAYS has pre-`since` rows — the entire birth boot, including its own
+# boot_complete and any fatal from a retried early stage. Both channels are therefore bounded
+# server-side (Better Stack through _BS_WHEN, Sentry through --start/--end), and rows outside
+# the window are ignored rather than counted.
+#
+#   0 PASS       a Better Stack stage:luks_reopen_ok row with action=reopened AND
+#                target=/mnt/git-data, and no level:fatal in EITHER channel.
+#   1 FAIL       any post-reset fatal, OR a luks_reopen_ok row whose action is not `reopened`,
+#                OR (#8211) a reopened row whose target is anything but /mnt/git-data.
+#                `noop` or `mounted` after a hard reset means the mapper survived a power cycle,
+#                which it cannot — so the probe or the host is lying, and that is not a pass.
+#   2 TRANSIENT  an EMPTY post-`since` set while the source-liveness anchor answers: an ingest
+#                miss must not burn a paid host (the emitter's Better Stack POST has no --retry).
+#                Also (#8211) a reopen seen ONLY in Sentry: sentry-issue.sh projects `action`,
+#                not `target`, so that row cannot show WHERE the mapper was mounted.
+#
+# BOTH channels are read because either alone is a single point of failure: Better Stack can
+# drop an ingest (#7855), and the Sentry row is level:info on an unrouted stage, which the
+# default fatal-pinned host-events query cannot see — hence sentry-issue.sh's --stage.
+if [[ -n "$REBOOT_SINCE" ]]; then
+  _bs_reopen="$(grep 'luks_reopen_ok' <<<"$host_out" || true)"
+  _bs_fatal="$(grep '"level":"fatal"' <<<"$fatal_out" || true)"
+
+  # (#8010 item 5) RESOLVE THE WINDOW ONCE, BEFORE THE CALL, and record THAT.
+  # `_sentry_window_args` resolves `--end` from `date -u` at call time, and the QUERY line
+  # appended below used to write the literal string `<now>` — which is not a timestamp, cannot
+  # be replayed, and hides the single field that says how far past the reset this arm looked.
+  # Resolved into `_rw` here (unconditionally: the helper is pure and cheap) so the line
+  # recorded is the line that ran, even on the branch where no Sentry read happens at all.
+  mapfile -t _rw < <(_sentry_window_args)
+  _reboot_end=""
+  for ((_i = 0; _i + 1 < ${#_rw[@]}; _i++)); do
+    if [[ "${_rw[_i]}" == "--end" ]]; then _reboot_end="${_rw[_i+1]}"; break; fi
+  done
+
+  _sentry_reopen=""; _sentry_reopen_rc=1
+  if [[ -n "${SENTRY_ISSUE_RO_TOKEN:-}" && -r "$SENTRY_READER" ]] && command -v jq >/dev/null 2>&1; then
+    # The window comes from the ONE helper every other Sentry read here uses (`--reboot-since`
+    # assigns SENTRY_SINCE, so it emits the same --start/--end this line used to re-type).
+    _sentry_reopen="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" --stage luks_reopen_ok \
+      "${_rw[@]}" 2>/dev/null)"; _sentry_reopen_rc=$?
+  fi
+  _sentry_reopened=0; _sentry_rows=0
+  if [[ "$_sentry_reopen_rc" -eq 0 && -n "$_sentry_reopen" ]]; then
+    _sentry_rows="$(printf '%s' "$_sentry_reopen" | jq -r '(.data // []) | length' 2>/dev/null || echo 0)"
+    if printf '%s' "$_sentry_reopen" | jq -e '(.data // []) | map(select(.action == "reopened")) | length > 0' >/dev/null 2>&1; then
+      _sentry_reopened=1
+    fi
+  fi
+
+  # The fatal arm runs FIRST and wins: a reopen row alongside a fatal is still a failed reboot.
+  _sentry_consult
+  if [[ -n "$_bs_fatal" || "$_SENTRY_VERDICT" == "FATAL" ]]; then
+    echo "FAIL (reboot arm): ${HOST_NAME} reported a level:fatal AFTER the reset at ${REBOOT_SINCE}."
+    printf '%s\n' "$_bs_fatal" | head -5
+    echo
+    echo "NO EVIDENCE APPENDED. The reopen path is the thing this arm exists to prove; a fatal in"
+    echo "the post-reset window means it did not hold. Read stage/action/result in the row above."
+    exit 1
+  fi
+
+  _bs_reopened=0
+  if grep -q '"action":"reopened"' <<<"$_bs_reopen"; then _bs_reopened=1; fi
+  # A luks_reopen_ok row whose action is neither reopened (nor absent) is a hard FAIL.
+  if [[ -n "$_bs_reopen" && "$_bs_reopened" -eq 0 ]] \
+     || { [[ "$_sentry_rows" -gt 0 && "$_sentry_reopened" -eq 0 ]]; }; then
+    echo "FAIL (reboot arm): a stage:luks_reopen_ok row arrived after the reset, but its action is"
+    echo "not 'reopened'. A mapper cannot survive a hard reset, so 'noop' or 'mounted' here means"
+    echo "the probe window or the host is lying — this is not a pass."
+    printf '%s\n' "$_bs_reopen" | head -3
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 1
+  fi
+
+  # (#8211) THE TARGET, not only the action. The reopen mounts whatever fstab names, so a
+  # reopened row proves the re-attach only when it reopened the SERVING root. A row with
+  # another target, or none, FAILs.
+  #
+  # PARSE THE FIELD, NEVER SUBSTRING-MATCH THE SERIALIZED ROW. This shipped as
+  # `grep -v '"target":"/mnt/git-data"'` and rejected every correct host: ClickHouse's
+  # JSONEachRow escapes the solidus, so the wire bytes are `"target":"\/mnt\/git-data"` and the
+  # unescaped literal never matched. The reboot arm could therefore never pass, which means the
+  # rung-2 gate could never be released — measured on rehearsal run 35909343686, whose host
+  # reopened at /mnt/git-data correctly and was failed anyway. `\/` is legal JSON that a
+  # producer may emit at will, so the encoding is not ours to assume; jq decodes it.
+  #
+  # FAIL CLOSED on a row jq cannot parse: an unreadable row is not a row that proves a reopen.
+  _bs_bad_target=""
+  while IFS= read -r _rrow; do
+    [[ -n "$_rrow" ]] || continue
+    _rtarget="$(jq -r '.target // empty' <<<"$_rrow" 2>/dev/null)" || _rtarget=""
+    [[ "$_rtarget" == "/mnt/git-data" ]] && continue
+    _bs_bad_target+="${_rrow}"$'\n'
+  done < <(grep '"action":"reopened"' <<<"$_bs_reopen" || true)
+  if [[ -n "$_bs_bad_target" ]]; then
+    echo "FAIL (reboot arm): a stage:luks_reopen_ok action=reopened row arrived after the reset, but"
+    echo "its target is not /mnt/git-data. The store is served from /mnt/git-data, so a reopen"
+    echo "anywhere else (or one that names no target) does not prove the serving root came back."
+    printf '%s\n' "$_bs_bad_target" | head -3
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 1
+  fi
+
+  if [[ "$_bs_reopened" -eq 0 ]]; then
+    if [[ "$_sentry_reopened" -eq 1 ]]; then
+      echo "TRANSIENT (reboot arm): Sentry carries a stage:luks_reopen_ok action=reopened row after"
+      echo "${REBOOT_SINCE}, but Better Stack does not, and the Sentry read projects no target."
+      echo "Where the mapper was mounted is unread, so this run declines to pass on it."
+    else
+      echo "TRANSIENT (reboot arm): no stage:luks_reopen_ok row in EITHER channel after"
+      echo "${REBOOT_SINCE}, while the source-liveness anchor answered. An ingest miss is not a"
+      echo "failed reopen — the emitter's Better Stack POST carries no retry — so this run declines"
+      echo "to read silence as a defect."
+    fi
+    echo
+    echo "NO EVIDENCE APPENDED."
+    exit 2
+  fi
+
+  # Better Stack carried the target-checked reopen; Sentry corroborates or it does not.
+  _channel=betterstack
+  [[ "$_sentry_reopened" -eq 1 ]] && _channel=both
+  _restarts="$(grep -o '"restarts":"[0-9]*"' <<<"$_bs_reopen" | head -1 | grep -o '[0-9]*' || true)"
+  # OUT is bound by command substitution, so an empty one appends to the CWD rather than to the
+  # evidence file — and this branch is the only writer of the reboot key. Guarded with an
+  # explicit test, NOT `${OUT:?}`: under this contract a `:?` abort exits 1, which is FAIL ("the
+  # mapper did not reopen"), when the truth is a wiring fault, which is TRANSIENT (2). The
+  # followthrough-convention lint (rule 1) bans the `:?` form on executable lines for exactly
+  # that reason, and the full gate caught the first revision of this block using it.
+  # `assert_fixture_dir` (defined once below the arg parse) is the ONE guard the P1b scanner
+  # recognises, executed as a statement; its exit 2 is TRANSIENT under this contract, which is
+  # the right verdict for a wiring fault. An empty-only test would not do: `>> relative/path`
+  # succeeds, so the abort would prove the opposite of what it was credited with.
+  assert_fixture_dir "$OUT"
+  {
+    printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+    # `--reboot-since` always assigns SENTRY_SINCE, so the helper always emits --start/--end
+    # here; the `:-unresolved` guard says so out loud rather than printing an empty field if
+    # that ever stops being true.
+    printf '# QUERY: sentry-issue.sh --host-events %s --stage luks_reopen_ok --start %s --end %s\n' \
+      "$HOST_NAME" "$REBOOT_SINCE" "${_reboot_end:-unresolved}"
+    printf 'RUNG2_REBOOT_REOPEN=PASS\n'
+    printf 'RUNG2_REBOOT_REOPEN_CHANNEL=%s\n' "$_channel"
+    printf 'RUNG2_REBOOT_REOPEN_RESTARTS=%s\n' "${_restarts:-unknown}"
+  } >> "$OUT"
+  echo "PASS (reboot arm): ${HOST_NAME} reopened /dev/mapper/git-data at /mnt/git-data unattended after the reset at"
+  echo "${REBOOT_SINCE} (channel ${_channel}, restarts ${_restarts:-unknown}); no fatal in either channel."
+  echo "Appended RUNG2_REBOOT_REOPEN to ${OUT}."
+  exit 0
 fi
 
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
@@ -276,30 +1192,164 @@ fi
 #
 # The `\bno\b` arm is retained anyway: it costs nothing and it is exactly the arm that fires
 # if those literals are ever replaced by real measurements.
-if grep -q '"level":"fatal"' <<<"$host_out"; then
+# READS `fatal_out`, NOT `host_out` (#7460 §5.0). Grepping the windowed row set here is what
+# made a chatty boot able to bury its own fatal; the predicate is kept identical so a mutation
+# that points it back at `host_out` is a one-token, clearly-visible revert.
+if grep -q '"level":"fatal"' <<<"$fatal_out"; then
   echo "FAIL: ${HOST_NAME} reported a FATAL. The rehearsal found the failure class this route exists to catch — a boot that would have looked green from the apply."
-  grep '"level":"fatal"' <<<"$host_out" | head -10
+  grep '"level":"fatal"' <<<"$fatal_out" | head -10
   echo
   echo "NO EVIDENCE FILE WRITTEN. Fix the cause, then re-run the rehearsal against the corrected template."
   exit 1
 fi
 
-if ! grep -q 'boot_complete' <<<"$host_out"; then
-  echo "TRANSIENT: the source is live (the anchor answered) but ${HOST_NAME} has not reported"
-  echo "stage:boot_complete within ${WINDOW}, and reported no fatal either. Either the boot is"
-  echo "still in progress, or it died before reaching a stage that can emit to Better Stack at"
-  echo "all — everything before \`doppler run\` reaches SENTRY ONLY, because the emitter's"
-  echo "Better Stack block is gated on BETTERSTACK_LOGS_TOKEN being in the environment."
-  echo "Check Sentry for this host_name before concluding anything."
-  exit 2
+# ── ARTIFACT 2c (#5274): every boot_complete this host reported, unbounded by row chatter ──
+# Read AFTER the fatal arm, so a fatal still wins over any transport or bound refusal here. See
+# BC_SQL. An unanswered read is TRANSIENT for the same reason the other three are.
+bc_out="$(_run_query "$BC_SQL")"; bc_rc=$?
+if [[ "$bc_rc" -ne 0 ]]; then
+  transient "TRANSIENT: the unbounded boot_complete query exited ${bc_rc} after the anchor succeeded. No verdict —" \
+            "an unanswered boot_complete query cannot show that EVERY boot_complete row complied." \
+            "$(printf '%s\n' "$bc_out" | tail -5)"
+fi
+_require_answer "$bc_out" "unbounded boot_complete"
+# SELECTED ON THE PARSED FIELD, not by a text grep. The server already filters on stage; this is
+# the reader's own exact match. The old `grep 'boot_complete'` over host_out also selected any row
+# whose text merely CONTAINS the word (a `boot_complete_retry` stage, a `detail` quoting it), and
+# such a row carries no plaintext fields — so a compliant boot FAILed on a row that was never a
+# boot_complete. The #8211 lesson again: parse, never substring-match. A row jq cannot parse
+# fails closed: an unreadable row is not a row that complied.
+if ! _bc_rows="$(jq -c 'select(.stage == "boot_complete")' <<<"$bc_out" 2>&1)"; then
+  transient "TRANSIENT: the unbounded boot_complete query answered with a row jq cannot parse. No verdict —" \
+            "an unreadable row is not a row that complied." \
+            "$(printf '%s\n' "$_bc_rows" | tail -3)"
+fi
+# Counted on the SERVER's answer, not on the selection: the bound is a property of the read.
+_bc_n="$(grep -c . <<<"$bc_out" || true)"
+if [[ "${_bc_n:-0}" -ge "$_BC_LIMIT" ]]; then
+  echo "FAIL (Guard 2 bound): ${HOST_NAME} reported ${_bc_n} stage:boot_complete rows in this window — AT the ${_BC_LIMIT}-row bound of the query that reads them. Guard 2 requires EVERY boot_complete row to comply, and the rows past the bound are unread, so this run cannot say that they did. A single rehearsal boot emits one; this many is itself the anomaly."
+  echo
+  echo "NO EVIDENCE FILE WRITTEN."
+  exit 1
 fi
 
-_bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
-if grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"' <<<"$_bc_rows"; then
+if [[ -z "$_bc_rows" ]]; then
+  # THE EYEBALL INSTRUCTION IS GONE, NOT MOVED. This branch used to end by telling the reader
+  # to go and inspect Sentry for this host_name before concluding anything — an instruction to
+  # a human to go and look, which
+  # hr-no-dashboard-eyeball-pull-data-yourself forbids and which nobody could act on from a
+  # 7-day artifact anyway. transient() performs that consult itself and prints what it found.
+  transient "TRANSIENT: the source is live (the anchor answered) but ${HOST_NAME} has not reported" \
+            "stage:boot_complete within ${WINDOW}, and reported no fatal either. Either the boot is" \
+            "still in progress, or it died before reaching a stage that can emit to Better Stack at" \
+            "all. Since #7460 only \`stage:bootcmd_start\` is Sentry-only by construction; the other" \
+            "eight stages post to Better Stack from a baked token, so silence here means the host" \
+            "died before runcmd, the baked token did not load, the ingest POST failed, OR the POST" \
+            "SUCCEEDED AND THE ROW WAS NOT STORED (#7855: measured 2026-09-06 on this very source —" \
+            "a 2xx-acknowledged marker was never retrievable and the table still did not exist)." \
+            "The Sentry \`stage:betterstack_ingest\` row already consulted above reports the POST" \
+            "OUTCOME, which is the acknowledgement — so a clean row there does not exclude the" \
+            "fourth cause, and this run cannot distinguish it without a readback (#7855)."
+fi
+
+# (#8210) luks_reopen_unit joins the terminal set. Unlike its four siblings it is MEASURED
+# (systemctl is-enabled + Result=success on git-data-luks-reopen.service), so this arm CAN fire
+# against real telemetry — see the PASS wording below, which says so.
+#
+# (#8211) fence_on_mapper, erasure_probe and plaintext_empty join it, each MEASURED by the
+# bootstrap (the fence's findmnt SOURCE, a real erasure run as `git`, the read-only plaintext
+# count). The informational plaintext_volume and served_repos are not terminal: a non-zero
+# served_repos is already a bootstrap FATAL (luks_residue), which the fatal arm above reads.
+#
+# THE TERMINAL ROSTER IS DECLARED ONCE, HERE. The FALSE-assertion alternation and the presence
+# loop both derive from it, and git-data-emit.test.sh's consumer-roster guard reads THIS line
+# (anchored on `_TERMINAL=`), so a name added here without a producer change REDs that suite.
+_TERMINAL="luks_mounted repo_root hooks_path provision luks_reopen_unit fence_on_mapper erasure_probe plaintext_empty"
+_alt="${_TERMINAL// /|}"
+if grep -qE "\"(${_alt})\":\"no\"" <<<"$_bc_rows"; then
   echo "FAIL: ${HOST_NAME} reported boot_complete with a FALSE assertion — it reached its final stage with an invariant unmet, which is the dark boot the interlock exists to catch."
   printf '%s\n' "$_bc_rows" | head -5
   echo
   echo "NO EVIDENCE FILE WRITTEN."
+  exit 1
+fi
+# ABSENCE IS NOT A PASS. Review found the two readers of this contract disagreed: the poll
+# (git-data-boot-signal-poll.sh) requires each field PRESENT and "yes", while this arm rejected
+# only an explicit "no" — so a bootstrap edit that dropped the `luks_reopen_unit=` kwarg from the
+# emit would fail the poll and, here, print "all five assertions positive" and write
+# gate-releasing evidence over a boolean nobody measured. Same rule as the poll now.
+for _f in $_TERMINAL; do
+  if ! grep -q "\"${_f}\":\"yes\"" <<<"$_bc_rows"; then
+    echo "FAIL: ${HOST_NAME} reported boot_complete WITHOUT a ${_f}=yes assertion — the emit contract and this reader have drifted, or a measured invariant went unasserted. Not verified."
+    printf '%s\n' "$_bc_rows" | head -5
+    echo
+    echo "NO EVIDENCE FILE WRITTEN."
+    exit 1
+  fi
+done
+
+# (#5274, Guard 2) THE DIRTY-JOURNAL CASE MUST HAVE BEEN BOOTED. The rehearsal seeds a dirty
+# plaintext journal before the payload boots, and the payload itself measures and emits the
+# origin's journal state. So PASS requires EVERY boot_complete row in the window to read
+# plaintext_volume=present AND plaintext_journal=dirty, by exact match on the parsed field. "Every
+# row" is every row of BC_SQL, the unbounded boot_complete read, never the newest-50 HOST_SQL set:
+#   - `absent` means the rehearsal root rendered no volume id — a broken render, not a pass
+#     (the future wipe PR's rehearsal amends this rule in its own PR, as ADR-239 requires);
+#   - `clean` means the seed never dirtied the journal, OR (replace arm) boot #1 WROTE the
+#     volume it only ever read — either way the case this rehearsal exists to prove did not run;
+#   - a later `clean` row after a compliant `dirty` one is not outvoted by it.
+# Parsed with jq, never substring-matched (ClickHouse JSON escaping, the #8211 reboot-arm lesson);
+# a row jq cannot parse fails closed. A MISSING key reads `// empty` -> '' and is refused like any
+# other non-`dirty` value: absence is never defaulted to a compliant reading.
+_pt_bad=""
+while IFS= read -r _row; do
+  [[ -n "$_row" ]] || continue
+  _pv="$(jq -r '.plaintext_volume // empty' <<<"$_row" 2>/dev/null)" || _pv=""
+  _pj="$(jq -r '.plaintext_journal // empty' <<<"$_row" 2>/dev/null)" || _pj=""
+  [[ "$_pv" == present && "$_pj" == dirty ]] && continue
+  _pt_bad+="plaintext_volume='${_pv}' plaintext_journal='${_pj}'"$'\n'
+done <<<"$_bc_rows"
+if [[ -n "$_pt_bad" ]]; then
+  echo "FAIL: ${HOST_NAME} reported boot_complete WITHOUT plaintext_volume=present plaintext_journal=dirty on every row. The rehearsal exists to boot the payload against a DIRTY plaintext journal; a clean or absent one means that case never ran (or, on the replace arm, that boot #1 wrote the volume it may only read)."
+  printf '%s' "$_pt_bad" | head -5
+  echo
+  echo "NO EVIDENCE FILE WRITTEN."
+  exit 1
+fi
+
+# ── THE PASS PATH CONSULTS SENTRY TOO (#7481 §4.5b) ────────────────────────────────
+#
+# THE GAP THIS CLOSES IS THE WORST ONE IN THE ROUTE, and it is not a TRANSIENT-path gap.
+# Every no-verdict branch above funnels through transient(), which consults Sentry. This
+# branch does not reach transient() at all: Better Stack said boot_complete with no fatal and
+# no false assertion, so without a cross-check the route WRITES gate-releasing evidence.
+#
+# A host can satisfy that and still have emitted a fatal. Everything before `doppler run`
+# reaches Sentry ONLY, so a host that died at an early stage, was retried by cloud-init, and
+# later reached boot_complete produces exactly this shape: a clean Better Stack record and a
+# fatal only Sentry holds. The artifact would read RUNG2_BOOT_REHEARSAL=PASS — the file whose
+# presence releases the binding mechanical hold on the birth of the host that will store every
+# connected user's source code.
+#
+# PRECEDENCE IS EXPLICIT: a fatal on EITHER channel beats a clean read on the other. An
+# UNAVAILABLE second channel does NOT block the PASS — it is reported and the Better Stack
+# verdict stands, because refusing to pass on an unreadable second channel would make a Sentry
+# scope problem cost a paid host for no safety gain. That asymmetry is deliberate and is the
+# one place this route prefers the weaker guarantee; it is stated rather than left implicit.
+echo "Cross-checking the second channel before writing evidence (a fatal on either channel beats a clean read on the other):"
+_sentry_consult
+if [[ "$_SENTRY_VERDICT" == "FATAL" ]]; then
+  echo
+  echo "FAIL (Sentry-derived, on an otherwise-PASSing Better Stack read): ${HOST_NAME} reached"
+  echo "stage:boot_complete with no Better Stack fatal, but Sentry holds a level:fatal for this"
+  echo "host in the same window. Since #7460 the early stages DO reach Better Stack, so a Sentry"
+  echo "fatal with no Better Stack fatal means one of: the bootcmd beacon (Sentry-only by"
+  echo "construction), a baked token that did not load, or an ingest POST that failed — the last"
+  echo "two are themselves reported at \`stage:betterstack_ingest\`."
+  echo
+  echo "NO EVIDENCE FILE WRITTEN — deliberately. Writing PASS here would release the git-data"
+  echo "birth hold on a boot that failed."
+  echo "**Next:** fix the cause named above, then re-run the rehearsal."
   exit 1
 fi
 
@@ -311,8 +1361,22 @@ fi
 # this script writes and the gate later reads.
 # shellcheck source=/dev/null
 source "$GATE_LIB"
+# THE EXIT CODE STAYS 2; THE LABEL DOES NOT. The 0/1/2 verdict contract is consumed by the
+# rehearsal workflow and no consumer greps this literal, so re-labelling is safe — and it is
+# necessary, because a derivation fault is the one rc=2 arm that is NOT transient. It is a
+# deterministic repo-side condition: the module's payload set or its render inputs are
+# unresolvable, and the identical failure reproduces on every attempt. Calling it TRANSIENT
+# told the reader to wait, and the workflow duly re-ran it ~20 times over ~10 minutes of a
+# paid host before reporting "do not simply re-dispatch" (#7485).
+#
+# That retry loop is the workflow's, not this script's, and changing a paid-host dispatch's
+# retry semantics is scoped out here (§Non-Goals) — so the honest move is to stop the message
+# implying the wait is worth anything.
+#
+# REACHES THE STEP LOG AND THE capture-log ARTIFACT, NOT $GITHUB_STEP_SUMMARY: that workflow
+# hardcodes its own rc=2 summary text, which this change does not edit.
 if ! TEMPLATE_SHA="$(git_data_rung2_user_data_sha256 "$CLOUD_INIT")"; then
-  echo "TRANSIENT: could not derive the user_data hash, so there is nothing to bind evidence to."
+  echo "DERIVATION FAULT (deterministic, NOT transient): could not derive the user_data hash from ${CLOUD_INIT}, so there is nothing to bind evidence to. The render inputs or the module's payload set are unresolvable in THIS TREE — re-dispatching reproduces it identically, so do not wait for it to clear. The fail-closed diagnostic below names the offending file."
   printf '%s\n' "$TEMPLATE_SHA"
   exit 2
 fi
@@ -326,13 +1390,31 @@ fi
 #
 # So the dispatcher declares it and this script refuses to invent one. `none` is the
 # explicit no-divergence declaration; the gate refuses an absent or duplicated key.
+# (#5274) REPLACE MODE appends to capture #1's file and writes nothing else. Its verdict ran
+# above in full — the fatal arms, the terminal booleans, Guard 2, and the Sentry cross-check over
+# the window stamped before the replace.
+if [[ -n "$REPLACE_SINCE" ]]; then
+  assert_fixture_dir "$OUT"
+  {
+    printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+    printf '# QUERY_BOOT_COMPLETE:%s\n' "$(printf '%s' "$BC_SQL" | tr '\n' ' ' | tr -s ' ')"
+    printf '# QUERY: sentry-issue.sh --host-events %s %s\n' "$HOST_NAME" "$(_sentry_window_args | tr '\n' ' ')"
+    printf '# SCOPE: the replace arm (boot #2, adopted LUKS) over the window from %s.\n' "$REPLACE_SINCE"
+    printf 'RUNG2_REPLACE_BOOT=PASS\n'
+    printf 'RUNG2_REPLACE_SENTRY_CROSSCHECK=%s\n' "${_SENTRY_VERDICT:-NOT_RUN}"
+  } >> "$OUT"
+  echo "PASS (replace arm): ${HOST_NAME} boot #2 reached boot_complete after the replace at ${REPLACE_SINCE}, with ${_TERMINAL} all yes, plaintext_volume=present plaintext_journal=dirty, and no fatal (Sentry ${_SENTRY_VERDICT:-NOT_RUN})."
+  echo "Appended RUNG2_REPLACE_BOOT to ${OUT}."
+  exit 0
+fi
+
 if [[ -z "$DIVERGENCE" ]]; then
   echo "refusing: --divergence is required. It records which templatefile ARGUMENTS the rehearsal diverged from production on — the axis the evidence hash does NOT bind. Pass the identity-shaped set the rehearsal root actually diverges on, or 'none'. This script reads Better Stack, not terraform state, so it cannot derive it; echoing the gate's own allowlist back (which it used to do) makes the check allowlist-subset-of-allowlist and refuses nothing." >&2
   exit 64
 fi
 
 if [[ "$VERIFY_ONLY" -eq 1 ]]; then
-  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with all four assertions positive, and no fatal. NO evidence file written."
+  echo "PASS (--verify-only): ${HOST_NAME} reported stage:boot_complete with every terminal assertion (${_TERMINAL}) positive, and no fatal. NO evidence file written."
   exit 0
 fi
 
@@ -340,6 +1422,20 @@ fi
 # question behind it is unreproducible: the next reader cannot distinguish a real observation
 # from a typo in a WHERE clause, and this file's whole job is to be checkable by someone who
 # was not here.
+#
+# (#8010 item 1) …and with the TABLE PAIR the queries ran against. Pasting a recorded query
+# into betterstack-query.sh with no BS_TABLE exported returns rc=0 and zero rows from the
+# inngest DEFAULT table — "dark boot" over a perfectly good birth. The S3 sibling comes from
+# the exported pair above; when a caller pinned BS_TABLE alone it is whatever
+# betterstack-query.sh derived, which this file cannot see, so it is recorded as such.
+_bs_s3="${BS_TABLE_S3:-<derived by betterstack-query.sh>}"
+# Local identifier guard: betterstack-query.sh already refuses non-identifiers, but the suite
+# stubs that script, so this line — which writes into a COMMITTED file — must not rely on it.
+# exit 64, not 2: a bad name is a fixed input error, and the rehearsal workflow retries rc=2.
+case "${BS_TABLE}${BS_TABLE_S3:-}" in *[!A-Za-z0-9_]*)
+  printf 'FATAL: refusing to record a non-identifier table name in the evidence file\n' >&2; exit 64 ;;
+esac
+assert_fixture_dir "$OUT"
 {
   printf '# rung-2 boot rehearsal evidence — generated by scripts/followthroughs/git-data-rung2-evidence-capture.sh (#7025)\n'
   printf '#\n'
@@ -350,6 +1446,7 @@ fi
   printf '#\n'
   printf '# Rehearsal host : %s\n' "$HOST_NAME"
   printf '# Captured (UTC) : %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '# TABLE: BS_TABLE=%s BS_TABLE_S3=%s\n' "$BS_TABLE" "$_bs_s3"
   printf '#\n'
   printf '# WHAT THE HASH BINDS: the cloud-init template plus every file()-bound payload in\n'
   printf '# modules/git-data-userdata/main.tf. It does NOT bind the templatefile ARGUMENTS, so\n'
@@ -364,7 +1461,45 @@ fi
   printf '# ARTIFACT 2 — every stage this host reported, and ARTIFACT 3 — the fatal/false-assertion\n'
   printf '# arms, both read from this one result set.\n'
   printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+  # The fatal arm is a SEPARATE query, so the evidence records both or it under-states what
+  # was actually asked. An auditor reading only the windowed query would conclude the verdict
+  # was window-bounded, which since #7460 it is not.
+  printf '# QUERY_FATAL:%s\n' "$(printf '%s' "$FATAL_SQL" | tr '\n' ' ' | tr -s ' ')"
+  # (#5274) …and the boot_complete read the terminal booleans and Guard 2 were decided on.
+  printf '# QUERY_BOOT_COMPLETE:%s\n' "$(printf '%s' "$BC_SQL" | tr '\n' ' ' | tr -s ' ')"
   printf '#\n'
+  # THE SECOND CHANNEL'S VERDICT IS PART OF THE EVIDENCE, not just of the log.
+  #
+  # Without this line a PASS cross-checked CLEAN and a PASS whose cross-check was SKIPPED or
+  # UNAVAILABLE are BYTE-IDENTICAL in the file that releases the birth hold — which is the
+  # defect class this whole route exists to remove, one level up. It is worse than it sounds:
+  # the capture-log artifact is uploaded only when `capture_rc != '0'`, so on a PASS the
+  # `second channel:` line is discarded exactly where it is the sole record that the
+  # cross-check ran at all. The human at the second gate merges THIS file, so the verdict
+  # has to survive into it.
+  #
+  # Recorded here, ENFORCED downstream: this capture still exits 0 on an UNAVAILABLE second
+  # channel (see the precedence note above), but git_data_rung2_rehearsal_gate no longer does
+  # — so the line below is what the reviewer reads AND what the gate reads.
+  printf '# ARTIFACT 4 — the Sentry cross-check, run before this file was written.\n'
+  printf '# CLEAN = the fatal read returned zero rows AND the liveness anchor confirmed the\n'
+  printf '# source is answering. UNAVAILABLE = the read RAN and could not be trusted (refused,\n'
+  printf '# unparseable, or zero rows from a source that could not be shown to be answering);\n'
+  printf '# NOT_RUN = it never ran at all (no jq, no SENTRY_ISSUE_RO_TOKEN, no reader).\n'
+  printf '# UNAVAILABLE now HOLDS git_data_rung2_rehearsal_gate unless a human appends\n'
+  printf '# RUNG2_SENTRY_CROSSCHECK_ACK=<this run id>:<why the second channel may be skipped>;\n'
+  printf '# NOT_RUN is refused outright and no acknowledgement rescues it.\n'
+  # BOTH READS ARE RECORDED, because they ask different questions over different windows and
+  # an evidence file that records only one under-states what was actually asked.
+  printf '# QUERY: sentry-issue.sh --host-events %s %s\n' "$HOST_NAME" "$(_sentry_window_args | tr '\n' ' ')"
+  printf '# QUERY: sentry-issue.sh --liveness %s --stats-period 24h\n' "$HOST_NAME"
+  # SCOPE, STATED RATHER THAN ASSUMED (#8010 item 6). `--reboot-since` re-runs the consult but
+  # appends only the RUNG2_REBOOT_REOPEN* keys, so the verdict recorded here describes the
+  # PRE-RESET window only. A reader who assumes it covers the whole run would read a
+  # post-reset Sentry degrade as having been cross-checked when it was not.
+  printf '# SCOPE: this verdict covers the PRE-RESET window only. The reboot arm below (if\n'
+  printf '# present) re-runs the cross-check but records only RUNG2_REBOOT_REOPEN*.\n'
+  printf 'RUNG2_SENTRY_CROSSCHECK=%s\n' "${_SENTRY_VERDICT:-NOT_RUN}"
   printf 'RUNG2_BOOT_REHEARSAL=PASS\n'
   printf 'RUNG2_EVIDENCE_URL=%s\n' "$EVIDENCE_URL"
   printf 'RUNG2_TEMPLATE_SHA256=%s\n' "$TEMPLATE_SHA"
@@ -376,7 +1511,7 @@ fi
 # literals, so the `"…":"no"` arm can never fire against real telemetry. The real
 # predicate is the one below. The overstatement mattered because it landed in the file a
 # human reads at the second of the two intentional gates — the compensating control.
-echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal. NOTE: boot_complete's four booleans are hardcoded literals in git-data-bootstrap.sh, so this attests that the final stage was REACHED and that nothing reported a fatal — not that four invariants were independently measured."
+echo "PASS: ${HOST_NAME} reported stage:boot_complete with ${_TERMINAL} all yes and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: where git-data-bootstrap.sh emits a boolean as a literal, this attests only that the final stage was REACHED and that nothing reported a fatal. luks_reopen_unit (#8210), fence_on_mapper, erasure_probe and plaintext_empty (#8211) are MEASURED, so a 'no' on any of them would have failed this run."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

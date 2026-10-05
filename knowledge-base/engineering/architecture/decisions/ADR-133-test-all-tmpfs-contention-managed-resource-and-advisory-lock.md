@@ -2,9 +2,15 @@
 title: The local test runner treats the shared tmpfs as a managed resource and serialises worktrees via an advisory lock
 status: active
 date: 2026-07-22
+amended-by: ADR-250
 ---
 
 # ADR-133: `test-all.sh` — managed tmpfs + advisory cross-worktree lock
+
+> **Amended by ADR-250 (2026-09-24, #7004):** scratch reclamation moved from
+> name heuristics to ownership keys (`soleur-run.<pid>.*` roots +
+> `.soleur-owned` markers). Reaper 2 stays `/tmp`-only; Reaper 3 and the
+> session-start sweep reclaim dead-owner roots on `/tmp` AND `/var/tmp`.
 
 ## Context
 
@@ -31,7 +37,8 @@ implicated suites' documented timeout-flake class fires.
    is observe-only (creates no files, takes no locks, deletes nothing). It prints
    a contention preamble (`/tmp` + runtime-dir headroom, sibling `test-all.sh`
    runs resolved to their worktrees via `/proc/<pid>/cwd`, machine load) and
-   named banners (`LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED`) so a contended run
+   named banners (`LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED`, joined by
+   `SIBLING_SUITE_DETECTED` in #7424) so a contended run
    is self-identifying and a false RED is never again diagnosed as a regression.
    A per-suite `/tmp` entry-count delta, appended to the existing
    `TEST_TIMING_LOG` channel, is the probe for a residual shared-tempfile
@@ -98,3 +105,498 @@ implicated suites' documented timeout-flake class fires.
   it replaces.
 - No product runtime surface, user data, or tenant boundary is touched; this is
   local developer tooling on the operator's own machine.
+
+## Addendum — 2026-08-10 (#7376): scope of the "capacity, not a colliding path" verdict
+
+<!-- lint-infra-ignore start: describes a PAST measurement's environment (which machine and mount ADR-133's original verdict was taken on), not a step anyone is being asked to perform. The actor+environment co-occurrence is what the linter keys on; there is no imperative here. -->
+This ADR's verdict — that the observed flakiness was **capacity**, not a colliding path —
+was measured on one specific machine and mount: a **RAM-backed 4 GiB `/tmp`** at 86% full
+with swap exhausted, on the operator's workstation, under **cross-worktree** overlap.
+<!-- lint-infra-ignore end -->
+
+It does **not** transfer to `apps/web-platform/infra/run-registered-suites.sh` running on a
+4-vCPU **hosted GitHub runner** against disk-backed `/var/tmp`, as a **single** run. Those
+differ on every variable the verdict rests on.
+
+The distinction is load-bearing because this ADR is the obvious thing to cite when the next
+parallel-runner flake appears, and citing it as *evidence* about a different machine would
+close the investigation on a measurement that was never taken there. Its **method** — probe
+before committing to a mechanism, and let a measurement rather than an argument settle it —
+transfers completely. Its **conclusion** is a prior, not evidence.
+
+Recorded because #7376 was, in fact, a colliding path in part: `run-registered-suites.test.sh`
+is itself a registered suite, and it created and deleted a fixture inside the live
+`apps/web-platform/infra/` directory while `credential-persist-home-guard.test.sh` was
+copying that directory and diffing the copy against the still-live source. Under this ADR's
+verdict alone, that class would not have been looked for.
+
+### Two departures from this ADR's decisions, recorded rather than left implicit
+
+**Decision 1's "observe-only" clause does not hold for #7376's instrument.** ADR-133 specifies
+instrumentation that "creates no files, takes no locks, deletes nothing." The per-suite capture
+in `run-registered-suites.sh` creates a directory plus two files per suite (186 files for
+today's 93) and removes that directory on a green run.
+
+That matters beyond bookkeeping: **an instrument that is not observe-only is a confound for the
+hypothesis it exists to measure.** Converting 93 suites' output from `/dev/null` to 186 file
+writes adds I/O at exactly the contended moment H2 (capacity) is about. So a post-fix green loop
+is partly an observer effect unless the baseline was run *with the instrument present*, and any
+future investigator comparing runs across that boundary is comparing two different systems.
+
+**Decision 1's "instrumentation ships ahead of every fix" ordering also does not hold.** The
+load-bearing property that rule protects is *no fix commits to an unmeasured mechanism* — both
+hypotheses this ADR recorded were refuted by measurement after being committed to in prose.
+#7376 honours the property while departing from the ordering: the two fixes it ships are provable
+**by reading** (a registered suite mutating the live tree that a sibling diffs against; an
+`exit 0` on `PASS + RED != count`), and the fix that *would* have needed measurement — the
+capacity arm — is explicitly declined. H2 (capacity) and H4 (polling deadline) remain UNKNOWN on
+the hosted runner as of #7376; the collision finding above is a partial cause, not a refutation
+of the others.
+
+**Decision 2's "managed, reaped resource" needed the producer's help.** `scripts/tmpfs-guard.sh`
+scopes to `/tmp` while this runner exports `TMPDIR=/var/tmp`, and this ADR explicitly rejected
+count-based reaping — so retained `infra-suites.*` dirs were unreapable by construction and grew
+to 414 dirs / 23 MB on the author's workstation before anyone looked. The runner now age-reaps
+its own older siblings at startup and reaps the current dir from its `EXIT` trap, mirroring the
+`meta_dir` precedent this ADR set for `skill-security-scan`.
+
+## Addendum — 2026-08-11: the bytes were finally measured, and the lock stays
+
+A post-mortem of a ~45-minute full-gate run proposed replacing Decision 3's advisory mutex with
+**admission control on actual `/tmp` headroom**. This addendum records the measurement that
+proposal asked for, and the verdict. **Decision 3 is unchanged; `status:` stays `active`.**
+Nothing above is edited — this appends.
+
+### Why a new instrument was needed
+
+This ADR's capacity verdict is about **bytes** — it rejected count-based reaping precisely because
+"4,294 small entries held 160 MB (4.5%) while three trees held 3.1 GiB (88%)". But the per-suite
+probe shipped to observe contention records `tmp_delta=<ENTRY COUNT>`. The quantity this decision
+exists to protect had never been measured by the instrument built to measure it.
+
+`scripts/lib/test-contention.sh` now carries `tc_used_bytes`, reading `df -P -k` field 3
+**per mount**, sampled at run boundaries into `TEST_TIMING_LOG` as `bytes_tmp=` / `bytes_tmpdir=`.
+
+`df`, not `du`, and this is not a style preference: measured on the author's workstation,
+`du -sk /tmp` took **2.15 s** and `du -sk /var/tmp` **did not finish in 115 s**. At the per-suite
+hook originally specified that is ~578 recursive walks per mount — an unbounded observer effect on
+the very run being instrumented, and the same objection that got a background sampler rejected.
+
+### The measurement (2026-08-11, one full-gate run, `SOLEUR_TEST_FORCE_ALL=1`)
+
+| Mount | Start | End | Delta |
+|---|---:|---:|---:|
+| `/tmp` (`TC_TMPDIR`, the 4 GiB tmpfs) | 3,553,042,432 B (3.31 GiB, **83%** used) | 3,810,562,048 B (3.55 GiB, **89%** used) | **+245.6 MiB** |
+| `/var/tmp` (`TMPDIR`, disk-backed) | 378,100,240,384 B (352.1 GiB) | 377,556,484,096 B (351.6 GiB) | −518.6 MiB |
+
+**Both figures are quoted deliberately.** One directory alone is incomplete by this addendum's own
+reject condition: the two are different mounts on purpose, and a single number spanning them would
+report health from whichever is roomier — indistinguishable from a healthy mount.
+
+### What the numbers do and do not license
+
+**The premise still holds.** ADR-133 described "a machine-global RAM-backed 4 GiB `/tmp` at 86%
+full". Measured a month later: **83% at run start, 89% at run end**, with available headroom
+dipping to **699 MB — below the runner's own 1024 MB floor**, firing `LOW_TMP_HEADROOM`. This is
+not a historical condition that the `TMPDIR=/var/tmp` migration retired.
+
+**The delta is an upper bound, not an attribution.** Three sibling `test-all.sh` runs were active
+for part of this run (`SIBLING_RUN_DETECTED` fired, naming all three). The +245.6 MiB on `/tmp` is
+the mount's movement, not this run's footprint, and cannot be split without a single-runner
+baseline this budget did not buy.
+
+**A near-zero `/tmp` delta would NOT have meant "no pressure, drop the lock."** It would have meant
+the `TMPDIR=/var/tmp` mitigation works — which is a different claim, and the one this reading
+actually supports. The mount still sat at 83–89% throughout, so the capacity hazard is live.
+
+### The sharper finding: the lock is not currently serialising anything
+
+The run queued on `tc_acquire` for the **full 900 s `TC_LOCK_TIMEOUT`** and then proceeded, while
+**three sibling runs executed concurrently** — 3,775 s, 5,787 s and 5,763 s elapsed at the moment
+of the probe, against a ~45-minute uncontended baseline. Because the lock is advisory and proceeds
+on timeout, it is charging every session up to 15 minutes of delay while delivering no isolation.
+
+That reframes the open question. It is not "mutex versus admission control"; it is **why a mutex
+that proceeds on timeout is being relied on as a mutex**. Raising `TC_LOCK_TIMEOUT`, or making
+acquisition blocking with a documented escape, are candidates the original Alternatives never
+considered because the failure mode had not been observed.
+
+### Verdict: keep the lock
+
+The decision rule was fixed before the data arrived, so the data decides rather than the author.
+The measurement does not clear the bar, and two mechanism-level objections survive any amount of
+measurement:
+
+- **TOCTOU.** Admission control is a point-in-time prediction about a 15-minute future. Two runners
+  both sample abundant headroom, both admit, both allocate. Fixing that needs a reservation — the
+  mutex again.
+- **Non-monotonic degradation.** The mutex degrades to *slow*. Admission control degrades to
+  ENOSPC mid-suite, producing a RED that reads as a code regression — the same
+  "signal that is not evidence" harm this ADR exists to prevent, inverted.
+
+**The evidence bar that was NOT met** (recorded so the next session inherits data rather than an
+argument): an in-suite sampler at <= 2 s resolution; >= 3 single-runner runs for variance; >= 2 runs
+at N=2 and >= 1 at N=3 with the lock disabled via `SOLEUR_DISABLE_SESSION_STATE=1`; a re-verified
+filesystem premise (done — 83%, above); and one adversarial run starting the top-3 consumers
+simultaneously. One run measures the *uncontended* case while the lock protects the *contended*
+one, so n=1 clears no honest bar for replacing a mutex. Tracked at #7454 item 3.
+
+The named follow-up candidate is a headroom **bypass on top of** the mutex, not a replacement.
+
+## Addendum — 2026-08-12 (#7484): the wait is now measured, not asserted
+
+The addendum above rests on an observation — "the run queued for the **full 900 s**" — that the
+instrument of the day could not actually produce. `tc_acquire` printed
+`LOCK_CONTENDED_PROCEEDING: '<name>' still held after ${timeout_s}s` unconditionally on every
+non-zero return from `acquire_lock`, so the duration in that line was the *budget it was handed*,
+never the time it waited. The 900 s figure was recovered by other means; the banner would have
+printed it either way.
+
+Worse, `acquire_lock` returns the same `99` for "waited the whole budget" and for
+"`flock(1)` is not installed" — so a run that never waited at all reported as contention, and then
+stated a duration for a wait that had not happened. `work/SKILL.md` instructs an agent to grep that
+line to decide whether a RED is trustworthy, which made the false statement load-bearing.
+
+**What changed** (confined to `scripts/lib/test-contention.sh`; `test-all.sh` and
+`session-state.sh` are untouched):
+
+- Both post-wait banners now report the elapsed **measured** across the `acquire_lock` call —
+  `LOCK_ACQUIRED: '<name>' after <N>ms` and
+  `LOCK_CONTENDED_PROCEEDING: '<name>' — gave up after <N>ms of <timeout_s>s`. Where timing is
+  unavailable the banner prints `unknown`, never a fabricated `0ms`: a zero is indistinguishable
+  from a lock that was free, which would re-introduce the same defect one branch over.
+- The **dominant** `rc=99` source is removed by a `command -v flock` precheck emitting the existing
+  `LOCK_UNAVAILABLE`. This is exact where an elapsed-time threshold would be approximate, and it
+  needs no new outcome name — a missing `flock` is the same class as the two `LOCK_UNAVAILABLE`
+  cases already there: the serialization layer is absent.
+
+  **It removes one of three, and the residue is recorded rather than implied.** `_acquire_lock_impl`
+  returns `99` from three places: the `flock` precondition (now precluded), the `exec {fd}>>` open of
+  the lock file, and the genuine `flock -w` timeout. An unwritable lock directory therefore still
+  reports `LOCK_CONTENDED_PROCEEDING` — measured on this branch as
+  `gave up after 5ms of 900s`. That is a **non-timeout failure still classified as a timeout**, so
+  the second half of the Guard Contract's property is enforced for one cause rather than all of
+  them. What changed is that the case is now self-diagnosing: 5 ms against a 900 s budget is legible
+  as a precondition failure, where the previous text printed the identical flat lie
+  `still held after 900s` whether or not anything was ever held. Classifying the residue by an
+  elapsed threshold was considered and rejected — approximate where `command -v` is exact — and
+  closing it properly means reaching into `session-state.sh`'s internals, which is a separate change.
+- `LOCK_WAITING` is emitted after every skip path, so its presence is a fact about control flow
+  ("this run reached the wait") and a long block reads as a queue rather than a hang.
+- Both banner **tokens** are byte-identical. Only post-colon text moved, so this ADR's own
+  vocabulary, `work/SKILL.md`'s contention grep and the existing arms all still match.
+
+Every `tc_acquire` exit path still returns `0` — Decision 3's fail-open contract, since an instrument
+that could wedge the run it observes would violate the contract it exists to serve.
+
+**A structural assertion of that contract is not sufficient, and this change is the demonstration.**
+The first cut asserted it by grepping the function body: every `return` is a `return 0`. That check
+passed while the function could still **abort without returning at all** — `test-all.sh` sources this
+lib under `set -euo pipefail`, so the bare `$EPOCHREALTIME` reads the measurement introduced were an
+unbound-variable abort on any shell lacking the variable. It also made the `unknown` branch
+unreachable on precisely the platform it was written for: the abort happens at the read, before the
+guard is entered. Both are fixed (`${EPOCHREALTIME:-}` at every read) and the contract is now asserted
+**behaviourally** as well — an arm that de-specialises `EPOCHREALTIME` under `set -euo pipefail` and
+requires a `0` return plus the honest `unknown` token. The general form, worth carrying forward: a
+grep over exit statements cannot see an exit that is not a statement.
+
+**First two readings from the instrument** (2026-08-12, this repo, real runs on the ship path):
+
+| Run | Banner | Outcome |
+|---|---|---|
+| queued behind 2 sibling worktrees | `LOCK_CONTENDED_PROCEEDING: 'test-all' — gave up after 899122ms of 900s` | abandoned at budget |
+| lock free | `LOCK_ACQUIRED: 'test-all' after 12ms` | uncontended floor |
+| queued behind 2 sibling worktrees | `LOCK_ACQUIRED: 'test-all' after 616310ms` | **redeemed at 616 s** |
+
+The first independently reproduces this ADR's 2026-08-11 "waited the full 900 s" figure — which the
+banner of the day could not have produced, since it printed the budget whether or not a wait
+occurred. The second is the uncontended floor.
+
+**The third is the one the instrument was built for, and it is the first of its kind in this repo.**
+It is an *uncensored* observation of a redeemed wait: the run queued, waited **616 s**, and then
+acquired — it was not truncated at the budget. So the plan's honest question ("does the wait ever
+pay off, and what is the longest wait that was redeemed?") now has a first answer: **yes, and at
+least 616 s.** Before this change that run and the 12 ms run printed the identical
+`LOCK_ACQUIRED: 'test-all'` line with no duration, so the two were indistinguishable and this datum
+did not exist.
+
+Its immediate consequence is negative, which is why it is worth recording: a `TC_LOCK_TIMEOUT`
+lowered to any value under ~620 s would have converted this run from *serialized* into *interleaved*.
+The option the measurement most directly supports is therefore **not** the one a censored reading
+suggested. That is a single observation, not a distribution, and it does not license a mechanism
+change on its own — but it is the first evidence that the budget's current value is doing work
+rather than merely being waited out.
+
+**What this does NOT settle.** Contended observations are **right-censored** at the fixed budget, so
+they cannot answer "would a longer wait have succeeded?" — and the short-circuit-on-holder-age
+candidate is parameterised by the *holder's* remaining run, while every duration here is the
+*waiter's*. The mechanism question the addendum above opened therefore remains open on the same
+terms; this change makes the waiter's side of it a measured quantity rather than an inferred one.
+
+## Addendum — 2026-08-19 (#7545): the readings became an answer, and the budget was raised above the hold time
+
+Appended, not edited: the citation-by-date convention `principles-register.md` relies on (ADR-181
+§8). No new ordinal is claimed — what lands here is the instrumentation Decision 1 already mandates
+plus a tuning of Decision 3's own parameter.
+
+### What shipped
+
+1. **A named capacity verdict**, emitted between `tc_preamble` and `tc_acquire`:
+   `CAPACITY_OK` / `CAPACITY_CONTENDED reason=<sibling_runs|low_tmp>` /
+   `CAPACITY_UNKNOWN reason=<unreadable_proc|unparseable_df|unparseable_meminfo|lib_unavailable>`.
+   Every line carries **the measured value and the threshold**, so a reader can judge rather than
+   obey.
+2. **`bash scripts/test-all.sh --capacity`** — a read-only query printing that verdict plus the
+   per-sibling pid/worktree/elapsed detail, taking no lock, running no suite, exiting 0. Modelled on
+   the `--print-suite-globs` early-exit, whose comment already records why such a path must not
+   block on `tc_acquire`.
+3. **`TC_LOCK_TIMEOUT` 900 → 3600**, plus `TC_WAIT_HEARTBEAT_S` (default 60) and a re-sampled
+   sibling count in the `LOCK_CONTENDED_PROCEEDING` banner.
+4. **A diff-justification report** naming which `TEST_GROUP` shards the run's diff touches.
+
+### Why the budget was raised, and why that is tuning rather than a mechanism change
+
+**900 s was shorter than the thing it waits for.** This ADR's own 2026-08-11 addendum records the
+uncontended full gate at a **~45-minute (~2700 s) baseline**. A budget at roughly a third of that
+cannot serialize two full gates: it expires by construction, `LOCK_CONTENDED_PROCEEDING` fires, and every queued run proceeds
+at once. **That is the mechanism behind six concurrent runs landing on one 16-core box — not the
+absence of a lock.** #7545 reproduced it with an agent that had full context on the failure class
+and still launched two shards onto a box already running two.
+
+The licence is recorded in this file: the 2026-08-11 addendum names **"Raising `TC_LOCK_TIMEOUT`,
+or making acquisition blocking with a documented escape"** as *"candidates the original Alternatives
+never considered"*. That is what distinguishes the raise from **"Make the lock blocking (abort on
+timeout)"**, which `## Alternatives Considered` REJECTS. Decision 3's load-bearing property is
+preserved verbatim: on expiry the lock still **proceeds and never aborts**.
+
+**Two corrections to how an earlier draft argued this.** (a) The 2026-08-11 figures of
+3,775 / 5,787 / 5,763 s were described here as "observed sibling holds". They are not — that
+addendum records those runs as executing *concurrently*, the figures being elapsed-at-probe-time,
+and at most one of them held the lock. (b) Citing them as hold times made the argument
+self-defeating: "a budget below the hold time cannot serialize" condemns 3600 just as readily
+against 5,787. The honest claim is narrower. **3600 is a bounded improvement over 900, sized above
+the recorded ~2700 s uncontended baseline; it is not a value proven sufficient for the contended
+tail** — and a future tuner should not inherit an argument that proves more than the data does.
+
+**Source of the 2700 s figure.** ADR-133's recorded baseline, not a fresh measurement. A fresh
+uncontended reading was not obtainable in-session: the box carried load 43.67 with two live sibling
+`test-all.sh` runs at the time of implementation — i.e. exactly the condition this change exists to
+report — and taking one would have meant launching a seventh full gate onto a contended machine to
+measure contention. 3600 > 2700 with headroom, and the value stays env-tunable for a constrained
+harness.
+
+### Measured on the first real use: 941 s, and the old budget would have missed it
+
+The `/work` exit gate for this very PR ran while **four** sibling worktrees were running the runner,
+and produced the second recorded redeemed wait:
+
+```
+[contention] CAPACITY_CONTENDED reason=sibling_runs measured_siblings=4 sibling_threshold=1 tmp_avail_mb=3470 tmp_floor_mb=1024
+[contention] LOCK_WAITING: 'test-all' — waiting up to 3600s for the advisory lock.
+[contention] LOCK_ACQUIRED: 'test-all' after 941047ms (worktrees of this repo serialize on it).
+```
+
+**941 s against the old 900 s budget** — it would have expired 41 seconds short and fired
+`LOCK_CONTENDED_PROCEEDING`. State that precisely: what the raise bought **on this observation** is
+~41 s of avoided overlap with the one run actually holding the lock. The other three siblings were
+already interleaved and would have been under either budget, so this is not evidence of a prevented
+fifth *sustained* concurrent gate — an earlier draft of this addendum claimed exactly that and
+overstated the datum. What it does establish is that a redeemed wait sat just above the old budget,
+the same shape the 2026-08-12 addendum recorded when it noted a budget below ~620 s would have
+converted THAT run from serialized to interleaved. Two independent observations, one bounded
+conclusion.
+
+Fourteen heartbeats fired across the wait — and that count is itself a finding. At an exact 60 s
+interval a 941 s wait yields fifteen beats ending at 900 s; the run recorded fourteen ending at
+`waited=840s`. The discrepancy was the instrument, not the machine: each beat also ran a ~6.6 s
+`/proc` walk the counter never counted, so reported elapsed drifted ~11% low and the self-terminate
+that bounds orphan lifetime overshot to ~4000 s on a 3600 s budget. Both are fixed — elapsed is read
+from `EPOCHSECONDS`, and the beat no longer walks `/proc` at all.
+
+**The cost this raises, stated plainly:** an *accidental* lock acquisition on a fast path is now an
+hour-long hang rather than a fifteen-minute one. That is why `--capacity`'s side-effect freedom is
+pinned by a mutation row rather than left to review — and that row (M12) reddens by **timeout**
+rather than by assertion, because the mutated `--capacity` queued behind the live holders exactly as
+the `--print-suite-globs` comment warns a lock-blocking fast path would.
+
+### Why a longer wait needed the heartbeat in the same change
+
+A raised budget makes the SILENCE longer, and a silent multi-minute block is indistinguishable from
+a hang — which is what produces hand-kills and hand-queueing. `LOCK_WAIT_HEARTBEAT` names the lock
+and this run's **measured** elapsed at the interval.
+
+**It deliberately does not name a holder.** A first draft did, taken from `head -1` of a `/proc`
+walk — whichever sibling the glob enumerated first, with no relationship to lock ownership. Measured
+during review: the reported pid changed on every beat and was `unknown` on 2 of 9, and on a six-run
+pileup five of six candidates are fellow *waiters*, so it named a waiter ~83% of the time while the
+skill docs told the operator to read it before killing something. It also cost ~313 CPU-seconds and
+~154,000 process creations per waiting run — a diagnostic that participates in the fork-starvation
+incident it narrates. `--capacity` answers "who is running" on demand in ~3 s; the beat answers only
+what it can know. The contended banner additionally **re-samples** the sibling
+count, which after a full budget would otherwise report a reading up to an hour stale.
+
+One implementation hazard is worth recording because it is invisible on the happy path: **`grep -c`
+exits 1 on a zero count**, so the re-sample must carry the trailing `|| true` that `tc_preamble`'s
+identical counting idiom already carries. Without it the assignment returns 1, `set -e` aborts
+`tc_acquire` mid-function, and because `tc_acquire "test-all"` is a bare top-level command the whole
+run dies with no summary, no rc file and no `[FAIL]` line — on the single most common post-wait
+state, since zero siblings is *why* the lock was released.
+
+### Why the pre-launch DECLINE was cut
+
+#7545 asked for a decision that declines an over-capacity run. It was cut, and the decisive datum is
+in this file:
+
+- **The 2026-08-12 addendum records `LOCK_ACQUIRED … after 616310ms`** — a wait **redeemed at
+  616 s** behind two sibling worktrees. A `>= 1` sibling decline refuses that run at t=0, converting
+  a gate that **completed** into no coverage at all. The proposal's "Pareto — never worse than the
+  status quo" claim reasoned only about the missed-decline direction and was false in the other.
+- **A decline blocks `git commit`.** `lefthook.yml`'s `pre-commit` hook runs this runner on any
+  staged `*.{ts,tsx,js,jsx}`; a non-zero exit blocks the commit. No `.ts` change could be committed
+  while any sibling worktree ran the runner.
+- **It would be misread at ship.** `ship/SKILL.md` documents `rc=4` as "`SOLEUR_SUBAGENT=1` was
+  set", and notes a ship session reached from a drain fan-out inherits that variable — so a ship
+  session hitting a capacity decline would set `SOLEUR_ALLOW_FULL_GATE=1`, the exact override that
+  re-creates the incident.
+- **It had no completion path.** That same override was its only escape, and it simultaneously
+  disarms the subagent refusal.
+
+**Deferred, not abandoned.** A future decline must meet #7454 item 3's evidence bar (an in-suite
+sampler at ≤2 s resolution, ≥3 single-runner runs, ≥2 runs at N=2 and ≥1 at N=3 with the lock
+disabled, a re-verified filesystem premise, and one adversarial run). **The verdict line shipped
+here is the instrument that produces most of that evidence** — which is the ordering Decision 1
+already prescribes: instrumentation ships ahead of the fix.
+
+### The degraded-reading hazard this closed
+
+`tc_avail_mb`, `tc_used_pct` and `tc_used_bytes` all degrade an unreadable or unparseable probe to
+**`0`**, which is below every floor. So "could not read the filesystem" and "read a critically low
+number" were the same number, and a verdict consuming the value alone would have reported a broken
+probe as a measured emergency. Each promoted reading therefore carries a `0|1` **validity flag**
+(`tc_avail_mb_v`, `tc_proc_readable`), and a degraded reading renders as `?`, never as a digit.
+Uncertainty is evaluated **per signal**: one unreadable probe does not suppress a `CONTENDED`
+verdict derived from a different, healthy one — it is named in a `degraded=` field instead.
+
+### What this does NOT settle
+
+The verdict is emitted from **one** `_tc_scan_procs` walk (measured ~6.6 s), shared with the
+banners, so verdict and banner cannot disagree. It is still a **point reading**: it says what the
+box looked like at t=0 of this run, not what it will look like an hour in. Nothing here reaps a
+wedged holder — that is #7537, and the raised budget makes reaping *more* valuable, not less, which
+is why `--capacity` — which enumerates the running worktrees on demand — ships alongside. And local developer tooling has no
+remote alert target, so a permanently-degraded probe on a hardened `/proc` is caught by loudness
+(`CAPACITY_UNKNOWN` on every run) rather than by telemetry.
+
+## Addendum — 2026-09-06 (#7869): the holder's own runtime is bounded, and stale-holder detection stays rejected
+
+`## Alternatives Considered` rejects **"Implement stale-holder detection on the
+lock"** as dead code. That rejection **stands, and was re-measured here**: a
+waiter using `_acquire_lock_impl`'s exact shape (`exec {fd}>>`, then
+`flock -w`) against a *live* holder returned `rc=1` at exactly its timeout, and
+`flock` releases automatically once the last fd holder dies. A dead pid holding
+the lock remains unreachable, so code defending it would still be dead code.
+
+**What it does not quantify over is a holder that is ALIVE but has no consumer.**
+#7869 measured one: a run whose session had gone away kept working through its
+suite list for **1d22h** (72 of 369 suites), holding the lock the whole time,
+with a second orphan from the same worktree found ~1h later. `flock` was
+behaving exactly as designed — the holder was live. The gap is not in the lock.
+
+Two consequences, and neither is stale-holder detection:
+
+1. **The dominant harm was the sibling count, not the lock.** An orphaned run is
+   still a running `test-all.sh`, so `tc_preamble` counted it as a live sibling
+   and the #7553 refusal rejected every later full-gate run on the box with
+   exit 4 — capacity pinned at zero. The rows the single `/proc` walk already
+   emits carry each sibling's measured elapsed seconds, so siblings past a
+   ceiling are now excluded from that count at the single `sibs=` derivation.
+   This kills nothing and needs no consent boundary.
+2. **The holder bounds its own runtime.** Past `TC_RUNTIME_CEILING_S` the runner
+   starts no further suite and exits 3 (UNRESOLVED). It **returns at suite
+   entry rather than exiting mid-suite**, because the lock fd is inherited by
+   suite children and the only teardown reaching them is a process-group
+   signal — whose group leader under lefthook's pre-commit is `git commit`.
+
+**No ownership discriminator was adopted, and that is a finding rather than an
+omission.** Every candidate resolves, on this project's documented topology, to
+a process that OUTLIVES the session: `$PPID` under lefthook is `git`; a
+top-ancestor-below-the-subreaper walk reaches the terminal emulator; no session
+identifier is exposed to the process. A healthy run and an orphaned one resolve
+identically, so such a guard could never fire. A wall-clock bound needs no
+discriminator — the same resolution `is_lease_active` reached for leases after a
+bare pid-liveness read deleted two live worktrees (#5454): the time bound is the
+authority, and every term fails toward keeping the run alive.
+
+The ceiling is sized on contended ELAPSED RUNTIME — not on the uncontended baseline, and
+not on hold times. This ADR's baseline is ~2700 s uncontended; its **2026-08-11** addendum
+records **3775 / 5787 / 5763 s** for three runs executing *concurrently*, and the 2026-08-19
+addendum corrects an earlier draft that had called those "observed sibling holds": they are
+elapsed-at-probe readings, and at most one of the three held the lock. That correction stands
+and is not re-litigated here — it mattered because `TC_LOCK_TIMEOUT` is about *holding*. It
+does not diminish the figures for THIS knob, whose operand is elapsed runtime, so 5787 s is a
+sound reading of how long a healthy run can be executing under contention and a ceiling below
+it would curtail live work. 14400 s is ~2.5x that reading; because `_RUN_START_EPOCH` is
+stamped before `tc_acquire`, up to 3600 s of queueing is charged against it, leaving ~10800 s
+of execution budget (~1.87x). It sits ~11.5x below the 46 h orphan.
+
+## Addendum — 2026-09-23 (#8579): waiters release in ticket order, not on a shared expiry
+
+Decision 3 is **extended, not reversed**: the lock is still advisory, every wait
+path still proceeds-with-banner and never aborts, and every lock still releases
+through the kernel on the last fd close. What changed is the *release shape*.
+
+`flock -w` has no application-level queue. Each waiter ran the same independent
+bounded wait, so a holder outlasting `TC_LOCK_TIMEOUT` expired every waiter's
+timer at roughly the same instant and released them **together** — the pileup
+this ADR exists to kill, recurring above the higher waterline the 2026-08-19
+addendum set (a sibling hold of **8,070 s** was measured the day this was
+filed). Raising the budget again was considered and rejected for the reason
+recorded there: any finite budget below the runtime ceiling has a synchronized
+expiry. The defect was never the number; it was that every waiter shared one.
+
+**What shipped.** `tc_acquire` now mints a flock-anchored **ticket** under
+`$LOCK_DIR/<name>.queue.d/` before waiting: serial `max+1` minted under a
+short-lived `.alloc` lock, ticket held `flock -x` for the *run's* lifetime
+(mirroring `_SESSION_LOCK_FDS`), and only the queue head makes the bounded
+`acquire_lock` call. An overrun therefore releases one run at a time, in mint
+order, instead of firing every waiter at once. Non-head waiters poll with
+`flock -n` probes every `TC_QUEUE_POLL_S` (5 s) — one probe per earlier ticket
+plus a readdir, against the ~6 s-per-beat `/proc` walk measured as the
+anti-pattern. A waiter
+whose **queue** patience (`TC_QUEUE_TIMEOUT`, default `TC_LOCK_TIMEOUT`)
+expires still proceeds contended — `LOCK_QUEUE_TIMEOUT` plus the canonical
+`LOCK_CONTENDED_PROCEEDING` line carrying `queue_timeout=1` — and the wait
+heartbeat reports `position=N` and switches its token to `LOCK_WAIT_OVERRUN`
+once the wait outlasts the lock budget (the detected-long-hold signal #8579
+named as a candidate).
+
+**No new `flock -w` exists in the queue path — deliberately.** #7697 (OPEN)
+measured a waiter parked 4.6 days in `locks_lock_inode_wait`, the
+masked-SIGALRM hypothesis making `-w` unreliable as a timeout. Every new wait
+is a `flock -n` probe or a counted-retry loop on `.alloc`; the only blocking
+`flock -w` in the repo's lock path remains `_acquire_lock_impl`'s. The
+heartbeat subshell closes its inherited copy of the ticket fd on entry so a
+dead run's diagnostic cannot hold its queue slot; suite children still inherit
+it, exactly as they inherit the main lock today.
+
+**Corrected ceiling arithmetic.** The 2026-09-06 addendum said "up to 3600 s of
+queueing is charged against `_RUN_START_EPOCH`." With the ticket stage the
+worst-case pre-run wait is `TC_QUEUE_TIMEOUT + TC_LOCK_TIMEOUT` — **7200 s** at
+defaults — so the execution budget inside the 14,400 s ceiling is ~7200 s
+(~1.25x the uncontended baseline), not ~10,800 s. A run whose queue wait eats
+deep into that budget exits 3 (UNRESOLVED) with only partial coverage — and at
+a `TC_QUEUE_TIMEOUT` raised past ~10,800 s, having run nothing; that is the
+honest serialization cost, and it is why `TC_QUEUE_TIMEOUT` exists rather than
+queueing being unbounded.
+
+**Mixed-version caveat.** A worktree running pre-queue code ignores tickets and
+contends exactly as before; a new-code holder's ticket does not block it.
+Degradation is to status quo, never worse — and a stubbed session-state layer
+(the capacity suite's shape) takes a named `LOCK_QUEUE_DEGRADED` line and the
+pre-queue direct-acquire path.
+
+**Ticket sweep.** Mint sweeps ticket files that are *both* unlocked and older
+than `TC_RUNTIME_CEILING_S`, inside the same `.alloc` hold. Locked tickets are
+never swept, so `max+1` numbering cannot regress below a live ticket, and a
+dead waiter's unlocked file is the only thing removed — the same kernel-release
+argument the AC5b arm measures for the main lock, applied one level down.

@@ -10,13 +10,19 @@
 # redirect denies, because the CLI prints ALL remaining secrets to stdout.
 
 set -uo pipefail
+
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/doppler-secrets-delete-redirect.sh"
 
 PASS=0; FAIL=0
-command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
+command -v jq >/dev/null 2>&1 || { echo "UNRESOLVED: jq missing — this suite asserted nothing; install jq"; exit 3; }
 
 # ADR-129 rule (c): ONE owning trap for every tempfile this suite allocates.
 # Per-case sandboxes are children of this root, so a case that dies mid-assertion
@@ -58,6 +64,10 @@ check "set WITH 1> /dev/null allows" "<none>" \
 check "doppler secrets get allows" "<none>" \
   "$(decision_of "$(mk 'doppler secrets get FOO -p soleur -c dev --plain')")"
 check "unrelated command allows" "<none>" "$(decision_of "$(mk 'ls -la')")"
+
+# Devin wire name `exec` reaches the gated check (kind map, #8205).
+check "Devin exec: delete without redirect denies" "deny" \
+  "$(decision_of "$(jq -nc '{tool_name:"exec", tool_input:{command:"doppler secrets delete FOO -p soleur -c dev"}}')")"
 
 # --- #7164: the envelope contract ------------------------------------------
 # An ARRAY tool_input.command previously rendered across lines, matched no

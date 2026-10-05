@@ -15,7 +15,7 @@
 #         thing this probe exists to catch, and it must be loud.
 #
 # Enrollment (the directive that makes the sweeper run this):
-#   <!-- soleur:followthrough script=scripts/followthroughs/accounted-beacon-live-6462.sh earliest=2026-07-29T00:00:00Z secrets=SENTRY_AUTH_TOKEN -->
+#   <!-- soleur:followthrough script=scripts/followthroughs/accounted-beacon-live-6462.sh earliest=2026-07-29T00:00:00Z secrets=SENTRY_ACTIONS_RO_TOKEN -->
 #
 #   ⚠ `earliest` is apply+14d, NOT apply+7d, and it is coupled to the 7-day rolling window
 #   below: together they guarantee the FIRST window the sweeper evaluates is
@@ -30,8 +30,24 @@
 
 set -uo pipefail
 
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-  echo "TRANSIENT: SENTRY_AUTH_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_ACTIONS_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_ACTIONS_RO_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+if [[ -z "${SENTRY_ACTIONS_RO_TOKEN:-}" ]]; then
+  echo "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN is unset or empty — cannot query Sentry (declare it in the directive's secrets= clause)" >&2
   exit 2
 fi
 
@@ -83,8 +99,8 @@ sentry_count() {
   q="$1"
   enc=$(printf '%s' "$q" | jq -sRr @uri)
   url="${API}/organizations/${ORG}/events/?query=${enc}&start=${START}&end=${END}&per_page=100&field=title&field=timestamp"
-  resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-    -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
+  resp=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+    -H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN" -H "Accept: application/json" "$url" 2>/dev/null)
   status=$(printf '%s' "$resp" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
   body=$(printf '%s' "$resp" | sed '$d')
   if [[ "$status" != "200" ]]; then echo "TRANSIENT"; return; fi

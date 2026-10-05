@@ -11,7 +11,34 @@ root_cause: verification_scope_and_count_derivation
 tags: [plugin-root, migration, ac-grep-scope, anchor-preservation, adr-093, slice-d]
 synced_to: [work, plan]
 issue: 6154
+superseded_by: 7450
+superseded_date: 2026-08-12
 ---
+
+> ## ⛔ SUPERSEDED 2026-08-12 by #7450 / ADR-179 — read this before item 2
+>
+> **The anchor guidance below is REVERSED. Do not follow items 2, 3 or 4.**
+>
+> This file is `synced_to: [work, plan]`, so an agent retrieves it mid-task. Item 2 says
+> *"Preserve the EXACT original fallback anchor per site — never homogenize"* and names
+> `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}` as the correct
+> form **for the three redaction gates specifically**. That construct is the #7450 vector:
+> `review/SKILL.md` instructs `gh pr checkout`, so on the review path the git root is the
+> **contributor's** tree, and the gate whose exit code decides whether secrets are emitted
+> resolved its own scanner from there.
+>
+> **The canonical form is now the bare, quoted `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>`
+> with NO fallback arm at all**, plus the ADR-179 decision-2 identity preflight. `:-` and
+> `:?` are both rejected. See ADR-179 and its 2026-08-12 amendment.
+>
+> Item 4's server-safety argument is sound and was never the issue — it reasons about the
+> hosted Concierge factory, where `CLAUDE_PLUGIN_ROOT` is always injected. The vector is the
+> **local CLI review path**, which item 4 does not consider.
+>
+> The body is retained unedited as the record of what was believed and why. The plan for
+> #7450 flagged this file as superseded and predicted this exact failure; it was not
+> updated at the time, which is the gap this banner closes.
+
 
 # Learning: `${CLAUDE_PLUGIN_ROOT}` family-migration — AC-grep scope, anchor preservation, files-vs-families counts
 
@@ -34,7 +61,7 @@ non-obvious traps surfaced — two at multi-agent review, one at verification ti
    -v '/scripts/[^:]*:' -v /workflows/`). The plan is authoritative for the AC's *intent*, never its exact
    command (`hr-when-a-plan-specifies-relative-paths-e-g`).
 
-2. **Preserve the EXACT original fallback anchor per site — never homogenize.** Three anchor classes,
+2. **[SUPERSEDED by #7450 — see the banner. This instruction is now REVERSED.]** **Preserve the EXACT original fallback anchor per site — never homogenize.** Three anchor classes,
    each with a verbatim precedent:
    - git-root (the 3 redaction gates: legal-generate, incident, linear-fetch) →
      `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}` (precedent `compound/SKILL.md:289`), **quote the whole expansion**;
@@ -44,12 +71,12 @@ non-obvious traps surfaced — two at multi-agent review, one at verification ti
    preserved anchors; a homogenized default is a defect. Non-`skills/` plugin scripts keep their shape
    (`plan:329` → `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/taste-profile-update.sh`, no `/skills/`).
 
-3. **Redaction gates get the git-root fallback + a fail-closed `[[ -r ]]` pre-check.** legal-generate already
+3. **[SUPERSEDED by #7450 — the git-root fallback is removed entirely; the `[[ -r ]]` pre-check survives and was extended with an identity preflight.]** **Redaction gates get the git-root fallback + a fail-closed `[[ -r ]]` pre-check.** legal-generate already
    had `[[ -r "$SENTINEL" ]] || exit 2`; incident (which *owns* redact-sentinel.sh) did not — a review-caught
    asymmetry. On a redaction gate, mirror the pre-check so a missing script maps to the documented exit-2 halt
    rather than an undocumented 127. All three gates fail closed, so a broken migration degrades safely.
 
-4. **Server-safety invariant (why the `$(…)` fallback is safe):** `CLAUDE_PLUGIN_ROOT` is always injected on
+4. **[SCOPED by #7450 — true for the hosted Concierge factory, and it is not the threat surface. The vector is the local CLI review path.]** **Server-safety invariant (why the `$(…)` fallback is safe):** `CLAUDE_PLUGIN_ROOT` is always injected on
    both Concierge factories (`agent-env.ts`; `assertTrustedPluginPath` chokepoint), so `${CLAUDE_PLUGIN_ROOT:-…}`
    → the deployed root on-server and the `$(git rev-parse …)` default **never executes there**. It also never
    needs a `safe-bash.ts` carve-out — both `$(` and `${` trip `SHELL_METACHAR_DENYLIST` and route through the

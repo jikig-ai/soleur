@@ -45,7 +45,7 @@ resolved — Gate 1 + Gate 2 closed and Gate 3 resolved as 3b (Phase 9); operato
 
 ## Symptom
 
-During Phase A2 brainstorm prereq verification (Sentry residency cleanup, follow-up to PR #3863 / issue #3861), an attempt to navigate to https://eu.sentry.io/auth/login/ returned an org-membership banner: "Your account (<operator-email>) is not a member of the eu organization. Ask an organization admin to invite you, or sign in with a different account."
+During Phase A2 brainstorm prereq verification (Sentry residency cleanup, follow-up to PR #3863 / issue #3861), an attempt to navigate to <https://eu.sentry.io/auth/login/> returned an org-membership banner: "Your account (<operator-email>) is not a member of the eu organization. Ask an organization admin to invite you, or sign in with a different account."
 
 Subsequent API probe of `/api/0/organizations/jikigai/` using the runtime `SENTRY_AUTH_TOKEN` (held in Doppler prd) returned a 302 redirect to `/api/0/organizations/eu/` followed by 401 "Invalid org token" — Sentry's region-router signal for "no org with that slug exists on this edge." Probes against the US edge (`sentry.io`) returned 403 on `/users/me/` (token valid but no member visibility); the operator's account is a member of a US `jikigai` org (separate, accessible, on a Team trial that has been cancelled this session), but the runtime DSN does NOT point there.
 
@@ -199,6 +199,7 @@ This PIR transitions from `status: open` to `status: resolved` when all three ga
 **Gate 3 current selection (2026-05-17T19:19Z, post-PR-γ-§17 submission):** *pending, leaning 3c (non-disclosure residual)* — Ticket 2 (forensics) submitted via Sentry's Intercom support channel at 2026-05-17T19:19Z (routed to Sentry's Foundations team for async human review; conversation also captured a substantive AI Support Assistant response stating Sentry's non-disclosure policy for cross-org ownership). **T+14d countdown anchors on Ticket 2 submission → expiry 2026-05-31T19:19Z.** Pre-expiry expectation: human-confirmed Sentry policy statement converts pending → 3c. If Foundations team responds with definitive third-party owner identification, converts to 3a. If response is "this org is yours" recovery evidence, converts to 3b (reopens this PIR). If silent through 2026-05-31T19:19Z, converts to 3d. This PIR carries `status: resolved` on Gate 1 + Gate 2 closure with Gate 3 residual tracked in PR-γ #3946 §22 post-merge gate (AC15-post). The operator updates this section in-place (no new commit required; runbook accumulates resolution evidence) when Gate 3 resolves to one of 3a/3b/3c/3d.
 
 **Submission state (2026-05-17):**
+
 - Ticket 1 (billing refund) — submitted 2026-05-17T19:17Z via Sentry Intercom; conversation titled "Billing refund request"; routed to Sentry Foundations team; email-OTP (`<otp-redacted>`, single-session) verified `jean.deruelle@jikigai.com`; AI returned standard non-refund policy reply, follow-up requested human review citing IaC-error context.
 - Ticket 2 (forensics) — submitted 2026-05-17T19:19Z via Sentry Intercom (separate conversation); routed to Sentry Foundations team; AI gave substantive non-disclosure-policy response citing Sentry help articles 13964423 + 13964441 + docs.sentry.io/api/organizations/retrieve-an-organization/; follow-up requested human-confirmed citable policy statement.
 
@@ -215,7 +216,7 @@ unsolicited Sentry support replies and a token-scope probe.
 
 > **Reply 2 (forensics thread, Rodolfo, 2026-05-19):** "I checked the
 > information from the Jikigai organisation (ID: 4511123328466944) and
-> confirmed that your user jean.deruelle@jikigai.com is currently the owner
+> confirmed that your user <jean.deruelle@jikigai.com> is currently the owner
 > of this organisation. … This organisation is also owned by you. I checked
 > the audit logs for both organisations and all actions were performed by
 > your user. I do not see any indication that either organisation was owned
@@ -275,6 +276,7 @@ operator-owned ones like the pre-cutover `jikigai`) the membership-scope
 check returns HTTP 401/403 depending on the route's auth-class boundary.
 
 Disambiguating evidence (full table in the resolution audit):
+
 - `/api/0/users/me/` returns HTTP 403 (User Auth Tokens return 200; proxy-users cannot call this surface) — definitive negative evidence the token is NOT a User Auth Token
 - `/api/0/organizations/` listing returns `[]` on every host (Internal Integrations cannot enumerate orgs; only slug-direct paths work)
 - `/api/0/organizations/jikigai-eu/sentry-apps/` lists `web-platform-ci-26eeaf` with scopes that match the runtime token's `/api/0/` `auth.scopes` byte-for-byte, and a slug that matches the proxy-user prefix byte-for-byte
@@ -298,6 +300,7 @@ sub-processor, or recipient under Art. 30.
 
 PIR `status: open → resolved`. All Phase 8 gates + Phase 9 T4 mechanism
 nailed. §5(2) accountability evidence is complete across:
+
 - 2026-05-17 SQL-count audit (renamed by PR-2 to drop "phantom-ingest"):
   `knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md`
 - 2026-05-19 probe-divergence audit:
@@ -309,7 +312,8 @@ nailed. §5(2) accountability evidence is complete across:
 
 **Corpus surfaces updated by PR-2 (2026-05-21 merge commit `057927af`).**
 Article 30 PA8 §(d) retract-in-place UPDATE block; this PIR Phase 9 section
-+ frontmatter flip; ADR-031 §Cluster/Host Glossary reframed to three
+
+- frontmatter flip; ADR-031 §Cluster/Host Glossary reframed to three
 orthogonal axes; auth.users audit artifact renamed (drop "phantom-ingest") +
 correcting note; compliance-posture row UPDATE block; learnings sweep
 cross-linked.

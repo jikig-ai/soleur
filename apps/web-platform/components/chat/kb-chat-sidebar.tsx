@@ -35,6 +35,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
           contextPath={contextPath}
           onClose={onClose}
           visible={open}
+          mobileTakeover
         />
       </KbChatFullScreen>
     );

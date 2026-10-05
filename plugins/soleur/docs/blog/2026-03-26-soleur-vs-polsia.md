@@ -5,6 +5,7 @@ date: 2026-03-26
 updated: 2026-07-20
 description: "Polsia runs your company autonomously for $49/month plus a 20% revenue share. Soleur keeps the founder in the decision seat. A comparison of two CaaS architectures for solo founders."
 ogImage: "blog/og-soleur-vs-polsia.png"
+pillar: soleur-comparisons
 tags:
   - comparison
   - polsia

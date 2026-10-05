@@ -51,7 +51,7 @@ variable "location" {
 }
 
 variable "registry_location" {
-  description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location so the registry can move regions independently. Originally nbg1 (provisioned there during a hel1/eu-central cx23-stock outage). MOVED nbg1→**hel1** (#6288): the OOM remediation needs an 8 GB host, and cx33 (8 GB, ~€8.49/mo) is available in hel1 but not nbg1 (nbg1's cheapest 8 GB was cpx32 ~€35/mo). hel1 is the same eu-central network zone (10.0.1.0/24 spans it) + where the web/git-data/inngest hosts live. The location change is ForceNew on hcloud_volume.registry — the nbg1 store volume is destroyed and a fresh hel1 volume is created; the 35 GB store re-fills from GHCR (zot is a mirror; pulls fall through to GHCR meanwhile)."
+  description = "Hetzner datacenter location for the zot registry host + its volume (#6122). Separate from var.location so the registry can move regions independently. Originally nbg1 (provisioned there during a hel1/eu-central cx23-stock outage). MOVED nbg1→**hel1** (#6288): the OOM remediation needs an 8 GB host, and cx33 (8 GB, ~€8.49/mo) is available in hel1 but not nbg1 (nbg1's cheapest 8 GB was cpx32 ~€35/mo). hel1 is the same eu-central network zone (10.0.1.0/24 spans it) + where the web/git-data/inngest hosts live. The location change is ForceNew on hcloud_volume.registry — the nbg1 store volume is destroyed and a fresh hel1 volume is created; the 35 GB store re-fills from the next CI dual-push (zot is a mirror). NOTE: pulls do NOT fall through to GHCR meanwhile — that claim was RETRACTED by #7071 (host->GHCR read PAT revoked 401, minter disabled 403 DENIED), so no host pulls from GHCR at all and the refill window is a deploy-blocking one."
   type        = string
   default     = "hel1"
   # EU residency (#6453) — same rule as var.location above, enforced separately because
@@ -116,7 +116,9 @@ variable "web_hosts" {
   # the ENTIRE cax ARM line are orderable in 0 of 3 EU DCs; the orderable set is identical in
   # nbg1-dc3/hel1-dc2/fsn1-dc14 = cpx12 cpx22 cpx32 cpx42 cpx52 cpx62 ccx13 ccx23 ccx33 ccx43
   # ccx53 ccx63. No `deprecation` block is set on any of them — Hetzner simply stopped selling them
-  # in our region. cpx22 is the cheapest ORDERABLE like-for-like (2c/4g) x86; cpx12 (1c/2g,
+  # in our region. cpx22 was the cheapest ORDERABLE like-for-like (2c/4g) x86 ON THAT 2026-07-26 PROBE (cx23,
+  # €5.49, was ✗ that day and ✓ again on 2026-08-06 — cheapest-orderable is a dated reading,
+  # not a standing fact); cpx12 (1c/2g,
   # ~€11.49) is the only cheaper orderable option and was rejected on headroom — 1.5 GB measured
   # peak on a 2 GB box is 75% with ~0 headroom, and its 1 vCPU would force a reboot-forcing resize
   # at the GA flip (i.e. a second birth cycle through the gated dispatch). Recorded as an ADR-143
@@ -137,11 +139,42 @@ variable "web_hosts" {
   # web host can never be born on the cax ARM line regardless of stock, because cloud-init.yml
   # PINS amd64 in three places (Doppler CLI, the Docker apt `arch=amd64` line, the webhook binary).
   #
-  # DISASTER-RECOVERY GAP (2026-07-26, feeds #6460): THREE running hosts sit on types that can no
-  # longer be ordered — web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and
-  # soleur-registry (cx23). They run fine, but NONE of them can be REBUILT on its current type: a
-  # rebuild of any of them is a TYPE DECISION, not a recreate. Nothing catches "a declared type
-  # left the orderable set" until an apply; that periodic audit is #6460.
+  # DISASTER-RECOVERY GAP (feeds #6460) — PARTIALLY RESTATED 2026-08-06 (#7309). One of its
+  # three legs was measured false; the other two STAND. Read which is which before relying on it.
+  #
+  # It used to read: THREE running hosts sit on types that can no longer be ordered —
+  # web-1/soleur-web-platform (cx33), soleur-grok-dogfood (cx33) and soleur-registry (cx23).
+  #
+  # Probed live 2026-08-06, `.server_types.available`, 3 samples, PER DATACENTER. The full
+  # series and its per-probe sources are SINGLE-SOURCED at zot-registry.tf, anchor
+  # "STOCK REALITY"; only the 2026-08-06 hel1-dc2 row is repeated here, because it is the row
+  # that decides the claim in this block and the block is unreadable without it:
+  #   hel1-dc2    cx23 ✓   cx33 ✗   cpx22 ✓   cax11 ✗
+  #   (cx33 is ✓ in nbg1-dc3 and fsn1-dc14 — see the anchor; it buys the hel1 hosts nothing.)
+  #
+  # So: the cx23 leg is FALSE — cx23 is orderable in hel1-dc2 again (it was ✗ there on
+  # 2026-07-26 and ✗ again on 2026-08-04). The two cx33 legs are TRUE AND UNCHANGED: web-1 and
+  # soleur-grok-dogfood both run in hel1, where cx33 is NOT orderable. cx33's ✓ in nbg1-dc3 and
+  # fsn1-dc14 buys those two hosts nothing — a host cannot be rebuilt in a datacenter it does
+  # not live in without also moving region, which is a different and larger decision.
+  #
+  # THAT PER-DC SPLIT IS THE POINT, and it is the trap this note previously walked into: a
+  # catalog-wide reading is not a datacenter reading. cx33 reads "available" if you look at the
+  # fleet and "unavailable" if you look at hel1-dc2, and only the second one answers "can web-1
+  # be rebuilt". This is the same class of error as reading `.supported` for `.available`, one
+  # level down. Always project the probe onto the DC the host actually runs in.
+  #
+  # The rebuild-is-a-type-decision consequence stands for ALL THREE hosts, and for two different
+  # reasons. For the cx33 pair it is the original reason: the type is not orderable where they
+  # run. For soleur-registry it is now the stronger one: the type IS orderable today and was not
+  # two days ago, so a green probe is not a guarantee — availability is not a property of a
+  # server type, it is a point-in-time reading of vendor supply that moves in both directions,
+  # and a dated ✓ is not a capacity reservation. soleur-registry was repinned to cpx22 on that
+  # basis (#7309, see var.registry_server_type); cpx22 was ✓ at every recorded probe. The two
+  # cx33 hosts are unrepinned. Nothing catches "a declared type left the orderable set" until an
+  # apply, and nothing re-checks a type that came BACK; that periodic audit is #6460. Whatever
+  # it samples, it must sample REPEATEDLY and PER DATACENTER — a single fleet-wide probe would
+  # have certified any of the contradictory answers above.
   #
   # Resize to a serving shape at the GA flip only if web-2's OWN metrics warrant (a
   # server_type change is a reboot-forcing in-place update — reboot_updates guard). It reuses
@@ -195,13 +228,15 @@ variable "git_data_volume_size" {
 
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
-  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): cax11 (2 vCPU ARM64/Ampere, 4GB) / cx23 (2 vCPU x86, 4GB) / cx33 (4 vCPU x86, 8GB, ~€8.49/mo net, hel1). A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral. Recorded via ops-advisor. #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed — see the block comment below. hel1 is where the rest of the fleet lives. cx23 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile, non-release-blocking). THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on cx33 and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED-on-cx23 condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
+  description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): `cax*` (Ampere) → arm64, anything else (`cx*`/`cpx*`/`ccx*`) → amd64. A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral — but the derivation is NOT: it selects local.zot_image between two DISTINCT OCI repositories, so an arch flip darks the sole pull path (ADR-169). Recorded via ops-advisor. HISTORY: #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed. REPINNED cx23 → **cpx22** 2026-08-06 (#7309) for RECREATE SURVIVABILITY, not sizing or price — see the block comment below; cpx22 matches cx23 exactly on cores and RAM (2c/4g) and doubles local disk (40→80 GB), so nothing derived from this var moves. hel1 is where the rest of the fleet lives. cpx22 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills on the next CI dual-push. The window is NOT non-release-blocking: #7071 retracted the host->GHCR fallback (read PAT revoked 401, minter disabled 403 DENIED), so nothing pulls from GHCR while the store is empty — already-running containers keep serving and any restart cannot pull. THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on an 8 GB type and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
   type        = string
-  # cx23 (x86, 4 GB, 2 vCPU, ~€5.49/mo net, hel1) — the right-SIZED registry host (operator-chosen,
-  # #6497 / #6463, 2026-07-16). The DERIVED cgroup cap (zot-registry.tf local.registry_memory_cap_mb)
-  # is 3072m here. amd64 (does NOT start with `cax`) → local.registry_arch unchanged from cx33; the
-  # zot image + Doppler CLI build are unchanged. The zot store is on a SEPARATE 60 GB volume, so
-  # cx23's 40 GB local disk (OS + docker + the ~100 MB zot image) is irrelevant to store capacity.
+  # cpx22 (x86/AMD, 4 GB, 2 vCPU, ~€19.49/mo net, hel1) — SAME SHAPE as the cx23 it replaces, so
+  # this is a change of RECREATE SURVIVABILITY, not of sizing. The right-SIZING decision below
+  # (4 GB, not 8) is #6497 / #6463's and is unchanged. The DERIVED cgroup cap (zot-registry.tf
+  # local.registry_memory_cap_mb) is 3072m on both. amd64 on both (neither starts with `cax`) →
+  # local.registry_arch, local.zot_image and the Doppler CLI build are all unchanged. The zot store
+  # is on a SEPARATE 60 GB volume, so the host's local disk (OS + docker + the ~100 MB zot image)
+  # is irrelevant to store capacity either way.
   #
   # WHY 4 GB, not the prior 8 GB (cx33): the 8 GB floor was never evidence-backed. #6288 bumped
   # cx23→cx33 for "OOM headroom", but that diagnosis was never confirmed. ADR-062:47 — "no safe
@@ -216,33 +251,67 @@ variable "registry_server_type" {
   # an in-memory blob index. Projected at the current ~9.4 GB store: ~50 MB, ~1.6 % of the 3072m cap.
   #
   # RESIDUAL RISK, stated honestly: still UNMEASURED is RSS during a boot scan of a LARGE store
-  # (every sampled boot so far scanned a near-empty one). The cx23 recreate WAS to be that
-  # measurement — but it can no longer happen on cx23 (see the STOCK REALITY note below), so the
-  # large-store boot-scan RSS stays unmeasured until a recreate on an orderable type.
+  # (every sampled boot so far scanned a near-empty one). The next registry recreate is that
+  # measurement, whenever it happens; the repin below does not change what is measured, only
+  # whether the create can be counted on to succeed.
   # It is bounded and reversible: on a 4 GB host the 3072m cap now BINDS (it was a hardcoded 7168m
   # with no edge to this var until #6508 — on 4 GB that could never bind, which is #6288's real
   # uncapped condition; that is fixed). So a wrong call yields a CONTAINED container-OOM
-  # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) plus GHCR fallback,
-  # NOT #6288's host-OOM restart-loop. Revert path: cpx32 (8 GB, ~€35.49/mo net) — the cx33 arm of
-  # this revert path is CLOSED (see STOCK REALITY below), so cpx32 is no longer a fallback but the
-  # only orderable 8 GB option. Then re-dispatch. #6288's exact failure mode (uncapped zot on a
-  # 4 GB host) is now structurally impossible.
+  # (zot_memory_capped=true, zot_oom_kills>0 — both self-reported and gated) with NO GHCR fallback
+  # behind it (#7071 revoked the host->GHCR read path),
+  # NOT #6288's host-OOM restart-loop. Revert path if 4 GB proves wrong: re-probe first —
+  # the 8 GB options are cx33 (~€8.49/mo net) and cpx32 (~€35.49/mo net). DO NOT read either
+  # one's availability out of this comment — re-probe hel1-dc2 and choose then. The decision
+  # and its cost are recorded in the ADR-096 amendment (2026-08-06, #7309), not here. Then
+  # re-dispatch. #6288's exact failure mode (uncapped zot on a 4 GB host)
+  # is now structurally impossible.
   #
-  # STOCK REALITY (live probe 2026-07-26, #6966) — the shapes named in the description above are
-  # HISTORICAL, not a menu. `cx23` (this default) and `cx33` are both orderable in **0 of 3** EU
-  # DCs, as is the entire `cax` ARM line; the orderable set is `cpx12 cpx22 cpx32 cpx42 cpx52
-  # cpx62 ccx13 ccx23 ccx33 ccx43 ccx53 ccx63`, identical in nbg1-dc3/hel1-dc2/fsn1-dc14. Read
-  # `.server_types.available`, never `.supported`, and never the `hcloud` CLI's location column —
-  # both report the SUPPORTED set (tests/scripts/lib/stock-preflight-gate.sh, head).
-  # CONSEQUENCE: soleur-registry is GRANDFATHERED on cx23. It runs fine, but it CANNOT BE REBUILT
-  # on this type — any recreate is a TYPE DECISION and a cost change, not a like-for-like recreate.
-  # This default is deliberately NOT changed here (#6966 was scoped to unwedging web-2, and a
-  # registry_server_type change is a host REPLACE of a live registry); the DR remediation for all
-  # three grandfathered hosts belongs to #6460.
+  # WHY cpx22 AND NOT cx23 (#7309, 2026-08-06) — READ THE MEASUREMENT, NOT THE HEADLINE.
   #
-  # A nonexistent type fails at PLAN via data.hcloud_server_type.registry (#6508) instead of
-  # destroying the host first — that was #6288's cx32 disaster. registry_location stays hel1.
-  default = "cx23"
+  # It is NOT that cx23 cannot be ordered. Probed live 2026-08-06 from `.server_types.available`,
+  # cx23 (id 114) is AVAILABLE in hel1-dc2. Any statement that cx23 is unorderable in hel1 —
+  # including #7309's own title — is false as of that probe, and this comment does not repeat it.
+  #
+  # What is true is that its availability in hel1 has changed direction TWICE across twelve days,
+  # once inside twenty-four hours. THE SERIES AND ITS SOURCES ARE SINGLE-SOURCED at
+  # zot-registry.tf › hcloud_server.registry, anchor "STOCK REALITY" — that copy is strictly
+  # richer (four types, per-DC) and restating it here is how the two drifted inside one PR.
+  #
+  # The consequence, which is the part that belongs on this variable: a registry_server_type
+  # change is a host REPLACE. `user_data` is ForceNew and hcloud_server.registry deliberately
+  # carries no `lifecycle.ignore_changes`, so the apply DESTROYS the host and then creates one,
+  # with no capacity reservation in front of the create. A failed create is not recoverable by
+  # rollback — the revert is a SECOND create against the same supply, with the sole pull path
+  # already dark (ADR-169). cpx22 was ✓ at every recorded probe; that is what it buys.
+  #
+  # PRICE: cpx22 ~€19.49/mo net against cx23's ~€5.49 — +€14.00/mo, +€168/yr, 3.55× on this host.
+  # Operator accepted that cost explicitly before this change was authorized. Recorded in
+  # knowledge-base/operations/expenses.md as declared-vs-billing: billing does not move until the
+  # host-replace, and this change schedules none.
+  #
+  # Read `.server_types.available`, never `.supported`, and never the `hcloud` CLI's location
+  # column — both report the SUPPORTED set, which resolves a type you cannot buy
+  # (tests/scripts/lib/stock-preflight-gate.sh, head, is the writeup of record). #6508's
+  # plan-time guard shares that blind spot: `data.hcloud_server_type.registry` is a catalog
+  # lookup. It catches a NONEXISTENT type (#6288's cx32) before anything is destroyed, and
+  # nothing about stock.
+  #
+  # STILL UNORDERABLE, and this survives the repin: the entire `cax` ARM line (cax11 id 45 probed
+  # NOT available 2026-08-06). Do not treat cax11 as a live option anywhere in this tree.
+  #
+  # registry_location stays hel1. This change edits a default only; it schedules no apply.
+  default = "cpx22"
+
+  # PREFIX VALIDATION — ADR-068 D5, back-filled 2026-08-06 (#7309). This was the ONLY one of the
+  # four host-type vars in this root without it (git_data, inngest and grok_dogfood all carry it),
+  # which is a straight inversion of stated risk: zot-registry.tf's own comment says a wrong arch
+  # derivation "DARKS THE SOLE PULL PATH". git-data borrowed its derivation FROM this host and was
+  # then hardened with guards this host never received. A typo'd or unrecognised prefix silently
+  # derives amd64 here (the ternary's else-branch), which is a wrong-arch boot, not a plan error.
+  validation {
+    condition     = can(regex("^(cax|cpx|cx|ccx)", var.registry_server_type))
+    error_message = "registry_server_type must be a recognized Hetzner type (cax*=arm64, or cpx*/cx*/ccx*=amd64); local.registry_arch is derived from the prefix and selects between two DISTINCT zot OCI repositories."
+  }
 }
 
 variable "registry_volume_size" {
@@ -253,7 +322,7 @@ variable "registry_volume_size" {
 
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
 variable "git_data_luks_volume_size" {
-  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf / git-data-cutover.sh FRESH_ROOT). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
+  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf; the LUKS cutover target, #8211). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
   type        = number
   default     = 10
 }
@@ -351,6 +420,52 @@ variable "cf_api_token_r2" {
   sensitive   = true
 }
 
+# SCOPE LEDGER — read this before rotating, widening, or reusing this token.
+#
+# PERMISSION: Account -> Cloudflare Pages -> Edit, and nothing else. No zone permission of
+#   any kind. Verified at first use by the probe in the ADR-194 plan's Phase 0: the token
+#   must return 200 on GET /accounts/<id>/pages/projects and 403 on
+#   GET /zones/<id>/rulesets. A 200 on the second means it was minted too broadly and must
+#   be re-minted narrower.
+# EXPIRY: none, deliberately. event-cf-token-expiry-check covers CF_API_TOKEN only, so a
+#   token minted with an expiry and no monitor is a ~90-day time bomb that would red every
+#   docs deploy with no advance warning.
+# WHY A NEW TOKEN RATHER THAN WIDENING AN EXISTING ONE: ADR-130's decision test. Pages is
+#   reached at /accounts/<id>/pages/projects, a different resource class from the zone
+#   rulesets cf_api_token_rulesets serves; folding Pages:Edit into that token would attach
+#   a site-content replacement primitive to a credential five .tf files and the pre-apply
+#   entrypoint gate already consume. The zone->account escalation is stated explicitly per
+#   ADR-130's #5092 note: this token is account-scoped because Pages is an account-level
+#   product.
+# ONE VALUE, FOUR NAMES: Doppler CF_API_TOKEN_PAGES -> TF_VAR_cf_api_token_pages ->
+#   GitHub Actions CLOUDFLARE_API_TOKEN_PAGES -> workflow env CLOUDFLARE_API_TOKEN. Only
+#   the last is forced (wrangler reads that exact name); the divergence is noted at both
+#   sites so a future reader does not mistake it for drift.
+# THREE STORAGE LOCATIONS, ONE ROTATION: Doppler prd_terraform, terraform.tfstate on R2,
+#   and GitHub Actions secrets. Rotating means replacing the Doppler value and re-applying
+#   this root; see the rotation-policy comment in cf-pages.tf.
+# CONSUMERS (all present as of PR3): main.tf provider alias cloudflare.pages; cf-pages.tf
+#   (cloudflare_pages_project.docs, cloudflare_pages_domain.apex, cloudflare_pages_domain.www,
+#   github_actions_secret.cloudflare_api_token_pages); and .github/workflows/deploy-docs.yml,
+#   which reads CLOUDFLARE_API_TOKEN_PAGES in the wrangler publish step.
+# This block used to carry a NOT-YET-PRESENT list naming deploy-docs.yml and the two
+#   pages_domain resources, against a sequence it called "PR1 of four". Both consumers have
+#   since landed and the sequence is five PRs, so the block became false in the OPPOSITE
+#   direction from the one it warned about — understating the blast radius rather than
+#   overstating it. Nothing catches this: no test reads a variable description. Prefer
+#   naming the EVENT ("the apex cutover") over a PR ordinal, which is why
+#   principles-register.md's AP-019 note survived two resequencings unscathed.
+# FORK-PR EXPOSURE: none. deploy-docs.yml has no pull_request trigger (verified 2026-08-20
+#   — zero occurrences in the file), so the secret is never exposed to a fork build.
+# NO DEFAULT (hr-tf-variable-no-operator-mint-default). Terraform resolves every root
+#   variable BEFORE -target pruning, so leaving this unprovisioned fails the whole
+#   merge-triggered apply on this root, not merely the Pages resources.
+variable "cf_api_token_pages" {
+  description = "Cloudflare API token narrowed to Account -> Cloudflare Pages:Edit for the soleur-docs Pages project (ADR-194, #7640). Account-scoped with no zone permission; minted with no expiry. Value from Doppler prd_terraform via TF_VAR_cf_api_token_pages, republished to GitHub Actions as CLOUDFLARE_API_TOKEN_PAGES by cf-pages.tf. Full scope ledger in the comment block above this declaration. No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+}
+
 # No default: an unprovisioned no-default var fails the WHOLE merge-triggered apply
 # (Terraform resolves all root vars before -target pruning), so CF_API_TOKEN_DNS_EDIT MUST
 # be present in Doppler prd_terraform BEFORE this merges (ADR-065 sequencing — it already is).
@@ -404,6 +519,18 @@ variable "ci_ssh_private_key" {
   sensitive   = true
 }
 
+# (#7226, ADR-237) The Terraform CLI version running the apply, mirrored from each workflow's
+# TERRAFORM_VERSION (parity-pinned by terraform-target-parity.test.ts) and passed as
+# TF_VAR_terraform_version. Its only consumer is terraform_data.web_1_host_key_probe's trigger:
+# a Terraform bump can change the Go SSH client's host-key algorithm preference, so it must
+# re-prove web-1's pin. An operator-local apply must export the same value, or it re-triggers
+# the probe (the default is empty).
+variable "terraform_version" {
+  description = "Terraform CLI version of the applying workflow (re-triggers web_1_host_key_probe on a bump). Empty locally."
+  type        = string
+  default     = ""
+}
+
 variable "cf_access_client_secret" {
   description = "CF Access service-token client secret for the deploy webhook endpoint"
   type        = string
@@ -437,6 +564,34 @@ variable "doppler_token" {
   # so the never-attempt property that made this worth having is preserved.
 }
 
+# #8609 / ADR-241 D10 — the web host's read token for the isolated `soleur-github-app` project
+# (github-app-runtime-project.tf). Rendered as one conditional line into soleur-doppler-token.tmpl.
+# autonomy-considered: operator-mint (ADR-241 D3: this root's state is Tier-A readable, so a
+# doppler_service_token minted here would be branch-readable; the operator mints it into Tier-B
+# `soleur-infra-privileged` instead, runbook step R2). Supplied as a real value ONLY to jobs that
+# opt in through the infra-credentials loader's `github-app-runtime-token` input; every other job
+# gets "". Default "" keeps every plan working before R2 and renders the credential file
+# byte-identical to its pre-#8609 content. NO `validation` block, for the reason on
+# `variable "doppler_token"` above: the shape gate is local.github_app_token_shape_ok (server.tf).
+variable "github_app_runtime_doppler_token" {
+  description = "Read-only Doppler service token for soleur-github-app/prd (#8609). Tier B, operator-minted; empty until runbook step R2."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+# #8609 — NOT a secret: "is this the job that delivers the token above?". The infra-credentials
+# loader exports TF_VAR_github_app_runtime_token_delivered in EVERY job, "true" only where the job
+# opted in (github-app-runtime-token: true), so a prd_terraform plant cannot win under
+# --preserve-env. It gates ONE thing: local.github_app_token_shape_ok requires a non-empty token
+# only when this is true and local.github_app_key_isolated is true. Census row G6o keeps it out of
+# every plan-visible attribute (it differs between contexts by design).
+variable "github_app_runtime_token_delivered" {
+  description = "True only in the jobs that deliver github_app_runtime_doppler_token to a web host (infra-credentials loader opt-in, #8609). Not a secret."
+  type        = bool
+  default     = false
+}
+
 variable "sentry_dsn" {
   description = "Sentry DSN baked into cloud-init so the fresh-boot fatal emit fires WITHOUT depending on doppler (which may itself be the broken stage). Semi-public (already in the client bundle). Injected via TF_VAR_sentry_dsn from Doppler prd_terraform SENTRY_DSN; empty default keeps bare `terraform validate` working. NOTE: the doppler fallback only applies AFTER doppler is installed — the pre-extraction fresh-boot stages (pkg_audit/doppler_dl, #6090) depend SOLELY on this baked value, so an empty DSN there silently reverts to a zero-emit abort. ENFORCED as of #6730 (ADR-145): the web-host-create dispatch asserts this non-empty in Doppler prd_terraform BEFORE any create, and fails closed on an unreadable secret as well as an empty one (ADR-128 R1). The web-host-replace dispatch (#6969, ADR-148) carries the same assertion, where it matters MORE: a replace destroys the existing host first, so an empty DSN means the replacement boots dark with nothing to fall back to. Between #6575 (which deleted the web-2-recreate job that used to assert it) and #6730 nothing enforced it; the operator pinned-image chain in the host_creates HALT still carries the check for the break-glass path, where nothing else does."
   type        = string
@@ -465,6 +620,17 @@ variable "supabase_access_token" {
   description = "Supabase account-scoped Management-API PAT (sbp_…) used by scheduled-inngest-health.yml to read pg_stat_activity on the dedicated inngest project (ref pigsfuxruiopinouvjwy) for connection-pool monitoring (#5562). Out-of-band-minted at supabase.com/dashboard/account/tokens; value from Doppler prd_terraform via TF_VAR_supabase_access_token. Published to a GH Actions secret via github_actions_secret.supabase_access_token (inngest.tf), NOT operator gh secret set. No default (hr-tf-variable-no-operator-mint-default)."
   type        = string
   sensitive   = true
+}
+
+variable "anthropic_api_key_ci" {
+  description = "Anthropic API key for CI and manual evals, minted in the spend-limited soleur-ci-eval Console workspace (#8505). Value from Doppler prd_terraform ANTHROPIC_API_KEY_CI via TF_VAR_anthropic_api_key_ci. Written to Doppler ci/ANTHROPIC_API_KEY and the ANTHROPIC_API_KEY repo secret by anthropic-ci-key.tf. Console-minted: the Admin API cannot set a workspace spend limit and no Anthropic provider exists (runbooks/anthropic-console-workspace-key.md). Distinctness from the production key is proven live by scripts/anthropic-key-distinctness.sh, not here (ADR-244). No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = startswith(var.anthropic_api_key_ci, "sk-ant-")
+    error_message = "anthropic_api_key_ci must be an sk-ant- key (#8505)."
+  }
 }
 
 # --- Inngest IaC (PR-F follow-up, #3960) -------------------------------------
@@ -496,8 +662,20 @@ variable "betterstack_logs_token" {
   sensitive   = true
 }
 
+variable "git_data_betterstack_logs_token" {
+  description = "Write-only Better Stack Logs ingest token for git-data's OWN source (2734275, soleur-git-data-prd, platform http, eu-central-1a, 90d retention) — NOT the shared 2457081 credential its four siblings use. Split out by #7772 item 1: the shared token fans out to the Inngest bake, the zot registry's Doppler secret and the web host's Vector sink, so a git-data metadata leak forced a rotation that darkened two other shippers and cost two host replaces. A dedicated source shrinks forged-row blast radius to git-data's own stream and satisfies leg (3) of ADR-198's capability test, which was the open residual. Published to Doppler soleur/prd_terraform as TF_VAR_git_data_betterstack_logs_token (--name-transformer tf-var). NO default (hr-tf-variable-no-operator-mint-default). Minted 2026-09-03 via POST /api/v2/sources — the `betterstackhq/better-uptime` provider still exposes no Logs-source resource (inngest.tf's IaC gap), so this is the same out-of-band provision that source 2457081 took, recorded rather than claimed; the ADR-198 amendment carries the rotation procedure."
+  type        = string
+  sensitive   = true
+}
+
+variable "host_proxy_tls_enabled" {
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default false, which is today's single-serving-host posture (#8754): SOLEUR_PROXY_BIND and SOLEUR_PROXY_PEER_ALLOWLIST are absent from Doppler prd, so delivering PROXY_TLS_* now would make createProxyServer fire a reportSilentFallback (createProxyServer.no-bind) on every web container start. Set true at the multi-host flip (#5274 Phase 3/6), in the same change that adds the bind + allowlist and the -target lines for all four addresses. Target the key and the cert together: a cert in prd without its key is unusable. See the ADR-118 amendment."
+  type        = bool
+  default     = false
+}
+
 variable "inngest_config_digest" {
-  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is excluded from the apply -target list until the cutover, so the empty default never propagates."
+  description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is count-gated on a non-empty value (#8754), so the empty default instantiates nothing; it stays off every -target list until the promotion route lands (#9060)."
   type        = string
   sensitive   = true
   default     = ""
@@ -512,32 +690,56 @@ variable "inngest_config_digest" {
 # autonomy-considered: provider-mint-applied (App auth + doppler_service_token).
 
 variable "github_app_id" {
-  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf)."
+  description = "GitHub App ID for Soleur-Concierge. Mirrored from `prd` to `prd_terraform` so the App-auth `provider \"github\"` block can resolve it (see main.tf). LEGACY MODE ONLY since #8209 — `default = \"\"` so a merge before the Tier-B project exists does not fail (ADR-065)."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "github_app_private_key" {
-  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded."
+  description = "PEM-encoded RSA private key for the GitHub App. Mirrored from `prd` to `prd_terraform` for the App-auth provider. One-shot download at App creation; cannot be re-downloaded. LEGACY MODE ONLY since #8209; after operator step O10 this resolves to the non-PEM `EVICTED_SEE_ADR_241` sentinel."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
-# #6005: scoped read:packages credential (machine account) for the now-PRIVATE GHCR
-# packages. NO default (hr-tf-variable-no-operator-mint-default) — the operator mints
-# it and writes the value into Doppler `prd_terraform` (the TF_VAR source) BEFORE this
-# file's doppler_secret resources apply. See ghcr-read-credential.tf for the ordered
-# runbook + the deliberate hr-github-app-auth-not-pat exception (ADR-087).
-variable "ghcr_read_user" {
-  description = "GitHub machine-account login that owns the scoped read:packages PAT (the docker login -u value). Published to Doppler soleur/prd as GHCR_READ_USER."
+# --- #8209 / ADR-241: the Tier-A and Tier-B GitHub identities -----------------
+#
+# Every variable below defaults to "" so this file can merge BEFORE the operator has
+# provisioned anything (ADR-065). The provider's mode selector in main.tf reads the
+# empty string as "not supplied", which is what makes the PR merge-safe in both the
+# before and the after state.
+#
+# NAMING: these are DOPPLER names, never Actions-secret names. GitHub reserves the
+# `GITHUB_*` prefix for Actions secrets and secret names are case-insensitive, so
+# `GITHUB_INFRA_APP_*` could not be an Actions secret even if we wanted it to be.
+
+variable "github_plan_actions_credential" {
+  description = "The PR plan job's own Actions credential (`github.token`), used in TOKEN mode for a read-only `terraform plan -refresh=false`. Tier A: a branch workflow can reach it, and that is fine — it is job-scoped, expires with the run, and cannot write. Deliberately NOT named `*_token`: the name is the only thing distinguishing it from the privileged Doppler token in a grep, and #8209 exists because those two were confusable."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
-variable "ghcr_read_token" {
-  description = "Fine-grained read:packages PAT scoped to the jikig-ai soleur-web-platform + soleur-inngest-bootstrap packages, on a machine account. Published to Doppler soleur/prd as GHCR_READ_TOKEN; consumed by ci-deploy.sh (host pull + cosign .sig fetch auth) + cloud-init fresh-boot login. NO default."
+variable "github_infra_app_id" {
+  description = "App ID of the dedicated `soleur-infra` App (Tier B, operator-created from github-infra-app-manifest.json at operator step O1). Not sensitive in itself, but marked so for symmetry with the pair it is useless without."
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_installation_id" {
+  description = "Installation ID of `soleur-infra` on the jikig-ai org (Tier B). A variable rather than a literal because, unlike the legacy soleur-ai installation, this one does not exist until the operator creates it."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_infra_app_private_key" {
+  description = "PEM-encoded private key for the `soleur-infra` App (Tier B, delivered only as a `DOPPLER_TOKEN_INFRA_PRIVILEGED`-gated environment secret on a main-only environment). Its non-emptiness is the selector for INFRA mode in main.tf."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 # #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web
@@ -615,4 +817,71 @@ variable "grok_dogfood_private_ip" {
   description = "Reserved private IP if private-net attach is re-enabled later. Unused in Phase 1 (no hcloud_server_network). Default 10.0.1.50."
   type        = string
   default     = "10.0.1.50"
+}
+
+# #7695. Arms the cloud-init LUKS discriminator's post-recut refusal on the dedicated inngest
+# host. While FALSE, an ext4 signature on the Redis AOF volume is the expected pre-recut state
+# and is mounted as-is. Once TRUE, an ext4 signature means the recut did not take, and the boot
+# refuses rather than putting in-flight job payloads back on a plaintext volume while the
+# encryption-posture ledger claims otherwise.
+#
+# THIS MUST NOT FLIP IN THE SAME CHANGE THAT DROPS `format`, and an earlier revision of this
+# comment said it must ("the two are one decision"). Following that instruction bricks the
+# dedicated host's store. The two settings act at different moments:
+#
+#   `format` governs what a CREATE produces — it matters exactly once, on the recut apply.
+#   `inngest_expect_luks` governs what every BOOT refuses — it matters on every boot after it flips.
+#
+# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03):
+#
+#   1. merge                    `format` gone; expect_luks STILL false
+#   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts
+#                               it plaintext and the host serves. With expect_luks=true here, ARM 1
+#                               REFUSES instead, /mnt/data never mounts, inngest-redis.service's
+#                               mount guard correctly declines to start, and the dedicated host
+#                               comes up with no store — on a host with no SSH and no console.
+#   3. inngest-volume-recut     the volume is destroyed and re-created RAW (this is where dropping
+#                               `format` pays off; ignore_changes suppresses diffs, never creates)
+#   4. inngest-host-replace     first boot against a RAW device: ARM 3 luksFormats it. ARM 3 does
+#                               not consult expect_luks at all, so the cut does not need it either.
+#
+# So expect_luks buys nothing until AFTER step 4, and costs the host its store if flipped before
+# step 2. Flip it in a LATER change, once a boot has been observed reaching
+# `SOLEUR_INNGEST_LUKS_STAGE stage=fstab` on /dev/mapper/inngest-redis — at which point an ext4
+# signature really does mean the recut did not take, which is the only state it exists to refuse.
+#
+# It is not an operator-supplied value and has no secret content.
+variable "inngest_expect_luks" {
+  description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  type        = bool
+  default     = false
+}
+
+# #6894 / ADR-142 — arms the "store is not on the encrypted volume" Better Stack alert
+# (betterstack-logs-alerts.tf, logtail_exploration_alert.inngest_luks_wrong_volume).
+#
+# TRUE since #8296. The inverting event is the 2026-09-20 additive cutover (ADR-142), measured
+# rather than inferred: the on-host FSM's terminal `cutover-complete` row and the first
+# post-cutover probe row reporting /mnt/data on the encrypted volume. The evidence is recorded
+# ONCE, content-anchored, in the encryption-posture ledger row for hcloud_volume.inngest_redis_luks
+# (scripts/encryption-posture-ledger.json, flipped in the follow-up to #8296) — not restated here,
+# where two literal volume ids would rot on the next re-create. Before the swap /mnt/data was
+# legitimately on the plaintext volume, so an armed rule would have paged continuously and been
+# muted; after it, a probe row still pinning the plaintext alias means the store came back.
+#
+# HAZARD: this default governs only while no Doppler override exists. The apply reads
+# TF_VAR_inngest_luks_cutover_complete from soleur/prd_terraform (`--name-transformer tf-var`), so
+# a secret named INNGEST_LUKS_CUTOVER_COMPLETE there SILENTLY WINS over this line and no plan diff
+# would explain why the alert stayed paused. Re-read it before concluding from a plan that this
+# default is or is not in effect:
+#   doppler secrets get INNGEST_LUKS_CUTOVER_COMPLETE -p soleur -c prd_terraform --plain
+# Since #8296 the reconciler resolves THIS default, so an override that pauses the alert is
+# reported twice daily as `logs-alert-paused` — by design; it is the only detector a forgotten
+# override has.
+#
+# Arms on the APPLY, not at merge — see the resource comment in betterstack-logs-alerts.tf.
+variable "inngest_luks_cutover_complete" {
+  description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
+  type        = bool
+  default     = true
 }

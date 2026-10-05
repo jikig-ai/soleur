@@ -15,6 +15,7 @@ import {
   REPO_OWNER,
   mintInstallationToken,
 } from "@/server/inngest/functions/_cron-shared";
+import { githubEgressUrl } from "@/server/github-url";
 import { reportSilentFallback } from "@/server/observability";
 
 // --- Sanitize family (moved verbatim from cron-weekly-release-digest.ts) -----
@@ -202,7 +203,10 @@ export async function fetchWebReleases(opts?: {
       break;
     }
     const resp = await fetch(
-      `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+      githubEgressUrl(
+        `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`,
+        "release-notes",
+      ),
       {
         headers: {
           authorization: `Bearer ${token}`,

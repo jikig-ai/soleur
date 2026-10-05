@@ -48,6 +48,12 @@ import {
   safeCommitAndPr,
   type SafeCommitResult,
 } from "@/server/inngest/functions/_cron-safe-commit";
+// #7849: the fixture git environment comes from the shared helper. SEED_ENV is layered ON TOP so
+// its deterministic identity and dates still win -- two fixtures with identical content must
+// produce identical parent SHAs for the double-run test. What the helper adds underneath is the
+// discovery ceiling and the prefix sweep: the previous `{ ...process.env, ...SEED_ENV }` spread
+// carried an inherited GIT_DIR straight through, and GIT_DIR beats both `cwd` and `git -C`.
+import { gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
 
 // ---------------------------------------------------------------------------
 // Fixture harness — real git repo + local bare "origin"
@@ -74,7 +80,7 @@ const RUN_STARTED_AT = "2026-06-10T11:00:03.123Z";
 async function tgit(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileP("git", args, {
     cwd,
-    env: { ...process.env, ...SEED_ENV },
+    env: { ...gitFixtureEnv(cwd), ...SEED_ENV },
     maxBuffer: 10 * 1024 * 1024,
   });
   return stdout.trim();
@@ -112,8 +118,8 @@ async function makeFixture(): Promise<Fixture> {
   fixtures.push(fixture);
   const remote = fixture.remote;
   const repo = fixture.repo;
-  await execFileP("git", ["init", "--bare", remote]);
-  await execFileP("git", ["init", "-b", "main", repo]);
+  await execFileP("git", ["init", "--bare", remote], { env: gitFixtureEnv(remote) });
+  await execFileP("git", ["init", "-b", "main", repo], { env: gitFixtureEnv(repo) });
   for (const [rel, content] of Object.entries(SEED_FILES)) {
     await mkdir(dirname(join(repo, rel)), { recursive: true });
     await writeFile(join(repo, rel), content, "utf-8");

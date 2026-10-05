@@ -20,6 +20,7 @@ end
 ```
 
 **Verb-to-noun conversion:**
+
 | Action | Resource |
 |--------|----------|
 | close a card | `card.closure` |
@@ -28,6 +29,7 @@ end
 | archive a card | `card.archival` |
 
 **Shallow nesting** - avoid deep URLs:
+
 ```ruby
 resources :boards do
   resources :cards, shallow: true  # /boards/:id/cards, but /cards/:id
@@ -35,21 +37,25 @@ end
 ```
 
 **Singular resources** for one-per-parent:
+
 ```ruby
 resource :closure   # not resources
 resource :goldness
 ```
 
 **Resolve for URL generation:**
+
 ```ruby
 # config/routes.rb
 resolve("Comment") { |comment| [comment.card, anchor: dom_id(comment)] }
 
 # Now url_for(@comment) works correctly
 ```
+
 </routing>
 
 <multi_tenancy>
+
 ## Multi-Tenancy (Path-Based)
 
 **Middleware extracts tenant** from URL prefix:
@@ -73,6 +79,7 @@ end
 ```
 
 **Cookie scoping** per tenant:
+
 ```ruby
 # Cookies scoped to tenant path
 cookies.signed[:session_id] = {
@@ -82,6 +89,7 @@ cookies.signed[:session_id] = {
 ```
 
 **Background job context** - serialize tenant:
+
 ```ruby
 class ApplicationJob < ActiveJob::Base
   around_perform do |job, block|
@@ -91,6 +99,7 @@ end
 ```
 
 **Recurring jobs** must iterate all tenants:
+
 ```ruby
 class DailyDigestJob < ApplicationJob
   def perform
@@ -104,6 +113,7 @@ end
 ```
 
 **Controller security** - always scope through tenant:
+
 ```ruby
 # Good - scoped through user's accessible records
 @card = Current.user.accessible_cards.find(params[:id])
@@ -111,6 +121,7 @@ end
 # Avoid - direct lookup
 @card = Card.find(params[:id])
 ```
+
 </multi_tenancy>
 
 <authentication>
@@ -142,12 +153,14 @@ end
 ```
 
 **Why not Devise:**
+
 - ~150 lines vs massive dependency
 - No password storage liability
 - Simpler UX for users
 - Full control over flow
 
 **Bearer token** for APIs:
+
 ```ruby
 module Authentication
   extend ActiveSupport::Concern
@@ -168,9 +181,11 @@ module Authentication
     end
 end
 ```
+
 </authentication>
 
 <background_jobs>
+
 ## Background Jobs
 
 Jobs are shallow wrappers calling model methods:
@@ -184,6 +199,7 @@ end
 ```
 
 **Naming convention:**
+
 - `_later` suffix for async: `card.notify_watchers_later`
 - `_now` suffix for immediate: `card.notify_watchers_now`
 
@@ -206,17 +222,20 @@ end
 ```
 
 **Database-backed** with Solid Queue:
+
 - No Redis required
 - Same transactional guarantees as your data
 - Simpler infrastructure
 
 **Transaction safety:**
+
 ```ruby
 # config/application.rb
 config.active_job.enqueue_after_transaction_commit = true
 ```
 
 **Error handling** by type:
+
 ```ruby
 class DeliveryJob < ApplicationJob
   # Transient errors - retry with backoff
@@ -232,6 +251,7 @@ end
 ```
 
 **Batch processing** with continuable:
+
 ```ruby
 class ProcessCardsJob < ApplicationJob
   include ActiveJob::Continuable
@@ -244,12 +264,15 @@ class ProcessCardsJob < ApplicationJob
   end
 end
 ```
+
 </background_jobs>
 
 <database_patterns>
+
 ## Database Patterns
 
 **UUIDs as primary keys** (time-sortable UUIDv7):
+
 ```ruby
 # migration
 create_table :cards, id: :uuid do |t|
@@ -260,6 +283,7 @@ end
 Benefits: No ID enumeration, distributed-friendly, client-side generation.
 
 **State as records** (not booleans):
+
 ```ruby
 # Instead of closed: boolean
 class Card::Closure < ApplicationRecord
@@ -273,6 +297,7 @@ Card.where.missing(:closure)  # open
 ```
 
 **Hard deletes** - no soft delete:
+
 ```ruby
 # Just destroy
 card.destroy!
@@ -284,6 +309,7 @@ card.record_event(:deleted, by: Current.user)
 Simplifies queries, uses event logs for auditing.
 
 **Counter caches** for performance:
+
 ```ruby
 class Comment < ApplicationRecord
   belongs_to :card, counter_cache: true
@@ -293,15 +319,18 @@ end
 ```
 
 **Account scoping** on every table:
+
 ```ruby
 class Card < ApplicationRecord
   belongs_to :account
   default_scope { where(account: Current.account) }
 end
 ```
+
 </database_patterns>
 
 <current_attributes>
+
 ## Current Attributes
 
 Use `Current` for request-scoped state:
@@ -321,6 +350,7 @@ end
 ```
 
 Set in controller:
+
 ```ruby
 class ApplicationController < ActionController::Base
   before_action :set_current_request
@@ -335,22 +365,26 @@ end
 ```
 
 Use throughout app:
+
 ```ruby
 class Card < ApplicationRecord
   belongs_to :creator, default: -> { Current.user }
 end
 ```
+
 </current_attributes>
 
 <caching>
 ## Caching
 
 **HTTP caching** with ETags:
+
 ```ruby
 fresh_when etag: [@card, Current.user.timezone]
 ```
 
 **Fragment caching:**
+
 ```erb
 <% cache card do %>
   <%= render card %>
@@ -358,6 +392,7 @@ fresh_when etag: [@card, Current.user.timezone]
 ```
 
 **Russian doll caching:**
+
 ```erb
 <% cache @board do %>
   <% @board.cards.each do |card| %>
@@ -369,6 +404,7 @@ fresh_when etag: [@card, Current.user.timezone]
 ```
 
 **Cache invalidation** via `touch: true`:
+
 ```ruby
 class Card < ApplicationRecord
   belongs_to :board, touch: true
@@ -376,6 +412,7 @@ end
 ```
 
 **Solid Cache** - database-backed:
+
 - No Redis required
 - Consistent with application data
 - Simpler infrastructure
@@ -385,6 +422,7 @@ end
 ## Configuration
 
 **ENV.fetch with defaults:**
+
 ```ruby
 # config/application.rb
 config.active_job.queue_adapter = ENV.fetch("QUEUE_ADAPTER", "solid_queue").to_sym
@@ -392,6 +430,7 @@ config.cache_store = ENV.fetch("CACHE_STORE", "solid_cache").to_sym
 ```
 
 **Multiple databases:**
+
 ```yaml
 # config/database.yml
 production:
@@ -409,23 +448,27 @@ production:
 ```
 
 **Switch between SQLite and MySQL via ENV:**
+
 ```ruby
 adapter = ENV.fetch("DATABASE_ADAPTER", "sqlite3")
 ```
 
 **CSP extensible via ENV:**
+
 ```ruby
 config.content_security_policy do |policy|
   policy.default_src :self
   policy.script_src :self, *ENV.fetch("CSP_SCRIPT_SRC", "").split(",")
 end
 ```
+
 </configuration>
 
 <testing>
 ## Testing
 
 **Minitest**, not RSpec:
+
 ```ruby
 class CardTest < ActiveSupport::TestCase
   test "closing a card creates a closure" do
@@ -440,6 +483,7 @@ end
 ```
 
 **Fixtures** instead of factories:
+
 ```yaml
 # test/fixtures/cards.yml
 one:
@@ -454,6 +498,7 @@ two:
 ```
 
 **Integration tests** for controllers:
+
 ```ruby
 class CardsControllerTest < ActionDispatch::IntegrationTest
   test "closing a card" do
@@ -488,6 +533,7 @@ end
 ```
 
 **Eventable concern:**
+
 ```ruby
 module Eventable
   extend ActiveSupport::Concern
@@ -510,9 +556,11 @@ end
 </events>
 
 <email_patterns>
+
 ## Email Patterns
 
 **Multi-tenant URL helpers:**
+
 ```ruby
 class ApplicationMailer < ActionMailer::Base
   def default_url_options
@@ -526,6 +574,7 @@ end
 ```
 
 **Timezone-aware delivery:**
+
 ```ruby
 class NotificationMailer < ApplicationMailer
   def daily_digest(user)
@@ -539,12 +588,14 @@ end
 ```
 
 **Batch delivery:**
+
 ```ruby
 emails = users.map { |user| NotificationMailer.digest(user) }
 ActiveJob.perform_all_later(emails.map(&:deliver_later))
 ```
 
 **One-click unsubscribe (RFC 8058):**
+
 ```ruby
 class ApplicationMailer < ActionMailer::Base
   after_action :set_unsubscribe_headers
@@ -556,12 +607,15 @@ class ApplicationMailer < ActionMailer::Base
     end
 end
 ```
+
 </email_patterns>
 
 <security_patterns>
+
 ## Security Patterns
 
 **XSS prevention** - escape in helpers:
+
 ```ruby
 def formatted_content(text)
   # Escape first, then mark safe
@@ -570,6 +624,7 @@ end
 ```
 
 **SSRF protection:**
+
 ```ruby
 # Resolve DNS once, pin the IP
 def fetch_safely(url)
@@ -590,6 +645,7 @@ end
 ```
 
 **Content Security Policy:**
+
 ```ruby
 # config/initializers/content_security_policy.rb
 Rails.application.configure do
@@ -605,6 +661,7 @@ end
 ```
 
 **ActionText sanitization:**
+
 ```ruby
 # config/initializers/action_text.rb
 Rails.application.config.after_initialize do
@@ -613,12 +670,15 @@ Rails.application.config.after_initialize do
   ]
 end
 ```
+
 </security_patterns>
 
 <active_storage>
+
 ## Active Storage Patterns
 
 **Variant preprocessing:**
+
 ```ruby
 class User < ApplicationRecord
   has_one_attached :avatar do |attachable|
@@ -629,12 +689,14 @@ end
 ```
 
 **Direct upload expiry** - extend for slow connections:
+
 ```ruby
 # config/initializers/active_storage.rb
 Rails.application.config.active_storage.service_urls_expire_in = 48.hours
 ```
 
 **Avatar optimization** - redirect to blob:
+
 ```ruby
 def show
   expires_in 1.year, public: true
@@ -643,6 +705,7 @@ end
 ```
 
 **Mirror service** for migrations:
+
 ```yaml
 # config/storage.yml
 production:
@@ -650,4 +713,5 @@ production:
   primary: amazon
   mirrors: [google]
 ```
+
 </active_storage>

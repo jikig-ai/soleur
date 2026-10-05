@@ -61,7 +61,11 @@ vi.mock("@/server/github/probe-octokit", () => ({
 import {
   AnthropicApiError,
   classifyEvalFatal,
+  deferDeployOnFinalAttempt,
   deferIfTier2Cron,
+  DeployInProgressError,
+  isFinalAttempt,
+  unwrapSetupVerdict,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   digestIssueExistsForDate,
   ensureDedupIssue,
@@ -82,8 +86,12 @@ import {
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
 import type { Octokit } from "@octokit/core";
+import {
+  ANTHROPIC_CREDIT_EXHAUSTED_FEATURE,
+  ANTHROPIC_CREDIT_EXHAUSTED_OP,
+} from "@/server/anthropic-credit";
 
-function octokitReturning(issues: Array<{ updated_at: string }>) {
+function octokitReturning(issues: Array<{ updated_at: string; created_at?: string; state?: string }>) {
   const request = vi.fn().mockResolvedValue({ data: issues });
   // The helper only ever calls `.request`; cast through unknown so the
   // stub satisfies the structural param type without the full Octokit API.
@@ -156,12 +164,46 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 
+  // #9482: cron-merge-queue-stall-dispatch is a dispatch-hybrid (mint token +
+  // workflow_dispatch to the stall-check workflow); the probe runs in the GHA
+  // executor, so the Node side holds no git and opens no PR. Never Tier-2
+  // deferred: a deferred tick is a missed stall check. Asserted here so the
+  // sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("merge-queue-stall-dispatch (#9482, dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-merge-queue-stall-dispatch")).toBe(false);
+  });
+
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
-  // grows with a new event-triggered cron.
+  // grows with a new event-triggered cron. The poll cron that used to sit beside
+  // it (`cron-gh-pages-cert-state`) was deleted in #9303; it never had an entry in
+  // this file, so the EXPECTED_CRON_FUNCTIONS shrink needs no assertion change.
   it("gh-pages-cert-reissue (#6657, event-triggered) is NOT in the deferred set", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-gh-pages-cert-reissue")).toBe(false);
+  });
+
+  // cron-machinery-drain is a dispatch-hybrid (mint token + workflow_dispatch to
+  // scheduled-machinery-drain.yml); the measurement and drain run in the
+  // ephemeral GHA executor, so the Node side holds no git and opens no PR. Never
+  // Tier-2 deferred: a deferred week is a week with no issue-flow measurement,
+  // and that measurement is the only thing that can tell the operator whether
+  // the filing rate actually fell. Asserted here so the sibling-set sweep sees
+  // this dependent when EXPECTED_CRON_FUNCTIONS grows. See ADR-216.
+  it("machinery-drain (dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-machinery-drain")).toBe(false);
+  });
+
+  // #9168: cron-supabase-watchdog-dispatch is a dispatch-hybrid (mint token +
+  // workflow_dispatch to scheduled-supabase-watchdog.yml); the restart write
+  // runs in the ephemeral GHA executor, the Node side holds no git, no PR, and
+  // NO Supabase credential. Never Tier-2 deferred: a deferred tick is a missed
+  // 5-min probe of the outage this cron exists to shorten. Asserted here so
+  // the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("supabase-watchdog-dispatch (#9168, dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-supabase-watchdog-dispatch")).toBe(
+      false,
+    );
   });
 
   // #5046 PR-2 Phase 2.C (AC-P2.12): the hook's relax-minimal (Task/Skill
@@ -227,12 +269,19 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-inngest-config-drift")).toBe(false);
   });
 
-  it("cron-ghcr-token-minter is live — not Tier-2 deferred (#6031)", () => {
-    // The GHCR installation-token minter does NO git operations (it mints a
-    // token and writes to Doppler), so it needs no CRON_BASH_ALLOWLISTS entry and
-    // is not a deferred Tier-2 cron — added to EXPECTED_CRON_FUNCTIONS but
-    // participating in the watchdog purview immediately.
-    expect(TIER2_DEFERRED_CRONS.has("cron-ghcr-token-minter")).toBe(false);
+  it("cron-sentry-alert-drift is live — not Tier-2 deferred (#7650)", () => {
+    // The §2.9 Sentry-alert drift detector is a dispatch-hybrid of the same
+    // shape as cron-terraform-drift: it mints a short-lived installation token
+    // and POSTs a `workflow_dispatch`, holding no git and opening no PR — the
+    // read and the issue-filing run in the ephemeral GHA executor, not in the
+    // Node dispatcher. So it needs no CRON_BASH_ALLOWLISTS entry and is not a
+    // deferred Tier-2 cron; it participates in the watchdog purview
+    // immediately, which is load-bearing here because that watchdog is the ONLY
+    // scheduler-liveness cover this detector has until #7834 restores its
+    // Sentry cron monitor. Added to EXPECTED_CRON_FUNCTIONS in #7650 Phase 2;
+    // asserted here so the sibling-set sweep sees this dependent updated in
+    // lockstep with the cron-manifest change.
+    expect(TIER2_DEFERRED_CRONS.has("cron-sentry-alert-drift")).toBe(false);
   });
 
   it("cron-action-required-sla is live — not Tier-2 deferred (#6836)", () => {
@@ -271,6 +320,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-roadmap-review",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0, // #9272 — keep the bounded-retry sleeps out of the test clock
     });
     expect(result).toBe(false);
   });
@@ -294,6 +344,60 @@ describe("verifyScheduledIssueCreated", () => {
     expect(result).toBe(true);
   });
 
+  // #8076 — the run-report sweeper (cron-stale-deferred-scope-outs, 12:00Z)
+  // CLOSES old SUCCESS run-reports, and a close bumps updated_at. Without a
+  // state guard that close would be credited as producer output during a
+  // verify-caller's retry window (seo-aeo-audit fires Mon 11:00Z). A CLOSED
+  // issue updated in-window is not evidence the producer ran.
+  it("#8076: does NOT credit a CLOSED issue whose updated_at moved into the window (sweeper close)", async () => {
+    const octokit = octokitReturning([
+      { updated_at: "2026-05-31T12:00:05.000Z", created_at: "2026-05-01T09:00:00.000Z", state: "closed" },
+    ]);
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-seo-aeo-audit",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+    });
+    expect(result).toBe(false);
+  });
+
+  it("#8076: still credits an OPEN comment-bumped issue and a created-in-window issue (closed or not)", async () => {
+    const bumped = octokitReturning([
+      { updated_at: "2026-05-31T09:31:00.000Z", created_at: "2026-05-01T09:00:00.000Z", state: "open" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-campaign-calendar", sinceIso: RUN_START, octokit: bumped })).toBe(true);
+    const createdThenClosed = octokitReturning([
+      { updated_at: "2026-05-31T09:40:00.000Z", created_at: "2026-05-31T09:30:08.000Z", state: "closed" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-roadmap-review", sinceIso: RUN_START, octokit: createdThenClosed })).toBe(true);
+  });
+
+  it("#8076: both timestamp bounds are inclusive at exactly `since` (>=, not >)", async () => {
+    const createdAtSince = octokitReturning([
+      { updated_at: "2026-05-01T09:00:00.000Z", created_at: RUN_START, state: "closed" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-roadmap-review", sinceIso: RUN_START, octokit: createdAtSince })).toBe(true);
+    const bumpedAtSince = octokitReturning([
+      { updated_at: RUN_START, created_at: "2026-05-01T09:00:00.000Z", state: "open" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-campaign-calendar", sinceIso: RUN_START, octokit: bumpedAtSince })).toBe(true);
+  });
+
+  it("#8076: reads 30 per page — the 12:00Z sweeper bumps up to 25 same-label issues, all refused as closed, and the real one must still be on page 1", async () => {
+    const closes = Array.from({ length: 25 }, (_, i) => ({
+      updated_at: `2026-05-31T12:00:${String(i).padStart(2, "0")}.000Z`,
+      created_at: "2026-04-01T09:00:00.000Z",
+      state: "closed",
+    }));
+    const octokit = octokitReturning([
+      ...closes,
+      { updated_at: "2026-05-31T09:31:00.000Z", created_at: "2026-05-31T09:30:00.000Z", state: "open" },
+    ]);
+    expect(await verifyScheduledIssueCreated({ label: "scheduled-content-generator", sinceIso: RUN_START, octokit })).toBe(true);
+    expect(octokit.request.mock.calls[0][1]).toMatchObject({ per_page: 30 });
+  });
+
   it("passes the GitHub `since` param so the server filters by updated_at", async () => {
     const octokit = octokitReturning([
       { updated_at: "2026-05-31T10:00:00.000Z" },
@@ -314,6 +418,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-competitive-analysis",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0,
     });
     expect(result).toBe(false);
   });
@@ -349,6 +454,106 @@ describe("verifyScheduledIssueCreated", () => {
         octokit,
       }),
     ).rejects.toThrow(/invalid sinceIso/);
+  });
+
+  // #9272 — the issues-list view can lag a just-created issue by a few
+  // seconds (label-filtered index), so a single point-in-time read false-reds
+  // a healthy producer AND the persistence gate then discards the run's real
+  // artifacts. The helper retries the empty read on a bounded budget; a read
+  // that recovers on attempt >1 emits a non-paging warn so the lag stays
+  // measurable.
+  it("#9272: an empty first read that resolves on retry returns true and emits scheduled-output-late-visible", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ updated_at: "2026-05-31T09:30:08.000Z" }],
+      });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      feature: "cron-community-monitor",
+    });
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    const [, ctx] = warnSilentFallbackSpy.mock.calls[0];
+    expect(ctx).toMatchObject({
+      feature: "cron-community-monitor",
+      op: "scheduled-output-late-visible",
+    });
+  });
+
+  it("#9272: all-empty reads return false after exactly maxAttempts requests with no warn (true-absence path unchanged)", async () => {
+    const request = vi.fn().mockResolvedValue({ data: [] });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      maxAttempts: 3,
+      feature: "cron-community-monitor",
+    });
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: a populated first read makes exactly one request and emits no warn", async () => {
+    const octokit = octokitReturning([
+      { updated_at: "2026-05-31T10:00:00.000Z" },
+    ]);
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+    });
+    expect(result).toBe(true);
+    expect(octokit.request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: a thrown request propagates immediately — the retry covers empty reads only, preserving verify-output-failed upstream", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("GitHub 503"));
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    await expect(
+      verifyScheduledIssueCreated({
+        label: "scheduled-community-monitor",
+        sinceIso: RUN_START,
+        octokit,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toThrow("GitHub 503");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: maxAttempts: 1 preserves the single-read contract for callers that opt out", async () => {
+    const request = vi.fn().mockResolvedValue({ data: [] });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      maxAttempts: 1,
+    });
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -430,6 +635,7 @@ describe("resolveOutputAwareOk", () => {
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
     });
     expect(ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -446,6 +652,7 @@ describe("resolveOutputAwareOk", () => {
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
     });
     expect(ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -815,7 +1022,7 @@ describe("mintInstallationToken (least-privilege cron token)", () => {
 // tests pin the transport contract: request headers + body, return shape,
 // non-ok throw, optional timeout wiring, optional output_config passthrough.
 describe("postAnthropicMessage (shared Anthropic transport)", () => {
-  const ANY_MODEL = "claude-sonnet-5";
+  const ANY_MODEL = "claude-sonnet-5-5";
   let fetchSpy: ReturnType<typeof vi.fn>;
 
   function okResponse(body: unknown) {
@@ -837,9 +1044,9 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   it("AC4c — emits a cron:<name> SOLEUR_CLAUDE_COST marker from the response usage/model when markerSource is set", async () => {
     fetchSpy.mockResolvedValue(
       okResponse({
-        content: [{ text: "ok" }],
+        content: [{ type: "text", text: "ok" }],
         stop_reason: "end_turn",
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-5-5",
         usage: {
           input_tokens: 12,
           output_tokens: 3,
@@ -860,7 +1067,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     expect(emitClaudeCostMarkerSpy).toHaveBeenCalledTimes(1);
     expect(emitClaudeCostMarkerSpy.mock.calls[0][0]).toMatchObject({
       source: "cron:cron-compound-promote",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       input_tokens: 12,
       output_tokens: 3,
       cache_read_input_tokens: 4,
@@ -873,7 +1080,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
 
   it("emits NO marker when markerSource is omitted (the two legacy callers)", async () => {
     fetchSpy.mockResolvedValue(
-      okResponse({ content: [{ text: "ok" }], stop_reason: "end_turn" }),
+      okResponse({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" }),
     );
     await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic-key",
@@ -886,7 +1093,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
 
   it("POSTs to the messages endpoint with auth + version headers and returns {text, stopReason}", async () => {
     fetchSpy.mockResolvedValue(
-      okResponse({ content: [{ text: '{"highlights":[]}' }], stop_reason: "end_turn" }),
+      okResponse({ content: [{ type: "text", text: '{"highlights":[]}' }], stop_reason: "end_turn" }),
     );
 
     const result = await postAnthropicMessage({
@@ -916,6 +1123,102 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
     expect(sent).not.toHaveProperty("output_config");
   });
 
+  // #8392 — EXECUTION_MODEL has been a Sonnet since #5849 (5.5 today), and Sonnet runs
+  // adaptive thinking when `thinking` is omitted, so content[0] is a thinking block
+  // (display "omitted" → `thinking: ""`) and the structured-output text follows it.
+  it("#8392 — returns the first TEXT block when a thinking block precedes it", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [
+          { type: "thinking", thinking: "" },
+          { type: "text", text: '{"clusters":[]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result).toEqual({ text: '{"clusters":[]}', stopReason: "end_turn" });
+  });
+
+  // Selection is by TYPE, not by position. The `text` key on the thinking block is a
+  // deliberate synthetic discriminator — the API never sends it — without which this
+  // case returns "" under both the old and new readers and kills no mutant.
+  it("#8392 — a thinking-only response yields \"\" even when the thinking block carries a text key", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [{ type: "thinking", thinking: "", text: "must-not-be-read" }],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result).toEqual({ text: "", stopReason: "end_turn" });
+  });
+
+  // Set cardinality: with one text block per fixture, `first` / `last` / join-all are
+  // indistinguishable. Measured — a reversed find and a filter().join() both survived
+  // the suite until this case existed.
+  it("#8392 — returns the FIRST text block when several follow the thinking block", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [
+          { type: "thinking", thinking: "" },
+          { type: "text", text: "FIRST" },
+          { type: "text", text: "SECOND" },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result.text).toBe("FIRST");
+  });
+
+  // Selection must be an ALLOWLIST of `text`, not a denylist of `thinking`. The API
+  // also emits tool_use / server_tool_use / redacted_thinking / web_search_tool_result,
+  // and a `!== "thinking"` reader returns undefined on all of them — reopening the
+  // very silent-empty class #8392 exists for. Measured: that inversion survived until
+  // this case existed.
+  it("#8392 — skips a non-thinking, non-text block and still finds the text", async () => {
+    fetchSpy.mockResolvedValue(
+      okResponse({
+        content: [
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: '{"clusters":[]}' },
+        ],
+        stop_reason: "end_turn",
+      }),
+    );
+
+    const result = await postAnthropicMessage({
+      apiKey: "sk-ant-" + "synthetic-key",
+      model: ANY_MODEL,
+      maxTokens: 2048,
+      messages: [{ role: "user", content: "cluster these" }],
+    });
+
+    expect(result.text).toBe('{"clusters":[]}');
+  });
+
   it("throws `Anthropic API <status>` on a non-ok response (caller owns the fallback)", async () => {
     fetchSpy.mockResolvedValue(new Response("upstream error", { status: 503 }));
 
@@ -927,6 +1230,107 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
         messages: [{ role: "user", content: "x" }],
       }),
     ).rejects.toThrow("Anthropic API 503");
+  });
+
+  // #8505 — the transport is the credit-marker chokepoint for every HTTP-transport
+  // cron (credit-probe canary, compound-promote, weekly-release-digest).
+  describe("#8505 credit-exhaustion marker", () => {
+    const creditBody =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}';
+    const creditReports = () =>
+      reportSilentFallbackSpy.mock.calls.filter(
+        ([, ctx]) => (ctx as { op?: string }).op === ANTHROPIC_CREDIT_EXHAUSTED_OP,
+      );
+
+    beforeEach(() => reportSilentFallbackSpy.mockClear());
+
+    it("reports once with source=cron:<markerSource> on a credit 400, and still throws AnthropicApiError", async () => {
+      fetchSpy.mockResolvedValue(new Response(creditBody, { status: 400 }));
+      const err = await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+        markerSource: "cron-anthropic-credit-probe",
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(AnthropicApiError);
+      // Classified once, from the full body, for the probe to read.
+      expect((err as AnthropicApiError).creditExhausted).toBe(true);
+      const reports = creditReports();
+      expect(reports).toHaveLength(1);
+      const [errArg, ctx] = reports[0] as [
+        unknown,
+        { feature: string; tags: Record<string, string>; extra: Record<string, unknown> },
+      ];
+      // Message path (err = null) — the Error path loses its tags to the pino mirror.
+      expect(errArg).toBeNull();
+      expect(ctx.feature).toBe(ANTHROPIC_CREDIT_EXHAUSTED_FEATURE);
+      expect(ctx.tags.source).toBe("cron:cron-anthropic-credit-probe");
+      expect(ctx.extra.status).toBe(400);
+      // Only the constant marker leaves the transport, never the vendor body.
+      expect(JSON.stringify(reports[0])).not.toContain("credit balance is too low to access");
+    });
+
+    it("does NOT report a 2xx whose content happens to contain the credit text", async () => {
+      fetchSpy.mockResolvedValue(
+        okResponse({
+          content: [{ type: "text", text: "PR: alert when your credit balance is too low" }],
+          stop_reason: "end_turn",
+        }),
+      );
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "summarize" }],
+        markerSource: "cron-weekly-release-digest",
+      });
+      expect(creditReports()).toHaveLength(0);
+    });
+
+    it("falls back to source=cron:unknown when no markerSource is threaded", async () => {
+      fetchSpy.mockResolvedValue(new Response(creditBody, { status: 400 }));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }).catch(() => undefined);
+      const reports = creditReports();
+      expect(reports).toHaveLength(1);
+      expect((reports[0][1] as { tags: Record<string, string> }).tags.source).toBe("cron:unknown");
+    });
+
+    it.each([
+      [429, '{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}'],
+      [500, "upstream error"],
+      [529, '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'],
+      [400, '{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}'],
+      [400, '{"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits."}}'],
+    ])("does NOT report on status %i with a non-credit body", async (status, body) => {
+      fetchSpy.mockResolvedValue(new Response(body, { status }));
+      const err = await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+        markerSource: "cron-compound-promote",
+      }).catch((e: unknown) => e);
+      expect(creditReports()).toHaveLength(0);
+      expect((err as AnthropicApiError).creditExhausted).toBe(false);
+    });
+
+    it("does NOT report on a network failure (redacted rethrow path)", async () => {
+      fetchSpy.mockRejectedValue(new TypeError("fetch failed"));
+      await postAnthropicMessage({
+        apiKey: "sk-ant-" + "synthetic-key",
+        model: ANY_MODEL,
+        maxTokens: 1,
+        messages: [{ role: "user", content: "ping" }],
+      }).catch(() => undefined);
+      expect(creditReports()).toHaveLength(0);
+    });
   });
 
   it("rethrows a redacted error on a fetch network failure (never leaks the api key)", async () => {
@@ -947,7 +1351,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   });
 
   it("wires AbortSignal.timeout when timeoutMs is provided", async () => {
-    fetchSpy.mockResolvedValue(okResponse({ content: [{ text: "{}" }], stop_reason: "end_turn" }));
+    fetchSpy.mockResolvedValue(okResponse({ content: [{ type: "text", text: "{}" }], stop_reason: "end_turn" }));
 
     await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic-key",
@@ -963,7 +1367,7 @@ describe("postAnthropicMessage (shared Anthropic transport)", () => {
   });
 
   it("passes output_config through to the request body when provided", async () => {
-    fetchSpy.mockResolvedValue(okResponse({ content: [{ text: "{}" }], stop_reason: "end_turn" }));
+    fetchSpy.mockResolvedValue(okResponse({ content: [{ type: "text", text: "{}" }], stop_reason: "end_turn" }));
     const schema = { type: "object", additionalProperties: false, properties: {} };
 
     await postAnthropicMessage({
@@ -1069,6 +1473,13 @@ describe("classifyEvalFatal", () => {
     expect(c.fatalClass).toBe("spawn-fault");
   });
 
+  it("#8611: a run stopped by --max-budget-usd → fatal budget-capped, from the result subtype (not the tail)", () => {
+    const c = classifyEvalFatal({ ...base, subtype: "error_max_budget_usd" });
+    expect(c.fatal).toBe(true);
+    expect(c.fatalClass).toBe("budget-capped");
+    expect(c.reason).toMatch(/max-budget-usd/);
+  });
+
   it("plain non-zero with no marker → NOT fatal (benign)", () => {
     const c = classifyEvalFatal({ ...base, stdoutTail: "Reached max turns; no artifact." });
     expect(c.fatal).toBe(false);
@@ -1109,6 +1520,21 @@ describe("resolveBestEffortEvalOk (classify-fatal heartbeat)", () => {
     expect(d.sentryExtra.fatalClass).toBe("benign");
   });
 
+  it("#8611: a capped run that EXITED 0 is still ok:false (the clean-exit shortcut must not hide it)", () => {
+    const d = resolveBestEffortEvalOk({
+      ok: true,
+      exitCode: 0,
+      abortedByTimeout: false,
+      durationMs: 42,
+      stdoutTail: "",
+      stderrTail: "",
+      subtype: "error_max_budget_usd",
+    });
+    expect(d.ok).toBe(false);
+    expect(d.sentryExtra.fatalClass).toBe("budget-capped");
+    expect(d.errorSummary).toMatch(/max-budget-usd/);
+  });
+
   it("clean exit (ok:true) → ok:true, no reason", () => {
     const d = resolveBestEffortEvalOk({
       ok: true,
@@ -1140,7 +1566,7 @@ describe("AnthropicApiError (widened transport, #5674)", () => {
     );
     const err = await postAnthropicMessage({
       apiKey: "sk-ant-" + "synthetic",
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-5-5",
       maxTokens: 1,
       messages: [{ role: "user", content: "ping" }],
     }).catch((e: unknown) => e);
@@ -1156,7 +1582,7 @@ describe("AnthropicApiError (widened transport, #5674)", () => {
     await expect(
       postAnthropicMessage({
         apiKey: "sk-ant-" + "synthetic",
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-5-5",
         maxTokens: 1,
         messages: [{ role: "user", content: "x" }],
       }),
@@ -1173,6 +1599,7 @@ describe("resolveOutputAwareOk — F1 retrofit (scheduled-output-missing extra i
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
       stdoutTail: `max-turns. leaked ${SYNTH_SK_ANT} here`,
       stderrTail: `boom ${SYNTH_GHS}`,
       exitCode: 0,
@@ -1596,7 +2023,7 @@ describe("postSentryHeartbeat — loud silent-skip on unset/malformed env (#4861
 // ---------------------------------------------------------------------------
 // ensureDedupIssue (#2756 starvation backstop) — a stable-title, open-issue
 // dedup sibling of ensureScheduledAuditIssue. Reuses the same read shape
-// (labels, sort:created desc, per_page:10) but matches the EXACT title and
+// (labels, sort:created desc, per_page:30) but matches the EXACT title and
 // scopes the dedup read to OPEN issues so an auto-closed prior alert never
 // suppresses a fresh drought (the standing-condition contract).
 // ---------------------------------------------------------------------------
@@ -1615,16 +2042,18 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
       title: "Content starvation: schedule empty",
       body: "drought",
       labels: ["action-required"],
+      missRetryDelayMs: 0,
     });
     expect(res.created).toBe(true);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    // GET then POST
+    // GET, bounded re-read (the index-lag retry), then POST
     expect(calls[0][0]).toBe("GET /repos/{owner}/{repo}/issues");
     expect(calls[0][1].state).toBe("open");
     expect(calls[0][1].sort).toBe("created");
     expect(calls[0][1].direction).toBe("desc");
-    expect(calls[0][1].per_page).toBe(10);
-    expect(calls[1][0]).toBe("POST /repos/{owner}/{repo}/issues");
+    expect(calls[0][1].per_page).toBe(30);
+    expect(calls[1][0]).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(calls[2][0]).toBe("POST /repos/{owner}/{repo}/issues");
   });
 
   it("does NOT create a duplicate when an open issue with the exact title exists", async () => {
@@ -1635,11 +2064,44 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
       title: "Content starvation: schedule empty",
       body: "drought",
       labels: ["action-required"],
+      missRetryDelayMs: 0,
     });
     expect(res.created).toBe(false);
     expect(res.issueNumber).toBe(99);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.length).toBe(1); // GET only, no POST
+  });
+
+  it("does NOT create a duplicate when the issue appears on the re-read (index lag)", async () => {
+    let n = 0;
+    const request = vi.fn(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        n++;
+        return {
+          data:
+            n === 1
+              ? []
+              : [{ title: "Content starvation: schedule empty", number: 88 }],
+        };
+      }
+      return { data: { number: 4242 } };
+    });
+    const client = {
+      request,
+    } as unknown as Parameters<typeof ensureDedupIssue>[0];
+    const res = await ensureDedupIssue(client, {
+      title: "Content starvation: schedule empty",
+      body: "drought",
+      labels: ["action-required"],
+      missRetryDelayMs: 0,
+    });
+    expect(res.created).toBe(false);
+    expect(res.issueNumber).toBe(88);
+    expect(
+      request.mock.calls.filter(
+        ([r]) => r === "POST /repos/{owner}/{repo}/issues",
+      ),
+    ).toHaveLength(0);
   });
 });
 
@@ -1966,5 +2428,77 @@ describe("artifactCommittedSince (#6750 freshness probe)", () => {
         octokit,
       }),
     ).resolves.toBe(false);
+  });
+});
+
+// #8726 (plan S4) — the deferral helpers. The check runs INSIDE the step, where
+// the DeployInProgressError is still live; the verdict is what crosses the step
+// boundary, because the class does not.
+describe("isFinalAttempt / deferDeployOnFinalAttempt / unwrapSetupVerdict (#8726)", () => {
+  const ws = { ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" };
+
+  it("isFinalAttempt matches the SDK's StepFailed choice when maxAttempts is present", () => {
+    expect(isFinalAttempt({ attempt: 0, maxAttempts: 2 })).toBe(false);
+    expect(isFinalAttempt({ attempt: 1, maxAttempts: 2 })).toBe(true);
+    expect(isFinalAttempt({ attempt: 0, maxAttempts: 1 })).toBe(true);
+  });
+
+  it("isFinalAttempt reads 'final' when maxAttempts is absent (the documented divergence from the SDK)", () => {
+    expect(isFinalAttempt({ attempt: 0, maxAttempts: undefined })).toBe(true);
+    expect(isFinalAttempt({ attempt: 1, maxAttempts: undefined })).toBe(true);
+    expect(isFinalAttempt({})).toBe(true);
+  });
+
+  it("a non-final attempt rethrows the SAME DeployInProgressError, so Inngest retries the step", async () => {
+    const err = new DeployInProgressError("cron-x", 1234);
+    await expect(
+      deferDeployOnFinalAttempt(async () => { throw err; }, { attempt: 0, maxAttempts: 2 }),
+    ).rejects.toBe(err);
+  });
+
+  it("the final attempt returns a JSON-plain deploy-deferred verdict", async () => {
+    const v = await deferDeployOnFinalAttempt(
+      async () => { throw new DeployInProgressError("cron-x", 1234); },
+      { attempt: 1, maxAttempts: 2 },
+    );
+    expect(v).toEqual({ kind: "deploy-deferred", leaseAgeMs: 1234 });
+    expect(JSON.parse(JSON.stringify(v))).toEqual(v);
+  });
+
+  it("with maxAttempts absent the deferral returns on attempt 0 (no retry)", async () => {
+    const v = await deferDeployOnFinalAttempt(
+      async () => { throw new DeployInProgressError("cron-x", 5); },
+      { attempt: 0, maxAttempts: undefined },
+    );
+    expect(v.kind).toBe("deploy-deferred");
+  });
+
+  it("any other error is rethrown unchanged, even on the final attempt", async () => {
+    const err = new Error("git clone failed");
+    await expect(
+      deferDeployOnFinalAttempt(async () => { throw err; }, { attempt: 1, maxAttempts: 2 }),
+    ).rejects.toBe(err);
+  });
+
+  it("success returns the workspace as a ready verdict", async () => {
+    await expect(
+      deferDeployOnFinalAttempt(async () => ws, { attempt: 0, maxAttempts: 2 }),
+    ).resolves.toEqual({ kind: "ready", workspace: ws });
+  });
+
+  it("unwrapSetupVerdict re-materializes the deferral with the cron name and lease age", () => {
+    let thrown: unknown;
+    try {
+      unwrapSetupVerdict({ kind: "deploy-deferred", leaseAgeMs: 42 }, "cron-x");
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(DeployInProgressError);
+    expect(thrown).toMatchObject({ cronName: "cron-x", leaseAgeMs: 42 });
+    expect(unwrapSetupVerdict({ kind: "ready", workspace: ws }, "cron-x")).toEqual(ws);
+  });
+
+  it("unwrapSetupVerdict accepts the pre-#8726 memoized shape (a run resuming across the deploy)", () => {
+    expect(unwrapSetupVerdict(ws, "cron-x")).toEqual(ws);
   });
 });

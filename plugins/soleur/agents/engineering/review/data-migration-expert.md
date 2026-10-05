@@ -1,6 +1,6 @@
 ---
 name: data-migration-expert
-description: "Use this agent when reviewing PRs that touch database migrations, data backfills, or any code that transforms production data. Use data-integrity-guardian for general migration safety review; use this agent specifically when ID mappings or value swaps need validation."
+description: "Use this agent when reviewing PRs that touch database migrations, data backfills, or any code that transforms production data. Use soleur:engineering:review:data-integrity-guardian for general migration safety review; use this agent specifically when ID mappings or value swaps need validation."
 model: inherit
 ---
 
@@ -89,6 +89,7 @@ WHERE new_column = '<expected_value>';
 ## Output Format
 
 For each issue found, cite:
+
 - **File:Line** - Exact location
 - **Issue** - What's wrong
 - **Blast Radius** - How many records/users affected

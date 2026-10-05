@@ -10,6 +10,28 @@
 2. `/ship` skill analyzes the diff and sets a `semver:patch`, `semver:minor`, or `semver:major` label
 3. On merge to main, the Action reads the label, computes the next version from the latest release tag, creates a GitHub Release, and posts to Slack
 
+### Manifest versioning
+
+**No plugin manifest carries a `version` key.** Not one of the three, and the reason is functional rather than stylistic.
+
+`claude plugin update` compares **version strings**. With no `version` key the CLI records the plugin's **commit SHA** as its version, so the string changes with every commit and the comparison detects the update. A constant `version` never changes, so the comparison always comes back equal: the update short-circuits, reports `already at the latest version`, and exits **0** having delivered nothing. That is defect 1 of #7471 — a plugin that never updates while telling the operator it is current, which is the worst shape of failure because it is indistinguishable from success.
+
+Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` — **§1.9** is the controlled experiment that establishes the mechanism above; §1.0 is the `git-subdir` gate and §2B the published repo. Cite by anchor; do not restate the numbers here.
+
+A superseded claim, recorded so it is not reintroduced: an earlier draft of this section said a `version` key *suppresses `gitCommitSha` tracking*. §1.9 refuted it — two arms differing only in that key **both** recorded a SHA. Identity is recorded either way; what the key changes is whether the identity string **varies between commits**, and that is what the comparator reads. Which field carries the identity is not the load-bearing part.
+
+So the rule is not "the version fields are frozen, leave them alone". The fields are **gone**, deliberately, and adding one back to any of the three silently reverts the fix for every new install.
+
+The three manifests:
+
+| Manifest | Where | Purpose |
+|---|---|---|
+| `plugins/soleur/.claude-plugin/plugin.json` | this repo | The plugin manifest itself. Keyless. |
+| `.claude-plugin/marketplace.json` | this repo | The **local-dev** marketplace. Its `plugins[0].source` is `./plugins/soleur`, which is what `claude plugin marketplace add <local-path>` consumes. Its `plugins[0]` entry is keyless; its **top-level** `"version"` is the manifest-*format* version, a different field that stays. |
+| `.claude-plugin/marketplace.json` | `jikig-ai/soleur-marketplace` | The **published distribution** manifest, one `git-subdir` entry pointing back at this repo. Keyless. Since #7493 its **source** is `infra/github/soleur-marketplace-manifest.json` here, published by Terraform and validated pre-merge by the blocking `marketplace-manifest-guard`; that repo also carries a PR-required ruleset. The **published bytes** still live outside this repo, so they are verified by reading the published file (`scheduled-marketplace-drift.yml`). |
+
+Nothing publishes to the third manifest on release. A GitHub Release creates a tag; it does not write to the marketplace repo. The distribution manifest tracks `main` with no pinned `ref`/`sha`, so new content is delivered by the source commit advancing, not by a version bump.
+
 ### Semver Label Rules
 
 - **MAJOR** (1.0.0 → 2.0.0): Breaking changes, major reorganization
@@ -21,7 +43,7 @@
 Before committing ANY changes:
 
 - [ ] README.md component counts verified (tables accurate)
-- [ ] Do NOT edit: `plugin.json` version field (frozen sentinel `0.0.0-dev`), `marketplace.json` version — these are intentionally static
+- [ ] Do NOT add a `version` key to `plugin.json` or to `marketplace.json`'s `plugins[]` entry — a constant version string makes `claude plugin update` compare equal and no-op while reporting success, silently breaking update delivery for every install (#7471). See [Manifest versioning](#manifest-versioning)
 - [ ] PR body includes a `## Changelog` section describing changes
 
 ### Directory Structure
@@ -32,6 +54,7 @@ Components are organized by domain, then by function.
 agents/
 ├── engineering/
 │   ├── design/            # Architecture agents
+│   ├── discovery/         # Community agent/skill discovery agents
 │   ├── infra/             # Infrastructure agents
 │   ├── research/          # Engineering research agents
 │   ├── review/            # Code review agents
@@ -50,6 +73,8 @@ commands/                      # Entry-point commands (go, sync, help)
 skills/
 └── <skill-name>/          # All skills at root level (flat)
 ```
+
+**`agents/` holds only agent definitions.** Claude loads every `.md` under it as a subagent, so reference text an agent needs belongs in that agent's body, not in a sibling file (#8317). The harness-parity tree test pins the tracked set to the registry.
 
 **Note:** `AGENTS.rules.md` at the repo root is the rule corpus injected on
 every session (ADR-151). It is *not* a plugin component — the plugin loader
@@ -125,15 +150,15 @@ When adding or modifying agents, verify compliance:
 
 ### YAML Frontmatter (Required)
 
-- [ ] `name:` present and matches filename (lowercase-with-hyphens)
+- [ ] `name:` present and matches filename (lowercase-with-hyphens), written exactly `name: <filename stem>` (unquoted, the first `name:` line, inside frontmatter that opens on line 1). It stays the bare leaf; the harness-parity census exempts that one line and no other
 - [ ] `description:` is 1-3 sentences of routing text only -- when to use this agent
 - [ ] `description:` contains NO `<example>` blocks, NO `<commentary>` tags (these bloat the system prompt on every turn)
-- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling] for [X]; use this agent for [Y].")
+- [ ] `description:` includes a disambiguation sentence if another agent has overlapping scope ("Use [sibling's registry id] for [X]; use this agent for [Y]."). Name the sibling by its registry id exactly as the harness-parity census prints it in its `write` hint (e.g. `soleur:engineering:review:security-sentinel`), never by its bare leaf: a bare leaf fails Claude Code's Task tool and Grok's spawn_subagent, and the registry id is the one form every harness resolves (ADR-226)
 - [ ] `model: inherit` (see Model Selection Policy; explicit overrides require justification)
 
 ### Token Budget Check (Required when adding agents)
 
-- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold)
+- [ ] Run: `grep -h 'description:' agents/**/*.md | wc -w` -- cumulative word count must stay under ~2500 words (~3.3k tokens, well under the 15k threshold). A registry id counts as ONE word but costs ~6-8 tokens, so this metric undercounts sibling references; a character/token budget is tracked in #8692
 - [ ] Reserve ~5 words per sibling needing disambiguation when budgeting the new agent's description -- large domains (marketing: 11 specialists) consume budget faster
 - [ ] Detailed instructions, frameworks, and examples belong in the agent body (after `---`), not in `description:`
 
@@ -150,15 +175,17 @@ grep -h 'description:' agents/**/*.md | wc -w
 
 ## Model Selection Policy
 
-Model selection is governed by three tiers (ADR-053; revised 2026-06-10 for the Fable 5 pricing era — Fable 5 is 2× Opus, 3.3× Sonnet, 10× Haiku per MTok):
+Pricing basis, refreshed 2026-09-03 at the Fable 5.1 launch: Fable 5.1 is 2× Opus, **5× Sonnet**, 10× Haiku per MTok. The Sonnet multiple was 3.3× when ADR-053 was written against Sonnet 4.6 ($3/$15); Sonnet 5.5 bills $2/$10, so the cheap end of the range moved and the Fable-vs-Sonnet gap widened — re-read any tiering judgment that leaned on 3.3×. Fable 5.1 costs the same per token as Fable 5 ($10/$50) and differs only on cache reads, $0.25/MTok vs $1 (0.025× vs 0.1× of base input). That is 4× on the **cache-read line item alone** — output and cache writes are unchanged, and the ADR-083 consult is a cold single-shot spawn per gate with no reused prefix, so its cache reads are ~0 and this does not move Soleur's advisor spend.
+
+Model selection is governed by three tiers (ADR-053; revised 2026-06-10 for the Fable pricing era):
 
 1. **Agent frontmatter:** All agents use `model: inherit` in their YAML frontmatter, so agents run on whatever model the user's session is using, respecting their cost/quality preference. Explicit overrides (`haiku`, `sonnet`, `opus`, `fable`) require written justification in the agent body text explaining why the task is fundamentally mismatched with the session model. Current exceptions: the five `engineering/research/*` agents (`repo-research-analyst`, `learnings-researcher`, `best-practices-researcher`, `framework-docs-researcher`, `git-history-analyzer`) are pinned to `model: haiku` (#5087). These are pure read-and-summarize researchers that Soleur's planning/research skills (`/plan`, `/brainstorm`, `/deepen-plan`) spawn via **direct or unpinned `Task` calls** — a cost surface ADR-053's workflow call-site pins (tier 2) structurally do not reach (`deepen-plan`'s workflow deliberately leaves its research fan-out on `inherit`). The `haiku` floor is the safe tier: an absolute floor pin can never *upgrade* a cheaper session, so unlike the `sonnet` frontmatter tiering ADR-053 rejected, it introduces no silent cheap-session upgrade. Reviewers/verifiers are deliberately NOT frontmatter-pinned — they stay `inherit` so a stronger session model still flows through (see tier 3).
-2. **Workflow call-site pins:** `skills/*/workflows/*.workflow.js` scripts MAY pin `opts.model` (`'sonnet'` or `'haiku'`) at **mechanical** steps — extract, classify, fetch, commit-message, issue-file, report. Each pin requires a one-line justification comment at the call site. Judgment steps (review, verify/concur adjudication, synthesis, resolution, implementation, principle scoring) MUST NOT be pinned. Pins are **absolute**, never "one tier below session" — only pin where a fixed cheap tier is always correct. Named consequence: an absolute pin can run ABOVE a cheaper session model (a Haiku session still runs a `sonnet`-pinned step on Sonnet); the per-run tier `log()` line is the disclosure. The pin set is enforced mechanically by `plugins/soleur/test/workflow-model-pins.test.ts` — changing the allowlist is a clo-attestation-class change.
+2. **Workflow call-site pins:** `skills/*/workflows/*.workflow.js` scripts MAY pin `opts.model` (`'standard'` or `'cheap'`) at **mechanical** steps — extract, classify, fetch, commit-message, issue-file, report. Each pin requires a one-line justification comment at the call site. Judgment steps (review, verify/concur adjudication, synthesis, resolution, implementation, principle scoring) MUST NOT be pinned. Pins are **semantic** (ADR-110) — the workflow inlines `resolveWorkflowModel()` so `'standard'`/`'cheap'` become harness SKUs at spawn. Pins are **absolute**, never "one tier below session" — only pin where a fixed cheap tier is always correct. Named consequence: an absolute pin can run ABOVE a cheaper session model (a Haiku session still runs a `standard`-pinned step on the `standard` tier's SKU — Sonnet on Claude; see `TIER_MAPS.grok` on Grok); the per-run tier `log()` line is the disclosure. The pin set is enforced mechanically by `plugins/soleur/test/workflow-model-pins.test.ts` — changing the allowlist is a clo-attestation-class change.
 3. **Never-downgrade exemption list:** all `engineering/review/*` agents, `data-migration-expert`, security/SAST agents, legal/compliance surfaces (`clo`, `gdpr-gate`, `data-integrity-guardian`), C-suite strategy agents, enumeration-scoring audits (`agent-native-audit` — the platform's own sonnet→opus upgrade precedent for the identical scoring workload, `cron-agent-native-audit.ts`), and any step that gates a merge or touches user data.
-4. **SKILL.md prose advisories (ungated fourth surface):** SKILL.md prose MAY advise spawning a Task/Agent with a cheap tier for mechanical sweeps (e.g., deepen-plan's verify-the-negative passes). Each advisory must cite ADR-053 and is discoverable via `grep -rn 'model: sonnet\|model: haiku\|model: fable' plugins/soleur/skills/*/SKILL.md` (the `fable` alternate catches the ADR-083 upgrade variant below) — prose advisories are advisory-only and carry no mechanical gate, so keep them to mechanical-step classes only, with one sanctioned exception: the scoped `fable` upgrade consult at the two named judgment gates (see the Scoped advisor consult bullet below, ADR-083).
+4. **SKILL.md prose advisories (ungated fourth surface):** SKILL.md prose MAY advise spawning a Task/Agent with a cheap tier for mechanical sweeps (e.g., deepen-plan's verify-the-negative passes). Each advisory must cite ADR-053 and is discoverable via `grep -rn 'model: cheap\|model: standard\|resolveAdvisorTier' plugins/soleur/skills/*/SKILL.md` (plus residual `model: sonnet\|model: haiku\|model: fable` until those SKUs leave SKILL.md) — prose advisories are advisory-only and carry no mechanical gate, so keep them to mechanical-step classes only, with one sanctioned exception: the scoped `advisor` upgrade consult at the two named judgment gates (see the Scoped advisor consult bullet below, ADR-083 / ADR-110).
 
 - **Effort control:** Reasoning effort is a session-level setting (`effortLevel` in `.claude/settings.json` or the `/model` slider), not configurable per-agent. The Claude Code plugin spec does not support per-agent effort levels.
-- **Scoped advisor consult (tier-4 upgrade variant):** for a strong-model second opinion at a decision gate, do NOT use Claude Code's built-in [advisor tool](https://code.claude.com/docs/en/advisor) (`advisorModel`) — it re-sends the full transcript uncached every call and is inherited by every fan-out subagent, the opposite of token-frugal. Instead spawn a scoped `Task(model: fable)` (fall back to `opus`) with a **curated payload** (plan sections / diff+findings+ACs), never the conversation — a Task subagent gets prompt text only, so curation is the cost lever. This is wired at exactly two gates: `plan` Step 4.5 (plan-finalization) and `ship` Phase 5.5 (completion); `one-shot` inherits both transitively. It is an *upgrade* pin for a *judgment* step (vs tier-4's cheap-mechanical downgrades), so the discovery grep is extended to include `fable`: `grep -rn 'model: sonnet\|model: haiku\|model: fable' plugins/soleur/skills/*/SKILL.md`. Decision + cost/tradeoff semantics: [ADR-083](../../knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md).
+- **Scoped advisor consult (tier-4 upgrade variant):** for a strong-model second opinion at a decision gate, do NOT use Claude Code's built-in [advisor tool](https://code.claude.com/docs/en/advisor) (`advisorModel`) — it re-sends the full transcript uncached every call and is inherited by every fan-out subagent, the opposite of token-frugal. Instead spawn via `resolveAdvisorTier()` (semantic tier `advisor`; fall back with `resolveAdvisorFallback()` / semantic tier `strong`) with a **curated payload** (plan sections / diff+findings+ACs), never the conversation — a Task subagent gets prompt text only, so curation is the cost lever. This is wired at exactly two gates: `plan` Step 4.5 (plan-finalization) and `ship` Phase 5.5 (completion); `one-shot` inherits both transitively. It is an *upgrade* pin for a *judgment* step (vs tier-4's cheap-mechanical downgrades). Decision + cost/tradeoff semantics: [ADR-083](../../knowledge-base/engineering/architecture/decisions/ADR-083-scoped-strong-model-consult-at-decision-gates.md). Harness SKUs: [ADR-110](../../knowledge-base/engineering/architecture/decisions/ADR-110-harness-semantic-model-tier-map.md).
 
 ## Skill Compliance Checklist
 
@@ -171,7 +198,7 @@ When adding or modifying skills, verify compliance with skill-creator spec:
 
 ### Token Budget Check (Required when adding skills)
 
-- [ ] Run: `bun test plugins/soleur/test/components.test.ts` -- cumulative description word count must stay under 1,800 words (see #618)
+- [ ] Run: `bun test plugins/soleur/test/components.test.ts` -- cumulative description word count must stay under `SKILL_DESCRIPTION_WORD_BUDGET` (defined in that same test file — read it, never a remembered literal; see #618)
 - [ ] Descriptions are for **routing**, not instruction. Remove trigger phrases (`Triggers on "..."`) and verbose restatements. Target ~30 words per skill.
 - [ ] No single description exceeds 1,024 characters
 
@@ -198,6 +225,53 @@ grep -E '`(references|assets|scripts)/[^`]+`' skills/*/SKILL.md
 grep -E '^description:' skills/*/SKILL.md | grep -v 'This skill'
 # Should return nothing if all use third person
 ```
+
+## Test Fixture Conventions
+
+### A test that spawns `git` must pass a constructed environment
+
+Use `gitCleanEnv()` from [`test/lib/git-clean-env.ts`](./test/lib/git-clean-env.ts) for the env
+sweep, or `gitFixtureEnv(dir)` / `gitFixture(dir)` from
+[`test/lib/git-fixture-env.ts`](./test/lib/git-fixture-env.ts) when the fixture WRITES — that
+layers a discovery ceiling, config hermeticity and a pinned identity on top of the sweep
+(python sibling: `tests/scripts/_git_fixture_env.py`). Do **not** hand-roll a per-file copy:
+three independent ones existed before extraction and the third is what lost data.
+
+`cwd` and `git -C` are not sufficient. In a **linked worktree** — which every feature branch here
+is — git exports `GIT_DIR` and `GIT_INDEX_FILE` to its hooks as absolute paths, and a `git`
+subprocess honours those over both its working directory and `-C`. A fixture's `git init` then
+initialises nothing and its commits land on the developer's live branch. Scrubbing `GIT_DIR` alone
+is also insufficient: an absolute `GIT_INDEX_FILE` still stages into the other repository's index.
+
+Two non-obvious consequences:
+
+- **The scrub goes on the invocation, not in the runtime.** Under Bun a `delete process.env.GIT_DIR`
+  does not reach a child spawned without an explicit `env`, so an in-process scrub looks correct and
+  protects nothing. (Node propagates it; the divergence only shows for an *inherited* variable.)
+- **Transitive spawns count.** If the suite shells out to a script that runs `git` itself, that
+  spawn needs the constructed env too — no helper-call grep or source scan can see it.
+
+### `rc=97` from a test runner is the tripwire, not a flake
+
+`plugins/soleur/test/lib/git-tripwire.ts` aborts a runner that *starts* holding a git-location
+variable. It is registered once per RUNTIME, and each registration is cwd- or config-scoped, so all
+four matter:
+
+| Runtime | Registration |
+|---|---|
+| bun (repo root) | `bunfig.toml` `[test] preload` |
+| bun (`cd plugins/soleur`) | `plugins/soleur/bunfig.toml` — bun resolves `bunfig.toml` from the INVOCATION cwd, so the root one does not apply |
+| vitest | `globalSetup` in `apps/web-platform/vitest.config.ts` (not `setupFiles`, which re-runs per file) |
+| shell | the prelude in `test/test-helpers.sh` |
+| python | `tests/conftest.py`, fired on import from `tests/scripts/_git_fixture_env.py` |
+
+They fail rather than scrub, so the broken entry point gets fixed instead of silently papered over.
+The message names the variables it FOUND and a remedy derived from them — a fixed spelling was a
+loop, since the guard refuses nine variables and the old remedy named three. A suite whose subject
+genuinely is the inherited environment can set `SOLEUR_GIT_TRIPWIRE_ALLOW=1`, which is honoured by
+every arm and announces itself on stderr.
+
+Background and measurements: #7833.
 
 ## Domain Leader Interface
 
@@ -232,6 +306,18 @@ Domain leaders are agents that orchestrate a business domain's specialist team. 
 6. Update docs data files: `agents.js` (DOMAIN_META, DOMAIN_CSS_VARS, domainOrder), `style.css` (CSS variable). Landing page and legal docs update automatically from data.
 7. Update AGENTS.md (directory tree, domain leader table) and README.md (agent section, counts)
 8. PR must have `semver:minor` label and `## Changelog` section (CI handles version bump at merge time)
+
+## Cloud Sessions (Devin Cloud)
+
+Soleur skills load in Devin Cloud sessions, but the enforcement surface differs from the local CLI — this file is a guaranteed-load surface, so the rules live here:
+
+- [id: cloud-detect-before-pipeline] — In a Devin session, run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/cloud-detect.sh"` before pipeline work. If `CLAUDE_PLUGIN_ROOT` is unset (cloud exec shells do not export it), resolve the plugin root by `.claude-plugin/plugin.json` identity per `devin/INSTRUCTIONS.md` §Detection — never by the script's basename. `local` or `not-local:no-devin-env` proceeds normally; any other `not-local:<reason>` activates Cloud Mode for the whole session.
+- [id: cloud-banner-on-not-local] — In a `not-local` session (excluding `no-devin-env`), emit `cloud-detect.sh --banner` (stderr) at the start of pipeline work so the degraded surface is visible, never silent.
+- [id: cloud-sequential-fallback] — Plugin subagents are local-only. A skill that fans out executes each role sequentially inline with the same definition, discloses `Reviewed-Coverage: sequential-fallback` in deliverables and PR trailers, and never claims an independent review ran. `/ship` blocks `sequential-fallback` coverage on a `single-user incident` plan without explicit acknowledgement.
+- [id: cloud-ack-before-secrets] — In a `not-local` session, no secrets read, production mutation, Doppler action, Terraform prod action, or mutating GitHub API call proceeds without an explicit session-scoped acknowledgement via `message_user` (the only cloud ask primitive — it blocks; an unanswered or headless session defers/aborts the step with a documented alternative; never a persisted ack file).
+- [id: cloud-guardrail-disclosure] — SessionStart rule injection and non-firing hooks are absent in cloud; run `scripts/precommit-guard.sh "<command>"` before any `git commit` so commit-on-main still refuses without hook execution, and every other repo guardrail is disclosed as not restored — never implied parity.
+
+Canonical contract: `devin/INSTRUCTIONS.md` §Cloud Mode (capability matrix, detection semantics, consumer behavior).
 
 ## Documentation
 

@@ -6,8 +6,8 @@
 #   - Writes systemd units for inngest-server.service + inngest-heartbeat.{service,timer}.
 #   - On second invocation with the SAME version, short-circuits via
 #     `systemctl is-active` + version match.
-#   - On version bump, pauses the running server (drains in-flight events),
-#     restarts, resumes.
+#   - On version bump: a DRAIN_SLEEP_SEC settle delay, then binary replace, then
+#     restart; in-flight step dispatches are interrupted at the restart (#7463/#9219).
 #
 # Self-hosted Inngest binds 0.0.0.0:8288 (events) + 8289 (connect-gateway).
 # ADR-030's "loopback only" intent — keep Inngest unreachable from the public
@@ -24,6 +24,15 @@
 # source of truth on disk; both delivery paths reference this file.
 
 set -euo pipefail
+
+# #7797: this script runs as root under cloud-init and handles live Doppler credentials, so `-x`
+# would print them into the cloud-init log. Unconditional refusal, not the credential-conditional
+# form used by read-only probes: by the time this runs the credentials are always present, and
+# this file's own post-mortem is about secret material reaching a world-readable file
+# (knowledge-base/engineering/operations/post-mortems/inngest-heartbeat-unit-heredoc-root-substitution-postmortem.md).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 # These two variables are templated by the OCI image build OR cloud-init
 # substitution. Default-to-empty triggers loud failure at runtime check.
@@ -72,10 +81,8 @@ readonly HEARTBEAT_SCRIPT="/usr/local/bin/inngest-heartbeat.sh"
 # oneshot that emits an ERR-priority `inngest-heartbeat` line when the heartbeat unit fails.
 readonly HEARTBEAT_FAILURE_LOG_UNIT="/etc/systemd/system/inngest-heartbeat-failure-log.service"
 readonly DOWNLOAD_URL="https://github.com/inngest/inngest/releases/download/${INNGEST_CLI_VERSION}/inngest_${INNGEST_CLI_VERSION#v}_linux_${INNGEST_CLI_ARCH}.tar.gz"
-# In-place upgrade drain. Override via env at install time if event volume
-# exceeds ~10 events/sec sustained — at higher rates the SQLite fsync window
-# can leave some inbound HTTP events unacknowledged. Default is fine for
-# alpha-internal (CFO autonomous-draft from Stripe webhooks, low volume).
+# In-place upgrade settle delay (DRAIN_SLEEP_SEC: the name is historical — nothing is drained).
+# Not overridable on the ci-deploy sudo path (--preserve-env omits it); edit the default.
 DRAIN_SLEEP_SEC="${DRAIN_SLEEP_SEC:-2}"
 
 # Defense-in-depth: refuse to operate if the writable host paths are symlinks
@@ -112,16 +119,15 @@ fi
 if [[ -z "$SKIP_BINARY_INSTALL" ]]; then
 
 # Detect in-place version upgrade (existing service running an older version).
-# Pause the server so the in-memory queue drains to the SQLite store before
-# replacing the binary, then resume after restart. Wall-clock downtime per
-# upgrade on loopback-only binding: ~5s.
+# No pause/resume verb exists (measured absent on v1.19.4 and v1.45.1, #7463/#9219);
+# the sleep is a settle delay, not a drain — nothing is quiesced before the restart,
+# and a host replace never enters this block.
 UPGRADE_FROM=""
 if systemctl is-active --quiet inngest-server.service 2>/dev/null; then
   UPGRADE_FROM=$(cat "$VERSION_FILE" 2>/dev/null || echo "unknown")
   if [[ "$UPGRADE_FROM" != "$INNGEST_CLI_VERSION" ]]; then
-    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; pausing for queue drain (${DRAIN_SLEEP_SEC}s)"
-    "$INSTALL_PATH" pause >/dev/null 2>&1 || log "warn: pause command failed (continuing)"
-    sleep "$DRAIN_SLEEP_SEC"  # allow in-flight events to drain to SQLite
+    log "upgrade detected: $UPGRADE_FROM → $INNGEST_CLI_VERSION; ${DRAIN_SLEEP_SEC}s settle delay before binary replace"
+    sleep "$DRAIN_SLEEP_SEC"
   fi
 fi
 
@@ -237,6 +243,58 @@ dark_arm_emit_due() {
 # correct THERE and only there. The co-located web host is TODAY'S live pusher and gets no
 # arm at all -- an absent URL there is always a real fault and must stay loud.
 @@DARK_ARM@@
+#
+# --- #7228: LISTENER GATE -------------------------------------------------------------------
+# Everything above decides WHETHER THIS HOST SHOULD BEAT AT ALL. This decides whether it has
+# anything to beat ABOUT, and it is the whole of #7228.
+#
+# The beat below is `curl "$INNGEST_HEARTBEAT_URL"` fired by a 60s systemd timer: it proves a
+# TIMER FIRED, and asserts nothing whatsoever about :8288. That is why one correctly-armed,
+# correctly-scoped, unpaused monitor stayed GREEN for twelve days while the dedicated host
+# served nothing and every app dispatch failed with ECONNREFUSED. The tempting fix -- give the
+# dedicated host its own monitor -- mints a SECOND meaningless green; the monitor has to be
+# gated on a listener or it is decoration.
+#
+# NOT DEDICATED-ONLY, DELIBERATELY. This heredoc is the shared renderer for both hosts, and both
+# run inngest-server.service on loopback 127.0.0.1:8288 (:782). inngest-server-probe.sh already
+# probes that exact URL from this same file. So the gate is meaningful on both, and on the
+# co-located web host -- TODAY's live pusher, the one actually feeding the monitor -- it is what
+# converts that monitor from "a timer fired" into "the scheduler serves".
+#
+# NO `curl -f`, and `-w '%{http_code}'` is the point: -f makes curl exit non-zero and print
+# NOTHING on 4xx/5xx, collapsing every distinguishable failure into one empty string. Same
+# classification web-zot-consumer-probe.sh documents. `|| true` keeps a curl failure from being
+# the thing that decides -- the CODE decides, and a code we could not obtain is 000.
+#
+# QUOTA. The first draft of this comment argued the row "fires only while the listener is DOWN,
+# which is an active outage someone is resolving" and left it unlimited. That premise is FALSE for
+# the co-located web host in the intended POST-CUTOVER steady state, which is the state this whole
+# programme is driving toward: the dark arm is rendered EMPTY there so there is no early exit; the
+# web host's INNGEST_HEARTBEAT_URL lives in the `soleur` project and is never deleted by op=arm or
+# op=rollback (both touch soleur-inngest only); and `quiesce inngest` stops inngest-server.service
+# while leaving inngest-heartbeat.timer firing every 60s. URL present + no dark arm + no listener
+# = one row every 60s, indefinitely. That is ~1,440 rows/day as a PERMANENT steady state -- the
+# exact cost #6617b removed, and exactly the "indefinite HEALTHY steady state" the old comment
+# claimed this was not. Measured headroom is ~5.1k/day against a ~19.9k baseline, so this alone
+# would consume ~28% of what is left, and a cutover that lands on terminal `aborted` doubles it.
+# So it is rate-limited on the SAME hourly stamp helper the dark arm uses, which already handles
+# the boot-before-NTP skew case. ~24 rows/day per host in a sustained outage, and the row still
+# says WHY the monitor went silent without an SSH (hr-no-ssh-fallback-in-runbooks).
+INNGEST_HEALTH_URL="${INNGEST_HEARTBEAT_HEALTH_URL:-http://127.0.0.1:8288/health}"
+health_code="$(/usr/bin/curl -gsS -m 5 -o /dev/null -w '%{http_code}' "$INNGEST_HEALTH_URL" 2>/dev/null || true)"
+# curl prints nothing at all when it cannot even start. Normalize to the literal 000 so
+# "no HTTP response" is a VALUE; an empty field reads as missing data on the Better Stack side.
+[ -n "$health_code" ] || health_code=000
+if [ "$health_code" != "200" ]; then
+  # Rate-limited on its own stamp, independent of the dark arm's, so neither can suppress the
+  # other: they answer different questions ("deliberately dark" vs "armed but not serving").
+  if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_GATE_STAMP:-/run/inngest-heartbeat/gate.stamp}" dark_arm_emit_due; then
+  logger -t "$LOG_TAG" "SOLEUR_INNGEST_HEARTBEAT_SUPPRESSED listener=no health_code=$health_code — refusing to beat: inngest does not serve /health on this host, so a beat would certify only that a timer fired (#7228). Absence-of-beat is the alarm."
+  fi
+  # The exit is OUTSIDE the rate limit: the limit governs the LINE only, never the DECISION, so a
+  # suppressed log row can never convert a non-serving host into a beating one.
+  exit 0
+fi
 # -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
 # { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
@@ -293,7 +351,7 @@ if [[ -z "$DOPPLER_BIN" ]]; then
   exit 1
 fi
 
-cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
+cat > "$HEARTBEAT_UNIT" <<'HEARTBEATEOF'
 [Unit]
 Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
@@ -309,7 +367,7 @@ User=deploy
 Group=deploy
 # Doppler CLI calls os.UserHomeDir() during init even when DOPPLER_CONFIG_DIR
 # is set in the env file. Running as root with no HOME triggers
-# "Doppler Error: \$HOME is not defined". User=deploy gets HOME=/home/deploy
+# "Doppler Error: $HOME is not defined". User=deploy gets HOME=/home/deploy
 # automatically, matching inngest-server.service's hardening pattern.
 # Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
@@ -356,8 +414,24 @@ RuntimeDirectoryPreserve=yes
 # This line is what made the PrivateTmp defect above diagnosable in 2 minutes, off-box,
 # after 3 days of a blind 60s storm. It earned its keep before the fix it shipped with did.
 SyslogIdentifier=inngest-heartbeat
-ExecStart=${DOPPLER_BIN} run --config prd -- ${HEARTBEAT_SCRIPT}
+ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@
 HEARTBEATEOF
+
+# #7695: the delimiter above is QUOTED, so nothing in the unit body is expanded or
+# executed at render time. The two values the unit genuinely needs are substituted here by
+# sentinel -- the house pattern already used for @@DARK_ARM@@ and @@HOST_NAME@@. Both seds match
+# the sentinel as a SUBSTRING (it sits mid-line inside ExecStart=, so unlike the standalone
+# @@DARK_ARM@@ line above it cannot be ^...$-anchored) and use | as the delimiter because both
+# values are absolute paths. The @@ residual check below is not ceremony: an & in a substituted
+# path expands to the whole match and corrupts it at exit 0, which set -e does not catch.
+sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|" "$HEARTBEAT_UNIT"
+# Refuse to install a unit still carrying an unsubstituted sentinel: a half-rendered
+# ExecStart= would fail at systemd start with a message about a literal @@ path, which is
+# exactly the class this file already learned to make diagnosable off-box.
+if grep -qF '@@' "$HEARTBEAT_UNIT"; then
+  log "ERROR: inngest-heartbeat.service still carries an unsubstituted sentinel after render"
+  exit 1
+fi
 
 # #6556 Part 2 — the OnFailure target for inngest-heartbeat.service. Non-templated (ONE
 # consumer, so no `@`/%i template — cf. cron-egress-alarm@ which earns its template from two
@@ -466,6 +540,18 @@ cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
 # one-sided change is a silent no-op.
 LOG_TAG="inngest-server-probe"
 
+# DRIFT-PINNED (#8015). Byte-identical to the registry probe's FUNCTIONS_GQL_QUERY and to the
+# copy inlined in inngest-cutover-flip.sh; inngest-cutover-flip.test.sh pins all three. At COLUMN
+# ZERO deliberately -- that pin greps `^readonly FUNCTIONS_GQL_QUERY=`, so an indented copy inside
+# this heredoc would be invisible to it and the pin would be vacuous for this file.
+#
+# THE PROBE SCRIPT IS NAMED NOWHERE IN THIS FILE, AND THAT IS AN INVARIANT, not an oversight.
+# cutover-inngest-workflow.test.sh enforces disjointness: that script is delivered to the WEB host
+# and must be ABSENT from every OCI bake surface, which is exactly why the query text is inlined
+# here rather than sourced. The guard is a `grep -qF` over this file, so writing the filename even
+# in a COMMENT trips it -- which it did, on the first draft of this block.
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
 # under a future `set -e`, or a missing systemctl, must degrade a FIELD, never the event.
@@ -496,8 +582,611 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
 image_ref="$(sed -n 's/^INNGEST_BOOTSTRAP_IMAGE=//p' /etc/default/soleur-inngest-image 2>/dev/null | head -1 || true)"
 [ -n "$image_ref" ] || image_ref=unknown
 
+# --- #7228: three fields whose absence cost this incident the most time -----------------
+# WHICH HOST IS THIS. 1,459 of the 1,839 rows naming inngest-server.service in a 72h window
+# came from the CO-LOCATED web host, so a substring query over the shared source table returns
+# healthy-looking rows FROM THE WRONG HOST and manufactures a false all-clear — the #7228 title
+# ("health probe certified a different server") reproduced one layer down, in the telemetry.
+# This field makes a row self-identifying instead of depending on the reader field-isolating
+# correctly. Hetzner IMDS only, deliberately: cat-deploy-state.sh's resolve_host_id() falls back
+# to /etc/machine-id and must HASH it, because machine-id(5) says the value is confidential and
+# this row's destination is a third-party vendor. Rather than carry that obligation into a
+# POSIX-sh heredoc, an unreachable IMDS degrades to `unknown` — honest, and never a leak.
+# (Fourth site to resolve a host id; cat-deploy-state.sh:32 names a 4th copy as the #6465
+# extraction trigger. Not a copy of that bash helper — no machine-id arm, no hashing — but the
+# same question, so it belongs on that ticket rather than being extracted mid-incident.)
+instance_id="$(curl -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
+case "$instance_id" in '' | *[!0-9]*) instance_id=unknown ;; *) instance_id="hetzner-$instance_id" ;; esac
+
+# WHAT IS ACTUALLY RUNNING. inngest.tf pins a version; whether the host runs it is a DIFFERENT
+# claim, and only the host can answer it. A replace that silently landed an older image is
+# indistinguishable from a healthy one without this.
+# Bounded: `inngest version` can perform an update check, and this runs BEFORE the probe's
+# unconditional emit — an unbounded stall here silently stops the hourly positive control, which
+# is indistinguishable from a dead host (the #6617a failure this marker exists to close).
+cli_version="$(timeout 10 /usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
+[ -n "$cli_version" ] || cli_version=unknown
+
+# WHY THE SERVER IS NOT RUNNING, when it is not. inngest-server-flip-guard.sh refuses EVERY
+# prod-URI start on a flag outside {armed, flipping, flushed, done}, so this field is the
+# difference between "the host is broken" and "the host is refusing on purpose". During this
+# incident the flag sat at `rollback` — outside the allowlist — and nothing off-box could say
+# so. Read from Doppler rather than the local state slot because Doppler is what the guard
+# itself reads; the slot records the FSM's last write, which is a different question.
+# doppler's stderr is discarded, never shipped: this row's tag is allowlisted, so raw stderr
+# from a credentialed CLI would be a route from the token's own error text to Better Stack.
+cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
+[ -n "$cutover_flag" ] || cutover_flag=unknown
+
+# --- #7695: the /mnt/data store facts the recut gate decides on ---
+# Guard 2 clears a DESTRUCTIVE volume recut only on a MEASURED-EMPTY store, so `0` IS the
+# clearance condition and a field degrading to `0` would authorize the destroy it was meant
+# to withhold. Hence `n/a` (does not apply on this host) and `__UNREADABLE__` (applied, could
+# not be answered) — neither is ever `0`.
+#
+# THE ROLE TEST IS THE DOPPLER PROJECT, NOT THE MOUNT. An earlier revision gated on "is
+# /mnt/data a mountpoint" and asserted in this comment that the web host has no /mnt/data.
+# That is FALSE: cloud-init.yml mounts the WORKSPACES volume there, so the mountpoint test is
+# true on BOTH hosts and does not discriminate. On web-1 it would have walked every user's
+# repository tree hourly and shipped the aggregate byte count off-box. DOPPLER_PROJECT is this
+# codebase's canonical dedicated-vs-web discriminator (`soleur-inngest` vs `soleur`; the
+# dedicated-only arms above gate on the same value), and the units receive it via
+# EnvironmentFile=/etc/default/inngest-server.
+#
+# NO `if` HERE: ADR-117 forbids branching before the unconditional emit below.
+#
+# EVERY CALL IS BOUNDED. This probe is the hourly positive liveness control, and a stall
+# before the emit loses the whole row — including vector_active and the Vector-down fallback.
+# `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
+# unbounded call here goes dark exactly when the disk is the thing being measured.
+probe_schema=8
+data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
+latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
+
+host_role=web
+[ "${DOPPLER_PROJECT:-}" = soleur-inngest ] && host_role=dedicated
+
+data_mount_src=n/a
+data_bytes=n/a
+flush_latched=n/a
+redis_keys=n/a
+# Mirrors redis_keys: the emit below is UNCONDITIONAL, so every field it names must be bound
+# on every path. An unbound one renders as the empty string and silently drops the field.
+redis_key_patterns=n/a
+# Same reason: the emit is unconditional, so this must be bound on EVERY path.
+redis_expires=n/a
+# #8017/#8015 probe_schema=8. Same unconditional-emit contract as every field above: bound here
+# so no code path can leave one of them unset and silently drop a field from the row.
+data_mount_devid=n/a
+data_mount_base=n/a
+registry_fns=n/a
+
+case "$host_role" in
+dedicated)
+  # A non-mountpoint is NOT "an empty store" — it is an unanswered question, and the gate must
+  # never read it as clearance.
+  data_mount_src="$(timeout 5 findmnt -no SOURCE "$data_mount" 2>/dev/null | head -1 || true)"
+  [ -n "$data_mount_src" ] || data_mount_src=__UNREADABLE__
+
+  # ── #8017 probe_schema=8: an identity the gate can actually compare ────────────────────────
+  # G14 compared this field -- findmnt's KERNEL device name, e.g. /dev/sdb -- against a
+  # /dev/disk/by-id/... path. /proc/self/mountinfo records the resolved target, never the
+  # symlink, so that arm was UNREACHABLE: only the /dev/mapper/inngest-redis arm could ever
+  # match, and that device does not exist until the recut G14 gates. Every dispatch returned
+  # mount_mismatch. The gate runs off-host and cannot readlink this host's /dev, so the host
+  # resolves and emits the identity instead.
+  #
+  # PLACED ABOVE the inner `case "$data_mount_src"` deliberately. That case's __UNREADABLE__ arm
+  # binds three fields and falls through everything else -- which is how redis_key_patterns and
+  # redis_expires legitimately keep their `n/a` default on that path. A resolution block inside
+  # its `*)` sub-arm would leave data_mount_devid=n/a on a host_role=dedicated row: the WEB-arm
+  # sentinel on a dedicated row, which G14 would then refuse while pointing at the volume
+  # attachment. Bound once, here, on every dedicated path.
+  byid_dir="${PROBE_BYID_DIR:-/dev/disk/by-id}"
+  case "$data_mount_src" in
+  __UNREADABLE__)
+    # Nothing mounted. `__UNREADABLE__` on devid has exactly TWO producers, and data_mount_src --
+    # emitted since schema 7 -- is what tells them apart:
+    #   src=__UNREADABLE__                  -> no mount at all (this branch)
+    #   src=/dev/sdb, base=__UNREADABLE__   -> the lsblk/readlink resolution itself broke
+    # The wrong-device case is NOT in that collision: it emits __NOMATCH__, which is already a
+    # distinct value. (An earlier revision of this comment called it a three-way collision and
+    # justified data_mount_base by it -- the line directly below it, naming __NOMATCH__, refuted
+    # that. base is kept for a narrower reason: on the __NOMATCH__ path it is the only field
+    # naming the backing kernel device, which separates "failed open onto the root disk" from
+    # "attached to some other volume".)
+    data_mount_devid=__UNREADABLE__
+    ;;
+  *)
+    # `lsblk -s` walks the INVERSE tree: through a device-mapper node to its backing device AND
+    # through a partition to its parent disk, in one documented flag. util-linux -- the same
+    # package as the findmnt above, which the live host demonstrably runs.
+    #
+    # THE INVARIANT, stated for the command that actually ships: `-nso` (NO `-d`) prints the full
+    # child->parent chain, so the base device is the LAST non-empty row. Do NOT "simplify" this to
+    # `-nsdo NAME` plus a first-non-empty read: that inverts the rule and yields the dm node or the
+    # partition instead of the base disk, which resolves to __NOMATCH__ and refuses forever. The
+    # `-d` measurement recorded in this branch's phase-0 notes is about that OTHER form.
+    # COUNT THE LEAVES, do not assume one. `lsblk -s` on md/RAID or multipath emits a FORKED
+    # inverse tree -- two ancestors at the SAME depth -- and a last-non-empty read picks one
+    # ARBITRARILY. Measured against the real probe body with `md0` over `sdb`+`sdc`, each carrying
+    # its own Hetzner alias: the emitter reported base=sdc and devid=scsi-0HC_Volume_777777777,
+    # a confident pin naming a volume the mount is NOT on. G14 then compares that against the
+    # dispatch's expected id, so an arbitrarily-picked leaf that happens to match would clear a
+    # destructive recut against the wrong physical device.
+    #
+    # This is the by-id half's own discipline applied to the other side of the same function: that
+    # half already COUNTS (`_devid_hits` -> __AMBIGUOUS__) rather than asserting single-valuedness.
+    # No current topology forks (cloud-init builds one volume, no partition table, no md) -- but
+    # "does not arise today" describes one layout, and this block already handles the partition
+    # case for exactly that reason.
+    #
+    # Depth = leading bytes before the first alphanumeric (lsblk's tree prefix). Only RELATIVE
+    # depth is compared, so a byte-oriented awk and a multibyte-aware one agree.
+    # -i (--ascii) is load-bearing, not cosmetic. lsblk indents with box-drawing glyphs by
+    # default, and the continuation under a NON-last sibling is U+2502 + space (4 bytes) while
+    # the last sibling gets two plain spaces (2 bytes). A byte-oriented depth therefore differs
+    # between two nodes at the same LOGICAL depth, which is how the previous revision of this
+    # awk returned a confident `sdb` for an md0 spanning sdb+sdc -- while the SAME tree in ASCII
+    # returned __AMBIGUOUS__. The probe unit sets no LANG/LC_ALL, so which one shipped was a
+    # property of the host locale. -i collapses every prefix segment to a fixed 2 bytes.
+    #
+    # COUNT THE LEAVES, and mean it. The previous revision counted nodes at the maximum depth,
+    # which is a different set: in a fork where one leg is partitioned and the other is not
+    # (md0 -> {sdb1 -> sdb, sdc}), the only node at max depth is sdb, so it pinned sdb
+    # confidently while the mount spans both. A row is a leaf when the next row is not deeper
+    # than it -- i.e. nothing descends from it -- or when it is the last row. Adjacency is
+    # sound here because a child's prefix is always its parent's plus one segment, so a child
+    # is always strictly deeper than its parent even before -i.
+    #
+    # This is the third time this predicate has been wrong in the same direction, so state the
+    # invariant rather than the mechanism: MORE THAN ONE PHYSICAL DEVICE UNDER THE MOUNT MUST
+    # PRODUCE __AMBIGUOUS__. A confident answer here becomes a volume alias that G14 accepts,
+    # on a gate whose next step destroys that volume.
+    data_mount_base="$(timeout 5 lsblk -inso NAME "$data_mount_src" 2>/dev/null \
+      | awk '''NF {
+             p = match($0, /[[:alnum:]]/)
+             if (p > 0) {
+               nrow++
+               dep[nrow] = p - 1
+               nm = substr($0, p); sub(/[^A-Za-z0-9_.-].*$/, "", nm)
+               nam[nrow] = nm
+             }
+           }
+           END {
+             cnt = 0
+             for (i = 1; i <= nrow; i++) {
+               if (i == nrow || dep[i + 1] <= dep[i]) { cnt++; base = nam[i] }
+             }
+             if (cnt > 1) print "__AMBIGUOUS__"
+             else if (cnt == 1 && base != "") print base
+           }''' || true)"
+    case "$data_mount_base" in
+    __AMBIGUOUS__) : ;;
+    '' | *[!A-Za-z0-9_.-]*) data_mount_base=__UNREADABLE__ ;;
+    esac
+    case "$data_mount_base" in
+    # A forked tree is not a readability failure -- it is a measured multiplicity, and it carries
+    # its own name so the operator is not sent at the wrong remedy.
+    __AMBIGUOUS__) data_mount_devid=__AMBIGUOUS__ ;;
+    __UNREADABLE__) data_mount_devid=__UNREADABLE__ ;;
+    *)
+      # Reverse-map inside the HETZNER NAMESPACE ONLY. Measured: a whole-by-id walk returns
+      # THREE aliases for one device (an eui form and two model forms), so an unconstrained map
+      # is multi-valued and would need an arbitrary tiebreak. Counting the matches instead of
+      # asserting single-valuedness is what keeps this a measurement rather than a premise --
+      # the #8005 class, which cost five host replaces by shipping an unverified assumption.
+      _devid_hits=0
+      _devid_match=""
+      for _alias in "$byid_dir"/scsi-0HC_Volume_*; do
+        [ -e "$_alias" ] || continue
+        _devid_target="$(readlink -f "$_alias" 2>/dev/null || true)"
+        [ -n "$_devid_target" ] || continue
+        case "$_devid_target" in
+        */"$data_mount_base")
+          _devid_hits=$((_devid_hits + 1))
+          _devid_match="${_alias##*/}"
+          ;;
+        esac
+      done
+      if [ "$_devid_hits" -eq 0 ]; then
+        data_mount_devid=__NOMATCH__
+      elif [ "$_devid_hits" -gt 1 ]; then
+        data_mount_devid=__AMBIGUOUS__
+      else
+        data_mount_devid="$_devid_match"
+      fi
+      ;;
+    esac
+    ;;
+  esac
+  # Charset guard, same contract redis_key_patterns carries: the emit is space-separated, so a
+  # value carrying whitespace would silently split into extra fields at the downstream parser.
+  case "$data_mount_devid" in
+  '' | *[[:space:]]*) data_mount_devid=__UNREADABLE__ ;;
+  esac
+  # (No whitespace guard on data_mount_base: the charset guard above already rejects every
+  # character outside [A-Za-z0-9_.-], whitespace included, and the two sentinels it can otherwise
+  # hold are `n/a` and `__UNREADABLE__`. A second guard here would be unreachable.)
+
+  # ── #8015 probe_schema=8: registry evidence, so G18 stops passing vacuously ───────────────
+  # The #7674 probe grants PASS to a host that answers /health and owns NOTHING -- which is the
+  # signature of a diagnostic boot. `registry_fns` is the field that separates "serving" from
+  # "listening": 0 is a MEASUREMENT (a server that answers and owns nothing), never an absence,
+  # and keeping it distinct from __UNREADABLE__ is the whole point. The consumer's positive
+  # discriminator becomes server_active=active AND http_code=200 AND registry_fns matching
+  # ^[1-9][0-9]*$ in the SAME row, so a diagnostic boot reads 0 and correctly fails to PASS.
+  #
+  # Bound HERE, above the inner case, for D1's reason: inside the `*)` sub-arm it would inherit
+  # the same defect (n/a -- the web-arm sentinel -- on a dedicated row), and a registry count has
+  # nothing to do with whether /mnt/data is readable. That would make #7674 permanently
+  # uncloseable whenever the mount is unreadable.
+  #
+  # jq is a HOST fact, not an image fact: it arrives via cloud-init-inngest.yml's `packages:`
+  # list, and this probe body calls it zero times today. So the parse is guarded rather than
+  # assumed -- a host without jq reports a measurement failure, not a silent zero.
+  #
+  # Both calls carry 2>/dev/null, and that is a shipping hazard rather than tidiness: this row's
+  # tag is allowlisted to Better Stack, and unredirected jq stderr on a malformed body echoes the
+  # OFFENDING INPUT -- an untrusted HTTP response -- into journald and thence to a third-party
+  # warehouse. Deliberate asymmetry with the redis arm, stated so it is not "fixed": no GQL error
+  # text is ever shipped. A future revision wanting a snippet must pass it through the same
+  # `tr -c 'A-Za-z0-9' '_' | cut -c1-48` shape probe_scan_err uses.
+  if [ "$http_code" != "200" ]; then
+    # Not serving at all. The count would be meaningless, and a 0 here would read as the
+    # diagnostic-boot signature rather than as "we never asked".
+    registry_fns=__UNREADABLE__
+  elif ! command -v jq >/dev/null 2>&1; then
+    registry_fns=__UNREADABLE__
+  else
+    _reg_body="$(timeout 10 curl -s --max-time 10 -H 'Content-Type: application/json' \
+      --data-binary "$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}' 2>/dev/null)" \
+      http://127.0.0.1:8288/v0/gql 2>/dev/null || true)"
+    # jq indexes null as null, so an {"errors":…,"data":null} envelope yields type "null" and
+    # lands on the non-numeric arm rather than being read as a count of zero.
+    registry_fns="$(printf '%s' "$_reg_body" \
+      | jq -r '(.data.functions // null) | if type == "array" then length else "nan" end' 2>/dev/null || true)"
+    case "$registry_fns" in
+    '' | *[!0-9]*) registry_fns=__UNREADABLE__ ;;
+    esac
+  fi
+
+  case "$data_mount_src" in
+  __UNREADABLE__)
+    data_bytes=__UNREADABLE__
+    flush_latched=__UNREADABLE__
+    redis_keys=__UNREADABLE__
+    ;;
+  *)
+    data_bytes="$(timeout 15 du -sb "$data_mount" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    case "$data_bytes" in '' | *[!0-9]*) data_bytes=__UNREADABLE__ ;; esac
+
+    # flush_latched INHERITS data_bytes' unreadability instead of being tested independently.
+    # `[ -f ]` cannot report failure: it returns false for "no latch" AND for "cannot read the
+    # directory", so on a volume detached while still mounted — findmnt still shows the mount,
+    # every read gives EIO — a bare test would emit `false`, a positive claim about a store it
+    # never read. `du` DOES report failure, so keying off it collapses the two into the one
+    # sanctioned token. Only when the walk succeeded is the absence of a latch a measurement.
+    case "$data_bytes" in
+    __UNREADABLE__) flush_latched=__UNREADABLE__ ;;
+    *)
+      flush_latched=false
+      [ -f "${latch_dir}/flip-done.latch" ] && flush_latched=true
+      ;;
+    esac
+
+    # #7695 probe_schema=3. INFO keyspace summed across EVERY db — never DBSIZE, which reads
+    # db0 only while FLUSHALL spans all of them, so DBSIZE would report 0 on a populated store.
+    #
+    # THE `# Keyspace` HEADER TEST IS THE MOST DANGEROUS LINE IN THIS BLOCK. Without it a NOAUTH
+    # error reply produces no `db<N>:` lines, `END{print s+0}` prints 0, and an AUTHENTICATION
+    # FAILURE renders as an empty store — the precise inverse of the outcome, on the field a
+    # destroy is authorized by. The header is a positive proof that redis answered the question.
+    #
+    # REDISCLI_AUTH, never `-a`: `-a` puts the password on argv where /proc/<pid>/cmdline exposes
+    # it host-wide to the co-resident deploy user. Bounded, because redis-cli has no default
+    # deadline and this runs before the unconditional emit.
+    #
+    # The credential arrives via EnvironmentFile=-/etc/default/inngest-probe (see the unit
+    # below). Absent on the web host by construction, so this whole arm is unreachable there.
+    redis_keys=__UNREADABLE__
+    redis_key_patterns=__UNREADABLE__
+    redis_expires=__UNREADABLE__
+    if [ -n "${INNGEST_REDIS_PASSWORD:-}" ]; then
+      # DIRECT INVOCATION, no `eval` and no command-string seam. The previous revision took the
+      # command from ${PROBE_REDIS_CLI_CMD:-…} and eval'd it; tests stub `redis-cli` on PATH
+      # instead, which exercises the real argv path rather than a shell string and leaves no
+      # injection surface to reason about.
+      redis_raw="$(REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
+        redis-cli -h 127.0.0.1 -p 6379 INFO keyspace 2>/dev/null || true)"
+      case "$redis_raw" in
+      *'# Keyspace'*)
+        # awk MUST VALIDATE, because awk COERCES. `s += $2` on a `keys=abc` field yields 0
+        # silently, so a truncated or garbled reply that still carries the header would sum to
+        # the CLEARING VALUE and the numeric normaliser downstream would see a perfectly valid
+        # `0`. Matching `keys=[0-9]+` explicitly and exiting non-zero on any db line that does
+        # not is the only way the difference survives to the caller.
+        #
+        # `n == 0` is NOT an error: a header with no `db<N>:` lines is a genuinely empty
+        # keyspace, which is the legitimate clearing reading. Only a MALFORMED line is.
+        redis_rc=0
+        redis_sum="$(printf '%s\n' "$redis_raw" | awk '
+          /^db[0-9]+:/ {
+            if (match($0, /keys=[0-9]+/)) { s += substr($0, RSTART + 5, RLENGTH - 5) }
+            else { bad = 1 }
+          }
+          END { if (bad) exit 1; print s + 0 }')" || redis_rc=$?
+        if [ "$redis_rc" -eq 0 ]; then
+          case "$redis_sum" in '' | *[!0-9]*) redis_keys=__UNREADABLE__ ;; *) redis_keys="$redis_sum" ;; esac
+        fi
+        # #7695 probe_schema=6 — `expires=` from the SAME reply, summed the SAME way.
+        #
+        # WHY IT IS WORTH A FIELD. `keys=` is the raw dict size and counts keys whose TTL has
+        # elapsed but which have not been reclaimed yet; SCAN respects expiry and skips those. So
+        # `keys=16` beside a SCAN that returns nothing has two readings — 16 live keys the scan
+        # cannot see, or 16 expired husks — and `expires=` is what separates them: it is the count
+        # carrying a TTL at all. Without it an operator is left inferring, which is the exact
+        # position this probe exists to end.
+        #
+        # Same awk shape as the count above, and the same reason for it: awk COERCES, so a
+        # malformed `expires=` field must exit non-zero rather than silently sum to 0 — 0 is a
+        # meaningful reading here ("nothing has a TTL"), so it must never be reachable by accident.
+        redis_exp_rc=0
+        redis_exp_sum="$(printf '%s\n' "$redis_raw" | awk '
+          /^db[0-9]+:/ {
+            if (match($0, /expires=[0-9]+/)) { s += substr($0, RSTART + 8, RLENGTH - 8) }
+            else { bad = 1 }
+          }
+          END { if (bad) exit 1; print s + 0 }')" || redis_exp_rc=$?
+        if [ "$redis_exp_rc" -eq 0 ]; then
+          case "$redis_exp_sum" in '' | *[!0-9]*) redis_expires=__UNREADABLE__ ;; *) redis_expires="$redis_exp_sum" ;; esac
+        fi
+        ;;
+      esac
+
+      # #7695 probe_schema=5 — WHAT the keys are, not just how many.
+      #
+      # WHY THIS FIELD EXISTS. `redis_keys` is the field the irreversible volume recut is
+      # authorized against, and a bare count cannot answer the only question an operator actually
+      # has before destroying a store: is this residue, or state someone needs? The recut runbook
+      # says "confirm before emptying anything", and a count alone makes that unfollowable without
+      # SSH — the fallback this repo forbids (hr-no-ssh-fallback-in-runbooks).
+      #
+      # NAMES ONLY, NEVER VALUES. This ships to Better Stack. Key NAMES are structural metadata;
+      # key VALUES are run payloads that can carry customer data, so nothing here reads a value.
+      # Even the names are reduced to their first two colon segments, so `inngest:run:<uuid>`
+      # contributes `inngest:run:*` and the identifier never leaves the box.
+      #
+      # ⚠️ SANITISATION IS LOAD-BEARING. Key names are the FIRST value in this row that anything
+      # writing to Redis can influence, and the row is parsed by whitespace tokens on `name=`. A
+      # key named `x redis_keys=0 server_active=inactive` would, unsanitised, inject a second copy
+      # of the very fields the destroy is authorized against — the `image_ref` injection shape
+      # documented in tests/scripts/lib/inngest-host-dark-gate.sh, which is why that gate refuses
+      # any row with a duplicated field name. Two independent defences: every character outside
+      # [A-Za-z0-9_:.-] becomes `?` HERE, and the gate refuses duplicates THERE.
+      #
+      # ── schema 5 fixes TWO defects that schema 4 shipped, both measured in production ────────
+      #
+      # (1) SCAN EVERY DB, NOT db0. `INFO keyspace` sums across EVERY database; `redis-cli --scan`
+      #     reads ONE (db0 unless `-n` says otherwise). Schema 4 paired the two, so on the live
+      #     host the count returned 16 and the scan returned nothing — `__UNREADABLE__`, on the
+      #     first real dispatch it was built for. That asymmetry is the SAME trap the `INFO
+      #     keyspace` comment above warns about for DBSIZE ("reads db0 only while FLUSHALL spans
+      #     all of them"); it was reintroduced eight lines beneath the warning. The db list is now
+      #     DERIVED from the very `INFO keyspace` reply the count is summed from, so the two
+      #     readings cannot disagree about which databases exist.
+      #
+      # (2) NEVER SWALLOW THE REASON. Schema 4 wrote `2>/dev/null` on the scan, which made "db0
+      #     is empty" and "the scan errored" indistinguishable — a diagnostic that cannot diagnose
+      #     its own failure, which is the silent-fallback class (cq-silent-fallback-must-mirror-to-
+      #     sentry) in the instrument built to remove guesswork. The sentinels are now distinct:
+      #       __NONE__              the store is genuinely empty (the recut's clearing reading)
+      #       __SCANFAIL_rc<N>_<t>  the scan command failed; N is its exit status, t a sanitised
+      #                             snippet of its stderr (NOAUTH, ERR, …)
+      #       __SCANEMPTY_<dbs>__   the scan RAN and returned nothing while the count says
+      #                             non-zero — the exact schema-4 symptom, now self-naming
+      #       __UNREADABLE__        the count itself was unreadable, so nothing was measured
+      #
+      # BOUNDED IN THREE DIRECTIONS. `--scan` (never `KEYS`, which blocks the server): a
+      # `timeout` per database, a cap on keys consumed, and a cap on distinct patterns emitted.
+      if [ "$redis_keys" != "__UNREADABLE__" ]; then
+        if [ "$redis_keys" = "0" ]; then
+          # An empty store is a CLEAN reading, not an unreadable one. Distinguishing them matters:
+          # `__NONE__` is what the recut wants to see, `__UNREADABLE__` must never authorize it.
+          redis_key_patterns=__NONE__
+        else
+          # The db list comes from the SAME reply the count was summed from. `sub(/:.*/, "")`
+          # also strips redis's CRLF, so `db0:keys=16,...\r` yields exactly `db0`.
+          probe_dbs="$(printf '%s\n' "$redis_raw" | awk '/^db[0-9]+:/ { sub(/:.*/, ""); print }')"
+          probe_scan_out=""
+          probe_scan_rc=0
+          probe_scan_err=""
+          probe_err_file="$(mktemp 2>/dev/null || echo /tmp/inngest-probe-scan.err)"
+          probe_out_file="$(mktemp 2>/dev/null || echo /tmp/inngest-probe-scan.out)"
+          for probe_db in $probe_dbs; do
+            probe_one=""
+            # ── NO `--count`. THAT FLAG DOES NOT EXIST, AND IT COST FOUR HOST REPLACES ────────
+            # `redis-cli 7.0.15` (the version this host runs) answers `--scan --count 100` with
+            #   Unrecognized option or bad number of args for: '--count'
+            # and returns NO keys. Reproduced in `docker run redis:7.0.15`: with the flag, rc=1
+            # and zero output; without it, `--scan` returns every key. I invented the flag in
+            # probe_schema=4, and every hypothesis chased afterwards — keys in another database,
+            # expired-but-unreclaimed husks, an ACL filter — was chasing a phantom my own typo
+            # produced. `--scan` without a count uses redis's default COUNT of 10, which is
+            # ample for a store this size and costs nothing but an extra cursor round-trip.
+            #
+            # ── AND NO PIPE, so redis-cli's OWN exit status survives ─────────────────────────
+            # The previous form piped into `head -c`, and a pipeline's status is the LAST
+            # command's — `head`, which succeeds. So redis-cli exiting 1 was reported as rc=0 and
+            # the `__SCANFAIL_` branch was UNREACHABLE for this failure no matter what it did.
+            # That is the third instance of one class in this probe: `2>/dev/null` discarded the
+            # reason, then stderr-only-on-rc!=0 discarded it again, and then the rc itself could
+            # not propagate. Redirect to a file and read the status directly; bound the size with
+            # `head -c` afterwards, where its exit status is nobody's evidence.
+            REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
+              redis-cli -h 127.0.0.1 -p 6379 -n "${probe_db#db}" --scan \
+              >"$probe_out_file" 2>"$probe_err_file" || probe_scan_rc=$?
+            probe_one="$(head -c 65536 "$probe_out_file")"
+            [ -n "$probe_one" ] && probe_scan_out="${probe_scan_out}${probe_one}
+"
+            if [ -s "$probe_err_file" ] && [ -z "$probe_scan_err" ]; then
+              # First line only, hard-sanitised. WIDENED 24 -> 48: at 24 the live host's reply
+              # truncated to `Unrecognized_option_or_b`, cutting off `for: '--count'` — the only
+              # part naming WHICH option. A snippet that drops the identifier answers "something
+              # was wrong" when the whole point is answering "what".
+              probe_scan_err="$(head -1 "$probe_err_file" | tr -c 'A-Za-z0-9' '_' | cut -c1-48)"
+            fi
+          done
+          rm -f "$probe_err_file" "$probe_out_file"
+
+          if [ "$probe_scan_rc" -ne 0 ]; then
+            redis_key_patterns="__SCANFAIL_rc${probe_scan_rc}_${probe_scan_err:-noerr}__"
+          elif [ -z "$probe_scan_out" ]; then
+            # The scan produced no keys. CARRY THE ERROR TEXT HERE TOO, and that is the schema-6
+            # fix: schema 5 captured stderr but surfaced it ONLY on a non-zero exit, and
+            # `redis-cli` routinely exits 0 while printing a server error reply (`ERR unknown
+            # command`, `NOAUTH`, `WRONGTYPE`). So the most likely failure landed in this branch
+            # with its reason discarded, and rendered as a bare `__SCANEMPTY_db0__` — the same
+            # swallow-the-reason defect as schema 4's `2>/dev/null`, one branch further in.
+            # `_noerr` distinguishes "genuinely empty" from "errored but exited 0".
+            redis_key_patterns="__SCANEMPTY_$(printf '%s' "$probe_dbs" | tr -c 'a-z0-9' '-')_${probe_scan_err:-noerr}__"
+          else
+            # #8013 probe_schema=8 -- IDENTIFIER-aware, not brace-aware. The two-segment
+            # reduction shipped segment 2 VERBATIM, so any key whose second segment IS the
+            # identifier leaked it whole. Measured against the live row: this field carried
+            # a 26-character ULID to Better Stack, a third-party warehouse, on every fire.
+            #
+            # The issue quoted the braced shape, and fixing only that shape leaves the identical
+            # leak standing -- measured, `estate:<ULID>:runs:1` with no brace anywhere reduces to
+            # `estate:<ULID>:*` under the old rule. So the test is on the SEGMENT, not the brace.
+            # The brace collapse still happens, because it keeps the tag readable as a category,
+            # but it is no longer the thing carrying the privacy property.
+            #
+            # No interval expressions ({26}, {16,}): older mawk does not support them and a
+            # silently-non-matching regex would make this whole fix vacuous. Verified identical
+            # output under mawk 1.3.4 and busybox awk. No apostrophes anywhere below -- one
+            # would close the surrounding awk '...' block.
+            redis_key_patterns="$(printf '%s\n' "$probe_scan_out" | awk '
+              # ALLOWLIST, NOT DENYLIST -- this is the second revision, and the reason is measured.
+              # The first cut asked "does this segment LOOK LIKE an identifier?" and enumerated four
+              # shapes (ULID / UUID / long hex / long digit run). A denylist over a field whose
+              # destination is a THIRD-PARTY WAREHOUSE is the wrong polarity: it ships everything it
+              # failed to imagine. Measured against the shipped denylist, all of these escaped whole:
+              #   estate:run_01KYAD...:x    -> prefixed ULID  (one character defeats length()==26,
+              #                                and run_/sess_ prefixes are a near-universal Redis
+              #                                convention, and the Inngest keyspace uses ULIDs)
+              #   estate:01kyad...:x        -> lowercase ULID
+              #   user:550E8400-E29B-...:p  -> uppercase UUID
+              #   user:ops@example.com:s    -> an email address
+              #   token:sk_live_...:meta    -> a secret-shaped value
+              # So the test is inverted: a segment is emitted ONLY if it looks like a CATEGORY, and
+              # anything else becomes `*`. Fail-closed. The cost is that a legitimate but unusual
+              # category renders as `*`; the alternative cost is a privacy incident.
+              #
+              # STATE THE RESIDUAL, because `fail-closed` is not the same claim as `closed against
+              # every identifier`, and the list above invites the stronger reading. What this rule
+              # closes is the shape space of the Inngest keyspace and its neighbours: ULIDs, UUIDs,
+              # long digit runs, mixed-case tokens, emails, and (since the hex arm) short hex ids.
+              # What it does NOT close is a lowercase, digit-sparse, <=24-char token carrying no
+              # uppercase -- measured, an all-lowercase vendor-key shape (a vendor prefix, an
+              # environment word and twenty lowercase letters, joined by underscores) is emitted
+              # whole, because by shape it is indistinguishable from `user_preferences`. Any rule
+              # that rejects the first rejects the second, so this is a floor, not an oversight.
+              # The literal is deliberately NOT written here: gitleaks scans this file, and a
+              # scannable token in a comment blocks every future commit that touches it.
+              #
+              # Redis key SEGMENTS are
+              # schema, not payload; if a caller ever puts a bearer token in one, the fix is at that
+              # caller, and this histogram is not the control that would save it.
+              function iscategory(s,   n, i, ch, run, hex) {
+                n = length(s)
+                if (n < 1 || n > 24) return 0
+                if (index("abcdefghijklmnopqrstuvwxyz", substr(s, 1, 1)) == 0) return 0
+                run = 0
+                hex = 1
+                for (i = 1; i <= n; i++) {
+                  ch = substr(s, i, 1)
+                  if (index("abcdefghijklmnopqrstuvwxyz0123456789_-", ch) == 0) return 0
+                  if (index("0123456789", ch) > 0) { run++; if (run >= 4) return 0 } else { run = 0 }
+                  if (index("abcdef0123456789", ch) == 0) hex = 0
+                }
+                # A segment that is entirely lowercase hex and at least 8 long is an id, not a
+                # category. No category in the measured live keyspace is all [a-f0-9]:
+                # `accounts` has o/u/n/t/s, `gateways` has g/w/y/s, `partition` has p/r/t/i/o/n.
+                if (hex && n >= 8) return 0
+                return 1
+              }
+              NR > 5000 { truncated = 1; exit }
+              $0 != "" {
+                key = $0
+                btok = ""
+                # Redis takes the FIRST {...} WHEREVER it appears, so this is not anchored at
+                # the start of the key -- an anchored rule would be narrower than the property.
+                ob = index(key, "{")
+                if (ob > 0) {
+                  after = substr(key, ob + 1)
+                  cb = index(after, "}")
+                  if (cb > 0) {
+                    tag = substr(after, 1, cb - 1)
+                    nt = split(tag, tseg, ":")
+                    newtag = ""
+                    for (ti = 1; ti <= nt; ti++) {
+                      if (!iscategory(tseg[ti])) continue
+                      newtag = newtag (newtag == "" ? "" : ":") tseg[ti]
+                    }
+                    if (newtag == "") newtag = "*"
+                    btok = "{" newtag "}"
+                    key = substr(key, 1, ob - 1) btok substr(after, cb + 1)
+                  }
+                }
+                n = split(key, seg, ":")
+                # The brace group was ALREADY category-filtered above, so re-testing it whole would
+                # fail on its own braces and discard the category tag -- the signal this field
+                # exists to carry. Over-redaction is a real failure direction, not just a cost.
+                #
+                # But the exemption must name the EXACT token this block just rebuilt, never the
+                # SHAPE of one. `starts with { and ends with }` is a shape test, and a shape test
+                # is a denylist wearing the clothes of an allowlist -- which is the precise polarity
+                # error the comment above says this rewrite exists to fix. Measured against the
+                # shape form, both of these shipped the ULID whole, because each starts with { and
+                # ends with } while only the FIRST brace group is filtered (Redis takes the first):
+                #   {q}{01KYAD...}:x   -> ?q??01KYAD...?:x:*
+                #   {q}01KYAD...}:x    -> ?q?01KYAD...?:x:*
+                # Comparing against btok admits exactly the token that was filtered and nothing
+                # else; every other segment falls through to iscategory() and fails closed.
+                s1 = seg[1]
+                if (btok == "" || s1 != btok) { if (!iscategory(s1)) s1 = "*" }
+                if (n >= 2) { s2 = iscategory(seg[2]) ? seg[2] : "*"; k = s1 ":" s2 ":*" } else { k = s1 }
+                gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
+                if (!(k in c)) { order[++distinct] = k }
+                c[k]++
+              }
+              END {
+                out = ""
+                lim = distinct < 12 ? distinct : 12
+                for (i = 1; i <= lim; i++) { out = out (i > 1 ? "," : "") order[i] "=" c[order[i]] }
+                if (distinct > 12) { out = out ",+" (distinct - 12) "more" }
+                if (truncated) { out = out ",+scan-truncated" }
+                if (out == "") { out = "__UNREADABLE__" }
+                print substr(out, 1, 400)
+              }')"
+          fi
+          # Belt and braces: if anything above emitted whitespace, the token parser downstream
+          # would see extra fields. Collapse to the sentinel rather than ship a splittable value.
+          case "$redis_key_patterns" in
+          '' | *[[:space:]]*) redis_key_patterns=__UNREADABLE__ ;;
+          esac
+        fi
+      fi
+    fi
+    ;;
+  esac
+  ;;
+esac
+
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -514,7 +1203,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -530,6 +1219,47 @@ Type=oneshot
 # ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
 # Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
 SyslogIdentifier=inngest-server-probe
+# Type=oneshot disables the start timeout by default; the probe makes bounded calls before its
+# unconditional emit, so bound the unit too — a hung probe holds the unit `activating`, and
+# OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
+# Budget (#8017/#8015): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 + redis-cli 5
+# + lsblk 5 + registry curl 10 = 68s worst case
+# = 53s of bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
+# a bound that fires degrades ONE field, the unit timeout loses the WHOLE row.
+TimeoutStartSec=120
+# #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
+# and — per the #6122 boot fix — HOME, all of which live here.
+#
+# The leading `-` is load-bearing, not decoration. This bootstrap is the SHARED renderer for
+# both hosts, and /etc/default/inngest-doppler is written by cloud-init-inngest.yml, which is
+# the DEDICATED host's userdata only. Without the `-`, systemd fails the unit outright on the
+# co-located web host and the probe stops firing there entirely — a change made to add
+# observability would delete it on one of the two hosts. With it, the web host simply reports
+# cutover_flag=unknown, which is honest: that host has no cutover flag.
+EnvironmentFile=-/etc/default/inngest-doppler
+# #7695. /etc/default/inngest-server carries DOPPLER_PROJECT, which is the probe's
+# dedicated-vs-web role discriminator. Without it DOPPLER_PROJECT is unset, host_role is `web`
+# on BOTH hosts, and the store fields ship dead. `-` prefixed: the web host's copy is written
+# later in this same script, and a probe that refuses to start is worse than one reporting
+# `web` for a boot or two.
+#
+# STILL NOT WRAPPED IN `doppler run`, and the reason is narrower than it used to be stated.
+# `doppler run` would inject EVERY secret in the config, making the fixture seams below settable
+# by anyone with Doppler write access — that objection stands. The OTHER reason previously given
+# here, that supplying a credential requires `doppler run` and would therefore 203/EXEC on the
+# web host, was FALSE: this unit already reads env files and its ExecStart is a plain script
+# path, so a third tolerant EnvironmentFile costs nothing and touches no interpreter. That
+# false claim is what scoped `redis_keys` out of #7754; the correction is recorded in the
+# plan's `## Addendum — 2026-09-03`.
+#
+# #7695 probe_schema=3: /etc/default/inngest-probe carries INNGEST_REDIS_PASSWORD and nothing
+# else, so the blast radius of this read is one variable rather than a whole config.
+# `-` prefixed and ABSENT ON THE WEB HOST BY CONSTRUCTION — cloud-init-inngest.yml is the only
+# writer. There, INNGEST_REDIS_PASSWORD stays unset, the keyspace arm never runs, and
+# redis_keys reports `n/a` because host_role is `web`. That is the honest state for a host with
+# no inngest Redis, and it is why this file must never be written by the shared bootstrap.
+EnvironmentFile=-/etc/default/inngest-server
+EnvironmentFile=-/etc/default/inngest-probe
 ExecStart=/usr/local/bin/inngest-server-probe.sh
 PROBEUNITEOF
 
@@ -665,6 +1395,7 @@ fi
 # gate silently fell through to DEDICATED_FLIP=0.) This runs BEFORE the inngest-server unit
 # write + restart below so the ExecStartPre guard script exists on disk first.
 DEDICATED_FLIP=0
+DEDICATED_LUKS_CUTOVER=0
 if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   if [[ -f /tmp/inngest-cutover-flip.sh && -f /tmp/inngest-server-flip-guard.sh \
         && -f /tmp/inngest-cutover-flip.service && -f /tmp/inngest-cutover-flip.timer ]]; then
@@ -684,6 +1415,27 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   else
     log "warn: cutover flip assets not staged at /tmp/inngest-cutover-flip.* (pre-#6178 image or undelivered assets); skipping flip install"
   fi
+  # LUKS blue-green cutover trio (#6894) — dedicated host only, delivered like the flip trio.
+  # FAIL-CLOSED, deliberately NOT a mirror of the flip's skip arm above: a skipped install yields a
+  # host that boots healthy with a flag nothing polls, so op=luks-cutover "succeeds" while the host
+  # never moves. A missing trio therefore emits install_missing under the unit's own tag (shipped by
+  # Vector, the only off-box read of this host) and the timer is NOT enabled. It does not abort the
+  # bootstrap: the scheduler this host exists to run must still come up.
+  if [[ -f /tmp/inngest-luks-cutover.sh && -f /tmp/inngest-luks-cutover.service && -f /tmp/inngest-luks-cutover.timer ]]; then
+    log "installing LUKS cutover trio (#6894)"
+    install -m 0755 /tmp/inngest-luks-cutover.sh /usr/local/bin/inngest-luks-cutover.sh
+    install -m 0644 /tmp/inngest-luks-cutover.service /etc/systemd/system/inngest-luks-cutover.service
+    install -m 0644 /tmp/inngest-luks-cutover.timer /etc/systemd/system/inngest-luks-cutover.timer
+    DEDICATED_LUKS_CUTOVER=1
+  else
+    log "ERROR: LUKS cutover assets not staged at /tmp/inngest-luks-cutover.{sh,service,timer}; the cutover timer will NOT be enabled (install_missing, #6894)"
+    logger -t inngest-luks-cutover '{"marker":"SOLEUR_INNGEST_LUKS_CUTOVER","exit_code":1,"reason":"install_missing","flag":"unknown","detail":"the cutover trio was not staged to /tmp by cloud-init; the timer is not enabled","guard":"6894"}' 2>/dev/null || true
+    # AND the Vector-independent path. This is a BOOT-time failure, which is exactly the case where
+    # the journald->Vector leg may not exist yet: Vector is installed later in this same script, and
+    # its own install is non-fatal. A marker that depends on the shipper to report that delivery
+    # failed is the shape that hid #6178 for a whole cutover attempt.
+    /usr/local/bin/inngest-boot-phone-home.sh luks-cutover-install-MISSING "the cutover trio was not staged to /tmp; inngest-luks-cutover.timer is NOT enabled (#6894)" 2>/dev/null || true
+  fi
 fi
 
 # Write the inngest-server systemd unit. RECONCILE-ALWAYS — deliberately
@@ -693,7 +1445,7 @@ fi
 # where SKIP_BINARY_INSTALL fires; leaving the write inside the guard would
 # skip it and the host would keep the OLD ExecStart indefinitely (same masking
 # class as the #4144 heartbeat-fix cascade). The binary download/install +
-# upgrade-drain stay inside the guard above (no need to re-download on a
+# upgrade settle delay stay inside the guard above (no need to re-download on a
 # no-op redeploy); only the unit write + the restart below are reconciled
 # every bootstrap. Mirrors webhook.service hardening (User=deploy,
 # ProtectSystem=strict, PrivateTmp, ReadWritePaths).
@@ -755,7 +1507,7 @@ fi
 #   --postgres-conn-max-idle-time 1  close idle conns after 1 MINUTE so they RELEASE their
 #                                 Supavisor session (this is the release lever). ⚠ UNIT TRAP:
 #                                 this IntFlag is MINUTES (default 5), NOT seconds — verified
-#                                 against inngest v1.19.4 cmd/start; the plan's "SECS=30" was
+#                                 against inngest v1.45.1 cmd/start; the plan's "SECS=30" was
 #                                 mis-labelled (30 would mean 30 MINUTES — worse than default).
 # default_pool_size stays 30 (the #5562 30→15 revert is SUPERSEDED — its premise "cap holds
 # total under 15" is falsified by the per-pool model; a 15-slot upstream while inngest bursts
@@ -779,7 +1531,7 @@ fi
 # vestigial-but-harmless in the durable form).
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
-Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
+Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
 After=network-online.target
 Wants=network-online.target
 
@@ -789,12 +1541,18 @@ EnvironmentFile=/etc/default/inngest-server
 # @@FLIP_GUARD_EXECSTARTPRE@@ — the P1-5 arm-atomicity guard (#6178), substituted to an
 # ExecStartPre line ON THE DEDICATED HOST ONLY (empty on the co-located web host). Wrapped
 # in `doppler run` so the guard sees INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP; blocks a
-# prod-URI start when the flip flag is not in {armed, flipping, done} — the guard's ACTUAL
-# allowlist, verbatim from inngest-server-flip-guard.sh's case. #6536: that is deliberately
-# NOT the full FSM (ADR-100's is armed → flipping → flushed → done), so `flushed` is omitted
-# — fail-closed + self-healing, tracked separately. Do NOT add `flushed` here to "reconcile"
-# it: this documents the guard's code, and a comment describing behaviour the code lacks is
-# the #6536 defect itself.
+# prod-URI start when the flip flag is not in {armed, flipping, flushed, done} — the guard's
+# ACTUAL allowlist, verbatim from inngest-server-flip-guard.sh's case.
+#
+# CORRECTED 2026-08-11 (#7228). This comment used to read `{armed, flipping, done}` and warned
+# against adding `flushed` to "reconcile" it, on the grounds that a comment describing behaviour
+# the code lacks is the #6536 defect itself. That reasoning is right and the comment had since
+# become an instance of it: #6553 added `flushed` to the guard's case (the FSM starts the server
+# AT flag=flushed, so without it the guard blocked the FSM's own controlled start), and this
+# prose kept asserting the older, narrower set — actively warning a future editor away from the
+# code's real behaviour. The allowlist is now quoted from the guard as it stands, and
+# inngest-server-flip-guard.test.sh derives both sets from source so the pair cannot drift again
+# without a suite failure.
 @@FLIP_GUARD_EXECSTARTPRE@@
 ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
@@ -838,9 +1596,47 @@ UNITEOF
 # the fragments contain `/`, `&`, and the literal `$${...}` Doppler token, all of which
 # sed's replacement string would mangle. The fragments are single-quoted so `$${...}`
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
-# injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
-# inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
-if [[ "$REDIS_READY" == "1" ]]; then
+# injected env (same $${...} contract as before). NOTE the `exec` inside the bash -c
+# payload does NOT make inngest the unit's main PID — `doppler run` forks the bash
+# child and stays the MainPID itself (signal-forwarding supervisor), which is why
+# /proc/<MainPID>/exe resolves to doppler, not inngest.
+# #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
+# the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
+# every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
+# hypothesis about the original failure permanently UNKNOWN. Selecting the SQLite-only form here
+# is what makes the host startable: prod Postgres is unreachable, so no second scheduler is
+# possible, and inngest can bind :8288 and emit the discriminating `net-health` row.
+#
+# This is one HALF of a two-half agreement. The other half is inngest-server-flip-guard.sh, which
+# does NOT trust this variable: it verifies the emitted unit lacks the `--postgres-max-open-conns`
+# durable sentinel before relaxing, and BLOCKS if diagnostic is requested while the unit is still
+# durable. Both halves read INNGEST_DIAGNOSTIC_BOOT, and inngest-server-flip-guard.test.sh pins
+# that they agree — changing the variable in one place alone fails the suite rather than silently
+# producing a host that starts durably while believing it is diagnostic.
+DIAGNOSTIC_BOOT="$(printf '%s' "${INNGEST_DIAGNOSTIC_BOOT:-}" | tr -d '[:space:]')"
+case "$DIAGNOSTIC_BOOT" in
+  1 | true | TRUE | yes | YES) DIAGNOSTIC_BOOT=1 ;;
+  *) DIAGNOSTIC_BOOT=0 ;;
+esac
+
+if [[ "$DIAGNOSTIC_BOOT" == "1" ]]; then
+  BACKEND_ENV='unset INNGEST_POSTGRES_URI; '
+  BACKEND_FLAGS=''
+  # AND NEUTRALISE REGISTRY ADOPTION. The durable sentinel governs where the QUEUE lives; it does
+  # not govern whether this host discovers and OWNS the function registry. Left pointing at the
+  # live web-platform, a diagnostic host polls --sdk-url every 60s, adopts the PRODUCTION registry
+  # into its local SQLite, and then independently fires the schedule for every cron in it against
+  # the prod app — while the co-located scheduler does the same. Two independent schedulers, two
+  # run ids, one production app: duplicate cron execution, which is the double-fire this whole
+  # guard exists to prevent, reached through the diagnostic escape hatch.
+  # The diagnostic objective — does the process bind :8288, and what does net-health say — is
+  # fully satisfied with an EMPTY registry, so point the sync at a closed loopback port.
+  SDK_URL='http://127.0.0.1:1/api/inngest'
+  # MEASURED-BY: the INNGEST_DIAGNOSTIC_BOOT branch this line sits in. "prod Postgres
+  # unreachable" is the DELIBERATE configuration this arm just chose (SQLite-only, sdk-url
+  # pointed at a closed loopback port), not a diagnosis of an observed failure.
+  log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. --sdk-url is pointed at a closed loopback port so the host adopts NO registry and cannot double-fire prod crons. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
+elif [[ "$REDIS_READY" == "1" ]]; then
   BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
   BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'
   log "inngest-server ExecStart: durable backend (env-delivered URIs; bounded per-pool footprint open=5/idle=2/idle-time=1min; --postgres-max-open-conns sentinel FIRST) #6258"
@@ -881,11 +1677,34 @@ systemctl daemon-reload
 # below (this file, "enable vector.service" + "restart vector.service") and
 # the same root cause documented there. Combined with the reconcile-always
 # unit write above, an ExecStart-only change is now deploy-reliable even on a
-# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade-drain
-# pause above runs before the binary replace; this restart subsumes the start
-# and the resume below runs after.
+# same-CLI-version redeploy (SKIP_BINARY_INSTALL path). The upgrade settle
+# delay above runs before the binary replace; this restart subsumes the start.
 systemctl enable inngest-server.service 2>/dev/null || true
-systemctl restart inngest-server.service
+# --- #7228: a REFUSED start must not take the observability stack down with it -------------
+# This was the only unguarded systemctl call in this block, and under `set -euo pipefail` a
+# non-zero restart aborted the ENTIRE bootstrap here — before Vector, the server-probe timer and
+# the cutover flip timer install, all of which are sequenced below.
+#
+# That became reachable on the NORMAL replace path the moment the flip guard learned to refuse an
+# inherited `done` (inngest-server-flip-guard.sh): a replaced host boots, inherits `done` from
+# Doppler, carries no done-owner marker, the ExecStartPre BLOCKS, the restart exits non-zero, and
+# the host ends up with no shipper and no flip timer — i.e. DARK and with the recovery FSM
+# unarmed, so the `flushed` re-entry the guard's own message prescribes cannot even be polled.
+# The guard would have been protecting the host by bricking it.
+#
+# Fail-closed on the SCHEDULER (it stays stopped — that is the guard's whole point) and fail-OPEN
+# on the BOOTSTRAP, so the machinery that makes the refusal visible and recoverable still lands.
+# A dark server with working observability is the outcome #7228 exists to buy; a dark server with
+# no observability is #7228 itself.
+if ! systemctl restart inngest-server.service; then
+  # Vector may not be up yet at this point in the bootstrap, so the marker rides the
+  # Vector-INDEPENDENT direct-curl emitter as well as the log.
+  if [[ -x /usr/local/bin/inngest-boot-phone-home.sh ]]; then
+    /usr/local/bin/inngest-boot-phone-home.sh inngest-server-start-REFUSED \
+      "ExecStartPre refused or the unit failed; bootstrap CONTINUES so vector + the probe + the flip timer still install" || true
+  fi
+  log "warn: inngest-server did not start (flip guard refusal or unit failure) — continuing the bootstrap so observability and the flip timer install; read the guard's BLOCK line for the reason"
+fi
 systemctl enable --now inngest-heartbeat.timer
 # Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
 # effect immediately rather than waiting up to 60s for the next timer fire.
@@ -907,11 +1726,16 @@ if [[ "${DEDICATED_FLIP:-0}" == "1" ]]; then
   systemctl enable --now inngest-cutover-flip.timer
   log "cutover flip poll timer enabled (#6178)"
 fi
+# #6894: the LUKS cutover poll. Its flag is unset on every host until op=luks-cutover, and unset is
+# a no-op, so enabling it is inert until an operator arms it.
+if [[ "${DEDICATED_LUKS_CUTOVER:-0}" == "1" ]]; then
+  systemctl enable --now inngest-luks-cutover.timer
+  log "LUKS cutover poll timer enabled (#6894)"
+fi
 
-# Resume from upgrade pause (if any).
+# In-place upgrade completion marker. Logged even when the restart above was refused
+# (its warn line and inngest-server-start-REFUSED marker report that case).
 if [[ -n "${UPGRADE_FROM:-}" ]]; then
-  sleep 2  # let the new server bind loopback before resume
-  "$INSTALL_PATH" resume >/dev/null 2>&1 || log "warn: resume command failed (server is still running)"
   log "upgrade complete: $UPGRADE_FROM → $INNGEST_CLI_VERSION"
 fi
 
@@ -965,14 +1789,41 @@ else
       return 0
     fi
     log "downloading vector $VECTOR_CLI_VERSION"
-    local tmp
+    local tmp attempt rc actual_sha=""
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' RETURN
-    curl -fsSL --max-time 120 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL"
-    local actual_sha
-    actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
+    # One stalled transfer used to end the install: a single `curl --max-time 120` timed out at
+    # 11.9 of 45 MB on the 2026-09-24 replace, the checksum then refused the partial file, and the
+    # host booted with no log shipper. Retry up to 4 times. `-C -` resumes the partial file, so
+    # progress accumulates across attempts instead of restarting. The checksum is checked after
+    # every attempt, whatever curl returned: the bytes on disk decide, not curl's exit code.
+    # This runs after inngest-server has started, so the extra time never delays scheduling.
+    # Worst case: 4 x 180s plus 30s of backoff.
+    for attempt in 1 2 3 4; do
+      rc=0
+      curl -fsSL -C - --connect-timeout 15 --max-time 180 -o "$tmp/vector.tar.gz" "$VECTOR_DOWNLOAD_URL" || rc=$?
+      if [[ -s "$tmp/vector.tar.gz" ]]; then
+        actual_sha="$(sha256sum "$tmp/vector.tar.gz" | awk '{print $1}')"
+        [[ "$actual_sha" == "$VECTOR_CLI_SHA256" ]] && break
+        # Start clean when resuming cannot help:
+        #   rc 0      curl finished and the bytes are wrong, so appending would extend a bad file;
+        #   rc 33/36  the server will not resume (it ignores Range), so every later `-C -` would
+        #             fail the same way against the same partial file.
+        case "$rc" in
+          0|33|36)
+            log "warn: vector download attempt $attempt: discarding the partial file (curl rc=$rc)"
+            rm -f "$tmp/vector.tar.gz"
+            actual_sha=""
+            ;;
+        esac
+      fi
+      log "warn: vector download attempt $attempt incomplete (curl rc=$rc)"
+      if [[ "$attempt" -lt 4 ]]; then sleep $((attempt * 5)); fi
+    done
     if [[ "$actual_sha" != "$VECTOR_CLI_SHA256" ]]; then
-      log "error: vector sha256 mismatch: expected $VECTOR_CLI_SHA256 actual $actual_sha"
+      # Name the last curl rc: with a dead network there is no file to hash, and a checksum
+      # message alone would point at the wrong cause.
+      log "error: vector download failed after $attempt attempts (last curl rc=$rc, last sha256=${actual_sha:-none}, expected $VECTOR_CLI_SHA256)"
       return 1
     fi
     tar -xzf "$tmp/vector.tar.gz" -C "$tmp"

@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the inngest consumer-perspective serviceability probe every 60s (#7228 Phase 1)
+
+[Timer]
+# OnBootSec is deliberately later than the zot probe's 90s: this probe reaches a PEER host over
+# the private network, so firing it before the NIC and routes settle would emit a spurious
+# UNREACHABLE on every web-host boot — and an alarm channel that cries wolf at boot is one the
+# operator learns to ignore, which is the failure mode #7228 is already an instance of.
+OnBootSec=120s
+# 60s matches the zot consumer probe. It is affordable here because the probe is silent on
+# success and its fault line is rate-limited to ~30min (see the QUOTA note in the .sh), so the
+# cadence costs no Better Stack rows in either the healthy or the dark steady state. The paired
+# heartbeat is period=180/grace=60, i.e. three missed runs before it alarms — enough that a
+# single slow GQL response or a timer skew never pages, and still well inside the window in
+# which a dispatch outage matters.
+OnUnitActiveSec=60s
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

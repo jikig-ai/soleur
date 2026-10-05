@@ -22,6 +22,7 @@ readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 #                            verbatim for any `docker inspect` call.
 #   DOCKER_EXEC_EXIT       - exit code for `docker exec` calls (default 0).
 #   DOCKER_EXEC_STDOUT     - optional stdout for `docker exec` (default "0").
+#   DOCKER_EXEC_ARGV_LOG   - optional file; every `docker exec` appends its raw argv, one line each (#8016).
 
 create_docker_mock() {
   cat > "$1/docker" << 'MOCK'
@@ -35,6 +36,10 @@ case "$1" in
     fi
     ;;
   exec)
+    # #8016: record the raw argv to a FILE (never stdout, which feeds the PASS message
+    # run_case asserts on). The /dev/null default keeps an unset variable from failing the
+    # mock; run_case passes the path through its extra-env arguments.
+    printf '%s\n' "$*" >> "${DOCKER_EXEC_ARGV_LOG:-/dev/null}"
     echo "${DOCKER_EXEC_STDOUT:-0}"
     exit "${DOCKER_EXEC_EXIT:-0}"
     ;;
@@ -78,7 +83,7 @@ run_case() {
     bash "$AUDIT_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
-  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -qF "$expected_string"; then
+  if [[ "$actual_exit" -eq "$expected_exit" ]] && printf '%s\n' "$output" | grep -cF "$expected_string" >/dev/null; then
     PASS=$((PASS + 1))
     echo "  PASS: $description"
   else
@@ -137,6 +142,48 @@ echo "--- check 1 regression guard: bwrap exec failure ---"
 run_case "docker exec bwrap fails — CLONE_NEWUSER rejected" \
   "inspect-pass.txt" 1 "CLONE_NEWUSER rejected" \
   "DOCKER_EXEC_EXIT=1"
+
+echo ""
+echo "--- #8016: the docker-exec bwrap statement must not arm PDEATHSIG ---"
+
+# A bwrap spawned by `docker exec` is a child of the short-lived runc exec parent;
+# --die-with-parent arms PR_SET_PDEATHSIG(SIGKILL) on it and races that parent's exit, so a
+# healthy sandbox is SIGKILLed at startup (rc=137, empty stderr) and the audit reports a false
+# "CLONE_NEWUSER rejected". See the learning docker-exec-pdeathsig-race-sigkills-bwrap-probe.
+_ARGV_DIR=$(mktemp -d)
+# Single owning trap (ADR-129): removes the argv log dir even if an assertion below aborts the script.
+trap 'rm -rf "$_ARGV_DIR"' EXIT
+_ARGV_LOG="$_ARGV_DIR/exec-argv.log"
+: > "$_ARGV_LOG"
+run_case "valid deploy — bwrap exec argv recorded" \
+  "inspect-pass.txt" 0 "CLONE_NEWUSER works" \
+  "DOCKER_EXEC_ARGV_LOG=$_ARGV_LOG"
+
+TOTAL=$((TOTAL + 1))
+_argv_line=$(cat "$_ARGV_LOG" 2>/dev/null || true)
+_argv_n=$(printf '%s\n' "$_argv_line" | grep -c . || true)
+_argv_expected="exec test-container bwrap --new-session --unshare-user --unshare-pid --dev /dev --bind / / -- id -u"
+if [[ -z "$_argv_line" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: no docker exec argv was recorded (the assertion below would be vacuous)"
+elif [[ "$_argv_n" -ne 1 ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: expected exactly one docker exec, recorded $_argv_n"
+  echo "        argv: $_argv_line"
+elif [[ "$_argv_line" == *"--die-with-parent"* || "$_argv_line" == *"--pdeathsig"* ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: bwrap exec argv arms PDEATHSIG (race under docker exec)"
+  echo "        argv: $_argv_line"
+elif [[ "$_argv_line" != "$_argv_expected" ]]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: bwrap exec argv differs from the pinned argv"
+  echo "        expected: $_argv_expected"
+  echo "        argv:     $_argv_line"
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: bwrap exec argv is exactly the pinned argv (no PDEATHSIG arm, --unshare-user --unshare-pid kept)"
+fi
+rm -rf "$_ARGV_DIR"
 
 # --- Results ----------------------------------------------------------------
 

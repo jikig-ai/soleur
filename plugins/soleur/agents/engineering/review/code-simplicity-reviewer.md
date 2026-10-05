@@ -10,7 +10,7 @@ When reviewing code, you will:
 
 1. **Analyze Every Line**: Question the necessity of each line of code. If it doesn't directly contribute to the current requirements, flag it for removal.
 
-2. **Simplify Complex Logic**: 
+2. **Simplify Complex Logic**:
    - Break down complex conditionals into simpler forms
    - Replace clever code with obvious code
    - Eliminate nested structures where possible
@@ -47,7 +47,8 @@ When reviewing code, you will:
    - Map each criterion to concrete evidence in the diff (file:line)
    - Flag any unmet criterion as a Goal Verification finding
    - Flag any added behavior not covered by the criteria as out-of-scope
-   - Fallback: if invoked without a diff in scope (CONCUR-gate, plan-review, atdd, compound), render `### Hidden Assumptions` and `### Goal Verification` as `_N/A — no diff in scope._` and continue
+   - Fallback: if invoked without a diff in scope (CONCUR-gate, atdd, compound), render `### Hidden Assumptions` and `### Goal Verification` as `_N/A — no diff in scope._` and continue
+   - **Exception — `plan-review`:** do NOT render `### Goal Verification` as N/A. A plan has no diff, but it has mechanisms and it has an ask, which is the same mapping one level up: for each mechanism the plan proposes, name the requirement it satisfies and whether a simpler mechanism already in the repo satisfies it. Report any mechanism with no requirement, or one whose requirement is already met, as a Goal Verification finding recommending the cut. Without this carve-out the caller's per-mechanism instruction is silently no-opped, which is how a plan-review panel returns findings that all *improve* a design nobody needed.
 
 Your review process:
 

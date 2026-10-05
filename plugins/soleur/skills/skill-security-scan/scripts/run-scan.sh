@@ -5,7 +5,16 @@
 #
 # Stdin: SKILL.md content. Or: positional file path.
 # Stdout: markdown findings table + disclaimer footer.
-# Exit code: 0 always (advisory).
+# Exit code: NOT guaranteed 0. This header claimed "0 always (advisory)" and
+# that was false the moment `set -euo pipefail` below was added: any internal
+# command failure, unset variable, or failing pipeline aborts this script with a
+# non-zero status. Callers MUST check it. The claim was load-bearing in the
+# wrong direction -- the skill-security-scan workflows relied on it to justify
+# `2>/dev/null | head -1 | grep ... || echo UNKNOWN`, which converted a crashed
+# scanner into a verdict the gate then accepted (#7629).
+#
+# The VERDICT is advisory; the EXIT STATUS is not. A non-zero exit means no
+# verdict was produced, which is not the same as a clean skill.
 
 set -euo pipefail
 

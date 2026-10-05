@@ -181,6 +181,99 @@ Note the backlog was **59 at that PR's branch base** and 56 after it fixed three
 it fixed had arrived in the interim from a sibling PR, so a count taken before the branch was
 cut would have undercounted the class rather than the remainder.
 
+## Addendum — 2026-08-06 (#7304): occurrence six, and the gate that should have shipped in July
+
+The section above ends by observing that prose is not a control for this class. It then shipped
+no repo-wide control. **Six days later the class recurred**, on the production-staleness alarm.
+
+### What it cost
+
+`scheduled-prod-version-drift.yml` calls a checker whose exit code is its verdict: 0 for the two
+QUIET verdicts (`CLEAN`, `DRIFT_PENDING`), 1 for `DRIFT_SUSTAINED`, 2 for `CHECK_ERROR`. Inherited
+errexit killed the step at the capture on **exactly the two verdicts that alert** and let the
+silent ones through. The alarm was quiet when it had nothing to say and dark precisely when
+production was stale — 8 of 8 scheduled runs failed emitting zero diagnostic output.
+
+The asymmetry is the part to internalise, because it is what makes this class survive review:
+
+| checker exit | verdict | intent | under inherited `-e` |
+|---|---|---|---|
+| 0 | `CLEAN` / `DRIFT_PENDING` | no alert | works, unchanged |
+| 1 | `DRIFT_SUSTAINED` | **ALERT** | step dies silently |
+| 2 | `CHECK_ERROR` | **ALERT** | step dies silently |
+
+Measured directly: running the shipped step body under `bash -e` against the pre-fix workflow
+gives 118 pass / 18 fail, with every exit-1 and exit-2 assertion red and **every exit-0
+assertion green**. A fix — or a test — verified only on the clean path is indistinguishable from
+no fix at all, because the clean path already worked throughout the outage.
+
+### The tell you can grep for
+
+A trailing `set -e` re-arm with **no matching `set +e` above it**. The author wrote the second
+half of a bracket whose first half was never there — they believed `-e` was off, which is
+precisely the false premise this file exists to correct.
+
+### The rule an automated detector must use, and the one that looks right and is not
+
+Anchor on the **`$?` / `${PIPESTATUS[n]}` READ**, then inspect the preceding logical command.
+
+The intuitive rule — "a command-substitution assignment is a finding" — was prototyped against
+the real tree and found **2 of 17 sites**. Nine of the seventeen are *bare commands* followed by
+`rc=$?`, so an assignment-anchored rule is structurally blind to every terraform site while
+reporting as full coverage. `${PIPESTATUS[n]}` must be included too: two sites, including one of
+the six occurrences, never touch `$?`.
+
+One false-positive class, worth knowing because it is an ordering bug rather than a rule bug:
+test the `|| rc=$?` exemption **before** stripping the trailing separator. Stripping first turns
+`cmd ||` into `cmd |`, which then fails the `||`-in-command test — 13 false positives, all in the
+two workflows independently verified as correctly protected.
+
+### The intervention that had not been tried
+
+Four learnings + six in-workflow comments + two hand sweeps → a sixth occurrence. #7304 shipped
+`scripts/lint-workflow-errexit-capture.py` + its unit suite, registered in `scripts/test-all.sh`
+(ADR-170, principle AP-022), calibrated in both directions: **17 findings against origin/main,
+0 against the fixed tree**. No `.highwater`.
+
+Calibrate any such gate against the PRE-FIX tree, and keep that tree available
+(`git worktree add <scratch> origin/main`) until the calibration is recorded. A gate authored
+after the fixes have erased the evidence can only be validated against fixtures its own author
+wrote — which is exactly how the 2-of-17 rule would have shipped reading as complete.
+
+### A second, adjacent defect that `set +e` does NOT fix
+
+Actions `==` is **loose**: operands of differing types are cast to Number, an unset step output is
+`''`, and `''` casts to 0 — so **`'' == '0'` is TRUE**. A step that dies before writing
+`$GITHUB_OUTPUT` therefore satisfies every `== '0'` gate downstream.
+
+Verified on run `31054501973`: the step gated `exit_code != '0' && != '1'` was **skipped** while
+its exact logical complement, gated `== '0' || == '1'`, **ran**. The workflow would have
+auto-closed the issue reporting its own breakage, posting an empty verdict.
+
+This bit twice in one PR. In `infra-validation.yml` the plan step carries
+`continue-on-error: true` and the job-failing guard is `if: steps.plan.outputs.exit_code != '0'`
+— which is **false** on the abort path, so a failing production `terraform plan` could report
+green. The plan for #7304 had reasoned the opposite ("caught today by accident") and was wrong in
+the unsafe direction; the run above settled it.
+
+Remedy: lead every consumer of a step's outputs with `steps.<id>.outcome == 'success'`. That
+conjunct is what discriminates "the step ran and measured 0" from "the step never ran".
+
+### Mutating a fix whose rationale comment quotes the fix
+
+Every correction in this class ships a comment containing the literal `set +e` (it has to — it
+explains why the statement is required). A mutation-testing arm that does
+`s.replace("set +e", "", 1)` therefore rewrites the **comment**: the file differs, `diff -q`
+reports the mutation landed, the child suite stays green, and the axis reports SURVIVED against a
+perfectly correct artifact. Mutators must be line-based and skip lines whose first non-space
+character is `#`.
+
+The same edit broke two *existing* mutation axes in the drift suite, both for related reasons —
+one was anchored on an exact `if:` expression string that the new conjunct split, the other
+replaced the first occurrence of a token that was unique before the fix and no longer is. **A
+mutator keyed on an exact expression shape is coupled to every future edit of that expression.**
+Assert that the mutation matched (`assert n == 1`), or an axis silently stops testing anything.
+
 ## Session Errors
 
 1. **`pipefail` parse-abort (P2, pr-introduced).** Authored the parse under a

@@ -16,9 +16,9 @@
 #     before any step executes — the human gate on CI-workflow compromise, the named top residual
 #     RCE path (HARD-7). id-token:write is scoped to this job only (least privilege).
 #   • Promotion is SEPARATE (HARD-6): this workflow does NOT write INNGEST_CONFIG_DIGEST. It emits
-#     the published IMAGE@DIGEST; an operator promotes by setting TF_VAR_inngest_config_digest and
-#     running `terraform apply` of inngest-config-digest.tf (no standing CI write-token into the
-#     isolated soleur-inngest/prd).
+#     the published IMAGE@DIGEST. Promotion is a Terraform write of inngest-config-digest.tf (no
+#     standing CI write-token into the isolated soleur-inngest/prd), and no automated route applies
+#     it yet (#9060): see step 3 of knowledge-base/engineering/operations/runbooks/inngest-config-refresh.md.
 name: build-inngest-config-bundle
 
 on:
@@ -171,7 +171,7 @@ jobs:
             echo "| version | \`${VERSION}\` |"
             echo "| image | \`${IMAGE}@${DIGEST}\` |"
             echo ""
-            echo "**To promote** (HARD-6, separate principal): set \`TF_VAR_inngest_config_digest=${DIGEST}\`"
-            echo "in Doppler \`soleur/prd_terraform\`, verify read-only, then \`terraform apply\` of"
-            echo "\`inngest-config-digest.tf\`. The pointer version MUST exceed the baked floor (HARD-9)."
+            echo "**To promote** (HARD-6, separate principal): no automated apply route exists yet (#9060)."
+            echo "Follow step 3 of \`knowledge-base/engineering/operations/runbooks/inngest-config-refresh.md\`."
+            echo "The first promotion bumps the isolation floor 5->6 in the same change; the pointer version MUST exceed the baked floor (HARD-9)."
           } >> "$GITHUB_STEP_SUMMARY"

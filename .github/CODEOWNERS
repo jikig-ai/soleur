@@ -24,12 +24,19 @@
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
-# Both workflow files are load-bearing: scheduled-content-vendor-drift.yml is
-# the workflow whose run timestamp feeds cron-run-stale (a rename silently
-# bypasses the MIN-binding); gdpr-gate-self-test.yml is the self-test that
-# asserts the operator-attested-mode banner literal.
+# gdpr-gate-self-test.yml is the self-test that asserts the operator-attested-mode
+# banner literal.
+#
+# The row for /.github/workflows/scheduled-content-vendor-drift.yml is REMOVED: that
+# file does not exist. The content-vendor-drift job migrated to an Inngest cron
+# (apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts), and a
+# CODEOWNERS row matching no path protects nothing while reading, to anyone auditing
+# this block, as though the cron-run-stale binding were still covered. It is not —
+# that probe returns 999 unconditionally (#7255). Restoring a row here is not the fix;
+# the fix is an Inngest-aware liveness source, and whatever path carries it gets the
+# row then.
 /plugins/soleur/skills/gdpr-gate/NOTICE                 @deruelle
-/.github/workflows/scheduled-content-vendor-drift.yml   @deruelle
+/plugins/soleur/skills/legal-generate/NOTICE            @deruelle
 /.github/workflows/gdpr-gate-self-test.yml              @deruelle
 /plugins/soleur/test/fixtures/gdpr-gate-stale/          @deruelle
 
@@ -45,9 +52,16 @@
 # is a tracked operator follow-up — see this file's header.)
 /AGENTS.rules.md                                        @deruelle
 /scripts/lint-rule-bodies.py                            @deruelle
+/scripts/pr-fanout-ledger.txt                           @deruelle
+/plugins/soleur/test/pr-fanout-ledger.test.sh           @deruelle
 /scripts/_agents_md_sections.py                         @deruelle
 /.claude/rule-body-hashes.txt                          @deruelle
 /.claude/rule-weakening-acks.txt                        @deruelle
+# #8030: a migrated rule's body lives at its skill-local home, outside the manifest above;
+# its integrity is the body hash in the migrated registry, checked by the lint below.
+/scripts/migrated-rule-ids.txt                          @deruelle
+/scripts/retired-rule-ids.txt                           @deruelle
+/scripts/lint-migrated-rule-ids.sh                      @deruelle
 
 # PR-B §1.6 — Service-role allowlist gate. Without these pins, an
 # attacker-modeled PR (or a careless agent loop) could add a
@@ -77,7 +91,18 @@
 /scripts/audit-ruleset-bypass.sh                        @deruelle
 /scripts/update-ci-required-ruleset.sh                  @deruelle
 /scripts/create-ci-required-ruleset.sh                  @deruelle
-/.github/workflows/scheduled-ruleset-bypass-audit.yml   @deruelle
+# CORRECTED #7493: the row here previously pinned
+# /.github/workflows/scheduled-ruleset-bypass-audit.yml, which does not exist — the audit
+# migrated to an Inngest cron. A CODEOWNERS row matching no path protects nothing while
+# reading as coverage, which is the exact failure this file's header documents for
+# scheduled-content-vendor-drift.yml.
+/apps/web-platform/server/inngest/functions/cron-ruleset-bypass-audit.ts @deruelle
+# #7493 — the marketplace ruleset's canonical bypass set + its verifier. Same reasoning as
+# the ci_required canonicals above: a self-edited canonical would let a widened bypass on the
+# plugin's distribution channel green its own audit.
+/scripts/marketplace-ruleset-canonical-bypass-actors.json @deruelle
+/scripts/verify-marketplace-ruleset.sh                   @deruelle
+/scripts/marketplace-manifest-validate.sh                @deruelle
 
 # Auto-apply for github branch-protection terraform (#3895/#3896 replacement).
 # The merge IS the human authorization, so CODEOWNERS is the load-bearing
@@ -110,6 +135,23 @@
 # dashboard-created entrypoint on apply-web-platform-infra.yml.
 /tests/scripts/lib/preapply-entrypoint-gate.sh           @deruelle
 /tests/scripts/test-preapply-entrypoint-gate.sh          @deruelle
+
+# vector-redeliver plan gate (#7542). Same review scope and the same reason as the
+# rows above: the `vector_redeliver` job sources this file from ${GITHUB_WORKSPACE}
+# and applies a saved plan only if it returns 0, so a PR that neuters the function
+# converts a scoped delivery into an unbounded apply against production web-1. The
+# blanket `*` rule at the top already assigns the same owner — these rows exist to
+# record WHICH files are gate-critical, not to change ownership.
+/tests/scripts/lib/vector-redeliver-gate.sh              @deruelle
+/tests/scripts/test-vector-redeliver-gate.sh             @deruelle
+/tests/scripts/test-vector-redeliver-wiring.sh           @deruelle
+
+# inngest-host plan-shape gate (#6894, ADR-142 Guard 3). Same review scope and reason as the
+# vector-redeliver rows: the `inngest_host` job sources this file from ${GITHUB_WORKSPACE} and
+# applies the saved plan only if it returns 0, so neutering the function lets that dispatch act on
+# the live plaintext AOF volume, the sole scheduler host, or the LUKS passphrase pair.
+/tests/scripts/lib/inngest-host-shape-gate.sh            @deruelle
+/tests/scripts/test-inngest-host-shape-gate.sh           @deruelle
 
 # R15 follow-up D2 — CodeQL coverage audit (#3545). Same false-pass
 # attack surface as #3544: mutating classify_codeql() to accept
@@ -150,3 +192,46 @@
 # that consume it (the default `*` rule already covers it; this is the
 # explicit load-bearing-files-get-explicit-rows row).
 /.github/actions/cf-tunnel-ssh-bridge/                  @deruelle
+
+# The knowledge-base index merge driver (#7935) and the root .gitattributes that
+# routed paths to it were RETIRED by #8377 / ADR-235: the index is an untracked
+# cache now, and a file that is never committed can never conflict, so there is
+# no merge-path code left to own. The rows that guarded the driver, its render
+# library, its installer and .gitattributes went with the files themselves. plugins/soleur/scripts/resolve-regenerable-conflicts.sh is the
+# replacement surface and is NOT unattended: it runs only when a sync script
+# calls it by name, never from git's merge machinery.
+
+# SSH host-key pinning trust files (#7226 / #5914, ADR-237). Each of these decides which
+# host key an SSH session to web-1 or git-data will accept: the committed web-1 pin, the
+# bridge that writes it into known_hosts, the redeploy workflow and its scripts that load the
+# git-data pin into the app, the app's git-data SSH transport and pin resolver, the cutover
+# precheck that reads the pin, and the plan-gate libraries whose allow-sets govern when the
+# git-data key rotates. A drive-by edit to any one can reopen TOFU without a failing test, so
+# they carry explicit rows (load-bearing-files-get-explicit-rows). NOTE: as the header says,
+# CODEOWNERS review is only an anchor once branch protection requires it.
+/apps/web-platform/infra/web-1-ssh-host-key.pub         @deruelle
+/.github/actions/dispatch-web-redeploy/                 @deruelle
+/apps/web-platform/server/git-auth.ts                   @deruelle
+/apps/web-platform/server/git-data-replication.ts       @deruelle
+/apps/web-platform/server/git-data-host-key-pin-shape.ts @deruelle
+/apps/web-platform/infra/git-data-flag-precheck.sh      @deruelle
+/tests/scripts/lib/git-data-host-replace-gate.sh        @deruelle
+/tests/scripts/lib/git-data-host-birth-gate.sh          @deruelle
+/tests/scripts/test-no-tofu-ssh.sh                      @deruelle
+
+# Merge-queue + advisory-CodeQL machinery (#9454, ADR-270). With CodeQL advisory on the queue, the post-merge alert
+# gate IS the control for a critical/high alert on main, and the CLA verify, the probe and the queued-skip tooling
+# decide whether a queued PR is merged, synced or dequeued. A PR that edits one of these is judged by the very edit
+# (the gate runs from the pushed commit), so each carries an explicit row (load-bearing-files-get-explicit-rows).
+# NOTE: as the header says, CODEOWNERS review is only an anchor once branch protection requires it. The three
+# workflows (.github/workflows/codeql-main-alert-gate.yml, merge-queue-cla-synthetics.yml, merge-queue-stall-check.yml)
+# are already covered by the /.github/workflows/ umbrella row above, so they get no redundant row here.
+/scripts/codeql-main-alert-gate.sh                      @deruelle
+/plugins/soleur/test/codeql-main-alert-gate.test.sh     @deruelle
+/plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh @deruelle
+/plugins/soleur/test/fixtures/codeql-main-alert-gate/   @deruelle
+/plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/ @deruelle
+/scripts/merge-queue-cla-verify.sh                      @deruelle
+/scripts/probe-merge-group-coverage.sh                  @deruelle
+/plugins/soleur/scripts/sync-pr-behind.sh               @deruelle
+/.claude/hooks/pre-merge-rebase.sh                      @deruelle

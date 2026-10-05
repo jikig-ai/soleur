@@ -1,0 +1,518 @@
+---
+title: A transient environment decline is reachable under CI, and must corroborate rather than infer
+status: adopting
+date: 2026-08-12
+amends: [ADR-181]
+related_adrs: [ADR-166, ADR-177, ADR-180, ADR-181]
+related: [7291]
+related_plans:
+  - knowledge-base/project/plans/archive/20260816-203421-2026-08-12-fix-t5-mutation-arm-network-flake-plan.md
+related_specs:
+  - knowledge-base/project/specs/archive/20260816-203421-feat-one-shot-7291-t5-mutation-network-flake/session-state.md
+brand_survival_threshold: aggregate pattern
+amended_by:
+  - "ADR-262 (2026-09-30, #9323) — a third carve-out: five self-test mutation batteries decline on a pull_request run; see ## Amendment — 2026-09-30"
+---
+
+# ADR-188: a transient environment decline is reachable under CI, and must corroborate rather than infer
+
+> **Ordinal note (re-derived at ship, 2026-08-17).** 188 was `highest + 1` when claimed at plan
+> time on 2026-08-12; `origin/main` has since merged up to 193. A review pass proposed renumbering
+> to 194 on the "highest + 1" convention, and the density check refutes it: the merged sequence has
+> exactly three gaps — 188, 189, 192 — and 189 and 192 are held by two other in-flight branches
+> (`feat-one-shot-7104-…`, `feat-one-shot-7569-…`). They are concurrent reservations, not holes.
+> Renumbering would *create* the hole at 188 and place this 2026-08-12 decision above two branches
+> that started later. No other ref claims 188, so there is no collision — which is the condition
+> the re-derive rule actually guards against.
+
+## Context
+
+`git-data-runcmd-rehearsal.test.sh` carries a mutation arm for T5, the guard that proves a wrong
+Doppler checksum aborts before `chmod +x /usr/local/bin/doppler` runs on an unverified tarball as
+root. The mutation arm exists to prove the `CHMOD_RAN` marker is *reachable*, so that its absence in
+the primary arm is evidence of the abort rather than evidence that nothing ever prints it.
+
+The arm's design comment stated its premise plainly: *"curl SUCCEEDS (real network, genuine
+tarball), so the checksum is the ONLY thing that can stop the chain."* That premise is false under a
+degraded network. When the container's `apt-get` or the tarball download fails, the chain aborts
+**earlier** than the checksum, `CHMOD_RAN` never prints, and the arm reported:
+
+```
+FAIL: T5 MUTATION: without set -e the chain still did not reach chmod — T5's check is vacuous
+```
+
+Measured on the reporting branch: 4 pass / 2 fail across 6 runs, against 44/44 on a clean
+`origin/main` run. The suite is registered in `infra-validation.yml`, so the flake reddens a
+required check on unrelated PRs.
+
+The failure direction was **correct** — an unreachable marker being reported as "this check proved
+nothing" is the honest verdict, and is exactly what ADR-180 asks of a guard that cannot demonstrate
+its own failing direction. What was wrong is that the arm could not distinguish *the mutant ran and
+the guard is vacuous* (a real finding about the SUT) from *the mutant never ran* (a statement about
+the network). Both produced the same verdict, and only one of them is about this repository.
+
+## Decision
+
+The arm gains a third verdict, `SKIP`, reachable **only** on a discriminating absence — that of a
+distinct, earlier execution marker — and bounded by a counted ceiling. Four properties are
+load-bearing.
+
+(This sentence said "positive corroboration" until review, contradicting the paragraph seven lines
+below that retracts exactly that phrasing. The retraction was applied to the test file's header and
+not to its two twins here and in the driver comment; marking one of three is worse than marking
+none, because an unmarked twin reads as still-current.)
+
+**1. The skip turns on the absence of a DISTINCT, EARLIER marker — not on the absence of the success marker.** The driver's `drive.sh` emits an
+execution marker immediately above its `. /work/doppler-dl.sh` line and **below** the capture-server
+guard. The verdict reads that marker, not the exit code alone. Absence of `CHMOD_RAN` plus presence
+of the marker is a genuine vacuity and stays a `FAIL`; absence of both is the environment decline.
+This is still an absence test — the code reads `! grep` — and calling it positive corroboration
+would be false. What makes it sound is WHICH absence: a distinct marker emitted earlier in the
+driver, localising the failure upstream of the download block rather than merely observing that
+the success marker did not appear. Inferring the decline from a non-zero docker rc alone would
+have re-created the original defect one level up — a missing signal read as a verdict about the
+SUT.
+
+**2. A missing measurement OUTSIDE THE MEASURED ENVIRONMENT CLASSES is a harness bug, never a
+skip.** A harness-defect rung sits above the skip rung: the execution marker absent, with a
+container rc that is **not one of the measured decline classes**, hard-fails. This is the row that
+stops the fix relocating the bug it closes (matrix row 5).
+
+**The rc test is an allowlist, widened from `rc == 0` at review.** The original predicate caught
+only the zero-exit case, so every *non-zero* harness defect fell through to the skip bucket — a
+mistyped `-v` source makes docker exit 125 with no marker, and that is a bug in the suite, not a
+statement about the network. The classes the decline is actually justified for are enumerated once
+(`100` apt under the container's outer `set -e`; `125` docker CLI / image pull) and read by both
+the routing predicate and the classification printed in the NOTE, so the two cannot drift apart.
+`125` is retained in that list only because a companion structural check now asserts every mount
+source exists before the run, which removes the harness half of 125 rather than trying to classify
+docker's error text.
+
+**The predicate is marker ABSENCE, not file emptiness.** An emptiness test is one byte from never
+firing: `2>&1` merges stderr into the capture, so `rc == 0` plus a single `WARNING: apt does not
+have a stable CLI` line defeats it and the run falls through to a SKIP. Marker absence subsumes
+emptiness — an empty file has no marker — and closes that hole.
+
+The `rc == 0` conjunct is load-bearing and the property is deliberately **not** stated
+unconditionally. A degraded container legitimately exits non-zero *and* produces no marker —
+measured, matrix row 2 (the only real skip in the matrix) recorded `docker rc=100` with an empty
+tail. Widening this rung to fire regardless of rc would convert that
+skip back into the false FAIL this ADR exists to remove. "The container said it succeeded and
+produced nothing" is a harness bug; "the container said it failed and produced nothing" is the
+environment.
+
+**3. The branch order is load-bearing and commented.** `CHMOD_RAN` → `FIXTURE:` → harness defect →
+marker → else `ran`, evaluated once into an explicit state rather than re-tested per assertion.
+(The terminal is `ran`, not `fail`: a run whose marker is present but whose chain did not reach a
+succeeding chmod routes into the `ran` arm, where the premise assertion can still pass. Written as
+`else fail` here until review.)
+Testing the marker before `CHMOD_RAN` would skip a slow-but-successful run; testing it before
+the `FIXTURE:` literal would absorb a deterministic fixture defect (the capture server failing to
+bind :8099) into the environment bucket, where nothing would ever act on it — and because the
+marker is emitted *below* the capture-server guard, a fixture defect also presents as marker-absent,
+which is precisely why `FIXTURE:` must be tested first.
+
+`FIXTURE:` also sits **above** the harness-defect rung, and that ordering is cosmetic — corrected
+at review, because the reason first recorded here was false. The draft argued that "a capture-server
+failure that still exits 0 satisfies the harness rung's predicate". It cannot: `drive.sh`'s :8099
+guard ends in `exit 2`, fires before that script arms its EXIT trap, and runs as the container's
+final command under `set -e`, so `FIXTURE:` present implies rc 2 — measured. The fixture rung and
+the harness rung are mutually exclusive, and their relative order changes nothing.
+
+The load-bearing constraint is the other one: **`FIXTURE:` must sit above `did-not-run`.** The
+execution marker is emitted *below* the capture-server guard, so a fixture defect presents as
+marker-absent with rc 2. Place the fixture rung any lower and that run satisfies `did-not-run`
+exactly — a deterministic, actionable bind failure absorbed into the environment bucket and
+reported as a green declared skip, which is the outcome this whole arm exists to prevent.
+
+**4. The skip is counted, denominated in assertion cost, and capped.** `SKIPPED_ASSERTIONS` increments by the
+number of assertions the skipped arm would have made, the floor compares `passes + fails + SKIPPED_ASSERTIONS`,
+and a counted ceiling asserts `SKIPPED_ASSERTIONS <= 2` — one skip-eligible arm exists, declaring a
+cost of two. **The cost is 2, not 1, and this was re-derived at the #7565 rebase rather than
+carried:** that PR gave the T5 mutation arm a second counted assertion (sha256sum's own
+`<tarball>: FAILED` rejection verdict, asserted in both arms), so the arm now contributes exactly
+two on each of its four **verdict** routes — ran, fixture-defect, harness-defect, and the declared
+skip. A ceiling left at 1 would have failed the very run it exists to permit. The ceiling is a
+function of the arm's assertion count and must be re-read off the arm whenever that changes.
+
+Scoped to the *verdict* routes deliberately: the arm's `did not land` pre-branch sits outside them
+and contributes **one**, which is pre-existing and identical on `main`. That route is sound because
+it must be red regardless and is doubly red — the total falls to 48 and the floor fires alongside
+the arm's own message (measured, mutation row 8). An earlier draft of this paragraph said "every
+route" and mutation row 8 falsified it: a universal asserted over a route set that had not been
+enumerated. This follows
+`infra-config-apply.test.sh`, which already ships the counter, the assertion-cost denomination, the
+sum-floor and a degraded-run `NOTE`. Only the ceiling is new here. Denominating in assertion cost
+rather than in arms resolves the ceiling's unit ambiguity outright and is forward-compatible with
+the deferred `run_case()` / `_s1_run()` extension, where one skipped case suppresses several
+follow-on assertions at once.
+
+## The carve-out this ADR adds, and the axis it turns on
+
+ADR-181 property 4 holds that **"a decline is UNREACHABLE under CI, not merely detected"**, and
+makes it so: `_diff_touches` returns true unconditionally when `CI` is set.
+
+**This is a second carve-out on an axis ADR-181 already opened, not a reversal.** ADR-181's own
+Scope paragraph already exempts one decline from CI-forcing — *"The infra runner's own pre-existing
+decline is deliberately **not** forced under CI"* — justified on coverage-ownership grounds. So a
+CI-reachable decline is not a new category; what this ADR owes is the rule for *when* one is
+legitimate.
+
+**The axis is contractual ownership, not computability.** An earlier draft of this ADR argued that
+a decline may stay CI-reachable when its input is not computable at dispatch (the diff is knowable,
+the apt archive's mood is not). That rule is refuted by the precedent this ADR leans on for its
+denomination. `infra-config-apply.test.sh` declines on two inputs that are both **fully computable**,
+and treats them **oppositely**:
+
+| Decline | Computable? | Under CI | Why |
+|---|---|---|---|
+| pinned blob absent (shallow clone) | yes | **hard FAIL** — `elif [[ -n "${CI:-}" ]]` | CI *is* contracted to `fetch-depth: 0`; its own message says so |
+| not root | yes | **SKIP (loud)**, ungated | CI is *not* contracted to run as root |
+
+Same suite, same computability, opposite verdicts. So the discriminator is: **who owns the missing
+precondition?**
+
+| Decline | Owner of the missing precondition | Right verdict |
+|---|---|---|
+| relevance (ADR-181) | the harness — it *chose* not to run | force off under CI |
+| docker / terraform / python3 absent (`_skip()`) | the runner, **contracted** to supply them | hard fail under CI |
+| `:8099` never bound (the `FIXTURE:` test) | this harness | fail, always |
+| the apt archive at that instant | **nobody** | counted skip |
+
+Computability co-varies with ownership in the two cases the earlier draft examined, and comes apart
+in the third — which is why it read as the axis and was not. Docker's absence hard-fails because CI
+is contracted to provide docker, not because it is computable.
+
+This is also why the suite's existing `_skip()` is left untouched and un-renamed: a runner without
+docker is a provisioning defect against a contract, so ADR-181's logic applies to it in full.
+
+**Category note — `SKIP` vs `INCONCLUSIVE`, considered and REJECTED (not deferred).** ADR-181's
+decline means *"we chose not to run"*; this one means *"we ran and could not conclude"*. Those are
+different verdict classes, and `INCONCLUSIVE` would name the second one better.
+
+It is rejected rather than deferred, because deferring a rename past the point where the vocabulary
+ships into recorded verdicts is the most expensive of the three options. The reason is not churn
+cost: it is that the carve-out framing above turned out to be **correct and load-bearing**, not dead
+weight. Both of its claims about ADR-181 were independently verified — ADR-181's Scope does exempt
+the infra runner's decline from CI-forcing, so this genuinely is a second carve-out on an opened
+axis. A rename would remove the section that records *when* a CI-reachable decline is legitimate,
+which is the part a future author needs; it would not remove the question.
+
+Recorded here so the next reader meets the decision rather than re-raising it.
+
+## Reconciliation with AP-021 / ADR-166
+
+AP-021 (ADR-166) holds that a message may only name a cause the job actually measured. The skip
+verdict is derived from **marker absence**, which is not itself a cause. So the reason line states
+what was observed — the marker did not appear — and *offers* the captured docker rc together with
+its measured classes (125 = docker CLI / image pull, 100 = apt under the container's outer `set -e`,
+2 = the capture-server guard) as classification. It does not assert that any of them happened. The
+arm did not measure why the download failed and does not claim to.
+
+## The counter-precedent, recorded
+
+`git-data-rung2-rehearsal.test.sh` takes the opposite position for a superficially similar case: it
+uses the doctrine sentence *"a gate that cannot run must not report success"* as a per-arm **FAIL**
+detail at two sites (`fail "python3 absent — the workflow-contract arms did NOT run"`). That is a
+real counter-precedent and is not being silently overridden.
+
+It distinguishes on the same axis as the reversal above. `python3 absent` is deterministic and
+locally fixable — the same input produces the same answer on every run, and a runner without python3
+stays without python3 until someone acts. Failing is therefore actionable. A degraded apt archive is
+transient: the identical tree passes minutes later, so a FAIL is a message no one can act on, and
+its only durable effect is to train readers that a red check on this suite means nothing. That
+training is the actual cost, and it is the cost ADR-180 warns about from the other direction.
+
+## Consequences
+
+- The required check stops flaking **in the one measured direction** — the T5 mutation arm. That is
+  the whole user-visible effect, and it is deliberately narrower than "the suite stops flaking":
+  `run_case()` (2 callers) and `_s1_run()` (2 callers) carry the same exposure and are explicitly
+  deferred, so one of **8 runtime container invocations** gains the verdict. (Stated as "~6" until
+  review — that is the SOURCE-SITE measure, and using it here for a runtime quantity is the exact
+  two-measures-sharing-one-number drift this ADR commends the suite for separating, below.)
+- The suite's floor moves **48 → 49** for the one new counted assertion (the ceiling). The base was
+  44 when this ADR was drafted, 46 after #7501, 48 after #7565, and 49 here — four moves in four
+  days while the increment (+1) has not moved once, which is exactly why the floor is stated as a
+  delta and the base re-read from `git show origin/main:<file>` at ship rather than at plan time.
+  Do not carry the literal forward; re-derive it.
+- A degraded run is now legible rather than silent: the summary line reports `Skipped: N`, and a
+  degraded run additionally emits a breakdown NOTE.
+- **Accepted residual — no persistence bound, but a narrower hole than it first appears.** The four
+  mechanical conditions bound a skip *per run*; nothing bounds it *across* runs, and ADR-181 paired
+  its decline with a compensating un-gated run every six hours where this has no analogue.
+
+  One bound does exist and is recorded here rather than left implicit: the T5 **primary** arm runs
+  the identical container recipe through `run_case … want=1`. Under a genuinely degraded apt the
+  container exits 100 (or 125 on an image pull) and the primary arm **FAILS** the suite. So "skips
+  forever behind a green check" is not reachable by a *persistently* degraded environment — it
+  requires a condition that hits only the mutant container's window while leaving the primary's
+  intact. That is a much narrower hole than "nothing bounds it across runs", and it costs nothing.
+
+  The residual that survives: the skip's only carrier is `Skipped: N` plus a NOTE on the stdout of a
+  green required check — no greppable marker reaches an observability layer, and nothing counts
+  across runs. The declared observation window is therefore manual: if the arm skips on more than
+  1 in 20 post-merge runs, the skip is masking a persistent defect and the deferred pre-baked
+  container image is owed immediately.
+- **Accepted residual — the ceiling constant is not mechanically drift-proof.** Raising it is not
+  detectable by any assertion that would not be text-matching the source, which is the antipattern
+  this suite rejects. The mitigation is procedural and declared: the ceiling's value and derivation
+  live inside the floor's itemisation comment, where this file's culture already forces review of
+  any count change. This is stated rather than papered over: the file's `"four plain docker run"` comment had been
+  stale since the count reached six, which is measured proof that hand-maintained numbers here
+  drift silently. **That comment is no longer this PR's to correct** — #7565 landed first and
+  replaced it with two named measures (6 source sites, 8 runtime invocations) each carrying its own
+  derivation, which is the shape a count in this file should take. The example is now historical,
+  and the corrected form is the better precedent for the ceiling constant this residual concerns.
+
+## Alternatives Considered
+
+- **Bounded retry on container setup** — REJECTED for now. It attacks a cause that measurement
+  showed *sufficient* but never *actual*, and it would convert the most likely occurrence class from
+  visible to invisible, destroying the frequency signal the marker exists to collect. Reconsider only
+  if the pre-bake lands and the flake persists; it must then emit `SETUP_RETRIED attempt=N` counted
+  and surfaced.
+- **Pre-bake the container image** — DEFERRED, and preferred over retry when it lands. It collapses
+  six apt transactions to one and makes the *healthy* path faster, where a retry makes the *degraded*
+  path slower. Three in-script `docker build` precedents already exist, none pushing to a registry.
+  It must carry a `[ ! -d /run/sshd ]` in-arm assertion: S1's finding depends on that directory not
+  existing at runcmd time, and installing `openssh-server` at build time changes when it could
+  appear.
+- **Serve the tarball from a local fixture for the mutant arm only** — REJECTED. It would make the
+  arm hermetic at the cost of the property that makes it faithful: the mutant reproduces the
+  supply-chain defect precisely *because* it downloads the genuine tarball and then fails the
+  checksum. A fixture-served tarball tests a different chain than the one that ships.
+- **Lower or remove the assertion floor** — REJECTED. It gives back exactly the detectability the
+  floor exists to provide, and makes a legitimate loud skip indistinguishable from an arm that
+  silently stopped running — the distinction this ADR is entirely about.
+
+---
+
+## Amendment — 2026-08-20 (#7572): S1 becomes skip-eligible, and what that costs
+
+This ADR's decision is unchanged. Three of the records it makes are now stale, and one of its
+accepted residuals is partially retired. All four are recorded here rather than edited above.
+
+### The ceiling moves 2 → 5, itemised
+
+`_SKIP_CEILING` was `2`, justified above as "one skip-eligible arm exists, declaring a cost of
+two". #7572 makes S1's two container-dependent groups declinable, so the itemisation is now:
+
+| Arm | Cost | Origin |
+|---|---|---|
+| T5 mutation | 2 | pre-existing (this ADR) |
+| S1 healthy | 2 | #7572 — both assertions in the healthy run |
+| S1 mutation | 3 | #7572 — the mutant's rc, its fatal, and the privsep reproduction |
+| **Ceiling** | **5** | the largest cost reachable in a single run |
+
+**7 — and an earlier revision of this amendment said 5.** That was wrong; it is corrected here
+rather than edited away. The claim was that "T5 and S1 cannot both be maximally skipped in a run
+that produced any verdict at all". They can: `_T5M_ENV_RCS` and `_S1_ENV_RCS` are the SAME
+allowlist (`100 125`) and both arms pull the same image, so ONE environmental condition satisfies
+both `did-not-run` rungs. Measured against an unpullable image — docker rc=125, all three arms
+decline, `Skipped: 7`. At a ceiling of 5 that legitimate decline emitted a SECOND, spurious
+failure blaming the arms for cost they genuinely have: a false FAIL inside the mechanism this ADR
+built to remove false FAILs.
+
+### Full derivation stays rejected, for the reason this ADR already gave
+
+#7572's issue body proposed replacing the constant with a count derived from the `arm_skip` call
+sites. That is rejected, and the rejection is the same one recorded above: a ceiling derived from
+the live skip count makes `SKIPPED_ASSERTIONS <= _SKIP_CEILING` an **identity that cannot fail**
+(AP-023). It would read as a tightening and would in fact delete the assertion.
+
+### The "not mechanically drift-proof" residual is PARTIALLY retired
+
+That residual said raising the ceiling "is not detectable by any assertion that would not be
+text-matching the source". A narrower guard now exists and does not require text-matching a
+value: the suite counts `arm_skip` **call sites** and asserts the number the itemised stanza
+declares (3). This catches an unlisted call site silently consuming another arm's budget — the
+drift that actually happens. It deliberately does **not** sum the costs from the code, because
+summing them would re-create the AP-023 identity one level down.
+
+**Scope it precisely: the CARDINALITY is guarded, not the roster.** A count of 3 is satisfied by
+any three call sites, so deleting `arm_skip "S1 healthy…"` and adding `arm_skip "R1 …"` passes it.
+Two assertions added alongside narrow that — every call site's message must open with a name the
+follow-through probe greps for (`T5 `/`S1 `), and the per-arm counts must sum to the call-site <!-- markdownlint-disable-line MD038 -->
+count — which catches an unlisted site and an arm-for-arm substitution. A reworded message inside
+an arm's own namespace is still not caught. The ceiling's *value* remains procedural.
+
+### The composite vacuity bound now rests on T5's primary alone
+
+This is the consequential one. The residual above records that "skips forever behind a green
+check" is not reachable, because the T5 **primary** arm runs the identical container recipe
+unconditionally and FAILS on a degraded container.
+
+S1's healthy run used to be such a bound, for the same reason and independently. Routing it
+through the classifier **removes it**: a run in which the container never starts now declares
+skips and still satisfies the floor.
+
+**But it was never the *second* bound, and T5's primary is not the only one left.** An earlier
+revision of this amendment said both, and was wrong in the direction that flatters the guard it
+introduced. Four container-dependent arms remain non-declinable, each verified to fail closed on
+a container that produces no output: **T5 primary** (`run_case` rc), **T17** (`run_case` rc plus
+its mutation arm), **R1** (five fail sites, plus six substitutes on the extraction-failed branch),
+and the **R4/R3 run-level fixture-liveness gate**. Which set stands depends on the failure: an apt
+failure leaves T5-primary, T17 and R4; an image-pull failure leaves all four.
+
+The real invariant is therefore not "T5's primary must not become skip-eligible" but **"at least
+one container-dependent arm must remain non-declinable"**, and the guard shipped here pins the
+weakest of the four — T5's primary carries one rc check where R1 carries eight assertions. It is
+worth having, and its scope is arbitrary. A declared roster of container-dependent arms, asserted
+to be a proper superset of the `arm_skip` call sites, is the right shape.
+
+The suite asserts this explicitly rather than leaving it implicit: if a future change makes T5's
+primary skip-eligible too, every container-dependent assertion in the file becomes declinable at
+once and a run in which docker never worked reports green. That assertion is a standing guard on
+this ADR's argument — not a complete one.
+
+**A residual this amendment adds rather than closes.** The floor (`passes + fails +
+SKIPPED_ASSERTIONS >= 68`) adds skips INTO its own total, so it constrains skips not at all: a run
+declaring 68 skips satisfies it. Only `_SKIP_CEILING` bounds declinable evidence, and its honest
+denominator is the ~20 assertions that actually execute a container, not 68. #7572 added nine
+container-INDEPENDENT assertions and #7613 ten more, and both instruments count them identically
+to container ones — so the suite's centre of mass can drift from "run the recipe in the pinned
+image" toward "grep the render" with neither noticing. A second floor over container-dependent
+assertions only would close it. It is recorded as a residual rather than decided, because an ADR
+that records an undecided problem as a decision is worse than one that records a residual.
+
+### Why S1 became skip-eligible at all
+
+Not for convenience. S1 read the stage's exit status out of the container's stdout, so a container
+that never ran left it empty and the arm reported `the sshd_config stage exited <no marker> on a
+fresh 24.04 — this is the boot abort` and `S1 is no longer reproducing the measured failure`. Both
+name a cause that never occurred: the stage did not exit anything, because it never started. That
+is the AP-021 / ADR-166 misattribution this ADR's own four-rung ladder exists to prevent, and S1
+was the arm without one. The skip is the cost of no longer asserting a false cause.
+
+### Carrier note
+
+The manual observation window this ADR declares ("more than 1 in 20 post-merge runs") is no longer
+manual. `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` counts it, and since #7574 its
+marker set covers **both** T5 and S1 — the arm this amendment makes skip-eligible. Its carrier is
+the standing daily monitor `.github/workflows/scheduled-rehearsal-skip-monitor.yml`, not the
+follow-through sweeper, which closes on first PASS and would retire the observer after one clean
+sample.
+
+## Amendment — 2026-09-17 (#7535 Phase 2): T17 becomes skip-eligible
+
+Same change class as the #7572 amendment above, and recorded the same way rather than left to
+drift: the code moved and this ADR is the normative record of the numbers it moved.
+
+The T17-mutation arm previously could not decline. Its `docker run` ended in `|| true`, so the
+container rc was discarded, and its sole assertion was `[ -s capture.log ]` — meaning a starved
+apt produced an empty capture that the arm reported as *"removing the rc guard did NOT make a
+healthy run emit — the check is vacuous"*. It did not skip; it mis-stated an environment failure
+as a mutation-battery finding. Capturing the rc gives it a fourth route, and that route is a
+declared skip.
+
+**Ceiling, re-itemised (5 → 7 → 8):**
+
+| Arm | Cost | Origin |
+|---|---|---|
+| T5 mutation | 2 | pre-existing (this ADR) |
+| S1 healthy | 2 | #7572 |
+| S1 mutation | 3 | #7572 |
+| T17 mutation | 1 | #7535 Phase 2 — the arm's single vacuity assertion |
+| **Ceiling** | **8** | the largest cost reachable in a single run |
+
+The T17 row is reachable in the *same* environmental condition as the other three:
+`_T17M_ENV_RCS` is the same `100 125` allowlist as `_T5M_ENV_RCS` and `_S1_ENV_RCS`, and all four
+arms pull the same image, so one unpullable image declines all of them at once. Holding the
+ceiling at 7 would have produced exactly the spurious second failure this ADR's own stanza
+warns about, one arm later.
+
+**Two guard values move with it.** The call-site cardinality assertion is now **4**, not 3
+(T5 mutation; S1 healthy; S1 mutation; T17 mutation). The roster parity check — every call site's
+message must open with a name the follow-through probe greps for — now spans `T5 `/`S1 `/`T17 `, <!-- markdownlint-disable-line MD038 -->
+and `SKIP (loud): T17 ` is registered in `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` <!-- markdownlint-disable-line MD038 -->
+in the same change. Registering the arm in the suite without registering it in the probe would
+have satisfied the parity equality *by arithmetic* while leaving the observer blind to the very
+arm the change creates — so the probe's own test suite gains a case asserting the T17 marker,
+which is what actually holds the two in step.
+
+**The observation window's marker set covers three arms, not two.** The `both T5 and S1` wording
+earlier in this ADR predates T17 and should be read as the set enumerated in `SKIP_MARKERS`.
+
+**What this amendment does *not* do:** it does not widen the carve-out. T17's skip is gated on
+marker ABSENCE *and* an allowlisted rc, with a fixture-defect rung above it and a mount-source
+existence pre-check before the spin — so a deterministic bind failure and a mistyped `-v` source
+both red rather than declining. A vacuity finding with apt provably healthy still fails.
+
+## Addendum — 2026-09-25 (#8616): the hook suites extend the ownership axis to local runs
+
+This ADR requires a hard fail **under CI** for a precondition the runner is contracted to supply,
+and keeps a local skip (`_skip()` in the infra suites, for docker/terraform/python3). #8616 goes
+further for the hook suites under `.claude/hooks/`, which run everywhere the hooks do. There, a
+missing `jq`/`git`/`perl`/`realpath`/`python3`/`script` is never green, locally or in CI. The suite
+exits 3 (UNRESOLVED) and names the tool. The reason is specific to hooks: the hooks under test call
+the same tools, so on a machine without them the guardrails are degraded too, and a green suite there
+misstates what was measured.
+
+This is an extension, not a reversal. The infra `_skip()` semantics are unchanged, and so is the
+gitleaks probe (`plugins/soleur/test/lib/gitleaks-probe.sh`, #8266), which keeps its local skip and
+CI hard fail. `.claude/hooks/hook-suite-dep-unresolved.test.sh` names that probe as an accepted gap.
+The same idiom outside `.claude/hooks/` is tracked in #8773.
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+Property 4 ("a decline is unreachable under CI") and the table row that forces relevance declines OFF under
+CI are narrowed by a third carve-out, and this one is for COST rather than for a transient environment:
+five self-test mutation batteries decline on a `pull_request` run when the diff touches none of their
+declared subject paths (ADR-262). The discriminator is the event name, the opt-in is per call site
+(`_diff_touches --pr-gated`), and the backstop is the merge-SHA `push` run and the 6-hourly monitor. The
+environment-decline rule above is untouched: an environment decline is still never inferred.
+
+## Amendment — 2026-10-01 (#9379): the apt decline gets a time bound, and no arm becomes skip-eligible
+
+#8744 bounded the NUMBER of in-container apt attempts in `git-data-ownership.test.sh` and
+`git-data-runcmd-rehearsal.test.sh`, not their elapsed time. From about 15:00 UTC on 2026-10-01 the
+Infra Validation `deploy-script-tests (1/4)` leg went red on every branch and on `main` because both
+suites hit their per-suite wall-clock bound (`rc=124`, empty log) instead of reaching the decline this
+ADR declares for "the apt archive's state at that instant".
+
+**The decision.** `apps/web-platform/infra/lib/apt-bounded.sh` puts one budget of apt seconds on every
+in-container apt cycle, shared by all containers a suite spawns through a host-owned state directory
+mounted at `/work/apt` (`budget`, plus one `spent` line appended per attempt). A single attempt is also
+capped (90 s) and retried up to three times. When the budget or the attempts run out, the container
+prints the credential-scrubbed log tail, a `FIXTURE_APT_CAUSE:` line naming the stage, the bare
+`FIXTURE_APT_FAILED` line, and exits 100. That is byte-for-byte the shape an apt exhaustion already
+produced, so no consumer's classifier changes and every skip-eligible arm reaches its EXISTING
+`arm_skip`. A non-timeout failure keeps apt's own rc (an OOM-killed apt stays 137 and is not retried),
+a missing lib at a call site exits 97, and an unarmed state directory exits 98; none of those can read
+as the environment decline, because 100 is in every consumer's allowlist.
+
+**Measured, not assumed.** Two choices came from running the suite against real docker:
+
+- *Apt seconds, not a wall-clock deadline.* The first cut armed one absolute deadline. The suite's
+  non-apt container time (the T5 tarball downloads, sshd) spent that budget too, so later healthy primary
+  arms inherited an expired deadline and starved. Only time inside the apt cycle is charged now.
+- *A per-attempt cap, not only a shared budget.* On this box roughly one apt cycle in three stalled for the
+  full allotted time although `Acquire::http::Timeout=20` and `Acquire::Retries=5` were set, and the very
+  same cycle succeeded in about 15 s on a fresh attempt. With the shared budget alone, one stalled first
+  attempt spent a third of it.
+
+**Budgets and known limits.** Rehearsal 420 s, ownership 180 s: healthy apt cost measured on a slow box is ~32 s per
+container (386 s for the rehearsal's 12, 32-55 s for ownership), CI's healthy rehearsal step is ~100 s, and a total
+stall ends near 430-440 s against the 600 s bound. A stall that recovers on its retry uses most of the headroom on
+the slow box, which is why the `GD_APT: spent=` line is printed at the end of each suite. Accepted limits, recorded in
+`lib/apt-bounded.sh`: `timeout -k` signals the process group with TERM but tracks only its direct child, so a
+TERM-ignoring apt is not reaped; a cap kill mid-dpkg can leave "dpkg was interrupted" for the retry (no
+`dpkg --configure -a` repair, because the unit suite runs the helper on the host); an OOM kill at or after the cap is
+indistinguishable from a timeout kill by rc.
+
+**What this amendment does not do.** It creates no new skip path. T5 primary, T17 healthy and the R4
+driver stay hard, and the ownership runtime arm stays fail-closed under `CI=true` (#8744: "do not let an
+apt failure turn into a skip"). The honest consequence: during a SUSTAINED archive outage those legs are
+still red, but bounded (about the budget plus non-apt time, below the suite bound), attributable (the
+cause line and the `GD_APT: spent=` line name the stage and the cost) and no longer starving the other
+suites on the leg. The S1 skip ceiling still fires if every S1 arm starves, which is the intended signal
+for a total outage.
+
+**Alternatives considered.** Raising `_SUITE_BOUNDS` (bounds nothing; the leg has a 15-minute
+`timeout-minutes` shared across suites). A pre-baked fixture image (rejected 2026-08-13: it would remove
+the apt-under-`set -e` RED that T5 relies on). A per-site budget (twelve serial apt containers in the
+rehearsal suite make `12 x budget` exceed the 600 s bound for any budget large enough to survive a slow
+day). A wall-clock deadline (measured above). Making T5 primary, T17 healthy or R4 skip-eligible, or
+giving ownership a counted skip: not taken here; recorded as a User-Challenge for the operator because
+each weakens a guard or reverses #8744.

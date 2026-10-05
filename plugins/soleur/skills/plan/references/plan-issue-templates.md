@@ -2,6 +2,37 @@
 
 Select how comprehensive you want the issue to be, simpler is mostly better.
 
+## Plan Frontmatter (all detail levels)
+
+The frontmatter block is identical across the three templates below; only the body differs. It is
+written in **two stages**, because the plan file now exists before the research that derives most
+of its metadata (#7418, ADR-176).
+
+**Stage 1 — the skeleton, written by `plan` Phase 0.7 before the research fan-out.** Only what
+Phase 0.6 already knows:
+
+| Key | Source |
+|---|---|
+| `title:` | the issue title Phase 0.6 fetched, or the feature description on the freeform arm |
+| `date:` | today, UTC |
+| `slug:` | the kebab title, without the date prefix or `-plan` suffix |
+| `branch:` | `git branch --show-current` — this is what the recovery selector matches on |
+| `issue:` | the cited issue — **provisional**, planning may re-target it |
+
+**Stage 2 — finalization.** `issue:` and `closes:` are rewritten unconditionally and the derived
+fields are added (`type:`, `priority:`, `domain:`, `brand_survival_threshold:`,
+`requires_cpo_signoff:`). `lane:` is written separately by Save Tasks, from `spec.md` — do **not**
+pre-seed it here or in the skeleton, because the fail-closed default is `cross-domain`, which widens
+the Phase 2.5 domain fan-out.
+
+**There is no progress key, by decision.** A plan is finished when it has `## Acceptance Criteria` —
+the one heading present in all three templates below, and the last one written. Completion is
+asserted from that content, never from a dedicated cursor field, because a second progress signal
+can disagree with the file's own content and every such disagreement resolves to a fail-open arm
+(ADR-176 §Considered Options 6). Do not add one, and do not repurpose the free-text `status:` field
+for it: `status:` is a human draft-state field already carrying dozens of distinct values across the
+plan corpus, including ones that read as pipeline states.
+
 ## MINIMAL (Quick Issue)
 
 **Best for:** Simple bugs, small improvements, clear features
@@ -19,6 +50,10 @@ Select how comprehensive you want the issue to be, simpler is mostly better.
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -30,6 +65,9 @@ date: YYYY-MM-DD
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -58,8 +96,21 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
-  expected_output: # canonical "everything OK" output
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -90,6 +141,59 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
 
 - [ ] Core requirement 1
@@ -97,7 +201,7 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 
 ## Test Scenarios
 
-Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `/soleur:qa`):
+Derive from acceptance criteria. Use Given/When/Then format for logic tests, and deterministic verification commands for integration tests (consumed by `soleur:qa`):
 
 - Given [precondition], when [action], then [expected result]
 - Given [edge case], when [action], then [expected handling]
@@ -149,6 +253,10 @@ end
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -170,7 +278,7 @@ date: YYYY-MM-DD
 - Architecture impacts
 - Performance implications
 - Security considerations
-- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `/soleur:architecture assess` for a structured assessment)
+- NFR impacts (read `knowledge-base/engineering/architecture/nfr-register.md` and assess which non-functional requirements this feature affects — run `soleur:architecture assess` for a structured assessment)
 
 ### Attack Surface Enumeration (for security fixes)
 
@@ -186,6 +294,9 @@ List ALL code paths that touch the security surface being fixed:
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
@@ -214,8 +325,21 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
-  expected_output: # canonical "everything OK" output
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -246,6 +370,59 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
 
 - [ ] Detailed requirement 1
@@ -261,7 +438,7 @@ Translate each acceptance criterion into a testable scenario:
 
 Include regression scenarios for any bugs this work addresses.
 
-If the feature touches external services, include deterministic verification commands (consumed by `/soleur:qa`):
+If the feature touches external services, include deterministic verification commands (consumed by `soleur:qa`):
 
 - **Browser:** [Navigate to URL, fill form, submit, verify UI state]
 - **API verify:** `doppler run -c dev -- curl -s [API endpoint] | jq '[query]'` expects `[value]`
@@ -280,6 +457,7 @@ If the feature touches external services, include deterministic verification com
 - Similar implementations: [file_path:line_number]
 - Best practices: [documentation_url]
 - Related PRs: #[pr_number]
+
 ```
 
 ## A LOT (Comprehensive Issue)
@@ -303,6 +481,10 @@ If the feature touches external services, include deterministic verification com
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -354,10 +536,13 @@ date: YYYY-MM-DD
 - **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
 - **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
 - **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+- **Threshold decision (challengeable):** <one sentence — why this tier and not the next>
+
+<!-- The threshold drives review-panel size (ADR-267). A disputed choice is a decision challenge — headless runs persist it to `decision-challenges.md` per the ADR-084 channel (brainstorm-techniques/references/decision-principles.md). -->
 
 *Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
-If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `user-impact-reviewer` can cross-check them against the diff.
+If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `soleur:engineering:review:user-impact-reviewer` can cross-check them against the diff.
 
 ## Observability
 
@@ -384,8 +569,21 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
-  expected_output: # canonical "everything OK" output
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
+                   # QUOTING: prefer an unquoted value when no quoting is needed. A double-quoted
+                   # value decodes \" and \\ once; single-quoted decodes '' once; every other
+                   # backslash sequence stays literal (a shell \n stays backslash-n). Example:
+                   # "printf '%s\n' \"ok\"" runs printf '%s\n' "ok".
+  expected_output: # the LITERAL string(s) the command prints ("200", "ok") — Check 10
+                   # substring-matches these against stdout; prose can never match
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -416,6 +614,59 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
+
+## Scope Check
+
+Required on every plan (plan Phase 2.4; halted at deepen-plan 4.12). One row
+per ask, verbatim quote; every plan item cites the user words it answers or is
+`inferred` with a justification. Full rules:
+`plugins/soleur/skills/plan/references/plan-scope-check.md`.
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "<ask, quoted>" | <FR/phase/file> | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| <item> | "<quote>" | asked |
+
+### Split Assessment
+
+- Subsystems touched: <N> — <roots>
+- Planned files: <N> | Estimated changed lines: <N>
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR | split — <proposed PR boundary>
+
 ## Acceptance Criteria
 
 ### Functional Requirements
@@ -427,7 +678,7 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
 - [ ] Performance targets
 - [ ] Security requirements
 - [ ] Accessibility standards
-- [ ] NFR register assessment (run `/soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
+- [ ] NFR register assessment (run `soleur:architecture assess` against `knowledge-base/engineering/architecture/nfr-register.md`)
 
 ### Quality Gates
 
@@ -453,7 +704,7 @@ For each bug fix included, write a scenario proving the fix:
 
 - Given [boundary condition], when [action], then [expected handling]
 
-### Integration Verification (for `/soleur:qa`)
+### Integration Verification (for `soleur:qa`)
 
 If the feature touches external services, include deterministic verification commands:
 
@@ -504,4 +755,5 @@ If the feature touches external services, include deterministic verification com
 - Previous PRs: #[pr_numbers]
 - Related issues: #[issue_numbers]
 - Design documents: [links]
+
 ```

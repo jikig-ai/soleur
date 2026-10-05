@@ -270,6 +270,85 @@ describe("POST /api/webhooks/resend-inbound — dedup (processed_resend_events)"
   });
 });
 
+describe("POST /api/webhooks/resend-inbound — recipients (ADR-269 routing key)", () => {
+  function sentData(): Record<string, unknown> {
+    return (mockInngestSend.mock.calls[0][0] as { data: Record<string, unknown> })
+      .data;
+  }
+
+  it("normalizes, dedupes and sorts recipients across `to` and `received_for`", async () => {
+    const res = await POST(
+      makeRequest({
+        body: receivedPayload({
+          to: ['"Triage" <Triage@Inbound.Soleur.AI>', "zed@inbound.soleur.ai"],
+          received_for: ["triage@inbound.soleur.ai"],
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(sentData().recipients).toEqual([
+      "triage@inbound.soleur.ai",
+      "zed@inbound.soleur.ai",
+    ]);
+  });
+
+  it("carries a `received_for` address that is NOT in `to` (the envelope field is a real source)", async () => {
+    await POST(
+      makeRequest({
+        body: receivedPayload({
+          to: ["triage@inbound.soleur.ai"],
+          received_for: ["cro@inbound.soleur.ai"],
+        }),
+      }),
+    );
+    expect(sentData().recipients).toEqual([
+      "cro@inbound.soleur.ai",
+      "triage@inbound.soleur.ai",
+    ]);
+  });
+
+  it("a long `to` list cannot push the envelope `received_for` address out of the event", async () => {
+    await POST(
+      makeRequest({
+        body: receivedPayload({
+          to: Array.from({ length: 60 }, (_, i) => `h${i}@inbound.soleur.ai`),
+          received_for: ["cro@inbound.soleur.ai"],
+        }),
+      }),
+    );
+    const recipients = sentData().recipients as string[];
+    expect(recipients).toContain("cro@inbound.soleur.ai");
+    expect(recipients.length).toBeLessThanOrEqual(20);
+  });
+
+  it("omits `recipients` entirely when no address field yields a valid address", async () => {
+    const res = await POST(
+      makeRequest({
+        body: receivedPayload({ to: [42, null, "not-an-address"], received_for: "x" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect("recipients" in sentData()).toBe(false);
+  });
+
+  it("omits `recipients` when the payload has no `to` field at all (pre-routing shape)", async () => {
+    const payload = receivedPayload() as { data: Record<string, unknown> };
+    delete payload.data.to;
+    const res = await POST(makeRequest({ body: payload }));
+    expect(res.status).toBe(200);
+    expect("recipients" in sentData()).toBe(false);
+  });
+
+  it("never puts a display name or mixed-case address into the event", async () => {
+    await POST(
+      makeRequest({
+        body: receivedPayload({ to: ["Ops Team <OPS@Soleur.ai>"] }),
+      }),
+    );
+    expect(JSON.stringify(sentData())).not.toMatch(/Ops Team|OPS@/);
+  });
+});
+
 describe("POST /api/webhooks/resend-inbound — event emission", () => {
   it("happy path emits exactly one email/inbound.received event with v:1 and receivedAt passthrough", async () => {
     const res = await POST(makeRequest());
@@ -294,6 +373,8 @@ describe("POST /api/webhooks/resend-inbound — event emission", () => {
           receivedAtSource: "payload",
           // Metadata ONLY — no content, no download URLs.
           attachments: [{ filename: "doc.pdf", contentType: "application/pdf" }],
+          // ADR-269 routing key: normalized recipients from data.to.
+          recipients: ["ops@soleur.ai"],
         },
       }),
     );

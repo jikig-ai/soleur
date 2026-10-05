@@ -1,0 +1,7 @@
+import { mkdtempSync as mk } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+export function scratch(): string {
+  return mk(join(tmpdir(), "demo-"));
+}

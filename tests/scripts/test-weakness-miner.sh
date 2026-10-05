@@ -6,6 +6,38 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# ONE owning root for every fixture below, removed by ONE EXIT trap installed BEFORE anything is
+# sourced (ADR-129: a sourced helper may compose with a prior trap; a later trap replaces it).
+# Each fixture was a bare `mktemp -d` with no cleanup: a direct run left five `tmp.*` dirs behind
+# (#9117). A fixture dir is `$WM_ROOT/<name>.XXXXXX`, so a replaced trap still leaves one entry, not five.
+WM_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/weakness-miner-test.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 1; }
+# Canonical assert_fixture_dir -- byte-identical copy (fixture-scan.py requires it); do not reword.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+_wm_cleanup() { assert_fixture_dir "$WM_ROOT"; rm -rf "$WM_ROOT"; }
+trap _wm_cleanup EXIT
+
+# The shell fixture chokepoint (#7849), replacing the nine-variable `unset GIT_…` that stood
+# here. That scrub was a hand-copied transcription of one list; this file sources the list
+# itself, so the two cannot drift. Every git call below is a bare `( cd "$root" && git … )`
+# with no -C and no explicit env, so an inherited GIT_DIR from a hook would send these fixture
+# commits into the developer's real repository -- the #7833 defect. The scrub SILENTLY removed
+# such an inheritance; sourcing here ABORTS on it, naming this file, so the broken entry point
+# gets fixed instead of papered over. Every fixture root below then calls `git_fixture_env` --
+# including the three that create no repo, because the scrub it replaces was suite-wide and a
+# per-fixture replacement that skipped them would cover strictly less.
+# shellcheck source=../../plugins/soleur/test/lib/git-fixture-env.sh
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
 SCRIPT="$REPO_ROOT/scripts/weakness-miner.sh"
 pass=0; fail=0
 
@@ -39,7 +71,11 @@ EOF
 # Uses SOLEUR_WM_FILES to feed an explicit file list (bypasses git selection).
 # ---------------------------------------------------------------------------
 t_clustering() {
-  local root; root=$(mktemp -d)
+  local root; root=$(mktemp -d "$WM_ROOT/fixture.XXXXXX")
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the clustering fixture $root" >&2
+    exit 1
+  }
   # 3 files share (ci, drift-guard); only 2 share (supabase, rls)
   _learning "$root/a.md" "ci, drift-guard, bash"
   _learning "$root/b.md" "ci, drift-guard, terraform"
@@ -72,7 +108,11 @@ t_clustering() {
 # uses --diff-filter=A first-appearance selection. SOLEUR_WM_SINCE pins cutoff.
 # ---------------------------------------------------------------------------
 t_git_window() {
-  local root; root=$(mktemp -d)
+  local root; root=$(mktemp -d "$WM_ROOT/fixture.XXXXXX")
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the git-window fixture $root" >&2
+    exit 1
+  }
   ( cd "$root" && git init -q -b main && git config user.email t@t && git config user.name t )
   local ld="$root/knowledge-base/project/learnings"
   # OLD file first-appears 2026-01-01 (out of window)
@@ -99,7 +139,11 @@ t_git_window() {
 # modified (AC4a). The digest is the single write sink.
 # ---------------------------------------------------------------------------
 t_zero_mutation() {
-  local root; root=$(mktemp -d)
+  local root; root=$(mktemp -d "$WM_ROOT/fixture.XXXXXX")
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the zero-mutation fixture $root" >&2
+    exit 1
+  }
   ( cd "$root" && git init -q -b main && git config user.email t@t && git config user.name t )
   local ld="$root/knowledge-base/project/learnings"
   _learning "$ld/z1.md" "za, zb, z1"
@@ -121,7 +165,11 @@ t_zero_mutation() {
 # Test 4 — no-cluster case: fewer than MIN_MEMBERS sharing a pair → benign note.
 # ---------------------------------------------------------------------------
 t_no_cluster() {
-  local root; root=$(mktemp -d)
+  local root; root=$(mktemp -d "$WM_ROOT/fixture.XXXXXX")
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the no-cluster fixture $root" >&2
+    exit 1
+  }
   _learning "$root/a.md" "solo-a, solo-b"
   _learning "$root/b.md" "solo-c, solo-d"
   local digest="$root/digest.md"
@@ -155,7 +203,11 @@ t_workflow_addpaths() {
 # cluster heading (labelled p + q + r), NOT the 3 K-choose-2 pair headings.
 # ---------------------------------------------------------------------------
 t_dedup() {
-  local root; root=$(mktemp -d)
+  local root; root=$(mktemp -d "$WM_ROOT/fixture.XXXXXX")
+  git_fixture_env "$root" || {
+    echo "FATAL: test-weakness-miner: git_fixture_env refused the dedup fixture $root" >&2
+    exit 1
+  }
   _learning "$root/a.md" "pp, qq, rr"
   _learning "$root/b.md" "pp, qq, rr"
   _learning "$root/c.md" "pp, qq, rr"

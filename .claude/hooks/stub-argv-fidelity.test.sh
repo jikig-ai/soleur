@@ -42,6 +42,12 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HOOK_DIR="${STUB_ARGV_FIDELITY_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 SELF="$(basename "${BASH_SOURCE[0]}")"
 
@@ -53,7 +59,7 @@ STUB_CMDS="gh|jq|git"
 # coverage silently collapse from N to 1 and still report PASS — a false-green
 # guard against false greens. Bumping this is the intended edit when a stub is
 # added; a DROP means the detector went blind and must be fixed, not lowered.
-EXPECTED_STUBS="${STUB_ARGV_FIDELITY_EXPECTED:-5}"
+EXPECTED_STUBS="${STUB_ARGV_FIDELITY_EXPECTED:-7}"
 
 fail=0
 checked=0
