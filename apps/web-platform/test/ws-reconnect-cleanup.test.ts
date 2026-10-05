@@ -20,7 +20,7 @@ describe("WS reconnect cleanup (#2135)", () => {
   test("after cleanup, a stream_start begins a fresh bubble for the same leader", () => {
     // Pre-disconnect: leader 'cmo' has an in-flight stream.
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<DomainLeaderId, number>();
+    let activeStreams = new Map<DomainLeaderId, string>();
     const s1 = applyStreamEvent(messages, activeStreams, {
       type: "stream_start",
       leaderId: "cmo",
@@ -39,7 +39,7 @@ describe("WS reconnect cleanup (#2135)", () => {
 
     // Simulate reconnect cleanup: the hook clears its activeStreamsRef and
     // timeoutTimersRef at the top of connect().
-    activeStreams = new Map<DomainLeaderId, number>();
+    activeStreams = new Map<DomainLeaderId, string>();
 
     // After cleanup, a new stream_start for 'cmo' must produce a NEW bubble
     // rather than mutate the pre-disconnect bubble at index 0.
@@ -51,7 +51,9 @@ describe("WS reconnect cleanup (#2135)", () => {
     expect(s3.messages).toHaveLength(2);
     expect(s3.messages[0].content).toBe("partial"); // pre-disconnect bubble preserved
     expect(s3.messages[1].state).toBe("thinking"); // new bubble is fresh
-    expect(s3.activeStreams.get("cmo")).toBe(1); // points to the NEW index
+    // activeStreams is id-keyed: the leader's entry must point at the NEW
+    // bubble's id (messages[1]), not a shifted index.
+    expect(s3.activeStreams.get("cmo")).toBe(s3.messages[1].id);
   });
 
   test("stale event after cleanup targeting a missing stream is a no-op", () => {
@@ -67,7 +69,7 @@ describe("WS reconnect cleanup (#2135)", () => {
         state: "streaming",
       },
     ];
-    const activeStreams = new Map<DomainLeaderId, number>();
+    const activeStreams = new Map<DomainLeaderId, string>();
 
     const result = applyStreamEvent(messages, activeStreams, {
       type: "tool_use",

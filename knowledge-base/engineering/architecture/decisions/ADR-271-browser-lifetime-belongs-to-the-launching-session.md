@@ -1,6 +1,6 @@
 ---
 title: Browser lifetime belongs to the launching session
-status: adopting
+status: accepted
 date: 2026-10-04
 supersedes: none
 issue: none
@@ -14,9 +14,12 @@ brand_survival_threshold: aggregate pattern
 
 ## Status
 
-**Adopting — 2026-10-04.** Flips to `accepted` when the agent-executable live check in "Proven and not proven" passes. That
-check is untested: it has not been run, and its first run is after the merge. The merge of the PR that carries this ADR does
-not by itself establish it, so the decision is recorded `adopting`, not `accepted` (the ADR-270 precedent).
+**Accepted — 2026-10-05**, for the lifetime fix (Decisions 1, 2, 4, 5). Recorded `adopting` on 2026-10-04 (the ADR-270 precedent)
+because the live idle-survival check had not run. It ran twice on 2026-10-05, on the plugin registration, and passed ("Proven").
+The operator decided that recipe step 4 (a second live process while the first browser is open) is not part of the acceptance
+check, because it tests the slot lease and needs a host with Google Chrome (record: <https://github.com/jikig-ai/soleur/issues/9281#issuecomment-5995806095>).
+Still open under "Not proven", and tracked on #9281, which stays open: that lease behaviour live, idle survival on the project
+registration (headed Chrome), headed Chrome after a proxy SIGKILL, and the unwrapped cron-ux-audit server.
 
 ## Context
 
@@ -178,42 +181,73 @@ The published statement "the heartbeat is the likely cause" was made before this
 - The fallback's `--sandbox` reaches the pinned config: resolving `{browser:'chromium'}` gives `chromiumSandbox false` and
   `{browser:'chromium', sandbox:true}` gives `true` (2026-10-04, the CTO probe of `resolveCLIConfigForMCP` against 0.0.78; the
   source anchors, `validateBrowserConfig` and `configFromCLIOptions`, were re-read for this record).
+- **The plugin registration's browser survives turn ends and idle gaps with the `Stop` hook removed (2026-10-05, two runs, one host).**
+  `claude` 2.1.289 `-p --plugin-dir <worktree>/plugins/soleur` (`4fea153121`) with `--input-format stream-json --output-format
+  stream-json --include-hook-events --verbose`, `PLAYWRIGHT_MCP_HEADLESS=1`, `--allowedTools mcp__plugin_soleur_playwright__*`,
+  stdin held open on a FIFO, three turns. The `init` event names the loaded plugin (`soleur@inline`, the worktree path), so the
+  loaded copy was asserted and not assumed. **Run 2 carries the acceptance.** Turn 1 navigated to a `data:` page whose title is a
+  unique marker. Turn 2's snapshot completed 80 s after turn 1's `Stop` and turn 3's 26 s after turn 2's (transcript timestamps; only the
+  first gap exceeds the recipe's 60 s). Both snapshots returned the marker page, not `about:blank`, and no "Target page, context or
+  browser has been closed". The transcript's three `stop_hook_summary` records (13:44:44Z, 13:46:06Z, 13:46:34Z) each carry
+  `hookCount: 2` and the commands `stop-hook.sh` and `unkept-promise-hook.sh`, none named `browser-cleanup`; the stream carried six
+  `Stop` `hook_started` events. A separate `pstree -p <claude pid>` sampler (every 5 s, 13:45:25Z to 13:46:55Z) saw one Chrome main
+  process, pid 1471574 started 13:44:43Z, under the child throughout, which spans the second and third `Stop`; it was already
+  alive when sampling began, about 40 s after the first `Stop`, so it survived that one too. **Run 1** used the same recipe with
+  `about:blank` and 75 s and 20 s gaps and agreed (six `Stop` events, three results, no error), but it had no marker and no pid
+  sampler, which is why run 2 exists. Limits: one host and one pass; no positive control, because the pre-fix copy
+  `4dbd1affe8eb` (still on disk, orphaned) has a plugin registration without `--chromium-fallback` and cannot launch here, so
+  "the removed hook would make three" is read from that copy's `hooks.json` and not from a stream; the sampler started after the
+  first `Stop`; the project registration was not exercised (below).
+- **Slot allocation across two real sessions (observed, not a lease proof).** While run 2 ran, the interactive session held slot 0
+  (`.pwslot.owner` names its pid, written 13:24:59Z) and the child's project-registration slot script took slot 1 (names the
+  child's pid, written 13:44:39Z, before its first navigate). No browser was launched from either project registration, so this
+  shows Decision 3's "a different session's hold advances to the next slot at once" and not that a first browser keeps answering
+  when a second launches.
 
 **Not proven:**
 
-- **Live idle survival after the fix.** The recipe below is agent-executable. It is UNTESTED: it was not executed when this ADR
-  was written, and its first run is after the merge. Until it passes, this ADR stays `adopting`.
-  1. From a checkout carrying this change, start ONE headless process that stays alive across turns:
+- **Idle survival on the project registration, and the lease under a live parallel session (recipe step 4).** The run above used
+  `--allowedTools mcp__plugin_soleur_playwright__*`, so the project registration's browser (headed, `channel: chrome`, slot lease)
+  never launched: this host has no Google Chrome at `/opt/google/chrome/chrome`, and an earlier run with both registrations allowed
+  failed both launches ("Chromium distribution 'chrome' is not found" on the project one; "Browser is already in use" on the
+  plugin one, because the launching interactive session's own browser held that profile). That run was INCONCLUSIVE, and its
+  output was not kept. Removing the hook is plugin-level, so it plausibly covers both registrations, but that is an inference.
+  Step 4 itself (the first browser still answering while a second process starts) was not run; a Chrome-less variant is possible
+  on the plugin registration, where the second process should get "Browser is already in use" while the first still answers.
+  The operator took step 4 out of the acceptance check (Status). #9281 stays open for it.
+  Recipe, kept so a pin bump or a hook change can re-run it (the driver script was not kept):
+  1. From a checkout carrying the change, start ONE headless process that stays alive across turns:
      `claude -p --plugin-dir <checkout>/plugins/soleur --input-format stream-json --output-format stream-json
-     --include-hook-events` (stream-json under `-p` may also require `--verbose`; add it if the CLI refuses). Keep its stdin open
-     (a FIFO or a coprocess) and send three user turns as stream-json lines: a `browser_navigate`, then more than 60 s later a
-     second turn that takes a `browser_snapshot`, then a third. Separate `-p` calls do not work: each ends its MCP server. On a
-     display-less host export `PLAYWRIGHT_MCP_HEADLESS=1` first; a launch error on the first `browser_navigate` makes the run
-     INCONCLUSIVE, never a pass.
-  2. Assert which hooks loaded from the `--include-hook-events` output, do not assume it: with `--plugin-dir` and the installed
-     copy both named `soleur`, which one loads is undetermined. Pass only if at least one `Stop` hook event was emitted AND no
-     `Stop` hook event names `browser-cleanup`. A `browser-cleanup` command means the installed copy won; the run says nothing
-     about the fix, so update and retry. UNTESTED, like the whole recipe: the field names of a stream-json hook event were not
-     observed (running the recipe loads a browser server), so the first run must record one real `--include-hook-events` line
-     here. Do not require `unkept-promise-hook` or `stop-hook` in the event: in this project's transcripts neither hook leaves any
-     `command`-carrying attachment (measured below, 0 of 143), because they print nothing, and a stream may omit them the same way.
-  3. Acceptance filter on the process's transcript (`~/.claude/projects/<slug>/<session>.jsonl`):
-     `jq -c 'select(.attachment.hookEvent=="Stop" and (.attachment.command|tostring|test("browser-cleanup")))' <transcript> | wc -l`
-     must print 0. This filter is EQUAL to the kill-text filter here, not stronger: over this project's transcripts it printed
-     142 and adding `and (.attachment.stderr|tostring|test("Browser cleanup: killed"))` also printed 142 (2026-10-05; 107 and 107
-     on 2026-10-04, a point-in-time count that grows while an installed copy still fires). Transcripts record only hooks that
-     printed, and `browser-cleanup-hook.sh` prints only when it killed something, so a loaded but idle hook leaves no attachment:
-     the filter detects a loaded hook only when a Chrome was alive at that `Stop`, which step 1 guarantees (a browser is open at
-     every turn end). The kill text itself lives in `attachment.stderr`, not `stdout`. A bare `grep -c` of the kill sentence is
-     not the check: the sentence also appears in quoted text such as this ADR.
-  4. Repeat with one parallel process on the same checkout (it takes slot 1) and confirm the first browser is still answering.
+     --include-hook-events --verbose`. Keep its stdin open (a FIFO) and send three user turns as stream-json lines: a
+     `browser_navigate` to a `data:` page with a unique title, then more than 60 s later a `browser_snapshot`, then a third. Separate
+     `-p` calls do not work: each ends its MCP server. On a display-less host export `PLAYWRIGHT_MCP_HEADLESS=1`. A launch error on
+     the first `browser_navigate` makes the run INCONCLUSIVE, never a pass.
+  2. Assert which hooks loaded, do not assume it: the `init` event names the loaded `soleur` path. Pass only if the transcript
+     (`~/.claude/projects/<slug>/<session>.jsonl`) carries one `stop_hook_summary` per turn, none of whose `hookInfos[].command`
+     values names `browser-cleanup`, and each `hookCount` equals the `Stop` commands the loaded `hooks.json` registers
+     (`jq '[.hooks.Stop[].hooks[]]|length' <plugin>/hooks/hooks.json`; 2 here, and a user-global `Stop` hook raises it):
+     `jq -c 'select(.subtype=="stop_hook_summary")|{hookCount,cmds:[.hookInfos[].command]}' <transcript>`. A `browser-cleanup`
+     command means the installed copy won; the run says nothing about the fix, so update and retry.
+     A stream `Stop` event carries no `command` field (observed 2026-10-05, claude 2.1.289; one real `--include-hook-events` line:
+     `{"type":"system","subtype":"hook_started","hook_id":"a3635fb3-7d9a-46fc-a7fe-0c7f79b19ae8","hook_name":"Stop","hook_event":"Stop","uuid":"b1e4ef41-5546-47d6-8139-16789d338fb3","session_id":"d2add08c-c834-418f-a084-7f8c2ca3fede"}`;
+     the `hook_response` adds `outcome` and `exit_code`), so the stream can only be counted, never asked which hook ran.
+  3. Survival, not only absence of the hook: every snapshot must return the marker page (a relaunched browser reports
+     `about:blank`), and one Chrome main process, found under the child with `pstree -p <claude pid>` (not a `-f` pattern search of
+     the process list, which matches its own command line here), must have a start time before the first `Stop` and still be
+     present after the last. The older `attachment`-based filter, `jq -c 'select(.attachment.hookEvent=="Stop" and
+     (.attachment.command|tostring|test("browser-cleanup")))' <transcript> | wc -l`, is supplementary only. It sees only hooks that
+     printed, so it printed 0 on both runs whether or not the removed hook had been loaded (the child transcript has no `Stop`
+     attachment at all), and it is not equal to the kill-text filter: over this project's transcripts it printed 169, and 155 with
+     `and (.attachment.stderr|tostring|test("Browser cleanup: killed"))` added, the difference being `hook_non_blocking_error`
+     rows (exit 127, script missing) from a session whose registry still names the removed script (2026-10-05, a point-in-time
+     count). A bare `grep -c` of the kill sentence is not the check: the sentence also appears in quoted text such as this ADR.
   The user's own interactive session still needs a restart by the USER (an agent cannot restart its own host); a `/mcp`
   reconnect reuses the cached `.mcp.json` command and does not reload hooks.
-- **That the machine's loaded plugin copy has the hook removed.** Confirmed present on this host on 2026-10-04: the installed copy
-  `4dbd1affe8eb` registers `browser-cleanup-hook.sh`. The fix reaches a user only after the plugin carrying this change is
-  released and installed (`claude plugin update soleur@soleur`, then a restart by the user); the installed version is a git
-  sha, so an update before the release carries nothing. Which copy a given session loads was not determined; the live check
-  must assert it, not assume it.
+- **That a user's loaded plugin copy has the hook removed.** On this host the installed copy was `4dbd1affe8eb` (registers
+  `browser-cleanup-hook.sh`) on 2026-10-04, and `claude plugin update soleur@soleur` took it to `4fea15312139` (two `Stop`
+  commands) at 2026-10-05T13:21Z; `4dbd1affe8eb` is orphaned on disk. The fix reaches another user only after the plugin carrying
+  this change is released and installed, then a restart by that user; the installed version is a git sha, so an update before the
+  release carries nothing. Not measured: any other user's machine.
 - **Headed real Chrome after a proxy SIGKILL, and the unwrapped cron-ux-audit server.** See Decision 2 and Consequences.
 - That the fix removes every browser-closing cause. A hook in a user's global configuration, a Wayland or Vulkan GPU crash (same
   error string, different cause; mitigated separately in `.claude/playwright-mcp.config.json`) or a launch race still produces the
@@ -324,6 +358,8 @@ When `@playwright/mcp` is re-pinned, re-verify, against the new pin's `coreBundl
 - `isProfileLocked` still throws before launching (the premise of Decision 3) and `install-browser` is still rewritten to
   `install` in `cli.js` (the SKILL.md remedy).
 - Playwright still spawns Chrome `detached` and the server's stdin watchdog is still installed (Decision 2).
+- The idle-survival recipe under "Not proven" still passes with the new pin or after any change to `plugins/soleur/hooks/hooks.json`
+  (the `stop_hook_summary` count, the marker page and the surviving Chrome pid).
 
 ## Cost Impacts
 

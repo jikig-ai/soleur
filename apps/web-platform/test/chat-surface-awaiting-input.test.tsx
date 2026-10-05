@@ -79,7 +79,10 @@ async function renderStreaming(messages: ChatMessage[]) {
   wsReturn = createWebSocketMock({
     realConversationId: "test-id",
     streamState: "streaming",
-    liveNarration: null,
+    // #9515 — the standalone "Still working…" placeholder is gone; the live
+    // line renders the actual narration text (pre-bubble fallback until a
+    // bubble exists to host it).
+    liveNarration: "Looking into your request…",
     messages,
   });
   const { ChatSurface } = await import("@/components/chat/chat-surface");
@@ -101,11 +104,11 @@ describe("ChatSurface — 'Still working…' suppressed while awaiting operator 
     expect(screen.queryByTestId("live-narration")).not.toBeInTheDocument();
   });
 
-  it("AC4 — streaming with NO gate → live-narration slot PRESENT ('Still working…')", async () => {
+  it("AC4 — streaming with NO gate → live-narration slot PRESENT", async () => {
     await renderStreaming([userMsg("u1")]);
     const slot = screen.getByTestId("live-narration");
     expect(slot).toBeInTheDocument();
-    expect(slot).toHaveTextContent("Still working…");
+    expect(slot).toHaveTextContent("Looking into your request…");
   });
 
   it("AC5 — resolved review_gate + streaming → slot PRESENT (suppression is awaiting-input-scoped, not permanent)", async () => {
