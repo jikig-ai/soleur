@@ -11,6 +11,35 @@ lane: cross-domain
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05 (inline deepen — no Task fan-out available in the planning subagent;
+mechanical halt gates 4.6–4.12 all executed and passed)
+**Sections enhanced:** Guard Contract (census-anchor trap), Observability (probe de-suite'd),
+Implementation Phases (jq correctness, sharp-edge disciplines)
+
+### Key Improvements
+
+1. `discoverability_test` probe replaced with `grep -c` twin-anchor check — the original
+   `bash <suite>` form matched the suite-shaped reject proxy and would have halted at 4.7 /
+   failed preflight Check 10.
+2. Standing-issue jq corrected live: `contains("x")` on the labels array is a jq type error;
+   `index("x") != null` verified end-to-end against the real repo (returns `[9508,9132,8482,8068]`).
+3. Guard census anchor sharpened to `uses: anthropics/claude-code-action@` —
+   `claude-code-review.yml` alone carries 3 `anthropics/claude-code*` strings and only one is a
+   consumer (marketplace URL + doc comment are false positives).
+4. Compatibility verified: `machinery-drain-floor.test.sh` asserts floor/waiver/verdict/create-label
+   shapes only — the lookup rewrite touches none of its anchors.
+
+### New Considerations Discovered
+
+- Both cited action SHAs are reachable via `git/trees`+`contents` APIs but return **422** from
+  `repos/{r}/commits/{sha}` (tag-target commits not on a branch — the objects exist; the live
+  failed run executed code at `20f0b248`). Re-verification must use the trees/contents path.
+- Post-fix live-tree census = 4 consumers, all compliant: claude-code-review + test-pretooluse-hooks
+  (id-token), scheduled-machinery-drain (id-token after this fix), fix-constraints-stage-a
+  (github_token input).
+
 ## Overview
 
 claude-code-action v1.0.236 (SHA `20f0b248c5003db4b9ca43c45e17949bcdc36d2d`, rolled out repo-wide
@@ -230,8 +259,14 @@ logs:
   where: "GitHub Actions run logs, workflow scheduled-machinery-drain"
   retention: "GitHub default retention (~90 days)"
 discoverability_test:
-  command: "bash plugins/soleur/test/claude-code-action-auth.test.sh"
-  expected_output: "0 failure(s)"
+  # Probe asserts the two load-bearing anchors exist in the same file: the
+  # top-level `id-token: write` grant (anchored, comment-proof) AND the Sentry
+  # heartbeat wiring. grep -c prints the matched-line count; 2 = both present.
+  # Chosen over the new test suite deliberately: the suite TESTS the invariant,
+  # this DISCOVERS the signal — and a *.test.sh command is reject-proxy-shaped
+  # at deepen-plan 4.7 / preflight Check 10 anyway.
+  command: "grep -c -e '^  id-token: write' -e 'monitor-slug: scheduled-machinery-drain' .github/workflows/scheduled-machinery-drain.yml"
+  expected_output: "2"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -262,8 +297,11 @@ contain `id-token: write` (or `write-all`), OR the consuming step's `with:` bloc
 `github_token:` input.
 
 **Assembly.** The population is DERIVED by grep census over `.github/workflows/*.yml` for
-`anthropics/claude-code-action` — never an enumerated list (membership drifts with each new
-consumer). Per file: locate each job containing a consumer step; resolve effective permissions
+`uses: anthropics/claude-code-action@` (the `@`-suffixed `uses:` form — never an enumerated
+list). The anchor matters: `claude-code-review.yml` alone carries three `anthropics/claude-code*`
+strings and only one is a consumer (`plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'`
+and a doc-comment URL are NOT `uses:` lines) — a bare `anthropics/` or unanchored action-name
+grep over-counts the assembly. Per file: locate each job containing a consumer step; resolve effective permissions
 (job block if present else workflow block); inspect the step's `with:` block for `github_token:`.
 The suite asserts `consumers >= 1` on the live tree — a census over nothing is vacuous. Fixture
 runs override the scan root via `WF_DIR` env (`mktemp -d` synthesized workflows per
