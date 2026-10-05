@@ -815,9 +815,12 @@ jobs:
   # nothing (measured on this job's first run, 34774037658: zero CACHED steps).
   # Every run is cold by construction.
   web-platform-build:
-    # 10m — measured 1m52s cold on the first run of this shape (run 34774037658:
-    # buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s for the
-    # full-checkout form it replaced (#8020 measured max 2.2m). >=5x headroom.
+    # 10m — measured 1m52s cold for the builder step alone on the first run of this shape
+    # (run 34774037658: buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s
+    # for the full-checkout form it replaced (#8020 measured max 2.2m). The `cli-tools` step
+    # below adds about a minute (npm registry only): >=3x headroom. The runner stage is not
+    # built here (apt, cli.github.com and the Playwright CDN would sit inside a required
+    # aggregate); it is FROM `cli-tools`, which holds both global installs the release layers.
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -866,6 +869,22 @@ jobs:
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
+
+      # Resolves the release image's two global CLI installs against the live npm registry on
+      # every pull request and every merge_group run (no path gate: a path-skipped required
+      # context stalls the queue). `no-cache` is the point: a cache hit would pass without
+      # resolving anything. Secret-free by construction (no build-args, secrets or cache export),
+      # because npm lifecycle scripts run in this container on fork PRs; the structure is pinned
+      # by test/c4-likec4-version-pin.test.ts.
+      - name: Build the Dockerfile cli-tools stage (registry resolution, no cache)
+        timeout-minutes: 5
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: apps/web-platform
+          target: cli-tools
+          push: false
+          load: false
+          no-cache: true
 
   # --- Test matrix: 4 leg jobs + synthetic aggregator ---
   #
@@ -955,7 +974,8 @@ jobs:
       # --before pins the whole transitive tree, not just likec4 (#9300: npm's CDN 404s a
       # tarball published minutes ago). Version and date are a pair; the bump procedure is
       # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh. The Dockerfile
-      # install is version-only on purpose for now (#9343).
+      # `cli-tools` stage carries the same pair and install mode, so this job resolves the same versions
+      # the image ships (not a byte comparison: node and npm patch versions differ from the image's pin).
       # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
       # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
       # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
@@ -963,7 +983,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
           likec4 --version
 
       # #8696 — the render child runs inside bubblewrap, so the acceptance test
@@ -1167,10 +1187,12 @@ jobs:
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # Kept on purpose: three suites here render through `npx`, and this install is their
+      # download-cache warm-up. Enforced by scripts-shard-runtime-coverage.test.sh.
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
           likec4 --version
 
       # #7332 — plugins/soleur/test/c4-from-components.test.sh drives the C4 producer
@@ -1254,7 +1276,8 @@ jobs:
   # extracts BOTH job blocks and requires every runtime a scripts-group suite
   # invokes to be installed in each — today's three members are bash+git only,
   # but a future heavy registration must not red for want of a binary (#7332's
-  # exact shape), so the install steps below mirror test-scripts verbatim.
+  # exact shape), so the install steps below mirror test-scripts, except for likec4 (this job
+  # runs no likec4 suite and every consumer falls back to `npx`).
   test-scripts-heavy:
     runs-on: ubuntu-latest
     strategy:
@@ -1289,12 +1312,8 @@ jobs:
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
-      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
-        run: |
-          set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28
-          likec4 --version
-
+      # No likec4 install in this job: no registration it runs invokes likec4, and every
+      # consumer falls back to `npx`. c4-likec4-version-pin.test.ts pins the install count.
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
