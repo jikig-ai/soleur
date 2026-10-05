@@ -573,6 +573,23 @@ t11_closed_transient_is_silent() {
   unset GH_TOKEN; rm -rf "$root"
 }
 
+# --- T11b (AC14): ACTION REQUIRED (exit 5) on a closed issue → comment, NEVER reopen ---
+# The `5)` arm used to set only the action: the shared tail then expanded an unset body_msg and ran
+# `gh issue reopen` for every action, so a notify-only probe on a hand-closed tracker that still
+# carried the label reopened it every sweep. The source asserts in T19c could not see that.
+t11b_closed_action_required_comments_without_reopening() {
+  local root; root=$(setup_closed_root 5 '{"comments":[]}')
+  local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
+  local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
+  assert_contains     "T11b names the verdict and the comment action" \
+                      "verdict=ACTION REQUIRED action=comment" "$out"
+  assert_contains     "T11b comments on the closed issue" \
+                      "issue comment 6657" "$calls"
+  assert_not_contains "T11b does NOT reopen on exit 5" \
+                      "issue reopen" "$calls"
+  unset GH_TOKEN; rm -rf "$root"
+}
+
 # --- T12 (AC14): does not re-litigate the sweeper's own PASS closure --------
 t12_skips_own_pass_closure() {
   # Evidence-based, not actor-based: still catches a premature close by ANY
@@ -838,6 +855,7 @@ t9_closed_fail_reopens_bypassing_earliest
 t9b_still_soaking_closure_is_not_reopened
 t10_closed_pass_is_full_noop
 t11_closed_transient_is_silent
+t11b_closed_action_required_comments_without_reopening
 t12_skips_own_pass_closure
 t13_reopen_cap_bounds_the_loop
 t14_failed_reopen_emits_error_annotation
@@ -1664,7 +1682,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=188
+MIN_ASSERTIONS=191
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1
