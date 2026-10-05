@@ -110,3 +110,8 @@ merge of PR #9448 (Ref #9377); if that PR closes unmerged, this addendum is void
 > owners (an alerting change, not a processing change). Every web-2 statement stays conditioned on the live conversion
 > (#9372); nothing here says web-2 is encrypted. Re-attestation is owed at #9372 and before web-2's serving weight rises,
 > and a passphrase-loss recovery path is to be recorded and tested when data lands (Art. 32(1)(c); #9372).
+
+> **Superseded 2026-10-05 (#9377, C4), in part:** PR #9448 merged on 2026-10-04 and a dispatched apply (run 37209725107, not a push-triggered run)
+> created the web-class key, so "only once the push-apply creates the web-class key (nothing has been applied)" is met in substance.
+> The measured state is in `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md`
+> ("Addendum — 2026-10-05"). This addendum stays unsigned prose and is not a re-attestation.
