@@ -216,6 +216,8 @@ compliance posture, conditioned on the live conversion.
 > residual, rewritten" in the 2026-10-03 addendum. The second paragraph (the escrow credential pair) was already
 > narrowed by D7 of 2026-10-02 and is unchanged here.
 
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** the condition in the callout above ("once ... the push-apply creates the web-class key (nothing has been applied)") is met; see "Addendum — 2026-10-05" for the measured state. The callout is kept as the dated record.
+
 The same token also reads the R2 header-escrow credential pair in `prd_workspaces_luks`. A compromised web-2
 (or a leak of the user_data token) can therefore overwrite or delete web-1's LUKS header backup, which is the
 recovery path for web-1's sole-copy volume: an integrity and availability exposure, not only a confidentiality
@@ -486,6 +488,8 @@ host). R4 (a user_data credential that cannot be revoked after first boot) is na
 the compliance posture, scoped to NEW births, with the web-2 statements still conditioned on #9372. True isolation between
 hosts remains the separate-project work (#6167).
 
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** the creation condition ("Once PR #9448 merges and the push-apply creates the web-class key") is met: PR #9448 merged 2026-10-04 and a dispatched apply (run 37209725107) created the key. The residual stays **narrowed, not eliminated**: the pre-split token is not retired (C2) and the distinctness is still structural, not read from a host. See "Addendum — 2026-10-05".
+
 **Loss recovery.** Once the push-apply creates it (it has not), the web-class passphrase will have as durable copies the Doppler secret,
 Terraform state and Doppler's secret history (plus the runner-local copy of the state described under Known limits); web-1's passphrase will no longer back it up, and the escrowed
 header cannot open a volume alone. While no web-class volume holds data a loss costs a rebuild of an empty standby. A
@@ -493,6 +497,8 @@ recovery path for the data-bearing period is owned by #9372 (acceptance criterio
 <https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5973898251>) and is to be recorded and tested before data
 lands (GDPR Art. 32(1)(c)). One of the two copies has no restore substrate today: the Terraform state bucket has no
 object versioning (#7992).
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** "(it has not)" no longer holds. The key and its Doppler secret were created by run 37209725107 on 2026-10-04, so the Doppler secret and Terraform state existed from that apply and were read back at 2026-10-04 17:57Z (plan-only run 37222472359) and 2026-10-05 12:32Z (dispatch run 37310111213), each with no changes. That Doppler's secret history holds the value is Doppler's design and was not measured. The recovery path for the data-bearing period is unchanged and still owned by #9372; no web-class volume holds data.
 
 **Known limits, recorded not hidden.**
 
@@ -650,3 +656,35 @@ posture: after reading state and re-reading the Doppler names, a dated `Supersed
 conditional sentence of the Article 30 and compliance-posture records without deleting any text, the two cells are kept
 byte-equal after bold removal, and `python3 scripts/lint-encryption-posture.py` is re-run (counsel review C4; owned by the
 CLO agent with the owner holding a veto). The GDPR gate must run when the first data-bearing web-class host is born.
+
+## Addendum — 2026-10-05 (#9377, counsel-review C4)
+
+**What this addendum does.** It performs the follow-through the 2026-10-04 addendum left open ("Follow-through that this
+change does not perform"): the first live apply has happened, so the conditional sentences about the web-class key are
+superseded by measured state. Each is kept as the dated record and carries a `Superseded 2026-10-05` marker; the Article 30
+register and compliance-posture cells carry the same marker, byte-equal.
+
+**Measured state (read-only; GitHub Actions run logs and the Doppler config audit log; no secret value was read).**
+
+- The web-class key exists. Run 37209725107 (`apply-web-platform-infra.yml`, `workflow_dispatch`, 2026-10-04 14:33:54Z to
+  14:37:14Z) planned 7 to add, 0 to change, 0 to destroy and created `random_password.workspaces_luks_web`, the three
+  `doppler_secret` resources (`WORKSPACES_LUKS_KEY` at 14:35:38Z, the bucket name and the R2 endpoint), the R2 bucket
+  `soleur-workspaces-luks-header-web` and two unrelated Better Stack resources. It was a manual dispatch by the operator, not a
+  push-triggered run. The web-class config and its read-only token were already in Terraform state when it began (refresh lines in its plan), and
+  no run of that workflow had applied since 2026-10-01 (run 37187540739 on 2026-10-04 08:00Z ran only `entrypoint_audit`), so they were created by a route outside
+  that workflow that this addendum does not identify.
+- C8 evidence, first-create premise: the Doppler audit log of `prd_workspaces_luks_web` (read by the author of this change and not
+  re-read by counsel; 9 entries, the whole history of
+  the config) holds no secret write between the config's creation (2026-10-04 07:27Z) and the three writes at 14:35:37Z to
+  14:35:38Z that match run 37209725107's three creates one to one. A plan-only run (37222472359, 17:57Z) read the live
+  value back and reported no changes. Limits, as posted at <https://github.com/jikig-ai/soleur/issues/9377#issuecomment-5995711642>: every entry carries the operator's account, because
+  the provider runs on the workplace personal token, so the actor cannot separate a person from Terraform; the audit log
+  carries no secret names. The window after the apply is closed to 2026-10-05 12:32Z by the allow-list plan of dispatch run 37310111213, which refreshed `doppler_secret.workspaces_luks_web_key` and reported no changes; a later change is excluded only by the next Terraform refresh (the drift run of 06:02Z does not show a refresh of the web-class resources in its log).
+- The names-only readiness diagnostic (run 37279392332, 2026-10-05 07:44Z) passed with `escrow-split-contract:live-ok`.
+  It reads names and not values, so it is necessary and not sufficient.
+
+**Not superseded, still open.** C1: the two R2 credential names exist as of 2026-10-05 07:44Z (the names-only check above; the mint itself is the operator's report on #9377, and the same check had reported both missing on 2026-10-04, run 37213826582), and the signed `HEAD` isolation results are
+recorded on #9377, but no proof record exists under `knowledge-base/` and this change did not re-run the proof, so the
+cells keep "intended to be scoped". C2: the pre-split token is not retired, so the narrowing holds for new births only. C3
+(#9372 items), C6 (state restore substrate, #7992) and the web-2 statements are unchanged. Nothing here says web-2 is
+encrypted.

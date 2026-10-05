@@ -51,6 +51,8 @@ does_not_attest:
   - "docs/legal/* and the Eleventy mirrors — untouched by this PR, and none of them mentions the escrow bucket, the web-class config or escrow=missing; their 'Encrypted workspace storage' wording is scoped to the volume workspace git data is served from (web-1) and remains true."
 art_33_triggered: false
 art_34_triggered: false
+addenda:
+  - "2026-10-05 re-attestation (C4) — appended below the signed body; the 2026-10-04 body is unchanged. C4 DISCHARGED (after wording amendments to the register markers, ADR-263 and the 6931 note); C5 DISCHARGED (apply run verified); C8 first-create premise ACCEPTED with stated limits; C1, C2, C3, C6 still open; C7 met. See '## Addendum — 2026-10-05 re-attestation (C4)'."
 re_evaluation_triggers: "(1) The push-apply creating the web-class key, the live R2 mint, or the pre-split token retirement: re-read each conditional sentence against the measured state and supersede it (C1, C2, C4). (2) web-2 receiving serving weight or any workspace data, or #9372 dispatching, before C3 is done: this attestation lapses for web-2. (3) Any publication of an at-rest claim naming web-2, or of the escrow bucket. (4) #7671 resolving that a LUKS header is personal data. (5) A recipient or sub-processor change for the second R2 bucket. (6) First arms-length user, EEA-out, or a regulated-industry customer (external counsel re-review)."
 ---
 
@@ -147,3 +149,82 @@ W1-W14 are in-cell corrections applied by this review. C1-C8 are open: C1 and C2
 C4, C5 and C8 by the #9377 comment <https://github.com/jikig-ai/soleur/issues/9377#issuecomment-5974285193>, C3 by #9372, and C6 is tracked at #7992 (C7 is the
 merge precondition). The attestation covers the register, ledger and ADR prose only, and lapses on
 re-evaluation trigger (2) if web-2 receives weight or data before C3 is done.
+
+## Addendum — 2026-10-05 re-attestation (C4)
+
+Additions only. The signed 2026-10-04 body above, including the frontmatter conditions that read "(open)", is unchanged and stays as
+the dated record; this addendum supersedes it condition by condition. Author of the edits under review: the engineer on branch
+`chore-9377-c4-measured-state`; reviewer and attestation authority: the CLO agent (Soleur-as-tenant-zero v1). The operator retains an
+optional veto. This is an internal v1 sign-off, not a lawyer's opinion. Evidence below was read by the CLO agent from GitHub Actions
+run logs and the GitHub API (no secret value was read, printed or stored, and nothing was written to any system). The Doppler audit
+log was NOT read by the CLO agent; every statement that rests on it is the author's measurement (issue comment 5995711642) and is
+labelled so.
+
+### What was verified, and where the author's text was overclaimed
+
+| Claim in the C4 edits | Evidence read by the CLO agent | Result |
+|---|---|---|
+| Run 37209725107 was a manual dispatch of `apply-web-platform-infra.yml` on 2026-10-04 | API: `event workflow_dispatch`, actor `deruelle`, created 14:33:54Z, finished 14:37:14Z, `apply` job success | TRUE |
+| It planned 7 to add, 0 to change, 0 to destroy and created the key | Log: `Plan: 7 to add, 0 to change, 0 to destroy`; `random_password.workspaces_luks_web` created 14:35:36.8Z, `WORKSPACES_LUKS_KEY` 14:35:38.0Z, `Apply complete! Resources: 7 added` | TRUE. The seven also include the other two web-class Doppler secrets, the R2 bucket `soleur-workspaces-luks-header-web` and two unrelated Better Stack resources; the author's text said "three doppler_secret copies" (the bucket name and endpoint are not copies of the key) and omitted the bucket. Corrected |
+| "The audit log records no secret write before that apply" | Not readable by the CLO agent. The apply log's creation times (14:35:37.59, 38.01, 38.59Z) follow the author's three audit timestamps by 0.3 to 0.5 s in the same order, which is consistent with the author's reading | UNVERIFIED by counsel; the markers now say it is the author's read, with the log's two limits (operator account on every entry, no secret names) |
+| "The three durable copies exist today" | The Doppler secret and Terraform state were refreshed with no change by plan-only run 37222472359 (2026-10-04 17:57Z, five addresses) and by the allow-list plan of dispatch run 37310111213 (2026-10-05 12:32Z: `doppler_secret.workspaces_luks_web_key: Refreshing state`, `No changes`). Doppler's secret history is not measured | OVERCLAIM as to "today" and as to the history; corrected to "existed from that apply and were read back at" the two times |
+| "State and live agree" (present tense) | Same two refreshes | Corrected to the dated reads. The window after 2026-10-05 12:32Z is closed only by the next Terraform refresh |
+| The author's limit "the window after 06:02Z is closed only by the 18:00Z drift run" | Run 37310111213 (12:32Z) read the key back after the 06:02Z run. The 06:02Z drift run's log shows no refresh of the web-class resources, so it was not relied on | Superseded by the 12:32Z read |
+| The author's marker covers every clause that says nothing was applied, including "no push-apply workflow run has created what it defines" and "a definition only: no push-apply workflow run ... has created that copy" | Run 37209725107 is a run of that workflow and created the key; the workflow's state was `active` on 2026-10-05 (API). The web-class config and read-only token were already in Terraform state when that run began (refresh lines, 14:35:16 and 14:35:19Z), and no apply ran between the last push run (2026-10-01 21:19:48Z) and 14:33Z (run 37187540739 ran only `entrypoint_audit`; run 37200210561 stopped at the preflight) | The two earlier clauses were not covered by the author's marker and were false as to the key. The marker now names them, says the workflow was active, and says the config and token came from a route that is not identified (an operator-local apply is the one channel CI history cannot see; the author's audit read puts it at 07:27Z) |
+| "The pair is a deferred mint" (several cells) | Names-only check 37213826582 (2026-10-04 15:39Z) reported both R2 names missing; check 37279392332 (2026-10-05 07:44Z) reported `escrow-split-contract:live-ok` | STALE as to timing. The R2 marker text is added to the R4 span; three other cells still say it (see C9 below) |
+| Plan-only run 37222472359 | It is `apply-web-escrow-create.yml` (plan_only), `No changes`, with R2 names `absent` and the three Terraform-managed names `present` | TRUE |
+| Markers do not say the pair is bucket-scoped, say web-2 is encrypted, or change the recovery, alert or R2-scope sentences | Read the full diff and the R4 span | TRUE. No cell newly says web-2 is encrypted; the web-2 conditional limb ("IF AND WHEN ... and not before ... no register entry may describe it as encrypted") is untouched |
+| Article 30 and compliance-posture markers are byte-equal | Extracted both R4 spans from 'Residual R4 (ADR-263 D4)' to '(#6167).]', removed `**` | TRUE after the amendments: 8271 = 8271 characters equal (the signed body's 5716 is the span before any C4 marker; it is not stale, it is a different span) |
+| `python3 scripts/lint-encryption-posture.py` | Re-run after the amendments | `21 stores, 10 connections, 0 unledgered, 0 failing checks -> PASS`, rc 0. It checks the ledger's structure; it does not read the new evidence phrase, so it measures agreement and not truth |
+| `check-web-host-escrow-config.sh --live` re-run | Run 37279392332 is the CI form of it (names only; `advisory: 13 prd-root name(s)` matching the keyword filter, `live-ok`). The CLO agent re-ran `--static` locally (`escrow-split-contract:ok`) and did not run `--live` locally (no credential was read) | `live-ok` is necessary and not sufficient: it reads names, not values or scope |
+
+### Per-condition ruling
+
+| Condition | Ruling | Reason |
+|---|---|---|
+| C1 live mint and isolation proof | NOT DISCHARGED | The two R2 names exist (07:44Z check). The mint and the five signed `HEAD` results are the operator's report on #9377 (comment 5990258115); no proof record exists under `knowledge-base/` (the condition's own falsifier), the proof is read-access `HEAD` only (not write, delete or list), and the CLO agent did not re-run it. Cells keep "intended to be scoped". |
+| C2 pre-split token retirement | NOT DISCHARGED | `doppler_service_token.workspaces_luks_fresh_boot` (config `prd_workspaces_luks`) was refreshed in state by run 37310111213 on 2026-10-05. "Held by no live host" stays inferred. |
+| C3 #9372 items | NOT DISCHARGED (unchanged) | #9372 is open. Three `web_host_replace` dispatches (2026-10-04 11:52Z, 2026-10-05 07:47Z and 07:51Z) ended before any apply step (preflight, then the plan gate), so no host was replaced or born; re-evaluation trigger 2 has not fired. |
+| C4 supersede "will live" with measured state | DISCHARGED | After the amendments listed below: every conditional sentence about the key's creation (four in the R4 span, the three ADR callouts, the 6931 pointer, the ledger phrase) carries a dated Superseded marker or a measured statement, the conditionals are kept, the register markers are byte-equal, the ledger lint passes, and the static check passes. Limits: the "no earlier write" premise is the author's audit-log read. |
+| C5 Sentry alert-rule apply | DISCHARGED | `apply-sentry-infra.yml` run 37192796426 (push, 2026-10-04 09:38Z): `Plan: 0 to add, 3 to change, 0 to destroy`, `Apply complete! Resources: 0 added, 3 changed`. Live rule contents were not read, and the throttle remains unmeasured. The cells' conditional ("once PR #9448 merges and ... has applied") is now satisfied and stays true as written. |
+| C6 state restore substrate | NOT DISCHARGED (unchanged) | #7992 is open; the state bucket still has no object versioning. |
+| C7 merge precondition | MET | PR #9448 merged 2026-10-04T09:38:14Z; the merge commit's tree equals the PR head's tree. Between the attested code HEAD (08c5369eb1) and the merged head, the files in scope changed only in ADR-263 and this record (the W14 prose round); no cited code file changed. |
+| C8 first-create premise | ACCEPTED for the v1 posture, with limits | See below. |
+
+### C8 ruling and its limits
+
+Accepted: nothing in the evidence suggests a person set `WORKSPACES_LUKS_KEY` before the apply. The author's audit-log read shows no secret write in
+`prd_workspaces_luks_web` between the config's creation and three writes that match the apply's three secret creates in order and in time; the apply's
+own plan listed the secret as a create; the value Terraform holds equalled the live value at 2026-10-04 17:57Z and 2026-10-05 12:32Z; and the stake is low
+(no web-class volume holds data, so an overwritten hand-set value would orphan nothing). Limits: (a) the audit log was not read by counsel; (b) every
+entry carries the operator's account because Terraform runs on the operator's personal token (#9461), so a person cannot be separated from Terraform by
+actor, only by timestamp and the one-to-one match; (c) the log carries no secret names, so the two writes at 2026-10-05 07:43Z are matched to the R2 mint by
+time, not by name; (d) the condition's procedure was not followed as written: no recorded `--live` run reported the key missing before the apply (the
+readiness workflow did not exist until after it; its first run was 2026-10-04 15:39Z), and the reviewed plan showed creates beyond the web-class pair (two
+Better Stack resources); (e) the window after 2026-10-05 12:32Z is closed only by the next Terraform refresh (the 18:00Z scheduled drift run, or any later apply plan); (f) the web-class
+config and its token were created by a route outside `apply-web-platform-infra.yml` (author's audit read: 07:27Z on 2026-10-04) that this addendum cannot identify, so an operator-local apply
+is evidenced as a live channel. None of (a) to (f) is a defect in a register sentence; each is why this is an acceptance and not a proof.
+
+### Edits applied by this re-attestation (wording only)
+
+- `knowledge-base/legal/article-30-register.md` and `knowledge-base/legal/compliance-posture.md`: the C4 marker in the Residual R4 entry was
+  rewritten identically in both. Changes: names the two earlier "no push-apply run has created" clauses as superseded; says the run was a dispatch by the operator and that the workflow was
+  active; adds the other resources the apply created; attributes the audit-log read to the author with its limits; replaces "exist today" and "state and live agree" with dated reads;
+  says the config and token pre-existed from an unidentified route; states the two R2 names now exist while scope stays unverified (C1) and the token is not retired (C2). The R4 span is
+  8271 characters in each file after removing `**`.
+- `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md`: third Superseded callout and four addendum bullets corrected the same way.
+- `scripts/encryption-posture-ledger.json` and `knowledge-base/legal/audits/2026-10-counsel-review-6931.md`: reviewed, no change needed.
+
+### Conditions and triggers added
+
+- **C9 (new, narrow).** Three other sentences still say the R2 pair is "a deferred mint": the Article 30 PA-1 (e) escrow-destination entry, and the compliance-posture
+  R2-custody sub-processor row and T-1 row (and the ledger's `does_not_defend` says "a deferred mint ... (and once applied)"). They are stale as to timing and not as to scope. When C1 closes,
+  append a Superseded marker under each (do not delete); until then the R4 marker states the correct timing. Falsifier: a grep of those cells for "deferred mint" with no marker after C1 closes.
+- **Trigger 7.** The first scheduled or dispatched Terraform run after 2026-10-05 12:32Z whose plan shows any change to a web-class address, or any audit-log write to `WORKSPACES_LUKS_KEY` not matched to a run: re-read C8 and the "state and live agree" statement.
+- **Trigger 8.** `apply-web-platform-infra.yml` is now `active`. A push-triggered run, or a dispatch whose plan touches a web-class address or a web host, fires trigger 1 (re-read each conditional) and, for a web host, trigger 2.
+- **Trigger 9.** The operator identifies how the web-class config and read-only token were created at about 07:27Z on 2026-10-04: record it here; a hand-written secret in that window would reopen C8.
+- Triggers 1 to 6 of the signed record are unchanged. External counsel re-review remains reserved for trigger 6 (first arms-length user, EEA-out, regulated industry).
+
+### Disposition
+
+C4 DISCHARGED; C5 DISCHARGED; C7 MET; C8 ACCEPTED with limits (a) to (f); C1, C2, C3, C6 and the new C9 remain open. The attestation covers register, ledger and ADR prose only. It does not attest the engineering change, any live state beyond what is listed above, the live conversion (#9372), or that web-2 is or will be encrypted; no sentence in scope says so.
