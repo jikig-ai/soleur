@@ -95,6 +95,23 @@ session may run the installed plugin copy, which keeps it until the plugin is up
    user can `chmod -x` the installed copy's `hooks/browser-cleanup-hook.sh`, which should
    make that hook fail without blocking until the next update overwrites it.
 
+**A second killer survives the update: a session in ANOTHER checkout still on the old
+`.mcp.json` launch string.** That string contains `pkill -9 -f` and, on every start or
+`/mcp` reconnect of that session, kills the proxy, server and Chrome of EVERY slot of
+a session on the new string. Read-only check: `for w in $(git worktree list --porcelain |
+sed -n 's/^worktree //p'); do grep -aq pkill "$w/.mcp.json" && echo "$w"; done` prints each
+checkout still carrying it. Bring those checkouts to this `.mcp.json` and restart their
+sessions (the string a running session loaded cannot be changed from here).
+
+**A login that should persist is missing in the repo registration:** that session was
+given a numbered slot or a `-p<pid>` directory. Run `grep -a 'was skipped:' "$(ls -t
+~/.cache/claude-cli-nodejs/*/mcp-logs-*playwright*/*.jsonl | head -1)"` (the newest log
+whose `"cwd"` is this project, as in the connect-failure steps below); the line names why
+slot 0 (the persistent profile) was not used. Ask the other session to close its browser (`browser_close`), then
+reconnect. A reason naming another HOST (a renamed host or a copied home directory) is
+cleared by hand: after confirming no Chrome of yours uses that profile, `rm
+<slot-0 dir>/Singleton*`, which removes only the stale lock files and no login.
+
 A search for another killer must cover every enabled plugin's `hooks.json` (the installed
 copy too), not only `settings.json`. The server's ping heartbeat is not a cause on stdio
 (ADR-271). **(2) A Wayland/Vulkan GPU crash** — already diagnosed and
@@ -495,9 +512,13 @@ kernel `flock` and never kills a process by pattern — slot 0 is the persistent
 `~/.cache/playwright-mcp-profile` and a launch whose slot is held by another live session
 takes the next numbered slot `~/.cache/playwright-mcp-profile-<n>` at once, with a stderr
 line in the MCP log saying the persistent profile's logins are not available in that
-session; a `/mcp` reconnect waits up to 7 s for its own previous launch to release slot 0.
+session; a `/mcp` reconnect waits up to 7 s for its own previous launch to release slot 0
+(the wait needs `flock`: where it is missing a reconnect that finds the old Chrome still
+alive lands on an empty `-p<pid>` profile).
 When `flock` is missing (stock macOS) the first session still takes slot 0 without a lease
-if no live Chrome owns it; with no usable `flock` and slot 0 busy, or when all 32 slots
+if no live Chrome owns it, and a second session that starts before the first one's browser
+exists (Playwright starts it lazily) also gets slot 0 and Playwright's "already in use"
+error; with no usable `flock` and slot 0 busy, or when all 32 slots
 are busy, it uses a unique `playwright-mcp-profile-p<pid>` directory that nothing reaps;
 `env -u WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
 (stdlib `selectors` + `subprocess`) and does not run on Windows. **Cleaning up profile
@@ -506,8 +527,10 @@ whatever logins were done in them) and removal is manual. Only the `-p<pid>` fal
 removable: remove one only when the pid in its name is dead (`kill -0 <pid>` fails) and its
 `SingletonLock` (`readlink <dir>/SingletonLock`, target `host-<pid>`) names no live pid. The
 numbered slots (`playwright-mcp-profile`, `-1` to `-31`) hold the persistent logins: do not
-delete them as stale; a slot is in use when `flock -n <dir>/.pwslot.lock true` fails (rc 1)
-and free when it succeeds.
+delete them as stale. A slot is in use when `flock -n <dir>/.pwslot.lock true` fails (rc 1)
+(rc 66 means the directory is missing), but that test sees only sessions on the new launch
+string: an old-string session holds no `flock`, so also require that `readlink
+<dir>/SingletonLock` names no live pid (as above) before calling a slot free.
 
 **Fail-closed in three arms, no bypass variable.**
 
