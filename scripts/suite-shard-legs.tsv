@@ -466,6 +466,10 @@ scripts/watchdog-arm-soak-9237	5
 scripts/web-fresh-boot-zot-8651	7
 scripts/web-host-escrow-preflight	3
 scripts/web2-luks-live-6931	4
+scripts/web2-rebirth	5
+scripts/web2-rebirth-emptiness	4
+scripts/web2-rebirth-never-pooled	4
+scripts/web2-rebirth-recovery-check	6
 scripts/workspaces-plaintext-hold-9348	2
 scripts/zot-fill-rate-7341	6
 scripts/zot-last-err-redact-7500	7
@@ -555,7 +559,9 @@ tests/scripts/vector-redeliver-wiring	3
 tests/scripts/vendor-pin-gate-verdict	4
 tests/scripts/weakness-miner	2
 tests/scripts/web-host-birth-gate	6
+tests/scripts/web-host-rebirth-gate	6
 tests/scripts/web-host-replace-gate	2
+tests/scripts/web2-rebirth-classify	7
 tests/scripts/workspaces-luks-cutover-gate	1
 tests/scripts/workspaces-luks-recut-gate	1
 tests/scripts/write-known-hosts	3
