@@ -20,8 +20,13 @@ export const sessions = new Map<string, ClientSession>();
  * Signal provenance: `session.conversationId`'s single writer is the
  * ws-handler binding handshake (`start_session`/`resume_session`), cleared on
  * close/abort/supersede — the binding IS the session, so the signal cannot
- * outlive it. Residual: a mounted-but-backgrounded tab still reads as viewing
- * (the card lands and is seen on return — acceptable for v1).
+ * outlive it. Residuals: a mounted-but-backgrounded tab still reads as
+ * viewing (the card lands and is seen on return — acceptable for v1), and a
+ * headless/external-agent socket bound to the same conversation reads as
+ * viewing without a human present (worst case: no push, but the unread
+ * inbox row + badge remain — the same accepted residual). If a clientKind
+ * discriminator is ever added to ClientSession, this predicate is the
+ * consumer.
  */
 export function isConversationViewed(
   userId: string,

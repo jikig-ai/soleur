@@ -4043,10 +4043,13 @@ export async function dispatchSoleurGo(
           conversationId,
           workspaceId: path.basename(workspacePath),
           title: "Soleur finished your request",
-          // feat-session-completion-inline — emits the inline card frame;
-          // sendToClient injects so notifications.ts never imports the
-          // ws-handler graph (cycle).
-          emit: sendToClient,
+          // feat-session-completion-inline — emits the inline card frame.
+          // defaultSendToClient (ws-handler's sender) specifically — NOT the
+          // per-call `sendToClient`, which is the support SSE sink on support
+          // turns (ADR-113): the card frame must reach the CC WebSocket so it
+          // ring-stamps (ADR-059) and `delivered` means "OPEN chat socket,"
+          // never "SSE enqueue succeeded."
+          emit: defaultSendToClient,
         });
       }
       // Per-turn boundary → terminal stream event for the cc_router bubble.

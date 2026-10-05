@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useEffect, useReducer, useMemo, useRef, useCallback } from "react";
-import { useSWRConfig } from "swr";
-import { swrKeys } from "@/lib/swr-config";
 import { createClient } from "@/lib/supabase/client";
 import {
   WS_CLOSE_CODES,
@@ -639,10 +637,6 @@ export const TIER_CHANGED_RECONNECT_DELAY_MS = 500;
 export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
-  // Unbound mutate — revalidates the shared `/api/inbox` SWR entry so the
-  // inbox surface + nav badge reconcile when a task_completed card marks its
-  // row read on render (ADR-067 shared-key contract). Hook-level call.
-  const { mutate: globalMutate } = useSWRConfig();
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
     activeStreams: new Map<DomainLeaderId, string>(),
@@ -992,6 +986,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // Non-buffered frames carry no `seq` and bypass the gate.
       const frameSeq = (msg as { seq?: number }).seq;
       if (typeof frameSeq === "number") {
+        // Buffered-frame seq counters are PER-CONVERSATION server-side — a
+        // seq-bearing frame bound to ANOTHER conversation (sendToClient is
+        // user-scoped) must be dropped before the cursor advances, or its
+        // foreign seq would silently swallow this surface's own later frames
+        // (and corrupt the reconnect ack). task_completed is the first frame
+        // guaranteed to arrive cross-conversation on every completion.
+        if (
+          "conversationId" in msg &&
+          typeof msg.conversationId === "string" &&
+          msg.conversationId !== realConversationIdRef.current
+        ) {
+          return;
+        }
         if (frameSeq <= lastRenderedSeqRef.current) {
           return; // already-rendered replayed frame — drop
         }
@@ -1493,7 +1500,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
         case "task_completed": {
           // feat-session-completion-inline — the inline completion card.
-          // Buffered (carries seq → replay-dedup gated above). sendToClient is
+          // Buffered (carries seq → replay-dedup gated above, which also drops
+          // seq-bearing foreign-conversation frames early). sendToClient is
           // user-scoped, so drop a frame bound to another conversation's
           // surface (the #9515 reasoning_narration guard class — required
           // field here, not optional).
@@ -1502,36 +1510,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // pending id this client holds — the frame then drops here while
           // suppression already fired. The unread row + badge stay honest.
           if (msg.conversationId !== realConversationIdRef.current) break;
+          // The read-mark POST lives in TaskCompletedCard's mount effect —
+          // "read" fires only once the card actually committed to the tree.
           dispatch({ type: "stream_event", msg });
-          // Render-anchored "seen": the server inserted the inbox_item row
-          // unread; mark it read now that the card dispatched, then revalidate
-          // the shared inbox key so list + nav badge reconcile (ADR-067).
-          // A failed mark leaves an honest unread row — the failure itself is
-          // still mirrored so a dead endpoint never goes silent.
-          void fetch(`/api/inbox/${msg.inboxItemId}/state`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ action: "read" }),
-          })
-            .then((res) => {
-              if (res.ok) {
-                void globalMutate(swrKeys.inbox("active"));
-              } else {
-                warnSilentFallback(null, {
-                  feature: "ws-client",
-                  op: "task-completed-mark-read",
-                  message: "task_completed read-mark POST returned non-ok",
-                  extra: { status: res.status },
-                });
-              }
-            })
-            .catch((err) => {
-              warnSilentFallback(err, {
-                feature: "ws-client",
-                op: "task-completed-mark-read",
-                message: "task_completed read-mark POST failed",
-              });
-            });
           break;
         }
         default: {

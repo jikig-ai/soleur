@@ -290,10 +290,11 @@ export interface ChatTurnSummaryMessage extends ChatMessageBase {
 /** feat-session-completion-inline — the inline per-request completion card.
  *  Renders INLINE in the viewed conversation when the server emits the
  *  `task_completed` frame; the matching inbox_item row stays the durable
- *  record and is marked read at render (see ws-client `case "task_completed"`).
- *  Render MUST be plain-text — the title is server-generated (never agent
- *  output, ADR-085) but the InboxItemRow plain-text invariant still applies.
- *  `content` carries the title. */
+ *  record and is marked read when the card MOUNTS (TaskCompletedCard's mount
+ *  effect — "read" implies painted). Render MUST be plain-text — the title is
+ *  server-generated (never agent output, ADR-085) but the InboxItemRow
+ *  plain-text invariant still applies. `content` carries the title;
+ *  `inboxItemId` links the card to its durable row (the read-mark target). */
 export interface ChatTaskCompletedMessage extends ChatMessageBase {
   type: "task_completed";
   inboxItemId: string;

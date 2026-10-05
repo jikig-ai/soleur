@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ClientSession } from "../server/ws-handler";
 
 // feat-session-completion-inline — the `notifyTaskCompleted` suppression seam.
@@ -139,6 +139,12 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://app.soleur.ai");
 });
 
+afterEach(() => {
+  // env is shared per vitest worker — un-stub so VAPID/RESEND keys can't
+  // leak into the next file on this worker.
+  vi.unstubAllEnvs();
+});
+
 describe("notifyTaskCompleted suppression seam", () => {
   it("viewing + frame delivered → inbox row inserted, frame emitted, push/email suppressed", async () => {
     sessions.set(USER_ID, fakeViewingSession(CONV_ID));
@@ -204,6 +210,21 @@ describe("notifyTaskCompleted suppression seam", () => {
 
     await notifyTaskCompleted({ ...baseOpts(), emit });
 
+    expect(mockFrom).toHaveBeenCalledWith("push_subscriptions");
+    expect(mockResendSend).toHaveBeenCalled();
+  });
+
+  it("emit() throws on the viewing path → caught, notify still fires", async () => {
+    sessions.set(USER_ID, fakeViewingSession(CONV_ID));
+    const emit = vi.fn().mockImplementation(() => {
+      throw new Error("socket write blew up");
+    });
+
+    // The seam is never-throws — a throwing injected emitter must degrade to
+    // delivered=false → notify, not reject into an unhandled rejection.
+    await expect(
+      notifyTaskCompleted({ ...baseOpts(), emit }),
+    ).resolves.toBeUndefined();
     expect(mockFrom).toHaveBeenCalledWith("push_subscriptions");
     expect(mockResendSend).toHaveBeenCalled();
   });

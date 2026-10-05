@@ -33,12 +33,27 @@ describe("task_completed producer covers both agent-run lineages", () => {
   });
 
   // feat-session-completion-inline — the seam emits the inline card frame via
-  // an INJECTED `emit:` (ws-handler sendToClient); a call site that drops the
-  // param silently loses the inline card while push/email still fires.
-  it("both lineages pass emit: sendToClient into the seam", () => {
-    for (const f of ["agent-runner.ts", "cc-dispatcher.ts"]) {
-      expect(read(f)).toMatch(/notifyTaskCompleted\(\{[\s\S]*?emit:\s*sendToClient/);
-    }
+  // an INJECTED `emit:` that must be WS-HANDLER's sender specifically:
+  // cc-dispatcher's per-call `sendToClient` arg is the support SSE sink on
+  // support turns (ADR-113) — a sink that neither ring-stamps the frame nor
+  // reports a real OPEN-socket delivery — so the pin names the symbol each
+  // file must pass, not just the `emit:` key.
+  it("both lineages inject ws-handler's sender into the seam", () => {
+    // agent-runner imports `sendToClient` from ./ws-handler directly.
+    expect(read("agent-runner.ts")).toMatch(
+      /import \{[^}]*sendToClient[^}]*\} from ["']\.\/ws-handler["']/,
+    );
+    expect(read("agent-runner.ts")).toMatch(
+      /notifyTaskCompleted\(\{[\s\S]*?emit:\s*sendToClient/,
+    );
+    // cc-dispatcher aliases it `defaultSendToClient` (its `sendToClient` param
+    // is the per-call injected sink) — the pin pins the alias.
+    expect(read("cc-dispatcher.ts")).toMatch(
+      /import \{[^}]*sendToClient as defaultSendToClient[^}]*\} from ["']\.\/ws-handler["']/,
+    );
+    expect(read("cc-dispatcher.ts")).toMatch(
+      /notifyTaskCompleted\(\{[\s\S]*?emit:\s*defaultSendToClient/,
+    );
     // And the seam reads the viewing predicate from the leaf registry —
     // notifications.ts must NOT import the ws-handler graph (import cycle).
     expect(read("notifications.ts")).toMatch(/isConversationViewed/);

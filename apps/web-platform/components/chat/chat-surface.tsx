@@ -1167,9 +1167,14 @@ export function ChatSurface({
                   break;
                 case "task_completed":
                   // feat-session-completion-inline — the inline completion
-                  // card (plain-text title; the inbox_item row stays the
-                  // durable record and was already marked read on render).
-                  body = <TaskCompletedCard title={msg.content} />;
+                  // card (sanitized plain-text title; mounting it fires the
+                  // inbox read-mark, so "read" implies the card painted).
+                  body = (
+                    <TaskCompletedCard
+                      title={msg.content}
+                      inboxItemId={msg.inboxItemId}
+                    />
+                  );
                   break;
                 default: {
                   const _exhaustive: never = msg;

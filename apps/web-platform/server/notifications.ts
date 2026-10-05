@@ -823,9 +823,11 @@ async function sendInboxItemEmailNotification(
 // ---------------------------------------------------------------------------
 
 /**
- * Insert an inbox_item row, then dispatch the push/email nudge. Fire-and-forget
- * (never throws) — callers must not await it. Returns the inserted row id
- * (`null` on dedup/failure) — existing callers ignore it.
+ * Insert an inbox_item row, then dispatch the push/email nudge. Never throws.
+ * Returns the inserted row id (`null` on dedup/failure); `dispatch: false`
+ * performs the insert only — `notifyTaskCompleted` awaits it for exactly that
+ * (it needs the id for the `task_completed` frame and defers the dispatch
+ * decision to itself). Other callers may fire-and-forget it.
  *
  * Idempotent (ADR-037): plain-insert + catch 23505 rather than
  * `ON CONFLICT DO NOTHING` (unreliable under supabase-js — returns data:null).
@@ -1038,8 +1040,21 @@ export async function notifyTaskCompleted(opts: {
   // THIS conversation — the predicate is read at decision time (post-emit,
   // same synchronous tick on the sessions Map), so a rebind during the insert
   // await above reads false → the nudge fires. Any uncertainty resolves
-  // toward over-notify, deliberately.
-  if (delivered && isConversationViewed(opts.userId, opts.conversationId)) {
+  // toward over-notify, deliberately — including a throwing predicate (the
+  // callers `void` this function, so an unguarded throw would be an
+  // unhandled rejection AND a skipped nudge).
+  let viewing = false;
+  try {
+    viewing = isConversationViewed(opts.userId, opts.conversationId);
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "inbox",
+      op: "task-completed-viewing-check-failed",
+      message: "isConversationViewed threw — degrading to notify",
+      extra: { conversationId: opts.conversationId },
+    });
+  }
+  if (delivered && viewing) {
     log.info(
       {
         userId: opts.userId,

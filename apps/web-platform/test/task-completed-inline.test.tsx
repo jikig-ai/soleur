@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
-import { chatReducer, type ChatState } from "../lib/ws-client";
+import { render, renderHook, act, waitFor } from "@testing-library/react";
+import { chatReducer, useWebSocket, type ChatState } from "../lib/ws-client";
 import type { ChatTaskCompletedMessage } from "../lib/chat-state-machine";
+import { TaskCompletedCard } from "../components/chat/task-completed-card";
 
 // feat-session-completion-inline — the client half of "inline + notify if
 // unseen": the `task_completed` frame must (a) append a ChatTaskCompletedMessage
 // via the reducer, (b) be dropped when bound to a DIFFERENT conversation
 // (user-scoped socket serves every tab — #9515 guard class), and (c) fire the
-// render-anchored read-mark POST so the inbox row is marked read only when the
-// card actually rendered.
+// render-anchored read-mark POST — mount-anchored, so "read" implies the card
+// actually committed to the tree.
 
 const mockGetSession = vi.fn().mockResolvedValue({
   data: { session: { access_token: "test-token" } },
@@ -39,7 +40,7 @@ class MockWebSocket {
   onerror: ((ev: Event) => void) | null = null;
   send = vi.fn();
   close = vi.fn();
-  readyState = MockWebSocket.OPEN;
+  readyState = MockWebSocket.CONNECTING;
   constructor() {
     wsInstance = this;
     queueMicrotask(() => {
@@ -82,9 +83,44 @@ describe("chatReducer — task_completed", () => {
   });
 });
 
+describe("TaskCompletedCard — render-anchored read-mark", () => {
+  let fetchSpy: MockInstance;
+
+  beforeEach(() => {
+    fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("{}", { status: 200 }));
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("renders the sanitized title and POSTs the read-mark on mount", async () => {
+    const { getByTestId, getByText } = render(
+      <TaskCompletedCard
+        title="Soleur finished your request"
+        inboxItemId="inbox-1"
+      />,
+    );
+
+    expect(getByTestId("task-completed")).toBeTruthy();
+    expect(getByText("Soleur finished your request")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/inbox/inbox-1/state",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ action: "read" }),
+        }),
+      );
+    });
+  });
+});
+
 describe("useWebSocket — task_completed frame", () => {
   let originalWebSocket: typeof globalThis.WebSocket;
-  let fetchSpy: MockInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -92,19 +128,17 @@ describe("useWebSocket — task_completed frame", () => {
     originalWebSocket = globalThis.WebSocket;
     // @ts-expect-error — mock constructor shape
     globalThis.WebSocket = MockWebSocket;
-    fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        new Response(JSON.stringify({ messages: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
   });
 
   afterEach(() => {
     globalThis.WebSocket = originalWebSocket;
-    fetchSpy.mockRestore();
+    vi.restoreAllMocks();
   });
 
   function serverSend(data: Record<string, unknown>) {
@@ -116,7 +150,6 @@ describe("useWebSocket — task_completed frame", () => {
   }
 
   async function connectAndResume(conversationId: string) {
-    const { useWebSocket } = await import("@/lib/ws-client");
     const result = renderHook(() => useWebSocket(conversationId));
 
     await waitFor(() => {
@@ -136,7 +169,7 @@ describe("useWebSocket — task_completed frame", () => {
     return result;
   }
 
-  it("renders the card and fires the read-mark POST when the frame matches the mounted conversation", async () => {
+  it("appends the card when the frame matches the mounted conversation", async () => {
     const result = await connectAndResume("conv-live-1");
 
     serverSend({
@@ -153,24 +186,14 @@ describe("useWebSocket — task_completed frame", () => {
         ),
       ).toBe(true);
     });
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/inbox/inbox-1/state",
-        expect.objectContaining({ method: "POST" }),
-      );
-    });
-    const readMarkCall = fetchSpy.mock.calls.find(
-      ([url]) => url === "/api/inbox/inbox-1/state",
-    );
-    expect(JSON.parse(String(readMarkCall?.[1]?.body))).toEqual({
-      action: "read",
-    });
+    const msg = result.result.current.messages.find(
+      (m) => m.type === "task_completed",
+    ) as ChatTaskCompletedMessage;
+    expect(msg.inboxItemId).toBe("inbox-1");
   });
 
-  it("drops a frame bound to a different conversation — no render, no read-mark", async () => {
+  it("drops a frame bound to a different conversation", async () => {
     const result = await connectAndResume("conv-live-1");
-    fetchSpy.mockClear();
 
     serverSend({
       type: "task_completed",
@@ -184,9 +207,37 @@ describe("useWebSocket — task_completed frame", () => {
     expect(
       result.result.current.messages.some((m) => m.type === "task_completed"),
     ).toBe(false);
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      "/api/inbox/inbox-2/state",
-      expect.anything(),
-    );
+  });
+
+  it("a seq-bearing foreign-conversation frame does not advance this surface's replay cursor", async () => {
+    const result = await connectAndResume("conv-live-1");
+
+    // A buffered frame for another conversation carries ITS conversation's
+    // seq — it must be dropped before lastRenderedSeq advances (perf-seat P2:
+    // foreign seq would swallow this surface's own later frames).
+    serverSend({
+      type: "task_completed",
+      conversationId: "conv-other-9",
+      inboxItemId: "inbox-3",
+      title: "x",
+      seq: 99,
+    });
+    // …then a same-conversation buffered frame with a LOWER seq (correct for
+    // conv-live-1's own counter) must still render, not be deduped away.
+    serverSend({
+      type: "task_completed",
+      conversationId: "conv-live-1",
+      inboxItemId: "inbox-4",
+      title: "y",
+      seq: 1,
+    });
+
+    await waitFor(() => {
+      const cards = result.result.current.messages.filter(
+        (m) => m.type === "task_completed",
+      );
+      expect(cards).toHaveLength(1);
+      expect(cards[0].content).toBe("y");
+    });
   });
 });

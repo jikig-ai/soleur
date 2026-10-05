@@ -82,6 +82,9 @@ export function reduceSupportFrame(
     case "error":
       return { ...state, status: "error", error: msg.message };
     default:
+      // task_completed (feat-session-completion-inline) is an expected
+      // pass-through — the support surface's "turn finished" signal is
+      // stream_end/session_ended above; the frame is ignored by design.
       return state;
   }
 }
