@@ -82,9 +82,11 @@ cannot catch the drift.
   (`buildToolLabel` output — already plain-language, #2138-safe) and
   `reasoning_narration.message` (deliberate agent emission). Never
   `debug_event.body`, never raw tool names.
-- **TR4 — `tool_progress` correlation.** If step-level elapsed display needs
-  correlation, widen `tool_use` with `toolUseId` (trivial wire widening) —
-  decide at plan time; elapsed-on-current-step may not need it.
+- **TR4 — `tool_progress` correlation (decided at plan 2026-10-05).** No
+  `tool_use` widening: cc forwards `tool_progress` since #5214, sequential
+  tool execution means the latest trail entry is the running step, and
+  `messages[]` must not mutate on the heartbeat hot path (memo churn) —
+  store `startedAt` on the trail entry and compute elapsed at render.
 - **TR5 — Tests.** PR1: update `ws-known-types-guard.test.ts` to derive expected
   membership from the union (or a parse of types.ts) — a test adding a union
   member must fail without a set entry. PR2: update
