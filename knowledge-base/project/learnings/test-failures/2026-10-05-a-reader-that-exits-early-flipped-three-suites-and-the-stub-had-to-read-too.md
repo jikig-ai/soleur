@@ -87,6 +87,12 @@ repo believed:
 10. **A sibling session's PR (#9523) edited the same reap suite and carried the e2e work I had planned as PR-2**, found only
     from a gate banner naming the sibling worktree. Recovery: read its diff, recorded merge order (this PR first), did not
     start PR-2. Prevention: at plan time list worktrees by the defect noun (existing one-shot rule).
+11. **The PR's first CI cycle failed on a ratchet I had not run.** `scripts/test-affected-kb-consumers.test.sh` reads one hop
+    into the scripts a registered suite names; the guard now names three suites, and their fixture strings produced six
+    uncovered `knowledge-base/` references. I had run "the ratchets" from memory, not from the list. Recovery:
+    `--write-baseline` (six rows, all for the guard; the guard reads none of them), re-ran 22/22, one more push.
+    **Prevention:** when a diff edits `scripts/lib/test-affected-paths.sh` or makes a registered suite name another script,
+    enumerate the ratchets with `grep -l 'ratchet' scripts/*.test.sh` and run each, rather than the ones the plan listed.
 
 ## Tags
 
