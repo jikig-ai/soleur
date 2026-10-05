@@ -1097,7 +1097,8 @@ for host in api.anthropic.com github.com api.github.com api.doppler.com \
   plausible.io api.resend.com api.buttondown.com api.cloudflare.com \
   api.stripe.com api.hetzner.cloud fcm.googleapis.com \
   updates.push.services.mozilla.com web.push.apple.com \
-  soleur.ai app.soleur.ai api.soleur.ai api.supabase.com; do
+  soleur.ai app.soleur.ai api.soleur.ai api.supabase.com \
+  registry.npmjs.org; do
   # -Fxq = exact full-line literal (dots are NOT wildcards)
   if grep -Fxq -- "$host" "$ALLOWLIST"; then
     PASS=$((PASS + 1)); echo "  PASS: allowlists $host"
@@ -1107,15 +1108,27 @@ for host in api.anthropic.com github.com api.github.com api.doppler.com \
 done
 # Exact-set guard: a NEW host (the firewall's entire attack-surface dial)
 # must force a deliberate edit here carrying its evidence.
-# Count is 23 since #5199 (restore 7 Tier-2 crons) grew the allowlist with
-# evidence-gated hosts (e.g. hn.algolia.com, plausible.io) but did not bump
-# this guard — drift fixed here. The CIDR ranges live in a SEPARATE interval
-# set/file (cron-egress-allowlist-cidr.txt) and are NOT counted here.
+# Count is 123 since the Actions-log + npm-registry egress widening (24
+# vendor hosts + 99 productionresultssa<N>.blob.core.windows.net accounts —
+# sa0..99 minus sa22, which NXDOMAINs). The CIDR ranges live in a SEPARATE
+# interval set/file (cron-egress-allowlist-cidr.txt) and are NOT counted here.
 HOST_COUNT="$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$ALLOWLIST")"
-if [[ "$HOST_COUNT" -eq 23 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: allowlist host count is exactly 23"
+if [[ "$HOST_COUNT" -eq 123 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: allowlist host count is exactly 123"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: allowlist host count is $HOST_COUNT (expected 23 — update BOTH the allowlist and this test with evidence)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: allowlist host count is $HOST_COUNT (expected 123 — update BOTH the allowlist and this test with evidence)"
+fi
+# Actions-blob fleet guard: the signed-URL accounts are exact hosts, so the
+# fleet boundaries AND the sa22 hole are pinned — a deleted account that
+# reappears in the file would NXDOMAIN-page via the resolver failcount.
+assert_grep "allowlists productionresultssa0 (fleet lower bound)" '^productionresultssa0\.blob\.core\.windows\.net$' "$ALLOWLIST"
+assert_grep "allowlists productionresultssa99 (fleet upper bound)" '^productionresultssa99\.blob\.core\.windows\.net$' "$ALLOWLIST"
+assert_not_grep "sa22 is NXDOMAIN — must NOT be allowlisted (resolver failcount would page)" '^productionresultssa22\.blob\.core\.windows\.net$' "$ALLOWLIST"
+SA_FLEET="$(grep -cE '^productionresultssa[0-9]+\.blob\.core\.windows\.net$' "$ALLOWLIST" || true)"
+if [[ "$SA_FLEET" -eq 99 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: productionresultssa fleet is exactly 99 hosts"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: productionresultssa fleet count is $SA_FLEET (expected 99 — verify each member resolves before adding/removing; an NXDOMAIN member pages via the resolver failcount)"
 fi
 assert_not_grep "Better Stack is HOST egress (must not be in the container allowlist)" '^(logs\.)?(betterstack|betteruptime)' "$ALLOWLIST"
 assert_not_grep "GHCR is HOST egress (must not be in the container allowlist)" '^ghcr\.io$' "$ALLOWLIST"
@@ -1195,12 +1208,18 @@ GHCR_HOST_RE='ghcr\.io|pkg\.github\.com|githubusercontent'
 SERVER_CENSUS_RE='githubusercontent|codeload|objects\.github|release-assets|pkg\.github\.com|ghcr\.io'
 # Explicit exemptions (repo-relative to the scanned dir). Empty today (0 hits, 2026-10-01).
 SERVER_CENSUS_EXEMPT=()
-sandbox_domains() {   # sandbox_domains <ts-file> -> sorted GITHUB_EGRESS_DOMAINS entries, one per line
-  awk '/GITHUB_EGRESS_DOMAINS = Object\.freeze\(\[/ { grab = 1; next } grab && /\] as const/ { grab = 0 } grab' "$1" \
+sandbox_domains() {   # sandbox_domains <ts-file> -> sorted literal entries under EITHER egress const, one per line
+  awk '/(ENTITLED_EGRESS_DOMAINS|GITHUB_ACTIONS_LOG_ACCOUNTS) = Object\.freeze\(\[/ { grab = 1; next } grab && /\] as const/ { grab = 0 } grab' "$1" \
     | grep -oE '"[^"]+"' | tr -d '"' | sort
 }
-sandbox_domains_ok() {   # sandbox_domains_ok <sorted domains, one per line> -> 0 iff EXACTLY {api.github.com, github.com}
-  [[ "$1" == $'api.github.com\ngithub.com' ]]
+expected_domains_sorted() {   # expected_domains_sorted -> the census-approved set: 3 base hosts + sa0..99 minus sa22 (NXDOMAIN)
+  { echo api.github.com; echo github.com; echo registry.npmjs.org
+    for i in $(seq 0 99); do
+      [[ "$i" -eq 22 ]] || echo "productionresultssa$i.blob.core.windows.net"
+    done; } | sort
+}
+sandbox_domains_ok() {   # sandbox_domains_ok <sorted domains, one per line> -> 0 iff EXACTLY the expected set (computed, not hardcoded, so the 99-account fleet stays readable)
+  [[ "$1" == "$(expected_domains_sorted)" ]]
 }
 allowlist_ghcr_hits() {   # allowlist_ghcr_hits <file> -> non-comment lines naming a GHCR / Packages / usercontent host (case-insensitive: DNS names are)
   grep -vE '^[[:space:]]*(#|$)' "$1" | grep -iE "$GHCR_HOST_RE" || true
@@ -1220,9 +1239,9 @@ SANDBOX_CFG="$SCRIPT_DIR/../server/agent-runner-sandbox-config.ts"
 SERVER_DIR="$SCRIPT_DIR/../server"
 SANDBOX_DOMAINS="$(sandbox_domains "$SANDBOX_CFG")"
 if sandbox_domains_ok "$SANDBOX_DOMAINS"; then
-  PASS=$((PASS + 1)); echo "  PASS: census: GITHUB_EGRESS_DOMAINS is exactly github.com + api.github.com"
+  PASS=$((PASS + 1)); echo "  PASS: census: egress domain consts are exactly github.com + api.github.com + registry.npmjs.org + the 99 productionresultssa accounts"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: census: GITHUB_EGRESS_DOMAINS is not exactly {github.com, api.github.com} (got: $(echo "$SANDBOX_DOMAINS" | tr '\n' ' ')); widening needs its own security review AND a decision on the GHCR deny"
+  FAIL=$((FAIL + 1)); echo "  FAIL: census: egress domain consts drifted from the approved set (got: $(echo "$SANDBOX_DOMAINS" | tr '\n' ' ')); widening needs its own security review AND a decision on the GHCR deny"
 fi
 # Read floor: an unreadable / emptied / relocated allowlist yields ZERO hits and would read as "clean".
 ALLOW_ENTRIES="$(grep -vcE '^[[:space:]]*(#|$)' "$ALLOWLIST" 2>/dev/null || true)"
@@ -1275,20 +1294,31 @@ if echo "$CEN_EMPTY" | grep -qx 'SCANNED 0'; then
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: empty tree did not report SCANNED 0 (got: $CEN_EMPTY)"
 fi
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "raw.githubusercontent.com",\n] as const);\n' > "$CEN_D/cfg-widened.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "raw.githubusercontent.com",\n] as const);\n' > "$CEN_D/cfg-widened.ts"
 # The self-test drives the SAME sandbox_domains_ok() the live check uses: a weakened predicate (a
 # glob such as *github.com*, a prefix test, a count-only test) accepts at least one negative below.
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n] as const);\n' > "$CEN_D/cfg-exact.ts"
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n] as const);\n' > "$CEN_D/cfg-one.ts"
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "evilgithub.com",\n] as const);\n' > "$CEN_D/cfg-lookalike.ts"
+# The positive fixture carries BOTH consts and the full fleet — generated so the sa0..99-minus-22
+# bound is written once (expected_domains_sorted) and cannot drift from the live check's notion.
+{
+  printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "registry.npmjs.org",\n  ...GITHUB_ACTIONS_LOG_ACCOUNTS,\n] as const);\n'
+  printf 'export const GITHUB_ACTIONS_LOG_ACCOUNTS = Object.freeze([\n'
+  for i in $(seq 0 99); do
+    [[ "$i" -eq 22 ]] || printf '  "productionresultssa%s.blob.core.windows.net",\n' "$i"
+  done
+  printf '] as const);\n'
+} > "$CEN_D/cfg-exact.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n] as const);\n' > "$CEN_D/cfg-pair.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n] as const);\n' > "$CEN_D/cfg-one.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "evilgithub.com",\n] as const);\n' > "$CEN_D/cfg-lookalike.ts"
 CEN_SD_OK=1
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-exact.ts")" || CEN_SD_OK=0
+sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-pair.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-widened.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-one.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-lookalike.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "" && CEN_SD_OK=0
 if [[ "$CEN_SD_OK" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: census self-test: sandbox_domains_ok accepts exactly {github.com, api.github.com} and rejects a widened, single, look-alike and empty list"
+  PASS=$((PASS + 1)); echo "  PASS: census self-test: sandbox_domains_ok accepts the full {github, api.github, npm, sa0..99 minus sa22} set and rejects pair-only, widened, single, look-alike and empty lists"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: sandbox_domains_ok misjudged a synthetic sandbox config (the live exact-set check is weaker than intended)"
 fi
