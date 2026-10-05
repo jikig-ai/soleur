@@ -1497,23 +1497,40 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // user-scoped, so drop a frame bound to another conversation's
           // surface (the #9515 reasoning_narration guard class — required
           // field here, not optional).
+          // Residual (pre-existing): a context_path 23505 rebind can resolve
+          // the server-side session to a different conversationId than the
+          // pending id this client holds — the frame then drops here while
+          // suppression already fired. The unread row + badge stay honest.
           if (msg.conversationId !== realConversationIdRef.current) break;
           dispatch({ type: "stream_event", msg });
           // Render-anchored "seen": the server inserted the inbox_item row
-          // unread; mark it read now that the card rendered, then revalidate
+          // unread; mark it read now that the card dispatched, then revalidate
           // the shared inbox key so list + nav badge reconcile (ADR-067).
-          // Fire-and-forget — a failed mark leaves an honest unread row,
-          // never a silent loss.
+          // A failed mark leaves an honest unread row — the failure itself is
+          // still mirrored so a dead endpoint never goes silent.
           void fetch(`/api/inbox/${msg.inboxItemId}/state`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ action: "read" }),
           })
             .then((res) => {
-              if (res.ok) void globalMutate(swrKeys.inbox("active"));
+              if (res.ok) {
+                void globalMutate(swrKeys.inbox("active"));
+              } else {
+                warnSilentFallback(null, {
+                  feature: "ws-client",
+                  op: "task-completed-mark-read",
+                  message: "task_completed read-mark POST returned non-ok",
+                  extra: { status: res.status },
+                });
+              }
             })
-            .catch(() => {
-              // Failed read-mark → row stays unread; badge surfaces it.
+            .catch((err) => {
+              warnSilentFallback(err, {
+                feature: "ws-client",
+                op: "task-completed-mark-read",
+                message: "task_completed read-mark POST failed",
+              });
             });
           break;
         }

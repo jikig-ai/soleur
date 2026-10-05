@@ -999,7 +999,6 @@ export async function notifyTaskCompleted(opts: {
   // paths — it stays the durable record (inserted `unread`; the client marks
   // it `read` when it renders the card, so a delivered-but-unrendered frame
   // still leaves an honest unread row + nav badge).
-  const viewing = isConversationViewed(opts.userId, opts.conversationId);
   const deepLinkPath = `/dashboard/chat/${opts.conversationId}`;
   const inboxItemId = await notifyInboxItem({
     workspaceId: opts.workspaceId,
@@ -1015,19 +1014,32 @@ export async function notifyTaskCompleted(opts: {
 
   // Emit unconditionally — sendToClient stamps the frame into the
   // per-conversation replay ring regardless of delivery (ADR-059), so a
-  // within-grace reconnect still renders the card.
-  const delivered = opts.emit(opts.userId, {
-    type: "task_completed",
-    conversationId: opts.conversationId,
-    inboxItemId,
-    title: opts.title,
-  });
+  // within-grace reconnect still renders the card. The emitter is
+  // caller-injected: a throwing sink degrades to "undelivered" (the nudge
+  // fires) rather than rejecting this never-throws path.
+  let delivered = false;
+  try {
+    delivered = opts.emit(opts.userId, {
+      type: "task_completed",
+      conversationId: opts.conversationId,
+      inboxItemId,
+      title: opts.title,
+    });
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "inbox",
+      op: "task-completed-emit-failed",
+      message: "task_completed frame emit threw",
+      extra: { conversationId: opts.conversationId },
+    });
+  }
 
-  // Suppression requires BOTH the bound-conversation check AND the frame
-  // actually reaching an OPEN socket — a socket that dies between check and
-  // send degrades to "unseen" and the nudge fires (no silent window). Any
-  // uncertainty resolves toward over-notify, deliberately.
-  if (viewing && delivered) {
+  // Suppression requires the frame actually reaching an OPEN socket bound to
+  // THIS conversation — the predicate is read at decision time (post-emit,
+  // same synchronous tick on the sessions Map), so a rebind during the insert
+  // await above reads false → the nudge fires. Any uncertainty resolves
+  // toward over-notify, deliberately.
+  if (delivered && isConversationViewed(opts.userId, opts.conversationId)) {
     log.info(
       {
         userId: opts.userId,
