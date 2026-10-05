@@ -348,9 +348,9 @@ CARVE_MODE="floor-only"
 CARVE_OK=0
 if [[ "${CARVE_HDRS:-0}" -ge 1 ]]; then
   CARVE_OK=1
-  if echo "$CARVE_ORACLE" | grep -q '^BASE_PREFIXES '; then
+  if grep -q '^BASE_PREFIXES ' <<<"$CARVE_ORACLE"; then
     CARVE_MODE="every header inside the pre-carve base file ($(echo "$CARVE_ORACLE" | sed -n 's/^BASE_PREFIXES //p') prefixes)"
-    echo "$CARVE_ORACLE" | grep -qE '^BASE_OUTSIDE 0 ?$' || CARVE_OK=0
+    grep -qE '^BASE_OUTSIDE 0 ?$' <<<"$CARVE_ORACLE" || CARVE_OK=0
   fi
 fi
 if [[ "$CARVE_OK" -eq 1 ]]; then
@@ -1277,7 +1277,7 @@ echo 'const ok = "https://api.github.com/";' > "$CEN_D/server/a.ts"
 echo 'fetch("https://ghcr.io/v2/");' > "$CEN_D/server/sub/b.ts"
 echo 'const OIDC = "https://token.actions.githubusercontent.com";' > "$CEN_D/scripts/provision.sh"
 CEN_SCAN="$(server_census_scan "$CEN_D/server")"
-if echo "$CEN_SCAN" | grep -qF "HIT $CEN_D/server/sub/b.ts" && ! echo "$CEN_SCAN" | grep -qF "HIT $CEN_D/server/a.ts" && echo "$CEN_SCAN" | grep -qx 'SCANNED 2'; then
+if grep -qF "HIT $CEN_D/server/sub/b.ts" <<<"$CEN_SCAN" && ! grep -qF "HIT $CEN_D/server/a.ts" <<<"$CEN_SCAN" && grep -qx 'SCANNED 2' <<<"$CEN_SCAN"; then
   PASS=$((PASS + 1)); echo "  PASS: census self-test: a ghcr.io literal in a server file is flagged, a clean file is not"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: server scanner did not flag exactly b.ts (got: $(echo "$CEN_SCAN" | tr '\n' ';'))"
@@ -1289,7 +1289,7 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: a script outside the server tree was scanned"
 fi
 CEN_EMPTY="$(server_census_scan "$CEN_D/empty")"
-if echo "$CEN_EMPTY" | grep -qx 'SCANNED 0'; then
+if grep -qx 'SCANNED 0' <<<"$CEN_EMPTY"; then
   PASS=$((PASS + 1)); echo "  PASS: census self-test: an empty tree reports SCANNED 0 (the floor above turns that into a RED)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: empty tree did not report SCANNED 0 (got: $CEN_EMPTY)"
@@ -1344,9 +1344,9 @@ for lit in raw.githubusercontent.com codeload.example.invalid objects.github.exa
 done
 printf 'const ok = "https://api.github.com/";\n' > "$CEN_D/members/clean.ts"
 CEN_MEMBER_SCAN="$(server_census_scan "$CEN_D/members")"
-for k in $(seq 1 "$CEN_MEMBER_N"); do echo "$CEN_MEMBER_SCAN" | grep -qxF "HIT $CEN_D/members/m$k.ts" || CEN_MEMBER_MISS+="m$k "; done
-echo "$CEN_MEMBER_SCAN" | grep -qxF "HIT $CEN_D/members/clean.ts" && CEN_MEMBER_MISS+="clean-flagged "
-echo "$CEN_MEMBER_SCAN" | grep -qx "SCANNED $((CEN_MEMBER_N + 1))" || CEN_MEMBER_MISS+="scanned-count "
+for k in $(seq 1 "$CEN_MEMBER_N"); do grep -qxF "HIT $CEN_D/members/m$k.ts" <<<"$CEN_MEMBER_SCAN" || CEN_MEMBER_MISS+="m$k "; done
+grep -qxF "HIT $CEN_D/members/clean.ts" <<<"$CEN_MEMBER_SCAN" && CEN_MEMBER_MISS+="clean-flagged "
+grep -qx "SCANNED $((CEN_MEMBER_N + 1))" <<<"$CEN_MEMBER_SCAN" || CEN_MEMBER_MISS+="scanned-count "
 if [[ -z "$CEN_ALLOW_MISS" && -z "$CEN_MEMBER_MISS" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: census self-test: every allowlist and server-scan alternation member (githubusercontent, codeload, objects.github, release-assets, pkg.github.com, ghcr.io) flags a synthetic positive, case-insensitively"
 else
@@ -1614,10 +1614,10 @@ ga_fx() {   # ga_fx <name> -> GA_D = a fresh scenario dir holding the healthy fi
 ga_calls_n() { { grep -c '' "$GA_D/get_element_calls" 2>/dev/null || true; } | head -n1; }   # recorded `nft get element` calls (incl. the 1 positive control)
 ga_inconclusive_ok() {   # ga_inconclusive_ok <rc ERE> -> 0 iff exit 0, loud inconclusive WARNING naming rc, NO held-ok, NO fatal sentinel
   [[ "$GA_RC" -eq 0 ]] \
-    && echo "$GA_OUT" | grep -qE "WARNING: ghcr-frontend-inconclusive [(]rc=($1)[)]" \
-    && ! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' \
-    && ! echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable' \
-    && echo "$GA_OUT" | grep -qx 'host-egress-ok'
+    && grep -qE "WARNING: ghcr-frontend-inconclusive [(]rc=($1)[)]" <<<"$GA_OUT" \
+    && ! grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" \
+    && ! grep -q 'ASSERT-FAILED: ghcr-frontend-reachable' <<<"$GA_OUT" \
+    && grep -qx 'host-egress-ok' <<<"$GA_OUT"
 }
 # Fixture CIDR file: a /31 and a /32 carved out of the 140.82.121.0 neighbourhood (synthetic, RFC
 # values chosen only for shape) plus the remainder prefixes; the set file is the file's allow
@@ -1644,8 +1644,8 @@ GA_D="$(ga_setup healthy)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -eq 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -qx 'host-egress-ok' || GA_OK=0
-echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+grep -qx 'host-egress-ok' <<<"$GA_OUT" || GA_OK=0
+grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
 grep -q -- '--resolve ghcr.io:443:140.82.121.32 ' "$GA_D/docker_exec_calls" 2>/dev/null || GA_OK=0
 ga_row "post-apply assert: healthy carve -> exit 0, host-egress-ok, live probe pinned to the first excluded address" "$GA_OK"
 # Curl contract (B4): the WHOLE argv the container sees, anchored as one exact line (-q first, --noproxy,
@@ -1667,7 +1667,7 @@ GA_D="$(ga_setup noheader)"; assert_fixture_dir "$GA_D"; ga_cidr_ok | grep -v '^
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-header-absent' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-header-absent' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: no Excluded header -> ASSERT-FAILED: ghcr-carve-header-absent, non-zero exit" "$GA_OK"
 
 # Row B2: the default-drop LOG rule survives but the terminal drop is gone -> default-drop sentinel (the log rule's
@@ -1676,7 +1676,7 @@ GA_D="$(ga_setup nodrop)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_NODROP=1
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: default-drop' || GA_OK=0
+grep -q 'ASSERT-FAILED: default-drop' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: log rule present but terminal drop gone -> ASSERT-FAILED: default-drop, non-zero exit" "$GA_OK"
 
 # Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
@@ -1684,7 +1684,7 @@ GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_JUMPOLD=1
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: docker-user-jump' || GA_OK=0
+grep -q 'ASSERT-FAILED: docker-user-jump' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: a jump to SOLEUR-EGRESS-OLD is not our jump -> ASSERT-FAILED: docker-user-jump, non-zero exit" "$GA_OK"
 
 # Row C: an excluded address is present in the LIVE set (stale set / loader not reloaded) ->
@@ -1694,14 +1694,14 @@ GA_D="$(ga_setup leak)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.tx
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.33 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.33 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: second address of an excluded /31 present in the live set -> ASSERT-FAILED: ghcr-carve-live-set 140.82.121.33" "$GA_OK"
 # Row C2: the LAST excluded prefix leaks (a loop that stops after the first prefix passes this).
 GA_D="$(ga_setup leaklast)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; { ga_set_of "$GA_D/cidr.txt"; echo "192.30.255.164/32"; } > "$GA_D/set.txt"
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 192.30.255.164 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 192.30.255.164 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: the LAST excluded prefix leaking is also caught (every prefix is walked)" "$GA_OK"
 
 # Row D: POSITIVE CONTROL. The set is missing/empty (nft errors on every get element): without the
@@ -1710,7 +1710,7 @@ GA_D="$(ga_setup deadset)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set (positive control' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set (positive control' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: missing/empty set -> positive control fails (ghcr-carve-live-set), not a vacuous pass" "$GA_OK"
 
 # Row E: the live end-to-end probe CONNECTS (time_connect > 0) -> ghcr-frontend-reachable.
@@ -1718,7 +1718,7 @@ ga_fx reachable
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT=0.021 GA_GHCR_RC=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: probe completes a handshake (time_connect 0.021) -> ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32" "$GA_OK"
 # Row E2/E3 bind the verdict to the FIELD the script asks curl for: the shim renders the -w format it
 # receives. A handshake that completed before a later phase timed out (rc 28, time_connect 0.021) is a
@@ -1728,21 +1728,21 @@ ga_fx e2
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TC=0.021 GA_NL=0 GA_GHCR_RC=28
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
-! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
+! grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: rc 28 with time_connect 0.021 (handshake done, later phase timed out) is a connect, not a drop (field-bound)" "$GA_OK"
 ga_fx e3
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TC=0 GA_NL=0.9 GA_GHCR_RC=28
 GA_OK=1
 [[ "$GA_RC" -eq 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
-! echo "$GA_OUT" | grep -q 'ASSERT-FAILED' || GA_OK=0
+grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
+! grep -q 'ASSERT-FAILED' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: rc 28 + time_connect 0 (time_namelookup 0.9) -> held, ghcr-frontend-held-ok (field-bound, the other direction)" "$GA_OK"
 ga_fx e4
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT= GA_GHCR_RC=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: curl exit 0 (a full response from an excluded frontend) is fatal even with empty output" "$GA_OK"
 
 # Row F: hostile / unprovable probe output. A binary inside a possibly compromised container writes it;
@@ -1792,14 +1792,14 @@ GA_D="$(ga_setup fresh)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.t
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_CONTAINER=0
 GA_OK=1
 [[ "$GA_RC" -eq 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'WARNING: .*ghcr-frontend-reachable probe SKIPPED' || GA_OK=0
+grep -q 'WARNING: .*ghcr-frontend-reachable probe SKIPPED' <<<"$GA_OUT" || GA_OK=0
 [[ ! -e "$GA_D/docker_exec_calls" ]] || GA_OK=0
 ga_row "post-apply assert: container absent -> live probe skipped with a LOUD warning, exit 0" "$GA_OK"
 GA_D="$(ga_setup freshleak)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; { ga_set_of "$GA_D/cidr.txt"; echo "140.82.121.32/32"; } > "$GA_D/set.txt"
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_CONTAINER=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.32 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: container absent but an excluded address leaked -> the nft checks still fail the apply" "$GA_OK"
 
 # Row H: a malformed, over-broad or MISALIGNED Excluded prefix must not drive a nft loop (a /16 would be
@@ -1813,9 +1813,9 @@ ga_bad_header_row() {   # ga_bad_header_row <name> <bad-header-cidr> -> GA_OK (1
   ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
   GA_OK=1
   [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-  echo "$GA_OUT" | grep -qF "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $2)" || GA_OK=0
+  grep -qF "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $2)" <<<"$GA_OUT" || GA_OK=0
   [[ "$(ga_calls_n)" -eq 1 ]] || GA_OK=0
-  ! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+  ! grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
 }
 ga_bad_header_row broad 10.0.0.0/24
 ga_row "post-apply assert: an over-broad Excluded prefix (/24, 256 addresses) is rejected before any nft loop" "$GA_OK"
@@ -1864,13 +1864,13 @@ ga_row "post-apply assert: a /29 and a /28 hole -> nft is asked for exactly 2^(3
 ga_card_setup cardleak29 198.51.100.12
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 198.51.100.12 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 198.51.100.12 ' <<<"$GA_OUT" || GA_OK=0
 [[ "$(ga_calls_n)" -eq 6 ]] || GA_OK=0   # control + .8 .9 .10 .11 .12 then the walk stops
 ga_row "post-apply assert: a leak at a MIDDLE address of an excluded /29 (.12) is named and stops the walk there" "$GA_OK"
 ga_card_setup cardleak28 203.0.113.23
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 203.0.113.23 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 203.0.113.23 ' <<<"$GA_OUT" || GA_OK=0
 [[ "$(ga_calls_n)" -eq 17 ]] || GA_OK=0   # control + all 8 of the /29 + .16 .. .23 of the /28
 ga_row "post-apply assert: a leak at a MIDDLE address of an excluded /28 (.23, after a fully walked /29) is named" "$GA_OK"
 
