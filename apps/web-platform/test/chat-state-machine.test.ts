@@ -971,7 +971,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
     const prev: ChatMessage[] = [
       toolUseMessage("cpo", { retrying: true, livenessRearms: 2 }),
     ];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, {
       type: "debug_event",
