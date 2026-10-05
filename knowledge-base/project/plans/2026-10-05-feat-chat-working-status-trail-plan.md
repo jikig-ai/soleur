@@ -276,9 +276,9 @@ discoverability_test:
 - [ ] **PR1:** boundary test replaces `ws-known-types-guard.test.ts` — bogus
   type → `ws-unknown-event` breadcrumb + no dispatch; valid
   `reasoning_narration` → `set_live_narration`.
-- [ ] **PR1:** `soleur:incident` PIR filed + linked before merge, naming all
-  7 actually-dropped paths (incl. `autonomous_posture`, `revocation_notice`,
-  `stream_replay`) and the ~4-month silent window.
+- [x] ~~**PR1:** `soleur:incident` PIR filed + linked before merge~~ — SKIPPED
+  by operator decision 2026-10-05 (draft was written + sentinel-cleared;
+  operator chose not to commit it. Draft preserved at /tmp/pir-draft.md).
 - [ ] **PR2:** exactly one in-turn status surface — standalone
   `live-narration` slot deleted; no second "Working" box after
   navigate-away-and-return (transitional bubbles sweep to
