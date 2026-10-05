@@ -45,6 +45,7 @@ const {
   mockEnsureWorkspaceRepoCloned,
   mockResolveC4FlagEnabled,
   mockWriteC4Diagram,
+  mockGetSessionMessages,
 } = vi.hoisted(() => ({
   mockResolveC4FlagEnabled: vi.fn(async () => false),
   mockWriteC4Diagram: vi.fn(),
@@ -76,6 +77,11 @@ const {
   // installation-id the clone receives is inspectable — the load-bearing
   // assertion for the clone-consumes-self-healed-install fix.
   mockEnsureWorkspaceRepoCloned: vi.fn(async () => undefined),
+  // #9538 — named so a test can override the default `[]`: since the cc
+  // caller now passes `dropResumeOnEmptyHistory: true`, `[]` drops the
+  // resume id, so a test that wants resume to survive supplies a live
+  // user-terminated history instead.
+  mockGetSessionMessages: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -85,7 +91,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   // empty-history branch from blocking these tests and matches the
   // behavior asserted by the prefill-guard test file's empty-history
   // scenario.
-  getSessionMessages: vi.fn().mockResolvedValue([]),
+  getSessionMessages: mockGetSessionMessages,
   // Return inspectable shapes so the soleur_platform always-build assertion
   // (#5370 T2) can read tool names off the registered server. `tool(name,…)`
   // → `{ name, handler }` — the handler passthrough lets the #8739 emit-seam
@@ -1452,6 +1458,12 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
   // Resume key: when resumeSessionId provided, options.resume is set.
   // -------------------------------------------------------------------------
   it("threads resumeSessionId into options.resume when present", async () => {
+    // #9538 — the cc call site now passes `dropResumeOnEmptyHistory: true`,
+    // so the default `[]` probe would drop the resume id. Give the guard a
+    // live user-terminated session so `resume:` survives.
+    mockGetSessionMessages.mockResolvedValueOnce([
+      { type: "user", uuid: "u1", session_id: "sess-abc", message: {}, parent_tool_use_id: null },
+    ]);
     await realSdkQueryFactory(makeArgs({ resumeSessionId: "sess-abc" }));
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBe("sess-abc");

@@ -949,6 +949,27 @@ export interface DispatchEvents {
     toolName: string;
     elapsedSeconds: number;
   }) => void;
+  /**
+   * #9538 — mid-stream stale-resume signal. Fires from `consumeStream`'s
+   * catch when the SDK iterator throws the dead-session signature
+   * (`No conversation found with session ID`) on a dispatch that
+   * attempted a `resume:` (`state.sessionId` set). The cc-dispatcher
+   * wires this to clear `conversations.session_id`, emit the
+   * `context_reset` honesty frame, and re-dispatch the turn cold — the
+   * mid-stream counterpart to the dispatch-time `clearCcSessionId`
+   * (#3266 R7). Optional + fire-and-forget: non-cc callers and existing
+   * tests ignore it; the runner `try/catch`es the invocation so a
+   * throwing listener mirrors to Sentry rather than escaping the catch.
+   * NOT a `WorkflowEnd` variant — this path emits no `internal_error`,
+   * so it must not route through `onWorkflowEnded`'s terminal handling.
+   *
+   * **Load-bearing ordering:** the callback fires BEFORE `closeQuery`'s
+   * `activeQueries.delete`. A listener that re-dispatches MUST defer
+   * (microtask) past the delete — a synchronous re-dispatch hits the
+   * still-present dying entry, takes the `queryReused` path, and pushes
+   * the user message into a closed input queue (silently lost).
+   */
+  onStaleResume?: (info: { deadSessionId: string | null }) => void;
 }
 
 export interface DispatchArgs {
@@ -1035,6 +1056,15 @@ export interface DispatchArgs {
    * Forwarded straight through to `QueryFactoryArgs.setBashAutonomous`.
    */
   setBashAutonomous?: (autonomous: boolean) => void;
+  /**
+   * #9538 — single-turn context-reset notice carried by the dispatcher's
+   * stale-resume re-dispatch (the prefill guard did not fire — the
+   * session died mid-stream — so `realSdkQueryFactory`'s guard-driven
+   * notice path never runs). Forwarded straight through to
+   * `QueryFactoryArgs.contextResetNotice`, which appends it to
+   * `effectiveSystemPrompt` at the existing notice site.
+   */
+  contextResetNotice?: string;
 }
 
 export interface DispatchResult {
@@ -1119,6 +1149,13 @@ export interface QueryFactoryArgs {
   documentExtractMeta?: DocumentExtractMeta;
   /** 2026-05-06 Bug A1: absolute-path Read directive support. See `DispatchArgs.workspacePath`. */
   workspacePath?: string;
+  /**
+   * #9538 — dispatcher-supplied context-reset notice (stale-resume
+   * re-dispatch). `realSdkQueryFactory` appends it to the system prompt
+   * at the same site as the prefill guard's `contextResetNotice`.
+   * Factories that do not handle it may ignore the field.
+   */
+  contextResetNotice?: string;
 }
 
 export type QueryFactory = (args: QueryFactoryArgs) => Promise<Query> | Query;
@@ -2538,18 +2575,66 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // are ignored at V1. V2 will route stream_event → WS cumulative deltas.
       }
     } catch (err) {
+      // #9538 — mid-stream stale-resume. A persisted `session_id` that
+      // points at a deleted/rotated SDK session constructs `query({
+      // resume })` fine and dies HERE, inside the iterator — past the
+      // dispatch-time catch that already clears the column (R7). The
+      // `state.sessionId` gate is load-bearing: the signature only means
+      // "dead resume" when a resume was actually attempted (a warm
+      // `queryReused` turn never re-resumes, so no `queryReused` check is
+      // needed). This arm must NOT emit `internal_error` — the terminal
+      // `session_ended` disables client input while the stale
+      // `conversations.session_id` survives, so every retry reproduces
+      // the same failure forever at zero tokens. It must NOT
+      // `reportSilentFallback` either — expected operational behavior,
+      // same reasoning as the legacy `agent-runner.ts` re-throw arm.
+      const isStaleResume =
+        err instanceof Error &&
+        err.message.includes("No conversation found with session ID") &&
+        !!state.sessionId;
       if (!state.closed) {
-        // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
-        // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
-        // by throwing through the for-await. When `cause === "denied_jti"`
-        // the session is irrecoverably revoked; emit the discriminated
-        // `session_revoked` terminal status so cc-dispatcher routes it
-        // through the terminal `session_ended` family and agent/API
-        // consumers receive the operator-supplied reason instead of a
-        // generic "Something went wrong". Best-effort RPC: a null status
-        // here just leaves reason/deniedAt null (the helper already
-        // mirrored any RPC failure to Sentry).
-        if (
+        if (isStaleResume) {
+          // Warn-tier occurrence marker (NOT error tier): the Sentry warn
+          // stream counts recoveries; `extra.conversationId` groups repeat
+          // fires so a clear that did not land is distinguishable from a
+          // new dead session.
+          warnSilentFallback(null, {
+            feature: "soleur-go-runner",
+            op: "stale-resume-recovery",
+            message:
+              "stale resume — cleared session_id and re-dispatching cold",
+            extra: {
+              conversationId: state.conversationId,
+              deadSessionId: state.sessionId,
+            },
+          });
+          state.closed = true;
+          // Fires BEFORE closeQuery's `activeQueries.delete` — the
+          // listener's re-dispatch MUST defer to a microtask (see the
+          // DispatchEvents.onStaleResume docstring).
+          try {
+            state.events.onStaleResume?.({
+              deadSessionId: state.sessionId,
+            });
+          } catch (listenerErr) {
+            reportSilentFallback(listenerErr, {
+              feature: "soleur-go-runner",
+              op: "onStaleResume",
+              extra: { conversationId: state.conversationId },
+            });
+          }
+          closeQuery(state);
+        } else if (
+          // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
+          // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
+          // by throwing through the for-await. When `cause === "denied_jti"`
+          // the session is irrecoverably revoked; emit the discriminated
+          // `session_revoked` terminal status so cc-dispatcher routes it
+          // through the terminal `session_ended` family and agent/API
+          // consumers receive the operator-supplied reason instead of a
+          // generic "Something went wrong". Best-effort RPC: a null status
+          // here just leaves reason/deniedAt null (the helper already
+          // mirrored any RPC failure to Sentry).
           err instanceof RuntimeAuthError &&
           err.cause === "denied_jti"
         ) {
@@ -2566,11 +2651,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           });
         }
       }
-      reportSilentFallback(err, {
-        feature: "soleur-go-runner",
-        op: "consumeStream",
-        extra: { conversationId: state.conversationId },
-      });
+      if (!isStaleResume) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "consumeStream",
+          extra: { conversationId: state.conversationId },
+        });
+      }
     }
   }
 
@@ -2660,6 +2747,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // sink so the factory publishes `bashAutonomous` to the
           // dispatcher's command_stream emit gate (D1).
           setBashAutonomous: args.setBashAutonomous,
+          // #9538 — stale-resume re-dispatch carries a reset notice for
+          // the factory's system-prompt append site.
+          contextResetNotice: args.contextResetNotice,
         });
       } catch (err) {
         // #5394 — a RepoNotReadyError (repo cloning/error) is an expected,

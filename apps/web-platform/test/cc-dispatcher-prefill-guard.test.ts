@@ -341,6 +341,19 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     expect(opts.resume).toBe("s");
   });
 
+  // #9538 — the cc caller opts into `dropResumeOnEmptyHistory`: `[]` for a
+  // known resumeSessionId is the deleted/rotated-file shape and the cc path
+  // has no `messages`-replay primitive, so a crash-and-retry cycle is
+  // strictly worse than a clean cold start with the reset notice.
+  it("passes dropResumeOnEmptyHistory: true on the cc call site", async () => {
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    expect(mockApplyPrefillGuard).toHaveBeenCalledOnce();
+    expect(
+      mockApplyPrefillGuard.mock.calls[0][0].dropResumeOnEmptyHistory,
+    ).toBe(true);
+  });
+
   it("invokes the helper even when resumeSessionId is undefined (helper short-circuits)", async () => {
     await realSdkQueryFactory(makeArgs());
 

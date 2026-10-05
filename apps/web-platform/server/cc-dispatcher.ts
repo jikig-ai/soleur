@@ -36,7 +36,10 @@ import {
   type Role,
 } from "@/lib/feature-flags/server";
 
-import { applyPrefillGuard } from "./agent-prefill-guard";
+import {
+  applyPrefillGuard,
+  CONTEXT_RESET_NOTICE_GENERIC,
+} from "./agent-prefill-guard";
 
 import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
@@ -2450,6 +2453,13 @@ export const realSdkQueryFactory: QueryFactory = async (
     conversationId: args.conversationId,
     feature: "cc-concierge",
     leaderId: CC_ROUTER_LEADER_ID,
+    // #9538 — `[]` for a known resumeSessionId is the deleted/rotated-file
+    // shape and the cc path has no `messages`-replay primitive, so passing
+    // `resume:` through dies mid-stream in the SDK iterator. Drop it
+    // in-turn instead — the `context_reset` notice + frame below cover the
+    // honesty contract. Legacy `agent-runner` keeps pass-through (its
+    // `.catch` replay restores full `messages` history).
+    dropResumeOnEmptyHistory: true,
   });
   const prefillGuardResult = mode.runRepoLifecycle
     ? (await Promise.all([patchWorkspacePermissions(workspacePath), prefillGuardPromise]))[1]
@@ -2476,6 +2486,12 @@ export const realSdkQueryFactory: QueryFactory = async (
   let effectiveSystemPrompt = contextResetNotice
     ? `${args.systemPrompt}\n\n${contextResetNotice}`
     : args.systemPrompt;
+  // #9538 — dispatcher-driven stale-resume re-dispatch carries its own
+  // notice (the guard did not fire on this invocation — the session died
+  // mid-stream on the PREVIOUS turn), so append it at the same site.
+  if (args.contextResetNotice) {
+    effectiveSystemPrompt += `\n\n${args.contextResetNotice}`;
+  }
   // Only advertise edit_c4_diagram when it was actually registered above
   // (flag on + connected repo), mirroring agent-runner's capability-gated
   // prompt sections so the model isn't told about a tool it cannot call.
@@ -4236,6 +4252,106 @@ export async function dispatchSoleurGo(
         userId,
         conversationId,
         sessionId: capturedSessionId,
+      });
+    },
+    onStaleResume: (_info) => {
+      // #9538 — mid-stream stale-resume recovery. The runner's
+      // `consumeStream` catch fired this instead of a terminal
+      // `internal_error` (which would leave `conversations.session_id`
+      // pointing at the dead session and wedge every subsequent send).
+      // Belt-guard on the dispatch arg: only a dispatch that attempted a
+      // resume can produce this signature — the runner's own
+      // `state.sessionId` gate is the primary check.
+      if (!sessionId) return;
+      // Honesty frame FIRST — the client sees the existing
+      // `context_reset` contract (reason "prefill-guard" is the
+      // sanctioned reuse; the wire copy is generic and accurate), not
+      // silent amnesia or an `internal_error`.
+      sendToClient(userId, {
+        type: "context_reset",
+        reason: "prefill-guard",
+        conversationId,
+      });
+      // Clear the stale id: in-process cache AND DB, same pair the
+      // dispatch-time stale-clear uses (R7). Fire-and-forget — the
+      // in-memory `state.sessionId` is already dead with the query.
+      onSessionIdPersisted?.(null);
+      void clearCcSessionId({ userId, conversationId });
+      // DEFERRED (microtask), load-bearing: this callback runs BEFORE
+      // `closeQuery`'s `activeQueries.delete` in the runner's catch. A
+      // synchronous `runner.dispatch` here would hit the still-present
+      // dying entry, take the `queryReused` path, and push the user
+      // message into a closed input queue — silently lost. The retry is
+      // bounded: `sessionId: undefined` means no `resume:` is attempted,
+      // so the stale signature cannot re-fire on the retried turn.
+      queueMicrotask(() => {
+        void runner
+          .dispatch({
+            conversationId,
+            userId,
+            userMessage,
+            currentRouting,
+            events,
+            persistActiveWorkflow,
+            sessionId: undefined,
+            contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC,
+            routineAuthoring: args.routineAuthoring,
+            crmLead: args.crmLead,
+            persona: args.persona,
+            artifactPath,
+            documentKind,
+            documentContent,
+            documentExtractError,
+            documentExtractMeta,
+            setDelegationContext,
+            setBashAutonomous,
+            workspacePath: callerWorkspacePath ?? workspacePath,
+          })
+          .catch(async (retryErr) => {
+            // Retry-failure contract mirrors the dispatch-time catch:
+            // mirror (no KeyInvalidError discrimination needed — the
+            // retry's own dispatch catch does not run here), generic
+            // client frame, and `active` → `failed` revert guarded on
+            // `hasActiveCcQuery` so a concurrent live turn's row is left
+            // untouched. Does NOT clear session_id again — the stale id
+            // is already gone and the retry ran cold.
+            mirrorWithDebounce(
+              retryErr,
+              {
+                feature: "cc-dispatcher",
+                op: "stale-resume-retry",
+                extra: { conversationId, userId },
+              },
+              userId,
+              `stale-resume-retry:${
+                retryErr instanceof Error
+                  ? retryErr.constructor.name
+                  : "unknown"
+              }`,
+            );
+            sendToClient(userId, {
+              type: "error",
+              message:
+                "Dashboard router is unavailable — try again shortly.",
+            });
+            if (!hasActiveCcQuery(conversationId)) {
+              try {
+                await updateConversationFor(
+                  userId,
+                  conversationId,
+                  { status: "failed" },
+                  {
+                    feature: "cc-dispatcher",
+                    op: "stale-resume-retry-revert",
+                    onlyIfStatusIn: ["active"],
+                    expectMatch: false,
+                  },
+                );
+              } catch {
+                // Mirror already fired inside updateConversationFor.
+              }
+            }
+          });
       });
     },
   };
