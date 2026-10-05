@@ -121,7 +121,8 @@ The published statement "the heartbeat is the likely cause" was made before this
      So slot 0 is not "non-blocking": it may block up to the budget, and only for a same-session or unknown owner.
    - A `SingletonLock` that names a live Chrome means a leftover or foreign Chrome owns the profile: the slot is skipped, never
      cleared (slot 0 gets the same wait-then-recheck). The probe fails toward busy and needs no `ps`: `/proc/<pid>` or `kill -0`
-     (EPERM counts as alive); a live pid counts as a Chrome owner only when its comm is chrome-like (or unreadable), otherwise the
+     (EPERM counts as alive); a live pid counts as a Chrome owner only when its comm is chrome-like (`chrom*`, `headless_shell`, or the Chromium derivatives
+     edge, brave, vivaldi, opera) or unreadable, otherwise the
      pid was recycled and the stale lock is cleared; a lock naming ANOTHER HOST is never removed (so a renamed host or a copied
      home leaves slot 0 skipped until `rm <slot-0 dir>/Singleton*` is run by hand, see `agent-browser/SKILL.md`). A `SingletonLock`
      whose pid is not a positive integer (non-numeric, zero, or out of range) names no owner and counts as stale, which is the
