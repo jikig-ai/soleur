@@ -366,15 +366,6 @@ export function pushActivity(
 }
 
 /**
- * feat-concierge-activity-trail (#9515): fold the superseded `liveNarration`
- * line into the tip text bubble's `activity[]` as a "narration" step.
- * Tip = the sole active stream's bubble when unambiguous, else the newest
- * live-ish-or-done text bubble — the turn-end fold lands on the JUST-
- * terminalized bubble so the final narration is never dropped (bounded by
- * the user barrier: it can never attach to a LATER turn's record).
- * Returns `{messages, folded}` — `folded:false` when nothing could hold it.
- */
-/**
  * #9515 follow-up — a `stream` event REPLACES the bubble's content per text
  * block (W8); intermediate "reasoning" paragraphs were silently overwritten
  * while the append-only debug stream kept them. When the incoming content is
@@ -402,6 +393,15 @@ function foldReplacedText(
   });
 }
 
+/**
+ * feat-concierge-activity-trail (#9515): fold the superseded `liveNarration`
+ * line into the tip text bubble's `activity[]` as a "narration" step.
+ * Tip = the sole active stream's bubble when unambiguous, else the newest
+ * live-ish-or-done text bubble — the turn-end fold lands on the JUST-
+ * terminalized bubble so the final narration is never dropped (bounded by
+ * the user barrier: it can never attach to a LATER turn's record).
+ * Returns `{messages, folded}` — `folded:false` when nothing could hold it.
+ */
 export function foldNarrationIntoTrail(
   messages: ChatMessage[],
   activeStreams: Map<DomainLeaderId, string>,
@@ -1267,7 +1267,7 @@ export function applyStreamEvent(
             activity: foldReplacedText(
               working[errIdx].content,
               event.content,
-              undefined,
+              working[errIdx].activity,
             ),
           },
         );
