@@ -49,16 +49,24 @@
 # the workflow's own `printf | ssh` take the signal — which no line search sees; the late-producer and
 # non-draining-stub rows in that suite hold it. The runtime SIGPIPE control for this class lives in
 # tests/scripts/test-sentry-full-root-apply.sh (T4: `yes | grep -q y`, the `type -t grep` shim guard).
-# The REST of scripts/ and plugins/ is still out of scope — ~800 sites repo-wide,
-# tracked in #7005. #7024 was a slice of that corpus, not a peer of it.
+# THE DERIVED SWEEP (#9217, #6601, #7005) replaced "the rest of scripts/ and plugins/ is out of scope". scan_sweep
+# derives its own population: every non-ignored file with a covered extension (.sh .bash .bats .yml .yaml .tf
+# .template .js; knowledge-base/ and this file excluded), asserted ZERO outside SWEEP_DEFERRALS. A new file under a
+# new directory is in the population without any edit; an extensionless script with a shebang is not (stated limit).
+# The named FILES_* passes below stay as they are: they pin the SUITES whose incidents made this class, and carry the
+# affected-paths wiring. The sweep is a line search, so a name in a comment is handled by the comment filter and the
+# per-line marker, never by widening a glob. To take a deferred subtree to zero: convert it and delete its row.
 #
-# THE PATHSPEC CANNOT SIMPLY BE WIDENED TO scripts/ OR plugins/. This pattern matches
-# COMMENTS as well as code — it is a text search, not a parse — so a wider sweep starts
-# matching prose that merely NAMES the forbidden shape, including this file's own
-# non-vacuity probe below and the learning file that documents the bug. Zero is
-# enforceable here precisely because the pathspec is narrow and each member was taken to
-# zero deliberately. Growth happens by adding a named file, never by widening a glob.
-
+# THE FORMS (pick by what the site reads; the FAIL message prints the same table):
+#   echo/printf "$V" | grep -q P   ->  grep -q P <<<"$V"
+#       (printf '%s' with an empty-capable body, -v, or a -x/-F variable pattern: grep -q P < <(printf '%s' "$V"))
+#   producer | grep -q P           ->  grep -q P < <(producer)     read-only producer in a condition; its status is dropped
+#   cat FILE | grep -q P           ->  grep -q P FILE
+#   a bare pipeline under set -e, a side-effecting producer or a function that mutates state
+#                                  ->  out=$(producer); grep -q P <<<"$out"   keeps the status and waits for the producer
+#   a line that must show the shape  ->  append  # sigpipe-demo: intentional
+# A gate whose MISS skips a check must route a grep that could not run (rc above 1) to the gate, not to "clean".
+#
 set -euo pipefail
 
 # Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
@@ -92,12 +100,24 @@ PATTERN_AWK_EXIT='(^|[^|])\|&?[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_
 # against SIGPIPE in general — `-c` reads all its input. Bare `| grep -c` is deliberately NOT
 # matched: it is the safe counting form this file's header recommends.
 PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+--([[:space:]]|$)'
-# Not matched (no instance in the scanned paths today): command/env/\grep/egrep/rg wrappers
-# (`LC_ALL=C grep -q`, `timeout 5 grep -q`, `/usr/bin/grep -q`), grep inside { } or ( ), flags AFTER the
-# pattern or after an argument-taking flag (`grep -e p -q`, `grep -A1 -q p`), `grep -l`, a pipe split
-# across lines, and `| head` / `| sed 1q` / `| read` / a multi-line awk program (the #8664 files keep 19
-# one-line `| head -1` sites whose producers are single short writes; the three #7376 suites keep ~17).
-# Widening is tracked in #7005.
+# WHAT PATTERN_V2 CLOSES (the sweep only; the named passes keep PATTERN): the wrappers command|builtin|exec|env|nice|
+# stdbuf -x|timeout N and VAR=x (6 real sites when measured, all `LC_ALL=C grep -q`), `\grep`, an absolute path, egrep and
+# fgrep, a reader inside { } (4) or ( ), long flags, and an argument-taking flag before the early-exit flag
+# (`grep -e P -q`, `grep -A 1 -q P`; 0 real sites, so --regexp is not added).
+# WHAT A LINE REGEX CANNOT CLOSE, with the count measured on 2026-10-05 over the swept population (code lines,
+# comments dropped, this file excluded; the command is `git grep --no-index --exclude-standard -anE <regex>` over the same
+# pathspec as scan_sweep). Re-measure before quoting a figure; counts rot.
+#   | head -N          1561 lines, 1022 of them `head -1`. Dangerous only where the site is a bare pipeline under set -e and
+#                      the producer writes more than a few KB; harmless on a short single-write producer. A count ratchet
+#                      would churn on every legitimate site and buy no property, so this is a review item, not a gate.
+#   | awk '... exit'     59 single-line stages (PATTERN_AWK_EXIT sees them in the named passes); a multi-line awk program is not seen
+#   | read                3 lines;  | sed ...q   0 lines
+#   a pipe split across lines   0 today (the one that existed was converted by hand)
+#   a reader reached through a variable ("$GREP" -q), a wrapper with its own flags (env -i, nice -n 10, timeout -s KILL 5,
+#   /usr/bin/env grep, sudo, xargs), a pipe into a function that wraps grep, and a procsub-out reader (cmd > >(grep -q ...)):
+#   0 sites each today. Known false positive: a quoted -e pattern containing a space and the text -q (0 repo hits).
+# THE PRODUCER SIDE of the pipe (a stub that never reads the stdin a `printf |` feeds it, so the writer takes the signal) is
+# invisible to any line search: it needs a join from each production pipe to the owning suite's stub. Tracked in #9217.
 
 # PATTERN_V2 is the widened reader pattern the DERIVED SWEEP (scan_sweep, below) uses. The four named
 # passes above keep PATTERN, so none of them can turn red on a spelling they never carried. Five parts so
@@ -117,10 +137,11 @@ PATTERN_V2="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}"
 # A PATTERN that does not compile must not read as "no hits": every grep below
 # folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
 # checks having scanned nothing (#8807 review).
-for _pat in "$PATTERN" "$PATTERN_AWK_EXIT" "$PATTERN_PIPED_SCORER" "$PATTERN_V2"; do
+for _name in PATTERN PATTERN_AWK_EXIT PATTERN_PIPED_SCORER PATTERN_V2; do
+  _pat="${!_name}"
   rc=0; grep -E -- "$_pat" </dev/null >/dev/null 2>&1 || rc=$?
   if [[ "$rc" -ne 1 ]]; then
-    echo "UNRESOLVED: a guard pattern does not compile as an ERE (grep rc=$rc) — this suite asserted nothing"
+    echo "UNRESOLVED: $_name does not compile as an ERE (grep rc=$rc) — this suite asserted nothing"
     exit 3
   fi
 done
@@ -753,6 +774,12 @@ own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2');
 [[ "$own" == *"DEFERRED: a/b/* (1 hits"* && "$own" == *"DEFERRED: a/* (1 hits"* && "$own" == *"SWEEP_FAIL=0" ]] \
   || sweep_probe_fail+=("deferral-owner: first-match-wins did not give each overlapping row its own hit")
 
+# A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
+# `sweep_probe_fail+=(...)`, so the count of those lines in this file is the count of checks.
+SWEEP_PROBE_CHECKS=19
+probe_checks=$(grep -c 'sweep_probe_fail+=(' "${BASH_SOURCE[0]}" || true)
+[[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
+  || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
 if (( ${#sweep_probe_fail[@]} == 0 )); then
   echo "PASS: grep-q-sweep-probe-pass (PATTERN_V2 fixtures, sweep wiring, deferral checks)"
 else
