@@ -520,9 +520,8 @@ describe("reasoning blocks fold into the trail on replace", () => {
       partial: true,
     } as any);
     const m = r.messages[0] as any;
-    expect(m.activity?.[m.activity.length - 1]?.label).toBe(
-      "Triaged the open PRs and changed nothing.",
-    );
+    const narration = (m.activity as any[]).find((e) => e.kind === "narration");
+    expect(narration.label).toBe("Triaged the open PRs and changed nothing.");
   });
 
   test("empty prior content folds nothing", () => {
@@ -537,5 +536,59 @@ describe("reasoning blocks fold into the trail on replace", () => {
     // block must produce nothing.
     const acts = (r.messages[0] as any).activity ?? [];
     expect(acts.filter((e: any) => e.kind === "narration")).toHaveLength(0);
+  });
+});
+
+describe("reasoning fold — ordering + rebind", () => {
+  test("text fold precedes the tool step it chronologically predates", () => {
+    // text block 1 → tool_use → text block 2: trail order must be
+    // [block-1 reasoning, tool label], not [tool label, block-1].
+    const prev = [
+      liveBubble(CC, {
+        state: "streaming",
+        content: "First reasoning paragraph.",
+      }),
+    ];
+    const afterTool = applyStreamEvent(
+      prev,
+      streams([[CC, "stream-cc_router-1"]]),
+      { type: "tool_use", leaderId: CC, label: "Searching code", toolUseId: "t1" } as any,
+    );
+    const r = applyStreamEvent(
+      afterTool.messages,
+      afterTool.activeStreams,
+      { type: "stream", leaderId: CC, content: "Second paragraph.", partial: true } as any,
+    );
+    const acts = (r.messages[0] as any).activity as any[];
+    // Chronology pin: the reasoning entry precedes the tool step that
+    // superseded it (the fixture's default toolLabel folds earlier).
+    const textIdx = acts.findIndex((e) => e.label === "First reasoning paragraph.");
+    const toolIdx = acts.findIndex((e) => e.label === "Searching code");
+    expect(textIdx).toBeGreaterThanOrEqual(0);
+    expect(toolIdx).toBeGreaterThan(textIdx);
+  });
+
+  test("interrupted-rebind folds the stale block into the trail", () => {
+    const prev = [
+      liveBubble(CC, {
+        state: undefined,
+        interrupted: true,
+        content: "Reasoning before the flap.",
+      }),
+    ];
+    const r = applyStreamEvent(prev, new Map(), {
+      type: "stream",
+      leaderId: CC,
+      content: "Fresh block after reconnect.",
+      partial: true,
+    } as any);
+    const m = r.messages[0] as any;
+    expect(
+      m.activity?.some(
+        (e: any) =>
+          e.kind === "narration" && e.label === "Reasoning before the flap.",
+      ),
+    ).toBe(true);
+    expect(m.content).toBe("Fresh block after reconnect.");
   });
 });

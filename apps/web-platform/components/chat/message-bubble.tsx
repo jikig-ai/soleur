@@ -135,12 +135,6 @@ export const MessageBubble = memo(function MessageBubble({
   /** #3448 PR2: aborted-turn snapshot. Required when `status === "aborted"`;
    *  ignored otherwise. */
   usage?: AbortMarkerUsage | null;
-  /** feat-concierge-stream-commands — inline streamed-terminal blocks for
-   *  Concierge Bash tool-uses (cc_router). Append-only; rendered below the
-   *  bubble content as monospace `<pre>` blocks, Claude-Code-terminal style,
-   *  with NO Approve/Deny buttons. Each block's command/output is redacted
-   *  again at render (belt-and-suspenders Art. 14 gate). Empty/undefined on
-   *  bubbles that ran no commands. */
   /** #9515 — session-only in-turn step history (dimmed priors). Rendered
    *  only while the bubble is live-ish (transitional state or
    *  `interrupted`) — done/error/hydrated bubbles skip it, so teardown

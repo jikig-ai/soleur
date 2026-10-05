@@ -58,6 +58,10 @@ interface ChatMessageBase {
    * simply stops rendering it. Never persisted; hydrated rows never carry it.
    */
   activity?: ActivityEntry[];
+  /** #9515 follow-up — when the current text block began (set on every
+   *  non-prefix `stream` replace), so the folded prior's trail entry can
+   *  carry its real start time instead of the fold instant. */
+  contentStartedAt?: number;
   /** ms epoch the CURRENT displayed step began (`toolLabel` set or last
    *  narration) — elapsed time computes at render, no hot-path mutation. */
   currentActivityStartedAt?: number;
@@ -103,11 +107,14 @@ export const MAX_LIVENESS_REARMS = 3;
 
 /**
  * feat-concierge-stream-commands — one inline terminal block per Concierge
- * Bash command. The reducer's `command_stream` case APPENDS these onto the
+ * Bash command. NOTE (#9515 follow-up): command blocks no longer render
+ * inside the bubble — the working box shows reasoning + plain-language steps;
+ * raw command detail lives in the Debug stream. The state is retained because
+ * the `command_stream` arm also drives chip-prune + liveness. The reducer's
+ * `command_stream` case APPENDS these onto the
  * active cc_router text bubble (output APPENDS to the matching block, the
  * command does NOT replace bubble text). `command`/`output` arrive
- * already-redacted at the server emit boundary; `message-bubble.tsx`
- * re-redacts at render as the belt-and-suspenders gate. `truncated` marks
+ * already-redacted at the server emit boundary. `truncated` marks
  * a block whose output hit the per-command cap (D4).
  */
 export interface CommandBlock {
@@ -128,8 +135,8 @@ export interface CommandBlock {
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
   /**
-   * feat-concierge-stream-commands — inline streamed-terminal blocks for
-   * Concierge Bash tool-uses. Append-only; `undefined`/empty on bubbles
+   * feat-concierge-stream-commands — retained for the command_stream arm's
+   * chip-prune + liveness; nothing renders these. Append-only; `undefined`/empty on bubbles
    * that ran no commands so existing fixtures + non-cc bubbles are
    * unaffected.
    */
@@ -374,11 +381,16 @@ export function pushActivity(
  * line folds into the trail so the box shows the reasoning SEQUENCE.
  * The text is the user-visible assistant content — already at the emit
  * boundary — so no new exposure; label is bounded to one line / 160 chars.
+ * SNAPSHOT assumption: every live emitter sends cumulative-per-block content
+ * (cc `onText` block.replace, agent-runner lastBlock.text). The dormant Codex
+ * mapper emits per-delta FRAGMENTS — when it wires into ws-handler, gate this
+ * fold off that path or accumulate deltas per itemId upstream.
  */
 function foldReplacedText(
   prevContent: string,
   nextContent: string,
   activity: ActivityEntry[] | undefined,
+  contentStartedAt: number | undefined,
 ): ActivityEntry[] | undefined {
   if (!prevContent || nextContent.startsWith(prevContent)) return activity;
   const firstLine = prevContent
@@ -387,9 +399,16 @@ function foldReplacedText(
     .find((l) => l.length > 0);
   if (!firstLine) return activity;
   return pushActivity(activity, {
-    label: firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine,
+    // Code-point-safe truncate — a naive slice can split a surrogate pair.
+    label:
+      Array.from(firstLine).length > 160
+        ? `${Array.from(firstLine).slice(0, 159).join("")}…`
+        : firstLine,
     kind: "narration",
-    startedAt: Date.now(),
+    // When the OUTGOING block began (contentStartedAt stamps each non-prefix
+    // replace); a missing stamp falls back to now — a 0s duration beats a
+    // wrong long one.
+    startedAt: contentStartedAt ?? Date.now(),
   });
 }
 
@@ -1201,18 +1220,27 @@ export function applyStreamEvent(
         // guard at the boundary so a future regression surfaces here, not as
         // a corrupted bubble shape.
         if (target.type === "text") {
-          const folded = foldCurrentStep(target, prunedChips);
+          const withText = foldReplacedText(
+            target.content,
+            event.content,
+            target.activity,
+            target.contentStartedAt,
+          );
+          const folded = foldCurrentStep(
+            { ...target, activity: withText },
+            prunedChips,
+          );
           updated[idx] = {
             ...target,
             ...folded,
-            activity: foldReplacedText(
-              target.content,
-              event.content,
-              folded.activity,
-            ),
             content: event.content,
             state: "streaming",
             interrupted: false,
+            contentStartedAt:
+              target.content !== event.content &&
+              !event.content.startsWith(target.content)
+                ? Date.now()
+                : (target.contentStartedAt ?? Date.now()),
           };
         }
         return {
@@ -1227,7 +1255,16 @@ export function applyStreamEvent(
       const intIdx = findInterruptedBubble(working, event.leaderId);
       if (intIdx !== undefined) {
         const current = working[intIdx];
-        const folded = foldCurrentStep(current, prunedChips);
+        const withText = foldReplacedText(
+          current.content,
+          event.content,
+          current.activity,
+          current.contentStartedAt,
+        );
+        const folded = foldCurrentStep(
+          { ...current, activity: withText },
+          prunedChips,
+        );
         const rebound = rebindInterruptedBubble(
           working,
           activeStreams,
@@ -1236,12 +1273,8 @@ export function applyStreamEvent(
           {
             state: "streaming",
             content: event.content,
+            contentStartedAt: Date.now(),
             ...folded,
-            activity: foldReplacedText(
-              current.content,
-              event.content,
-              folded.activity,
-            ),
           },
         );
         return {
@@ -1264,10 +1297,15 @@ export function applyStreamEvent(
             state: "streaming",
             content: event.content,
             toolLabel: undefined,
+            contentStartedAt: Date.now(),
             activity: foldReplacedText(
               working[errIdx].content,
               event.content,
-              working[errIdx].activity,
+              seedActivityFromChips(
+                working[errIdx].activity,
+                prunedChips,
+              ),
+              working[errIdx].contentStartedAt,
             ),
           },
         );
@@ -1833,6 +1871,7 @@ export function applyStreamEvent(
           {
             state: "streaming",
             commandBlocks: applyToBlocks(target.commandBlocks),
+            activity: seedActivityFromChips(target.activity, prunedChips),
           },
         );
         return {
