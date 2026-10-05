@@ -8,7 +8,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 PIN=106466179; SID=1001; NEW=777
 # The baseline is the FIRST dispatch: the pinned ext4 volume is attached to web-2 and held by state.
-base=(apply=no pause=no pin=$PIN pin_status=present pin_format=ext4 pin_name_ok=yes pin_server=$SID names=$PIN web2_sid=$SID web2_vols=$PIN state_vol=$PIN state_server=present)
+base=(apply=no pause=no pin="$PIN" pin_status=present pin_format=ext4 pin_name_ok=yes pin_server="$SID" names="$PIN" web2_sid="$SID" web2_vols="$PIN" state_vol="$PIN" state_server=present)
 
 battery() {
   local lib="$1" n=0
