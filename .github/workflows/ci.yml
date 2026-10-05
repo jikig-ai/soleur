@@ -7,7 +7,7 @@ on:
   # Merge queue (#5780). The queue dispatches `merge_group` against the
   # gh-readonly-queue/main/* temp ref. INVARIANT: EVERY job that produces a
   # required status context (the full set is scripts/required-checks.txt minus
-  # the CLA + CodeQL rows — e.g. `test`, `e2e`, `lockfile-sync`,
+  # the CLA rows (CodeQL is advisory, not required) — e.g. `test`, `e2e`, `lockfile-sync`,
   # `service-role-allowlist-gate`, `tc-document-sha-guard`, `adr-ordinals`,
   # `rule-body-lint`, `grok-fidelity`, `credential-path-guard`) must run on
   # `merge_group` — do NOT add an `event_name == 'pull_request'` gate to any of
@@ -815,9 +815,12 @@ jobs:
   # nothing (measured on this job's first run, 34774037658: zero CACHED steps).
   # Every run is cold by construction.
   web-platform-build:
-    # 10m — measured 1m52s cold on the first run of this shape (run 34774037658:
-    # buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s for the
-    # full-checkout form it replaced (#8020 measured max 2.2m). >=5x headroom.
+    # 10m — measured 1m52s cold for the builder step alone on the first run of this shape
+    # (run 34774037658: buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s
+    # for the full-checkout form it replaced (#8020 measured max 2.2m). The `cli-tools` step
+    # below adds about a minute (npm registry only): >=3x headroom. The runner stage is not
+    # built here (apt, cli.github.com and the Playwright CDN would sit inside a required
+    # aggregate); it is FROM `cli-tools`, which holds both global installs the release layers.
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -866,6 +869,22 @@ jobs:
           build-args: |
             NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
             NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
+
+      # Resolves the release image's two global CLI installs against the live npm registry on
+      # every pull request and every merge_group run (no path gate: a path-skipped required
+      # context stalls the queue). `no-cache` is the point: a cache hit would pass without
+      # resolving anything. Secret-free by construction (no build-args, secrets or cache export),
+      # because npm lifecycle scripts run in this container on fork PRs; the structure is pinned
+      # by test/c4-likec4-version-pin.test.ts.
+      - name: Build the Dockerfile cli-tools stage (registry resolution, no cache)
+        timeout-minutes: 5
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: apps/web-platform
+          target: cli-tools
+          push: false
+          load: false
+          no-cache: true
 
   # --- Test matrix: 4 leg jobs + synthetic aggregator ---
   #
@@ -952,6 +971,11 @@ jobs:
         run: ./node_modules/.bin/tsc --noEmit
         working-directory: apps/web-platform
 
+      # --before pins the whole transitive tree, not just likec4 (#9300: npm's CDN 404s a
+      # tarball published minutes ago). Version and date are a pair; the bump procedure is
+      # under BUMPING LIKEC4 in plugins/soleur/scripts/render-c4-model.sh. The Dockerfile
+      # `cli-tools` stage carries the same pair and install mode, so this job resolves the same versions
+      # the image ships (not a byte comparison: node and npm patch versions differ from the image's pin).
       # #8623 — test/c4-render-tenant-config.test.ts is the acceptance test for
       # the C4 re-render boundary and runs the REAL likec4 binary (a sentinel-
       # writing likec4.config.mjs must never execute). LIKEC4_REQUIRED on the run
@@ -959,7 +983,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
           likec4 --version
 
       # #8696 — the render child runs inside bubblewrap, so the acceptance test
@@ -1026,14 +1050,15 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
-    # MATRIX SHARDED (#7902), K=7 after the heavy carve-out (#8006 phase 2) and
-    # the 2026-09-25 rebalance (suite growth pushed K=6's worst leg to 13.0 min
-    # measured on run 36123485360; the K=6 dry-run regen predicted 614s).
-    # The three cost-heaviest registrations moved to `test-scripts-heavy` below;
-    # what is left is ~60 min of light suite work, so seven legs measure
-    # ~8.1-9.8 min suite time each plus setup (leg 5 is a single 589 s atomic
-    # suite — no K splits it; the suite split is deferred, tracked in #8864;
-    # the duration-aware manifest keeps assignment balanced as suites drift).
+    # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
+    # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
+    # named below). The three cost-heaviest registrations moved to
+    # `test-scripts-heavy` below; what is left is ~76 min of light suite work,
+    # so eight legs measure ~9.5 min predicted suite time each (#9307; every
+    # leg under 600 s) plus setup. The one atomic mega-suite was split in
+    # #8864; the duration-aware manifest keeps assignment balanced as suites
+    # drift. Cost of the 8th leg: one more job competing for the runner pool
+    # (see the concurrency note near the top of this file and the runbook).
     #
     # Leg membership is NOT positional: `scripts/suite-shard-legs.tsv` pins each
     # label to a leg via the duration-aware sticky-LPT generator, packed from
@@ -1049,7 +1074,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/7", "2/7", "3/7", "4/7", "5/7", "6/7", "7/7"]
+        shard: ["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
     # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
@@ -1070,10 +1095,10 @@ jobs:
     # this leg, because a silent kill below a duration the repo itself
     # calls legitimate is indistinguishable from a hang:
     #
-    #   light leg ~8.1-9.8 min nominal at K=7 after the #8006 carve-out + phase-2 split and the 2026-09-25 K-bump. No light suite carries a
+    #   light leg ~9.5 min predicted at K=8 (runbook topology table has the range). No light suite carries a
     #     declared `_suite_budget_ms` — the only declaration (the battery's 41.67 min)
     #     moved to test-scripts-heavy, whose own derivation sits on that job.
-    #   -> 60 stays as the hang cap; it is ~7x the nominal leg, not a leg estimate.
+    #   -> 60 stays as the hang cap; it is ~6x the nominal leg, not a leg estimate.
     #
     # An earlier revision of this file set 30, sized against the leg's NOMINAL value. That
     # was a new silent-kill path: the battery measures 14.3-27.9 min and its own budget
@@ -1102,10 +1127,10 @@ jobs:
     # If you are re-deriving this: use `grep -rlE '(^|[^[:alnum:]_-])bun[[:space:]]'`
     # rather than a line anchor.
     #
-    # NOTE for the next author: `npx -y <pkg>@<version>` does NOT reuse the
-    # `npm install -g likec4@1.50.0` step below — verified with a control. So a suite
-    # invoking the producer pays its own `npx` resolve even though the shard already
-    # has likec4 on PATH.
+    # NOTE for the next author: `npx -y <pkg>@<version>` does NOT reuse the likec4
+    # install step below as an installation — verified with a control — only as a
+    # download cache (measured in #9300), so both carry the same --before date
+    # (BUMPING LIKEC4 in render-c4-model.sh).
     #
     # Two CLIs ARE installed for tests in this shard:
     #  - gitleaks: code-to-prd.test.sh (#2726), gitleaks-rules.test.sh,
@@ -1117,8 +1142,8 @@ jobs:
     #    suites go red here rather than skipping green. Version + SHA pinned
     #    identically to .github/workflows/secret-scan.yml — to upgrade, bump
     #    both files together.
-    #  - likec4@1.50.0: plugins/soleur/test/c4-model-freshness.test.sh renders
-    #    the .c4 sources and byte-diffs the committed model.likec4.json. The
+    #  - likec4 (version + --before date): plugins/soleur/test/c4-model-freshness.test.sh
+    #    renders the .c4 sources and byte-diffs the committed model.likec4.json. The
     #    version MUST match apps/web-platform/Dockerfile + package.json
     #    (@likec4/core/@likec4/diagram), guarded by c4-likec4-version-pin.test.ts.
     # Variables are workflow-internal literals; no untrusted input is
@@ -1162,10 +1187,12 @@ jobs:
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
+      # Kept on purpose: three suites here render through `npx`, and this install is their
+      # download-cache warm-up. Enforced by scripts-shard-runtime-coverage.test.sh.
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts
           likec4 --version
 
       # #7332 — plugins/soleur/test/c4-from-components.test.sh drives the C4 producer
@@ -1175,6 +1202,14 @@ jobs:
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:
           bun-version-file: ".bun-version"
+
+      # scripts/audit-suite-reads.test.sh (#9307) drives the read-recorder inside an unprivileged
+      # network namespace (`unshare -cn`, `unshare -rn` or bwrap), and under CI it FAILS rather than skips when
+      # none that keeps the invoking uid works (`-rn` alone and uid 0 count as none), so its rows cannot silently go unrun. ubuntu-24.04 restricts unprivileged user
+      # namespaces through AppArmor; relax it on this ephemeral GH-hosted runner exactly as the
+      # test-webplat job does for its C4 sandbox. Best-effort: the suite's own probe decides.
+      - name: Allow unprivileged user namespaces (read-recorder network-namespace rows)
+        run: sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Run scripts-side tests (bash + python3 + bun)
         run: bash scripts/test-all.sh scripts
@@ -1212,7 +1247,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
-          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/7` and
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/8` and
           # `/` is not permitted in an artifact name, so it is not used at all —
           # an earlier revision of this comment described a `/`->`-` rewrite the
           # code never performed. job-index is also matrix-resize-safe, matching
@@ -1235,13 +1270,14 @@ jobs:
   # (~6 min) from sharing a leg — on the measured order they DID share one,
   # which is where the 31-39 min long pole came from. A dedicated 3-leg
   # matrix over `want_scripts_heavy` gives each its own leg; the light group
-  # fans out to seven legs above.
+  # fans out to eight legs above.
   #
   # TOOLCHAIN PARITY IS ASSERTED, NOT ASSUMED. scripts-shard-runtime-coverage.test.sh
   # extracts BOTH job blocks and requires every runtime a scripts-group suite
   # invokes to be installed in each — today's three members are bash+git only,
   # but a future heavy registration must not red for want of a binary (#7332's
-  # exact shape), so the install steps below mirror test-scripts verbatim.
+  # exact shape), so the install steps below mirror test-scripts, except for likec4 (this job
+  # runs no likec4 suite and every consumer falls back to `npx`).
   test-scripts-heavy:
     runs-on: ubuntu-latest
     strategy:
@@ -1276,12 +1312,8 @@ jobs:
           sudo mv gitleaks /usr/local/bin/gitleaks
           gitleaks version
 
-      - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
-        run: |
-          set -euo pipefail
-          npm install -g likec4@1.50.0
-          likec4 --version
-
+      # No likec4 install in this job: no registration it runs invokes likec4, and every
+      # consumer falls back to `npx`. c4-likec4-version-pin.test.ts pins the install count.
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
         with:

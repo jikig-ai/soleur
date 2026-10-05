@@ -1183,16 +1183,20 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-17 (extended 2026-09-30): the tf root now declares
-# 61 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01 and 2026-10-04): the tf root now declares
+# 62 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
 # #8450 scheduled-actions-queue-health probe a third, the #9168
 # scheduled-supabase-watchdog monitor a fourth, and the #9274
-# scheduled-bot-pr-reaper monitor a fifth.
+# scheduled-bot-pr-reaper monitor a fifth, and the #9482 follow-up (a)
+# scheduled-merge-queue-stall-dispatch monitor a sixth; #9304 deleted the
+# retired scheduled-gh-pages-cert-state monitor. This list names the additions
+# made since the 2026-08-19 live figure and is not a complete ledger, so the
+# declared count above (62) is the figure of record.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
-# than silently promoted to 61. T25 derives from the tf root, so it reads this
+# than silently promoted to the current declared count. T25 derives from the tf root, so it reads this
 # line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 

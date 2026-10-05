@@ -899,6 +899,42 @@ resource "sentry_alert" "container_restart_burst" {
 # is the exact silent-green failure the umbrella issue exists to prevent.
 # Modeled on kb_sync_silent_failure; unique frequency (30) so this alert's
 # re-notification cadence is distinguishable in Sentry's alert list.
+#
+# #9275 (ADR-096 5.3b-iii): the `op` filter also routes the two GHCR-deny ops that
+# cron-egress-resolve.sh emits from its ~5-minute in-container probe of ghcr.io and
+# docker.pkg.github.com (the generator carves GitHub's Packages frontends out of the
+# container allow list; the probe proves the carve holds):
+#   ghcr_deny_lost         -> a bridge container completed a TCP handshake to a
+#                             Packages frontend (the deny stopped holding). Static
+#                             message, so every loss groups into ONE issue; name and
+#                             remote_ip live in `extra`.
+#   ghcr_deny_probe_blind  -> the probe could not decide for ~1 hour (DNS failure or
+#                             hang, docker exec failing, container absent, or the tick
+#                             budget gate skipping it), i.e. the control itself went
+#                             dark. Re-emitted hourly while the blindness lasts.
+# Both ride this rule rather than a new one: same feature=cron-egress-firewall family,
+# same recipients, no new frequency_minutes (the rule emails ONCE per unresolved issue
+# group, so "resolved in Sentry" does not mean the deny is back; see the runbook
+# cron-egress-blocked.md#ghcr-carve-9275). `enforcement_missing` is deliberately NOT
+# added: it is a different failure (the enforcement self-heal), tracked by #9392 (297
+# events since 2026-06-11, about 2.7/day on average and about 15/day in the week to
+# 2026-10-01), and widening an alert filter for an unexamined recurring event is a
+# separate decision. (Routing it would not page daily: this rule emails once per
+# unresolved issue group, and again on a reappearance after a resolve.)
+#
+# #9377: the `op` filter also routes `resolve_link_local`, which cron-egress-resolve.sh emits (same
+# feature=cron-egress-firewall tag) when an allowlisted vendor name resolves into 169.254.0.0/16, the
+# instance-metadata range. The address is dropped and never allowlisted, so the firewall is intact, but a
+# name that answers with a metadata address is either a poisoned answer or a vendor misconfiguration and a
+# person should read it. The message interpolates the resolving source, so each source is its own issue
+# group (first_seen pages once per source on first sighting; the resolver sends once per source until it answers clean,
+# writing its once-per-source marker only after a POST succeeded, so a failed or unconfigured attempt is retried on the next
+# tick; delivery is best-effort, a curl rc 0 is not an HTTP 2xx).
+# Same rule, recipients and frequency; no new rule. Decoded in the runbook cron-egress-blocked.md.
+# Do NOT rename this resource or the live rule name
+# (`cron-egress-blocked`): a rename is a destroy/create of a live paging rule.
+# Op literals are pinned against the resolver by
+# apps/web-platform/test/sentry-egress-ghcr-deny-alert-op-contract.test.ts.
 resource "sentry_alert" "egress_blocked" {
   organization      = var.sentry_org
   name              = "cron-egress-blocked"
@@ -917,7 +953,7 @@ resource "sentry_alert" "egress_blocked" {
       logic_type = "all"
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "cron-egress-firewall" } },
-        { tagged_event = { key = "op", match = "in", value = "egress_blocked" } },
+        { tagged_event = { key = "op", match = "in", value = "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind,resolve_link_local" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
@@ -1827,6 +1863,105 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #6931 / ADR-263 — the fresh-boot LUKS path's stages (the guest-side provisioner, the cloud-init
+# hard gate, the readiness gate). TWO rules, split by severity, the web_host_github_app_key_boot
+# precedent: a degraded-but-booted host must not be paged as a dead one, and a dead one must not be
+# folded into a quiet rule.
+#
+# WHY THIS IS LOAD-BEARING. soleur-boot-emit sends ONE shared message ("soleur-cloud-init boot
+# stage") for every stage, so a stage that matches no tagged_event filter lands in the always-open
+# group and pages nobody (the failure web_terminal_boot_fatal above and web_private_nic_boot_gate
+# already record). A web-2 whose provisioner fails, whose gate powers it off, or whose readiness
+# gate fails is a host that never comes up; with no console and no SSH route the Sentry event is the
+# ONLY signal. Pinned both ways by test/sentry-fresh-boot-luks-alert-op-contract.test.ts.
+#
+# web_luks_boot_fatal (pages). Every stage below but one ends the boot (provisioner fatal arms exit
+# 10-17 and cloud-init `poweroff -f`s on a nonzero exit; `workspaces_luks_not_mounted` is followed
+# by `poweroff -f` itself) or marks a first boot that is not ready to serve
+# (`fresh_boot_not_ready_<reason>`, one stage per readiness reason). The one exception is
+# `workspaces_luks_provision_escrow` (#9377, ADR-263 D8): the off-host header copy failed, the boot
+# CONTINUES (the provisioner emits it at level warning and exits 0), but a web-class host whose LUKS header
+# has no off-host copy is a single-point loss of its store, so a person is paged. Severity is separated by
+# STAGE NAME, not by Sentry level: no rule in this file filters on `level` (unproven against live Sentry,
+# and the drift probe's projection maps only the stage-style tagged_event), so a stage that exists at both
+# levels would page on its warning. The provisioner therefore gives its other warnings their OWN stage names
+# (`..._wire_warn`), never a level of a paging stage; escrow is the single deliberate stage that pages while
+# the boot continues, and the op-contract test pins it as the closed PAGE_AT_WARNING list.
+#
+# THROTTLE WINDOW (#9377 review; real, fleet-wide, spans boots). frequency_minutes = 35 is a per-rule, per-issue-group
+# throttle, and every boot event shares ONE perpetually-active issue group (the web_terminal_boot_fatal and
+# web_private_nic_boot_gate comments above: one shared message, no fingerprint). So the window is NOT per boot and NOT per
+# host: at most one email per 35 minutes across ALL fourteen paging stages and ALL web-class hosts. A retry within 35 minutes
+# of any earlier page from this rule (another stage, another host, or an earlier failed attempt of the same host) can fold an
+# escrow page into silence, and the escrow page (emitted first in a boot) can equally fold a fatal stage that follows it.
+# Read from those group comments, not measured against live Sentry. The reads that do not depend on the throttle are the
+# readiness row's escrow=ok, the ready_escrow verify leg, and `scripts/sentry-issue.sh --host-events <host> --stage
+# workspaces_luks_provision_escrow` (web-host-replace.md and web-host-birth.md). frequency_minutes is deliberately unchanged.
+#
+# web_luks_boot_warning (NoOne fallthrough, so it lands in the issue stream to be read, not pushed):
+# the non-fatal stages that do not page. `workspaces_luks_provision_wire_warn` (the daily probe
+# timer did not arm), `workspaces_luks_provision_result` (the arm-file write failed), and
+# `fresh_boot_ready_bs_egress` (the readiness row could not be sent direct to Better Stack; the Sentry
+# twin carries luks_arm/escrow/boot_id). Do NOT put `fresh_boot_ready` (info, the green twin) on either rule.
+#
+# Distinct frequency_minutes 35 and 36 avoid Sentry POST-time exact-duplicate dedup (both unused).
+# `value = 0` pages the first event of any group, safe because every listed stage is failure-only.
+resource "sentry_alert" "web_luks_boot_fatal" {
+  organization      = var.sentry_org
+  name              = "web-host-luks-boot-fatal"
+  enabled           = true
+  frequency_minutes = 35
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks,workspaces_luks_provision_escrow" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+resource "sentry_alert" "web_luks_boot_warning" {
+  organization      = var.sentry_org
+  name              = "web-host-luks-boot-warning"
+  enabled           = true
+  frequency_minutes = 36
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "any-short"
+      conditions = [
+        { tagged_event = { key = "stage", match = "in", value = "workspaces_luks_provision_wire_warn,workspaces_luks_provision_result,fresh_boot_ready_bs_egress" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
       ]
     },
   ]

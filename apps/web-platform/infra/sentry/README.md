@@ -2,8 +2,8 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **42 `sentry_alert` rules** (42 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299. 40 are
-  fully Terraform-owned (39 in `issue-alerts.tf`, plus `cron-monitor-failure` in
+- **44 `sentry_alert` rules** (44 alert rules total) — #7650 Phase 2, #7985 Phase 3.4, #8451, #8505, #8630, #8719, #8572, #6428, #9176, #8609, #6129, #9299, #6931. 42 are
+  fully Terraform-owned (41 in `issue-alerts.tf`, plus `cron-monitor-failure` in
   `cron-monitor-alerts.tf`): `ignore_changes = [environment]` only, real
   `trigger_conditions` and `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint. A new rule takes an UNUSED `frequency_minutes`
@@ -36,7 +36,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **61 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **62 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -162,7 +162,7 @@ named after the latter.
 
 This section previously read "the 8 `sentry_cron_monitor` resources do not
 exist in Sentry yet" and described the first apply creating them. True at
-authoring, actively misleading now: the root declares **61** of them, all live
+authoring, actively misleading now: the root declares **60** of them, all live
 once `apply-sentry-infra.yml` runs for the latest additions,
 and the audit's Class D machinery exists precisely *because* live monitors can
 outrun the `.tf` that declares them — a monitor Terraform never declared is
@@ -203,11 +203,22 @@ red after a complete apply). So routing a new monitor takes two PRs:
   `alert-reference.json`); PR B deletes the `sentry_cron_monitor` and its unrouted
   entry. Do not do both in one apply: Terraform orders an update that depends on a
   destroyed resource AFTER the destroy, so the monitor would be deleted while the
-  workflow still binds it — and whether Sentry accepts that is unmeasured.
+  workflow still binds it — and whether Sentry accepts that is unmeasured. PR B also
+  owes three edits a bare delete misses: remove any `NON_INNGEST_MONITORS` exemption in
+  `function-registry-count.test.ts` (its `(c3)` guard reds on a stale entry), put
+  `[ack-destroy]` alone on a line in a commit BODY (never a subject, never the PR body
+  alone), and move the count citations that T25 and `c4-count-parity` read (this
+  README, the audit-script comment, `model.c4` and `model.likec4.json`).
 - **A monitor deleted outside Terraform** is recreated by the next plan with an
   id that does not exist yet, and the projection floor then refuses every Sentry
   plan. Recover by moving its label to `cron_monitor_alert_unrouted`, letting the
   apply recreate it, and routing it again in the next PR.
+- **An apply run stuck in `waiting` is a runner or concurrency stall, not an approval**: `infra-privileged` has no
+  reviewers, so a run with zero steps for many minutes is not waiting on a person. Do not read the environment's
+  deployments list as proof it applied (its `log_url` may belong to another workflow); read the live Sentry object. For
+  a non-destroy change, cancelling the stuck run lets the next main push run apply full-root main. A destroy needs the
+  ack-carrying run, so recover by `gh run rerun` of that run after checking nothing newer landed under `infra/sentry`
+  (never `workflow_dispatch`, which carries no commit message and so no ack).
 
 The routing-parity guard
 (`apps/web-platform/test/server/inngest/sentry-cron-monitor-routing-parity.test.ts`)

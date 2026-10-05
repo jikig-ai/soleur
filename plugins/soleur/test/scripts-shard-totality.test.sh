@@ -7,7 +7,7 @@
 # duplicates.
 #
 # WHY THIS IS THE HIGHEST-PRIORITY DELIVERABLE OF ITS PR. Sharding `test-scripts` makes the
-# required `test` check green off seven legs (Guard 1b below covers the three-leg
+# required `test` check green off eight legs (Guard 1b below covers the three-leg
 # `test-scripts-heavy` matrix under the identical contract). If the partition drops a
 # registration, that check reports green while running a strict subset — a regression
 # reaching production behind a green pipeline. That is strictly WORSE than the blocked
@@ -167,7 +167,7 @@ fi
 # --- The matrix leg list, read from ci.yml ---------------------------------------------------
 #
 # Read as VALUES, not as a count. Mutation row 5 is a matrix listing one leg short of
-# ["1/7".."7/7"] — six legs whose values still say /7 — where leg 7's suites run nowhere and
+# ["1/8".."8/8"] — seven legs whose values still say /8 — where leg 8's suites run nowhere and
 # all surviving legs are green. A count-based read cannot see that; the value list can.
 awk '
   /^  test-scripts:$/ { inj=1; next }
@@ -1004,7 +1004,10 @@ else
     fail "Direction-1 lib enumeration returned ZERO shell-bearing files — scripts/lib is empty, renamed, or the pathspec drifted; the literal census would cover only the runner"
   fi
 fi
-_lit_n=$( { sed 's/#.*//' "$RUNNER"; while IFS= read -r -d '' _lf; do sed 's/#.*//' "$_lf"; done < "$WORK/dir1_libs"; } | grep -oE -- '--rows[[:space:]]+[0123456789]+-[0123456789]+' | wc -l | tr -d ' ')
+# The runner side drops a skip_suite call's QUOTED re-run line (`skip_suite "<label>" "relevance" \` then
+# `"bash <file> --rows A-B"`): it is the printed command that re-runs a declined half (ADR-181 / ADR-262), an
+# echo and not an executable registration, so counting it would make every --pr-gated --rows battery red.
+_lit_n=$( { sed 's/#.*//' "$RUNNER" | awk 'p ~ /^[[:space:]]*skip_suite / && /^[[:space:]]*"bash / { p=$0; next } { p=$0; print }'; while IFS= read -r -d '' _lf; do sed 's/#.*//' "$_lf"; done < "$WORK/dir1_libs"; } | grep -oE -- '--rows[[:space:]]+[0123456789]+-[0123456789]+' | wc -l | tr -d ' ')
 _emit_n=$(awk -F'\t' '$3 != "UNFLAGGED"' "$WORK/run_suite_rows" | wc -l | tr -d ' ')
 if (( _lit_n == _emit_n )); then
   pass "literal census: ${_lit_n} '--rows A-B' occurrences in test-all.sh+scripts/lib, all ${_emit_n} extracted"

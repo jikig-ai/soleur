@@ -3,11 +3,16 @@ name: Build inngest-bootstrap OCI image
 # dispatched from (every auto-mint dispatch is from main, #4326).
 run-name: Build inngest-bootstrap ${{ inputs.ref || github.ref_name }}
 
-# Triggered on `vinngest-vX.Y.Z` tag pushes, and by workflow_dispatch. Since #4326
-# (ADR-232 §8) the usual first publish of a tag is a DISPATCH from main:
-# mint-inngest-bootstrap-tag.yml cuts the tag with GITHUB_TOKEN (which fires no
-# `push: tags` run) and dispatches this workflow from main with inputs.ref=<tag>.
-# A hand-pushed tag still runs here on the tag ref, as before. Builds a scratch-based image
+# Triggered ONLY by workflow_dispatch (the auto-mint and the runbook dispatch from main;
+# a dispatch from another ref runs that ref's build job, but infra-privileged refuses
+# its bump job). Since #4326 (ADR-232 §8) the first
+# publish of a tag is a DISPATCH from main: mint-inngest-bootstrap-tag.yml cuts the
+# tag and dispatches this workflow with inputs.ref=<tag>. Since #9262 there is no
+# `push: tags` trigger (ADR-232 alternative A5): the bump-cloud-init-pin job holds
+# the main-only infra-privileged environment, which refuses a tag-ref run, so a
+# hand-pushed tag starts nothing — publish it with one dispatch from main:
+#   gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>
+# Builds a scratch-based image
 # embedding the pinned inngest-cli binary + inngest-bootstrap.sh + a minimal
 # entrypoint shim. The deploy webhook fires:
 #   `deploy inngest ghcr.io/jikig-ai/soleur-inngest-bootstrap vX.Y.Z`
@@ -19,9 +24,6 @@ run-name: Build inngest-bootstrap ${{ inputs.ref || github.ref_name }}
 # bootstrap shape, regardless of the embedded inngest-cli version.
 
 on:
-  push:
-    tags:
-      - 'vinngest-v*.*.*'
   # workflow_dispatch publishes an EXISTING vinngest-v* tag: the FIRST publish of
   # an auto-minted tag (#4326 — dispatched once from main; that run is the only
   # build of the tag), or an escape-hatch re-publish (a CVE base-image rebuild of
@@ -103,8 +105,8 @@ jobs:
             echo "ERROR: workflow_dispatch ref '$REF' is not an existing vinngest-vX.Y.Z tag"; exit 1
           fi
 
-      # On push the `ref:` expression is '' → checkout uses the triggering tag.
-      # On dispatch it is the FULLY QUALIFIED refs/tags/<inputs.ref>, so a
+      # The '' arm is the pre-#9262 tag-push shape; with workflow_dispatch the only
+      # trigger it is unreachable. On dispatch it is the FULLY QUALIFIED refs/tags/<inputs.ref>, so a
       # branch with the same name can never be checked out in the tag's place.
       # `inputs.ref` is regex-validated above before it reaches this `ref:`.
       # fetch-depth: 0 (#8747) fetches every branch as refs/remotes/origin/*
@@ -123,11 +125,11 @@ jobs:
         # This logic is INLINE (not a checked-out script) on purpose: the
         # checkout above lands `inputs.ref`'s tree (an existing tag, predating
         # this workflow), so a `.github/scripts/*.sh` helper would not exist
-        # there and the step would fail with exit 127. Which copy of THIS file
-        # runs depends on the trigger: a dispatch runs the copy on the ref it was
-        # dispatched from (the default branch unless `--ref` names another), and
-        # a tag push runs the copy in the TAGGED commit — so a tag cut on a branch
-        # forked before a change here runs that branch's older logic.
+        # there and the step would fail with exit 127. A dispatch runs the copy of
+        # THIS file on the ref it was dispatched from (the default branch unless
+        # `--ref` names another); the `push` arm below is the pre-#9262 tag-push
+        # path, kept because the inline-equivalent harness covers it, and
+        # unreachable now that workflow_dispatch is the only trigger.
         # That is why the #8747 ancestry refusal below is defence-in-depth and
         # the bump script's merged-into-main selection plus its `ancestry` stage
         # (main's copy, #8782) is the authoritative check. The post-strip regex
@@ -139,8 +141,8 @@ jobs:
           INPUTS_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          # Discriminate on the event name (NOT inputs.ref emptiness) so a
-          # future stale/defaulted dispatch input can't misroute the push path.
+          # Discriminate on the event name (NOT inputs.ref emptiness). The non-dispatch
+          # arm is the pre-#9262 tag-push path, unreachable with dispatch the only trigger.
           if [[ "$GH_EVENT" == "workflow_dispatch" ]]; then
             src="$INPUTS_REF"
           else
@@ -213,7 +215,7 @@ jobs:
               echo "verdict=on-main commit=$HEAD_SHA"
               printf 'verdict=on-main commit=%s\n' "$HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
               ;;
-            1) refuse "vinngest-$TAG is on commit $HEAD_SHA, which is not an ancestor of main: it was cut on an unmerged branch, and publishing it would ship unreviewed bytes. Delete it (git push origin :refs/tags/vinngest-$TAG; git tag -d vinngest-$TAG), wait for the source PR to merge, then tag its squash-merge commit on main as a NEW version, never a re-used name (git tag -a vinngest-vX.Y.Z <main-sha> -m ... && git push origin vinngest-vX.Y.Z). That tag push runs its own publish and bump." ;;
+            1) refuse "vinngest-$TAG is on commit $HEAD_SHA, which is not an ancestor of main: it was cut on an unmerged branch, and publishing it would ship unreviewed bytes. Delete it (git push origin :refs/tags/vinngest-$TAG; git tag -d vinngest-$TAG), wait for the source PR to merge, then tag its squash-merge commit on main as a NEW version, never a re-used name (git tag -a vinngest-vX.Y.Z <main-sha> -m ... && git push origin vinngest-vX.Y.Z), then dispatch the build once from main (gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-vX.Y.Z)." ;;
             *) refuse "could not decide whether vinngest-$TAG ($HEAD_SHA) is on main: git merge-base exited $rc - refusing rather than guessing" ;;
           esac
 
@@ -521,9 +523,10 @@ jobs:
       #           required pin and has no unsigned arm.
       #   IS NOT -- a provenance claim any consumer verifies. ci-deploy.sh pins
       #           COSIGN_IDENTITY_REGEXP to `reusable-release.yml@(refs/heads/main|refs/tags/v[0-9].+)`;
-      #           this signature's Fulcio subject is this file at the ref the RUN executed on: a
-      #           `vinngest-` tag for a hand-pushed tag, and `refs/heads/main` for a dispatched build
-      #           (every auto-minted tag's first publish, #4326), whatever tag it publishes. Neither
+      #           this signature's Fulcio subject is this file at the ref the RUN executed on:
+      #           `refs/heads/main` for a main-dispatched build (every auto-mint and runbook
+      #           dispatch; the only trigger since #9262), the branch ref for a branch dispatch,
+      #           whatever tag it publishes. Neither
       #           matches the workflow-name half of that regexp. And the inngest deploy branch does
       #           not call verify_image_signature at all -- measured, zero occurrences.
       #
@@ -724,7 +727,7 @@ jobs:
             # there is no build to be "UNAFFECTED", and "backfill needed" describes a run
             # whose entire purpose WAS the backfill.
             if [ "${MIRROR_ONLY:-false}" = "true" ]; then
-              echo "::error::mirror_only backfill FAILED for ${IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — zot does not serve the GHCR digest. DO NOT PIN until this is green. Re-run: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true"
+              echo "::error::mirror_only backfill FAILED for ${IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — zot does not serve the GHCR digest. DO NOT PIN until this is green. Re-run: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TAG} -f mirror_only=true"
               echo "❌ mirror_only backfill FAILED for \`${IMAGE}:${TAG}\` (reason=\`${reason}\` rc=${rc}) — zot does not serve the GHCR digest; do not pin." >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
@@ -759,7 +762,7 @@ jobs:
             # a tag zot does not serve fails the NEXT inngest fresh boot at inngest_pull_fatal and
             # leaves the sole scheduler dark. The message says so: backfill before any
             # inngest-host-replace pinned to this tag.
-            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build + GHCR push unaffected, but hosts pull ONLY from zot: an inngest fresh boot pinned to this tag will fail (inngest_pull_fatal). Backfill BEFORE any inngest-host-replace: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
+            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build + GHCR push unaffected, but hosts pull ONLY from zot: an inngest fresh boot pinned to this tag will fail (inngest_pull_fatal). Backfill BEFORE any inngest-host-replace: gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
             echo "⚠️ zot mirror degraded for \`${TAG}\` (reason=\`${reason}\` rc=${rc}) — GHCR push unaffected; hosts pull only from zot, so backfill before any inngest-host-replace pinned to this tag." >> "$GITHUB_STEP_SUMMARY"
             # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
             exit 0
@@ -901,7 +904,7 @@ jobs:
           # inherits GitHub's 360-minute default). The unverified case named above — crane
           # guessing the wrong scheme against the tunnelled loopback listener — fails as a
           # STALL, not a clean non-zero: the local port binds and accepts, then the origin hop
-          # hangs. Three retried stalls would burn the job timeout and RED a tag-push release
+          # hangs. Three retried stalls would burn the job timeout and RED a release run
           # from a check documented as unable to affect the outcome. `timeout` exits 124,
           # which the else-arm reports as blob_validate=failed with the rc — better promotion
           # evidence than a job timeout, and it keeps the dark-launch property intact.
@@ -1043,14 +1046,25 @@ jobs:
   # the logic is tested out-of-band and this YAML stays a thin driver
   # (board-status-sync.yml records the convention).
   #
-  # Auth: the soleur-ai App installation token minted by the composite action
-  # below (the canonical App-JWT recipe — hr-github-app-auth-not-pat). The App
-  # token is load-bearing, not just policy: GITHUB_TOKEN pushes do not fire
-  # pull_request events, so required checks would never run on the bump PR
-  # and auto-merge could never release it. Never a PAT.
+  # Auth: the soleur-infra App installation token minted by the composite action
+  # below (the canonical App-JWT recipe — hr-github-app-auth-not-pat), scoped to
+  # contents+pull_requests write on this repository. The App token is
+  # load-bearing, not just policy: GITHUB_TOKEN pushes do not fire pull_request
+  # events, so required checks would never run on the bump PR and auto-merge
+  # could never release it. Never a PAT.
+  #
+  # Tier B (#9262, ADR-241): the job holds the main-only `infra-privileged`
+  # environment, whose secret DOPPLER_TOKEN_INFRA_APP (a read token for the
+  # soleur-infra-app project, which holds only the two App values, ADR-241 D11)
+  # is the only Doppler secret this job references (the no-broad-tier-b rows pin
+  # that; the infra-privileged environment still holds the broad token). A
+  # dispatch from any other ref is refused before a step runs: the environment's
+  # branch policy refuses a branch copy. No job-level `if:`
+  # (inngest-bootstrap-mirror-only.test.sh forbids one).
   bump-cloud-init-pin:
     needs: build
     runs-on: ubuntu-latest
+    environment: infra-privileged
     timeout-minutes: 10
     # Serialize bump runs across overlapping publishes: two rapid vinngest-v*
     # tags both resolve the SAME semver-max target, and the loser finds the
@@ -1136,27 +1150,30 @@ jobs:
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
-      - name: Verify DOPPLER_TOKEN present
+      - name: Verify DOPPLER_TOKEN_INFRA_APP present
         env:
-          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
         run: |
           set -euo pipefail
           if [[ -z "$DOPPLER_TOKEN_CHECK" ]]; then
-            echo "::error::DOPPLER_TOKEN secret is not configured."
+            echo "::error::DOPPLER_TOKEN_INFRA_APP is not available (an environment secret of infra-privileged; see runbook infra-credential-tiers-8209.md §Release-job App source)."
             exit 1
           fi
 
-      # Composite action — the App-JWT recipe lived inline in three workflows;
-      # this job would have been the fourth copy, so the mint is extracted per
-      # learning 2026-05-25-app-jwt-inline-mint (extract at three consumers).
-      # `gh api` cannot take a JWT as GH_TOKEN, so the action exchanges it for
-      # an installation token and emits it masked.
-      - name: Mint soleur-ai App token
+      # Composite action (learning 2026-05-25-app-jwt-inline-mint: extract at
+      # three consumers). Mints the soleur-infra App from the narrow soleur-infra-app project,
+      # scoped to exactly what the bump writes: the branch push (contents) and
+      # the PR open/comment/auto-merge (pull_requests). It refuses a grant that
+      # differs, and a soleur-infra App without pull_requests:write (runbook
+      # step O4c) fails HERE, before anything is pushed.
+      - name: Mint soleur-infra App token (contents+pull_requests write on soleur)
         id: mint
-        uses: ./.github/actions/mint-soleur-ai-app-token
+        uses: ./.github/actions/mint-infra-app-token
         with:
-          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
-          installation-id: "122213433"
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+          installation-id: "166065653"
+          permissions: '{"contents":"write","pull_requests":"write"}'
+          repositories: soleur
 
       # The script re-resolves the digest via `crane digest` and
       # cross-checks it against SIGNED_DIGEST ONLY when TAG is the
@@ -1179,6 +1196,10 @@ jobs:
           SIGNED_DIGEST: ${{ needs.build.outputs.digest }}
           SIGNED_COMMIT: ${{ needs.build.outputs.commit }}
           MIRROR_STATUS: ${{ needs.build.outputs.mirror_status }}
+          # A mirror_only backfill cannot attest provenance (the sign step signs
+          # whatever the tag resolves to, and mirror_only skips the ancestry
+          # refusal), so the script never arms auto-merge under it (#9262).
+          MIRROR_ONLY: ${{ inputs.mirror_only }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -1187,7 +1208,8 @@ jobs:
             --signed-digest "$SIGNED_DIGEST" \
             --signed-commit "$SIGNED_COMMIT" \
             --mirror-status "$MIRROR_STATUS" \
-            --run-url "$RUN_URL"
+            --run-url "$RUN_URL" \
+            --mirror-only "$MIRROR_ONLY"
 
       - name: Post to Slack (pin-bump failure)
         # A bump failure must not be silent — the drift guard stays red until

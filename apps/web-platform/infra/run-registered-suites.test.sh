@@ -496,7 +496,7 @@ else
 fi
 
 # The summary line is the one this runner may NOT change: two exact-string consumers read it
-# (T6v here, and plugins/soleur/test/main-health-monitor-workflow.test.sh:554,571). A killed
+# (T6v here, and the `(13)` rows of plugins/soleur/test/main-health-monitor-workflow.test.sh). A killed
 # suite is still counted among `failed` there — deliberately imprecise, because correcting the
 # LABEL would break both consumers. The precision is carried by the gated line T10c asserts.
 if printf '%s\n' "$OUT10A" | grep -cF '=== registered infra suites: 0 passed, 1 failed, 0 unaccounted (of 1) ===' >/dev/null; then

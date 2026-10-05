@@ -47,8 +47,8 @@ const CREDENTIAL_KEY_SEGMENTS = new Set([
 
 // Substring fallback for camelCase / no-separator compounds the segment split
 // can't decompose (e.g. `xSessionId`, `userPassphrase`, `apiSecret`). High-
-// signal nouns only — over-redaction of a non-secret is an acceptable cost on a
-// dev-only debug surface; under-redaction is a single-user incident.
+// signal nouns only — over-redaction of a non-secret is an acceptable cost on
+// an opt-in debug surface; under-redaction is a single-user incident.
 const CREDENTIAL_KEY_SUBSTRINGS = [
   "secret", "token", "passwd", "password", "passphrase", "apikey", "credential",
   "mnemonic", "privatekey", "sessionid",

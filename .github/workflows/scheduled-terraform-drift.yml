@@ -41,13 +41,18 @@ jobs:
         directory:
           - apps/web-platform/infra
           # infra/github (#5780, CTO B-2): scheduled drift detection for the
-          # GitHub branch-protection ruleset, incl. the new merge_queue rule.
-          # A queue silently removed/mangled outside Terraform (provider 6.x
-          # nested-block history) would leave the stall probe blind (no entries
-          # -> nothing to detect), so `terraform plan` here is the real drift
-          # detector. Authenticates identically to apply-github-infra.yml:
-          # Doppler prd_terraform (App-auth TF_VAR_github_app_* + R2 backend
-          # creds) via --name-transformer tf-var. infra/github declares no
+          # GitHub branch-protection ruleset. The merge queue is LIVE (#9454,
+          # ADR-270; adopted in #5800, reverted the same day in #5811, re-adopted
+          # with CodeQL advisory), so this plan now also sees the `merge_queue`
+          # rule: a queue rule removed or edited outside Terraform shows as drift
+          # here, and the merge-queue stall probe is blind to a disabled queue by
+          # design. No other surface watches this ruleset for out-of-band edits,
+          # so `terraform plan` here is the real drift detector.
+          # Authenticates as apply-github-infra.yml's Terraform does:
+          # the soleur-infra App key from the infra-credentials loader (infra
+          # mode, ADR-241 D5; the soleur-ai pair in prd_terraform is the #8209
+          # eviction sentinel), plus Doppler prd_terraform tf-var for the
+          # remaining inputs. infra/github declares no
           # ssh_key_path variable, so the CI-SSH-key VAR_ARGS guard below skips
           # it automatically.
           - infra/github

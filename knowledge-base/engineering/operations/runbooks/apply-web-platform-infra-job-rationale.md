@@ -356,6 +356,46 @@ A GREEN APPLY IS NOT A GREEN BOOT. `runcmd` is once-per-instance: a host that ab
 at stage=verify is not repairable by a reboot, only by replacement. That asymmetry is
 why the coherence preflight is mandatory and PRE-apply, and why R2 exists at all.
 
+### Escrow readiness preflight (web_host_create, web_host_replace) and the workspaces passphrase HALT (apply), #9377
+
+Relocated here from the workflow (ADR-231: the workflow file is near its byte gate, so rationale lives in this file and
+the logic lives in committed scripts).
+A third consumer runs the same script outside a birth: the dispatch-only, read-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04), so an agent can ask whether escrow is ready before it dispatches one. It is not a host-creating job, so the census below does not apply to it.
+
+**The preflight step.** Both birth routes run one step, `bash scripts/web-host-escrow-preflight.sh`, after the ADR-128 R1
+backend-credentials step and before `Terraform init` (the R1 step is deliberately the first reader of Doppler, so the
+preflight follows it rather than preceding it). It runs `scripts/check-web-host-escrow-config.sh --live` and fails closed:
+exit 1 (a required name is missing), 2 (usage or no credential) and 3 (Doppler unreadable) all fail the step, and none is
+read as absence. It has no `if:`, no `continue-on-error` and no `|| true`, and `timeout-minutes: 2`. The checker reads
+names only, so it proves the web-class config carries the key, bucket, endpoint and R2 pair names; it cannot prove the
+values are right. A present but wrong R2 pair passes it and surfaces later as a paged `escrow=missing` from the
+provisioner (its `reason=` is decoded in `web-host-replace.md`; that page shares the paging rule's 35-minute throttle, which is
+fleet-wide and spans boots because all boot events share one Sentry issue group, so the stage is also read directly after a birth). The cause map (which missing name means the push-apply has not run, which means the live R2 mint is still
+pending) lives in the checker's own output, not here.
+
+**Why a wrapper.** `--live` needs a token that can list both configs: a workplace-scope token (`TF_VAR_doppler_token_tf`,
+exported masked by the Tier-B loader, or the `prd_terraform` secret `DOPPLER_TOKEN_TF` in the legacy arm); the step's own
+config-scoped token exits 3. The wrapper prefers the environment value, otherwise reads exactly one named secret (never
+`doppler run`, which would hand the checker every `prd_terraform` secret), refuses xtrace first, shape-checks a fallback
+value before masking it, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. One reusable script keeps the
+single-use web-2 rebirth workflow (#9372) to one added line, and `web-host-escrow-preflight-census.test.ts` makes any
+job that runs `terraform apply` with a `-target` or `-replace` of `hcloud_server.web[` carry it. The step runs after the
+reviewer approval of the dispatch environment, so a refused birth spends one approval; moving it to a preceding ungated
+job is recorded as a taste call in the #9377 decision challenges. The provider token is write-capable; a read-only
+preflight token is a tracked deferral (<https://github.com/jikig-ai/soleur/issues/9461>).
+
+**The widened HALT in `apply`.** `luks_passphrase_rotations` (the jq counter in
+`tests/scripts/lib/destroy-guard-filter-web-platform.jq`) now covers six addresses: the inngest pair and, for the
+workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_luks_key`,
+`random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`. The HALT sits before the
+`destroy_count` sum and outside it, so `[ack-destroy]` cannot reach it: a replace of a password also trips
+`resource_deletes`, and acking an unrelated delete in the same merge would otherwise ack the rotation with it. A first
+`create` stays legal (the web-class pair had never been applied when this gate was written, so the swap to a distinct password was a first create; it was applied on 2026-10-04, so a later change is not);
+`update`, `delete`, `forget` and an unreadable verb list stop the apply. The remediation text names the supported rotation
+(a header re-key, then an intentional state change under review, never a replace) and the recovery from a tainted first
+create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
+`[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md
@@ -693,11 +733,24 @@ key is corrupted", and the remedy it suggests is to paste a fresh key into `prd_
 **undoes the eviction**, on a config every branch of this public repository can read. A message
 that invites the operator to reverse the fix is worse than no message.
 
-Four consumers read this name and all four carry the refusal:
-`.github/actions/mint-soleur-ai-app-token/action.yml`, `apply-github-infra.yml`,
+Three consumers read this name and all three carry the refusal: `apply-github-infra.yml`,
 `board-status-sync.yml`, and this workflow. ADR-241 D5, the plan and the #8209 runbook all promised
 `verdict=legacy_app_key_evicted`; nothing implemented it until review round 3. Census row **G4e**
-is what keeps a fifth consumer from being added without it.
+(floor 3) is what keeps a fourth consumer from being added without it.
+
+*Updated 2026-09-30 (#9262):* this read "Four consumers" until #9262. The fourth was the pin-bump
+and auto-mint composite, `.github/actions/mint-soleur-ai-app-token/action.yml`, renamed to
+`.github/actions/mint-infra-app-token/action.yml` in #9262. It left the population: it no longer
+reads `GITHUB_APP_PRIVATE_KEY` (or `prd_terraform` at all), and it mints the Tier-B `soleur-infra`
+identity from the fixed Tier-B project `soleur-infra-privileged`. G4e's floor moved from 4 to 3. *(Dated
+2026-10-03, #9321: its source is now the validated `doppler-project` input, default the narrow
+`soleur-infra-app` project; `soleur-infra-privileged` is read only by a caller that names it, which is
+`apply-github-infra.yml`. G4e is unaffected: the composite never read `GITHUB_APP_PRIVATE_KEY`.)*
+
+*Updated 2026-10-01 (#9360):* one consumer remains, `board-status-sync.yml`'s legacy arm.
+`apply-github-infra.yml` now mints its verify token from the Tier-B soleur-infra App through
+`.github/actions/mint-infra-app-token`, and this workflow's `entrypoint_audit` job posts with its own
+`github.token`. G4e moved from a floor of 3 to an exact 1, and no reader may sit in a Tier-B job.
 
 ### plan_only, belt-and-braces on the post-apply steps
 
@@ -953,9 +1006,11 @@ workflow-injection guidance. All action references are SHA-pinned.
   hardcoded to it (ForceNew), cloudflare_record.app is pinned to its ipv4_address, and all
   15 web-1-pinned terraform_data SSH provisioners would be left un-run against a dead IP.
   DECISIVELY, and invisible to any plan-shaped gate: /mnt/data pins by-id to the PLAINTEXT
-  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded, and nothing
-  on a fresh boot opens the mapper (guest-side unlock deferred to #6931) — so a rebuilt
-  web-1 would serve every worktree rolled back to 2026-07-23. See
+  hcloud_volume.workspaces[key], which the 2026-07-23 LUKS cutover superseded. The guest-side
+  fresh-boot path (#6931, ADR-263) now refuses that ext4 volume (stage
+  workspaces_luks_provision_discriminate, zero writes, host powers off), so a rebuilt web-1
+  fails CLOSED instead of serving every worktree rolled back to 2026-07-23; the LUKS volume
+  still sits attached and unopened, which is why the refusal stands. See
   tests/scripts/lib/web-host-replace-gate.sh's header and ADR-148 §Alternatives; #6964.
 
   A REPLACE DESTROYS BEFORE IT CREATES, so the stock preflight is mandatory here rather

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# lint-trap-ownership: ok the host path is a fixed contract with the unit file
+work="$(mktemp -d /var/tmp/demo.XXXXXX)"
+trap 'rm -rf "$work"' EXIT

@@ -55,7 +55,10 @@ function extractSentryMonitorSlugs(): Map<string, string> {
 }
 
 function extractTfMonitorNames(): Set<string> {
-  return new Set([...tfSrc.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+  // Comment lines are stripped first: a commented `# name = "<slug>"` must not
+  // satisfy the (c2)/(c3) guards for a monitor that is no longer declared.
+  const code = tfSrc.replace(/^[ \t]*#.*$/gm, "");
+  return new Set([...code.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
 }
 
 const KNOWN_UNMONITORED_SLUGS = new Set([
@@ -185,6 +188,11 @@ const NON_INNGEST_MONITORS = new Set([
   // cron-*.ts counterpart and no SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings
   // the check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
   "workspaces-luks-verify",
+  // #6931: the web-2 soak-marker job of the same workflow (workspaces-luks-verify.yml, job
+  // `web2_marker`, same on.schedule). Same anti-circularity class as the web-1 leg above: the
+  // verifier must not run on the host it verifies. No cron-*.ts counterpart and no
+  // SENTRY_MONITOR_SLUG const; its own check-in step pings sentry_cron_monitor.workspaces_luks_verify_web2.
+  "workspaces-luks-verify-web2",
   // #8160: GHA-fired (scheduled-devin-docs-drift.yml, on.schedule '23 7 * * *') — the
   // disposable docs.devin.ai capability-drift watcher. Its subject is OUTSIDE the
   // product (Cognition's public documentation, fetched anonymously), so it has no
@@ -208,11 +216,6 @@ const NON_INNGEST_MONITORS = new Set([
   // no SENTRY_MONITOR_SLUG; the workflow's terminal sentry-heartbeat step posts
   // the check-in. Same class as scheduled-terraform-drift / main-health-monitor.
   "scheduled-supabase-watchdog",
-  // TEMPORARY (#9304): the cron-gh-pages-cert-state function was deleted (its GitHub Pages
-  // origin cert is abandoned, ADR-194), but the Sentry two-PR rule (#8630) forbids unrouting
-  // and deleting a monitor in one apply, so the disabled monitor survives one PR with no
-  // handler slug. Remove this entry in the PR that deletes the monitor (#9304).
-  "scheduled-gh-pages-cert-state",
 ]);
 
 describe("Inngest function registry — drift guards", () => {
@@ -241,8 +244,9 @@ describe("Inngest function registry — drift guards", () => {
   // NON_INNGEST_MONITORS like scheduled-terraform-drift).
   // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
   // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
+  // 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a)).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(71);
+    expect(routeEntries.length).toBe(72);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle

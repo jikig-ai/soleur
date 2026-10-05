@@ -452,10 +452,9 @@ runcmd:
   # redirect, so no world-readable window. THIS FILE IS BYTE-BUDGETED — keep prose in server.tf.
   - install -m 640 -o root -g deploy /dev/null /etc/default/soleur-doppler-token
   - printf '%s' '${soleur_doppler_token_env_b64}' | base64 -d > /etc/default/soleur-doppler-token
-  # (#6604/DP-9) Bake the Sentry DSN for the luks-monitor units — baked so "Doppler down ⇒ MUST page" keeps its DSN.
-  - printf 'SOLEUR_SENTRY_DSN=%s\n' '${sentry_dsn}' > /etc/default/luks-monitor
-  - chmod 600 /etc/default/luks-monitor
-  - chown root:root /etc/default/luks-monitor
+  # (#6604/DP-9, #6931) luks-monitor env: baked DSN + the fresh-host scoped token (never co-rotated; ADR-263). 0600 from creation.
+  - install -m 600 -o root -g root /dev/null /etc/default/luks-monitor
+  - printf 'SOLEUR_SENTRY_DSN=%s\nDOPPLER_TOKEN=%s\nLUKS_MONITOR_PROFILE=standby\n' '${sentry_dsn}' '${workspaces_luks_fresh_boot_token}' > /etc/default/luks-monitor
 
   # Install Docker via official APT repository with GPG key verification (#1615).
   # Replaces pipe-to-shell (curl | sh) with signed APT repo -- same pattern as cloudflared above.
@@ -556,10 +555,11 @@ runcmd:
     set +e  # H3 (#6090): scope set -e — runcmd is ONE /bin/sh; leak = silent abort (plan).
   # END host-script extraction (#5921)
 
-  # #6604: pin /mnt/data by-id + nofail (glob binds the wrong device once LUKS attaches; nofail = pageable degrade, not a boot hang).
-  - mkdir -p /mnt/data
-  - grep -q ' /mnt/data ' /etc/fstab || echo '/dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
-  - mount /mnt/data 2>/dev/null || mount /dev/disk/by-id/scsi-0HC_Volume_${workspaces_volume_id} /mnt/data || soleur-boot-emit workspaces_mount fatal || true
+  # #6931: guest-side LUKS (baked provisioner, ADR-263). Hard gate: nothing below may write to /mnt/data unless the mapper backs it.
+  - printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\n' '${workspaces_volume_id}' > /etc/default/workspaces-luks-boot
+  - chmod 600 /etc/default/workspaces-luks-boot
+  - /usr/local/bin/workspaces-luks-provision.sh
+  - mountpoint -q /mnt/data && [ "$(findmnt -no SOURCE /mnt/data)" = /dev/mapper/workspaces ] || { soleur-boot-emit workspaces_luks_not_mounted fatal; poweroff -f; }
 
   # Create workspace and plugin directories
   - mkdir -p /mnt/data/workspaces

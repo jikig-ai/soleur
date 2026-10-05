@@ -11,6 +11,10 @@
 #   1. Declare <NAME>_PATHS here, self-including the suite's own file AND this file.
 #   2. Add "<NAME>_PATHS|<suite-file>" to RELEVANCE_ARRAYS in scripts/lint-orphan-test-suites.sh.
 #   3. Wrap the run_suite call in scripts/test-all.sh with `if _diff_touches "${<NAME>_PATHS[@]}"`.
+#      A self-test mutation battery that should ALSO decline on a pull_request CI run (ADR-262) takes
+#      the second form, `if _diff_touches --pr-gated "${<NAME>_PATHS[@]}"`; without the flag a CI run
+#      always executes the suite. Only admit a suite to it under ADR-262's admission rule, and put
+#      `"${PR_GATE_MACHINERY_PATHS[@]}"` in its array.
 #   4. Give it a skip_suite else-arm — the decline must be a counted verdict, never an absence.
 #   5. Ensure every path in 1 lives under a TEST_RELEVANCE_PREFIXES entry below; add the prefix if
 #      not, or the untracked-file arm is blind to it.
@@ -31,7 +35,7 @@
 # DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very
 # different consumers source this file and both need it to be inert:
 #
-#   scripts/test-all.sh              — sources it at TOP LEVEL to guard four run_suite calls
+#   scripts/test-all.sh              — sources it at TOP LEVEL to guard its relevance-gated run_suite calls
 #   scripts/lint-orphan-test-suites.sh — sources it to assert every declared path still resolves
 #
 # WHY A DATA FILE RATHER THAN ARRAYS BESIDE THE CALL SITES. The linter has to read these lists,
@@ -63,11 +67,13 @@
 # SHORTER list satisfies all four. Verified by deleting an entry: the linter stayed green.
 # Cost is ~17 min of battery time on commits touching this one file, which is rare.
 #
-# scripts/test-all.sh is deliberately NOT listed. Its gating LOGIC is already covered
-# unconditionally by scripts/test-all-infra-coverage-notice (registered with no relevance gate),
-# and the batteries verify neither that logic nor these lists — so listing it would tax every
-# routine suite registration with ~17 min for no added signal.
-#
+# scripts/test-all.sh IS LISTED ONLY FOR THE --pr-gated BATTERIES, through PR_GATE_MACHINERY_PATHS
+# below (ADR-262). Until then it was deliberately absent: its gating LOGIC is covered
+# unconditionally by scripts/test-all-infra-coverage-notice (registered with no relevance gate), and
+# the batteries verify neither that logic nor these lists. That reasoning held while a CI run executed
+# every battery regardless. On a pull_request run the predicate now decides, so an edit to the
+# predicate, the arrays or the shard manifests must arm every gated battery on the PR that makes it.
+
 # KNOWN LIMIT — the cf-tunnel enumeration is a LOWER BOUND, not a closed set. Three of the
 # oracle's assertions bind to a DIRECTORY rather than to nameable files: W2 counts
 # `--only CI_SSH_ACCESS_TOKEN` call sites across .github/, W7 enumerates bridge adopters under
@@ -89,6 +95,19 @@
 # battery, necessarily matches the predicate, and therefore necessarily runs the suite that
 # would otherwise have been skipped with a stale list.
 
+# GATE MACHINERY (ADR-262). A diff that edits the predicate, the arrays, the affected index, the CI
+# workflow or a shard manifest arms EVERY --pr-gated battery on that PR. Spread into each such array
+# below rather than repeated, so the set is single-sourced and a sixth site cannot lose one member.
+# scripts/lib/test-relevance-paths.sh is NOT listed here: every array names it itself, per the
+# self-inclusion rule above, and the orphan linter enforces that per array.
+PR_GATE_MACHINERY_PATHS=(
+  "scripts/test-all.sh"                                     # the predicate, the canary and every call site
+  "scripts/lib/test-affected-paths.sh"                      # ALWAYS_ON / consumed-edge classification of these batteries
+  ".github/workflows/ci.yml"                                # binds the event and the shard legs the gate runs in
+  "scripts/suite-shard-legs.tsv"                            # leg assignment: a mid-block shift changes which leg RUNS a battery
+  "scripts/suite-shard-legs-heavy.tsv"
+)
+
 # tests/scripts/registry-gate-mutation-battery (test-all.sh) — the single most expensive suite in
 # the runner at ~860 s, and it guards the registry restore/destroy authorization path.
 # Source of truth: tests/scripts/test-registry-gate-mutation-battery.sh — SUT_GATE/SUT_ENGINE and
@@ -102,6 +121,7 @@ REGISTRY_BATTERY_PATHS=(
   "scripts/zot-mirror-diagnosis.sh"                         # sourced companion; absence changes which arm runs
   "scripts/check-cloudflare-token-drift.sh"                 # copied, but seam-overridden on every run
   "apps/web-platform/infra/cloud-init.yml"                  # copied fixture
+  "${PR_GATE_MACHINERY_PATHS[@]}"
   "tests/scripts/test-registry-gate-mutation-battery.sh"    # SELF — see the note above
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
@@ -127,7 +147,61 @@ CF_TUNNEL_BATTERY_PATHS=(
   ".github/workflows/git-data-cutover.yml"                  # W7_EXPECTED, and mutated directly by M4
   ".github/workflows/workspaces-luks-cutover.yml"           # W7_EXPECTED (three call sites)
   ".github/workflows/workspaces-luks-verify.yml"            # W7_EXPECTED
+  "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/cf-tunnel-liveness-gate-mutations.test.sh"       # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
+)
+
+# scripts/lint-orphan-test-suites-mutations-a / -b (test-all.sh) — ~440 s each, ONE array for both
+# halves (they are the two --rows ranges of one battery). Source of truth:
+# scripts/lint-orphan-test-suites.test.sh — the `cp` block that builds $PRISTINE (the linter, the
+# runner, the two libs and repo-write-boundary.sh, run-registered-suites.sh, .github/workflows/*.yml).
+# NOT DECLARED, NAMED: the battery also materialises `git ls-files '*.test.sh'` and
+# `tests/commands/*.sh` into its sandbox — a whole-corpus read. Declaring every tracked suite would arm
+# it on nearly every PR, so it is declared by DEPENDENCY, not copy set (ADR-181's rule), and the corpus
+# is ADR-262 residual R3. .github/workflows is a DIRECTORY entry because the linter greps every
+# workflow for suite registrations, so the directory entry arms it on about a third of commits
+# (re-measure: bash scripts/ci-battery-gate-replay.sh).
+LINT_ORPHAN_BATTERY_PATHS=(
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/lint-orphan-test-suites.sh"                      # SUT
+  "scripts/lib/repo-write-boundary.sh"                      # copied into the sandbox
+  "apps/web-platform/infra/run-registered-suites.sh"        # copied; a REQUIRED_RUNNERS registration
+  ".github/workflows"                                       # cp .github/workflows/*.yml — directory, see above
+  "scripts/lint-orphan-test-suites.test.sh"                 # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
+)
+
+# scripts/battery-tag-authorship-mutations (test-all.sh, heavy group) — ~400 s. Source of truth:
+# scripts/battery-tag-authorship-mutations.test.sh (SUBJECT, the BATTERY_TAG_RUNNER seam) and the
+# subject's own `for w in` witness list. The subject also reads ADR-207 and walks the runner's whole
+# closure; edits there are caught by the subject's own ungated registration, which is why this
+# array does not list the closure (ADR-262 residual R3). The subject runs the LIVE tree, not a copy: it
+# is declared by its named inputs only.
+TAG_AUTHORSHIP_BATTERY_PATHS=(
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/battery-tag-authorship.test.sh"                  # SUBJECT — the guard the rows mutate
+  "scripts/lib/repo-write-boundary.sh"                      # the classifier the subject's premise rests on
+  "scripts/lib/repo-write-boundary.test.sh"                 # witness (the subject's `for w in` list)
+  "scripts/suite-exit-class-parity.test.sh"                 # witness
+  "tests/scripts/test-plan-gate-preamble.sh"                # witness
+  "tests/scripts/fixtures/battery-tag-bare-fetch.sh"        # FIXTURE_EXCLUSION fixture
+  "tests/scripts/fixtures/battery-tag-marker-no-ledger.sh"  # FIXTURE_EXCLUSION fixture
+  "scripts/guard-vacuity-floor.test.sh"                     # owns the floor-shape this battery's final block must keep
+  "scripts/battery-tag-authorship-mutations.test.sh"        # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
+)
+
+# scripts/test-all-affected (test-all.sh, light group) — ~440 s on CI. Source of truth:
+# scripts/test-all-affected.test.sh — RUNNER / AFF_LIB / REL_LIB / RWB_LIB at its top, plus the census
+# sandbox. THE SANDBOX HARDLINKS ALL OF scripts/ (`cp -al "$REPO_ROOT/scripts/."`), so a prefix
+# declaration would arm this battery on over half of recent commits (re-measure with the replay script) for no
+# added signal; it is declared by dependency instead and the hardlinked corpus is ADR-262 residual R3.
+TEST_ALL_AFFECTED_BATTERY_PATHS=(
+  "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/lib/repo-write-boundary.sh"                      # RWB_LIB
+  "scripts/lint-orphan-test-suites.sh"                      # the census linter the sandbox arms drive
+  "scripts/test-all-affected.test.sh"                       # SELF — see the note above
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
@@ -161,8 +235,9 @@ CF_TUNNEL_BATTERY_PATHS=(
 #
 # KNOWN LIMIT — a LOWER BOUND, not a closed set, exactly as the cf-tunnel block above says of
 # itself. Two real dependencies are deliberately NOT declared: `.bun-version` (run_producer invokes
-# `bun "$PRODUCER"`) and the likec4 version pin, which lives in three places (package.json,
-# apps/web-platform/Dockerfile, the ci.yml install step) and none of them here. Declaring them
+# `bun "$PRODUCER"`) and the likec4 version pin, which lives in several places (package.json,
+# apps/web-platform/Dockerfile, the ci.yml and monitor install steps; BUMPING LIKEC4 in
+# render-c4-model.sh lists them) and none of them here. Declaring them
 # would arm this suite on every toolchain bump for no added signal, and the window is bounded three
 # ways: the pin trio has its own UNGATED guard (apps/web-platform's c4-likec4-version-pin.test.ts),
 # the suite DEGRADES rather than fails when the CLI is unreachable, and CI runs everything.

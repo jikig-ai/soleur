@@ -94,6 +94,26 @@ if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fai
 write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},$(rc_obj 'doppler_secret.workspaces_luks_key' '"update"')"
 if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8: touching the doppler_secret should ABORT"; else pass; fi
 
+# --- Test 8w (#9377): the web-class key copy doppler_secret.workspaces_luks_web_key touched ⇒ ABORT ---
+# It holds the web host class's OWN passphrase (a distinct generator since #9377, not a copy of web-1's); a create or
+# update strands that class's at-rest data the same way a touch on the original pair would.
+# The address is in named_live (excluded from out_of_scope), so luks_passphrase_touched is its SOLE catcher.
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"create"')"
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8w-a: web key copy create should ABORT"; else pass; fi
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"update"')"
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8w-b: web key copy update should ABORT"; else pass; fi
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"no-op"')"
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then pass; else fail "Test 8w-c: web key copy no-op should still PASS"; fi
+
+# --- Test 8x (#9377 decision A1): the NEW web-class passphrase random_password.workspaces_luks_web touched ⇒ ABORT ---
+# Same reasoning as 8w: it is in named_live (excluded from out_of_scope), so luks_passphrase_touched is its SOLE catcher.
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'random_password.workspaces_luks_web' '"create"')"
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8x-a: web-class passphrase create should ABORT"; else pass; fi
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'random_password.workspaces_luks_web' '"update"')"
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 8x-b: web-class passphrase update should ABORT"; else pass; fi
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'random_password.workspaces_luks_web' '"no-op"')"
+if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then pass; else fail "Test 8x-c: web-class passphrase no-op should still PASS"; fi
+
 # --- Test 9: doppler_service_token.workspaces_luks touched ⇒ ABORT (out_of_scope) ---
 write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'doppler_service_token.workspaces_luks' '"update"')"
 if workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID" >/dev/null; then fail "Test 9: touching the service token should ABORT (out_of_scope)"; else pass; fi
@@ -183,6 +203,31 @@ gate_check "A2 (D6): a SCALAR .change => fail-closed ABORT" \
 gate_check "A2 (D6): the ABORT names the offending address" \
   workspaces_luks_recut_gate 1 "hcloud_volume.workspaces" "$TMP/pg-d6.json"
 
+# 4.1b (#9377): the passphrase arm names the web-class key copy. SOLE guard (the address is excluded
+# from out_of_scope via named_live), proven by deleting just that clause of the arm.
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'doppler_secret.workspaces_luks_web_key' '"update"')"
+gate_mutate_and_check "4.1b: luks_passphrase_touched names doppler_secret.workspaces_luks_web_key" \
+  's/ or \.address == "doppler_secret\.workspaces_luks_web_key"//' \
+  workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID"
+
+# 4.1c (#9377): the passphrase arm names the NEW web-class password, proven the same way as 4.1b.
+write_plan "${VOL_REPLACE_ID},${ATT_REPLACE},${PW_NOOP},${SECRET_NOOP},$(rc_obj 'random_password.workspaces_luks_web' '"update"')"
+gate_mutate_and_check "4.1c: luks_passphrase_touched names random_password.workspaces_luks_web" \
+  's/ or \.address == "random_password\.workspaces_luks_web")/)/' \
+  workspaces_luks_recut_gate "$TMP/plan.json" "$ORPHAN_ID"
+
+# 4.2 (#9377 review): the operator-facing ABORT message in the WORKFLOW names every address the gate counts. It listed
+# only web-1's pair after the gate learned the web-class pair, so the checklist an operator reads pointed at the wrong
+# resources. Boundary-matched (`random_password.workspaces_luks` is not satisfied by its `_web` sibling).
+_RC_WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.github/workflows/apply-web-platform-infra.yml"
+_rc_msg="$(grep -F 'workspaces-luks-recut destroy-guard ABORTED' "$_RC_WF" || true)"
+_rc_missing=''
+if [[ -z "$_rc_msg" ]]; then _rc_missing=' (message line not found)'; fi
+for _rc_a in random_password.workspaces_luks doppler_secret.workspaces_luks_key random_password.workspaces_luks_web doppler_secret.workspaces_luks_web_key; do
+  grep -qE "(^|[^A-Za-z0-9_])${_rc_a//./\\.}([^A-Za-z0-9_]|\$)" <<<"$_rc_msg" || _rc_missing="${_rc_missing} ${_rc_a}"
+done
+if [[ -z "$_rc_missing" ]]; then pass; else fail "Test 4.2: the workflow's recut ABORT message must name all four counted passphrase addresses; missing:${_rc_missing}"; fi
+
 gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
   's/^  plan_gate_assert_classifiable .*/  :/' \
   "unclassifiable plan entry" "plan is NOT the exact scoped" \
@@ -208,11 +253,11 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 23 ]]; then
+if [[ "$_ran" -lt 35 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 35. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 35)\n' "$_ran"
 fi
 
 echo ""

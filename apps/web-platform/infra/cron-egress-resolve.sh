@@ -26,8 +26,20 @@
 #   - DNS PIN UNION: @soleur_egress_dns always includes Docker's
 #     substitution pair (8.8.8.8/8.8.4.4) — pruning them while the container
 #     is down (deploy window) would blackhole ALL container DNS on restart.
+#   - NEVER LINK-LOCAL (#9378): no address in 169.254.0.0/16 (the instance-metadata range; it serves
+#     cloud-init user_data, which carries a Doppler read token) may enter either set, from ANY feeder:
+#     the host's answers, the container's own getent view, the 24 h grace pool re-read from SEEN_DIR
+#     (matching seen/ files are PURGED, never just skipped) and the resolver pin set. The v4-mapped
+#     spelling (::ffff:169.254.x.y) counts as link-local too. A host whose answers were ALL link-local
+#     counts as a resolution failure (additive-only tick, the existing partial-failure doctrine), and
+#     the first occurrence per host posts a Sentry event (the stdout line below is journal-only: this
+#     unit's SYSLOG_IDENTIFIER is not in Vector's host-script allowlist).
+#     COST: an event whose POST fails is retried each tick (the marker is written only after a successful POST), and a
+#     blackholed Sentry costs up to the POST's --max-time 10 s per poisoned source per tick, spent BEFORE the GHCR probe's
+#     start gate (GHCR_PROBE_BUDGET_SECS). Mitigation: past that budget the probe is skipped for that tick and counted as blind
+#     (budget_skipped), not failed; the next tick re-evaluates. The tick cadence and the real Sentry latency are unmeasured.
 #   - SELF-HEAL: each tick asserts the DOCKER-USER jump + default-drop rule
-#     are live and re-execs the loader when absent (mid-life `nft flush` /
+#     (+ the default-drop log rule) are live and re-execs the loader when absent (mid-life `nft flush` /
 #     external tooling would otherwise fail OPEN with every monitor green).
 #   - The timer-unit failure alarms via OnFailure= (cron-egress-alarm.service)
 #     AND this script posts a Sentry Crons check-in (slug
@@ -36,6 +48,15 @@
 # Runs doppler-wrapped (prd config) so SENTRY_* / SUPABASE_* are present;
 # every env read degrades gracefully when absent (dev hosts).
 set -euo pipefail
+# (#7797) Refuse to run under shell tracing: this unit is doppler-wrapped and holds a live
+# Sentry ingest key that -x would print. UNCONDITIONAL (every credential arrives from the
+# unit's environment, so a `${VAR:+x}` hatch names nothing it can trust).
+case "$-" in
+  *x*)
+    printf '[cron-egress-resolve] refusing to run under xtrace: this unit handles a live credential and -x would print it\n' >&2
+    exit 78
+    ;;
+esac
 
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-/etc/soleur/cron-egress-allowlist.txt}"
 ALLOW_SET="soleur_egress_allow"
@@ -45,7 +66,18 @@ SENTRY_SLUG="cron-egress-resolve"
 LOG_TAG="cron-egress-resolve"
 LOADER="${LOADER:-/usr/local/bin/cron-egress-nftables.sh}"
 LOCK_FILE="/run/cron-egress-resolve.lock"
-FAILCOUNT_DIR="/run/cron-egress-resolve-failcount"
+FAILCOUNT_DIR="${FAILCOUNT_DIR:-/run/cron-egress-resolve-failcount}"
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$FAILCOUNT_DIR"
 # Post one escalation event after this many consecutive failures of the same
 # host (at the 1-min timer cadence ≈ 30 min of sustained failure).
 FAILCOUNT_ESCALATE=30
@@ -65,6 +97,50 @@ SEEN_DIR="${SEEN_DIR:-/var/lib/cron-egress-resolve/seen}"
 
 log() { echo "[$LOG_TAG] $*"; }
 
+# --- Link-local guard (#9378) ---------------------------------------------------
+# One predicate, two stdin filters. is_link_local normalises each octet with 10# (so 169.254.009.1 is read as
+# decimal) and strips the v4-mapped prefix, then tests 169.254.0.0/16 membership.
+is_link_local() { # <addr>
+  local a="${1#::[fF][fF][fF][fF]:}"
+  [[ "$a" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || return 1
+  (( 10#${BASH_REMATCH[1]} == 169 && 10#${BASH_REMATCH[2]} == 254 ))
+}
+ll_only() { local a; while IFS= read -r a; do ! is_link_local "$a" || printf '%s\n' "$a"; done; } # stdin lines that ARE link-local
+ll_strip() { local a; while IFS= read -r a; do is_link_local "$a" || printf '%s\n' "$a"; done; } # stdin lines that are NOT
+ll_report() { # <source> <addrs>: journal line always; the Sentry event once per source until it answers clean again
+  local marker="$FAILCOUNT_DIR/.ll-$1" extra addrs
+  addrs="$(tr '\n' ' ' <<< "$2")"; addrs="${addrs% }"
+  log "WARN: $1 answered link-local address(es) [$addrs] - DROPPED (169.254.0.0/16 is never allowlisted)"
+  [[ -e "$marker" ]] && return 0
+  extra="$(jq -nc --arg src "$1" --arg addrs "$addrs" '{source: $src, addresses: $addrs, remediation: "a vendor name in cron-egress-allowlist.txt (or a dynamic host env) resolves into the instance-metadata range; the address was dropped. Investigate DNS for that host."}')"
+  SENTRY_EVENT_SENT=0
+  sentry_event "cron-egress-resolve: '$1' answered a link-local address (169.254.0.0/16, the instance-metadata range); dropped, never allowlisted" "resolve_link_local" "$extra"
+  # The marker is written only AFTER a POST that curl reported as sent (#9377 review): this event is the only no-SSH
+  # signal (the stdout line is journal-only), and sentry_event returns 0 even when the Sentry env is unset or the POST
+  # failed, so a marker written before it would let one transient failure suppress the signal until the name answers
+  # clean. A failed or unconfigured attempt is retried on the next tick (delivery is still best-effort: curl rc 0 is not an HTTP 2xx).
+  if (( SENTRY_EVENT_SENT )); then
+    : > "$marker"
+  fi
+}
+ll_clear() { rm -f "$FAILCOUNT_DIR/.ll-$1"; } # <source>
+
+# Strict dotted-quad filter (stdin lines -> stdout lines): four decimal fields, each
+# <= 255 with no leading zeros. Container-supplied addresses (getent / resolv.conf read
+# through docker exec) reach the nft batch only through this: a `999.1.1.1` that matched
+# a bare `^[0-9]+(\.[0-9]+){3}$` would make `nft -f` reject the WHOLE transaction and
+# abort the tick before the GHCR probe. Pure awk, no gawk-only constructs (the host
+# runs mawk).
+strict_ipv4_lines() {
+  awk -F. 'NF == 4 {
+    ok = 1
+    for (i = 1; i <= 4; i++) {
+      if ($i !~ /^[0-9]+$/ || $i + 0 > 255 || ($i != "0" && $i ~ /^0/)) ok = 0
+    }
+    if (ok) print
+  }'
+}
+
 # Serialize against concurrent invocations (timer tick vs loader bootstrap vs
 # terraform re-provision). Without this, two identical reconciles can race and
 # one batch fails on an already-deleted element (kernel rolls back atomically —
@@ -76,25 +152,57 @@ fi
 # --- Sentry Crons check-in (mirrors postSentryHeartbeat, _cron-shared.ts) ---
 sentry_checkin() {
   local status="$1"
-  local domain="${SENTRY_INGEST_DOMAIN:-}"
-  local project="${SENTRY_PROJECT_ID:-}"
-  local key="${SENTRY_PUBLIC_KEY:-}"
-  if [[ -z "$domain" || -z "$project" || -z "$key" ]]; then
-    log "WARN: Sentry env unset — skipping ${status} check-in"
+  # (#7898 §2) Sentry ingest-triple adjudication: the destination is pinned to a Sentry ingest
+  # host and the project id / public key to their shapes before the key is sent anywhere; a
+  # value that fails the pin is refused (never posted), not corrected.
+  # BEGIN sentry-dest-pin (#7898)
+  sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    _si_host="${SENTRY_INGEST_DOMAIN%.}"
+    _si_host="${_si_host,,}"
+    if [[ "$_si_host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ingest\.(de|us)\.sentry\.io$ ]]; then
+      sentry_dest_ok=1
+    else
+      sentry_refuse_reason=host-shape
+    fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PROJECT_ID" =~ ^[0-9]+$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=project-shape; fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PUBLIC_KEY" =~ ^[a-f0-9]{32}$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=key-shape; fi
+  fi
+  # END sentry-dest-pin (#7898)
+  if (( ! sentry_dest_ok )); then
+    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — skipping ${status} check-in"
     return 0
   fi
-  curl -s -o /dev/null --max-time 10 -X POST \
-    "https://${domain}/api/${project}/cron/${SENTRY_SLUG}/${key}/?status=${status}" \
+  # (#7873) transport confinement, position load-bearing: --disable FIRST aborts ~/.curlrc
+  # parsing; --noproxy '*' ignores a planted proxy env. The URL interpolates the FOLDED host.
+  curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null --max-time 10 -X POST \
+    "https://${_si_host}/api/${SENTRY_PROJECT_ID}/cron/${SENTRY_SLUG}/${SENTRY_PUBLIC_KEY}/?status=${status}" \
     || log "WARN: Sentry check-in POST failed (status=${status})"
 }
 
+SENTRY_EVENT_SENT=0 # set to 1 by sentry_event only when its curl POST returned 0 (read by ll_report; every caller still gets rc 0)
 # Post a Sentry error EVENT (store API — legacy-but-stable endpoint; migrate
 # to the envelope API if Sentry ever sunsets /store/). $1=message $2=op
 # $3=extra-json.
 sentry_event() {
   local msg="$1" op="$2" extra="$3"
-  if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
-    log "WARN: Sentry env unset — event not posted (op=${op})"
+  SENTRY_EVENT_SENT=0
+  # BEGIN sentry-dest-pin (#7898)
+  sentry_dest_ok=0; sentry_refuse_reason=""; _si_host=""
+  if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
+    _si_host="${SENTRY_INGEST_DOMAIN%.}"
+    _si_host="${_si_host,,}"
+    if [[ "$_si_host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.ingest\.(de|us)\.sentry\.io$ ]]; then
+      sentry_dest_ok=1
+    else
+      sentry_refuse_reason=host-shape
+    fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PROJECT_ID" =~ ^[0-9]+$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=project-shape; fi
+    if (( sentry_dest_ok )) && [[ ! "$SENTRY_PUBLIC_KEY" =~ ^[a-f0-9]{32}$ ]]; then sentry_dest_ok=0; sentry_refuse_reason=key-shape; fi
+  fi
+  # END sentry-dest-pin (#7898)
+  if (( ! sentry_dest_ok )); then
+    log "WARN: Sentry env unset or refused (${sentry_refuse_reason:-unset}) — event not posted (op=${op})"
     return 0
   fi
   local payload
@@ -105,12 +213,16 @@ sentry_event() {
     '{message: $msg, level: "error", platform: "other", logger: "cron-egress-resolve",
       tags: {feature: "cron-egress-firewall", op: $op},
       extra: $extra}')"
-  curl -s -o /dev/null --max-time 10 -X POST \
-    "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+  # (#7873) transport confinement, position load-bearing (see sentry_checkin).
+  if curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null --max-time 10 -X POST \
+    "https://${_si_host}/api/${SENTRY_PROJECT_ID}/store/" \
     -H "Content-Type: application/json" \
     -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
-    -d "$payload" \
-    || log "WARN: Sentry event POST failed (op=${op})"
+    -d "$payload"; then
+    SENTRY_EVENT_SENT=1
+  else
+    log "WARN: Sentry event POST failed (op=${op})"
+  fi
 }
 
 fail() {
@@ -173,8 +285,17 @@ fi
 DESIRED_ALLOW=""
 for host in $HOSTS_SORTED; do
   ips="$(timeout 10 getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u || true)"
+  # Link-local answers are dropped HERE so that "every record was link-local" reads as a resolution failure of
+  # this host (additive-only tick); the merged sets are scrubbed again below, for every feeder.
+  host_ll="$(printf '%s\n' "$ips" | ll_only)"
+  if [[ -n "$host_ll" ]]; then
+    ll_report "$host" "$host_ll"
+    ips="$(printf '%s\n' "$ips" | ll_strip)"
+  else
+    ll_clear "$host"
+  fi
   if [[ -z "$ips" ]]; then
-    log "WARN: could not resolve $host (keeping its previous addresses)"
+    log "WARN: could not resolve $host${host_ll:+ (every record was link-local)} (keeping its previous addresses)"
     FAILED_HOSTS=$((FAILED_HOSTS + 1))
     # Escalate sustained failure of a single host: ADDITIVE-ONLY forever is
     # silent laxity drift + a possibly-dead needed host; page once at the
@@ -194,7 +315,11 @@ for host in $HOSTS_SORTED; do
   DESIRED_ALLOW+="$ips"$'\n'
 done
 DESIRED_ALLOW+="$CONTAINER_VIEW"$'\n'
-DESIRED_ALLOW="$(echo "$DESIRED_ALLOW" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)"
+DESIRED_ALLOW="$(echo "$DESIRED_ALLOW" | strict_ipv4_lines | sort -u || true)"
+# The container's own getent view is a second feeder: scrub it before anything is recorded in SEEN_DIR.
+cv_ll="$(printf '%s\n' "$CONTAINER_VIEW" | ll_only)"
+if [[ -n "$cv_ll" ]]; then ll_report "container-view" "$cv_ll"; else ll_clear "container-view"; fi
+DESIRED_ALLOW="$(printf '%s\n' "$DESIRED_ALLOW" | ll_strip)"
 
 # FAIL-SAFE: never operate against a fully-empty resolution (DNS outage).
 [[ -n "$DESIRED_ALLOW" ]] || fail "resolution returned ZERO addresses — refusing to touch the sets (fail-safe)"
@@ -224,6 +349,12 @@ if [[ -d "$SEEN_DIR" ]]; then
     [[ -n "$seen_file" ]] || continue
     ip="$(basename "$seen_file")"
     [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    # PURGE (not skip): a planted seen/169.254.169.254 would otherwise be re-read, and re-added, for the whole grace window.
+    if is_link_local "$ip"; then
+      rm -f "$seen_file"
+      log "WARN: purged link-local entry $ip from the grace-window store"
+      continue
+    fi
     ts="$(cat "$seen_file" 2>/dev/null || echo 0)"
     [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
     age=$(( NOW_EPOCH - ts ))
@@ -240,7 +371,7 @@ if [[ -d "$SEEN_DIR" ]]; then
     fi
   done < <(find "$SEEN_DIR" -type f 2>/dev/null)
 fi
-RETAINED="$(echo "$RETAINED" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)"
+RETAINED="$(echo "$RETAINED" | strict_ipv4_lines | sort -u || true)"
 
 # --- DNS resolver pin set ------------------------------------------------------
 # Union of: Docker's loopback-stub substitution pair (ALWAYS — the container
@@ -254,7 +385,13 @@ fi
 if [[ -r /run/systemd/resolve/resolv.conf ]]; then
   DNS_IPS+=$'\n'"$(awk '/^nameserver/ {print $2}' /run/systemd/resolve/resolv.conf)"
 fi
-DNS_IPS="$(echo "$DNS_IPS" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)"
+DNS_IPS="$(echo "$DNS_IPS" | strict_ipv4_lines | sort -u || true)"
+# FINAL CHOKEPOINT: whatever a feeder above let through, nothing link-local reaches a set. The resolver pin set
+# is fed from the container's own resolv.conf, which is container-influenced input.
+dns_ll="$(printf '%s\n' "$DNS_IPS" | ll_only)"
+if [[ -n "$dns_ll" ]]; then ll_report "dns-pin" "$dns_ll"; else ll_clear "dns-pin"; fi
+DNS_IPS="$(printf '%s\n' "$DNS_IPS" | ll_strip)"
+RETAINED="$(printf '%s\n' "$RETAINED" | ll_strip)"
 [[ -n "$DNS_IPS" ]] || fail "no IPv4 resolver to pin"
 
 # --- Reconcile (one atomic nft -f transaction) ---------------------------------
@@ -309,22 +446,352 @@ fi
 
 # --- Self-heal: assert the enforcement rules are still live ---------------------
 # The sets being converged proves nothing about ENFORCEMENT — if the
-# DOCKER-USER jump or the default-drop rule was removed mid-life (external
+# DOCKER-USER jump or the default-drop rule (or its log rule) was removed mid-life (external
 # nft flush, third-party tooling), traffic is silently ACCEPTED with every
 # monitor green. Re-exec the loader to reinstall. Skipped when the loader
 # itself invoked us (CRON_EGRESS_FROM_LOADER=1) — at bootstrap the rules are
 # legitimately not installed yet (sets populate BEFORE the drop by design).
+#
+# The read is capture-then-match, never `nft ... | grep -q` under pipefail: a `grep -q`
+# early exit can SIGPIPE `nft` (status 141, read as "missing"), and an `nft` read that
+# fails against netlink contention reads as "missing" too. Each rule is THREE-valued
+# (present / absent / unreadable) and a failed read is never reported as an absent rule
+# (#9392), with one exception: nft's own ENOENT (rc 1 and an `Error: No such file or directory`
+# first line: the object is gone, a deleted table or chain) IS an absent rule, not contention.
+# A missing binary (rc 127), another error that merely ends in the same words, or a different
+# status stays unreadable. Globals set:
+# ENF_JUMP ENF_DROP ENF_LOG (present|absent|unreadable), ENF_RC_JUMP, ENF_RC_DROP
+# (the LAST attempt's status), ENF_READ_FAILED, ENF_READ_RETRIED, ENF_HEAL.
+# Needles: the jump by its target token (so `jump SOLEUR-EGRESS-OLD` does not count), the
+# drop rule and the default-drop log rule by their own comments (the drop comment's closing
+# quote excludes the log rule's "... default drop log").
+enforcement_probe() {
+  ENF_JUMP=unreadable; ENF_DROP=unreadable; ENF_LOG=unreadable
+  ENF_RC_JUMP=0; ENF_RC_DROP=0; ENF_READ_FAILED=false; ENF_READ_RETRIED=false; ENF_HEAL=false
+  local out_jump="" out_chain="" attempt jump_gone=false drop_gone=false
+  local jump_re='jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)'
+  local sleep_s="${NFT_RETRY_SLEEP:-1}"
+  [[ "$sleep_s" =~ ^[0-9]$ ]] || sleep_s=1
+  for attempt in 1 2; do
+    jump_gone=false; drop_gone=false
+    ENF_RC_JUMP=0; out_jump="$(nft list chain ip filter DOCKER-USER 2>&1)" || ENF_RC_JUMP=$?
+    ENF_RC_DROP=0; out_chain="$(nft list chain ip filter SOLEUR-EGRESS 2>&1)" || ENF_RC_DROP=$?
+    if (( ENF_RC_JUMP == 1 )) && [[ "$out_jump" == "Error: No such file or directory"* ]]; then jump_gone=true; fi
+    if (( ENF_RC_DROP == 1 )) && [[ "$out_chain" == "Error: No such file or directory"* ]]; then drop_gone=true; fi
+    if { (( ENF_RC_JUMP == 0 )) || [[ "$jump_gone" == true ]]; } && { (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; }; then break; fi
+    ENF_READ_RETRIED=true
+    if (( attempt == 1 )); then sleep "$sleep_s"; fi
+  done
+  if (( ENF_RC_JUMP == 0 )) || [[ "$jump_gone" == true ]]; then
+    ENF_JUMP=absent
+    if [[ "$out_jump" =~ $jump_re ]]; then ENF_JUMP=present; fi
+  fi
+  if (( ENF_RC_DROP == 0 )) || [[ "$drop_gone" == true ]]; then
+    ENF_DROP=absent; ENF_LOG=absent
+    if [[ "$out_chain" == *'comment "soleur-egress: default drop"'* ]]; then ENF_DROP=present; fi
+    if [[ "$out_chain" == *'comment "soleur-egress: default drop log"'* ]]; then ENF_LOG=present; fi
+  fi
+  if [[ "$ENF_JUMP" == unreadable || "$ENF_DROP" == unreadable ]]; then ENF_READ_FAILED=true; fi
+  if [[ "$ENF_JUMP" != present || "$ENF_DROP" != present || "$ENF_LOG" != present ]]; then ENF_HEAL=true; fi
+}
+
+# The Sentry `extra` for op=enforcement_missing: which cause class fired. $1 = the loader
+# re-run's exit status (0 ok, 124 timed out). A jq or systemctl failure degrades (minimal
+# object / "unknown"), it never aborts the heal. Timestamps are the host-local strings
+# systemd prints.
+enforcement_extra() {
+  local loader_rc="${1:-0}"
+  local remediation="self-healed by re-running cron-egress-nftables.sh; investigate what flushed DOCKER-USER"
+  local docker_since loader_since host
+  docker_since="$(timeout 2 systemctl show docker.service -p ActiveEnterTimestamp --value 2>/dev/null)" || docker_since=unknown
+  loader_since="$(timeout 2 systemctl show cron-egress-firewall.service -p ActiveEnterTimestamp --value 2>/dev/null)" || loader_since=unknown
+  host="$(hostname 2>/dev/null)" || host=unknown
+  jq -nc \
+    --arg remediation "$remediation" --arg host "${host:-unknown}" \
+    --arg jump "$ENF_JUMP" --arg drop "$ENF_DROP" --arg log "$ENF_LOG" \
+    --argjson rcj "$ENF_RC_JUMP" --argjson rcd "$ENF_RC_DROP" \
+    --argjson failed "$ENF_READ_FAILED" --argjson retried "$ENF_READ_RETRIED" --argjson lrc "$loader_rc" \
+    --arg dsince "${docker_since:-unknown}" --arg lsince "${loader_since:-unknown}" \
+    '{remediation: $remediation, host: $host, jump_present: $jump, drop_present: $drop, log_present: $log,
+      rc_jump: $rcj, rc_drop: $rcd, read_failed: $failed, read_retried: $retried,
+      loader_rc: $lrc, docker_since: $dsince, loader_since: $lsince}' 2>/dev/null \
+    || printf '{"remediation": "%s"}\n' "$remediation"
+}
+
+# Order (#9392 review): the loader re-runs FIRST (egress is open until it does, so only the
+# probe sits in front of it), under `timeout` so a wedged loader (netlink contention is the
+# #9392 hypothesis) becomes rc 124 and still reaches the event and `fail` instead of being
+# killed with the unit at TimeoutStartSec=120 (60 s + the 10 s event POST + the 10 s `fail`
+# check-in fit inside it when the heal starts within ~40 s of the tick start; a slower tick can
+# still be cut with the unit, and then only the OnFailure alarm email reports). The event then
+# posts BEFORE `fail`, so a failed or timed-out
+# self-heal still reports; its `extra` carries the probe's pre-heal rule state and the loader's
+# status. A failed Sentry POST only logs (sentry_event), it cannot stop the heal.
 if [[ "${CRON_EGRESS_FROM_LOADER:-}" != "1" ]]; then
-  if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -q 'jump SOLEUR-EGRESS' \
-    || ! nft list chain ip filter SOLEUR-EGRESS 2>/dev/null | grep -q 'egress-blocked'; then
-    log "WARN: enforcement rules missing — re-running loader (self-heal)"
+  enforcement_probe
+  if [[ "$ENF_HEAL" == true ]]; then
+    log "WARN: enforcement rules missing — re-running loader (self-heal) jump=$ENF_JUMP drop=$ENF_DROP log=$ENF_LOG read_failed=$ENF_READ_FAILED"
+    loader_rc=0
+    timeout -k 2 60 "$LOADER" || loader_rc=$?
+    extra="$(enforcement_extra "$loader_rc")"
     sentry_event \
       "cron-egress-firewall: enforcement rules were MISSING at tick (jump/drop absent) — loader re-run triggered" \
       "enforcement_missing" \
-      '{"remediation": "self-healed by re-running cron-egress-nftables.sh; investigate what flushed DOCKER-USER"}'
-    "$LOADER" || fail "self-heal loader re-run failed"
+      "$extra"
+    (( loader_rc == 0 )) || fail "self-heal loader re-run failed (rc=$loader_rc)"
   fi
 fi
+
+# --- GHCR deny probe (#9275, ADR-096 5.3b-iii) -----------------------------------
+# GitHub's Packages frontends (ghcr.io, docker.pkg.github.com) are carved OUT of
+# the generated CIDR allow list by gen-github-egress-cidr.sh. This probe proves
+# the carve holds: every >= GHCR_PROBE_INTERVAL seconds it asks the APP container
+# (docker exec, so the measurement is taken from inside the surface being
+# denied) to open a TCP connection to each name. A completed handshake means the
+# deny is lost -> op=ghcr_deny_lost; a probe that cannot decide for about an hour
+# (GHCR_PROBE_BLIND_AT consecutive inconclusive, container-absent or budget-skipped
+# due runs) -> op=ghcr_deny_probe_blind, re-emitted every GHCR_PROBE_BLIND_AT further
+# blind runs so one failed Sentry POST is never the last word. Both ride the existing
+# routed Sentry rule.
+#
+# TRUST BOUNDARY: the probe runs INSIDE the app container, so a root-compromised
+# container can forge a `held` answer. It is a drift detector (a carve that silently
+# stopped holding), not a trust anchor against a hostile container.
+#
+# The probe's own SYNs hit the logged default drop (the carved IPs are no longer
+# allowed), so the drop sampler below discards a kernel line only when ALL of:
+# PROTO=TCP, SPT inside the reserved probe port range, DPT=443, DST inside a
+# `# Excluded (GitHub Packages frontends): <cidr>` header prefix of the CIDR
+# file; the header tokens are the FIRST occurrence on the line and a line carrying an
+# ICMP-error inner header (`[SRC=`) is never discarded. Any other drop (including one
+# from the reserved range) is still counted.
+#
+# curl output is produced inside a possibly-compromised container and parsed by
+# this root script: it is capped (`head -c 256` inside the command substitution, so
+# the cap bounds what is BUFFERED, not just what is parsed), split without eval,
+# regex-validated field by field, compared with `awk -v` (never (( )) / [[ -gt ]]),
+# and reaches Sentry only via `jq --arg`. No --retry: a retry flag can turn a failure
+# into success.
+GHCR_PROBE_PORT_LO=49100
+GHCR_PROBE_PORT_HI=49199
+GHCR_PROBE_NAMES="ghcr.io docker.pkg.github.com"
+GHCR_PROBE_INTERVAL=270
+GHCR_PROBE_BLIND_AT=12
+# Budget arithmetic against the 120 s unit TimeoutStartSec (cron-egress-resolve.service).
+# The probe starts only while $SECONDS <= 30. Worst case from there: container_running
+# 10 s + 2 names x (15 s timeout + 2 s kill grace + one Sentry POST 10 s) = 64 s, so the
+# probe ends by t=94 s; the sampler's egress_blocked POST (10 s) and the ok check-in
+# (10 s) then finish by t=114 s, 6 s inside the unit budget. The self-heal above runs BEFORE this
+# gate and is not part of that arithmetic: the probe's slice is the same (<= ~1 s), and the heal path
+# is bounded by its own `timeout -k 2 60` loader run; a tick past 30 s skips the GHCR probe (counted
+# as blind, which needs GHCR_PROBE_BLIND_AT consecutive runs to alert).
+GHCR_PROBE_BUDGET_SECS=30
+CIDR_FILE="${CIDR_FILE:-/etc/soleur/cron-egress-allowlist-cidr.txt}"
+
+# Pure verdict. $1=curl/docker-exec exit code, $2=raw `-w` output
+# ('<time_namelookup> <time_connect> <remote_ip>'). Prints one line:
+#   <reached|held|inconclusive> <time_namelookup|-> <time_connect|-> <remote_ip|->
+# reached      time_connect > 0 (a handshake completed)
+# held         rc 28 AND time_connect == 0 AND time_namelookup > 0 (the name
+#              resolved, the connect hung: a drop). A hung RESOLVER also exits 28
+#              with time_connect == 0 and must NOT read as held.
+# inconclusive anything else, including any field that is not a plain number.
+ghcr_probe_verdict() {
+  local rc="$1" raw="$2" line nl="" tc="" ip="" extra="" shown_ip="-" o
+  line="${raw:0:128}"
+  line="${line%%$'\n'*}"
+  read -r nl tc ip extra <<<"$line" || true
+  if [[ ! "$rc" =~ ^[0-9]{1,3}$ || -n "$extra" ]] \
+    || [[ ! "$nl" =~ ^[0-9]+(\.[0-9]+)?$ || ! "$tc" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "inconclusive - - -"
+    return 0
+  fi
+  if [[ "$ip" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]]; then
+    shown_ip="$ip"
+    for o in "${BASH_REMATCH[@]:1}"; do
+      if (( 10#$o > 255 )); then shown_ip="-"; fi
+    done
+  fi
+  if awk -v v="$tc" 'BEGIN { exit !(v + 0 > 0) }'; then
+    echo "reached $nl $tc $shown_ip"
+  elif [[ "$rc" == "28" ]] && awk -v v="$nl" 'BEGIN { exit !(v + 0 > 0) }'; then
+    echo "held $nl $tc -"
+  else
+    echo "inconclusive $nl $tc -"
+  fi
+}
+
+# Per-name consecutive-blind counter under FAILCOUNT_DIR. The `ghcr_probe.` prefix
+# makes these files collide with no host name: the host-failure counters beside them
+# are named for allowlisted hosts, and the loop that removes them (`rm -f
+# "$FAILCOUNT_DIR/$host"`) only ever names a host, never globs the directory.
+# $1=state (held|reached reset it; inconclusive|absent increment it) $2=name. Prints
+# the new count; the caller emits ghcr_deny_probe_blind whenever it is a positive
+# multiple of GHCR_PROBE_BLIND_AT (first at 12, again at 24, 36, ...).
+ghcr_probe_blind_step() {
+  local state="$1" name="$2" f cur
+  f="$FAILCOUNT_DIR/ghcr_probe.${name}.blind"
+  case "$state" in
+    held|reached) rm -f "$f"; echo 0; return 0 ;;
+  esac
+  cur="$(cat "$f" 2>/dev/null || true)"
+  [[ "$cur" =~ ^[0-9]{1,6}$ ]] || cur=0
+  cur=$(( 10#$cur + 1 ))
+  echo "$cur" > "$f"
+  echo "$cur"
+}
+
+# Dispatch. $1=optional epoch seconds (clock seam for tests). Cadence is a stamp
+# file, not a wall-clock-minute gate: the timer has AccuracySec=1min drift. A DUE run
+# that cannot probe is never silent: a budget skip steps every name's blind counter
+# with reason budget_skipped (no stamp, so the next tick retries) and a container-
+# absent run steps it with container_absent. Only the loader-invoked tick and a
+# not-yet-due tick return without counting.
+run_ghcr_probe() {
+  local now="${1:-}" last stamp name rc out verdict nl tc ip state reason count skip=""
+  local in_cidr in_name sha
+  if [[ -z "$now" ]]; then now="$(date +%s)"; fi
+  if [[ "${CRON_EGRESS_FROM_LOADER:-}" == "1" ]]; then return 0; fi
+  stamp="$FAILCOUNT_DIR/ghcr_probe.stamp"
+  last="$(cat "$stamp" 2>/dev/null || true)"
+  [[ "$last" =~ ^[0-9]{1,12}$ ]] || last=0
+  if (( now - 10#$last < GHCR_PROBE_INTERVAL )); then return 0; fi
+  if (( SECONDS > GHCR_PROBE_BUDGET_SECS )); then
+    skip="budget_skipped"
+    log "WARN: tick already ${SECONDS}s old — skipping GHCR probe this run (counted as blind)"
+  else
+    echo "$now" > "$stamp"
+  fi
+
+  local container_up=1
+  if [[ -z "$skip" ]] && ! container_running; then container_up=0; fi
+
+  for name in $GHCR_PROBE_NAMES; do
+    rc=0; out=""; verdict="inconclusive"; nl="-"; tc="-"; ip="-"; reason="inconclusive"
+    if [[ -n "$skip" ]]; then
+      state="absent"; reason="$skip"; rc="-"
+    elif (( container_up )); then
+      # head -c 256 INSIDE the substitution bounds what is buffered from the container;
+      # the exit code is timeout/docker-exec's own (PIPESTATUS[0]), so rc 28 survives.
+      out="$(timeout -k 2 15 docker exec "$CONTAINER" curl -q -s -o /dev/null --noproxy '*' \
+        --connect-timeout 5 --max-time 8 \
+        --local-port "${GHCR_PROBE_PORT_LO}-${GHCR_PROBE_PORT_HI}" \
+        -w '%{time_namelookup} %{time_connect} %{remote_ip}' "https://${name}/" 2>/dev/null | head -c 256; exit "${PIPESTATUS[0]}")" || rc=$?
+      read -r verdict nl tc ip <<<"$(ghcr_probe_verdict "$rc" "$out")" || true
+      state="$verdict"
+    else
+      state="absent"; reason="container_absent"; rc="-"
+    fi
+    log "GHCR probe ${name}: ${state} (rc=${rc} namelookup=${nl} connect=${tc})"
+
+    if [[ "$state" == "reached" ]]; then
+      # in_allow_cidr = the generated CIDR set; in_allow_name = the by-name set (the
+      # by-name allow wins by order, so a carved IP can still be admitted there).
+      # Membership is nft's own exit status (no `nft | grep -q`, which pipefail would mask).
+      in_cidr="unknown"; in_name="unknown"
+      if [[ "$ip" != "-" ]]; then
+        if nft get element ip filter soleur_egress_allow_cidr "{ $ip }" >/dev/null 2>&1; then
+          in_cidr="true"
+        else
+          in_cidr="false"
+        fi
+        if nft get element ip filter soleur_egress_allow "{ $ip }" >/dev/null 2>&1; then
+          in_name="true"
+        else
+          in_name="false"
+        fi
+      fi
+      sha="$(sha256sum "$CIDR_FILE" 2>/dev/null | cut -d' ' -f1 || true)"
+      sentry_event \
+        "cron-egress-firewall: GHCR deny lost (a bridge container completed a TCP handshake to a GitHub Packages frontend)" \
+        "ghcr_deny_lost" \
+        "$(jq -n --arg name "$name" --arg remote_ip "$ip" --arg time_connect "$tc" \
+          --arg in_allow_cidr "$in_cidr" --arg in_allow_name "$in_name" --arg file_sha256 "${sha:-unreadable}" \
+          '{name: $name, remote_ip: $remote_ip, time_connect: $time_connect,
+            in_allow_cidr: $in_allow_cidr, in_allow_name: $in_allow_name, file_sha256: $file_sha256,
+            remediation: "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#ghcr-carve-9275"}')"
+    fi
+
+    count="$(ghcr_probe_blind_step "$state" "$name")"
+    if (( count > 0 && count % GHCR_PROBE_BLIND_AT == 0 )); then
+      sentry_event \
+        "cron-egress-firewall: GHCR deny probe is blind (cannot decide for about an hour)" \
+        "ghcr_deny_probe_blind" \
+        "$(jq -n --arg name "$name" --arg reason "$reason" --arg last_rc "$rc" --arg last_namelookup "$nl" \
+          '{name: $name, reason: $reason, last_rc: $last_rc, last_namelookup: $last_namelookup,
+            remediation: "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#ghcr-carve-9275"}')"
+    fi
+  done
+}
+
+# Sampler filter (stdin kernel lines -> stdout kept lines). Drops a line only when
+# PROTO=TCP AND SPT in [GHCR_PROBE_PORT_LO, GHCR_PROBE_PORT_HI] AND DPT=443 AND DST
+# lies inside a `# Excluded (GitHub Packages frontends): <cidr>` prefix of the CIDR
+# file (integer containment, no address expansion). Assumed line format is the
+# nf_log_ipv4 LOG shape: `... SRC=<a> DST=<b> ... PROTO=TCP SPT=<p> DPT=<q> ...`; an
+# ICMP error carries the offending packet's header again as `[SRC=.. DST=.. ..
+# PROTO=TCP SPT=.. DPT=..]`, so each token is taken at its FIRST occurrence (the outer
+# header) and any line containing `[SRC=` is kept (counted). Every header CIDR is
+# re-validated strictly and must be /28 or longer; ANY parse problem (no header, bad
+# CIDR) makes the filter pass everything through — it fails toward counting.
+filter_ghcr_probe_drops() {
+  local excl
+  excl="$(sed -n 's/^# Excluded (GitHub Packages frontends): *//p' "$CIDR_FILE" 2>/dev/null | tr '\n' ' ' || true)"
+  if [[ -z "${excl// /}" ]]; then cat; return 0; fi
+  awk -v plo="$GHCR_PROBE_PORT_LO" -v phi="$GHCR_PROBE_PORT_HI" -v excl="$excl" '
+    function oct_ok(s) { return (s ~ /^[0-9]+$/ && length(s) <= 3 && s + 0 <= 255 && (s == "0" || s !~ /^0/)) }
+    function ip2n(s,   p, j) {
+      if (split(s, p, ".") != 4) return -1
+      for (j = 1; j <= 4; j++) if (!oct_ok(p[j])) return -1
+      return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+    }
+    BEGIN {
+      bad = 0; m = 0; n = split(excl, tok, " ")
+      for (i = 1; i <= n; i++) {
+        if (split(tok[i], c, "/") != 2 || c[2] !~ /^[0-9]+$/ || c[2] + 0 < 28 || c[2] + 0 > 32) { bad = 1; break }
+        base = ip2n(c[1])
+        if (base < 0) { bad = 1; break }
+        size = 2 ^ (32 - c[2]); start = base - (base % size)
+        m++; cs[m] = start; ce[m] = start + size - 1
+      }
+      if (m == 0) bad = 1
+    }
+    {
+      spt = ""; dpt = ""; dst = ""; proto = ""
+      for (f = 1; f <= NF; f++) {
+        if (spt == "" && $f ~ /^SPT=[0-9]+$/) spt = substr($f, 5)
+        else if (dpt == "" && $f ~ /^DPT=[0-9]+$/) dpt = substr($f, 5)
+        else if (dst == "" && $f ~ /^DST=[0-9.]+$/) dst = substr($f, 5)
+        else if (proto == "" && $f ~ /^PROTO=[A-Za-z0-9]+$/) proto = substr($f, 7)
+      }
+      drop = 0
+      if (!bad && index($0, "[SRC=") == 0 && proto == "TCP" && spt != "" && dpt == "443" && spt + 0 >= plo && spt + 0 <= phi) {
+        d = ip2n(dst)
+        if (d >= 0) for (k = 1; k <= m; k++) if (d >= cs[k] && d <= ce[k]) drop = 1
+      }
+      if (!drop) print
+    }'
+}
+
+# Fail-toward-counting wrapper (stdin -> stdout, always rc 0). If the filter itself
+# fails (awk dialect/runtime error) a bare `$(... | filter || true)` would turn an
+# EMPTY output into "zero drops" and silence every egress_blocked alert. Here the
+# filter's exit code is read separately and a failure keeps the UNFILTERED input.
+ghcr_probe_filter_or_keep() {
+  local in out frc=0
+  in="$(cat)"
+  out="$(printf '%s\n' "$in" | filter_ghcr_probe_drops)" || frc=$?
+  if (( frc != 0 )); then
+    log "WARN: GHCR drop filter failed (rc=${frc}) — counting every drop unfiltered"
+    printf '%s\n' "$in"
+    return 0
+  fi
+  printf '%s\n' "$out"
+}
+
+# Placed AFTER the self-heal block and BEFORE the drop sampler so a probe failure
+# can never skip `sentry_checkin ok`: errors inside run under `||` do not abort.
+run_ghcr_probe || log "WARN: GHCR probe errored (non-fatal)"
 
 # --- Fail-loud: surface kernel drops to Sentry -----------------------------------
 # BOTH drop prefixes are counted: `egress-blocked: ` (off-allowlist) AND
@@ -333,11 +800,14 @@ fi
 # ship to Better Stack (Vector's journald sources are priority/unit-scoped);
 # this Sentry event is the ONLY no-SSH channel for drop forensics, so the
 # sample is included. Window is 3min on a 1-min cadence — overlap is safe
-# (Sentry dedupes into one issue), a gap is not.
-BLOCK_HITS="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -cE 'egress-(blocked|dns-exfil): ' || true)"
+# (Sentry dedupes into one issue), a gap is not. The GHCR probe's own drops are
+# removed by filter_ghcr_probe_drops via ghcr_probe_filter_or_keep (see above).
+KERNEL_DROPS="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil): ' || true)"
+KERNEL_DROPS="$(printf '%s\n' "$KERNEL_DROPS" | ghcr_probe_filter_or_keep)"
+BLOCK_HITS="$(printf '%s\n' "$KERNEL_DROPS" | grep -c . || true)"
 if [[ "${BLOCK_HITS:-0}" -gt 0 ]]; then
   log "WARN: $BLOCK_HITS egress drop(s) in the last 3m"
-  SAMPLE="$(journalctl -k --since "-3min" --no-pager 2>/dev/null | grep -E 'egress-(blocked|dns-exfil): ' | tail -3 | tr '"' "'" | tr '\n' ';' | cut -c1-500)"
+  SAMPLE="$(printf '%s\n' "$KERNEL_DROPS" | tail -3 | tr '"' "'" | tr '\n' ';' | cut -c1-500)"
   sentry_event \
     "egress-blocked: container egress denied (${BLOCK_HITS} hits in last 3m)" \
     "egress_blocked" \

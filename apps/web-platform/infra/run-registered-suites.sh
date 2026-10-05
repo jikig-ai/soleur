@@ -98,18 +98,22 @@
 #   docker      5   cloud-init-plugin-seed, git-data-cutover-access,
 #                   git-data-ownership, git-data-runcmd-rehearsal,
 #                   zot-config-deadlines (digest arm only — declines, not a whole-suite skip)
-#   terraform   9   cloud-init-inngest-bootstrap, generate-apex-rollback-pr, git-data-emit,
+#   terraform  10   cloud-init-inngest-bootstrap, generate-apex-rollback-pr, git-data-emit,
 #                   git-data-render-strip-parity, git-data-runcmd-rehearsal,
 #                   git-data-template-strip, inngest-boot-emitter, inngest,
-#                   registry-userdata-budget
+#                   registry-userdata-budget,
+#                   workspaces-luks-t2-rehearsal (added 2026-10-02, #9357: absent terraform or jq
+#                   exits non-zero when CI is set, exits 0 loudly otherwise; under CI it also
+#                   requires the installed version to equal TERRAFORM_VERSION)
 #   python3     7   canary-bundle-claim-check, git-data-emit,
 #                   git-data-render-strip-parity, git-data-root-key,
 #                   git-data-runcmd-rehearsal, git-data-rung2-rehearsal,
 #                   workspaces-luks-g4-mutation
 #   cloud-init  1   cloud-init-inngest-bootstrap
-#   jq          8   canary-bundle-claim-check, ci-deploy,
+#   jq          9   canary-bundle-claim-check, ci-deploy,
 #                   cosign-trusted-root-staleness, doppler-download-error-channel,
-#                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper
+#                   git-data-root-key, inngest, registry-boot-guard, zot-log-shipper,
+#                   workspaces-luks-t2-rehearsal
 #   curl        2   canary-bundle-claim-check, git-data-runcmd-rehearsal
 #
 #   (zot-config-deadlines also invokes python3 unconditionally — render/extract/
@@ -283,6 +287,10 @@ if (( LIST_ONLY == 0 )) && declare -F soleur_scratch_session_begin >/dev/null 2>
   soleur_scratch_session_begin "$_SUITE_TMP_BASE" || true
 fi
 declare -F _soleur_scratch_cleanup >/dev/null 2>&1 || _soleur_scratch_cleanup() { :; }
+# Provisional owner for the window before the full EXIT trap below (an early `exit`, e.g. --enumerate, left a
+# marker-only root per invocation); that trap replaces this one and carries the same cleanup (ADR-129).
+_provisional_scratch_exit() { _soleur_scratch_cleanup 2>/dev/null || true; }
+trap _provisional_scratch_exit EXIT
 cd "$ROOT" || exit 1
 
 # SOLEUR_INFRA_DIR is a TEST SEAM. Namespaced because a bare
@@ -636,6 +644,16 @@ _SUITE_BOUNDS=(
   # every row still passing, so pin at 900; a slow day renders as this
   # suite's RED, not a leg timeout.
   "apps/web-platform/infra/workspaces-boot-unlock.test.sh=900"
+  # #6931: the guest-side LUKS provisioner suite re-runs itself once per mutation row (68 rows, 6 in
+  # parallel) over a stub-PATH runtime — ~220 s serial on the dev box and bound-killed at the 360 s
+  # default (rc=124, run 36912548151) on a starved -P4 CI leg while green. Pin at 900 per the
+  # boot-unlock precedent above, so a slow day renders as this suite's RED, not a leg timeout.
+  "apps/web-platform/infra/workspaces-luks-provision.test.sh=900"
+  # #9377: the escrow-create suite runs ~200 rows plus a ~70-spec mutation battery (approximately 105 s wall on a 16-core
+  # box; 325 to 415 s pinned to one core, load-dependent, about 10 CPU-min in total). 900 s keeps ~2.2x headroom over the
+  # single-core figure, so a starved -P4 leg cannot bound-kill a green run (the workspaces-luks-provision incident class
+  # cited above).
+  "apps/web-platform/infra/web-escrow-create-workflow.test.sh=900"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT
@@ -727,11 +745,11 @@ JOBS="${JOBS:-$(( _NPROC < 6 ? _NPROC : 6 ))}"
 # wording claimed EVERY line was prefixed, which is both false and the wrong inference to hand
 # a future maintainer — it invites "completing" the rule by prefixing the summary, which would
 # break the monitor. That is not cosmetic. 10 registered suites print `[FAIL]` at column 0, and main-health-monitor.yml
-# greps `^RED |^\[FAIL\]` to build a PUBLIC issue body AND to derive its TITLE — so an
-# unprefixed dumped `[FAIL]` during a TIMEOUT would title an issue with a cause the job never
-# measured, the exact AP-021/ADR-166 defect #7371 removed. The prefix also gives the monitor a
-# filter for its UNCONDITIONAL `tail -30` (it sits outside the `if [[ -n "$hits" ]]` block), so
-# the published excerpt stays byte-identical to today's.
+# greps `^RED |^UNACCOUNTED ` and `^\[FAIL\]` to build a PUBLIC issue body (since #8112 only
+# the `RED`/`UNACCOUNTED` lines and the runner's own breakdown pick its TITLE; a bare `[FAIL]` is
+# display-only), so an unprefixed dumped `[FAIL]` would still reach that body. The prefix also gives
+# the monitor a filter for its UNCONDITIONAL `grep -v '^SOLEUR| ' | tail -30` (it sits outside the
+# per-capture `if` blocks), so the published excerpt stays free of dumped bytes.
 #
 # WHY `SOLEUR| ` AND NOT A BARE `| `. The monitor's excerpt loop covers TWO captures, and both
 # can carry this runner's output: the infra step invokes it directly, and the tests step runs

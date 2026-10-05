@@ -98,7 +98,7 @@ on:
       # guard, still resolves to an immutable digest, and still faces the coherence
       # preflight. Same env:-routed, shape-validated handling as web_host_key.
       image_tag:
-        description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required when birthing web-1 or when the fleet is down."
+        description: "For apply_target=web-host-create and web-host-replace: pin the image to this released tag (e.g. v1.2.3) instead of reading web-1's /health. Required for a fresh birth (the default reads the RUNNING version, which will not carry the baked fresh-boot LUKS provisioner; web-1 itself is refused by web-host-create) and when the fleet is down."
         required: false
         type: string
       # For apply_target=workspaces-luks-recut ONLY. The Hetzner id of the ORPHANED LUKS volume the
@@ -269,7 +269,7 @@ on:
           - git-data-host-create
           # #6767: read-only retrospective drift audit of every declared ruleset's
           # LIVE phase entrypoint (no terraform apply; own concurrency group;
-          # issues:write App auth; posts findings to #6767). See the
+          # issues:write via the job's github.token; posts findings to #6767). See the
           # entrypoint_audit job below.
           # #7095 — re-mints the CF Access ci_ssh service token when Cloudflare has
           # stopped accepting it. Narrow by construction: a two-resource -target set
@@ -618,12 +618,25 @@ jobs:
               -target=doppler_project.github_app_runtime \
               -target=doppler_environment.github_app_runtime_prd \
               -target=doppler_config.github_app_runtime_prd_retired \
+              -target=doppler_project.infra_app \
+              -target=doppler_environment.infra_app_prd \
               -target=cloudflare_r2_bucket.terraform_state_privileged \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
               -target=doppler_service_token.workspaces_luks \
               -target=github_actions_secret.workspaces_luks_boot_token \
+              -target=doppler_service_token.workspaces_luks_fresh_boot \
+              -target=doppler_config.workspaces_luks_web \
+              -target=doppler_service_token.workspaces_luks_fresh_boot_web \
+              -target=cloudflare_r2_bucket.workspaces_luks_header_web \
+              -target=random_password.workspaces_luks_web \
+              -target=doppler_secret.workspaces_luks_web_key \
+              -target=doppler_secret.workspaces_luks_web_header_bucket \
+              -target=doppler_secret.workspaces_luks_web_header_r2_endpoint \
+              -target=doppler_config.workspaces_luks_marker \
+              -target=doppler_service_token.workspaces_luks_marker_write \
+              -target=github_actions_secret.doppler_token_workspaces_luks_marker \
               -target=github_actions_secret.doppler_token_inngest_arm \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \
@@ -693,6 +706,10 @@ jobs:
               -target=logtail_exploration_alert.luks_monitor_host_timer_dark \
               -target=logtail_exploration.workspaces_luks_deadman_fired \
               -target=logtail_exploration_alert.workspaces_luks_deadman_fired \
+              -target=logtail_exploration.bwrap_probe_rollback \
+              -target=logtail_exploration_alert.bwrap_probe_rollback \
+              -target=logtail_exploration.ghcr_hostsfile_deny_lost \
+              -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=supabase_project.prd
@@ -796,15 +813,17 @@ jobs:
           # header is still cut from the old one. The store then cannot be opened, on a host with
           # no SSH and no console, and what it holds is user prompts and agent output.
           if [[ "$luks_rotations" -gt 0 ]]; then
-            echo "::error::terraform plan would UPDATE, DELETE or FORGET ${luks_rotations} inngest LUKS passphrase resource(s) (random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key) on the per-PR apply path, or emitted a change there whose action list could not be read."
+            echo "::error::terraform plan would UPDATE, DELETE or FORGET ${luks_rotations} LUKS passphrase resource(s) (inngest or workspaces: random_password.inngest_redis_luks, doppler_secret.inngest_redis_luks_key, random_password.workspaces_luks, doppler_secret.workspaces_luks_key, random_password.workspaces_luks_web, doppler_secret.workspaces_luks_web_key) on the per-PR apply path, or emitted a change there whose action list could not be read."
             echo "::error::A rotation mints a new passphrase while the LUKS header on the live volume is still cut from the OLD one. The store becomes unopenable and the AOF is unrecoverable — there is no second copy of the header key, and the host has no SSH and no console."
             echo "::error::[ack-destroy] deliberately does NOT reach this HALT: a replace also trips resource_deletes, so acking an unrelated destructive change in the same merge would ack this one through with it."
             echo "::error::Remediation depends on what you intended:"
             echo "::error::  • You did NOT intend to touch the passphrase → something upstream forced a replace (a changed keeper, length, or the Doppler project/config reference). Revert that change; a passphrase must never be a side effect."
             echo "::error::  • You DID intend to rotate it → the store must be re-cut from empty in the same operation, which is the 'inngest-volume-recut' dispatch, not this path. Rotating the value without re-cutting the header strands the volume."
             echo "::error::  • The volume is already absent/empty and you are re-establishing the pair → dispatch '-f apply_target=inngest-volume-recut -f confirm=RECUT-INNGEST-VOLUME', which grades the plan against both guards (a passphrase FIRST CREATE is legal there; a rotation is not)."
+            echo "::error::  • A workspaces pair (web-1 or the web host class) → NEVER a replace, and never this path. Rotating a populated volume's passphrase is a header re-key (cryptsetup luksChangeKey) followed by an intentional state change under review, and recovering a tainted first create is terraform untaint or a reviewed state-entry removal. NO automated route exists for either yet; the web-host rebirth work owns it (#9372). Until then merge with [skip-web-platform-apply] and escalate. For a not-yet-formatted web-class volume the first create is the only legal verb."
+            echo "::error::  • A bare update on a doppler_secret.*_key copy with no passphrase change in the diff → the Doppler value was edited out of band and drifted from the generator. Restore the previous value in Doppler; never apply over it, the header is cut from the old one."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
-            grep -E 'inngest_redis_luks|Plan:' tfplan.txt | head -20 >&2
+            grep -F -e random_password.inngest_redis_luks -e doppler_secret.inngest_redis_luks_key -e random_password.workspaces_luks -e doppler_secret.workspaces_luks_key -e random_password.workspaces_luks_web -e doppler_secret.workspaces_luks_web_key -e 'Plan:' tfplan.txt >&2 || true
             exit 1
           fi
           # HALT on a host create — evaluated OUTSIDE the destroy_count sum below
@@ -4704,7 +4723,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/workspaces-luks-recut-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/workspaces-luks-recut-gate.sh"
           if ! workspaces_luks_recut_gate tfplan.json "$EXPECTED_LUKS_ID"; then
-            echo "::error::workspaces-luks-recut destroy-guard ABORTED: the plan is not the exact scoped recut. Verify the LUKS volume (hcloud_volume.workspaces_luks) shows a genuine REPLACE (delete AND create) OR a recovery bare create (before null), the attachment shows a create, the replaced-volume id matches expected_luks_volume_id=${EXPECTED_LUKS_ID}, the LIVE plaintext /mnt/data volume (hcloud_volume.workspaces[\"web-1\"]) + its attachment + the web-1 server are UNTOUCHED, and the passphrase (random_password.workspaces_luks + doppler_secret.workspaces_luks_key) is NOT re-minted. A gate result of luks_id_mismatch=1 means the workspaces_luks ADDRESS resolves to a DIFFERENT physical volume than the id you supplied — STOP and reconcile terraform state before proceeding. NO [ack-destroy] bypass on this path."
+            echo "::error::workspaces-luks-recut destroy-guard ABORTED: the plan is not the exact scoped recut. Verify the LUKS volume (hcloud_volume.workspaces_luks) shows a genuine REPLACE (delete AND create) OR a recovery bare create (before null), the attachment shows a create, the replaced-volume id matches expected_luks_volume_id=${EXPECTED_LUKS_ID}, the LIVE plaintext /mnt/data volume (hcloud_volume.workspaces[\"web-1\"]) + its attachment + the web-1 server are UNTOUCHED, and the passphrases (random_password.workspaces_luks, doppler_secret.workspaces_luks_key, random_password.workspaces_luks_web, doppler_secret.workspaces_luks_web_key) are NOT re-minted. A gate result of luks_id_mismatch=1 means the workspaces_luks ADDRESS resolves to a DIFFERENT physical volume than the id you supplied — STOP and reconcile terraform state before proceeding. NO [ack-destroy] bypass on this path."
             grep -E 'will be destroyed|must be replaced|will be updated in-place|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
@@ -4920,6 +4939,13 @@ jobs:
           fi
           echo "ADR-128 R1 satisfied: SENTRY_DSN present and non-empty (value not printed)."
 
+      # Escrow readiness (#9377, ADR-263): fail-closed before ANY Terraform command.
+      - name: Escrow readiness preflight
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/web-host-escrow-preflight.sh
+
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
@@ -5001,7 +5027,7 @@ jobs:
               sleep 10
             done
             if [[ -z "$RUNNING_VERSION" ]]; then
-              echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts, and no image_tag input was supplied. Refusing to fall back to ':latest' — a birth on an unvetted image is the ADR-080 stale-image trap and the host cannot be repaired by a reboot if it aborts at stage=verify. If you are birthing web-1 (or the fleet is down), this read is CIRCULAR by construction: re-dispatch with -f image_tag=<vX.Y.Z>, naming the last known-good released version. It is still digest-pinned and coherence-preflighted."
+              echo "::error::could not read a running version from ${HEALTH_URL} after 12 attempts, and no image_tag input was supplied. Refusing to fall back to ':latest' — a birth on an unvetted image is the ADR-080 stale-image trap and the host cannot be repaired by a reboot if it aborts at stage=verify. If the fleet is down, or this host's image must carry files the RUNNING version does not (a fresh web-2 needs the baked workspaces-luks-provision.sh), this read is wrong or CIRCULAR by construction: re-dispatch with -f image_tag=<vX.Y.Z>, naming a released version built from the commit you are applying. It is still digest-pinned and coherence-preflighted. (web-host-create refuses web-1 by name.)"
               exit 1
             fi
             echo "pin source: web-1 live /health (${HEALTH_URL})"
@@ -5305,7 +5331,7 @@ jobs:
           # and a terraform plan, and so the operator reads the reason at the top of the run.
           # Keep the key in lockstep with _WEB_HOST_REPLACE_LUKS_PINNED_KEY in the gate.
           if [[ "$WEB_HOST_KEY_RAW" == "web-1" ]]; then
-            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it would leave all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP. DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (guest-side unlock deferred to #6931) — a rebuilt host would boot healthy and serve every worktree rolled back to 2026-07-23. That is a cloud-init property, invisible to any plan-shaped gate. NOTHING HAS BEEN DESTROYED — this dispatch stopped before reading a secret. Land #6931 first; tracker #6964 (ADR-148 §Alternatives)."
+            echo "::error::'${WEB_HOST_KEY_RAW}' is the LUKS-pinned host and this path REFUSES it. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to it and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address), and it would leave all 22 web-1-pinned terraform_data SSH provisioners un-run against a dead IP. DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover. The guest-side fresh-boot path (#6931, workspaces-luks-provision.sh) refuses that volume's ext4 signature, so a rebuilt host fails closed instead of serving worktrees rolled back to 2026-07-23 — but it would still be an outage, with the sole-copy LUKS attachment stranded on a dead server id. That is a cloud-init property, invisible to any plan-shaped gate. NOTHING HAS BEEN DESTROYED — this dispatch stopped before reading a secret. Remaining blockers: the key-conditional gate arms exist (#9356) but no plan can show the by-id mount pin or the web-1-pinned provisioners, so they stay inert behind this refusal; a rehearsal on a non-production host; and tracker #6964 (ADR-148 §Alternatives)."
             exit 1
           fi
           # image_tag is optional, but if supplied it is interpolated into a docker ref and a
@@ -5372,6 +5398,13 @@ jobs:
             exit 1
           fi
           echo "ADR-128 R1 satisfied: SENTRY_DSN present and non-empty (value not printed)."
+
+      # Escrow readiness (#9377, ADR-263): fail-closed before ANY Terraform command.
+      - name: Escrow readiness preflight
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/web-host-escrow-preflight.sh
 
       - name: Terraform init
         working-directory: ${{ env.INFRA_DIR }}
@@ -6814,8 +6847,6 @@ jobs:
       contents: read
       issues: write
     env:
-      # soleur-ai App org installation (learning 2026-05-25-app-jwt-inline-mint).
-      INSTALLATION_ID: "122213433"
       AUDIT_ISSUE: "6767"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -6841,6 +6872,12 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           DOPPLER_PROJECT: soleur
           DOPPLER_CONFIG: prd_terraform
+          # The job's own token (issues:write, this repository only) posts the findings
+          # (#9360): the soleur-ai App key this used to mint from is the #8209 eviction
+          # sentinel. Named AUDIT_POST_TOKEN, not GH_TOKEN, and unset for the audit script,
+          # so only the post below holds it.
+          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
+          AUDIT_POST_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # Read-only CF creds for the live entrypoint enumeration.
@@ -6849,7 +6886,7 @@ jobs:
           PREAPPLY_CF_ACCOUNT_ID=$(doppler secrets get CF_ACCOUNT_ID --plain 2>/dev/null || true)
           # `--plain` reads are NOT a secrets.* context, so GitHub does not
           # auto-mask them. Mask the CF token before export so an audit ::error::
-          # (or set -x) can never leak it into the log (mirrors KEY_ID/PEM above).
+          # (or set -x) can never leak it into the log.
           [[ -n "$PREAPPLY_CF_TOKEN" ]] && printf '::add-mask::%s\n' "$PREAPPLY_CF_TOKEN"
           export PREAPPLY_CF_TOKEN PREAPPLY_CF_ZONE_ID PREAPPLY_CF_ACCOUNT_ID
           # Static table + LIVE enumeration (GETs only — no import, no apply).
@@ -6859,7 +6896,7 @@ jobs:
           # watch` would show a false success. Keep the comment/system-of-record
           # path alive on failure (post below), then re-raise the rc at the end.
           rc=0
-          AUDIT_OUT=$(bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
+          AUDIT_OUT=$(env -u AUDIT_POST_TOKEN bash "${GITHUB_WORKSPACE}/tests/scripts/lib/preapply-entrypoint-gate.sh" --audit --live 2>&1) || rc=$?
           {
             echo "## Whole-list entrypoint drift audit (#6767)"
             echo ""
@@ -6871,51 +6908,7 @@ jobs:
           } > /tmp/audit-body.md
           cat /tmp/audit-body.md >> "$GITHUB_STEP_SUMMARY"
 
-          # Mint a short-lived GitHub App installation token (issues:write) to
-          # post the findings to #6767. Inline JWT mint mirrors
-          # board-status-sync.yml (learning 2026-05-25-app-jwt-inline-mint).
-          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform."; exit 1; }
-          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform."; exit 1; }
-          # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §legacy-app-key-evicted
-          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
-            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there."
-            exit 1
-          fi
-          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
-            echo "::error::GitHub App credentials empty in Doppler prd_terraform."; exit 1; fi
-          printf '::add-mask::%s\n' "$APP_ID"
-          while IFS= read -r pem_line; do
-            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
-          done <<< "$PEM"
-          umask 077
-          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
-          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
-          chmod 600 "$APP_PEM_FILE"
-          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
-          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
-            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler is not a valid RSA PEM."; exit 1; fi
-          b64url() { base64 -w 0 | tr '+/' '-_' | tr -d '=\n'; }
-          now=$(date +%s)
-          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
-          payload=$(jq -nc --argjson iss "$APP_ID" --argjson iat "$((now - 60))" \
-            --argjson exp "$((now + 540))" '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
-          unsigned="${header}.${payload}"
-          signature=$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
-          JWT="${unsigned}.${signature}"
-          [[ -n "$JWT" ]] || { echo "::error::App-JWT mint produced empty output."; exit 1; }
-          echo "::add-mask::$JWT"
-          INSTALL_TOKEN=$(curl -sS -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-            | jq -r '.token // empty')
-          [[ -n "$INSTALL_TOKEN" ]] || {
-            echo "::error::Installation-token exchange returned empty token."; exit 1; }
-          echo "::add-mask::$INSTALL_TOKEN"
-          GH_TOKEN="$INSTALL_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md
+          GH_TOKEN="$AUDIT_POST_TOKEN" gh issue comment "$AUDIT_ISSUE" --body-file /tmp/audit-body.md
           echo "Posted entrypoint drift audit findings to #${AUDIT_ISSUE}."
 
           # P2-B: the comment (system-of-record) is now posted; make the RUN

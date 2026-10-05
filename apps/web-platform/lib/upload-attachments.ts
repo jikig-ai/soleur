@@ -1,6 +1,7 @@
-import * as Sentry from "@sentry/nextjs";
 import type { AttachmentRef } from "@/lib/types";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
+import { reportSilentFallback } from "@/lib/client-observability";
+import { sanitizeAttachmentFilename } from "@/lib/attachment-constants";
 
 export interface UploadPendingFilesOptions {
   /** Invoked as each file progresses. `fileIndex` is the original 0-based
@@ -14,15 +15,9 @@ export interface UploadPendingFilesOptions {
   onUploaded?: (ref: AttachmentRef) => void;
 }
 
-/**
- * Truncate + strip control characters from a user-controlled filename so it
- * is safe to pass to `console.warn` / Sentry payloads. The browser File API
- * accepts arbitrary strings; an attacker-chosen filename can carry log-injection
- * characters (`\r\n`, ANSI escapes) or be unbounded in size.
- */
-function sanitizeFilenameForLog(name: string): string {
-  return String(name).slice(0, 256).replace(/[\x00-\x1f\x7f]/g, "?");
-}
+// Filenames reaching console.warn / Sentry payloads go through
+// `sanitizeAttachmentFilename` (lib/attachment-constants.ts) — it strips
+// control chars, path separators, bidi controls and zero-width chars.
 
 /**
  * Re-wrap an error with a sanitized message for telemetry. `uploadWithProgress`
@@ -65,7 +60,7 @@ export async function uploadPendingFiles(
   for (let i = 0; i < files.length; i++) {
     if (signal?.aborted) break;
     const file = files[i];
-    const safeFilename = sanitizeFilenameForLog(file.name);
+    const safeFilename = sanitizeAttachmentFilename(file.name);
     try {
       const presignRes = await fetch("/api/attachments/presign", {
         method: "POST",
@@ -87,7 +82,13 @@ export async function uploadPendingFiles(
           err: sanitized,
           filename: safeFilename,
         });
-        Sentry.captureException(sanitized, { extra: { filename: safeFilename } });
+        // Tagged emit: feature:attachments keeps this leg visible on the same
+        // triage key as the server route's presign/presign-lookup reports.
+        reportSilentFallback(sanitized, {
+          feature: "attachments",
+          op: "presign-client",
+          extra: { filename: safeFilename },
+        });
         continue;
       }
 
@@ -130,7 +131,17 @@ export async function uploadPendingFiles(
         err: sanitized,
         filename: safeFilename,
       });
-      Sentry.captureException(sanitized, { extra: { filename: safeFilename } });
+      // The transport chokepoint (upload-with-progress.ts `fail()`) already
+      // reports PUT failures with xhr.status under feature:attachments /
+      // op:storage-put — skip re-capture for those and emit only for legs the
+      // chokepoint never saw (e.g. a presign-res.json() parse throw).
+      if (!(err instanceof Error && (err as { reportedToSentry?: boolean }).reportedToSentry)) {
+        reportSilentFallback(sanitized, {
+          feature: "attachments",
+          op: "storage-put-caller",
+          extra: { filename: safeFilename },
+        });
+      }
     }
   }
 

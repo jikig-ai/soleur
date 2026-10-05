@@ -215,7 +215,11 @@ pre-commit:
       # the same unpinned-resolution defect class as #7927 (and the bare-`npx
       # tsc` prohibition in plugins/soleur/skills/work/SKILL.md). Fail fast
       # naming the deterministic recovery instead.
-      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && ./node_modules/.bin/tsc --noEmit
+      # Bounded heap (#9384): tsc aborts with a V8 heap OOM at Node's default old-space size (which
+      # scales with host memory) on a large staged set when the machine is loaded. 6144 MB is explicit so
+      # it can never become unbounded. It is a ceiling, not a reservation. It is appended after any
+      # operator NODE_OPTIONS and, being the later flag, wins over an operator --max-old-space-size.
+      run: cd apps/web-platform && { [ -x node_modules/.bin/tsc ] || { echo "web-platform-typecheck -- node_modules/.bin/tsc missing; recover with npm ci --ignore-scripts --prefix apps/web-platform" >&2; exit 2; }; } && NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144" ./node_modules/.bin/tsc --noEmit
     conversations-update-callsites:
       priority: 5
       # Run target is the whole repo (not `{staged_files}`) because the
@@ -528,3 +532,17 @@ pre-push:
       # to empty (nothing is staged at push time) and the command skips with "no files for
       # inspection" — a vacuous gate. Same correction as client-pii-grep above.
       run: bash scripts/lint-rejected-register.sh {push_files}
+    # #9400 — the affected-ratchets pre-push lane: fetch origin/main, merge it
+    # into an ephemeral detached scratch worktree (the operator's tree is never
+    # mutated), and run only the cheap ratchet/lint members the push diff can
+    # trip plus a condition-triggered kb-consumers member. NO glob and NO
+    # {push_files}: the script derives its own diff (merge-base origin/main)
+    # and performs its own fetch/scratch merge, so a file-list binding would be
+    # both wrong-scoped and unused. Receipt contract: per-member
+    # name/tier/verdict/seconds lines and a terminal RATCHET_LANE verdict=
+    # PASS|RED|MERGE_CONFLICT|ABORT. This is the cheap local net; the required
+    # `test` context remains the merge gate (ADR-183). scripts/hooks/pre-push
+    # runs the same script as its first stage for non-lefthook invocations.
+    ratchet-lane:
+      priority: 7
+      run: bash scripts/pre-push-ratchet-lane.sh

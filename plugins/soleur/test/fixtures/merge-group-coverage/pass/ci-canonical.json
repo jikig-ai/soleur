@@ -1,0 +1,6 @@
+[
+  { "context": "fx-string", "integration_id": 15368 },
+  { "context": "fx-map", "integration_id": 15368 },
+  { "context": "fx-list-or", "integration_id": 15368 },
+  { "context": "fx-named", "integration_id": 15368 }
+]

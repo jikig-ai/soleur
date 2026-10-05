@@ -5,7 +5,10 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
+  - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
+  - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -25,7 +28,8 @@ high:
   reason=sibling_runs`) and expired once at its watcher cap, because five
   sibling worktrees were each attempting their own full gate on the same
   host. The affected set still carries the ~130 always-on ratchets (~22.5
-  minutes on the measured `feat-one-shot-8231` serial baseline), so the win
+  minutes on the measured `feat-one-shot-8231` serial baseline; the 2026-09-30
+  amendment re-measured it as 145 entries and 39.3 minutes), so the win
   is roughly half the wall time plus exemption from the contention refusals —
   it is the narrow gate, not an opportunistic second battery.
 - **Selection machinery already existed.** `scripts/lib/test-affected-paths.sh`
@@ -220,6 +224,188 @@ Alternatives added by this amendment:
 | Pass lefthook `{staged_files}` argv to the runner | Space-separated argv fragility; the in-runner index derivation is authoritative and seam-testable. |
 | `no_stash` on the hook (sibling symptom in #8045) | Out of scope for this amendment — `git diff --cached` is stash-agnostic, and the false-RED/stash question belongs to #8045. |
 
+## Amendment — 2026-09-30
+
+Context: a session reported the local gate "over-selected 229 mostly unrelated suites" (#9307). Measuring it
+found that `--print-affected-set` prints each registration's CLASS and ignores the diff, that the
+knowledge-base-only diff really selected the 145-entry always-on floor plus five suites pulled in by one false
+edge, and that the always-on floor is 52% of light-group suite time. Four decisions follow; they extend
+decisions 1-3 above and do not change the CI contract.
+
+12. **Edge matching is anchored.** `_affected_add_edge` stores every edge it accepts with a `^` marker: a
+    directory edge (`^dir/`) matches a diff line that STARTS with `dir/`, a file edge (`^file`) matches a line
+    that EQUALS it. `_diff_touches` keeps the legacy substring match for unmarked edges, so the relevance
+    arrays that reach it directly are untouched, and edges rooted at `.`/`..` stay unanchored (an anchored `^./`
+    could never match, which would turn a select-everything edge into a select-nothing one). Evidence: over 30
+    real diffs the new matcher selected 0 suites the old one did not and dropped 84 selections belonging to 7
+    suites, every one a demonstrated false positive (a directory token matched inside a longer path); the
+    record is `knowledge-base/project/specs/feat-affected-parallel-test-gate/edge-anchoring-corpus.md`.
+    **The direction flips.** A substring over-matched toward RUNNING, the safe side decisions 3 and 8 rely on;
+    an anchored edge errs toward NOT running whenever the diff text does not present a path as its own line.
+    The diff blob therefore has to: `--name-status -M` rename rows (`R100<TAB>old<TAB>new`) are split on TABs
+    so the OLD path matches (rows t8/t9/m7), and a git C-quoted name (`"dir/caf\303\251.md"`) is unwrapped so
+    a directory prefix still matches (t10/m8). The corpus above used `--name-only` and could not see renames;
+    that gap was found at review, not by it. An edge to a path that no longer exists is dropped when edges are
+    minted (as before), so deleting a declared subject is caught by the census linter in the same run, not by
+    selection. A path whose name holds a TAB, a newline or a `|` is not supported.
+13. **A runner subcommand is not an operand.** The word `test` in `bun test <file>` resolved to the repo-root
+    `test/` directory and minted an edge that selected every `bun test` suite for any diff under it. The
+    derivation now skips `test` after `bun|npm|pnpm|yarn|go|cargo`. Removing it exposed three suites that had no
+    real edge (the bogus one had been masking that, selecting them only when a diff path contained the word
+    "test"); they now declare their subject.
+14. **Selection is observable.** `--print-selection` runs the same pre-pass a real run applies and prints
+    `AFFECTED_SELECTED<TAB>label<TAB>0|1<TAB>class<TAB>edges` per runnable suite plus one `AFFECTED_SUMMARY`
+    line, running nothing; every real affected run prints the same summary on stdout, and a degraded run says
+    `selected=all ... fallback=<reason>` instead of inventing a selection. `--paths=a,b`, valid only with
+    `--print-selection` (and with `--enumerate-commands`, which the pre-pass uses to forward it to its
+    enumerate child so the relevance-gated registrations are declined against the SAME named paths), selects
+    against named paths instead of the real diff, so it cannot narrow a real run. `of=` counts runnable
+    registrations only; a relevance-declined suite is in neither `selected` nor `of`. The row format is
+    private to the Soleur runner and unversioned; PR 2's plugin gate must not parse it.
+    `--print-affected-set` stays class-only and must not be quoted as a selection.
+15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** *(Superseded in part by decisions 16 to 18: one-run evidence became a committed recorder, 20 of the 23 demotions were re-promoted, and the "one audited run" caveat no longer applies.)* Each always-on suite
+    ran serially under an inotify open-event recorder (`strace` is not installed on the operator host) and its
+    observed reads, not its name, decided whether it may leave the set. 23 suites moved to declared edges (24
+    were audited as demotable; `scripts/domain-model-drift` was put back, see below);
+    `_MIN_ALWAYS_ON_DECLARED` rose to 116. A `*-live` suite may carry a declared edge: the census linter
+    demands a declaration but does not check the evidence, so the audit document is the only record that
+    backs it. `scripts/test-affected-kb-consumers.test.sh` fails when a suite that reads a real
+    `knowledge-base/` path is neither always-on nor covered by an edge, and when its committed baseline is
+    stale. It covers literal `knowledge-base/` reads only, one hop deep; the `docs/legal/`, `AGENTS*.md` and
+    migrations edges of the demoted suites rest on the one audited run alone. It is registered in
+    `scripts/test-all.sh` (it was a never-run suite until the census said so) with a declared edge set, and
+    costs one `--print-selection` walk (about 11 minutes of CPU today), so it runs on every CI battery and
+    locally only when its own inputs change. **The measured limits:** the demoted suites are the fast ones,
+    about 0.5 of 39.3 minutes of always-on time (1%); about 80% of the time is nine suites that walk the whole
+    tree (about 62% is runner-SUT or census batteries; the rest are whole-corpus scanners) and stay always-on.
+    The saving is suite count, not time. A demotion also moves a suite from a free always-on skip to a full
+    source-closure derive in the pre-pass: about 2 s for the 23 together, but 82 s for
+    `scripts/domain-model-drift` (its comments name `test-all.sh`) against 0.9 s of suite time, so that one
+    stayed always-on. The pre-pass itself is about 11 minutes of CPU on every local `--affected` run, 73% of
+    it in eight registrations; that, not the always-on count, is the dominant local cost and is tracked on
+    #9307. Observed reads are evidence for the run that happened, not a proof for every input (inotify open
+    events do not see `stat` calls or probes of missing files), which is why the disqualifiers are
+    deliberately broad and CI's full battery stays authoritative.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Drop the always-on class and trust derivation for every suite | Derivation attaches a self-edge to a corpus scanner, which then declines on the diffs that drift the corpus; the census linter exists to prevent exactly that |
+| Anchor by rewriting every declared edge by hand | The edge set is derived; anchoring in the one minting function covers every source and cannot drift |
+| Add an env seam to fake the diff for `--print-selection` | An exported `SOLEUR_*` variable could narrow a real run; a print-only flag cannot (decision 11) |
+| Demote the nine heavy batteries in this change | Their reads span the tree; the evidence cannot bound them, so the decision is per-suite and follows separately |
+| Observe reads with `strace` | Not installed on the operator host; inotify open events cover reads and directory listings, but not `stat`, probes of missing files or git-index access. The disqualifiers target git and clock use, not `stat`, so the compensation for that gap is unmeasured |
+| Run the dropped-consumer ratchet over declared arrays only (seconds, not minutes) | Declared arrays are a subset of a demoted suite's effective edges (declared plus derived), so it would flag reads the derived closure already covers; the full walk is the only exact oracle until the closure derive is made cheap |
+
+## Amendment — 2026-10-01
+
+Context: the pre-pass cost recorded under decision 15 (about 11 minutes of CPU on every local `--affected` run) was
+attributed to comment tokens and an O(n) edge scan. Profiling the walk found a different mix. Decisions are numbered
+in landing order; the follow-on work is decision 17 onward.
+
+16. **The derive is cheaper, bash-version independent, and changes to it are certified by a selection-identity
+    bench.** Four changes, each its own commit:
+    (a) `shopt -u patsub_replacement` as the second statement of the runner's derive section (after `_AC_CLASS=""`).
+    On bash 5.2 and later an unescaped `&` in the replacement of `${v//pat/repl}` expands to the matched text, and
+    the derive substitutes captured variable values into tokens, so a value carrying `&` resolved differently on 5.2
+    and later than on 3.2. The option is a no-op before 5.2 and `BASH_COMPAT` does not disable it. It applies to the
+    rest of the runner process; a review found no later `&`-in-replacement site in the runner or its libraries.
+    Repo precedent quotes the replacement instead (`ci-deploy.sh`), which is unverified on old bash and would let a
+    future site reintroduce the hazard.
+    (b) `_affected_resolve_vars` stops starting new passes once the string has grown more than 4096 bytes over its
+    input (counted in the C locale). A self-referential value multiplies the string every pass, and review measured
+    that removing the cap takes the walk from about 90 s back to 220-260 s. **This one is not identity-preserving in
+    general:** a trip stops resolution, so a later variable on the same line is left as `$VAR`, dies at the `-e`
+    filter, and its edge is not minted (the 12-pass cap alone would have resolved it; a review reproduced it with a
+    1100-byte value repeated five times before a second variable). Selection is identical on today's corpus, which the
+    bench shows, and any later change to this function is gated by the same bench. Failing safe on a trip would change
+    selection for the lines that trip today, so it is not done here.
+    (c) Edge membership is a newline-bracketed shadow set (`_AC_ESET`) beside the ordered `_AC_EDGES` array, appended
+    with `+=`; the closure's visited list is the same kind of set. Every site that assigns the array goes through
+    `_affected_reset_edges` or `_affected_resolve_edges`, and a suite row counts the sites so a fourth fails.
+    `_affected_resolve_edges` validates its `eval` operand as an identifier.
+    `scripts/affected-prepass-bench.sh` is the acceptance contract for any later change to the pre-pass: it compares the
+    `AFFECTED_SELECTED` rows of a base revision and a head byte for byte (registrations the change adds, and edges that
+    exist only because the change added a file, are declared and counted), and times both sides interleaved. Its
+    limits, stated: only registrations classified under the chosen probes are compared; each side derives over its own
+    tree; identity is checked on one bash (head-on-5.3 versus base-on-3.2 is argued by the derive suite, not measured);
+    and it is operator-run, so CI keeps `scripts/test-affected-derive.test.sh` and the dropped-consumer ratchet's full
+    walk as regression coverage and does not prove identity against a merge base.
+
+**Corrected figures for decision 15.** The 8 registrations that held 73% of the pre-pass were the first to scan the
+files of a shared closure: `_affected_file_edges` memoises per file, so cost lands on whichever registration touches a
+file first (`scripts/orphan-process-reaper` is registration 74 and carries 23.8 s because its closure reaches the runner
+and about 465 files). Profile of the walk after (a), (b) and the first shadow set (one `--print-selection --paths=README.md`
+run, instrumented copy, 80 s of classify time): 785 distinct files scanned for 45.5 s (57%), 8,076 memo replays for
+5.5 s, 1,093 per-token `sed` forks in `_affected_normpath` for about 4.4 s, and the remainder in the closure loops. A
+review prototyped three further identity-preserving changes (the memo index, which this change did not take, plus the
+two taken here) at 5-7x on one registration's warm derive; the memo index is the open candidate and is measured only
+by the bench, not here. Measured on the operator host (16 cores, bash 5.3.15, locale en_US.UTF-8) with the bench, base
+and head interleaved, two base and three head runs per probe, median CPU (user+sys): the README probe went from 277 s to 69 s (4.0x) and
+a multi-path probe that selects edge suites from 427 s to 98 s (4.4 (3.1 at the minimum, 280 s to 89 s, because the base side was noisy)x), load average 5 to 10 during the
+runs, selection identical on both probes (537 and 538 base rows byte for byte, one declared added
+registration). The earlier figure of about 11 minutes was taken at load average 30 to 64 and overstated the cost on a
+quiet host. The route to a further order of magnitude is to stop following what the runner's text merely names (about
+450 edges for 18 suites, measured at 61.9 s CPU by the plan); that narrows selection, so it is not
+identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT` idiom fix).
+
+## Amendment — 2026-10-03 (PR-B and PR-C of #9307)
+
+Context: decision 15's evidence was one run of session-scratch scripts, and decision 16 named the further route to a cheaper pre-pass
+(stop following what the runner's text merely names) as a separate decision. This amendment records both. Numbers follow landing order.
+The measured figures live in `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
+
+17. **The always-on evidence is a committed recorder with one verdict function, and a recording that is not complete is never evidence for a
+    demotion.** `scripts/audit-suite-reads.sh` (with `scripts/lib/inotify-open-recorder.py`) re-issues decision 15's audit as "Round 2" and
+    **supersedes its "one audited run" caveat.** A recording that overflowed the inotify queue, failed to watch a directory, exited non-zero
+    or disagrees with its repeat, or skipped an arm of the suite (a `SKIP` line: its reads are unobserved), or moved or deleted a watched directory,
+    or left a dirty checkout, is `unreliable` (retry; the classification is never changed on it); a probe the open-event stream cannot see
+    (`[[ -e ]]`, `stat`, `ls`, `find`) whose operand the static scan cannot resolve **disqualifies**, and the audit doc states that the scan has
+    low resolving power. The event source is a raw-inotify reader because `inotifywait` was measured to deliver exactly 16,384 events for 17,500
+    opens and print no overflow record when the reader lags, so it cannot back that rule. Applied to the 23 existing demotions: 3 stay demoted and 20 return
+    to `ALWAYS_ON_SUITES`: 18 on the first recording, and 2 more after review found that the two rows first recorded `unreliable` were an artifact of
+    the recorder's own contamination probe (tracked-but-gitignored files made window 1 of every run look dirty; fixed) and re-recorded them `uncovered`.
+    The rule is the plan's: an `unreliable` suite that is already demoted goes BACK, because the default is keep (the first write-up of this decision left
+    them demoted, which is the unsafe direction). The isolation is "no IP network and a scrubbed environment", not a filesystem sandbox; only revisions
+    that are ancestors of HEAD or `origin/main` are audited. Three smaller changes belong to the same decision: a runner subcommand
+    (`deno test`, `make test`, `npm|bun|pnpm|yarn run test`) is not an operand in the argv walk or the `-c` payload walk (extends decision 13); the
+    dropped-consumer ratchet gains a form table with one new form (a directory operand with no code file), classifies every non-literal baseline
+    row, decides existence by git-tracked paths, and treats the declarations libs as data; and a declared edge to a deleted subject still being
+    dropped (decision 12's clause) was **not** reversed: that change was cut for cost and is tracked in #9441.
+18. **The runner and its index are closure leaves for text mentions, and the selection delta is certified by the bench's declared-delta mode plus
+    the recorder, not by identity.** `CLOSURE_LEAF_FILES` (exactly the two files the `runner-changed` fallback greps for, pinned equal by a derive
+    row) keep their real load edges (`source` and `.` lines, variables and `$(dirname "${BASH_SOURCE[0]}")` resolved) and lose the invocation words and
+    `$VAR/path` tokens; the file itself stays an edge of every closure reaching it. This **amends decision 16's wording that the bench is the identity
+    contract**: it stays so for every non-narrowing change, and this narrowing is the declared exception (`--leaf-files`: the head may only lose edges,
+    no real source edge of a leaf may be lost, every row that reaches a leaf with outbound edges must lose exactly what the walker expects, a row that
+    reaches none must lose nothing, a walker with no suite commands refuses, and two ceilings, `--max-unexplained` and `--max-kept`, both default 0).
+    The oracle's walker is a second implementation of the derive's text rules and reproduces every edge-classified row of the stream (408 of 408 at the
+    README probe), which is what lets the ceilings be 0; the first walker was not a model of the derive and needed a ceiling of 240, which the first
+    write-up understated as 200 and described as "over-approximating". It still cannot see a read the derive never modelled, so the recorder's check
+    mode on the suites that reached the runner is the behavioural cover, and it found runtime reads the incidental edges had covered, now declared per
+    label. The `runner-changed` fallback is NOT part of that cover: it fires only on a diff to the two leaf files themselves (and not under
+    `--affected-scope=staged`), never on a file the leaf stopped following. The recorder is operator-run, so a read added to a suite later is not
+    re-validated automatically; CI's full battery is the cover for that. Where the recorder gave no evidence the suite is hedged to always-on when
+    that costs under about 7 s (six suites after the re-check), and where hedging would cost 77 s to 134 s (`test-affected-kb-consumers`,
+    `orphan-process-reaper-mutations`, `audit-suite-reads`) the suite stays on its derived or declared edges with the evidence gap stated in the audit. The first version of this rule dropped the runner's
+    variable-sourced libs; the retained-edge floor, which had been vacuous when the list was empty, is what caught it. The `REPO_ROOT` idiom
+    fix (D1) is a **widening** recorded here with its census and selection delta: `cd "<dir>[/..]" && pwd` resolves to its cd target when the target
+    is fully resolved, and a token D1 leaves without an edge is re-run as before so it can only widen. Non-leaf files also resolve
+    `$(dirname ...)/` on the whole line (the slash form only: the bare form mints a coarse directory edge on 241 rows), which restores the real
+    source edges of the 11 hooks that lost them. Phase C: none of the six heavy always-on batteries narrows (no clean recording); `domain-model-drift` stays always-on on the
+    recorder rule now that its 82 s derive cost is 0.2 s.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Keep `inotifywait` as the event source | It drops queue overflow silently (measured), which defeats "never demotable from an incomplete recording" |
+| Resolve `$VAR` probe operands in the recorder to keep more suites demoted | An unprovable operand is unproven; resolving it is the next increment of the scan, and always-on is the safe side meanwhile |
+| Make the bench an exact-equality oracle for the leaf rule | An independent text walker cannot reproduce every dropped edge; equality would force the walker to become the derive |
+| Treat the runner as a leaf by skipping passes 2 and 3 wholesale | Loses `source "$VAR"` loads (measured: five libs), which had reached suites only by being mentioned |
+| Declare `.` as an edge for the five suites that open the checkout root | A directory open of the root is a read of no particular file; no pre-change cover held it either |
+
 ## References
 
 - Issue: #8322; motivating review session: #8270/#8231; duplicate-full-run
@@ -227,3 +413,70 @@ Alternatives added by this amendment:
 - Plan: `knowledge-base/project/plans/archive/20260920-163321-feat-test-all-affected-gate-default-plan.md`
 - Index: `scripts/lib/test-affected-paths.sh`; classifier + mode matrix:
   `scripts/test-all.sh`; mutation suite: `scripts/test-all-affected.test.sh`.
+
+## Amendment — 2026-09-30 (#9323, ADR-262)
+
+Narrowed, not reversed. Decision 1's "CI keeps the full battery", Context's "the merge gate is unchanged:
+CI's required `test` context runs the full battery", the Consequences line "the serial battery still runs —
+on CI" and the accepted-residual bound "CI's full battery on the PR head, which remains the authoritative
+merge gate" are each **true except for five self-test mutation batteries on a `pull_request` event**, which
+decline when the PR's diff touches none of their declared subject paths (ADR-262). The required `test`
+context still reports on every PR and no job `if:` changed; on `push`, `merge_group`, `workflow_dispatch` and
+the 6-hourly `main-health-monitor` the full battery runs, so an escape is caught on the push run or the
+monitor, not on the PR.
+
+**ALWAYS_ON rationale for four labels.** `scripts/test-all-affected`, `scripts/battery-tag-authorship-mutations`
+and the two `--rows` halves of `scripts/lint-orphan-test-suites-mutations` were classified `ALWAYS_ON` as
+"runner-SUT" suites whose verdict is a property of the whole registration set. That reasoning does not hold
+for them: each is a mutation battery that scores a **sandbox copy of named files**, so its edge set is the
+declared array (`LINT_ORPHAN_BATTERY_PATHS`, `TAG_AUTHORSHIP_BATTERY_PATHS`,
+`TEST_ALL_AFFECTED_BATTERY_PATHS`), now read as `AFFECTED_CONSUMED_EDGES`. Their subjects
+(`scripts/lint-orphan-test-suites`, `scripts/battery-tag-authorship`) stay `ALWAYS_ON`. The new guard suite
+`scripts/test-all-pr-battery-gate` is `ALWAYS_ON`: its subject is the runner itself.
+
+## Amendment — 2026-10-01 (#9400)
+
+Added, not narrowed: a **third local gate tier** now exists below this ADR's `test-all.sh --affected`
+dispatch. `scripts/pre-push-ratchet-lane.sh` runs at `pre-push` time (lefthook `ratchet-lane` command and
+stage 1 of `scripts/hooks/pre-push`) and is scoped to the curated ratchet/lint members a push diff can trip:
+the highwater family (`lint-trap-tempfile-ownership`, `lint-supabase-deprecated-endpoints`,
+`lint-diagnosis-claims`, `alarm-issue-filing-guard`, `lint-workflow-step-env-refs`), the standalone
+`plugin-root-anchor-debt` probe, the three fixture-scan suites, the merge-base byte/body lints
+(`lint-skill-body-budget`, `lint-rule-bodies`), plus `test-affected-kb-consumers` under a conditional
+trigger and a capped branch-touched suite tier run in the deps-free, disk-backed-TMPDIR scratch.
+
+The load-bearing difference from every other local gate: the lane **evaluates the merged tree**, not the
+branch tree. It fetches `origin/main`, materializes the branch in an ephemeral detached scratch worktree,
+merges `origin/main` there, and runs every member with cwd inside that scratch — the shape that makes the
+five #9339 CI-only failure classes visible locally without mutating the operator's branch or working tree
+(a fetch failure degrades to `merge=skipped:fetch-failed` and members still run on the unmerged tree; a
+merge conflict exits 2 with `verdict=MERGE_CONFLICT`; the receipt never reads `all green`/`tests verified`).
+
+**ADR-183 reaffirmed.** This lane is not the merge gate and is never described as one. The required `test`
+context on the PR head remains the only merge gate; the lane is the cheap local net in front of it, and its
+receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
+
+## Amendment — 2026-10-04 (section 2 of #9307)
+
+19. **The recorder runs suites as the invoking user, and a suite whose recorded read set no short declaration can bound is hedged, not declared.** The
+    recorder probes `unshare -cn` (the caller's own uid), falls back to `unshare -rn` (namespace-root, stamped `idmap=root`), then bwrap, and carries
+    `unshare` on its scratch PATH. The mapping is stamped in the header and written to the meta file; a `--mode demote` row is decided only for `idmap=current`:
+    `idmap=root` (also a run started by uid 0) comes out `unreliable reason=idmap-root` and a meta with no IDMAP line (a pre-cell recording)
+    `reason=idmap-unknown`, because a namespace-root run can skip arms that refuse a privileged caller without saying so. **This supersedes,
+    for `scripts/test-affected-kb-consumers`, `scripts/orphan-process-reaper-mutations` and `scripts/audit-suite-reads` only, decision 18's sentence that
+    keeps them on their derived or declared edges with the evidence gap stated, and decision 18's threshold of about 7 s under which a suite with no
+    evidence is hedged.** The two suites with an instrument-side gap now have evidence; the third (`scripts/test-affected-kb-consumers`) is hedged into
+    `ALWAYS_ON_SUITES` because no short declaration bounds its read set (the registration corpus, plus a `git ls-files` walk inotify cannot see). The
+    criterion is "no short declaration bounds the set": a recorded read set spanning more than 20 directories, or any whole-tree `git ls-files` walk
+    (measured 2026-10-04: 24 directories for the hedged suite, at most 4 for every other row of that table). Directory-listing residue may stay
+    undeclared only where a cited assertion cannot depend on it (`scripts/audit-suite-reads` asserts only that the real runner enumerates at least
+    400 registrations). **Both-state, deliberately:** that label is
+    also kept in its declared array, solely because `scripts/pre-push-ratchet-lane.test.sh` arm 21 pins the lane's `KB_CONSUMERS_INPUTS` to it; the
+    array is dead to selection (always-on wins). Removing the always-on entry trips row f2; deleting the array trips arm 21. **Demotions recorded
+    before 2026-10-04 stand, as a deliberate exception to decision 17's keep-default** (they were recorded under `idmap=root`, where a skipped arm prints
+    SKIP and rates its row unreliable; a silent skip is the residual risk). The re-record that would close the exception is section 3 of the #9307
+    follow-up list (a scheduled recorder check); it does not exist yet and no separate issue tracks it, so the trigger is the next edit to any demoted
+    suite's edge array: re-record that suite then, or put it back in `ALWAYS_ON_SUITES`. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
+    becomes incremental, so "keep" does not become permanent by default; row f1 holds the census slack at 5 and this change leaves it at 0, so the next
+    always-on addition raises the floor (in `scripts/test-all.sh` and in f1's pin), which is the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
+    (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.

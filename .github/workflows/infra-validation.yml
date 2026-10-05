@@ -157,6 +157,12 @@ on:
       # heartbeat unwired, and the published privacy policy asserts that verification in the present
       # tense. A guard born unreachable here means a false Article 32 claim decays silently.
       - ".github/workflows/workspaces-luks-verify.yml"
+      # (#6931, Guard 3) The same suite now EXECUTES the web-2 soak-marker leg of that workflow, and the
+      # leg's query and parse live in the shared helper plus the Better Stack query script it drives.
+      # Neither is under apps/*/infra/**, so a PR editing ONLY one of them (loosening the parse, say, so
+      # a stale row reads green) would skip the guard whose job is to turn that red.
+      - "scripts/lib/web2-luks-rows.sh"
+      - "scripts/betterstack-query.sh"
       # (#3366) supabase-advisor/scan-workflow.test.sh reads all of these. The
       # guard's whole job is to catch a gate that looks present but does nothing
       # — so a guard that cannot fire when its own subjects are edited would be
@@ -194,6 +200,9 @@ on:
       - "scripts/supabase-advisor-scan.sh"
       - "apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts"
       - "knowledge-base/engineering/architecture/diagrams/model.c4"
+      # (#9391) The hosts-file GHCR deny lost alert's drift guard resolves the runbook anchor in
+      # its incident link against this file; a docs-only heading rename must run the guard.
+      - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
   workflow_dispatch:
 
 permissions:
@@ -769,10 +778,22 @@ jobs:
       - name: Run workspaces-LUKS dead-man fired alert drift guard (#9045)
         run: bash apps/web-platform/test/infra/workspaces-luks-deadman-fired-alert.test.sh
 
+      # (#9342) The bwrap-probe rollback Logs alert: the needle read from ci-deploy.sh's own
+      # BWRAP_LINE, the two-conjunct predicate (no host_name), the paging semantics, both -target
+      # lines (the only enforcement for logtail resources), the runbook anchor, and the mutation rows.
+      - name: Run bwrap-probe rollback alert drift guard (#9342)
+        run: bash apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh
+
       # (#8408 a) The registry store-not-LUKS / escrow-not-ok Logs alert: head-scoped per-arm
       # predicate, exact literals, unpaused, both -target lines, and its mutation rows.
       - name: Run registry store-not-LUKS alert drift guard (#8408)
         run: bash apps/web-platform/test/infra/registry-store-not-luks-alert.test.sh
+
+      # (#9391) The hosts-file GHCR deny lost Logs alert: both emitters' needles read from their own source,
+      # the two-arm value-0 predicate compared whole, head-scoping, the paging windows, both -target lines
+      # (the only enforcement for logtail resources), the runbook anchor, and its mutation rows.
+      - name: Run hosts-file GHCR deny lost alert drift guard (#9391)
+        run: bash apps/web-platform/test/infra/ghcr-blocked-alert.test.sh
 
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and

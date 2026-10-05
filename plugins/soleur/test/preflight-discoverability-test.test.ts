@@ -2487,8 +2487,9 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //   1. PLACEMENT — a correctly-indented child of the `discoverability_test:` sub-block,
   //      not a leftover template comment and not a stray top-level line.
   //   2. TRUTH — the probe reads BOTH of its signals out of the Better Stack Logs ClickHouse
-  //      warehouse (zot's boot `configuration settings` line for delivery, and the
-  //      PatchBlobUpload rows for absence), which needs
+  //      warehouse (zot's boot `configuration settings` line for delivery, and the PATCH
+  //      /blobs/uploads HTTP API rows plus the best-effort PatchBlobUpload error rows for
+  //      absence), which needs
   //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
   //   3. NO SUBSTITUTE — the property is the ABSENCE of a server-side upload failure on a
   //      deny-all-public private host (10.0.1.30, no ingress). Nothing unauthenticated can
@@ -2785,7 +2786,41 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // signs a GET to the HMAC-gated `/hooks/deploy-status` with WEBHOOK_DEPLOY_SECRET plus the CF Access
   // pair (Doppler soleur/prd_terraform). NO SUBSTITUTE: which key source a production host runs must
   // not be disclosed by any unauthenticated endpoint, and deploy state has no other read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 38;
+  // #9304 (2026-10-01): +1 (38 -> 39) for `2026-10-01-chore-delete-scheduled-gh-pages-cert-state-sentry-monitor-plan.md`
+  // (archived under plans/archive/). PLACEMENT: a correctly-indented child of its `discoverability_test:`
+  // sub-block, value on one line (a double-quoted scalar). TRUTH: the probe GETs the Sentry detectors API
+  // with SENTRY_IAC_AUTH_TOKEN (Doppler soleur/prd). NO SUBSTITUTE: the detectors API has no
+  // unauthenticated read, and "this detector is gone" is unverifiable from outside the org. Genuine.
+  // #8016 (2026-10-01): +1 (39 -> 40) for `2026-10-01-fix-deploy-bwrap-probe-sigkill-canary-rollback-plan.md`
+  // (archived under plans/archive/). PLACEMENT: a correctly-indented child of its `discoverability_test:`
+  // sub-block, value on one line. TRUTH: the probe reads the DEPLOY_ROLLBACK / SANDBOX_PROBE_OK journald
+  // lines through `scripts/betterstack-query.sh` under `doppler run -c prd_terraform`
+  // (BETTERSTACK_QUERY_*). NO SUBSTITUTE: those lines exist only in production logs, so no
+  // unauthenticated read can verify the same property. Genuine.
+  // #9342 (2026-10-01): +1 (40 -> 41) for `2026-10-01-chore-alert-on-deploy-rollback-bwrap-probe-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe reads the SANDBOX_PROBE_OK journald line through
+  // `scripts/betterstack-query.sh` under `doppler run -c prd_terraform` (BETTERSTACK_QUERY_*), which
+  // checks the pipeline feeding the new alert. NO SUBSTITUTE: that line exists only in production
+  // logs and Better Stack has no unauthenticated read path. Genuine.
+  // #6931 (2026-10-01): +1 (41 -> 42, after #9342 took 40 -> 41) for `2026-10-01-feat-web-host-fresh-boot-luks-path-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) alone: it grades from the probe and readiness rows and never reads the marker, so it
+  // holds no other credential. NO SUBSTITUTE: web-2's probe and readiness rows land only in the Logs warehouse, which has
+  // no unauthenticated read path. Genuine.
+  // #9392 (2026-10-03): +1 (42 -> 43) for `2026-10-03-chore-zot-adr096-wrapup-delivery-resolver-alert-adr190-plan.md` (archived under plans/archive/ with a `20261004-124500-` prefix by #9391).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the `GHCR_DENY` journald rows through `scripts/betterstack-query.sh` under
+  // `doppler run -c prd_terraform` (BETTERSTACK_QUERY_*), the pipeline that feeds the follow-up alert.
+  // NO SUBSTITUTE: Better Stack has no unauthenticated read path. Genuine.
+  // #9458 (2026-10-04): +1 (43 -> 44, after #9392 took 42 -> 43) for `2026-10-03-feat-inbox-provider-neutral-email-routing-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`apps/web-platform/scripts/email-route-status.sh`) reads `public.email_inbox_routes`
+  // through DATABASE_URL_POOLER (Doppler soleur/prd). NO SUBSTITUTE: the table is service-role only (RLS on,
+  // zero policies, every privilege revoked from anon/authenticated), so no unauthenticated probe can read it.
+  // Genuine.
+  const BASELINE_DECLARED_PROBES = 44;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

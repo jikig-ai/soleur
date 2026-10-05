@@ -13,9 +13,10 @@
 # in the same run.
 #
 # The passphrase is read ONLY via the pinned form `doppler secrets get WORKSPACES_LUKS_KEY --plain
-# --config prd_workspaces_luks` (R9 / workspaces-luks.tf:112) — NEVER `doppler run`/`download
+# --config "$KEY_CONFIG"` (R9 / workspaces-luks.tf:112; KEY_CONFIG is prd_workspaces_luks on web-1 and
+# prd_workspaces_luks_web on a fresh web host, from the boot env file, #9377) — NEVER `doppler run`/`download
 # --config prd_workspaces_luks`, which drag the root's ~116 prd secrets into env (the CWE-522 hole
-# the dedicated config exists to close). DOPPLER_TOKEN (the prd_workspaces_luks service token) +
+# the dedicated config exists to close). DOPPLER_TOKEN (the config-scoped service token) +
 # SOLEUR_SENTRY_DSN arrive via the unit's EnvironmentFile=/etc/default/luks-monitor; the token line
 # is owned by terraform_data.luks_monitor_token_install after the cutover's first write (ADR-119).
 set -uo pipefail
@@ -27,6 +28,20 @@ esac
 # at inngest-heartbeat.sh: a heredoc-blind fixture derives the SYSLOG_IDENTIFIER set from
 # `^\s*(readonly\s+)?LOG_TAG="..."`. Must equal the vector.toml include_matches tag.
 LOG_TAG="luks-monitor"
+
+# (#6931) PROFILE. `standby` (written to /etc/default/luks-monitor by cloud-init on a FRESH host, never on
+# web-1) skips the shared Better Stack heartbeat push at the end: that heartbeat is web-1's dead-probe
+# switch, so a second pusher would mask a dead web-1 probe (the #8706 failure mode, one host over). A
+# standby's dead probe is caught by the daily verify leg instead, which fails on a stale or missing row.
+# Only the exact word `standby` changes anything: any other value (a typo, an empty string) keeps the
+# push, so a mis-set profile fails TOWARD the heartbeat, never away from it.
+PROFILE="${LUKS_MONITOR_PROFILE:-primary}"
+# The kernel's per-boot id, DIAGNOSTIC only: the probe row is per boot, the SOLEUR_FRESH_BOOT_READY row is
+# per INSTANCE (cloud-init runcmd), so the verify join is instance-level (probe newer than the green
+# readiness row), never boot_id equality (ADR-263). Lower-cased and charset-bound. The stderr redirect
+# precedes the `<` so a missing file stays silent (a redirect after the `<` is applied too late).
+BOOT_ID="$(tr 'A-F' 'a-f' 2>/dev/null < "${LUKS_MONITOR_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" | tr -cd '0-9a-f-' | head -c 36 || true)"
+[ -n "$BOOT_ID" ] || BOOT_ID=unknown
 
 MOUNT="${WORKSPACES_MOUNT:-/mnt/data}"
 MAPPER_NAME="${WORKSPACES_MAPPER_NAME:-workspaces}"
@@ -171,8 +186,41 @@ WL_DEVICE_TYPE="${dev_type:-none}"
 [ "$dev_type" = "crypto_LUKS" ] || emit_and_die device_not_luks
 
 # 4. Escrow re-test: read the passphrase via the PINNED scoped-config form (R9), never doppler run.
-key="$(doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks 2>/dev/null || true)"
-if [ -n "$key" ]; then WL_DOPPLER_REACHABLE=true; else WL_DOPPLER_REACHABLE=false; emit_and_die doppler_unreachable; fi
+# (#9377) WHICH config: the one the boot env file names. A web-class host's cloud-init writes
+# WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web there; web-1's SSH installer writes prd_workspaces_luks. The file is
+# PARSED, never sourced (the provisioner's `_one` shape: exactly one ^KEY= line, then sed; the reopen script's
+# ^[a-z0-9_]+$ shape check), and the value must be in the closed set below. An absent file, an absent or ambiguous
+# line, or a value outside the set falls back to prd_workspaces_luks, so web-1 is unchanged and the boot file stays the
+# single source (no new env var in /etc/default/luks-monitor). A web-class host that falls back reads with a token
+# scoped to the web config, so the read fails and takes the doppler_unreachable branch below (Sentry
+# workspaces-luks-drift): loud, never silent. Only THIS read moves; the heartbeat read below stays on
+# prd_workspaces_luks because the standby profile web-2 runs skips it.
+BOOT_ENV_FILE="/etc/default/workspaces-luks-boot"
+[ "${LUKS_MONITOR_TEST_SEAM:-0}" = "1" ] && BOOT_ENV_FILE="${LUKS_MONITOR_BOOT_ENV_FILE:-$BOOT_ENV_FILE}"
+KEY_CONFIG=prd_workspaces_luks
+KEY_CONFIG_SRC=fallback-no-boot-file
+if [ -r "$BOOT_ENV_FILE" ]; then
+  KEY_CONFIG_SRC=fallback-no-config-line
+  if [ "$(grep -c '^WORKSPACES_DOPPLER_CONFIG=' "$BOOT_ENV_FILE" 2>/dev/null || true)" = 1 ]; then
+    KEY_CONFIG_SRC=fallback-bad-value
+    _kc="$(sed -n 's/^WORKSPACES_DOPPLER_CONFIG=//p' "$BOOT_ENV_FILE")"
+    if [[ "$_kc" =~ ^[a-z0-9_]+$ ]]; then
+      case "$_kc" in
+        prd_workspaces_luks|prd_workspaces_luks_web) KEY_CONFIG="$_kc"; KEY_CONFIG_SRC=boot-file ;;
+      esac
+    fi
+  fi
+fi
+key="$(doppler secrets get WORKSPACES_LUKS_KEY --plain --config "$KEY_CONFIG" 2>/dev/null || true)"
+if [ -n "$key" ]; then
+  WL_DOPPLER_REACHABLE=true
+else
+  WL_DOPPLER_REACHABLE=false
+  # A web-scoped token whose boot file fell back to prd_workspaces_luks fails here exactly like a Doppler outage; the line says which
+  # config was asked for and why, so the two are distinguishable from journald alone (observability review P2-4). Names only, no value.
+  log "key read failed: config=$KEY_CONFIG source=$KEY_CONFIG_SRC"
+  emit_and_die doppler_unreachable
+fi
 if printf '%s' "$key" | cryptsetup luksOpen --test-passphrase --key-file - "$real_dev" >/dev/null 2>&1; then
   WL_LUKS_OPEN_RESULT=ok
 else
@@ -371,6 +419,9 @@ fi
 # in this file, comments included. The (M)/(N) parity gates derive the producible-reason set by
 # regex over the whole file, so `<helper> would classify ...` registers "would" as an emittable
 # reason and reds the gate. Existing prose uses the possessive form for exactly this reason.
+if [ "$PROFILE" = standby ]; then
+  log "standby profile: the shared heartbeat push is skipped (the daily verify leg is this host's dead-probe alarm)"
+else
 hb_url="$(doppler secrets get WORKSPACES_LUKS_HEARTBEAT_URL --plain --config prd_workspaces_luks 2>/dev/null || true)"
 [ -n "$hb_url" ] || emit_readiness_and_die heartbeat_url_absent
 # -g (--globoff): the URL is a bearer capability; without -g a URL with [ ]/{ } prints the full
@@ -387,6 +438,7 @@ for _ in 1 2 3; do
   sleep 2
 done
 [ "$hb_pushed" = true ] || emit_readiness_and_die heartbeat_push_failed
+fi
 
-log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable)"
+log "OK: /mnt/data is LUKS-backed (device_type=crypto_LUKS mount_source=$MAPPER escrow=ok header=readable boot_id=$BOOT_ID)"
 exit 0
