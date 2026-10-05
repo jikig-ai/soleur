@@ -12,6 +12,25 @@ brand_survival_threshold: none
 
 # docs: delete the hand-maintained sentry_alert rule count from the C4 sentry -> founder edge
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05
+**Sections enhanced:** 4 (Scope Check added, Phase 1 exact-text verification, gate results, tooling risk)
+**Research agents used:** none spawned. The change is one description string in two files; a 40-agent fan-out has nothing to review, so the deepen pass was done as targeted local verification (greps, a unique-match probe of the edit target, the Phase 4.6-4.12 gates run by hand).
+
+### Key Improvements
+
+1. Added the mandatory `## Scope Check` (deepen-plan 4.12): nine asks mapped to plan items, two items declared `inferred` with justification, split assessment `single PR`.
+2. Verified both Phase 1 substitution targets are present exactly once in `model.c4` (the long routing clause and the "by design there and a defect anywhere else" clause), so the Edit tool's uniqueness requirement will hold. Removed stray backslash-escaped backticks from the plan's quoted old text; the file contains plain backticks.
+3. Confirmed no assertion pins the removed sentence: `c4-count-parity` rows are file-wide clause-anchored greps on other edges, and nothing in the three C4 suites mentions `sentry_alert`, `issue-alerts` or `NoOne`.
+
+### New Considerations Discovered
+
+- Gate results: 4.6 pass (concrete User-Brand Impact, threshold none, scope-out bullet present); 4.7 skip (pure docs); 4.8 pass (no PAT-shaped tokens); 4.9 skip (no UI surface); 4.10 skip (no store or connection; `.tf` files are cited, not edited); 4.11 skip (no guard is delivered, the operator explicitly declined the parity row); 4.12 pass.
+- Re-measured live: 43 `sentry_alert` resources in `issue-alerts.tf`, 4 `fallthrough_type = "NoOne"`, 1 more in `cron-monitor-alerts.tf`; PR #9302 merged 2026-09-30T19:46:09Z; #9312 open.
+- Issue #9312's body itself says the original count read "36 of the 38" and that PR #9263 would change it again; both are superseded by this deletion, and the number would have gone stale a third time without any test noticing.
+- Risk: rendering needs network through `npx` with the pinned `--before` date. A failed render never overwrites the committed artifact, and CI `c4-model-freshness` is the backstop.
+
 ## Overview
 
 The C4 model's `sentry -> founder` edge (`knowledge-base/engineering/architecture/diagrams/model.c4`,
@@ -95,7 +114,7 @@ File: `knowledge-base/engineering/architecture/diagrams/model.c4`, the `sentry -
 only. Two substitutions inside that one description string, applied to the exact current text:
 
 1. Replace
-   `Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers — 40 of the 43 \`sentry_alert\` rules in issue-alerts.tf; three deliberately set fallthrough_type NoOne — \`byok_cap_exceeded\`, \`git_data_boot_warning\` (the non-paging half of the git-data boot severity split) and \`web_luks_boot_warning\` (the non-paging half of the fresh-boot LUKS stage split, #6931).`
+   `Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers — 40 of the 43 `sentry_alert` rules in issue-alerts.tf; three deliberately set fallthrough_type NoOne — `byok_cap_exceeded`, `git_data_boot_warning` (the non-paging half of the git-data boot severity split) and `web_luks_boot_warning` (the non-paging half of the fresh-boot LUKS stage split, #6931).`
    with
    `Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers; a few rules, the non-paging halves of a severity split, deliberately set fallthrough_type NoOne instead (issue-alerts.tf is the authoritative list).`
 2. Replace `by design there and a defect anywhere else` with
@@ -160,6 +179,39 @@ then a `jq --arg path` body search for both edited paths (`model.c4`, `model.lik
 delegated to the work phase's first command (the plan phase is read-mostly and the edit set is two
 fixed files). Disposition rule: any match is acknowledged unless it concerns the `sentry -> founder`
 edge description, in which case it folds into this PR. Recorded result at plan time: none known.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "DELETE the number, do not keep it and do not add a parity row" [brief] | Phase 1 (model.c4 edit); Test Scenarios negative row | mapped |
+| 2 | "remove the "N of the M" count and the hand-enumerated NoOne rule names from the edge description" [brief] | Phase 1 substitution 1 | mapped |
+| 3 | "keep the qualitative routing description" [brief] | Phase 1 replacement sentence | mapped |
+| 4 | "re-render model.likec4.json via plugins/soleur/scripts/render-c4-model.sh and satisfy the C4 freshness/parity tests" [brief] | Phase 2, Phase 3 | mapped |
+| 5 | "Sweep the subject repo-wide" [brief] | Research Insights sweep results; Phase 3 residual grep | mapped |
+| 6 | "ADR-031 amendments are dated append-only records: do NOT edit them" [brief] | Cut List; Sharp Edges; Files to Edit omits ADR files | mapped |
+| 7 | "check plugins/soleur/test and scripts for any assertion pinning the removed sentence" [brief] | Research Insights sweep results; Phase 3 | mapped |
+| 8 | "the PR body must say "Closes #9312"" [brief] | Phase 4; Acceptance Criteria | mapped |
+| 9 | "keep the edit to that one description" [brief] | Phase 1 constraint; Acceptance Criteria diff-scope row | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Files to Edit: model.c4 | "remove the "N of the M" count and the hand-enumerated NoOne rule names from the edge description" | asked |
+| Files to Edit: model.likec4.json | "re-render model.likec4.json via plugins/soleur/scripts/render-c4-model.sh" | asked |
+| Phase 1 substitution 2 (reword "by design there") | — | inferred — justification: the clause "by design there" refers to the enumerated rules being deleted, so leaving it makes the surviving description wrong |
+| Phase 3 test runs and residual grep | "satisfy the C4 freshness/parity tests" | asked |
+| Files to Create: this plan and tasks.md | — | inferred — justification: the soleur:plan pipeline contract requires the plan file and tasks.md as the hand-off to soleur:work |
+
+### Split Assessment
+
+- Subsystems touched: 1 - knowledge-base (plus plan/spec artifacts in the same root)
+- Planned files: 4 | Estimated changed lines: 4
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Acceptance Criteria
 
