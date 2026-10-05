@@ -77,3 +77,26 @@ Branch: `feat-one-shot-ci-flakes-queue-slowness-9482`. PR body uses `Ref #N` onl
   gated on it.
 - PR-3 live-verify (#8022): diagnosis-first discriminating FAIL detail in `scripts/live-verify/run.ts`;
   sequence guard in `fetchConversations` only if H-A is confirmed.
+
+## Work-phase outcome (2026-10-05)
+
+- Phase 1 done in four commits: reap 11 sites and cron 33 sites (`61c2158ad0`), luks stub drain + `drive` stdin +
+  race rows + floor 313 to 316 (`dbbd8d6bb7`), guard `FILES_7376` + scan + non-vacuity + affected-path edges
+  (`9ad27f260f`), guard wiring probe (follow-up commit).
+- Measured: reap 45/0 serial and 24/24 green under 24 parallel copies (plan: 3/24 and 6/32 red before); cron 308/0;
+  luks 316/0; all four suites green in parallel under `CI=1 SOLEUR_SUBAGENT=1`.
+- Mutation results (each landed, tree restored): cron census pattern flipped = RED; luks drain deleted = RED on the
+  late-producer row; luks row neutered = RED on the floor; guard: bad line appended to each of the three real
+  files = RED x3, empty pin list, renamed member, neutered scan pattern, wrong array in `scan_7376`, comment
+  filter dropped = RED each.
+- **Surviving mutant, labelled:** replacing the live assignment `hits_7376="$(scan_7376 .)"` with `''` stays green.
+  Reading: fixture gap shared by every sibling pass (`hits_8664`, `hits_8855`); the in-suite probe drives the
+  function and each member, the per-file append rows above kill the live assignment out of suite.
+- Gate note: editing `scripts/lib/test-affected-paths.sh` degrades `--affected` to the full battery, which a
+  sibling worktree's running gate refused (rc 4) and the scoped selector queued behind; both cancelled by name.
+  The consumer suites, guard, ratchets (`fixture-relative-assert` 62/0, `fixture-dir-operand-assert` 71/0,
+  capture-exit, trap-ownership, orphan lint, derive 116/116) were run directly; CI's full battery is the gate.
+- **Overlap found:** PR #9523 (sibling session, branch `feat-one-shot-merge-queue-slow-failures`) carries the
+  e2e/font work this plan called PR-2 and also edits `reap-archive-persistence.test.sh` fixture G (diagnostics
+  only, cause recorded as unproven). This PR carries the proven cause and the fix for the same suite; PR-2 is not
+  started here. Whichever lands second rebases the reap suite.
