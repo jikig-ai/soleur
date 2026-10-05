@@ -33,7 +33,7 @@
 # sources the lib to actually reach it.
 # #7376 (the tracker for these flakes; the fix PR is #9525) added three infra/plugin suites whose
 # 2026-10-05 CI flakes were this same mechanism (FILES_7376). TO ADD A FILE to FILES_7376, make three
-# edits together: the array, the member-count literal `!= 3` in the pin check below, and the file's path in
+# edits together: the array, `PIN_7376` (the pinned member count) in the pin check below, and the file's path in
 # AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh (hand-
 # maintained; the parity check below reads that array only, ignoring comments, and fails if the path is
 # missing from it — otherwise `--affected` would not select this guard when that suite changes. If
