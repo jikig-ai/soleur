@@ -189,3 +189,12 @@ evidence-only update and do not qualify provider execution, recovery,
 authenticated screenshots or either Web matrix. No provider request,
 credential-value inspection, shared database/production write or flag/cohort
 change was made by this continuation; local suites remain skipped.
+
+## Addendum — 2026-10-05 seven-day maximum lifetime report
+
+The operator subsequently reports the project's maximum API-key lifetime
+configured to seven days. See the [CLO key-lifetime continuation](clo-decision-packet.md#key-lifetime-evidence-continuation--2026-10-05)
+for its scope: reported administrator configuration, not an evidenced key or
+its deadline, test-window extension, live authorization or Web qualification.
+The earlier configured-control gap is historical; all remaining gates and
+action prohibitions persist.

@@ -140,3 +140,29 @@ provider request, credential-value inspection, shared database/production
 write or flag/cohort change. Local suites remain skipped at operator
 direction. Neither mode gains live authorization or qualification; customer
 content remains blocked, and PR #9051 remains draft with Codex default-off.
+
+## Key-lifetime evidence continuation — 2026-10-05
+
+Scoped reassessment by `soleur:legal:clo` following documentation verification
+at source head `daa7d9bc1e410d4ebb776e1b026e33b0e45d768d`.
+
+The operator subsequently reports that the project's maximum API-key
+lifetime is configured to seven days. This is an operator-reported actual
+setting, not independently verified dashboard/API evidence. It narrows the
+configured-control gap recorded earlier on this date; those earlier
+observations retain their historical context.
+
+An administrator maximum lifetime for newly created keys does not establish
+that a key has been created or identify its actual expiry deadline. Nor does
+it establish the separately authorized test expiry of seven days after setup:
+a later-created key must not extend that authorization window. The reported
+US$5 project monthly hard limit likewise does not establish enforcement of
+the US$5 total test budget, including possible enforcement lag.
+
+API-key disposition remains **PENDING — no live authorization**; the existing
+managed hosted-auth path remains **BLOCKED — provider-permitted integration
+required**. Agreement/DPA coverage, precise hosted custody permission, actual
+data/transfer controls and independent Web qualification remain unresolved.
+This continuation grants no provider request, credential-value inspection,
+shared database/production write or flag/cohort change. Keep PR #9051 draft,
+Codex default-off and customer content blocked.
