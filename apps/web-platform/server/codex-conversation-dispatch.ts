@@ -3,7 +3,7 @@ import type { EngineBinding, EngineEvent, EngineInput, EngineRunContext, EngineS
 import { dispatchConversationEngineRun } from "./agent-engine-dispatch";
 import type { ReviewedEngineRegistry } from "./agent-engine-adapter-factory";
 import { createCodexWebEngineFactoriesForBinding, type CodexWebRuntimeOptions } from "./codex-web-runtime";
-import { mapCodexEngineEventToWsMessage } from "./codex-ws-events";
+import { createCodexWebEventMapper, mapCodexEngineEventToWsMessage } from "./codex-ws-events";
 import { reviewedEngineRegistry } from "./agent-engine-reviewed-definitions";
 import { authorizeEngineDataEgress } from "./agent-engine-data-egress-policy";
 
@@ -96,6 +96,11 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
       throw Object.assign(new Error("Codex adapter factory is unavailable"), { code: "codex_adapter_unavailable" });
     }
     assertTurnActive(options.context.signal);
+    const mapWebEvent = createCodexWebEventMapper({
+      leaderId: options.leaderId,
+      conversationId: options.conversationId,
+      workspaceId: options.workspaceId,
+    });
     for await (const event of dispatchConversationEngineRun({
       repository: options.repository,
       persistedRun: persisted,
@@ -111,11 +116,7 @@ export async function dispatchCodexConversationToWebSocket(options: CodexConvers
         && (event.payload.status === "completed" || event.payload.status === "failed" || event.payload.status === "cancelled")) {
         terminalStatus = event.payload.status;
       }
-      options.send(mapCodexEngineEventToWsMessage(event, {
-        leaderId: options.leaderId,
-        conversationId: options.conversationId,
-        workspaceId: options.workspaceId,
-      }));
+      options.send(mapWebEvent(event));
     }
     if (terminalStatus === null) {
       throw Object.assign(new Error("Codex stream ended without a terminal status"), { code: "codex_terminal_missing" });

@@ -51,6 +51,14 @@ This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-d
 
 The resumed fix also covers these concrete failure modes:
 
+- A member receives consecutive Codex text fragments. Treating each as a
+  replacement loses answer text and makes fragments look like completed
+  reasoning steps. The per-turn Web mapper accumulates by translated item
+  identity, replaces persisted snapshots and keeps different items separate.
+  Its 32-item / 256 KiB aggregate UTF-8 limit fails the turn visibly instead
+  of evicting earlier text. Synthetic mapper/reducer and dispatch regression
+  definitions cover this boundary; local execution remains skipped at the
+  user's direction. Ref #9553. Routine text semantics are preserved.
 - A member replaces a conversation while a scoped `tool_use.label` or
   `reasoning_narration.message` is in flight. A late frame could otherwise
   paint the previous conversation's activity in the new chat. The optional
@@ -141,6 +149,9 @@ failure_modes:
     alert_route: "web-platform engineering on call"
   - mode: "denied provider egress, replay/approval/usage failure"
     detection: "bounded engine observability event and Sentry capture"
+    alert_route: "web-platform engineering on call"
+  - mode: "Web text retention exceeds 32 items or 256 KiB UTF-8"
+    detection: "failed attempt lifecycle and WebSocket handler error captured by Sentry; no text included in the limit error"
     alert_route: "web-platform engineering on call"
 logs:
   where: "content-free engine lifecycle telemetry, Sentry and Inngest run metadata"

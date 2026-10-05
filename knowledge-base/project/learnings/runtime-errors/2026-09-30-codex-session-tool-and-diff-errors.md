@@ -532,3 +532,10 @@ is not a completed lint check of those files.
   verdict as current. An unverified expanded main hash in the first record
   draft was replaced with the measured second-parent SHA before commit;
   never expand a known abbreviated hash by assumption.
+- During the final sync, guessed Codex mapper/adapter filenames and root-relative
+  paths passed from the app directory failed. Discover files first and keep
+  every command's path relative to its explicit working directory; a failed
+  prerequisite must not be mistaken for a compiler run. Large combined reads
+  again truncated; use smaller targeted reads. The first audit-defect filing
+  was refused for missing milestone and filing-exit fields. The corrected
+  invocation supplies both and created issue 9553 before the inline fix.

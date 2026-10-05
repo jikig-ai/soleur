@@ -154,7 +154,7 @@
  * font-sans utility class emits the full fallback stack.
  *
  * INVARIANT: the --font-inter token below MUST equal the `variable:`
- * field on the Inter() call in app/fonts.ts. Renaming one without the
+ * field on the localFont() call in app/fonts.ts. Renaming one without the
  * other silently falls through to system fonts (no build error, no
  * runtime warning). Kept separate from the colors @theme block above
  * because that block MUST stay non-inline so data-theme swap remains

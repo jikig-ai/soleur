@@ -46,6 +46,21 @@ function turnFixture(payloads: EngineEventPayload[]) {
 }
 
 describe("Codex conversation dispatch bridge", () => {
+  it("emits cumulative Web snapshots from separate native item fragments", async () => {
+    const { options, adapter, send } = turnFixture([]);
+    adapter.start.mockImplementation(async function* () {
+      yield { runId: "synthetic-run", eventId: "codex:item:synthetic-item:delta:1", sequence: 1, payload: { type: "text", text: "Hello " } };
+      yield { runId: "synthetic-run", eventId: "codex:item:synthetic-item:delta:2", sequence: 2, payload: { type: "text", text: "world" } };
+      yield { runId: "synthetic-run", eventId: "synthetic-end", sequence: 3, payload: { type: "status", status: "completed" } };
+    });
+    await dispatchCodexConversationToWebSocket(options);
+    expect(send.mock.calls.map(([frame]) => frame)).toEqual([
+      { type: "stream", content: "Hello ", partial: true, leaderId: "cc_router", conversationId: "synthetic-conversation" },
+      { type: "stream", content: "Hello world", partial: true, leaderId: "cc_router", conversationId: "synthetic-conversation" },
+      { type: "stream_end", leaderId: "cc_router", conversationId: "synthetic-conversation" },
+    ]);
+  });
+
   it("notifies acceptance only after the durable attempt claim and generation validation", async () => {
     const { repository, options, adapter } = turnFixture([{ type: "status", status: "completed" }]);
     const onAccepted = vi.fn(() => {

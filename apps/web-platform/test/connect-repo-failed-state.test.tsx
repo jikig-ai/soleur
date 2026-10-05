@@ -1,8 +1,8 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-vi.mock("next/font/google", () => ({
-  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
+vi.mock("next/font/local", () => ({
+  default: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 const { mockRpc, mockRefreshSession, mockReportSilentFallback } = vi.hoisted(
