@@ -1895,11 +1895,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // persistent chip reflects server truth (`bashAutonomous && acked`), NOT a
     // message-presence heuristic. A held (un-acked) disclosure is "Approve each";
     // only an acked autonomous workspace is "Auto-run on". Re-pushed by the
-    // ws-handler on a successful in-session ack-release.
-    defaultSendToClient(args.userId, {
-      type: "autonomous_posture",
-      autonomous: bashAutonomous && autonomousAckAtMs != null,
-    });
+    // ws-handler on a successful in-session ack-release. Gated off support
+    // (#9539): the frame is WS-bound and meaningless to an SSE-only turn.
+    if (args.persona !== "support") {
+      defaultSendToClient(args.userId, {
+        type: "autonomous_posture",
+        autonomous: bashAutonomous && autonomousAckAtMs != null,
+      });
+    }
 
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below

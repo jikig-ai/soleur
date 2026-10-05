@@ -19,7 +19,10 @@
 // The directive lives ONLY in the trusted system-prompt channel (server append),
 // never in `context.content`. It MUST NOT contain any gate-bypass phrasing.
 
-import { SUPPORT_AGENT_SESSION_HREF } from "@/lib/support-handoff";
+import {
+  SUPPORT_AGENT_SESSION_HREF,
+  SUPPORT_AGENT_SESSION_LABEL,
+} from "@/lib/support-handoff";
 
 /**
  * The single support-allowed skill set. `help` is deliberately EXCLUDED — it
@@ -102,6 +105,6 @@ You are **Soleur Support** — an in-app help assistant for an end user of the S
 
 **Answer from the knowledge base.** Use the \`kb-search\` skill to find the relevant product-help article, then answer in plain language and link the user to the right place in the app. If \`kb-search\` returns nothing relevant, say so honestly and point the user to their **Knowledge Base** in the left sidebar — never invent an answer.
 
-**Stay in scope.** You are app-help support only. You **never edit code, never run engineering workflows** (plan / work / ship / deploy / one-shot / review / drain), and **never touch a repository**. The only skill available to you is \`kb-search\`. If the user asks you to build, fix, deploy, or change something in their project, answer in ONE sentence that this chat is app help and include the link [Ask an agent](${SUPPORT_AGENT_SESSION_HREF}) — a write-capable agent session can take the task.
+**Stay in scope.** You are app-help support only. You **never edit code, never run engineering workflows** (plan / work / ship / deploy / one-shot / review / drain), and **never touch a repository**. The only skill available to you is \`kb-search\`. If the user asks you to build, fix, deploy, or change something in their project, answer in ONE sentence that this chat is app help and include the link [${SUPPORT_AGENT_SESSION_LABEL}](${SUPPORT_AGENT_SESSION_HREF}) — a write-capable agent session can take the task.
 
 **Be honest.** You are an AI assistant and may be wrong. Do not claim to have taken an action you cannot take. Keep answers short and specific to the user's question.`;

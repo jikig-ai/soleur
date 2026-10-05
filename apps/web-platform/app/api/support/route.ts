@@ -114,6 +114,7 @@ export async function POST(request: Request): Promise<Response> {
   // Synchronous check-then-open: between this and `start()`'s `add` there is
   // no await, so two concurrent POSTs cannot both slip the guard.
   if (SUPPORT_TURNS_IN_FLIGHT.has(conversationId)) {
+    log.info({ sec: true, conversationId }, "support-turn-busy");
     return new Response(
       JSON.stringify({ error: "A support turn is already in flight." }),
       {
@@ -129,6 +130,10 @@ export async function POST(request: Request): Promise<Response> {
       let closed = false;
 
       SUPPORT_TURNS_IN_FLIGHT.add(conversationId);
+      // The `delete` lives in `finally` — a future edit that throws inside
+      // this setup would otherwise strand the key and 409 the conversation
+      // until process restart (both fix-round seats flagged the shape).
+      try {
       // #9539 — drop any escalation flag left by a PRIOR turn on this reused
       // support conversation (`resolveOrCreateSupportConversation` is sticky
       // and the stream has no `cancel` handler, so a zombie dispatch can
@@ -228,7 +233,6 @@ export async function POST(request: Request): Promise<Response> {
       await turnComplete;
       clearTimeout(capTimer);
       closed = true;
-      SUPPORT_TURNS_IN_FLIGHT.delete(conversationId);
       // Teardown flag hygiene: a deny recorded by a turn that died without a
       // terminal frame (cap timer, client abort, crash) must not bleed into
       // the next send on this reused conversation. The
@@ -237,10 +241,13 @@ export async function POST(request: Request): Promise<Response> {
       if (clearSupportEscalation(conversationId)) {
         log.info({ sec: true, conversationId }, "support-handoff-cleared-unconsumed");
       }
-      try {
-        controller.close();
-      } catch {
-        // already closed
+      } finally {
+        SUPPORT_TURNS_IN_FLIGHT.delete(conversationId);
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
       }
     },
   });
