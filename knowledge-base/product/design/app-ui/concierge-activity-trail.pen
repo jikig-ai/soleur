@@ -1,0 +1,1991 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "FAA00",
+      "x": 0,
+      "y": 0,
+      "name": "A \u2014 In-turn: consolidated status box + activity trail",
+      "width": 760,
+      "height": 980,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "clip": true,
+      "children": [
+        {
+          "type": "frame",
+          "id": "f031",
+          "name": "cap",
+          "children": [
+            {
+              "type": "text",
+              "id": "t029",
+              "name": "capL",
+              "fill": "#C9A962",
+              "content": "FRAME A \u00b7 IN-TURN \u2014 ONE BOX, LIVE STATUS + TRAIL",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "t030",
+              "name": "capD",
+              "fill": "#848484",
+              "content": "The boxed \"Working\u2026\" badge and the standalone \"Still working\u2026\" line are replaced by ONE status box attached to the active assistant turn: leader header, the latest activity as the live line, and a bounded trail of prior steps beneath it.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "lineHeight": 1.4
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f036",
+          "name": "hdrA",
+          "children": [
+            {
+              "type": "text",
+              "id": "t032",
+              "name": "hdrTA",
+              "fill": "#FFFFFF",
+              "content": "Soleur Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "f035",
+              "name": "hstatA",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "e033",
+                  "name": "hdotA",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "t034",
+                  "name": "hstatTA",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ],
+              "gap": 6,
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center"
+        },
+        {
+          "type": "frame",
+          "id": "f037",
+          "name": "threadA",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f002",
+              "name": "uArow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f001",
+                  "name": "uA",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t000",
+                      "name": "uAT",
+                      "fill": "#FFFFFF",
+                      "content": "Triage my open pull requests and tell me which ones need attention.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "lineHeight": 1.45
+                    }
+                  ],
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container",
+              "justifyContent": "end"
+            },
+            {
+              "type": "frame",
+              "id": "f025",
+              "name": "aboxrow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f024",
+                  "name": "abox",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f009",
+                      "name": "ahdr",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "f005",
+                          "name": "ahdrL",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e003",
+                              "name": "aav",
+                              "fill": "#1E1E1E",
+                              "width": 20,
+                              "height": 20,
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#C9A962"
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "t004",
+                              "name": "ahdrT",
+                              "fill": "#848484",
+                              "content": "Soleur Concierge",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "600"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f008",
+                          "name": "ahdrR",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e006",
+                              "name": "wdot",
+                              "fill": "#D97706",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t007",
+                              "name": "wT",
+                              "fill": "#D97706",
+                              "content": "Working",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 1
+                            }
+                          ],
+                          "gap": 5,
+                          "alignItems": "center"
+                        }
+                      ],
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f012",
+                      "name": "live",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "e010",
+                          "name": "ldot",
+                          "fill": "#D97706",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "t011",
+                          "name": "liveT",
+                          "fill": "#FFFFFF",
+                          "content": "Checking automated tests\u2026",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ],
+                      "gap": 8,
+                      "alignItems": "center"
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "r013",
+                      "name": "trailSep",
+                      "fill": "#2A2A2A",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f023",
+                      "name": "trail",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "f016",
+                          "name": "step0",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e014",
+                              "name": "s0d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t015",
+                              "name": "s0t",
+                              "fill": "#848484",
+                              "content": "Triaging open pull requests\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.75
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f019",
+                          "name": "step1",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e017",
+                              "name": "s1d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t018",
+                              "name": "s1t",
+                              "fill": "#848484",
+                              "content": "Reading chat-state-machine.ts\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.58
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f022",
+                          "name": "step2",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e020",
+                              "name": "s2d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t021",
+                              "name": "s2t",
+                              "fill": "#848484",
+                              "content": "Reviewing your request\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.42
+                        }
+                      ],
+                      "layout": "vertical",
+                      "gap": 7
+                    }
+                  ],
+                  "fill": "#141414",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 2,
+                    "fill": "#B45309"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    14,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container"
+            },
+            {
+              "type": "frame",
+              "id": "f028",
+              "name": "note",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t026",
+                  "name": "noteL",
+                  "fill": "#C9A962",
+                  "content": "\u2191 THE CONSOLIDATED STATUS BOX",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "t027",
+                  "name": "noteB",
+                  "fill": "#848484",
+                  "content": "Amber active border = the turn is in flight (same signal the old boxed badge carried). Live line = latest plain-language activity, always full strength. Trail below = prior steps, most recent first, fading with age. Steps are gerund labels \u2014 no paths, no command text, no skill names.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 460,
+                  "lineHeight": 1.45
+                }
+              ],
+              "fill": "#1A160C",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#C9A962"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                12
+              ]
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f042",
+          "name": "inbarA",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f041",
+              "name": "inboxA",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t040",
+                  "name": "inTA",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question\u2026",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ],
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center"
+            },
+            {
+              "type": "frame",
+              "id": "f039",
+              "name": "stopbtnA",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t038",
+                  "name": "stopTA",
+                  "fill": "#D97706",
+                  "content": "Stop",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ],
+              "height": 40,
+              "fill": "#1E1E1E",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#B45309"
+              },
+              "padding": [
+                0,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "FBB00",
+      "x": 840,
+      "y": 0,
+      "name": "B \u2014 In-turn: trail capped at 5 + overflow",
+      "width": 760,
+      "height": 980,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "clip": true,
+      "children": [
+        {
+          "type": "frame",
+          "id": "f082",
+          "name": "cap",
+          "children": [
+            {
+              "type": "text",
+              "id": "t080",
+              "name": "capL",
+              "fill": "#C9A962",
+              "content": "FRAME B \u00b7 IN-TURN \u2014 TRAIL CAPPED AT 5 STEPS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "t081",
+              "name": "capD",
+              "fill": "#848484",
+              "content": "The trail is bounded: at most five prior steps render, then a single collapsed \"\u2026and N more steps\" line. The box never grows without limit on long autonomous turns.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "lineHeight": 1.4
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f087",
+          "name": "hdrB",
+          "children": [
+            {
+              "type": "text",
+              "id": "t083",
+              "name": "hdrTB",
+              "fill": "#FFFFFF",
+              "content": "Soleur Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "f086",
+              "name": "hstatB",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "e084",
+                  "name": "hdotB",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "t085",
+                  "name": "hstatTB",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ],
+              "gap": 6,
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center"
+        },
+        {
+          "type": "frame",
+          "id": "f088",
+          "name": "threadB",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f045",
+              "name": "uBrow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f044",
+                  "name": "uB",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t043",
+                      "name": "uBT",
+                      "fill": "#FFFFFF",
+                      "content": "Triage my open pull requests and tell me which ones need attention.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "lineHeight": 1.45
+                    }
+                  ],
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container",
+              "justifyContent": "end"
+            },
+            {
+              "type": "frame",
+              "id": "f076",
+              "name": "aboxrow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f075",
+                  "name": "abox",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f052",
+                      "name": "ahdr",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "f048",
+                          "name": "ahdrL",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e046",
+                              "name": "aav",
+                              "fill": "#1E1E1E",
+                              "width": 20,
+                              "height": 20,
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#C9A962"
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "t047",
+                              "name": "ahdrT",
+                              "fill": "#848484",
+                              "content": "Soleur Concierge",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "600"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f051",
+                          "name": "ahdrR",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e049",
+                              "name": "wdot",
+                              "fill": "#D97706",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t050",
+                              "name": "wT",
+                              "fill": "#D97706",
+                              "content": "Working",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 1
+                            }
+                          ],
+                          "gap": 5,
+                          "alignItems": "center"
+                        }
+                      ],
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f055",
+                      "name": "live",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "e053",
+                          "name": "ldot",
+                          "fill": "#D97706",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "t054",
+                          "name": "liveT",
+                          "fill": "#FFFFFF",
+                          "content": "Summarizing findings for you\u2026",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ],
+                      "gap": 8,
+                      "alignItems": "center"
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "r056",
+                      "name": "trailSep",
+                      "fill": "#2A2A2A",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f074",
+                      "name": "trail",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "f059",
+                          "name": "step0",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e057",
+                              "name": "s0d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t058",
+                              "name": "s0t",
+                              "fill": "#848484",
+                              "content": "Checking automated tests\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.75
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f062",
+                          "name": "step1",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e060",
+                              "name": "s1d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t061",
+                              "name": "s1t",
+                              "fill": "#848484",
+                              "content": "Comparing branches against main\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.62
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f065",
+                          "name": "step2",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e063",
+                              "name": "s2d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t064",
+                              "name": "s2t",
+                              "fill": "#848484",
+                              "content": "Triaging open pull requests\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.5
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f068",
+                          "name": "step3",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e066",
+                              "name": "s3d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t067",
+                              "name": "s3t",
+                              "fill": "#848484",
+                              "content": "Reading chat-state-machine.ts\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.4
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f071",
+                          "name": "step4",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e069",
+                              "name": "s4d",
+                              "fill": "#6A6A6A",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t070",
+                              "name": "s4t",
+                              "fill": "#848484",
+                              "content": "Reviewing your request\u2026",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center",
+                          "opacity": 0.32
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f073",
+                          "name": "moreRow",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "t072",
+                              "name": "moreT",
+                              "fill": "#6A6A6A",
+                              "content": "\u2026and 4 more steps",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ],
+                          "gap": 8,
+                          "padding": [
+                            0,
+                            0,
+                            0,
+                            13
+                          ],
+                          "alignItems": "center",
+                          "opacity": 0.6
+                        }
+                      ],
+                      "layout": "vertical",
+                      "gap": 7
+                    }
+                  ],
+                  "fill": "#141414",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 2,
+                    "fill": "#B45309"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    14,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container"
+            },
+            {
+              "type": "frame",
+              "id": "f079",
+              "name": "note",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t077",
+                  "name": "noteL",
+                  "fill": "#C9A962",
+                  "content": "\u2191 BOUNDED TRAIL + OVERFLOW LINE",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "t078",
+                  "name": "noteB",
+                  "fill": "#848484",
+                  "content": "Five rows max, then \"\u2026and 4 more steps\" \u2014 one dim line, not expandable chrome. Cap keeps the box compact on turns with dozens of tool calls; the full detail still lives in the debug stream for operators who want it.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 460,
+                  "lineHeight": 1.45
+                }
+              ],
+              "fill": "#1A160C",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#C9A962"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                12
+              ]
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f093",
+          "name": "inbarB",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f092",
+              "name": "inboxB",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t091",
+                  "name": "inTB",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question\u2026",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ],
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center"
+            },
+            {
+              "type": "frame",
+              "id": "f090",
+              "name": "stopbtnB",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t089",
+                  "name": "stopTB",
+                  "fill": "#D97706",
+                  "content": "Stop",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ],
+              "height": 40,
+              "fill": "#1E1E1E",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#B45309"
+              },
+              "padding": [
+                0,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "FCC00",
+      "x": 1680,
+      "y": 0,
+      "name": "C \u2014 Post-turn: trail torn down, summary only",
+      "width": 760,
+      "height": 980,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "clip": true,
+      "children": [
+        {
+          "type": "frame",
+          "id": "f114",
+          "name": "cap",
+          "children": [
+            {
+              "type": "text",
+              "id": "t112",
+              "name": "capL",
+              "fill": "#C9A962",
+              "content": "FRAME C \u00b7 AFTER THE TURN \u2014 TRAIL GONE, SUMMARY STAYS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "t113",
+              "name": "capD",
+              "fill": "#848484",
+              "content": "When the turn ends the whole status box \u2014 live line and trail \u2014 tears down. Only the durable emerald turn-summary card remains in history. Nothing transient persists.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "lineHeight": 1.4
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f119",
+          "name": "hdrC",
+          "children": [
+            {
+              "type": "text",
+              "id": "t115",
+              "name": "hdrTC",
+              "fill": "#FFFFFF",
+              "content": "Soleur Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "f118",
+              "name": "hstatC",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "e116",
+                  "name": "hdotC",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "t117",
+                  "name": "hstatTC",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ],
+              "gap": 6,
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center"
+        },
+        {
+          "type": "frame",
+          "id": "f120",
+          "name": "threadC",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f096",
+              "name": "uCrow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f095",
+                  "name": "uC",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t094",
+                      "name": "uCT",
+                      "fill": "#FFFFFF",
+                      "content": "Triage my open pull requests and tell me which ones need attention.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "lineHeight": 1.45
+                    }
+                  ],
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container",
+              "justifyContent": "end"
+            },
+            {
+              "type": "frame",
+              "id": "f105",
+              "name": "srow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f104",
+                  "name": "sbox",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f099",
+                      "name": "shdr",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "e097",
+                          "name": "scheck",
+                          "fill": "#0F2417",
+                          "width": 20,
+                          "height": 20,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#34D399"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "t098",
+                          "name": "sT",
+                          "fill": "#34D399",
+                          "content": "Done",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "600",
+                          "letterSpacing": 1
+                        }
+                      ],
+                      "gap": 8,
+                      "alignItems": "center"
+                    },
+                    {
+                      "type": "text",
+                      "id": "t100",
+                      "name": "sbody",
+                      "fill": "#FFFFFF",
+                      "content": "Triaged your open PRs \u2014 2 need review now, 1 is blocked on failing tests, and 3 are waiting on CI. Details above.",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "500",
+                      "textGrowth": "fixed-width",
+                      "width": 420,
+                      "lineHeight": 1.5
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f103",
+                      "name": "sfoot",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "e101",
+                          "name": "aav",
+                          "fill": "#1E1E1E",
+                          "width": 16,
+                          "height": 16,
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#C9A962"
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "t102",
+                          "name": "sfT",
+                          "fill": "#6A6A6A",
+                          "content": "Soleur Concierge \u00b7 just now",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ],
+                      "gap": 6,
+                      "alignItems": "center"
+                    }
+                  ],
+                  "fill": "#10160F",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1,
+                      "right": 1,
+                      "bottom": 1,
+                      "left": 3
+                    },
+                    "fill": "#34D399"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    16,
+                    18
+                  ]
+                }
+              ],
+              "width": "fill_container"
+            },
+            {
+              "type": "frame",
+              "id": "f108",
+              "name": "noteC1",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t106",
+                  "name": "noteC1L",
+                  "fill": "#34D399",
+                  "content": "\u2191 DURABLE TURN SUMMARY (UNCHANGED)",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "t107",
+                  "name": "noteC1B",
+                  "fill": "#848484",
+                  "content": "The existing emerald card \u2014 check, left-accent rail, agent-authored sentence. It is the only artifact a completed turn leaves behind; a reload shows exactly this.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 460,
+                  "lineHeight": 1.45
+                }
+              ],
+              "fill": "#0E1410",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#34D399"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                12
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "f111",
+              "name": "noteC2",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t109",
+                  "name": "noteC2L",
+                  "fill": "#6A6A6A",
+                  "content": "WHERE DID THE BOX GO?",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "t110",
+                  "name": "noteC2B",
+                  "fill": "#848484",
+                  "content": "Status box, live line, and the whole activity trail vanished at turn end. They were never written to history \u2014 revisited tomorrow, this thread reads as request \u2192 summary.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 460,
+                  "lineHeight": 1.45
+                }
+              ],
+              "fill": "#141414",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#6A6A6A"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                12
+              ]
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f125",
+          "name": "inbarC",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f124",
+              "name": "inboxC",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t123",
+                  "name": "inTC",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question\u2026",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ],
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center"
+            },
+            {
+              "type": "frame",
+              "id": "f122",
+              "name": "sendbtnC",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t121",
+                  "name": "sendTC",
+                  "fill": "#1A1612",
+                  "content": "\u2191",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                }
+              ],
+              "width": 40,
+              "height": 40,
+              "fill": "#C9A962",
+              "cornerRadius": 10,
+              "justifyContent": "center",
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "FDD00",
+      "x": 2520,
+      "y": 0,
+      "name": "D \u2014 Turn start: empty trail (honest Working\u2026)",
+      "width": 760,
+      "height": 980,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "clip": true,
+      "children": [
+        {
+          "type": "frame",
+          "id": "f146",
+          "name": "cap",
+          "children": [
+            {
+              "type": "text",
+              "id": "t144",
+              "name": "capL",
+              "fill": "#C9A962",
+              "content": "FRAME D \u00b7 TURN START \u2014 NO STEPS YET",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "t145",
+              "name": "capD",
+              "fill": "#848484",
+              "content": "Before the first step lands there is no trail to show \u2014 the box honestly falls back to a bare \"Working\u2026\" live line. It is never an empty box and never fabricates steps.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "lineHeight": 1.4
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            18,
+            24,
+            10,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f151",
+          "name": "hdrD",
+          "children": [
+            {
+              "type": "text",
+              "id": "t147",
+              "name": "hdrTD",
+              "fill": "#FFFFFF",
+              "content": "Soleur Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "f150",
+              "name": "hstatD",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "e148",
+                  "name": "hdotD",
+                  "fill": "#34D399",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "text",
+                  "id": "t149",
+                  "name": "hstatTD",
+                  "fill": "#848484",
+                  "content": "Connected",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ],
+              "gap": 6,
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "padding": [
+            0,
+            24
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center"
+        },
+        {
+          "type": "frame",
+          "id": "f152",
+          "name": "threadD",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f128",
+              "name": "uDrow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f127",
+                  "name": "uD",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t126",
+                      "name": "uDT",
+                      "fill": "#FFFFFF",
+                      "content": "Triage my open pull requests and tell me which ones need attention.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal",
+                      "textGrowth": "fixed-width",
+                      "width": 360,
+                      "lineHeight": 1.45
+                    }
+                  ],
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "layout": "vertical",
+                  "padding": [
+                    12,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container",
+              "justifyContent": "end"
+            },
+            {
+              "type": "frame",
+              "id": "f140",
+              "name": "aboxrow",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "f139",
+                  "name": "abox",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "f135",
+                      "name": "ahdr",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "f131",
+                          "name": "ahdrL",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e129",
+                              "name": "aav",
+                              "fill": "#1E1E1E",
+                              "width": 20,
+                              "height": 20,
+                              "stroke": {
+                                "align": "inside",
+                                "thickness": 1,
+                                "fill": "#C9A962"
+                              }
+                            },
+                            {
+                              "type": "text",
+                              "id": "t130",
+                              "name": "ahdrT",
+                              "fill": "#848484",
+                              "content": "Soleur Concierge",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "600"
+                            }
+                          ],
+                          "gap": 8,
+                          "alignItems": "center"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f134",
+                          "name": "ahdrR",
+                          "children": [
+                            {
+                              "type": "ellipse",
+                              "id": "e132",
+                              "name": "wdot",
+                              "fill": "#D97706",
+                              "width": 5,
+                              "height": 5
+                            },
+                            {
+                              "type": "text",
+                              "id": "t133",
+                              "name": "wT",
+                              "fill": "#D97706",
+                              "content": "Working",
+                              "fontFamily": "Inter",
+                              "fontSize": 10,
+                              "fontWeight": "600",
+                              "letterSpacing": 1
+                            }
+                          ],
+                          "gap": 5,
+                          "alignItems": "center"
+                        }
+                      ],
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "f138",
+                      "name": "live",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "e136",
+                          "name": "ldot",
+                          "fill": "#D97706",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "t137",
+                          "name": "liveT",
+                          "fill": "#FFFFFF",
+                          "content": "Working\u2026",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ],
+                      "gap": 8,
+                      "alignItems": "center"
+                    }
+                  ],
+                  "fill": "#141414",
+                  "cornerRadius": 12,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 2,
+                    "fill": "#B45309"
+                  },
+                  "layout": "vertical",
+                  "gap": 10,
+                  "padding": [
+                    14,
+                    16
+                  ]
+                }
+              ],
+              "width": "fill_container"
+            },
+            {
+              "type": "frame",
+              "id": "f143",
+              "name": "note",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t141",
+                  "name": "noteL",
+                  "fill": "#C9A962",
+                  "content": "\u2191 HONEST EMPTY-TRAIL START",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 2
+                },
+                {
+                  "type": "text",
+                  "id": "t142",
+                  "name": "noteB",
+                  "fill": "#848484",
+                  "content": "No label has arrived yet, so the live line is the plain \"Working\u2026\" fallback \u2014 the same honesty rule as the old placeholder, now inside the box. The trail section simply does not render until the first step exists; no empty region, no skeleton rows.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal",
+                  "textGrowth": "fixed-width",
+                  "width": 460,
+                  "lineHeight": 1.45
+                }
+              ],
+              "fill": "#1A160C",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#C9A962"
+              },
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                12
+              ]
+            }
+          ],
+          "width": "fill_container",
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            20,
+            24
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "f157",
+          "name": "inbarD",
+          "children": [
+            {
+              "type": "frame",
+              "id": "f156",
+              "name": "inboxD",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t155",
+                  "name": "inTD",
+                  "fill": "#6A6A6A",
+                  "content": "Follow up or ask another question\u2026",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ],
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                0,
+                14
+              ],
+              "alignItems": "center"
+            },
+            {
+              "type": "frame",
+              "id": "f154",
+              "name": "stopbtnD",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t153",
+                  "name": "stopTD",
+                  "fill": "#D97706",
+                  "content": "Stop",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ],
+              "height": 40,
+              "fill": "#1E1E1E",
+              "cornerRadius": 10,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#B45309"
+              },
+              "padding": [
+                0,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center"
+            }
+          ],
+          "width": "fill_container",
+          "height": 64,
+          "fill": "#0A0A0A",
+          "stroke": {
+            "align": "inside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            24
+          ],
+          "alignItems": "center"
+        }
+      ]
+    }
+  ]
+}
