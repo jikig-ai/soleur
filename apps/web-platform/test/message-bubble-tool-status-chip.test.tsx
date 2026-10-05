@@ -13,8 +13,11 @@ import { MessageBubble } from "../components/chat/message-bubble";
 // already convey the working state. Structural assertion (chip has exactly
 // one child = the label span) is durable against Tailwind-class refactors
 // (`motion-safe:animate-pulse`, CSS modules, etc.).
-describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
-  test("chip contains exactly one child (the label span) — no inner indicator", () => {
+// #9515 — consolidated working box: the tool step now renders as the
+// ActivityTrail's `live-narration` line inside the bubble (the body's
+// ToolStatusChip is suppressed so the label can never double).
+describe("MessageBubble tool_use live-step line (consolidated box)", () => {
+  test("the live line carries the label inside the activity trail", () => {
     const { getByTestId } = render(
       <MessageBubble
         role="assistant"
@@ -23,9 +26,8 @@ describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
         toolLabel="Reading knowledge-base/overview/foo.pdf"
       />,
     );
-    const chip = getByTestId("tool-status-chip");
-    expect(chip.children).toHaveLength(1);
-    expect(chip.children[0].textContent).toBe("Reading knowledge-base/overview/foo.pdf");
+    const line = getByTestId("live-narration");
+    expect(line).toHaveTextContent("Reading knowledge-base/overview/foo.pdf");
   });
 
   test("renders the toolLabel verbatim in the bubble", () => {
@@ -87,8 +89,10 @@ describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
         toolLabel="Routing to the right experts..."
       />,
     );
-    const chip = getByTestId("tool-status-chip");
-    const labelSpan = chip.children[0] as HTMLElement;
+    const line = getByTestId("live-narration");
+    const labelSpan = Array.from(line.children).find(
+      (el) => el.tagName === "SPAN" && el.textContent?.length,
+    ) as HTMLElement;
     expect(labelSpan.className).toContain("[overflow-wrap:anywhere]");
     expect(labelSpan.className).not.toContain("whitespace-nowrap");
   });
