@@ -98,14 +98,15 @@ Terraform route and the operation needs its own review, approval environment and
 `REBIRTH-web-2-LUKS`, the pinned volume id as a constant the input must equal, a required explicit `image_tag`, a free-text
 `reason`. Workflow-level concurrency `terraform-apply-web-platform-host` (the lockless R2 state serializer), job-level
 `web-1-swap` (the firewall attachment singleton), environment `web-platform-infra-apply`, a main-only `if:`, permissions
-`contents: read, packages: read`, `timeout-minutes: 60`.
+`contents: read, packages: read, actions: read` (the push-apply pause assertion calls the Actions API and refuses on every run without `actions: read`), `timeout-minutes: 60`.
 
 One job. Steps (the mutating ones carry `if: inputs.plan_only != true`):
 
 | # | Step | Writes? |
 |---|---|---|
 | S1 | Validate inputs (typed confirm, pin equality, `image_tag` shape), refuse xtrace | no |
-| S2 | Load credentials (tiered loader), `SENTRY_DSN` non-empty (ADR-128 R1), escrow preflight | no |
+| S2 | Load credentials (tiered loader), `SENTRY_DSN` non-empty (ADR-128 R1) | no |
+| S2b | Escrow preflight as its own step, exactly `bash scripts/web-host-escrow-preflight.sh` (`timeout-minutes: 2`, env `DOPPLER_TOKEN` only, no `if:`/`shell:`/`working-directory:`/`continue-on-error`), before ANY step containing a terraform command, including S4's `terraform state pull` | no |
 | S3 | Presence proof: GET web-1 holds the live LUKS volume (a 404 below means gone, not wrong project); capture web-2's server id | no |
 | S4 | Classify state: Hetzner GETs plus `terraform state pull` through ONE field-selecting jq, into `web2_rebirth_classify`; REFUSE or name the heal window | no |
 | S5 | Emptiness evidence (7-day Better Stack aggregate) and never-pooled proof (marker name absent; anti-pooling check green at the ref) | no |
@@ -116,7 +117,7 @@ One job. Steps (the mutating ones carry `if: inputs.plan_only != true`):
 | S10 | `post` plan, graded by `web_host_rebirth_gate post`; then apply of exactly that plan file | yes |
 | S11 | Poll Better Stack for `SOLEUR_FRESH_BOOT_READY` newer than the run anchor; RED unless `luks=1 luks_arm=formatted escrow=ok host=soleur-web-2` | no |
 | S12 | Birth-time read-only recovery check; any failure fails the run. (a) the escrowed header object exists under the volume's LUKS UUID, a ranged GET of bytes 0-5 equals `LUKS\xba\xbe`, and its UUID equals the live volume's UUID (from the readiness row); (b) the Doppler and Terraform-state passphrase copies agree (boolean only); (c) `cryptsetup open --test-passphrase --header <downloaded backup>` succeeds with the passphrase fed on stdin from one process (never argv, never a file). Prints "birth-time consistency check; restore not exercised; open until #7992 and a restore drill" | no |
-| S13 | hcloud reboot action (API only); on failure of any step a final `if: failure()` step names the heal window; summary prints "reboot issued", the follow-through directive text with `earliest` computed, and the evidence list in the Closing checklist | yes |
+| S13 | hcloud reboot action (API only), target re-resolved by NAME `soleur-web-2` and asserted not web-1's server id and equal to the id in post-apply state; on failure of any step a final `if: failure()` step names the heal window; summary prints "reboot issued", the follow-through directive text with `earliest` computed, and the evidence list in the Closing checklist | yes |
 
 ### The two-mode gate (`tests/scripts/lib/web-host-rebirth-gate.sh`)
 
@@ -155,9 +156,9 @@ here; the existing `web_host_replace` for web-2 carries the new volume forward b
 
 Raw SQL through `scripts/betterstack-query.sh` (hot and archive arms) filtered to `host_name='soleur-web-2'`,
 `filesystem_used_bytes`, mountpoint `/mnt/data`, and `filesystem_total_bytes` between 15e9 and 21.5e9 (the 20 GB volume, not
-the root disk). PASS only if: at least 1800 rows, at least 160 of 168 hours covered, newest row at most 1800 s old, maximum at
-most 1 GiB, and maximum minus minimum at most 32 MiB. Zero rows runs one diagnostic count at any mountpoint so "field not
-shipped" reads differently from "web-2 dark". A transport failure is not a verdict.
+the root disk). PASS only if: at least 160 of 168 hours covered, newest row at most 1800 s old, and maximum at most 1 GiB. Zero rows is a
+named RED ("field absent or web-2 dark"). A transport failure is not a verdict. (Plan review cut the row-count, spread and
+diagnostic-count rules as redundant with hour coverage plus the ceiling.)
 
 ### Flip precondition (acceptance item 4)
 
@@ -168,9 +169,9 @@ escrow-create workflow and flips the exemption) has merged. `plan_only` runs pri
 
 ### Reboot proof and follow-through
 
-`scripts/lib/web2-luks-rows.sh` gains one function, `w2l_reboot_seen <probe.jsonl> <ready.jsonl>`: GREEN only when a
-well-formed GREEN probe row carries a `boot_id` that is known and differs from the readiness row's (an `unknown` id is
-RED, fail closed). It is called from BOTH `w2l_judge`'s marker-absent branch (so `WORKSPACES_LUKS_CUTOVER_AT`, and with it
+`scripts/lib/web2-luks-rows.sh` gains one small function, `w2l_reboot_seen <probe_verdict> <ready_verdict>`, comparing the
+`boot_id=` tokens the existing verdicts already print: GREEN only when both are known and differ (an `unknown` or equal id is
+RED, fail closed; no second row parse). It is called from BOTH `w2l_judge`'s marker-absent branch (so `WORKSPACES_LUKS_CUTOVER_AT`, and with it
 any weight, cannot be written on the readiness row alone, CPO condition 6) and `web2-luks-live-6931.sh` (so the
 follow-through grades the reopen). One definition, two callers; `boot_id` stops being diagnostic-only for the marker-absent
 decision. The probe is daily, so reopen evidence arrives up to about 26 h after the reboot; the directive is
@@ -215,7 +216,8 @@ and `scripts/followthroughs/web2-luks-live-6931.sh`, with tests for equal, `unkn
 
 **Phase 7 — registrations.** `suite-shard-legs.tsv`, `suite-durations.tsv`, `run-registered-suites.sh` bounds,
 `guard-vacuity-floor.test.sh` promoted files, `terraform-target-parity.test.ts` (new workflow in `MAIN_ROOT_TF_WORKFLOWS`,
-census count, the five-target pin), the escrow preflight census text, `model.c4` edge clause and regenerated
+census count 4 to 5, workflow-level `env.TERRAFORM_VERSION` equal to `TF_VAR_terraform_version`, a new row defining the
+five-target pin; the escrow-preflight census is predicate-driven and needs no edit), `model.c4` edge clause and regenerated
 `model.likec4.json`.
 
 **Phase 8 — records.** New runbook `web2-luks-rebirth.md` with pointer lines in `web-host-birth.md` / `web-host-replace.md`;
@@ -243,6 +245,8 @@ battery per the Guard Contract on a sandbox copy.
    says "LUKS-backed at boot" before the graded reboot proof is green; until then the wording is "provisioned, proof pending".
    Web-2 stays at weight 0 and holds no workspace data until C3 items 2 and 3 (recovery for a data-bearing host, re-escrow)
    and #7992 are discharged: the birth-time check here is a partial answer, not their closure.
+2b. The push-apply workflows are `disabled_manually` today; whoever re-enables them does so only after the host-key pin is
+   re-captured, because the pipeline-fix apply fails closed until then (runbooks/cron-egress-blocked.md).
 3. Enrol the directive on #6931 with the computed `earliest`.
 4. Delete this workflow, its gate, classifier, suite and registrations in the same change that records the use in ADR-263.
 
@@ -391,6 +395,10 @@ files graded. One chokepoint: both calls source the same function.
 | 8 | Passphrase-pair address with any action, or an extra address | RED |
 | 9 | `pre` plan with the volume not a no-op, or `post` plan with the volume a no-op | RED |
 | 10 | Firewall attachment `["delete"]` | RED |
+| 11 | `reboot_updates` > 0 on web-1 (pulled in through the firewall attachment's whole-map reference), or an `actions: []` entry (`undecidable_entries`) | RED |
+| 12 | NIC `before.server_id` or server `before.name` pin wrong; NIC, attachment or firewall entry missing (requirement arms) | RED |
+| 13 | `forget` at a non-volume address (RED); `no-op` and `read` entries at other addresses are allowed, as in the birth gate (must-PASS) | RED / PASS |
+| 14 | The raw-volume check drifts from `web-host-birth-gate.sh`'s inline check (parity row over both bodies) | RED |
 
 **Harness rows.** Delete the suite's assertion calls: the suite must exit non-zero on its own floor. A must-PASS fixture that is
 not the canonical: `post` mode with the server already absent (`["create"]` only).
@@ -433,6 +441,7 @@ after the `pre` grade, and the constants and concurrency literals are the ones t
 | 5 | Flip precondition reverted; `escrow!=ok` or `luks_arm!=formatted` no longer RED; stale READY row accepted | RED |
 | 6 | Concurrency group literal changed; a plan artifact uploaded; token in argv | RED |
 | 7 | S12 header-UUID, magic or test-passphrase check made non-fatal; passphrase on argv or in a file | RED |
+| 7b | S13 reboot target not re-resolved by name, equals web-1's id, or differs from the post-apply state id | RED |
 | 8 | `w2l_judge` marker-absent no longer requires `w2l_reboot_seen`; an `unknown` or equal `boot_id` accepted | RED |
 
 **Harness rows.** A step with no `shell:` key is run under `bash -e`, not `bash -eo pipefail`. A must-PASS run with `plan_only`
@@ -526,10 +535,10 @@ None recorded yet; the check runs once `## Files to Edit` is final (see Phase 0)
 ## Files to Edit
 
 - `scripts/lib/web2-luks-rows.sh` (`w2l_reboot_seen`, called from `w2l_judge`), `scripts/followthroughs/web2-luks-live-6931.sh` and their tests, including the marker-writer suite's expectations
+- `scripts/test-all.sh`, `scripts/suite-shard-legs.tsv`, `scripts/suite-durations.tsv` (suites under `tests/scripts/` and `scripts/`; precedent `tests/scripts/web-host-replace-gate`)
 - `apps/web-platform/infra/suite-shard-legs.tsv`, `suite-durations.tsv`, `run-registered-suites.sh`
-- `scripts/guard-vacuity-floor.test.sh`
+- `scripts/guard-vacuity-floor.test.sh` (only if a new suite carries a `-lt` floor)
 - `plugins/soleur/test/terraform-target-parity.test.ts`
-- `scripts/web-host-escrow-preflight.sh` (census wording only)
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, `model.likec4.json`
 - `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md`
 - `knowledge-base/engineering/operations/runbooks/web-host-birth.md`, `web-host-replace.md` (pointer lines)
