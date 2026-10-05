@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Emptiness evidence for the single-use web-2 volume rebirth (#9372): is the plaintext /mnt/data volume of
+# soleur-web-2 provably EMPTY before anything deletes it? Read from Better Stack host_metrics (Vector's
+# `filesystem` collector, mountpoint /mnt/data, tagged host_name; apps/web-platform/infra/vector.toml
+# [sources.host_metrics.filesystem]) over the last 7 days. No SSH: the volume's own byte counters are the evidence.
+#
+# PASS needs ALL of, from one aggregate over 7 days (hot AND archive arm):
+#   - filesystem_used_bytes: at least 160 of 168 distinct hours covered (a gappy series is not evidence),
+#     the newest row at most 1800 s old (a dark host is not evidence), and a maximum at most 1 GiB (the
+#     stated ceiling: an empty ext4 volume holds only its own metadata, a populated one holds user data);
+#   - filesystem_total_bytes: every sample between 15e9 and 21.5e9 bytes, which is the 20 GB volume and not the
+#     root disk, so a mis-mounted /mnt/data cannot pass as "small".
+# Zero rows is a named RED ("field absent or web-2 dark"), never a pass. A transport failure is rc 2 (no verdict).
+#
+# UNCONFIRMED UNTIL THE FIRST LIVE QUERY: no repo consumer reads these JSON paths (metric.name, metric.value,
+# tags.mountpoint). The first live run is the positive control, and an absent field fails closed. The vector.toml
+# `devices.excludes = ["loop*", "dm-*"]` is matched against the device NAME; whether a LUKS mapper device
+# (/dev/mapper/workspaces) matches `dm-*` is unverified, so this evidence is NOT claimed to vanish after LUKS.
+#
+# Exit: 0 PASS, 1 RED (a verdict), 2 the read did not answer (not a verdict), 3 the shared helper could not load.
+set -uo pipefail
+
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${BETTERSTACK_QUERY_USERNAME:+x}${BETTERSTACK_QUERY_HOST:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+_w2r_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/web2-luks-rows.sh
+source "${_w2r_dir}/lib/web2-luks-rows.sh" || { echo "web2-rebirth-emptiness: the shared rows helper could not be loaded"; exit 3; }
+
+W2R_LOOKBACK_DAYS=7
+W2R_MIN_HOURS=160
+W2R_MAX_NEWEST_AGE_S=1800
+W2R_MAX_USED_BYTES=1073741824
+W2R_TOTAL_MIN_BYTES=15000000000
+W2R_TOTAL_MAX_BYTES=21500000000
+
+# One aggregate row per metric name. age is computed by the SERVER (dateDiff against now()); no output alias
+# reuses a source column name (`dt`, `raw`). The host predicate is an explicit AND in the OUTER WHERE so it binds
+# both the hot arm and the archive arm.
+w2r_sql_emptiness() {
+  printf '%s' "SELECT JSONExtractString(raw,'metric','name') AS metric_name, count() AS n, countDistinct(toStartOfHour(dt)) AS hours, min(JSONExtractFloat(raw,'metric','value')) AS vmin, max(JSONExtractFloat(raw,'metric','value')) AS vmax, min(dateDiff('second', dt, now())) AS newest_age_s
+FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+WHERE dt > now() - INTERVAL ${W2R_LOOKBACK_DAYS} DAY
+  AND JSONExtractString(raw,'host_name') = '${W2L_HOST_NAME}'
+  AND JSONExtractString(raw,'source_kind') = 'host_metrics'
+  AND JSONExtractString(raw,'tags','mountpoint') = '/mnt/data'
+  AND JSONExtractString(raw,'metric','name') IN ('filesystem_used_bytes','filesystem_total_bytes')
+GROUP BY metric_name
+FORMAT JSONEachRow"
+}
+
+# w2r_emptiness_verdict <body.jsonl> — prints PASS ... or RED reason=...
+w2r_emptiness_verdict() {
+  local f="$1" out
+  if ! jq -e -s 'all(.[]; type == "object")' "$f" >/dev/null 2>&1; then printf 'RED reason=emptiness_body_unparseable\n'; return 0; fi
+  out="$(jq -r -s --argjson minh "$W2R_MIN_HOURS" --argjson maxage "$W2R_MAX_NEWEST_AGE_S" --argjson maxused "$W2R_MAX_USED_BYTES" \
+    --argjson tmin "$W2R_TOTAL_MIN_BYTES" --argjson tmax "$W2R_TOTAL_MAX_BYTES" '
+    def num: if type == "number" then . elif type == "string" and test("^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$") then tonumber else null end;
+    (map({(.metric_name): .}) | add // {}) as $m
+    | ($m.filesystem_used_bytes) as $u
+    | ($m.filesystem_total_bytes) as $t
+    | if $u == null then "RED reason=used_bytes_absent_or_host_dark"
+      elif ($u.hours | num) == null or ($u.newest_age_s | num) == null or ($u.vmax | num) == null then "RED reason=used_bytes_malformed"
+      elif ($u.hours | num) < $minh then "RED reason=coverage_gap hours=\($u.hours | num)"
+      elif ($u.newest_age_s | num) > $maxage then "RED reason=stale newest_age_s=\($u.newest_age_s | num)"
+      elif ($u.vmax | num) > $maxused then "RED reason=not_empty max_used_bytes=\($u.vmax | num)"
+      elif $t == null then "RED reason=total_bytes_absent"
+      elif ($t.vmin | num) == null or ($t.vmax | num) == null then "RED reason=total_bytes_malformed"
+      elif ($t.vmin | num) < $tmin or ($t.vmax | num) > $tmax then "RED reason=not_the_20gb_volume total_min=\($t.vmin | num) total_max=\($t.vmax | num)"
+      else "PASS hours=\($u.hours | num) newest_age_s=\($u.newest_age_s | num) max_used_bytes=\($u.vmax | num) min_used_bytes=\($u.vmin | num) ceiling_bytes=\($maxused)" end' "$f" 2>/dev/null)" || out=""
+  [[ -n "$out" ]] || out="RED reason=emptiness_judge_error"
+  printf '%s\n' "$out"
+}
+
+w2r_main() {
+  local tmp verdict
+  tmp="$(mktemp -d)" || { echo "web2-rebirth-emptiness: mktemp failed"; return 2; }
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+  if ! w2l_query "$(w2r_sql_emptiness)" "$tmp/body.jsonl"; then
+    echo "web2-rebirth-emptiness: the Better Stack read did not answer. A read fault is not a verdict."
+    return 2
+  fi
+  verdict="$(w2r_emptiness_verdict "$tmp/body.jsonl")"
+  printf '%s\n' "$verdict"
+  [[ "$verdict" == PASS* ]]
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  w2r_main; rc=$?
+  if [[ "$rc" -eq 2 ]]; then exit 2; fi
+  exit "$rc"
+fi
