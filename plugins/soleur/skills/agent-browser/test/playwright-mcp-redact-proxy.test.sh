@@ -410,10 +410,15 @@ HASCHROME="PLAYWRIGHT_MCP_PROXY_CHROME_PATHS=$CHR/chrome-present"
 # The platform seam: the proxy reads sys.platform, so a shim that sets it and runs the proxy by path models another OS.
 printf 'import os, runpy, sys\nsys.platform = os.environ["SHIM_PLATFORM"]\nrunpy.run_path(os.environ["SHIM_TARGET"], run_name="__main__")\n' > "$WORK/platform-shim.py"
 # The path-list seam: the REAL GOOGLE_CHROME_PATHS constant (no PLAYWRIGHT_MCP_PROXY_CHROME_PATHS), with sys.platform
-# and the two filesystem probes patched. Only paths that name a Chrome are intercepted (isfile/access are true for
-# SHIM_PRESENT alone), every other path keeps its real answer, so the verdict never depends on a Chrome installed on
-# the host running the suite and the shim itself carries no copy of the shipped list.
-printf 'import os, runpy, sys\nsys.platform = os.environ["SHIM_PLATFORM"]\npresent = os.environ["SHIM_PRESENT"]\n_isfile, _access = os.path.isfile, os.access\nos.path.isfile = lambda p: p == present if "chrome" in str(p).lower() else _isfile(p)\nos.access = lambda p, m, **k: p == present if "chrome" in str(p).lower() else _access(p, m, **k)\nrunpy.run_path(os.environ["SHIM_TARGET"], run_name="__main__")\n' > "$WORK/chrome-fs-shim.py"
+# and the two filesystem probes patched. Only the two documented Chrome paths (the literals below, passed in SHIM_DOC) are
+# intercepted: isfile/access answer true for SHIM_PRESENT alone there. Every other path keeps its real answer, so the
+# verdict never depends on a Chrome installed on the host running the suite, the shim itself carries no copy of the shipped
+# list, and a checkout whose path happens to contain "chrome" (the proxy script, $WORK, the config files) is not hijacked.
+# The documented Google Chrome locations are literals HERE (not read back from the proxy): a wrong default in the
+# shipped constant must fail a row. A file at the documented path means Chrome is installed; one character off, it is not.
+LINUX_CHROME='/opt/google/chrome/chrome'
+DARWIN_CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+printf 'import os, runpy, sys\nsys.platform = os.environ["SHIM_PLATFORM"]\npresent = os.environ["SHIM_PRESENT"]\ndoc = os.environ["SHIM_DOC"].split(os.pathsep)\n_isfile, _access = os.path.isfile, os.access\nos.path.isfile = lambda p: p == present if str(p) in doc else _isfile(p)\nos.access = lambda p, m, **k: p == present if str(p) in doc else _access(p, m, **k)\nrunpy.run_path(os.environ["SHIM_TARGET"], run_name="__main__")\n' > "$WORK/chrome-fs-shim.py"
 FBCHK="$WORK/fb-check.py"
 cat > "$FBCHK" <<'PY'
 import sys
@@ -462,13 +467,9 @@ session fb-darwin "$WORK/platform-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY
 assert_true 'FR16: macOS is modelled — the fallback applies there too' python3 "$FBCHK" "$WORK/fb-darwin" once
 session fb-win "$WORK/platform-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY" --env SHIM_PLATFORM=win32 --env "$NOCHROME" --env FAKE_PW_ARGV_OUT="$WORK/fb-win" --send "$INIT" --end eof >/dev/null
 assert_true 'FR16: any other platform is a no-op — nothing appended (the proxy still started and ran the child)' python3 "$FBCHK" "$WORK/fb-win" none
-# The documented Google Chrome locations are literals HERE (not read back from the proxy): a wrong default in the
-# shipped constant must fail a row. A file at the documented path means Chrome is installed; one character off, it is not.
-LINUX_CHROME='/opt/google/chrome/chrome'
-DARWIN_CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 fs_session() {  # <tag> <platform> <present-path> [extra --env args...] — the real path list under the filesystem shim
   local tag="$1" plat="$2" present="$3"; shift 3
-  session "$tag" "$WORK/chrome-fs-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY" --env SHIM_PLATFORM="$plat" --env SHIM_PRESENT="$present" --env FAKE_PW_ARGV_OUT="$WORK/$tag" --send "$INIT" --end eof "$@" >/dev/null
+  session "$tag" "$WORK/chrome-fs-shim.py" "${CFB[@]}" --env SHIM_TARGET="$PROXY" --env SHIM_PLATFORM="$plat" --env SHIM_PRESENT="$present" --env SHIM_DOC="$LINUX_CHROME:$DARWIN_CHROME" --env FAKE_PW_ARGV_OUT="$WORK/$tag" --send "$INIT" --end eof "$@" >/dev/null
 }
 fs_session fb-real-linux linux "$LINUX_CHROME"
 assert_true 'FR16 shipped path list: an executable file at /opt/google/chrome/chrome on Linux → Chrome is installed, nothing appended' python3 "$FBCHK" "$WORK/fb-real-linux" none
