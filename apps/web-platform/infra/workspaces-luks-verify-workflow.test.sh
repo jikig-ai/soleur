@@ -1875,7 +1875,7 @@ root = sys.argv[1]
 WRITER = ".github/workflows/workspaces-luks-verify.yml"
 READERS = {"scripts/lib/web2-luks-rows.sh", "apps/web-platform/infra/lb-weight-gate.sh", "apps/web-platform/infra/lb-weight-gate-with-marker.sh",
            ".github/workflows/infra-validation.yml", "scripts/followthroughs/web2-luks-live-6931.sh",
-           "scripts/lib/test-affected-paths.sh", "scripts/web2-rebirth-emptiness.sh", "scripts/web2-rebirth-never-pooled.sh"}
+           "scripts/lib/test-affected-paths.sh", "scripts/web2-rebirth-emptiness.sh", "scripts/web2-rebirth-never-pooled.sh", "scripts/web2-rebirth-ready-poll.sh"}
 KEY = re.compile(r"workspaces_luks_cutover[\"'_]*at\b|w2l_marker_name|web2-luks-rows", re.I)
 VERB = re.compile(r"doppler\b[^\n]*\bsecrets\b[^\n]*\b(set|delete|upload)\b|resource\s+[\"']doppler_secret[\"']|api\.doppler\.com"
                   r"|/secrets?/(set|delete|upload)\b|/configs/config/secrets\b"
@@ -2196,8 +2196,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # occurrence-based census with planted writers; mutation rows 1-21) -> 313; #7376 the producer-side
 # SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316; review:
 # the drained-text and hand-off-by-sentinel rows 316 -> 318; #9372 the reboot-proof scenario (S53) and
-# mutation row 22 318 -> 319 (measured green count after the rebase onto #9525).
-WF_MIN_ASSERTIONS=319
+# mutation row 22 318 -> 320 (measured green count after the rebase onto #9525 and the ready-poll reader split).
+WF_MIN_ASSERTIONS=320
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

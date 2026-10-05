@@ -37,7 +37,6 @@ WEB1_SERVER_NAME="soleur-web-platform"
 LUKS_VOLUME_ID="106443278"
 VOLUME_LABEL_APP="soleur-web-platform"
 INFRA_DIR="${INFRA_DIR:-apps/web-platform/infra}"
-POLL_INTERVAL_S="${WEB2_REBIRTH_POLL_INTERVAL_S:-60}"
 ACTION_POLL_S="${WEB2_REBIRTH_ACTION_POLL_S:-5}"
 
 HBODY="$(mktemp)"; trap 'rm -f "$HBODY"' EXIT
@@ -216,37 +215,9 @@ cmd_state_rm() {
   echo "forgot ${#addrs[@]} address(es): ${addrs[*]} (serial ${pre_serial} -> $((pre_serial + 1)), lineage unchanged)"
 }
 
-cmd_ready_poll() { # <anchor-epoch>
-  local anchor="${1:?anchor epoch required}" tmp i now verdict age row_arm
-  [[ "$anchor" =~ ^[0-9]+$ ]] || fail "ready-poll: the run anchor must be an epoch"
-  # shellcheck source=scripts/lib/web2-luks-rows.sh
-  source "${_ROOT}/scripts/lib/web2-luks-rows.sh"
-  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
-  for i in $(seq 1 "${WEB2_REBIRTH_POLL_ATTEMPTS:-24}"); do
-    if w2l_fetch_ready "$tmp/ready.jsonl" 1 20; then
-      verdict="$(w2l_ready_verdict "$tmp/ready.jsonl")"
-      if [[ "$verdict" == GREEN* ]]; then
-        age="${verdict##* age_s=}"; now="$(date -u +%s)"
-        row_arm="$(jq -r -s --arg host "$W2L_HOST_NAME" "${_W2L_JQ_DEFS}"'[ .[] | classify_ready ] | sort_by(.age) | (.[0].f.luks_arm // "none")' "$tmp/ready.jsonl" 2>/dev/null || echo none)"
-        if [[ "$age" =~ ^[0-9]+$ ]] && (( age < now - anchor )); then
-          [[ "$row_arm" == formatted ]] || fail "ready-poll: the fresh readiness row reports luks_arm=${row_arm}, not formatted: the volume was not freshly formatted by this birth"
-          echo "ready: ${verdict} luks_arm=formatted (the row is newer than the run anchor)"; return 0
-        fi
-        echo "attempt ${i}: the newest GREEN readiness row (age ${age}s) predates this run; waiting"
-      else
-        echo "attempt ${i}: ${verdict}"
-        case "$verdict" in RED\ reason=ready_escrow*|RED\ reason=ready_not_luks*|RED\ reason=ready_luks_arm*)
-          # a row exists and is newer than the anchor only if its age is below the elapsed time: do not wait on a verdict row from before the run
-          age="$(w2l_ready_newest_age "$tmp/ready.jsonl")"; now="$(date -u +%s)"
-          if [[ "$age" =~ ^[0-9]+$ ]] && (( age < now - anchor )); then fail "ready-poll: the fresh readiness row is RED (${verdict}); the host stays dark (the marker is withheld) and the run is RED"; fi ;; esac
-      fi
-    else
-      echo "attempt ${i}: the Better Stack read did not answer"
-    fi
-    sleep "$POLL_INTERVAL_S"
-  done
-  fail "ready-poll: no fresh GREEN readiness row appeared within the boot window"
-}
+# The readiness poll reads Better Stack through the shared rows helper, which the soak-marker census holds to READ-ONLY
+# (no write verb in the file). This file carries Hetzner write verbs, so the poll lives in its own allow-listed reader.
+cmd_ready_poll() { exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" "$@"; }
 
 cmd_reboot() {
   need_token
@@ -262,7 +233,7 @@ cmd_reboot() {
   [[ "$code" == 201 ]] || fail "reboot -> ${code} (error.code=$(errcode))"
   action_id="$(jq -r '.action.id | tostring' "$HBODY")"
   [[ "$action_id" =~ ^[0-9]+$ ]] || fail "reboot returned no action id"
-  for i in $(seq 1 24); do
+  for _ in $(seq 1 24); do
     code="$(hapi GET "/actions/${action_id}")"; [[ "$code" == 200 ]] || fail "action ${action_id} -> ${code}"
     st="$(jq -r '.action.status' "$HBODY")"
     [[ "$st" == success ]] && { echo "reboot issued: server ${sid} (${WEB2_NAME}), action ${action_id} accepted. The reopen is NOT proven by this step: the next luks-monitor probe row on a new boot_id is the evidence."; return 0; }

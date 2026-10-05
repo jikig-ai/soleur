@@ -234,10 +234,11 @@ ran="${ran:-0}"
 printf 'real script: %s world scenarios, %s failed\n' "$ran" "$fails"
 [[ "$ran" -ge 40 ]] || { echo "  FAIL scenario floor: ran ${ran} < 40"; fails=$((fails + 1)); }
 
-mutate() { # <name> <old> <new>
-  local name="$1" old="$2" new="$3" copy="$TMP/mut/scripts/web2-rebirth.sh" after
+mutate() { # <name> <old> <new> [file under scripts/ to mutate, default web2-rebirth.sh]
+  local name="$1" old="$2" new="$3" target="${4:-web2-rebirth.sh}" copy after
   rm -rf "$TMP/mut"; mkdir -p "$TMP/mut/scripts" "$TMP/mut/tests/scripts/lib" "$TMP/mut/tests/scripts/fixtures" "$TMP/mut/.github/workflows"
-  cp "$SCRIPT" "$copy"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$TMP/mut/scripts/"
+  copy="$TMP/mut/scripts/$target"
+  cp "$SCRIPT" "$TMP/mut/scripts/web2-rebirth.sh"; cp "$ROOT/scripts/web2-rebirth-ready-poll.sh" "$TMP/mut/scripts/"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$TMP/mut/scripts/"
   cp "$ROOT/tests/scripts/lib/web2-rebirth-classify.sh" "$ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq" "$TMP/mut/tests/scripts/lib/"
   cp -r "$ROOT/tests/scripts/fixtures/web-host-rebirth" "$TMP/mut/tests/scripts/fixtures/"
   if ! python3 - "$copy" "$old" "$new" <<'PY'
@@ -249,7 +250,7 @@ if s.count(old) != 1:
 open(p, "w").write(s.replace(old, new))
 PY
   then echo "  FAIL mutation '${name}': the edit did not land exactly once"; fails=$((fails + 1)); return; fi
-  after="$(battery "$copy" 2>&1 | grep -c '^FAILED')"
+  after="$(battery "$TMP/mut/scripts/web2-rebirth.sh" 2>&1 | grep -c '^FAILED')"
   if [[ "$after" -gt 0 ]]; then echo "  ok   mutation killed: ${name} (${after} rows red)"; else echo "  FAIL mutation SURVIVED: ${name}"; fails=$((fails + 1)); fi
 }
 mutate "delete: the ext4/name re-assert is dropped" '.volume.format == "ext4" and .volume.name == $n and .volume.labels == {app: $a}' 'true'
@@ -265,9 +266,9 @@ mutate "flip: the apply refusal is dropped" 'if [[ "$apply" == yes ]]; then
     fail "flip precondition NOT met' 'if false; then
     fail "flip precondition NOT met'
 mutate "ready: the run-anchor freshness is dropped" 'if [[ "$age" =~ ^[0-9]+$ ]] && (( age < now - anchor )); then
-          [[ "$row_arm" == formatted ]]' 'if true; then
-          [[ "$row_arm" == formatted ]]'
-mutate "ready: the formatted-arm requirement is dropped" '[[ "$row_arm" == formatted ]] || fail' 'true || fail'
+        [[ "$row_arm" == formatted ]]' 'if true; then
+        [[ "$row_arm" == formatted ]]' web2-rebirth-ready-poll.sh
+mutate "ready: the formatted-arm requirement is dropped" '[[ "$row_arm" == formatted ]] || fail' 'true || fail' web2-rebirth-ready-poll.sh
 mutate "classify: the pause is forced real" '[[ "$apply" == yes ]] && { pause_real && pause=yes || pause=no; }' 'pause=yes'
 mutate "classify: the web-1-in-state sanity check is dropped" '[[ "$(jq -r '"'"'.web1'"'"' <<<"$ident")" == 1 ]] || fail' 'true || fail'
 
