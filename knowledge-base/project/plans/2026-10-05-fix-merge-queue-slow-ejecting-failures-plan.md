@@ -12,6 +12,24 @@ brand_survival_threshold: none
 
 # fix: merge queue is slow because failing candidates eject and force rebuilds
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05
+**Sections enhanced:** Phases 1 to 4, Guard Contract, Acceptance Criteria, Test Scenarios, Scope Check, Observability
+**Agents/checks used:** plan-review panel (DHH, Kieran, code-simplicity, CTO devex), architecture-strategist, test-design-reviewer, learnings-researcher, repo-research-analyst; direct source reads of `playwright-core` `isURLAvailable`, `playwright` `tasks.js`/`failureTracker.js`, Next 16.3.6 local-font loader; live `gh` re-verification of cited PRs and the #9505 timeline; mechanical gates 4.6 to 4.12 (all pass after the Scope Check restructure).
+
+### Key Improvements
+1. Phase 2 no longer adds files: `url:` readiness replaces a global-setup probe, helper, unit test and second guard (a `FullConfig.webServer` is `null` for an array config, which would have made the probe vacuous).
+2. Guard 1 enumerator now includes untracked files and a fs-walk fixture path; floor raised from 300 to 1,500 (measured 2,304).
+3. Otp-login negative control made deterministic (injected status element) after finding the pending island holds only 400 ms.
+4. Cold-compile risk handled: webServer timeouts 120 s to 180 s so readiness cannot become a new ejection cause.
+5. Corrected: no `adjustFontFallback` needed (Next computes it by default); #9505 timeline updated (87.7 min, merged 11:30:24).
+
+### New Considerations Discovered
+- The `lint-bot-statuses` red was an advisory job; PR #9477's 56 min came from an agent push (manual dequeue), not an ejection.
+- PR-event workflows are about 61% of window demand (`ci.yml` PR 2,046, `secret-scan` 325, `PR quality guards` 224, `Infra Validation` 104 job-min): the next lever, recorded for #9482, not built.
+
+
 Ref #9482 (ADR-270, status stays `adopting`). Draft PR #9523. Never `Closes #9482`.
 
 Spec lacks a valid `lane:` (no spec.md exists for this branch): defaulted to `cross-domain` (fail-closed).
@@ -149,8 +167,8 @@ for each (5,548 jobs); queue wait = `started_at - created_at`; running = `starte
 Enqueue-to-merge re-verified from the GraphQL timeline (`ADDED_TO_MERGE_QUEUE_EVENT` /
 `REMOVED_FROM_MERGE_QUEUE_EVENT`): #9229 15.0 min, #9491 18.0, #9507 32.6 (behind a 24.5 min contended
 run), #8680 33.0, #8820 64.2 (removed `failed_checks` 10:15:45 on the `test-scripts` shard, re-added 10:19:05,
-rebuilt again 10:36 when #9505 was ejected, merged 11:05:00), #9505 ejected `failed_checks` 10:36:41,
-re-added 10:38:44, still OPEN.
+rebuilt again 10:36 when #9505 was ejected, merged 11:05:00), #9505 87.7 min (enqueued 10:02:41, ejected `failed_checks` 10:36:41 on the font-cascade `e2e`,
+re-added 10:38:44, merged 11:30:24; verified at deepen time, it was still open at plan time).
 
 Ejection latency: `e2e` for #9505 started 10:21:37 and failed 10:36:12, so the entry behind it learned
 at 10:36 rather than about 10:25 had the cascade failed fast.
@@ -176,16 +194,43 @@ ejections removes the rebuilds.
 
 ## Scope Check
 
-| Ask | Maps to |
-| --- | --- |
-| 1. Why each failure happened | Research Insights Task 1 table; Phases 1, 3, 4, 5 |
-| 2. Fix or quarantine, root cause preferred | Phases 1 to 4 |
-| 3. Job-level contention, decide `max_entries_to_build` / fewer jobs | Research Insights Task 3 table; Phase 6 (decision: no change, re-measure trigger) |
-| 4. Re-evaluate #9512 trigger | Phase 6 |
-| Constraints (Ref not Closes, ADR stays adopting, no operator decisions, net-issue-flow) | Acceptance Criteria; Non-Goals |
+### Ask Mapping
 
-Item provenance: every phase maps to an ask or to a named tracker (#8785 is the existing tracker for
-cause A, found by the Task 1 search the brief mandates). The `url` readiness change (Phase 2) is `inferred` from the measured 14 min vs 3 min cascade; each is justified there.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Find out WHY each failure happened." [brief task 1] | Research Insights Task 1 table; Phases 3 and 4 diagnostics | mapped |
+| 2 | "Fix or quarantine the causes found in step 1 (the e2e flake is the highest-yield one; the operator already knows the nav-states e2e flake exists). Prefer root-cause fixes; do not just retry." [brief task 2] | Phase 1 (font, the e2e flake), Phase 2, Phase 3 (otp), Phase 4 (fixture G) | mapped |
+| 3 | "Measure runner contention at JOB level (job started_at minus run created_at, and concurrent run count) for the 10:00 to 11:05 window, then decide whether a lower max_entries_to_build or running fewer jobs per merge_group run helps." [brief task 3] | Research Insights Task 3 table; Phase 6 items 1 to 3 | mapped |
+| 4 | "Re-evaluate its trigger with the contention numbers from step 3; it needs its own plan" [brief task 4, #9512] | Phase 6 item 5 | mapped |
+| 5 | "Search existing trackers first: #9167 and #9170 (flaky e2e), #9190 (c4-code-panel flake under contention), #7376 (registered infra suites flaky under -P). Comment on or fix those rather than filing duplicates." [brief task 1] | Phase 5 item 2 (consolidated comments), PR body `Closes #8785`, `Closes #9170` | mapped |
+| 6 | "PR bodies use `Ref #9482`, never `Closes`." [brief constraints] | Acceptance Criteria (PR body line) | mapped |
+| 7 | "ADR-270 stays `adopting`; do not flip it." [brief constraints] | Acceptance Criteria (empty diff on ADR dir); Non-Goals | mapped |
+| 8 | "Do NOT act on the three operator decisions on #9482 (deploy hold, brand-survival threshold, `actions`-language alerts); defaults stand." [brief constraints] | Non-Goals | mapped |
+| 9 | "Net-issue-flow gate: close or fold into existing trackers before filing new issues." [brief constraints] | Phase 5 (no new issues); Cut List | mapped |
+| 10 | "the plan must include the data findings from tasks 1 and 3" [brief planning-phase note] | Research Insights (Task 1 and Task 3 data) | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Phase 1: `app/fonts.ts`, `assets/fonts/inter-latin-wght.woff2` | "the e2e flake is the highest-yield one" (ask 2) | asked |
+| Phase 1: three `vi.mock("next/font/google")` repoints | - | inferred - justification: the unit tests mock the module the import names; leaving the old mock name makes three suites import the real loader and fail |
+| Phase 1: `assets/fonts/README.md` | - | inferred - justification: a vendored binary with no recorded source, version and licence rots; the README is the provenance record |
+| Phase 1: `test/no-network-fonts.test.ts` (Guard 1) | "Prefer root-cause fixes; do not just retry." (ask 2) | asked (a root-cause fix that nothing prevents regressing is a retry in waiting) |
+| Phase 2: `playwright.config.ts` `url:` readiness | "Prefer root-cause fixes; do not just retry." (ask 2) | inferred - justification: shortens the measured 14 min cascade to the readiness timeout (about 2 min) so entries behind an ejection rebuild sooner; the brief's own evidence is that failures make "every entry behind it rebuild" |
+| Phase 3: `e2e/otp-login.e2e.ts` | "#9167 and #9170 (flaky e2e)" (ask 5) | asked |
+| Phase 4: `reap-archive-persistence.test.sh` diagnostics | "Fix or quarantine the causes found in step 1" (ask 2) | asked (diagnostics only; cause unproven) |
+| Phase 5: `merge-queue-dequeue.md` advisory-red note | "Find out WHY each failure happened." (ask 1) | inferred - justification: the lint-bot-statuses finding (advisory job, manual dequeue costing 56 min) is only useful if the ship skill's dequeue reference records it |
+| Phase 5: tracker comments (#9482, #8785, #9167, #9512) | "Comment on or fix those rather than filing duplicates." (ask 5) | asked |
+| Phase 6: no-code decision and #9512 numbers | "decide whether a lower max_entries_to_build or running fewer jobs per merge_group run helps" (ask 3) | asked |
+| `specs/feat-one-shot-merge-queue-slow-failures/tasks.md` | - | inferred - justification: the plan skill's Save Tasks contract; `soleur:work` executes against it |
+
+### Split Assessment
+
+- Subsystems touched: 3 - `apps/web-platform`, `plugins/soleur`, `knowledge-base`
+- Planned files: 12 | Estimated changed lines: about 120 (excluding the 48 KB binary)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Implementation Phases
 
@@ -206,7 +251,7 @@ pointer, sha256, regenerate command, and the explicit statement "frozen asset, n
 Inter v20 to a later version changes nothing the app needs"), `apps/web-platform/test/no-network-fonts.test.ts` (Guard 1).
 
 1. Download the woff2 from the URL in Research Insights; record the sha256 in the README only (not in the test: it cannot add integrity, see Guard 1 Anchor).
-2. `fonts.ts`: `localFont({ src: "../assets/fonts/inter-latin-wght.woff2", weight: "400 600", style: "normal", variable: "--font-inter", display: "swap", adjustFontFallback: "Arial" })`, still exporting `sans`. `weight: "400 600"` deliberately mirrors today's `weight: ["400","500","600"]` (a `100 900` range would change how `font-bold` renders). `adjustFontFallback` keeps the size-adjusted fallback the Google loader computes, to avoid a layout-shift regression (#3564 territory). `layout.tsx` and `globals.css` are untouched (same variable name).
+2. `fonts.ts`: `localFont({ src: "../assets/fonts/inter-latin-wght.woff2", weight: "400 600", style: "normal", variable: "--font-inter", display: "swap" })`, still exporting `sans`. `weight: "400 600"` deliberately mirrors today's `weight: ["400","500","600"]` (a `100 900` range would change how `font-bold` renders). No `adjustFontFallback` option is needed: verified in `node_modules/next/dist/compiled/@next/font/dist/local/loader.js` (Next 16.3.6) that an undefined value computes size-adjusted fallback metrics from the font file (only `false` disables it), so the layout-shift protection the Google loader gives is kept (#3564 territory). `layout.tsx` and `globals.css` are untouched (same variable name).
 3. No new dependency (`@fontsource-variable/inter` would need `package-lock.json` and `bun.lock` to move together and trips `lockfile-sync`).
 4. Verify (work phase): (a) `grep` shows no `next/font/google` left; (b) the dev server answers `GET /login` 200 inside a network namespace (`unshare -cn` then `-rn`, as `scripts/audit-suite-reads.sh` does), or, if the host forbids user namespaces, assert the compiled CSS served for `/login` contains no `fonts.gstatic.com` URL; (c) the production image path: `next.config.ts` has `output: undefined` (custom server, no standalone tree), so the check is that the hashed woff2 exists under `.next/static/media` after `next build`, and that `.dockerignore` does not exclude `assets/` (the builder stage does `COPY . .`).
 5. Visual parity: run the full e2e once locally and in CI (`nav-states-shell` has pixel-sensitive assertions); same typeface and metrics should not move them.
@@ -217,16 +262,15 @@ Files to edit: `apps/web-platform/playwright.config.ts` only.
 
 Today both `webServer` entries use `port:` (TCP readiness), so a server whose first compile 5xx's is
 "ready" and 64 tests then fail one by one. Switch each entry to `url: "http://localhost:<port>/login"`:
-Playwright's own readiness poll treats a 5xx as not ready and fails within the existing 120 s `timeout`
-with its standard message. No new file, helper or unit test. `/login` renders `app/layout.tsx`, so the
+Playwright's own readiness poll treats a 5xx as not ready (verified in `playwright-core/lib/server/utils/network.js` `isURLAvailable`: ready only for status >= 200 and < 404) and fails at the `timeout` with its standard message. Because the poll request now triggers the first cold compile of `app/layout.tsx` inside that budget, raise both `timeout` values from 120_000 to 180_000 (a slow compile on a saturated runner must not become a new ejection cause); record the measured cold `/login` compile time in the PR body. No new file, helper or unit test. `/login` renders `app/layout.tsx`, so the
 font error would surface here.
 
-Work-phase verification: (a) `/login` on :3100 does not depend on the mock Supabase (which is started
+Work-phase verification: (a) `/login` on :3100 does not depend on the mock Supabase (architecture review read `middleware.ts`: `/login` is in `PUBLIC_PATHS` and returns before any Supabase call, and `app/layout.tsx` resolves an anonymous identity locally with no cookies; confirm with `curl -i http://localhost:3100/login` before the mock exists) (which is started
 in `globalSetup`, after `webServer` in Playwright 1.58.2: `runner/tasks.js` runs plugin setup before
 global setup); if it does, fall back to an inline probe at the top of `globalSetup` after the mock starts,
 reading the two ports from constants exported by the config module (never from `config.webServer`:
 Playwright sets `FullConfig.webServer` to `null` when it is an array); (b) a deliberately broken layout
-import makes `npx playwright test` fail within about 2 min locally. `skipLocallyFailInCi` stays (it
+import makes `npx playwright test` fail at readiness within about 3 min locally; (c) `url:` readiness goes through proxy resolution unlike the TCP check: the e2e job sets no proxy env today, so no `NO_PROXY` change is needed. `skipLocallyFailInCi` stays (it
 protects the local skip-when-compile-broken behaviour of individual specs).
 
 Not shipped: `maxFailures` (see Cut List; the one remaining whole-environment cascade, auth server
@@ -238,7 +282,7 @@ Files to edit: `apps/web-platform/e2e/otp-login.e2e.ts`. Read result recorded he
 `nav-states-nav-pending.e2e.ts:17` defines `LIVE = page.getByRole("status")` but its use at `:150` is
 already filtered, so that file is not edited.
 
-1. Add `const noAccountBanner = (page) => page.getByRole("status").filter({ hasText: /no Soleur account found/i })` and use it at `:174`, `:177` and `:181` (the post-redirect assertion and the dismiss-on-edit `toHaveCount(0)`, where the pending island can still be mounted).
+1. Add `const noAccountBanner = (page) => page.getByRole("status").filter({ hasText: /no Soleur account found/i })` and use it at `:174`, `:177` and `:181` (`:174` and `:177` are the non-retrying strict-mode `toContainText` calls that raced; `:181` is filtered for fidelity to "the banner is gone", not because it flakes: `toHaveCount` auto-retries and the island clears within 400 ms, so do not count it as #9170 flake evidence).
 2. Leave `:195`, `:207`, `:219` unfiltered: they run on `/signup` after `page.goto` with no navigation pending, so there is no race, and a text filter would make "no banner" vacuously true.
 3. Comment pointing at #9170.
 
@@ -246,7 +290,7 @@ already filtered, so that file is not edited.
 
 Files to edit: `plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh`.
 
-1. Make the fixture-G failure message print `grep SOLEUR_ "$OUT_G"` and `git -C "$CLONE_G" log --oneline -5 feat-actor` (as fixtures B and E already do for their markers), so the next occurrence names STAGED vs COMMITTED vs a hook failure. No retry, no repro loop (1 occurrence in 54 failed `test-scripts` jobs; excluded from the expected-ejection arithmetic below).
+1. Make the fixture-G failure message inline, flattened onto one line (`$OUT_G` lives under `$TMP` and is deleted by the EXIT trap), `grep SOLEUR_ "$OUT_G"`, `tail -20 "$OUT_G"`, `git -C "$CLONE_G" status --short` and `git -C "$CLONE_G" log --oneline -5 feat-actor` (a STAGED outcome or hook failure shows in stderr lines without a `SOLEUR_` marker). Run `plugins/soleur/test/fixture-relative-assert.test.sh` afterwards: a new `git -C` use can move this file's baseline row (`--write-baseline` in the same commit), so the next occurrence names STAGED vs COMMITTED vs a hook failure. No retry, no repro loop (1 occurrence in 54 failed `test-scripts` jobs; excluded from the expected-ejection arithmetic below).
 2. Comment on #7376 (same class: passes alone, fails under shard contention) in the consolidated tracker update; no new issue.
 
 ### Phase 5: advisory-red note and tracker updates (P4)
@@ -270,7 +314,7 @@ Files to edit: `plugins/soleur/skills/ship/references/merge-queue-dequeue.md` (2
 
 **Property.** No tracked source file under `apps/web-platform` imports `next/font/google` or references `fonts.googleapis.com` / `fonts.gstatic.com`, and the vendored Inter file exists and is non-empty, so no compile, dev or build step needs the network for fonts.
 
-**Assembly.** Quantifies over every tracked file under `apps/web-platform` with extension `.ts`, `.tsx`, `.js`, `.mjs`, `.mts`, `.cjs` or `.css`, plus `next.config.*`, enumerated at run time with `git ls-files` (not a list of today's members) and excluding `node_modules`, `.next` and the guard test file itself (which necessarily contains the forbidden strings). The sweep root is a parameter of the helper function so the suite can point it at a synthesized temp tree. Chokepoint: one vitest suite, `test/no-network-fonts.test.ts`; `app/fonts.ts` is the only declaration site today, and the census exists for a second site. A floor asserts the sweep examined at least 300 files (393 `.ts`/`.tsx` under `app/` and `components/` on 2026-10-05) and prints `scanned N files`.
+**Assembly.** Quantifies over every file under `apps/web-platform` with extension `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.mts`, `.cjs`, `.css` or `.scss`, plus `next.config.*`, enumerated at run time by an injectable enumerator: production uses `git ls-files --cached --others --exclude-standard` (so an untracked new file is swept; tolerate tracked-but-deleted ENOENT), fixtures use a plain directory walk of a synthesized temp tree (a temp dir is not a repo, so the harness rows must not depend on git). Ignored by path SEGMENT (`node_modules`, `.next`), never by substring, and the guard test file itself is excluded (it necessarily contains the forbidden strings). The sweep root is a parameter of the helper. Chokepoint: one vitest suite, `test/no-network-fonts.test.ts`; `app/fonts.ts` is the only declaration site today, and the census exists for a second site. A floor asserts the sweep examined at least 1,500 files (2,304 measured on 2026-10-05 across those extensions under `apps/web-platform`; a pathspec that silently drops most of the tree must fail) and prints `scanned N files`. Resolve paths from the app directory (cwd or `__dirname/..`), never `rev-parse --show-toplevel`, so `test/repo-wide-containment.test.ts` does not reclassify the suite as repo-wide.
 
 **Mutation matrix.**
 
@@ -280,10 +324,10 @@ Files to edit: `plugins/soleur/skills/ship/references/merge-queue-dequeue.md` (2
 | 2 | Keep `fonts.ts` compliant, add `import { Roboto } from "next/font/google"` in a new `components/x.tsx` | Second member after a compliant first |
 | 3 | Add `@import url(https://fonts.googleapis.com/...)` to `app/globals.css` | Different file type and syntax |
 | 4 | Delete or empty `assets/fonts/inter-latin-wght.woff2` | Vendored file missing |
-| 5 | Point the sweep at an empty temp directory | Own dispatch: must fail with "0 files scanned" |
+| 5 | Point the sweep at an empty temp directory | Own dispatch: assert the message text contains "0 files scanned" (not just that it throws), so a git-state error cannot satisfy it |
 | 6 | Put the forbidden import in a `.mts` file | The extension set must include `.mts` and `.cjs` |
 
-**Harness rows.** RED: against the synthesized temp tree, weaken the detection regex in the suite (for example drop the `google` alternative) and re-run row 1: the suite must go RED (the row-1 assertion is on the temp tree, so a vacuous regex fails it). Must-PASS non-canonical: a temp tree whose only font import is `import localFont from "next/font/local"` in two files, plus a markdown file mentioning `fonts.gstatic.com` (non-code extensions are out of the sweep), must pass.
+**Harness rows.** RED: against the synthesized temp tree, weaken the detection regex in the suite (for example drop the `google` alternative) and re-run row 1: the suite must go RED (the row-1 assertion is on the temp tree, so a vacuous regex fails it). Must-PASS non-canonical: a temp tree whose only font import is `import localFont from "next/font/local"` in two files, plus a markdown file mentioning `fonts.gstatic.com` (non-code extensions are out of the sweep), must pass. Rows 2 and 6 run on the fs-walk temp tree (an untracked file is exactly what the production enumerator also covers via `--others`).
 
 **Anchor.** The vendored file's hash lives only in the README, so the guard proves "no network font and not missing", not tamper-resistance or truncation (a truncated file fails `next build` and e2e). Recorded so no reader takes it for integrity.
 
@@ -312,13 +356,13 @@ Path verification: every edited path was confirmed present on this branch; `apps
 
 ### Pre-merge (PR)
 
-- [ ] `git grep -n "next/font/google" -- apps/web-platform ':!apps/web-platform/test/no-network-fonts.test.ts'` returns no hits (the three test mocks now name `next/font/local`).
+- [ ] `git grep -n "next/font/google" -- apps/web-platform ':!apps/web-platform/test/no-network-fonts.test.ts' ':!apps/web-platform/assets/fonts/README.md'` returns no hits (the three test mocks now name `next/font/local`); the standing check is the vitest guard, which also sees untracked files.
 - [ ] The dev server serves `/login` 200 with no network route (`unshare -cn`/`-rn`), or, on a host without user namespaces, the served CSS contains no `fonts.gstatic.com` URL; after `next build` the hashed woff2 exists under `.next/static/media`; `.dockerignore` does not exclude `assets/`.
-- [ ] `no-network-fonts.test.ts`: the unmutated tree is green and prints `scanned N files` with N >= 300; mutation rows 1 to 6 each turn it red.
-- [ ] `playwright.config.ts` webServer entries use `url:` readiness; with a deliberately broken `app/layout.tsx` import, `npx playwright test` fails at server readiness within about 2 min (not after the suite), recorded in the PR body.
+- [ ] `no-network-fonts.test.ts`: the unmutated tree is green and prints `scanned N files` with N >= 1,500; mutation rows 1 to 6 each turn it red.
+- [ ] `playwright.config.ts` webServer entries use `url:` readiness; with a deliberately broken `app/layout.tsx` import, `npx playwright test` fails at server readiness within about 3 min (not after the suite), recorded in the PR body.
 - [ ] CI `e2e`: 0 failed, and the log contains none of `queries have exactly one entry`, `Dev server compile error`, `strict mode violation`.
-- [ ] `otp-login.e2e.ts`: no unfiltered `getByRole("status")` at the three assertion sites; with a route delay holding the signup navigation pending, the filtered version passes once and the pre-change unfiltered version fails (negative control proving the delay reproduces the race).
-- [ ] Fixture G's failure message prints the SOLEUR markers and recent log (shown by forcing the assertion to fail locally once).
+- [ ] `otp-login.e2e.ts`: no unfiltered `getByRole("status")` at the three assertion sites. Deterministic negative control (not a wall-clock delay: the island holds only `NAV_MIN_VISIBLE_MS` 400 ms after a 150 ms entry delay, so a long route delay lets it unmount before the banner shows and both versions pass): after `waitForURL`, `page.evaluate` appends `<div role="status">Loading</div>`; the pre-change unfiltered assertion then fails with a strict-mode error and the filtered one passes.
+- [ ] Fixture G's failure message inlines (flattened with `tr '\n' '|'`, because `$OUT_G` is deleted by the EXIT trap) the SOLEUR markers, `tail -20` of the output, `git status --short` and `git log --oneline -5`; shown once by forcing the assertion to fail locally. This is a one-off diagnostic check, not regression coverage for cause C. `plugins/soleur/test/fixture-relative-assert.test.sh` is run and its baseline regenerated (`--write-baseline`) if the new `git -C` use moves a row.
 - [ ] `merge-queue-dequeue.md` carries the advisory-red note.
 - [ ] PR body says `Ref #9482` (never `Closes #9482`), `Closes #8785`, `Closes #9170`; ADR-270 `status:` still `adopting`; `git diff origin/main -- infra/github knowledge-base/engineering/architecture` is empty.
 - [ ] `python3 scripts/lint-guard-contract.py` passes on this plan; markdown lint passes on the README.
@@ -331,8 +375,8 @@ Path verification: every edited path was confirmed present on this branch; `apps
 
 - Font file removed from the tree: `no-network-fonts.test.ts` red (row 4); vitest and e2e fail with a missing-file error, not a Turbopack message.
 - `fonts.gstatic.com` unreachable (network namespace): dev server still 200 on `/login` and on `/dashboard/chat/<id>` with the mock Supabase.
-- Signup navigation held pending for 3 s: the filtered banner assertions pass, the unfiltered ones fail (negative control).
-- Broken layout import: Playwright fails at `webServer` readiness, not after the suite.
+- Synthetic `role="status"` "Loading" element injected after the signup redirect: the filtered banner assertions pass, the unfiltered ones fail with a strict-mode error (deterministic negative control).
+- Broken layout import: Playwright fails at `webServer` readiness (about 3 min), not after the suite.
 - Healthy tree: the e2e report shows 0 failed and none of the three log signatures above.
 
 ## Domain Review
@@ -362,7 +406,7 @@ error_reporting:
   fail_loud: true (Playwright fails at webServer readiness with its standard message; job red)
 failure_modes:
   - mode: dev server compile error on either e2e server
-    detection: `url:` readiness on both webServer entries fails the job within the 120 s timeout
+    detection: `url:` readiness on both webServer entries fails the job at the webServer timeout (180 s after the Phase 2 raise)
     alert_route: required `e2e` check red, entry ejected, PR author sees the message
   - mode: vendored font missing or corrupt
     detection: no-network-fonts.test.ts and next build
@@ -404,6 +448,8 @@ discoverability_test:
 - Playwright sets `FullConfig.webServer` to `null` when `webServer` is an array (`lib/common/config.js`); never read ports from it.
 - The cause-A explanation ("transient fonts.gstatic.com fetch") is an inference: the logs show the Turbopack resolve error, not the failing HTTP request. Vendoring is correct under either explanation (the dependency disappears), which is why it is the fix rather than a retry.
 - Planning-phase caveat on the contention table: queue wait uses job `created_at`; for `needs`-chained jobs it is the time the job was created, which matched 3 to 5 s medians in quiet periods, so it is a fair queue-wait proxy.
+- Before ship, check `knowledge-base/engineering/architecture/principles-register.md` for an entry on third-party egress or vendored assets (not read during planning).
+- ADR-270's Parameters row phrases the `max_entries_to_build` gate as "raise to 3 only after the canary shows contention is not binding" and the Raise checklist governs `max_entries_to_merge`; this plan cites each for what it says.
 - Frozen figures above are from 2026-10-05 11:20 UTC; the work phase re-pulls any figure it quotes in a PR body.
 
 ## Measurement recipe (reproducible, read-only)
