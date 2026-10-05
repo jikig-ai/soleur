@@ -122,7 +122,7 @@ export function BashAutonomousToggle({
             blocklist (curl, wget, sudo, …) and secret redaction still apply, but
             no blocklist is perfect — a command that looks safe could still
             change or delete files in this workspace. Your work is backed up in
-            git, and you can watch every command run in the chat. Only turn this
+            git, and you can watch each step in the chat. Only turn this
             on for repos and accounts you trust.
           </p>
           <div className="flex justify-end gap-2">

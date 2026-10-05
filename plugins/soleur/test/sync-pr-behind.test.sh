@@ -846,7 +846,7 @@ dq_run "$DQ" dequeued
 if [[ "$DQ_RC" -eq 0 ]] && ! grep -q 'kind=dequeued' "$DQ/out"; then pass "dequeue tick 3: marker consumed — the next tick syncs instead of re-reporting"; else fail "dequeue tick 3: rc=$DQ_RC out=$(tr '\n' ' ' < "$DQ/out")"; fi
 rm -rf "$DQ"
 # E1: queued, then out of the queue with auto-merge STILL armed (an armed PR after a failed merge_group run is
-# unmeasured, and a marker means it WAS queued): after the confirming re-read this is a dequeue, no longer "a push
+# normal, measured 2026-10-05 in #9482, and a marker means it WAS queued): after the confirming re-read this is a dequeue, no longer "a push
 # dequeued it and it re-enqueues itself" (that reading survives only with neither a marker nor a removal event).
 dq_pair() {  # <name> <mode-after-queued> → leaves DQ set to a fresh dir after the queued tick
   DQ="$(mktemp -d "$TMPDIR/sync-dequeue-$1.XXXXXXXX")"; FIXTURES+=("$DQ")
