@@ -434,3 +434,25 @@ The final check summary combined `gh api --paginate --slurp` with its native
 pipe the resulting array to standalone `jq` under `set -o pipefail`. Group
 checks by app and name and select the largest check ID before counting current
 results; superseded cancellations are separate from the latest verdict.
+
+## Sign-in recheck errors — 2026-10-05
+
+The resumed browser inspection first requested a snapshot without its redactor
+pipeline. The credential guard refused it before capture. The corrected call
+then could not access the browser socket outside the writable sandbox; the
+approved escalated call succeeded. Use the installed, identity-verified
+redactor with `set -o pipefail` from the first snapshot, and retry a sandbox
+socket refusal through escalation rather than interpreting it as browser state.
+
+A temporary gate-script read and a guessed rollout `session-state.md` path
+failed because those files were absent. Discover the active feature's tracked
+paths before reading; temporary scripts are not durable resume artifacts.
+Large combined reads again truncated output; select bounded sections and
+selected API fields. Authentication URLs can contain transient state and device
+identifiers: return only their origin/path when recording navigation evidence.
+
+The operator reported another verification loop. One redacted inspection of
+`codex9051-verify-20261005` confirmed Cloudflare's unchecked human-verification
+challenge at `auth.openai.com`. No challenge retry or browser-state copy followed.
+This establishes an access blocker, not account authentication or verified
+spending/expiry controls.
