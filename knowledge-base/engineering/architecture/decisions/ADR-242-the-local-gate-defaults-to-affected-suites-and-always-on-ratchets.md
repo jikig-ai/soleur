@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
@@ -220,7 +221,7 @@ Alternatives added by this amendment:
 |---|---|
 | `TEST_GROUP=commit-scope` + a `SOLEUR_ALLOW_*`-style provenance env (#9173 option b) | Duplicates the existing narrow selector with new `want_*` plumbing for the same property; an env var's presence is not ownership and it inherits into the nested enumerate self-call. A flag buys the property outright. |
 | `runner-changed` → runner suites + staged set under branch scope (option c alone) | Still needs the staged plumbing; keeps branch-diff over-selection on every commit of a runner-touching branch; keeps the use-the-suspect-selector trust hole without the per-commit semantics that bound it. Its bounded-degradation half was adopted *inside* staged scope. |
-| `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. |
+| `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. **Superseded in part by decision 20 (2026-10-05, #9552):** a CLOSED whole-line grammar over added lines, with zero tolerance for removed lines, is not the fragile inspection this row rejected, and the data-shaped narrowing edit is answered by the label-binding rule. |
 | Pass lefthook `{staged_files}` argv to the runner | Space-separated argv fragility; the in-runner index derivation is authoritative and seam-testable. |
 | `no_stash` on the hook (sibling symptom in #8045) | Out of scope for this amendment — `git diff --cached` is stash-agnostic, and the false-RED/stash question belongs to #8045. |
 
@@ -480,3 +481,44 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     becomes incremental, so "keep" does not become permanent by default; row f1 holds the census slack at 5 and this change leaves it at 0, so the next
     always-on addition raises the floor (in `scripts/test-all.sh` and in f1's pin), which is the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
     (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.
+
+## Amendment — 2026-10-05 (#9552)
+
+20. **A registration-only runner diff takes the bounded selection under branch scope; every other runner edit keeps `runner-changed`.** Registering a
+    new suite is itself an edit to `scripts/test-all.sh`, so every suite-adding PR paid the whole battery (a recent one was stopped after 2 h 13 m of
+    contended run), and the run read as a hang. `_aff_classify_runner_diff` judges the diff `git merge-base origin/main HEAD` to the working tree for
+    both runner-critical files against a closed grammar, and the pre-pass takes the bounded walk (`AFFECTED_RUNNER_IN_SCOPE reason=registration-only`,
+    `AFFECTED_SUMMARY ... fallback=none`) only when EVERY changed line fits: **G0** headers only (a mode, rename, delete, binary or no-newline marker is
+    semantic); **G1** zero removed lines (an edited line is a removal plus an addition); **G2** every line added to the runner is a blank line, a `#`
+    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`, no option-shaped first
+    argument, no quote, substitution, redirect, `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that
+    is not blank or a comment must itself be a complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line
+    strings); **G4** `bash -n` passes on both post-images; any hunk in `scripts/lib/test-affected-paths.sh` is semantic. The pre-pass then requires every
+    added label to occur exactly once in the live `--enumerate-commands` stream and every anchor label at least once, because loops and globs produce
+    about half of the live registrations and their labels never appear as literals; any other count degrades to the full fallback through the same print
+    block (never a new ladder arm, which repeated the #9197 defect). Anything the classifier cannot decide (no merge-base, a git error, `--paths` mode, an
+    empty diff text) is `undecidable` and behaves as semantic. The classifier is not computed under `--affected-scope=staged`, which stays byte-identical.
+    The full-fallback banner states the cause, the manifest-weight cost (`about N min`, or "duration unknown"), the first offending `<file>:<line>
+    [rule-code]` and a fixed sentence per code; it never prints diff text, because agents read this output.
+    **This SUPERSEDES decision 10's closing sentence** ("Branch scope keeps the full-corpus fallback byte-identical") for registration-only diffs, and
+    **CORRECTS a stale premise in decision 10**: it cites an "unconditional always-on runner-SUT battery (which includes `scripts/test-all-affected`)", but
+    ADR-262 withdrew that suite from `ALWAYS_ON_SUITES`; it still runs on every runner-touching diff because the runner is in its declared edge set and the
+    diff names it, and the residual argument rests on that edge. **Why this reverses the 2026-09-29 option-d rejection in part:** that row feared "fragile
+    diff-content inspection" and said the dangerous narrowing edit is data-shaped. A closed allowlist of whole-line shapes models none of bash's syntax and
+    every miss falls toward the full battery, so it is not fragile in the way that matters; and the only data edit that can narrow (a new
+    `AFFECTED_*_PATHS` array on an existing unclassified label turns "always runs" into "runs only when its edge is touched") is refused because no
+    index hunk is admitted. **Measured:** of 226 runner-touching commits since 2026-06-01, 152 (67%) fit the grammar including the anchor rule and 139 add
+    a registration; the full battery is 91.4 min at manifest weights against 58.6 min for a bounded selection (a 36% saving, not minutes: 13.6 min of the
+    43 edge suites are heavy batteries that are not runner-SUT, and narrowing those is a separate, deferred concept). **Accepted residual**, the same class
+    as decision 10's with a larger window (the whole branch, not one commit's index): the classifier lives in the file it judges, so a PR that edits it is
+    semantic by G1/G2 and goes full; a PR that breaks it AND weakens its rows in one diff is outside this guard, bounded by the rows living in
+    `scripts/test-all-affected.test.sh` (selected by every runner-touching run) and by CI's full sharded battery on the PR head, which stays the merge
+    gate. The `PR_GATE_MACHINERY_PATHS` arming of ADR-262 is unchanged: the name list a registration-only run reads still contains both paths.
+
+    Alternatives considered: (b) registrations in a data file (about 560 registrations interleaved with relevance-gated blocks and ordinal-indexed shard
+    selection; the data file would become a third runner-critical path needing its own grammar, which is mechanism (a) relocated); (c) banner only (does not
+    deliver the narrowing; its banner half is kept for the fail-closed arm); a selection-equivalence oracle (sees selection metadata only, costs two walks);
+    a classifier in a third file (an edit to it would not match the two-file trigger); admitting deletions or edits (a removed `run_suite` is a narrowing
+    edit by definition); `SUITE_GLOBS` auto-discovery of root `scripts/*.test.sh` (162 explicit registrations make it a mass conversion, and "registration
+    is a reviewed act" is a property worth keeping). Index declarations (a new `AFFECTED_*_PATHS` block, an `ALWAYS_ON_SUITES` entry) are a separable
+    follow-on slice bound to labels registered in the same diff.

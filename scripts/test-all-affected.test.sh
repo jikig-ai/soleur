@@ -196,6 +196,20 @@ s = re.sub(r'^tc_preamble$', (
     'fi'
 ), s, count=1, flags=re.M)
 
+# 3b. Classifier READ seam (ADR-242 decision 20). The runner's registration-only classifier reads
+#     git through two small functions; the sandbox REDEFINES them after the shipped
+#     `# aff-rd-seam-end` marker with a fabricated diff text and post-image root, so an arm
+#     proves the DISPATCH without a scratch repo around the whole runner. With no seam values
+#     supplied the reads fail, which classifies `undecidable` (full) — what every pre-existing
+#     runner-changed arm already expects. Never shipped: an env-readable substitution in the
+#     production runner would be the first seam able to narrow a real run's diff.
+seam_anchor = '# aff-rd-seam-end\n'
+assert s.count(seam_anchor) == 1, f"expected exactly one seam marker, found {s.count(seam_anchor)}"
+s = s.replace(seam_anchor, seam_anchor + (
+    '_aff_rd_root() { printf "%s" "${SANDBOX_RD_ROOT:-}"; }\n'
+    '_aff_rd_diff() { [[ -n "${SANDBOX_RD_DIFF+x}" ]] || return 1; printf "%s\\n" "$SANDBOX_RD_DIFF"; }\n'
+), 1)
+
 # 4. Corpus trim. The arms under test exercise SELECTION — a handful of named
 #    labels — so the ~300-registration stream is fixture, not subject. The
 #    filter sits inside run_suite BEFORE _shard_selects ticks the ordinal, so
@@ -214,7 +228,7 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     apps/web-platform/infra/run-registered-suites.sh|\\
     tests/commands/sync-domain-model|\\
     plugins/soleur/test/c4-model-freshness.test.sh|\\
-    test/x-community|plugins/soleur) : ;;
+    test/x-community|plugins/soleur|zz/new-suite) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -489,6 +503,411 @@ if grep -qF 'RUNNER EDITS' <<<"$_k4_out" \
   pass "k4: --help carries the RUNNER EDITS block with the preview and staged-scope commands"
 else
   fail "k4: --help lacks the RUNNER EDITS block"
+fi
+
+# --- Rows rc*: the registration-only runner-diff classifier (ADR-242 decision 20) ---
+# A registration-only diff must take the bounded selection and ANY other runner/index edit must
+# keep the full fallback. The classifier is a closed grammar over the diff text, so this block
+# drives the REAL function (extracted from the runner by awk range, run in a scratch git repo
+# built by copying files, never links: #8800) against a table of mutations. Semantic rows prove
+# the fail-closed direction; must-PASS rows prove the suite can see a reject-everything stub;
+# H1/H2 swap in a permissive and a reject-all stub and require the table to notice.
+_rc_src="$TESTROOT/classifier.sh"
+awk '/^_aff_rd_root\(\) \{$/ { on = 1 } on { print } on && /^_aff_classify_runner_diff\(\) \{$/ { inf = 1 } inf && /^}$/ { exit }' "$RUNNER" > "$_rc_src"
+_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
+cases=$((cases + 1))
+if [[ "$_rc_defs" == "3" ]] && bash -n "$_rc_src"; then
+  pass "rc0: the classifier extracts as three functions and parses"
+else
+  fail "rc0: classifier extraction found $_rc_defs of 3 functions (or it does not parse)"
+fi
+
+RC_BASE_RUNNER='#!/usr/bin/env bash
+set -euo pipefail
+_MIN_ALWAYS_ON_DECLARED=141
+run_suite() { :; }
+if true; then
+  run_suite "a/one" bash a/one.test.sh
+  run_suite "a/two" bash a/two.test.sh
+fi
+cat <<'"'"'USAGE'"'"'
+usage: runner
+-- note kept in the heredoc
+USAGE
+x=1 \
+  y=2
+'
+RC_BASE_LIB='ALWAYS_ON_SUITES=(
+  "a/one"
+)
+'
+
+rc_g() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+
+# Build a scratch repo whose origin/main is the base commit. $2 = "broken-lib" makes the base lib
+# unparseable (the G4 row). Never links into the live tree.
+rc_mk_repo() {
+  local d="$1"
+  assert_fixture_dir "$d"
+  mkdir -p "$d/scripts/lib" || return 98
+  printf '%s' "$RC_BASE_RUNNER" > "$d/scripts/test-all.sh" || return 98
+  if [[ "${2:-}" == "broken-lib" ]]; then printf 'if then\n' > "$d/scripts/lib/test-affected-paths.sh"
+  else printf '%s' "$RC_BASE_LIB" > "$d/scripts/lib/test-affected-paths.sh"; fi
+  rc_g -C "$d" init -q -b main . \
+    && rc_g -C "$d" config user.email t@t && rc_g -C "$d" config user.name t \
+    && rc_g -C "$d" config commit.gpgsign false \
+    && rc_g -C "$d" add -A && rc_g -C "$d" commit -q -m base \
+    && rc_g -C "$d" update-ref refs/remotes/origin/main HEAD || return 98
+}
+# Insert text after the first line equal to $2 in the runner.
+rc_ins() {
+  local d="$1" pat="$2" txt="$3"
+  assert_fixture_dir "$d"
+  PAT="$pat" TXT="$txt" awk '{ print } $0 == ENVIRON["PAT"] && !done { printf "%s\n", ENVIRON["TXT"]; done = 1 }' \
+    "$d/scripts/test-all.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/test-all.sh"
+}
+# Replace the first line equal to $2 with $3 (empty $3 deletes it).
+rc_rep() {
+  local d="$1" pat="$2" new="$3"
+  assert_fixture_dir "$d"
+  PAT="$pat" NEW="$new" DEL="${4:-}" awk '$0 == ENVIRON["PAT"] && !done { done = 1; if (ENVIRON["DEL"] == "") print ENVIRON["NEW"]; next } { print }' \
+    "$d/scripts/test-all.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/test-all.sh"
+}
+RC_TWO='  run_suite "a/two" bash a/two.test.sh'
+RC_ONE='  run_suite "a/one" bash a/one.test.sh'
+
+# Mutations. Each edits the scratch repo's working tree (and may commit); the table below names
+# the verdict each must produce.
+m_ok_single()      { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash x/new.test.sh'; }
+m_ok_label_dots()  { rc_ins "$1" "$RC_TWO" '  run_suite "tests/scripts/a.b c" bash tests/scripts/a.b.test.sh'; }
+m_ok_python_m()    { rc_ins "$1" "$RC_TWO" '  run_suite "x/py" python3 -m unittest tests.scripts.test_x'; }
+m_ok_bun()         { rc_ins "$1" "$RC_TWO" '  run_suite "x/bun" bun test apps/x/test/x.test.ts'; }
+m_ok_blank_comment() { rc_ins "$1" "$RC_TWO" $'\n  # a note\n  run_suite "x/new" bash x/new.test.sh'; }
+m_ok_two_in_hunk() { rc_ins "$1" "$RC_TWO" $'  run_suite "x/n1" bash x/n1.test.sh\n  run_suite "x/n2" bash x/n2.test.sh'; }
+m_ok_comment_only() { rc_ins "$1" "$RC_TWO" '  # just a note'; }
+m_ok_mnemonic()    { rc_g -C "$1" config diff.mnemonicPrefix true; rc_g -C "$1" config diff.noprefix true; m_ok_single "$1"; }
+m_s_fallback()     { rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; }
+m_s_floor()        { rc_rep "$1" '_MIN_ALWAYS_ON_DECLARED=141' '_MIN_ALWAYS_ON_DECLARED=0'; }
+m_s_smuggle_semi() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a.test.sh; _aff_fallback='; }
+m_s_smuggle_sub()  { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash $(id).sh'; }
+m_s_smuggle_tick() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash `id`.sh'; }
+m_s_smuggle_and()  { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a.sh && :'; }
+m_s_smuggle_redir() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a.sh > /dev/null'; }
+m_s_smuggle_cmt()  { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a.sh # trailing'; }
+m_s_delete_reg()   { rc_rep "$1" "$RC_TWO" '' del; }
+m_s_edit_argv()    { rc_rep "$1" "$RC_TWO" '  run_suite "a/two" bash a/other.test.sh'; }
+m_s_two_hunks()    { m_ok_single "$1"; rc_ins "$1" '  y=2' '_x=1'; }
+m_s_continuation() { rc_ins "$1" 'x=1 \' '  run_suite "x/new" bash x/new.test.sh'; }
+m_s_cont_blank()   { rc_ins "$1" 'x=1 \' ''; }
+m_s_heredoc_blank() { rc_ins "$1" 'usage: runner' ''; }
+m_s_after_nonreg() { rc_ins "$1" '  y=2' '  run_suite "x/new" bash x/new.test.sh'; }
+m_s_first_in_group() { rc_ins "$1" 'if true; then' '  run_suite "x/new" bash x/new.test.sh'; }
+m_s_chmod()        { chmod +x "$1/scripts/test-all.sh"; }
+m_s_delete_file()  { rm -f "$1/scripts/test-all.sh"; }
+m_s_binary()       { printf 'scripts/test-all.sh -diff\n' > "$1/.gitattributes"; m_ok_single "$1"; }
+m_s_nonewline()    { local d="$1"; assert_fixture_dir "$d"; printf '%s' "$RC_BASE_RUNNER" | head -c -1 > "$d/scripts/test-all.sh"; }
+m_s_removed_dashes() { m_ok_single "$1"; rc_rep "$1" '-- note kept in the heredoc' '' del; }
+m_s_added_plusplus() { m_ok_single "$1"; rc_ins "$1" '  y=2' '++ x'; }
+m_s_crlf()         { rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\r'; }
+m_s_bash_c()       { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash -c foo'; }
+m_s_rcfile()       { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash --rcfile f'; }
+m_s_node_r()       { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" node -r f'; }
+m_s_bun_x()        { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bun x pkg@1'; }
+m_s_bun_x_plain()  { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bun x cowsay'; }
+m_s_py_c()         { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" python3 -c x'; }
+m_s_argv0()        { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" sh x.sh'; }
+m_s_label_dotdot() { rc_ins "$1" "$RC_TWO" '  run_suite "../x" bash x.sh'; }
+m_s_label_dash()   { rc_ins "$1" "$RC_TWO" '  run_suite "-x" bash x.sh'; }
+m_s_formfeed()     { rc_ins "$1" "$RC_TWO" $'\f'; }
+m_s_nbsp()         { rc_ins "$1" "$RC_TWO" $'\xc2\xa0'; }
+m_s_label_dup()    { rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\n  run_suite "x/new" bash x/other.test.sh'; }
+m_s_index_hunk()   { local d="$1"; assert_fixture_dir "$d"; printf '  "a/two"\n' >> "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
+m_s_committed()    { rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; rc_g -C "$1" commit -q -am semantic; m_ok_single "$1"; }
+m_u_empty()        { :; }
+m_u_no_origin()    { rc_g -C "$1" update-ref -d refs/remotes/origin/main; m_ok_single "$1"; }
+
+# name | mutation | expected "<class>[:<first code>|:<labels>]" | repo flavour
+RC_TABLE=(
+  'ok_single|m_ok_single|registration-only:x/new|'
+  'ok_label_dots|m_ok_label_dots|registration-only:tests/scripts/a.b c|'
+  'ok_python_m|m_ok_python_m|registration-only:x/py|'
+  'ok_bun|m_ok_bun|registration-only:x/bun|'
+  'ok_blank_comment|m_ok_blank_comment|registration-only:x/new|'
+  'ok_two_in_hunk|m_ok_two_in_hunk|registration-only:x/n1,x/n2|'
+  'ok_comment_only|m_ok_comment_only|registration-only:|'
+  'ok_mnemonic|m_ok_mnemonic|registration-only:x/new|'
+  's_fallback|m_s_fallback|semantic:G2-shape|'
+  's_floor|m_s_floor|semantic:G1-removal|'
+  's_smuggle_semi|m_s_smuggle_semi|semantic:G2-charset|'
+  's_smuggle_sub|m_s_smuggle_sub|semantic:G2-charset|'
+  's_smuggle_tick|m_s_smuggle_tick|semantic:G2-charset|'
+  's_smuggle_and|m_s_smuggle_and|semantic:G2-charset|'
+  's_smuggle_redir|m_s_smuggle_redir|semantic:G2-charset|'
+  's_smuggle_cmt|m_s_smuggle_cmt|semantic:G2-charset|'
+  's_delete_reg|m_s_delete_reg|semantic:G1-removal|'
+  's_edit_argv|m_s_edit_argv|semantic:G1-removal|'
+  's_two_hunks|m_s_two_hunks|semantic:G2-shape|'
+  's_continuation|m_s_continuation|semantic:G2-anchor|'
+  's_cont_blank|m_s_cont_blank|semantic:G2-anchor|'
+  's_heredoc_blank|m_s_heredoc_blank|semantic:G2-anchor|'
+  's_after_nonreg|m_s_after_nonreg|semantic:G2-anchor|'
+  's_first_in_group|m_s_first_in_group|semantic:G2-anchor|'
+  's_chmod|m_s_chmod|semantic:G0-header|'
+  's_delete_file|m_s_delete_file|undecidable:no-post-image|'
+  's_binary|m_s_binary|semantic:G0-header|'
+  's_nonewline|m_s_nonewline|semantic:G1-removal|'
+  's_removed_dashes|m_s_removed_dashes|semantic:G1-removal|'
+  's_added_plusplus|m_s_added_plusplus|semantic:G2-shape|'
+  's_crlf|m_s_crlf|semantic:G2-cr|'
+  's_bash_c|m_s_bash_c|semantic:G2-charset|'
+  's_rcfile|m_s_rcfile|semantic:G2-charset|'
+  's_node_r|m_s_node_r|semantic:G2-charset|'
+  's_bun_x|m_s_bun_x|semantic:G2-charset|'
+  's_bun_x_plain|m_s_bun_x_plain|semantic:G2-charset|'
+  's_py_c|m_s_py_c|semantic:G2-charset|'
+  's_argv0|m_s_argv0|semantic:G2-charset|'
+  's_label_dotdot|m_s_label_dotdot|semantic:G2-charset|'
+  's_label_dash|m_s_label_dash|semantic:G2-charset|'
+  's_formfeed|m_s_formfeed|semantic:G2-shape|'
+  's_nbsp|m_s_nbsp|semantic:G2-shape|'
+  's_label_dup|m_s_label_dup|semantic:G2-label-dup|'
+  's_index_hunk|m_s_index_hunk|semantic:INDEX-HUNK|'
+  's_committed|m_s_committed|semantic:G2-shape|'
+  's_broken_lib|m_ok_single|semantic:G4-syntax|broken-lib'
+  'u_empty|m_u_empty|undecidable:empty-diff-text|'
+  'u_no_origin|m_u_no_origin|undecidable:no-merge-base-or-git-error|'
+)
+
+# Run one table row against a classifier file; print "<class>:<detail>" (or MUTATION-DID-NOT-LAND).
+rc_classify_row() {
+  local clf="$1" mut="$2" flavour="$3" d
+  d="$TESTROOT/rc-repo-$cases-$mut"
+  # A fresh repo per call: the table runs several times (real classifier, then the two stubs), and
+  # a reused directory would carry the previous run's edits and commits into the next verdict.
+  assert_fixture_dir "$d"
+  rm -rf "$d"
+  rc_mk_repo "$d" "$flavour" || { echo "FIXTURE-BUILD-FAILED"; return 0; }
+  "$mut" "$d" >/dev/null 2>&1 || true
+  if [[ "$mut" != m_u_empty && "$mut" != m_u_no_origin ]] && rc_g -C "$d" diff --quiet origin/main -- scripts 2>/dev/null; then
+    echo "MUTATION-DID-NOT-LAND"; return 0
+  fi
+  ( cd "$d" && env -u BASH_ENV -u ENV bash -c '
+      source "$1"
+      _aff_classify_runner_diff || _aff_runner_class=undecidable
+      case "$_aff_runner_class" in
+        registration-only) _l=""; for _x in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do _l+="${_l:+,}${_x}"; done; printf "registration-only:%s\n" "$_l" ;;
+        semantic) printf "semantic:%s\n" "${_aff_runner_offenders[0]#* }" ;;
+        *) printf "%s:%s\n" "$_aff_runner_class" "$_aff_runner_reason" ;;
+      esac' _ "$clf" ) 2>&1 | tail -1
+}
+# Run the whole table against $1; print the number of rows whose verdict differs from the table.
+rc_run_table() {
+  local clf="$1" row name mut want flavour got bad=0
+  for row in "${RC_TABLE[@]}"; do
+    IFS='|' read -r name mut want flavour <<<"$row"
+    got="$(rc_classify_row "$clf" "$mut" "$flavour")"
+    if [[ "$got" != "$want" ]]; then
+      bad=$((bad + 1))
+      [[ -n "${RC_VERBOSE:-}" ]] && echo "    [row $name] want '$want' got '$got'" >&2
+    fi
+  done
+  echo "$bad"
+}
+
+cases=$((cases + 1))
+_rc_bad="$(RC_VERBOSE=1 rc_run_table "$_rc_src" 2>"$TESTROOT/rc-table.err")"
+if [[ "$_rc_bad" == "0" ]]; then
+  pass "rc1: all ${#RC_TABLE[@]} classifier rows give the table's verdict (registration-only shapes pass, every semantic edit stays full)"
+else
+  fail "rc1: $_rc_bad classifier row(s) differ from the table: $(tr '\n' ' ' < "$TESTROOT/rc-table.err" | head -c 900)"
+fi
+
+# H1: a permissive stub (everything registration-only) — the semantic rows must notice.
+cases=$((cases + 1))
+cat > "$TESTROOT/clf-permissive.sh" <<'STUB'
+_aff_classify_runner_diff() { _aff_runner_class=registration-only; _aff_runner_added_labels=(); _aff_runner_offenders=(); _aff_runner_reason=""; }
+STUB
+_h1_bad="$(rc_run_table "$TESTROOT/clf-permissive.sh" 2>/dev/null)"
+if (( _h1_bad > 20 )); then pass "H1: a permissive classifier stub reddens $_h1_bad rows (the table can see a classifier that admits everything)"
+else fail "H1: a permissive stub only reddened $_h1_bad rows"; fi
+
+# H2: a reject-everything stub — the must-PASS rows (and only they, plus the undecidable rows) must notice.
+cases=$((cases + 1))
+cat > "$TESTROOT/clf-rejectall.sh" <<'STUB'
+_aff_classify_runner_diff() { _aff_runner_class=semantic; _aff_runner_added_labels=(); _aff_runner_offenders=("x:0 G2-shape"); _aff_runner_reason=""; }
+STUB
+_h2_bad="$(rc_run_table "$TESTROOT/clf-rejectall.sh" 2>/dev/null)"
+_h2_pass_rows=$(printf '%s\n' "${RC_TABLE[@]}" | grep -c '|registration-only' || true)
+if (( _h2_bad >= _h2_pass_rows )) && (( _h2_pass_rows >= 5 )); then pass "H2: a reject-everything stub reddens $_h2_bad rows including all $_h2_pass_rows must-pass rows"
+else fail "H2: a reject-all stub reddened $_h2_bad rows against $_h2_pass_rows must-pass rows"; fi
+
+# H3: the must-PASS non-canonical inputs are each shaped differently from the canonical bash row
+# (dotted+spaced label, python -m, bun test, blank+comment run, two in one hunk, comment-only).
+cases=$((cases + 1))
+if (( _h2_pass_rows >= 7 )); then pass "H3: $_h2_pass_rows must-pass shapes in the table"; else fail "H3: only $_h2_pass_rows must-pass shapes"; fi
+
+# --- Rows re*: end to end through the sandboxed runner ------------------------------
+# The sandbox replaces the classifier's two READ functions at build time (never shipped inline)
+# with a fabricated diff text and post-image root, so these rows prove the DISPATCH: the pre-pass
+# consults the classifier, takes the bounded selection for a registration-only diff, and degrades
+# to the full fallback for everything else. `tests/commands/sync-domain-model` and
+# `scripts/lint-dual-lockfile` are real labels of the trimmed sandbox corpus (registered once each).
+re_root() { # $1 = name; remaining args = runner post-image lines
+  local d="$TESTROOT/re-root-$1"; shift
+  assert_fixture_dir "$d"
+  mkdir -p "$d/scripts/lib" || return 98
+  printf '#!/usr/bin/env bash\n' > "$d/scripts/test-all.sh" || return 98
+  local l; for l in "$@"; do printf '%s\n' "$l" >> "$d/scripts/test-all.sh"; done
+  printf 'ALWAYS_ON_SUITES=()\n' > "$d/scripts/lib/test-affected-paths.sh" || return 98
+  printf '%s' "$d"
+}
+re_diff() { # $1 = first added post-image line number, $2 = count, remaining = added lines
+  local n="$1" c="$2"; shift 2
+  local out=$'diff --git a/scripts/test-all.sh b/scripts/test-all.sh\nindex 1111111..2222222 100644\n--- a/scripts/test-all.sh\n+++ b/scripts/test-all.sh'
+  out+=$'\n'"@@ -$((n - 1)),0 +${n},${c} @@"
+  local l; for l in "$@"; do out+=$'\n'"+${l}"; done
+  printf '%s' "$out"
+}
+RE_DUAL='  run_suite "scripts/lint-dual-lockfile" bash scripts/lint-dual-lockfile.test.sh'
+RE_SYNC='  run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh'
+
+# re1: registration-only -> bounded selection, and the NEW suite is selected. The mutation adds a
+# genuinely new, unclassified registration (`zz/new-suite`, kept by the corpus trim) to the sandbox
+# runner, so the live stream holds it exactly once and the new suite is the thing that must run.
+cases=$((cases + 1))
+RE_NEW='  run_suite "zz/new-suite" bash zz/new.test.sh'
+_re1_root=$(re_root re1 "$RE_DUAL" "$RE_NEW")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re1_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_NEW")" -- --print-selection
+_re1_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if [[ "$ARM_RC" == "0" ]] \
+  && grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=registration-only' <<<"$ARM_OUT" \
+  && grep -qF 'fallback=none' <<<"$_re1_sum" \
+  && ! grep -qF 'AFFECTED_FALLBACK' <<<"$ARM_OUT" \
+  && grep -qF $'AFFECTED_SELECTED\tzz/new-suite\t1\tunclassified' <<<"$ARM_OUT"; then
+  pass "re1: a registration-only runner edit takes the bounded selection and selects the new suite"
+else
+  fail "re1: rc=$ARM_RC summary='${_re1_sum}' out: $(grep -E 'AFFECTED_|\[affected\]' <<<"$ARM_OUT" | head -6 | tr '\n' '|')"
+fi
+
+# re2: the same fixture plus ONE semantic line elsewhere in the hunk -> full; the banner names the
+# first offender by file:line and rule code, never by source text.
+cases=$((cases + 1))
+_re2_root=$(re_root re2 "$RE_DUAL" "$RE_SYNC" '  _aff_fallback=""')
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re2_root" "SANDBOX_RD_DIFF=$(re_diff 3 2 "$RE_SYNC" '  _aff_fallback=""')" -- --print-selection
+_re2_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re2_sum" \
+  && grep -qF $'AFFECTED_FALLBACK\treason=runner-changed' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT" \
+  && grep -qF 'first: scripts/test-all.sh:4 [G2-shape]' <<<"$ARM_OUT" \
+  && ! grep -qF '_aff_fallback' <<<"$ARM_OUT"; then
+  pass "re2: a registration plus one semantic line goes full; the banner names scripts/test-all.sh:4 [G2-shape], no source text"
+else
+  fail "re2: summary='${_re2_sum}' banner: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re3: an added label that aliases an existing label degrades via the post-walk uniqueness check.
+# The mutation duplicates the real registration in the sandbox copy, so the live stream holds the
+# label twice (what a PR that added a colliding line would produce).
+cases=$((cases + 1))
+_re3_root=$(re_root re3 "$RE_DUAL" "$RE_DUAL")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_DUAL}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re3_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_DUAL")" -- --print-selection
+_re3_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re3_sum" && grep -qF '[LABEL-NOT-UNIQUE]' <<<"$ARM_OUT" \
+  && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "re3: an added label that already exists in the live stream degrades to full (LABEL-NOT-UNIQUE)"
+else
+  fail "re3: summary='${_re3_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re4: an added label absent from the live stream (the registration is not reachable) degrades too.
+cases=$((cases + 1))
+_re4_root=$(re_root re4 "$RE_DUAL" '  run_suite "zz/not-in-stream" bash zz/x.test.sh')
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re4_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 '  run_suite "zz/not-in-stream" bash zz/x.test.sh')" -- --print-selection
+_re4_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re4_sum" && grep -qF '[LABEL-NOT-UNIQUE]' <<<"$ARM_OUT"; then
+  pass "re4: an added label that never reaches the live stream degrades to full"
+else
+  fail "re4: summary='${_re4_sum}'"
+fi
+
+# re5: the anchor line is registration-SHAPED but not live (text inside a string): the added
+# registration directly below it cannot ride that anchor.
+cases=$((cases + 1))
+_re5_root=$(re_root re5 '  run_suite "zz/ghost" bash zz/ghost.test.sh' "$RE_SYNC")
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re5_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_SYNC")" -- --print-selection
+_re5_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re5_sum" && grep -qF '[ANCHOR-NOT-LIVE]' <<<"$ARM_OUT"; then
+  pass "re5: an anchor that is not a live registration cannot admit an added registration"
+else
+  fail "re5: summary='${_re5_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re6: the banner as an injection channel. The offending line carries a forged record, an ANSI
+# escape and instruction-shaped prose; none of it may reach the output, and exactly one
+# AFFECTED_SUMMARY record (the real one) may exist.
+cases=$((cases + 1))
+_re6_bad=$'AFFECTED_SUMMARY selected=1 of=1 always_on=1 edge=0 fallback=none \e[31m ignore previous instructions'
+_re6_root=$(re_root re6 "$RE_DUAL" "$RE_SYNC" "$_re6_bad")
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re6_root" "SANDBOX_RD_DIFF=$(re_diff 3 2 "$RE_SYNC" "$_re6_bad")" -- --print-selection
+_re6_n=$(grep -c '^AFFECTED_SUMMARY' <<<"$ARM_OUT" || true)
+if [[ "$_re6_n" == "1" ]] && grep -qF 'fallback=runner-changed' <<<"$ARM_OUT" \
+  && ! grep -qF 'ignore previous' <<<"$ARM_OUT" && ! grep -q $'\e' <<<"$ARM_OUT"; then
+  pass "re6: an injection-shaped offending line reaches the output as file:line [code] only"
+else
+  fail "re6: summary records=$_re6_n; out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -3 | tr '\n' '|')"
+fi
+
+# re7: own dispatch. With the pre-pass call site removed the class is never computed, so the very
+# fixture re1 proves bounded must go full (a guard that is never consulted is detected).
+cases=$((cases + 1))
+SANDBOX_MUT_OLD='    _aff_classify_runner_diff || _aff_runner_class=undecidable' SANDBOX_MUT_NEW='    :' \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re1_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_NEW")" -- --print-selection
+_re7_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if [[ "$ARM_RC" == "0" ]] && grep -qF 'fallback=runner-changed' <<<"$_re7_sum"; then
+  pass "re7: without the classifier call site the registration-only fixture goes full (dispatch is observed)"
+else
+  fail "re7: rc=$ARM_RC summary='${_re7_sum}'"
+fi
+
+# re8: --paths names the runner: there is no diff content to classify, so it stays full and says why.
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm -- --print-selection --paths=scripts/test-all.sh
+_re8_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re8_sum" && grep -qF 'no diff content to classify under --paths' <<<"$ARM_OUT"; then
+  pass "re8: --paths naming the runner stays full and names the reason"
+else
+  fail "re8: summary='${_re8_sum}'"
+fi
+
+# re9: staged scope never computes the class: byte-identical to before (sc6 keeps its note).
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_STAGED_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re1_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_NEW")" -- --print-selection --affected-scope=staged
+if grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed' <<<"$ARM_OUT" \
+  && ! grep -qF 'reason=registration-only' <<<"$ARM_OUT"; then
+  pass "re9: under staged scope the class is not computed (the runner-changed note is unchanged)"
+else
+  fail "re9: out: $(grep -F 'AFFECTED_RUNNER' <<<"$ARM_OUT" | head -3 | tr '\n' '|')"
+fi
+
+# H5: the extraction under test is the runner's own text — the classifier the matrix drove is
+# byte-identical to the one the sandbox arms run (they are copies of the same file).
+cases=$((cases + 1))
+_h5_fn() { awk '/^_aff_classify_runner_diff\(\) \{$/ { on = 1 } on { print } on && /^}$/ { exit }' "$1"; }
+_h5_live=$(_h5_fn "$RUNNER"); _h5_sb=$(_h5_fn "$ARM_SB")
+if [[ -n "$_h5_live" && "$_h5_live" == "$_h5_sb" ]]; then
+  pass "H5: the sandbox runner carries the same classifier function the matrix drove"
+else
+  fail "H5: classifier text differs between the live runner and the sandbox copy"
 fi
 
 # --- Row l: SOLEUR_SUBAGENT refusal — affected proceeds, --full refuses -----------
@@ -2062,7 +2481,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=89
+MIN_CASES=104
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
