@@ -15,6 +15,8 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import {
   applyStreamEvent,
   applyTimeout,
+  foldNarrationIntoTrail,
+  sweepTransitional,
   type ChatMessage,
   type StreamEventResult,
   type WorkflowLifecycleState,
@@ -23,8 +25,7 @@ import {
 } from "@/lib/chat-state-machine";
 
 export type { ConnectionPhase } from "@/lib/chat-state-machine";
-import { isKnownWSMessageType } from "@/lib/ws-known-types";
-import { parseWSMessage } from "@/lib/ws-zod-schemas";
+import { parseWSMessage, wsMessageTypeLiterals } from "@/lib/ws-zod-schemas";
 import {
   SESSION_ENDED_SUPPRESSED,
   sessionEndedCopy,
@@ -161,6 +162,8 @@ interface UseWebSocketReturn {
    *  the in-flight turn, or null. Rendered near the "Working…" badge; torn down
    *  by the reducer on every turn-end path. Live-only (never persisted). */
   liveNarration: string | null;
+  /** #9515 — ms epoch the current narration began; elapsed renders live. */
+  liveNarrationStartedAt?: number | null;
   /** User-initiated Stop. Sends `{ type: "abort_turn", conversationId }` and
    *  optimistically transitions `streamState` to `"stopping"`. No-op when
    *  `streamState !== "streaming"` (idempotent under double-click) or when
@@ -230,7 +233,7 @@ export const OPEN_MEMBERSHIP_REVOKED_TERMINAL_EVENT =
  *  subsequent unrelated dispatches. */
 export interface ChatState {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   /** Stage 4 (#2886): ambient lifecycle-bar slice. */
   workflow: WorkflowLifecycleState;
   /** Stage 4 (#2886): reverse-lookup index for `subagent_complete`. */
@@ -280,6 +283,10 @@ export interface ChatState {
    * turn-end arm + on the turn-ending `stream_event` (activeStreams emptied).
    */
   liveNarration: string | null;
+  /** #9515 — ms epoch the current narration began (elapsed renders live);
+   *  when a narration is superseded it folds into the tip bubble's
+   *  `activity[]` carrying this as `startedAt`. */
+  liveNarrationStartedAt?: number | null;
 }
 
 export type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
@@ -364,8 +371,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           : isCcTurnEnd && state.streamState !== "idle"
             ? "idle"
             : state.streamState;
+      const narrationSuperseded =
+        action.msg.type === "tool_use" && state.liveNarration !== null;
+      // #9515 — a turn ENDS when this event drained streams that were live
+      // (`size > 0 → 0`); arms that never touch activeStreams (workflow_*,
+      // debug_event, turn_summary, interactive_prompt) must not fold narration
+      // just because the map happens to be momentarily empty (review seat).
+      const turnDrained =
+        state.activeStreams.size > 0 && result.activeStreams.size === 0;
+      const shouldFold = turnDrained || narrationSuperseded;
+      const fold = shouldFold
+        ? foldNarrationIntoTrail(
+            result.messages,
+            result.activeStreams,
+            state.liveNarration,
+            state.liveNarrationStartedAt,
+          )
+        : null;
+      // #9515 — a superseded narration with nowhere to fold (chip-only path:
+      // no live-ish text bubble) STAYS live — the fallback line renders it
+      // until a bubble exists, instead of vanishing unrecorded (review seat).
+      const keepNarration =
+        !shouldFold || (narrationSuperseded && !turnDrained && fold?.folded === false);
       return {
-        messages: result.messages,
+        messages: fold ? fold.messages : result.messages,
         activeStreams: result.activeStreams,
         workflow: result.workflow,
         spawnIndex: result.spawnIndex,
@@ -375,23 +404,56 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         connection: state.connection,
         // #5370 — tear down the live narration line when the turn fully ends
         // (the last stream drained); otherwise carry it through unchanged.
-        liveNarration:
-          result.activeStreams.size === 0 ? null : state.liveNarration,
+        liveNarration: keepNarration ? state.liveNarration : null,
+        liveNarrationStartedAt: keepNarration
+          ? state.liveNarrationStartedAt
+          : null,
       };
     }
-    case "set_live_narration":
+    case "set_live_narration": {
       // #5370 — single-slot set; teardown happens on the turn-end arms.
-      return { ...state, liveNarration: action.message };
-    case "timeout": {
-      const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
+      // #9515 — the SUPERSEDED narration folds into the tip bubble's
+      // `activity[]` (consecutive-dedup + cap inside `pushActivity`), so the
+      // in-turn step history persists for the rest of the turn. The slot
+      // carries only the CURRENT step.
+      const fold = foldNarrationIntoTrail(
+        state.messages,
+        state.activeStreams,
+        state.liveNarration,
+        state.liveNarrationStartedAt,
+      );
       return {
         ...state,
-        messages: result.messages,
+        messages: fold.messages,
+        liveNarration: action.message,
+        liveNarrationStartedAt: Date.now(),
+      };
+    }
+    case "timeout": {
+      const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
+      // #9515 — terminal escalation drains streams: fold the last narration
+      // like every other turn-end arm (review seat F5 — the only drop).
+      const timeoutFold =
+        state.activeStreams.size > 0 && result.activeStreams.size === 0
+          ? foldNarrationIntoTrail(
+              result.messages,
+              result.activeStreams,
+              state.liveNarration,
+              state.liveNarrationStartedAt,
+            )
+          : null;
+      return {
+        ...state,
+        messages: timeoutFold ? timeoutFold.messages : result.messages,
         activeStreams: result.activeStreams,
         // #5370 — a timeout that escalates the last leader to error ends the
         // turn (activeStreams emptied) → tear down the live narration line.
         liveNarration:
           result.activeStreams.size === 0 ? null : state.liveNarration,
+        liveNarrationStartedAt:
+          result.activeStreams.size === 0
+            ? null
+            : state.liveNarrationStartedAt,
         // FR5 (#2861): first timeout returns `{type:"reset"}` so the watchdog
         // restarts against the same leader; second consecutive timeout returns
         // `{type:"clear"}`. Propagate either (may be undefined for stale
@@ -399,24 +461,37 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         pendingTimerAction: result.timerAction,
       };
     }
-    case "clear_streams":
+    case "clear_streams": {
       // Review F1: clear_streams must also reset workflow and spawnIndex.
       // Otherwise after `key_invalid` / `session_ended` / socket remount
       // (`connect()`), the lifecycle bar still renders the old workflow's
       // `state: "active"` and stale spawnIndex entries linger.
       // #3448 PR2: also resets streamState to "idle" — atomicity invariant
       // for the per-turn lifecycle slice.
+      // #9515 — transitional bubbles left mid-turn (socket remount /
+      // reconnect / session_ended / teardown) get the honest `interrupted`
+      // marker + their final step folded into the trail — NOT a fresh box
+      // on resume. The superseded narration folds into the tip bubble too.
+      const sweptMessages = foldNarrationIntoTrail(
+        sweepTransitional(state.messages),
+        state.activeStreams,
+        state.liveNarration,
+        state.liveNarrationStartedAt,
+      ).messages;
       return {
         ...state,
+        messages: sweptMessages,
         activeStreams: new Map(),
         workflow: { state: "idle" },
-        spawnIndex: new Map(),
+        spawnIndex: new Set(),
         streamState: "idle",
         pendingTimerAction: undefined,
         // #5370 — turn teardown (session_ended / socket remount / abort
         // completion) clears the transient live narration line.
         liveNarration: null,
+        liveNarrationStartedAt: null,
       };
+    }
     case "enter_stopping":
       // #3448 PR2: idempotent under double-click — only "streaming" → "stopping".
       // "idle" / "stopping" are no-ops. Send-of-`abort_turn` is performed
@@ -426,7 +501,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // #5370 — user Stop tears down the live narration line (the turn is
       // ending; the line must never persist as a finished record).
       return state.streamState === "streaming"
-        ? { ...state, streamState: "stopping", liveNarration: null }
+        ? {
+            ...state,
+            // #9515 — Stop leaves transitional bubbles honest: `stopped`
+            // (non-rebindable `interrupted`), trail folded — frames racing in
+            // behind the abort (the cc path's abort_turn is a no-op) spawn a
+            // FRESH box instead of resurrecting a contradictory
+            // Working+Interrupted one (review seats' convergent P1). The map
+            // clears too, or idx-resolved frames would re-enter a transitional
+            // state while the stale flag still showed "Interrupted".
+            messages: foldNarrationIntoTrail(
+              sweepTransitional(state.messages, { stopped: true }),
+              state.activeStreams,
+              state.liveNarration,
+              state.liveNarrationStartedAt,
+            ).messages,
+            activeStreams: new Map(),
+            streamState: "stopping",
+            liveNarration: null,
+            liveNarrationStartedAt: null,
+          }
         : state;
     case "connection_change": {
       // #5282 — sticky guard (AC11): once `unrecoverable`, the in-flight
@@ -441,13 +535,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       // Latest-wins (AC4): the slice holds exactly one phase, so rapid
       // disconnect→reconnect→disconnect can never stack banners.
+      const messages =
+        action.phase === "live"
+          ? state.messages
+          : foldNarrationIntoTrail(
+              state.messages,
+              state.activeStreams,
+              state.liveNarration,
+              state.liveNarrationStartedAt,
+            ).messages;
       return {
         ...state,
+        messages,
         connection: { phase: action.phase, resumedAt: action.resumedAt },
         // #5370 — a non-live transition (disconnect/reconnecting/unrecoverable)
         // tears down the stale live narration line; the live-only frame does
         // not replay, so a stale line would otherwise hang on reconnect.
+        // #9515 — its text folds into the trail instead of vanishing.
         liveNarration: action.phase === "live" ? state.liveNarration : null,
+        liveNarrationStartedAt:
+          action.phase === "live" ? state.liveNarrationStartedAt : null,
       };
     }
     case "reset_connection":
@@ -532,12 +639,13 @@ export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
-    activeStreams: new Map<DomainLeaderId, number>(),
+    activeStreams: new Map<DomainLeaderId, string>(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
     streamState: "idle",
     connection: { phase: "live" },
     liveNarration: null,
+    liveNarrationStartedAt: null,
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
@@ -828,21 +936,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
       }
 
-      // FR4 (#2861): boundary guard. Drop any event whose type isn't in the
-      // known allowlist, and breadcrumb it so server/client skew is visible.
-      // Stage 3 (#2885) added a Zod schema as the strict gate; the
-      // `isKnownWSMessageType` allowlist stays as a cheap fast-path so a
-      // single bad-`type` frame doesn't pay for full schema validation.
+      // FR4 (#2861) / #9515: `parseWSMessage`'s discriminated union is the
+      // sole admission authority — the deleted `isKnownWSMessageType`
+      // allowlist was a strict subset of this check (and its hand-maintained
+      // literal had drifted 11 union members stale behind a vacuous
+      // exhaustiveness proof, silently dropping live frames). A parse
+      // failure splits into two ops for observability:
+      //   discriminator-miss (`type` matched NO schema variant — genuine
+      //     server/client version skew) → `ws-unknown-event`;
+      //   shape-miss (type admitted, payload invalid) → `ws-zod-parse-failure`.
+      // `wsMessageTypeLiterals` is derived from the schema itself — one
+      // source of truth, no second literal to drift.
       const rawType = (parsed as { type?: unknown } | null)?.type;
-      if (!isKnownWSMessageType(rawType)) {
-        reportSilentFallback(null, {
-          feature: "command-center",
-          op: "ws-unknown-event",
-          extra: { rawType: typeof rawType === "string" ? rawType : String(rawType) },
-        });
-        return;
-      }
-
       const parseResult = parseWSMessage(parsed);
       if (!parseResult.ok) {
         // Strip per-issue `input` values from the Zod error before
@@ -857,7 +962,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }));
         reportSilentFallback(null, {
           feature: "command-center",
-          op: "ws-zod-parse-failure",
+          op:
+            typeof rawType === "string" &&
+            wsMessageTypeLiterals().has(rawType)
+              ? "ws-zod-parse-failure"
+              : "ws-unknown-event",
           extra: {
             rawType: typeof rawType === "string" ? rawType : String(rawType),
             issues: sanitizedIssues,
@@ -1355,6 +1464,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // connection_change-non-live) + the turn-ending stream_event. This
           // frame is live-only (no seq), so it bypassed the replay-dedup gate
           // above and never replays on reconnect.
+          // #9515 — sendToClient is user-scoped (all the user's sockets), so a
+          // conversation-scoped frame guards against landing in ANOTHER tab's
+          // conversation and persisting in its trail (security seat).
+          if (
+            msg.conversationId !== undefined &&
+            msg.conversationId !== realConversationIdRef.current
+          ) {
+            break;
+          }
           dispatch({ type: "set_live_narration", message: msg.message });
           break;
         }
@@ -1592,7 +1710,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // completion checkmark only appears on messages that completed via a
       // WS stream event in the current session. renderBubbleContent handles
       // undefined state via its default branch (MarkdownRenderer), which is
-      // functionally identical to case "done" for messages without toolsUsed.
+      // functionally identical to case "done" for messages without an activity trail.
       // See #2218 (checkmark on historical bubbles) and #2139 (original fix).
       attachments: (m.message_attachments ?? []).map((a) => ({
         id: a.id,
@@ -1977,6 +2095,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     historyLoading,
     streamState: chatState.streamState,
     liveNarration: chatState.liveNarration,
+    liveNarrationStartedAt: chatState.liveNarrationStartedAt,
     abort,
     connection: chatState.connection,
     resumeAfterUnrecoverable,
