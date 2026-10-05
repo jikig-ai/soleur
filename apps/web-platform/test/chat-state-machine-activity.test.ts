@@ -457,3 +457,85 @@ describe("idx-path interrupted strip (review F2 belt)", () => {
     expect((r.messages[0] as any).interrupted).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reasoning accumulation — a `stream` event REPLACES the bubble content per
+// text block (W8). When the new content is NOT a continuation of the old, the
+// prior block's first line folds into the trail so reasoning ADDS UP instead
+// of being silently overwritten (the debug stream was append-only; the box
+// was replace-only). Operator report 2026-10-05.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("reasoning blocks fold into the trail on replace", () => {
+  test("a new (non-prefix) text block folds the old first line into activity", () => {
+    const prev = [
+      liveBubble(CC, {
+        state: "streaming",
+        content: "Workspace is ready. Routing to one-shot…",
+      }),
+    ];
+    const r = applyStreamEvent(prev, streams([[CC, "stream-cc_router-1"]]), {
+      type: "stream",
+      leaderId: CC,
+      content: "Checking the two surfaces now.",
+      partial: true,
+    } as any);
+    const m = r.messages[0] as any;
+    expect(m.content).toBe("Checking the two surfaces now.");
+    expect(
+      m.activity?.some(
+        (e: any) =>
+          e.kind === "narration" &&
+          e.label === "Workspace is ready. Routing to one-shot…",
+      ),
+    ).toBe(true);
+  });
+
+  test("a cumulative partial (prefix) does NOT fold — still the same block", () => {
+    const prev = [
+      liveBubble(CC, { state: "streaming", content: "Workspace is ready" }),
+    ];
+    const r = applyStreamEvent(prev, streams([[CC, "stream-cc_router-1"]]), {
+      type: "stream",
+      leaderId: CC,
+      content: "Workspace is ready. Routing to one-shot…",
+      partial: true,
+    } as any);
+    const m = r.messages[0] as any;
+    expect(m.content).toContain("Routing to one-shot");
+    expect(m.activity?.some((e: any) => e.kind === "narration")).toBeFalsy();
+  });
+
+  test("multi-line blocks fold only the first non-empty line", () => {
+    const prev = [
+      liveBubble(CC, {
+        state: "streaming",
+        content: "\n\nTriaged the open PRs and changed nothing.\nDetails follow…",
+      }),
+    ];
+    const r = applyStreamEvent(prev, streams([[CC, "stream-cc_router-1"]]), {
+      type: "stream",
+      leaderId: CC,
+      content: "New block",
+      partial: true,
+    } as any);
+    const m = r.messages[0] as any;
+    expect(m.activity?.[m.activity.length - 1]?.label).toBe(
+      "Triaged the open PRs and changed nothing.",
+    );
+  });
+
+  test("empty prior content folds nothing", () => {
+    const prev = [liveBubble(CC, { state: "streaming", content: "" })];
+    const r = applyStreamEvent(prev, streams([[CC, "stream-cc_router-1"]]), {
+      type: "stream",
+      leaderId: CC,
+      content: "First real block",
+      partial: true,
+    } as any);
+    // The fixture's toolLabel still folds (tool kind) — only the empty TEXT
+    // block must produce nothing.
+    const acts = (r.messages[0] as any).activity ?? [];
+    expect(acts.filter((e: any) => e.kind === "narration")).toHaveLength(0);
+  });
+});

@@ -374,6 +374,34 @@ export function pushActivity(
  * the user barrier: it can never attach to a LATER turn's record).
  * Returns `{messages, folded}` — `folded:false` when nothing could hold it.
  */
+/**
+ * #9515 follow-up — a `stream` event REPLACES the bubble's content per text
+ * block (W8); intermediate "reasoning" paragraphs were silently overwritten
+ * while the append-only debug stream kept them. When the incoming content is
+ * NOT a continuation of the current content (a new block, not a growing
+ * partial — cumulative partials share the prefix), the previous block's first
+ * line folds into the trail so the box shows the reasoning SEQUENCE.
+ * The text is the user-visible assistant content — already at the emit
+ * boundary — so no new exposure; label is bounded to one line / 160 chars.
+ */
+function foldReplacedText(
+  prevContent: string,
+  nextContent: string,
+  activity: ActivityEntry[] | undefined,
+): ActivityEntry[] | undefined {
+  if (!prevContent || nextContent.startsWith(prevContent)) return activity;
+  const firstLine = prevContent
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!firstLine) return activity;
+  return pushActivity(activity, {
+    label: firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine,
+    kind: "narration",
+    startedAt: Date.now(),
+  });
+}
+
 export function foldNarrationIntoTrail(
   messages: ChatMessage[],
   activeStreams: Map<DomainLeaderId, string>,
@@ -1173,9 +1201,15 @@ export function applyStreamEvent(
         // guard at the boundary so a future regression surfaces here, not as
         // a corrupted bubble shape.
         if (target.type === "text") {
+          const folded = foldCurrentStep(target, prunedChips);
           updated[idx] = {
             ...target,
-            ...foldCurrentStep(target, prunedChips),
+            ...folded,
+            activity: foldReplacedText(
+              target.content,
+              event.content,
+              folded.activity,
+            ),
             content: event.content,
             state: "streaming",
             interrupted: false,
@@ -1193,6 +1227,7 @@ export function applyStreamEvent(
       const intIdx = findInterruptedBubble(working, event.leaderId);
       if (intIdx !== undefined) {
         const current = working[intIdx];
+        const folded = foldCurrentStep(current, prunedChips);
         const rebound = rebindInterruptedBubble(
           working,
           activeStreams,
@@ -1201,7 +1236,12 @@ export function applyStreamEvent(
           {
             state: "streaming",
             content: event.content,
-            ...foldCurrentStep(current, prunedChips),
+            ...folded,
+            activity: foldReplacedText(
+              current.content,
+              event.content,
+              folded.activity,
+            ),
           },
         );
         return {
@@ -1224,6 +1264,11 @@ export function applyStreamEvent(
             state: "streaming",
             content: event.content,
             toolLabel: undefined,
+            activity: foldReplacedText(
+              working[errIdx].content,
+              event.content,
+              undefined,
+            ),
           },
         );
         return {
