@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useReducer, useMemo, useRef, useCallback } from "react";
+import { useSWRConfig } from "swr";
+import { swrKeys } from "@/lib/swr-config";
 import { createClient } from "@/lib/supabase/client";
 import {
   WS_CLOSE_CODES,
@@ -637,6 +639,10 @@ export const TIER_CHANGED_RECONNECT_DELAY_MS = 500;
 export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
+  // Unbound mutate — revalidates the shared `/api/inbox` SWR entry so the
+  // inbox surface + nav badge reconcile when a task_completed card marks its
+  // row read on render (ADR-067 shared-key contract). Hook-level call.
+  const { mutate: globalMutate } = useSWRConfig();
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
     activeStreams: new Map<DomainLeaderId, string>(),
@@ -1483,6 +1489,32 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // table on reload. Route through the message reducer to append a
           // ChatTurnSummaryMessage to the main list.
           dispatch({ type: "stream_event", msg });
+          break;
+        }
+        case "task_completed": {
+          // feat-session-completion-inline — the inline completion card.
+          // Buffered (carries seq → replay-dedup gated above). sendToClient is
+          // user-scoped, so drop a frame bound to another conversation's
+          // surface (the #9515 reasoning_narration guard class — required
+          // field here, not optional).
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          dispatch({ type: "stream_event", msg });
+          // Render-anchored "seen": the server inserted the inbox_item row
+          // unread; mark it read now that the card rendered, then revalidate
+          // the shared inbox key so list + nav badge reconcile (ADR-067).
+          // Fire-and-forget — a failed mark leaves an honest unread row,
+          // never a silent loss.
+          void fetch(`/api/inbox/${msg.inboxItemId}/state`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "read" }),
+          })
+            .then((res) => {
+              if (res.ok) void globalMutate(swrKeys.inbox("active"));
+            })
+            .catch(() => {
+              // Failed read-mark → row stays unread; badge surfaces it.
+            });
           break;
         }
         default: {

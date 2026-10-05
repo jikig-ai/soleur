@@ -4043,6 +4043,10 @@ export async function dispatchSoleurGo(
           conversationId,
           workspaceId: path.basename(workspacePath),
           title: "Soleur finished your request",
+          // feat-session-completion-inline — emits the inline card frame;
+          // sendToClient injects so notifications.ts never imports the
+          // ws-handler graph (cycle).
+          emit: sendToClient,
         });
       }
       // Per-turn boundary → terminal stream event for the cc_router bubble.

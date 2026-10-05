@@ -2908,7 +2908,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // server→client only (emitted from cc-dispatcher onToolResult).
     case "reasoning_narration":
     case "turn_summary":
-    // feat-stream-since-disconnect (#5273) — server→client only.
+    case "task_completed":
+    // feat-stream-since-disconnect (#5273) — server→client only (likewise
+    // task_completed — feat-session-completion-inline, emitted from the shared
+    // notifyTaskCompleted seam).
     case "stream_replay": {
       sendToClient(userId, {
         type: "error",

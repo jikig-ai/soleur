@@ -34,6 +34,7 @@ import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { TurnSummaryBubble } from "@/components/chat/turn-summary-bubble";
+import { TaskCompletedCard } from "@/components/chat/task-completed-card";
 import { ActivityTrail } from "@/components/chat/activity-trail";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
@@ -1163,6 +1164,12 @@ export function ChatSurface({
                   // box, rendered INLINE in the main conversation (plain-text;
                   // never MarkdownRenderer — see TurnSummaryBubble security note).
                   body = <TurnSummaryBubble content={msg.content} />;
+                  break;
+                case "task_completed":
+                  // feat-session-completion-inline — the inline completion
+                  // card (plain-text title; the inbox_item row stays the
+                  // durable record and was already marked read on render).
+                  body = <TaskCompletedCard title={msg.content} />;
                   break;
                 default: {
                   const _exhaustive: never = msg;

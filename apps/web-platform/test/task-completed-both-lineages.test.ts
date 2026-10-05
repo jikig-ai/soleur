@@ -31,4 +31,19 @@ describe("task_completed producer covers both agent-run lineages", () => {
       /export async function notifyTaskCompleted/,
     );
   });
+
+  // feat-session-completion-inline — the seam emits the inline card frame via
+  // an INJECTED `emit:` (ws-handler sendToClient); a call site that drops the
+  // param silently loses the inline card while push/email still fires.
+  it("both lineages pass emit: sendToClient into the seam", () => {
+    for (const f of ["agent-runner.ts", "cc-dispatcher.ts"]) {
+      expect(read(f)).toMatch(/notifyTaskCompleted\(\{[\s\S]*?emit:\s*sendToClient/);
+    }
+    // And the seam reads the viewing predicate from the leaf registry —
+    // notifications.ts must NOT import the ws-handler graph (import cycle).
+    expect(read("notifications.ts")).toMatch(/isConversationViewed/);
+    expect(read("notifications.ts")).not.toMatch(
+      /from\s+["']\.\/ws-handler["']/,
+    );
+  });
 });
