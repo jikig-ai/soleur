@@ -29,7 +29,20 @@ pass() { passes=$((passes + 1)); }
 fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+SRV_PID=""
+SUITE_DONE=0
+# The EXIT trap is also the completion check: the tally floor at the END of this file cannot see an `exit 0`
+# placed before it (a mid-file exit skips the very tail that holds the floor). SUITE_DONE is set only at the tally.
+cleanup() {
+  local rc=$?
+  [[ -n "$SRV_PID" ]] && kill "$SRV_PID" 2>/dev/null
+  rm -rf "$TMP"
+  if [[ "$SUITE_DONE" -ne 1 ]]; then
+    echo "stock-preflight-gate: FAIL — the suite exited before reaching its final tally (rc=${rc}): truncation or early exit." >&2
+    exit 1
+  fi
+}
+trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # Synthesized API fixtures.
@@ -38,56 +51,80 @@ trap 'rm -rf "$TMP"' EXIT
 # fixture to a real id invites someone to "verify" it against live state, which is
 # exactly the coupling this suite exists to avoid.
 #
-# Shape mirrors the real API: /datacenters exposes BOTH .available (orderable now)
-# and .supported (what the DC can host). The two DIVERGE in these fixtures on
-# purpose — 9001 is `supported` everywhere but `available` nowhere in EU. A gate
-# that read .supported would pass T2/T3 and ship the live trap; these fixtures make
-# that mistake fail loudly.
+# Shape mirrors the real API AFTER Hetzner removed GET /datacenters (changelog 2026-06-02): every
+# server type carries locations[] = [{id,name,available,recommended,deprecation}]. PRESENCE of an entry
+# means the type is supported in that location; `available` is the indicator that it is orderable right
+# now (Hetzner's own wording: an indicator, not a guarantee). The fixtures keep the two apart on purpose:
+# alpha33 has an entry in every EU location with available:false (supported everywhere, orderable
+# nowhere), so a gate that treated PRESENCE as availability would pass T2/T3 and ship the live trap.
 # ---------------------------------------------------------------------------
-SUPPORTED_ALL='[9001,9002,9003,9004]'
+loc_entry() { # <name> <available-json> [deprecation-json]
+  printf '{"id":1,"name":"%s","available":%s,"recommended":false,"deprecation":%s}' "$1" "$2" "${3:-null}"
+}
+type_doc() { # <id> <name> <locations-json-array>
+  printf '{"id":%s,"name":"%s","locations":%s}' "$1" "$2" "$3"
+}
+DEPR='{"announced":"2099-01-01T00:00:00+00:00","unavailable_after":"2099-06-01T00:00:00+00:00"}'
+
+# alpha33 (9001): an entry everywhere, available NOWHERE       -> the cx33/#6463 shape
+# beta22  (9002): available in eu-b (non-null deprecation) + eu-c + far   -> the orderable shape
+# arm11   (9003): an entry everywhere, available nowhere at all -> the cax11 shape
+# sing44  (9004): available ONLY in the non-EU location         -> residency-filter probe
+# partial55 (9005): lists ONLY eu-c                             -> unknown-location probe
+LOCS_ALPHA33="[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c false),$(loc_entry far false)]"
+LOCS_BETA22="[$(loc_entry eu-a false),$(loc_entry eu-b true "$DEPR"),$(loc_entry eu-c true),$(loc_entry far true)]"
+LOCS_ARM11="[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c false),$(loc_entry far false)]"
+LOCS_SING44="[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c false),$(loc_entry far true)]"
+LOCS_PARTIAL55="[$(loc_entry eu-c true)]"
+LOCS_OTHER="[$(loc_entry eu-a true),$(loc_entry eu-b true),$(loc_entry eu-c true),$(loc_entry far true)]"
 
 fixture_types() {
+  local doc
   case "$1" in
-    alpha33) echo '{"server_types":[{"id":9001,"name":"alpha33"}]}' ;;
-    beta22)  echo '{"server_types":[{"id":9002,"name":"beta22"}]}' ;;
-    arm11)   echo '{"server_types":[{"id":9003,"name":"arm11"}]}' ;;
-    sing44)  echo '{"server_types":[{"id":9004,"name":"sing44"}]}' ;;
-    *)       echo '{"server_types":[]}' ;;   # unknown type
+    alpha33)   doc=$(type_doc 9001 alpha33 "$LOCS_ALPHA33") ;;
+    beta22)    doc=$(type_doc 9002 beta22 "$LOCS_BETA22") ;;
+    arm11)     doc=$(type_doc 9003 arm11 "$LOCS_ARM11") ;;
+    sing44)    doc=$(type_doc 9004 sing44 "$LOCS_SING44") ;;
+    partial55) doc=$(type_doc 9005 partial55 "$LOCS_PARTIAL55") ;;
+    *)         echo '{"server_types":[],"meta":{"pagination":{"page":1}}}'; return 0 ;;   # unknown type
   esac
-}
-
-# alpha33 (9001): supported in EU, available NOWHERE      -> the cx33/#6463 shape
-# beta22  (9002): available in eu-b + eu-c                -> the orderable shape
-# arm11   (9003): supported, available nowhere at all     -> the cax11 shape
-# sing44  (9004): available ONLY in the non-EU DC         -> residency-filter probe
-fixture_dcs() {
-  cat <<JSON
-{"datacenters":[
-  {"name":"eu-a-dc1","location":{"name":"eu-a"},"server_types":{"available":[],           "supported":$SUPPORTED_ALL}},
-  {"name":"eu-b-dc1","location":{"name":"eu-b"},"server_types":{"available":[9002],       "supported":$SUPPORTED_ALL}},
-  {"name":"eu-c-dc1","location":{"name":"eu-c"},"server_types":{"available":[9002],       "supported":$SUPPORTED_ALL}},
-  {"name":"far-dc1", "location":{"name":"far"}, "server_types":{"available":[9002,9004],  "supported":$SUPPORTED_ALL}}
-]}
-JSON
+  printf '{"server_types":[%s],"meta":{"pagination":{"page":1}}}' "$doc"
 }
 
 # The EU allow-set for this suite's synthetic topology.
 STOCK_PREFLIGHT_EU_LOCATIONS="eu-a eu-b eu-c"
 
-# Fetch seam override. FETCH_MODE steers failure injection.
+# Fetch seam override. FETCH_MODE steers failure injection. TRIPWIRE: every requested path is
+# appended to $CALLS_LOG (a FILE — a counter would not survive the $(...) subshells the lib calls the
+# seam from). Hetzner removed GET /datacenters (HTTP 410): the seam serves that synthesized 410 body
+# for it, so a gate that still depends on /datacenters can neither pass nor go unnoticed (T1b).
 FETCH_MODE="ok"
+BODY_FILE="$TMP/body.json"
+CALLS_LOG="$TMP/calls.log"
+: > "$CALLS_LOG"
+BODY_410='{"error":{"code":"deprecated_api_endpoint","message":"API functionality was removed","details":{"announcement":"https://docs.hetzner.cloud/changelog#2026-06-02-datacenters-deprecated"}}}'
 _stock_fetch() {
   local path="$1"
+  printf '%s\n' "$path" >> "$CALLS_LOG"
   case "$FETCH_MODE" in
-    fail_all)   return 1 ;;
-    fail_dcs)   [[ "$path" == /datacenters* ]] && return 1 ;;
-    garbage)    echo '{"unexpected":"shape"}'; return 0 ;;
+    fail_all)  return 1 ;;
+    garbage)   echo '{"unexpected":"shape"}'; return 0 ;;
+    body)      cat "$BODY_FILE"; return 0 ;;
+    body_rc22) cat "$BODY_FILE"; return 22 ;;
   esac
   case "$path" in
     /server_types?name=*) fixture_types "${path#/server_types?name=}" ;;
-    /datacenters*)        fixture_dcs ;;
+    /datacenters*)        printf '%s' "$BODY_410"; return 0 ;;
     *)                    return 1 ;;
   esac
+}
+
+# run_body <body> <type> <loc> — serve <body> verbatim for /server_types, set out/rc in THIS shell.
+run_body() {
+  printf '%s' "$1" > "$BODY_FILE"
+  FETCH_MODE=body
+  out=$(stock_preflight "$2" "$3" 2>&1); rc=$?
+  FETCH_MODE=ok
 }
 
 # plan_with <addr> <actions-json> <type> <loc> [extra-resources-json-array]
@@ -111,7 +148,11 @@ plan_with() {
 # T1 — orderable => rc 0
 # ---------------------------------------------------------------------------
 FETCH_MODE=ok
+: > "$CALLS_LOG"
 if stock_preflight beta22 eu-b >/dev/null 2>&1; then pass; else fail "T1: beta22@eu-b is available; expected rc=0"; fi
+# T1b — ONE fetch, and it is /server_types. /datacenters is gone (HTTP 410); a gate that still asks for it is dead.
+calls=$(cat "$CALLS_LOG")
+[[ "$calls" == "/server_types?name=beta22" ]] && pass || fail "T1b: the gate must make exactly one request, /server_types?name=beta22; got: ${calls}"
 
 # ---------------------------------------------------------------------------
 # T2 — NOT orderable here, orderable elsewhere in EU => rc 1 + the remediation menu.
@@ -146,7 +187,7 @@ grep -q "orderable in EU: <none>" <<<"$out" && pass || fail "T3: with no EU stoc
 
 # ---------------------------------------------------------------------------
 # T4 — RESIDENCY: available only in a non-EU DC. Must NOT be suggested.
-# /v1/datacenters really does return ash/hil/sin; an unfiltered "orderable elsewhere"
+# /server_types locations[] really does include ash/hil/sin; an unfiltered "orderable elsewhere"
 # would advise putting a prod host outside the EU (variables.tf:94-96, CLO T-1).
 # ---------------------------------------------------------------------------
 FETCH_MODE=ok
@@ -170,6 +211,11 @@ FETCH_MODE=ok
 out=$(stock_preflight beta22 atlantis 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T6: expected rc=1 for an unknown location, got $rc"
 grep -q "unknown location" <<<"$out" && pass || fail "T6: abort must name the unknown location"
+# partial55 lists ONLY eu-c: eu-b is a location the type is not offered in => unknown location, never a stock miss.
+out=$(stock_preflight partial55 eu-b 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T6: partial55@eu-b must abort, got $rc"
+grep -q "unknown location" <<<"$out" && pass || fail "T6: a location absent from locations[] must say unknown location"
+grep -q "NOT orderable" <<<"$out" && fail "T6: an unknown location must not masquerade as a stock miss" || pass
 
 # ---------------------------------------------------------------------------
 # T7 — API failure => rc 1 with a DISTINCT message. An unreachable API is not
@@ -182,10 +228,15 @@ out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
 grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7: API-blip abort must be DISTINCT from the stock-miss abort"
 grep -q "NOT orderable" <<<"$out" && fail "T7: API blip must not masquerade as a real shortage" || pass
 
-FETCH_MODE=fail_dcs
+# T7b — a non-2xx fetch (curl --fail-with-body exits 22 and still prints the body): rc 1, blip, and the
+# reason carries the curl exit so an operator can tell a changed API contract from a flaky network.
+printf '%s' "$BODY_410" > "$BODY_FILE"
+FETCH_MODE=body_rc22
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
-[[ "$rc" -eq 1 ]] && pass || fail "T7b: expected rc=1 when /datacenters fails, got $rc"
-grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7b: /datacenters failure must fail closed with the blip message"
+[[ "$rc" -eq 1 ]] && pass || fail "T7b: expected rc=1 when /server_types answers non-2xx, got $rc"
+grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7b: a non-2xx answer must fail closed with the blip message"
+grep -q "curl exit 22" <<<"$out" && pass || fail "T7b: the blip must carry the curl exit status. out=$out"
+grep -q "NOT orderable" <<<"$out" && fail "T7b: an API error must not masquerade as a real shortage" || pass
 
 FETCH_MODE=garbage
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
@@ -340,14 +391,200 @@ out=$(stock_preflight_gate "$p" 2>&1); rc=$?
 grep -q "NOT orderable in 'eu-a'" <<<"$out" && pass || fail "T13b: must fire the stock-miss abort. out=$out"
 
 # ---------------------------------------------------------------------------
-# T14 — NON-VACUITY: prove the suite reads .available and not .supported.
-# Every type is `supported` everywhere in the fixtures. If the gate were rewritten
-# against .supported, T2/T3/T4 would all pass. Assert the divergence exists so this
-# suite cannot silently become a .supported test.
+# T14 — NON-VACUITY: prove the suite reads .available and not mere PRESENCE. alpha33 has an
+# entry in every location and zero available:true. If the gate treated presence as availability,
+# T2/T3/T4 would all pass; assert the divergence exists so this suite cannot silently become a
+# presence test.
 # ---------------------------------------------------------------------------
-sup=$(fixture_dcs | jq -r '[.datacenters[] | select(.name=="eu-a-dc1") | .server_types.supported[]] | length')
-avl=$(fixture_dcs | jq -r '[.datacenters[] | select(.name=="eu-a-dc1") | .server_types.available[]] | length')
-[[ "$sup" -gt 0 && "$avl" -eq 0 ]] && pass || fail "T14: fixture must keep supported!=available (supported=$sup available=$avl) or the suite cannot catch a .supported regression"
+present=$(fixture_types alpha33 | jq -r '[.server_types[0].locations[]] | length')
+avail=$(fixture_types alpha33 | jq -r '[.server_types[0].locations[] | select(.available == true)] | length')
+[[ "$present" -gt 0 && "$avail" -eq 0 ]] && pass || fail "T14: fixture must keep present!=available (present=$present available=$avail) or the suite cannot catch a presence regression"
+
+# ---------------------------------------------------------------------------
+# NEW-SHAPE CASES (this PR). Malformed bodies are built with jq -n / jq, never heredoc interpolation.
+# ---------------------------------------------------------------------------
+BASE=$(fixture_types beta22)
+
+# T7d — malformed-body table: every body must fail CLOSED with the blip message, never as a stock miss.
+for body in '' '<html><body>502 Bad Gateway</body></html>' '[]' 'null' '"x"' '{}' \
+            '{"server_types":null}' '{"server_types":{}}' '{"server_types":["x"]}'; do
+  run_body "$body" beta22 eu-b
+  [[ "$rc" -eq 1 ]] && pass || fail "T7d: body [$body] must abort, got rc=$rc"
+  grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7d: body [$body] must produce the blip message. out=$out"
+  grep -q "NOT orderable" <<<"$out" && fail "T7d: body [$body] must not read as a stock miss" || pass
+done
+
+# T7f — a 200 body that carries a VALID orderable doc AND an error key, and the bare 410 body at /server_types.
+run_body "$(jq -c '. + {error: {code: "x"}}' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T7f: an error key beside a valid doc must abort, got $rc"
+grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7f: an error key must produce the blip message. out=$out"
+run_body "$BODY_410" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T7f: the bare 410 body at /server_types must abort, got $rc"
+grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7f: the 410 body must produce the blip message. out=$out"
+
+# T7i / T7j — trailing junk after a valid orderable doc, and two JSON documents. jq prints the verdict of the
+# first document and then exits 5; the verdict must be captured with `|| verdict=""` so this can never authorize.
+run_body "${BASE}garbage" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T7i: trailing junk after a valid doc must abort, got $rc"
+run_body "${BASE}${BASE}" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T7j: two JSON documents must abort, got $rc"
+
+# T15 — locations absent / null / object => MALFORMED:locations (blip); [] => unknown location.
+for v in absent null object; do
+  case "$v" in
+    absent) body=$(jq -c '.server_types[0] |= del(.locations)' <<<"$BASE") ;;
+    null)   body=$(jq -c '.server_types[0].locations = null' <<<"$BASE") ;;
+    object) body=$(jq -c '.server_types[0].locations = {}' <<<"$BASE") ;;
+  esac
+  run_body "$body" beta22 eu-b
+  [[ "$rc" -eq 1 ]] && pass || fail "T15: locations $v must abort, got $rc"
+  grep -q "MALFORMED:locations" <<<"$out" && pass || fail "T15: locations $v must report MALFORMED:locations. out=$out"
+done
+run_body "$(jq -c '.server_types[0].locations = []' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T15: an empty locations array must abort, got $rc"
+grep -q "unknown location" <<<"$out" && pass || fail "T15: an empty locations array must say unknown location. out=$out"
+
+# T16 — `available` must be the boolean true: "true", 1, null, absent are MALFORMED:available (never orderable,
+# never a stock miss); a real false at eu-a is a stock miss.
+for v in str num null absent; do
+  case "$v" in
+    str)    body=$(jq -c '(.server_types[0].locations[] | select(.name == "eu-b") | .available) = "true"' <<<"$BASE") ;;
+    num)    body=$(jq -c '(.server_types[0].locations[] | select(.name == "eu-b") | .available) = 1' <<<"$BASE") ;;
+    null)   body=$(jq -c '(.server_types[0].locations[] | select(.name == "eu-b") | .available) = null' <<<"$BASE") ;;
+    absent) body=$(jq -c '.server_types[0].locations |= map(if .name == "eu-b" then del(.available) else . end)' <<<"$BASE") ;;
+  esac
+  run_body "$body" beta22 eu-b
+  [[ "$rc" -eq 1 ]] && pass || fail "T16: available=$v must abort, got $rc"
+  grep -q "MALFORMED:available" <<<"$out" && pass || fail "T16: available=$v must report MALFORMED:available. out=$out"
+  grep -q "NOT orderable" <<<"$out" && fail "T16: available=$v must not read as a stock miss" || pass
+done
+out=$(stock_preflight beta22 eu-a 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T16: a real available:false must abort, got $rc"
+grep -q "NOT orderable in 'eu-a'" <<<"$out" && pass || fail "T16: a real false must be a stock miss. out=$out"
+
+# T17 — duplicates and junk: a duplicate type, duplicate location entries in BOTH orders, a junk member.
+run_body "$(jq -c '.server_types += [.server_types[0]]' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T17: a duplicate type must abort, got $rc"
+run_body "$(jq -c --argjson e "$(loc_entry eu-b false)" '.server_types[0].locations += [$e]' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T17: duplicate location entries (true,false) must abort, got $rc"
+run_body "$(jq -c --argjson e "$(loc_entry eu-b false)" '.server_types[0].locations = [$e] + .server_types[0].locations' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T17: duplicate location entries (false,true) must abort, got $rc"
+run_body "$(jq -c '.server_types[0].locations += ["x"]' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T17: a junk member in locations must abort, got $rc"
+
+# T18 — selection by NAME, never by position. If `?name=` were ignored the list would hold other types.
+OTHER=$(type_doc 9100 other "$LOCS_OTHER")
+ALPHA=$(type_doc 9001 alpha33 "$LOCS_ALPHA33")
+BETA=$(type_doc 9002 beta22 "$LOCS_BETA22")
+run_body "{\"server_types\":[$OTHER,$ALPHA]}" alpha33 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T18a: [other(true everywhere), wanted(false)] must abort on the WANTED type, got $rc"
+grep -q "NOT orderable in 'eu-b'" <<<"$out" && pass || fail "T18a: must be a stock miss for the wanted type. out=$out"
+run_body "{\"server_types\":[$OTHER,$BETA]}" beta22 eu-b
+[[ "$rc" -eq 0 ]] && pass || fail "T18b: [other, wanted(true)] must pass on the WANTED type, got $rc"
+run_body "{\"server_types\":[$OTHER]}" beta22 eu-b
+[[ "$rc" -eq 1 ]] && pass || fail "T18c: a non-empty list without the wanted type must abort, got $rc"
+grep -q "MALFORMED:filter-ignored" <<<"$out" && pass || fail "T18c: must report filter-ignored, never authorize or call it a typo. out=$out"
+
+# T19 — alternatives strictness: only the boolean true is suggested, and only inside the EU allow-set.
+ALT_STR=$(type_doc 9200 alt66 "[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c '"true"'),$(loc_entry far true)]")
+ALT_NUM=$(type_doc 9200 alt66 "[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c 1),$(loc_entry far true)]")
+ALT_OK=$(type_doc 9200 alt66 "[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c true),$(loc_entry far true)]")
+run_body "{\"server_types\":[$ALT_STR]}" alt66 eu-b
+grep -q "orderable in EU: <none>" <<<"$out" && pass || fail "T19: a string \"true\" must not be suggested. out=$out"
+run_body "{\"server_types\":[$ALT_NUM]}" alt66 eu-b
+grep -q "orderable in EU: <none>" <<<"$out" && pass || fail "T19: the number 1 must not be suggested. out=$out"
+run_body "{\"server_types\":[$ALT_OK]}" alt66 eu-b
+grep -q "orderable in EU: eu-c)" <<<"$out" && pass || fail "T19: the exact payload must be eu-c (never far). out=$out"
+
+ALT_TWO=$(type_doc 9200 alt66 "[$(loc_entry eu-a false),$(loc_entry eu-b true),$(loc_entry eu-c true),$(loc_entry far true)]")
+run_body "{\"server_types\":[$ALT_TWO]}" alt66 eu-a
+grep -q "orderable in EU: eu-b eu-c)" <<<"$out" && pass || fail "T19d: two EU locations available and one non-EU must list exactly eu-b eu-c. out=$out"
+[[ "$rc" -eq 1 ]] && pass || fail "T19d: the stock miss at eu-a must still abort, got $rc"
+
+# MUST-PASS — harmless variations of a good document are still authorized (a gate that rejects everything is
+# today's failure, not safety): extra fields, reversed key order, a null sibling, a non-null deprecation.
+run_body "$(jq -c '.server_types[0].extra = {"a": [1, 2]} | .meta = null' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 0 ]] && pass || fail "MUST-PASS: extra fields and a null sibling must still pass, got $rc. out=$out"
+run_body "$(jq -c '.server_types[0].locations |= map(to_entries | reverse | from_entries)' <<<"$BASE")" beta22 eu-b
+[[ "$rc" -eq 0 ]] && pass || fail "MUST-PASS: reversed key order must still pass, got $rc. out=$out"
+[[ "$(jq -r '.server_types[0].locations[] | select(.name == "eu-b") | .deprecation | type' <<<"$BASE")" == "object" ]] \
+  && pass || fail "MUST-PASS: the canonical orderable fixture must carry a non-null deprecation at eu-b"
+
+# ---------------------------------------------------------------------------
+# T20 — WIRE LEVEL: the real _stock_fetch against a loopback HTTP server (python3 stdlib). The seam-level cases
+# above cannot observe an HTTP status, the Authorization header, or --fail-with-body; this is the only case that can.
+# The lib is re-sourced in a SUBSHELL so the real _stock_fetch replaces the seam there; HCLOUD_API/HCLOUD_TOKEN are
+# set BEFORE the source (the lib reads them at source time). Named failure, never a skip, if it cannot run.
+# Non-goals, stated: no wire-level timeout case (--max-time 20) and no 3xx case.
+# ---------------------------------------------------------------------------
+if ! command -v python3 >/dev/null 2>&1; then
+  fail "T20: python3 is required for the loopback wire test and was not found (this case never skips)"
+else
+  fixture_types beta22 > "$TMP/doc_ok.json"
+  printf '%s' "$BODY_410" > "$TMP/doc_410.json"
+  cat > "$TMP/srv.py" <<'PY'
+import http.server, os, sys
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        mode = open(os.path.join(d, "mode")).read().strip()
+        with open(os.path.join(d, "req.log"), "a") as f:
+            f.write("%s\t%s\n" % (self.path, self.headers.get("Authorization", "")))
+        ok = open(os.path.join(d, "doc_ok.json")).read()
+        if mode == "ok":
+            code, body = 200, ok
+        elif mode == "410":
+            code, body = 410, open(os.path.join(d, "doc_410.json")).read()
+        else:
+            code, body = 502, ok
+        b = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(os.path.join(d, "port.tmp"), "w").write(str(srv.server_address[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+srv.serve_forever()
+PY
+  python3 "$TMP/srv.py" "$TMP" >/dev/null 2>&1 &
+  SRV_PID=$!
+  PORT=""
+  for _ in $(seq 1 50); do
+    [[ -s "$TMP/port" ]] && { PORT=$(cat "$TMP/port"); break; }
+    sleep 0.1
+  done
+  if [[ -z "$PORT" ]]; then
+    fail "T20: the loopback server did not publish a port within 5s"
+  else
+    loop_call() { # <mode> <type> <loc>
+      printf '%s' "$1" > "$TMP/mode"; : > "$TMP/req.log"
+      (
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+        export HCLOUD_API="http://127.0.0.1:${PORT}/v1" HCLOUD_TOKEN="synthetic-token-123" NO_PROXY=127.0.0.1 no_proxy=127.0.0.1
+        # shellcheck source=/dev/null
+        source "$GATE"
+        stock_preflight "$2" "$3"
+      ) 2>&1
+    }
+    out=$(loop_call ok beta22 eu-b); rc=$?
+    [[ "$rc" -eq 0 ]] && pass || fail "T20a: a 200 orderable document over HTTP must pass, got $rc. out=$out"
+    [[ "$(wc -l < "$TMP/req.log")" -eq 1 ]] && pass || fail "T20a: exactly one request expected; log: $(cat "$TMP/req.log")"
+    grep -qF "Bearer synthetic-token-123" "$TMP/req.log" && pass || fail "T20a: the Authorization bearer must reach the wire"
+    out=$(loop_call 410 beta22 eu-b); rc=$?
+    [[ "$rc" -eq 1 ]] && pass || fail "T20b: an HTTP 410 must abort, got $rc"
+    grep -q "curl exit 22" <<<"$out" && pass || fail "T20b: an HTTP error must surface as curl exit 22 (--fail-with-body). out=$out"
+    out=$(loop_call 502 beta22 eu-b); rc=$?
+    [[ "$rc" -eq 1 ]] && pass || fail "T20c: an HTTP 502 carrying a VALID orderable body must still abort, got $rc"
+  fi
+  kill "$SRV_PID" 2>/dev/null; SRV_PID=""
+fi
+
+# Reaching this line IS the completion signal the EXIT trap checks (see cleanup above).
+SUITE_DONE=1
 
 # Minimum-cardinality floor. This suite is a linear accumulate-then-tally script, so a
 # mid-file `exit`, a truncation, or a block silently removed leaves `fails` at 0 and the
@@ -355,7 +592,7 @@ avl=$(fixture_dcs | jq -r '[.datacenters[] | select(.name=="eu-a-dc1") | .server
 # `fails -eq 0` proves nothing was WRONG; it cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=53
+MIN_ASSERTIONS=137
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2

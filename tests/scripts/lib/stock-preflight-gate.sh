@@ -23,7 +23,7 @@
 #   fleet is short a host with no rollback. That is #6393, which wedged the web-1
 #   prod deploy leg ~10h (PIR corrected 2026-07-14, #6400).
 #
-#   This gate asserts every server the plan will CREATE is orderable in its target
+#   This gate asserts Hetzner REPORTS every server the plan will CREATE as available in its target
 #   location BEFORE the destroy runs. It is a TRIPWIRE, not a routine gate — matching
 #   the host_creates HALT in apply-web-platform-infra.yml (search: "This is a TRIPWIRE,
 #   not a routine gate").
@@ -34,13 +34,20 @@
 # (inngest-host-replace, registry-host-replace, registry-region-migrate,
 # git-data-host-replace, web-host-replace), none of which carry an override.
 #
-# `available` vs `.supported` — LOAD-BEARING:
-#   /v1/datacenters exposes BOTH. `.supported` (24 per EU DC) is what a DC *can*
-#   host; `.server_types.available` is what is *orderable right now*. A gate built
-#   on `.supported` passes the live trap. The `hcloud` CLI has the same trap:
-#   `hcloud server-type list -o columns=name,location` reports the SUPPORTED set —
-#   on 2026-07-15 it said `cx33 -> fsn1,nbg1,hel1` while cx33 was orderable NOWHERE.
-#   Do NOT "simplify" this to the CLI.
+# PRESENCE vs `available` — LOAD-BEARING (rewritten 2026-10-05, after Hetzner removed GET /datacenters):
+#   Hetzner deleted /v1/datacenters (HTTP 410 `deprecated_api_endpoint`; changelog
+#   https://docs.hetzner.cloud/changelog#2026-06-02-datacenters-deprecated). The replacement is the
+#   `locations[]` array on each server type: GET /v1/server_types?name=<type> ->
+#   server_types[].locations[] = [{id,name,available,recommended,deprecation}]. PRESENCE of a location
+#   entry means the type is *supported* there (what it CAN host); `available` is the indicator that it is
+#   orderable right now — Hetzner's own wording is an indicator, not a guarantee. A gate built on presence
+#   passes the live trap: on 2026-07-15 the `hcloud` CLI said `cx33 -> fsn1,nbg1,hel1` (the SUPPORTED set)
+#   while cx33 was orderable NOWHERE. Do NOT "simplify" this to presence or to the CLI. The gate authorizes
+#   ONLY on the JSON boolean `true` for exactly one matching type and exactly one matching location.
+#   `available: true` is not a reservation: a replace can still destroy and then fail to create. The gate
+#   narrows that window to Hetzner's own signal; it does not remove it.
+#   Re-evaluation probe for ADR-154's old trigger (a type back in stock): GET /v1/server_types?name=cx33
+#   -> locations[].available.
 #
 # Stock is time-varying on an HOURS timescale: cx33 went from "orderable in hel1"
 # to orderable in ZERO datacenters within ~3h on 2026-07-15 (hel1's available count
@@ -48,54 +55,72 @@
 # availability in a test (the suite uses synthesized fixtures via the _stock_fetch
 # seam — cq-test-fixtures-synthesized-only).
 #
-# Each Hetzner LOCATION maps to exactly ONE datacenter (fsn1 -> fsn1-dc14), so there
-# is no sibling-DC fallback within a location.
+# Stock is reported per LOCATION (locations[].available): there is no per-datacenter breakdown and no
+# sibling fallback within a location.
 #
 # FAIL-CLOSED on every resolution/API failure: an unreachable API is not evidence of
 # availability. A blocked recreate is recoverable; a stranded fleet is a deploy freeze.
 
 # EU allow-set — mirrors the `web_hosts` residency validation in
 # apps/web-platform/infra/variables.tf (search: "must be an EU Hetzner DC") — GDPR
-# residency, CLO T-1. /v1/datacenters
-# also returns ash-dc1 (US), hil-dc1 (US) and sin-dc1 (Singapore); an unfiltered
+# residency, CLO T-1. A type's locations[]
+# also lists ash (US), hil (US) and sin (Singapore); an unfiltered
 # "orderable elsewhere" suggestion would advise putting a prod host in Singapore.
 STOCK_PREFLIGHT_EU_LOCATIONS="${STOCK_PREFLIGHT_EU_LOCATIONS:-nbg1 fsn1 hel1}"
 
 # Injectable fetch seam. The test redefines this to cat a synthesized fixture, so the
 # suite is hermetic (no network, no HCLOUD_TOKEN). Never inline curl at a call site.
 HCLOUD_API="${HCLOUD_API:-https://api.hetzner.cloud/v1}"
+# `--fail-with-body` (curl >= 7.76): a non-2xx answer exits 22 and still prints the body. Without it `curl -sS`
+# exits 0 on a 410, and the caller would have to guess from the body alone whether it was told "no".
 _stock_fetch() {
-  curl -sS --max-time 20 -H "Authorization: Bearer ${HCLOUD_TOKEN:-}" "${HCLOUD_API}$1"
+  curl -sS --fail-with-body --max-time 20 -H "Authorization: Bearer ${HCLOUD_TOKEN:-}" "${HCLOUD_API}$1"
 }
 
-# _stock_eu_locations_for <datacenters_json> <type_id>
-# Echoes the EU-filtered location names where <type_id> is orderable (space-separated).
-# NOTE: deliberately takes ONLY what it reads. An earlier signature also declared a leading
-# <server_types_json> that the body never bound — a dead positional is an attractive nuisance
-# here, because a future maintainer dropping the unused arg at the call site would shift
-# $2/$3 and silently corrupt the "orderable in EU:" list, i.e. the one line an operator reads
-# mid-incident.
+# _stock_verdict <types_json> <type> <loc>
+#   -> ORDERABLE | UNAVAILABLE | UNKNOWN_TYPE | UNKNOWN_LOCATION | MALFORMED:<reason>
+# ONE jq program, ONE token. Only the exact string ORDERABLE authorizes anything. The caller captures it as
+# `verdict=$(_stock_verdict ...) || verdict=""` — jq prints the verdict of the FIRST document and then exits 5 on
+# trailing junk (`<valid doc>garbage`), so a bare capture would read ORDERABLE off a body that is not one document.
+# The type is selected by NAME, never by position: if `?name=` were ever ignored the list would hold other types and
+# [0] would answer about the wrong one. `type != "object"` stays LEFT of has("error") (jq `or` short-circuits).
+_stock_verdict() {
+  printf '%s' "$1" | jq -r --arg t "$2" --arg l "$3" '
+    if (type != "object") or has("error") or ((.server_types | type) != "array") then "MALFORMED:shape"
+    elif (.server_types | length) == 0 then "UNKNOWN_TYPE"
+    else [.server_types[] | select(.name == $t)] as $m
+      | if   ($m | length) == 0 then "MALFORMED:filter-ignored"
+        elif ($m | length) >  1 then "MALFORMED:duplicate-type"
+        elif ($m[0].locations | type) != "array" then "MALFORMED:locations"
+        else [$m[0].locations[] | select(.name == $l)] as $e
+          | if   ($e | length) == 0 then "UNKNOWN_LOCATION"
+            elif ($e | length) >  1 then "MALFORMED:duplicate-location"
+            elif ($e[0].available | type) != "boolean" then "MALFORMED:available"
+            elif $e[0].available then "ORDERABLE" else "UNAVAILABLE" end
+        end
+    end' 2>/dev/null
+}
+
+# _stock_eu_locations_for <types_json> <type>
+# Echoes the EU-filtered location names where <type> is reported available (space-separated). ADVISORY ONLY: it
+# runs on the UNAVAILABLE arm and never influences the verdict or the exit code; a failure degrades the `<none>`
+# text. Strict `== true` (a string "true" or 1 is not suggested) and the allow-set intersection happens INSIDE jq,
+# so no location name can word-split into a shell loop. Takes only what it reads.
 _stock_eu_locations_for() {
-  local dcs_json="$1" type_id="$2" out=() loc
-  local all
-  all=$(printf '%s' "$dcs_json" | jq -r --argjson i "$type_id" \
-    '.datacenters[] | select(.server_types.available | index($i)) | .location.name' 2>/dev/null | sort -u)
-  for loc in $all; do
-    case " $STOCK_PREFLIGHT_EU_LOCATIONS " in
-      *" $loc "*) out+=("$loc") ;;
-    esac
-  done
-  printf '%s' "${out[*]-}"
+  printf '%s' "$1" | jq -r --arg t "$2" --arg eu "$STOCK_PREFLIGHT_EU_LOCATIONS" '
+    ($eu | split(" ") | map(select(. != ""))) as $allow
+    | [.server_types[] | select(.name == $t)] | if length == 1 then .[0].locations[]? else empty end
+    | select(.available == true and (.name | IN($allow[]))) | .name' 2>/dev/null | sort -u | paste -sd' ' -
 }
 
 # stock_preflight <server_type> <location>
-# rc=0  -> orderable in <location> right now
-# rc=1  -> NOT orderable, OR unknown type/location, OR the API could not be reached
+# rc=0  -> Hetzner REPORTS the type available in <location> right now (an indicator, not a reservation)
+# rc=1  -> reported unavailable, OR unknown type/location, OR the API could not be read
 # Emits a ::error:: on abort. The stock-miss and API-blip messages are DISTINCT so an
 # operator does not read a transient blip as a real shortage and file a spurious #6463 dup.
 stock_preflight() {
   local want_type="$1" want_loc="$2"
-  local types_json dcs_json type_id dc_name orderable elsewhere
+  local types_json="" verdict="" reason="" elsewhere="" fetch_rc=0
 
   if [[ -z "$want_type" || -z "$want_loc" ]]; then
     echo "::error::stock-preflight ABORT: called without server_type/location (got '${want_type}'/'${want_loc}'). Fail-closed." >&2
@@ -121,43 +146,44 @@ stock_preflight() {
     return 1
   fi
 
-  # Resolve the type by NAME (not ?per_page=50 — that silently encodes "Hetzner has
-  # <=50 types" and fails CLOSED if one ever lands on page 2, aborting a legitimate
-  # recreate). Unknown type => 0 results.
-  types_json=$(_stock_fetch "/server_types?name=${want_type}" 2>/dev/null) || types_json=""
-  if [[ -z "$types_json" ]] || ! printf '%s' "$types_json" | jq -e '.server_types' >/dev/null 2>&1; then
-    echo "::error::stock-preflight ABORT: cannot PROVE stock for '${want_type}' in '${want_loc}' (Hetzner API unreachable or malformed at /server_types). An unreachable API is not evidence of availability. Re-dispatch." >&2
-    return 1
-  fi
-  type_id=$(printf '%s' "$types_json" | jq -r '.server_types[0].id // empty' 2>/dev/null)
-  if [[ -z "$type_id" ]]; then
-    echo "::error::stock-preflight ABORT: unknown server_type '${want_type}' (no match at /server_types?name=). Fail-closed — a typo must never authorize a destroy." >&2
-    return 1
-  fi
-
-  dcs_json=$(_stock_fetch "/datacenters" 2>/dev/null) || dcs_json=""
-  if [[ -z "$dcs_json" ]] || ! printf '%s' "$dcs_json" | jq -e '.datacenters' >/dev/null 2>&1; then
-    echo "::error::stock-preflight ABORT: cannot PROVE stock for '${want_type}' in '${want_loc}' (Hetzner API unreachable or malformed at /datacenters). An unreachable API is not evidence of availability. Re-dispatch." >&2
-    return 1
+  # ONE fetch. Resolve the type by NAME (not ?per_page=50 — that silently encodes "Hetzner has <=50 types" and fails
+  # CLOSED if one ever lands on page 2). `fetch_rc` is captured, not discarded: with --fail-with-body a non-2xx answer
+  # exits 22, and the abort text must be able to tell a changed API contract from a flaky network.
+  types_json=$(_stock_fetch "/server_types?name=${want_type}" 2>/dev/null) || fetch_rc=$?
+  verdict=""
+  if [[ "$fetch_rc" -ne 0 ]]; then
+    reason="curl exit ${fetch_rc}"
+  elif [[ -z "$types_json" ]]; then
+    reason="empty body"
+  else
+    # `|| verdict=""` — see _stock_verdict. NEVER a bare assignment, never `local v=$(...)` (masks the status).
+    verdict=$(_stock_verdict "$types_json" "$want_type" "$want_loc") || verdict=""
   fi
 
-  # Each location maps to exactly one datacenter; no sibling-DC fallback.
-  dc_name=$(printf '%s' "$dcs_json" | jq -r --arg l "$want_loc" \
-    '.datacenters[] | select(.location.name == $l) | .name' 2>/dev/null | head -1)
-  if [[ -z "$dc_name" ]]; then
-    echo "::error::stock-preflight ABORT: unknown location '${want_loc}' (no datacenter at /datacenters). Fail-closed." >&2
-    return 1
-  fi
+  # Exactly one `return 0` in this function: the exact token ORDERABLE. Everything else, including an empty or
+  # multi-line verdict, aborts. Four DISTINCT classes with different advice, so an operator mid-incident does not
+  # read a changed contract as a shortage or a typo as an outage.
+  case "$verdict" in
+    ORDERABLE) return 0 ;;
+    UNAVAILABLE) ;;   # falls through to the stock-miss abort and the remediation menu below
+    UNKNOWN_TYPE)
+      echo "::error::stock-preflight ABORT: unknown server_type '${want_type}' (no match at /server_types?name=). Fail-closed — a typo must never authorize a destroy." >&2
+      return 1 ;;
+    UNKNOWN_LOCATION)
+      echo "::error::stock-preflight ABORT: unknown location '${want_loc}' for server_type '${want_type}' (not in its /server_types locations[]: a mistyped location, or a type Hetzner does not offer there — check \`location\` in the plan and variables.tf). Fail-closed." >&2
+      return 1 ;;
+    *)
+      if [[ -z "$reason" ]]; then reason="${verdict:-unparseable body}"; fi
+      if [[ "$reason" == curl* || "$reason" == "empty body" ]]; then
+        echo "::error::stock-preflight ABORT: cannot PROVE stock for '${want_type}' in '${want_loc}' (Hetzner API unreachable at /server_types: ${reason}). An unreachable API is not evidence of availability. Retry: re-dispatch; if it repeats on consecutive dispatches the API contract has likely changed — see the header of this file for the changelog URL." >&2
+      else
+        echo "::error::stock-preflight ABORT: cannot PROVE stock for '${want_type}' in '${want_loc}' (Hetzner answered /server_types in a shape this gate does not accept: ${reason}). This is NOT a stock shortage: the API contract may have changed. Open an issue naming this line; do NOT blind re-dispatch." >&2
+      fi
+      return 1 ;;
+  esac
 
-  # .available (orderable NOW) — never .supported.
-  orderable=$(printf '%s' "$dcs_json" | jq -r --arg d "$dc_name" --argjson i "$type_id" \
-    '.datacenters[] | select(.name == $d) | (.server_types.available | index($i)) != null' 2>/dev/null)
-  if [[ "$orderable" == "true" ]]; then
-    return 0
-  fi
-
-  elsewhere=$(_stock_eu_locations_for "$dcs_json" "$type_id")
-  echo "::error::stock-preflight ABORT: server_type '${want_type}' is NOT orderable in '${want_loc}' today (orderable in EU: ${elsewhere:-<none>}). A -replace DESTROYS before it creates — this recreate would strand the fleet with no rollback (#6393, #6463)." >&2
+  elsewhere=$(_stock_eu_locations_for "$types_json" "$want_type")
+  echo "::error::stock-preflight ABORT: server_type '${want_type}' is reported NOT orderable in '${want_loc}' today by Hetzner (orderable in EU: ${elsewhere:-<none>}). That is an indicator, not a guarantee, so it can block a replace that would have succeeded — but a -replace DESTROYS before it creates, and this recreate would strand the fleet with no rollback if the create fails (#6393, #6463)." >&2
   # REMEDIATION MENU — order is the point: the cheapest correct action first, so an operator
   # reading this mid-abort does not escalate to a cost/HA decision when waiting would do.
   #
@@ -314,7 +340,7 @@ stock_preflight_gate() {
   # half existed, and a gate that is silent on success cannot be distinguished from a gate
   # that has rotted into a no-op. Mirrors the sibling gates' `PASS —` lines.
   if [[ "$rc" -eq 0 ]]; then
-    echo "stock-preflight PASS: ${n} planned server create(s) orderable in target location(s)." >&2
+    echo "stock-preflight PASS: ${n} planned server create(s) reported available in target location(s) (an indicator, not a reservation)." >&2
   fi
   return "$rc"
 }
