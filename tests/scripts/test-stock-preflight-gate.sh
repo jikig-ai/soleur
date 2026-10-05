@@ -11,7 +11,8 @@
 # SYNTHESIZED and the gate's _stock_fetch seam is redefined to serve them. No network,
 # no HCLOUD_TOKEN, no captured-real API document. This is not stylistic — a live-bound
 # suite is RED by lunchtime: on 2026-07-15 cx33 went from "orderable in hel1" to
-# orderable in ZERO datacenters within ~3h, and hel1's available count fell 14 -> 12.
+# orderable in ZERO datacenters within ~3h, and hel1's available count fell 14 -> 12 (measured on the
+# since-removed /v1/datacenters).
 # NEVER assert against real stock here.
 #
 # Mirrors the posture of tests/scripts/test-git-data-host-replace-gate.sh:17-21.
@@ -29,7 +30,7 @@ source "$GATE"
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); }
-fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; }
+fail() { fails=$((fails + 1)); echo "FAIL: $1" >&2; return 0; }
 
 # INSTRUMENT SELF-TEST: drive pass() and fail() once each and require BOTH counters to move, then unwind. A suite whose
 # verdict helpers can be neutered goes green over every defect it exists to catch; the floor at the end sums the same
@@ -41,6 +42,12 @@ if [[ "$passes" -ne $((_p0 + 1)) || "$fails" -ne $((_f0 + 1)) ]]; then
   exit 1
 fi
 passes=$_p0; fails=$_f0
+# ... and fail() must actually PRINT: a verdict nobody can read is a red run with zero FAIL lines and a misleading
+# "truncation" message. Run in a subshell so no counter moves.
+if ! ( fail "probe" 2>&1 ) | grep -q '^FAIL: probe'; then
+  echo "stock-preflight-gate: FAIL — fail() does not print its FAIL: line; a red run would be unreadable." >&2
+  exit 1
+fi
 
 TMP="$(mktemp -d)"
 SRV_PID=""
@@ -128,7 +135,7 @@ _stock_fetch() {
   esac
   case "$path" in
     /server_types?name=*) fixture_types "${path#/server_types?name=}" ;;
-    /datacenters*)        printf '%s' "$BODY_410"; return 0 ;;
+    /datacenters*)        printf '%s' "$BODY_410"; return 22 ;;   # what the real fetch does now: curl --fail-with-body exits 22
     *)                    return 1 ;;
   esac
 }
@@ -252,8 +259,9 @@ grep -q "class=unreachable" <<<"$out" && pass || fail "T7: a fetch failure is th
 grep -q "class=malformed" <<<"$out" && fail "T7: a fetch failure must not read as a malformed answer" || pass
 
 # T7b — a non-2xx fetch (curl --fail-with-body exits 22 and still prints the body): rc 1, the unreachable class, and
-# the reason carries BOTH the curl exit and the API's own error code — curl's status is 22 for every HTTP error, so the
-# body is the only thing that separates a removed endpoint or a bad token (NOT transient) from a flaky network.
+# the reason carries BOTH the curl exit and the API's own error code. curl's status is 22 for EVERY HTTP error, so the
+# body's error code is what separates a removed endpoint or a bad token (NOT transient) from a gateway page (transient).
+# NOTE: the advice text itself names `api_error=` codes, so assertions on the REASON anchor on `curl exit 22 api_error=`.
 printf '%s' "$BODY_410" > "$BODY_FILE"
 FETCH_MODE=body_rc22
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
@@ -269,18 +277,37 @@ out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
 grep -q "api_error=unauthorized" <<<"$out" && pass || fail "T7b: a 401 must be distinguishable from a 410. out=$out"
 printf '%s' '<html>502</html>' > "$BODY_FILE"
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
-grep -q "api_error=" <<<"$out" && fail "T7b: a non-JSON error page has no api_error to report" || pass
+grep -q "curl exit 22 api_error=" <<<"$out" && fail "T7b: a non-JSON error page has no api_error to report" || pass
 # an error code that is not a short [a-z_] token is never echoed (it could carry anything into a ::error:: line)
 printf '%s' '{"error":{"code":"x\n::error::forged"}}' > "$BODY_FILE"
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
 grep -q '^::error::forged' <<<"$out" && fail "T7b: an API-supplied error code must never forge a workflow command line" || pass
-grep -q "api_error=" <<<"$out" && fail "T7b: a non-token error code must not be echoed at all" || pass
+grep -q "curl exit 22 api_error=" <<<"$out" && fail "T7b: a non-token error code must not be echoed at all" || pass
+# the code sanitizer is exact: [a-z_]{1,64}, nothing else — each of these must be dropped, the 64-char one kept
+for code in 'abc def' 'abc;x' 'ABC' "$(printf 'a%.0s' $(seq 1 65))"; do
+  jq -nc --arg c "$code" '{error: {code: $c}}' > "$BODY_FILE"
+  out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
+  grep -q "curl exit 22 api_error=" <<<"$out" && fail "T7b: error code [${code:0:20}...] must not be echoed" || pass
+done
+code64=$(printf 'a%.0s' $(seq 1 64))
+jq -nc --arg c "$code64" '{error: {code: $c}}' > "$BODY_FILE"
+out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
+grep -q "curl exit 22 api_error=${code64}" <<<"$out" && pass || fail "T7b: a 64-char [a-z_] code is the longest that is echoed. out=$out"
+# the advice text is class-specific and pinned: transient vs NOT transient must not swap between classes
+printf '%s' "$BODY_410" > "$BODY_FILE"
+out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
+grep -q "NOT transient" <<<"$out" && pass || fail "T7b: the unreachable class must say which failures are NOT transient. out=$out"
+grep -q "Transient — re-dispatch once" <<<"$out" && pass || fail "T7b: the unreachable class must say which failures are transient. out=$out"
+grep -q "NOT a stock shortage" <<<"$out" && fail "T7b: the malformed advice must not appear on the unreachable class" || pass
 
 FETCH_MODE=garbage
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T7c: expected rc=1 on a malformed API document, got $rc"
 grep -q "class=malformed" <<<"$out" && pass || fail "T7c: a 2xx answer in an unusable shape is the malformed class. out=$out"
 grep -q "body=object keys=unexpected" <<<"$out" && pass || fail "T7c: the abort must carry a sanitized shape hint. out=$out"
+grep -q "NOT a stock shortage" <<<"$out" && pass || fail "T7c: the malformed class must say it is NOT a shortage. out=$out"
+grep -q "Transient — re-dispatch once" <<<"$out" && fail "T7c: the transient advice must not appear on the malformed class" || pass
+grep -q "api_error=" <<<"$out" && fail "T7c: a 2xx answer carries no api_error" || pass
 
 # ---------------------------------------------------------------------------
 # T8 — gate over a tfplan: a -replace (delete+create) of an unorderable type => rc 1
@@ -320,6 +347,8 @@ out=$(stock_preflight_gate "$p" 2>&1); rc=$?
 
 # ---------------------------------------------------------------------------
 # T10b — NON-MISDIRECTION on the four surviving production paths. RETARGETED 2026-07-20
+# (Superseded in part by #6730 and #6969: web-host-create and web-host-replace now preflight web hosts too. This case
+# still guards the NON-web paths, which is why the web-1 clause stays conditionally worded.)
 # (#6575): the warm-standby half of this test is vacuous now that no such dispatch exists, but
 # the invariant it protected is MORE live, not less. After the web-2 retire, every production
 # caller of stock_preflight_gate is a NON-WEB host (inngest-host-replace, registry-host-replace,
@@ -471,10 +500,25 @@ run_body "$(jq -c '. + {error: {code: "x"}}' <<<"$BASE")" beta22 eu-b
 [[ "$rc" -eq 1 ]] && pass || fail "T7f: an error key beside a valid doc must abort, got $rc"
 grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7f: an error key must produce the blip message. out=$out"
 grep -q "class=malformed" <<<"$out" && pass || fail "T7f: an error key beside a valid doc is the malformed class. out=$out"
+grep -q "api_error=" <<<"$out" && fail "T7f: a 2xx answer carries no api_error, even when it has an error key" || pass
 run_body "$BODY_410" beta22 eu-b
 [[ "$rc" -eq 1 ]] && pass || fail "T7f: the bare 410 body at /server_types must abort, got $rc"
 grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7f: the 410 body must produce the blip message. out=$out"
 grep -q "class=malformed" <<<"$out" && pass || fail "T7f: a 410 body served with a 2xx status is the malformed class. out=$out"
+
+# T7h — the shape hint names KEYS, never values, caps at 8 keys / 120 chars, and drops keys outside [A-Za-z0-9_].
+run_body '{"k":"SECRETVALUE-xyz"}' beta22 eu-b
+grep -q "SECRETVALUE" <<<"$out" && fail "T7h: a body VALUE must never reach the log. out=$out" || pass
+grep -q "body=object keys=k)" <<<"$out" && pass || fail "T7h: the hint must be the key names only. out=$out"
+run_body "$(jq -nc '[range(0; 12) | {key: ("k" + tostring), value: 1}] | from_entries')" beta22 eu-b
+hint=$(grep -o 'body=[^)]*' <<<"$out" | head -n1)
+[[ "$(tr -cd ',' <<<"$hint" | wc -c)" -le 7 ]] && pass || fail "T7h: at most 8 keys may be listed. hint=$hint"
+run_body "$(jq -nc '[range(0; 8) | {key: ("k" + tostring + ("y" * 30)), value: 1}] | from_entries')" beta22 eu-b
+hint=$(grep -o 'body=[^)]*' <<<"$out" | head -n1)
+[[ "${#hint}" -le 125 ]] && pass || fail "T7h: the hint is capped at 120 chars after 'body='. len=${#hint}"
+run_body '{"a b":1,"ok_key":2}' beta22 eu-b
+grep -q "a b" <<<"$out" && fail "T7h: a key outside [A-Za-z0-9_] must be dropped. out=$out" || pass
+grep -q "ok_key" <<<"$out" && pass || fail "T7h: a clean key must be kept. out=$out"
 
 # T7i — trailing junk after a valid orderable doc: jq prints the verdict of the FIRST document and then exits non-zero,
 # so the verdict must be captured with `|| verdict=""` or ORDERABLE would be read off a body that is not one document.
@@ -625,11 +669,14 @@ run_body "$(jq -c '.server_types[0].locations = [null] + .server_types[0].locati
 for row in 'beta22&name=alpha33|eu-b|not a valid Hetzner type name' 'BETA22|eu-b|not a valid Hetzner type name' \
            'beta 22|eu-b|not a valid Hetzner type name' '|eu-b|called without server_type/location' \
            'beta22|EU-B|not a valid Hetzner location name' 'beta22|eu-b#x|not a valid Hetzner location name' \
-           'beta22||called without server_type/location'; do
+           'beta22||called without server_type/location' 'beta22 |eu-b|not a valid Hetzner type name' \
+           'beta#22|eu-b|not a valid Hetzner type name' 'beta22|eu=b|not a valid Hetzner location name'; do
   IFS='|' read -r g_type g_loc g_msg <<<"$row"
   out=$(stock_preflight "$g_type" "$g_loc" 2>&1); rc=$?
   [[ "$rc" -eq 1 ]] && pass || fail "T23: [$g_type]/[$g_loc] must abort, got $rc"
   grep -q "$g_msg" <<<"$out" && pass || fail "T23: [$g_type]/[$g_loc] must say '$g_msg'. out=$out"
+  grep -q "class=config" <<<"$out" && pass || fail "T23: an unqueryable value is the config class. out=$out"
+  [[ "$(grep -o 'class=' <<<"$out" | wc -l)" -eq 1 ]] && pass || fail "T23: exactly one class token per abort. out=$out"
 done
 [[ ! -s "$CALLS_LOG" ]] && pass || fail "T23: an unsafe value must never reach the network; calls: $(cat "$CALLS_LOG")"
 
@@ -660,6 +707,30 @@ out=$(stock_preflight_gate "$(two_plan hcloud_server.a beta22 eu-b hcloud_server
 [[ "$rc" -eq 0 ]] && pass || fail "T24: [good, good] must pass, got $rc. out=$out"
 grep -q "2 planned server create(s)" <<<"$out" && pass || fail "T24: the PASS line must count both creates. out=$out"
 [[ "$(grep -c '^/server_types' "$CALLS_LOG")" -eq 2 ]] && pass || fail "T24: [good, good] must make one request per create; calls: $(cat "$CALLS_LOG")"
+
+# T24c — N-create plans: the middle/last row bad, and two creates of the SAME type and location (no memoization — each
+# create is its own request, because stock for one server does not cover two).
+multi_plan() { # <addr> <type> <loc> ... (any number of triples)
+  jq -n '$ARGS.positional as $a | {resource_changes: [range(0; ($a | length); 3) as $i
+      | {address: $a[$i], type: "hcloud_server", change: {actions: ["create"], after: {server_type: $a[$i + 1], location: $a[$i + 2]}}}]}' \
+    --args "$@" > "$TMP/planN.json"
+  echo "$TMP/planN.json"
+}
+FETCH_MODE=ok
+: > "$CALLS_LOG"
+out=$(stock_preflight_gate "$(multi_plan hcloud_server.a beta22 eu-b hcloud_server.b beta22 eu-c hcloud_server.c alpha33 eu-b)" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T24c: [good, good, bad] must abort, got $rc"
+[[ "$(grep -c '^/server_types' "$CALLS_LOG")" -eq 3 ]] && pass || fail "T24c: all three creates must be preflighted; calls: $(cat "$CALLS_LOG")"
+grep -qF "hcloud_server.c" <<<"$out" && pass || fail "T24c: the THIRD row must be the one named. out=$out"
+: > "$CALLS_LOG"
+out=$(stock_preflight_gate "$(multi_plan hcloud_server.a beta22 eu-b hcloud_server.b alpha33 eu-b hcloud_server.c beta22 eu-c)" 2>&1); rc=$?
+[[ "$rc" -eq 1 ]] && pass || fail "T24c: [good, bad, good] must abort, got $rc"
+grep -qF "hcloud_server.b" <<<"$out" && pass || fail "T24c: the MIDDLE row must be the one named. out=$out"
+grep -qF "hcloud_server.a" <<<"$out" && fail "T24c: a good row must not be named as the offender" || pass
+: > "$CALLS_LOG"
+out=$(stock_preflight_gate "$(multi_plan hcloud_server.a beta22 eu-b hcloud_server.b beta22 eu-b)" 2>&1); rc=$?
+[[ "$rc" -eq 0 ]] && pass || fail "T24c: two creates of the same type+location must pass when available, got $rc"
+[[ "$(grep -c '^/server_types?name=beta22$' "$CALLS_LOG")" -eq 2 ]] && pass || fail "T24c: each create is its own request (no memoization); calls: $(cat "$CALLS_LOG")"
 
 # T24b — a create row with NO ADDRESS beside a valid row. It used to be skipped silently (`continue`), so the plan passed
 # with a single fetch. A create that cannot be named cannot be reconciled: abort.
@@ -695,6 +766,17 @@ run_body "$(jq -c '(.server_types[0].locations[] | select(.name == "eu-b") | .de
 [[ "$rc" -eq 0 ]] && pass || fail "T25: a hostile deprecation value must not change the verdict, got $rc"
 grep -q '^::error::' <<<"$out" && fail "T25: a hostile deprecation value must never forge a workflow command line" || pass
 
+# T25b — the annotation is exact: absent on the stock-miss arm, "unknown" when no cutoff is given, sanitized, capped.
+run_body "$(jq -c '(.server_types[0].locations[] | select(.name == "eu-a") | .deprecation) = {"announced": "x", "unavailable_after": "2099-01-01T00:00:00Z"}' <<<"$BASE")" beta22 eu-a
+[[ "$rc" -eq 1 ]] && pass || fail "T25b: eu-a is unavailable and must abort, got $rc"
+grep -q "::warning::" <<<"$out" && fail "T25b: a deprecation on an UNAVAILABLE location must not warn (the verdict is already a stock miss)" || pass
+run_body "$(jq -c '(.server_types[0].locations[] | select(.name == "eu-b") | .deprecation) = {"announced": "2099-01-01T00:00:00Z"}' <<<"$BASE")" beta22 eu-b
+grep -q "unavailable_after=unknown" <<<"$out" && pass || fail "T25b: a deprecation with no cutoff must still be annotated as unknown. out=$out"
+run_body "$(jq -c '(.server_types[0].locations[] | select(.name == "eu-b") | .deprecation.unavailable_after) = "2099 01;x"' <<<"$BASE")" beta22 eu-b
+grep -q "unavailable_after=2099?01?x" <<<"$out" && pass || fail "T25b: characters outside [0-9A-Za-z:.+-] must be replaced. out=$out"
+run_body "$(jq -c --arg v "$(printf 'a%.0s' $(seq 1 50))ZZZ" '(.server_types[0].locations[] | select(.name == "eu-b") | .deprecation.unavailable_after) = $v' <<<"$BASE")" beta22 eu-b
+grep -q "ZZZ" <<<"$out" && fail "T25b: the cutoff is capped at 40 chars. out=$out" || pass
+
 # ---------------------------------------------------------------------------
 # T26 — ADVISORY POPULATION: the "orderable in EU" list is exact-name, sorted, de-duplicated and EU-only. A location named
 # like a SUBSTRING of the allow-set ("u-a", inside "eu-a") must not be suggested; listing order must not matter.
@@ -705,6 +787,27 @@ grep -q "orderable in EU: eu-b eu-c)" <<<"$out" && pass || fail "T26: reverse-li
 ALT_DUP=$(type_doc 9401 alt78 "[$(loc_entry eu-a false),$(loc_entry eu-c true),$(loc_entry eu-c true)]")
 run_body "{\"server_types\":[$ALT_DUP]}" alt78 eu-a
 grep -q "orderable in EU: eu-c)" <<<"$out" && pass || fail "T26: a duplicated suggestion must be de-duplicated. out=$out"
+
+# the wanted type listed FIRST, another type (orderable in every EU location) second: the list must still be the WANTED
+# type's own — here eu-c only — not the first type's and not a union
+ADV_W=$(type_doc 9501 advw "[$(loc_entry eu-a false),$(loc_entry eu-b false),$(loc_entry eu-c true)]")
+ADV_O=$(type_doc 9502 advo "$LOCS_OTHER")
+run_body "{\"server_types\":[$ADV_W,$ADV_O]}" advw eu-a
+grep -q "orderable in EU: eu-c)" <<<"$out" && pass || fail "T26: wanted-first alternatives must be exactly eu-c. out=$out"
+run_body "{\"server_types\":[$ADV_O,$ADV_W]}" advw eu-a
+grep -q "orderable in EU: eu-c)" <<<"$out" && pass || fail "T26: wanted-last alternatives must be exactly eu-c. out=$out"
+
+# T27 — the production endpoint default and the endpoint-override warning (the suite unsets HCLOUD_API before sourcing,
+# and every other case replaces _stock_fetch, so nothing else would notice a wrong default).
+[[ "$_STOCK_DEFAULT_API" == "https://api.hetzner.cloud/v1" && "$HCLOUD_API" == "https://api.hetzner.cloud/v1" ]] \
+  && pass || fail "T27: the production endpoint default must be https://api.hetzner.cloud/v1 (got default=$_STOCK_DEFAULT_API effective=$HCLOUD_API)"
+w=$(HCLOUD_API="$_STOCK_DEFAULT_API" _stock_warn_if_endpoint_overridden 2>&1)
+[[ -z "$w" ]] && pass || fail "T27: the default endpoint must not warn. out=$w"
+w=$(HCLOUD_API='https://svcuser:SYNTH-PASS-123@h.example:8443/v1?apikey=SYNTHKEY#frag' _stock_warn_if_endpoint_overridden 2>&1)
+grep -q "host=h.example:8443)" <<<"$w" && pass || fail "T27: only the authority host may be printed. out=$w"
+grep -qE "SYNTH|svcuser|apikey|frag" <<<"$w" && fail "T27: userinfo, query and fragment must never reach the log. out=$w" || pass
+w=$(HCLOUD_API=$'https://a.example\nb.example/v1' _stock_warn_if_endpoint_overridden 2>&1)
+[[ "$(wc -l <<<"$w")" -eq 1 ]] && pass || fail "T27: a newline in the value must not split the warning line. out=$w"
 
 # ---------------------------------------------------------------------------
 # T20 — WIRE LEVEL: the real _stock_fetch against a loopback HTTP server (python3 stdlib). The seam-level cases
@@ -804,7 +907,7 @@ SUITE_DONE=1
 # cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=248
+MIN_ASSERTIONS=312
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2
