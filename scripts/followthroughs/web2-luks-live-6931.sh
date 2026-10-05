@@ -57,7 +57,7 @@ done
 _w2l_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/web2-luks-rows.sh"
 # shellcheck source=scripts/lib/web2-luks-rows.sh
 if ! source "$_w2l_lib" || ! declare -F w2l_probe_verdict >/dev/null || ! declare -F w2l_ready_verdict >/dev/null \
-   || ! declare -F w2l_soak_scan >/dev/null; then
+   || ! declare -F w2l_soak_scan >/dev/null || ! declare -F w2l_reboot_seen >/dev/null; then
   printf 'CANNOT ESTABLISH: the shared helper could not be loaded (lib=%s). Nothing was measured.\n' "$_w2l_lib"
   exit 3
 fi
@@ -127,6 +127,12 @@ if [[ "$verdict" != GREEN* ]]; then
 fi
 if (( green_days < SOAK_DAYS )); then
   unmet "${green_days} of ${SOAK_DAYS} distinct days of GREEN probe rows since the readiness row."
+fi
+
+# The reboot proof (#9372): a probe row from a boot other than the one that emitted the readiness row. Without it the
+# volume was formatted and opened once and nothing shows it REOPENS after a reboot, which is the property the soak is for.
+if ! w2l_reboot_seen "$verdict" "$rverdict"; then
+  unmet "no GREEN probe row carries a boot_id that differs from the readiness row's (probe: ${verdict}; readiness: ${rverdict}): the reboot and reopen are not evidenced."
 fi
 
 printf 'PASS: web-2 is live on a LUKS-backed /workspaces — %s distinct days of GREEN probe rows since the readiness row (%s h ago), no non-green row, and the newest probe row is fresh (%s). (#6931 soak-gated closure)\n' \

@@ -252,6 +252,18 @@ w2l_ready_newest_age() {
     [ .[] | classify_ready | select(.kind == "row" and (.f.host // "") == $host) ] | sort_by(.age) | (.[0].age // empty)' "$1" 2>/dev/null || true
 }
 
+# w2l_reboot_seen <probe_verdict> <ready_verdict> — the rebirth's reboot proof, from the boot_id tokens the two GREEN
+# verdicts already print (no second row parse). True only when both ids are KNOWN (an `unknown` id is a row that
+# did not report one, so nothing is evidenced) and they DIFFER: the newest probe row then belongs to a boot other
+# than the one that emitted the once-per-instance readiness row, which is exactly "the host rebooted and the
+# volume reopened". Equal ids are the pre-reboot probe row; fail closed on anything else (#9372, CPO condition 6).
+w2l_reboot_seen() {
+  local pb rb
+  pb="$(sed -nE 's/^GREEN boot_id=([^ ]+) .*/\1/p' <<<"${1:-}")"
+  rb="$(sed -nE 's/^GREEN boot_id=([^ ]+) .*/\1/p' <<<"${2:-}")"
+  [[ -n "$pb" && -n "$rb" && "$pb" != "unknown" && "$rb" != "unknown" && "$pb" != "$rb" ]]
+}
+
 # w2l_judge <probe.jsonl> <ready.jsonl> [absent|present] — the combined verdict; the third argument is the
 # marker's CURRENT state (default `absent`, the strict one). The probe row is judged first (its reasons are the
 # ones an operator can act on). Then:
@@ -273,6 +285,8 @@ w2l_judge() {
     [[ "$ra" =~ ^[0-9]+$ ]] || { printf 'RED reason=ready_judge_error\n'; return 0; }
   fi
   if [[ "$ra" =~ ^[0-9]+$ ]] && (( pa > ra )); then printf 'RED reason=probe_predates_ready\n'; return 0; fi
+  # Marker absent: the marker (and with it any weight) needs the reboot proof, not the readiness row alone.
+  if [[ "$marker" != present ]] && ! w2l_reboot_seen "$pv" "$rv"; then printf 'RED reason=reboot_not_seen\n'; return 0; fi
   printf '%s\n' "$pv"
 }
 
