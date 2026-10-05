@@ -4,18 +4,18 @@ import { useState, useCallback } from "react";
 import { usePendingAction } from "@/hooks/use-pending-action";
 
 /**
- * feat-debug-mode-stream — per-workspace internal "debug mode" toggle (FR2).
+ * feat-debug-mode-stream — per-workspace "debug mode" toggle (FR2).
  *
  * When ON, the conversation surface shows a separate collapsed debug panel that
  * streams REDACTED harness SDK events for this workspace. Unlike autonomous
- * mode this is NOT an approval bypass — it is render-only, ephemeral, and
- * dev-cohort-only — so there is no risk interstitial; turning it on streams
- * nothing the operator can't already see, just in raw harness form.
+ * mode this is NOT an approval bypass — it is render-only and ephemeral —
+ * so there is no risk interstitial; turning it on streams nothing the
+ * operator can't already see, just in raw harness form.
  *
- * Visible ONLY to the Soleur `dev` cohort (the caller gates on
- * `isDebugModeAvailable`). Owner-WRITE: the underlying RPC raises for
- * non-owners; a non-owner dev sees the current state as a disabled (read-only)
- * switch rather than a flip they can't perform.
+ * Open to all roles during beta (the caller gates on `isDebugModeAvailable`)
+ * so users can capture logs for support. Owner-WRITE: the underlying RPC
+ * raises for non-owners; a non-owner sees the current state as a disabled
+ * (read-only) switch rather than a flip they can't perform.
  */
 export function DebugModeToggle({
   initialDebugMode,
@@ -66,12 +66,12 @@ export function DebugModeToggle({
     <div className="flex items-center justify-between gap-4">
       <div className="flex flex-col gap-1">
         <span className="text-sm font-semibold text-soleur-text-primary">
-          Debug mode (internal)
+          Debug mode
         </span>
         <span className="text-xs text-soleur-text-muted">
           Show a separate panel streaming this workspace&apos;s harness events
           (redacted tool inputs, reasoning, results). Render-only and{" "}
-          <strong>not saved</strong>. Visible only to the Soleur team.
+          <strong>not saved</strong>. Useful for sending logs to support.
           {!isOwner && " Owner-only — read-only for you."}
         </span>
       </div>

@@ -17,11 +17,12 @@ import type { ChatDebugEventMessage } from "@/lib/chat-state-machine";
  * independent coverage for a redactor regex MISS — the server-side
  * DEBUG_REDACTION_PROBES superset is the real coverage backstop (Sharp Edge).
  *
- * Visibility is the `dev`-cohort `debug-mode` flag (`available`); the panel is
+ * Visibility is the `debug-mode` flag (`available`) — open to all roles
+ * during beta so any user can capture harness logs for support. The panel is
  * always READ-ONLY (the owner-gated flip lives in the settings toggle, so a
- * member/non-owner dev sees the stream with no control here). Emission is
- * server-gated independently — a flipped client flag can never unlock the
- * stream; this panel only renders what already arrived over the ephemeral WS.
+ * non-owner sees the stream with no control here). Emission is server-gated
+ * independently — a flipped client flag can never unlock the stream; this
+ * panel only renders what already arrived over the ephemeral WS.
  */
 
 // The server DROP placeholder for a tool_use whose input tripped the redaction
@@ -41,7 +42,7 @@ const KIND_LABEL: Record<ChatDebugEventMessage["debugKind"], string> = {
 };
 
 export interface DebugStreamPanelProps {
-  /** dev-cohort `debug-mode` flag — hide the whole panel when false. */
+  /** `debug-mode` flag — hide the whole panel when false. */
   available: boolean;
   /** Debug events filtered out of the main message list, in arrival order. */
   events: ChatDebugEventMessage[];
@@ -133,7 +134,7 @@ export function DebugStreamPanel({
       copyTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard unavailable (insecure context / permission denied). This is a
-      // dev-cohort, same-origin panel (always a secure context in practice), so
+      // same-origin panel (always a secure context in practice), so
       // no execCommand fallback is warranted — mirrors components/kb/share-popover.tsx.
     }
   }, [events]);
@@ -230,9 +231,9 @@ export function DebugStreamPanel({
       {expanded && (
         <div className="border-t border-soleur-border-default/40">
           <p className="px-3 py-1.5 text-[10px] text-soleur-text-muted">
-            Internal harness events for this workspace. Secrets are redacted;
-            this stream is <strong>not saved</strong> and visible only to the
-            Soleur team.
+            Harness events for this workspace. Secrets are redacted and the
+            stream is <strong>not saved</strong> — use Copy to share the log
+            with support.
           </p>
           {withheldCount > 0 && (
             <p
