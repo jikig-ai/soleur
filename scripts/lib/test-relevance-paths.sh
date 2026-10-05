@@ -235,8 +235,9 @@ TEST_ALL_AFFECTED_BATTERY_PATHS=(
 #
 # KNOWN LIMIT — a LOWER BOUND, not a closed set, exactly as the cf-tunnel block above says of
 # itself. Two real dependencies are deliberately NOT declared: `.bun-version` (run_producer invokes
-# `bun "$PRODUCER"`) and the likec4 version pin, which lives in three places (package.json,
-# apps/web-platform/Dockerfile, the ci.yml install step) and none of them here. Declaring them
+# `bun "$PRODUCER"`) and the likec4 version pin, which lives in several places (package.json,
+# apps/web-platform/Dockerfile, the ci.yml and monitor install steps; BUMPING LIKEC4 in
+# render-c4-model.sh lists them) and none of them here. Declaring them
 # would arm this suite on every toolchain bump for no added signal, and the window is bounded three
 # ways: the pin trio has its own UNGATED guard (apps/web-platform's c4-likec4-version-pin.test.ts),
 # the suite DEGRADES rather than fails when the CLI is unreachable, and CI runs everything.

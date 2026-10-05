@@ -359,3 +359,33 @@ repo export for non-canonical dirs) instead of a dead Save affordance. No WS sch
 share-route change; the public share route still omits `stale`. The emit site counts all
 three outcomes (`feature=c4-save-outcome`, `outcome=rerendered|rerendered-false|emit-failed`)
 so the silent-fallback incidence is readable as a rate.
+
+## Addendum — 2026-10-04 (#9343): the release image carries the same frozen pair; the install stays global, not locked
+
+The Dockerfile's `likec4` install now carries `--before=2026-09-28`, the same literal as every
+CI site (#9300), as a sixth site in `c4-likec4-version-pin.test.ts`. Both global CLI installs moved into a
+`cli-tools` stage that `runner` is built `FROM`, so CI can build exactly that stage on every pull request
+(`web-platform-build`, no cache, about a minute). The stage move alone changes no layer; the install-line
+edits re-key the likec4 layer and everything after it once.
+
+- **Global install, not a lock.** `npm install -g` ignores lockfiles. This ADR chose a global install so that
+  vite/esbuild stay out of production deps and `npm ci` lockfile parity is untouched (Key constraint 1). The
+  lock-based alternative was measured in the #9300 plan
+  (`knowledge-base/project/plans/archive/20261001-091701-2026-10-01-fix-ci-pin-likec4-transitive-deps-plan.md`,
+  real binary, real bwrap, 2026-10-01): a lockfile in a tools package hoists likec4's dependencies into sibling
+  `node_modules/*` directories, `server/c4-render.ts` binds only the likec4 package directory into the sandbox,
+  and 5 of the 15 `c4-render-tenant-config` tests fail, where the global install layout passes 15 of 15. A lock
+  also cannot be consumed by the `npx` call sites. So "or an equivalent lock" was considered and measured,
+  not skipped.
+- **`@anthropic-ai/claude-code` has no `--before`, on purpose.** Its tree is the package plus its exact-pinned
+  platform packages and nothing floating (asserted offline against the lock in
+  `claude-cli-pin-knows-models.test.ts`), and a date-only value is midnight-exclusive, so
+  `--before=2026-09-28` fails ETARGET on a version published that afternoon.
+- **`--ignore-scripts` on the likec4 install, at every site.** The only install script that runs on linux in its
+  tree is esbuild's postinstall (`fsevents` has one too, darwin-only), which is not needed: the binary comes from the `@esbuild/<platform>` optional dependency, and a
+  scripts-off `likec4 export json --no-use-dot` renders (verified for the #9343 ruling). The CI and monitor
+  sites carry the same flag so the binary the tests exercise is the binary the image ships. The claude-code
+  install keeps lifecycle scripts: its postinstall places the native binary.
+- **`--before` bounds recency, not integrity.** A global install has no lock hashes, so the registry is trusted
+  at install time, and the frozen likec4 tree is invisible to Dependabot; the owner of an advisory against it is
+  whoever bumps likec4 or triages one.

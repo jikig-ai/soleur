@@ -64,7 +64,7 @@ be a second, driftable copy of the suite registry.
    skipped heavy matrix fails the required check.
 
 5. **Duplicated workflow pins are guarded for all occurrences, not the
-   first.** The heavy job clones the gitleaks/likec4 toolchain;
+   first.** The heavy job clones the gitleaks toolchain (and, until #9343, likec4);
    `required-checks-canonical-parity.test.sh` and
    `c4-likec4-version-pin.test.ts` were extended so every in-file occurrence
    must agree, closing the first-occurrence blindness.
