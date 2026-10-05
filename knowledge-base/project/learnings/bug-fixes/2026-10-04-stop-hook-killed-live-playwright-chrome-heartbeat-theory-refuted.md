@@ -63,11 +63,15 @@ A cause that fires "sometimes" has to be matched against the failures it should 
 3. Match. For each failure, take the window from the previous successful tool completion (`Tool '...' completed
    successfully`) to the failure's timestamp, and ask whether any kill from any session falls inside it.
 
-Filter used for the agent-executable form (stronger than the sentence, because it proves the hook is loaded even when nothing
-printed): `cat ~/.claude/projects/<slug>/*.jsonl | jq -c 'select(.attachment.hookEvent=="Stop" and
-(.attachment.command|tostring|test("browser-cleanup")))' | wc -l`. Run over this project's transcripts on 2026-10-04 it printed
-107, and also requiring `(.attachment.stderr|tostring|test("Browser cleanup: killed"))` printed 107 (a point-in-time count that
-grows while an installed copy still fires).
+Filter used for the agent-executable form: `cat ~/.claude/projects/<slug>/*.jsonl | jq -c 'select(.attachment.hookEvent=="Stop" and
+(.attachment.command|tostring|test("browser-cleanup")))' | wc -l`. It is EQUAL to the kill-text filter, not stronger: run over
+this project's transcripts on 2026-10-05 it printed 142, and also requiring `(.attachment.stderr|tostring|test("Browser cleanup:
+killed"))` printed 142 (107 and 107 on 2026-10-04; a point-in-time count that grows while an installed copy still fires; a
+`zzz-no-such-hook` control printed 0). A transcript records only hooks that printed something, and `browser-cleanup-hook.sh` prints
+only when it killed, so a loaded but idle hook leaves no attachment: the filter detects a loaded hook only when a Chrome was alive
+at that `Stop`. The two other `Stop` hooks print nothing, so they leave no `command`-carrying attachment either (the same `select`
+with `test("unkept-promise-hook|stop-hook")` printed 0, against 143 `Stop` attachments that carry a `command`); do not assert "the
+other hooks loaded" from a transcript.
 
 Result: 18 kill events on 2026-10-04 from 5 sessions at analysis time (re-run during the review: 26 from 5 sessions; a first pass that matched the bare sentence found 29 and was wrong, for
 the reason in step 2; the 14 of 15 below is the same under both); 15 failures; **14 of 15 have a kill inside their
@@ -93,6 +97,14 @@ Before concluding "no hook kills it", enumerate every source the harness will ex
   still registers the hook until the plugin is updated);
 - the scripts those commands invoke, and the MCP launch strings in both `.mcp.json` files;
 - then look for `kill`, `pkill`, `killall`, `pgrep` in them, and for any `Stop` or `SessionEnd` registration.
+
+When the closer is not a hook, the proxy's own MCP log (`~/.cache/claude-cli-nodejs/<slug>/mcp-logs-<server>/<start>.jsonl`, the
+`Server stderr:` entries) separates the cases. The proxy prints `child pgid N` when it starts the server and `child exited
+rc=<rc> signal=<sig> (<why>)` at teardown, so a `child exited` line near the failure means the proxy tore the server down (stdin
+EOF or a signal to the proxy). A kill that hits only Chrome (a pattern killer, an OOM kill, a crash) logs nothing in that file:
+the server stays alive, so there is no `child exited` line, and the only trace is the failing tool call itself. A SIGKILLed proxy
+also logs nothing. "No proxy line" therefore does not exonerate anything; look at transcript hook attachments and the kernel or
+journal log instead.
 
 Searched on 2026-10-04 with `git grep -n -a -E '\bkill\b|pkill|killall|pgrep' fa8bc5961f -- 'plugins/soleur/hooks/*.sh'
 'plugins/soleur/hooks/lib/*'`: executable code matches in two files. `browser-cleanup-hook.sh` is the only one that signals by
@@ -159,3 +171,28 @@ registering it until `claude plugin update soleur@soleur` and a restart by the u
    one-line command or by the code.
    - **Prevention:** for every causal or universal sentence in an ADR or learning, write the command that would falsify it beside
      it, run it, and re-derive each count at write time; mark an inference as an inference.
+6. **A fix introduced a contention bug that the author's suite and the first panel could not reach.** The slot script's new
+   `flock` capability probe took an exclusive lock on `/dev/null`, one inode shared by every launch, so launches started in the
+   same instant made each other's probe fail and fell into the no-lease branch. Two review seats found it independently: a
+   30-trial race ended with 2 trials sharing slot 0, and 20- and 34-launch barrier runs gave duplicated profiles at the fix commit
+   where the panel SHA gave 20 of 20 and 34 of 34 distinct. The suite's concurrent rows started their launches one after another.
+   - **Prevention:** a probe that touches a resource every instance shares (`/dev/null`, a fixed path) is a contention point:
+     treat its failure code as something concurrent peers can produce, and give every concurrency guard one row that releases at
+     least a dozen instances together and asserts distinct results, plus a mutant that restores the strict probe.
+7. **Guard 2 mutant 10 cost a review round.** It walked every process's fd table with one `readlink` per fd (about 18 s at about
+   610 processes), so on a busy host the readiness wait gave up first and the suite read "mutant survived" for a guard that was fine.
+   - **Prevention:** a fixture or mutant whose cost scales with the host's process count needs a bounded selector (one `find` over
+     `/proc/*/fd`), and a readiness timeout must abort as unresolved, never be scored as a verdict.
+8. **Decoys were shaped like the retired hook's pattern.** The Guard 1 decoys carried `chrome --remote-debugging-pipe
+   --user-data-dir=...`, the shape the still-installed old `Stop` hook kills; with no suite running, five of six probes of that shape
+   died on this host within about five minutes (the first after 13 s), so a decoy could be killed by the host and read as a dead scanner.
+   - **Prevention:** a decoy must not match the pattern of any killer that may still be installed on the host running the
+     suite; select it by pid in the shim and give it an argv no retired pattern can match.
+9. **A test shim was keyed on a substring.** The proxy suite's `chrome-fs-shim.py` answered "no such file" for any path containing
+   `chrome`, so six rows went red when the checkout path itself contained that word (worktrees are named after their task).
+   - **Prevention:** a shim patches the exact strings the test controls and passes every other path through; run the block once
+     from a copy of the tree whose directory name contains the shimmed word.
+10. **A comparison adjective was asserted without printing both counts.** ADR-271 and this learning called the
+    `attachment.command` filter "stronger" than the kill-text filter while their own positive control printed 107 for both.
+    - **Prevention:** when a sentence compares two measurements, print both numbers next to it and let them decide the adjective;
+      transcripts record only hooks that printed, so a quiet hook is invisible to either filter.

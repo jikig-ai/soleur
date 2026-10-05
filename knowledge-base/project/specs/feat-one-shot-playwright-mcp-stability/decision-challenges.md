@@ -54,3 +54,36 @@ Raised during headless planning (no operator available); for `ship` to render in
   registrations; it is recorded as the follow-up (ADR-271 Alternatives) and the limitation is in ADR-271 Consequences and the
   agent-browser playbook.
 
+
+## 2026-10-05 — Review resolutions, round 2 (PR #9494, fix-round seats)
+
+Seven seats re-read the first fix round. All original findings held as documents; the items below are what the fixes introduced or left
+open, and what was done with each. Code items are in the slot-script and suite commits on this branch; this section says only what
+the final code and suite show.
+
+- **Concurrent launches shared slot 0 (two seats, P2, fix-introduced): fixed in code, proven by a suite row.** The `flock`
+  capability probe locked `/dev/null`, so a launch that lost the race read rc 75 as "no usable flock" and took the no-lease branch.
+  The probe now reads 75 as proof `-E` works; the lifetime suite releases 12 lease scripts together and asserts 12 distinct
+  profiles, with a strict-probe mutant that goes red. ADR-271 "Proven" says "12 launches, util-linux flock only" and does not claim
+  more. Declined: a private lock file for the probe (rc 75 handling is the smaller change).
+- **"Stronger" filter (agent-native N1, P2): withdrawn.** The `attachment.command` filter equals the kill-text filter (142 = 142
+  on 2026-10-05; 107 = 107 the day before); it detects a loaded hook only when a Chrome was alive at that `Stop`. Step 2 of the
+  headless recipe no longer requires `unkept-promise-hook` or `stop-hook` in the event (neither leaves a `command`-carrying
+  attachment: 0 of 143). It now requires one `Stop` event and no `browser-cleanup`, labelled UNTESTED because running the recipe
+  loads a browser server; the first run must quote one real `--include-hook-events` line. Operator decision left open: whether
+  the post-merge run is worth scheduling, since the ADR stays `adopting` until it passes.
+- **Recipe on a display-less host (N2), proxy log lines (N3), numbered-slot test (N4), foreign-host lock, no-flock second session,
+  second surviving killer, lost-login diagnosis, 7 s wait needs flock: documented** in ADR-271 Decision 3 and the agent-browser
+  playbook.
+- **Sandbox remedy reaches the driving skills (user-impact F1, P2): done.** One sentence each in `qa`, `ux-audit` and `work`: on
+  `Chromium sandboxing failed!` / `No usable sandbox!` stop, read the troubleshooting entry, never disable the sandbox, tell the
+  user the host needs Google Chrome or a non-root user. `qa` was 356 bytes over its body-budget ceiling and was trimmed (a
+  duplicated screenshot-path note and some wording) rather than raising the ceiling.
+- **Plan User-Brand Impact (F4, P2): edited in place.** Designed fail-closed host class, additional at-rest credential stores, and a
+  delivery line; R5 retired by the CTO ruling; R4 and the transition note no longer say the mixed-version kill is one-time.
+- **`browser_close` duty (F6, N5): added** to `work` and `reproduce-bug` (one sentence each). The `chmod -x` interim stays labelled
+  untested; nobody ran it.
+- **Not changed, still open:** the final PR body must carry the update, restart and interim text and the mixed-version note (a ship
+  step, not a repository artifact); the lease-inside-the-proxy follow-up is still to be filed as an issue at ship; real-host
+  confirmation that a Chrome-less host without unprivileged user namespaces fails closed was not run (this host's `unshare -Ur true`
+  succeeds).

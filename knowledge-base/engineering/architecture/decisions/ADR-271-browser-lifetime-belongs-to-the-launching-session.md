@@ -122,12 +122,17 @@ The published statement "the heartbeat is the likely cause" was made before this
    - A `SingletonLock` that names a live Chrome means a leftover or foreign Chrome owns the profile: the slot is skipped, never
      cleared (slot 0 gets the same wait-then-recheck). The probe fails toward busy and needs no `ps`: `/proc/<pid>` or `kill -0`
      (EPERM counts as alive); a live pid counts as a Chrome owner only when its comm is chrome-like (or unreadable), otherwise the
-     pid was recycled and the stale lock is cleared; a lock naming ANOTHER HOST is never removed.
+     pid was recycled and the stale lock is cleared; a lock naming ANOTHER HOST is never removed (so a renamed host or a copied
+     home leaves slot 0 skipped until `rm <slot-0 dir>/Singleton*` is run by hand, see `agent-browser/SKILL.md`). A `SingletonLock`
+     whose pid is not a positive integer (non-numeric, zero, or out of range) names no owner and counts as stale, which is the
+     one exception to "fails toward busy"; Chrome never writes such a value.
    - Every slot-0 skip prints one stderr line (in the MCP log) saying the persistent profile's logins are not available in this
      session. A slot >= 1 that cannot be used (mkdir, lock file, open or an `flock` error) continues the search.
    - No usable `flock` (stock macOS has none; busybox `flock` lacks `-E`): slot 0 is claimed WITHOUT a lease when its
-     `SingletonLock` is absent or provably stale, so the first session keeps the persistent profile; otherwise the unique
-     fallback. 32 busy slots also use it.
+     `SingletonLock` is absent or provably stale, so the first session keeps the persistent profile once its Chrome exists;
+     otherwise the unique fallback. A second session that starts before the first one's browser exists (Playwright starts the
+     browser lazily, so there is no `SingletonLock` yet) also gets slot 0 and Playwright's "already in use" error. 32 busy slots
+     also use the unique fallback.
    - The unique fallback is `<base>-p<pid>` (`$base-p$$`: a non-numeric infix so it never aliases slot N), created by the script
      with mode 700, with a stderr note naming the cause. The script never kills anything.
    - Teardown timing: the old proxy's teardown is usually well under 5 s and up to about 15 s in the worst case
@@ -160,6 +165,13 @@ The published statement "the heartbeat is the likely cause" was made before this
 - The heartbeat cannot be the cause on stdio in 0.0.78 or 0.0.83, because the stdio transport passes `runHeartbeat=false`.
 - With the proxy SIGKILLed, no browser descendant outlived it for headless bundled Chromium (three runs, 0.04 s). Headed real
   Chrome and the unwrapped 0.0.75 server of cron-ux-audit were not measured.
+- Concurrent launches do not share a slot, for 12 launches on this host. Two review seats found that launches started in the same
+  instant could both take slot 0, because the `flock` capability probe locked one shared inode (`/dev/null`) and read a lost
+  race (rc 75) as "no usable flock". The probe now reads 75 as proof `-E` works. The lifetime suite has a row that releases 12
+  lease scripts together under one HOME and asserts 12 distinct profiles and zero "no usable flock" notes, and a mutant that
+  restores the strict probe goes red (`grep -n 'BAR_N=' plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh`).
+  The 20- and 34-launch figures in the review are manual seat measurements, not suite rows, and the proof is for util-linux
+  `flock` only.
 - Without `--browser chromium`, the plugin registration cannot launch a browser on a host with no Google Chrome (reproduced on
   this host only).
 - The fallback's `--sandbox` reaches the pinned config: resolving `{browser:'chromium'}` gives `chromiumSandbox false` and
@@ -174,18 +186,25 @@ The published statement "the heartbeat is the likely cause" was made before this
      `claude -p --plugin-dir <checkout>/plugins/soleur --input-format stream-json --output-format stream-json
      --include-hook-events` (stream-json under `-p` may also require `--verbose`; add it if the CLI refuses). Keep its stdin open
      (a FIFO or a coprocess) and send three user turns as stream-json lines: a `browser_navigate`, then more than 60 s later a
-     second turn that takes a `browser_snapshot`, then a third. Separate `-p` calls do not work: each ends its MCP server.
+     second turn that takes a `browser_snapshot`, then a third. Separate `-p` calls do not work: each ends its MCP server. On a
+     display-less host export `PLAYWRIGHT_MCP_HEADLESS=1` first; a launch error on the first `browser_navigate` makes the run
+     INCONCLUSIVE, never a pass.
   2. Assert which hooks loaded from the `--include-hook-events` output, do not assume it: with `--plugin-dir` and the installed
-     copy both named `soleur`, which one loads is undetermined. Pass only if the `Stop` hook events carry a command matching
-     `unkept-promise-hook` or `stop-hook` (the plugin's hooks are loaded and `Stop` fired) AND none matches `browser-cleanup`.
-     A `browser-cleanup` command means the installed copy won; the run says nothing about the fix, so update and retry.
+     copy both named `soleur`, which one loads is undetermined. Pass only if at least one `Stop` hook event was emitted AND no
+     `Stop` hook event names `browser-cleanup`. A `browser-cleanup` command means the installed copy won; the run says nothing
+     about the fix, so update and retry. UNTESTED, like the whole recipe: the field names of a stream-json hook event were not
+     observed (running the recipe loads a browser server), so the first run must record one real `--include-hook-events` line
+     here. Do not require `unkept-promise-hook` or `stop-hook` in the event: in this project's transcripts neither hook leaves any
+     `command`-carrying attachment (measured below, 0 of 143), because they print nothing, and a stream may omit them the same way.
   3. Acceptance filter on the process's transcript (`~/.claude/projects/<slug>/<session>.jsonl`):
      `jq -c 'select(.attachment.hookEvent=="Stop" and (.attachment.command|tostring|test("browser-cleanup")))' <transcript> | wc -l`
-     must print 0. It proves the hook is not loaded, which is stronger than the kill text being absent. The kill text itself
-     lives in `attachment.stderr`, not `stdout`. Positive control, run on 2026-10-04: `cat ~/.claude/projects/-data-git-repositories-jikig-ai-soleur/*.jsonl | jq -c '<the same select>' | wc -l`
-     printed 107, and adding `and (.attachment.stderr|tostring|test("Browser cleanup: killed"))` also printed 107 (a point-in-time count that
-     grows while an installed copy still fires). A bare `grep -c` of the kill sentence is not the check: the sentence also appears
-     in quoted text such as this ADR.
+     must print 0. This filter is EQUAL to the kill-text filter here, not stronger: over this project's transcripts it printed
+     142 and adding `and (.attachment.stderr|tostring|test("Browser cleanup: killed"))` also printed 142 (2026-10-05; 107 and 107
+     on 2026-10-04, a point-in-time count that grows while an installed copy still fires). Transcripts record only hooks that
+     printed, and `browser-cleanup-hook.sh` prints only when it killed something, so a loaded but idle hook leaves no attachment:
+     the filter detects a loaded hook only when a Chrome was alive at that `Stop`, which step 1 guarantees (a browser is open at
+     every turn end). The kill text itself lives in `attachment.stderr`, not `stdout`. A bare `grep -c` of the kill sentence is
+     not the check: the sentence also appears in quoted text such as this ADR.
   4. Repeat with one parallel process on the same checkout (it takes slot 1) and confirm the first browser is still answering.
   The user's own interactive session still needs a restart by the USER (an agent cannot restart its own host); a `/mcp`
   reconnect reuses the cached `.mcp.json` command and does not reload hooks.
