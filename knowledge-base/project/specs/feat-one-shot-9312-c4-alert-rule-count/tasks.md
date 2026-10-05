@@ -17,7 +17,7 @@ Plan: knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-c
 ## Phase 3: Verify
 
 - 3.1 Run c4-model-freshness, c4-count-parity and render-c4-model tests; all pass.
-- 3.2 Run the residual-sentence `git grep` (excluding archive and this feature's plan/tasks); no hits.
+- 3.2 Run the residual-sentence `git grep` (excluding archive and this feature's plan/tasks/session-state); no hits.
 - 3.3 Check no doubled blank lines in the new markdown (plan, tasks).
 
 ## Phase 4: Ship

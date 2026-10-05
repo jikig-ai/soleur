@@ -27,7 +27,7 @@ brand_survival_threshold: none
 ### New Considerations Discovered
 
 - Gate results: 4.6 pass (concrete User-Brand Impact, threshold none, scope-out bullet present); 4.7 skip (pure docs); 4.8 pass (no PAT-shaped tokens); 4.9 skip (no UI surface); 4.10 skip (no store or connection; `.tf` files are cited, not edited); 4.11 skip (no guard is delivered, the operator explicitly declined the parity row); 4.12 pass.
-- Re-measured live: 43 `sentry_alert` resources in `issue-alerts.tf`, 3 `fallthrough_type = "NoOne"` rules (`git_data_boot_warning`, `byok_cap_exceeded`, `web_luks_boot_warning`; a fourth `grep -c` hit is the comment at `issue-alerts.tf:241`, and `auth_per_user_loop` is `ActiveMembers`), 1 more `sentry_alert` in `cron-monitor-alerts.tf`; PR #9302 merged 2026-09-30T19:46:09Z; #9312 open.
+- Re-measured live (as of 2026-10-05): 43 `sentry_alert` resources in `issue-alerts.tf`, 3 `fallthrough_type = "NoOne"` rules (`git_data_boot_warning`, `byok_cap_exceeded`, `web_luks_boot_warning`; a fourth `grep -c` hit is the comment at `issue-alerts.tf:241`, and `auth_per_user_loop` is `ActiveMembers`), 1 more `sentry_alert` in `cron-monitor-alerts.tf`; PR #9302 merged 2026-09-30T19:46:09Z; #9312 open.
 - Issue #9312's body itself says the original count read "36 of the 38" and that PR #9263 would change it again; both are superseded by this deletion, and the number would have gone stale a third time without any test noticing.
 - Risk: rendering needs network through `npx` with the pinned `--before` date. A failed render never overwrites the committed artifact, and CI `c4-model-freshness` is the backstop.
 
@@ -40,8 +40,9 @@ three rule names (review decision-challenge DC-5 on PR #9302, issue #9312). The 
 today (`apps/web-platform/infra/sentry/issue-alerts.tf` has 43 `sentry_alert` resources and three with
 `fallthrough_type = "NoOne"`; an earlier draft of this plan wrongly counted four because a `grep -c`
 also matched a comment). The reason to delete it is maintenance, not a wrong number: nothing checks it
-(`plugins/soleur/test/c4-count-parity.test.sh` has no row for this count), it was hand-bumped once
-already, and every new alert rule needs a hand edit.
+(`plugins/soleur/test/c4-count-parity.test.sh` has no row for this count), its text has been hand-edited across several PRs
+(it read "31 of the 33" at #8694, "36 of the 38" in #9312's own description and "40 of the 43" today),
+and every new alert rule needs a hand edit.
 
 The operator already chose the resolution at the go-dispatch prompt: DELETE the number. Do not keep
 it, do not add a parity row. The edit removes the "N of the M" count and the hand-enumerated NoOne
@@ -54,7 +55,7 @@ writes.
 **Premise Validation.** Checked: #9312 is OPEN with no closing PR; PR #9302 is MERGED
 (2026-09-30T19:46:09Z), so the earlier caveat about an open PR changing the count again is resolved.
 `model.c4:815` on this branch still carries the sentence (draft PR #9527 is OPEN, branch is clean and
-current with origin/main for `diagrams/`). Counts re-measured on the worktree:
+current with origin/main for `diagrams/`). Counts re-measured on the worktree (as of 2026-10-05):
 `grep -c '^resource "sentry_alert"'` = 43 in `issue-alerts.tf`, 1 in `cron-monitor-alerts.tf`;
 `grep -c 'fallthrough_type *= *"NoOne"' issue-alerts.tf` = 4, of which one is a comment (`:241`) and three are rules (`git_data_boot_warning`, `byok_cap_exceeded`, `web_luks_boot_warning`), so the count in the prose is correct. The premise "the count is already wrong" does NOT hold; the deletion rests on maintenance cost. No external premises
 are stale. The proposed mechanism (delete prose) is not in any ADR's rejected-alternatives table.
