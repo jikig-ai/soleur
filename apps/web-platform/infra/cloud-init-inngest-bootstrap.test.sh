@@ -265,8 +265,8 @@ assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]
 # bootstrap-image release" step — forgotten 10 consecutive times (v1.0.1…v1.1.10)
 # before #4669. The pin MUST equal the semver-max `vinngest-v*` git tag MERGED
 # INTO HEAD: that tag is the authoritative "a new soleur-inngest-bootstrap image
-# was published" signal (build-inngest-bootstrap-image.yml is
-# `on: push: tags: ['vinngest-v*.*.*']`). sort -V (semver), NOT lexicographic —
+# was published" signal (build-inngest-bootstrap-image.yml publishes each tag once,
+# dispatched from main; its `push: tags` trigger was removed in #9262). sort -V (semver), NOT lexicographic —
 # plain `sort` ranks v1.1.9 above v1.1.10, the exact bug class that hid the drift.
 # `--merged HEAD` (#8782): a tag cut on an unmerged branch is never a candidate,
 # so it cannot turn main and every other PR red. The 3-line selector below is
@@ -455,7 +455,7 @@ if command -v terraform >/dev/null 2>&1; then
   # whose assertions fail with a misleading "OMITS" pass (#6425).
   render_ci() {
     local colocate="$1" out="$2" connector="${3:-true}"
-    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10", web_probes_token="t", expected_ip="10.0.1.10", web_host_key="hk", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zp", zot_pull_token="zt" })\n' \
+    printf 'templatefile("%s", { image_name="i", fail2ban_sshd_local_b64="x", host_scripts_content_hash="h", tunnel_token="TT_SENTINEL_6425", webhook_deploy_secret="w", doppler_token="d", sentry_dsn="s", resend_api_key="r", ci_ssh_public_key_openssh="k", workspaces_volume_id="v", workspaces_luks_fresh_boot_token="lt", registry_endpoint="reg", web_colocate_inngest=%s, web_tunnel_connector=%s, host_name="soleur-web-platform", private_ip="10.0.1.10", web_probes_token="t", expected_ip="10.0.1.10", web_host_key="hk", zot_probe_repo="zr", betterstack_ingest_url="bs", soleur_doppler_token_env_b64="RE9QUExFUl9UT0tFTj1k", zot_pull_user="zp", zot_pull_token="zt" })\n' \
       "$CLOUD_INIT" "$colocate" "$connector" | terraform -chdir="$RENDER_SCRATCH" console > "$out"
     # A truncated/empty render makes every `! grep` assertion pass vacuously.
     [[ -s "$out" ]] || { echo "  FATAL: render produced no output (colocate=$colocate connector=$connector)"; return 1; }

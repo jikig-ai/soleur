@@ -37,6 +37,8 @@ import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { ERR_ATTACHMENT_NOT_FOUND } from "./error-messages";
+import { validateAttachmentRef } from "./attachment-pipeline";
 import { createChildLogger } from "./logger";
 import {
   connectionThrottle,
@@ -53,7 +55,7 @@ import {
   getActiveTurnConversation,
   setActiveTurnConversation,
   clearActiveTurnConversation,
-  forEachSessionForConversation,
+  hasLiveAgentLoop,
 } from "./agent-session-registry";
 import {
   streamReplayBuffer,
@@ -468,15 +470,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
  * (knowledge-base/engineering/architecture/decisions): reap on agent-loop
  * liveness, not socket focus.
  */
-function hasLiveAgentLoop(userId: string, conversationId: string): boolean {
-  if (hasActiveCcQuery(conversationId)) return true;
-  let found = false;
-  forEachSessionForConversation(userId, conversationId, () => {
-    found = true;
-    return true; // stop at the first match
-  });
-  return found;
-}
+// The predicate itself is imported from the shared registry
+// (agent-session-registry.hasLiveAgentLoop) — the stuck-active reaper
+// consults the same cross-lineage check so a slotless-but-live turn is
+// never reaped from either path.
 
 export async function tryLedgerDivergenceRecovery(
   userId: string,
@@ -1679,7 +1676,13 @@ async function handleResumeStream(
     // already carry `seq`). The client dedups any `seq <= lastRenderedSeq`.
     // Live frames then resume from the still-running agent.
     for (const frame of frames) {
-      sendToClient(userId, frame);
+      // debug_event re-emits are marked `replayed` so the client's watchdog
+      // heartbeat ignores them — a buffered tool_use is stale liveness
+      // evidence, not a live one (lib/chat-state-machine.ts `debug_event`).
+      sendToClient(
+        userId,
+        frame.type === "debug_event" ? { ...frame, replayed: true } : frame,
+      );
     }
   } catch (err) {
     Sentry.captureException(err);
@@ -1688,6 +1691,29 @@ async function handleResumeStream(
       "resume_stream error",
     );
     fallback(msg.conversationId);
+  }
+}
+
+/**
+ * Rejoin replay for the debug-mode panel: re-emit a conversation's buffered
+ * `debug_event` frames when the client binds to it via a full session resume
+ * (`resume_session` / context_path resume) — the leave-and-return remount
+ * path that never sends `resume_stream`. Each frame is cloned with
+ * `replayed: true` so the client's watchdog heartbeat ignores it
+ * (lib/chat-state-machine.ts `debug_event` case). The frames were already
+ * delivered to this user's socket once — re-sending within the same
+ * ownership boundary introduces no new exposure, and nothing is persisted.
+ * An absent/evicted ring is a silent no-op (the panel simply starts empty).
+ */
+function replayBufferedDebugEvents(
+  userId: string,
+  conversationId: string,
+): void {
+  const { frames } = streamReplayBuffer.replayFrom(conversationId, -1);
+  for (const frame of frames) {
+    if (frame.type === "debug_event") {
+      sendToClient(userId, { ...frame, replayed: true });
+    }
   }
 }
 
@@ -1873,6 +1899,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               resumedFromTimestamp: row.last_active,
               messageCount: countErr ? 0 : (messageCount ?? 0),
             });
+
+            // feat-debug-mode-stream — repopulate the debug panel on this
+            // leave-and-return rebind (buffered frames only; no-op when the
+            // ring is gone).
+            replayBufferedDebugEvents(userId, row.id);
 
             log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
             break;
@@ -2239,6 +2270,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           conversationId: msg.conversationId,
           capabilities: WS_CAPABILITIES,
         });
+
+        // feat-debug-mode-stream — repopulate the debug panel on this
+        // leave-and-return rebind: emit the conversation's buffered debug
+        // frames (marked `replayed`; no-op when the ring is gone).
+        replayBufferedDebugEvents(userId, msg.conversationId);
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");
@@ -2336,12 +2372,28 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
         const stripped = userContent.replace(/@\w+\s*/g, "").trim();
-        if (!stripped) {
+        // `attachments: []` is truthy: test the length, never `!msg.attachments`.
+        if (!stripped && (msg.attachments?.length ?? 0) === 0) {
           sendToClient(userId, {
             type: "error",
             message: "Please include a message along with the @-mention.",
           });
           return;
+        }
+        // First message with ANY attachments (#9297): validate every ref BEFORE
+        // createConversation, text or not. A forged/stale ref (e.g. uploaded
+        // under a pending id a reconnect has since re-minted) must not create
+        // the conversation row or the user message before the attachment
+        // pipeline rejects it.
+        if ((msg.attachments?.length ?? 0) > 0) {
+          try {
+            for (const a of msg.attachments ?? []) {
+              validateAttachmentRef(a, userId, session.pending.id);
+            }
+          } catch (refErr) {
+            sendToClient(userId, { type: "error", message: sanitizeErrorForClient(refErr) });
+            return;
+          }
         }
 
         try {
@@ -2379,6 +2431,24 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             // crm-lead stays command_center (rail + DSAR filter on that kind).
             pendingContext?.type === "support" ? "support" : "command_center",
           );
+          // Two-tab context_path fallback: the row id differs from the pending
+          // id the client uploaded under, so the pipeline prefix check would
+          // fail closed AFTER the user message row was appended to the other
+          // tab's conversation. Fail closed here instead: countable, and no
+          // empty user message. Session state is left untouched (still pending).
+          if (resolvedId !== pendingId && (msg.attachments?.length ?? 0) > 0) {
+            reportSilentFallback(null, {
+              feature: "attachments",
+              op: "attachments-pending-id-diverged",
+              message: "first-message attachments uploaded under a pending id that diverged from the resolved conversation id",
+              extra: { userId, pendingId, resolvedId, attachmentCount: msg.attachments?.length },
+            });
+            sendToClient(userId, {
+              type: "error",
+              message: sanitizeErrorForClient(new Error(ERR_ATTACHMENT_NOT_FOUND)),
+            });
+            return;
+          }
           session.conversationId = resolvedId;
           session.pending = undefined;
           // Seed the routing cache so chat-case on subsequent turns

@@ -696,6 +696,38 @@ describe("Command Center", () => {
       expect(mockPush).toHaveBeenCalledWith(
         expect.stringContaining("/dashboard/chat/new"),
       );
+      // No staged files -> no first-run marker.
+      expect(mockPush.mock.calls.at(-1)![0]).not.toContain("fr=1");
+    });
+
+    it("adds the fr=1 first-run marker to the chat URL when files are staged", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<SwrTestProvider><DashboardPage /></SwrTestProvider>);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(fileInput, {
+        target: { files: [new File(["# notes"], "notes.md", { type: "text/markdown" })] },
+      });
+      await waitFor(() => {
+        expect(screen.getByText("notes.md")).toBeInTheDocument();
+      });
+
+      // Files only (empty message): the marker is the only signal the chat
+      // page has that the staged files belong to this navigation.
+      const input = screen.getByPlaceholderText("What are you building?");
+      fireEvent.submit(input.closest("form")!);
+
+      expect(mockPush).toHaveBeenCalledTimes(1);
+      const url = new URL(mockPush.mock.calls[0]![0] as string, "http://localhost");
+      expect(url.pathname).toBe("/dashboard/chat/new");
+      expect(url.searchParams.get("fr")).toBe("1");
+      expect(url.searchParams.has("msg")).toBe(false);
     });
   });
 });

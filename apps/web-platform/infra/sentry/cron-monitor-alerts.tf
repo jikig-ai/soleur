@@ -41,7 +41,18 @@
 locals {
   # label => "<reason> (#<issue>)". Declared-unrouted cron monitors.
   # Not read by any resource: it is the reviewed record Guard 1 checks against.
-  cron_monitor_alert_unrouted = {}
+  cron_monitor_alert_unrouted = {
+    # #9274 — added under the two-PR rule: deliberately not in
+    # monitor_ids; a future PR may route it once the loop is measured. Real
+    # cover meanwhile: a dead reaper lets armed bot PRs sit >48h, which
+    # cron-cloud-task-heartbeat's stale-bot-PR scan (#5138) feeds
+    # sentry_alert.stale_bot_pr (issue-alerts.tf) → email; the unrouted
+    # monitor itself still opens a Sentry issue on failure.
+    scheduled_bot_pr_reaper = "48h stale-bot-PR watchdog (sentry_alert.stale_bot_pr) covers a dead reaper pending a routing decision (#9274)"
+    # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
+    # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
+    workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
+  }
 }
 
 resource "sentry_alert" "cron_monitor_failure" {
@@ -77,7 +88,6 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_devin_docs_drift.id,
     sentry_cron_monitor.scheduled_domain_model_drift.id,
     sentry_cron_monitor.scheduled_follow_through.id,
-    sentry_cron_monitor.scheduled_gh_pages_cert_state.id,
     sentry_cron_monitor.scheduled_github_app_drift_guard.id,
     sentry_cron_monitor.scheduled_growth_audit.id,
     sentry_cron_monitor.scheduled_growth_execution.id,
@@ -89,6 +99,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_machinery_drain.id,
     sentry_cron_monitor.scheduled_marketplace_drift.id,
     sentry_cron_monitor.scheduled_membership_health.id,
+    sentry_cron_monitor.scheduled_merge_queue_stall_dispatch.id,
     sentry_cron_monitor.scheduled_nag_4216_readiness.id,
     sentry_cron_monitor.scheduled_oauth_probe.id,
     sentry_cron_monitor.scheduled_plausible_goals.id,

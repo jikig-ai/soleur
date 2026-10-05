@@ -35,7 +35,8 @@
 # are dispatched by the web server's watchdog clock (ADR-248), so their margins
 # are budgeted for the clock plus the MEASURED runner queue instead (inngest 15 -> 50, zot
 # 120 -> 60; see each resource).
-# Daily/weekly monitors use 30-240 min as their observed jitter dictates.
+# Daily/weekly monitors use 30-1440 min as their observed jitter dictates; the 1440
+# outlier is scheduled_realtime_probe, sized to survive one wholly dropped daily run.
 # The TR9 substrate-migration sequence completed the move off GHA hourly cron
 # for the Inngest-fired cohort: PR-1 #3985 (daily-triage), PR-2 #4062
 # (follow-through), PR-3 #4227 closing issue #4211 (oauth-probe), PR-4
@@ -281,9 +282,9 @@ resource "sentry_cron_monitor" "scheduled_follow_through" {
   name         = "scheduled-follow-through"
   schedule     = { crontab = "0 9 * * 1-5" }
   # TR9 PR-2 (#4063): NEW Inngest-fired monitor for cron-follow-through-monitor.ts.
-  # 30-min margin per Inngest-fired precedent (scheduled_daily_triage above + PR-γ
-  # #4006's scheduled_gh_pages_cert_state). Weekday-only DOW range (1-5) is honored
-  # by Sentry's croniter-backed missed-checkin algorithm AND the jianyuan/sentry
+  # 30-min margin per Inngest-fired precedent (scheduled_daily_triage above).
+  # Weekday-only DOW range (1-5) is honored by Sentry's croniter-backed
+  # missed-checkin algorithm AND the jianyuan/sentry
   # provider passes the crontab through verbatim (verified at Phase 0.4 of the plan
   # via gh search against the provider's internal/provider/resource_cron_monitor_impl.go
   # — Schedule: inSchedule.Crontab.Get()). Weekend gap is expected silence, not a
@@ -363,77 +364,15 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
   timezone                = "UTC"
 }
 
-# scheduled-gh-pages-cert-state: daily 03:00 UTC poll of GitHub Pages cert
-# state for soleur.ai. Closes the gap exposed by the 2026-05-18 silent
-# cert-expiry outage (PR #3974 + PR #3986 + issue #3976). Daily cadence
-# leaves >2 weeks operator response on a single missed fire; the 240-
-# minute `checkin_margin_minutes` is a GHA-era inheritance, RETAINED UNCHANGED.
-# (An earlier revision of this comment said the monitor "is GHA-fired (not
-# Inngest), so the legacy GHA-jitter tolerance applies". That was stale: TR9
-# Phase-2 migrated this poll to Inngest and deleted
-# scheduled-gh-pages-cert-state.yml. The 240 is kept as-is rather than re-tuned
-# to the Inngest norm — cf. `scheduled-daily-triage`, which tightened to 30 min
-# after its own Inngest migration in TR9 PR-1 #3985 — because re-tuning a margin
-# is a separate decision and this monitor is disabled anyway. Correcting the
-# sentence matters because whoever re-arms this would otherwise inherit a wrong
-# premise about why the margin is 240.)
-# `failure_issue_threshold = 1` because a single miss on a daily monitor
-# is itself noteworthy.
-#
-# ‼️ #7640 / ADR-194 — DISARMED (`enabled = false`), NOT deleted. The producer
-# `cron-gh-pages-cert-state` lost its `{ cron: "0 3 * * *" }` trigger in the
-# same PR (manual-trigger-only now), so this monitor would otherwise open a
-# MISSED-check-in issue EVERY DAY from that merge onward — the same daily-noise
-# loop the disarmament exists to remove, relocated from `[cert-poll]` issues
-# into Sentry.
-#
-# WHY `enabled = false` AND NOT A DELETE:
-#   - a delete requires `[ack-destroy]`, which this migration reserves for the
-#     DNS cutover PR; spending it on the substrate PR costs the gate its signal;
-#   - the handler still declares SENTRY_MONITOR_SLUG and still heartbeats on the
-#     retained manual-trigger arm, so a delete breaks the code->IaC parity guard
-#     (test/server/inngest/sentry-monitor-iac-parity.test.ts) and would need a
-#     DISABLED_CRON_SLUG_EXEMPTIONS entry;
-#   - a delete also moves model.c4's live monitor counts (55/11/44) and the
-#     Art. 30 register's monitor inventory, both count-gated in CI;
-#   - rollback is a revert of the cutover. Re-arming must be the INVERSE of
-#     disarming — one boolean here, one trigger there — not a re-creation of a
-#     destroyed resource through a second Terraform root.
-#
-# KNOWN RESIDUAL, accepted deliberately: a manual
-# `cron/gh-pages-cert-state.manual-trigger` still calls postSentryHeartbeat,
-# which POSTs to the check-in URL. Against a disabled monitor Sentry may return
-# 4xx; _cron-shared.ts does not retry a 4xx and routes it to
-# reportSilentFallback — one Sentry event per operator-initiated manual run.
-# Bounded and operator-triggered, three orders of magnitude below the ~365/yr it
-# replaces. Do NOT add a "skip heartbeat when disarmed" branch to the handler:
-# that would make the app a second source of truth for this monitor's state.
-#
-# The schedule and margins below are RETAINED VERBATIM as the re-arm recipe.
-# Flip `enabled` back to true ONLY in the same PR that restores the cron
-# trigger in cron-gh-pages-cert-state.ts.
-resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
-  organization            = var.sentry_org
-  project                 = data.sentry_project.web_platform.slug
-  name                    = "scheduled-gh-pages-cert-state"
-  enabled                 = false
-  schedule                = { crontab = "0 3 * * *" }
-  checkin_margin_minutes  = 240
-  max_runtime_minutes     = 10
-  failure_issue_threshold = 1
-  recovery_threshold      = 1
-  timezone                = "UTC"
-}
-
 # TR9 PR-6 (closes #4416): Inngest-fired via
 # `apps/web-platform/server/inngest/functions/cron-strategy-review.ts`. NEW
 # monitor — no GHA-era predecessor (the workflow ran on GHA's runner pool
 # with no Sentry check-in). The GHA scheduled-strategy-review workflow was
 # deleted in the same commit per TR9 I-13 hygiene.
 # Weekly Monday 08:00 UTC. Inngest-fired (not GHA) — 30-min margin per the
-# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through,
-# scheduled_bug_fixer); tighter than the GHA-era 240-min margin
-# (cf. scheduled_gh_pages_cert_state) because Inngest has minimal jitter.
+# Inngest-fired precedent (scheduled_daily_triage, scheduled_follow_through);
+# tighter than the GHA-era 240-min margin (see scheduled_daily_triage) because
+# Inngest has minimal jitter.
 # Single-miss alert (failure_issue_threshold=1): a single missed Monday is
 # noteworthy on a weekly cadence.
 resource "sentry_cron_monitor" "scheduled_strategy_review" {
@@ -1297,6 +1236,30 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
   timezone                = "UTC"
 }
 
+# (#6931) Liveness for the web-2 soak-marker job (.github/workflows/workspaces-luks-verify.yml, job
+# `web2_marker`, the SAME on.schedule "41 4 * * *" as the web-1 leg above). That job is the single writer and
+# deleter of WORKSPACES_LUKS_CUTOVER_AT, so a silently dead schedule leaves a stale marker in place with no
+# re-verification; a missed check-in is the only layer that sees it. The check-in is posted by the job's last
+# `sentry-heartbeat` step and ONLY on a `schedule` event (a dispatch must not forge liveness).
+#
+# Every constant mirrors `workspaces_luks_verify` ABOVE and for the same reasons (threshold 2 absorbs the
+# dropped scheduled runs recorded in #4189, and the margin then only has to size start-delay jitter; the
+# in-run GitHub issue is the primary channel for an observed failure, Sentry the backstop for silence).
+# max_runtime_minutes is decorative (the heartbeat posts one terminal check-in) and tracks this job's
+# `timeout-minutes: 10` with headroom. The crontab is asserted EQUAL to the workflow's by
+# workspaces-luks-verify-workflow.test.sh, as for the web-1 monitor.
+resource "sentry_cron_monitor" "workspaces_luks_verify_web2" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "workspaces-luks-verify-web2"
+  schedule                = { crontab = "41 4 * * *" }
+  checkin_margin_minutes  = 420
+  max_runtime_minutes     = 20
+  failure_issue_threshold = 2
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Executor liveness for the main-branch health monitor (#7307).
 #
 # NOT a novel argument — the on-point precedent is `scheduled_domain_model_drift`
@@ -1315,36 +1278,36 @@ resource "sentry_cron_monitor" "workspaces_luks_verify" {
 # crontab mirrors the Inngest cron in cron-main-health-monitor.ts
 # (`{ cron: "0 */6 * * *" }`) — read from that file, not from memory.
 #
-# checkin_margin_minutes = 90, DERIVED, not copied from the cohort. The cohort's
+# checkin_margin_minutes = 210, DERIVED, not copied from the cohort. The cohort's
 # 60 belongs to jobs with `timeout-minutes` of 8-15, i.e. 45+ minutes of slack;
-# this executor's ceiling is 65, so a copied 60 would page BEFORE the job's own
+# this executor's job ceiling is 185, so a copied 60 would page BEFORE the job's own
 # ceiling and a legitimately slow green run would open a P1 on a healthy main.
 # The method the header's CLAUDE-EVAL passage actually documents is
-# margin = run budget + setup/teardown slack, so: 65 (job ceiling) + 25 (Inngest
-# jitter, dispatch, runner queue) = 90, still 4x under the 360-minute inter-fire
-# gap, so a genuinely dropped run pages within 90 minutes. If the workflow's
-# `timeout-minutes` moves, this moves with it.
+# margin = run budget + setup/teardown slack, so: 185 (job ceiling) + 25 (Inngest
+# jitter, dispatch, runner queue) = 210, still under the 360-minute inter-fire
+# gap, so a genuinely dropped run pages within 210 minutes. If the workflow's
+# `timeout-minutes` moves, this moves with it; the static guard in
+# plugins/soleur/test/main-health-monitor-workflow.test.sh (G2) fails when it does not.
+# The 185 is derived from an uncensored measurement (workflow run 36950488321), see the
+# TIMEOUT BUDGET block in the workflow. The +25 slack is checked against the monitor's own
+# population, measured over the 62 runs since 2026-09-17: dispatch lag after the 6-hour slot
+# (p90 111 s, max 211 s from the slot to the run's created_at) and job queue delay (a few
+# seconds typically; the worst two samples were 1509 s and 2176 s). A healthy run takes about
+# 110 minutes against the 185-minute job ceiling, so the margin absorbs those worst samples
+# with room; a run that ALSO ran to its full ceiling would not. A dry run now has its own
+# concurrency group, so a manual measurement cannot queue the scheduled run behind it.
 #
-# (An earlier revision of this comment cited "the Inngest-dispatch cohort
-# convention documented in this file's header" and a header-recorded false page
-# "on this same substrate". Both were wrong: the header documents 30 for
-# Inngest-fired monitors and the 60 convention lives in per-resource blocks, and
-# the false page it records is `scheduled-agent-native-audit` on the in-process
-# claude-eval substrate, not Inngest -> dispatch -> GHA.)
-#
-# max_runtime_minutes tracks the workflow's own `timeout-minutes: 65`, per the
+# max_runtime_minutes tracks the workflow's own job-level `timeout-minutes` (185), per the
 # `workspaces_luks_verify` convention immediately above. It is DECORATIVE under a
 # single terminal heartbeat (this file's header, lines on two-step check-ins) —
-# but it must not be FALSE: the previous value of 15 was exactly the ceiling this
-# PR replaced, so a reader applying the sibling convention backwards would have
-# read it as evidence the job ceiling was still 15.
+# but it must not be FALSE.
 resource "sentry_cron_monitor" "main_health_monitor" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "main-health-monitor"
   schedule                = { crontab = "0 */6 * * *" }
-  checkin_margin_minutes  = 90
-  max_runtime_minutes     = 65
+  checkin_margin_minutes  = 210
+  max_runtime_minutes     = 185
   failure_issue_threshold = 1
   recovery_threshold      = 1
   timezone                = "UTC"
@@ -1442,9 +1405,11 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
 
 # Liveness for the GitHub Actions queue-health monitor
 # (.github/workflows/scheduled-actions-queue-health.yml, on.schedule
-# "*/30 * * * *"). #8450 incident class: on 2026-09-22 the org sat ~90 minutes
-# at ~206 queued runs with ~8-10 jobs executing against a 60-job Team
-# entitlement — runner under-assignment — and nothing paged.
+# "*/30 * * * *" as FALLBACK + Inngest dispatch-primary via
+# cron-actions-queue-health-dispatch, #9273). #8450 incident class: on
+# 2026-09-22 the org sat ~90 minutes at ~206 queued runs with ~8-10 jobs
+# executing against a 60-job Team entitlement — runner under-assignment — and
+# nothing paged.
 #
 # TWO failure signals land here. (1) A ?status=error heartbeat = the probe ran
 # and returned UNDER_ASSIGNED (deep+old queue with delivered concurrency below
@@ -1453,21 +1418,71 @@ resource "sentry_cron_monitor" "scheduled_devin_docs_drift" {
 # itself cannot get a runner, absence pages — the only mechanism that can
 # detect a total-assignment outage.
 #
-# GHA-scheduled (NOT Inngest-dispatched) by design: an inngest cron would add
-# the prod inngest server as a liveness dependency (#5542 showed it can be
-# dark for hours) and would still land the executor in the queue being
-# measured. checkin_margin_minutes = 30 == the */30 interval (the
-# scheduled_inngest_health margin==interval precedent): a run up to one
-# interval late still checks in, while a genuinely starved monitor pages once
-# the window closes. max_runtime_minutes = 5 matches the job's
-# timeout-minutes. Slug MUST match the workflow's `monitor-slug`
-# (parity-asserted by
+# #9273 — the monitor was GHA-scheduled-only and paged on GitHub's schedule
+# DEFERRAL (measured ~4 fires/day under org load → ~47 missed-checkin
+# pages/day while the probe read HEALTHY whenever it landed). Deferral is not
+# starvation, so the primary trigger is now the Inngest dispatch cron: the
+# dispatch needs no runner to FIRE, and the executor still lands in the
+# measured queue (self-reference preserved). `schedule:` stays byte-identical
+# as the fallback clock (the #8450 cadence-parity guard keys on it).
+#
+# checkin_margin_minutes = 60 covers ~2× the measured dispatch-primary
+# delivery: p90 ~20 min runner-queue wait on the dispatched cohort
+# (2026-09-24, see QUEUE_ALLOWANCE_MINUTES in sentry-monitor-iac-parity.test.ts)
+# + ~5 min runtime + jitter. A run that never lands (both triggers failed, or
+# true starvation) still pages once the window closes.
+# max_runtime_minutes = 5 matches the job's timeout-minutes. Slug MUST match
+# the workflow's `monitor-slug` (parity-asserted by
 # apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts).
 resource "sentry_cron_monitor" "scheduled_actions_queue_health" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-actions-queue-health"
   schedule                = { crontab = "*/30 * * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Liveness for cron-bot-pr-reaper (#9274) — the every-2-hours sweep that
+# update-branches armed soleur-ai[bot] PRs stuck `mergeable_state: "behind"`
+# so auto-merge can fire, and files a [ci/bot-pr-reaper] action-required issue
+# for states update-branch cannot fix. Inngest-fired (pure REST sweep — no GHA
+# executor), so margin follows the Inngest-fired cohort convention: 30 min
+# over the */2h interval covers scheduler jitter plus a transient Inngest
+# retry; a dead reaper pages inside ~2.5 h.
+resource "sentry_cron_monitor" "scheduled_bot_pr_reaper" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-bot-pr-reaper"
+  schedule                = { crontab = "17 */2 * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# Liveness for cron-merge-queue-stall-dispatch (#9482 follow-up (a)) — the
+# every-10-minutes Inngest dispatcher that triggers the merge-queue stall probe
+# (.github/workflows/merge-queue-stall-check.yml). DISPATCHER-fed: the check-in
+# is posted by the Inngest function itself, NOT by the executed workflow (which
+# carries no Sentry secrets), so a green check-in means "dispatched", not
+# "probe executed". Do not move the heartbeat into the workflow without
+# revisiting its secrets posture. Margin follows the Inngest-fired cohort
+# convention (30 min over the 10-min interval); no runner-queue allowance is
+# needed because the heartbeat posts from the dispatcher, not a runner. A dead
+# dispatcher opens a Sentry issue inside ~40 min and emails via
+# sentry_alert.cron_monitor_failure (the two-PR rule's second PR, tracked in
+# #9493). The workflow's own schedule: is the fallback trigger; its
+# detection-latency story lives in the function header.
+resource "sentry_cron_monitor" "scheduled_merge_queue_stall_dispatch" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-merge-queue-stall-dispatch"
+  schedule                = { crontab = "*/10 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 5
   failure_issue_threshold = 1

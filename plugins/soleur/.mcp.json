@@ -6,10 +6,14 @@
         "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py",
         "--user-data-dir-name",
         "soleur-playwright-mcp-profile",
+        "--chromium-fallback",
         "--",
         "npx",
         "@playwright/mcp@0.0.78"
-      ]
+      ],
+      "env": {
+        "PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"
+      }
     }
   }
 }

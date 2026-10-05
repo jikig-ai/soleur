@@ -565,16 +565,15 @@ PY
     && ok "degraded() emits an ::error:: annotation under mirror_only" \
     || no "degraded() emitted no ::error:: under mirror_only"
 
-  # PUSH path. On `push: tags` the inputs context is empty, so `${{ inputs.mirror_only }}`
-  # renders the EMPTY STRING — not "false". "false" is only ever produced by an explicit
-  # dispatch with the box unchecked, so both prior fixtures tested a value the release path
-  # never sees. This pins the `:-` colon form: rewriting it to `${MIRROR_ONLY-false}` (bare,
-  # substitutes on unset only) would make the empty string fall through to the mirror_only
-  # arm and RED every tag-push release on a transient mirror fault.
+  # EMPTY-STRING path. Before #9262 a `push: tags` run rendered `${{ inputs.mirror_only }}`
+  # as the EMPTY STRING. The build is dispatch-only since #9262 (a dispatch renders true or
+  # false), so this is now a defensive row: it pins the `:-` colon form, since rewriting it
+  # to `${MIRROR_ONLY-false}` (bare, substitutes on unset only) would make an empty value
+  # fall through to the mirror_only arm and RED a release on a transient mirror fault.
   if run_degraded "" empty; then
-    ok "degraded() exits 0 when MIRROR_ONLY is the empty string (the real push-path value)"
+    ok "degraded() exits 0 when MIRROR_ONLY is the empty string (defensive: the pre-#9262 push-path value)"
   else
-    no "degraded() exited non-zero with MIRROR_ONLY='' — this reds every tag-push release on a transient mirror fault"
+    no "degraded() exited non-zero with MIRROR_ONLY='' — an empty value would red a release on a transient mirror fault"
   fi
 
   # The sentinel must never print on ANY path — see run_degraded().

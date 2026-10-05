@@ -352,7 +352,7 @@ DRAFTED, NOT-YET-ACTIVE** (no inter-host transfer occurs at `replicas=1` — DHH
 2. Live stock probe output for **both** cx33 (web) and cax11 (git-data) + web-2 type/DC verdict recorded in ADR-143.
 3. Fresh-boot readiness assertion **code present** + unit-tested; `SOLEUR_FRESH_BOOT_READY` emit-code present with a quantified boot-window timeout.
 4. Complete cattle cloud-init artifact present; the reconciled provisioner enumeration is pinned (grep-verified count, ADR-136 gated).
-5. web-2 entry added; the **2 roster-coupled** parity guards green (`inngest-host.test.sh §6b`, `web-hosts-fanout-parity`); web-2 volume is LUKS-backed in HCL.
+5. web-2 entry added; the **2 roster-coupled** parity guards green (`inngest-host.test.sh §6b`, `web-hosts-fanout-parity`); web-2 volume is LUKS-backed in HCL. **SUPERSEDED (2026-10-01, #6931): the AC is now "LUKS-backed at boot", see ADR-263.**
 6. `terraform plan` shows **no create/replace** of the prod Inngest host from the web-2 add (#6608 is separate).
 7. **Anti-pooling gate rebuilt** (#6575) — unit-tested to FAIL when web-2 serving-weight > 0 pre-flip.
 8. `prevent_destroy` on `hcloud_volume.workspaces` present; LUKS-header-presence check + luksOpen-not-reformat logic present and unit-tested.

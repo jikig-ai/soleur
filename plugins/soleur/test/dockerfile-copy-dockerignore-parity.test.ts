@@ -1,7 +1,8 @@
 // Generic pre-merge guard: Dockerfile `COPY --from=builder` / builder-`RUN .sh` of a
 // `.dockerignore`-stripped build-context path.
 //
-// apps/web-platform/Dockerfile is a 3-stage build. The `builder` stage runs `COPY . .` (filtered
+// apps/web-platform/Dockerfile is a 4-stage build (deps, builder, cli-tools, runner; only the `builder`
+// and `runner` stages matter here). The `builder` stage runs `COPY . .` (filtered
 // by apps/web-platform/.dockerignore). The `runner` stage then bakes specific build artifacts into
 // the final image via `COPY --from=builder /app/<path> ...`, and the builder stage runs shell
 // scripts via `RUN bash scripts/<x>.sh`. When a referenced `<path>` is a CONTEXT-SOURCED file

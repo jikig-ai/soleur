@@ -13,11 +13,14 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { useActiveRepo } from "@/hooks/use-active-repo";
-import { CONVERSATION_CREATED_EVENT } from "@/hooks/use-conversations";
+import {
+  CONVERSATION_ACTIVITY_EVENT,
+  CONVERSATION_CREATED_EVENT,
+} from "@/hooks/use-conversations";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
-import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
+import { getPendingFiles, clearPendingFiles, setPendingFiles } from "@/lib/pending-attachments";
 import { uploadPendingFiles } from "@/lib/upload-attachments";
-import * as Sentry from "@sentry/nextjs";
+import { runFirstRunSend } from "@/lib/first-run-send";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
@@ -31,6 +34,7 @@ import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { TurnSummaryBubble } from "@/components/chat/turn-summary-bubble";
+import { ActivityTrail } from "@/components/chat/activity-trail";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
@@ -239,6 +243,7 @@ export function ChatSurface({
     historyLoading,
     streamState,
     liveNarration,
+    liveNarrationStartedAt,
     abort,
     connection,
     resumeAfterUnrecoverable,
@@ -276,7 +281,6 @@ export function ChatSurface({
   }, [connection.resumedAt, connection.phase]);
 
   const [sessionStarted, setSessionStarted] = useState(false);
-  const [initialMsgSent, setInitialMsgSent] = useState(false);
   const [sessionStartTimeout, setSessionStartTimeout] = useState(false);
   const [dismissedErrorKey, setDismissedErrorKey] = useState<string | null>(null);
   const [sessionTimeoutDismissed, setSessionTimeoutDismissed] = useState(false);
@@ -572,48 +576,63 @@ export function ChatSurface({
     return () => document.removeEventListener("keydown", handler);
   }, [streamState, abort]);
 
+  // First-run send (Command Center -> /dashboard/chat/new?msg=..&fr=1): upload
+  // staged files FIRST, then send ONE message (see lib/first-run-send.ts).
+  // `fr=1` is the only signal that the module-global pending-file store belongs
+  // to THIS navigation; without it a later "New conversation" click inside the
+  // store TTL would upload and send those files into an unrelated chat.
+  const frParam = searchParams.get("fr");
+  const MAX_FIRST_RUN_RETRIES = 1; // one re-arm under a new session, then the text-only final attempt
+  const unmountedRef = useRef(false);
+  const firstRun = useRef({ started: false, retries: 0, msg: null as string | null, rearm: false });
+  const [firstRunBusy, setFirstRunBusy] = useState(false);
+  const liveRef = useRef({ conversationId: realConversationId, connected: status === "connected", sessionConfirmed });
+  liveRef.current = { conversationId: realConversationId, connected: status === "connected", sessionConfirmed };
   useEffect(() => {
-    if (sessionConfirmed && msgParam && !initialMsgSent) {
-      sendMessage(msgParam);
-      setInitialMsgSent(true);
-      router.replace(pathname, { scroll: false });
-    }
-  }, [sessionConfirmed, msgParam, initialMsgSent, sendMessage, router, pathname]);
-
-  const [pendingFilesHandled, setPendingFilesHandled] = useState(false);
+    unmountedRef.current = false; // StrictMode re-mounts after a simulated unmount
+    return () => {
+      unmountedRef.current = true;
+      liveRef.current = { conversationId: null, connected: false, sessionConfirmed: false }; // unmount = dead
+    };
+  }, []);
   useEffect(() => {
-    if (!initialMsgSent || pendingFilesHandled || !realConversationId) return;
-
-    const files = getPendingFiles();
-    if (files.length === 0) {
-      clearPendingFiles();
-      setPendingFilesHandled(true);
-      return;
-    }
-
-    setPendingFilesHandled(true);
-    clearPendingFiles();
-
-    (async () => {
-      try {
-        const uploaded = await uploadPendingFiles(files, realConversationId);
-        if (uploaded.length > 0) {
-          sendMessage("", uploaded);
+    const fr = firstRun.current;
+    if (fr.started || !sessionConfirmed) return;
+    const msg = msgParam ?? fr.msg;
+    const filesEligible =
+      (frParam === "1" || fr.rearm) && conversationId === "new" && variant === "full" && !resumedFrom;
+    const files = filesEligible ? getPendingFiles() : [];
+    if (!msg && files.length === 0) return;
+    if (files.length > 0 && !realConversationId) return; // wait; the msg-only path must not wait
+    fr.started = true;
+    if (files.length > 0) clearPendingFiles();
+    if (msgParam || frParam) router.replace(pathname, { scroll: false });
+    if (files.length > 0) setFirstRunBusy(true); // the msg-only send is synchronous
+    void runFirstRunSend({
+      msgParam: msg,
+      files,
+      conversationId: realConversationId,
+      getLive: () => liveRef.current,
+      upload: uploadPendingFiles,
+      send: sendMessage,
+      final: fr.retries >= MAX_FIRST_RUN_RETRIES,
+    })
+      .then(({ retry }) => {
+        if (unmountedRef.current) return;
+        if (retry && fr.retries < MAX_FIRST_RUN_RETRIES) {
+          fr.retries += 1;
+          fr.started = false;
+          fr.rearm = true;
+          fr.msg = msg;
+          if (files.length) setPendingFiles(files);
         }
-      } catch (err) {
-        // Defense-in-depth: uploadPendingFiles already catches per-file
-        // failures internally. This outer catch only fires on a batch-level
-        // failure (e.g., sendMessage throws). Re-wrap so Sentry does not
-        // ingest any signed-URL tokens embedded in XHR error messages.
-        const original = err instanceof Error ? err.message : String(err);
-        const sanitized = new Error(
-          `[kb-chat] pending-files batch failed (original message length ${original.length})`,
-        );
-        console.warn("[kb-chat] pending upload failed (batch)", { err: sanitized });
-        Sentry.captureException(sanitized);
-      }
-    })();
-  }, [initialMsgSent, pendingFilesHandled, realConversationId, sendMessage]);
+      })
+      .finally(() => {
+        if (!unmountedRef.current) setFirstRunBusy(false);
+      });
+    // `firstRunBusy` re-runs this effect after a re-arm: the session may
+    // already have re-confirmed while the upload was in flight.
+  }, [sessionConfirmed, msgParam, frParam, realConversationId, conversationId, variant, resumedFrom, sendMessage, router, pathname, firstRunBusy]);
 
   useEffect(() => {
     if (!sessionStarted || sessionConfirmed) return;
@@ -666,8 +685,70 @@ export function ChatSurface({
       !m.resolved,
   );
 
+  // #9515 — the consolidated working box: liveNarration renders INSIDE the
+  // sole active leader's newest transitional text bubble (the same tip the
+  // reducer's foldNarrationIntoTrail targets). When no bubble exists yet —
+  // narration can arrive before the first stream/tool_use — a thin
+  // standalone live line renders below the list (one working surface at a
+  // time, never two).
+  const narrationTargetId = (() => {
+    if (!liveNarration || activeLeaderIds.length !== 1) return undefined;
+    const leader = activeLeaderIds[0];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (
+        m.type === "text" &&
+        m.leaderId === leader &&
+        (m.state === "thinking" ||
+          m.state === "tool_use" ||
+          m.state === "streaming")
+      ) {
+        return m.id;
+      }
+    }
+    return undefined;
+  })();
+
+  // Deterministic rail-refresh signal for the VIEWED conversation's status
+  // (PR #9270 — same class as CONVERSATION_CREATED_EVENT above: the rail's
+  // realtime UPDATE can miss or die unobserved mid-view, so its badge stayed
+  // at the previous terminal value for the whole run). Dispatch on DERIVED
+  // turn boundaries — `streamState` transitions and the `awaitingUserInput`
+  // gate transition — never on wire frames: the cc path emits no
+  // `stream_start`, and `session_started` fires on socket bind/resume (a
+  // resume-on-view would falsely signal activity — the plan's inverse-lie
+  // AC). The rail listener debounces bursts and refetches quietly; the status
+  // value stays server-owned.
+  //
+  // Ref seeded with the mount-time signal (the codebase's "seed with CURRENT
+  // value" idiom — mount is not a transition, so it must never emit: a
+  // resume-on-view is not activity). The tuple compare suppresses firing on
+  // realConversationId/conversationId-only changes (mid-stream id resolution).
+  // `detail.conversationId` is carried for parity with
+  // CONVERSATION_CREATED_EVENT and future scoped consumers — the current rail
+  // listener intentionally ignores it (the refetch is the whole scoped list).
+  const activitySignalRef = useRef({
+    streamState,
+    awaiting: awaitingUserInput,
+  });
+  useEffect(() => {
+    const convId = realConversationId ?? conversationId;
+    const sig = { streamState, awaiting: awaitingUserInput };
+    const prev = activitySignalRef.current;
+    activitySignalRef.current = sig;
+    if (prev.streamState === sig.streamState && prev.awaiting === sig.awaiting) {
+      return;
+    }
+    if (typeof window === "undefined" || !convId || convId === "new") return;
+    window.dispatchEvent(
+      new CustomEvent(CONVERSATION_ACTIVITY_EVENT, {
+        detail: { conversationId: convId },
+      }),
+    );
+  }, [streamState, awaitingUserInput, realConversationId, conversationId]);
+
   // feat-debug-mode-stream — the separate debug drawer. Visibility is the
-  // dev-cohort `debug-mode` flag; the panel filters debug_event frames out of
+  // `debug-mode` flag (all roles during beta); the panel filters debug_event frames out of
   // the main message flow (they render null inline). `connected` drives the
   // disconnected affordance; `hadCompletedTurn` sharpens the empty-vs-
   // unavailable hint. Emission is server-gated independently — this only
@@ -938,7 +1019,18 @@ export function ChatSurface({
                       showFullTitle={!!isFirst}
                       messageState={msg.state}
                       toolLabel={msg.toolLabel}
-                      toolsUsed={msg.toolsUsed}
+                      activity={msg.activity}
+                      currentActivityStartedAt={msg.currentActivityStartedAt}
+                      interrupted={msg.interrupted}
+                      liveNarration={
+                        msg.id === narrationTargetId ? liveNarration : undefined
+                      }
+                      liveNarrationStartedAt={
+                        msg.id === narrationTargetId
+                          ? liveNarrationStartedAt
+                          : undefined
+                      }
+                      suppressLive={awaitingUserInput}
                       // #5282 AC12 — suppress the State-2 watchdog chip whenever
                       // State 1 (connection-lost banner) is showing, so the two
                       // can never render simultaneously.
@@ -1012,6 +1104,12 @@ export function ChatSurface({
                         Workflow{" "}
                         <span className="font-semibold">{msg.workflow}</span>{" "}
                         ended:{" "}
+                        {/* Dormant raw-enum render — no server→client
+                            `workflow_ended` emitter exists yet (cc-dispatcher
+                            routes terminal statuses to session_ended until
+                            Stage 3). When one ships, map status through
+                            lib/session-ended-copy.ts › SESSION_ENDED_COPY
+                            before it can leak like internal_error did. */}
                         <span
                           className={
                             msg.status === "completed"
@@ -1088,6 +1186,8 @@ export function ChatSurface({
             // subsequent in-flight assistant turn rather than rendering a
             // distinct flat row. Outer wrapper preserves the routing-chip
             // testid for existing presence/absence assertions.
+            // #9515 — the routing chip IS the working box while it shows:
+            // narration folds INTO it (no separate line below).
             <div className="flex justify-start" data-testid="routing-chip">
               <MessageBubble
                 role="assistant"
@@ -1095,6 +1195,11 @@ export function ChatSurface({
                 leaderId={CC_ROUTER_LEADER_ID}
                 messageState="tool_use"
                 toolLabel="Routing to the right experts..."
+                liveNarration={!narrationTargetId ? liveNarration : undefined}
+                liveNarrationStartedAt={
+                  !narrationTargetId ? liveNarrationStartedAt : undefined
+                }
+                suppressLive={awaitingUserInput}
                 getDisplayName={getDisplayName}
                 getIconPath={getIconPath}
                 variant={variant}
@@ -1102,42 +1207,27 @@ export function ChatSurface({
             </div>
           )}
 
-          {/* feat-reasoning-chat-boxes (#5370) — transient live narration line.
-              Shows the agent's deliberate plain-language status near the Working
-              badge while a turn is in flight. The slot is gated only on
-              `streamState === "streaming"`; the CONTENT falls back to a
-              "Still working…" placeholder when `liveNarration === null` — which
-              is exactly the spec-flow Finding 4 reconnect case: the live frame is
-              live-only (never buffered), so a mid-turn reconnect nulls
-              `liveNarration` while the turn is still streaming. The placeholder
-              keeps the user oriented instead of leaving a blank gap, and is
-              immediately replaced when the next `narrate` frame arrives. It
-              disappears on turn-end (the reducer nulls liveNarration AND
-              streamState leaves "streaming" on every turn-end path), so it is
-              still fully inert outside an in-flight turn.
-
-              feat-one-shot-concierge-web-duplicate-question-box — additionally
-              gated on `!awaitingUserInput`: while an unresolved review_gate /
-              autonomous_disclosure parks the turn on the operator, the amber
-              prompt card is the waiting-for-input surface, so this spinner is
-              suppressed to avoid a contradictory "Still working…" signal. See
-              the `awaitingUserInput` derivation above for the turn-scoping and
-              why informational interactive_prompt cards are excluded. */}
-          {streamState === "streaming" && !awaitingUserInput && (
-            <div
-              data-testid="live-narration"
-              aria-live="polite"
-              className="flex items-center gap-2 px-1 text-sm text-soleur-text-secondary"
-            >
-              <span
-                aria-hidden="true"
-                className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+          {/* #9515 — consolidated working box: the live narration renders
+              INSIDE the active bubble via ActivityTrail (narrationTargetId).
+              This fallback line exists ONLY for the pre-bubble window — a
+              narration can arrive before the first stream/tool_use creates
+              the box it will fold into. Once a bubble exists the narration
+              lives inside it and this line disappears — one working surface,
+              never two. Gated on `!awaitingUserInput` for the same parked-
+              gate suppression as the in-box live line. */}
+          {streamState === "streaming" &&
+            liveNarration &&
+            !narrationTargetId &&
+            !isClassifying &&
+            !awaitingUserInput && (
+              <ActivityTrail
+                activity={undefined}
+                current={{
+                  label: liveNarration,
+                  startedAt: liveNarrationStartedAt,
+                }}
               />
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {liveNarration ?? "Still working…"}
-              </span>
-            </div>
-          )}
+            )}
 
           <NotificationPrompt visible={showNotificationPrompt} />
           {/* PR-B (#3603) — per-thread transparency marker for the
@@ -1220,7 +1310,15 @@ export function ChatSurface({
           />
           <ChatInput
             onSend={handleSend}
-            conversationId={conversationId}
+            // The route id "new" is not a real conversation: presign would 404.
+            // Until the session is confirmed there is no id to attach under, so
+            // pass null (attachments unavailable). `sessionConfirmed` matters:
+            // a reconnect leaves realConversationId on the dead pending id.
+            conversationId={
+              conversationId === "new"
+                ? (sessionConfirmed ? realConversationId : null)
+                : (realConversationId ?? conversationId)
+            }
             onAtTrigger={(query, pos) => {
               setAtQuery(query);
               setAtPosition(pos);
@@ -1228,7 +1326,7 @@ export function ChatSurface({
             }}
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
-            disabled={status !== "connected"}
+            disabled={status !== "connected" || firstRunBusy}
             workflowEnded={workflowEnded}
             placeholder={
               status === "connected"

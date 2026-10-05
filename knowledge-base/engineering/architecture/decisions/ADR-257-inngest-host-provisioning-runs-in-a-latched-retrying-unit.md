@@ -101,6 +101,11 @@ edge at all, not that the host lacks a reboot.
    > carries `why=inngest_pull_fatal`; pull misses stay on `zot_mirror_fallback_rate`. The rule is live at
    > merge, but both events exist only on a host born from the provision-unit template (§Status),
    > and one 2 h throttle covers both stages (runbook § "Reading an `inngest-provision-failure` page").
+   >
+   > **Superseded 2026-09-30 (#9299):** the stages no longer share a throttle.
+   > `bootstrap_done_degraded` pages through its own rule, `sentry_alert.inngest_provision_degraded`
+   > (`inngest-provision-degraded`), and `inngest-provision-failure` pages `provision_attempt_failed`
+   > only (runbook § "Reading an `inngest-provision-degraded` page").
 6. **Quiesce the cutover FSMs before every bootstrap run.** Immediately before invoking
    `inngest-bootstrap.sh`, the script stops `inngest-cutover-flip.timer` and
    `inngest-luks-cutover.timer`, then waits (bounded at 300 s) until neither
@@ -145,6 +150,12 @@ edge at all, not that the host lacks a reboot.
   throttle window. The runbook
   (`inngest-server.md` § "Provision unit (#8562)") explains `attempt=N` and says to wait for
   `bootstrap-done` with the same `iid` before deciding to replace.
+
+  > **Corrected 2026-09-30 (#9299):** "about 26 `provision_attempt_failed` events an hour at
+  > first" overstates the rate. `RestartSec=120`, `RestartSteps=4` and `RestartMaxDelaySec=15min`
+  > give about 8 attempts in the first hour, as the unit's own comment in `cloud-init-inngest.yml`
+  > says.
+
 - **Better Stack row volume rises on a failing host,** highest in the first few attempts and
   falling as the delay backs off to 15 minutes. Each attempt makes at most about 6 Doppler reads.
 - **Singleton guarantee (ADR-100).** A self-recovered host never starts serving on its own
@@ -203,6 +214,11 @@ edge at all, not that the host lacks a reboot.
     > carries `why=inngest_pull_fatal`; pull misses stay on `zot_mirror_fallback_rate`. The rule is live at
     > merge, but both events exist only on a host born from the provision-unit template (§Status),
     > and one 2 h throttle covers both stages (runbook § "Reading an `inngest-provision-failure` page").
+    >
+    > **Superseded 2026-09-30 (#9299):** the stages no longer share a throttle.
+    > `bootstrap_done_degraded` pages through its own rule, `sentry_alert.inngest_provision_degraded`
+    > (`inngest-provision-degraded`), and `inngest-provision-failure` pages `provision_attempt_failed`
+    > only (runbook § "Reading an `inngest-provision-degraded` page").
 - **The unit's journald rows stay on the host.** Vector is installed by the bootstrap this unit
   runs, and shipping those rows would need a `vector.toml` edit, which mints a bootstrap tag. The
   off-host channels are the phone-home and the Sentry emitter (tracked on #6780).

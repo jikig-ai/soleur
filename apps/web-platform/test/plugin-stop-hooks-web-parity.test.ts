@@ -38,8 +38,6 @@ const REGISTRY: Record<string, Classification> = {
   // stale ones. Not spawned here: classification is tracked with the non-Stop hooks.
   "stop-hook.sh": { kind: "deferred", issue: "#9289" },
   "unkept-promise-hook.sh": { kind: "web-disabled", optOutVar: "SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK" },
-  // Kills host Chrome processes; whether that can reach another tenant is unverified.
-  "browser-cleanup-hook.sh": { kind: "deferred", issue: "#9281" },
 };
 
 // The incident's closing, and a differently-phrased promise, so a hook that

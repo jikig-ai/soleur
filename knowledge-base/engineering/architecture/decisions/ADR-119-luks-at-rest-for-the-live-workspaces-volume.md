@@ -254,6 +254,8 @@ web-2-recreate path**, and `moved` wants a singleton source.
 never served (fact 5), and its volume is empty. Encrypting a volume scheduled for deletion is waste.
 **This is a recorded deviation from #6588's "every `var.web_hosts` member" AC.**
 
+> **Reversed - 2026-10-01 (#6931):** a fresh web host now MUST get the reopen unit and web-2's volume is LUKS at boot (true after the live conversion); see [ADR-263](ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md).
+
 ### (e) The fail-closed mount gate reaches web-1 via the CUTOVER channel, not the bake
 
 **Supersedes the original ruling.** It held that LUKS goes in the baked `soleur-host-bootstrap.sh`
@@ -1136,12 +1138,15 @@ The mechanics live in `workspaces-cutover.sh`:
   exit status checked, and resumes writers. It pages through the fatal Sentry drift
   `cutover_aborted_post_canary`. If the mapper re-assert fails, it stops the app and the writers, so
   nothing writes to a mount that is not the mapper. The runbook makes this path fix-forward only.
-- **`ROLLBACK=1` refuses after a successful cutover.** When `/mnt/data` is the mapper and the
-  persisted `CANARY_OK` matches the live volume's LUKS UUID, a rollback dispatch refuses unless the
-  `rollback_ack_luks_writes` input is set. Such a rollback strands every write made since
-  `docker start` on the LUKS volume. It also refuses, with the same override, when the mapper is
-  mounted and `CANARY_OK` is persisted but the live header UUID cannot be read or the persisted
-  UUID is empty: an unmeasurable match fails closed. A refusal records `outcome=pre_freeze`.
+- **`ROLLBACK=1` refuses after a successful cutover.** When the persisted `CANARY_OK` matches the
+  live volume's LUKS UUID, a rollback dispatch refuses unless the `rollback_ack_luks_writes` input
+  is set. Such a rollback strands every write made since `docker start` on the LUKS volume. It also
+  refuses, with the same override, when `CANARY_OK` is persisted but the live header UUID cannot be
+  read (a closed mapper included) or the persisted UUID is empty: an unmeasurable match fails closed.
+  A refusal records `outcome=refused_post_cutover mode=rollback mount_src=<source>`. (Corrected
+  2026-09-30, PR #9286 review: the check no longer requires `/mnt/data` to be on the mapper. Keyed on
+  the mount, an unacked rollback after a failed boot unlock, with `/mnt/data` empty, would have
+  served the stale plaintext.)
 - **An unattended fire pages.** `logtail_exploration_alert.workspaces_luks_deadman_fired` (ADR-218
   semantics) matches `op=workspaces-luks-deadman result=fired` from `soleur-web-platform`. This
   closes the #6812 six-hour silence. The alert auto-resolves after ten quiet minutes; that does not
@@ -1359,7 +1364,9 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
 - **The one property.** `blkdiscard -z` runs on exactly one device, the pinned volume, never the device
   backing `/dev/mapper/workspaces`. The pin (`expected_plaintext_volume_id`) is bound through preflight's
   API classification, the host's by-id path (W1), path + major:minor + holders + mount + size +
-  hypervisor `ID_SERIAL` + the `workspaces_plain` label (W6), every systemd device unit sharing the
+  hypervisor `ID_SERIAL` + the cutover's recorded plaintext mount source `PLAINTEXT_DEV` (W6, first wipe only; the label
+  premise was false — no artifact labels the retained plaintext, corrected 2026-09-30), every systemd
+  device unit sharing the
   target's `SysFSPath` (W6b), the success row the job parses, and the forget's state identity.
   Recoverability of the sole copy is proven at wipe time: the persisted `CANARY_OK` UUID names the live
   header (W3), the escrowed passphrase opens it (W4), and the off-host header object downloads, carries
@@ -1381,9 +1388,13 @@ Terraform state, and a second PR (PR B) that narrows the `for_each`s. Plan:
   such a volume was remounted read-write since and may hold writes that exist nowhere else. As evidence
   (never a refusal) the rehearsal lists the workspace names on the unmounted plaintext (read-only
   `debugfs`) that the live mount lacks (`plaintext_only=`); the approver's ask accounts for each.
-- **Post-wipe rollback is refused permanently** (`outcome=refused_plaintext_wiped`), with or without the
-  ack, on either of two witnesses: a persisted wipe marker, or `/mnt/data` on the mapper with the
-  plaintext label gone (the physical witness does not depend on the state file). The check is the first
+- **Post-wipe rollback is refused permanently**, with or without the ack, on either of two witnesses: a
+  persisted wipe marker (`outcome=refused_plaintext_wiped`, the only proof of a wipe), or `/mnt/data`
+  on the mapper with the recorded `PLAINTEXT_DEV` not an intact restore source: invalid, resolving to
+  the mapper, not a block device, or not ext4 (`outcome=refused_plaintext_record_gone`, its own slug:
+  with no marker it is drift or a detach, never a wipe; a lost record reads as gone: it refuses). One
+  predicate, `_plaintext_record_status`, decides "intact" for this check, the dead-man arm and the
+  rollback remount (corrected 2026-09-30, PR #9286 review). The check is the first
   line of `rollback()` itself, so every caller is covered, and the dead-man fire string carries its own
   self-contained copy. Arming a dead-man stays unreachable on a cut-over host: `prepare_staging_target`
   refuses it first.
@@ -1430,6 +1441,23 @@ runs on the host at the real dispatch. It is mitigated, not closed: the remote `
 is byte-identical in both (the workflow suite pins it), both copies' bodies are executed against an ssh
 stub, the host half is the same script, and every failure mode of the copy is fail-closed (a red run,
 never a wrong zero).
+
+## Addendum (2026-10-01): the fresh-host convention is the provisioner, not the baked gate (#6931, ADR-263)
+
+This addendum supersedes the §(e) sentence "The bake (`soleur-luks-structural-gate`) is unchanged and stays
+the fresh-host convention; #6931 owns the fresh-host boot-unlock path", and resolves the crypttab-divergence
+note that said the baked `nofail` line should be reconciled when #6931 lands. The earlier text above is left
+as written.
+
+- **`soleur-luks-structural-gate` is deleted.** On a fresh host its properties moved into the baked
+  `workspaces-luks-provision.sh` (immutable covered inode before the mount, the `RequiresMountsFor` drop-in,
+  the mapper-backed mount) and a hard `poweroff -f` gate in `cloud-init.yml`.
+- **The crypttab, fstab and drop-in lines the provisioner writes are web-1's canonical ones** (`luks,noauto`,
+  by-id), pinned byte-for-byte against `local.workspaces_boot_unlock_*` by `fresh-boot-parity.test.sh`; the
+  by-label `nofail` spelling no longer exists.
+- §(d) is reversed by ADR-263 (a fresh host MUST get the reopen unit). The claim that web-2's volume is LUKS
+  at boot becomes true only after the volume rebirth (#9372); until then it is the empty Hetzner-formatted
+  ext4 volume, kept un-pooled by `lb-weight-gate.sh`.
 
 ## References
 

@@ -55,7 +55,10 @@ function extractSentryMonitorSlugs(): Map<string, string> {
 }
 
 function extractTfMonitorNames(): Set<string> {
-  return new Set([...tfSrc.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
+  // Comment lines are stripped first: a commented `# name = "<slug>"` must not
+  // satisfy the (c2)/(c3) guards for a monitor that is no longer declared.
+  const code = tfSrc.replace(/^[ \t]*#.*$/gm, "");
+  return new Set([...code.matchAll(/name\s*=\s*"([^"]+)"/g)].map((m) => m[1]));
 }
 
 const KNOWN_UNMONITORED_SLUGS = new Set([
@@ -185,6 +188,11 @@ const NON_INNGEST_MONITORS = new Set([
   // cron-*.ts counterpart and no SENTRY_MONITOR_SLUG const; its final sentry-heartbeat step pings
   // the check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
   "workspaces-luks-verify",
+  // #6931: the web-2 soak-marker job of the same workflow (workspaces-luks-verify.yml, job
+  // `web2_marker`, same on.schedule). Same anti-circularity class as the web-1 leg above: the
+  // verifier must not run on the host it verifies. No cron-*.ts counterpart and no
+  // SENTRY_MONITOR_SLUG const; its own check-in step pings sentry_cron_monitor.workspaces_luks_verify_web2.
+  "workspaces-luks-verify-web2",
   // #8160: GHA-fired (scheduled-devin-docs-drift.yml, on.schedule '23 7 * * *') — the
   // disposable docs.devin.ai capability-drift watcher. Its subject is OUTSIDE the
   // product (Cognition's public documentation, fetched anonymously), so it has no
@@ -193,11 +201,14 @@ const NON_INNGEST_MONITORS = new Set([
   // close; productization of the watch substrate is #8253's design problem. Same
   // class as scheduled-marketplace-drift.
   "scheduled-devin-docs-drift",
-  // #8450: GHA-fired (scheduled-actions-queue-health.yml, on.schedule '*/30') — the
-  // Actions runner under-assignment probe. It MUST be external to the product: its
-  // subject is GitHub's hosted-runner scheduler, so it has no cron-*.ts counterpart
-  // and declares no SENTRY_MONITOR_SLUG; its final sentry-heartbeat step pings the
-  // check-in. Same class as scheduled-inngest-health / scheduled-prod-version-drift.
+  // #8450: GHA-executed (scheduled-actions-queue-health.yml) — the Actions
+  // runner under-assignment probe. Its subject is GitHub's hosted-runner
+  // scheduler, so the EXECUTOR runs in an ephemeral runner and this monitor
+  // maps to no SENTRY_MONITOR_SLUG (its final sentry-heartbeat step pings the
+  // check-in). #9273 demoted its native `schedule:` to a fallback: the primary
+  // trigger is now cron-actions-queue-health-dispatch.ts (dispatch-only, no
+  // slug — same class as cron-supabase-watchdog-dispatch) because GHA schedule
+  // deferral paged ~47 missed check-ins/day on a healthy queue.
   "scheduled-actions-queue-health",
   // #9168: GHA-executed (scheduled-supabase-watchdog.yml) — the bounded
   // Postgres-hang auto-restart watchdog. The cron-supabase-watchdog-dispatch.ts
@@ -231,8 +242,11 @@ describe("Inngest function registry — drift guards", () => {
   // bounded DB-hang restart workflow — dispatch-hybrid, no SENTRY_MONITOR_SLUG;
   // the GHA executor posts the heartbeat, so its monitor sits in
   // NON_INNGEST_MONITORS like scheduled-terraform-drift).
+  // 70 -> 69: cron-gh-pages-cert-state deleted (ADR-194: the origin cert it polled is abandoned).
+  // 69 -> 71: cron-actions-queue-health-dispatch + cron-bot-pr-reaper (#9273/#9274).
+  // 71 -> 72: cron-merge-queue-stall-dispatch (#9482 follow-up (a)).
   it("(a) route.ts functions array has expected count", () => {
-    expect(routeEntries.length).toBe(70);
+    expect(routeEntries.length).toBe(72);
   });
 
   // An event function is invisible to the cron-glob guards; an unserved settle
@@ -283,6 +297,13 @@ describe("Inngest function registry — drift guards", () => {
       }
     }
     expect(phantom).toEqual([]);
+  });
+
+  // The mirror of (c2): an exemption must name a monitor that still exists, so a
+  // temporary entry expires when the monitor it covers is deleted.
+  it("(c3) every NON_INNGEST_MONITORS entry names a monitor declared in cron-monitors.tf", () => {
+    const stale = [...NON_INNGEST_MONITORS].filter((name) => !tfMonitors.has(name));
+    expect(stale).toEqual([]);
   });
 
   it("(d) KNOWN_UNMONITORED_SLUGS contains no stale entries", () => {

@@ -71,10 +71,64 @@ Playwright **MCP** stack. If a `mcp__plugin_soleur_playwright__browser_*` call
 backend dropped while the MCP server itself stayed registered (a lifecycle event, not a
 dead tool).
 
-Known root cause on this host: a Wayland/Vulkan GPU crash — already diagnosed and
+Two known causes, check in this order. **(1) A hook killing the browser at the end of
+a turn.** Older plugin versions registered `browser-cleanup-hook.sh` on `Stop`, which
+fires every turn and SIGTERMed every Playwright Chrome of the user (ADR-271; method in
+`knowledge-base/project/learnings/bug-fixes/2026-10-04-stop-hook-killed-live-playwright-chrome-heartbeat-theory-refuted.md`).
+Tell-tale: the next call after a turn boundary fails, and the session transcript
+(`~/.claude/projects/<slug>/<session>.jsonl`) carries a `hook_success` attachment whose
+`hookEvent` is `Stop` and whose `command` matches `browser-cleanup`; the kill text
+`Browser cleanup: killed N orphaned Playwright Chrome process(es)` is in
+`attachment.stderr`, not `stdout`. The hook is removed from the repository, but a
+session may run the installed plugin copy, which keeps it until the plugin is updated:
+
+1. Check (read-only): take `installPath` for `soleur@soleur` from
+   `~/.claude/plugins/installed_plugins.json`, then run
+   `jq -c '.hooks.Stop[].hooks[].command' <installPath>/hooks/hooks.json`. A line naming
+   `browser-cleanup-hook.sh` means the installed copy still kills the browser.
+2. Update: `claude plugin update soleur@soleur` (or the id `claude plugin list` prints).
+   The installed version is a git sha, so the update carries the fix only once the release
+   that removes the hook has been published; before that it changes nothing.
+3. Restart: the USER restarts Claude Code (an agent cannot restart its own host). A `/mcp`
+   reconnect reuses the cached `.mcp.json` command and does not reload hooks.
+4. Until then, complete a whole browser flow inside ONE turn. Interim and untested: the
+   user can `chmod -x` the installed copy's `hooks/browser-cleanup-hook.sh`, which should
+   make that hook fail without blocking until the next update overwrites it.
+
+**A second killer survives the update: a session in ANOTHER checkout still on the old
+`.mcp.json` launch string.** That string contains `pkill -9 -f` and, on every start or
+`/mcp` reconnect of that session, kills the proxy, server and Chrome of EVERY slot of
+a session on the new string. Read-only check: `for w in $(git worktree list --porcelain |
+sed -n 's/^worktree //p'); do grep -aq pkill "$w/.mcp.json" && echo "$w"; done` prints each
+checkout still carrying it. Bring those checkouts to this `.mcp.json` and restart their
+sessions (the string a running session loaded cannot be changed from here).
+
+**A login that should persist is missing in the repo registration:** that session was
+given a numbered slot or a `-p<pid>` directory. Run `grep -a 'was skipped:' "$(ls -t
+~/.cache/claude-cli-nodejs/"$(pwd | sed 's/[^A-Za-z0-9]/-/g')"/mcp-logs-playwright/*.jsonl |
+head -1)"` from the project directory: the repo registration logs under `mcp-logs-playwright`
+in the directory named after the working directory with every character that is not a
+letter or digit replaced by a dash (`/.worktrees/` becomes `--worktrees-`). The plugin
+registration's `mcp-logs-plugin-soleur-playwright` never runs the slot script and never
+prints that line. The line names why slot 0 (the persistent profile) was not used, and the
+remedy depends on the reason:
+
+- "its lock is held by another live launch": the lease is held by the other session's
+  proxy process, and `browser_close` does not release it (it closes Chrome, not the
+  proxy). End that session, or disconnect its Playwright MCP server, then reconnect.
+- "its SingletonLock names a live Chrome": that Chrome must exit, for example
+  `browser_close` in the session that owns it, then reconnect.
+- A reason naming another HOST (a renamed host or a copied home directory) is
+  cleared by hand: after confirming no Chrome of yours uses that profile, `rm
+  <slot-0 dir>/Singleton*`, which removes only the stale lock files and no login.
+
+A search for another killer must cover every enabled plugin's `hooks.json` (the installed
+copy too), not only `settings.json`. The server's ping heartbeat is not a cause on stdio
+(ADR-271). **(2) A Wayland/Vulkan GPU crash** — already diagnosed and
 remediated in `.claude/playwright-mcp.config.json` (forces the X11/XWayland backend
 and disables the GPU); see `knowledge-base/project/learnings/workflow-patterns/2026-06-17-playwright-mcp-wayland-vulkan-launch-crash.md`.
-If it still recurs, recycle the context and re-navigate (the pattern in
+
+**Whatever the cause**, recycle the context and re-navigate (the pattern in
 `plugins/soleur/skills/qa/SKILL.md`: `browser_close` — safe even if already closed —
 then `browser_navigate`); the backend restarts. Note that snapshot `ref=` handles do
 **not** survive the restart; target elements by name/selector
@@ -99,6 +153,11 @@ If you see "Version mismatch between agent-browser (expects 1200) and installed 
 2. **Snapshot** to get interactive elements with refs
 3. **Interact** using refs (@e1, @e2, etc.)
 4. **Re-snapshot** after navigation or DOM changes
+
+**Playwright MCP flow: when the flow is finished, call `browser_close`.** Nothing reaps the
+browser at turn end (ADR-271): it lives as long as the session that launched it, and a
+logged-in window left open after a credential hand-off stays logged in. For the
+`agent-browser` CLI the same duty is `agent-browser close`.
 
 ### Preflight: verify the plugin install before any snapshot
 
@@ -382,7 +441,7 @@ registers `playwright` with `python3` running
 in front of `npx @playwright/mcp@0.0.78`, so on Claude Code its tools arrive as
 `mcp__plugin_soleur_playwright__*` — already wrapped, no customer
 configuration. The registration passes
-`--user-data-dir-name soleur-playwright-mcp-profile`, so the wrapped browser
+`--user-data-dir-name soleur-playwright-mcp-profile` and `--chromium-fallback`, so the wrapped browser
 runs on its own profile under `$XDG_CACHE_HOME` (default `~/.cache`), separate
 from any `playwright` registration the customer configured themselves. On a
 registration routed through the proxy, every `tools/call` result is rewritten
@@ -390,12 +449,21 @@ through `redact-a11y-snapshot.py` at the stdio boundary — between the server's
 stdout and the client's stdin, before the model reads it — which is what
 "redacted in flight" means: a content rewrite, not encryption and not
 transport security. A registration not routed through it is not covered by
-anything at runtime (#7980). **The registration ships no config and no env
-block, so the server runs upstream defaults: headed — a visible Chrome window
-opens when a tool drives the browser — on channel `chrome` (real Google
-Chrome).** Headed is deliberate: the credential-handoff flows need an
-operator-visible window. On a display-less host or where Chrome is absent the
-server still connects but browser tools fail to launch — see the playbook at
+anything at runtime (#7980). **The registration ships no config; its `env` block carries only
+`PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0`, an inert guard on stdio that is not a fix for
+anything (ADR-271). The server runs upstream defaults: headed — a visible Chrome
+window opens when a tool drives the browser — on channel `chrome` (real Google
+Chrome), except that when no Google Chrome executable exists at
+`/opt/google/chrome/chrome` (Linux) or `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (macOS)
+and the launch names no browser, `--chromium-fallback` makes the proxy append
+`--browser chromium --sandbox`, which Playwright maps to its bundled Chromium with the
+Chromium sandbox kept on, like real Chrome. If that sandbox cannot start on the host (no
+unprivileged user namespaces, an Ubuntu AppArmor restriction, running as root, a
+default-seccomp container), the first browser call fails with a sandbox error and no
+browser opens; the supported remedy is to install Google Chrome, never to disable the
+sandbox, which the proxy refuses in every spelling.** Headed is deliberate: the
+credential-handoff flows need an operator-visible window. On a display-less host
+the server still connects but browser tools fail to launch — see the playbook at
 the end of this section.
 
 **Preconditions.** The plugin server exists only where all of these hold: the
@@ -448,10 +516,31 @@ the proxy refuses to start on a named config that does not exist. An
 reconnect, and only the user can restart; afterwards verify with `ToolSearch
 select:mcp__playwright__browser_snapshot` — a description ending with the marker
 below means wrapped, no match means the server did not connect (see the end of
-this section). This repository wraps the command in a `bash -c` prelude (`pkill`
-of a stale proxy, server and browser on the same profile; `env -u
-WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
-(stdlib `selectors` + `subprocess`) and does not run on Windows.
+this section). This repository wraps the command in a `bash -c` prelude (it sources
+`plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh`, which leases a profile directory by a
+kernel `flock` and never kills a process by pattern — slot 0 is the persistent
+`~/.cache/playwright-mcp-profile` and a launch whose slot is held by another live session
+takes the next numbered slot `~/.cache/playwright-mcp-profile-<n>` at once, with a stderr
+line in the MCP log saying the persistent profile's logins are not available in that
+session; a `/mcp` reconnect waits up to 7 s for its own previous launch to release slot 0
+(the wait needs `flock`: where it is missing a reconnect that finds the old Chrome still
+alive lands on an empty `-p<pid>` profile).
+When `flock` is missing (stock macOS) the first session still takes slot 0 without a lease
+if no live Chrome owns it, and a second session that starts before the first one's browser
+exists (Playwright starts it lazily) also gets slot 0 and Playwright's "already in use"
+error; with no usable `flock` and slot 0 busy, or when all 32 slots
+are busy, it uses a unique `playwright-mcp-profile-p<pid>` directory that nothing reaps;
+`env -u WAYLAND_DISPLAY`; an X11 display) that is Linux-only; the proxy itself is POSIX
+(stdlib `selectors` + `subprocess`) and does not run on Windows. **Cleaning up profile
+directories:** these directories are at-rest credential stores (mode 700; they hold
+whatever logins were done in them) and removal is manual. Only the `-p<pid>` fallbacks are
+removable: remove one only when the pid in its name is dead (`kill -0 <pid>` fails) and its
+`SingletonLock` (`readlink <dir>/SingletonLock`, target `host-<pid>`) names no live pid. The
+numbered slots (`playwright-mcp-profile`, `-1` to `-31`) hold the persistent logins: do not
+delete them as stale. A slot is in use when `flock -n <dir>/.pwslot.lock true` fails (rc 1)
+(rc 66 means the directory is missing), but that test sees only sessions on the new launch
+string: an old-string session holds no `flock`, so also require that `readlink
+<dir>/SingletonLock` names no live pid (as above) before calling a slot free.
 
 **Fail-closed in three arms, no bypass variable.**
 
@@ -561,16 +650,46 @@ which only the user can do.
 **If the plugin server connects but the browser never launches** (tools answer
 with launch/navigation errors while the registration itself is healthy), the
 registration's upstream defaults are the suspect surface: headed, channel
-`chrome`. Three measured modes, each remediated by the customer exporting the
-named variable in the shell that launches their harness (the plugin entry has
-no `env` block, so process env is the only override path — `executable-path`
-is refused by the proxy as a foreign-browser sink, so do not suggest it):
+`chrome`. Measured modes, each remediated by the customer exporting the
+named variable in the shell that launches their harness (the plugin entry's
+`env` block carries only the inert ping guard, so process env is the only
+override path — `executable-path` is refused by the proxy as a foreign-browser
+sink, so do not suggest it):
 
 - **No display** (headless host, SSH, container): a headed browser cannot
   open. `PLAYWRIGHT_MCP_HEADLESS=1` is the supported opt-out.
-- **No real Chrome** (channel `chrome` resolves to Google Chrome, not bundled
-  Chromium): install Chrome, or `npx playwright install chromium` plus
-  `PLAYWRIGHT_MCP_CHANNEL=chromium`.
+- **No real Chrome**: the plugin registration's `--chromium-fallback` already
+  switches to bundled Chromium, with its sandbox on. If Playwright then reports the
+  bundled browser is missing, install it with the PINNED command
+  `npx @playwright/mcp@0.0.78 install-browser chromium` (the pinned package's
+  `cli.js` rewrites `install-browser` to Playwright's `install`, its `--help`
+  prints Playwright's install usage, `install-browser chromium --dry-run` resolves
+  "playwright chromium v1232"; Playwright's own missing-browser error names the
+  UNPINNED form `npx @playwright/mcp install-browser <target>`, which can fetch a
+  newer package whose Chromium revision differs, so always use the pinned form; the
+  top-level `--help` does not list it, and the `npx playwright install` warning
+  banner it prints is cosmetic). Note the pinned server's
+  `--help` lists only `chrome, firefox, webkit, msedge` as `--browser` values, but
+  `chromium` is accepted and maps to the bundled browser. A registration
+  without the flag (a customer's own) still needs real Chrome or an explicit
+  `--browser chromium`.
+- **`Chromium sandboxing failed!` / `No usable sandbox!` on the first browser call**
+  (bundled Chromium, sandbox kept on): the host does not allow unprivileged user
+  namespaces (common on Ubuntu 23.10+/24.04, in containers, or as root). Do NOT try
+  `chromiumSandbox: false`, `--no-sandbox` or `PLAYWRIGHT_MCP_SANDBOX`; Playwright's
+  message suggests it and the proxy refuses it. Install Google Chrome
+  (`google-chrome-stable`, which ships the AppArmor profile that lets its sandbox
+  run), asking the operator for the privilege prompt if one is needed, then restart
+  the session. Running as root: use a non-root user.
+- **A second concurrent session gets `Browser is already in use for <dir>, use
+  --isolated ...` on the plugin registration**: the plugin registration
+  (`soleur-playwright-mcp-profile`) has NO lease, so the first session's browser holds
+  the profile for that session's whole lifetime (before ADR-271 the Stop hook freed it
+  at each turn end; now nothing does). Nothing is killed. Call `browser_close` in the
+  other session or end it. `--isolated` does not apply: the proxy always injects a
+  user-data-dir and the pinned server rejects the combination, and ADR-271 rejects
+  `--isolated` (it wipes OAuth sessions). This repository's own `.mcp.json` registration
+  does lease slots, so two sessions there each get a browser.
 - **Wayland/GPU variance**: a headed launch on a Wayland host was measured
   working with system Chromium (no Vulkan/ozone/crash lines), but the
   2026-06 dogfood crash class existed — on a crash-looping host,

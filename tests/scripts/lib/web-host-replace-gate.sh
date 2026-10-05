@@ -47,11 +47,16 @@
 #      hcloud_server.web["web-1"].ipv4_address, dns.tf). Omit it and app.soleur.ai resolves
 #      to a destroyed host — a total product outage.
 #
-#   3. all 17 terraform_data.* SSH provisioners in server.tf hardcode
+#   3. every terraform_data.* SSH provisioner pinned to web-1 hardcodes
 #      connection.host = hcloud_server.web["web-1"].ipv4_address. `-target` is
 #      upstream-only, so NONE of them is pulled into the plan — including the seccomp and
-#      AppArmor sandbox controls. A replaced web-1 leaves all 17 un-run against a dead IP,
-#      and no plan-shaped arm can see them.
+#      AppArmor sandbox controls. A replaced web-1 leaves every one un-run against a dead IP,
+#      and no plan-shaped arm can see them. COUNT (measured 2026-10-02 with
+#      `grep -c 'host *= *hcloud_server.web\["web-1"\]'` per file of the infra root): 22 —
+#      18 in server.tf, 3 in workspaces-luks.tf, 1 in ci-ssh-key.tf. The earlier text of this
+#      header said 17 and the refusal message said 15; neither was a measurement, and both
+#      counted server.tf alone. The count drifts, so this comment is dated and re-derived
+#      rather than trusted.
 #
 # And the decisive reason, which is NOT a plan property and therefore not something any
 # plan-shaped gate can observe — MEASURED 2026-07-27, not quoted:
@@ -63,7 +68,8 @@
 #   the LUKS workspaces_luks mapper"; the plaintext volume is "retained as the pre-cutover
 #   rollback backstop"). Nothing on a fresh boot opens the mapper — crypttab is written with
 #   keyfile `none` + nofail (soleur-host-bootstrap.sh) and the guest-side unlock path is
-#   DEFERRED to #6931. So a rebuilt web-1 boots healthy, mounts the superseded backstop, and
+#   DEFERRED to #6931 when this was measured (delivered since for fresh hosts, ADR-263; it does
+#   not change web-1's by-id pin to the superseded volume). So a rebuilt web-1 boots healthy, mounts the superseded backstop, and
 #   serves every user worktree rolled back to 2026-07-23, while the live LUKS volume sits
 #   attached and unopened.
 #
@@ -76,10 +82,10 @@
 # reviewer who relaxed it on that basis would inherit reasons 1-3 with NO gate arms at all.
 #
 # A gate that admitted web-1 would be certifying a safety property it structurally cannot
-# check. THE UNBLOCK CONDITION IS #6931 (fresh-boot guest-side LUKS unlock), plus
-# key-conditional requirement arms for hcloud_volume_attachment.workspaces_luks and
-# cloudflare_record.app, plus a rehearsal on a non-production host — no web-1 replace has
-# ever been performed. Tracker: #6964.
+# check. #6931 (the fresh-boot guest-side LUKS path, ADR-263) is DONE and is no longer the
+# blocker. THE REMAINING UNBLOCK CONDITIONS ARE key-conditional requirement arms for
+# hcloud_volume_attachment.workspaces_luks and cloudflare_record.app, plus a rehearsal on a
+# non-production host (no web-1 replace has ever been performed), plus #6964.
 #
 # ── PASS (rc=0) iff ALL of ───────────────────────────────────────────────────────
 #
@@ -91,8 +97,11 @@
 #   reboot_updates == 0   no OTHER live host is power-cycled
 #   out_of_scope   == 0   nothing outside the four-member fan-out changes
 #   nic  >= 1  |  vatt >= 1  |  fw >= 1        the members the replace ENTAILS
+#   key == _WEB_HOST_REPLACE_LUKS_ARMS_KEY only (reachable only with the refusal cleared):
+#   luks_att >= 1 | apex >= 1                    the two members web-1 alone entails
 #
-# The first seven are PROHIBITIONS; the last three are REQUIREMENTS. A gate built only from
+# The first seven are PROHIBITIONS; the rest are REQUIREMENTS: three for every key (nic, vatt, fw) plus
+# the two keyed arms (luks_att, apex), i.e. FIVE requirements for web-1 and three for any other key. A gate built only from
 # prohibitions cannot make a replace safe — it constrains what the plan may ALSO do, never
 # what it must do — and the birth gate shipped exactly that way until review found it
 # accepted a plan whose only entry was the server itself.
@@ -145,6 +154,14 @@
 # topology fact with one place to change when ADR-119's mount pin lands.
 _WEB_HOST_REPLACE_LUKS_PINNED_KEY="web-1"
 
+# The key the KEYED ARMS below apply to (#9356). A separate constant from the refusal on
+# purpose: terraform-target-parity.test.ts binds the refusal literal to the workflow's
+# fail-fast copy, and the arms must be able to exist while the refusal is active. The arms
+# are dead code while the refusal holds; they are the evidence a later relaxing change is
+# graded against. T2 (#9357) dissolves the workspaces_luks address and this arm becomes
+# obsolete with it.
+_WEB_HOST_REPLACE_LUKS_ARMS_KEY="web-1"
+
 # The replace fan-out, defined ONCE.
 #
 # The birth gate carried this twice — once in the counting filter, once in the offenders
@@ -161,10 +178,25 @@ _WEB_HOST_REPLACE_ALLOW='def allow($k): [
       "hcloud_firewall_attachment.web"
 ];'
 
+# The KEYED extension of the allow-set (#9356): two addresses, applicable to
+# _WEB_HOST_REPLACE_LUKS_ARMS_KEY ONLY. Kept as its own definition so the base `allow($k)`
+# above stays the single literal terraform-target-parity.test.ts compares to the workflow's
+# -target list, and so the extension is pinned separately as exactly these two addresses.
+# hcloud_volume.workspaces_luks and the passphrase resources are deliberately NOT here: they
+# remain prohibitions.
+#
+# `$akey` is supplied to every jq program that includes this text (--arg akey). The
+# comparison `$k == $akey` is what keeps web-2 (and any other key) on the base allow-set.
+_WEB_HOST_REPLACE_ARMS_ALLOW='def allow_arms: [
+      "hcloud_volume_attachment.workspaces_luks",
+      "cloudflare_record.app"
+];
+def effective_allow($k): allow($k) + (if $k == $akey then allow_arms else [] end);'
+
 web_host_replace_gate() {
   local plan_json="${1:-}" host_key="${2:-}"
   local want_addr counts offenders v
-  local oos wvd lvd lpt replaced replaced_addr nic vatt fw reboot
+  local oos wvd lvd lpt replaced replaced_addr nic vatt fw reboot arms latt apex
 
   if [[ -z "$host_key" ]]; then
     echo "web_host_replace_gate: ABORT — no host key supplied. The gate cannot verify WHICH host is being replaced without the request it is grading against, and a replace gate that does not check identity is a count check wearing a costume — one satisfied by destroying web-1. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
@@ -173,10 +205,10 @@ web_host_replace_gate() {
 
   # Refused BEFORE the plan is even read: this is a property of the request, not of the
   # plan, and there is no plan shape that would make it safe. See the header for the
-  # measured topology (LUKS singleton attachment + apex A record + 17 web-1-pinned SSH
+  # measured topology (LUKS singleton attachment + apex A record + 22 web-1-pinned SSH
   # provisioners + the superseded-plaintext mount, which is the decisive one).
   if [[ "$host_key" == "$_WEB_HOST_REPLACE_LUKS_PINNED_KEY" ]]; then
-    echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves all 15 web-1-pinned terraform_data SSH provisioners un-run against a dead IP (-target is upstream-only). DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none'; the guest-side unlock path is deferred to #6931). A rebuilt host would boot healthy and serve every user worktree rolled back to 2026-07-23 while the live LUKS volume sat attached and unopened. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — this needs #6931 first; see #6964."
+    echo "web_host_replace_gate: ABORT — '${host_key}' is the LUKS-pinned host and this path REFUSES it by name. Replacing it entails two members no other key has (hcloud_volume_attachment.workspaces_luks, whose server_id is hardcoded to this host and is ForceNew; and cloudflare_record.app, the apex A record pinned to its ipv4_address). It also leaves every web-1-pinned terraform_data SSH provisioner un-run against a dead IP (-target is upstream-only). DECISIVELY: /mnt/data pins by-id to hcloud_volume.workspaces[key], which on this host is the PLAINTEXT volume superseded by the 2026-07-23 LUKS cutover, and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile is 'none' on the template path web-1 was built from; the fresh-boot guest-side LUKS path that #6931 delivered for fresh hosts, ADR-263, does not change web-1's by-id pin to that volume). A rebuilt host would boot healthy and serve every user worktree rolled back to 2026-07-23 while the live LUKS volume sat attached and unopened. That is a cloud-init property, invisible to any plan-shaped gate, so no arm below could certify it. NOTHING HAS BEEN DESTROYED. Do not re-dispatch — the key-conditional gate arms now exist but are arms-only and cannot observe any of the blockers above, so this still needs a rehearsal on a non-production host and #6964 first."
     return 1
   fi
 
@@ -220,12 +252,13 @@ web_host_replace_gate() {
   if ! jq -e 'all(.resource_changes[];
                   (.change | type) == "object"
                   and (.change.actions | type) == "array"
+                  and (.change.actions | length) > 0
                   and all(.change.actions[]; type == "string"))' \
        < "$plan_json" >/dev/null 2>&1; then
     # `.change.actions?` here, matching the counting filter — without it this extraction
     # errors on the very entry it is trying to name and the operator gets an empty list.
-    offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions? | type) != "array")) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
-    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying an array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    offenders=$(jq -r '[.resource_changes[] | select(((.change | type) != "object") or ((.change.actions? | type) != "array") or ((.change.actions? | length) == 0)) | .address] | .[0:10] | join(", ")' < "$plan_json" 2>/dev/null)
+    echo "web_host_replace_gate: ABORT — unclassifiable plan entry: ${offenders} has no object .change carrying a NON-EMPTY array of string .change.actions, so it cannot be classified as create/replace/destroy/no-op. Fail-closed: an entry the gate cannot read is not evidence of a safe plan — a destroy hiding in an unreadable entry is exactly what this refuses to wave through. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -233,7 +266,7 @@ web_host_replace_gate() {
   # EXACT-EQUALITY membership via IN(.address; allow($k)[]) — NOT `inside`/`contains`, which
   # substring-match, so the bare for_each map address `hcloud_server.web` would satisfy the
   # keyed member and wave the entire fleet through. Verified on jq 1.8.x.
-  if ! counts=$(jq -n --slurpfile p "$plan_json" --arg k "$host_key" "${_WEB_HOST_REPLACE_ALLOW}"'
+  if ! counts=$(jq -n --slurpfile p "$plan_json" --arg k "$host_key" --arg akey "$_WEB_HOST_REPLACE_LUKS_ARMS_KEY" "${_WEB_HOST_REPLACE_ALLOW}${_WEB_HOST_REPLACE_ARMS_ALLOW}"'
       $p[0] as $plan
       | {
           out_of_scope: (
@@ -246,7 +279,7 @@ web_host_replace_gate() {
             # returned PASS. Only a deny-list of `no-op`/`read` stays correct as it grows again.
             [ $plan.resource_changes[]?
               | select([.change.actions[]] - ["no-op", "read"] | length > 0)
-              | select(IN(.address; allow($k)[]) | not) ]
+              | select(IN(.address; effective_allow($k)[]) | not) ]
             | length
           ),
           workspaces_volume_destroyed: (
@@ -269,10 +302,11 @@ web_host_replace_gate() {
           luks_passphrase_touched: (
             # A rotated passphrase luksFormat/luksOpens a NEW header on the fresh boot,
             # STRANDING the existing at-rest data while the host boots and reports healthy.
-            # BOTH the random_password AND the doppler_secret carrying it must show ZERO
-            # positive actions.
+            # The web-1 random_password and its doppler_secret key copy, AND the web host class own
+            # generator random_password.workspaces_luks_web with its doppler_secret key copy (#9377: the
+            # web class holds a DISTINCT passphrase, not a copy of the web-1 one), must show ZERO positive actions.
             [ $plan.resource_changes[]?
-              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key")
+              | select(.address == "random_password.workspaces_luks" or .address == "doppler_secret.workspaces_luks_key" or .address == "doppler_secret.workspaces_luks_web_key" or .address == "random_password.workspaces_luks_web")
               | select([.change.actions[]] - ["no-op", "read"] | length > 0) ]
             | length
           ),
@@ -380,7 +414,7 @@ web_host_replace_gate() {
   fi
 
   if [[ "$lpt" -ne 0 ]]; then
-    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    echo "web_host_replace_gate: ABORT — ${lpt} action(s) on the LUKS passphrase (random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key / random_password.workspaces_luks_web). A rotated passphrase opens a NEW header on the fresh boot and STRANDS the existing at-rest data behind it, while the host boots and reports perfectly healthy. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -390,12 +424,12 @@ web_host_replace_gate() {
   fi
 
   if [[ "$oos" -ne 0 ]]; then
-    offenders=$(jq -r --arg k "$host_key" "${_WEB_HOST_REPLACE_ALLOW}"'
+    offenders=$(jq -r --arg k "$host_key" --arg akey "$_WEB_HOST_REPLACE_LUKS_ARMS_KEY" "${_WEB_HOST_REPLACE_ALLOW}${_WEB_HOST_REPLACE_ARMS_ALLOW}"'
       [ .resource_changes[]
         | select(.change.actions | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
-        | select(IN(.address; allow($k)[]) | not) | .address ] | .[0:10] | join(", ")' \
+        | select(IN(.address; effective_allow($k)[]) | not) | .address ] | .[0:10] | join(", ")' \
       < "$plan_json" 2>/dev/null)
-    echo "web_host_replace_gate: ABORT — ${oos} out-of-scope change(s), outside the replace fan-out for '${host_key}': ${offenders}. One authorization replaces one host and touches only that host's four fan-out addresses. A sibling host's NIC, the apex A record, or a Cloudflare ruleset riding along is a different operation that has not been authorized here. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+    echo "web_host_replace_gate: ABORT — ${oos} out-of-scope change(s), outside the replace fan-out for '${host_key}': ${offenders}. One authorization replaces one host and touches only that host's four fan-out addresses (plus the two keyed web-1 arms addresses for that key alone). A sibling host's NIC, the apex A record, or a Cloudflare ruleset riding along is a different operation that has not been authorized here. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
   fi
 
@@ -418,6 +452,91 @@ web_host_replace_gate() {
   if [[ "$fw" -lt 1 ]]; then
     echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but hcloud_firewall_attachment.web shows no create/update (${fw}; expected >= 1). Its server_ids is [for h in hcloud_server.web : h.id], so replacing a host changes that list by construction. Without the re-attachment the fresh Hetzner host boots NAKED on its public IPv4/IPv6. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
     return 1
+  fi
+
+  # ── KEY-CONDITIONAL ARMS (#9356) ─────────────────────────────────────────────────
+  #
+  # Reachable ONLY for _WEB_HOST_REPLACE_LUKS_ARMS_KEY and, today, only with the refusal at the
+  # top of this function cleared (it is the first statement, so a complete web-1 plan still
+  # aborts while it is active — CPO condition 1). They run AFTER every prohibition above and
+  # after the three generic requirement arms, so no arm here can mask a prohibition.
+  #
+  # ARMS ONLY — "arms complete" is NOT "web-1 safe". Three blockers are invisible to any
+  # plan-shaped gate: (1) /mnt/data pins by-id to the superseded PLAINTEXT volume, (2) the
+  # web-1-pinned terraform_data SSH provisioners are not in a -target plan (count them with
+  # grep -c at work time; see the header), (3) -target is upstream-only. A fixture that
+  # satisfies these arms is an ARMS-ONLY fixture and certifies nothing about those.
+  #
+  #   luks_att  hcloud_volume_attachment.workspaces_luks shows a CREATE (server_id is ForceNew,
+  #             so replacing web-1 recreates it) AND its after.volume_id equals the LUKS volume
+  #             id in the PRIOR STATE. `index("create")` alone also passes a delete+create onto
+  #             a DIFFERENT volume — the exact shape that boots the host with the wrong disk.
+  #   apex      cloudflare_record.app is updated IN PLACE (exactly ["update"]: a delete+create
+  #             of the apex record is an outage window), its content CHANGES, every other
+  #             attribute is unchanged, and the content is sourced from the replaced server
+  #             (after_unknown.content is true for ANY replace, so the plan JSON configuration
+  #             references are what prove the source).
+  if [[ "$host_key" == "$_WEB_HOST_REPLACE_LUKS_ARMS_KEY" ]]; then
+    if ! arms=$(jq -n --slurpfile p "$plan_json" --arg k "$host_key" '
+        # Every attribute except content is unchanged. The five named attributes must be PRESENT on
+        # both sides and equal; any other attribute present on both sides must be equal too. An
+        # attribute the plan marks unknown is absent from `after` (a provider-computed field such as
+        # a modified-on stamp) and is tolerated ONLY if it is not one of the five; an attribute that
+        # appears only in `after` is a change and is refused.
+        def apex_attrs_equal:
+          .change as $c | ($c.before // {}) as $b | ($c.after // {}) as $a
+          | all(["name", "type", "proxied", "ttl", "zone_id"][]; . as $n | ($b | has($n)) and ($a | has($n)) and ($b[$n] == $a[$n]))
+            and all(($b | keys_unsorted)[]; . as $n | $n == "content" or (($a | has($n)) | not) or $b[$n] == $a[$n])
+            and all(($a | keys_unsorted)[]; . as $n | $n == "content" or ($b | has($n)));
+        # The record content must be sourced from THIS replaced server: a configuration reference to
+        # hcloud_server.web["<key>"]. after_unknown.content is true for ANY replace, so it proves nothing.
+        def apex_sourced($plan; $key):
+          any(($plan.configuration.root_module.resources[]? | select(.address == "cloudflare_record.app") | .expressions.content.references[]?);
+              type == "string" and startswith("hcloud_server.web[\"" + $key + "\"]"));
+        $p[0] as $plan
+        | ( [ $plan.prior_state.values.root_module.resources[]?
+              | select(.address == "hcloud_volume.workspaces_luks")
+              | .values.id | select(. != null) | tostring | select(length > 0) ][0] // "" ) as $luksid
+        | {
+            luks_att: (
+              [ $plan.resource_changes[]?
+                | select(.address == "hcloud_volume_attachment.workspaces_luks")
+                | select(.change.actions? | index("create"))
+                | select($luksid != "" and (.change.after.volume_id != null) and ((.change.after.volume_id | tostring) == $luksid)) # arm:luks-volume-id
+              ] | length
+            ),
+            apex: (
+              [ $plan.resource_changes[]?
+                | select(.address == "cloudflare_record.app")
+                | select(.change.actions == ["update"]) # arm:apex-actions
+                | select((.change.after.content != null and .change.after.content != .change.before.content) or .change.after_unknown.content == true) # arm:apex-content
+                | select(apex_attrs_equal) # arm:apex-attrs
+                | select(apex_sourced($plan; $k)) # arm:apex-source
+              ] | length
+            )
+          }' 2>/dev/null); then
+      echo "web_host_replace_gate: ABORT — jq evaluation failed on the keyed arms for ${plan_json}. Fail-closed. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+      return 1
+    fi
+    latt=$(echo "$arms" | jq -r '.luks_att')
+    apex=$(echo "$arms" | jq -r '.apex')
+    for v in "$latt" "$apex"; do
+      if [[ ! "$v" =~ ^[0-9]+$ ]]; then
+        echo "web_host_replace_gate: ABORT — keyed-arm counter parse failed (luks_att='${latt}' apex='${apex}'). Fail-closed. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+        return 1
+      fi
+    done
+    echo "web_host_replace_gate: keyed arms for ${host_key}: luks_attachment_recreated_onto_prior_volume=${latt} apex_record_repointed_in_place=${apex}"
+
+    if [[ "$latt" -lt 1 ]]; then
+      echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but does NOT create hcloud_volume_attachment.workspaces_luks onto the LUKS volume recorded in the prior state (${latt} matching creates; expected >= 1). Its server_id is ForceNew and hardcoded to this host, so the attachment is entailed by the replace; absent it the LUKS at-rest store boots UNATTACHED while the host reports healthy, and a create onto a DIFFERENT volume id boots it with the wrong disk. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+      return 1
+    fi
+
+    if [[ "$apex" -lt 1 ]]; then
+      echo "web_host_replace_gate: ABORT — the plan replaces ${want_addr} but cloudflare_record.app is not updated in place to the replaced server (${apex} qualifying entries; expected 1: exactly [\"update\"], content changing, name/type/proxied/ttl/zone_id unchanged, content sourced from hcloud_server.web[\"${host_key}\"]). The apex A record is pinned to this host's ipv4_address: left stale it resolves app.soleur.ai to a destroyed host, and a delete+create of it is an outage window. NOTHING HAS BEEN DESTROYED — this gate runs before the apply. Do not re-dispatch; hand this line to an engineer."
+      return 1
+    fi
   fi
 
   echo "web_host_replace_gate: PASS — scoped replace of ${want_addr} permitted (exactly 1 host replace + its private NIC + its workspaces volume attachment + the fleet firewall re-attachment; the workspaces volume, the LUKS volume and the LUKS passphrase preserved by omission; 0 reboots of other hosts, 0 out-of-scope changes, identity matches the dispatch request '${host_key}')."

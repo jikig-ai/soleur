@@ -1,6 +1,6 @@
 # ADR-096: Migrate the container registry off GHCR to a self-hosted zot (Hetzner, volume-backed)
 
-- **Status:** Adopting
+- **Status:** Accepted (2026-10-02, #8714 step 5.6; see "Amendment 2026-10-02 (#8714)")
 - **Date:** 2026-07-07
 - **Issue:** [#6122](https://github.com/jikig-ai/soleur/issues/6122)
 - **Supersedes:** [ADR-088](./ADR-088-control-plane-installation-token-minter-for-private-ghcr-reads.md) (the GHCR App installation-token minter — GHCR refuses App tokens for `docker pull`, confirmed platform limitation)
@@ -8,14 +8,21 @@
 
 ## Status
 
-**Adopting — cut over, not yet accepted** (as of 2026-09-24). zot has served production pulls since
-**2026-07-17T19:51:49Z** and has been the **sole** pull path since about 2026-07-29, when the GHCR
+**Accepted** (2026-10-02, #8714 step 5.6; see "Amendment 2026-10-02 (#8714)" at the end). The text
+below is the record of how it got there. It is kept as written apart from this label and the closing
+sentence, so its "Adopting" wording is as of 2026-09-24. Every "stays **Adopting**" and "5.6 flips it"
+line in the amendments below, and every "live proof" gate they name, is superseded by the 2026-10-02
+amendment (which also records that the #9275 live proof did not run).
+
+As of 2026-09-24: zot had served production pulls since
+**2026-07-17T19:51:49Z** and had been the **sole** pull path since about 2026-07-29, when the GHCR
 read PAT was revoked outside any repo change (amendments 2026-07-30 and 2026-09-22; cutover record
 in `runbooks/zot-registry-revert.md` § "Cutover record (#6122)"). That holds for **rolling
 deploys**. A **fresh web boot failed** on 2026-09-23 (web-2 booted dark at `stage=pull`, #8651).
 The fix, PR #8660, merged at 2026-09-24T03:22:41Z. The web-2 replace that followed (run
 35951886838) booted zot-served (`stage=app_zot`, `ghcr_login=fail`, `fresh_boot_ready`), so #8651's
-follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is partial:
+follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement was partial then (every
+item below has since completed; see the 2026-10-02 amendment):
 
 - **5.3a** (the `ci-deploy.sh` GHCR read path) is done (2026-09-23, #8036 item 1c; see "Amendment
   2026-09-23 (#8036 item 1c)" under §Cold-boot-dependency statement).
@@ -27,7 +34,8 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   item 1d)"). No fresh-boot template or baked host script presents a GHCR credential or pulls a
   private GHCR package. It is true of the hosts once the post-merge `inngest-host-replace` and
   web-2 `web-host-replace` boot from the new templates. The operator released 5.3b-i from the soak
-  on the no-reachable-success-arm ground (#6122, 2026-09-24). **5.3b-iii remains.**
+  on the no-reachable-success-arm ground (#6122, 2026-09-24). **5.3b-iii remained** then (completed
+  2026-09-28 to 2026-09-30; see the last bullet).
 - **The #6122 soak is re-armed and enrolled** (operator, #6122, 2026-09-24): `START` is
   2026-09-24T03:22:41Z (the #8660 merge), with a 7-day minimum, and the sweeper grades it on #6122
   from 2026-10-01T03:22:41Z. Its PASS authorizes 5.6 (once 5.3b-iii and 5.4 are also done) and
@@ -43,10 +51,14 @@ follow-through passed; the sweeper closes #8651 after 2026-09-25. Retirement is 
   (part 1), and the registry host boots zot from a pinned release asset with ghcr.io denied
   (part 2). See the two "Amendment 2026-09-28 (#8714 step 5.3b-iii, …)" sections. 5.4 is done
   (#9071). The web hosts deny ghcr.io as well (2026-09-30, #9169; see "Amendment 2026-09-30
-  (#9169)"); bridge-network containers and the `docker.pkg.github.com` alias are the remaining
-  gaps (#9275).
+  (#9169)"). The bridge-network carve (2026-10-01, #9275; see "Amendment 2026-10-01 (#9275)") is
+  merged but **not delivered to any running host**: the apply workflow that delivers it was disabled
+  before the merge (see "Amendment 2026-10-02 (#8714)"). So 5.3b-iii is complete at template level.
+  Still open: the host-level `docker.pkg.github.com` hosts-file line (#9390), the `ghcr_blocked=0`
+  regression alert (#9391) and delivery of the carve to running hosts (#9393).
 
-This ADR flips to **accepted** (task 5.6) when 5.3b-iii and 5.4 are also complete (5.3b-i is done).
+This ADR flipped to **accepted** (task 5.6) on 2026-10-02, once 5.3b-iii (template level; delivery
+tracked in #9393) and 5.4 were complete (5.3b-i was already done).
 
 ## Amendment 2026-07-30 — the CI mirror is release-blocking for web-platform
 
@@ -1784,6 +1796,11 @@ for the zot half. The cosign half moved in part 1 (the amendment above).
   > half (`cron-egress-allowlist-cidr.txt`) admits `140.82.112.0/20` and `185.199.108.0/22`,
   > which contain ghcr.io and pkg-containers.githubusercontent.com, so bridge-network containers
   > can reach GHCR (#9275).
+  >
+  > **Superseded 2026-10-01 (#9275):** the CIDR half is carved: the Packages frontends in
+  > `/meta` `.packages` are removed from the generated file, so bridge containers on web-1
+  > (after the post-merge apply) and on fresh hosts cannot reach GHCR; a running web-2 keeps the
+  > old list until its next replace (#9393). See "Amendment 2026-10-01 (#9275)".
 - **amd64 only.** A precondition on `hcloud_server.registry` refuses an arm64 `registry_server_type`,
   because no arm64 asset is mirrored. `zot_image_arm64` stays as the upstream record.
 - **Status.** 5.3b-iii is complete at template level once this merges. The live proof is the first
@@ -1856,6 +1873,11 @@ The registry host's deny (part 2 above) now covers both web hosts, with the same
   restored (changing that means editing copy R); and a `hcloud server rebuild` re-runs the host's
   creation-time `user_data` without re-firing either route. Nothing alerts on a later
   `ghcr_blocked=0`; that regression check is tracked with #9275.
+
+  > **Superseded 2026-10-01 (#9275):** the regression check is not part of #9275 (its issue body
+  > has no such item) and it concerns the hosts-file deny, a different layer from the bridge gap.
+  > It is #9391. The bridge-layer gap named in the "Scope" sentence above is closed by the
+  > carve (see "Amendment 2026-10-01 (#9275)").
 - **Loopback.** A connect to `0.0.0.0` or `::` reaches the local host on Linux, just as
   `127.0.0.1` would: HTTPS on :443 fails fast (a connect was refused in 0 ms, measured with `curl`
   on 2026-09-30), while plain HTTP on :80 reaches the web host's own app. No registry client talks
@@ -1866,3 +1888,267 @@ The registry host's deny (part 2 above) now covers both web hosts, with the same
 - **Live proof.** Green post-merge runs of both apply workflows, then the first release after them
   logs `GHCR_DENY ghcr_blocked=1` from `soleur-web-platform` and `soleur-web-2` next to
   `IMAGE_VERIFY: ok`. The ADR stays **Adopting**; 5.6 flips it.
+
+## Amendment 2026-09-30 (#6129) — cosign verification is ENFORCE by default
+
+The #6122 zot soak passed. The operator accepted the verdict on 2026-09-30, about 6.5 days into
+the 7-day window, and #6122 closed as completed. So the soak-gated fast-follow ships:
+`ci-deploy.sh` now defaults to `IMAGE_VERIFY_MODE=enforce`, and `warn` is an explicit override
+only. #6129 listed three conditions, all measured on the flip date:
+
+- **Clean verification over the soak.** Better Stack shows 0 `IMAGE_VERIFY_FAIL` rows (including
+  `cosign_absent`) against 263 `IMAGE_VERIFY: ok` rows across both web hosts over 7 days.
+- **Trusted-root staleness gate green.** `cosign-trusted-root-staleness.test.sh` passes 3/3;
+  capture age is 88 days, within the 150-day limit.
+- **No manually maintained credential.** The interim GHCR read PAT is revoked (AP-016 lapsed
+  2026-07-30, #7071).
+
+Under enforce, any verify failure keeps the old container running and fails the deploy. That
+includes `cosign_absent`, where the pinned verifier image can't be pulled from gcr.io. The
+§"Amendment 2026-09-24 (#6122)" note that B3's GHCR restore input depends on #6129 is now satisfied
+**for the web-platform image**: an app image altered on GHCR and restored is refused, not deployed
+with a warning (ADR-169 amendment of the same date). Two paths are not covered, and both are
+unchanged by this flip:
+
+- `ci-deploy.sh`'s `inngest)` arm calls `verify_image_signature` zero times. Its identity pattern
+  admits only `reusable-release.yml`, and the inngest bootstrap image is signed by
+  `build-inngest-bootstrap-image.yml`. The arm refuses to run while the web scheduler is
+  quiesced, which is the steady state.
+- The dedicated inngest host's boot pins the bootstrap image by digest (integrity) but verifies no
+  signature. `cloud-init-inngest.yml` records this state (#6617, #7410).
+
+The fresh-boot path runs no cosign verify either, because there is no old container to fall back
+to there. `soleur-host-bootstrap-observability.test.sh` AC1 pins that.
+
+Two more consequences of the flip:
+
+- **Break-glass is a reviewed revert.** No setting on the hosts can downgrade to warn without SSH,
+  which is deliberate: a Doppler-settable downgrade would let a Doppler writer switch off the
+  control that guards against a tampered registry.
+- **Resilience.** `ci-deploy.sh` retries a daemon-side verifier-image pull failure once, the
+  transient gcr.io class. An unknown `IMAGE_VERIFY_MODE` value fails closed to enforce.
+
+## Amendment 2026-10-01 (#9275) — bridge containers on web-1 (after the post-merge apply) and fresh hosts can no longer dial GitHub's Packages frontends; a running web-2 keeps the old list until its next replace (#9393)
+
+This closes the two gaps the 2026-09-30 (#9169) amendment left under "Scope", for the bridge layer, on
+web-1 after the post-merge apply and on fresh hosts; a running web-2 keeps the old list until its next
+replace (#9393).
+It supersedes the sentence in the 2026-09-28 part 2 amendment's "Superseded" note that bridge-network
+containers can reach GHCR. The evidence below is measured 2026-10-01, either recorded in the plan
+(`knowledge-base/project/plans/archive/20261003-215900-2026-10-01-infra-deny-ghcr-from-bridge-containers-plan.md`) or
+re-derived when this amendment was written (stated per row). It is a dated measurement, not a
+constant: `/meta` rotates, so tests assert structure and the set-difference relation, never the counts.
+
+### Decision
+
+- **The Packages frontends are carved out of the generated container-egress allow list, in the
+  generator, on web-1 after the post-merge apply and on fresh hosts (a running web-2 keeps the old
+  list until its next replace, #9393).** `gen-github-egress-cidr.sh` still builds the `(.git+.api)` IPv4 union from
+  `api.github.com/meta`, then removes every address of the `.packages` list that is not also an exact
+  member of `.git`, `.web` or `.api`. Each carved prefix is recorded in the committed
+  `cron-egress-allowlist-cidr.txt` as a header line `# Excluded (GitHub Packages frontends): <cidr>`.
+  The loader, the nft rule order, the DOCKER-USER jump, the set types and the systemd units are
+  unchanged: this is a data change. The by-name allow rule still precedes the CIDR rule, so a host in
+  `cron-egress-allowlist.txt` wins by construction. A missing or empty CIDR file fails toward a
+  narrower allow list (the loader builds an empty set). A **stale** file does not: it keeps whatever
+  the last delivered carve admitted, and staleness is detected by the probe (`file_sha256` and
+  `in_allow_cidr` on a loss), not prevented by construction.
+- **The carve covers both names with one change.** The same frontend IPs serve `ghcr.io` and
+  `docker.pkg.github.com`, so the `docker.pkg.github.com` alias is denied at the bridge layer by the
+  same carve. The host-level hosts-file line for that alias is a registry-host byte change and waits
+  for the next registry-host replace (#9390). `cloud-init-registry.yml` is not touched by this change.
+- **`185.199.108.0/22` is kept** (operator-visible deviation DC-1 in the plan's
+  `decision-challenges.md`). See the scoping table.
+- **A recurring in-container probe, not a boot-time poweroff, is the control.** The resolver tick
+  (`cron-egress-resolve.sh`) runs one probe per name, about every 5 minutes, from inside the app
+  container. It reports a connection as `op=ghcr_deny_lost`. A due probe that cannot decide, is skipped by the
+  30 s tick-budget gate or finds the container absent is counted per name, and the twelfth consecutive
+  one, about an hour, is `op=ghcr_deny_probe_blind`, re-emitted hourly while it lasts. Both ride the existing `sentry_alert.egress_blocked` rule (its
+  `op` filter is widened by two values; no new rule, no new monitor). The apply-time assertion in
+  `cron-egress-postapply-assert.sh` is the T0 proof: exact `nft get element` per carved address plus
+  one live probe, which is three-state: a proven drop (`rc=28` with a zero connect time) passes, a connect
+  fails the apply (`ASSERT-FAILED: ghcr-frontend-reachable <ip>`), and anything else is a loud
+  `WARNING: ghcr-frontend-inconclusive (rc=<rc>)` with the apply continuing, because the `nft get element`
+  checks are the hard gate. A hardening leak must not power off a serving host, so the boot-time
+  `cron-egress-enforce-probe.sh` is not extended. The decode table and the repair ladder live in
+  `knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md` § "GHCR carve (#9275)".
+- **Why a generator carve and not a deny set.** A separate deny set, rule and loader parser would
+  buy what a data subtraction buys and add a fail-open-on-bootstrap surface (the loader is
+  fail-open by ADR-052). The CTO review replaced it with the carve.
+
+### Scoping — what a bridge container legitimately needs from GitHub address space
+
+| Question | Evidence (2026-10-01) | Conclusion |
+|---|---|---|
+| Does our code dial GHCR or `*.githubusercontent.com`? | The plan's static census, a `git grep` for the host names `githubusercontent`, `codeload`, `objects.github`, `release-assets`, `pkg.github.com` and `ghcr.io`, over `apps/web-platform` (excluding infra and tests) returned 0 hits; over `plugins/soleur` (excluding tests and `*.md`) one hit, an OIDC issuer string in `provision-doppler.sh`, not a dial. The Dockerfile installs `git`, `curl`, `jq`, `gh` and no `git-lfs`. | No. |
+| What does the sandbox list? | `GITHUB_EGRESS_DOMAINS` in `server/agent-runner-sandbox-config.ts` is exactly `github.com` and `api.github.com`; `cron-egress-allowlist.txt` names exactly those two for GitHub. | Bridge containers need those two hosts and the Azure `/32` pool `api.github.com` rotates into (incident 5516336). |
+| Can a prefix cut separate GHCR from github.com? | Re-derived: from this runner `github.com` resolved to 140.82.121.3, `api.github.com` to .6, `codeload.github.com` to .9, `ghcr.io` and `docker.pkg.github.com` to .33, all inside `140.82.112.0/20`. | No. The carve has to be per address. |
+| Which frontends serve which names? | Re-derived with `curl --resolve`: 140.82.121.33 and .34 answer `ghcr.io` (HTTP 301) and `docker.pkg.github.com` (200) and fail verification for `github.com` (000); 140.82.121.3 answers `github.com` (200) and neither Packages name (000). The plan measured the same split on 140.82.112.34 and 140.82.113.33. A re-check on 2026-10-01 against **all eight `/32` holes** (`140.82.{112,113,114,121}.{33,34}`) returned `000` for `github.com` and for `api.github.com` and `301` for `ghcr.io` on every one. **`192.30.255.164/31` is different:** both of its addresses (.164, .165) returned `000` for all three names, `ghcr.io` included, so it is carved on `/meta`'s word alone (its `.packages` entry), not on a measurement that it serves Packages. At that re-check `ghcr.io` and `docker.pkg.github.com` resolved to .34 (not .33; `github.com` to .4, `api.github.com` to .6, `codeload.github.com` to .10): the answer rotates inside each pool, so none of this is a constant. | An IP-level carve is safe for the eight `/32` holes, where the measurement shows they do not serve `github.com` or `api.github.com`, and one carve covers both Packages names. The `/31` rests on `/meta` alone; the by-name allow set (which pins whatever `github.com` and `api.github.com` resolve to) and the generator's DNS guard are what protect GitHub itself. |
+| How many prefixes and addresses are carved? | Re-derived against live `/meta`: 78 allow ranges in; `.packages` minus exact `.git`/`.web`/`.api` members leaves 28 holes, 9 of them inside an allow prefix (`140.82.{112,113,114,121}.{33,34}/32`, eight `/32`, and `192.30.255.164/31`); the carve yields 122 prefixes out. The other 19 holes are Azure `/32`s already outside the allow list. | Nine effective hole prefixes covering ten addresses (8 x `/32` plus one `/31`). github.com, api.github.com, codeload, 140.82.112.3, 192.30.255.112 and 185.199.108.154 stay admitted; the ten carved addresses are denied. |
+| Is `185.199.108.0/22` unneeded? | Plan evidence: it also fronts `raw.githubusercontent.com` (185.199.108.154 answered both `pkg-containers.githubusercontent.com` and `raw.githubusercontent.com`, a shared frontend) and Pages; no runtime evidence exists, and `pkg-containers` is a blob CDN that is useless without a ghcr.io token. | Retained. Narrowing needs a runtime census first (DC-1). |
+
+### Residuals (accepted)
+
+- `pkg-containers.githubusercontent.com` (185.199.108-111.154) stays reachable, for the reason in the last
+  table row.
+- A bridge container can still dial a Packages frontend IP that `/meta` does not list. The probe finds
+  DNS-visible drift, and `ghcr_deny_lost.extra.remote_ip` names the address. Carving it needs a
+  **generator change in a PR**: there is no extra-hole list or override (holes come only from `/meta`
+  `.packages`), so the change adds a reviewed, explicit way for the generator to treat that address as
+  a hole, under its existing `github.com` / `api.github.com` DNS guard, with a test.
+- **Exact-member exception.** `20.217.135.1/32` is listed in `.packages` and also in `.git` and `.web`,
+  so the generator deliberately does not carve it (carving it would cut GitHub). Re-checked
+  2026-10-01 with `curl --resolve`: it answers `github.com` and `api.github.com` (400) and not
+  `ghcr.io` or `docker.pkg.github.com` (000). It is not denied; it is detect-only through the probe,
+  and only if DNS ever points a probed name at it.
+- **Sibling Packages names are unprobed.** The probe covers `ghcr.io` and `docker.pkg.github.com`. The
+  other Packages names (npm, maven, nuget, rubygems and `containers.pkg.github.com`) share the same
+  frontends, so the carve denies them, but nothing probes them.
+- **Not every network is governed.** `DOCKER-USER` governs the default bridge. Containers on other
+  Docker networks, and `--network host` containers, are outside it. The canary shares `docker0` with the
+  app, but the probe checks only the `soleur-web-platform` container. Established flows survive until
+  they end: the loader flushes and reloads the set, and a connection already admitted is not cut.
+- **By-name allow wins by order** (the plan's Cut List decision). A hostname in
+  `cron-egress-allowlist.txt` that resolves into a carved address stays admitted, because the by-name
+  rule precedes the CIDR rule. The runtime probe is the only detector, and it sees only what
+  `ghcr.io` and `docker.pkg.github.com` answer; `ghcr_deny_lost.extra.in_allow_name` says when the
+  by-name set admitted the connection.
+- The probe reserves source ports 49100-49199 inside the ephemeral range. A drop from that range to a
+  carved frontend on 443 is not counted by `egress_blocked`. The sampler filter is the conjunction of
+  that source range, destination port 443, TCP and a destination inside a `# Excluded` prefix, taken
+  from the first `SPT`/`DPT`/`DST` token of the line; it never suppresses a line carrying an inner
+  `[SRC=` header and counts every line if the filter itself fails. Any other drop stays counted. The
+  blind spot is real: about 100 of about 28,000 default ephemeral ports (32768-60999, about 0.35%) of
+  legitimate dials to a carved `/32` are hidden from the count, and a compromised container can pick a
+  port in that range to hide dials to the carved frontends only. ADR-052's amendment of this date
+  records why this is a narrow, explicit exception and not the suppression it rejects.
+- **A running web-2 keeps the old allow list and the old resolver, with no probe, until its next
+  replace** (DC-3). `terraform_data.cron_egress_firewall` is pinned to web-1 and
+  `deploy_pipeline_fix_web2` carries no cron-egress artifact; fresh hosts get the change through the
+  baked scripts. Tracked in #9393. Until then GHCR stays reachable from web-2's bridge containers.
+- DoH or IP-literal exfiltration to other GitHub-hosted surfaces (any repo, any gist) is the
+  pre-existing `github.com` allowance and is out of scope. Host processes and `--network host`
+  containers are not governed by DOCKER-USER; their deny is the hosts-file mechanism (#9169).
+- The in-container probe runs the container's own `curl`, so it is not a trust anchor against a
+  root-compromised container, which can forge a `held` verdict. It detects configuration drift. Its
+  output is treated as untrusted by the host script, which caps it before parsing. A non-root process
+  can also bind the reserved source ports first, which makes the verdict inconclusive (a
+  `ghcr_deny_probe_blind` after about an hour).
+- The daily refresh opens a direct-merge PR with no review, so the runtime probe, not CI, is the
+  control against a bad regeneration. The generator also dies, rather than writing, when `github.com`
+  or `api.github.com` resolves into a carved range (`ghcr-carve-would-cut-github`) and when no
+  effective Packages hole remains (`ghcr-carve-no-effective-holes`, also an oversized `.packages`
+  list of more than 512 IPv4 entries). Either freezes the refresh and leaves the stale carved file
+  serving; the die reaches Sentry as the handler's `reportSilentFallback` event
+  (`feature=cron-github-cidr-refresh`, `op=handler-top-level`) and the monitor's error check-in.
+
+### Corrections to the 2026-09-30 (#9169) amendment
+
+- "Nothing alerts on a later `ghcr_blocked=0`; that regression check is tracked with #9275." The
+  #9275 issue body contains no such item, and it concerns the hosts-file deny, a different layer from
+  the bridge gap. It is its own issue, #9391 (DC-2). The alert this change adds covers the bridge deny.
+- The "Scope" bullet's two gaps map as follows: bridge-network containers are covered by the carve and
+  the alias is covered at the bridge layer; the host-level alias line is #9390.
+
+### Follow-ups
+
+- #9390: the host-level `docker.pkg.github.com` hosts-file line, at the next registry-host replace.
+- #9391: the Better Stack alert on `ghcr_blocked=0`.
+- #9392: `op=enforcement_missing` has 297 events since 2026-06-11 (about 2.7 a day on average, about
+  15 a day in the week to 2026-10-01, per the issue) and is routed by no Sentry rule. It is
+  deliberately not added to the widened filter: it is a different failure (the enforcement self-heal)
+  and widening an alert filter for an unexamined recurring event is a separate decision. (It would not
+  page daily: the rule emails once per unresolved issue group.)
+- #9393: deliver the carved firewall artifacts to a running web-2.
+- #8714 keeps tracking the remaining retirement step 5.6.
+
+### Status
+
+5.3b-iii is complete at the bridge layer for web-1 (after the post-merge apply) and fresh hosts when
+this merges; a running web-2 keeps the old list until its next replace (#9393), the delivery residual
+above. No C4 statement is falsified: `webapp -> github` and `engine -> github` stay true, and no
+`webapp -> ghcr` edge exists or is needed. The ADR stays **Adopting**; 5.6 flips it. Live proof is the
+green post-merge `apply-web-platform-infra.yml` run, whose post-apply assertion checks every carved
+address, followed by 24 hours with neither a `ghcr_deny_lost` nor a `ghcr_deny_probe_blind` event in
+Sentry (no loss and no blindness). The apply assertion is the positive control. The
+`cron-egress-resolve` check-in proves only that the tick ran, not that the probe decided, so a green
+check-in alone is not the proof: probe silence converges to `ghcr_deny_probe_blind`. The apply run is
+live proof only if its provisioner ran (`terraform_data.cron_egress_firewall` is keyed on a hash of its
+delivered files plus the server id; this PR changes hashed files, so the post-merge push applies it).
+
+> **Superseded 2026-10-02 (#8714):** the ADR is Accepted, and the live proof named above did not run
+> (the apply workflow was disabled before the merge). That gate was waived, not met; carve delivery is
+> tracked in #9393. The hosts-file deny of ghcr.io on the web hosts has its own evidence: both hosts
+> logged `GHCR_DENY ghcr_blocked=1` on 2026-09-30 (rows on #9169).
+
+## Amendment 2026-10-02 (#8714) — 5.6: ADR-096 is Accepted
+
+*No new ordinal is claimed; this amends ADR-096 in place.*
+
+**Decision.** Status flips from Adopting to **Accepted**. #8714 step 5.6's own criteria are met:
+
+- The #6122 soak passed and #6122 closed (2026-09-30).
+- 5.3b-i, 5.3b-iii and 5.4 are merged (#8036 item 1d, #9147/#9264, #9071).
+- The soak's Sentry evidence was corroborated on Better Stack, as 5.6 required. A query run on
+  2026-10-02 (`betterstack-query.sh --since 7d --grep 'inngest_zot'`) returned one host beacon,
+  `stage=inngest_zot bootstrap image served by zot ep=10.0.1.30:5000`. Its other matches were this
+  issue's and the runbooks' own prose echoed into the log, which carry the marker with a redacted or
+  absent `ep=` value.
+  The soak's three beacon rows are recorded on #6122. That proves one zot-served bootstrap pull per
+  window on the dedicated host. It is availability evidence, not an absence-of-fallback proof, and it is
+  not a signature check (see "Provenance" below). The sturdier web-path corroboration is the 263
+  `IMAGE_VERIFY: ok` rows against 0 `IMAGE_VERIFY_FAIL` over seven days recorded in the 2026-09-30
+  (#6129) amendment. The operator accepted the soak about 6.5 days into its 7-day window (#6122), as
+  that amendment records.
+- Every host-side GHCR pull is gone. The hosts-file deny covers `ghcr.io` on both web hosts and the
+  registry host. It does not cover the `docker.pkg.github.com` alias (#9390), and bridge-container
+  egress to GHCR is **not** denied yet (see below).
+
+**5.3b-iii does not wait on #9275.** #9275 was recorded as a residual of #9169 (bridge-network containers
+and the `docker.pkg.github.com` alias), not as a line of the 5.3b-iii checklist, whose remaining items were
+web-2 cosign (#9151) and the web-host deny (#9169). The bridge carve merged as PR #9385.
+
+**What Accepted does and does not claim.** It records that the migration is complete and zot is the sole pull
+path. It does not claim the #9275 carve is live: the post-merge `apply-web-platform-infra.yml` run that the
+2026-10-01 amendment names as live proof did not happen, because that workflow was disabled (state
+`disabled_manually`, 2026-10-01T21:30Z) before the merge, so the carved allow list and resolver have not
+been delivered to web-1. The 24-hour live-proof gate that amendment set is therefore **waived** at
+acceptance, not met. Until delivery, the `ghcr_deny_lost` and `ghcr_deny_probe_blind` alerts are silent
+on web-1 because the probe does not run there, so silence is not evidence of the deny. That delivery, and
+the residuals below, are tracked outside this ADR and do not reopen it:
+
+- #9390: the host-level `docker.pkg.github.com` hosts-file line.
+- #9391: the Better Stack alert on `ghcr_blocked=0`.
+- #9392: `op=enforcement_missing` is unrouted.
+- #9393: delivery of the carved firewall artifacts to hosts that are already running (web-2, and web-1 until
+  the apply workflow runs). Its scope was widened to web-1 and to the disabled apply workflow in a comment
+  on 2026-10-02.
+
+**Provenance.** Accepted does not mean signature-verified end to end. Cosign ENFORCE covers the web
+rolling-deploy path only. The inngest bootstrap and fresh boots are pinned by digest (integrity, not
+authenticity); see "Fresh-boot images are digest-pinned (integrity), not verified at boot" earlier in
+this ADR.
+
+## Amendment 2026-10-03 (#9393) — how the carved firewall artifacts reach hosts that are already running
+
+The "What Accepted does and does not claim" list above names #9393 as delivery to hosts that are already
+running. Decided 2026-10-03, with no new Terraform delivery code:
+
+- **web-2** is delivered by rebirth only (#9372, ADR-263), never by a plain replace: ADR-263's discriminate
+  step refuses the live plaintext web-2 volume, and a plain replace would power the host off. A reborn host
+  boots from the baked image, whose host scripts carry the carve, so the rebirth is the delivery event. Its
+  `image_tag` must be built from a commit that already carries the 2026-10-03 resolver and loader changes
+  (`cron-egress-resolve.sh`, `cron-egress-nftables.sh`: baked host scripts whose content hash moves).
+- **web-1** is delivered by the first run of `apply-web-platform-infra.yml` (the only workflow whose
+  `-target` list names `terraform_data.cron_egress_firewall`): that resource hashes the carve file, the resolver
+  and the post-apply assertion, so a green run whose SSH apply step actually ran (it can green-skip, #7539) is
+  the proof. `apply-deploy-pipeline-fix.yml` does not target it.
+- **Re-enabling the apply workflows** is not decided here. It is a production-write authorization with no
+  safe subset: it restores push-apply of every merged infra change, and the first apply after the pause
+  carries all of them. It is the operator's approval, requested with a recommendation to enable after a
+  read-only look at what would be applied.
+- This **supersedes** the "until its next replace" wording for web-2 in the 2026-10-01 amendment (above): web-2 is
+  never delivered by a plain replace.
+- #9393 stays open with two readable close conditions (an apply run after the change whose provisioner
+  executed green, and the #9372 rebirth run) and a dated re-evaluation on 2026-10-17. #9390 and #9391 are
+  tracked in their issues; read their state there rather than from this list.

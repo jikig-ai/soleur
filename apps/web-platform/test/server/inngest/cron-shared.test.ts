@@ -164,10 +164,21 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 
+  // #9482: cron-merge-queue-stall-dispatch is a dispatch-hybrid (mint token +
+  // workflow_dispatch to the stall-check workflow); the probe runs in the GHA
+  // executor, so the Node side holds no git and opens no PR. Never Tier-2
+  // deferred: a deferred tick is a missed stall check. Asserted here so the
+  // sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("merge-queue-stall-dispatch (#9482, dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-merge-queue-stall-dispatch")).toBe(false);
+  });
+
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
-  // grows with a new event-triggered cron.
+  // grows with a new event-triggered cron. The poll cron that used to sit beside
+  // it (`cron-gh-pages-cert-state`) was deleted in #9303; it never had an entry in
+  // this file, so the EXPECTED_CRON_FUNCTIONS shrink needs no assertion change.
   it("gh-pages-cert-reissue (#6657, event-triggered) is NOT in the deferred set", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-gh-pages-cert-reissue")).toBe(false);
   });
@@ -309,6 +320,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-roadmap-review",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0, // #9272 — keep the bounded-retry sleeps out of the test clock
     });
     expect(result).toBe(false);
   });
@@ -345,6 +357,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-seo-aeo-audit",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0,
     });
     expect(result).toBe(false);
   });
@@ -405,6 +418,7 @@ describe("verifyScheduledIssueCreated", () => {
       label: "scheduled-competitive-analysis",
       sinceIso: RUN_START,
       octokit,
+      retryDelayMs: 0,
     });
     expect(result).toBe(false);
   });
@@ -440,6 +454,106 @@ describe("verifyScheduledIssueCreated", () => {
         octokit,
       }),
     ).rejects.toThrow(/invalid sinceIso/);
+  });
+
+  // #9272 — the issues-list view can lag a just-created issue by a few
+  // seconds (label-filtered index), so a single point-in-time read false-reds
+  // a healthy producer AND the persistence gate then discards the run's real
+  // artifacts. The helper retries the empty read on a bounded budget; a read
+  // that recovers on attempt >1 emits a non-paging warn so the lag stays
+  // measurable.
+  it("#9272: an empty first read that resolves on retry returns true and emits scheduled-output-late-visible", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{ updated_at: "2026-05-31T09:30:08.000Z" }],
+      });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      feature: "cron-community-monitor",
+    });
+    expect(result).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(warnSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    const [, ctx] = warnSilentFallbackSpy.mock.calls[0];
+    expect(ctx).toMatchObject({
+      feature: "cron-community-monitor",
+      op: "scheduled-output-late-visible",
+    });
+  });
+
+  it("#9272: all-empty reads return false after exactly maxAttempts requests with no warn (true-absence path unchanged)", async () => {
+    const request = vi.fn().mockResolvedValue({ data: [] });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      maxAttempts: 3,
+      feature: "cron-community-monitor",
+    });
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: a populated first read makes exactly one request and emits no warn", async () => {
+    const octokit = octokitReturning([
+      { updated_at: "2026-05-31T10:00:00.000Z" },
+    ]);
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+    });
+    expect(result).toBe(true);
+    expect(octokit.request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: a thrown request propagates immediately — the retry covers empty reads only, preserving verify-output-failed upstream", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("GitHub 503"));
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    await expect(
+      verifyScheduledIssueCreated({
+        label: "scheduled-community-monitor",
+        sinceIso: RUN_START,
+        octokit,
+        retryDelayMs: 0,
+      }),
+    ).rejects.toThrow("GitHub 503");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
+  it("#9272: maxAttempts: 1 preserves the single-read contract for callers that opt out", async () => {
+    const request = vi.fn().mockResolvedValue({ data: [] });
+    const octokit = { request } as unknown as Parameters<
+      typeof verifyScheduledIssueCreated
+    >[0]["octokit"];
+    const result = await verifyScheduledIssueCreated({
+      label: "scheduled-community-monitor",
+      sinceIso: RUN_START,
+      octokit,
+      retryDelayMs: 0,
+      maxAttempts: 1,
+    });
+    expect(result).toBe(false);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -521,6 +635,7 @@ describe("resolveOutputAwareOk", () => {
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
     });
     expect(ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -537,6 +652,7 @@ describe("resolveOutputAwareOk", () => {
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
     });
     expect(ok).toBe(false);
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
@@ -1483,6 +1599,7 @@ describe("resolveOutputAwareOk — F1 retrofit (scheduled-output-missing extra i
       runStartedAt: RUN_START,
       cronName: "cron-roadmap-review",
       octokit,
+      verifyRetryDelayMs: 0, // #9272
       stdoutTail: `max-turns. leaked ${SYNTH_SK_ANT} here`,
       stderrTail: `boom ${SYNTH_GHS}`,
       exitCode: 0,
@@ -1906,7 +2023,7 @@ describe("postSentryHeartbeat — loud silent-skip on unset/malformed env (#4861
 // ---------------------------------------------------------------------------
 // ensureDedupIssue (#2756 starvation backstop) — a stable-title, open-issue
 // dedup sibling of ensureScheduledAuditIssue. Reuses the same read shape
-// (labels, sort:created desc, per_page:10) but matches the EXACT title and
+// (labels, sort:created desc, per_page:30) but matches the EXACT title and
 // scopes the dedup read to OPEN issues so an auto-closed prior alert never
 // suppresses a fresh drought (the standing-condition contract).
 // ---------------------------------------------------------------------------
@@ -1925,16 +2042,18 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
       title: "Content starvation: schedule empty",
       body: "drought",
       labels: ["action-required"],
+      missRetryDelayMs: 0,
     });
     expect(res.created).toBe(true);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    // GET then POST
+    // GET, bounded re-read (the index-lag retry), then POST
     expect(calls[0][0]).toBe("GET /repos/{owner}/{repo}/issues");
     expect(calls[0][1].state).toBe("open");
     expect(calls[0][1].sort).toBe("created");
     expect(calls[0][1].direction).toBe("desc");
-    expect(calls[0][1].per_page).toBe(10);
-    expect(calls[1][0]).toBe("POST /repos/{owner}/{repo}/issues");
+    expect(calls[0][1].per_page).toBe(30);
+    expect(calls[1][0]).toBe("GET /repos/{owner}/{repo}/issues");
+    expect(calls[2][0]).toBe("POST /repos/{owner}/{repo}/issues");
   });
 
   it("does NOT create a duplicate when an open issue with the exact title exists", async () => {
@@ -1945,11 +2064,44 @@ describe("ensureDedupIssue (stable-title standing alert)", () => {
       title: "Content starvation: schedule empty",
       body: "drought",
       labels: ["action-required"],
+      missRetryDelayMs: 0,
     });
     expect(res.created).toBe(false);
     expect(res.issueNumber).toBe(99);
     const calls = (client.request as unknown as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls.length).toBe(1); // GET only, no POST
+  });
+
+  it("does NOT create a duplicate when the issue appears on the re-read (index lag)", async () => {
+    let n = 0;
+    const request = vi.fn(async (route: string) => {
+      if (route === "GET /repos/{owner}/{repo}/issues") {
+        n++;
+        return {
+          data:
+            n === 1
+              ? []
+              : [{ title: "Content starvation: schedule empty", number: 88 }],
+        };
+      }
+      return { data: { number: 4242 } };
+    });
+    const client = {
+      request,
+    } as unknown as Parameters<typeof ensureDedupIssue>[0];
+    const res = await ensureDedupIssue(client, {
+      title: "Content starvation: schedule empty",
+      body: "drought",
+      labels: ["action-required"],
+      missRetryDelayMs: 0,
+    });
+    expect(res.created).toBe(false);
+    expect(res.issueNumber).toBe(88);
+    expect(
+      request.mock.calls.filter(
+        ([r]) => r === "POST /repos/{owner}/{repo}/issues",
+      ),
+    ).toHaveLength(0);
   });
 });
 

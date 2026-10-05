@@ -301,9 +301,11 @@ runs:
         # PR stalled at mergeState=BLOCKED forever. The file-vs-file parity test
         # (plugins/soleur/test/required-checks-canonical-parity.test.sh) keeps
         # the SSOT ≡ the canonical ruleset JSON, and a composite→SSOT guard in
-        # the same test catches any future re-hardcode here. `CodeQL` (GHAS
-        # 57789) is intentionally omitted from the SSOT — a 15368 synthetic
-        # cannot satisfy a GHAS gate; CodeQL concludes `neutral` for bot PRs.
+        # the same test catches any future re-hardcode here. `CodeQL` is NOT a
+        # required check (advisory since #9454: the merge queue is adopted and
+        # CodeQL cannot report on `merge_group`), so it is in no required set and
+        # not in the SSOT. If it is ever re-tightened (GHAS 57789) it stays out of
+        # the SSOT — a 15368 synthetic cannot satisfy a GHAS-bound gate.
         #
         # Parser: leading-`#`-only comment rule (kept in sync with
         # scripts/lint-bot-synthetic-completeness.sh) — preserves multi-word

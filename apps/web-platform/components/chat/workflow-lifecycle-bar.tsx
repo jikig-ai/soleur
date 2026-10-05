@@ -84,6 +84,9 @@ export function WorkflowLifecycleBar({
                   : "bg-red-900/40 text-red-300"
               }`}
             >
+              {/* Same dormant raw-enum render as chat-surface.tsx ›
+                  workflow_ended — when a server emitter ships, map status
+                  through lib/session-ended-copy.ts › SESSION_ENDED_COPY. */}
               {lifecycle.status}
             </span>
             {lifecycle.summary ? (

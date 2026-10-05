@@ -7,7 +7,7 @@ function emptyState(): ChatState {
     messages: [],
     activeStreams: new Map(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
     streamState: "idle",
     connection: { phase: "live" },
     liveNarration: null,
@@ -53,9 +53,9 @@ describe("chatReducer", () => {
   test("clear_streams empties activeStreams and clears pendingTimerAction", () => {
     const state: ChatState = {
       messages: [],
-      activeStreams: new Map([["cpo", 0]]),
+      activeStreams: new Map([["cpo", "m0"]]),
       workflow: { state: "idle" },
-      spawnIndex: new Map(),
+      spawnIndex: new Set(),
       streamState: "idle",
       connection: { phase: "unrecoverable" },
       liveNarration: null,
@@ -82,11 +82,9 @@ describe("chatReducer", () => {
     // stale subagent indices linger.
     const state: ChatState = {
       messages: [],
-      activeStreams: new Map([["cpo", 0]]),
+      activeStreams: new Map([["cpo", "m0"]]),
       workflow: { state: "active", workflow: "brainstorm" },
-      spawnIndex: new Map([
-        ["s-1", { messageIdx: 0, childIdx: 0 }],
-      ]),
+      spawnIndex: new Set(["s-1"]),
       streamState: "idle",
       connection: { phase: "live" },
       liveNarration: null,
@@ -125,9 +123,9 @@ describe("chatReducer", () => {
     // the pending action to avoid resetting a timer that just fired.
     const state: ChatState = {
       messages: [],
-      activeStreams: new Map([["cpo", 0]]),
+      activeStreams: new Map([["cpo", "m0"]]),
       workflow: { state: "idle" },
-      spawnIndex: new Map(),
+      spawnIndex: new Set(),
       streamState: "idle",
       connection: { phase: "live" },
       liveNarration: null,
@@ -264,17 +262,109 @@ describe("chatReducer", () => {
   });
 
   test("exhaustive: all action discriminants are handled (TypeScript guarantees, runtime sanity)", () => {
+    // The literal pins every union member — widening ChatAction without
+    // updating this list fails here AND at the type level (tsc catches a
+    // literal that doesn't match the union; this length catches a union
+    // that grew silently, test seat 7.2).
     const actions: ChatAction["type"][] = [
       "stream_event",
       "timeout",
       "clear_streams",
+      "set_live_narration",
       "ack_timer_action",
       "add_message",
       "filter_prepend",
       "gate_error",
       "resolve_gate",
+      "resolve_autonomous_disclosure",
+      "enter_stopping",
+      "connection_change",
+      "reset_connection",
       "resolve_interactive_prompt",
     ];
-    expect(actions).toHaveLength(9);
+    expect(actions).toHaveLength(14);
+  });
+});
+
+describe("#9515 review pins", () => {
+  test("tool_use supersedes liveNarration — narration folds into the bubble's trail", () => {
+    const bubble: ChatMessage = {
+      id: "stream-cc_router-1",
+      role: "assistant",
+      content: "",
+      type: "text",
+      leaderId: "cc_router" as any,
+      state: "streaming",
+    } as ChatMessage;
+    const state: ChatState = {
+      ...emptyState(),
+      streamState: "streaming",
+      messages: [bubble],
+      activeStreams: new Map([["cc_router" as any, "stream-cc_router-1"]]),
+      liveNarration: "Routing to the right experts…",
+    };
+    const next = chatReducer(state, {
+      type: "stream_event",
+      msg: { type: "tool_use", leaderId: "cc_router", label: "Reading file…" } as any,
+    });
+    expect(next.liveNarration).toBeNull();
+    const m = next.messages[0] as any;
+    expect(m.activity?.some((e: any) => e.kind === "narration" && e.label === "Routing to the right experts…")).toBe(true);
+    expect(m.toolLabel).toBe("Reading file…");
+  });
+
+  test("tool_use supersede with NO fold target keeps the narration live (chip path)", () => {
+    const state: ChatState = {
+      ...emptyState(),
+      streamState: "streaming",
+      liveNarration: "Thinking…",
+    };
+    const next = chatReducer(state, {
+      type: "stream_event",
+      msg: { type: "tool_use", leaderId: "cc_router", label: "Reading file…" } as any,
+    });
+    // Chip path (no bubble) → narration stays live for the fallback line.
+    expect(next.liveNarration).toBe("Thinking…");
+  });
+
+  test("enter_stopping sweeps to stopped + clears activeStreams — no resurrection", () => {
+    const bubble: ChatMessage = {
+      id: "stream-cc_router-1",
+      role: "assistant",
+      content: "partial",
+      type: "text",
+      leaderId: "cc_router" as any,
+      state: "streaming",
+    } as ChatMessage;
+    const state: ChatState = {
+      ...emptyState(),
+      streamState: "streaming",
+      messages: [bubble],
+      activeStreams: new Map([["cc_router" as any, "stream-cc_router-1"]]),
+    };
+    const stopping = chatReducer(state, { type: "enter_stopping" });
+    expect((stopping.messages[0] as any).stopped).toBe(true);
+    expect(stopping.activeStreams.size).toBe(0);
+    // A frame racing in behind the abort lands fresh — the stopped box
+    // never flips back to Working.
+    const next = chatReducer(stopping, {
+      type: "stream_event",
+      msg: { type: "stream", leaderId: "cc_router", content: "x", partial: true } as any,
+    });
+    expect((next.messages[0] as any).stopped).toBe(true);
+    expect(next.messages.filter((m) => m.type === "text")).toHaveLength(2);
+  });
+
+  test("a non-boundary frame (turn_summary) does not fold the narration just because streams are empty", () => {
+    const state: ChatState = {
+      ...emptyState(),
+      streamState: "streaming",
+      liveNarration: "Thinking…",
+    };
+    const next = chatReducer(state, {
+      type: "stream_event",
+      msg: { type: "turn_summary", summary: "Done" } as any,
+    });
+    expect(next.liveNarration).toBe("Thinking…");
   });
 });

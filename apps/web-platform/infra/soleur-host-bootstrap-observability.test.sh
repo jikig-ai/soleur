@@ -79,13 +79,14 @@ else
 fi
 
 # ── AC1 (B): cosign ENFORCE is not on the fresh-boot path (documentation guard) ──
-# The default is warn; no repo site sets enforce outside a test; cosign verify is
-# absent from cloud-init. (A regression that wired enforce into cloud-init would
+# Since #6129 ci-deploy.sh defaults to enforce: a failed verify keeps the OLD container live on a
+# running host. The fresh-boot path must stay free of cosign verify, because there is no old
+# container to fall back to there. (A regression that wired enforce into cloud-init would
 # reintroduce the exact silent-abort class this PR investigates.)
-if grep -qE 'IMAGE_VERIFY_MODE:-warn' "$DIR/ci-deploy.sh"; then
-  ok "AC1: IMAGE_VERIFY_MODE default is warn (cosign ENFORCE not live)"
+if grep -qE 'IMAGE_VERIFY_MODE:-enforce' "$DIR/ci-deploy.sh"; then
+  ok "AC1: IMAGE_VERIFY_MODE default is enforce in ci-deploy.sh only (#6129)"
 else
-  no "AC1: expected IMAGE_VERIFY_MODE:-warn default in ci-deploy.sh"
+  no "AC1: expected IMAGE_VERIFY_MODE:-enforce default in ci-deploy.sh (#6129)"
 fi
 # #6122: match a cosign INVOCATION, not the word in a comment. cloud-init.yml's
 # daemon.json block documents "cosign digest-pinning is the integrity guard, not TLS"
@@ -213,19 +214,23 @@ fi
 #
 # #6604 RE-POINT (Q6/C10): the /mnt/data mount was pinned from the ambiguous scsi-0HC_Volume_*
 # glob to the stable by-id device (once the LUKS volume attaches the glob binds the wrong device).
-# The survivability this AC protects is NOT inverted — it is STRENGTHENED: it moved from the
-# single runcmd `|| true` into `nofail` in the fstab line, which survives EVERY boot (not just the
-# one runcmd pass), and the runcmd mount chain STILL ends non-fatal (`|| soleur-boot-emit … || true`,
-# a pageable-but-survivable degrade). Assert (a) the bare-glob mount is GONE, (b) the mount is
-# by-id-pinned and still ends `|| true`, (c) fstab carries `nofail`. Anchored on the pin construct
-# + `nofail`, not a bare token (cq-assert-anchor-not-bare-token).
+# The fstab line keeps `nofail`, which survives EVERY boot (not just the one runcmd pass).
+# #6931 RE-POINT: the /mnt/data mount moved from the runcmd chain into the baked
+# workspaces-luks-provision.sh, and its failure is now DELIBERATELY fatal (hard gate + `poweroff -f`
+# before anything writes under /mnt/data) — a host whose data volume is not on the LUKS mapper must
+# not serve, so the old "stays survivable" disposition is intentionally reversed for this one mount.
+# What this AC still protects: no ambiguous glob, the device stays pinned by-id, fstab keeps `nofail`
+# (a boot-time degrade is pageable, never a boot hang), and the fatal path is NAMED (boot-emit stage).
+# The gate's PREDICATE is executed, not grepped, in fresh-boot-parity.test.sh section 20.
+PROV_SH="$DIR/workspaces-luks-provision.sh"
 if grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\* /mnt/data' "$CI"; then
   no "AC6b: the ambiguous scsi-0HC_Volume_* glob mount for /mnt/data must be REMOVED (#6604 pin by-id)"
-elif grep -qE 'mount /dev/disk/by-id/scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data \|\| soleur-boot-emit workspaces_mount fatal \|\| true' "$CI" \
-  && grep -qE 'scsi-0HC_Volume_\$\{workspaces_volume_id\} /mnt/data ext4 defaults,nofail ' "$CI"; then
-  ok "AC6b: /mnt/data mount pinned by-id + fstab nofail; survivability strengthened, not inverted"
+elif _pin_line="$(grep -F 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s' "$CI")" && [[ "$_pin_line" == *"'"'${workspaces_volume_id}'"'"* ]] \
+  && grep -qE "^FSTAB_LINE='/dev/mapper/workspaces /mnt/data ext4 defaults,nofail 0 2'\$" "$PROV_SH" \
+  && grep -qE 'workspaces_luks_not_mounted fatal; poweroff -f' "$CI"; then
+  ok "AC6b: /mnt/data is by-id-pinned, fstab keeps nofail, and the fatal path is a NAMED fail-closed gate (#6931)"
 else
-  no "AC6b: /mnt/data mount must be by-id-pinned, end '|| true', and carry fstab 'nofail' (survivable, not fatal)"
+  no "AC6b: /mnt/data must be by-id-pinned, keep fstab 'nofail' and fail closed through the named workspaces_luks_not_mounted gate"
 fi
 # plugin_seed + inngest keep a COMPOSITE trap that still calls cleanup.
 n_comp=$(grep -cE "trap 'rc=\\\$\?; cleanup;" "$CI" || true)

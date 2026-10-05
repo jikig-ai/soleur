@@ -1504,7 +1504,8 @@ WP_HDR="$TMPROOT/escrow-header.img"
 cryptsetup luksHeaderBackup "$WL_LUKS_DEV" --header-backup-file "$WP_HDR" >/dev/null 2>&1 \
   || unavailable "session W: luksHeaderBackup of the LUKS loop failed"
 
-# new_plain <tag> — a fresh plaintext loop with a real ext4 labelled workspaces_plain and real data on it.
+# new_plain <tag> — a fresh plaintext loop with a real, UNLABELLED ext4 and real data on it: the shape of
+# web-1's retained plaintext (no artifact ever labelled it — the 2026-09-30 rehearsal read label=none).
 new_plain() {
   local tag="$1" backing m
   backing="$TMPROOT/plain-${tag}.img"
@@ -1512,14 +1513,20 @@ new_plain() {
   WP_DEV="$(losetup --find --show "$backing" 2>/dev/null)" || unavailable "losetup of $backing failed"
   [ -b "$WP_DEV" ] || unavailable "$WP_DEV is not a block device"
   CLEAN_LOOPS+=("$WP_DEV")
-  mkfs.ext4 -q -L workspaces_plain "$WP_DEV" >/dev/null 2>&1 || unavailable "mkfs.ext4 -L workspaces_plain on $WP_DEV failed"
+  mkfs.ext4 -q "$WP_DEV" >/dev/null 2>&1 || unavailable "mkfs.ext4 on $WP_DEV failed"
   m="$(mktemp -d "$TMPROOT/pmnt.XXXXXX")"
   mount "$WP_DEV" "$m" || unavailable "could not mount $WP_DEV"
   mkdir -p "$m/workspaces/ws1"; head -c 2097152 /dev/urandom > "$m/workspaces/ws1/blob.bin" 2>/dev/null
   umount "$m" || unavailable "could not unmount $m"
   udevadm settle >/dev/null 2>&1 || true
 }
-seed_state() { printf 'CANARY_OK=1:%s\n' "$WL_UUID" > "$WL_STATE/state"; [ -n "${1:-}" ] && printf '%s\n' "$1" >> "$WL_STATE/state"; return 0; }
+# seed_state [line] — the persisted run state: CANARY_OK, then the plaintext mount source the cutover
+# recorded (PLAINTEXT_DEV=$WP_DEV, which W6 binds the first wipe to), then the caller's line (last wins).
+seed_state() {
+  printf 'CANARY_OK=1:%s\nPLAINTEXT_DEV=%s\n' "$WL_UUID" "$WP_DEV" > "$WL_STATE/state"
+  [ -n "${1:-}" ] && printf '%s\n' "$1" >> "$WL_STATE/state"
+  return 0
+}
 
 # run_wipe_real <invocation> [env...] — the REAL wipe functions in a fresh subshell (functions only:
 # the sourced-detection guard stops before the main body). Sets CASE_RC, CASE_OUT (file), MARKER_LOG.
@@ -1570,10 +1577,18 @@ note "session W: luks=$WL_LUKS_DEV mapper=$WL_MAPPER_NAME plain=$WP_DEV size=$WP
 seed_state
 run_wipe_real 'wipe_plaintext; echo WIPE_RETURNED' DRY_RUN=1
 if [ "$CASE_RC" -eq 0 ] && [ -n "$(wout_row rehearsal_ok first_wipe)" ] && grep -q ' magic=53ef' "$CASE_OUT" \
-  && [ "$(dev_magic "$WP_DEV")" = "53ef" ] && ! grep -qE '^PLAINTEXT_' "$WL_STATE/state"; then
+  && [ "$(dev_magic "$WP_DEV")" = "53ef" ] && ! grep -qE '^PLAINTEXT_WIPE(_BEGUN|D)=' "$WL_STATE/state"; then
   ok "LW1a rehearsal on a real ext4 loop: rehearsal_ok arm=first_wipe with magic=53ef, the device untouched, no PLAINTEXT_* marker"
 else
   no "LW1a real rehearsal wrong (rc=$CASE_RC magic=$(dev_magic "$WP_DEV")): $(tr '\n' '|' < "$CASE_OUT" | cut -c1-400)"
+fi
+# --- LW-P1: the same rehearsal row, on an UNLABELLED real ext4, is bound to the recorded device, and
+# carries the real ext4 UUID (plaintext_fs_uuid=, the pre-reboot content anchor) --------------------
+LWP1_UUID="$(blkid -p -s UUID -o value "$WP_DEV" 2>/dev/null)"
+if [ -n "$LWP1_UUID" ] && grep -qE "result=rehearsal_ok arm=first_wipe .* label=none plaintext_dev=${WP_DEV} plaintext_fs_uuid=${LWP1_UUID}( |\$)" "$CASE_OUT"; then
+  ok "LW-P1 an unlabelled real ext4 loop bound to its recorded PLAINTEXT_DEV rehearses: label=none plaintext_dev=$WP_DEV plaintext_fs_uuid=$LWP1_UUID (real blkid)"
+else
+  no "LW-P1 the real rehearsal row lacks label=none plaintext_dev=$WP_DEV plaintext_fs_uuid=${LWP1_UUID:-<blkid read none>}: $(grep -oE 'result=[a-z_]+ .*' "$CASE_OUT" | head -1 | cut -c1-300)"
 fi
 # --- LW8: the io.max cap was IN FORCE in a real scope, read back by the in-scope gate ---------------
 LW8_DEVNUM="$(tr -d '[:space:]' < "/sys/class/block/$(basename "$(readlink -f "$WP_DEV")")/dev")"
@@ -1581,6 +1596,15 @@ if grep -qE " io_max=${LW8_DEVNUM}_rbps=150000000_wbps=150000000(_|\$| )" "$CASE
   ok "LW8 real systemd wrote io.max for the loop's MAJ:MIN ($LW8_DEVNUM) with rbps=wbps=150000000 in the rehearsal's scope, and the gate read it back"
 else
   no "LW8 the rehearsal's io.max read-back is missing or wrong for $LW8_DEVNUM: $(grep -oE ' io_max=[^ ]*' "$CASE_OUT" | head -1) $(grep -E 'io_cap' "$CASE_OUT" | head -1 | cut -c1-200)"
+fi
+# --- LW-P2: the REAL _plaintext_gone (real blkid, real mapper) reads an intact recorded plaintext ------
+LW_GONE='_plaintext_gone; echo "gone_rc=$? why=$PLAINTEXT_GONE_WHY status=$PLAINTEXT_RECORD_STATUS"'
+seed_state
+run_wipe_real "$LW_GONE"
+if grep -qE '^gone_rc=1 why= status=ok$' "$CASE_OUT"; then
+  ok "LW-P2 real devices: mapper mounted + the recorded plaintext loop intact (real blkid TYPE=ext4) → NOT gone (rollback stays possible)"
+else
+  no "LW-P2 the real witness misread an intact recorded plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
 fi
 # --- LW1: the real zero + read-back -------------------------------------------------------------
 run_wipe_real 'wipe_plaintext; echo WIPE_RETURNED'
@@ -1608,6 +1632,24 @@ for off in 1048577 4194303 $((WP_SIZE - 1)); do
   fi
   poke "$WP_DEV" "$off" 000
 done
+
+# --- LW-P3: after the REAL zero, the recorded device reads no filesystem → gone (no marker needed) -----
+seed_state
+run_wipe_real "$LW_GONE"
+if grep -qE '^gone_rc=0 why=plaintext_dev_gone status=none$' "$CASE_OUT"; then
+  ok "LW-P3 real devices: the recorded plaintext zeroed (real blkid finds nothing), no marker → gone, why=plaintext_dev_gone"
+else
+  no "LW-P3 the real witness did not read a zeroed recorded plaintext as gone: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
+# --- LW-P4: a record naming the mapper's REAL dm-N node (it reads ext4!) is the live copy → gone ---------
+LWP4_DM="$(readlink -f "$MAPPER")"
+seed_state "PLAINTEXT_DEV=$LWP4_DM"
+run_wipe_real "$LW_GONE"
+if [ "$LWP4_DM" != "$MAPPER" ] && grep -qE '^gone_rc=0 why=plaintext_dev_gone status=is_mapper$' "$CASE_OUT"; then
+  ok "LW-P4 real devices: a record naming the mapper's own node ($LWP4_DM, a real ext4) is refused by the mapper-identity clause, not trusted as an intact plaintext"
+else
+  no "LW-P4 a record naming the live mapper node ($LWP4_DM) was read as an intact plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
+fi
 
 # --- LW4: an interrupted zero (first MiB only, BEGUN set) resumes on arm=re_zero --------------------
 new_plain lw4
@@ -1695,6 +1737,60 @@ if cryptsetup luksAddKey --batch-mode --pbkdf pbkdf2 --pbkdf-force-iterations 10
   fi
 else
   no "LW7 could not luksAddKey on the LUKS loop — the stale-header case did not run"
+fi
+
+# --- LW8 (#9356, CPO): HEADER-RESTORE DRILL — a destroyed LUKS header is recoverable from the escrowed backup ---
+# The whole at-rest posture rests on one claim: the escrowed header backup (luksHeaderBackup, shipped to R2 by
+# the provisioner) plus the passphrase brings the data back if the on-disk header is lost. Nothing proved it
+# against a real device. Format a loop, put a SENTINEL filesystem on the mapper, back the header up, ZERO the
+# whole header region, prove the volume is then genuinely unopenable (the anti-vacuity half: a drill whose
+# "destruction" did nothing proves nothing), restore, reopen with the same passphrase, read the sentinel back.
+LW8_SENTINEL="lw8-sentinel-$$-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+new_session lw8
+LW8_BK="$TMPROOT/lw8-header.bak"
+LW8_MNT="$(mktemp -d "$TMPROOT/lw8mnt.XXXXXX")"; CLEAN_MOUNTS+=("$LW8_MNT")
+lw8_ok=1
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 mkfs.ext4 on the mapper failed — the drill has no filesystem to carry the sentinel"; }
+if [ "$lw8_ok" -eq 1 ]; then
+  mount "$MAPPER" "$LW8_MNT" && printf '%s\n' "$LW8_SENTINEL" > "$LW8_MNT/sentinel.txt" && sync && umount "$LW8_MNT" \
+    || { lw8_ok=0; no "LW8 could not write the sentinel through the mapper"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  cryptsetup close "$MAPPER_NAME" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 could not close the mapper before the header is destroyed"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  LW8_UUID_BEFORE="$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)"
+  rm -f "$LW8_BK"
+  cryptsetup luksHeaderBackup --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_ok=0
+  LW8_HDR_BYTES="$(stat -c %s "$LW8_BK" 2>/dev/null || echo 0)"
+  # The backup file is exactly the header area (binary headers + keyslots area), so its size is the span to destroy.
+  if [ "$lw8_ok" -eq 0 ] || [ "${LW8_HDR_BYTES:-0}" -lt 4096 ] || [ -z "$LW8_UUID_BEFORE" ]; then
+    lw8_ok=0; no "LW8 luksHeaderBackup produced no usable backup (bytes=${LW8_HDR_BYTES:-0} uuid='${LW8_UUID_BEFORE:-}')"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  dd if=/dev/zero of="$LOOP_DEV" bs=4096 count=$((LW8_HDR_BYTES / 4096)) oflag=direct conv=fsync status=none 2>/dev/null
+  lw8_open_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_open_rc=$?
+  lw8_uuid_rc=0; cryptsetup luksUUID "$LOOP_DEV" >/dev/null 2>&1 || lw8_uuid_rc=$?
+  if [ "$lw8_open_rc" -ne 0 ] && [ "$lw8_uuid_rc" -ne 0 ] && [ ! -b "$MAPPER" ]; then
+    ok "LW8a with the whole header region zeroed the volume is genuinely unopenable (luksOpen rc=$lw8_open_rc, luksUUID rc=$lw8_uuid_rc) — the drill destroys something real"
+  else
+    lw8_ok=0; no "LW8a the zeroed header did not make the volume unopenable (open rc=$lw8_open_rc uuid rc=$lw8_uuid_rc) — the drill would be vacuous"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  lw8_rs_rc=0; cryptsetup luksHeaderRestore --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_rs_rc=$?
+  lw8_ro_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_ro_rc=$?
+  lw8_read=""
+  if [ "$lw8_rs_rc" -eq 0 ] && [ "$lw8_ro_rc" -eq 0 ] && [ -b "$MAPPER" ] && mount "$MAPPER" "$LW8_MNT" 2>/dev/null; then
+    lw8_read="$(cat "$LW8_MNT/sentinel.txt" 2>/dev/null)"
+    umount "$LW8_MNT" 2>/dev/null || true
+  fi
+  if [ "$lw8_read" = "$LW8_SENTINEL" ] && [ "$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)" = "$LW8_UUID_BEFORE" ]; then
+    ok "LW8b luksHeaderRestore from the escrowed backup + the same passphrase reopens the volume and the sentinel reads back; the header UUID is the one backed up"
+  else
+    no "LW8b the header restore did not bring the data back (restore rc=$lw8_rs_rc open rc=$lw8_ro_rc sentinel='${lw8_read:-}')"
+  fi
 fi
 
 # ===========================================================================

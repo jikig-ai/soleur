@@ -6,13 +6,18 @@
 #
 # Mirrors `apply-sentry-infra.yml` (ADR-031) with adjustments for the
 # `infra/github/` root:
-#   - Auth: GitHub App credentials (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY)
-#     from Doppler `prd_terraform`. Migrated from GH_RULESET_PAT in #4384 per
-#     AGENTS.rules.md hr-github-app-auth-not-pat.
+#   - Auth: the Tier-B soleur-infra GitHub App (ADR-241 D5). The provider takes
+#     its key from the infra-credentials loader (soleur-infra-privileged/prd,
+#     environment infra-privileged); the post-apply verify uses a scoped token
+#     from .github/actions/mint-infra-app-token. Since #9360 no step consumes the
+#     soleur-ai pair; the prd_terraform tf-var layer still injects it (the #8209
+#     sentinel), inert because infra mode wins (ADR-241 D5). PAT auth was retired
+#     in #4384 per AGENTS.rules.md hr-github-app-auth-not-pat.
 #   - First-apply import: if state does not yet contain
 #     github_repository_ruleset.ci_required, the workflow imports it before
 #     plan. Idempotent — subsequent runs no-op the import.
-#   - No `environment:` reviewer gate. Sentry uses one because Sentry resource
+#   - No reviewer gate (the infra-privileged environment has a main-only branch
+#     policy and no required reviewers). Sentry uses one because Sentry resource
 #     destruction has cross-tenant blast radius; `infra/github/` only affects
 #     the founder's repo, so CODEOWNERS + [ack-destroy] gate is sufficient.
 #
@@ -152,79 +157,34 @@ jobs:
             echo "::error::DOPPLER_TOKEN secret is not configured."
             exit 1
           fi
+          # The mint below names its installation as a literal; Terraform takes it from the
+          # loader. Refuse a disagreement, so the mint's coverage check is about the
+          # installation Terraform actually uses (#9360).
+          if [[ -z "${GITHUB_INFRA_APP_INSTALLATION_ID:-}" ]]; then
+            echo "::error title=infra-app-installation::the loader exported no GITHUB_INFRA_APP_INSTALLATION_ID: it took its legacy arm (DOPPLER_TOKEN_INFRA_PRIVILEGED missing on environment infra-privileged?). Refusing: legacy mode is the evicted soleur-ai key."
+            exit 1
+          elif [[ "$GITHUB_INFRA_APP_INSTALLATION_ID" != "166065653" ]]; then
+            echo "::error title=infra-app-installation::soleur-infra-privileged/prd's GITHUB_INFRA_APP_INSTALLATION_ID is not 166065653, the installation the mint step checks. Reconcile the two before applying."
+            exit 1
+          fi
 
-      - name: Fetch GitHub App credentials from Doppler
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          DOPPLER_PROJECT: soleur
-          DOPPLER_CONFIG: prd_terraform
-        run: |
-          set -euo pipefail
-          # #4384 — migrated from GH_RULESET_PAT to App-installation auth per
-          # AGENTS.rules.md hr-github-app-auth-not-pat. App credentials are
-          # mirrored from prd to prd_terraform by apps/web-platform/infra/'s
-          # doppler_secret resources (#4150), so no separate mint step exists.
-          APP_ID=$(doppler secrets get GITHUB_APP_ID --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_ID not found in Doppler prd_terraform. Mirror from prd via apps/web-platform/infra/ apply."
-            exit 1
-          }
-          PEM=$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain 2>/dev/null) || {
-            echo "::error::GITHUB_APP_PRIVATE_KEY not found in Doppler prd_terraform. One-shot download at App creation; cannot be re-downloaded — recover from password manager or App admin UI."
-            exit 1
-          }
-          # The #8209 eviction sentinel, refused BY NAME. After operator step O10 this config holds
-          # `EVICTED_SEE_ADR_241` under this name instead of a key -- the eviction is an OVERRIDE,
-          # because the value is inherited from `prd` and cannot be deleted out of a branch config,
-          # so the read above SUCCEEDS and returns a non-empty string. `openssl rsa -check` further
-          # down does reject it, but as "not a valid RSA PEM" -- which reads as a CORRUPTED key, and
-          # the remedy that suggests is to paste a fresh key into prd_terraform, undoing the eviction
-          # on a config every branch can read. Rationale: ADR-241 D5; census row G4e keeps it here.
-          if [[ "$PEM" == EVICTED_SEE_ADR_241 ]]; then
-            echo "::error title=legacy-app-key::verdict=legacy_app_key_evicted GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is the #8209 eviction sentinel, not a key. Do NOT re-set it there; see knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md."
-            exit 1
-          fi
-          if [[ -z "$APP_ID" || -z "$PEM" ]]; then
-            echo "::error::GitHub App credentials are empty in Doppler prd_terraform."
-            exit 1
-          fi
-          # APP_ID is short and non-secret-like; masking still cheap defence.
-          printf '::add-mask::%s\n' "$APP_ID"
-          # Per-line ::add-mask:: for every non-empty PEM line BEFORE writing
-          # to $GITHUB_ENV. GitHub Actions does NOT auto-mask values written
-          # to $GITHUB_ENV via heredoc (only `secrets.*`-sourced env vars are
-          # masked); a downstream `TF_LOG=DEBUG` or `set -x` could otherwise
-          # echo the full PEM. (review: PR #4384 — security-sentinel F1.)
-          while IFS= read -r pem_line; do
-            [[ -n "$pem_line" ]] && printf '::add-mask::%s\n' "$pem_line"
-          done <<< "$PEM"
-          # Multi-line PEM must use the GitHub Actions multiline env-var form.
-          # Single-line `printf '%s\n' "$PEM" >> $GITHUB_ENV` corrupts newlines.
-          printf 'TF_VAR_github_app_id=%s\n' "$APP_ID" >> "$GITHUB_ENV"
-          {
-            echo 'TF_VAR_github_app_private_key<<__SOLEUR_PEM_EOF__'
-            printf '%s\n' "$PEM"
-            echo '__SOLEUR_PEM_EOF__'
-          } >> "$GITHUB_ENV"
-          # Also stash the PEM to a runner-temp file (chmod 600) so the post-
-          # apply verify step can mint an App-JWT for `gh api .../rulesets/N`
-          # (rulesets read requires Administration:Read, which the default
-          # secrets.GITHUB_TOKEN does NOT carry). Per Risk R10 in the #4384
-          # plan: this replaces the deleted GITHUB_TOKEN_PAT line.
-          umask 077
-          APP_PEM_FILE=$(mktemp -p "$RUNNER_TEMP" soleur-ai-app-pem.XXXXXX)
-          printf '%s\n' "$PEM" > "$APP_PEM_FILE"
-          chmod 600 "$APP_PEM_FILE"
-          # PEM-shape pre-flight: catch a corrupted PEM in Doppler (literal
-          # `\n` instead of newlines, BOM, partial paste) HERE with a
-          # routable error, rather than later at `openssl dgst -sign` with a
-          # generic `unable to load Private Key`. (review: PR #4384 —
-          # code-quality Q3 / pattern-recognition Item 3.)
-          if ! openssl rsa -in "$APP_PEM_FILE" -check -noout 2>/dev/null; then
-            echo "::error::GITHUB_APP_PRIVATE_KEY in Doppler prd_terraform is not a valid RSA PEM. One-shot download at App creation; recover from password manager or App admin UI."
-            exit 1
-          fi
-          printf 'APP_ID=%s\n' "$APP_ID" >> "$GITHUB_ENV"
-          printf 'APP_PEM_FILE=%s\n' "$APP_PEM_FILE" >> "$GITHUB_ENV"
+      # Tier-B identity preflight and the marketplace verify's token (#9360). It runs before
+      # any state or GitHub write and fails closed, naming its cause (remedies: the #8209
+      # runbook's Group 2 note). administration:write on soleur-marketplace ONLY: that
+      # ruleset's bypass_actors are returned only to a caller with write access, while the
+      # two soleur ruleset probes need Metadata read, which github.token carries. The token
+      # is a step output (never $GITHUB_ENV) and the last step revokes it. Its notice prints
+      # the installation id as ***: the loader masks every Tier-B value.
+      - name: Mint soleur-infra App token (administration:write on soleur-marketplace)
+        id: mint
+        timeout-minutes: 2
+        uses: ./.github/actions/mint-infra-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-project: soleur-infra-privileged
+          installation-id: "166065653"
+          permissions: '{"administration":"write"}'
+          repositories: soleur-marketplace
 
       - name: Extract backend credentials
         env:
@@ -305,18 +265,11 @@ jobs:
           # the same defense.
           import_ruleset github_repository_ruleset.ci_required 14145388
           import_ruleset github_repository_ruleset.cla_required 13304872
-          # App-installation scope: the provider authenticates as the soleur-ai
-          # App (installation 122213433). A repository import 404s -- confusingly,
-          # as "Not Found" rather than "Forbidden" -- if the App is installed on
-          # *selected repositories* and soleur-marketplace is not among them.
-          # Verified org-wide at adoption time:
-          #   gh api /orgs/jikig-ai/installations \
-          #     --jq '.installations[] | select(.app_slug=="soleur-ai") | .repository_selection'
-          #   => "all"
-          # If that ever reads "selected", add the repo to the installation
-          # (Settings -> GitHub Apps -> soleur-ai -> Repository access, or
-          # `PUT /user/installations/122213433/repositories/{repository_id}`)
-          # before re-running -- do NOT chase it as a Terraform bug.
+          # App-installation scope: the provider authenticates as the soleur-infra App
+          # (installation 166065653, repository_selection=selected). A repository import
+          # 404s -- as "Not Found", not "Forbidden" -- if soleur-marketplace is not among
+          # the selected repositories; the mint step above already refuses that case.
+          # Diagnose and remedy: the #8209 runbook's Group 2 note. Not a Terraform bug.
           import_repository github_repository.soleur_marketplace soleur-marketplace
 
       - name: Terraform plan
@@ -388,67 +341,35 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          rc=0
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan
+            terraform apply -auto-approve -input=false tfplan 2>&1 | tee "${RUNNER_TEMP}/apply.log" || rc=$?
+          # Known gap until #9361: the marketplace ruleset's App bypass actor is still
+          # soleur-ai, so a manifest write as soleur-infra is refused. Name it, so the red
+          # run is not chased as a credential fault.
+          if [[ "$rc" -ne 0 ]] && grep -q 'Repository rule violations' "${RUNNER_TEMP}/apply.log"; then
+            echo "::error title=known-gap-9361::the marketplace manifest write was refused (Repository rule violations): the ruleset's App bypass actor is still soleur-ai (3261325). Tracked in #9361; see infra/github/README.md \"Known gap\". Not a credential fault: do not re-set any key."
+          fi
+          exit "$rc"
 
       - name: Post-apply verify (ruleset required check counts — CI 14145388 + CLA 13304872)
         id: verify
         env:
-          # Mint a short-lived App-installation token from the soleur-ai App
-          # credentials already loaded into env by the Fetch step. The
-          # rulesets API requires `Administration: Read` scope which the
-          # default `secrets.GITHUB_TOKEN` does NOT carry — but the App
-          # installation does (the same scope it uses to write the ruleset).
-          # Migrated from PAT auth (the deleted GITHUB_TOKEN_PAT) per #4384.
-          APP_ID: ${{ env.APP_ID }}
-          APP_PEM_FILE: ${{ env.APP_PEM_FILE }}
-          INSTALLATION_ID: "122213433"
+          # Steps 3-4 read two soleur rulesets' required-check counts: Metadata read, which
+          # the job's github.token carries. Step 5 needs the marketplace ruleset's
+          # bypass_actors, returned only to a writer: the mint step's token (#9360).
+          REPO_TOKEN: ${{ github.token }}
+          INSTALL_TOKEN: ${{ steps.mint.outputs.token }}
         run: |
           set -euo pipefail
-          # Trap-based cleanup so the PEM file is shredded on BOTH success
-          # and any failure exit (open/jq/curl/gh failures, set -e tripping
-          # mid-step). The `|| true` keeps the trap idempotent if the file
-          # was already removed. (review: PR #4384 — security-sentinel F2.)
-          trap 'rm -f "${APP_PEM_FILE:-}" 2>/dev/null || true' EXIT
-
-          b64url() {
-            base64 -w 0 | tr '+/' '-_' | tr -d '=\n'
-          }
-
-          # ---- Step 1: mint App-JWT (RS256, lifetime 540s, backdate 60s) ----
-          now=$(date +%s)
-          header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
-          payload=$(jq -nc \
-            --argjson iss "$APP_ID" \
-            --argjson iat "$((now - 60))" \
-            --argjson exp "$((now + 540))" \
-            '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
-          unsigned="${header}.${payload}"
-          signature=$(printf '%s' "$unsigned" | \
-            openssl dgst -sha256 -sign "$APP_PEM_FILE" -binary | b64url)
-          JWT="${unsigned}.${signature}"
-          if [[ -z "$JWT" ]]; then
-            echo "::error::App-JWT mint produced empty output."
-            exit 1
-          fi
-          echo "::add-mask::$JWT"
-
-          # ---- Step 2: exchange App-JWT for installation access token ----
-          INSTALL_TOKEN=$(curl -sS -X POST \
-            -H "Authorization: Bearer $JWT" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-            | jq -r '.token // empty')
           if [[ -z "$INSTALL_TOKEN" ]]; then
-            echo "::error::Installation-token exchange returned empty token. App may lack permission or installation_id mismatch."
+            echo "::error::verify: the soleur-infra token from the mint step is empty; refusing to verify unauthenticated."
             exit 1
           fi
-          echo "::add-mask::$INSTALL_TOKEN"
 
           # ---- Step 3: ruleset count probe ----
-          RULESET_JSON=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" 2>&1) || {
-            echo "::error::gh api rulesets/14145388 failed — App lacks Administration:Read or ruleset deleted. Response: ${RULESET_JSON}"
+          RULESET_JSON=$(GH_TOKEN="$REPO_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/rulesets/14145388" 2>&1) || {
+            echo "::error::gh api rulesets/14145388 failed — the job token was refused or the ruleset is gone. Response: ${RULESET_JSON}"
             exit 1
           }
           # Order-independent select (#5780): adding a sibling `merge_queue`
@@ -461,20 +382,17 @@ jobs:
             exit 1
           fi
 
-          # PEM file shred is handled by the EXIT trap at the top of this
-          # step (covers both success and failure paths).
-
           echo "actual_count=$ACTUAL" >> "$GITHUB_OUTPUT"
           echo "Ruleset 14145388 (CI): required_status_checks count = ${ACTUAL}."
 
-          # ---- Step 4: CLA ruleset (13304872) count probe (reuse INSTALL_TOKEN) ----
+          # ---- Step 4: CLA ruleset (13304872) count probe (job token, as Step 3) ----
           # Symmetric with the CI probe above; same order-independent
           # select(.type==…) (never a positional .rules[0]). Expected count = 2
           # (cla-check + cla-evidence). This probes RSC COUNT only, not
           # bypass_actors — the no-op-first-apply / no-bypass-widening guarantee is
           # the daily cron-ruleset-bypass-audit's, not this verify's.
-          CLA_RULESET_JSON=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/rulesets/13304872" 2>&1) || {
-            echo "::error::gh api rulesets/13304872 failed — App lacks Administration:Read or CLA ruleset deleted. Response: ${CLA_RULESET_JSON}"
+          CLA_RULESET_JSON=$(GH_TOKEN="$REPO_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/rulesets/13304872" 2>&1) || {
+            echo "::error::gh api rulesets/13304872 failed — the job token was refused or the CLA ruleset is gone. Response: ${CLA_RULESET_JSON}"
             exit 1
           }
           CLA_ACTUAL=$(echo "$CLA_RULESET_JSON" | jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks | length')
@@ -486,9 +404,7 @@ jobs:
           echo "Ruleset 13304872 (CLA): required_status_checks count = ${CLA_ACTUAL}."
 
           # ---- Step 5: marketplace ruleset probe (#7493) ------------------------------------
-          # Lives INSIDE this step deliberately: the EXIT trap at the top shreds
-          # $APP_PEM_FILE when the step ends, so no later step can mint an
-          # installation token. Reuses INSTALL_TOKEN for the same reason.
+          # Uses INSTALL_TOKEN (soleur-infra, administration:write on soleur-marketplace only).
           #
           # TWO-HOP, and the hop is load-bearing. The rulesets LIST endpoint returns a
           # SUMMARY — id/name/target/enforcement only, with NO `rules`, NO
@@ -500,7 +416,7 @@ jobs:
           MP_REPO="jikig-ai/soleur-marketplace"
           MP_NAME="Marketplace PR Required"
           MP_LIST=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${MP_REPO}/rulesets" 2>&1) || {
-            echo "::error::gh api repos/${MP_REPO}/rulesets failed — App lacks Administration:Read on the marketplace repo. Response: ${MP_LIST}"
+            echo "::error::gh api repos/${MP_REPO}/rulesets failed — the soleur-infra token was refused or the marketplace repo is not covered. Response: ${MP_LIST}"
             exit 1
           }
           MP_ID=$(echo "$MP_LIST" | jq -r --arg n "$MP_NAME" '[.[]? | select(.name == $n) | .id] | first // empty')
@@ -523,7 +439,7 @@ jobs:
           # matrix drivable against recorded fixtures in the sibling .test.sh, which also means
           # this probe is exercised on every PR rather than only after an apply.
           printf '%s' "$MP_JSON" > "${RUNNER_TEMP}/marketplace-ruleset.json"
-          if ! bash "${GITHUB_WORKSPACE}/scripts/verify-marketplace-ruleset.sh" \
+          if ! env -u INSTALL_TOKEN -u REPO_TOKEN bash "${GITHUB_WORKSPACE}/scripts/verify-marketplace-ruleset.sh" \
                  "${RUNNER_TEMP}/marketplace-ruleset.json" \
                  "${GITHUB_WORKSPACE}/scripts/marketplace-ruleset-canonical-bypass-actors.json"; then
             echo "::error::marketplace ruleset (${MP_REPO} #${MP_ID}) does not match its declaration."
@@ -622,3 +538,19 @@ jobs:
             echo "**Published manifest byte-match:** ${MP_ATTEMPTS:+settled after ${MP_ATTEMPTS} attempt(s)}${MP_ATTEMPTS:-n/a}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Revoke the administration:write token (#9360), also on the failed-apply path where
+      # verify never runs. Best-effort: a failed revoke warns and never fails the job.
+      - name: Revoke the soleur-infra token
+        if: always() && steps.mint.outcome == 'success'
+        env:
+          REVOKE_TOKEN: ${{ steps.mint.outputs.token }}
+        run: |
+          code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -X DELETE \
+            -H "Authorization: Bearer $REVOKE_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/installation/token" 2>/dev/null) || code=000
+          if [[ "$code" != "204" ]]; then
+            echo "::warning title=app-token-revoke::revoking the soleur-infra token returned HTTP ${code}; it expires on its own within the hour."
+          fi

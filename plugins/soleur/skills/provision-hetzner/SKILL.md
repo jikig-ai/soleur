@@ -18,7 +18,7 @@ Guide the operator through Hetzner Console project creation, accept a project-sc
 
 ## Art. 32 Pre-condition
 
-**MUST run on the operator's local machine. MUST NOT run in CI.** The Hetzner token is read from `SOLEUR_BOOTSTRAP_HCLOUD_TOKEN` when that variable is set; otherwise it is prompted for with `read -rs` on a TTY; with neither, the script exits 64 with `SOLEUR_BOOTSTRAP_INPUT_REQUIRED var=SOLEUR_BOOTSTRAP_HCLOUD_TOKEN`. It is never persisted to disk, never exported beyond the smoke-test subshell, and never placed on CLI args.
+**MUST run on the operator's local machine. MUST NOT run in CI.** The Hetzner token is read from `SOLEUR_BOOTSTRAP_HCLOUD_TOKEN` when that variable is set; otherwise it is prompted for with `read -rs` on a TTY (credential entry is a class-1 interactive carve-out: the agent never asks for the token in chat); with neither, the script exits 64 with `SOLEUR_BOOTSTRAP_INPUT_REQUIRED var=SOLEUR_BOOTSTRAP_HCLOUD_TOKEN`. It is never persisted to disk, never exported beyond the smoke-test subshell, and never placed on CLI args.
 
 ## Usage
 
@@ -41,7 +41,7 @@ The script:
 
 1. Validates prerequisites (DPA gate, slug format, `hcloud` CLI)
 2. Displays guided instructions for Console project creation + token minting
-3. Accepts the token (environment variable, else `read -rs` on a TTY, else exit 64) and, after a per-command `yes` acknowledgement that has **no** skip variable, runs the write-class smoke-test (create + delete cx11)
+3. Accepts the token (environment variable, else the class-1 `read -rs` entry on a TTY, else exit 64) and, after a per-command `yes` acknowledgement that has **no** skip variable, runs the write-class smoke-test (create + delete cx11)
 4. Uses deterministic probe name (`probe-provision-<slug>`) so orphans are findable
 5. Trap handler ensures probe server cleanup on EXIT/INT/TERM
 6. Prints teardown commands on any exit
@@ -54,7 +54,7 @@ The script:
 | `SOLEUR_BOOTSTRAP_SKIP_HETZNER_TOKEN_BARRIER` | Any non-empty value skips the "Token created? Type 'yes'" barrier. The smoke test that follows is the independent verification the barrier attests to, so skipping it is safe only because that test still runs. |
 | `SOLEUR_BOOTSTRAP_LEDGER` | Run-ledger path. Default: `<cwd>/.soleur/bootstrap-runs.jsonl` (gitignored; the DPA gate already requires cwd to be the monorepo root). |
 
-There is **no** variable for the "Create the billable probe server now?" acknowledgement. Without a TTY the script exits 64 there with `SOLEUR_BOOTSTRAP_INPUT_REQUIRED var=destructive-write-ack(no-skip-variable-by-design)`; only a person at a terminal can answer it (`hr-menu-option-ack-not-prod-write-auth`). Exit codes and every stdout marker: the header of `plugins/soleur/scripts/lib/operator-script.sh`.
+There is **no** variable for the "Create the billable probe server now?" acknowledgement. Without a TTY the script exits 64 there with `SOLEUR_BOOTSTRAP_INPUT_REQUIRED var=destructive-write-ack(no-skip-variable-by-design)`; only a person at a terminal can answer it (`hr-menu-option-ack-not-prod-write-auth`). This script still uses the typed-`yes` TTY acknowledgement; migrating it to the staged agent-run approval gate that generated operator scripts use is tracked in #9387. The agent runs every step it can (prerequisites, instructions, verification) and hands over only that one prompt. Exit codes and every stdout marker: the header of `plugins/soleur/scripts/lib/operator-script.sh`.
 
 ## Encryption Posture
 

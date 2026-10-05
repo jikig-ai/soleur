@@ -1,0 +1,138 @@
+name: Merge queue CLA synthetics
+
+# Merge queue (#5780, re-adopted by #9454). `main` is gated by TWO rulesets: "CI Required"
+# (23 contexts, every one produced on merge_group by its own workflow; audited by
+# scripts/probe-merge-group-coverage.sh) AND "CLA Required" (`cla-check` + `cla-evidence`,
+# see scripts/required-checks.txt). The CLA producers, cla.yml and cla-evidence.yml, are
+# pull_request_target/issue_comment driven (contributor-assistant action + an R2 evidence
+# sidecar), so they cannot run on a `merge_group` event (there is no PR/comment object on the
+# temp ref). Without this workflow, `cla-check`/`cla-evidence` never report on the
+# gh-readonly-queue/main/* candidate and the queue STALLS on the first PR.
+#
+# THIS WORKFLOW DOES NOT POST UNCONDITIONAL SUCCESS. It first proves the PR head's REAL
+# results (scripts/merge-queue-cla-verify.sh): the PR number comes from a strictly validated
+# `merge_group.head_ref`, `merge_group.base_ref` must be refs/heads/main, and the LATEST
+# `cla-check` and `cla-evidence` check-runs (github-actions app, integration 15368) on the PR's
+# current head must both be completed/success. (No parent-of-candidate check: with SQUASH the
+# candidate is a single-parent squash commit, and a push to a queued PR dequeues it.) Only then
+# does the success step post both names on the candidate.
+#
+# ANY failure (verify, checkout, the success step itself) runs the failure step, which posts BOTH
+# names on the candidate with conclusion=failure and a title naming the reason, then the job
+# stays failed. Without it the verify failure posts nothing, the required contexts stay pending
+# and the queue entry waits out check_response_timeout_minutes (60) instead of being dequeued at
+# once. The reason is the verify script's fixed die() text (steps.verify.outputs.reason), never
+# PR or event content; when verify recorded none, steps.verify.outcome picks the wording (verify
+# passed and the success post failed / verify failed unrecorded / checkout failed before verify). The failure step is the only step with an `if:`, and it can only post
+# failure: success is posted by the one step that runs only after verify exited 0.
+#
+# WHY a verified synthetic is sound (NOT a CLA bypass) - CTO ruling, #5780:
+#   - Entry-gate premise (GitHub docs, "Managing a merge queue"): "Once a pull request has passed
+#     all required branch protection checks, a user with write access can add the pull request to
+#     the queue". An unsigned CLA leaves both contexts red on the head, so the PR cannot be queued.
+#     The verification above re-reads the real results rather than relying on that premise alone.
+#   - The legal artifact is created at SIGN time, not merge-group time: cla-evidence.yml writes
+#     the content-addressed, Object-Lock R2 record on the contributor's signature event. This
+#     workflow does NOT replace or regenerate it; it only re-reports the CI-gate signal on a
+#     throwaway ref. CLA is an author-property, invariant under the queue's merge (unlike
+#     test/e2e, which must re-run to catch semantic conflicts).
+#   - Bot PRs: the bot-pr-with-synthetic-checks composite action posts cla-check/cla-evidence on
+#     the PR head under the same app, and the verification accepts exactly those runs.
+#
+# AUTH - GITHUB_TOKEN is MANDATORY here, do NOT "harden" to an app token: the CLA Required ruleset
+# matches Check Runs from integration_id 15368 (the github-actions App = GITHUB_TOKEN). An external
+# app token posts under a different integration_id and FAILS the ruleset match, silently
+# re-breaking the queue. Scopes: checks write (post the two check-runs, read the head's runs),
+# pull-requests read (the PR object), contents read.
+#
+# TRUST BOUNDARY - the posting token is a checks:write token under the 15368 identity, so the
+# verification logic runs from a checkout of the repository's DEFAULT branch tip, never from the
+# candidate: no PR-controlled code runs next to that token. Residual, accepted and recorded in
+# ADR-270: this workflow DEFINITION is taken from the candidate commit like every other
+# merge_group workflow, and entry to the queue needs a write-access actor.
+#
+# max_entries_to_merge = 1 (infra/github/ruleset-ci-required.tf) keeps one PR per merged group so
+# the PR number in head_ref is exact. If that is ever raised, this workflow must enumerate PRs.
+
+on:
+  merge_group:
+
+permissions:
+  checks: write
+  pull-requests: read
+  contents: read
+
+jobs:
+  cla-synthetics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+      HEAD_REF: ${{ github.event.merge_group.head_ref }}
+      BASE_REF: ${{ github.event.merge_group.base_ref }}
+    steps:
+      # Verification logic from the DEFAULT branch, not the candidate (see TRUST BOUNDARY).
+      - name: Check out the default branch (verification script only)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: scripts/merge-queue-cla-verify.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Verify the PR head's real cla-check and cla-evidence
+        id: verify
+        run: bash scripts/merge-queue-cla-verify.sh
+
+      - name: Re-post cla-check + cla-evidence on the merge-queue candidate
+        run: |
+          set -eo pipefail
+          summary="cla-check/cla-evidence verified green on the PR head (latest run per name) before queue admission; re-reported on the merge group. The legal evidence record was written to R2 Object Lock at CLA sign time. See #5780, #9454."
+          # Post each independently and fail loud: leaving cla-check green while cla-evidence is
+          # missing still stalls the queue. Checks API (NOT Statuses API): the ruleset requires
+          # Check Runs from integration_id 15368 (GITHUB_TOKEN). Mirrors
+          # bot-pr-with-synthetic-checks/action.yml.
+          for check in cla-check cla-evidence; do
+            gh api "repos/${REPO}/check-runs" \
+              -f name="$check" \
+              -f head_sha="$HEAD_SHA" \
+              -f status=completed \
+              -f conclusion=success \
+              -f "output[title]=CLA verified before queue entry" \
+              -f "output[summary]=${summary}"
+          done
+
+      # Fail visibly: when anything above failed, report BOTH required contexts as failed on the
+      # candidate so the queue dequeues the entry now. This step cannot post success.
+      - name: Report cla-check + cla-evidence as failed on the merge-queue candidate
+        if: failure()
+        env:
+          VERIFY_REASON: ${{ steps.verify.outputs.reason }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -eo pipefail
+          # The reason depends on WHERE it failed: verify's own die() text when it recorded one; else the
+          # verify outcome says whether verify passed (the success post failed afterwards), failed without
+          # a recorded reason, or never ran (checkout failed first).
+          if [[ -n "${VERIFY_REASON:-}" ]]; then
+            reason="$VERIFY_REASON"
+          elif [[ "${VERIFY_OUTCOME:-}" == "success" ]]; then
+            reason="verification passed but posting the verified result failed"
+          elif [[ "${VERIFY_OUTCOME:-}" == "failure" ]]; then
+            reason="the verify step failed without a recorded reason"
+          else
+            reason="a step before verification failed (checkout)"
+          fi
+          title="$(printf 'CLA not verified before queue entry: %s' "$reason" | tr -cd 'A-Za-z0-9 /#:,._=-' | cut -c1-200)"
+          summary="The merge-queue CLA synthetics could not prove cla-check/cla-evidence green on the PR head, so both contexts are reported as failed here. See the merge-queue-cla-synthetics run log (::error:: line). #5780, #9454."
+          for check in cla-check cla-evidence; do
+            gh api "repos/${REPO}/check-runs" \
+              -f name="$check" \
+              -f head_sha="$HEAD_SHA" \
+              -f status=completed \
+              -f conclusion=failure \
+              -f "output[title]=${title}" \
+              -f "output[summary]=${summary}"
+          done

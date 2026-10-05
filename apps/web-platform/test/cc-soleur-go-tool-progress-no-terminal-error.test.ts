@@ -24,7 +24,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 
 interface ReducerState {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   workflow: WorkflowLifecycleState;
   spawnIndex: SpawnIndex;
 }
@@ -34,7 +34,7 @@ function emptyState(): ReducerState {
     messages: [],
     activeStreams: new Map(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
   };
 }
 
@@ -87,7 +87,9 @@ describe("cc-soleur-go tool_progress consumer-contract (no terminal-error on >90
   it("Test #5: heartbeat between two timeouts prevents the terminal-error flip + eviction", () => {
     let state = applyEvent(emptyState(), streamStart());
     state = applyEvent(state, toolUse());
-    const idx = state.activeStreams.get(CC)!;
+    const idx = state.messages.findIndex(
+      (m) => m.id === state.activeStreams.get(CC),
+    );
     expect(state.messages[idx].state).toBe("tool_use");
 
     // First 45s timeout → retrying (bubble stays active).
@@ -112,7 +114,9 @@ describe("cc-soleur-go tool_progress consumer-contract (no terminal-error on >90
   it("Test #6: tool_progress clears the first-timeout retrying flag", () => {
     let state = applyEvent(emptyState(), streamStart());
     state = applyEvent(state, toolUse());
-    const idx = state.activeStreams.get(CC)!;
+    const idx = state.messages.findIndex(
+      (m) => m.id === state.activeStreams.get(CC),
+    );
 
     state = applyTimeoutTo(state, CC);
     expect(state.messages[idx].retrying).toBe(true);
@@ -131,7 +135,9 @@ describe("cc-soleur-go tool_progress consumer-contract (no terminal-error on >90
   it("Test #7: NO heartbeat → two timeouts still flip to terminal error + evict", () => {
     let state = applyEvent(emptyState(), streamStart());
     state = applyEvent(state, toolUse());
-    const idx = state.activeStreams.get(CC)!;
+    const idx = state.messages.findIndex(
+      (m) => m.id === state.activeStreams.get(CC),
+    );
 
     // First timeout → retrying.
     state = applyTimeoutTo(state, CC);
@@ -148,7 +154,9 @@ describe("cc-soleur-go tool_progress consumer-contract (no terminal-error on >90
   it("Test #8: tool_progress after Stage-2 error heals orphan red banner", () => {
     let state = applyEvent(emptyState(), streamStart());
     state = applyEvent(state, toolUse());
-    const idx = state.activeStreams.get(CC)!;
+    const idx = state.messages.findIndex(
+      (m) => m.id === state.activeStreams.get(CC),
+    );
 
     state = applyTimeoutTo(state, CC);
     state = applyTimeoutTo(state, CC);
