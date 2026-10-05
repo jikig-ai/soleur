@@ -190,9 +190,11 @@ fi
 # counters are untouched. The setup-bun self-check above only proves `grep -v` removes a line;
 # these prove the likec4 row's decisions, including the two it must NOT get wrong in the
 # reassuring direction (a comment quoting the marker, an empty users list).
-# Under the scratch root test-helpers.sh already owns and removes on EXIT: a second `trap ... EXIT`
-# here would REPLACE the helper's composed one and leak its sandbox (#8659).
-FIX_DIR="$(mktemp -d "$INCIDENTS_REPO_ROOT/shard-cov.XXXXXXXX")"
+# A per-process path under the scratch root test-helpers.sh already owns and removes on EXIT. No mktemp and
+# no second `trap ... EXIT` here: a second trap would REPLACE the helper's composed one and leak its
+# sandbox (#8659), and the directory is removed explicitly below as well.
+FIX_DIR="$INCIDENTS_REPO_ROOT/shard-cov-$$"
+assert_fixture_dir "$FIX_DIR"
 mkdir -p "$FIX_DIR/users" "$FIX_DIR/empty" "$FIX_DIR/commentonly"
 printf '#!/usr/bin/env bash\nlikec4 --version\n' >"$FIX_DIR/users/uses-likec4.test.sh"
 printf '#!/usr/bin/env bash\n# likec4 --version is only discussed here\nx=1 # likec4 render\n' >"$FIX_DIR/commentonly/discusses-likec4.test.sh"
@@ -239,6 +241,7 @@ _ctl() {  # <label> <expected "PASS FAIL SKIPPED"> <command...>
 _ctl "row() with a wrong expectation registers a FAILURE" "0 1 0" row 1 "wrong-on-purpose" "$GOOD_BLOCK" "$FIX_DIR/users" 1
 _tally_ctl() { tally 0 "ok"; tally 1 "bad"; tally 2 "skip"; }
 _ctl "tally() counts status 0 as a pass, 1 as a failure and 2 as a skip" "1 1 1" _tally_ctl
+assert_fixture_dir "$FIX_DIR"
 rm -rf "$FIX_DIR"
 
 # --- every executable producer must have a documented call site ---------------
