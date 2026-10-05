@@ -8,3 +8,8 @@ Persisted by plan-review (headless). None changes the operator's stated scope; e
 2. **Producer-side census.** DHH and code-simplicity said cut it from PR-1 (no deliverable in this PR). The brief says "Treat the producer-side form separately". Class: user-challenge risk (touches a stated ask). Resolution: the measured population is posted on #9217 in PR-1 and the production-to-stub join plus stub fixes move to the first phase of wave B, so the ask stays served as a separate item. Challenge: do the join in PR-1 if the operator wants the census before the test-harness wave.
 3. **Join pre-pass for continued pipes and extra flag spellings.** Cut (1 site; 0 real flag-order sites), except that the brief names "flag order", so the argument-taking-flag alternative stays in minimal form. Class: taste.
 4. **Transformer not committed.** Kept as scratch work in PR-1; committed by the first later wave that needs it. Class: taste.
+
+## 2026-10-05 Deepen-plan
+
+5. **Ceiling mode.** Architecture review: a `<=` ceiling leaves slack when hits fall, a `=` ceiling restores merge-conflict churn on hot test directories. Class: taste. Resolution: `=` for the small, sensitive A2 rows; `<=` with a printed `slack=N` for the coarse wave-B rows, whose wave PR owns tightening. Challenge: use `=` everywhere if the wave-B churn proves tolerable.
+6. **Sharing `scan_pipes`.** Architecture review found the shared-function idea would hand the `FILES_7376` pass a marker opt-out it deliberately lacks; resolution: extract only `_strip_comments`. Class: mechanical.

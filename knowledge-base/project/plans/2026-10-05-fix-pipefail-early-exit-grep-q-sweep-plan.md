@@ -14,6 +14,25 @@ brand_survival_threshold: aggregate pattern
 
 # fix: sweep pipe-into-early-exit-grep sites repo-wide and widen the guard (PR-1: scripts, plugins, guard)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05
+**Agents and checks used:** plan-review panel (DHH, Kieran, code-simplicity, CTO devex), then deepen-plan architecture-strategist, security-sentinel (read seven real verdict-bearing files), test-design-reviewer, git-history-analyzer (attribution), plus mechanical gates 4.6 to 4.12 and direct measurements.
+
+### Key Improvements
+
+1. `scan_sweep` must call `git -c core.excludesFile=/dev/null -C <root> grep --no-index --exclude-standard -a`: without `--exclude-standard` it scanned `node_modules` (24.3 s versus 1.0 s, 10 stray hits); without `-a` a NUL-bearing file reports no line number.
+2. The shared `scan_pipes` idea was dropped: only the comment filter is extracted (marker opt-in), so the existing three named passes stay byte-identical and do not silently gain an opt-out.
+3. Conversion rules gained three concrete traps found by reading real files: `printf '%s'` heading a chain that ends in `tail -c 2` flips under a head-of-chain here-string (`unkept-promise-hook.sh:258,313`); the capture form still ends in a here-string; a fail-open site (`sdk-bump-sandbox-gate.sh:183`) needs rc>1 routed to the gate.
+4. Guard Contract mutation rows were corrected so each is a working weaker program (an unclosed `(` for the compile row, `grep -A 1 -q p` for the argument-flag row), the harness runs in a git-initialised sandbox with an instrument control, and rows now name their expected rc and diagnostic.
+5. Deferral rows are classified first-match-wins from one scan; A2 rows are tight (`=`), wave-B rows loose (`<=`, `slack=N` printed), pinned `FILES_*` members are carved out and scanned unconditionally by V2 at zero (measured: 0 V2 hits in all 13).
+
+### New Considerations Discovered
+
+- `apps/web-platform/.github/workflows/constraint-gates.yml` is generated from the template by `constraint-scaffold.sh` (a `sed` of `__TARGET_DIR__`); regenerate it, do not hand-edit.
+- awk-exit stages in PR-1's roots are not at zero (11 to 21 depending on the test filter); the sweep covers the `grep` form only and says so.
+- The guard measured 0.96 s today and `git grep` 0.88 to 1.0 s with `--exclude-standard`, so the sweep adds about 1 s.
+
 Ref #9217, #7005, #6601, #7376, #9482 (umbrella; ADR-270 stays `adopting`). Draft PR #9554.
 PR bodies use `Ref #N`, never `Closes #9482`. No new issue is filed: evidence goes onto #9217, #7005, #6601 and #7376.
 
@@ -134,6 +153,19 @@ and test legs the diff arms (the `apps/web-platform/scripts/` edits may select t
 - `2026-10-01-a-grep-q-in-a-pipefail-chain-made-the-trigger-miss-its-own-bug-class.md`: a file operand is the safest form when the producer is `cat FILE`.
 - Audit `knowledge-base/engineering/audits/2026-07-17-sigpipe-guard-triage-feasibility.md`: heredocs inside Terraform `remote-exec` and cloud-init `runcmd` are payload, not prose; five classifier bugs in the audit itself.
 
+## Files to Edit
+
+- `.claude/hooks/grep-q-pipe-guard.test.sh` (verified: tracked, 478 lines on this branch)
+- PR-1's conversion set: every tracked production file with a covered extension outside the A2 and wave-B deferral entries that carries a hit, derived by `git grep` (not enumerated): about 82 files under `scripts/` (43), `plugins/soleur/` (28), `apps/web-platform/` (10, including the nested `apps/web-platform/.github/workflows/constraint-gates.yml`) and `apps/cla-evidence/` (1). Verified at plan time: the four roots exist, 0 of the files match `SENSITIVE_PATH_RE`, none is named by exact path in `scripts/lib/test-relevance-paths.sh`.
+- `knowledge-base/engineering/audits/2026-07-17-sigpipe-guard-triage-feasibility.md` (one appended row)
+
+## Files to Create
+
+- One learning under `knowledge-base/project/learnings/test-failures/` (topic only; the author picks the date at write time)
+- `knowledge-base/project/specs/feat-one-shot-merge-queue-pipefail-sweep/tasks.md`, `decision-challenges.md` (already written by planning)
+
+Not edited, by design (AC-9): `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/lib/test-relevance-paths.sh`, `.github/workflows/ci.yml`, `scripts/suite-shard-legs*.tsv`, `lefthook.yml`, `infra/github/ruleset-ci-required.tf`, any ADR.
+
 ## Open Code-Review Overlap
 
 Queried `gh issue list --label code-review --state open` (87 issues) against PR-1's production file set and the guard:
@@ -161,38 +193,51 @@ invisible to any line search.
 | `cat FILE \| grep -q P`, `head -1 FILE \| grep -q P` | `grep -q P FILE` / process substitution | A file operand has no upstream to take the signal |
 | output-consuming early exit (`... \| grep -m1 P` and `grep -oEm1`, 4 sites: `monitor-pr-checks.sh`, `check-backstop-revision.sh`, `git-data-reboot-evidence-landed-8210.sh`, `watch-live-verify-pass.sh`) | `grep -m1 P <<<"$v"` (or `< <(producer)` for a pure producer) | The site reads grep's output, so no `>/dev/null` drain form applies; no pipe means no race |
 | pure read-only producer inside a condition (`git log`, `git diff`, `jq`, `sed`, `nft list`, `ip addr`, `docker ps`) | `grep -q P < <(producer)` | Keeps the one-line shape; the producer is a filter with no side effect |
+| `printf '%s' "$V" \| <stage> \| tail -c N \| grep -q P` (any downstream `tail -c`, `wc -c`, `-z` or `$`-anchored stage) | `grep -q P < <(printf '%s' "$V" \| <stages>)`, never a here-string at the head of the chain | A here-string adds a trailing newline that every later stage sees: `unkept-promise-hook.sh:258` and `:313` read the last two characters, and `is it ready?"` matches `?` today but `"\n` after the rewrite, so the hook would block where it now excuses (measured). Hand queue |
 | every BARE pipeline under `set -e` (about 44 in production), a producer with side effects, a needed exit status, or a function that mutates state (`ssh`, `gh api` writes, `terraform`, anything run as `x=$(fn)`) | capture, then `grep -q P <<<"$out"` (hand edit) | Process substitution is not waited for and drops the producer status: `{ echo x; exit 3; } \| grep -q x` exits 3 while `grep -q x < <(...)` continues with rc 0, so a bare site would silently stop failing. A captured function loses state |
 
-Gotchas the transformer must encode and the working ledger must report: a here-string needs a writable temp file when the body exceeds the pipe
-capacity (bash before 5.1 always), so a read-only or full `/tmp` turns a match into a silent miss; under an ignored SIGPIPE an external producer in a
+Gotchas the transformer must encode and the working table must report: a here-string needs a writable temp file when the body exceeds the pipe
+capacity (bash before 5.1 always; measured NOT reproducible on bash 5.3 with a 100 KB body and `TMPDIR=/proc`, so it matters for older bash such as the macOS 3.2 that plugin hooks reach). The capture form ends in a here-string too, so it does not remove that dependency. For unbounded bodies in plugin hooks and gates (`sdk-bump-sandbox-gate.sh:140,224`, `stop-hook.sh:178`) use `grep -q P < <(printf '%s' "$v")`, which needs no temp file; under an ignored SIGPIPE an external producer in a
 procsub can print `write error: Broken pipe` to stderr, which matters for suites that assert on stderr; `-q` is also an early exit by design on an
 intentionally unbounded producer, which stays and gets the `# sigpipe-demo: intentional` marker; a site inside a comment, a quoted string, an LLM
-prompt template literal (`drain-labeled-backlog.workflow.js` lines 181 and 184) or a heredoc that merely documents the shape is DATA, not converted, and
-carries the marker (Phase 0 measures how many; the heredoc probe over PR-1's files found none). A drain form (`producer | grep -E P >/dev/null`) for a
+prompt template literal (`drain-labeled-backlog.workflow.js` lines 181 and 184) or a heredoc that merely documents the shape is DATA, not converted. The
+comment filter only knows `#`, and a marker inside a prompt literal would change the text sent to the model, so DATA in `.js`/`.template` files goes in a small
+named exclusion row (shrink-only, like the deferral table) instead of an in-line marker (Phase 0 measures how many; the heredoc probe over PR-1's files found none). The transformer also refuses a here-string when an `-x` or `-F` pattern is a variable that can be empty. A drain form (`producer | grep -E P >/dev/null`) for a
 non-bash script is NOT in the table: all 79 PR-1 `.sh` files carry a bash shebang, so it has no site today and is added only when a wave meets a real
 `#!/bin/sh` site.
 
 ### Guard shape: derived population, zero, per-entry ceilings on what is deferred (replaces per-file pinning for the sweep)
 
-The existing four named passes (`FILES_7024`, `FILES_8664`, `FILES_8855`, `FILES_7376`) stay untouched and keep the V1 pattern. A new pass,
-`scan_sweep <root>`, derives its population with `git -C <root> grep --no-index` over a named pathspec constant (every shell-bearing file by
-extension minus the deferral entries), strips comment lines and marked lines, and asserts zero. `--no-index` is what lets the probe plant scratch files
-that are not tracked (a plain `git grep` reads tracked files only, so a scratch-file mutation would read "0 hits" and look like a pass). It is built by
-giving `scan_pipes` a pattern and an optional root rather than adding a fourth near-copy beside `scan_scorers`, `scan_pipes` and `scan_7376`.
+The existing four named passes (`FILES_7024`, `FILES_8664`, `FILES_8855`, `FILES_7376`) stay untouched, keep V1, and their three callers stay
+byte-identical. A new pass, `scan_sweep <root>`, derives its population with
+`git -c core.excludesFile=/dev/null -C <root> grep --no-index --exclude-standard -anE` over a named pathspec constant (every covered extension minus the
+deferral rows), strips comment lines and marked lines, and asserts zero. Why each flag: `--no-index` lets the probe plant scratch files that are not tracked
+(a plain `git grep` reads tracked files only, so a scratch mutation would read "0 hits"); `--exclude-standard` stops it scanning `node_modules` and ignored
+trees (measured on this worktree: 399 files in 1.0 s with it, 409 files in 24.3 s and 10 stray hits without it); `core.excludesFile=/dev/null` stops a
+developer's global ignore file changing local results; `-a` makes a NUL-bearing file searchable as text (otherwise it prints `Binary file ... matches` with
+no line number). `git grep` returns rc 1 for "no hits" and rc 128 on a fatal error, so the wrapper follows the file's existing convention: it captures with
+`rc=0; out=$(...) || rc=$?`, treats rc 1 as zero hits, prints `UNRESOLVED:` for rc above 1, and the caller turns that into `FAIL=1` and a top-level `exit 3`
+(a `scan_*` function runs inside `$( )`, where `exit` only leaves the subshell). It extracts only `_strip_comments` from `scan_pipes` and `scan_scorers`
+(the marker filter is an opt-in flag used by `scan_sweep` alone): sharing the whole of `scan_pipes` would give the `FILES_7376` pass an opt-out it
+deliberately does not have, and `scan_pipes` takes a file list for `grep -Hn` where `git grep` takes pathspecs and prints root-relative paths.
 
-The deferral table names the subtrees not yet taken to zero, one row per entry: `path-or-glob | ceiling | tracker`. The first rows are wave A2
-(`apps/web-platform/infra`, root `.github`, `lefthook.yml`) and the wave-B test-harness globs. The guard asserts per row: hits are at or below the
-ceiling (a deferred subtree cannot grow while its wave is pending), hits are at least one (a row whose subtree reached zero is reported stale and must
-be deleted, so a wave deletes its own row in the PR that converts the subtree), and the tracker token is present. It prints one `DEFERRED: <path> (N hits,
-ceiling M, #tracker)` line per row on every run so the residual debt is visible in every CI log. There is no separate length pin: adding or removing a row
-is already a one-line reviewable diff. Every entry is derived from the pathspec, not from the classifier regex used for the measurements (a git glob for
-`test-*` can diverge from the regex), and Phase 0 asserts the two agree file by file and lists production-looking files that fall inside a deferred glob.
-This is the ratchet without a baseline file.
+The deferral table names the subtrees not yet taken to zero, one row per entry, sorted by path, one row per line (so concurrent edits are textually
+independent): `path-or-glob | mode | ceiling | tracker`. The first rows are wave A2 (`apps/web-platform/infra`, root `.github`, `lefthook.yml`; mode `=`, tight,
+because they are small, sensitive and slow-moving) and a few coarse wave-B rows (`tests/`, `plugins/soleur/test/` and the `*.test.sh` globs; mode `<=`, with
+`slack=N` printed, and the wave PR owns tightening it). Hits are classified in bash from one scan, first matching row wins, using `[[ $path == $glob ]]`
+(a glob `*` crosses `/`), so overlapping rows (`infra/x.test.sh`) have a defined owner and the guard does not run one `git grep` per row. Checks per row:
+hits at or below the ceiling (`=` mode: equal, with "lower the ceiling to N" as the message), at least one hit (a row whose subtree reached zero is reported
+stale and must be deleted, so a wave deletes its own row in the PR that converts the subtree), and the tracker token present. One `DEFERRED: <path> (N hits,
+ceiling M, #tracker)` line is printed per row on every run. There is no separate length pin. Every `FILES_*` member is excluded from the deferral rows
+(generated `:!file` entries) and scanned unconditionally with V2 at ceiling 0, so a V2-only spelling in a file the named passes pin cannot hide in a loose
+row (measured: 0 V2 hits across all 13 members today). Every entry is derived from the pathspec, not from the classifier regex used for the
+measurements (a git glob for `test-*` can diverge from the regex), and Phase 0 asserts the two agree file by file and records the list.
 
-Coverage is by file extension (`*.sh`, `*.yml`, `*.tf`, `*.template`, `*.js`), not by "shell-bearing": an extensionless script with a shebang would
-escape. Today there are zero such hits outside two `.ts` test files, and the limit is stated in the guard header. Local `--affected` selects the guard
-only for edits under `.claude/hooks/`, `plugins/` and the named infra suites, so a new bad pipe in `scripts/` is caught by CI and by running the guard
-directly (Phase 5), not by a local `--affected` run.
+Coverage is by file extension (`*.sh`, `*.bash`, `*.bats`, `*.yml`, `*.yaml`, `*.tf`, `*.template`, `*.js`), not by "shell-bearing": an extensionless script
+with a shebang, or a `.ts`/`.mjs`/`.py` file with an embedded `sh -c`, would escape. Today the only other-extension hits are two `.ts` test files, which sit in
+a wave-B row. The limit is stated in the guard header. Local `--affected` selects the guard only for edits under `.claude/hooks/`, `plugins/` and the named
+infra suites, so a new bad pipe in `scripts/` is caught by CI and by running the guard directly (Phase 5), not by a local `--affected` run (adding it to
+`scripts/pre-push-ratchet-lane.sh` is follow-up 6a: that lane pins its member count).
 
 ### Item 5: what the regex closes
 
@@ -232,6 +277,18 @@ it. Population measured today: 28 production pipes from `printf`/`echo`/`cat` in
 owning suite's stub, does the stub drain?) and the stub fixes both live in test files, so they are wave B's first phase, using the `drain` idiom PR
 #9525 introduced.
 
+### Verdict-bearing sites worksheet (read by deepen-plan from the real files; each is a Phase 2 hand edit, line numbers before conversion)
+
+| Site | Finding | Required form |
+| --- | --- | --- |
+| `plugins/soleur/hooks/unkept-promise-hook.sh:258` and `:313` | `printf '%s' "$PROSE" \| sed ... \| tail -c 2 \| grep -q '?'`; a head-of-chain here-string changes what `tail -c 2` sees; `:258` is negated, so the parked-deliverable arm flips too | `grep -q '?' < <(printf '%s' "$PROSE" \| sed ... \| tail -c 2)`. `:304` and `:332` to `:337` (`tail -n 1`, per sentence) are equivalent under either form |
+| `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh:183` | A miss leaves `capture_trigger=0`, so a hand edit to `sandbox-canary-argv.json` (a command-injection sink into the prod canary) skips the capture-verify gate; any here-string or procsub failure reads as a miss, the same silent-skip direction as today's flake | `rc=0; grep -qE P <<<"$CHANGED" \|\| rc=$?; (( rc == 0 \|\| rc > 1 )) && capture_trigger=1`. Pre-existing and not caused by the conversion: `:181` (`... \|\| true` on `git diff`) also yields an empty `CHANGED` and skips the gate; note it in the PR body |
+| `sdk-bump-sandbox-gate.sh:140`, `:224`; `plugins/soleur/hooks/stop-hook.sh:178` | Unbounded `git log` body; `stop-hook.sh` has no here-string today, so a rewrite adds a temp-file dependency (a failure leaves `IS_IDLE=false`, so the loop keeps running) | `grep -q P < <(printf '%s' "$v")` (no temp file) |
+| `scripts/check-web-host-escrow-config.sh:224`, `:305` | Negative sites `code "$x" \| grep -qE P && viol ...` treat any failure as "clean"; positive `\|\| viol` sites (217, 225, 226, 231, 291, 309) fail closed under every form; no `-e`, and `code()` ends in `\|\| true` | Route the two negative sites through a helper that calls `viol` on rc>1; use procsub for `:217` and `:309` |
+| `scripts/zot-restart-loop-alarm.sh:322,425,536,544` | Today's flake turns a real `exit_code=137`, `oom_killed=true` or `nic_ok=false` into "absent" (fail-open toward "never FIRE on zero evidence"); `printf '%s\n' "$X"` and `<<<"$X"` are byte-identical here | Here-string (strictly better) |
+| `scripts/plugin-delivery-canary.sh:953` | The only self-test line expecting `no`, so a grep failure also yields `no` and passes vacuously; the seven `yes` lines fail closed | Assert the complement for `:953` |
+| `scripts/lint-legal-registers.sh:308,391,406,409` | Positive assertions, fail closed; the `-qxF` patterns are non-empty | Here-string; transformer refuses an empty-capable `-x`/`-F` variable pattern |
+
 ## Technical Approach
 
 ### Phases
@@ -246,9 +303,17 @@ reworded, marked, or named in a second shrink-only exclusion list if there are m
 `apps/web-platform/.github/workflows/constraint-gates.yml` (1 site), which the root `.github` deferral entry does not match and which is the generated
 copy of `constraint-gates-workflow.template`, so the two are converted together.
 
-**Phase 1: guard first, red.** In `.claude/hooks/grep-q-pipe-guard.test.sh`: add `scan_sweep`, the deferral table with its three checks and printed
-lines, `PATTERN_V2` (added to the compile pre-check loop), and the probe fixtures and mutation-checked rows of the Guard Contract. Expected result
-before any conversion: the derived pass FAILs on the roughly 165 sites. This is the RED state (`cq-write-failing-tests-before`). Commit it first.
+**Phase 1: guard first, red.** In `.claude/hooks/grep-q-pipe-guard.test.sh`: add `scan_sweep` with its `SWEPT: <n> files` sentinel, the deferral table with its checks and printed
+lines, `PATTERN_V2` (added to the compile pre-check loop), the V2 fixtures in their own `bad-v2.sh`/`good-v2.sh` with literal counts pinned beside the derived
+ones, and a named FAIL diagnostic per new aggregate conjunct (a single boolean cannot say which one failed, and a deleted assignment would abort under `set -u` with no
+diagnostic). Expected result before any conversion: the derived pass FAILs on the roughly 165 sites. This is the RED state (`cq-write-failing-tests-before`). Commit it first.
+The mutation matrix is run by one `mutate <id> <anchor> <replacement> <expect-rc> <expect-diag> [line-lo line-hi]` helper (about 30 lines, scratch, not committed): it requires the
+anchor to occur exactly once (else `NOT LANDED <id>` counts as a failure) and, with a range, inside that range (`PATTERN` and `PATTERN_V2` blocks are near-identical); applies the
+edit with bash `${content/"$old"/"$new"}` and `printf >`, not `sed`; requires `! cmp -s` against the pristine copy; runs `timeout 120 bash <suite>`; and scores a row as caught
+only when the rc equals the row's expected rc and the diagnostic matches (rc above 1 on a row expecting 1 is an instrument error, not a kill). It runs in a copy of the tree that is
+itself `git init`-ed and committed (`soleur-sandbox.sh` copies via `git ls-files | tar` with no `.git`, which makes the pristine copy fail the `git ls-files --error-unmatch` pin check and
+every plain `git grep` read 0 hits, the #8616 blind spot). The instrument control comes first: the pristine sandbox must exit 0 with every `PASS:` line present. AC-3's "RED before
+conversion" is a separate observation (compare the exact set of FAIL lines), not the control.
 
 **Phase 2: convert PR-1's roots, one commit per root.** The commits are in this order: `scripts/`, `plugins/soleur/`, `apps/web-platform/` (scripts and
 the nested workflow), `apps/cla-evidence/`, then the commit that empties nothing but flips the guard to green. Each commit is individually revertable
@@ -259,7 +324,9 @@ the original line for the mechanical class (assert-before-write, count equals th
 and `actionlint` where installed; (c) each changed production script that has a registered suite has identical pass/fail counts before and after, and
 the contention run (four copies, each isolated in its own scratch copy of the worktree-relative temp paths, collected by pid) is limited to the
 hand-converted and verdict-bearing suites, not all 80; (d) the two constraint-scaffold `*.template` files, the generated workflow copy and the
-`.workflow.js` file are read for what they emit before editing, and their parity tests are run.
+`.workflow.js` file are read for what they emit before editing, and their parity tests are run. `apps/web-platform/.github/workflows/constraint-gates.yml` is
+generated from `constraint-gates-workflow.template` by `plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh` (a `sed` of `__TARGET_DIR__`):
+edit the template, regenerate the copy with that script, diff, and commit both together; do not hand-edit the copy.
 
 **Phase 3: item 5 documentation.** Rewrite the header's "Not matched" paragraph into the measured closed/residual table above, keep a three-row
 version of the conversion table in the header with the `# sigpipe-demo: intentional` marker syntax, add the one-sentence `| head` danger rule, make the
@@ -340,51 +407,58 @@ logs:
   retention: GitHub Actions log retention
 discoverability_test:
   command: bash .claude/hooks/grep-q-pipe-guard.test.sh
-  expected_output: PASS: grep-q-zero-sweep-pass
+  expected_output: grep-q-zero-sweep-pass
 ```
+
+Detection note for preflight Check 10 and deepen-plan's suite-shaped proxy: the command's filename contains `.test.`, so the over-inclusive proxy flags it as a suite. It is argued down here, not ignored: the guard is one deterministic file with no build or network, it measured 0.96 s on this tree against the 15 s cap, and AC-12 re-measures it inside the Check 10 sandbox shape. The expected literal is the stable pass name `grep-q-zero-sweep-pass`, which the guard prints as `PASS: grep-q-zero-sweep-pass` (the field holds the whitespace-free token so it substring-matches).
 
 ## Guard Contract
 
 ### Guard 1 — derived sweep pass (zero, per-entry ceilings on what is deferred)
 
-**Property.** No tracked, non-deferred file of a covered extension contains a pipe into an early-exiting grep outside a comment line or a marked intentional demo, and each deferred subtree's hit count can only fall.
+**Property.** No tracked, non-ignored file of a covered extension, outside a deferral row, contains a pipe into an early-exiting grep outside a comment line or a marked intentional demo, and each deferred subtree's hit count can only fall.
 
-**Assembly.** The population is derived, not listed: `scan_sweep <root>` runs `git -C <root> grep --no-index` over one named pathspec constant (covered extensions) minus the deferral table, in one function that every consumer calls, including the non-vacuity probe. The chokepoints the members flow through are (1) the pathspec constant, (2) the deferral table with its stale, ceiling and tracker checks, (3) the comment-and-marker filter shared with `scan_pipes`. A file added next month under a new directory is in the population without any edit; an extensionless script is not (stated limit). The scan is a line search, not a lexer: a heredoc payload and prose that merely names the shape are indistinguishable from code, so false positives are handled by the comment filter and the per-line marker, and a shape split across lines is a documented residual. The four existing named passes (`FILES_7024`, `FILES_8664`, `FILES_8855`, `FILES_7376`) are left as they are and keep V1 and their own patterns (`PATTERN_AWK_EXIT`, `PATTERN_PIPED_SCORER`).
+**Assembly.** The population is derived, not listed: `scan_sweep <root>` runs the `--no-index --exclude-standard -a` `git grep` of the Guard shape section over one named pathspec constant (covered extensions) minus the deferral table, in one function that every consumer calls, including the non-vacuity probe. The chokepoints the members flow through are (1) the pathspec constant, (2) the deferral table with its stale, ceiling and tracker checks and its first-match-wins classifier, (3) the shared `_strip_comments` filter with the opt-in marker flag, (4) the `FILES_*` carve-out scanned with V2 at ceiling 0. A file added next month under a new directory is in the population without any edit; an extensionless script is not (stated limit). The scan is a line search, not a lexer: a heredoc payload and prose that merely names the shape are indistinguishable from code, so false positives are handled by the comment filter, the per-line marker and the named DATA row, and a shape split across lines is a documented residual. The four existing named passes are left as they are and keep V1 and their own patterns (`PATTERN_AWK_EXIT`, `PATTERN_PIPED_SCORER`).
 
-**Mutation matrix:**
+**Mutation matrix** (run in the git-initialised sandbox by the `mutate` helper; each row names its expected rc and diagnostic, and every row except 2 and 8 expects rc 1):
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Append `echo "$x" \| grep -q p` to a scratch copy of a real PR-1 file, one per root (`scripts/`, `plugins/soleur/`, `apps/web-platform/scripts/`), scanned with `--no-index` | RED, one hit per root |
-| 2 | Drop `*.sh` from the pathspec constant, or point the scan at an empty directory (the guard's own dispatch) | RED: UNRESOLVED exit 3 from the size floor and the per-root canary check, not "0 hits, PASS" |
+| 1 | Append `echo "$x" \| grep -q p` to a real file of each PR-1 root inside the sandbox (`scripts/`, `plugins/soleur/`, `apps/web-platform/scripts/`) and run the real-tree pass | RED: one reported hit per root (the probe's scratch-root copy is the wiring check, not this row) |
+| 2 | Drop `*.sh` from the pathspec constant, or scan an empty directory (the guard's own dispatch) | RED with `UNRESOLVED` and the caller's top-level `exit 3` (an empty directory returns git rc 1, indistinguishable from "no hits", so the floor comes from the `SWEPT: <n> files` sentinel and the per-root canary, not from rc) |
 | 3 | Add a second bad file under a brand-new directory after a compliant first (`tools/new/x.sh`, never named anywhere) | RED: the derived pass reports it |
-| 4 | Append a bad line inside a deferred subtree whose row ceiling equals its current hit count | RED: ceiling exceeded; and a comment-only line appended there stays green |
-| 5 | Keep a deferral row whose subtree has no hit | RED: stale deferral (a single check, no pin to confuse it) |
-| 6 | Delete a deferral row while its subtree still has hits | RED: those hits now count |
-| 7 | Put the bad line in a comment, on a marked line, and on a plain code line | comment and marked lines pass, the plain code line is RED (a test of the filter, not a loop property) |
+| 4 | Append a bad line inside a deferred subtree whose row ceiling equals the hit count parsed from its `DEFERRED:` line | RED: ceiling exceeded (the row first asserts N equals the ceiling, else `NOT LANDED`); a `#` comment line appended there stays green |
+| 5 | A stale row with a valid tracker, an existing zero-hit path and a ceiling, so only the stale check can fire | RED with the `stale deferral` message (not a silent `set -e` abort: the row count tolerates git rc 1) |
+| 6 | Delete a deferral row whose glob does not overlap another row while its subtree still has hits (output to a file; about 950 hits would flood a terminal) | RED: those hits now count |
+| 7 | Drop the comment filter, then separately drop the marker filter, with a comment line, a marked line and a plain code line in the fixture | RED each time: the dropped filter's line is now reported; with both filters present the comment and marked lines pass and the plain line is RED |
+| 8 | Delete the real-tree `scan_sweep` call, then separately delete the wiring conjunct from the final `if` | RED each time: the first through the real-tree floor gate `${n_swept:-0} -ge FLOOR` with a named FAIL line (not an accidental `set -u` abort), the second through its own named diagnostic |
+| 9 | Plant a bad line in a gitignored path (`ignored/x.sh`) | stays green: the line is not reported (`--exclude-standard`) |
 
-Harness rows. Suite edit that must go RED: delete the `scan_sweep` call from the final aggregate (so the pass runs but is not scored) and the wiring probe must fail. Must-PASS non-canonical input: a fixture file whose only match is `a || grep -q p <<<"$x"` (the #8866 shape) with a trailing comment, differing from every probe line the original guard carried.
+Harness rows. Suite edit that must go RED: rows 8's two mutants. Must-PASS non-canonical input: a fixture file whose only match is `a || grep -q p <<<"$x"` (the #8866 shape) with a trailing comment, differing from every probe line the original guard carried.
 
-Anchor. The ceilings and the size floor are values stored in the same file as the check, so one commit can raise them with the check; this proves consistency, not integrity, exactly like the existing `PIN_*` values. What outside the commit must also move for a weakening to pass: a reviewer reads the deferral-table diff (one line per row), every row carries a tracker token, and every CI log prints a `DEFERRED:` line per row, so the debt cannot be raised silently. Locally `--affected` may not select the guard for edits under `scripts/`; CI and the direct run in Phase 5 are the backstop, and that is accepted.
+Anchor. The ceilings and the size floor are values stored in the same file as the check, so one commit can raise them with the check; this proves consistency, not integrity, exactly like the existing `PIN_*` values. What outside the commit must also move for a weakening to pass: a reviewer reads the deferral-table diff (one line per row, sorted), every row carries a tracker token, and every CI log prints a `DEFERRED:` line per row, so the debt cannot be raised silently; the wave-B loose rows are the accepted weakest point and print `slack=N`. Locally `--affected` may not select the guard for edits under `scripts/`; CI and the direct run in Phase 5 are the backstop, and that is accepted.
 
 ### Guard 2 — widened pattern (blind-spot spellings)
 
 **Property.** Every early-exit grep reader spelling that exists in the tracked tree (wrapper, brace or paren wrapper, long flag, an argument-taking flag before the early-exit flag) is matched by `PATTERN_V2` in `scan_sweep`, and the spellings a regex cannot close are listed with measured counts in the guard header.
 
-**Assembly.** One pattern definition (`PATTERN_V2`) consumed by `scan_sweep` only, plus the probe fixtures extended in the existing `bad.sh`/`good.sh` style; the header table is the second place the property lives. The named passes keep V1 on purpose.
+**Assembly.** One pattern definition (`PATTERN_V2`) consumed by `scan_sweep` only, with its fixtures in their own `bad-v2.sh`/`good-v2.sh` (appending wrappers to the existing `bad.sh` would break its V1 `bad_hits == bad_lines` conjunct for good), counts pinned as literals beside the derived comparison so deleting a fixture line cannot lower both sides; the header table is the second place the property lives. The named passes keep V1 on purpose.
 
-**Mutation matrix:**
+**Mutation matrix** (same helper; a rule check that a mutant is a working weaker program):
 
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Revert `WRAP` to empty | RED: the `x \| LC_ALL=C grep -q p` and `x \| command env LC_ALL=C grep -q p` fixtures are no longer matched |
-| 2 | Drop the brace alternative from `LEAD` | RED: the `x \| { grep -m1 -E v \|\| [ $? -eq 1 ]; }` fixture |
-| 3 | Drop `--quiet\|--silent\|--max-count` from `EARLY` | RED: the long-flag fixtures |
-| 4 | Drop the argument-taking-flag alternative from `ARG` | RED: the `x \| grep -e p -q` and `x \| grep -A1 -q p` fixtures |
-| 5 | Widen `EARLY`'s class from `[qm]` to `[qmcv]` | RED: the false-positive fixtures `x \| grep -c p`, `x \| grep -v p` and `x \| { grep -oE p \|\| true; }` now match |
-| 6 | Break `PATTERN_V2` so it does not compile (an unbalanced parenthesis) | RED: UNRESOLVED exit 3 from the compile pre-check, never PASS (a negated grep folds rc 2 into "no match") |
+| 2 | Drop the brace alternative from `LEAD` | RED: `x \| { grep -m1 -E v \|\| [ $? -eq 1 ]; }` |
+| 3 | Drop the paren alternative from `LEAD` | RED: `x \| (grep -q p)` |
+| 4 | Drop `&?` from `LEAD` | RED: `x \|& grep -q p` |
+| 5 | Drop `--quiet\|--silent\|--max-count` from `EARLY` | RED: the long-flag fixtures, including `--max-count=1` |
+| 6 | Drop the argument-taking-flag alternative from `ARG` | RED on `x \| grep -e p -q` and on the space-separated `x \| grep -A 1 -q p` (the compact `-A1` is matched by the generic cluster alternative and is not a discriminating fixture) |
+| 7 | Drop the `BIN` alternatives | RED: `x \| \grep -q p`, `x \| /usr/bin/grep -q p`, `x \| egrep -q p` |
+| 8 | Widen `EARLY`'s class from `[qm]` to `[qmcv]` | RED: the false-positive fixtures `x \| grep -c p`, `x \| grep -v p` and `x \| grep -cE p` now match (`-oE` has none of the four letters, so it is not a discriminating fixture) |
+| 9 | Break `PATTERN_V2` with an unclosed `(` (an unbalanced `)` compiles under GNU `grep -E` with rc 1, not 2, so it would read as no kill) | RED: UNRESOLVED exit 3 from the compile pre-check loop, which must list `PATTERN_V2`; never PASS (a negated grep folds rc 2 into "no match"). The pre-check uses GNU `grep`, `scan_sweep` uses `git grep -E`, so a dialect divergence is not covered by this row and the V2 fixtures are also run through `git grep` |
 
-Harness rows. Suite edit that must go RED: change the expected fixture count in the aggregate condition by one. Must-PASS non-canonical input: a good fixture `x | grep -F -- "$m"` with a `--` terminator, which no original probe line used, scanned through `scan_sweep` only (`scan_scorers` carries `PATTERN_PIPED_SCORER`, which flags it by design).
+Harness rows. Suite edit that must go RED: change a pinned literal fixture count (`v2_bad_lines == 21`) by one. Must-PASS non-canonical input: a good fixture `x | grep -F -- "$m"` with a `--` terminator, which no original probe line used, scanned through `scan_sweep` only (`scan_scorers` carries `PATTERN_PIPED_SCORER`, which flags it by design).
 
 Anchor. The pattern and its fixtures are in the same file, so one commit can weaken both; the measured repo-wide comparison in Phase 0 (V2 reports a superset of V1 and exactly the 10 wrapper and brace sites) is run outside the guard and recorded in the PR body.
 
@@ -392,7 +466,7 @@ Anchor. The pattern and its fixtures are in the same file, so one commit can wea
 
 Each item is a separate PR, verified against `origin/main` at c35116046b on 2026-10-05. Not planned in depth here.
 
-- **Item 1, waves A2 and B (the rest of the sweep).** Done on main: three suites and the guard's named passes at zero (#9525); `.claude/hooks` non-test code at zero (#6998). Remains: A2 (infra and CI production, about 138 sites, batched with 6b because `ci.yml` is machinery) and B1..B3 (814 test-harness sites, plus the producer-side join and stub fixes). Each wave deletes its deferral row.
+- **Item 1, waves A2 and B (the rest of the sweep).** Done on main: three suites and the guard's named passes at zero (#9525); `.claude/hooks` non-test code at zero (#6998). Remains: A2 (infra and CI production, about 138 sites, batched with 6b because `ci.yml` is machinery), and the awk-exit form as a second sweep pattern (PR-1's roots are not at zero for it: 11 to 21 stages depending on the test filter, pinned in Phase 0; the sweep covers the `grep` form only and the header says so) and B1..B3 (814 test-harness sites, plus the producer-side join and stub fixes). Each wave deletes its deferral row.
 - **Item 2, e2e ejections (#8785, #9170, #9167).** Done on main: #9523 vendored Inter through `next/font/local` (`apps/web-platform/app/fonts.ts`, guard `test/no-network-fonts.test.ts`), switched Playwright readiness from `port:` to `url:` on `/login` (180 s) and made the otp-login banner assertions select by text; merge_group run 37348057569 passed. #8785 and #9170 are fixed in code but still open (the PR used `Ref`, "to be closed with the CI e2e result"). Remains: close #8785 and #9170 with that evidence; #9167 is untouched (the plan of 2026-10-05 found its string is the mocked payload, so the cascade claim needs a comment, not a fix).
 - **Item 3, live-verify rail (#8022, #7969, #7215, #5634).** Done on main: rail is `apps/web-platform/scripts/live-verify/run.ts` run by the `live-verify` job in `.github/workflows/web-platform-release.yml`; PRs #8092 (wait timeout diagnosable) and #8184 (seed) merged. Remains: all four open. #5634 and #7215 are old environmental CANT-RUN items; #7969 recurred (post-merge of PR #9315); #8022 is the live one (3 of 3 `FAIL`, "persisted but did NOT appear in the rail", after PR #9279; its 2026-10-05 comment says possibly a real regression since #9270, undiagnosed). Two things to reconcile at item-3 time: the rail runs post-deploy in the release workflow, not on `merge_group` (so the 2026-10-05 comment's "merge-queue runs" wording is loose), and the 2026-09-30 comment on #8022 calls the gate report-only while #5463 (closed) records a flip to blocking; read the job's `continue-on-error` before stating which.
 - **Item 4, lint-bot-statuses.** Done on main: it is the advisory job at `.github/workflows/ci.yml` (about line 160), absent from `scripts/required-checks.txt`; the 2026-10-05 red was a deterministic content finding in the PR's own text (`lint-infra-no-human-steps.py`), it ejected nothing, and the last six main runs are green; #9523 added an advisory-red note to `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`. Remains: no dedicated issue (adjacent: #7472, ship Phase 7 poll silent on non-required failures); nothing to fix, record in #9482 and close the question.
@@ -469,7 +543,7 @@ No cross-domain implications detected: an engineering-internal CI-hygiene change
 - [ ] AC-9: `git diff --name-only origin/main...HEAD` (merge-base form, so a sibling merge cannot flip it) contains none of `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/lib/test-relevance-paths.sh`, `.github/workflows/ci.yml`, `scripts/suite-shard-legs*.tsv`, `infra/github/ruleset-ci-required.tf`, `lefthook.yml`, and no ADR-270 file.
 - [ ] AC-10: PR body uses `Ref #9217`, `Ref #7005`, `Ref #6601`, `Ref #7376`, `Ref #9482` and no `Closes`.
 - [ ] AC-11: `python3 scripts/lint-guard-contract.py knowledge-base/project/plans/2026-10-05-fix-pipefail-early-exit-grep-q-sweep-plan.md` passes; markdownlint passes on every markdown file in the commit.
-- [ ] AC-12: The `discoverability_test` command runs inside preflight Check 10's sandbox shape (repo read-only, tmpfs `HOME`, `PATH=/usr/local/bin:/usr/bin:/bin`) in under 15 s and prints `PASS: grep-q-zero-sweep-pass`; if `git grep` or `mktemp` cannot run there, the probe is replaced by a repo-relative wrapper in the same PR.
+- [ ] AC-12: The `discoverability_test` command (with `--exclude-standard` the sweep adds about 1 s) runs inside preflight Check 10's sandbox shape (repo read-only, tmpfs `HOME`, `PATH=/usr/local/bin:/usr/bin:/bin`) in under 15 s and prints `PASS: grep-q-zero-sweep-pass`; if `git grep` or `mktemp` cannot run there, the probe is replaced by a repo-relative wrapper in the same PR.
 - [ ] AC-13: The audit gains one corrected SIGPIPE-disposition row, and one learning is written that links to it; the scratch transformer is not committed (waves A2 and B commit a tool only if they need one).
 
 ### Quality Gates
@@ -511,7 +585,7 @@ No cross-domain implications detected: an engineering-internal CI-hygiene change
 ## Risks and Sharp Edges
 
 - **A transformer bug repeats across 165 sites.** Mitigation: assert-before-write, inverse-transform check over the mechanical class's changed lines only, the Phase 0 reconciliation, per-root commits, and the rule that a mutant or a rewrite must be a working program (the learning's session errors 1 and 2).
-- **A here-string needs a temp file for bodies over the pipe capacity.** A read-only or full `/tmp` makes a match silently read as a miss. The Phase 0 table flags production scripts that run on hosts (`scripts/zot-restart-loop-alarm.sh`, `scripts/check-web-host-escrow-config.sh`) so they are reviewed for body size and, if in doubt, use the capture form.
+- **A here-string needs a temp file for bodies over the pipe capacity on older bash.** Measured not reproducible on bash 5.3 (100 KB body, `TMPDIR=/proc`), so the exposure is older bash such as macOS 3.2 reaching plugin hooks. The capture form ends in a here-string too, so it is not the remedy: unbounded bodies in plugin hooks and gates use `grep -q P < <(printf '%s' "$v")` (see the worksheet). The Phase 0 table flags production scripts that run on hosts or on user machines.
 - **Process substitution is not waited for and drops the producer status.** A producer with side effects, and every bare pipeline under `set -e`, stays in the capture form.
 - **Semantic overlap with the sibling #9552.** It may edit the relevance libraries and `ci.yml` that reference `.claude/hooks`; PR-1 touches none of them (AC-9), re-compares the armed-battery set at ship time, and leaves a note on #9552.
 - **Local `--affected` may not select the guard for `scripts/` edits.** CI runs it in full and Phase 5 runs it directly; accepted and stated in Guard 1.

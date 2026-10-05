@@ -13,19 +13,19 @@ Plan: `knowledge-base/project/plans/2026-10-05-fix-pipefail-early-exit-grep-q-sw
 
 ## Phase 1: guard first, red
 
-- [ ] 1.1 Add `scan_sweep <root>` (`git -C <root> grep --no-index`) by giving `scan_pipes` a pattern and optional root.
-- [ ] 1.2 Add the deferral table (`path | ceiling | tracker`) with stale, ceiling and tracker checks and the `DEFERRED:` lines.
+- [ ] 1.1 Add `scan_sweep <root>` using `git -c core.excludesFile=/dev/null -C <root> grep --no-index --exclude-standard -anE`, rc 1 as zero hits, `UNRESOLVED:` for rc above 1 with a top-level `exit 3`, and a `SWEPT: <n> files` sentinel; extract only `_strip_comments` (marker filter opt-in) and leave the three existing callers byte-identical.
+- [ ] 1.2 Add the deferral table (`path | mode | ceiling | tracker`, sorted, one row per line, first-match-wins) with stale, ceiling and tracker checks and the `DEFERRED:` lines; carve every `FILES_*` member out and scan it with V2 at ceiling 0.
 - [ ] 1.3 Add `PATTERN_V2` (named passes keep V1) and put it in the compile pre-check loop.
-- [ ] 1.4 Add probe fixtures and the Guard 1 and Guard 2 mutation rows; each mutation reports NOT LANDED if its anchor is absent.
+- [ ] 1.4 Add `bad-v2.sh`/`good-v2.sh` with pinned literal counts and a named FAIL diagnostic per new conjunct; write the scratch `mutate` helper and run the Guard 1 and Guard 2 matrices in a git-initialised sandbox after a pristine control (exit 0, every PASS line present).
 - [ ] 1.5 Confirm the derived pass is RED on the unconverted tree; commit.
 
 ## Phase 2: convert, one commit per root
 
 - [ ] 2.1 `scripts/` (mechanical class by scratch transformer, then hand queue); `bash -n`, per-suite before/after counts.
 - [ ] 2.2 `plugins/soleur/` including the two templates and `.workflow.js` DATA lines.
-- [ ] 2.3 `apps/web-platform/` (scripts and the nested workflow together with its template).
+- [ ] 2.3 `apps/web-platform/` (scripts; the nested `constraint-gates.yml` is regenerated from its template with `constraint-scaffold.sh`, not hand-edited).
 - [ ] 2.4 `apps/cla-evidence/`; convert the one continued pipe by hand.
-- [ ] 2.5 Convert the four `-m1` output-consuming sites with `grep -m1 P <<<"$v"`; send every bare pipeline under `set -e` to the capture form.
+- [ ] 2.5 Apply the plan's verdict-bearing worksheet (`unkept-promise-hook.sh:258,313` procsub form, `sdk-bump-sandbox-gate.sh:183` rc>1 handling, escrow negative sites, canary `:953`). Convert the four `-m1` output-consuming sites with `grep -m1 P <<<"$v"`; send every bare pipeline under `set -e` to the capture form.
 - [ ] 2.6 Contention run (four isolated copies, collected by pid) for the hand-converted and verdict-bearing suites.
 
 ## Phase 3: item 5 documentation
