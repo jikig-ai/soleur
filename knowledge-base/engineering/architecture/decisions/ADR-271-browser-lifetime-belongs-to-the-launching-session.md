@@ -17,7 +17,7 @@ brand_survival_threshold: aggregate pattern
 **Accepted — 2026-10-05**, for the lifetime fix (Decisions 1, 2, 4, 5). Recorded `adopting` on 2026-10-04 (the ADR-270 precedent)
 because the live idle-survival check had not run. It ran twice on 2026-10-05, on the plugin registration, and passed ("Proven").
 The operator decided that recipe step 4 (a second live process while the first browser is open) is not part of the acceptance
-check, because it tests the slot lease and needs a host with Google Chrome (record: https://github.com/jikig-ai/soleur/issues/9281#issuecomment-5995806095).
+check, because it tests the slot lease and needs a host with Google Chrome (record: <https://github.com/jikig-ai/soleur/issues/9281#issuecomment-5995806095>).
 Still open under "Not proven", and tracked on #9281, which stays open: that lease behaviour live, idle survival on the project
 registration (headed Chrome), headed Chrome after a proxy SIGKILL, and the unwrapped cron-ux-audit server.
 
