@@ -49,7 +49,7 @@ hapi() {
   [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
   : > "$HBODY"   # a transport error must not leave the PREVIOUS call's body to be read as this one's
   code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
-    | curl -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
+    | curl --disable --noproxy '*' -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
   [[ "$rc" -eq 0 ]] || code="000"
   printf '%s' "$code"
 }

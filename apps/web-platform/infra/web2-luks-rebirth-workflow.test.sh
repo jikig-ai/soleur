@@ -163,7 +163,10 @@ for name in ("errcode", "fail"):
     a, b = fn(forget, name), fn(mine, name)
     if a is None or b is None or a != b: bad.append(name + "()")
 curl = "curl -sS --max-time 15 --config - -X \"$1\" \"${extra[@]}\" -o \"$HBODY\" -w '%{http_code}' \"https://api.hetzner.cloud/v1$2\""
-if curl not in forget or curl not in mine: bad.append("curl line")
+# The orchestrator's copy is the forget workflow's line plus the transport confinement the shell-trace lint demands of a credentialed curl
+# (--disable FIRST, --noproxy '*'): equal in every other byte.
+hard = curl.replace("curl -sS", "curl --disable --noproxy '*' -sS", 1)
+if curl not in forget or hard not in mine: bad.append("curl line")
 def const(text, pat):
     m = re.search(pat, text, re.M); return m.group(1) if m else None
 pairs = [("WEB1_SERVER_ID", r'^\s*WEB1_SERVER_ID: "(\d+)"', r'^WEB1_SERVER_ID="(\d+)"'),

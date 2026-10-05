@@ -35,8 +35,10 @@
 # Env: DOPPLER_TOKEN — a provider token that can read prd_workspaces_luks_web (the workflow binds TF_VAR_doppler_token_tf).
 # Exit: 0 PASS, 1 a check failed, 3 an input could not be read, 78 refused to run under xtrace.
 set -euo pipefail
+# Unconditional: this script ACQUIRES its credentials at runtime (the passphrase copies and the R2 pair are read after this line),
+# so a refusal conditional on a variable that is empty here would let the acquisition itself be traced.
 case "$-" in
-  *x*) if [ -n "${DOPPLER_TOKEN:+x}" ]; then printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2; exit 78; fi ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
 
 _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
