@@ -66,7 +66,8 @@ fail() {
   echo "::error::$m"
   exit 1
 }
-need_token() { [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"; printf '::add-mask::%s\n' "$HCLOUD_TOKEN"; }
+need_token() { [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"; printf '::add-mask::%s\n' "$HCLOUD_TOKEN" >&2; }
+# (the mask goes to STDERR: a workflow step that captures this script's stdout to a file must never capture a masked value; the runner reads commands from both streams)
 # One line per output: a value with a newline (a Hetzner name, an API field) must not be able to start a second `key=value` line.
 out() { local v="${2//$'\r'/ }"; v="${v//$'\n'/ }"; [[ -z "${GITHUB_OUTPUT:-}" ]] || printf '%s=%s\n' "$1" "$v" >> "$GITHUB_OUTPUT"; }
 # clean — a value printed into the run log or the step-summary table: no newline (so no value can start a line of its own, and every table row starts
@@ -155,7 +156,7 @@ cmd_classify() { # apply=yes|no
   verdict="$(web2_rebirth_classify apply="$apply" pause="$pause" pin="$PINNED_VOLUME_ID" pin_status="$PIN_STATUS" pin_format="$PIN_FORMAT" \
     pin_name_ok="$PIN_NAME_OK" pin_server="$PIN_SERVER" names="$NAMES" web2_sid="$WEB2_SID" web2_vols="$WEB2_VOLS" state_vol="$state_vol" state_server="$state_server" web2_age_s="$WEB2_AGE_S")"
   echo "classifier: pin=${PIN_STATUS}/${PIN_FORMAT} attached_to=${PIN_SERVER} named_ids=${NAMES} web2_sid=${WEB2_SID} web2_vols=${WEB2_VOLS} state_vol=${state_vol} state_server=${state_server} pause=${pause} web2_age_s=${WEB2_AGE_S}"
-  echo "pinned volume: ${PIN_DESC}"
+  echo "pinned volume: $(clean "$PIN_DESC")"
   out verdict "$verdict"; out web2_sid "$WEB2_SID"; out pin_desc "$PIN_DESC"
   echo "verdict: ${verdict}"
   case "$verdict" in refuse:*) fail "the rebirth REFUSES before any write: ${verdict}" ;; esac
@@ -322,7 +323,9 @@ cmd_summary() {
   if [[ "${MODE:-}" == apply && "$status" == success && -n "${HCLOUD_TOKEN:-}" ]]; then
     if [[ "$(hapi GET "/servers?name=${WEB2_NAME}")" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]]; then
       new_host="$(jq -r '.servers[0] | "server_id=\(.id) location=\(.datacenter.location.name // "unknown") volumes=\([.volumes[] | tostring] | join(",")) created=\(.created // "unknown")"' "$HBODY")"
-      created_epoch="$(date -u -d "$(jq -r '.servers[0].created // empty' "$HBODY")" +%s 2>/dev/null || true)"
+      # An absent creation time must stay unknown: `date -d ""` is midnight today.
+      created="$(jq -r '.servers[0].created // empty' "$HBODY")"
+      if [[ -n "$created" ]]; then created_epoch="$(date -u -d "$created" +%s 2>/dev/null || true)"; fi
     fi
   fi
   # The follow-through's `earliest` is the REBIRTH + 3 days, i.e. the server's own creation time (never "today", which on a resume is wrong).

@@ -115,6 +115,13 @@ PY2
   pre_lit="$(jq -r --argjson i "$ipre" '.[$i].run' <<<"$steps" | sed -nE "s/.*printf 'graded=([a-z]+)\\\\n'.*/\1/p" | head -1)"
   req_lit="$(sed -nE 's/.*\[\[ "\$\{PRE_PLAN:-\}" == ([a-z]+) \]\].*/\1/p' "$SCRIPT_REAL" | head -1)"
   chk "S12m the literal the pre-plan step EXPORTS equals the literal delete-volume REQUIRES (they disagreed once: ${pre_lit} vs ${req_lit})" "$([[ -n "$pre_lit" && "$pre_lit" == "$req_lit" ]]; echo $?)"
+  local pool_lit req_pool met_lit req_met
+  pool_lit="$(jq -r '[.[] | select(.name | startswith("Never-pooled evidence"))][0].run' <<<"$steps" | sed -nE "s/.*printf 'verdict=([a-z]+)\\\\n'.*/\1/p" | head -1)"
+  req_pool="$(sed -nE 's/.*\[\[ "\$\{NEVER_POOLED:-\}" == ([a-z]+) \]\].*/\1/p' "$SCRIPT_REAL" | sort -u | tr '\n' ' ')"
+  met_lit="$(sed -nE 's/.*echo "flip precondition: MET"; out met ([a-z]+);.*/\1/p' "$SCRIPT_REAL" | head -1)"
+  req_met="$(sed -nE 's/.*\[\[ "\$\{FLIP:-\}" == ([a-z]+) \]\].*/\1/p' "$SCRIPT_REAL" | head -1)"
+  chk "S12m2 the never-pooled literal the step EXPORTS (${pool_lit}) is the one the script requires of NEVER_POOLED (${req_pool})" "$([[ -n "$pool_lit" && "$req_pool" == "$pool_lit " ]]; echo $?)"
+  chk "S12m3 the flip literal the script EXPORTS (${met_lit}) is the one delete-volume requires of FLIP (${req_met})" "$([[ -n "$met_lit" && "$met_lit" == "$req_met" ]]; echo $?)"
   chk "S12n no run body talks to Hetzner or the hcloud CLI directly (every Hetzner call is inside a classified script)" "$([[ "$(jq -r '[.[] | select((.run // "") | test("curl |api\\.hetzner\\.cloud|(^|[^A-Za-z0-9_-])hcloud +"))] | length' <<<"$steps")" == 0 ]]; echo $?)"
   chk "S12o the only Terraform verbs in a run body are init, plan, apply, show and console (state surgery lives in the script)" "$([[ "$(jq -r '[.[] | (.run // "") | scan("(?:^|[^A-Za-z0-9_-])terraform +(?:-[^ ]+ +)*([a-z]+)") | .[0]] | map(select(. != "init" and . != "plan" and . != "apply" and . != "show" and . != "console")) | length' <<<"$steps")" == 0 ]]; echo $?)"
   chk "S12p no run body swallows a failure with || true, || exit 0, || echo, || : or | cat (cleanup and the digest resolve excepted)" "$([[ "$(jq -r '[.[] | select(((.name | startswith("Remove plan files")) or (.name | startswith("Resolve the image digest"))) | not) | select((.run // "") | test("\\|\\| *(true|exit 0|echo|:)|\\| *cat( |$)|; *true( |$)"))] | length' <<<"$steps")" == 0 ]]; echo $?)"
@@ -249,6 +256,8 @@ SH
   chk "B16 heal:volume_created grades in mode post-heal (so a create-volume plan is refused there)" "$([[ "$RC" -ne 0 && "$OUT" == *"REFUSED the post-heal plan"* ]]; echo $?)"
   runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$FIX/resume.json" WEB2_SID=2002 VERDICT=resume:post_apply
   chk "B15b the resume plan (adds only, no replace) passes in mode resume, with no stock preflight" "$([[ "$RC" -eq 0 && "$OUT" == *"post plan graded (resume)"* ]]; echo $?)"
+  runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$FIX/resume.json" WEB2_SID=2002 VERDICT=resume:post_apply STOCK_FAIL=1
+  chk "B15d the stock preflight is NOT run on a resume (a failing one would block a read-only resume)" "$([[ "$RC" -eq 0 && "$OUT" == *"post plan graded (resume)"* ]]; echo $?)"
   runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$FIX/post.json" WEB2_SID=2002 VERDICT=resume:post_apply
   chk "B15c a replace plan is REFUSED on a resume (the rebirth plan must never run twice)" "$([[ "$RC" -ne 0 && "$OUT" == *"REFUSED the resume plan"* ]]; echo $?)"
   jq '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change.after) += {"format":"ext4"}' "$FIX/post.json" > "$sb/post.bad.json"
@@ -292,7 +301,7 @@ while IFS= read -r line; do
   case "$line" in FAILED*) fails=$((fails + 1)); printf 'FAIL - %s\n' "${line#FAILED }" ;; RAN*) ran="${line#RAN }" ;; *) [[ -z "$line" ]] || printf '       %s\n' "$line" ;; esac
 done <<<"$report"
 printf 'real workflow: %s assertions, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 81 ]] || { echo "FAIL - assertion floor: ran ${ran} < 81"; fails=$((fails + 1)); }
+[[ "$ran" -ge 84 ]] || { echo "FAIL - assertion floor: ran ${ran} < 84"; fails=$((fails + 1)); }
 
 # Mutants are independent (each works on its own copy of the workflow and its own sandbox), so up to MUT_JOBS run at once; every mutant
 # writes its verdict line to its own file and the lines are counted once all have finished.
@@ -345,6 +354,9 @@ mutate "the reboot step loses the never-pooled proof" '          NEVER_POOLED: $
         run: bash scripts/web2-rebirth.sh reboot' '        run: bash scripts/web2-rebirth.sh reboot'
 mutate "the resume plan grades in the wrong mode" 'then MODE=resume; REPLACE=(); fi' 'then MODE=post; REPLACE=(); fi'
 mutate "the recovery step captures stdout to a file again" '          facts="${RUNNER_TEMP}/recovery-facts.txt"; rc=0' '          facts="${RUNNER_TEMP}/recovery-facts.txt"; rc=0; : > "${RUNNER_TEMP}/recovery.out"; echo ::add-mask::SECRETPASSPHRASE > "${RUNNER_TEMP}/recovery.out"'
+mutate "the stock preflight runs on a resume too" '          if [[ "$MODE" != resume ]]; then
+            HCLOUD_TOKEN=' '          if true; then
+            HCLOUD_TOKEN='
 mutate "the delete step swallows a failure" '        run: bash scripts/web2-rebirth.sh delete-volume' '        run: bash scripts/web2-rebirth.sh delete-volume || true'
 mutate "the emptiness step never runs" "      - name: Emptiness evidence (7 days of Better Stack host_metrics, fail-closed)
         id: emptiness

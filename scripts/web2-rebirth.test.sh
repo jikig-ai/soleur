@@ -333,7 +333,8 @@ battery() {
   # (a Hetzner POST/DELETE, a state rm) calls require_apply before it does
   local verbs; verbs="$(sed -nE 's/^  ([a-z-]+)\) .*cmd_[a-z_]+.*;;$/\1/p' "$SCRIPT_UNDER_TEST" | LC_ALL=C sort | tr '\n' ' ')"
   check "the dispatcher serves exactly the known verbs (got: ${verbs})" "$([[ "$verbs" == "classify delete-volume flip-precondition ready-poll reboot state-rm summary " ]]; echo $?)"
-  local unguarded; unguarded="$(awk '/^cmd_[a-z_]+\(\) \{/{name=$1; has=0; writes=0} /require_apply/{has=1} /hapi (POST|DELETE)|terraform state rm/{ if(!has) bad[name]=1 } END{for(k in bad) printf "%s ", k}' "$SCRIPT_UNDER_TEST")"
+  check "the readiness reader looks back 4 days (a 72 h-old resume must still find the once-per-instance row)" "$(grep -q 'w2l_fetch_ready "$tmp/ready.jsonl" 4 20' "$(dirname "$SCRIPT_UNDER_TEST")/web2-rebirth-ready-poll.sh"; echo $?)"
+  local unguarded; unguarded="$(awk '/^[a-z_0-9]+\(\) \{/{name=$1; has=0; writes=0} /require_apply/{has=1} /hapi (POST|DELETE)|terraform state rm/{ if(!has) bad[name]=1 } END{for(k in bad) printf "%s ", k}' "$SCRIPT_UNDER_TEST")"
   check "every function that writes calls require_apply first (unguarded: ${unguarded})" "$([[ -z "$unguarded" ]]; echo $?)"
 
   check "no unexpected API call in any row of THIS battery" "$(! ls "$BATTERY_DIR"/world.*/unexpected.log >/dev/null 2>&1; echo $?)"
@@ -348,7 +349,7 @@ while IFS= read -r line; do
 done <<<"$report"
 ran="${ran:-0}"
 printf 'real script: %s world scenarios, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 119 ]] || { echo "  FAIL scenario floor: ran ${ran} < 119"; fails=$((fails + 1)); }
+[[ "$ran" -ge 120 ]] || { echo "  FAIL scenario floor: ran ${ran} < 120"; fails=$((fails + 1)); }
 
 # Mutants are independent (each works in its own sandbox tree and fake worlds), so up to MUT_JOBS run at once; every mutant writes
 # its verdict line to its own file and the lines are counted once all have finished.
@@ -393,6 +394,7 @@ mutate "flip: the apply refusal is dropped" 'if [[ "$apply" == yes ]]; then
 mutate "ready: the run-anchor freshness is dropped" 'if [[ "$age" =~ ^[0-9]+$ ]] && (( age < now - anchor )); then
         [[ "$row_arm" == formatted ]]' 'if true; then
         [[ "$row_arm" == formatted ]]' web2-rebirth-ready-poll.sh
+mutate "ready: the lookback is shortened to 1 day" 'w2l_fetch_ready "$tmp/ready.jsonl" 4 20' 'w2l_fetch_ready "$tmp/ready.jsonl" 1 20' web2-rebirth-ready-poll.sh
 mutate "ready: the formatted-arm requirement is dropped" '[[ "$row_arm" == formatted ]] || fail' 'true || fail' web2-rebirth-ready-poll.sh
 mutate "classify: the pause is forced real" '[[ "$apply" == yes ]] && { pause_real && pause=yes || pause=no; }' 'pause=yes'
 mutate "classify: the web-1-in-state sanity check is dropped" '[[ "$(jq -r '"'"'.web1'"'"' <<<"$ident")" == 1 ]] || fail' 'true || fail'
