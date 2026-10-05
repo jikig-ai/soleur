@@ -351,3 +351,14 @@ commit, inside the same `-target=` allow-list the comment is attached to. An ear
 this paragraph said "six lines beneath"; that number was written from recollection and is wrong.
 The distance is not the point and never was: the instruction governed the list, the addition went
 into the list, and the instruction did not hold.
+
+## Addendum — 2026-10-05 (#9505): the re-evaluation probe moved endpoints
+
+The re-evaluation trigger and the dated probes above name `GET /v1/datacenters`, which Hetzner removed (HTTP 410
+`deprecated_api_endpoint`, changelog 2026-06-02). The equivalent probe is `GET /v1/server_types?name=cx33` →
+`server_types[0].locations[]`, reading `available` per location; the header of
+`tests/scripts/lib/stock-preflight-gate.sh` is the writeup of record. The dated measurements above are left as recorded.
+
+Reading taken 2026-10-05 (read-only credential, shapes only): `cx33` has an entry in all three EU locations (`fsn1`,
+`nbg1`, `hel1`) and `available:false` in each — so the "next query reporting `cx33` available in web-1's location"
+trigger had **not** fired as of that reading, and the exception stands.
