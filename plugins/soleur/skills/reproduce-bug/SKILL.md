@@ -126,6 +126,8 @@ not register or is toggled off), take the file-form path: use whatever
 possibly unwrapped — registration under the §Wrapping rules below, or
 `agent-browser` when no Playwright registration exists at all.
 
+When the reproduction is finished, call `browser_close` (nothing reaps the browser at turn end; ADR-271).
+
 ### Step 2: Navigate to Affected Area
 
 Based on the issue description, navigate to the relevant page:
