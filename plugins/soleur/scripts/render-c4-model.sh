@@ -42,8 +42,9 @@
 #      scripts-off install makes, so the shipped one must match. The claude-code install is the
 #      exception (its postinstall places the binary). Sweep with: git grep 'likec4@1\.'
 #      c4-likec4-version-pin.test.ts asserts parity, the age floor, the flag and the exact form.
-#   Deliberately version-only (no --before, and scripts-on): package.json and the interactive
-#   `validate` recipes in the architecture skill docs (they are asserted for the version only).
+#   Deliberately version-only (no --before): package.json (installed by lock-based
+#   `npm ci --ignore-scripts`) and the interactive `validate` recipes in the architecture skill docs,
+#   which also run scripts-on (they are asserted for the version only).
 #   A claude-code bump needs no date (its tree is exact-pinned platform packages with
 #   nothing floating) but claude-cli-pin-knows-models.test.ts must stay green.
 #   Policy: the date moves with a likec4 bump, or sooner if a transitive advisory affects

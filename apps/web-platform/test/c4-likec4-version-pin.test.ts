@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
@@ -65,11 +65,26 @@ const BUMP_HINT =
  * continuations are joined first, so a command split across physical lines is read as the one command
  * the shell runs.
  */
+const WHOLE_LINE_COMMENT = /^\s*(#|\/\/|\/\*|\*(\s|$|\/))/;
+
+/** Join backslash continuations line by line; a comment line never continues onto the next line. */
+function joinContinuations(src: string): string {
+  const lines = src.split("\n");
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    let l = lines[i];
+    while (!WHOLE_LINE_COMMENT.test(l) && /\\\s*$/.test(l) && i + 1 < lines.length) {
+      l = `${l.replace(/[ \t]*\\\s*$/, "")} ${lines[++i].trim()}`;
+    }
+    out.push(l);
+  }
+  return out.join("\n");
+}
+
 function stripComments(src: string): string {
-  return src
-    .replace(/[ \t]*\\\n[ \t]*/g, " ")
+  return joinContinuations(src)
     .split("\n")
-    .filter((l) => !/^\s*(#|\/\/|\/\*|\*(\s|$|\/))/.test(l))
+    .filter((l) => !WHOLE_LINE_COMMENT.test(l))
     .map((l) => l.replace(/(?<=\S)\s+#.*$/, "").replace(/(?<=\S)\s+\/\/\s.*$/, ""))
     .join("\n");
 }
@@ -123,7 +138,7 @@ function checkLikec4Pins(files: Likec4PinFiles, now: Date): string[] {
       else dates.add(m[1]);
       // The tests run the binary a scripts-off install produces, so the shipped one must be the same.
       if (!/(^|\s)--ignore-scripts(\s|$)/.test(l)) violations.push(`${name}: install line #${i + 1} has no --ignore-scripts: ${l.trim()}`);
-      if (!LIKEC4_CMD_RE.test(l.trim().replace(/^RUN\s+/, ""))) {
+      if (!LIKEC4_CMD_RE.test(l.trim().replace(/^(?:RUN|-\s+run:|run:)\s+/, ""))) {
         violations.push(`${name}: install line #${i + 1} is not exactly \`npm install -g likec4@<x.y.z> --before=<date> --ignore-scripts\`: ${l.trim()}`);
       }
     });
@@ -197,6 +212,7 @@ function dockerfileLines(src: string): string[] {
   let cur = "";
   for (const raw of src.split("\n")) {
     if (/^\s*#/.test(raw)) continue; // Docker drops comment lines even inside a continuation
+    if (cur && raw.trim() === "") continue; // ...and skips blank lines inside one
     const cont = /\\\s*$/.test(raw);
     cur = `${cur}${cur ? " " : ""}${raw.replace(/\\\s*$/, "").trim()}`;
     if (!cont) {
@@ -264,7 +280,7 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
     if (PACKAGE_MANAGER.test(l) && !RUNNER_PM_ALLOWED.some((re) => re.test(l))) {
       violations.push(`Dockerfile: \`runner\` may use a package manager only in its two known lines (npm ci --omit=dev, the pinned playwright install), found: ${l}`);
     }
-    if (/^(?:COPY|ADD)\b.*--from=(?!builder\b)/i.test(l)) {
+    if (/^(?:COPY|ADD)\b.*--from=(?!builder(?:\s|$))/i.test(l)) {
       violations.push(`Dockerfile: \`runner\` may COPY --from only the builder stage, found: ${l}`);
     }
   }
@@ -273,7 +289,7 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
 
   // ci.yml: exactly one step builds the stage, as one object (a commented-out or split step is not one).
   type Step = { uses?: string; if?: unknown; "continue-on-error"?: unknown; with?: Record<string, unknown> } & Record<string, unknown>;
-  type Job = { steps?: Step[]; if?: unknown; "continue-on-error"?: unknown };
+  type Job = { steps?: Step[]; if?: unknown; "continue-on-error"?: unknown; "runs-on"?: unknown };
   let doc: { jobs?: Record<string, Job> };
   try {
     doc = parseYaml(ci) as typeof doc;
@@ -287,6 +303,9 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
     if (k === "continue-on-error") violations.push("ci.yml: web-platform-build must not set job-level continue-on-error (the cli-tools gate would go green on failure)");
     else if (k === "if") violations.push("ci.yml: web-platform-build must not be conditional at job level");
     else if (!["timeout-minutes", "runs-on", "steps"].includes(k)) violations.push(`ci.yml: web-platform-build sets unexpected job key ${k} (only timeout-minutes, runs-on, steps)`);
+  }
+  if (job && "runs-on" in job && !(typeof job["runs-on"] === "string" && /^ubuntu-/.test(job["runs-on"]))) {
+    violations.push(`ci.yml: web-platform-build must run on a GitHub-hosted ubuntu runner, found ${JSON.stringify(job["runs-on"])}`);
   }
   const steps = job?.steps ?? [];
   const built = steps.filter(
@@ -330,7 +349,7 @@ const CI_LIKEC4_JOBS = ["test-scripts", "test-webplat"];
 const MONITOR_LIKEC4_JOBS = ["health-check"];
 function checkLikec4InstallJobs(src: string, name: string, expected: string[]): string[] {
   type S = { run?: unknown; if?: unknown; "continue-on-error"?: unknown };
-  let doc: { jobs?: Record<string, { steps?: S[] }> };
+  let doc: { jobs?: Record<string, { steps?: S[]; if?: unknown; "continue-on-error"?: unknown }> };
   try {
     doc = parseYaml(src) as typeof doc;
   } catch (e) {
@@ -342,6 +361,8 @@ function checkLikec4InstallJobs(src: string, name: string, expected: string[]): 
     for (const s of job?.steps ?? []) {
       if (typeof s.run !== "string" || extractInstallLines(s.run).length === 0) continue;
       found.push(jobId);
+      // A job-level `if` or `continue-on-error` skips or masks every step in it, install included.
+      if ("if" in job || "continue-on-error" in job) violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
       if ("if" in s || "continue-on-error" in s) violations.push(`${name}: the likec4 install step in ${jobId} must not be conditional or non-blocking`);
     }
   }
@@ -493,6 +514,8 @@ describe("likec4 dependency-tree pin (--before) parity (#9300)", () => {
     };
     walk(path.join(REPO_ROOT, ".github", "workflows"));
     walk(path.join(REPO_ROOT, ".github", "actions"));
+    const nested = path.join(REPO_ROOT, "apps", "web-platform", ".github", "workflows");
+    if (existsSync(nested)) walk(nested);
     // Any non-comment line that names likec4 next to a package-manager verb, with or without a pinned version:
     // `@latest`, a bare `npm i -g likec4` and a continuation-split install are all resolutions.
     const sites = files
@@ -657,6 +680,12 @@ describe("checkLikec4Pins self-test (string-fed mutations)", () => {
     const bad = good();
     bad.ci = `      npm install -g likec4@1.50.0 \\\n        --foo\n      npm install -g likec4@1.50.0 --before=${D} --ignore-scripts`;
     expect(checkLikec4Pins(bad, NOW).join("\n")).toMatch(/install line #1 has no --before/);
+  });
+
+  it("a single-line YAML step `- run: <pinned install>` is the pinned command, not a violation", () => {
+    const f = good();
+    f.ci = `      - run: npm install -g likec4@1.50.0 --before=${D} --ignore-scripts\n${f.ci}`;
+    expect(checkLikec4Pins(f, NOW).join("\n")).not.toMatch(/is not exactly/);
   });
 
   it("row 8: --ignore-scripts missing from the TS export argv is caught", () => {
@@ -889,6 +918,12 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     expect(run(`# syntax=docker/dockerfile:1\n${dockerfile()}`)).toMatch(/parser directive/);
   });
 
+  it("a comment ending in a backslash does not swallow the next real line; a blank line inside a continuation does not end it", () => {
+    expect(extractInstallLines(`# note \\\nnpm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts`)).toHaveLength(1);
+    expect(run(dockerfile({ runnerBody: "RUN npm ci --omit=dev \\\n\n  -g typescript" }))).toMatch(/may use a package manager only/);
+    expect(run(dockerfile({ runnerBody: "COPY --from=builder-evil /a /b" }))).toMatch(/COPY --from only the builder stage/);
+  });
+
   it("a backslash-continued install is read as the one logical line the builder runs", () => {
     const split = "RUN npm install -g @anthropic-ai/claude-code@2.1.284\nRUN npm install -g likec4@1.50.0 \\\n  --before=2026-09-28 --ignore-scripts";
     expect(run(dockerfile({ cliBody: split }))).toBe("");
@@ -932,7 +967,7 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     }
     for (const j of ["env: {X: 1}", "permissions: {contents: write}", "runs-on: self-hosted", "container: x", "needs: y"]) {
       const out = run(dockerfile(), stepYaml("", "", "", j));
-      if (j.startsWith("runs-on")) expect(out, j).toBe("");
+      if (j.startsWith("runs-on")) expect(out, j).toMatch(/GitHub-hosted ubuntu runner/);
       else expect(out, j).toMatch(/unexpected job key/);
     }
     expect(checkImageStructure(dockerfile(), "jobs: [")[0]).toMatch(/not parseable YAML/);
@@ -966,6 +1001,12 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
   it("an install step made conditional or non-blocking is not an install", () => {
     expect(checkCiLikec4Jobs(ci({ scripts: install("if: false") })).join("\n")).toMatch(/test-scripts must not be conditional or non-blocking/);
     expect(checkCiLikec4Jobs(ci({ webplat: install("continue-on-error: true") })).join("\n")).toMatch(/test-webplat must not be conditional/);
+  });
+
+  it("job-level if / continue-on-error on a job that carries the install is refused", () => {
+    const withJobKey = (key: string): string => ci().replace("  test-scripts:\n", `  test-scripts:\n    ${key}\n`);
+    expect(checkCiLikec4Jobs(withJobKey("if: false")).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(withJobKey("continue-on-error: true")).join("\n")).toMatch(/job test-scripts carries/);
   });
 
   it("a command that merely quotes the install in a comment is not a site", () => {
