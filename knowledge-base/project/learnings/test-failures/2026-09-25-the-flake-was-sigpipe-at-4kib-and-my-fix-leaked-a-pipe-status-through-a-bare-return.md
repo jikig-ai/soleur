@@ -113,4 +113,3 @@ Three more suites flaked through this mechanism on 2026-10-05, and two points sh
 SIGPIPE, or EPIPE rc 1 where SIGPIPE is ignored, as on the CI runner) that no line search over the test file can see; and
 a CI log showed `echo: write error: Broken pipe` for a few-KB `echo`, so the producer's size is not a bound. See
 `2026-10-05-a-reader-that-exits-early-flipped-three-suites-and-the-stub-had-to-read-too.md`.
-
