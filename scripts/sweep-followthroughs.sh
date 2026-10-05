@@ -717,6 +717,21 @@ $trimmed_out
         # Comment rather than reopen: 5 is "a human should look", not "the thing that
         # closed this regressed" (that is 1, above).
         action="comment"; verdict="ACTION REQUIRED"
+        # The body is set HERE, not left to the shared tail: this arm used to set only the action,
+        # so the tail expanded an unset body_msg (an unbound variable under set -u, with set -e
+        # suppressed by the caller's `|| fail`) and then reopened the issue anyway, because the
+        # reopen below ran for every action. A probe that exits 5 on a hand-closed tracker still
+        # carrying the label (the probe's own retirement path) was therefore reopened daily.
+        body_msg="### Sweeper run: ACTION REQUIRED (exit 5, $(date -u +%FT%TZ))
+Script: \`$script\` exited 5 on this CLOSED issue. Not reopening: 5 means a human should look. Remove the \`follow-through\` label to stop these comments.
+
+<details><summary>Output (last 4 KB)</summary>
+
+\`\`\`\`\`
+$trimmed_out
+\`\`\`\`\`
+
+</details>"
         ;;
       *)
         # TRANSIENT on a closed issue: no action AND no comment. A flaky probe
@@ -736,10 +751,11 @@ $trimmed_out
     fi
 
     printf '%s' "$body_msg" | gh issue comment "$issue_num" --repo "$REPO" --body-file -
+    # Only the reopen action reopens: exit 5 comments and leaves the issue closed.
     # A failed reopen is the ONLY failure surface for this path — surface it as
     # a workflow annotation rather than letting the caller's `|| fail` swallow
     # it into the log.
-    if ! gh issue reopen "$issue_num" --repo "$REPO"; then
+    if [[ "$action" == "reopen" ]] && ! gh issue reopen "$issue_num" --repo "$REPO"; then
       printf '::error::sweeper failed to reopen issue #%s (verification exits 1 but the issue stays closed)\n' "$issue_num"
       return 1
     fi
