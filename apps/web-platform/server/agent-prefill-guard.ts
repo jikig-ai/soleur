@@ -74,6 +74,19 @@ export interface ApplyPrefillGuardArgs {
    * the actual domain leader id.
    */
   leaderId?: string;
+  /**
+   * #9538 — when `true`, the `history.length === 0` branch drops
+   * `resume:` instead of passing it through, and returns the generic
+   * context-reset notice + `"prefill-guard"` reason so the caller's
+   * existing notice/WS wiring fires. Opt-in: the cc caller
+   * (`realSdkQueryFactory`) sets it because the cc path has no
+   * `messages`-replay primitive — a dead session resume crashes
+   * mid-stream (issue #9538) and cold-start-with-notice is strictly
+   * better. The legacy `agent-runner` caller omits it: its
+   * `.catch` stale-resume replay restores full `messages` history, so
+   * pass-through preserves context fidelity there.
+   */
+  dropResumeOnEmptyHistory?: boolean;
 }
 
 export interface ApplyPrefillGuardResult {
@@ -233,9 +246,8 @@ export async function applyPrefillGuard(
     // was emitted by the SDK on a prior turn, so an empty list means the
     // session file was rotated, deleted, or never persisted. (Since the
     // probe omits `dir` and searches all projects (#4852), a cwd-encoding
-    // mismatch can no longer produce this `[]`.) Pass `resume:` through
-    // (Anthropic accepts empty conversation + new user message) and emit a
-    // distinct op so a rising empty-history rate is observable.
+    // mismatch can no longer produce this `[]`.) Emit a distinct op so a
+    // rising empty-history rate is observable.
     warnSilentFallback(null, {
       feature: args.feature,
       op: "prefill-guard-empty-history",
@@ -243,6 +255,22 @@ export async function applyPrefillGuard(
         "Persisted session has zero messages — session file rotated, deleted, or never persisted",
       extra: baseExtra,
     });
+    // #9538 — dead-file premise: the "Anthropic accepts empty
+    // conversation + new user message" theory behind pass-through is
+    // wrong for this shape — the SDK dies mid-stream with `No
+    // conversation found with session ID` (#9538), which on the cc path
+    // wedges the conversation (see `soleur-go-runner.ts` ›
+    // `consumeStream`'s stale-resume arm). The cc caller opts into the
+    // drop; the legacy caller keeps pass-through because its `.catch`
+    // stale-resume replay restores full `messages` history — dropping
+    // `resume:` there would silently downgrade its context fidelity.
+    if (args.dropResumeOnEmptyHistory) {
+      return {
+        safeResumeSessionId: undefined,
+        contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC,
+        reason: "prefill-guard",
+      };
+    }
     return { safeResumeSessionId: args.resumeSessionId };
   }
 
