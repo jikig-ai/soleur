@@ -428,3 +428,9 @@ used the active worktree's file inventory. Oversized skill and status reads
 again truncated results: read bounded sections and print selected API fields,
 not entire response objects. Existing learning covers these visible errors;
 they do not warrant a new cross-cutting rule.
+
+The final check summary combined `gh api --paginate --slurp` with its native
+`--jq`, which this CLI rejects. Keep pagination and slurping in `gh api`, then
+pipe the resulting array to standalone `jq` under `set -o pipefail`. Group
+checks by app and name and select the largest check ID before counting current
+results; superseded cancellations are separate from the latest verdict.
