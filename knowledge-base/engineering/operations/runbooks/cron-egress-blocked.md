@@ -853,3 +853,68 @@ SSH:
    resolver could not confirm the jump or default-drop rule and re-ran the loader;
    the event's `extra` names the cause class (decode table under "Related signals"),
    so the live ruleset state is observable without logging in.
+
+### Egress gateway (Better Stack alerts)
+
+Two Terraform-managed native alerts over the Vector Logs source
+(`apps/web-platform/infra/betterstack-logs-alerts.tf`, `egress_gw_*`):
+
+#### `soleur-egress-gw-deny-spike-prd` (higher_than 20 / 300 s)
+
+**What it means.** Squid logged `TCP_DENIED` on `CONTAINER_NAME=soleur-egress-gw`
+more than 20 times in 5 minutes. During the PR-A dark launch the only legitimate
+deny traffic is the resolver's synthetic probe (~1 row per 5 min), so any
+sustained burst means a session (or a compromised forwarder) is attempting
+CONNECT to denied destination classes — metadata `169.254.0.0/16`, RFC1918,
+CGNAT, ULA, NAT64, 6to4.
+
+**Decode (no SSH).** Better Stack Logs query on the `prd` Logs source:
+
+```
+CONTAINER_NAME:soleur-egress-gw AND message:TCP_DENIED
+```
+
+Each row is the `soleur_json` logformat object: `requested_host`,
+`resolved_ip`, `workspace` (the `%un` attribution = workspaceId), `decision`,
+`decision_reason`. Group by `workspace` to name the offending tenant.
+
+**Revocation.** Session tokens are files under
+`/var/lib/soleur/egress-tokens/<token>` on the web host, mirrored into the app
+container (rw) and the gateway (ro). Deleting the token file revokes that
+session's gateway auth at the next CONNECT (instant for new connections).
+Revocation is a workspace-owner action — the app-side entitlement toggle
+deletes the file; if the spike names a workspace, the owner (or ops acting for
+them) flips **Settings → Agent web access** off.
+
+**What it is silent about.** Allowed-traffic abuse (volume/exfil over
+*permitted* CONNECTs — documented gap, spec open questions), and
+domain-fronting/SNI drift (Squid sees the CONNECT line only; the tunnel is
+opaque). Both are named residuals in the ADR.
+
+#### `soleur-egress-gw-probe-silent-prd` (lower_than 1 / 900 s)
+
+**What it means.** No `egress_gw_probe` row under
+`SYSLOG_IDENTIFIER=egress-gw-probe` for 15+ minutes. The heartbeat is emitted by
+`run_egress_gw_probe` in `cron-egress-resolve.sh` every 5 minutes. Absence
+means the resolver timer stopped, the journal→Vector pipeline broke, or the
+probe function errored — the gateway's live allow/deny verification is dark.
+
+**Decode ladder:**
+
+1. Sentry: look for a missed `cron-egress-resolve` check-in (the resolver's own
+   dead-timer detector) — if that also went dark, the timer is dead, not just
+   the probe.
+2. Sentry `op=egress_gw_probe_fail` events — if the probe was emitting
+   `result=fail`, the gateway is up but denying its own synthetic allow leg
+   (ACL or auth-helper drift) and silence followed = resolver stopped.
+3. If neither, query Better Stack for `SYSLOG_IDENTIFIER:cron-egress-resolve`
+   and `SYSLOG_IDENTIFIER:egress-gw-probe` — the former is not shipped at all
+   (deliberate; volume), so its absence proves nothing; only `egress-gw-probe`
+   rows are load-bearing here.
+
+**Repair.** The resolver is self-healing for *ruleset* drift only; a dead timer
+restores via `systemctl` on the next boot or the next `cron-egress-firewall`
+provisioner run — the repair path is the same as any dead resolver tick (see
+the `enforcement_missing` decode table above). A gateway container that is down
+is re-created by `egress-gateway-bootstrap.sh`, re-delivered by the
+`terraform_data.egress_gateway` provisioner on the next infra apply.

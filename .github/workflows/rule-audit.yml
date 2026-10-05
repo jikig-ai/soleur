@@ -368,6 +368,101 @@ jobs:
             exit 1
           fi
 
+      # DETECTION half of the egress-gateway Squid pin (#9534). Same two-condition
+      # split as the zot step: (1) offline staleness gate (committed files) +
+      # (2) live Docker Hub index-digest poll. One idempotent `egress-gw-pin-drift`
+      # + `action-required` issue; NEVER edits the pin.
+      - name: Detect egress-gw image drift
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          BS=apps/web-platform/infra/egress-gateway-bootstrap.sh
+          DRIFT=""; PROBLEMS=""
+
+          set +e
+          OUT="$(bash apps/web-platform/infra/egress-gw-image-staleness.test.sh 2>&1)"
+          RC=$?
+          set -e
+          if [ "$RC" -eq 2 ]; then
+            echo "egress-gw-image-staleness.test.sh reported DETECTOR FAILURE (rc=2); failing step." >&2
+            echo "$OUT" >&2
+            exit 2
+          elif [ "$RC" -ne 0 ] && [ "$RC" -ne 10 ] && [ "$RC" -ne 1 ]; then
+            echo "egress-gw-image-staleness.test.sh exited unexpectedly (rc=$RC); failing step." >&2
+            echo "$OUT" >&2
+            exit "$RC"
+          fi
+          [ "$RC" -eq 10 ] && DRIFT="stale"
+          if [ "$RC" -eq 1 ]; then
+            PROBLEMS="${PROBLEMS}- offline staleness gate FAILED (incoherence, not age; see output)."$'\n'
+          fi
+
+          # Anchored-ish parse: the digest literal only exists once (comment-free).
+          PINNED="$(grep -oE 'ubuntu/squid@sha256:[0-9a-f]{64}' "$BS" | head -1)"
+
+          set +e
+          T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ubuntu/squid:pull" | jq -r '.token // empty')"
+          LIVE="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer $T" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://registry-1.docker.io/v2/ubuntu/squid/manifests/latest" \
+            | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
+          POLL_RC=$?
+          set -e
+          if [ "$POLL_RC" -ne 0 ] || [ -z "$T" ] || [ -z "$LIVE" ]; then
+            PROBLEMS="${PROBLEMS}- upstream digest poll failed (rc=$POLL_RC); cannot tell whether we are behind."$'\n'
+          elif [ -z "$PINNED" ]; then
+            PROBLEMS="${PROBLEMS}- could not parse the pinned reference from $BS."$'\n'
+          elif [ "ubuntu/squid@$LIVE" != "$PINNED" ]; then
+            DRIFT="${DRIFT:+$DRIFT+}behind"
+          fi
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ]; then
+            echo "egress-gw pin is current ($PINNED)."
+            exit 0
+          fi
+
+          gh label create egress-gw-pin-drift --color FBCA04 \
+            --description "the egress gateway Squid image pin is stale or behind upstream (#9534)" \
+            --force >/dev/null 2>&1 || true
+          {
+            echo "The pinned egress-gateway Squid image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned | \`${PINNED:-unparsed}\` |"
+            echo "| Upstream \`latest\` index digest | \`${LIVE:-unavailable}\` |"
+            echo
+            if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
+            echo "Offline gate output:"
+            echo
+            echo '```'
+            echo "$OUT"
+            echo '```'
+            echo
+            echo "Remediation — follow \`## Re-pin procedure\` in"
+            echo "\`apps/web-platform/infra/egress-gw-image.provenance.md\`."
+            echo
+            echo "_Filed automatically by rule-audit.yml image-pin drift detection (#9534)._"
+          } > "$RUNNER_TEMP/egress-gw-drift-body.md"
+          EXISTING="$(gh issue list --label egress-gw-pin-drift --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/egress-gw-drift-body.md"
+            echo "Updated existing egress-gw-pin-drift issue #$EXISTING."
+          else
+            gh issue create --label egress-gw-pin-drift --label action-required \
+              --title "egress-gw-pin-drift: gateway Squid image pin needs attention" \
+              --body-file "$RUNNER_TEMP/egress-gw-drift-body.md"
+          fi
+
+          if [ -n "$PROBLEMS" ]; then
+            echo "one or more probes could not complete; see the filed issue." >&2
+            exit 1
+          fi
+
       # DETECTION half of the inngest CLI pin cadence (#7463 PR-B). Enforcement is
       # apps/web-platform/infra/inngest-cli-staleness.test.sh on deploy-script-tests
       # (per-PR, offline, 0 fresh / 10 drift / 2 detector-failure). This step is the

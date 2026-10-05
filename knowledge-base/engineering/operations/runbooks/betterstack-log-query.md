@@ -152,6 +152,18 @@ Live standing alarms over this source:
   is back. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
   `apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`. Decode, silent states and per-host repair:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert).
+- **`logtail_exploration_alert.egress_gw_deny_spike`** (#9534, `higher_than 20` over 300 s, missing
+  data counts as zero): `soleur-egress-gw-deny-spike-prd`. Pages on sustained Squid `TCP_DENIED`
+  volume from `CONTAINER_NAME=soleur-egress-gw` — the deny-class signal for sessions attempting
+  CONNECT to metadata/RFC1918/ULA destinations. Dark-launch baseline is ~1 row per 5-min probe pair,
+  so 20 clears only a real burst. Decode + revocation path:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
+- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, `lower_than 1` over 900 s, missing
+  data counts as zero): `soleur-egress-gw-probe-silent-prd`. Pages when the resolver's
+  `egress_gw_probe` heartbeat (`SYSLOG_IDENTIFIER=egress-gw-probe`, one row per 5 min) has been
+  absent for 15+ min — a dead timer or dead gateway can never read as green. Defined in
+  `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the

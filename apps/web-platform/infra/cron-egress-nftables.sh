@@ -45,6 +45,25 @@ if command -v docker >/dev/null && docker network inspect bridge >/dev/null 2>&1
   [[ "$V6" == "false" ]] || die "default bridge EnableIPv6=$V6 — IPv6 egress would bypass the v4 allowlist"
 fi
 
+# Egress gateway bridge (#9534): the opt-in open-web path lives on a second
+# bridge so it never enters the docker0-scoped SOLEUR-EGRESS jump. Three
+# placements (see plan §Proposed Solution): a docker0→gw accept here, a
+# DOCKER-USER reply accept + an egress0 jump into SOLEUR-EGRESS-GW below.
+EGRESS_BRIDGE_IF="${EGRESS_BRIDGE_IF:-soleur-egress0}"
+if command -v docker >/dev/null && docker network inspect "$EGRESS_BRIDGE_IF" >/dev/null 2>&1; then
+  V6E="$(docker network inspect "$EGRESS_BRIDGE_IF" -f '{{.EnableIPv6}}' 2>/dev/null || echo unknown)"
+  [[ "$V6E" == "false" ]] || die "$EGRESS_BRIDGE_IF EnableIPv6=$V6E — IPv6 would bypass the v4 gw deny set"
+fi
+
+# Gateway container IP: derived, never hardcoded — the bootstrap may
+# re-number the bridge subnet on collision. Absent container → no accept rule
+# (fail closed; the gateway itself is unreachable anyway).
+EGRESS_GW_IP=""
+if command -v docker >/dev/null; then
+  EGRESS_GW_IP="$(docker inspect soleur-egress-gw -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)"
+  [[ "$EGRESS_GW_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || EGRESS_GW_IP=""
+fi
+
 # Host-gateway address for the explicit Inngest :8288 accept. Derived, never
 # hardcoded (a daemon.json bip/default-address-pools change shifts it).
 BRIDGE_GW="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
@@ -110,6 +129,34 @@ if [[ -f "$CIDR_FILE" ]]; then
   done < "$CIDR_FILE"
 fi
 
+# Shared gateway DENY set (#9534): one file feeds this loader's nftables
+# drop AND the Squid `dst` ACL (parity pinned by egress-gateway.test.sh).
+# Deliberately NOT is_valid_ipv4_cidr — that validator rejects link-local,
+# which is exactly what a deny file must contain. Format+range only; `ip6`
+# lines are Squid-only (this table is `ip`); missing file dies loud — an
+# empty deny is an open internal network.
+DENY_CIDR_FILE="${DENY_CIDR_FILE:-/etc/soleur/egress-deny-cidrs.txt}"
+DENY_ELEMENTS=""
+is_valid_ipv4_cidr_format() {
+  local cidr="$1" prefix o1 o2 o3 o4 part
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  o1=${BASH_REMATCH[1]}; o2=${BASH_REMATCH[2]}; o3=${BASH_REMATCH[3]}
+  o4=${BASH_REMATCH[4]}; prefix=${BASH_REMATCH[5]}
+  for part in "$o1" "$o2" "$o3" "$o4" "$prefix"; do
+    [[ "$part" =~ ^0[0-9] ]] && return 1
+  done
+  (( o1 <= 255 && o2 <= 255 && o3 <= 255 && o4 <= 255 && prefix <= 32 )) || return 1
+  return 0
+}
+[[ -s "$DENY_CIDR_FILE" ]] || die "gateway deny file $DENY_CIDR_FILE missing/empty — an empty deny is an open internal network"
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ "$line" =~ ^[[:space:]]*(#|$|ip6[[:space:]]) ]] && continue
+  line="${line%%[[:space:]]#*}"
+  is_valid_ipv4_cidr_format "$line" \
+    || die "invalid CIDR in $DENY_CIDR_FILE: '$line' (reject-whole-file; refusing to build nft elements)"
+  DENY_ELEMENTS+="${DENY_ELEMENTS:+,}$line"
+done < "$DENY_CIDR_FILE"
+
 # --- Phase 1: declare table/sets/chains (additive, idempotent) -----------------
 # `nft -f` table declarations MERGE into existing state — safe to re-run.
 # DOCKER-USER is declared too so this works even before dockerd starts
@@ -126,7 +173,13 @@ table ip filter {
   set soleur_egress_dns {
     type ipv4_addr
   }
+  set soleur_egress_gw_deny {
+    type ipv4_addr
+    flags interval
+  }
   chain SOLEUR-EGRESS {
+  }
+  chain SOLEUR-EGRESS-GW {
   }
   chain DOCKER-USER {
   }
@@ -145,6 +198,14 @@ add element ip filter soleur_egress_allow_cidr { $CIDR_ELEMENTS }
 EOF
 fi
 
+# --- Phase 1.6: populate the shared gateway deny set (static, atomic) ----------
+if [[ -n "$DENY_ELEMENTS" ]]; then
+  nft -f - <<EOF
+flush set ip filter soleur_egress_gw_deny
+add element ip filter soleur_egress_gw_deny { $DENY_ELEMENTS }
+EOF
+fi
+
 # --- Phase 2: populate the sets BEFORE any drop rule exists --------------------
 # CRON_EGRESS_FROM_LOADER=1 suppresses the resolver's enforcement self-heal
 # (the rules are legitimately absent at this point — that's the availability
@@ -152,6 +213,13 @@ fi
 CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT" || die "allowlist resolution failed — NOT installing default-drop (fail-open bootstrap; OnFailure alarms)"
 
 # --- Phase 3: (re)install our rules atomically ----------------------------------
+# Gateway forward accept — interpolated ONLY when the gw container exists and
+# its IP derived (empty line is a harmless blank in the nft script). It sits
+# after the CIDR allowlist and before the default-drop pair.
+GW_ACCEPT_LINE=""
+if [[ -n "$EGRESS_GW_IP" ]]; then
+  GW_ACCEPT_LINE='add rule ip filter SOLEUR-EGRESS ip daddr $EGRESS_GW_IP tcp dport 8443 accept comment "soleur-egress: egress gateway (#9534)"'
+fi
 # One transaction: flush OUR chain + add the ordered rules. First-match-wins,
 # drop LAST. Everything in this chain arrived via the iifname-scoped jump, so
 # per-rule iifname repeats are unnecessary. The link-local drop (instance metadata,
@@ -182,8 +250,20 @@ add rule ip filter SOLEUR-EGRESS ip daddr $BRIDGE_GW tcp dport 8288 accept comme
 add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.40 tcp dport 8288 accept comment "soleur-egress: dedicated inngest host (#6178)"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow accept comment "soleur-egress: allowlist"
 add rule ip filter SOLEUR-EGRESS ip daddr @soleur_egress_allow_cidr accept comment "soleur-egress: cidr allowlist (github git LB ranges)"
+$GW_ACCEPT_LINE
 add rule ip filter SOLEUR-EGRESS limit rate 10/minute burst 50 packets log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"
 add rule ip filter SOLEUR-EGRESS counter drop comment "soleur-egress: default drop"
+EOF
+
+# --- Phase 3.5: (re)install the gateway deny chain atomically -------------------
+# Every deny is `ct state new`-scoped: the same chain's packets include gw→docker0
+# REPLIES (docker0's 172.17.0.0/16 is inside the deny set's 172.16/12) — an
+# unscoped drop would sever the very tunnel it protects. NEW gw→docker0 dials
+# still die (the one-way invariant), because cold opens are `new`.
+nft -f - <<EOF
+flush chain ip filter SOLEUR-EGRESS-GW
+add rule ip filter SOLEUR-EGRESS-GW ct state new ip daddr @soleur_egress_gw_deny limit rate 10/minute burst 50 packets log prefix "egress-gw-deny: " level notice comment "soleur-egress-gw: deny log"
+add rule ip filter SOLEUR-EGRESS-GW ct state new ip daddr @soleur_egress_gw_deny counter drop comment "soleur-egress-gw: deny drop"
 EOF
 
 # --- Phase 4: ensure the single DOCKER-USER jump exists -------------------------
@@ -209,6 +289,24 @@ fi
 if [[ ! "$docker_user_rules" =~ $jump_re ]]; then
   nft insert rule ip filter DOCKER-USER iifname "$BRIDGE_IF" counter jump SOLEUR-EGRESS comment '"soleur-egress: jump"'
   log "installed DOCKER-USER jump rule"
+fi
+
+# --- Phase 4.5: egress-gateway legs at DOCKER-USER (#9534) -----------------------
+# DOCKER-USER evaluates BEFORE DOCKER-ISOLATION-STAGE-2 in FORWARD, so both legs
+# live here. Order is append-sequential: the REPLY accept precedes the egress0
+# jump so established/related gw→docker0 packets (tunnel replies — docker0's
+# 172.17.0.0/16 is inside the deny set) never even reach the `ct state new`
+# denies. NEW gw→docker0 dials fall into SOLEUR-EGRESS-GW and die against the
+# RFC1918 ranges — the one-way property.
+reply_re='iifname "soleur-egress0" oifname "docker0" ct state established,related accept'
+gwyjump_re='jump[[:space:]]+SOLEUR-EGRESS-GW([[:space:]]|$)'
+if [[ ! "$docker_user_rules" =~ $reply_re ]]; then
+  nft add rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" oifname "$BRIDGE_IF" ct state established,related accept comment '"soleur-egress: gw reply traffic (#9534)"'
+  log "installed DOCKER-USER gw reply accept"
+fi
+if [[ ! "$docker_user_rules" =~ $gwyjump_re ]]; then
+  nft add rule ip filter DOCKER-USER iifname "$EGRESS_BRIDGE_IF" counter jump SOLEUR-EGRESS-GW comment '"soleur-egress: egress0 jump"'
+  log "installed DOCKER-USER egress0 jump"
 fi
 
 log "OK: SOLEUR-EGRESS active (bridge=$BRIDGE_IF gw=$BRIDGE_GW)"

@@ -3822,6 +3822,7 @@ case "$COMPONENT" in
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+      -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
       -p 0.0.0.0:3001:3000 \
       "$VERIFIED_REF"
 
@@ -4154,6 +4155,7 @@ case "$COMPONENT" in
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
+        -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:3000:3000 \
         "$VERIFIED_REF"; then

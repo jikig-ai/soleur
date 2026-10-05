@@ -53,6 +53,11 @@ infra/
 !infra/cron-egress-resolve.timer
 !infra/cron-egress-alarm@.service
 !infra/cron-egress-postapply-assert.sh
+!infra/egress-gateway-squid.conf
+!infra/egress-auth-helper.sh
+!infra/egress-deny-cidrs.txt
+!infra/egress-gateway-bootstrap.sh
+!infra/egress-forwarder.mjs
 !infra/cron-egress-enforce-probe.sh
 !infra/hooks.json.tmpl
 !infra/journald-soleur.conf

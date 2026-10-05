@@ -710,6 +710,10 @@ jobs:
               -target=logtail_exploration_alert.bwrap_probe_rollback \
               -target=logtail_exploration.ghcr_hostsfile_deny_lost \
               -target=logtail_exploration_alert.ghcr_hostsfile_deny_lost \
+              -target=logtail_exploration.egress_gw_deny_spike \
+              -target=logtail_exploration_alert.egress_gw_deny_spike \
+              -target=logtail_exploration.egress_gw_probe_silent \
+              -target=logtail_exploration_alert.egress_gw_probe_silent \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=supabase_project.prd
@@ -1197,7 +1201,8 @@ jobs:
               -target=terraform_data.web_1_host_key_probe \
               -target=terraform_data.luks_monitor_token_install \
               -target=terraform_data.luks_monitor_install \
-              -target=terraform_data.workspaces_boot_unlock_install
+              -target=terraform_data.workspaces_boot_unlock_install \
+              -target=terraform_data.egress_gateway
 
       # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
       # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the

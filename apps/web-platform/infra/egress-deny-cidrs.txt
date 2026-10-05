@@ -1,0 +1,29 @@
+# Shared egress deny set — SINGLE SOURCE for the Squid `dst` ACL AND the
+# nftables SOLEUR-EGRESS-GW drop (#9534 / feat-open-web-egress).
+#
+# The gateway's CONNECT targets must never reach private/reserved space:
+# container bridges (docker0's 172.17.0.0/16 lives inside 172.16/12), the
+# cluster-private network (10.0.1.0/24 — inside 10/8), and the instance
+# metadata endpoint 169.254.169.254 (cloud-init user_data carries a Doppler
+# read token, #9378).
+#
+# Format: one CIDR per line, `#` comments, `ip6 ` prefix for IPv6 lines.
+# The nftables loader installs only the bare IPv4 lines (table ip filter);
+# the `ip6` lines exist for the Squid ACL render (dns_v4_first still applies
+# upstream). Parity is enforced by egress-gateway.test.sh.
+10.0.0.0/8        # RFC1918 (incl. cluster-private 10.0.1.0/24)
+172.16.0.0/12     # RFC1918 (incl. docker0 172.17.0.0/16 + soleur-egress0)
+192.168.0.0/16    # RFC1918
+100.64.0.0/10     # CGNAT
+169.254.0.0/16    # link-local (instance metadata, #9378)
+127.0.0.0/8       # loopback
+0.0.0.0/8         # "this host" source range
+224.0.0.0/4       # multicast
+240.0.0.0/4       # reserved (incl. 255.255.255.255)
+ip6 fc00::/7      # ULA
+ip6 fe80::/10     # v6 link-local
+ip6 ::1/128       # v6 loopback
+ip6 ::/128        # v6 unspecified
+ip6 ::ffff:0.0.0.0/96  # v4-mapped v6
+ip6 64:ff9b::/96  # NAT64 well-known prefix
+ip6 2002::/16     # 6to4
