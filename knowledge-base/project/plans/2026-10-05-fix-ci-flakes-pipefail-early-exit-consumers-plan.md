@@ -537,35 +537,35 @@ which review sees. No stored expectation sits outside the diff; that is the acce
 
 ### Phase 0: measure RED first (informational)
 
-- [ ] 0.1 Informational baseline on the unfixed tree for the reap suite only (cron never reproduced locally, 0 of
+- [x] 0.1 (measured during planning, not re-run in work) Informational baseline on the unfixed tree for the reap suite only (cron never reproduced locally, 0 of
   6,000): `for i in $(seq 1 24); do env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE bash <reap suite> > "$S/b$i" 2>&1 & done; wait`
   and count suites with a `FAIL:` line (measured: 3 of 24; 9 of 56). The `env -u` matters: the suite exits 97 on
   an inherited git-location variable, which would record 24 FATALs and read as zero reproductions.
-- [ ] 0.2 Re-run the luks race demonstration (extract the `reassert` step with `python3 -c yaml`, delay the
+- [x] 0.2 (the race rows now reproduce it deterministically: probe rc=1, unavailable/unparsed) Re-run the luks race demonstration (extract the `reassert` step with `python3 -c yaml`, delay the
   producer, run with the suite's non-draining stub) and record `unavailable unparsed` and the non-zero probe rc.
 
 ### Phase 1: fixes (one commit per suite; floor bump with its rows)
 
-- [ ] 1.1 `reap-archive-persistence.test.sh`: 11 sites, `grep -q X < <(producer)`.
-- [ ] 1.2 `cron-egress-firewall.test.sh`: 33 sites; throwaway inverse diff on changed lines only (33 segments;
+- [x] 1.1 `reap-archive-persistence.test.sh`: 11 sites, `grep -q X < <(producer)`.
+- [x] 1.2 `cron-egress-firewall.test.sh`: 33 sites; throwaway inverse diff on changed lines only (33 segments;
   34 here-string sites and 0 pipe-fed after) plus the discriminating census-flip row.
-- [ ] 1.3 `workspaces-luks-verify-workflow.test.sh`: `</dev/null` in `drive`, probe-arm drain,
+- [x] 1.3 `workspaces-luks-verify-workflow.test.sh`: `</dev/null` in `drive`, probe-arm drain,
   `FIXTURE_NO_DRAIN` plumbing, line 722, `slow_printf` helper and two rows, exact floor in the same commit.
-- [ ] 1.4 Guard: header correction FIRST, then `FILES_7376`, dedicated scan function, probe additions;
+- [x] 1.4 Guard: header correction FIRST, then `FILES_7376`, dedicated scan function, probe additions;
   affected-paths block by hand; `bash scripts/lint-orphan-test-suites.sh`.
-- [ ] 1.5 Ratchets: `bash plugins/soleur/test/fixture-relative-assert.test.sh`, the trap-ownership lint, and
+- [x] 1.5 Ratchets: `bash plugins/soleur/test/fixture-relative-assert.test.sh`, the trap-ownership lint, and
   shellcheck on the three edited suites; fix or explain every delta.
 
 ### Phase 2: mutation checks (assert each mutation LANDED with `cmp` / `git diff --numstat`; working tree clean after)
 
-- [ ] 2.1 Guard 1 rows 1-4 and Guard 2 rows 1-5; paste the load-bearing three in the PR body.
-- [ ] 2.2 Label any surviving mutant: fixtures do not exercise it, or equivalent (proved).
+- [x] 2.1 Guard 1 rows 1-4 and Guard 2 rows 1-5; paste the load-bearing three in the PR body.
+- [x] 2.2 Label any surviving mutant: fixtures do not exercise it, or equivalent (proved).
 
 ### Phase 3: verification
 
-- [ ] 3.1 The three suites green serially (cron 308/0, reap 45/0, luks 313 plus the new rows / 0).
-- [ ] 3.2 Informational: reap and luks loaded runs after the fix (record counts).
-- [ ] 3.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh` green; `bash scripts/test-affected-derive.test.sh` green;
+- [x] 3.1 The three suites green serially (cron 308/0, reap 45/0, luks 313 plus the new rows / 0).
+- [x] 3.2 Informational: reap and luks loaded runs after the fix (record counts).
+- [x] 3.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh` green; `bash scripts/test-affected-derive.test.sh` green;
   `python3 scripts/lint-guard-contract.py` green on this plan.
 - [ ] 3.4 Open the DRAFT PR. Treat its first Infra Validation and `test-scripts` runs (the legs the suites
   actually run in; local serial runs do not reproduce their contention) as the verification gate.
@@ -588,30 +588,31 @@ which review sees. No stored expectation sits outside the diff; that is the acce
 
 ### Functional
 
-- [ ] The three suites contain zero pipe-fed early-exit greps: `bash .claude/hooks/grep-q-pipe-guard.test.sh`
+- [x] The three suites contain zero pipe-fed early-exit greps: `bash .claude/hooks/grep-q-pipe-guard.test.sh`
   exits 0 and prints `PASS: grep-q-zero-7376-pass`.
-- [ ] Assertion counts are unchanged except for the new rows: cron 308 passed / 0 failed, reap 45 / 0, luks
+- [x] Assertion counts are unchanged except for the new rows: cron 308 passed / 0 failed, reap 45 / 0, luks
   313 plus the two race rows / 0, and `WF_MIN_ASSERTIONS` equals the new green count exactly.
-- [ ] `drive()` runs the body with `</dev/null`; the suite finishes when started as `sleep 20 | timeout 8 bash <suite>`
+- [x] `drive()` runs the body with `</dev/null`; the suite finishes when started as `sleep 20 | timeout 8 bash <suite>`
   (no hang).
-- [ ] The luks race rows are RED against the pre-fix stub (row 1 fails with `unavailable/unparsed`) and GREEN
+- [x] The luks race rows are RED against the pre-fix stub (row 1 fails with `unavailable/unparsed`) and GREEN
   after: row 1 classifies `selftest` and row 2 (`FIXTURE_NO_DRAIN=1`) classifies `unavailable/unparsed` with a
   probe rc outside {0,3,127,255}, both under `(trap '' PIPE; …)`.
-- [ ] Cron conversion: the inverse transform over the changed lines shows exactly 33 changed segments; after the
-  change the file has 34 here-string `grep -q` sites and 0 pipe-fed ones; flipping the `m$k` census pattern in a
+- [x] Cron conversion: the inverse transform over the changed lines shows exactly 33 changed segments; after the
+  change the file has 35 here-string `grep -q` sites (33 converted plus 2 that were already here-strings; the
+  "34" first written here was off by one) and 0 pipe-fed ones; flipping the `m$k` census pattern in a
   sandbox turns the suite RED.
-- [ ] Informational, recorded in the PR body and NOT a gate (the rates are probabilistic: 3/24 and 9/56 on the
+- [x] Informational, recorded in the PR body and NOT a gate (the rates are probabilistic: 3/24 and 9/56 on the
   unfixed tree): reap-suite loaded runs before and after. The deterministic gates are the luks race rows, the
   guard and the mutation rows.
 
 ### Guard / quality gates
 
-- [ ] Every Guard 1 and Guard 2 mutation row was executed and went RED (the load-bearing three pasted in the PR
+- [x] Every Guard 1 and Guard 2 mutation row was executed and went RED (the load-bearing three pasted in the PR
   body); each mutation was proved to have landed; any survivor is labelled.
-- [ ] `python3 scripts/lint-guard-contract.py` passes on this plan; `bash scripts/lint-orphan-test-suites.sh`,
+- [x] `python3 scripts/lint-guard-contract.py` passes on this plan; `bash scripts/lint-orphan-test-suites.sh`,
   `bash plugins/soleur/test/fixture-relative-assert.test.sh`, the trap-ownership lint and shellcheck pass on the
   edited files.
-- [ ] No change under `infra/github/**`; ADR-270 file untouched (`git diff --stat` shows neither).
+- [x] No change under `infra/github/**`; ADR-270 file untouched (`git diff --stat` shows neither).
 - [ ] PR body uses `Ref #7376`, `Ref #7432` and `Ref #9217` (no `Closes`; #7005 and #6601 are cross-linked in
   comments only).
 - [ ] Tracker comments posted after the PR's Infra Validation and `test-scripts` legs are green; no new GitHub
