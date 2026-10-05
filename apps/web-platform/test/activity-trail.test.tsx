@@ -187,3 +187,80 @@ describe("MessageBubble — consolidated working box", () => {
     expect(screen.getByText("Triage open pull requests")).toBeInTheDocument();
   });
 });
+
+// #9515 follow-up — the current step is the prominent text in the box
+// (operator review 2026-10-05): the generic dots move to the trail's tail
+// and the live label takes the body slot when no content streams yet.
+describe("live step prominence (body/trail swap)", () => {
+  it("thinking bubble shows the live label in the body, dots at trail tail", async () => {
+    const { MessageBubble } = await import(
+      "@/components/chat/message-bubble"
+    );
+    const { getAllByTestId, getByTestId, queryByTestId } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        leaderId="cc_router"
+        messageState="thinking"
+        toolLabel="Managing worktrees"
+        activity={[{ label: "Inspecting the repository", kind: "tool", startedAt: Date.now() - 5000 }]}
+      />,
+    );
+    const bodyLines = getAllByTestId("live-narration");
+    expect(bodyLines).toHaveLength(1);
+    expect(bodyLines[0].textContent).toContain("Managing worktrees");
+    expect(getByTestId("trail-working-dots")).toBeTruthy();
+    expect(queryByTestId("thinking-dots")).toBeNull();
+  });
+
+  it("streaming bubble keeps content in body and the live line in the trail", async () => {
+    const { MessageBubble } = await import(
+      "@/components/chat/message-bubble"
+    );
+    const { getByTestId, queryByTestId, container } = render(
+      <MessageBubble
+        role="assistant"
+        content="Drafting the reply…"
+        leaderId="cc_router"
+        messageState="streaming"
+        toolLabel="Managing worktrees"
+      />,
+    );
+    expect(container.textContent).toContain("Drafting the reply…");
+    expect(getByTestId("live-narration").textContent).toContain("Managing worktrees");
+    expect(queryByTestId("trail-working-dots")).toBeNull();
+  });
+
+  it("no live step → dots stay in the body (fallback unchanged)", async () => {
+    const { MessageBubble } = await import(
+      "@/components/chat/message-bubble"
+    );
+    const { getByTestId, queryByTestId } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        leaderId="cc_router"
+        messageState="thinking"
+      />,
+    );
+    expect(getByTestId("thinking-dots")).toBeTruthy();
+    expect(queryByTestId("live-narration")).toBeNull();
+  });
+
+  it("liveNarration wins over toolLabel in the body slot", async () => {
+    const { MessageBubble } = await import(
+      "@/components/chat/message-bubble"
+    );
+    const { getByTestId } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        leaderId="cc_router"
+        messageState="tool_use"
+        toolLabel="Managing worktrees"
+        liveNarration="Checking the two surfaces"
+      />,
+    );
+    expect(getByTestId("live-narration").textContent).toContain("Checking the two surfaces");
+  });
+});
