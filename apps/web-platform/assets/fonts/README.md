@@ -3,7 +3,7 @@
 `inter-latin-wght.woff2`: Inter variable font, latin subset only (weights 100 to 900 in one file). Google Fonts path version v20; the font's own version is 4.001.
 
 - Source: `https://fonts.gstatic.com/s/inter/v20/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2`
-- Licence: SIL Open Font License 1.1, copyright The Inter Project Authors; the full notice travels with the font in `LICENSE.txt`.
+- Licence: SIL Open Font License 1.1, copyright The Inter Project Authors; the full notice travels with the vendored source file in `LICENSE.txt` (the served font also carries the copyright and licence URL in its name table).
 - sha256: `3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62` (48,256 bytes)
 - Regenerate: download the URL above and compare the sha256.
 - Loaded by `app/fonts.ts` through `next/font/local`; `test/no-network-fonts.test.ts` forbids the network font loader.

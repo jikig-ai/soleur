@@ -556,8 +556,8 @@ run_cleanup "$CLONE_G" "$OUT_G"
 # Restore perms before assertions (and so the EXIT trap's rm -rf can clean up).
 chmod -R u+w "$CLONE_G" 2>/dev/null || true
 
-# One failure of fixture G was seen under shard contention with no diagnostics
-# beyond the assertion text (cause unproven, #7376 class). $OUT_G
+# One failure of fixture G was seen under shard contention with at most five marker
+# lines on its first arm and nothing on the other two (cause unproven, #7376 class). $OUT_G
 # lives under $TMP and the EXIT trap deletes it, so inline everything a reader
 # needs to tell a STAGED outcome from a COMMITTED one from a hook failure,
 # flattened to one line.
@@ -590,8 +590,8 @@ fi
 # The diagnostic only runs inside the three failure arms above, so nothing else
 # exercises it: pin that it still emits every field a reader needs.
 G_DIAG_OUT="$(g_diag)"
-if [[ "$G_DIAG_OUT" == *"markers=["*"] tail20=["*"] status=["*"] log=["*"]" ]]; then
-  pass "G: failure diagnostic carries markers, tail20, status and log"
+if [[ "$G_DIAG_OUT" == *"markers=["*"SOLEUR_REAP_ARCHIVE_DEFERRED"*"] tail20=["*"] status=["*"] log=["*"chore(archive-kb)"*"]" ]]; then
+  pass "G: failure diagnostic carries the DEFERRED marker, tail20, status and the archive commit in log"
 else
   fail "G: failure diagnostic is missing a field: $G_DIAG_OUT"
 fi

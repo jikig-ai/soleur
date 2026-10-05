@@ -39,18 +39,26 @@ describe("playwright dev servers use distinct dist directories", () => {
   // — measured: a third entry spelled `npm run dev:mock` was invisible to it, and its
   // undercount exactly cancelled the missing declaration, leaving the suite green.
   const webServerBlock = playwright.slice(playwright.indexOf("webServer:"));
-  const webServers = (webServerBlock.match(/^\s*(?:port|url):\s/gm) ?? []).length;
-  const webServerCommands = (webServerBlock.match(/^\s*command:\s/gm) ?? []).length;
+  // Unanchored on purpose: a single-line entry (`{ command: ..., url: ... }`) must count too.
+  const webServers = (webServerBlock.match(/\b(?:port|url):\s/g) ?? []).length;
+  const webServerCommands = (webServerBlock.match(/\bcommand:\s/g) ?? []).length;
+  // One segment per webServer entry (text after each `command:`), so per-entry properties
+  // are asserted per entry rather than counted across the whole block.
+  const entries = webServerBlock.split(/\bcommand:\s/).slice(1);
 
   it("polls /login for readiness on both servers, with a budget that covers the cold compile", () => {
     // `port:` is a TCP check: a server whose first compile 5xx's counts as ready and the
     // suite then fails one test at a time (64 reds, ~14 min). `url:` treats a 5xx as not
     // ready. Reverting either entry, or pointing it at a path that is not `/login`
     // (which renders app/layout.tsx), must turn this red.
-    expect(playwright).toMatch(/^\s*url:\s*`http:\/\/localhost:\$\{PUBLIC_PORT\}\/login`,/m);
-    expect(playwright).toMatch(/^\s*url:\s*`http:\/\/localhost:\$\{AUTH_PORT\}\/login`,/m);
-    expect(webServerBlock).not.toMatch(/^\s*port:\s/m);
-    expect(webServerBlock.match(/^\s*timeout:\s*180_000,/gm) ?? []).toHaveLength(2);
+    expect(entries).toHaveLength(2);
+    const [pub, auth] = entries;
+    expect(pub).toMatch(/\burl:\s*`http:\/\/localhost:\$\{PUBLIC_PORT\}\/login`/);
+    expect(auth).toMatch(/\burl:\s*`http:\/\/localhost:\$\{AUTH_PORT\}\/login`/);
+    for (const entry of entries) {
+      expect(entry, "an entry must not fall back to a TCP port check").not.toMatch(/\bport:\s/);
+      expect(entry, "every entry needs the 180s readiness budget").toMatch(/\btimeout:\s*180_000\b/);
+    }
   });
 
   it("declares one NEXT_DIST_DIR per webServer entry", () => {

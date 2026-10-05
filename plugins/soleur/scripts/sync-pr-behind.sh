@@ -211,7 +211,8 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 # dq_candidate <marker> — 0 iff QS_OUT reads the PR out of the queue and OPEN AND it either was seen queued (the
 # marker, per worktree git dir) or has a CURRENT removal event. Auto-merge state is NOT consulted: after a failed
-# merge_group run it stays armed (measured 2026-10-05, #9482) and GitHub may re-queue the PR, and a removed PR must be reported whether or not it is still armed. Only a PR with
+# merge_group run it stays armed (measured 2026-10-05, #9482, two PRs) and GitHub may re-queue the PR, and a
+# removed PR must be reported whether or not it is still armed. Only a PR with
 # neither marker nor event keeps the old reading (not queued yet, or a push dequeued it and it re-enqueues itself).
 dq_candidate() {
   local v st am rm

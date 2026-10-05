@@ -1,8 +1,8 @@
 /**
  * Guard: no build-time network font fetch (merge-queue slow-failures work, Ref #9482).
  *
- * `next/font/google` resolves the font loader (a network fetch, suspected as the
- * transient cause, #8785) inside the compile of `app/layout.tsx`. When that fails the
+ * `next/font/google` resolves its font loader inside the compile of `app/layout.tsx`
+ * (Turbopack could not resolve it, same signature as #8785; cause unproven). When that fails the
  * first compile of the authenticated e2e dev server 5xx's, and every authenticated
  * test then fails one by one (64 reds in about 14 min instead of about 3). The font is
  * vendored under `assets/fonts/` and loaded through `next/font/local`; this suite keeps
@@ -10,9 +10,10 @@
  *
  * Property: no source file under apps/web-platform imports `next/font/google` or
  * names fonts.googleapis.com / fonts.gstatic.com, the one required vendored asset
- * exists, starts with the WOFF2 magic and is non-empty, and `app/fonts.ts` points at
- * it. It does NOT prove the asset is untampered: its hash is recorded only in
- * assets/fonts/README.md (a truncated file fails `next build` and e2e).
+ * exists, starts with the WOFF2 magic, matches the sha256 recorded in
+ * assets/fonts/README.md, and `app/fonts.ts` points at it. The hash and the README live in
+ * the same PR, so this catches an accidental truncation or swap, not a deliberate edit of
+ * both.
  *
  * The scan reads raw text on purpose (no comment stripping): a comment that names the
  * host is also a hit, which keeps the rule trivially explainable.
@@ -35,7 +36,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { gitCleanEnv } from "../../../plugins/soleur/test/lib/git-clean-env";
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
+import { stripComments } from "./helpers/strip-comments";
 
 const APP_ROOT = join(__dirname, "..");
 const SELF = "test/no-network-fonts.test.ts";
@@ -56,7 +61,7 @@ const SWEPT_EXTENSIONS = new Set([
 // Ignored by path SEGMENT, never by substring.
 const IGNORED_SEGMENTS = new Set(["node_modules", ".next"]);
 const REQUIRED_ASSETS = ["assets/fonts/inter-latin-wght.woff2"];
-// 2,304 files measured on 2026-10-05 across SWEPT_EXTENSIONS under apps/web-platform.
+// 2,307 files measured on 2026-10-05 across SWEPT_EXTENSIONS under apps/web-platform.
 const MIN_FILES = 1_500;
 
 const FORBIDDEN =
@@ -65,16 +70,20 @@ const FORBIDDEN =
 type Enumerator = (root: string) => string[];
 
 // An inherited GIT_DIR / GIT_INDEX_FILE (a hook environment) would point git at the
-// caller's repository instead of `root`, so strip the whole GIT_ prefix.
-const GIT_FREE_ENV = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")),
-) as NodeJS.ProcessEnv;
+// caller's repository instead of `root`. gitCleanEnv() strips the whole GIT_ prefix at
+// CALL time; NODE_ENV is re-stated because Next requires it on NodeJS.ProcessEnv and tsc
+// cannot see that the helper's copy already carries it (same shape as
+// test/cla-evidence/roster-entry-gate.test.ts).
+const cleanGitEnv = (): NodeJS.ProcessEnv => ({
+  ...gitCleanEnv(),
+  NODE_ENV: process.env.NODE_ENV,
+});
 
 function enumerateGit(root: string): string[] {
   return execFileSync(
     "git",
-    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-    { cwd: root, maxBuffer: 64 * 1024 * 1024, env: GIT_FREE_ENV },
+    ["-c", "core.excludesFile=/dev/null", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { cwd: root, maxBuffer: 64 * 1024 * 1024, env: cleanGitEnv() },
   )
     .toString("utf8")
     .split("\0")
@@ -142,6 +151,19 @@ function sweep(root: string, enumerate: Enumerator, opts: SweepOptions): number 
   return scanned;
 }
 
+/** Throws unless the vendored asset hashes to the sha256 its README records. */
+function assertAssetMatchesReadme(root: string, asset: string): void {
+  const readmePath = join(root, dirname(asset), "README.md");
+  const m = existsSync(readmePath)
+    ? /sha256:\s*`([0-9a-f]{64})`/.exec(readFileSync(readmePath, "utf8"))
+    : null;
+  if (!m) throw new Error(`${readmePath}: no sha256 line for ${asset}`);
+  const actual = createHash("sha256").update(readFileSync(join(root, asset))).digest("hex");
+  if (actual !== m[1]) {
+    throw new Error(`${asset}: sha256 ${actual} does not match the README (${m[1]})`);
+  }
+}
+
 function tree(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "no-network-fonts-"));
   for (const [rel, content] of Object.entries(files)) {
@@ -165,6 +187,9 @@ describe("no build-time network font fetch", () => {
       requiredAssets: REQUIRED_ASSETS,
     });
     expect(scanned).toBeGreaterThanOrEqual(MIN_FILES);
+    for (const asset of REQUIRED_ASSETS) {
+      expect(() => assertAssetMatchesReadme(APP_ROOT, asset)).not.toThrow();
+    }
   });
 
   describe("mutation rows (synthesized tree)", () => {
@@ -290,17 +315,64 @@ describe("no build-time network font fetch", () => {
       });
     }
 
-    // Every top-level directory the real tree sweeps must contribute: ignoring
-    // a whole directory (server/, e2e/, hooks/, ...) must not hide behind the floor's headroom.
-    it("each top-level source directory contributes scanned files in the real tree", () => {
-      const tops = new Set(
-        enumerateGit(APP_ROOT)
-          .filter(isSwept)
-          .map((rel) => rel.split(sep)[0])
-          .filter((seg) => seg.length > 0),
-      );
-      for (const dir of ["app", "components", "lib", "server", "e2e", "test", "hooks", "scripts"]) {
+    // Every top-level directory the real tree sweeps must contribute, plus the root-level
+    // config files: ignoring a whole directory (server/, public/, supabase/ ...) or the
+    // root files must not hide behind the floor's headroom.
+    it("each top-level source directory and the root config files contribute in the real tree", () => {
+      const swept = enumerateGit(APP_ROOT).filter(isSwept);
+      const tops = new Set(swept.map((rel) => rel.split(sep)[0]));
+      for (const dir of [
+        "app", "components", "lib", "server", "e2e", "test", "hooks", "scripts",
+        "public", "supabase",
+      ]) {
         expect(tops.has(dir), `${dir}/ contributed no swept file`).toBe(true);
+      }
+      for (const file of ["next.config.ts", "middleware.ts", "instrumentation.ts"]) {
+        expect(swept, `${file} was not swept`).toContain(file);
+      }
+    });
+
+    it("the vendored asset must match the sha256 its README records", () => {
+      const ok = tree({
+        "assets/fonts/inter-latin-wght.woff2": "wOF2-fixture",
+        "assets/fonts/README.md": `- sha256: \`${createHash("sha256").update("wOF2-fixture").digest("hex")}\`\n`,
+      });
+      const bad = tree({
+        "assets/fonts/inter-latin-wght.woff2": "wOF2-fixture-truncated",
+        "assets/fonts/README.md": `- sha256: \`${createHash("sha256").update("wOF2-fixture").digest("hex")}\`\n`,
+      });
+      const none = tree({
+        "assets/fonts/inter-latin-wght.woff2": "wOF2-fixture",
+        "assets/fonts/README.md": "no hash recorded here\n",
+      });
+      try {
+        const asset = "assets/fonts/inter-latin-wght.woff2";
+        expect(() => assertAssetMatchesReadme(ok, asset)).not.toThrow();
+        expect(() => assertAssetMatchesReadme(bad, asset)).toThrow(/does not match the README/);
+        expect(() => assertAssetMatchesReadme(none, asset)).toThrow(/no sha256 line/);
+      } finally {
+        for (const r of [ok, bad, none]) rmSync(r, { recursive: true, force: true });
+      }
+    });
+
+    it("segments are ignored by exact name, never by substring", () => {
+      const skipped = tree({
+        "app/fonts.ts": LOCAL_FONT,
+        ".next/x.js": `require("next/font/google");\n`,
+        ...ASSET,
+      });
+      const found = tree({
+        "app/fonts.ts": LOCAL_FONT,
+        "lib/.nextra/x.ts": `import { Inter } from "next/font/google";\n`,
+        ...ASSET,
+      });
+      try {
+        expect(sweep(skipped, enumerateWalk, FIXTURE_OPTS)).toBe(1);
+        expect(() => sweep(found, enumerateWalk, FIXTURE_OPTS)).toThrow(
+          /lib\/\.nextra\/x\.ts: network font reference/,
+        );
+      } finally {
+        for (const r of [skipped, found]) rmSync(r, { recursive: true, force: true });
       }
     });
 
@@ -342,7 +414,7 @@ describe("no build-time network font fetch", () => {
         ...ASSET,
       });
       try {
-        execFileSync("git", ["init", "-q"], { cwd: root, env: GIT_FREE_ENV });
+        execFileSync("git", ["init", "-q"], { cwd: root, env: gitFixtureEnv(root) });
         const listed = enumerateGit(root).sort();
         expect(listed).toContain("app/new-untracked.ts");
         expect(listed).not.toContain("gen/ignored.ts");
@@ -358,12 +430,18 @@ describe("no build-time network font fetch", () => {
     });
   });
 
-  it("app/fonts.ts loads the required vendored asset", () => {
-    const src = readFileSync(join(APP_ROOT, "app/fonts.ts"), "utf8");
-    const m = /src:\s*"([^"]+\.woff2)"/.exec(src);
-    expect(m, "fonts.ts must load a .woff2 through next/font/local").not.toBeNull();
-    const target = resolve(join(APP_ROOT, "app"), m![1]);
-    expect(REQUIRED_ASSETS.map((a) => join(APP_ROOT, a))).toContain(target);
+  it("every .woff2 app/fonts.ts loads is a required vendored asset", () => {
+    // Comments are stripped first so a commented-out `src:` cannot satisfy the check, and
+    // every match is checked so a second font declaration cannot hide behind the first.
+    const code = stripComments(readFileSync(join(APP_ROOT, "app/fonts.ts"), "utf8"));
+    const srcs = [...code.matchAll(/src:\s*"([^"]+\.woff2)"/g)].map((m) => m[1]);
+    expect(srcs.length, "fonts.ts must load a .woff2 through next/font/local").toBeGreaterThan(0);
+    const required = REQUIRED_ASSETS.map((a) => join(APP_ROOT, a));
+    for (const src of srcs) {
+      expect(required, `${src} is not a required vendored asset`).toContain(
+        resolve(join(APP_ROOT, "app"), src),
+      );
+    }
   });
 
   describe("harness rows", () => {
