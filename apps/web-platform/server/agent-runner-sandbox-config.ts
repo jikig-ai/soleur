@@ -29,7 +29,7 @@ const log = createChildLogger("agent-sandbox");
 //     (#1557).
 //   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
 //     no outbound network by default; `opts.allowGithubEgress` widens
-//     the allowlist to exactly `GITHUB_EGRESS_DOMAINS` (entitled-token
+//     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
 //     sessions only — derived from `ghToken` presence at the consumer).
 //   - `filesystem.allowWrite: [workspacePath]` + PER-SIBLING `denyRead` —
 //     the agent gets full READ+WRITE of its OWN `/workspaces/<uuid>` while
@@ -147,16 +147,138 @@ export type AgentSandboxConfig = {
 } & { [x: string]: unknown };
 
 /**
- * Exact-host egress allowlist for the Concierge's in-sandbox GitHub
- * surface. No wildcards — `gh` (REST + GraphQL) needs `api.github.com`;
- * raw `git push/fetch` via the GIT_ASKPASS path needs `github.com`.
- * Widening beyond these two hosts (gist/upload/CDN) requires its own
- * security review — each added host is exfiltration surface.
+ * GitHub-owned Actions log/artifact download hosts: `api.github.com`
+ * 302s `/actions/{runs,jobs}/.../logs` and artifact zips to signed
+ * per-account Azure Blob URLs. Enumerated, NOT a wildcard — a
+ * `*.blob.core.windows.net` entry would admit EVERY Azure storage
+ * account, and exact hosts keep both layers (this domain filter AND
+ * the container nftables allowlist) GitHub-scoped even off-host.
+ * Fleet verified 2026-10-05: sa0..sa99 resolve EXCEPT sa22 (NXDOMAIN —
+ * listing it would page via the resolver failcount). Keep in sync with
+ * the productionresultssa block in infra/cron-egress-allowlist.txt and
+ * the fleet guards in cron-egress-firewall.test.sh.
  */
-const GITHUB_EGRESS_DOMAINS = Object.freeze([
+const GITHUB_ACTIONS_LOG_ACCOUNTS = Object.freeze([
+  "productionresultssa0.blob.core.windows.net",
+  "productionresultssa1.blob.core.windows.net",
+  "productionresultssa2.blob.core.windows.net",
+  "productionresultssa3.blob.core.windows.net",
+  "productionresultssa4.blob.core.windows.net",
+  "productionresultssa5.blob.core.windows.net",
+  "productionresultssa6.blob.core.windows.net",
+  "productionresultssa7.blob.core.windows.net",
+  "productionresultssa8.blob.core.windows.net",
+  "productionresultssa9.blob.core.windows.net",
+  "productionresultssa10.blob.core.windows.net",
+  "productionresultssa11.blob.core.windows.net",
+  "productionresultssa12.blob.core.windows.net",
+  "productionresultssa13.blob.core.windows.net",
+  "productionresultssa14.blob.core.windows.net",
+  "productionresultssa15.blob.core.windows.net",
+  "productionresultssa16.blob.core.windows.net",
+  "productionresultssa17.blob.core.windows.net",
+  "productionresultssa18.blob.core.windows.net",
+  "productionresultssa19.blob.core.windows.net",
+  "productionresultssa20.blob.core.windows.net",
+  "productionresultssa21.blob.core.windows.net",
+  "productionresultssa23.blob.core.windows.net",
+  "productionresultssa24.blob.core.windows.net",
+  "productionresultssa25.blob.core.windows.net",
+  "productionresultssa26.blob.core.windows.net",
+  "productionresultssa27.blob.core.windows.net",
+  "productionresultssa28.blob.core.windows.net",
+  "productionresultssa29.blob.core.windows.net",
+  "productionresultssa30.blob.core.windows.net",
+  "productionresultssa31.blob.core.windows.net",
+  "productionresultssa32.blob.core.windows.net",
+  "productionresultssa33.blob.core.windows.net",
+  "productionresultssa34.blob.core.windows.net",
+  "productionresultssa35.blob.core.windows.net",
+  "productionresultssa36.blob.core.windows.net",
+  "productionresultssa37.blob.core.windows.net",
+  "productionresultssa38.blob.core.windows.net",
+  "productionresultssa39.blob.core.windows.net",
+  "productionresultssa40.blob.core.windows.net",
+  "productionresultssa41.blob.core.windows.net",
+  "productionresultssa42.blob.core.windows.net",
+  "productionresultssa43.blob.core.windows.net",
+  "productionresultssa44.blob.core.windows.net",
+  "productionresultssa45.blob.core.windows.net",
+  "productionresultssa46.blob.core.windows.net",
+  "productionresultssa47.blob.core.windows.net",
+  "productionresultssa48.blob.core.windows.net",
+  "productionresultssa49.blob.core.windows.net",
+  "productionresultssa50.blob.core.windows.net",
+  "productionresultssa51.blob.core.windows.net",
+  "productionresultssa52.blob.core.windows.net",
+  "productionresultssa53.blob.core.windows.net",
+  "productionresultssa54.blob.core.windows.net",
+  "productionresultssa55.blob.core.windows.net",
+  "productionresultssa56.blob.core.windows.net",
+  "productionresultssa57.blob.core.windows.net",
+  "productionresultssa58.blob.core.windows.net",
+  "productionresultssa59.blob.core.windows.net",
+  "productionresultssa60.blob.core.windows.net",
+  "productionresultssa61.blob.core.windows.net",
+  "productionresultssa62.blob.core.windows.net",
+  "productionresultssa63.blob.core.windows.net",
+  "productionresultssa64.blob.core.windows.net",
+  "productionresultssa65.blob.core.windows.net",
+  "productionresultssa66.blob.core.windows.net",
+  "productionresultssa67.blob.core.windows.net",
+  "productionresultssa68.blob.core.windows.net",
+  "productionresultssa69.blob.core.windows.net",
+  "productionresultssa70.blob.core.windows.net",
+  "productionresultssa71.blob.core.windows.net",
+  "productionresultssa72.blob.core.windows.net",
+  "productionresultssa73.blob.core.windows.net",
+  "productionresultssa74.blob.core.windows.net",
+  "productionresultssa75.blob.core.windows.net",
+  "productionresultssa76.blob.core.windows.net",
+  "productionresultssa77.blob.core.windows.net",
+  "productionresultssa78.blob.core.windows.net",
+  "productionresultssa79.blob.core.windows.net",
+  "productionresultssa80.blob.core.windows.net",
+  "productionresultssa81.blob.core.windows.net",
+  "productionresultssa82.blob.core.windows.net",
+  "productionresultssa83.blob.core.windows.net",
+  "productionresultssa84.blob.core.windows.net",
+  "productionresultssa85.blob.core.windows.net",
+  "productionresultssa86.blob.core.windows.net",
+  "productionresultssa87.blob.core.windows.net",
+  "productionresultssa88.blob.core.windows.net",
+  "productionresultssa89.blob.core.windows.net",
+  "productionresultssa90.blob.core.windows.net",
+  "productionresultssa91.blob.core.windows.net",
+  "productionresultssa92.blob.core.windows.net",
+  "productionresultssa93.blob.core.windows.net",
+  "productionresultssa94.blob.core.windows.net",
+  "productionresultssa95.blob.core.windows.net",
+  "productionresultssa96.blob.core.windows.net",
+  "productionresultssa97.blob.core.windows.net",
+  "productionresultssa98.blob.core.windows.net",
+  "productionresultssa99.blob.core.windows.net",
+] as const);
+
+/**
+ * Egress allowlist for an entitled (ghToken-minting) session. Exact
+ * hosts only, no wildcards — each added host is exfiltration surface:
+ *  - `github.com` — raw `git push/fetch` via the GIT_ASKPASS path.
+ *  - `api.github.com` — `gh` (REST + GraphQL).
+ *  - `registry.npmjs.org` — sessions regenerate package-lock.json via
+ *    `npx npm@11` (the lockfile-sync gate pins npm@11); npm serves
+ *    metadata and tarballs from this one host.
+ *  - `...GITHUB_ACTIONS_LOG_ACCOUNTS` — the signed-URL hosts above.
+ * Widening further (gist/upload/CDN, GitHub user-content domains)
+ * requires its own security review.
+ */
+const ENTITLED_EGRESS_DOMAINS = Object.freeze([
   "github.com",
   "api.github.com",
+  "registry.npmjs.org",
+  ...GITHUB_ACTIONS_LOG_ACCOUNTS,
 ] as const);
+
 
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
@@ -240,7 +362,7 @@ export function buildAgentSandboxConfig(
     // which is acceptable because /proc is already in denyRead (#1557).
     enableWeakerNestedSandbox: true,
     network: {
-      allowedDomains: opts?.allowGithubEgress ? [...GITHUB_EGRESS_DOMAINS] : [],
+      allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
       allowManagedDomainsOnly: true,
     },
     filesystem: {

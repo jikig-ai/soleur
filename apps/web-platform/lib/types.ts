@@ -362,7 +362,7 @@ export type WSMessage =
       /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
       seq?: number;
     }
-  // feat-debug-mode-stream — internal dev-cohort harness instruction stream
+  // feat-debug-mode-stream — workspace debug-mode harness instruction stream
   // (server→client). A SEPARATE collapsed debug panel renders these; they are
   // NOT routed into the conversation bubble. Each frame is ONE delta event
   // (turn end is signalled by `stream_end`/`session_ended`). `body` is the
@@ -373,23 +373,32 @@ export type WSMessage =
   // human tool label from `buildToolLabel(name, undefined, …)` — NEVER the
   // raw SDK tool name (#2138/PR#2115). Flat (no leaderId): the panel is a
   // single ordered log, not a per-leader bubble. Render-only + ephemeral —
-  // NEVER persisted to `messages`/logs/Sentry (standing CI grep gate).
+  // NEVER persisted to `messages`/logs/Sentry (standing CI grep gate). The
+  // in-memory stream-replay buffer DOES retain them (ADR-059) so a transient
+  // reconnect or a leave-and-return remount can repopulate the panel.
   | {
       type: "debug_event";
       kind: "tool_use" | "reasoning" | "result";
       label?: string;
       body: string;
+      /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */
+      seq?: number;
+      /** True when the frame was re-emitted from the replay buffer rather
+       *  than live — the client renders it but never counts it as a liveness
+       *  heartbeat (a buffered tool_use is stale evidence). */
+      replayed?: boolean;
     }
   // feat-reasoning-chat-boxes (#5370) — agent-emitted, USER-FACING narration.
-  // Distinct from `debug_event` (team-only, dev-cohort, raw SDK internals):
+  // Distinct from `debug_event` (debug-mode panel, raw SDK internals):
   // these carry deliberate plain-language text the agent authors via the
   // `narrate`/`summarize` MCP tools, redacted at the server emit boundary.
   //
   // `reasoning_narration` is the TRANSIENT live status line ("Looking into
   // the navigation issue…"). LIVE-ONLY: it carries NO `seq` and is EXCLUDED
-  // from the stream-replay buffer (mirrors debug_event), so it never replays
-  // on reconnect and is never persisted. The client stores it in a transient
-  // `liveNarration` slot torn down on every turn-end path.
+  // from the stream-replay buffer (unlike `debug_event`, which IS buffered
+  // for reconnect/remount replay), so it never replays on reconnect and is
+  // never persisted. The client stores it in a transient `liveNarration`
+  // slot torn down on every turn-end path.
   | { type: "reasoning_narration"; message: string }
   // `turn_summary` is the DURABLE per-turn record ("✓ Fixed the side panel…").
   // Persisted as a `messages` row (message_kind='turn_summary', mig 105) AND
