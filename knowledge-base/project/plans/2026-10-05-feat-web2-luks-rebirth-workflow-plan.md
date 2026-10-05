@@ -287,27 +287,36 @@ and marker evidence are green. `requires_cpo_signoff: true`.
 liveness_signal:
   what: SOLEUR_FRESH_BOOT_READY for host=soleur-web-2 (once per instance) and the daily luks-monitor probe row
   cadence: per birth and daily
-  alert_target: Sentry issue owners via the escrow-stage alert rule; Better Stack query for the rows
-  configured_in: apps/web-platform/infra/workspaces-luks-provision.sh, apps/web-platform/infra/luks-monitor.sh, apps/web-platform/infra/issue-alerts.tf
+  alert_target: Sentry issue owners via the escrow-stage alert rule; Better Stack query for the rows; the workflow run log and step summary for the dispatcher
+  configured_in: apps/web-platform/infra/workspaces-luks-provision.sh, apps/web-platform/infra/luks-monitor.sh, apps/web-platform/infra/sentry/issue-alerts.tf
 error_reporting:
-  destination: Sentry web-platform via SENTRY_DSN (asserted non-empty at S2)
-  fail_loud: the run ends RED with a named ::error:: reason at the failing step; the summary lists each stage's outcome
+  destination: Sentry web-platform via SENTRY_DSN (asserted non-empty at S2) and the GitHub Actions workflow run log
+  fail_loud: every refusal and failure is an `::error::` annotation naming the stage, the classifier verdict or the heal window; the run ends RED and the step summary names the window
 failure_modes:
-  - mode: emptiness evidence missing, gappy or over the ceiling
-    detection: S5 verdict, named reason in the run log
-    alert_route: workflow run RED to the dispatcher
+  - mode: emptiness evidence missing, gappy, zero or over the ceiling (workflow run log `::error::` from the emptiness step; verdict line RED reason=...)
+    detection: S5 verdict in the workflow run log, exported as a step output and printed in the dispatch summary
+    alert_route: workflow run RED to the dispatcher (GitHub notification)
+  - mode: classifier refusal or an unhealable state (workflow run log `::error::` naming refuse:<reason>)
+    detection: S4 verdict in the workflow run log before any write
+    alert_route: workflow run RED to the dispatcher; the runbook table gives the next step per verdict
+  - mode: detach, delete, state rm, plan gate or apply failure (workflow run log `::error::` naming the step)
+    detection: the failing step's `::error::` annotation plus the failure step's heal-window summary
+    alert_route: workflow run RED to the dispatcher; re-dispatch heals the window or refuses before writing
   - mode: host born but escrow missing or luks_arm not formatted
-    detection: S11 verdict RED; verify leg keeps the marker absent
+    detection: ready-poll verdict RED in the workflow run log; the verify leg keeps the soak marker absent
     alert_route: Sentry escrow-stage rule; weight gate stays closed
+  - mode: readiness, recovery check or reboot failed after the apply
+    detection: the failing step's `::error::` in the workflow run log; a re-dispatch resumes (resume:post_apply) without replacing anything
+    alert_route: workflow run RED to the dispatcher
   - mode: reboot issued but no reopen
-    detection: follow-through reboot-seen arm after rebirth + 3d
-    alert_route: follow-through tracker on the issue
+    detection: follow-through reboot-seen arm after rebirth + 3d (the window closes at earliest + 4d and the follow-through fails loudly then)
+    alert_route: follow-through tracker on #6931
 logs:
   where: GitHub Actions run log and step summary; Better Stack for the host rows
   retention: Actions default; Better Stack per its plan
 discoverability_test:
   command: bash scripts/followthroughs/web2-luks-live-6931.sh
-  expected_output: NOT YET
+  expected_output: CANNOT ESTABLISH
   credentials_required: Better Stack query credentials (Doppler prd_terraform) — the readiness and probe rows exist only in Better Stack, so no unauthenticated probe verifies the same property
 ```
 

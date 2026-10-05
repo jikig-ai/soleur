@@ -154,7 +154,8 @@ _whrb_raw_volume() { # <mode> <plan> <key>
 }
 
 web_host_rebirth_gate() {
-  local mode="${1:-}" plan_json="${2:-}" host_key="${3:-}" server_id="${4:-}" volume_id="${5:-}"
+  local plan_json="${2:-}"
+  local mode="${1:-}" host_key="${3:-}" server_id="${4:-}" volume_id="${5:-}"
   local viol="" nl=$'\n' count
 
   if [[ "$host_key" == "$_WEB_HOST_REBIRTH_LUKS_PINNED_KEY" ]]; then
@@ -189,7 +190,7 @@ web_host_rebirth_gate() {
   viol+="$(_whrb_pin_volume "$mode" "$plan_json" "$host_key" "$server_id" "$volume_id")${nl}"  # GATE:PIN-VOLUME
   viol+="$(_whrb_raw_volume "$mode" "$plan_json" "$host_key")${nl}"                         # GATE:RAW-VOLUME
 
-  viol="$(printf '%s' "$viol" | sed '/^$/d')"
+  viol="$(printf '%s' "$viol" | sed '/^$/d' | LC_ALL=C sort -u)"   # a violation reached by two arms is one violation
   count=0
   [[ -z "$viol" ]] || count="$(printf '%s\n' "$viol" | wc -l | tr -d ' ')"
   plan_gate_assert_numeric "web_host_rebirth_gate" "violations=${count}" || return 1
