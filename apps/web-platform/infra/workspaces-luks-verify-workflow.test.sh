@@ -654,7 +654,21 @@ case "$*" in
     printf 'ActiveState=x\r::error title=forged-cr::verdict=pass\n'
     exit "${FIXTURE_UNITSTATE_RC:-0}" ;;
 esac
-# The probe invocation: emit the fixture's log body, then exit the fixture's rc.
+# The probe invocation: the workflow feeds it .env text on stdin (`printf ... | ssh ...`). Real ssh reads
+# stdin to EOF, so this stub does too; a stub that exits without reading makes the producer take SIGPIPE
+# (or EPIPE where SIGPIPE is ignored, as on CI) whenever the producer is scheduled late, and the
+# pipeline status then reads as a probe failure under pipefail (#7376). FIXTURE_NO_DRAIN=1 restores the
+# non-reading stub as the race rows' positive control. The sentinel is created AFTER stdin is closed (or
+# just before the drain) so slow_printf can hand off deterministically.
+if [[ "$*" == *luks-monitor.sh* ]]; then
+  if [[ "${FIXTURE_NO_DRAIN:-0}" == 1 ]]; then
+    exec 0<&-
+    : > "${PROBE_SENTINEL:-/dev/null}"
+  else
+    : > "${PROBE_SENTINEL:-/dev/null}"
+    cat >/dev/null
+  fi
+fi
 [[ -n "${FIXTURE_PROBE_LOG:-}" ]] && printf '%s\n' "$FIXTURE_PROBE_LOG"
 exit "${FIXTURE_PROBE_RC:-0}"
 EOS
@@ -667,11 +681,14 @@ EOS
   # would read as working and be empty in the parent. The CALLER therefore owns the artifact paths
   # via $CALLS and drive only WRITES to them: the ssh-argv file, and a sibling `.rc` holding the
   # exit code. Anything the parent must observe has to travel through a file or through stdout.
+  # The body runs with stdin from /dev/null so the ONLY pipes it sees are the workflow's own
+  # (`printf | ssh`, `tar | ...`): an inherited open stdin would be drained by a stub arm and hang the
+  # suite under a harness that leaves a pipe open (measured: `sleep 20 | timeout 8 bash <suite>` rc 124).
   drive() {
     local rc=0
     local calls="${CALLS:-$SCRATCH/calls.default}"
     local out="$calls.out" genv="$calls.env"
-    : > "$out"; : > "$genv"; : > "$calls"
+    : > "$out"; : > "$genv"; : > "$calls"; rm -f "$calls.sentinel"
     PATH="$SCRATCH/bin:$PATH" \
     SSH_CALLS="$calls" \
     GITHUB_OUTPUT="$out" GITHUB_ENV="$genv" \
@@ -687,7 +704,8 @@ EOS
     ALARM_SELFTEST="${SELFTEST:-}" \
     FIXTURE_UNITSTATE_RC="${USRC:-0}" \
       FIXTURE_HOSTKEY_FAIL="${HKFAIL:-0}" \
-      bash -e "${REASSERT:-$SCRATCH/reassert.sh}" >"$calls.stdout" 2>&1 || rc=$?
+      FIXTURE_NO_DRAIN="${NODRAIN:-0}" PROBE_SENTINEL="$calls.sentinel" \
+      bash -e "${REASSERT:-$SCRATCH/reassert.sh}" >"$calls.stdout" 2>&1 </dev/null || rc=$?
     printf '%s\n' "$rc" > "$calls.rc"
     sed -n 's/^outcome_class=//p' "$out" | tail -1
   }
@@ -719,7 +737,7 @@ EOS
   else
     ok "#8706: remote unit-state text is prefixed, so a forged ::workflow-command:: stays inert"
   fi
-  if tr '\r' '\n' < "$us_calls.stdout" | grep -q '^[[:space:]]*::error title=forged-cr'; then
+  if grep -q '^[[:space:]]*::error title=forged-cr' < <(tr '\r' '\n' < "$us_calls.stdout"); then
     no "#8706: a CR-embedded workflow command in remote unit-state text survives as its own runner line"
   else
     ok "#8706: a CR-embedded workflow command in remote unit-state text is stripped before the prefix"
@@ -975,6 +993,44 @@ EOS
   st_calls="$SCRATCH/calls.selftest"
   c_selftest=$(EV=workflow_dispatch SELFTEST=true CALLS="$st_calls" PRC=0 PLOG="$READYZ_OK" drive)
   expect_class "an otherwise-healthy run with alarm_selftest=true classifies as selftest" "selftest" "$c_selftest"
+
+  # (#7376) THE PRODUCER SIDE OF THE `printf | ssh` PIPE. The suite's stub used to exit without reading
+  # stdin, so a printf scheduled after the stub had gone took SIGPIPE (rc 141) or, with SIGPIPE ignored as
+  # on the CI runner, EPIPE (rc 1); under pipefail that became the probe rc, which is none of 0/3/127/255,
+  # so the body classified `unavailable/unparsed` instead of `selftest` (run 37296532619). slow_printf
+  # delays ONLY that printf until the stub has handled the probe call (a handshake on a sentinel the stub
+  # creates, bounded ~5 s), which forces the late-producer ordering deterministically instead of hoping
+  # for CPU contention. Both rows run with SIGPIPE ignored, the CI disposition, on every host.
+  slow_re="$SCRATCH/reassert.slow.sh"
+  {
+    cat <<'EOS'
+slow_printf() {
+  local i=0
+  while [[ ! -e "${PROBE_SENTINEL:-/nonexistent}" && "$i" -lt 100 ]]; do sleep 0.05; i=$((i + 1)); done
+  # shellcheck disable=SC2059  # a transparent wrapper: the caller owns the format string
+  printf "$@"
+}
+EOS
+    sed -E "s/^([[:space:]]*)printf 'DOPPLER_TOKEN/\1slow_printf 'DOPPLER_TOKEN/" "$SCRATCH/reassert.sh"
+  } > "$slow_re"
+  slow_sites=$(grep -c "^slow_printf 'DOPPLER_TOKEN" "$slow_re" || true)
+  if [[ "$slow_sites" == 1 ]] && ! cmp -s "$slow_re" "$SCRATCH/reassert.sh"; then
+    ok "RACE: the producer-delay rewrite landed on exactly the one printf call site"
+  else
+    no "RACE: the producer-delay rewrite did not land once (sites=$slow_sites) — the race rows below would measure nothing"
+  fi
+  sp_calls="$SCRATCH/calls.slowprod"
+  c_slow=$( (trap '' PIPE; EV=workflow_dispatch SELFTEST=true CALLS="$sp_calls" REASSERT="$slow_re" PRC=0 PLOG="$READYZ_OK" drive) )
+  expect_class "RACE: a producer delayed past the stub's start still classifies selftest (the stub drains stdin)" "selftest" "$c_slow"
+  nd_calls="$SCRATCH/calls.nodrain"
+  c_nodrain=$( (trap '' PIPE; EV=workflow_dispatch SELFTEST=true CALLS="$nd_calls" REASSERT="$slow_re" NODRAIN=1 PRC=0 PLOG="$READYZ_OK" drive) )
+  nd_probe_rc="$(sed -n 's/^luks-monitor probe rc=//p' "$nd_calls.stdout" | tail -1)"
+  if [[ "$c_nodrain" == unavailable && "$(reason_of "$nd_calls")" == unparsed \
+        && "$nd_probe_rc" =~ ^[0-9]+$ && ! "$nd_probe_rc" =~ ^(0|3|127|255)$ ]]; then
+    ok "RACE CONTROL: the same late producer against a stub that never reads stdin fails (probe rc=$nd_probe_rc, unavailable/unparsed)"
+  else
+    no "RACE CONTROL: the non-draining stub did not reproduce the failure (class=${c_nodrain:-<none>} reason=$(reason_of "$nd_calls") probe_rc=${nd_probe_rc:-<none>}) — the race rows above cannot fail"
+  fi
 
   # `outcome_reason` PRODUCED, not just consumed. Every alarm fixture supplies RSN= at the consumer,
   # so deleting the reason printf from emit_class left the suite green while every alarm carried
@@ -2098,8 +2154,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # stopped running, not what number to lower it to.
 # History: #8706 132 -> 143; #6931 143 -> 184 (Guard 3), then Guard 3 review rework (51 registered scenarios
 # each asserting rc, calls, final state, outcome and reason; structural rows evaluated over grids; the
-# occurrence-based census with planted writers; mutation rows 1-21) -> 313.
-WF_MIN_ASSERTIONS=313
+# occurrence-based census with planted writers; mutation rows 1-21) -> 313; #7376 the producer-side
+# SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316.
+WF_MIN_ASSERTIONS=316
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1
