@@ -381,7 +381,9 @@ SDK has no per-host injection primitive; the forwarder port is the seam.
    the sibling's treatment — wireframe covers owner states only; on-state
    sub-line "Applies to sessions started after enabling; turning off revokes
    live web access" since in-sandbox env-deny applies next-dispatch while
-   the forwarder kill is immediate; verify the confirm CTA's gold-gradient
+   the forwarder kill is immediate; tighten the credential copy to "…in
+   sandboxed commands" (the CLI process retains env by design — the sentence
+   is the boundary claim, CMO P2); verify the confirm CTA's gold-gradient
    against the anti-slop scan + sibling destructive-confirm styling).
    The "View egress audit log" affordance is **deferred** — the wireframe
    keeps it as future-state (there is no queryable store in Phase A; a
@@ -502,6 +504,9 @@ failure_modes:
   - mode: "in-process WebFetch bypasses proxy env (SDK)"
     detection: "Phase B-1 verification task pins behavior; if unproven, WebFetch stays disabled for entitled sessions (documented)"
     alert_route: "fails closed — L1 default-drop catches the dial"
+  - mode: "policy-ALLOWED abuse (scraping, C2 to public hosts, bulk fetch) — deny-class alerts never see it"
+    detection: "per-workspace CONNECT volume/rate anomaly on the gw decision log (Better Stack exploration alert); AUP clause defines the suspension trigger"
+    alert_route: "Better Stack escalation → operator; AUP suspension path"
 
 logs:
   where: "journald (container log-driver) → Vector CONTAINER_NAME=soleur-egress-gw → Better Stack; decision+close JSON lines"
