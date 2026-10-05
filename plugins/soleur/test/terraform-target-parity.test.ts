@@ -2227,6 +2227,9 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   // #9377: the dispatch-only, create-only escrow workflow plans and applies the main root (single-use; retired
   // with the #9372 checklist, which takes this entry out and the census count back to 3).
   "apply-web-escrow-create.yml",
+  // #9372: the dispatch-only, single-use web-2 rebirth plans and applies the main root (retired with the same closing
+  // checklist, which takes this entry out and the census count back to 3).
+  "web2-luks-rebirth.yml",
 ];
 
 describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)", () => {
@@ -2349,7 +2352,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(4);
+    expect(found.length).toBe(5);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Tests for scripts/web2-rebirth.sh (#9372): the stateful steps of the single-use web-2 volume rebirth, run against a
+# shellcheck disable=SC2319,SC2034
 # fake Hetzner API / Terraform / gh / Better Stack ("the world", a directory of small files the shims read and write).
 # Every row drives the REAL script under the production shell; a mutation battery then removes each load-bearing
 # check from a COPY and requires the battery to go red.
