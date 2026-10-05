@@ -62,5 +62,5 @@ if (( 10#$NOW >= 10#$DEADLINE_EPOCH )); then
     "  (c) When the migration has landed, close #9387 by hand AND remove its follow-through label: a tracker closed with the label still on can be swept for up to 14 more days."
   exit 5
 fi
-echo "NOT YET: the ${DEADLINE_ISO%%T*} re-evaluation date for #9387 has not arrived. (Seeing this as a tracker comment means the directive's earliest= is earlier than this date.)"
+echo "NOT YET: the ${DEADLINE_ISO%%T*} re-evaluation date for #9387 has not arrived. (Seeing this as a tracker comment means the directive's earliest= is earlier than this date, or missing or unparseable.)"
 exit 2
