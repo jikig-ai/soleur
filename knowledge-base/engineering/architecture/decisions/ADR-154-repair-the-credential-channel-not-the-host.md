@@ -356,9 +356,10 @@ into the list, and the instruction did not hold.
 
 The re-evaluation trigger and the dated probes above name `GET /v1/datacenters`, which Hetzner removed (HTTP 410
 `deprecated_api_endpoint`, changelog 2026-06-02). The equivalent probe is `GET /v1/server_types?name=cx33` →
-`server_types[0].locations[]`, reading `available` per location; the header of
+the `locations[]` of the entry named `cx33`, reading `available` per location; the header of
 `tests/scripts/lib/stock-preflight-gate.sh` is the writeup of record. The dated measurements above are left as recorded.
 
 Reading taken 2026-10-05 (read-only credential, shapes only): `cx33` has an entry in all three EU locations (`fsn1`,
 `nbg1`, `hel1`) and `available:false` in each — so the "next query reporting `cx33` available in web-1's location"
-trigger had **not** fired as of that reading, and the exception stands.
+trigger had **not** fired as of that reading, and the exception stands. This is one sample: it neither fires nor
+retires the trigger as amended in the dated readings above.
