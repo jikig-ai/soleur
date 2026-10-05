@@ -48,6 +48,22 @@ spawn: `2d11c4f47b`; fix round re-reviewed on the fix commit.
 
 ## Fix-round disposition
 
-fix_rounds=1. Re-review: targeted re-check of the fix sites by the seats that
-filed each P1/P2 (bridge gate, allowedTools filter, c4 gate, belt coverage,
-busy guard, copy constants, observability fixes) + full suite re-run.
+fix_rounds=1 — 5 targeted seats (security, structural-enumeration,
+architecture, data-integrity, test-design — the seats that filed every P1/P2)
+re-verified on `f4edc9194b`. **All concur:** security=pass,
+structural-enumeration=FIXED, architecture=approve, data-integrity=pass,
+test-design=concur.
+
+Advisory fixes applied post-round (commit `22d4f5c523`): busy-flag delete
+moved into `finally` (theoretical permanent-409 leak flagged by both
+data-integrity and security), `support-turn-busy` log on the 409,
+`autonomous_posture` WS emit gated off support (security INFO residual),
+`SUPPORT_AGENT_SESSION_LABEL` interpolated in the directive link.
+
+Recorded (not filed, documented in-code/ADR): zombie-in-window flag
+attribution residual, no `cancel` handler on the stream (409 bounded by the
+120s cap), concurrent first-time POST mint-race on the non-unique support
+conversation index (pre-existing, two-row dedup edge), plugin-MCP arm lacking
+a persona belt (unreachable — `pluginMcpServerNames: []`), Bash
+empty-command deny without a record (no-payload shape, consistent with the
+no-record design).
