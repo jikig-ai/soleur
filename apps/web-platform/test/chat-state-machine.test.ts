@@ -969,6 +969,29 @@ describe("#5240 leader-liveness watchdog reset", () => {
     }
   });
 
+  test("AC9: a REPLAYED debug tool_use appends but never heartbeats (stale evidence)", () => {
+    // fix-debug-stream-replay — debug_event joined the replay-buffer family;
+    // re-emitted frames carry `replayed: true`. A buffered tool_use is stale
+    // liveness evidence: it must still land in the panel log, but must not
+    // re-arm the watchdog or clear a retrying chip.
+    const prev: ChatMessage[] = [
+      toolUseMessage("cpo", { retrying: true, livenessRearms: 2 }),
+    ];
+    const streams = makeStreams([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, {
+      type: "debug_event",
+      kind: "tool_use",
+      body: "Running command...",
+      replayed: true,
+    });
+
+    expect(result.timerAction).toBeUndefined();
+    expect(result.messages[0].retrying).toBe(true);
+    expect(result.messages[0].livenessRearms).toBe(2);
+    expect(result.messages[result.messages.length - 1].type).toBe("debug_event");
+  });
+
   test("AC8b: debug heartbeat does not resurrect a terminal bubble", () => {
     // Sole active leader's bubble is already `error` but transiently still in
     // activeStreams. reset_all may re-arm its timer, but a follow-up timeout

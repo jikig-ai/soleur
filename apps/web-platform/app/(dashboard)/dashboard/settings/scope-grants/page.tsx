@@ -65,11 +65,11 @@ export default async function ScopeGrantsPage() {
     .maybeSingle();
   const isWorkspaceOwner = membership?.role === "owner";
 
-  // feat-debug-mode-stream — internal harness-stream toggle. Visible ONLY to
-  // the `dev` cohort (server-resolved availability, fail-closed; a Flagsmith
-  // outage keeps it hidden for prd). Owner-WRITE: a non-owner dev sees the
-  // current state read-only. Read the dev role from the cookie/RLS-scoped
-  // client (caller reads its own users row), then the member-checked toggle.
+  // feat-debug-mode-stream — workspace harness-stream toggle. Open to all
+  // roles during beta (server-resolved availability via the `debug-mode`
+  // flag). Owner-WRITE: a non-owner sees the current state read-only. The
+  // role read still feeds the Flagsmith identity so the flag can be
+  // re-segmented for a partial beta rollback.
   const { data: debugRoleRow } = await supabase
     .from("users")
     .select("role")
@@ -202,7 +202,7 @@ export default async function ScopeGrantsPage() {
             id="debug-mode-heading"
             className="mb-2 text-sm font-medium uppercase tracking-wide text-soleur-text-muted"
           >
-            Debug mode (internal)
+            Debug mode
           </h2>
           <DebugModeToggle initialDebugMode={debugMode} isOwner={isWorkspaceOwner} />
         </section>
