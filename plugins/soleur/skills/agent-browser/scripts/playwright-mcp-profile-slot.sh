@@ -28,14 +28,21 @@
 #     Chrome owns the profile: the slot is skipped (never kill it, never remove its lock; slot 0 gets
 #     the same wait-then-recheck). The probe fails toward BUSY: a pid counts as alive when /proc/<pid>
 #     exists or kill -0 does not answer "No such process" (EPERM = alive), and as a Chrome owner when
-#     its comm (/proc/<pid>/comm, else ps) is chrome-like or unreadable. A lock naming another host is
-#     busy. Only a dead pid, or a live pid that is provably not a Chrome (a recycled pid), makes the
-#     Singleton* files stale, and they are then removed (rm -f, never recursive);
+#     its comm (/proc/<pid>/comm, else ps) is chrome-like (chrom*, headless_shell, or the Chromium
+#     derivatives edge, brave, vivaldi, opera) or unreadable. A lock naming another host is busy. Only a
+#     dead pid, or a live pid that is provably not a Chrome (a recycled pid), makes the Singleton* files
+#     stale, and they are then removed (rm -f, never recursive). One exception, on purpose: a pid field
+#     that is empty, non-numeric, zero or out of range names NO owner, so such a (garbage) lock is stale
+#     too and never blocks slot 0 forever. Two ends of the probe are untested by construction (an
+#     unprivileged suite cannot model a hidepid /proc): the kill -0 "Operation not permitted" branch and
+#     the ps comm fallback;
 #   * a slot that cannot be used (mkdir, lock file, open or an flock error) is skipped for slots >= 1; slot
 #     0 or an unusable flock ends the search;
 #   * no usable flock (stock macOS has none; busybox flock lacks -E): slot 0 is claimed WITHOUT a lease
 #     when its SingletonLock is absent or provably stale, so the first session keeps the persistent
-#     profile; otherwise the unique fallback;
+#     profile; otherwise the unique fallback. That branch has no slot-0 wait either: a /mcp reconnect
+#     that finds the previous Chrome still alive lands on a fresh empty $base-p<pid> profile, and two
+#     launches before the first Chrome exists can both take slot 0 (no lease exists to prevent it);
 #   * the unique fallback is $base-p$$ (a non-numeric infix, so it can never alias slot N), created
 #     mode 700, with a stderr note naming the cause (no flock, a lock error, or all slots busy).
 #     Never blocks, never kills.
@@ -66,7 +73,7 @@ prof=""
 
 # _pwslot_owner_busy <SingletonLock target, "host-pid"> -> 0 treat as a live owner (skip) | 1 provably stale.
 # Sets _pwslot_why when busy. Fails toward busy: only a definite "no such process" or a live pid that is
-# provably not a Chrome is stale.
+# provably not a Chrome is stale (and a pid field that names no pid at all, see the header).
 _pwslot_owner_busy() {
   _pwslot_t=$1
   _pwslot_p=${_pwslot_t##*-}
@@ -82,7 +89,8 @@ _pwslot_owner_busy() {
   fi
   _pwslot_alive=1
   if ! [ -d "/proc/$_pwslot_p" ]; then
-    # kill -0 answers EPERM for a live pid that is not ours (hidepid mounts hide it from /proc too)
+    # kill -0 answers EPERM for a live pid that is not ours (hidepid mounts hide it from /proc too).
+    # Untested by construction: the suite cannot hide /proc from itself, so the EPERM arm is read, not exercised.
     if ! _pwslot_m=$(LC_ALL=C; kill -0 "$_pwslot_p" 2>&1); then
       case "$_pwslot_m" in
         *'No such process'*) _pwslot_alive=0 ;;
@@ -95,10 +103,11 @@ _pwslot_owner_busy() {
     read -r _pwslot_c 2>/dev/null < "/proc/$_pwslot_p/comm" || :
   fi
   if [ -z "$_pwslot_c" ]; then
+    # untested by construction (the suite always has a readable /proc comm); an empty answer below reads as busy
     _pwslot_c=$(ps -o comm= -p "$_pwslot_p" 2>/dev/null) || _pwslot_c=""
   fi
   case "$_pwslot_c" in
-    *[Cc]hrom* | *headless_shell* | '')
+    *[Cc]hrom* | *headless_shell* | *[Ee]dge* | *[Bb]rave* | *[Vv]ivaldi* | *[Oo]pera* | '')
       _pwslot_why="its SingletonLock names a live Chrome (pid $_pwslot_p)"
       return 0
       ;;

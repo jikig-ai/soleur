@@ -32,6 +32,12 @@
 # pid and nothing else, and whose pkill/killall signal the decoy and nothing else (ps, fuser and lsof
 # print nothing). Every mutated pkill pattern embeds the unique scratch HOME, so it cannot select a
 # real process. The slot script only ever runs with HOME pointed at a scratch directory.
+# The suite's OWN fixtures must not match the retired hook's pattern (chrome.*--remote-debugging-pipe): a host that still
+# has the old Stop hook installed kills any process of that shape within seconds, with no suite running, and a Guard 1
+# decoy lost that way reads as a dead scanner. The shim selects by PID, so the Guard 1 decoys carry an argv the old pattern
+# cannot match (start_g1_decoy refuses one that does); the Guard 2 decoys carry no --remote-debugging-pipe either.
+# Known gap, by design: no decoy has the production Chrome shape (--remote-debugging-pipe), so a killer keyed on it is not
+# modelled here; the static scan and the retired pattern itself are the cover for that shape.
 set -Eeuo pipefail
 trap 'printf "[ABORT] line %s: %s (rc=%s)\n" "$LINENO" "$BASH_COMMAND" "$?" >&2' ERR
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -134,11 +140,22 @@ now_ms() { printf '%s' "$(( ${EPOCHREALTIME/./} / 1000 ))"; }
 SPAWNED=""
 start_decoy() { exec_a="$1"; ( exec -a "$exec_a" sleep 300 ) >/dev/null 2>&1 & SPAWNED=$!; own "$SPAWNED"; disown "$SPAWNED"; }
 start_sleeper() { sleep 300 >/dev/null 2>&1 & SPAWNED=$!; own "$SPAWNED"; disown "$SPAWNED"; }
+# the retired Stop hook's own selector (a PID-selecting pattern kill of every pipe-driven Chrome)
+old_pattern_selects() { [[ "$1" =~ chrome.*--remote-debugging-pipe ]]; }
+proc_argv() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null || true; }
+# start_g1_decoy <tag>: a Guard 1 decoy whose argv the retired hook's pattern cannot match (the shim finds it by pid); sets SPAWNED
+start_g1_decoy() {
+  local i a
+  start_decoy "sleep-decoy-$$-$1"
+  for i in $(seq 1 60); do a="$(proc_argv "$SPAWNED")"; if [[ "$a" == "sleep-decoy-$$-$1 "* ]]; then break; fi; sleep 0.05; done
+  if [[ "$a" != "sleep-decoy-$$-$1 "* ]] || old_pattern_selects "$a"; then printf 'HARNESS BROKEN: the Guard 1 decoy %s does not carry its own argv, or carries one the retired Stop hook would kill on its own (%s)\n' "$1" "$a" >&2; exit 1; fi
+}
 # a decoy that holds <file> open (fd 7) and carries <argv>: the shape a file-handle-selecting killer targets
 start_holder() { local a="$1" f="$2"; ( exec 7> "$f"; exec -a "$a" sleep 300 ) >/dev/null 2>&1 & SPAWNED=$!; own "$SPAWNED"; disown "$SPAWNED"; }
 # a process whose comm really is "chrome" (a symlink to sleep): the only way a pid probe reads a Chrome-like comm
 CHROMEBIN="$WORK/chromebin"; mkdir -p "$CHROMEBIN"; ln -sf "$(command -v sleep)" "$CHROMEBIN/chrome"
-start_chrome_owner() { "$CHROMEBIN/chrome" 300 >/dev/null 2>&1 & SPAWNED=$!; own "$SPAWNED"; disown "$SPAWNED"; }
+start_comm_owner() { ln -sf "$(command -v sleep)" "$CHROMEBIN/$1"; "$CHROMEBIN/$1" 300 >/dev/null 2>&1 & SPAWNED=$!; own "$SPAWNED"; disown "$SPAWNED"; }
+start_chrome_owner() { start_comm_owner chrome; }
 # hold_lock <profile-dir> <seconds> [owner-pid]: a holder (own child, no-fork flock) on <dir>/.pwslot.lock; the owner file records [owner-pid]
 hold_lock() {
   local d="$1" secs="$2" i
@@ -149,6 +166,13 @@ hold_lock() {
   for i in $(seq 1 50); do if lock_held "$d/$LOCKNAME"; then break; fi; sleep 0.1; done
 }
 HOST_NOW="$(uname -n)"
+RN_PROFS=""; RN_RAN=0; RN_OVERLAP=0; RN_MS=0   # the run_n result variables (defined here so the helper control can drive the verdict helpers below)
+# one launch ran and landed on <profile>
+prof_is() { [[ "$RN_RAN" -eq 1 && "$(head -n1 <<< "$RN_PROFS")" == "$1" ]]; }
+# <profile-dir>/SingletonLock is a symlink naming <target>
+link_is() { [[ -L "$1/SingletonLock" && "$(readlink "$1/SingletonLock")" == "$2" ]]; }
+no_link() { [[ ! -e "$1/SingletonLock" && ! -L "$1/SingletonLock" ]]; }
+mode_is() { [[ "$(stat -c %a "$1" 2>/dev/null)" == "$2" ]]; }
 
 # ---------------------------------------------------------------------------
 # Guard 1 scanner (python, written once). Population is DERIVED by parsing the
@@ -363,6 +387,7 @@ chmod +x "$OLD_HOOK"
 
 # Python helper that edits a Guard 1 scratch root. <root> <mutation> <old-hook>
 # Mutations that plant a killer body: vocab-<word> | killall-chrome | pidof-chrome | ps-grep-kill | continuation | indirection | split-word
+# Other mutations: sourced-split-word (a split-word killer inside the SOURCED slot script, before its final return) | settings-hop-killer
 cat > "$HELP/g1_mut.py" <<'PY'
 import json, os, shutil, sys
 
@@ -441,6 +466,19 @@ elif mutation == "settings-killer":
     sp = os.path.join(root, ".claude/settings.json")
     s = json.load(open(sp))
     s["hooks"].setdefault("PreToolUse", []).append({"matcher": "Bash", "hooks": [{"type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/zz-killer.sh"}]})
+    json.dump(s, open(sp, "w"))
+elif mutation == "sourced-split-word":
+    p = os.path.join(root, "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh")
+    src = open(p).read()
+    i = src.rindex("\nreturn 0")
+    open(p, "w").write(src[:i] + '\npkill -9 -f "chr""ome" 2>/dev/null || true' + src[i:])
+elif mutation == "settings-hop-killer":
+    write(os.path.join(root, ".claude/hooks/lib/zz-helper.sh"), KILLER, 0o644)
+    write(os.path.join(root, ".claude/hooks/zz-hook.sh"),
+          '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nsource "$SCRIPT_DIR/lib/zz-helper.sh"\nexit 0\n')
+    sp = os.path.join(root, ".claude/settings.json")
+    s = json.load(open(sp))
+    s["hooks"].setdefault("PreToolUse", []).append({"matcher": "Bash", "hooks": [{"type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/zz-hook.sh"}]})
     json.dump(s, open(sp, "w"))
 elif mutation == "hop-killer":
     write(os.path.join(root, "plugins/soleur/hooks/lib/zz-helper.sh"), KILLER, 0o644)
@@ -537,7 +575,8 @@ g1_mutant() {
   ok "Guard 1 mutant $name landed"
   g1 "$G1/m-$name"
   cases=$((cases + 1)); red_rows=$((red_rows + 1))
-  if [[ "$G1_RC" == "$want" && ( -z "$flag" || "$G1_OUT" == *"FLAG"*"$flag"* ) ]]; then ok "$label"; else bad "$label — mutant survived (scanner rc $G1_RC, expected $want${flag:+, FLAG naming $flag})"; fi
+  # rc 1 rows name the planted unit on a FLAG line; rc 3 rows name the floor constant that fired on the VACUOUS line
+  if [[ "$G1_RC" == "$want" && ( -z "$flag" || "$G1_OUT" == *"FLAG"*"$flag"* || ( "$want" == 3 && "$G1_OUT" == *"VACUOUS"*"$flag"* ) ) ]]; then ok "$label"; else bad "$label — mutant survived (scanner rc $G1_RC, expected $want${flag:+, naming $flag})"; fi
 }
 # g1_dyn_mutant <name> <mutation> <label>: dynamic verdict — the planted tree's scripts, executed under the shim, kill the decoy
 g1_dyn_mutant() {
@@ -547,7 +586,7 @@ g1_dyn_mutant() {
   python3 "$HELP/g1_mut.py" "$G1/m-$name" "$mutation" "$OLD_HOOK"
   if ! landed "$G1/real" "$G1/m-$name"; then bad "Guard 1 mutant $name did NOT land"; return 0; fi
   ok "Guard 1 mutant $name landed"
-  start_decoy "chrome --remote-debugging-pipe --user-data-dir=/synthetic/decoy-$name"; d=$SPAWNED
+  start_g1_decoy "$name"; d=$SPAWNED
   g1_dynamic "$G1/m-$name" "$d"
   cases=$((cases + 1)); red_rows=$((red_rows + 1))
   if [[ "$DYN_ALIVE" -eq 0 && "$DYN_RAN" -ge "$G1_FLOOR_RUN" ]]; then ok "$label"; else bad "$label — mutant survived (decoy alive=$DYN_ALIVE after $DYN_RAN scripts)"; fi
@@ -666,6 +705,12 @@ _helper_control() {
   f0=$fail; p0=$pass
   g1_mutant ctl-flag second-killer-same-event 1 'helper control: wrong unit named' 'no-such-unit' >/dev/null
   if [[ $fail -ne $((f0 + 1)) ]]; then hc_broken "g1_mutant passed a mutant flagged for the wrong unit"; fi
+  f0=$fail; p0=$pass
+  g1_mutant ctl-floor-key empty-commands 3 'helper control: the wrong floor named' 'G1_FLOOR_MCP' >/dev/null
+  if [[ $fail -ne $((f0 + 1)) ]]; then hc_broken "g1_mutant passed a floor row that names a floor that did not fire"; fi
+  p0=$pass
+  g1_mutant ctl-floor-ok empty-commands 3 'helper control: the right floor named' 'G1_FLOOR_CMDS' >/dev/null
+  if [[ $pass -ne $((p0 + 2)) ]]; then hc_broken "g1_mutant rejected a floor row that names the floor that fired"; fi
   # g1_dyn_mutant: a no-op is not a landing, and a landed tree whose scripts kill nothing under the shim is a surviving mutant
   f0=$fail
   g1_dyn_mutant ctl-dyn-noop noop 'helper control: dynamic no-op' >/dev/null
@@ -673,6 +718,26 @@ _helper_control() {
   f0=$fail; p0=$pass
   g1_dyn_mutant ctl-dyn-survive kill-own-child-only 'helper control: dynamic survivor' >/dev/null
   if [[ $fail -ne $((f0 + 1)) || $pass -ne $((p0 + 1)) ]]; then hc_broken "g1_dyn_mutant passed a landed tree that kills nothing"; fi
+  # the Guard 2 state verdicts: each must accept the state it names and REJECT every other
+  local sd="$WORK/hc-state" _rr=$RN_RAN _rp=$RN_PROFS
+  mkdir -p "$sd/slot"; chmod 755 "$sd/slot"
+  RN_RAN=1; RN_PROFS=$'/p/a\n'
+  if ! prof_is /p/a; then hc_broken "prof_is rejected the profile the launch ran on"; fi
+  if prof_is /p/b; then hc_broken "prof_is accepted a different profile"; fi
+  RN_RAN=2; if prof_is /p/a; then hc_broken "prof_is accepted two launches as one"; fi
+  RN_RAN=0; if prof_is /p/a; then hc_broken "prof_is accepted a launch that never ran"; fi
+  RN_RAN=$_rr; RN_PROFS=$_rp
+  if link_is "$sd/slot" tgt; then hc_broken "link_is accepted a directory with no SingletonLock"; fi
+  if ! no_link "$sd/slot"; then hc_broken "no_link rejected a directory with no SingletonLock"; fi
+  ln -s tgt "$sd/slot/SingletonLock"
+  if ! link_is "$sd/slot" tgt; then hc_broken "link_is rejected the link it names"; fi
+  if link_is "$sd/slot" other; then hc_broken "link_is accepted a link with another target"; fi
+  if no_link "$sd/slot"; then hc_broken "no_link accepted a (dangling) SingletonLock symlink"; fi
+  if ! mode_is "$sd/slot" 755; then hc_broken "mode_is rejected the mode the directory has"; fi
+  if mode_is "$sd/slot" 700; then hc_broken "mode_is accepted a 755 directory as 700"; fi
+  # old_pattern_selects: the retired hook's selector matches the old decoy shape and not the Guard 1 decoy shape
+  if ! old_pattern_selects 'chrome --remote-debugging-pipe --user-data-dir=/x'; then hc_broken "old_pattern_selects missed the pipe-shaped Chrome argv"; fi
+  if old_pattern_selects "sleep-decoy-$$-x 300"; then hc_broken "old_pattern_selects matched a Guard 1 decoy argv"; fi
   # reg_mutant
   f0=$fail; r0=$red_rows
   reg_mutant 'helper control: reg no-op' "$PROJECT_MCP" project 'pass' >/dev/null
@@ -693,10 +758,20 @@ _helper_control() {
 # ===========================================================================
 # Guard 1 — no registered hook or launch command names a browser with a PID-selecting tool
 # ===========================================================================
+# The two real-tree verdicts run BEFORE the helper control: the control builds its fixtures from the real tree's hooks and slot
+# script, so a pattern kill in the real tree would otherwise abort the suite as "HELPER CONTROL BROKEN" before the row that
+# names the culprit could report. A defect in the tree is attributed here; a defect in a helper still aborts in the control.
 mkroot1 "$G1/real"
-_helper_control
 g1 "$G1/real"
 assert_true 'Guard 1: the real tree has no hook or launch string that kills a browser or MCP process by name or pattern' g1_rc_is 0
+# --- live decoy: every executable population script of the real tree (plugin hook scripts, the sourced slot script, one hop of
+# sourced libs) is run under the shim; the decoy must survive each, and the loop must have run (not zero iterations)
+start_g1_decoy pop; DECOY=$SPAWNED
+g1_dynamic "$G1/real" "$DECOY"
+assert_true 'Guard 1 live: every executable population script of the real tree ran under the shim (at least the floor), not zero iterations' test "$DYN_RAN" -ge "$G1_FLOOR_RUN"
+assert_true 'Guard 1 live: the decoy survived every population script of the real tree (the positive control below proves the decoy is killable)' test "$DYN_ALIVE" -eq 1
+_helper_control
+g1 "$G1/real"
 pop_reported() { [[ "$G1_OUT" == *"POP commands="* && "$G1_OUT" != *VACUOUS* ]]; }
 assert_true 'Guard 1: the scan examined a population at or above every floor (not vacuous)' pop_reported
 pop_axes_covered() {
@@ -726,26 +801,23 @@ g1 "$G1/planted"
 assert_true 'Guard 1 positive control: the scanner flags the old hook text registered under Stop (and names pgrep)' bash -c '[[ "$1" == 1 && "$2" == *"FLAG"*"[pgrep]"* ]]' _ "$G1_RC" "$G1_OUT"
 
 # --- live decoy: the old hook text, executed under the shim, DOES kill a pattern-matched Chrome ---
-start_decoy 'chrome --remote-debugging-pipe --user-data-dir=/synthetic/decoy-profile'; DECOY=$SPAWNED
+start_g1_decoy live; DECOY=$SPAWNED
 printf '%s' "$DECOY" > "$SHIM/decoy.pid"
 shim_resolves() { local out; out="$(PATH="$SHIM:$PATH" pgrep anything)"; [[ "$(PATH="$SHIM:$PATH" command -v pgrep)" == "$SHIM/pgrep" && "$out" == "$DECOY" ]]; }
 assert_true 'Guard 1 harness: under the scratch PATH pgrep resolves to the shim and prints only the decoy pid' shim_resolves
 assert_true 'Guard 1 harness: the decoy is a live process before any hook runs' alive "$DECOY"
+decoy_not_old_shaped() { local a; a="$(proc_argv "$DECOY")"; if [[ "$a" == "sleep-decoy-"* ]] && ! old_pattern_selects "$a"; then return 0; fi; return 1; }
+assert_true 'Guard 1 harness: the decoy argv (read from /proc) cannot be selected by the retired Stop hook'"'"'s own pattern, so a host that still has that hook installed cannot kill it' decoy_not_old_shaped
 cases=$((cases + 1))
 if run_under_shim "$OLD_HOOK" "$DECOY" "$DECOY"; then bad 'Guard 1 positive control: the old hook text killed the decoy'; else ok 'Guard 1 positive control: the old hook text killed the decoy (the decoy is a real target)'; fi
-# EVERY executable population script of the real tree (plugin hook scripts, the sourced slot script, one hop of sourced libs) is run under
-# the shim; the decoy must survive each, and the loop must have run (not zero iterations)
-start_decoy 'chrome --remote-debugging-pipe --user-data-dir=/synthetic/decoy-profile-2'; DECOY=$SPAWNED
-g1_dynamic "$G1/real" "$DECOY"
-assert_true 'Guard 1 live: every executable population script of the real tree ran under the shim (at least the floor), not zero iterations' test "$DYN_RAN" -ge "$G1_FLOOR_RUN"
-assert_true 'Guard 1 live: the decoy survived every population script of the real tree (the positive control above proves the decoy is killable)' test "$DYN_ALIVE" -eq 1
+# (the live rows over EVERY executable population script of the real tree ran above, before the helper control)
 
 # --- Guard 1 mutation matrix: each mutated copy must be flagged (or hit a vacuity floor, or kill the decoy under the shim) ---
 g1_mutant 1-restore-old-hook restore-old-hook 1 'Guard 1 mutant 1: the old hook and its Stop registration restored → RED' 'browser-cleanup-hook.sh'
 g1_mutant 2-other-event killer-under-sessionstart 1 'Guard 1 mutant 2: a pattern-killing script registered under SessionStart → RED' 'zz-killer.sh'
 g1_mutant 3-second-killer second-killer-same-event 1 'Guard 1 mutant 3: a second killing hook after the compliant ones in the same Stop array → RED' 'zz-killer.sh'
 g1_mutant 4-mcp-pkill mcp-pkill 1 'Guard 1 mutant 4: pkill -9 -f "[c]hrome.*$prof" back in the .mcp.json launch string → RED' ' .mcp.json:playwright'
-g1_mutant 5-empty-population empty-commands 3 'Guard 1 mutant 5: hooks.json command population emptied → RED (vacuity floor)'
+g1_mutant 5-empty-population empty-commands 3 'Guard 1 mutant 5: hooks.json command population emptied → RED (vacuity floor)' 'G1_FLOOR_CMDS='
 g1_mutant 6-second-in-group second-in-group 1 'Guard 1 mutant 6: a killer as the SECOND hook inside one hooks.json group → RED' 'zz-killer.sh'
 g1_mutant 7-plugin-mcp plugin-mcp-pkill 1 'Guard 1 mutant 7: a pkill in plugins/soleur/.mcp.json → RED' 'plugins/soleur/.mcp.json:reaper'
 g1_mutant 8-sourced-killer sourced-killer 1 'Guard 1 mutant 8: a pattern kill appended to the sourced slot script → RED' 'playwright-mcp-profile-slot.sh'
@@ -758,14 +830,16 @@ g1_mutant 12-killall killall-chrome 1 'Guard 1 mutant 12: killall -9 chrome → 
 g1_mutant 13-pidof pidof-chrome 1 'Guard 1 mutant 13: kill $(pidof chrome) → RED' 'zz-killer.sh'
 g1_mutant 14-ps-grep-kill ps-grep-kill 1 'Guard 1 mutant 14: ps | grep chrome | xargs kill (the grep branch) → RED' 'zz-killer.sh'
 g1_mutant 15-continuation continuation 1 'Guard 1 mutant 15: a backslash-continued pkill -f \<newline> "chrome..." → RED' 'zz-killer.sh'
-g1_mutant 16-drop-plugin-mcp drop-plugin-mcp 3 'Guard 1 mutant 16: plugins/soleur/.mcp.json emptied → RED (mcp floor)'
-g1_mutant 17-drop-sourced drop-sourced 3 'Guard 1 mutant 17: the launch string no longer sources the slot script → RED (sourced floor)'
+g1_mutant 16-drop-plugin-mcp drop-plugin-mcp 3 'Guard 1 mutant 16: plugins/soleur/.mcp.json emptied → RED (mcp floor)' 'G1_FLOOR_MCP='
+g1_mutant 17-drop-sourced drop-sourced 3 'Guard 1 mutant 17: the launch string no longer sources the slot script → RED (sourced floor)' 'G1_FLOOR_SOURCED='
 # the shim run catches what the static text scan cannot see: indirection, split words, and (as a known positive) the old hook
 g1_dyn_mutant 18-dyn-old-hook restore-old-hook 'Guard 1 mutant 18 (dynamic): the old hook, registered under Stop, kills the decoy when the population is executed under the shim → RED'
 g1_dyn_mutant 19-dyn-indirection indirection 'Guard 1 mutant 19 (dynamic): pkill -f "$PAT" with the pattern in a variable (invisible to the static scan) kills the decoy → RED'
 g1_dyn_mutant 20-dyn-split-word split-word 'Guard 1 mutant 20 (dynamic): pkill -f "chr""ome" (split word, invisible to the static scan) kills the decoy → RED'
+g1_dyn_mutant 21-dyn-sourced-split-word sourced-split-word 'Guard 1 mutant 21 (dynamic): a split-word pkill planted in the SOURCED slot script (executed by sourcing under the shim) kills the decoy → RED'
+g1_mutant 22-settings-hop-killer settings-hop-killer 1 'Guard 1 mutant 22: a killer in a lib sourced one hop from a .claude/settings.json hook script → RED' '.claude/hooks/lib/zz-helper.sh'
 # Mutation (harness): the shim prints nothing, so the old hook kills nothing — the positive control must then FAIL
-start_decoy 'chrome --remote-debugging-pipe --user-data-dir=/synthetic/decoy-profile-3'; DECOY=$SPAWNED
+start_g1_decoy harness; DECOY=$SPAWNED
 red 'Guard 1 mutant (harness): a pgrep shim that prints nothing → the old hook kills nothing, so the positive control would fail (the decoy is what makes it bite)' run_under_shim "$OLD_HOOK" "" "$DECOY"
 
 # ===========================================================================
@@ -880,7 +954,6 @@ for l in open(sys.argv[1]):
 # run_n <pfx> <root> <home> <cmd> <n> <overlap|sequential> [VAR=val...]
 # sets RN_PROFS (one per line), RN_RAN (shims that ran), RN_OVERLAP (every launch alive AND every distinct profile's lock held at one instant),
 # RN_MS (milliseconds from starting the first launch until its server shim ran)
-RN_PROFS=""; RN_RAN=0; RN_OVERLAP=0; RN_MS=0
 run_n() {
   local pfx="$1" root="$2" home="$3" cmd="$4" n="$5" mode="$6" i tag p t0; shift 6
   RN_PROFS=""; RN_RAN=0; RN_OVERLAP=1; RN_MS=0
@@ -904,12 +977,6 @@ rn_distinct() { [[ "$RN_RAN" -eq "$1" && "$(sort -u <<< "$RN_PROFS" | grep -c . 
 rn_overlap() { [[ "$RN_OVERLAP" -eq 1 ]]; }
 prof0() { printf '%s/.cache/playwright-mcp-profile' "$1"; }
 FAST=PW_PROFILE_SLOT0_WAIT_S=0.3
-# one launch ran and landed on <profile>
-prof_is() { [[ "$RN_RAN" -eq 1 && "$(head -n1 <<< "$RN_PROFS")" == "$1" ]]; }
-# <profile-dir>/SingletonLock is a symlink naming <target>
-link_is() { [[ -L "$1/SingletonLock" && "$(readlink "$1/SingletonLock")" == "$2" ]]; }
-no_link() { [[ ! -e "$1/SingletonLock" && ! -L "$1/SingletonLock" ]]; }
-mode_is() { [[ "$(stat -c %a "$1" 2>/dev/null)" == "$2" ]]; }
 
 # --- real tree: overlapped launches ---
 H="$G2/h-two"
@@ -999,6 +1066,16 @@ ln -s "$HOST_NOW-$RECYCLED" "$(prof0 "$H")/SingletonLock"
 run_n recycled "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
 recycled_state() { prof_is "$(prof0 "$H")" && no_link "$(prof0 "$H")" && alive "$RECYCLED"; }
 assert_true 'Guard 2 must-PASS: a SingletonLock naming a live pid whose comm is not Chrome (a recycled pid) is stale: cleared, slot 0 reused, the unrelated process untouched' recycled_state
+
+# --- a live Chromium derivative (comm msedge) or headless build (comm headless_shell) owner is a browser too: kept, never read as a recycled pid ---
+for _c in msedge headless_shell; do
+  H="$G2/h-comm-$_c"; mkdir -p "$(prof0 "$H")"
+  start_comm_owner "$_c"; COMM_OWNER=$SPAWNED
+  ln -s "$HOST_NOW-$COMM_OWNER" "$(prof0 "$H")/SingletonLock"
+  run_n "comm-$_c" "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+  comm_kept() { prof_is "$(prof0 "$H")-1" && link_is "$(prof0 "$H")" "$HOST_NOW-$COMM_OWNER" && alive "$COMM_OWNER"; }
+  assert_true "Guard 2 must-PASS: a free lock but a live owner whose comm is $_c skips the slot and keeps its SingletonLock (a browser, not a recycled pid)" comm_kept
+done
 
 # --- a lock naming ANOTHER HOST is never removed, whatever the local pid says ---
 H="$G2/h-foreign"; mkdir -p "$(prof0 "$H")"
@@ -1173,6 +1250,16 @@ run_n timing "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
 timing_ok() { prof_is "$(prof0 "$H")-8" && [[ "$RN_MS" -lt 1500 ]]; }
 assert_true 'Guard 2: slots 1+ never wait — eight busy slots resolve to slot 8 in under 1.5 s (a loop that waited on each slot would take over 2.7 s)' timing_ok
 
+# slots >= 1 never wait on a live-Chrome SingletonLock either: slot 0 belongs to another session (no wait), slot 1 has a live Chrome and no
+# owner file (an unknown owner would be waited for if slots 1+ waited), so the launch resolves to slot 2 at once despite a 4 s budget
+H="$G2/h-timing2"; mkdir -p "$(prof0 "$H")" "$(prof0 "$H")-1"
+printf '%s\n' "$OTHER_SESSION" > "$(prof0 "$H")/.pwslot.owner"
+start_chrome_owner; T2A=$SPAWNED; start_chrome_owner; T2B=$SPAWNED
+ln -s "$HOST_NOW-$T2A" "$(prof0 "$H")/SingletonLock"; ln -s "$HOST_NOW-$T2B" "$(prof0 "$H")-1/SingletonLock"
+run_n timing2 "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap PW_PROFILE_SLOT0_WAIT_S=4
+timing2_ok() { prof_is "$(prof0 "$H")-2" && [[ "$RN_MS" -lt 2500 ]]; }
+assert_true 'Guard 2: slots 1+ never wait on a live-Chrome SingletonLock — slots 0 and 1 held that way resolve to slot 2 in under 2.5 s with a 4 s budget' timing2_ok
+
 # --- sourced-script hygiene: nothing leaks into the exec'd shell, no errexit/nounset, fd 9 stays open ---
 H="$G2/h-hygiene"; mkdir -p "$H" "$G2/hyg"
 ( cd "$REPO_ROOT" && HOME="$H" PW_PROFILE_SLOT0_WAIT_S=0.3 bash -c ': | :; compgen -v | sort > "$1/v0"; declare -F | sort > "$1/f0"; export -p | grep -v "^declare -x _=" | sort > "$1/e0"; . "$2" || exit 1; compgen -v | sort > "$1/v1"; declare -F | sort > "$1/f1"; export -p | grep -v "^declare -x _=" | sort > "$1/e1"; printf "flags=%s fd9=%s\n" "$-" "$([ -e /proc/self/fd/9 ] && echo open || echo closed)"' _ "$G2/hyg" "$SLOT_REL" ) > "$G2/hyg/out" 2>&1 || true
@@ -1277,7 +1364,7 @@ if [[ -n "$MROOT" ]]; then
   red 'Guard 2 mutant 11: the hostname ignored → a foreign host'"'"'s lock with a locally dead pid is removed' m11_removed
 fi
 # 12 — any live pid counts as a Chrome owner (the pre-review behaviour): a recycled pid blocks slot 0
-slot_mutant 12-any-live-pid "*[Cc]hrom* | *headless_shell* | '')" '*)'
+slot_mutant 12-any-live-pid "*[Cc]hrom* | *headless_shell* | *[Ee]dge* | *[Bb]rave* | *[Vv]ivaldi* | *[Oo]pera* | '')" '*)'
 if [[ -n "$MROOT" ]]; then
   H="$G2/h-m12"; mkdir -p "$(prof0 "$H")"; start_sleeper; RECYCLED=$SPAWNED; ln -s "$HOST_NOW-$RECYCLED" "$(prof0 "$H")/SingletonLock"
   run_n g2m12 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
@@ -1373,6 +1460,33 @@ if [[ -n "$MROOT" ]]; then
   m22_probe_busy() { [[ "$BAR_NOTES" -ge 1 ]]; }
   red 'Guard 2 mutant 22: the strict rc-0 probe, a probe answering 75 → "no usable flock" is printed and the launch takes the no-lease branch (the deterministic form)' m22_probe_busy
 fi
+# 23 — the headless build dropped from the Chrome-owner comm list: a live headless_shell owner reads as a recycled pid
+slot_mutant 23-comm-no-headless '*headless_shell* | ' ''
+if [[ -n "$MROOT" ]]; then
+  H="$G2/h-m23"; mkdir -p "$(prof0 "$H")"; start_comm_owner headless_shell; OWNER=$SPAWNED; ln -s "$HOST_NOW-$OWNER" "$(prof0 "$H")/SingletonLock"
+  run_n g2m23 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+  m23_removed() { if [[ "$RN_RAN" -eq 1 ]] && no_link "$(prof0 "$H")"; then return 0; fi; return 1; }
+  red 'Guard 2 mutant 23: headless_shell dropped from the owner comm list → a live headless owner'"'"'s lock is removed' m23_removed
+fi
+# 24 — the Chromium derivatives dropped from the comm list: a live msedge owner reads as a recycled pid
+slot_mutant 24-comm-no-derivatives '*[Ee]dge* | *[Bb]rave* | *[Vv]ivaldi* | *[Oo]pera* | ' ''
+if [[ -n "$MROOT" ]]; then
+  H="$G2/h-m24"; mkdir -p "$(prof0 "$H")"; start_comm_owner msedge; OWNER=$SPAWNED; ln -s "$HOST_NOW-$OWNER" "$(prof0 "$H")/SingletonLock"
+  run_n g2m24 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
+  m24_removed() { if [[ "$RN_RAN" -eq 1 ]] && no_link "$(prof0 "$H")"; then return 0; fi; return 1; }
+  red 'Guard 2 mutant 24: the Chromium derivatives dropped from the owner comm list → a live msedge owner'"'"'s lock is removed' m24_removed
+fi
+# 25 — slots >= 1 wait in the SingletonLock re-check loop (the slot-0-only guard dropped there; mutant 15 covers the flock path)
+slot_mutant 25-recheck-waits 'if [ "$_pwslot_n" -eq 0 ] && [ "$_pwslot_waitok" -eq 0 ] && [ "$_pwslot_left" -lt 0 ]; then' 'if [ "$_pwslot_waitok" -eq 0 ] && [ "$_pwslot_left" -lt 0 ]; then'
+if [[ -n "$MROOT" ]]; then
+  H="$G2/h-m25"; mkdir -p "$(prof0 "$H")" "$(prof0 "$H")-1"
+  printf '%s\n' "$OTHER_SESSION" > "$(prof0 "$H")/.pwslot.owner"
+  start_chrome_owner; M25A=$SPAWNED; start_chrome_owner; M25B=$SPAWNED
+  ln -s "$HOST_NOW-$M25A" "$(prof0 "$H")/SingletonLock"; ln -s "$HOST_NOW-$M25B" "$(prof0 "$H")-1/SingletonLock"
+  run_n g2m25 "$MROOT" "$H" "$MCP_ARGS" 1 overlap PW_PROFILE_SLOT0_WAIT_S=4
+  m25_slow() { [[ "$RN_RAN" -eq 1 && "$RN_MS" -ge 2500 ]]; }
+  red 'Guard 2 mutant 25: slots 1+ wait in the SingletonLock re-check → the launch takes 2.5 s or more' m25_slow
+fi
 
 # ===========================================================================
 # Guard 3 — the registrations
@@ -1416,13 +1530,13 @@ if [[ $((pass + fail)) -ne $cases ]]; then
   printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d) — a row did not report\n' "$((pass + fail))" "$cases" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=50   # Guard 1: 21 static + 3 dynamic mutants; Guard 2: mutants 1-5 and 7-22 (6 is a harness row); Guard 3: mutants 1-5
-EXPECTED_RED_ROWS=55   # the 50 mutants, one extra row each for Guard 2 mutants 21 and 22, plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
+EXPECTED_MUTANTS=55   # Guard 1: 22 static + 4 dynamic mutants; Guard 2: mutants 1-5 and 7-25 (6 is a harness row); Guard 3: mutants 1-5
+EXPECTED_RED_ROWS=60   # the 55 mutants, one extra row each for Guard 2 mutants 21 and 22, plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
 if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROWS ]]; then
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=175
+MIN_ASSERTIONS=189
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1
