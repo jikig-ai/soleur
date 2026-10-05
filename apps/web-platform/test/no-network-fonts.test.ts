@@ -430,12 +430,33 @@ describe("no build-time network font fetch", () => {
     });
   });
 
+  it("a developer's global git ignore cannot hide an untracked file from the sweep (core.excludesFile)", () => {
+    const home = tree({ "git/ignore": "*.css\n" });
+    const root = tree({
+      "app/fonts.ts": LOCAL_FONT,
+      "app/leak.css": "@import url(https://fonts.googleapis.com/css2);\n",
+      ...ASSET,
+    });
+    const prior = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = home;
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: root, env: gitFixtureEnv(root) });
+      expect(enumerateGit(root)).toContain("app/leak.css");
+    } finally {
+      if (prior === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = prior;
+      for (const r of [home, root]) rmSync(r, { recursive: true, force: true });
+    }
+  });
+
   it("every .woff2 app/fonts.ts loads is a required vendored asset", () => {
     // Comments are stripped first so a commented-out `src:` cannot satisfy the check, and
     // every match is checked so a second font declaration cannot hide behind the first.
     const code = stripComments(readFileSync(join(APP_ROOT, "app/fonts.ts"), "utf8"));
-    const srcs = [...code.matchAll(/src:\s*"([^"]+\.woff2)"/g)].map((m) => m[1]);
+    const srcs = [...code.matchAll(/src:\s*["'`]([^"'`]+\.woff2)["'`]/g)].map((m) => m[1]);
+    const calls = (code.match(/\blocalFont\(/g) ?? []).length;
     expect(srcs.length, "fonts.ts must load a .woff2 through next/font/local").toBeGreaterThan(0);
+    expect(srcs.length, "every localFont() call must declare a literal .woff2 src").toBe(calls);
     const required = REQUIRED_ASSETS.map((a) => join(APP_ROOT, a));
     for (const src of srcs) {
       expect(required, `${src} is not a required vendored asset`).toContain(

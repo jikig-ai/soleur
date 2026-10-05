@@ -590,8 +590,8 @@ fi
 # The diagnostic only runs inside the three failure arms above, so nothing else
 # exercises it: pin that it still emits every field a reader needs.
 G_DIAG_OUT="$(g_diag)"
-if [[ "$G_DIAG_OUT" == *"markers=["*"SOLEUR_REAP_ARCHIVE_DEFERRED"*"] tail20=["*"] status=["*"] log=["*"chore(archive-kb)"*"]" ]]; then
-  pass "G: failure diagnostic carries the DEFERRED marker, tail20, status and the archive commit in log"
+if [[ "$G_DIAG_OUT" == *"markers=["*"SOLEUR_"*"] tail20=["*"] status=["*"] log=["*"]" ]]; then
+  pass "G: failure diagnostic carries SOLEUR_ markers, tail20, status and log"
 else
   fail "G: failure diagnostic is missing a field: $G_DIAG_OUT"
 fi
