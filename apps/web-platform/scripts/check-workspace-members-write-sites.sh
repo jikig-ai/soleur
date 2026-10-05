@@ -129,7 +129,7 @@ check_site() {
     local entry_pat="${entry_rest%:*}"
     if [[ "$filepath" == "$entry_path" ]]; then
       if [[ "$content" =~ $entry_pat ]] || \
-         sed -n "${lineno}p" "$filepath" 2>/dev/null | grep -qE "$entry_pat"; then
+         grep -qE "$entry_pat" < <(sed -n "${lineno}p" "$filepath" 2>/dev/null); then
         return 0
       fi
     fi

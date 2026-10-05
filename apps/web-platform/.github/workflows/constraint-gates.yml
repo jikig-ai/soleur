@@ -43,7 +43,7 @@ jobs:
           # making the three-dot diff fail under `set -e` and redden every
           # non-target PR. checkout already used fetch-depth: 0 (full history).
           git fetch --no-tags origin "$BASE_REF"
-          if git diff --name-only "origin/${BASE_REF}...HEAD" | grep -qE '^apps/web-platform/'; then
+          if grep -qE '^apps/web-platform/' < <(git diff --name-only "origin/${BASE_REF}...HEAD"); then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
