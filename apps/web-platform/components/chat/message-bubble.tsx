@@ -187,6 +187,11 @@ export const MessageBubble = memo(function MessageBubble({
   const isActive = messageState === "thinking" || messageState === "tool_use" || messageState === "streaming";
   const isError = messageState === "error";
   const isDone = messageState === "done";
+  // #9515 — consolidated working box: the ActivityTrail footer renders for
+  // every live-ish assistant bubble (priors + live step + elapsed +
+  // interrupted marker in ONE surface). Done/error/hydrated bubbles never
+  // reach it — turn end collapses for free.
+  const showTrail = role === "assistant" && (isActive || interrupted);
 
   const borderStyle = isError
     ? "border-2 border-red-900/60"
@@ -252,7 +257,22 @@ export const MessageBubble = memo(function MessageBubble({
 
           {status === "aborted" && role === "assistant"
             ? renderAbortedAssistant({ content, usage, variant })
-            : renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, retrying, isDone, variant })}
+            : renderBubbleContent({
+                isUser,
+                messageState,
+                content,
+                toolLabel,
+                toolsUsed,
+                retrying,
+                isDone,
+                variant,
+                // #9515 — the trail's live line owns the CURRENT step;
+                // body's ToolStatusChip is suppressed so the label can
+                // never double. When the live line is itself suppressed
+                // (parked gate / interrupted) the body chip stays — the
+                // step must show somewhere honest.
+                suppressToolStatus: showTrail && !suppressLive && !interrupted,
+              })}
 
           {commandBlocks && commandBlocks.length > 0 && (
             <CommandStreamBlocks blocks={commandBlocks} />
@@ -262,7 +282,7 @@ export const MessageBubble = memo(function MessageBubble({
               live narration/tool step + honest Interrupted marker, all
               INSIDE the bubble. Render-gated on live-ish state so done /
               error / hydrated bubbles never show a stale trail. */}
-          {role === "assistant" && (isActive || interrupted) && (
+          {showTrail && (
             <ActivityTrail
               activity={activity}
               interrupted={interrupted}
@@ -373,6 +393,7 @@ function renderBubbleContent({
   retrying,
   isDone,
   variant,
+  suppressToolStatus = false,
 }: {
   isUser: boolean;
   messageState: MessageState | undefined;
@@ -382,6 +403,9 @@ function renderBubbleContent({
   retrying: boolean;
   isDone: boolean;
   variant: "full" | "sidebar";
+  /** #9515 — when the ActivityTrail live line carries the current step,
+   *  the body's ToolStatusChip is dropped (one label, one surface). */
+  suppressToolStatus?: boolean;
 }): React.ReactNode {
   const wrapCode = variant === "sidebar";
   if (isUser) {
@@ -410,6 +434,7 @@ function renderBubbleContent({
       return <ThinkingDots />;
     case "tool_use":
       if (retrying) return <RetryingChip label={toolLabel} />;
+      if (suppressToolStatus) return <ThinkingDots />;
       return toolLabel ? <ToolStatusChip label={toolLabel} /> : <ThinkingDots />;
     case "streaming":
       return (

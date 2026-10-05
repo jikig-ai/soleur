@@ -55,7 +55,8 @@ describe("buildToolLabel (#2428)", () => {
         { command: "git log --oneline -5" },
         workspacePath,
       );
-      expect(label).toBe("Checking git log");
+      // #9515 — safe business map, never raw subcommand interpolation.
+      expect(label).toBe("Reviewing commit history");
     });
 
     test("unknown long command collapses to 'Working…' (FR1 safe default)", () => {
@@ -404,22 +405,23 @@ describe("Bash verb allowlist (FR1 #2861)", () => {
     expect(label).toBe(expected);
   });
 
-  test("git subcommand produces 'Checking git <sub>'", () => {
+  test("git subcommand produces a safe business label (#9515)", () => {
     const label = buildToolLabel(
       "Bash",
       { command: "git log --oneline -5" },
       workspacePath,
     );
-    expect(label).toBe("Checking git log");
+    // #9515 — safe business map, never raw subcommand interpolation.
+    expect(label).toBe("Reviewing commit history");
   });
 
-  test("gh subcommand produces 'Querying GitHub'", () => {
+  test("gh subcommand produces a business label (#9515)", () => {
     const label = buildToolLabel(
       "Bash",
       { command: "gh issue view 2861" },
       workspacePath,
     );
-    expect(label).toBe("Querying GitHub");
+    expect(label).toBe("Reviewing an issue");
   });
 
   test("env-var assignment before verb is stripped", () => {

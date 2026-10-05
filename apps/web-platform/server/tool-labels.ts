@@ -165,20 +165,182 @@ const BASH_VERB_LABELS: Record<string, string> = {
   rg: "Searching code",
   grep: "Searching code",
   cat: "Reading file",
+  head: "Reading file",
+  tail: "Reading file",
+  less: "Reading file",
+  wc: "Counting output",
+  sort: "Sorting output",
+  uniq: "Deduplicating output",
+  jq: "Processing JSON data",
+  yq: "Processing structured data",
+  sed: "Transforming text",
+  awk: "Transforming text",
+  cut: "Transforming text",
+  tr: "Transforming text",
+  xargs: "Processing items",
+  tee: "Writing output",
+  diff: "Comparing files",
+  patch: "Applying a patch",
   npm: "Running package command",
   bun: "Running package command",
   pnpm: "Running package command",
   yarn: "Running package command",
+  npx: "Running a package tool",
+  bunx: "Running a package tool",
+  node: "Running a script",
+  tsx: "Running a script",
+  python: "Running a script",
+  python3: "Running a script",
+  pip: "Managing Python packages",
+  pip3: "Managing Python packages",
+  uv: "Managing Python packages",
+  poetry: "Managing Python packages",
+  gem: "Managing packages",
+  bundle: "Managing packages",
+  composer: "Managing packages",
+  cargo: "Building the project",
+  go: "Building the project",
+  make: "Building the project",
+  cmake: "Building the project",
   doppler: "Fetching secrets",
   terraform: "Running Terraform",
   tofu: "Running Terraform",
+  docker: "Managing containers",
+  kubectl: "Managing containers",
+  helm: "Managing containers",
+  bash: "Running a script",
+  sh: "Running a script",
+  zsh: "Running a script",
+  curl: "Making a web request",
+  wget: "Making a web request",
+  ssh: "Connecting to a remote host",
+  scp: "Copying files between hosts",
+  rsync: "Synchronizing files",
+  sleep: "Pausing briefly",
+  mkdir: "Creating directories",
+  mv: "Moving files",
+  cp: "Copying files",
+  rm: "Removing files",
+  touch: "Creating files",
+  chmod: "Adjusting file permissions",
+  chown: "Adjusting file ownership",
+  ln: "Linking files",
+  tar: "Working with archives",
+  zip: "Compressing files",
+  unzip: "Extracting files",
+  gzip: "Compressing files",
+  gunzip: "Decompressing files",
+  sha256sum: "Verifying a checksum",
+  md5sum: "Verifying a checksum",
+  openssl: "Performing a crypto operation",
+  ps: "Checking running processes",
+  kill: "Stopping a process",
+  pkill: "Stopping a process",
+  df: "Checking disk space",
+  du: "Measuring disk usage",
+  free: "Checking memory",
+  top: "Checking system state",
+  env: "Checking the environment",
+  which: "Checking the environment",
+  type: "Checking the environment",
 };
 
-/** Parse the first meaningful token from a shell command, skipping leading
- *  env-var assignments (`FOO=bar ls` → `ls`). Returns null when the command
+/**
+ * #9515 — `git <subcommand>` mapped to business language. NEVER interpolate
+ * the raw subcommand: `rev-parse`/`rev-list`/`reflog` are jargon to the
+ * target user (CMO finding). Unknown subs degrade to the honest generic —
+ * the shape test in tool-labels-shape.test.ts bans raw-token leak through.
+ */
+const GIT_SUBCOMMAND_LABELS: Record<string, string> = {
+  status: "Checking repository status",
+  log: "Reviewing commit history",
+  diff: "Comparing changes",
+  show: "Inspecting changes",
+  fetch: "Fetching latest changes",
+  pull: "Fetching latest changes",
+  checkout: "Switching branches",
+  switch: "Switching branches",
+  add: "Preparing a commit",
+  commit: "Preparing a commit",
+  push: "Pushing changes",
+  branch: "Working with branches",
+  stash: "Stashing changes",
+  rebase: "Rebasing changes",
+  merge: "Merging changes",
+  tag: "Working with tags",
+  remote: "Checking remotes",
+  blame: "Checking line history",
+  "rev-parse": "Inspecting the repository",
+  "rev-list": "Inspecting the repository",
+  reflog: "Inspecting the repository",
+  worktree: "Managing worktrees",
+  clean: "Cleaning the working tree",
+  restore: "Restoring files",
+  reset: "Resetting changes",
+  "cherry-pick": "Applying a commit",
+  revert: "Reverting a commit",
+};
+
+/** #9515 — `gh <noun> <verb>` business labels for the highest-frequency
+ *  GitHub CLI paths (the Concierge's dominant compound-command tool). */
+const GH_SUBCOMMAND_LABELS: Record<string, string> = {
+  "pr list": "Listing pull requests",
+  "pr view": "Reviewing a pull request",
+  "pr checks": "Checking CI on a pull request",
+  "pr status": "Checking pull request status",
+  "pr merge": "Merging a pull request",
+  "pr close": "Closing a pull request",
+  "pr create": "Opening a pull request",
+  "pr diff": "Comparing pull request changes",
+  "pr review": "Reviewing a pull request",
+  "pr comment": "Commenting on a pull request",
+  "issue list": "Listing issues",
+  "issue view": "Reviewing an issue",
+  "issue create": "Filing an issue",
+  "issue close": "Closing an issue",
+  "issue comment": "Commenting on an issue",
+  "run list": "Checking CI runs",
+  "run view": "Reviewing a CI run",
+  "run watch": "Watching a CI run",
+  "workflow list": "Listing workflows",
+  "workflow run": "Triggering a workflow",
+  "release list": "Listing releases",
+  "release view": "Reviewing a release",
+  "repo view": "Reviewing the repository",
+  api: "Querying GitHub",
+  search: "Searching GitHub",
+  label: "Managing labels",
+};
+
+/**
+ * #9515 — verbs that are setup noise in a compound command, NOT the work:
+ * `cd /workspaces/x; gh pr list` is "Listing pull requests", not "Working…".
+ * The segment walk skips these and maps the first meaningful verb.
+ */
+const SETUP_NOISE_VERBS = new Set([
+  "cd", "pushd", "popd", "export", "set", "unset", "echo", "printf", "true",
+  "false", "eval", "source", ".", "read", "local", "declare", "typeset",
+  "trap", "ulimit", "umask", "alias", "unalias", "dirs", "jobs", "bg", "fg",
+  "disown", "builtin", "time", "nice", "nohup", "chronic", "wait",
+  "done", "fi", "esac", "{", "}", "in", "test", "[",
+]);
+
+/** Shell control-flow keywords — a segment starting with a loop/conditional
+ *  HEADER keyword (`for n in …`, `while`, `until`, `if`, `elif`, `case`) is
+ *  control structure, not the work — the whole segment is skipped so the
+ *  loop body's real verb surfaces (`for n in …; do gh pr view; done` → `gh`).
+ *  Body keywords (`do`, `then`, `else`) are stripped instead — the remainder
+ *  IS the command. */
+const HEADER_KEYWORDS = new Set([
+  "for", "while", "until", "if", "elif", "case", "select",
+]);
+const BODY_KEYWORDS = new Set(["do", "then", "else"]);
+
+/** Parse the first meaningful token from a shell segment, skipping leading
+ *  env-var assignments (`FOO=bar ls` → `ls`). Returns null when the segment
  *  starts with a token we can't map safely (`bash -c`, `sudo`, `$(...)`). */
-function parseLeadingVerb(command: string): string | null {
-  const trimmed = command.trim();
+function parseLeadingVerb(segment: string): string | null {
+  const trimmed = segment.trim();
   if (!trimmed) return null;
 
   const tokens = trimmed.split(/\s+/);
@@ -205,14 +367,51 @@ function parseLeadingVerb(command: string): string | null {
 }
 
 /**
+ * #9515 — walk a compound command's segments (`;`, `&&`, `||`, `|`,
+ * newlines) and return the first MEANINGFUL verb with its segment. Setup
+ * noise (`cd`, env assignments, `export`) and control-flow keywords (`for`,
+ * `do`, `if`, `then`) are skipped — measured against prod Sentry fallback
+ * distribution (issue 124542794: `cd`/`for`/`if`/`sleep` dominated 490
+ * events — every one a compound command where the real verb sits behind a
+ * setup segment or inside a loop body).
+ */
+function findMeaningfulVerb(
+  command: string,
+): { verb: string; segment: string } | null {
+  const segments = command.split(/;|&&|\|\||\||\n/);
+  for (const rawSegment of segments) {
+    let segment = rawSegment.trim();
+    if (!segment) continue;
+    const head = segment.split(/\s+/)[0];
+    // Loop/conditional headers (`for n in …`, `if cmd; then`) — the work
+    // lives in a `do`/`then` body segment, not the header.
+    if (HEADER_KEYWORDS.has(head)) continue;
+    // Body keywords (`do`, `then`, `else`) prefix the actual command.
+    for (let guard = 0; guard < 4; guard++) {
+      const tokens = segment.trim().split(/\s+/);
+      if (tokens.length > 1 && BODY_KEYWORDS.has(tokens[0])) {
+        segment = tokens.slice(1).join(" ");
+        continue;
+      }
+      break;
+    }
+    const verb = parseLeadingVerb(segment);
+    if (!verb) continue;
+    if (SETUP_NOISE_VERBS.has(verb)) continue;
+    return { verb, segment: segment.trim() };
+  }
+  return null;
+}
+
+/**
  * Map a Bash command to a human-readable activity label. Returns "Working…"
  * as the safe default for unknown verbs (fires `reportSilentFallback` so the
  * allowlist can be tightened from prod data).
  */
 export function mapBashVerb(command: string): string {
-  const verb = parseLeadingVerb(command);
+  const found = findMeaningfulVerb(command);
 
-  if (!verb) {
+  if (!found) {
     reportSilentFallback(null, {
       feature: "command-center",
       op: "tool-label-fallback",
@@ -222,13 +421,21 @@ export function mapBashVerb(command: string): string {
     return "Working…";
   }
 
-  // Subcommand-aware verbs come first — `git log` / `gh issue view`.
+  const { verb, segment } = found;
+  const sub = segment.split(/\s+/).slice(1, 3).join(" ");
+
+  // Subcommand-aware verbs come first — safe business maps, never raw
+  // subcommand interpolation (#9515: `git rev-parse` is jargon, not copy).
   if (verb === "git") {
-    const sub = command.trim().split(/\s+/)[1] ?? "";
-    return sub ? `Checking git ${sub}` : "Checking git";
+    const first = segment.split(/\s+/)[1] ?? "";
+    return GIT_SUBCOMMAND_LABELS[first] ?? "Working with the repository";
   }
   if (verb === "gh") {
-    return "Querying GitHub";
+    return (
+      GH_SUBCOMMAND_LABELS[sub] ??
+      GH_SUBCOMMAND_LABELS[sub.split(" ")[0] ?? ""] ??
+      "Querying GitHub"
+    );
   }
 
   const label = BASH_VERB_LABELS[verb];
