@@ -2,6 +2,16 @@ import { test, expect } from "@playwright/test";
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
 import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
 
+/**
+ * The /signup "no account" banner. The nav-pending island also renders
+ * role="status" while the /login -> /signup navigation settles, so an
+ * unfiltered getByRole("status") hits two elements and the non-retrying
+ * toContainText calls fail with a strict-mode violation (#9170). Select the
+ * banner by its text instead.
+ */
+const noAccountBanner = (page: import("@playwright/test").Page) =>
+  page.getByRole("status").filter({ hasText: /no Soleur account found/i });
+
 // ---------- OTP Login Flow Tests ----------
 // These test the email OTP sign-in flow end-to-end.
 
@@ -170,15 +180,25 @@ test.describe("Login no-account redirect", () => {
     });
     await expect(emailInput).toHaveValue(email);
 
+    // Deterministic stand-in for the nav-pending island: a second
+    // role="status" element that is NOT the banner. An unfiltered locator
+    // would hit both and fail strict mode, which is the #9170 flake.
+    await page.evaluate(() => {
+      const decoy = document.createElement("div");
+      decoy.setAttribute("role", "status");
+      decoy.textContent = "Loading";
+      document.body.appendChild(decoy);
+    });
+
     // Banner is visible
-    await expect(page.getByRole("status")).toContainText(
+    await expect(noAccountBanner(page)).toContainText(
       /no Soleur account found/i,
     );
-    await expect(page.getByRole("status")).toContainText(email);
+    await expect(noAccountBanner(page)).toContainText(email);
 
     // Banner dismisses on edit (derived from `email !== initialEmail`)
     await emailInput.fill(`${email}-edit`);
-    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(noAccountBanner(page)).toHaveCount(0);
   });
 
   test("/signup with unknown reason value does NOT show the banner", async ({

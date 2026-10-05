@@ -65,8 +65,13 @@ export default defineConfig({
     // Server for public page tests (original config — fake unreachable Supabase URL)
     {
       command: `npm run dev`,
-      port: PUBLIC_PORT,
-      timeout: 120_000,
+      // `url:` readiness, not `port:`. A TCP check calls a server "ready" the
+      // moment it listens, so a first compile of app/layout.tsx that 5xx's let
+      // the suite start and fail one test at a time (64 reds, ~14 min). The
+      // URL poll treats a 5xx as not ready and fails here, at the timeout.
+      // The poll triggers the cold compile, hence 180s rather than 120s.
+      url: `http://localhost:${PUBLIC_PORT}/login`,
+      timeout: 180_000,
       reuseExistingServer: !process.env.CI,
       env: {
         PORT: String(PUBLIC_PORT),
@@ -82,8 +87,8 @@ export default defineConfig({
     // Server for authenticated tests (mock Supabase for middleware auth)
     {
       command: `npm run dev`,
-      port: AUTH_PORT,
-      timeout: 120_000,
+      url: `http://localhost:${AUTH_PORT}/login`,
+      timeout: 180_000,
       reuseExistingServer: !process.env.CI,
       env: {
         PORT: String(AUTH_PORT),

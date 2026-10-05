@@ -31,13 +31,13 @@ const read = (name: string) => stripComments(readFileSync(join(__dirname, "..", 
 describe("playwright dev servers use distinct dist directories", () => {
   const playwright = read("playwright.config.ts");
   const distDirs = [...playwright.matchAll(/NEXT_DIST_DIR:\s*"([^"]+)"/g)].map((m) => m[1]);
-  // Counted by `port:`, not by the command string. Playwright requires exactly one of
-  // `port`/`url` per webServer entry, so this counts ENTRIES. Counting occurrences of
+  // Counted by readiness key (`port:` or `url:`), not by the command string. Playwright
+  // requires exactly one of `port`/`url` per webServer entry, so this counts ENTRIES. Counting occurrences of
   // "command: `npm run dev`" instead would answer "how many entries use that one command"
   // — measured: a third entry spelled `npm run dev:mock` was invisible to it, and its
   // undercount exactly cancelled the missing declaration, leaving the suite green.
   const webServerBlock = playwright.slice(playwright.indexOf("webServer:"));
-  const webServers = (webServerBlock.match(/^\s*port:\s/gm) ?? []).length;
+  const webServers = (webServerBlock.match(/^\s*(?:port|url):\s/gm) ?? []).length;
 
   it("declares one NEXT_DIST_DIR per webServer entry", () => {
     expect(webServers, "expected the two-dev-server harness").toBe(2);

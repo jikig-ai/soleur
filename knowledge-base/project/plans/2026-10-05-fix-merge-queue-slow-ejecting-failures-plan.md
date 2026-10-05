@@ -356,16 +356,16 @@ Path verification: every edited path was confirmed present on this branch; `apps
 
 ### Pre-merge (PR)
 
-- [ ] `git grep -n "next/font/google" -- apps/web-platform ':!apps/web-platform/test/no-network-fonts.test.ts' ':!apps/web-platform/assets/fonts/README.md'` returns no hits (the three test mocks now name `next/font/local`); the standing check is the vitest guard, which also sees untracked files.
-- [ ] The dev server serves `/login` 200 with no network route (`unshare -cn`/`-rn`), or, on a host without user namespaces, the served CSS contains no `fonts.gstatic.com` URL; after `next build` the hashed woff2 exists under `.next/static/media`; `.dockerignore` does not exclude `assets/`.
-- [ ] `no-network-fonts.test.ts`: the unmutated tree is green and prints `scanned N files` with N >= 1,500; mutation rows 1 to 6 each turn it red.
-- [ ] `playwright.config.ts` webServer entries use `url:` readiness; with a deliberately broken `app/layout.tsx` import, `npx playwright test` fails at server readiness within about 3 min (not after the suite), recorded in the PR body.
+- [x] `git grep -n "next/font/google" -- apps/web-platform ':!apps/web-platform/test/no-network-fonts.test.ts' ':!apps/web-platform/assets/fonts/README.md'` returns no hits (the three test mocks now name `next/font/local`); the standing check is the vitest guard, which also sees untracked files.
+- [x] The dev server serves `/login` 200 with no network route (`unshare -cn`/`-rn`), or, on a host without user namespaces, the served CSS contains no `fonts.gstatic.com` URL; after `next build` the hashed woff2 exists under `.next/static/media`; `.dockerignore` does not exclude `assets/`.
+- [x] `no-network-fonts.test.ts`: the unmutated tree is green and prints `scanned N files` with N >= 1,500; mutation rows 1 to 6 each turn it red.
+- [x] `playwright.config.ts` webServer entries use `url:` readiness; with a deliberately broken `app/layout.tsx` import, `npx playwright test` fails at server readiness within about 3 min (not after the suite), recorded in the PR body.
 - [ ] CI `e2e`: 0 failed, and the log contains none of `queries have exactly one entry`, `Dev server compile error`, `strict mode violation`.
-- [ ] `otp-login.e2e.ts`: no unfiltered `getByRole("status")` at the three assertion sites. Deterministic negative control (not a wall-clock delay: the island holds only `NAV_MIN_VISIBLE_MS` 400 ms after a 150 ms entry delay, so a long route delay lets it unmount before the banner shows and both versions pass): after `waitForURL`, `page.evaluate` appends `<div role="status">Loading</div>`; the pre-change unfiltered assertion then fails with a strict-mode error and the filtered one passes.
-- [ ] Fixture G's failure message inlines (flattened with `tr '\n' '|'`, because `$OUT_G` is deleted by the EXIT trap) the SOLEUR markers, `tail -20` of the output, `git status --short` and `git log --oneline -5`; shown once by forcing the assertion to fail locally. This is a one-off diagnostic check, not regression coverage for cause C. `plugins/soleur/test/fixture-relative-assert.test.sh` is run and its baseline regenerated (`--write-baseline`) if the new `git -C` use moves a row.
-- [ ] `merge-queue-dequeue.md` carries the advisory-red note.
+- [x] `otp-login.e2e.ts`: no unfiltered `getByRole("status")` at the three assertion sites. Deterministic negative control (not a wall-clock delay: the island holds only `NAV_MIN_VISIBLE_MS` 400 ms after a 150 ms entry delay, so a long route delay lets it unmount before the banner shows and both versions pass): after `waitForURL`, `page.evaluate` appends `<div role="status">Loading</div>`; the pre-change unfiltered assertion then fails with a strict-mode error and the filtered one passes.
+- [x] Fixture G's failure message inlines (flattened with `tr '\n' '|'`, because `$OUT_G` is deleted by the EXIT trap) the SOLEUR markers, `tail -20` of the output, `git status --short` and `git log --oneline -5`; shown once by forcing the assertion to fail locally. This is a one-off diagnostic check, not regression coverage for cause C. `plugins/soleur/test/fixture-relative-assert.test.sh` is run and its baseline regenerated (`--write-baseline`) if the new `git -C` use moves a row.
+- [x] `merge-queue-dequeue.md` carries the advisory-red note.
 - [ ] PR body says `Ref #9482` (never `Closes #9482`), `Closes #8785`, `Closes #9170`; ADR-270 `status:` still `adopting`; `git diff origin/main -- infra/github knowledge-base/engineering/architecture` is empty.
-- [ ] `python3 scripts/lint-guard-contract.py` passes on this plan; markdown lint passes on the README.
+- [x] `python3 scripts/lint-guard-contract.py` passes on this plan; markdown lint passes on the README.
 
 ### Post-merge (agent-run, no operator)
 
