@@ -329,9 +329,9 @@ describe("cc-dispatcher — forwards tool_progress WS message (server layer 2)",
     expect(frame.elapsedSeconds).toBe(5);
     // #2138 invariant: the raw SDK tool name MUST NOT reach the wire — the
     // forward routes it through `buildToolLabel` (human label only). "Read"
-    // with no `tool_input` falls to FALLBACK_LABELS.Read ("Reading file...").
+    // with no `tool_input` falls to FALLBACK_LABELS.Read ("Reading file…").
     expect(frame.toolName).not.toBe("Read");
-    expect(frame.toolName).toBe("Reading file...");
+    expect(frame.toolName).toBe("Reading file…");
   });
 
   // Test #3 — debounce: ≤1 forward per 5s per toolUseId. CLOCK-DRIVE: the

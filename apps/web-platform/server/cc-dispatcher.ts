@@ -958,7 +958,11 @@ async function emitNarration(opts: {
     const raw = typeof input.message === "string" ? input.message : "";
     const redacted = redactNarrationOrDrop(raw, "message", userId, conversationId);
     if (!redacted) return; // null (dropped) or empty → emit nothing
-    sendToClient(userId, { type: "reasoning_narration", message: redacted });
+    sendToClient(userId, {
+      type: "reasoning_narration",
+      message: redacted,
+      conversationId,
+    });
     return;
   }
 
@@ -3616,11 +3620,11 @@ export async function dispatchSoleurGo(
   // failure leaves the fail-closed `false`):
   //   (1) `debugPosture` — the ACTIVE workspace's `debug_mode` toggle is ON
   //       (`resolveDebugMode`, member-checked RPC, fail-closed false).
-  //   (2) `debugEligible` — the dispatch user is in the `dev` cohort AND the
-  //       `debug-mode` Flagsmith flag is on (`isDebugModeAvailable` hard-gates
-  //       `role !== "dev"` BEFORE the flag — fail-CLOSED on a Flagsmith outage,
-  //       P0-8). Role is read from the SAME `users.role` shape as the
-  //       c4-visualizer gate above.
+  //   (2) `debugEligible` — the `debug-mode` Flagsmith flag is on for the
+  //       dispatch user's segment (`isDebugModeAvailable`; open to all roles
+  //       during beta — the flag is the sole cohort gate / kill switch).
+  //       Role is read from the SAME `users.role` shape as the
+  //       c4-visualizer gate above so Flagsmith can still re-segment.
   // Per-dispatch resolution (not ClientSession-carried) also solves toggle
   // propagation for free: the NEXT turn re-resolves fresh (≤1-turn latency on
   // a mid-turn flip — AC6). The debug stream is a scoped exception to the

@@ -297,7 +297,7 @@
 "external"
 ],
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "title": "Playwright MCP server",
 "kind": "system",
@@ -948,7 +948,7 @@
 },
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "description": {
-"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml, refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
+"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml (and, only when started with the opt-in --chromium-fallback flag on a host with no Google Chrome executable, also appends --browser chromium --sandbox — not a sink flag; --no-sandbox, PLAYWRIGHT_MCP_SANDBOX and config chromiumSandbox:false and --executable-path stay refused), refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
 },
 "title": "browser-snapshot credential guard",
 "kind": "component",
@@ -2698,7 +2698,7 @@
 "id": "1y7uk7w"
 },
 "1pwg3g5": {
-"title": "Pages the operator — the LARGER of two independent exits (betterstack is the other; a Sentry outage is survivable BY DESIGN). Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers — 40 of the 43 `sentry_alert` rules in issue-alerts.tf; three deliberately set fallthrough_type NoOne — `byok_cap_exceeded`, `git_data_boot_warning` (the non-paging half of the git-data boot severity split) and `web_luks_boot_warning` (the non-paging half of the fresh-boot LUKS stage split, #6931). Every rule is a `sentry_alert` carrying the route as `action_filters[].actions[].email` with a lowercase `target_type = issue_owners`; since #8451 the two rules whose `event_unique_user_frequency_count` trigger the pinned provider cannot express (`auth_per_user_loop` and `sandbox_startup_failure`) are FROZEN `sentry_alert` blocks (`legacy_trigger_conditions`, `ignore_changes = all`), no longer `sentry_issue_alert`. `scripts/sentry-alert-live-fidelity.sh` checks every `sentry_alert` field-for-field against the plan-derived reference (#8050) after each apply and daily. One further rule is live in the project and ABSENT FROM IaC: the Sentry-default `Send a notification for high priority issues` — empty filters, null environment, NotifyEmailAction with target_type IssueOwners and fallthrough_type ActiveMembers. Its conditions are New/ExistingHighPriorityIssueCondition, i.e. FIRST-SEEN and ESCALATED-TO — NOT a recurrence of an issue that is already high priority. Since Sentry derives high priority from level, it is what actually routes a level=error event carrying no matching tag filter (the release-outcome mirror among them), and a repeat of an identical event is silent on this route. It is UI-managed, so ADR-031's IaC-is-the-source-of-truth posture does not cover it; tracked as #7142. NB IssueOwners has no ownership rule on this project, so the fallthrough is what actually reaches a human: a NoOne rule fires and pages nobody, by design there and a defect anywhere else. The cron monitors open an issue on a missed/failed check-in (per-monitor failure_issue_threshold). Since #8630 those issues reach email through one more `sentry_alert`, `cron_monitor_failure` in cron-monitor-alerts.tf, which binds every routed cron detector in `monitor_ids` (first-seen, reappeared and regression triggers; at most one email per monitor per 24 h) with the same issue_owners → ActiveMembers route. A MUTED monitor environment creates no issue, so it pages nobody even though it is routed; mute is not expressible in the provider. The uptime monitors open an issue on downtime, but their detectors are bound to no workflow, so this edge claims no route for them",
+"title": "Pages the operator — the LARGER of two independent exits (betterstack is the other; a Sentry outage is survivable BY DESIGN). Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers; a few rules set fallthrough_type NoOne instead (issue-alerts.tf is the authoritative list). Every rule is a `sentry_alert` carrying the route as `action_filters[].actions[].email` with a lowercase `target_type = issue_owners`; since #8451 the two rules whose `event_unique_user_frequency_count` trigger the pinned provider cannot express (`auth_per_user_loop` and `sandbox_startup_failure`) are FROZEN `sentry_alert` blocks (`legacy_trigger_conditions`, `ignore_changes = all`), no longer `sentry_issue_alert`. `scripts/sentry-alert-live-fidelity.sh` checks every `sentry_alert` field-for-field against the plan-derived reference (#8050) after each apply and daily. One further rule is live in the project and ABSENT FROM IaC: the Sentry-default `Send a notification for high priority issues` — empty filters, null environment, NotifyEmailAction with target_type IssueOwners and fallthrough_type ActiveMembers. Its conditions are New/ExistingHighPriorityIssueCondition, i.e. FIRST-SEEN and ESCALATED-TO — NOT a recurrence of an issue that is already high priority. Since Sentry derives high priority from level, it is what actually routes a level=error event carrying no matching tag filter (the release-outcome mirror among them), and a repeat of an identical event is silent on this route. It is UI-managed, so ADR-031's IaC-is-the-source-of-truth posture does not cover it; tracked as #7142. NB IssueOwners has no ownership rule on this project, so the fallthrough is what actually reaches a human: a NoOne rule fires and pages nobody, by design only where issue-alerts.tf says so and a defect anywhere else. The cron monitors open an issue on a missed/failed check-in (per-monitor failure_issue_threshold). Since #8630 those issues reach email through one more `sentry_alert`, `cron_monitor_failure` in cron-monitor-alerts.tf, which binds every routed cron detector in `monitor_ids` (first-seen, reappeared and regression triggers; at most one email per monitor per 24 h) with the same issue_owners → ActiveMembers route. A MUTED monitor environment creates no issue, so it pages nobody even though it is routed; mute is not expressible in the provider. The uptime monitors open an issue on downtime, but their detectors are bound to no workflow, so this edge claims no route for them",
 "technology": "Sentry issue alert → email notification",
 "source": {
 "model": "sentry"
@@ -3105,7 +3105,7 @@
 "id": "1oi54az"
 },
 "1k7otfp": {
-"title": "Relays JSON-RPC lines; appends --snapshot-mode none; refuses filename",
+"title": "Relays JSON-RPC lines; appends --snapshot-mode none (and, opt-in via --chromium-fallback, --browser chromium --sandbox); refuses filename",
 "technology": "stdio JSON-RPC over pipes (child process group)",
 "source": {
 "model": "platform.plugin.snapshotGuard"
@@ -4116,7 +4116,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -9112,7 +9112,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__soleurMarketplace",
-"x": 7885,
+"x": 8260,
 "y": 2914,
 "width": 352,
 "height": 180,
@@ -9648,7 +9648,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__systemdUser",
-"x": 5011,
+"x": 4848,
 "y": 2914,
 "width": 379,
 "height": 180,
@@ -10304,7 +10304,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -10961,23 +10961,23 @@
 "points": [
 [
 6311,
-2615
+2608
 ],
 [
-6678,
-2696
+6740,
+2688
 ],
 [
-7503,
-2879
+7815,
+2888
 ],
 [
-7874,
-2962
+8249,
+2969
 ]
 ],
 "labelBBox": {
-"x": 7382,
+"x": 7625,
 "y": 2760,
 "width": 231,
 "height": 73
@@ -10998,16 +10998,16 @@
 "label": "git-subdir entry resolves plugins/soleur \nout of the monorepo at main; the install \nmaterialises the plugin subtree alone \n(~10 MiB, ~33s, well inside the CLI's \n120s default). Keyless and unpinned, so ",
 "points": [
 [
-7885,
+8259,
 2998
 ],
 [
-7174,
-2976
+7504,
+2978
 ],
 [
-4550,
-2892
+4570,
+2896
 ],
 [
 4378,
@@ -11015,14 +11015,14 @@
 ],
 [
 4201,
-2815
+2816
 ],
 [
 4012,
 2733
 ],
 [
-3879,
+3878,
 2668
 ]
 ],
@@ -11049,35 +11049,35 @@
 "points": [
 [
 6311,
-2595
+2590
 ],
 [
-6594,
-2626
+6629,
+2618
 ],
 [
-7161,
-2690
+7310,
+2680
 ],
 [
-7641,
+7884,
 2744
 ],
 [
-8415,
-2831
+8563,
+2820
 ],
 [
-9337,
-2936
+9368,
+2927
 ],
 [
 9729,
-2981
+2977
 ]
 ],
 "labelBBox": {
-"x": 8581,
+"x": 8780,
 "y": 2779,
 "width": 246,
 "height": 35
@@ -11098,38 +11098,38 @@
 "points": [
 [
 9739,
-2991
+2987
 ],
 [
-9439,
-2972
+9496,
+2966
 ],
 [
-8818,
-2934
+9049,
+2931
 ],
 [
-8292,
+8667,
 2914
 ],
 [
-7612,
-2889
+7881,
+2880
 ],
 [
-5909,
-2925
+5908,
+2951
 ],
 [
-5233,
+5127,
 2854
 ],
 [
-4973,
-2827
+4914,
+2828
 ],
 [
-4916,
+4869,
 2770
 ],
 [
@@ -11138,7 +11138,7 @@
 ],
 [
 4598,
-2738
+2737
 ],
 [
 4192,
@@ -11162,7 +11162,7 @@
 ]
 ],
 "labelBBox": {
-"x": 5234,
+"x": 5128,
 "y": 2743,
 "width": 265,
 "height": 107
@@ -11348,32 +11348,32 @@
 2736
 ],
 [
-3362,
+3361,
 2744
 ],
 [
-2833,
+2816,
 2742
 ],
 [
-2800,
+2782,
 2744
 ],
 [
-1881,
+1871,
 2795
 ],
 [
-788,
-2926
+786,
+2925
 ],
 [
-359,
+360,
 2979
 ]
 ],
 "labelBBox": {
-"x": 2801,
+"x": 2783,
 "y": 2760,
 "width": 241,
 "height": 73
@@ -11933,15 +11933,15 @@
 ],
 [
 9591,
-2851
+2779
 ],
 [
-8655,
-2957
+8949,
+2917
 ],
 [
-8247,
-2990
+8622,
+2974
 ]
 ],
 "labelBBox": {
@@ -14026,23 +14026,23 @@
 "points": [
 [
 5948,
-2658
+2646
 ],
 [
-5791,
-2731
+5752,
+2723
 ],
 [
-5562,
-2836
+5440,
+2845
 ],
 [
-5400,
-2911
+5237,
+2925
 ]
 ],
 "labelBBox": {
-"x": 5749,
+"x": 5683,
 "y": 2743,
 "width": 262,
 "height": 107
@@ -14095,28 +14095,28 @@
 2442
 ],
 [
-4371,
-2680
+4379,
+2668
 ],
 [
 4629,
 2854
 ],
 [
-4739,
-2929
+4690,
+2900
 ],
 [
-4884,
-2966
+4768,
+2933
 ],
 [
-5001,
-2985
+4838,
+2956
 ]
 ],
 "labelBBox": {
-"x": 4504,
+"x": 4512,
 "y": 2518,
 "width": 255,
 "height": 106
@@ -14137,16 +14137,16 @@
 "label": "Reaps the agent session by stopping its \nscope, via BindsTo= on the terminal's \nown scope — a UNIT dependency, because \nadoption moves the process out of the \nterminal's cgroup so co-membership can ",
 "points": [
 [
-5011,
-2990
+4848,
+2988
 ],
 [
-4743,
-2972
+4606,
+2969
 ],
 [
-4238,
-2939
+4176,
+2937
 ],
 [
 3807,
@@ -14382,7 +14382,7 @@
 "id": "1r9ivj3",
 "source": "platform.plugin",
 "target": "playwrightMcp",
-"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none; refuses filename",
+"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
 3564,
@@ -14401,47 +14401,47 @@
 2736
 ],
 [
-3349,
+3348,
 2748
 ],
 [
-3227,
-2725
+3225,
+2726
 ],
 [
-3184,
+3181,
 2744
 ],
 [
-3120,
+3111,
 2771
 ],
 [
-3134,
+3121,
 2822
 ],
 [
-3071,
+3053,
 2854
 ],
 [
-2954,
-2913
+2840,
+2955
 ],
 [
-2610,
-2959
+2569,
+2988
 ],
 [
-2389,
-2984
+2388,
+2999
 ]
 ],
 "labelBBox": {
-"x": 3185,
-"y": 2769,
-"width": 255,
-"height": 55
+"x": 3182,
+"y": 2752,
+"width": 259,
+"height": 89
 },
 "parent": null,
 "relations": [
@@ -15913,7 +15913,7 @@
 "kind": "system",
 "depth": 1,
 "navigateTo": "components",
-"x": 9016,
+"x": 9012,
 "y": 1620,
 "width": 1344,
 "height": 743,
@@ -16040,7 +16040,7 @@
 "technology": "Markdown SKILL.md",
 "kind": "container",
 "navigateTo": "__platform_plugin_skills",
-"x": 9486,
+"x": 9482,
 "y": 1703,
 "width": 336,
 "height": 180,
@@ -16078,7 +16078,7 @@
 "technology": "Markdown Agent Defs",
 "kind": "container",
 "navigateTo": "__platform_plugin_agents",
-"x": 9056,
+"x": 9052,
 "y": 1703,
 "width": 320,
 "height": 180,
@@ -16110,14 +16110,14 @@
 "size": "md"
 },
 "description": {
-"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml, refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
+"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml (and, only when started with the opt-in --chromium-fallback flag on a host with no Google Chrome executable, also appends --browser chromium --sandbox — not a sink flag; --no-sandbox, PLAYWRIGHT_MCP_SANDBOX and config chromiumSandbox:false and --executable-path stay refused), refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
 },
 "tags": [],
 "notation": "Component",
 "technology": "Python 3 stdlib (redactor + stdio JSON-RPC relay) + bash PreToolUse hook",
 "kind": "component",
 "navigateTo": "__platform_plugin_snapshotGuard",
-"x": 9932,
+"x": 9928,
 "y": 1703,
 "width": 387,
 "height": 180,
@@ -16314,7 +16314,7 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 9480,
+"x": 9476,
 "y": 2123,
 "width": 348,
 "height": 200,
@@ -16344,7 +16344,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -16633,7 +16633,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__inngestReleases",
-"x": 11419,
+"x": 11415,
 "y": 2132,
 "width": 344,
 "height": 182,
@@ -17298,23 +17298,23 @@
 1625
 ],
 [
-9894,
+9890,
 1614
 ],
 [
-9877,
+9873,
 1620
 ],
 [
-9831,
+9827,
 1636
 ],
 [
-9786,
+9782,
 1666
 ],
 [
-9750,
+9746,
 1696
 ]
 ],
@@ -17360,28 +17360,28 @@
 1514
 ],
 [
-8739,
+8737,
 1455
 ],
 [
-8867,
+8865,
 1502
 ],
 [
-8973,
+8971,
 1540
 ],
 [
-9070,
+9067,
 1627
 ],
 [
-9135,
+9131,
 1695
 ]
 ],
 "labelBBox": {
-"x": 9046,
+"x": 9043,
 "y": 1535,
 "width": 99,
 "height": 39
@@ -17482,35 +17482,35 @@
 1629
 ],
 [
-11822,
+11818,
 1927
 ],
 [
-11768,
+11764,
 1953
 ],
 [
-11703,
+11699,
 1984
 ],
 [
-11714,
+11710,
 2034
 ],
 [
-11648,
+11644,
 2063
 ],
 [
-11485,
+11481,
 2134
 ],
 [
-10303,
+10299,
 2194
 ],
 [
-9840,
+9836,
 2214
 ]
 ],
@@ -17556,19 +17556,19 @@
 1501
 ],
 [
-9094,
+9091,
 1499
 ],
 [
-9173,
+9170,
 1502
 ],
 [
-9876,
+9874,
 1528
 ],
 [
-10049,
+10047,
 1579
 ],
 [
@@ -17580,52 +17580,52 @@
 1613
 ],
 [
-11079,
+11075,
 1614
 ],
 [
-11085,
+11081,
 1620
 ],
 [
-11170,
+11166,
 1707
 ],
 [
-11167,
+11163,
 1803
 ],
 [
-11085,
+11081,
 1893
 ],
 [
-11033,
+11029,
 1949
 ],
 [
-10474,
+10470,
 1936
 ],
 [
-10399,
+10395,
 1953
 ],
 [
-10203,
+10199,
 1996
 ],
 [
-9987,
+9983,
 2078
 ],
 [
-9839,
+9835,
 2140
 ]
 ],
 "labelBBox": {
-"x": 11148,
+"x": 11144,
 "y": 1762,
 "width": 200,
 "height": 56
@@ -17646,24 +17646,24 @@
 "label": "Reads/writes",
 "points": [
 [
-9654,
+9650,
 1882
 ],
 [
-9654,
+9650,
 1949
 ],
 [
-9654,
+9650,
 2041
 ],
 [
-9654,
+9650,
 2112
 ]
 ],
 "labelBBox": {
-"x": 9655,
+"x": 9651,
 "y": 1986,
 "width": 85,
 "height": 39
@@ -17684,24 +17684,24 @@
 "label": "Reads/writes",
 "points": [
 [
-9307,
+9303,
 1882
 ],
 [
-9376,
+9372,
 1950
 ],
 [
-9472,
+9468,
 2044
 ],
 [
-9545,
+9541,
 2116
 ]
 ],
 "labelBBox": {
-"x": 9488,
+"x": 9484,
 "y": 1986,
 "width": 85,
 "height": 39
@@ -19871,19 +19871,19 @@
 1502
 ],
 [
-9934,
+9933,
 1550
 ],
 [
-9783,
+9782,
 1587
 ],
 [
-9173,
+9170,
 1612
 ],
 [
-9147,
+9144,
 1613
 ],
 [
@@ -20501,19 +20501,19 @@
 1622
 ],
 [
-8833,
+8829,
 1617
 ],
 [
-8807,
+8803,
 1620
 ],
 [
-8605,
+8602,
 1643
 ],
 [
-8377,
+8376,
 1699
 ],
 [
@@ -21657,34 +21657,34 @@
 ],
 [
 2478,
-1948
+1947
 ],
 [
-11520,
+11516,
 1852
 ],
 [
-11765,
+11761,
 1953
 ],
 [
-11830,
+11826,
 1979
 ],
 [
-11814,
+11810,
 2035
 ],
 [
-11879,
+11875,
 2063
 ],
 [
-12135,
+12132,
 2174
 ],
 [
-12860,
+12859,
 2061
 ],
 [
@@ -21705,7 +21705,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11880,
+"x": 11876,
 "y": 1952,
 "width": 281,
 "height": 107
@@ -21858,40 +21858,40 @@
 1940
 ],
 [
-10180,
+10176,
 1860
 ],
 [
-10387,
+10383,
 1953
 ],
 [
-10448,
+10444,
 1980
 ],
 [
-10429,
+10425,
 2032
 ],
 [
-10488,
+10484,
 2063
 ],
 [
-10644,
+10640,
 2146
 ],
 [
-11138,
+11134,
 2191
 ],
 [
-11409,
+11405,
 2211
 ]
 ],
 "labelBBox": {
-"x": 10489,
+"x": 10485,
 "y": 1952,
 "width": 259,
 "height": 107
@@ -21964,27 +21964,27 @@
 1893
 ],
 [
-11943,
-1953
+11942,
+1954
 ],
 [
-11867,
+11865,
 1860
 ],
 [
-11738,
+11734,
 1953
 ],
 [
-11681,
+11677,
 1994
 ],
 [
-11643,
+11639,
 2064
 ],
 [
-11621,
+11617,
 2123
 ]
 ],
@@ -22140,40 +22140,40 @@
 1527
 ],
 [
-8602,
+8601,
 1587
 ],
 [
-8813,
+8811,
 1612
 ],
 [
-8887,
+8885,
 1621
 ],
 [
-11434,
+11430,
 1603
 ],
 [
-11507,
+11503,
 1620
 ],
 [
-11575,
+11572,
 1636
 ],
 [
-11645,
+11642,
 1667
 ],
 [
-11704,
+11702,
 1698
 ]
 ],
 "labelBBox": {
-"x": 8814,
+"x": 8812,
 "y": 1544,
 "width": 25,
 "height": 18
@@ -22532,56 +22532,56 @@
 1618
 ],
 [
-10807,
+10803,
 1604
 ],
 [
-10838,
+10834,
 1620
 ],
 [
-10970,
+10966,
 1689
 ],
 [
-10901,
+10897,
 1821
 ],
 [
-11031,
+11027,
 1893
 ],
 [
-11275,
+11271,
 2026
 ],
 [
-12024,
+12020,
 1846
 ],
 [
-12280,
+12276,
 1953
 ],
 [
-12347,
+12343,
 1981
 ],
 [
-12338,
+12333,
 2026
 ],
 [
-12400,
+12396,
 2063
 ],
 [
-12486,
-2113
+12483,
+2114
 ],
 [
-12590,
-2150
+12588,
+2151
 ],
 [
 12679,
@@ -22589,7 +22589,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11032,
+"x": 11028,
 "y": 1780,
 "width": 25,
 "height": 18
@@ -22630,39 +22630,39 @@
 1942
 ],
 [
-10558,
+10554,
 1849
 ],
 [
-10772,
+10768,
 1953
 ],
 [
-10829,
+10825,
 1980
 ],
 [
-10804,
+10800,
 2034
 ],
 [
-10860,
+10856,
 2063
 ],
 [
-10955,
+10951,
 2112
 ],
 [
-11712,
+11708,
 2115
 ],
 [
-11818,
+11814,
 2123
 ],
 [
-12118,
+12115,
 2146
 ],
 [
@@ -22670,12 +22670,12 @@
 2180
 ],
 [
-12678,
+12679,
 2201
 ]
 ],
 "labelBBox": {
-"x": 10861,
+"x": 10857,
 "y": 1952,
 "width": 278,
 "height": 107
@@ -22716,31 +22716,31 @@
 1929
 ],
 [
-10724,
+10720,
 1878
 ],
 [
-11167,
+11163,
 1953
 ],
 [
-11318,
+11314,
 1978
 ],
 [
-11344,
+11340,
 2030
 ],
 [
-11493,
+11489,
 2063
 ],
 [
-11714,
-2112
+11711,
+2113
 ],
 [
-12349,
+12348,
 2174
 ],
 [
@@ -22749,7 +22749,7 @@
 ]
 ],
 "labelBBox": {
-"x": 11494,
+"x": 11490,
 "y": 1952,
 "width": 247,
 "height": 107
@@ -23041,58 +23041,58 @@
 "points": [
 [
 12689,
-2195
+2196
 ],
 [
-12567,
+12566,
 2173
 ],
 [
-12409,
-2132
+12406,
+2133
 ],
 [
-12283,
+12279,
 2063
 ],
 [
-12219,
+12215,
 2028
 ],
 [
-12230,
+12226,
 1980
 ],
 [
-12163,
+12159,
 1953
 ],
 [
-11996,
+11992,
 1884
 ],
 [
-10694,
+10690,
 1987
 ],
 [
-10540,
+10536,
 1893
 ],
 [
-10422,
+10418,
 1820
 ],
 [
-10507,
+10503,
 1690
 ],
 [
-10387,
+10383,
 1620
 ],
 [
-10368,
+10364,
 1609
 ],
 [
@@ -23141,7 +23141,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10541,
+"x": 10537,
 "y": 1737,
 "width": 269,
 "height": 106
@@ -23428,20 +23428,20 @@
 1634
 ],
 [
-9035,
+9031,
 1601
 ],
 [
-8989,
+8985,
 1620
 ],
 [
-8740,
+8737,
 1723
 ],
 [
-8539,
-1982
+8537,
+1983
 ],
 [
 8442,
@@ -24131,23 +24131,23 @@
 1621
 ],
 [
-10415,
+10411,
 1617
 ],
 [
-10403,
+10399,
 1620
 ],
 [
-10348,
+10344,
 1636
 ],
 [
-10293,
+10289,
 1666
 ],
 [
-10247,
+10243,
 1697
 ]
 ],
@@ -24217,23 +24217,23 @@
 1613
 ],
 [
-9847,
+9843,
 1611
 ],
 [
-9877,
+9873,
 1620
 ],
 [
-9928,
+9924,
 1636
 ],
 [
-9977,
+9973,
 1666
 ],
 [
-10018,
+10014,
 1696
 ]
 ],
@@ -24354,54 +24354,54 @@
 "id": "wip0go",
 "source": "platform.plugin.snapshotGuard",
 "target": "playwrightMcp",
-"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none; refuses filename",
+"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
-10320,
+10316,
 1871
 ],
 [
-10347,
+10343,
 1880
 ],
 [
-10376,
+10372,
 1887
 ],
 [
-10403,
+10399,
 1893
 ],
 [
-11183,
+11179,
 2042
 ],
 [
-11410,
-1798
+11406,
+1799
 ],
 [
-12189,
+12185,
 1953
 ],
 [
-12327,
+12323,
 1980
 ],
 [
-12347,
+12343,
 2034
 ],
 [
-12485,
+12481,
 2063
 ],
 [
-12970,
-2164
+12968,
+2165
 ],
 [
-13104,
+13102,
 2090
 ],
 [
@@ -24422,10 +24422,10 @@
 ]
 ],
 "labelBBox": {
-"x": 12486,
-"y": 1978,
-"width": 255,
-"height": 55
+"x": 12482,
+"y": 1961,
+"width": 259,
+"height": 89
 },
 "parent": null,
 "relations": [
@@ -24487,16 +24487,16 @@
 1619
 ],
 [
-10080,
+10077,
 1607
 ],
 [
-9887,
+9883,
 1619
 ]
 ],
 "labelBBox": {
-"x": 11863,
+"x": 11861,
 "y": 1504,
 "width": 301,
 "height": 106
@@ -24931,11 +24931,11 @@
 1619
 ],
 [
-10023,
+10019,
 1608
 ],
 [
-9887,
+9883,
 1619
 ]
 ],
@@ -25009,7 +25009,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 7390,
+"width": 7394,
 "height": 2371
 },
 "nodes": [
@@ -25067,7 +25067,7 @@
 "depth": 1,
 "x": 2767,
 "y": 386,
-"width": 3950,
+"width": 3954,
 "height": 1599,
 "labelBBox": {
 "x": 6,
@@ -25133,7 +25133,7 @@
 "technology": "Constraint Generator",
 "kind": "component",
 "navigateTo": "__platform_plugin_constraintscaffold",
-"x": 3572,
+"x": 3576,
 "y": 1458,
 "width": 388,
 "height": 180,
@@ -25441,7 +25441,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml, refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
+"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml (and, only when started with the opt-in --chromium-fallback flag on a host with no Google Chrome executable, also appends --browser chromium --sandbox — not a sink flag; --no-sandbox, PLAYWRIGHT_MCP_SANDBOX and config chromiumSandbox:false and --executable-path stay refused), refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
 },
 "tags": [],
 "notation": "Component",
@@ -25563,7 +25563,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_brainstorm",
-"x": 4139,
+"x": 4143,
 "y": 567,
 "width": 360,
 "height": 180,
@@ -25605,12 +25605,12 @@
 "technology": "Orchestrator",
 "kind": "component",
 "navigateTo": "__platform_plugin_oneshot",
-"x": 3576,
+"x": 3580,
 "y": 1147,
 "width": 379,
 "height": 180,
 "labelBBox": {
-"x": 39,
+"x": 38,
 "y": 44,
 "width": 303,
 "height": 85
@@ -25634,7 +25634,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -25642,7 +25642,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__playwrightMcp",
-"x": 3580,
+"x": 3584,
 "y": 2025,
 "width": 372,
 "height": 180,
@@ -25678,7 +25678,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cmo",
-"x": 4903,
+"x": 4907,
 "y": 737,
 "width": 377,
 "height": 180,
@@ -25714,7 +25714,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cpo",
-"x": 4927,
+"x": 4931,
 "y": 447,
 "width": 330,
 "height": 180,
@@ -25753,7 +25753,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_plan",
-"x": 4133,
+"x": 4137,
 "y": 1437,
 "width": 371,
 "height": 180,
@@ -25791,12 +25791,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_work",
-"x": 5587,
+"x": 5590,
 "y": 1475,
 "width": 383,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 39,
 "y": 44,
 "width": 307,
 "height": 85
@@ -25829,7 +25829,7 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_review",
-"x": 4127,
+"x": 4131,
 "y": 857,
 "width": 384,
 "height": 180,
@@ -25868,12 +25868,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_compound",
-"x": 5614,
+"x": 5617,
 "y": 1765,
 "width": 330,
 "height": 180,
 "labelBBox": {
-"x": 43,
+"x": 44,
 "y": 44,
 "width": 242,
 "height": 85
@@ -25904,12 +25904,12 @@
 "technology": "Workflow",
 "kind": "component",
 "navigateTo": "__platform_plugin_ship",
-"x": 4144,
+"x": 4148,
 "y": 1147,
 "width": 350,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 37,
 "y": 44,
 "width": 275,
 "height": 85
@@ -25943,7 +25943,7 @@
 "technology": "Domain Leader",
 "kind": "component",
 "navigateTo": "__platform_plugin_cto",
-"x": 4897,
+"x": 4901,
 "y": 1027,
 "width": 390,
 "height": 180,
@@ -25981,7 +25981,7 @@
 "technology": "Review Agent",
 "kind": "component",
 "navigateTo": "__platform_plugin_archstrat",
-"x": 4905,
+"x": 4909,
 "y": 1429,
 "width": 374,
 "height": 180,
@@ -26019,12 +26019,12 @@
 "technology": "Validation Gate",
 "kind": "component",
 "navigateTo": "__platform_plugin_evalharness",
-"x": 6322,
+"x": 6325,
 "y": 1745,
 "width": 355,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 39,
 "y": 44,
 "width": 279,
 "height": 85
@@ -26059,12 +26059,12 @@
 "technology": "Documentation",
 "kind": "component",
 "navigateTo": "__platform_plugin_architecture",
-"x": 5601,
+"x": 5604,
 "y": 961,
 "width": 355,
 "height": 180,
 "labelBBox": {
-"x": 38,
+"x": 39,
 "y": 53,
 "width": 279,
 "height": 67
@@ -26097,7 +26097,7 @@
 "notation": "System",
 "kind": "system",
 "navigateTo": "__anthropic",
-"x": 7040,
+"x": 7044,
 "y": 827,
 "width": 349,
 "height": 180,
@@ -26138,12 +26138,12 @@
 "technology": "Markdown + YAML",
 "kind": "database",
 "navigateTo": "__platform_plugin_kb",
-"x": 6326,
+"x": 6329,
 "y": 1264,
 "width": 348,
 "height": 200,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 312,
 "height": 139
@@ -26176,12 +26176,12 @@
 "notation": "Data store",
 "kind": "database",
 "navigateTo": "__connectedRepoKb",
-"x": 6327,
+"x": 6330,
 "y": 166,
 "width": 346,
 "height": 180,
 "labelBBox": {
-"x": 17,
+"x": 18,
 "y": 27,
 "width": 311,
 "height": 120
@@ -26200,20 +26200,20 @@
 1163
 ],
 [
-3416,
+3417,
 1054
 ],
 [
-3873,
+3876,
 853
 ],
 [
-4130,
+4134,
 740
 ]
 ],
 "labelBBox": {
-"x": 3688,
+"x": 3691,
 "y": 793,
 "width": 157,
 "height": 18
@@ -26237,20 +26237,20 @@
 1237
 ],
 [
-3287,
+3288,
 1237
 ],
 [
-3443,
+3446,
 1237
 ],
 [
-3566,
+3570,
 1237
 ]
 ],
 "labelBBox": {
-"x": 3342,
+"x": 3344,
 "y": 1214,
 "width": 82,
 "height": 18
@@ -26270,24 +26270,24 @@
 "label": "Step 1",
 "points": [
 [
-3938,
+3942,
 1327
 ],
 [
-4002,
+4005,
 1360
 ],
 [
-4074,
+4078,
 1398
 ],
 [
-4138,
+4142,
 1432
 ]
 ],
 "labelBBox": {
-"x": 4021,
+"x": 4025,
 "y": 1350,
 "width": 44,
 "height": 18
@@ -26307,72 +26307,72 @@
 "label": "Step 2",
 "points": [
 [
-3884,
+3887,
 1327
 ],
 [
-3910,
+3914,
 1350
 ],
 [
-3938,
+3941,
 1376
 ],
 [
-3960,
+3964,
 1403
 ],
 [
-4052,
+4056,
 1510
 ],
 [
-4007,
+4011,
 1599
 ],
 [
-4127,
+4131,
 1672
 ],
 [
-4347,
+4351,
 1806
 ],
 [
-5030,
+5034,
 1732
 ],
 [
-5287,
+5291,
 1713
 ],
 [
-5395,
+5399,
 1705
 ],
 [
-5424,
+5427,
 1707
 ],
 [
-5527,
+5531,
 1677
 ],
 [
-5545,
+5549,
 1672
 ],
 [
-5563,
+5567,
 1665
 ],
 [
-5581,
+5585,
 1659
 ]
 ],
 "labelBBox": {
-"x": 4682,
+"x": 4686,
 "y": 1722,
 "width": 44,
 "height": 18
@@ -26392,24 +26392,24 @@
 "label": "Step 3",
 "points": [
 [
-3938,
+3942,
 1147
 ],
 [
-4002,
+4005,
 1114
 ],
 [
-4074,
+4078,
 1076
 ],
 [
-4138,
+4142,
 1042
 ]
 ],
 "labelBBox": {
-"x": 4021,
+"x": 4025,
 "y": 1060,
 "width": 44,
 "height": 18
@@ -26429,60 +26429,60 @@
 "label": "Step 4",
 "points": [
 [
-3895,
+3899,
 1327
 ],
 [
-3920,
+3923,
 1349
 ],
 [
-3943,
+3947,
 1375
 ],
 [
-3960,
+3964,
 1403
 ],
 [
-4019,
+4023,
 1498
 ],
 [
-3971,
+3974,
 1547
 ],
 [
-4020,
+4024,
 1646
 ],
 [
-4054,
+4058,
 1712
 ],
 [
-4061,
+4064,
 1741
 ],
 [
-4127,
+4131,
 1775
 ],
 [
-4614,
+4618,
 2022
 ],
 [
-5289,
+5293,
 1946
 ],
 [
-5604,
+5607,
 1891
 ]
 ],
 "labelBBox": {
-"x": 4682,
+"x": 4686,
 "y": 1893,
 "width": 44,
 "height": 18
@@ -26502,24 +26502,24 @@
 "label": "Step 5",
 "points": [
 [
-3956,
+3959,
 1237
 ],
 [
-4013,
+4017,
 1237
 ],
 [
-4076,
+4080,
 1237
 ],
 [
-4133,
+4137,
 1237
 ]
 ],
 "labelBBox": {
-"x": 4021,
+"x": 4025,
 "y": 1214,
 "width": 44,
 "height": 18
@@ -26539,36 +26539,36 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4459,
+4463,
 747
 ],
 [
-4495,
+4499,
 770
 ],
 [
-4535,
+4538,
 795
 ],
 [
-4571,
+4575,
 817
 ],
 [
-4688,
+4691,
 887
 ],
 [
-4820,
+4824,
 964
 ],
 [
-4923,
+4926,
 1022
 ]
 ],
 "labelBBox": {
-"x": 4631,
+"x": 4635,
 "y": 794,
 "width": 146,
 "height": 18
@@ -26588,24 +26588,24 @@
 "label": "Phase 2.5 domain review",
 "points": [
 [
-4489,
+4493,
 1437
 ],
 [
-4615,
+4619,
 1370
 ],
 [
-4785,
+4789,
 1280
 ],
 [
-4913,
+4917,
 1212
 ]
 ],
 "labelBBox": {
-"x": 4624,
+"x": 4627,
 "y": 1238,
 "width": 161,
 "height": 18
@@ -26625,24 +26625,24 @@
 "label": "Recommends ADR creation",
 "points": [
 [
-5287,
+5291,
 1098
 ],
 [
-5382,
+5386,
 1089
 ],
 [
-5497,
+5500,
 1078
 ],
 [
-5591,
+5595,
 1069
 ]
 ],
 "labelBBox": {
-"x": 5348,
+"x": 5352,
 "y": 1053,
 "width": 178,
 "height": 18
@@ -26662,24 +26662,24 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4499,
+4503,
 696
 ],
 [
-4617,
+4621,
 722
 ],
 [
-4772,
+4776,
 757
 ],
 [
-4893,
+4897,
 783
 ]
 ],
 "labelBBox": {
-"x": 4631,
+"x": 4635,
 "y": 694,
 "width": 146,
 "height": 18
@@ -26699,24 +26699,24 @@
 "label": "Phase 0.5 assessment",
 "points": [
 [
-4499,
+4503,
 629
 ],
 [
-4625,
+4629,
 610
 ],
 [
-4793,
+4796,
 583
 ],
 [
-4918,
+4921,
 564
 ]
 ],
 "labelBBox": {
-"x": 4631,
+"x": 4635,
 "y": 556,
 "width": 146,
 "height": 18
@@ -26736,48 +26736,48 @@
 "label": "Parallel review agent",
 "points": [
 [
-4465,
+4468,
 1037
 ],
 [
-4483,
+4486,
 1053
 ],
 [
-4499,
+4503,
 1072
 ],
 [
-4511,
+4515,
 1092
 ],
 [
-4591,
+4595,
 1223
 ],
 [
-4462,
+4466,
 1325
 ],
 [
-4571,
+4575,
 1433
 ],
 [
-4655,
+4659,
 1515
 ],
 [
-4785,
+4789,
 1537
 ],
 [
-4895,
+4898,
 1538
 ]
 ],
 "labelBBox": {
-"x": 4637,
+"x": 4641,
 "y": 1410,
 "width": 134,
 "height": 18
@@ -26797,48 +26797,48 @@
 "label": "Checks ADR coverage",
 "points": [
 [
-5279,
+5283,
 1512
 ],
 [
-5361,
+5365,
 1502
 ],
 [
-5455,
+5459,
 1478
 ],
 [
-5527,
+5531,
 1429
 ],
 [
-5567,
+5571,
 1401
 ],
 [
-5560,
+5564,
 1377
 ],
 [
-5587,
+5591,
 1336
 ],
 [
-5628,
+5632,
 1274
 ],
 [
-5674,
+5678,
 1204
 ],
 [
-5711,
+5715,
 1150
 ]
 ],
 "labelBBox": {
-"x": 5364,
+"x": 5368,
 "y": 1406,
 "width": 146,
 "height": 18
@@ -26858,24 +26858,24 @@
 "label": "Validates classifier-skill edits before \napplying",
 "points": [
 [
-5943,
+5947,
 1850
 ],
 [
-6053,
+6057,
 1847
 ],
 [
-6198,
+6201,
 1843
 ],
 [
-6312,
+6316,
 1840
 ]
 ],
 "labelBBox": {
-"x": 6034,
+"x": 6037,
 "y": 1802,
 "width": 225,
 "height": 35
@@ -26895,24 +26895,24 @@
 "label": "promptfoo eval grids on the \nsoleur-ci-eval workspace key (Doppler \nci; ADR-244)",
 "points": [
 [
-6570,
+6574,
 1745
 ],
 [
-6705,
+6708,
 1572
 ],
 [
-6999,
+7003,
 1194
 ],
 [
-7138,
+7142,
 1015
 ]
 ],
 "labelBBox": {
-"x": 6738,
+"x": 6742,
 "y": 1163,
 "width": 241,
 "height": 73
@@ -26930,30 +26930,30 @@
 "id": "wip0go",
 "source": "platform.plugin.snapshotGuard",
 "target": "playwrightMcp",
-"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none; refuses filename",
+"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
 3194,
 1916
 ],
 [
-3309,
+3310,
 1956
 ],
 [
-3455,
+3458,
 2007
 ],
 [
-3571,
+3574,
 2047
 ]
 ],
 "labelBBox": {
 "x": 3256,
-"y": 1882,
-"width": 255,
-"height": 56
+"y": 1849,
+"width": 259,
+"height": 89
 },
 "parent": null,
 "relations": [
@@ -27009,60 +27009,60 @@
 "label": "Writes brainstorms",
 "points": [
 [
-4460,
+4464,
 747
 ],
 [
-4479,
+4483,
 763
 ],
 [
-4497,
+4501,
 782
 ],
 [
-4511,
+4515,
 802
 ],
 [
-4563,
+4566,
 875
 ],
 [
-4521,
+4525,
 920
 ],
 [
-4571,
+4575,
 994
 ],
 [
-4676,
+4680,
 1150
 ],
 [
-4723,
+4727,
 1193
 ],
 [
-4897,
+4901,
 1262
 ],
 [
-4930,
+4934,
 1275
 ],
 [
-5900,
+5904,
 1331
 ],
 [
-6314,
+6318,
 1354
 ]
 ],
 "labelBBox": {
-"x": 5377,
+"x": 5381,
 "y": 1274,
 "width": 121,
 "height": 18
@@ -27082,84 +27082,84 @@
 "label": "Writes plans and specs",
 "points": [
 [
-4505,
+4509,
 1582
 ],
 [
-4617,
+4621,
 1613
 ],
 [
-4764,
+4768,
 1648
 ],
 [
-4897,
+4901,
 1664
 ],
 [
-5069,
+5073,
 1684
 ],
 [
-5118,
+5122,
 1702
 ],
 [
-5287,
+5291,
 1664
 ],
 [
-5402,
+5406,
 1638
 ],
 [
-5444,
+5448,
 1634
 ],
 [
-5527,
+5531,
 1550
 ],
 [
-5572,
+5575,
 1505
 ],
 [
-5535,
+5539,
 1456
 ],
 [
-5587,
+5591,
 1420
 ],
 [
-5749,
+5753,
 1307
 ],
 [
-5833,
+5837,
 1397
 ],
 [
-6030,
+6034,
 1385
 ],
 [
-6124,
+6128,
 1379
 ],
 [
-6228,
+6232,
 1374
 ],
 [
-6314,
+6318,
 1371
 ]
 ],
 "labelBBox": {
-"x": 5363,
+"x": 5367,
 "y": 1527,
 "width": 149,
 "height": 18
@@ -27179,24 +27179,24 @@
 "label": "Reads plans, writes code",
 "points": [
 [
-5970,
+5974,
 1512
 ],
 [
-6077,
+6080,
 1482
 ],
 [
-6209,
+6213,
 1445
 ],
 [
-6314,
+6318,
 1415
 ]
 ],
 "labelBBox": {
-"x": 6066,
+"x": 6070,
 "y": 1412,
 "width": 160,
 "height": 18
@@ -27216,36 +27216,36 @@
 "label": "Writes learnings, promotes to \nconstitution",
 "points": [
 [
-5940,
+5944,
 1765
 ],
 [
-6035,
+6039,
 1710
 ],
 [
-6158,
+6162,
 1635
 ],
 [
-6262,
+6266,
 1561
 ],
 [
-6301,
+6305,
 1533
 ],
 [
-6342,
+6346,
 1500
 ],
 [
-6378,
+6382,
 1470
 ]
 ],
 "labelBBox": {
-"x": 6053,
+"x": 6057,
 "y": 1521,
 "width": 186,
 "height": 34
@@ -27265,36 +27265,36 @@
 "label": "Writes ADRs and diagrams",
 "points": [
 [
-5956,
+5960,
 1105
 ],
 [
-6049,
+6053,
 1136
 ],
 [
-6163,
+6167,
 1178
 ],
 [
-6262,
+6266,
 1224
 ],
 [
-6287,
+6291,
 1236
 ],
 [
-6313,
+6317,
 1250
 ],
 [
-6339,
+6342,
 1264
 ]
 ],
 "labelBBox": {
-"x": 6060,
+"x": 6064,
 "y": 1111,
 "width": 173,
 "height": 18
@@ -27338,48 +27338,48 @@
 2371
 ],
 [
-5780,
+5783,
 2371
 ],
 [
-6087,
+6091,
 2371
 ],
 [
-6103,
+6107,
 2138
 ],
 [
-6262,
+6266,
 1875
 ],
 [
-6307,
+6310,
 1801
 ],
 [
-6288,
+6292,
 1769
 ],
 [
-6322,
+6326,
 1690
 ],
 [
-6354,
+6358,
 1616
 ],
 [
-6397,
+6401,
 1536
 ],
 [
-6433,
+6436,
 1474
 ]
 ],
 "labelBBox": {
-"x": 4219,
+"x": 4223,
 "y": 2311,
 "width": 200,
 "height": 55
@@ -27609,48 +27609,48 @@
 "label": "Writes conventions, learnings, component \ndocs, generated C4 \n(generated-components.c4 + \nmodel.likec4.json + c4-model.md), \ndomain-model rows, and kb-coverage.md",
 "points": [
 [
-3158,
+3159,
 447
 ],
 [
-3309,
+3311,
 369
 ],
 [
-3545,
+3548,
 269
 ],
 [
-3765,
+3769,
 269
 ],
 [
-3765,
+3769,
 269
 ],
 [
-3765,
+3769,
 269
 ],
 [
-5780,
+5783,
 269
 ],
 [
-5962,
+5966,
 269
 ],
 [
-6170,
+6174,
 265
 ],
 [
-6315,
+6319,
 261
 ]
 ],
 "labelBBox": {
-"x": 4572,
+"x": 4576,
 "y": 158,
 "width": 264,
 "height": 106
@@ -27671,48 +27671,48 @@
 "label": "Writes spec.c4 / model.c4 / views.c4 \ncwd-relative — same directory sync \ngenerates into (ADR-171 two-writer \nprecedence)",
 "points": [
 [
-5854,
+5858,
 961
 ],
 [
-5951,
+5955,
 844
 ],
 [
-6123,
+6127,
 633
 ],
 [
-6262,
+6266,
 446
 ],
 [
-6290,
+6294,
 408
 ],
 [
-6288,
+6291,
 391
 ],
 [
-6322,
+6326,
 359
 ],
 [
-6326,
+6330,
 355
 ],
 [
-6330,
+6334,
 351
 ],
 [
-6335,
+6339,
 348
 ]
 ],
 "labelBBox": {
-"x": 6031,
+"x": 6035,
 "y": 352,
 "width": 230,
 "height": 89
@@ -27794,24 +27794,24 @@
 0
 ],
 [
-6501,
+6504,
 0
 ],
 [
-6911,
+6915,
 0
 ],
 [
-7120,
+7124,
 580
 ],
 [
-7188,
+7192,
 817
 ]
 ],
 "labelBBox": {
-"x": 3373,
+"x": 3374,
 "y": 0,
 "width": 63,
 "height": 39
@@ -34263,7 +34263,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -38836,7 +38836,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -46270,7 +46270,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -54435,8 +54435,8 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 491,
-"height": 864
+"width": 495,
+"height": 898
 },
 "nodes": [
 {
@@ -54534,7 +54534,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml, refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
+"txt": "Four controls with one predicate (ADR-213 + its 2026-09-14 addendum, #7947/#7980): (1) redact-a11y-snapshot.py rewrites credential-NAMED input values in an accessibility tree to <redacted> — name-based, because no surface serialises type=; (2) browser-snapshot-credential-guard.sh, a PreToolUse DENY on any Bash-invoked agent-browser snapshot not piped through that redactor; (3) the corpus lint's S2 rule, which now prescribes a STRUCTURAL disclosure verbatim (use the filename: + redactor + shred form first; a refusal whose text starts `refused by playwright-mcp-redact-proxy:` means THAT server's registration is wrapped — any other error, such as the server's own File access denied, does not); (4) playwright-mcp-redact-proxy.py, a single-file stdio JSON-RPC relay that importlib-loads the redactor by path, runs redact_text over the text of EVERY tools/call result by shape (two tools inline tree lines on the pinned server — browser_snapshot and browser_find), appends --snapshot-mode none to the wrapped argv so action tools write no raw page-*.yml (and, only when started with the opt-in --chromium-fallback flag on a host with no Google Chrome executable, also appends --browser chromium --sandbox — not a sink flag; --no-sandbox, PLAYWRIGHT_MCP_SANDBOX and config chromiumSandbox:false and --executable-path stay refused), refuses browser_snapshot with filename and any call carrying an undocumented _meta argument (measured: _meta.json returns the tree as one escaped string the line-anchored predicate cannot see), withholds a JSON-escaped tree in any result and an error carrying data or tree-shaped text, drops server notifications and every server request but roots/list, refuses to start on any launch setting that opens a raw sink around it (--save-session, a non-JSON or saveSession/saveVideo/server/non-vision-capabilities config, --port/--host, --caps beyond vision, --output-mode file, any DEBUG value that can enable a pw: logger, DEBUG_FILE), and is fail-closed in three arms with NO kill switch (cannot load or self-test the redactor → exit 2 before spawning; cannot rewrite a result → isError text that never quotes input; dead child → non-zero exit, closed stdin → group SIGTERM then SIGKILL, signalled to the GROUP even when the direct child has already exited). SHIPS vs WIRES: the plugin SHIPS the proxy and, since #8156, WIRES it — plugins/soleur/.mcp.json registers `playwright` through it (mcp__plugin_soleur_playwright__*), alongside this repository's own .mcp.json; a customer's own registration stays wrapped only by their configuration. Residuals stay named, not closed: screenshots render a readonly credential panel in clear; browser_network_request / browser_evaluate / browser_run_code_unsafe return what they are asked for; console logs, PNGs and downloads are non-tree disk sinks; Page URL / title / dialog prose is inert to the predicate."
 },
 "tags": [],
 "notation": "Component",
@@ -54569,7 +54569,7 @@
 "size": "md"
 },
 "description": {
-"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile, whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no env forcing, so it runs the upstream defaults: headed, channel chrome — a launch-failure mode on hosts with no real Chrome installed); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
+"txt": "@playwright/mcp@0.0.78 (playwright-core 1.62.0-alpha), spawned by npx as a stdio JSON-RPC child — one newline-terminated JSON object per line, no Content-Length framing (measured) — driving a HEADED real Chrome (channel chrome, chromiumSandbox true, X11 forced at the env level) on the operator workstation with the persistent profile ~/.cache/playwright-mcp-profile (this repository's registration claims it, or a numbered sibling directory when it is held, by a kernel flock tied to the proxy process — slot 0 may wait up to 7 s, for the same session's previous launch or an unknown/unreadable owner — so a new-style launch or /mcp reconnect kills nothing; an old-style launch string still running in another worktree can, and the plugin registration has no lease), whose password manager autofills into pages the agent opens. An accessibility snapshot serialises the VALUE of every input, so a bare browser_snapshot on a login page or a credential panel returns the value inline in the tool result. Since #7980 the agent runtime reaches this server THROUGH the plugin's snapshotGuard component rather than directly — that relay is the trust boundary this node exists to show — and only on a registration that routes through it: this repository's .mcp.json does, and since #8156 the plugin's own plugins/soleur/.mcp.json registration does by default (mcp__plugin_soleur_playwright__*, on the dedicated soleur-playwright-mcp-profile under the XDG cache root — that registration ships NO config and no display forcing, so it runs the upstream defaults: headed, channel chrome; on a host with no Google Chrome executable its opt-in --chromium-fallback proxy flag makes the proxy append --browser chromium --sandbox, so Playwright launches its bundled Chromium instead with the Chromium sandbox kept on (a host that cannot run it fails closed: install Google Chrome), and its env carries only PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0, an inert guard on stdio, not the fix for anything — ADR-271); a customer's own registration does not unless they route it themselves; the hosted agent-runner registers no Playwright server (the vendored plugin tree excludes the plugin-root .mcp.json — both vendor steps rm it post-copy, so the hosted plugins:[type local] load never discovers it); the Inngest fleet's per-fire cron-ux-audit overlay runs a SEPARATE 0.0.75 copy, UNWRAPPED, with --snapshot-mode none appended directly (register PA-31 §(g)). Every behaviour cited is a dated observation of the pinned version, not an undertaking about the tool; the suite derives its fixture directory from the pin, so a bump without a re-capture reddens."
 },
 "tags": [
 "external"
@@ -54578,14 +54578,14 @@
 "kind": "system",
 "navigateTo": "__playwrightMcp",
 "x": 48,
-"y": 684,
+"y": 718,
 "width": 372,
 "height": 180,
 "labelBBox": {
 "x": 18,
 "y": 27,
 "width": 337,
-"height": 120
+"height": 119
 }
 }
 ],
@@ -54632,7 +54632,7 @@
 "id": "wip0go",
 "source": "platform.plugin.snapshotGuard",
 "target": "playwrightMcp",
-"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none; refuses filename",
+"label": "Relays JSON-RPC lines; appends \n--snapshot-mode none (and, opt-in via \n--chromium-fallback, --browser chromium \n--sandbox); refuses filename",
 "points": [
 [
 234,
@@ -54640,22 +54640,22 @@
 ],
 [
 234,
-556
+564
 ],
 [
 234,
-621
+645
 ],
 [
 234,
-674
+707
 ]
 ],
 "labelBBox": {
 "x": 235,
 "y": 564,
-"width": 255,
-"height": 55
+"width": 259,
+"height": 89
 },
 "parent": null,
 "relations": [
