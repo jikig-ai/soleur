@@ -52,7 +52,25 @@ import { warnSilentFallback } from "./observability";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { isSupportAllowedSkill } from "./support-directive";
 import { denySupport } from "./support-escalation";
+import { SUPPORT_AGENT_SESSION_HINT } from "@/lib/support-handoff";
 import type { Persona } from "./workspace-mode";
+
+// Write-class file tools denied (with escalation record) on support personas —
+// the read-class file tools (Read/Glob/Grep/LS/NotebookRead) stay on the normal
+// containment flow because kb-search's corpus path needs them. MultiEdit is
+// schema-removed AND not a FILE_TOOLS member (deny-by-default covers it), but
+// listing it here is harmless future-proofing if it ever joins the set.
+const SUPPORT_WRITE_FILE_TOOLS = new Set<string>([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+]);
+
+// The support deny message that names the concrete next surface — one site
+// owns the literal so the model-relayed prose, the rendered link, and the
+// directive can never drift.
+const SUPPORT_BASH_DENY_MESSAGE = `This chat is read-only app help — I can't run that command. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`;
 
 const log = createChildLogger("permission");
 
@@ -255,8 +273,30 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // Defense-in-depth: catch any file tool that bypasses PreToolUse hooks.
     // Hooks are the primary enforcement (layer 1); this is layer 2. See #891.
     if (isFileTool(toolName)) {
+      // Support persona (#9539): write-class file tools are schema-removed via
+      // SUPPORT_EXTRA_DISALLOWED_TOOLS; a model emitting one anyway is an
+      // engineering attempt — deny + record rather than letting the sandbox
+      // reject the write AFTER a `diff`/`notebook_edit` frame already went to
+      // the WS sink. Read-class file tools flow through containment below.
+      if (ctx.persona === "support" && SUPPORT_WRITE_FILE_TOOLS.has(toolName)) {
+        return denySupport({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "tool",
+          message: `This chat is read-only app help — I can't edit or write files. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        });
+      }
       const filePath = extractToolPath(toolInput);
       if (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) {
+        if (ctx.persona === "support") {
+          return denySupport({
+            conversationId: ctx.conversationId,
+            toolName,
+            source: "tool",
+            message: `This chat is read-only app help — that path is outside my reach. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+            detail: "outside workspace",
+          });
+        }
         logPermissionDecision(
           "canUseTool-file-tool",
           toolName,
@@ -293,6 +333,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // removed tool. NO escalation record — a clarifying question is not an
       // engineering attempt.
       if (ctx.persona === "support") {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "deny-support-question",
+            conversationId: ctx.conversationId,
+          },
+          "Support persona denied an interactive question (no gate surface)",
+        );
         logPermissionDecision(
           "canUseTool-support-question",
           toolName,
@@ -371,6 +420,40 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       };
     }
 
+    // Support persona (#9539): TodoWrite / ExitPlanMode are schema-removed
+    // (SUPPORT_EXTRA_DISALLOWED_TOOLS) AND filtered from `allowedTools` for
+    // support dispatches — either reaching here means a model emitted a
+    // removed tool AND slipped the auto-approve filter, which is exactly the
+    // case the AskUserQuestion belt hedges. Deny WITHOUT an escalation
+    // record (a UX signal is not an engineering attempt).
+    if (
+      ctx.persona === "support" &&
+      (toolName === "TodoWrite" ||
+        toolName === "ExitPlanMode" ||
+        SOLEUR_GO_SAFE_UX_TOOLS.has(toolName))
+    ) {
+      log.info(
+        {
+          sec: true,
+          tool: toolName,
+          decision: "deny-support-question",
+          conversationId: ctx.conversationId,
+        },
+        "Support persona denied a UX-signal tool (no interactive surface)",
+      );
+      logPermissionDecision(
+        "canUseTool-support-question",
+        toolName,
+        "deny",
+        "no interactive surface",
+      );
+      return {
+        behavior: "deny" as const,
+        message:
+          "This chat can't render interactive prompts — answer in plain text instead.",
+      };
+    }
+
     // ExitPlanMode: plan-preview-acknowledgment tool surfaced by the
     // soleur plugin. No filesystem path, no command execution — purely
     // a UX signal that the planning phase is complete. Stage 2.11.
@@ -411,8 +494,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             conversationId: ctx.conversationId,
             toolName,
             source: "bash",
-            message:
-              "This chat is read-only app help — I can't run that command. For engineering work, use \"Ask an agent\" (the Command Center, /dashboard/chat/new).",
+            message: SUPPORT_BASH_DENY_MESSAGE,
             detail: "BLOCKED_BASH_PATTERNS match",
           });
         }
@@ -512,8 +594,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           conversationId: ctx.conversationId,
           toolName,
           source: "bash",
-          message:
-            "This chat is read-only app help — I can't run that command. For engineering work, use \"Ask an agent\" (the Command Center, /dashboard/chat/new).",
+          message: SUPPORT_BASH_DENY_MESSAGE,
         });
       }
 
@@ -943,6 +1024,17 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // Agent tool: spawns subagents under the same SDK sandbox. Explicit
     // allow (replaces prior SAFE_TOOLS auto-allow) for auditability. See #910.
     if (toolName === "Agent") {
+      // Support persona (#9539): `Agent` is schema-removed for support; an
+      // emitted-despite-removal call is engineering fan-out on a read-only
+      // turn — deny + record.
+      if (ctx.persona === "support") {
+        return denySupport({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "tool",
+          message: `This chat is read-only app help — I can't spawn engineering agents. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        });
+      }
       if (subagentCtx) {
         log.info(
           { sec: true, agentId: options.agentID },
@@ -974,8 +1066,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         conversationId: ctx.conversationId,
         toolName,
         source: "skill",
-        message:
-          "Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — use \"Ask an agent\" (the Command Center, /dashboard/chat/new).",
+        message: `Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — ${SUPPORT_AGENT_SESSION_HINT}.`,
         detail: requested || "(missing)",
       });
     }
@@ -990,6 +1081,19 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // `platformToolNames` (not blanket mcp__ prefix) so future MCP servers
     // never auto-allow without explicit review.
     if (ctx.platformToolNames.includes(toolName)) {
+      // Support persona (#9539): a platform tool is repo-capable by
+      // construction (its gated tier emits a `review_gate` on the WS sink;
+      // its auto-approve tier executes unconditionally). For support
+      // dispatches `platformToolNames` is empty — this belt is for a future
+      // tool added to the list without a persona check.
+      if (ctx.persona === "support") {
+        return denySupport({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "tool",
+          message: `This chat is read-only app help — that integration isn't available here. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        });
+      }
       const tier: ToolTier = getToolTier(toolName);
 
       if (tier === "blocked") {
@@ -1119,6 +1223,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     }
 
     // Deny-by-default: block unrecognized tools
+    if (ctx.persona === "support") {
+      return denySupport({
+        conversationId: ctx.conversationId,
+        toolName,
+        source: "tool",
+        message: `This chat is read-only app help — I can't do that here. For engineering work, ${SUPPORT_AGENT_SESSION_HINT}.`,
+        detail: "unrecognized tool",
+      });
+    }
     logPermissionDecision(
       "canUseTool-deny-default",
       toolName,

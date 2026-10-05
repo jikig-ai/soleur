@@ -23,8 +23,8 @@ Execution order: Phase 1 (detection + wire contract) → Phase 2 (Bash channel) 
 ## Phase 1: Detection + wire contract
 
 - [x] 1.1 Write `apps/web-platform/server/support-escalation.ts`: `recordSupportEscalation(
-      conversationId, source: "skill" | "bash")`, `consumeSupportEscalation(conversationId):
-      boolean` (consume-on-read), `clearSupportEscalation(conversationId)`; bounded Map
+      conversationId, source: "skill" | "bash" | "tool")`, `consumeSupportEscalation(conversationId):
+      SupportEscalationSource | null` (consume-on-read), `clearSupportEscalation(conversationId)`; bounded Map
       (evict oldest at ~1000 entries).
 - [x] 1.2 In `apps/web-platform/lib/support-sse.ts`: `export type SupportSseMessage =
       WSMessage | { type: "support_handoff"; task: string; conversationId: string }`;
@@ -63,9 +63,9 @@ Execution order: Phase 1 (detection + wire contract) → Phase 2 (Bash channel) 
 
 - [x] 3.1 In `app/api/support/route.ts` `enqueue`: when
       `SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)` and
-      `consumeSupportEscalation(conversationId)` is true, enqueue
-      `{ type: "support_handoff", task: message.slice(0, 500) }` BEFORE forwarding the
-      terminal frame; call `clearSupportEscalation(conversationId)` in stream teardown.
+      `consumeSupportEscalation(conversationId)` is non-null, enqueue
+      `{ type: "support_handoff", task: truncateSupportHandoffTask(message), conversationId }`
+      BEFORE forwarding the terminal frame (code-point-aware truncate, not `slice`); call `clearSupportEscalation(conversationId)` in stream teardown.
 - [x] 3.2 In `apps/web-platform/lib/support-sse.ts` `reduceSupportFrame`: `support_handoff`
       case sets `state.handoffMarkdown` (separate field — never merged into `state.text`,
       which `stream` replaces wholesale). In `components/support/use-support-chat.ts`
@@ -74,8 +74,9 @@ Execution order: Phase 1 (detection + wire contract) → Phase 2 (Bash channel) 
       records for support. `route.ts`: `clearSupportEscalation` at stream open AND teardown
       (+ `support-handoff-cleared-unconsumed` log).
 - [x] 3.3 In `apps/web-platform/server/support-directive.ts` `SUPPORT_SYSTEM_DIRECTIVE`:
-      update the engineering-redirect instruction to one sentence + the bare
-      `[Open an agent session](/dashboard/chat/new)` link (no model-side query params).
+      update the engineering-redirect instruction to one sentence + the canonical
+      `[Ask an agent](/dashboard/chat/new)` link (`SUPPORT_AGENT_SESSION_LABEL`/`_HREF` —
+      no model-side query params).
 - [x] 3.4 Do NOT create or edit any `components/**/*.tsx` — the affordance rides the
       existing MarkdownRenderer (a `.tsx` touch fires the BLOCKING UX wireframe gate).
 

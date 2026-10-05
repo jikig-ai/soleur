@@ -30,6 +30,7 @@ export type PermissionLayer =
   | "canUseTool-soleur-go-ux"
   | "canUseTool-support-skill"
   | "canUseTool-support-bash"
+  | "canUseTool-support-tool"
   | "canUseTool-support-question";
 
 export function logPermissionDecision(

@@ -36,6 +36,17 @@ import type { WSMessage } from "@/lib/types";
 
 const log = createChildLogger("support-route");
 
+// #9539 — one in-flight support turn per conversation, enforced at the
+// transport boundary. `resolveOrCreateSupportConversation` is STICKY (every
+// non-forceNew POST resolves the same row), and the runner warm-reuses the
+// conversation's Query — a second POST rebinds `state.events` to the new
+// request's sink, so the older stream starves (pre-existing frame-hijack)
+// and the per-conversation escalation flag can cross-attribute a deny to an
+// innocent turn. The support client already aborts prior turns before
+// sending, so a 409 here only greets cross-tab/double-send races — a much
+// better answer than silently consuming the wrong turn's frames.
+const SUPPORT_TURNS_IN_FLIGHT = new Set<string>();
+
 // Hard cap on how long the SSE response is held open waiting for the turn to
 // finish. A well-behaved turn ends with a `stream_end`/`session_ended` frame far
 // sooner; this only backstops a turn that crashes mid-stream or is reaped without
@@ -100,19 +111,34 @@ export async function POST(request: Request): Promise<Response> {
     });
   }
 
+  // Synchronous check-then-open: between this and `start()`'s `add` there is
+  // no await, so two concurrent POSTs cannot both slip the guard.
+  if (SUPPORT_TURNS_IN_FLIGHT.has(conversationId)) {
+    return new Response(
+      JSON.stringify({ error: "A support turn is already in flight." }),
+      {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let closed = false;
 
+      SUPPORT_TURNS_IN_FLIGHT.add(conversationId);
       // #9539 — drop any escalation flag left by a PRIOR turn on this reused
       // support conversation (`resolveOrCreateSupportConversation` is sticky
       // and the stream has no `cancel` handler, so a zombie dispatch can
       // record a deny after its own teardown). Clearing at stream OPEN, not
-      // only at teardown, makes the record→consume window strictly
-      // turn-scoped — without it the next innocent turn's terminal frame
-      // would consume the stale flag and render a handoff for a deny that
-      // never happened.
+      // only at teardown, narrows the record→consume window to this turn —
+      // without it the next innocent turn's terminal frame would consume the
+      // stale flag and render a handoff for a deny that never happened. A
+      // flag recorded by a zombie turn DURING this turn's window is the
+      // accepted residual (the busy-guard above blocks the concurrent-POST
+      // form of it).
       clearSupportEscalation(conversationId);
       const handoffTask = truncateSupportHandoffTask(message);
 
@@ -144,24 +170,34 @@ export async function POST(request: Request): Promise<Response> {
         // load-bearing; a `stream` frame's replace-text semantics is the
         // other reason the emit is terminal-adjacent). Consume-on-read makes
         // this fire exactly once per recorded deny, never unconditionally.
-        const handoff = SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)
+        const escalationSource = SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)
           ? consumeSupportEscalation(conversationId)
           : null;
         try {
           for (const frame of supportTerminalPrefixFrames(
             msg,
-            handoff === null
+            escalationSource === null
               ? null
               : { type: "support_handoff", task: handoffTask, conversationId },
           )) {
             controller.enqueue(encoder.encode(formatSupportSseFrame(frame)));
           }
         } catch {
+          // A consumed flag with a dead stream is neither `emitted` nor
+          // `cleared-unconsumed` — mark it so the deny→emit join still reads.
+          // The stream is already dead; the turn must not wait out the cap.
+          if (escalationSource !== null) {
+            log.warn(
+              { sec: true, conversationId, source: escalationSource },
+              "support-handoff-emit-failed",
+            );
+          }
+          if (SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)) finishTurn();
           return false;
         }
-        if (handoff !== null) {
+        if (escalationSource !== null) {
           log.info(
-            { sec: true, conversationId, source: handoff },
+            { sec: true, conversationId, source: escalationSource },
             "support-handoff-emitted",
           );
         }
@@ -192,6 +228,7 @@ export async function POST(request: Request): Promise<Response> {
       await turnComplete;
       clearTimeout(capTimer);
       closed = true;
+      SUPPORT_TURNS_IN_FLIGHT.delete(conversationId);
       // Teardown flag hygiene: a deny recorded by a turn that died without a
       // terminal frame (cap timer, client abort, crash) must not bleed into
       // the next send on this reused conversation. The

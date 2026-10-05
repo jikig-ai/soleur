@@ -205,7 +205,6 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buf = "";
-          state = initialSupportStream();
 
           for (;;) {
             const { done, value } = await reader.read();
@@ -223,11 +222,9 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
               fallback();
               return;
             }
-            if (composeSupportBubbleText(state).length > 0) {
-              patch(supportId, {
-                text: composeSupportBubbleText(state),
-                streaming: true,
-              });
+            const bubble = composeSupportBubbleText(state);
+            if (bubble.length > 0) {
+              patch(supportId, { text: bubble, streaming: true });
             }
           }
 

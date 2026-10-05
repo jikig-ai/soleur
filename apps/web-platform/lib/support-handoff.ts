@@ -19,6 +19,12 @@ export const SUPPORT_AGENT_SESSION_HREF = "/dashboard/chat/new";
  */
 export const SUPPORT_AGENT_SESSION_LABEL = "Ask an agent";
 
+/**
+ * Plain-text (non-markdown) pointer for model-relayed deny messages — the
+ * same destination as the rendered link so prose and affordance cannot drift.
+ */
+export const SUPPORT_AGENT_SESSION_HINT = `use "${SUPPORT_AGENT_SESSION_LABEL}" (the Command Center, ${SUPPORT_AGENT_SESSION_HREF})`;
+
 /** Cap on the user message carried into the `?msg=` deep link. */
 const HANDOFF_TASK_MAX_CHARS = 500;
 
@@ -34,6 +40,9 @@ export function truncateSupportHandoffTask(
   message: string,
   maxChars: number = HANDOFF_TASK_MAX_CHARS,
 ): string {
+  // UTF-16 length is an upper bound on the code-point count — skip the
+  // `Array.from` allocation for the common short message.
+  if (message.length <= maxChars) return message;
   const points = Array.from(message);
   if (points.length <= maxChars) return message;
   return `${points.slice(0, maxChars).join("")}…`;

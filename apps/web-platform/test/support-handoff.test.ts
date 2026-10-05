@@ -109,20 +109,6 @@ function assertAllow(r: PermissionResult | null) {
   return r;
 }
 
-const GATE_FRAME_TYPES = new Set([
-  "review_gate",
-  "bash_approval",
-  "autonomous_disclosure",
-  "interactive_prompt",
-]);
-
-function gateFramesSent(deps: CanUseToolDeps): unknown[] {
-  const send = deps.sendToClient as ReturnType<typeof vi.fn>;
-  return send.mock.calls
-    .map((c) => c[1])
-    .filter((m: { type?: string }) => GATE_FRAME_TYPES.has(m?.type ?? ""));
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   clearSupportEscalation("conv-1");
@@ -142,6 +128,27 @@ describe("support escalation registry", () => {
     expect(clearSupportEscalation("conv-1")).toBe(true);
     expect(consumeSupportEscalation("conv-1")).toBeNull();
   });
+
+  test("FIFO cap evicts the OLDEST key and retains the newest", () => {
+    for (let i = 0; i < 1001; i++) {
+      recordSupportEscalation(`conv-cap-${i}`, "skill");
+    }
+    expect(consumeSupportEscalation("conv-cap-0")).toBeNull(); // evicted
+    expect(consumeSupportEscalation("conv-cap-1000")).toBe("skill"); // newest kept
+    for (let i = 1; i < 1001; i++) clearSupportEscalation(`conv-cap-${i}`);
+  });
+
+  test("re-recording refreshes insertion order (oldest is not the newest)", () => {
+    recordSupportEscalation("conv-cap-a", "skill");
+    for (let i = 0; i < 999; i++) recordSupportEscalation(`conv-rr-${i}`, "skill");
+    recordSupportEscalation("conv-cap-a", "bash"); // re-record → newest
+    recordSupportEscalation("conv-rr-overflow", "skill"); // evicts oldest
+    // conv-cap-a was refreshed, so conv-rr-0 (the true oldest) is evicted.
+    expect(consumeSupportEscalation("conv-rr-0")).toBeNull();
+    expect(consumeSupportEscalation("conv-cap-a")).toBe("bash");
+    clearSupportEscalation("conv-rr-overflow");
+    for (let i = 1; i < 999; i++) clearSupportEscalation(`conv-rr-${i}`);
+  });
 });
 
 describe("support persona — deny → escalation record", () => {
@@ -154,11 +161,12 @@ describe("support persona — deny → escalation record", () => {
     }
   });
 
-  test("(b) non-safe Bash denies with zero gate frames + records 'bash'", async () => {
+  test("(b) non-safe Bash denies with zero frames on the WS sink + records 'bash'", async () => {
     const deps = buildDeps();
     const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
     const r = assertDeny(await canUse("Bash", { command: "git checkout -b x" }, opts()));
-    expect(gateFramesSent(deps)).toEqual([]);
+    // "No emit, ever" — stronger than a frame-type allowlist.
+    expect(deps.sendToClient).not.toHaveBeenCalled();
     expect(deps.abortableReviewGate).not.toHaveBeenCalled();
     expect(consumeSupportEscalation("conv-1")).toBe("bash");
     if (r.behavior === "deny") {
@@ -175,15 +183,34 @@ describe("support persona — deny → escalation record", () => {
     });
     const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
     assertDeny(await canUse("Bash", { command: "git checkout -b x" }, opts()));
-    expect(gateFramesSent(deps)).toEqual([]);
+    expect(deps.sendToClient).not.toHaveBeenCalled();
     expect(consumeSupportEscalation("conv-1")).toBe("bash");
   });
 
-  test("(b3) blocklisted command on support records the escalation", async () => {
+  test("(b2b) owner + un-acked + autonomous OFF still denies (opt-out hold arm)", async () => {
+    // The existing-workspace opt-out hold emits `autonomous_disclosure` over
+    // the WS sink when !bashAutonomous && unAcked && isOwner — the short-
+    // circuit must precede that arm too.
+    const deps = buildDeps({
+      bashAutonomous: false,
+      isOwner: true,
+      autonomousAckAt: null,
+    });
+    const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
+    assertDeny(await canUse("Bash", { command: "git checkout -b x" }, opts()));
+    expect(deps.sendToClient).not.toHaveBeenCalled();
+    expect(deps.abortableReviewGate).not.toHaveBeenCalled();
+    expect(consumeSupportEscalation("conv-1")).toBe("bash");
+  });
+
+  test("(b3) blocklisted command on support records the escalation + handoff copy", async () => {
     const deps = buildDeps();
     const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
-    assertDeny(await canUse("Bash", { command: "sudo ls" }, opts()));
+    const r = assertDeny(await canUse("Bash", { command: "sudo ls" }, opts()));
     expect(consumeSupportEscalation("conv-1")).toBe("bash");
+    if (r.behavior === "deny") {
+      expect(r.message).toMatch(/Ask an agent/);
+    }
   });
 
   test("(b4) AskUserQuestion denies on support — no gate frame, NO escalation", async () => {
@@ -236,6 +263,78 @@ describe("support persona — deny → escalation record", () => {
   });
 });
 
+describe("support persona — uncovered-path belts (panel enumeration)", () => {
+  test("write-class file tool (Edit) denies + records 'tool' at the belt, not deny-default", async () => {
+    // isFileTool must report true or the call lands on deny-default instead of
+    // the write-class belt — and "tool" alone wouldn't discriminate (deny-
+    // default records the same source). The file-path input proves the call
+    // reached the file-tool branch.
+    mockIsFileTool.mockReturnValue(true);
+    const canUse = createCanUseTool(buildContext({ persona: "support" }));
+    assertDeny(await canUse("Edit", { file_path: "/tmp/ws/f.ts", old_string: "a", new_string: "b" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    mockIsFileTool.mockReturnValue(false);
+  });
+
+  test("read-class file tool (Read) still flows through containment", async () => {
+    mockIsFileTool.mockReturnValue(true);
+    const canUse = createCanUseTool(buildContext({ persona: "support" }));
+    assertAllow(await canUse("Read", { file_path: "/tmp/ws/f.ts" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBeNull();
+    mockIsFileTool.mockReturnValue(false);
+  });
+
+  test("file tool outside workspace on support records the deny", async () => {
+    // vi.clearAllMocks does NOT reset mockReturnValue implementations —
+    // restore all three after the test or the impls leak into later tests.
+    mockIsFileTool.mockReturnValue(true);
+    const { extractToolPath } = await import("../server/tool-path-checker");
+    (extractToolPath as ReturnType<typeof vi.fn>).mockReturnValue("/outside/f.ts");
+    const { isPathInWorkspace } = await import("../server/sandbox");
+    (isPathInWorkspace as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const canUse = createCanUseTool(buildContext({ persona: "support" }));
+    assertDeny(await canUse("Read", { file_path: "/outside/f.ts" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+    mockIsFileTool.mockReturnValue(false);
+    (extractToolPath as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isPathInWorkspace as ReturnType<typeof vi.fn>).mockReturnValue(true);
+  });
+
+  test("Agent on support denies + records 'tool' (engineering fan-out)", async () => {
+    const canUse = createCanUseTool(buildContext({ persona: "support" }));
+    assertDeny(await canUse("Agent", { prompt: "fix it" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+  });
+
+  test("platform tool on support denies + records 'tool' (belt for future entries)", async () => {
+    const canUse = createCanUseTool(
+      buildContext({ persona: "support", platformToolNames: ["mcp__soleur_platform__x"] }),
+    );
+    assertDeny(await canUse("mcp__soleur_platform__x", {}, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+  });
+
+  test("deny-by-default unknown tool on support records 'tool'", async () => {
+    const canUse = createCanUseTool(buildContext({ persona: "support" }));
+    assertDeny(await canUse("MultiEdit", { file_path: "/tmp/ws/f" }, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBe("tool");
+  });
+
+  test("TodoWrite denies on support WITHOUT recording (UX signal, not engineering)", async () => {
+    const deps = buildDeps();
+    const canUse = createCanUseTool(buildContext({ persona: "support", deps }));
+    assertDeny(await canUse("TodoWrite", { todos: [] }, opts()));
+    expect(deps.sendToClient).not.toHaveBeenCalled();
+    expect(consumeSupportEscalation("conv-1")).toBeNull();
+  });
+
+  test("ExitPlanMode denies on support WITHOUT recording", async () => {
+    const canUse = createCanUseTool(buildContext({ persona: "support" }));
+    assertDeny(await canUse("ExitPlanMode", {}, opts()));
+    expect(consumeSupportEscalation("conv-1")).toBeNull();
+  });
+});
+
 describe("supportTerminalPrefixFrames (consume-gated terminal emit)", () => {
   const handoff = { type: "support_handoff" as const, task: "do x", conversationId: "conv-1" };
   const end = { type: "stream_end", leaderId: "cc_router" } as WSMessage;
@@ -255,7 +354,12 @@ describe("supportTerminalPrefixFrames (consume-gated terminal emit)", () => {
     expect(supportTerminalPrefixFrames(stream, handoff)).toEqual([stream]);
   });
 
-  test("covers every terminal type", () => {
+  test("covers every terminal type (literal pin — a removed member can't evade)", () => {
+    expect([...SUPPORT_TERMINAL_FRAME_TYPES].sort()).toEqual([
+      "error",
+      "session_ended",
+      "stream_end",
+    ]);
     for (const t of SUPPORT_TERMINAL_FRAME_TYPES) {
       const terminal = { type: t } as WSMessage;
       expect(supportTerminalPrefixFrames(terminal, handoff)[0]).toEqual(handoff);
@@ -281,8 +385,10 @@ describe("reduceSupportFrame + composeSupportBubbleText (handoffMarkdown)", () =
 
   test("truncateSupportHandoffTask is code-point aware (no lone surrogate)", () => {
     const emoji = "🙂".repeat(600);
-    const t = truncateSupportHandoffTask(emoji, 500);
-    // Never throws in encodeURIComponent — would throw URIError on a lone surrogate.
+    // Odd code-unit boundary: a code-unit `slice(0, 501)` mutant lands INSIDE
+    // a surrogate pair (2 units each, so index 500 is a lone high surrogate)
+    // and would throw URIError — the fixture actually discriminates.
+    const t = truncateSupportHandoffTask(emoji, 501);
     expect(() => encodeURIComponent(t)).not.toThrow();
     expect(t.endsWith("…")).toBe(true);
   });
@@ -356,7 +462,13 @@ vi.mock("../server/cc-dispatcher", () => ({ dispatchSoleurGo: routeH.dispatchSol
 vi.mock("../server/support-conversation", () => ({
   resolveOrCreateSupportConversation: routeH.resolveOrCreateSupportConversation,
 }));
-vi.mock("../server/observability", () => ({ reportSilentFallback: vi.fn() }));
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  // The mock is file-scoped (vi.mock hoists): permission-callback.ts imports
+  // `warnSilentFallback` from this same module — omitting it strips the fn
+  // for every test above too.
+  warnSilentFallback: vi.fn(),
+}));
 
 import { POST } from "../app/api/support/route";
 
@@ -436,5 +548,22 @@ describe("POST /api/support — terminal-frame handoff emit", () => {
     expect(handoff?.task).toBe("fix (my) board's layout");
     // error-terminated turn still emits the handoff, BEFORE the error frame.
     expect(sse.indexOf('"type":"support_handoff"')).toBeLessThan(sse.indexOf('"type":"error"'));
+  });
+
+  test("a second POST on the in-flight conversation returns 409 (busy guard)", async () => {
+    let send!: (u: string, m: WSMessage) => boolean;
+    routeH.dispatchSoleurGo.mockImplementation(
+      async (args: { sendToClient: (u: string, m: WSMessage) => boolean }) => {
+        send = args.sendToClient;
+      },
+    );
+    const res1 = await POST(routeReq({ message: "long help question" }));
+    expect(res1.status).toBe(200);
+    // Turn 1 never emits a terminal frame → still in-flight.
+    const res2 = await POST(routeReq({ message: "concurrent double-send" }));
+    expect(res2.status).toBe(409);
+    // Release turn 1 so the busy flag clears for subsequent tests.
+    send("user-1", { type: "stream_end", leaderId: "cc_router" } as WSMessage);
+    await res1.text();
   });
 });

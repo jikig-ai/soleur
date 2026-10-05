@@ -127,27 +127,58 @@ The client stores it in a separate `handoffMarkdown` state field so
 Mechanism:
 
 - `server/support-escalation.ts` — bounded FIFO registry +
-  `denySupport` (structured `deny-support-{skill,bash}` log + permission-decision
-  log + record + user-relayable deny, one authoring point).
-- `permission-callback.ts` — Skill-deny and BOTH Bash deny sites (blocklist,
-  plus a new short-circuit after the safe-allowlist + near-miss telemetry and
-  BEFORE `bashAutonomous`/cache/review-gate) route through `denySupport`. The
-  Bash short-circuit also closes two latent leaks: on an acked autonomous
-  workspace a non-safe command was silently auto-ALLOWED, and on an un-acked
-  owner path a WS-bound `autonomous_disclosure` hold could be cross-surface-acked.
-  `AskUserQuestion` gets a persona-deny belt (no escalation — a clarifying
-  question is not an engineering attempt); `AskUserQuestion`/`TodoWrite`/
-  `ExitPlanMode` join `SUPPORT_EXTRA_DISALLOWED_TOOLS` so the WS-bound
-  review-gate/interactive-prompt frames can never be scheduled.
+  `denySupport` (structured `deny-support-{skill,bash,tool}` log + permission-decision
+  log + record + user-relayable deny, one authoring point). Escalation sources:
+  `skill` (non-allowlisted Skill), `bash` (blocklist or non-safe command),
+  `tool` (every other denied engineering surface).
+- `permission-callback.ts` — deny-with-record covers ALL engineering-intent
+  surfaces: Skill-deny, BOTH Bash deny sites (blocklist, plus a short-circuit
+  after the safe-allowlist + near-miss telemetry and BEFORE
+  `bashAutonomous`/cache/review-gate), write-class file tools (`Write`/`Edit`/
+  `MultiEdit`/`NotebookEdit`), outside-workspace file denies, `Agent`, platform
+  tools, and deny-by-default. The Bash short-circuit also closes two latent
+  leaks: on an acked autonomous workspace a non-safe command was silently
+  auto-ALLOWED, and on an un-acked owner path a WS-bound `autonomous_disclosure`
+  hold could be cross-surface-acked. `AskUserQuestion`/`TodoWrite`/
+  `ExitPlanMode` get persona-deny belts WITHOUT an escalation record (a UX
+  signal is not an engineering attempt) and join
+  `SUPPORT_EXTRA_DISALLOWED_TOOLS`.
+- `soleur-go-runner.ts` — `bridgeInteractivePromptIfApplicable` returns early
+  for `persona === "support"`: the bridge fires on tool_use *sighting* (before
+  `canUseTool`), so it is the chokepoint belt keeping `interactive_prompt`
+  frames + answerable `pendingPrompts` entries off the WS sink even if a model
+  emits a schema-removed tool.
+- `cc-dispatcher.ts` — support dispatches filter `allowedTools` against
+  `SUPPORT_EXTRA_DISALLOWED_TOOLS` (auto-approve bypasses `canUseTool`, so the
+  overlap would defeat both schema removal and the belts), and the entire C4
+  surface — `edit_c4_diagram` registration, `platformToolNames` entry, and
+  `c4PromptAddendum` — is gated off support (the tool commits to the user's
+  repo via the installation token, a real write outside `allowWrite:[]`).
 - `app/api/support/route.ts` — consume-on-read at the terminal boundary
   (exactly-once, never unconditional), `clearSupportEscalation` at stream open
-  (zombie-turn stale flag) and teardown, with `support-handoff-emitted` /
-  `support-handoff-cleared-unconsumed` markers for the deny→emit join.
+  (zombie-turn stale flag) and teardown, a per-conversation busy guard (409 to
+  a second POST while a turn is in-flight — the sticky conversation + warm
+  Query rebind would otherwise cross-attribute the escalation flag), and
+  `support-handoff-emitted` / `support-handoff-cleared-unconsumed` /
+  `support-handoff-emit-failed` / `support-escalation-evicted` markers for the
+  deny→emit join.
+- `lib/support-handoff.ts` — canonical label/href/encoded-link builder +
+  `SUPPORT_AGENT_SESSION_HINT` (the plain-text pointer all deny messages
+  compose from — model-relayed prose and the rendered link cannot drift).
 - The handoff frame is a support-local `SupportSseMessage` member, NOT a
   `WSMessage` member — the bidirectional `_SchemaCovers` drift pin makes a bare
   member a compile error, and the frame can never legitimately arrive on the WS.
   `lib/types.ts` / `ws-zod-schemas.ts` are untouched; the CC dispatch path is
   byte-neutral.
+
+Known residuals (tracked, not silently accepted): `kb-search`'s documented
+`git grep`/`grep`/script shell-outs hit the Bash deny and record a spurious
+handoff on a pure help question (#9559); `git branch <name>` and other
+write-shaped safe-allowlisted commands auto-approve with no deny and no
+handoff (#9555); the GH-token mint/askpass/egress surface is not persona-gated
+(#9558); a zombie turn recording a deny *during* a successor turn's window is
+the remaining flag-attribution edge after the busy guard (a per-dispatch key
+cannot reach the per-Query `canUseTool` ctx without new plumbing).
 
 ## Alternatives Considered (this addendum)
 
