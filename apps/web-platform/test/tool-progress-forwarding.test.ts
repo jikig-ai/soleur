@@ -151,13 +151,13 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
     );
     expect(calls.length).toBe(1);
     // Raw SDK tool_name is routed through buildToolLabel so internal tool
-    // names don't leak — `Bash` → `Running command...` (FALLBACK_LABELS.Bash).
+    // names don't leak — `Bash` → `Running command…` (FALLBACK_LABELS.Bash).
     // Security review (#2861) mandated parity with the `tool_use` channel.
     expect(calls[0][1]).toMatchObject({
       type: "tool_progress",
       leaderId: "cpo",
       toolUseId: "tu-1",
-      toolName: "Running command...",
+      toolName: "Running command…",
       elapsedSeconds: 5,
     });
   });
