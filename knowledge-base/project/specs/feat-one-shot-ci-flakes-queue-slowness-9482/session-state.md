@@ -36,5 +36,5 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan
   (not introduced here; positive companions exist); the live `hits_7376` assignment survives neutering
   (shared with sibling passes, killed out of suite); a time-based handshake bound would trip at the same wall
   time, so no change; scan_pipes/scan_scorers duplication is style; `FILES_7376` is pinned by count and
-  tracked-ness, not by literal names.
+  tracked-ness, not by literal names; its membership in the affected-paths guard array is checked by reading that array only, comments ignored.
 - Merge order vs #9523 (sibling draft, reap suite fixture G diagnostics): this PR first, then rebase.

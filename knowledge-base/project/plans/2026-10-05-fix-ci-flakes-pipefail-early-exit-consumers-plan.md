@@ -231,12 +231,15 @@ non-reproducible flakes carry a stated hypothesis; (P5) evidence lands on existi
    (line 722) to `grep -q … < <(tr '\r' '\n' < "$f")`. (d) The race rows (a landing check, a must-PASS late producer, a non-draining control, plus two review-added pins) through a new helper (not `hk_mutant`,
    which compares only `outcome_reason`): rewrite the single `printf 'DOPPLER_TOKEN` call to `slow_printf …` and
    prepend a `slow_printf` function. `slow_printf` is a HANDSHAKE, not a fixed sleep: it polls, bounded
-   (about 5 s), for a sentinel file that the no-drain stub creates only when it handles the `luks-monitor.sh`
-   probe call (`"$*" == *luks-monitor.sh*`, so the earlier `mktemp`/`tar` calls cannot pre-create it) after
-   closing its stdin (`exec 0<&-`), then calls `printf`; in drain mode it polls the same bound and proceeds. The
-   landing check asserts the call token `^slow_printf 'DOPPLER_TOKEN` appears exactly once (the function
-   definition adds a second `slow_printf`, so a bare count of 2 is expected) and the derived body differs from
-   the original. Row 1 (must-PASS): the slow body against the draining stub classifies `selftest`. Row 2
+   (about 5 s), for a sentinel file that the stub creates when it handles the `luks-monitor.sh` probe call
+   (`"$*" == *luks-monitor.sh*`, so the earlier `mktemp`/`tar` calls cannot pre-create it): in no-drain mode
+   after closing its stdin (`exec 0<&-`), in drain mode just before it drains (the drain keeps what it read in
+   `$calls.probe-stdin`). `slow_printf` is the only poller; it records `sentinel` or `timeout` in
+   `<sentinel>.released`, and the rows fail on a timeout. The landing check asserts the call token
+   `^slow_printf 'DOPPLER_TOKEN` appears exactly once (the function definition adds a second `slow_printf`,
+   so a bare count of 2 is expected) and that the derived body differs from production in exactly one line
+   (`diff` prints two `<`/`>` lines). The `*tar\ xzf*` stub arm drains stdin too (defensive; the tar stub
+   emits nothing, so it has no row). Row 1 (must-PASS): the slow body against the draining stub classifies `selftest`. Row 2
    (positive control, same input): against `FIXTURE_NO_DRAIN=1` it classifies `unavailable/unparsed` with a probe
    rc outside {0,3,127,255}. Both rows run under `(trap '' PIPE; …)` so the CI disposition (rc 1) is exercised
    on every host, and the assertion is "non-zero and not one of those", never 141. No luks row may be

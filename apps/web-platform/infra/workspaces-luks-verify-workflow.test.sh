@@ -1019,7 +1019,11 @@ slow_printf() {
   while [[ ! -e "${PROBE_SENTINEL:-/nonexistent}" && "$i" -lt 100 ]]; do sleep 0.05; i=$((i + 1)); done
   # Record WHY the wait ended: a timeout means the hand-off never happened, which the rows below
   # turn into a failure instead of a silently weaker (timing-only) test.
-  if [[ -e "${PROBE_SENTINEL:-/nonexistent}" ]]; then echo sentinel; else echo timeout; fi > "${PROBE_SENTINEL:-/dev/null}.released"
+  # Only when the path is set: an unset one must not turn into `/dev/null.released` (a write outside the
+  # scratch dir when run as root); the rows then fail on the missing record, which is the loud outcome.
+  if [[ -n "${PROBE_SENTINEL:-}" ]]; then
+    if [[ -e "$PROBE_SENTINEL" ]]; then echo sentinel; else echo timeout; fi > "$PROBE_SENTINEL.released"
+  fi
   # shellcheck disable=SC2059  # a transparent wrapper: the caller owns the format string
   printf "$@"
 }

@@ -81,10 +81,10 @@ Branch: `feat-one-shot-ci-flakes-queue-slowness-9482`. PR body uses `Ref #N` onl
 ## Work-phase outcome (2026-10-05)
 
 - Phase 1 done in four commits: reap 11 sites and cron 33 sites (`61c2158ad0`), luks stub drain + `drive` stdin +
-  race rows + floor 313 to 316 (`dbbd8d6bb7`), guard `FILES_7376` + scan + non-vacuity + affected-path edges
+  race rows + floor 313 to 316 (`dbbd8d6bb7`; 318 after the review commit), guard `FILES_7376` + scan + non-vacuity + affected-path edges
   (`9ad27f260f`), guard wiring probe (follow-up commit).
 - Measured: reap 45/0 serial and 24/24 green under 24 parallel copies (plan: 3/24 and 6/32 red before); cron 308/0;
-  luks 316/0; all four suites green in parallel under `CI=1 SOLEUR_SUBAGENT=1`.
+  luks 316/0 (318/0 after the review commit); all four suites green in parallel under `CI=1 SOLEUR_SUBAGENT=1`.
 - Mutation results (each landed, tree restored): cron census pattern flipped = RED; luks drain deleted = RED on the
   late-producer row; luks row neutered = RED on the floor; guard: bad line appended to each of the three real
   files = RED x3, empty pin list, renamed member, neutered scan pattern, wrong array in `scan_7376`, comment

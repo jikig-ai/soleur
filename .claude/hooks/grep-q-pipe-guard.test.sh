@@ -35,8 +35,9 @@
 # 2026-10-05 CI flakes were this same mechanism (FILES_7376). TO ADD A FILE to FILES_7376, make three
 # edits together: the array, the member-count literal `!= 3` in the pin check below, and the file's path in
 # AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh (hand-
-# maintained; the parity check below fails if it is missing, otherwise `--affected` would not select this
-# guard when that suite changes):
+# maintained; the parity check below reads that array only, ignoring comments, and fails if the path is
+# missing from it — otherwise `--affected` would not select this guard when that suite changes. If
+# derivation later reaches these suites and the entries are pruned, drop this check with them):
 #   apps/web-platform/infra/cron-egress-firewall.test.sh
 #   apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 #   plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
@@ -196,22 +197,38 @@ for f in "${FILES_7024[@]}" "${FILES_8664[@]}" "${FILES_8855[@]}" "${FILES_7376[
 done
 # DISTINCT members: a duplicated entry would keep the count while dropping a file from its pin.
 distinct() { printf '%s\n' "$@" | sort -u | wc -l; }
-if [[ -n "$missing_pins" ]] || (( $(distinct "${FILES_7024[@]}") != 2 || $(distinct "${FILES_8664[@]}") != 2 \
-      || $(distinct "${FILES_8855[@]}") != 6 || $(distinct "${FILES_7376[@]}") != 3 )); then
+# The pinned sizes, declared ONCE and used by both the check and its message (raise the matching value
+# when you add a member to a list).
+PIN_7024=2; PIN_8664=2; PIN_8855=6; PIN_7376=3
+if [[ -n "$missing_pins" ]] || (( $(distinct "${FILES_7024[@]}") != PIN_7024 || $(distinct "${FILES_8664[@]}") != PIN_8664 \
+      || $(distinct "${FILES_8855[@]}") != PIN_8855 || $(distinct "${FILES_7376[@]}") != PIN_7376 )); then
   FAIL=1
   echo "FAIL: a pinned file is not tracked, or a pin list changed size, so its pin covers nothing:${missing_pins:- (member count changed)}"
-  echo "  Sizes now: FILES_7024=$(distinct "${FILES_7024[@]}") (pinned 2), FILES_8664=$(distinct "${FILES_8664[@]}") (pinned 2), FILES_8855=$(distinct "${FILES_8855[@]}") (pinned 6), FILES_7376=$(distinct "${FILES_7376[@]}") (pinned 3)."
-  echo "  If a file was renamed, update the FILES_* list in this file to the new path; do not delete the entry. If you ADDED a member, raise the matching literal in the (( ... != N )) test above (and, for FILES_7376, the affected-paths array named in the header)."
+  echo "  Sizes now: FILES_7024=$(distinct "${FILES_7024[@]}") (pinned $PIN_7024), FILES_8664=$(distinct "${FILES_8664[@]}") (pinned $PIN_8664), FILES_8855=$(distinct "${FILES_8855[@]}") (pinned $PIN_8855), FILES_7376=$(distinct "${FILES_7376[@]}") (pinned $PIN_7376)."
+  echo "  If a file was renamed, update the FILES_* list in this file to the new path; do not delete the entry. If you ADDED a member, raise the matching PIN_* value above (and, for FILES_7376, add the path to the affected-paths array named in the header)."
 fi
 # FILES_7376 must also be declared as edges of this guard in the affected-paths index, or a local
 # `--affected` run that edits one of those suites would not select the guard (hand-maintained block).
-unwired_7376=""
-for f in "${FILES_7376[@]}"; do
-  grep -qF -- "\"$f\"" scripts/lib/test-affected-paths.sh || unwired_7376="$unwired_7376 $f"
-done
+# The membership test reads ONLY that array's body with comment lines dropped, and matches whole entry
+# lines: a whole-file grep is satisfied by the same path sitting in another suite's own array (the reap
+# suite names itself there) or by a commented-out entry. An empty extraction is reported, not read as "all
+# present". Prints the missing members, one per line, or `UNRESOLVED: ...`.
+unwired_in() { # <index file> -> missing FILES_7376 members
+  local idx="$1" body f
+  body="$(sed -n '/^AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=(/,/^)/p' "$idx" 2>/dev/null | grep -vE '^[[:space:]]*#' || true)"
+  if ! grep -q '"' <<<"$body"; then
+    echo "UNRESOLVED: the AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS array was not found or is empty in $idx"
+    return 0
+  fi
+  for f in "${FILES_7376[@]}"; do
+    grep -qxF -- "  \"$f\"" <<<"$body" || echo "$f"
+  done
+}
+unwired_7376="$(unwired_in scripts/lib/test-affected-paths.sh)"
 if [[ -n "$unwired_7376" ]]; then
   FAIL=1
-  echo "FAIL: FILES_7376 members missing from AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh:$unwired_7376"
+  echo "FAIL: FILES_7376 members missing from AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh (read from that array only, comments ignored):"
+  echo "$unwired_7376" | sed 's/^/  /'
 fi
 # The scan both the #8664 and #8855 passes use: all three patterns, comment lines stripped. The
 # non-vacuity probe below drives THIS function, so dropping a pattern or widening the comment
@@ -394,6 +411,24 @@ for _f in "${FILES_7376[@]}"; do
 done
 p7376_wire_hits=$(scan_7376 "$probe/root" | grep -c . || true)
 
+# The parity check's own non-vacuity: a member named in ANOTHER suite's array, and a commented-out entry in
+# the guard's array, must both read as missing; the one genuinely present member must not. An index with no
+# such array must read as UNRESOLVED.
+mkdir -p "$probe/idx"
+{
+  echo 'AFFECTED_OTHER_SUITE_PATHS=('
+  printf '  "%s"\n' "${FILES_7376[0]}"
+  echo ')'
+  echo 'AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS=('
+  printf '  # "%s"\n' "${FILES_7376[1]}"
+  printf '  "%s"\n' "${FILES_7376[2]}"
+  echo ')'
+} > "$probe/idx/index.sh"
+printf 'AFFECTED_UNRELATED=(\n  "x"\n)\n' > "$probe/idx/noarray.sh"
+parity_missing=$(unwired_in "$probe/idx/index.sh" | grep -c . || true)
+parity_has_third=$(unwired_in "$probe/idx/index.sh" | grep -cxF -- "${FILES_7376[2]}" || true)
+parity_unresolved=$(unwired_in "$probe/idx/noarray.sh" | grep -c '^UNRESOLVED' || true)
+
 # Every bad line must match and no good line may, compared as COUNTS: a grep error
 # prints no count, so it can never equal the line total or 0 (a negated `grep -q`
 # would read exit 2 as a pass). Both files must be non-empty, or either half
@@ -424,6 +459,7 @@ if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" &
       && "$p7376_bad_lines" -gt 0 && "$p7376_bad_hits" == "$p7376_bad_lines" \
       && -s "$probe/good-7376.sh" && "$p7376_good_hits" == 0 && -s "$probe/comment-7376.sh" && "$p7376_comment_hits" == 0 \
       && "$p7376_unreadable" == 1 \
+      && "$parity_missing" == 2 && "$parity_has_third" == 0 && "$parity_unresolved" == 1 \
       && "$wire_members" == "${#FILES_7376[@]}" && "$p7376_wire_hits" == "${#FILES_7376[@]}" ]]; then
   echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
@@ -436,6 +472,7 @@ else
   echo "  scan_scorers reported:   ${scan_bad_hits:-<error>}/$scorer_bad_lines bad lines, ${scan_comment_hits:-<error>} comment lines (want 0)"
   echo "  scan_pipes (#7376):      ${p7376_bad_hits:-<error>}/$p7376_bad_lines bad lines, ${p7376_good_hits:-<error>} safe lines, ${p7376_comment_hits:-<error>} comment lines (want 0 and 0)"
   echo "  scan_7376 wiring:        ${p7376_wire_hits:-<error>} hits over $wire_members scratch members (want one per member: ${#FILES_7376[@]}); unreadable-input reports: ${p7376_unreadable:-<error>} (want 1)"
+  echo "  parity check probe:      ${parity_missing:-<error>} missing (want 2: a member only in another array, a commented-out one), present member reported missing: ${parity_has_third:-<error>} (want 0), no-array index unresolved: ${parity_unresolved:-<error>} (want 1)"
 fi
 
 exit "$FAIL"
