@@ -556,22 +556,44 @@ run_cleanup "$CLONE_G" "$OUT_G"
 # Restore perms before assertions (and so the EXIT trap's rm -rf can clean up).
 chmod -R u+w "$CLONE_G" 2>/dev/null || true
 
+# One failure of fixture G was seen under shard contention with at most five marker
+# lines on its first arm and nothing on the other two (cause unproven, #7376 class). $OUT_G
+# lives under $TMP and the EXIT trap deletes it, so inline everything a reader
+# needs to tell a STAGED outcome from a COMMITTED one from a hook failure,
+# flattened to one line.
+g_diag() {
+  local markers tailout status log
+  markers="$(grep 'SOLEUR_' "$OUT_G" 2>/dev/null | tr '\n' '|')"
+  tailout="$(tail -20 "$OUT_G" 2>/dev/null | tr '\n' '|')"
+  status="$(git --no-optional-locks -C "$CLONE_G" status --short 2>&1 | tr '\n' '|')"
+  log="$(git -C "$CLONE_G" log --oneline -5 feat-actor 2>&1 | tr '\n' '|')"
+  printf 'markers=[%s] tail20=[%s] status=[%s] log=[%s]' "$markers" "$tailout" "$status" "$log"
+}
+
 if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=git-mv-failed' "$OUT_G"; then
   pass "G: failed git mv emits DEFERRED reason=git-mv-failed (not a silent warn)"
 else
-  fail "G: no git-mv-failed marker (output: $(grep 'SOLEUR_' "$OUT_G" | head -5))"
+  fail "G: no git-mv-failed marker ($(g_diag))"
 fi
 if spec_live "$CLONE_G" && ! spec_arch "$CLONE_G"; then
   pass "G: failed git mv left the spec dir live (no partial move, no plain-mv fallback)"
 else
-  fail "G: spec dir moved/archived despite the failed git mv"
+  fail "G: spec dir moved/archived despite the failed git mv ($(g_diag))"
 fi
 # The tracked plan file DID move (plans/ stayed writable) — its commit proves
 # the mv-failure arm did not abort the reap loop mid-batch.
 if grep -q 'chore(archive-kb)' < <(git -C "$CLONE_G" log --oneline -3 --format=%s feat-actor); then
   pass "G: tracked plan still committed — failed spec move did not abort the reap"
 else
-  fail "G: plan archive commit missing — the mv failure aborted the run"
+  fail "G: plan archive commit missing — the mv failure aborted the run ($(g_diag))"
+fi
+# The diagnostic only runs inside the three failure arms above, so nothing else
+# exercises it: pin that it still emits every field a reader needs.
+G_DIAG_OUT="$(g_diag)"
+if [[ "$G_DIAG_OUT" == *"markers=["*"SOLEUR_"*"] tail20=["*"] status=["*"] log=["*"]" ]]; then
+  pass "G: failure diagnostic carries SOLEUR_ markers, tail20, status and log"
+else
+  fail "G: failure diagnostic is missing a field: $G_DIAG_OUT"
 fi
 
 # ===========================================================================

@@ -60,6 +60,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/leader-document-resolver.test.ts",
   "test/legal-doc-consistency.test.ts",
   "test/legal-doc-shas-guard.test.ts",
+  "test/no-network-fonts.test.ts",
   "test/phase-surface-hint-shell-parity.test.ts",
   "test/phase-surface-map-parity.test.ts",
   "test/plugin-root-anchoring.test.ts",
