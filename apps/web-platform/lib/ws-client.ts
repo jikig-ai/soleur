@@ -23,8 +23,7 @@ import {
 } from "@/lib/chat-state-machine";
 
 export type { ConnectionPhase } from "@/lib/chat-state-machine";
-import { isKnownWSMessageType } from "@/lib/ws-known-types";
-import { parseWSMessage } from "@/lib/ws-zod-schemas";
+import { parseWSMessage, wsMessageTypeLiterals } from "@/lib/ws-zod-schemas";
 import {
   SESSION_ENDED_SUPPRESSED,
   sessionEndedCopy,
@@ -828,21 +827,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
       }
 
-      // FR4 (#2861): boundary guard. Drop any event whose type isn't in the
-      // known allowlist, and breadcrumb it so server/client skew is visible.
-      // Stage 3 (#2885) added a Zod schema as the strict gate; the
-      // `isKnownWSMessageType` allowlist stays as a cheap fast-path so a
-      // single bad-`type` frame doesn't pay for full schema validation.
+      // FR4 (#2861) / #9515: `parseWSMessage`'s discriminated union is the
+      // sole admission authority — the deleted `isKnownWSMessageType`
+      // allowlist was a strict subset of this check (and its hand-maintained
+      // literal had drifted 11 union members stale behind a vacuous
+      // exhaustiveness proof, silently dropping live frames). A parse
+      // failure splits into two ops for observability:
+      //   discriminator-miss (`type` matched NO schema variant — genuine
+      //     server/client version skew) → `ws-unknown-event`;
+      //   shape-miss (type admitted, payload invalid) → `ws-zod-parse-failure`.
+      // `wsMessageTypeLiterals` is derived from the schema itself — one
+      // source of truth, no second literal to drift.
       const rawType = (parsed as { type?: unknown } | null)?.type;
-      if (!isKnownWSMessageType(rawType)) {
-        reportSilentFallback(null, {
-          feature: "command-center",
-          op: "ws-unknown-event",
-          extra: { rawType: typeof rawType === "string" ? rawType : String(rawType) },
-        });
-        return;
-      }
-
       const parseResult = parseWSMessage(parsed);
       if (!parseResult.ok) {
         // Strip per-issue `input` values from the Zod error before
@@ -857,7 +853,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }));
         reportSilentFallback(null, {
           feature: "command-center",
-          op: "ws-zod-parse-failure",
+          op:
+            typeof rawType === "string" &&
+            wsMessageTypeLiterals().has(rawType)
+              ? "ws-zod-parse-failure"
+              : "ws-unknown-event",
           extra: {
             rawType: typeof rawType === "string" ? rawType : String(rawType),
             issues: sanitizedIssues,

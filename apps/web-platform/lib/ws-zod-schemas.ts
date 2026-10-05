@@ -678,6 +678,31 @@ export function parseWSMessage(raw: unknown): ParseWSMessageResult {
 }
 
 // ---------------------------------------------------------------------------
+// `wsMessageTypeLiterals` — the DERIVED set of every `type` literal the
+// schema admits, computed by walking the union arms (each arm is a
+// discriminated union of strictObjects; `interactive_prompt*` variants
+// collapse to their shared `type` literal). Used by `ws-client.ts` ONLY to
+// classify a parse failure as discriminator-miss (`ws-unknown-event`) vs
+// shape-miss (`ws-zod-parse-failure`) — admission itself is decided by
+// `parseWSMessage`, never by this set. There is no second literal list to
+// drift: the schema is the single source of truth.
+// ---------------------------------------------------------------------------
+
+export function wsMessageTypeLiterals(): ReadonlySet<string> {
+  const types = new Set<string>();
+  for (const arm of wsMessageSchema.options) {
+    const variants = (arm as { options?: unknown[] }).options;
+    if (!Array.isArray(variants)) continue;
+    for (const variant of variants) {
+      const shape = (variant as { shape?: Record<string, unknown> }).shape;
+      const typeField = shape?.type as { value?: unknown } | undefined;
+      if (typeof typeField?.value === "string") types.add(typeField.value);
+    }
+  }
+  return types;
+}
+
+// ---------------------------------------------------------------------------
 // Bidirectional drift guard — every `WSMessage` variant must be covered by
 // the schema, and every schema-inferred variant must appear in `WSMessage`.
 // The two `_check` consts assert structural equivalence in both directions:
