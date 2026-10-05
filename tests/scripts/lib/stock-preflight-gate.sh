@@ -147,9 +147,10 @@ _stock_eu_locations_for() {
 }
 
 # _stock_api_error <body> — on a non-2xx answer (curl exit 22, --fail-with-body) prints ` api_error=<code>` taken from
-# the body's `.error.code` (e.g. deprecated_api_endpoint, unauthorized, rate_limit_exceeded), or nothing. That code is
-# the ONLY thing separating a removed endpoint or a bad token (NOT transient) from a flaky network (transient): curl's
-# own exit status is 22 for every HTTP error. Only a short [a-z_] token is ever echoed — no body text reaches a
+# the body's `.error.code` (e.g. deprecated_api_endpoint, unauthorized, rate_limit_exceeded), or nothing. curl's own
+# exit status already separates a network failure (6 DNS, 7 connect, 28 timeout) from an HTTP error status (22); this
+# code separates WHICH HTTP error — a removed endpoint or a bad token (NOT transient) from a rate limit or a gateway
+# page (transient). Only a short [a-z_] token is ever echoed — no body text reaches a
 # `::error::` line. Always returns 0.
 _stock_api_error() {
   local c
@@ -179,7 +180,7 @@ _stock_deprecation_note() {
      | select(. != null) | (.unavailable_after // "unknown") | tostring] | .[0] // empty' 2>/dev/null | head -n1 | cut -c1-40) || ua=""
   [[ -z "$ua" ]] && return 0
   ua="${ua//[^0-9A-Za-z:.+-]/?}"
-  echo "::warning::stock-preflight: '${2}' in '${3}' is reported available but carries a Hetzner deprecation (unavailable_after=${ua}). Not gating — plan a server_type change before that date." >&2 || true
+  echo "::warning::stock-preflight: '${2}' in '${3}' is reported available but carries a Hetzner deprecation (unavailable_after=${ua}). Not gating — if that date is still ahead, plan a server_type change before it." >&2 || true
   return 0
 }
 
@@ -189,7 +190,10 @@ _stock_deprecation_note() {
 # unmasked (the loader masks only the whole value). Always returns 0.
 _stock_warn_if_endpoint_overridden() {
   [[ "$HCLOUD_API" == "$_STOCK_DEFAULT_API" ]] && return 0
-  local h="${HCLOUD_API#*://}"
+  local h="$HCLOUD_API" scheme_re='^[A-Za-z][A-Za-z0-9+.-]*://'
+  # strip the scheme ONLY when the value starts with one: a scheme-less value whose query contains `://` must not
+  # have its query read as the authority
+  [[ "$h" =~ $scheme_re ]] && h="${h#*://}"
   h="${h%%[/?#]*}"
   h="${h##*@}"
   h="${h//[^A-Za-z0-9.:_-]/?}"
@@ -236,7 +240,7 @@ stock_preflight() {
 
   # ONE fetch. Resolve the type by NAME (not ?per_page=50 — that silently encodes "Hetzner has <=50 types" and fails
   # CLOSED if one ever lands on page 2). `fetch_rc` is captured, not discarded: with --fail-with-body a non-2xx answer
-  # exits 22 and the body names the API error — see _stock_api_error for why that is the only discriminator.
+  # exits 22 and the body names the API error — see _stock_api_error for what that adds to curl's own exit status.
   _stock_warn_if_endpoint_overridden
   types_json=$(_stock_fetch "/server_types?name=${want_type}" 2>/dev/null) || fetch_rc=$?
   if [[ "$fetch_rc" -ne 0 ]]; then

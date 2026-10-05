@@ -267,7 +267,7 @@ FETCH_MODE=body_rc22
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
 [[ "$rc" -eq 1 ]] && pass || fail "T7b: expected rc=1 when /server_types answers non-2xx, got $rc"
 grep -q "cannot PROVE stock" <<<"$out" && pass || fail "T7b: a non-2xx answer must fail closed with the blip message"
-grep -q "curl exit 22" <<<"$out" && pass || fail "T7b: the blip must carry the curl exit status. out=$out"
+grep -q "with a 2xx: curl exit 22" <<<"$out" && pass || fail "T7b: the REASON must carry the curl exit status (the advice prose also names exit 22, so anchor on the reason segment). out=$out"
 grep -q "class=unreachable" <<<"$out" && pass || fail "T7b: a non-2xx answer is the unreachable class. out=$out"
 grep -q "api_error=deprecated_api_endpoint" <<<"$out" && pass || fail "T7b: a 410 must surface the API's own error code. out=$out"
 grep -q "NOT orderable" <<<"$out" && fail "T7b: an API error must not masquerade as a real shortage" || pass
@@ -296,8 +296,10 @@ grep -q "curl exit 22 api_error=${code64}" <<<"$out" && pass || fail "T7b: a 64-
 # the advice text is class-specific and pinned: transient vs NOT transient must not swap between classes
 printf '%s' "$BODY_410" > "$BODY_FILE"
 out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
-grep -q "NOT transient" <<<"$out" && pass || fail "T7b: the unreachable class must say which failures are NOT transient. out=$out"
-grep -q "Transient — re-dispatch once" <<<"$out" && pass || fail "T7b: the unreachable class must say which failures are transient. out=$out"
+# the transient / NOT-transient LISTS are pinned whole — moving one member across the divide must go red
+grep -qF "Transient — re-dispatch once: a curl exit other than 22 (timeout, DNS, connect), api_error=rate_limit_exceeded, or exit 22 with no api_error (a gateway error page)." <<<"$out" && pass || fail "T7b: the transient list must be exact. out=$out"
+grep -qF "NOT transient: any other api_error (deprecated_api_endpoint, unauthorized, forbidden, ...) or the same failure on consecutive dispatches" <<<"$out" && pass || fail "T7b: the NOT-transient list must be exact. out=$out"
+grep -qF "curl exit 22 means an HTTP error status" <<<"$out" && pass || fail "T7b: the advice must say what exit 22 means. out=$out"
 grep -q "NOT a stock shortage" <<<"$out" && fail "T7b: the malformed advice must not appear on the unreachable class" || pass
 
 FETCH_MODE=garbage
@@ -306,6 +308,7 @@ out=$(stock_preflight beta22 eu-b 2>&1); rc=$?
 grep -q "class=malformed" <<<"$out" && pass || fail "T7c: a 2xx answer in an unusable shape is the malformed class. out=$out"
 grep -q "body=object keys=unexpected" <<<"$out" && pass || fail "T7c: the abort must carry a sanitized shape hint. out=$out"
 grep -q "NOT a stock shortage" <<<"$out" && pass || fail "T7c: the malformed class must say it is NOT a shortage. out=$out"
+grep -qF "probe command: header of tests/scripts/lib/stock-preflight-gate.sh" <<<"$out" && pass || fail "T7c: the malformed abort must point at the probe. out=$out"
 grep -q "Transient — re-dispatch once" <<<"$out" && fail "T7c: the transient advice must not appear on the malformed class" || pass
 grep -q "api_error=" <<<"$out" && fail "T7c: a 2xx answer carries no api_error" || pass
 
@@ -806,6 +809,15 @@ w=$(HCLOUD_API="$_STOCK_DEFAULT_API" _stock_warn_if_endpoint_overridden 2>&1)
 w=$(HCLOUD_API='https://svcuser:SYNTH-PASS-123@h.example:8443/v1?apikey=SYNTHKEY#frag' _stock_warn_if_endpoint_overridden 2>&1)
 grep -q "host=h.example:8443)" <<<"$w" && pass || fail "T27: only the authority host may be printed. out=$w"
 grep -qE "SYNTH|svcuser|apikey|frag" <<<"$w" && fail "T27: userinfo, query and fragment must never reach the log. out=$w" || pass
+# a pathless value with a query and fragment, and a scheme-less value whose query contains `://`
+w=$(HCLOUD_API='https://h.example?apikey=SYNTHKEY#frag' _stock_warn_if_endpoint_overridden 2>&1)
+grep -q "host=h.example)" <<<"$w" && pass || fail "T27: a pathless value must print its host only. out=$w"
+grep -qE "SYNTHKEY|apikey|frag" <<<"$w" && fail "T27: query and fragment must be cut at the first ? or #. out=$w" || pass
+w=$(HCLOUD_API='h.example/v1?next=http://SYNTHSECRET' _stock_warn_if_endpoint_overridden 2>&1)
+grep -q "host=h.example)" <<<"$w" && pass || fail "T27: a scheme-less value must not have its query read as the authority. out=$w"
+grep -q "SYNTHSECRET" <<<"$w" && fail "T27: a :// inside a query must never reach the log. out=$w" || pass
+# the header carries the literal read-only probe the abort messages point at
+grep -qF 'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY"' "$GATE" && pass || fail "T27: the lib header must carry the literal probe command the abort text points at"
 w=$(HCLOUD_API=$'https://a.example\nb.example/v1' _stock_warn_if_endpoint_overridden 2>&1)
 [[ "$(wc -l <<<"$w")" -eq 1 ]] && pass || fail "T27: a newline in the value must not split the warning line. out=$w"
 
@@ -883,12 +895,12 @@ PY
     grep -q "HCLOUD_API is overridden (host=127.0.0.1:" <<<"$out" && pass || fail "T20a: a non-default HCLOUD_API must be announced. out=$out"
     out=$(loop_call 410 beta22 eu-b); rc=$?
     [[ "$rc" -eq 1 ]] && pass || fail "T20b: an HTTP 410 must abort, got $rc"
-    grep -q "curl exit 22" <<<"$out" && pass || fail "T20b: an HTTP error must surface as curl exit 22 (--fail-with-body). out=$out"
+    grep -q "with a 2xx: curl exit 22" <<<"$out" && pass || fail "T20b: an HTTP error must surface as curl exit 22 (--fail-with-body). out=$out"
     grep -q "api_error=deprecated_api_endpoint" <<<"$out" && pass || fail "T20b: the 410 body must reach the abort line over the wire. out=$out"
     [[ "$(wc -l < "$TMP/req.log")" -eq 1 ]] && pass || fail "T20b: a 410 must not be retried; log: $(cat "$TMP/req.log")"
     out=$(loop_call 502 beta22 eu-b); rc=$?
     [[ "$rc" -eq 1 ]] && pass || fail "T20c: an HTTP 502 carrying a VALID orderable body must still abort, got $rc"
-    grep -q "curl exit 22" <<<"$out" && pass || fail "T20c: the 502 must abort through the status, not the body. out=$out"
+    grep -q "with a 2xx: curl exit 22" <<<"$out" && pass || fail "T20c: the 502 must abort through the status, not the body. out=$out"
     [[ "$(wc -l < "$TMP/req.log")" -eq 1 ]] && pass || fail "T20c: a 502 must not be retried; log: $(cat "$TMP/req.log")"
     out=$(loop_call 401 beta22 eu-b); rc=$?
     [[ "$rc" -eq 1 ]] && pass || fail "T20d: an HTTP 401 must abort, got $rc"
@@ -907,7 +919,7 @@ SUITE_DONE=1
 # cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=312
+MIN_ASSERTIONS=319
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2
