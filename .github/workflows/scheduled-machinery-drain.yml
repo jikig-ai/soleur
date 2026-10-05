@@ -10,15 +10,10 @@ name: scheduled-machinery-drain
 on:
   workflow_dispatch: {}
 
-permissions:
-  contents: read
-  issues: write
-  # claude-code-action mints its app token via OIDC (setupGitHubToken ->
-  # getOidcToken); without this grant the drain step dies ~15 s in — measured on
-  # runs 35580861691/36402277938/37287175185 (2026-09-21..10-05). Recurrence 3 of
-  # the missing-id-token class; see
-  # knowledge-base/project/learnings/2026-05-04-schedule-once-template-missing-id-token.md
-  id-token: write
+# Deny-all at workflow level (job-level permissions REPLACE, never extend — the
+# repo convention is grants live on the job; see claude-code-review.yml). Any
+# future second job starts with no token access at all.
+permissions: {}
 
 concurrency:
   group: scheduled-machinery-drain
@@ -33,6 +28,20 @@ env:
 
 jobs:
   measure-and-drain:
+    permissions:
+      contents: read
+      issues: write
+      # claude-code-action mints its app token via OIDC (setupGitHubToken ->
+      # getOidcToken); the minted token carries the action's DEFAULT_PERMISSIONS
+      # (contents/pull-requests/issues: write) — deliberately broader than this
+      # job's GITHUB_TOKEN, since the drain opens PRs the job token cannot.
+      # Without the grant the drain step dies ~15 s in — measured on EVERY run
+      # since creation (v1.0.161 at run 34591772975; still v1.0.236 at run
+      # 37287175185); WAIVED-SUPPLY masked it while the pool sat below the
+      # floor — surfaced when the pool crossed 20 on 2026-09-21. Recurrence 3
+      # of the missing-id-token class; see
+      # knowledge-base/project/learnings/2026-05-04-schedule-once-template-missing-id-token.md
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -158,17 +167,28 @@ jobs:
         run: |
           set -euo pipefail
           TITLE="issue-flow: weekly measurement"
-          # Census, not a positional window: `gh issue list --limit 100` sits
-          # ~1700 open issues below the standing issue, so `existing` was always
-          # empty and the step re-filed its own issue every week (four live
-          # duplicates measured 2026-10-05). `search/issues` `in:title` is the
-          # same API the pre/post candidate counts already use; the exact-title
-          # + keep-open + meta/machinery + github-actions[bot] filter means a
-          # human-filed same-titled issue is neither selected nor closed.
-          matches="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+in:title+%22issue-flow%3A+weekly+measurement%22&sort=created&order=desc&per_page=100" \
-            --jq "[.items[] | select(.title == \"$TITLE\"
-                    and .user.login == \"github-actions[bot]\"
-                    and ([.labels[].name] | index(\"keep-open\") != null)
+          # Census over the keep-open kill-switch set, not a positional window:
+          # `gh issue list --limit 100` sits ~1700 open issues above the
+          # standing issue, so `existing` was always empty and the step
+          # re-filed its own issue every week (four live duplicates measured
+          # 2026-10-05). `--label keep-open` scopes the enumeration to the
+          # kill-switch class (small by design; --limit 200 is headroom, never
+          # the selection criterion) and keeps the title literal SINGLE-SOURCED
+          # in $TITLE — no URL-encoded second copy to drift from. The author +
+          # meta/machinery conjuncts are LOAD-BEARING for the close loop below:
+          # an issue is closed only when it is bot-authored AND carries the
+          # machinery label; if either drifts the filter yields zero matches
+          # and the step files fresh (fail-loud), never closes a human's issue.
+          # `gh issue list` returns newest-first, so .[0] is canonical.
+          # Author check: `gh issue list` reports the app as `app/github-actions`
+          # while the search/issues API reports `github-actions[bot]` — accept
+          # either shape (a bot-authored issue from the Actions app), never a
+          # human-authored same-titled issue.
+          matches="$(gh issue list --state open --label keep-open --limit 200 \
+            --json number,title,author,labels \
+            --jq "[.[] | select(.title == \"$TITLE\"
+                    and .author.is_bot == true
+                    and (.author.login | test(\"github-actions\"))
                     and ([.labels[].name] | index(\"meta/machinery\") != null)) | .number]")"
           # `matches` is a JSON array of numbers sorted newest-first — keep it
           # JSON (bare `.[].number` lines would break the `.[0]` reads below).
@@ -193,11 +213,16 @@ jobs:
             echo "updated standing issue #$existing"
             # Self-healing consolidation: older bot-authored same-titled issues
             # are leftovers of the positional-window bug; close them with a
-            # pointer so the standing set converges to exactly one.
+            # pointer so the standing set converges to exactly one. Each close
+            # is best-effort housekeeping — a transient failure must not red
+            # the step AFTER the canonical update already landed.
             printf '%s\n' "$dupes" | while IFS= read -r n; do
               [ -n "$n" ] || continue
-              gh issue close "$n" --comment "Superseded by #$existing — the weekly measurement consolidates to one standing issue."
-              echo "closed duplicate standing issue #$n"
+              if gh issue close "$n" --comment "Superseded by #$existing — the weekly measurement consolidates to one standing issue."; then
+                echo "closed duplicate standing issue #$n"
+              else
+                echo "::error::Could not close duplicate issue #${n} — it will be re-detected next week"
+              fi
             done
           else
             # `keep-open` is the drain kill-switch (group-by-area.sh excludes it

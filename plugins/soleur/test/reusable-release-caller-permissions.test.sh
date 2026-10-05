@@ -67,10 +67,16 @@ echo ""
 # remote (`owner/repo/…/reusable-release.yml@ref`). Anchored to `^<indent>uses:`
 # so a `# uses: …` comment line never matches.
 USES_GREP_ERE='^[[:space:]]+uses:[[:space:]]*[^[:space:]]*reusable-release\.yml'
+# NOTE: these YAML helpers are duplicated in claude-code-action-auth.test.sh
+# (self-contained-suite convention) — a bug fix here must be ported BOTH ways.
 # `write` terminated by whitespace, end-of-line, or a trailing `#` comment.
 # POSIX class (NOT the GNU-only `\b`) so the guard is portable across grep
 # implementations (BusyBox / mawk-adjacent CI environments).
-ID_TOKEN_ERE='^[[:space:]]+id-token:[[:space:]]*write([[:space:]]|$|#)'
+ID_TOKEN_ERE='^[[:space:]]+id-token[[:space:]]*:[[:space:]]*write([[:space:]]|$|#)'
+# Flow-map classifier for a permissions VALUE: `id-token: write` as an ENTRY,
+# not the substring pair — `{id-token: none, contents: write}` is a DENIAL,
+# `{x-id-token: write}` an unknown key; neither grants.
+ID_TOKEN_FLOW_ERE='(^|[{,[:space:]])id-token[[:space:]]*:[[:space:]]*write([[:space:],}]|$)'
 
 # Print the block of a named job (header through the line before the next job
 # header), scoped to content after the top-level `jobs:` key so `on.push:` and
@@ -103,7 +109,7 @@ named_job_permissions_block() {
       inrel = (cur == job); next
     }
     inrel && /^  [A-Za-z0-9_-]+:/ { exit }
-    inrel && /^    permissions:[[:space:]]*(#.*)?$/ { inperm = 1; next }
+    inrel && /^    permissions[[:space:]]*:[[:space:]]*(#.*)?$/ { inperm = 1; next }
     inperm && /^    [A-Za-z0-9_-]+:/ { exit }
     inperm { print }
   ' "$file"
@@ -135,7 +141,7 @@ calling_job_names() {
 workflow_perms() {
   local file="$1"
   awk '
-    /^permissions:[[:space:]]*$/ { inblock = 1; next }
+    /^permissions[[:space:]]*:[[:space:]]*$/ { inblock = 1; next }
     inblock && /^[A-Za-z]/ { exit }
     inblock { print }
   ' "$file"
@@ -149,7 +155,7 @@ workflow_perms() {
 job_id_token_verdict() {
   local block permline lineno value sub
   block="$(cat)"
-  permline="$(printf '%s\n' "$block" | grep -nE '^    permissions:' | head -1)"
+  permline="$(printf '%s\n' "$block" | grep -nE '^    permissions[[:space:]]*:' | tail -1)"
   if [[ -z "$permline" ]]; then
     echo "none"
     return
@@ -157,7 +163,7 @@ job_id_token_verdict() {
   lineno="${permline%%:*}"
   # Everything after `permissions:` on that line (strip trailing comment + ws).
   value="$(printf '%s\n' "$block" | sed -n "${lineno}p" \
-    | sed -E 's/^    permissions:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//')"
+    | sed -E 's/^    permissions[[:space:]]*:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//')"
   if [[ -z "$value" ]]; then
     # Block form: scan the sub-block (indent deeper than the 4-space key) until
     # the next 4-space job key, and require id-token WITHIN it (not the whole job).
@@ -174,8 +180,11 @@ job_id_token_verdict() {
   # does not.
   case "$value" in
     write-all) echo "granted" ;;
-    *id-token*write*) echo "granted" ;;
-    *) echo "denied" ;;
+    *) if printf '%s\n' "$value" | grep -qE "$ID_TOKEN_FLOW_ERE"; then
+         echo "granted"
+       else
+         echo "denied"
+       fi ;;
   esac
 }
 

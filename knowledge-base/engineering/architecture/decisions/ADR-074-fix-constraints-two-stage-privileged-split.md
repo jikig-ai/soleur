@@ -174,7 +174,10 @@ token is exchangeable at Anthropic's app-token endpoint for `contents:write` /
 `pull-requests:write` / `issues:write` app credentials — which would hand PR-head code exactly
 the write capability this split exists to withhold. The invariant is upheld, not re-decided; a
 future action bump that drops the `github_token` bypass must find another credential path that
-does not grant OIDC minting to Stage A.
+does not grant OIDC minting to Stage A. The generator template
+(`plugins/soleur/skills/constraint-scaffold/references/fix-constraints-stage-a.template`)
+carries the same posture — the latent OIDC defect lived there first and the emitted surface
+must not reinstall it in target repos.
 
 ## Alternatives Considered
 

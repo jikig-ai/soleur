@@ -96,7 +96,9 @@ recurrence guard is warranted, not optional polish.
 
 ## Proposed Solution
 
-- **Drain workflow:** add `id-token: write` to the workflow-level `permissions:` block —
+- **Drain workflow:** add `id-token: write` at JOB level on `measure-and-drain`
+  (least-privilege convention — job-level `permissions:` replaces, and a
+  `permissions: {}` deny-all top-level keeps any future second job at zero) —
   trusted context (main-branch workflow definition, `workflow_dispatch`), mirrors the
   established convention.
 - **Stage A:** add `github_token: ${{ github.token }}` to the agent step's `with:` block and a
@@ -260,12 +262,13 @@ logs:
   retention: "GitHub default retention (~90 days)"
 discoverability_test:
   # Probe asserts the two load-bearing anchors exist in the same file: the
-  # top-level `id-token: write` grant (anchored, comment-proof) AND the Sentry
-  # heartbeat wiring. grep -c prints the matched-line count; 2 = both present.
+  # job-level `id-token: write` grant (anchored, comment-proof, any indent —
+  # the grant lives on the `measure-and-drain` job, least-privilege convention)
+  # AND the Sentry heartbeat wiring. grep -c prints the matched-line count.
   # Chosen over the new test suite deliberately: the suite TESTS the invariant,
   # this DISCOVERS the signal — and a *.test.sh command is reject-proxy-shaped
   # at deepen-plan 4.7 / preflight Check 10 anyway.
-  command: "grep -c -e '^  id-token: write' -e 'monitor-slug: scheduled-machinery-drain' .github/workflows/scheduled-machinery-drain.yml"
+  command: "grep -cE -e '^[[:space:]]+id-token: write' -e 'monitor-slug: scheduled-machinery-drain' .github/workflows/scheduled-machinery-drain.yml"
   expected_output: "2"
 ```
 
