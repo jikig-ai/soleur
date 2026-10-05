@@ -25,6 +25,13 @@ import {
 export type { ConnectionPhase } from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
+import {
+  SESSION_ENDED_COPY,
+  SESSION_ENDED_GENERIC_COPY,
+  SESSION_ENDED_SUPPRESSED,
+  type SessionEndedReason,
+  type SessionEndedRenderableReason,
+} from "@/lib/session-ended-copy";
 import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observability";
 import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
@@ -1166,14 +1173,30 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             });
           }
           // streamState reset to "idle" handled by `clear_streams` above.
-          // Don't display "turn_complete" as a visible message — it's a lifecycle signal
-          if (msg.reason !== "turn_complete") {
+          // Suppressed reasons (turn_complete) never produce a visible
+          // message — they're per-turn lifecycle signals. Every other
+          // reason renders founder-facing copy from SESSION_ENDED_COPY;
+          // the raw wire token ("internal_error" et al.) never reaches
+          // the transcript. An unmapped reason falls back to generic
+          // copy + a Sentry breadcrumb so the new reason is triaged.
+          if (!SESSION_ENDED_SUPPRESSED.has(msg.reason as SessionEndedReason)) {
+            const copy =
+              SESSION_ENDED_COPY[msg.reason as SessionEndedRenderableReason] ??
+              SESSION_ENDED_GENERIC_COPY;
+            if (copy === SESSION_ENDED_GENERIC_COPY) {
+              Sentry.addBreadcrumb({
+                category: "session-ended",
+                message: "session-ended-unmapped-reason",
+                level: "warning",
+                data: { reason: msg.reason },
+              });
+            }
             dispatch({
               type: "add_message",
               message: {
                 id: `end-${Date.now()}`,
                 role: "assistant",
-                content: `Session ended: ${msg.reason}`,
+                content: copy,
                 type: "text",
               },
             });
