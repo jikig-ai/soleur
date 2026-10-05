@@ -205,7 +205,7 @@ logs:
   where: pino logger.info line "Dispatched merge-queue-stall-check workflow" to Better Stack via stdout; GitHub Actions run history for the dispatched run
   retention: Better Stack plan retention; GitHub Actions run history 90 days
 discoverability_test:
-  command: curl -s "https://api.github.com/repos/jikig-ai/soleur/actions/workflows/merge-queue-stall-check.yml/runs?event=workflow_dispatch&per_page=1" | jq -r '.workflow_runs[0].event'
+  command: curl -fsS --max-time 10 https://api.github.com/repos/jikig-ai/soleur/actions/workflows/merge-queue-stall-check.yml/runs?event=workflow_dispatch
   expected_output: workflow_dispatch
 ```
 
