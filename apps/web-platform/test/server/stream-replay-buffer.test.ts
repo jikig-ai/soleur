@@ -17,6 +17,10 @@ function streamFrame(content = "hi"): Extract<WSMessage, { type: "stream" }> {
   return { type: "stream", content, partial: true, leaderId: "cto" };
 }
 
+function debugFrame(): Extract<WSMessage, { type: "debug_event" }> {
+  return { type: "debug_event", kind: "tool_use", label: "tool", body: "{}" };
+}
+
 function newBuffer(
   overrides: Partial<{
     maxFrames: number;
@@ -137,6 +141,21 @@ describe("StreamReplayBuffer.replayFrom", () => {
     const { frames, status } = buf.replayFrom("conv-a", 0);
     expect(status).toBe("complete");
     expect(frames).toEqual([]);
+  });
+
+  // fix-debug-stream-replay — debug_event joined the buffered family so the
+  // panel repopulates after a leave-and-return remount / transient reconnect.
+  // The ws-handler re-emit paths add `replayed: true` (asserted in the
+  // ws-handler resume_stream suite); the buffer itself stores frames verbatim.
+  it("buffers and replays debug_event frames interleaved with stream frames", () => {
+    const buf = newBuffer();
+    buf.stamp("conv-a", streamFrame("s0"), 1); // seq 0
+    buf.stamp("conv-a", debugFrame(), 2); // seq 1
+    buf.stamp("conv-a", streamFrame("s1"), 3); // seq 2
+    const { frames, status } = buf.replayFrom("conv-a", -1);
+    expect(status).toBe("complete");
+    expect(frames.map((f) => f.type)).toEqual(["stream", "debug_event", "stream"]);
+    expect(frames[1].seq).toBe(1);
   });
 });
 
