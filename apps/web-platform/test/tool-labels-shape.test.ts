@@ -54,7 +54,7 @@ describe("tool-labels copy contract (#9515)", () => {
       mapBashVerb('for n in 9470 9443; do gh pr view $n -R a/b --json files; done'),
     ).toBe("Reviewing a pull request");
     expect(mapBashVerb("cd /tmp; sleep 5")).toBe("Pausing briefly");
-    expect(mapBashVerb("export FOO=1; gh api repos/x")).toBe("Querying GitHub");
+    expect(mapBashVerb("export FOO=1; gh api repos/x")).toBe("Calling the GitHub API");
   });
 
   it("git subcommands never interpolate raw jargon", () => {

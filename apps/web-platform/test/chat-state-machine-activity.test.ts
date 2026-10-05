@@ -38,7 +38,6 @@ function liveBubble(leaderId: DomainLeaderId = CC, extra: Partial<ChatMessage> =
     leaderId,
     state: "tool_use",
     toolLabel: "Reading a file",
-    toolsUsed: ["Reading a file"],
     ...extra,
   } as ChatMessage;
 }
@@ -274,12 +273,13 @@ describe("id-keyed activeStreams — corruption regressions", () => {
 describe("foldNarrationIntoTrail", () => {
   test("narration folds into the sole active stream's bubble", () => {
     const msgs = [liveBubble()];
-    const out = foldNarrationIntoTrail(
+    const { messages: out, folded } = foldNarrationIntoTrail(
       msgs,
       streams([[CC, "stream-cc_router-1"]]),
       "Routing to drain-prs — this is triage of open pull requests",
       1234,
     );
+    expect(folded).toBe(true);
     const m = out[0] as any;
     expect(m.activity).toHaveLength(1);
     expect(m.activity[0]).toMatchObject({
@@ -291,14 +291,169 @@ describe("foldNarrationIntoTrail", () => {
 
   test("null narration returns messages unchanged", () => {
     const msgs = [liveBubble()];
-    expect(foldNarrationIntoTrail(msgs, new Map(), null, null)).toBe(msgs);
+    const { messages: out, folded } = foldNarrationIntoTrail(
+      msgs,
+      new Map(),
+      null,
+      null,
+    );
+    expect(out).toBe(msgs);
+    expect(folded).toBe(false);
   });
 
-  test("no live-ish bubble → narration dropped (never a finished record)", () => {
+  test("turn-end fold lands on the just-terminalized bubble (final step kept)", () => {
     const done: ChatMessage[] = [
       liveBubble(CC, { state: "done" }),
     ];
-    const out = foldNarrationIntoTrail(done, new Map(), "late narration", null);
-    expect((out[0] as any).activity).toBeUndefined();
+    const { messages: out, folded } = foldNarrationIntoTrail(
+      done,
+      new Map(),
+      "final narration",
+      null,
+    );
+    expect(folded).toBe(true);
+    expect((out[0] as any).activity[0].label).toBe("final narration");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// #9515 review fixes — stop-semantics + turn-boundary barriers.
+// The panel's convergent P1s: (a) `enter_stopping` left the leader registered
+// AND rebindable, so frames racing in behind the abort resurrected a
+// contradictory Working+Interrupted box; (b) the rebind scan crossed user
+// messages, so the NEXT turn's first frame resumed a dead bubble above the
+// question that prompted it.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("stop semantics — no Working resurrection (review P1)", () => {
+  test("enter_stopping marks bubbles stopped (non-rebindable) + clears the map", () => {
+    // enter_stopping lives in ws-client's reducer; assert the SWEEP contract:
+    // `stopped` is the non-rebindable variant of interrupted.
+    const swept = sweepTransitional(
+      [liveBubble(CC, { state: "streaming" })],
+      { stopped: true },
+    );
+    const m = swept[0] as any;
+    expect(m.interrupted).toBe(true);
+    expect(m.stopped).toBe(true);
+    expect(m.state).toBeUndefined();
+  });
+
+  test("a stopped bubble is NOT a rebind target — late tool_use goes to the chip path", () => {
+    const swept = sweepTransitional([liveBubble()], { stopped: true });
+    const r = applyStreamEvent(swept, new Map(), {
+      type: "tool_use",
+      leaderId: CC,
+      label: "Late step",
+    } as any);
+    // The old bubble stays stopped…
+    expect((r.messages[0] as any).stopped).toBe(true);
+    expect((r.messages[0] as any).state).toBeUndefined();
+    // …and the late frame lands as a chip, never resurrecting the box.
+    expect(
+      r.messages.some((m) => m.type === "tool_use_chip"),
+    ).toBe(true);
+  });
+
+  test("a stopped bubble is NOT a rebind target — late stream opens a fresh box", () => {
+    const swept = sweepTransitional([liveBubble()], { stopped: true });
+    const r = applyStreamEvent(swept, new Map(), {
+      type: "stream",
+      leaderId: CC,
+      content: "resuming text",
+      partial: true,
+    } as any);
+    const texts = r.messages.filter((m) => m.type === "text");
+    expect(texts).toHaveLength(2);
+    expect((texts[0] as any).stopped).toBe(true);
+    expect((texts[1] as any).state).toBe("streaming");
+  });
+});
+
+describe("turn-boundary barrier — rebind never crosses a user message", () => {
+  test("interrupted bubble + user message + resuming frame → new bubble, no rebind", () => {
+    const swept = sweepTransitional([liveBubble()]); // rebindable interrupted
+    const withUser = [
+      ...swept,
+      {
+        id: "user-2",
+        role: "user",
+        content: "next question",
+        type: "text",
+      } as ChatMessage,
+    ];
+    const r = applyStreamEvent(withUser, new Map(), {
+      type: "stream",
+      leaderId: CC,
+      content: "answer",
+      partial: true,
+    } as any);
+    // The swept bubble stays interrupted (NOT rebound above the question).
+    expect((r.messages[0] as any).interrupted).toBe(true);
+    expect((r.messages[0] as any).state).toBeUndefined();
+    // The new turn's output lands in a NEW bubble AFTER the user message.
+    const texts = r.messages.filter((m) => m.type === "text" && m.role === "assistant");
+    expect(texts).toHaveLength(2);
+    expect((texts[1] as any).state).toBe("streaming");
+    expect((texts[1] as any).content).toBe("answer");
+  });
+
+  test("foldNarrationIntoTrail never folds across a user message", () => {
+    const swept = sweepTransitional([liveBubble()]);
+    const withUser = [
+      ...swept,
+      {
+        id: "user-2",
+        role: "user",
+        content: "next question",
+        type: "text",
+      } as ChatMessage,
+    ];
+    const { folded, messages } = foldNarrationIntoTrail(
+      withUser,
+      new Map(),
+      "late narration",
+      null,
+    );
+    expect(folded).toBe(false);
+    expect((messages[0] as any).activity?.some((e: any) => e.kind === "narration")).toBeFalsy();
+  });
+
+  test("findRecoverableErrorBubble also stops at a user message", () => {
+    const prev = [
+      liveBubble(CC, { state: "error" }),
+      {
+        id: "user-2",
+        role: "user",
+        content: "next question",
+        type: "text",
+      } as ChatMessage,
+    ];
+    const r = applyStreamEvent(prev, new Map(), {
+      type: "stream",
+      leaderId: CC,
+      content: "answer",
+      partial: true,
+    } as any);
+    const texts = r.messages.filter((m) => m.type === "text" && m.role === "assistant");
+    // The error bubble keeps its banner; the answer lands in a NEW bubble.
+    expect((texts[0] as any).state).toBe("error");
+    expect((texts[1] as any).state).toBe("streaming");
+  });
+});
+
+describe("idx-path interrupted strip (review F2 belt)", () => {
+  test("a streaming write onto an interrupted-flag bubble clears the flag", () => {
+    // Construct the unreachable-but-defended shape: interrupted bubble that
+    // is STILL registered in activeStreams (pre-fix enter_stopping left it).
+    const bub = liveBubble(CC, { interrupted: true });
+    const r = applyStreamEvent([bub], streams([[CC, "stream-cc_router-1"]]), {
+      type: "stream",
+      leaderId: CC,
+      content: "more",
+      partial: true,
+    } as any);
+    expect((r.messages[0] as any).state).toBe("streaming");
+    expect((r.messages[0] as any).interrupted).toBe(false);
   });
 });

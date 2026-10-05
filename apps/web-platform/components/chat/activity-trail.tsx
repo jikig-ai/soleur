@@ -5,6 +5,7 @@ import {
   ACTIVITY_VISIBLE_CAP,
   type ActivityEntry,
 } from "@/lib/chat-state-machine";
+import { formatAssistantText } from "@/lib/format-assistant-text";
 
 /**
  * feat-concierge-activity-trail (#9515): the in-turn step history rendered
@@ -30,11 +31,7 @@ export function formatElapsed(
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
-export function ActivityTrail({
-  activity,
-  current,
-  interrupted = false,
-}: {
+interface ActivityTrailProps {
   /** Prior steps (oldest → newest), session-only. */
   activity: ActivityEntry[] | undefined;
   /** The live step: `{label, startedAt}` from the narration slot or toolLabel. */
@@ -42,18 +39,29 @@ export function ActivityTrail({
   /** Mid-flap marker — renders the honest "Interrupted" chip; the live line
    *  stays dark because no current step is provably running client-side. */
   interrupted?: boolean;
-}) {
+}
+
+export function ActivityTrail({
+  activity,
+  current,
+  interrupted = false,
+}: ActivityTrailProps) {
   const [now, setNow] = useState(() => Date.now());
+  // The 1s ticker exists only for the LIVE line — a dead card (interrupted,
+  // no current) would otherwise re-render forever showing ever-growing
+  // "elapsed" on steps that are not running (review seats).
+  const live = current !== null && !interrupted;
   useEffect(() => {
+    if (!live) return;
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [live]);
 
   const priors = activity ?? [];
   const hiddenCount = Math.max(0, priors.length - ACTIVITY_VISIBLE_CAP);
   const visible = priors.slice(-ACTIVITY_VISIBLE_CAP);
-  const currentElapsed = current
-    ? formatElapsed(current.startedAt ?? undefined, now)
+  const currentElapsed = live
+    ? formatElapsed(current?.startedAt ?? undefined, now)
     : null;
 
   return (
@@ -68,14 +76,23 @@ export function ActivityTrail({
         </div>
       )}
       {visible.map((entry, i) => {
-        const elapsed = formatElapsed(entry.startedAt, now);
+        // A prior's number is its DURATION (superseded at the next step's
+        // start), not age-since-start — an ever-growing elapsed reads as
+        // "still running" on dead steps (review seats).
+        const endedAt =
+          visible[i + 1]?.startedAt ??
+          (live ? current?.startedAt ?? undefined : undefined);
+        const elapsed =
+          endedAt !== undefined
+            ? formatElapsed(entry.startedAt, endedAt)
+            : null;
         return (
           <div
             key={`${entry.startedAt}-${i}`}
             className="flex items-center gap-1.5 text-xs text-soleur-text-muted"
           >
             <span className="min-w-0 [overflow-wrap:anywhere]">
-              {entry.label}
+              {formatAssistantText(entry.label)}
             </span>
             {elapsed && (
               <span aria-hidden="true" className="shrink-0 tabular-nums">
@@ -107,7 +124,7 @@ export function ActivityTrail({
             className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
           />
           <span className="min-w-0 text-soleur-text-secondary [overflow-wrap:anywhere]">
-            {current.label}
+            {formatAssistantText(current.label)}
           </span>
           {currentElapsed && (
             <span

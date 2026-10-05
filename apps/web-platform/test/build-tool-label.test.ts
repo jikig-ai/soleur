@@ -39,12 +39,12 @@ describe("buildToolLabel (#2428)", () => {
 
     test("falls back when input is undefined", () => {
       const label = buildToolLabel("Read", undefined, workspacePath);
-      expect(label).toBe("Reading file...");
+      expect(label).toBe("Reading file…");
     });
 
     test("falls back when file_path is missing from input", () => {
       const label = buildToolLabel("Read", {}, workspacePath);
-      expect(label).toBe("Reading file...");
+      expect(label).toBe("Reading file…");
     });
   });
 
@@ -69,7 +69,7 @@ describe("buildToolLabel (#2428)", () => {
 
     test("falls back when input is undefined", () => {
       const label = buildToolLabel("Bash", undefined, workspacePath);
-      expect(label).toBe("Running command...");
+      expect(label).toBe("Running command…");
     });
   });
 
@@ -85,7 +85,7 @@ describe("buildToolLabel (#2428)", () => {
 
     test("falls back when input is undefined", () => {
       const label = buildToolLabel("Grep", undefined, workspacePath);
-      expect(label).toBe("Searching code...");
+      expect(label).toBe("Searching code…");
     });
   });
 
@@ -101,7 +101,7 @@ describe("buildToolLabel (#2428)", () => {
 
     test("falls back when input is undefined", () => {
       const label = buildToolLabel("Glob", undefined, workspacePath);
-      expect(label).toBe("Finding files...");
+      expect(label).toBe("Finding files…");
     });
   });
 
@@ -126,12 +126,12 @@ describe("buildToolLabel (#2428)", () => {
 
     test("WebSearch shows 'Searching web...'", () => {
       const label = buildToolLabel("WebSearch", {}, workspacePath);
-      expect(label).toBe("Searching web...");
+      expect(label).toBe("Searching web…");
     });
 
     test("unknown tool falls back to 'Working...'", () => {
       const label = buildToolLabel("SomeUnknownTool", {}, workspacePath);
-      expect(label).toBe("Working...");
+      expect(label).toBe("Working…");
     });
   });
 
@@ -226,7 +226,7 @@ describe("sandbox path stripping (FR2 #2861)", () => {
       { file_path: "/some/absolute/path.md" },
       undefined,
     );
-    expect(label).toBe("Reading file...");
+    expect(label).toBe("Reading file…");
     expect(label).not.toContain("/some/absolute/path.md");
   });
 
@@ -376,7 +376,7 @@ describe("sandbox path stripping (FR2 #2861)", () => {
       { file_path: leakedWorkspaceId },
       workspacePath,
     );
-    expect(label).toBe("Reading file...");
+    expect(label).toBe("Reading file…");
     expect(label).not.toContain(leakedWorkspaceId);
   });
 });

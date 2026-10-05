@@ -24,7 +24,6 @@ function thinkingMessage(leaderId: string): ChatMessage {
     type: "text",
     leaderId: leaderId as any,
     state: "thinking",
-    toolsUsed: [],
   };
 }
 
@@ -816,7 +815,6 @@ function toolUseMessage(leaderId: string, extra: Partial<ChatMessage> = {}): Cha
     leaderId: leaderId as any,
     state: "tool_use",
     toolLabel: "Reading file...",
-    toolsUsed: ["Reading file..."],
     ...extra,
   } as ChatMessage;
 }
@@ -1018,7 +1016,6 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
       leaderId: leaderId as DomainLeaderId,
       state: "error",
       toolLabel: "Working",
-      toolsUsed: ["Bash"],
     };
   }
 
@@ -1139,8 +1136,7 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
       type: "text",
       leaderId: CC,
       state: "streaming",
-      toolsUsed: [],
-    };
+      };
     const prev: ChatMessage[] = [oldError, newerLive];
     const streams = makeStreams();
 

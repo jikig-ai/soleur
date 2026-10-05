@@ -18,7 +18,7 @@ import { MessageBubble } from "../components/chat/message-bubble";
 // ToolStatusChip is suppressed so the label can never double).
 describe("MessageBubble tool_use live-step line (consolidated box)", () => {
   test("the live line carries the label inside the activity trail", () => {
-    const { getByTestId } = render(
+    const { getByTestId, queryByTestId } = render(
       <MessageBubble
         role="assistant"
         content=""
@@ -28,6 +28,10 @@ describe("MessageBubble tool_use live-step line (consolidated box)", () => {
     );
     const line = getByTestId("live-narration");
     expect(line).toHaveTextContent("Reading knowledge-base/overview/foo.pdf");
+    // One label, one surface — the body's ToolStatusChip is suppressed while
+    // the trail's live line owns the current step (the motivating double-label
+    // bug; a deleted suppressToolStatus would ship green without this pin).
+    expect(queryByTestId("tool-status-chip")).not.toBeInTheDocument();
   });
 
   test("renders the toolLabel verbatim in the bubble", () => {

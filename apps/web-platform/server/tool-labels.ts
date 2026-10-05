@@ -61,13 +61,13 @@ export function isInSandboxRevParseStrand(
 
 /** Fallback labels when input is unavailable or unrecognized */
 const FALLBACK_LABELS: Record<string, string> = {
-  Read: "Reading file...",
-  Bash: "Running command...",
-  Edit: "Editing file...",
-  Write: "Writing file...",
-  WebSearch: "Searching web...",
-  Grep: "Searching code...",
-  Glob: "Finding files...",
+  Read: "Reading file…",
+  Bash: "Running command…",
+  Edit: "Editing file…",
+  Write: "Writing file…",
+  WebSearch: "Searching web…",
+  Grep: "Searching code…",
+  Glob: "Finding files…",
 };
 
 const MAX_BASH_CMD_LENGTH = 60;
@@ -143,7 +143,13 @@ function extractRelativePath(
   const filePath = input?.file_path;
   if (typeof filePath !== "string") return undefined;
   if (workspacePath === undefined && filePath.startsWith("/")) return undefined;
-  return stripWorkspacePath(filePath, workspacePath);
+  const rel = stripWorkspacePath(filePath, workspacePath);
+  // #9515 security seat — a path that is still absolute after the workspace +
+  // sandbox scrubs (`/home/user/.aws/...`) is a HOST path the label machinery
+  // must never echo to clients or persist in the trail. Fall back to the
+  // generic label; the unmatched shape was already reported above.
+  if (rel.startsWith("/")) return undefined;
+  return rel;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +289,11 @@ const GIT_SUBCOMMAND_LABELS: Record<string, string> = {
 
 /** #9515 — `gh <noun> <verb>` business labels for the highest-frequency
  *  GitHub CLI paths (the Concierge's dominant compound-command tool). */
+const GH_NOUNS = new Set([
+  "pr", "issue", "run", "workflow", "release", "repo", "api", "search",
+  "label", "gist", "auth", "secret", "variable", "codespace", "project",
+]);
+
 const GH_SUBCOMMAND_LABELS: Record<string, string> = {
   "pr list": "Listing pull requests",
   "pr view": "Reviewing a pull request",
@@ -307,7 +318,7 @@ const GH_SUBCOMMAND_LABELS: Record<string, string> = {
   "release list": "Listing releases",
   "release view": "Reviewing a release",
   "repo view": "Reviewing the repository",
-  api: "Querying GitHub",
+  api: "Calling the GitHub API",
   search: "Searching GitHub",
   label: "Managing labels",
 };
@@ -321,8 +332,17 @@ const SETUP_NOISE_VERBS = new Set([
   "cd", "pushd", "popd", "export", "set", "unset", "echo", "printf", "true",
   "false", "eval", "source", ".", "read", "local", "declare", "typeset",
   "trap", "ulimit", "umask", "alias", "unalias", "dirs", "jobs", "bg", "fg",
-  "disown", "builtin", "time", "nice", "nohup", "chronic", "wait",
+  "disown", "builtin", "wait",
   "done", "fi", "esac", "{", "}", "in", "test", "[",
+]);
+
+/** Wrapper verbs — the REAL verb follows the wrapper (`nohup npm test` →
+ *  `npm`). Stripped like a `do`/`then` body prefix rather than skipped, so a
+ *  wrapper-prefixed command doesn't degrade to the "Working…" fallback and
+ *  re-pollute the fallback class this fix measured (agent-native seat). */
+const WRAPPER_VERBS = new Set([
+  "nohup", "time", "nice", "chronic", "env", "xargs", "exec", "command",
+  "stdbuf", "timeout", "watch", "unbuffer", "setsid", "flock",
 ]);
 
 /** Shell control-flow keywords — a segment starting with a loop/conditional
@@ -339,7 +359,9 @@ const BODY_KEYWORDS = new Set(["do", "then", "else"]);
 /** Parse the first meaningful token from a shell segment, skipping leading
  *  env-var assignments (`FOO=bar ls` → `ls`). Returns null when the segment
  *  starts with a token we can't map safely (`bash -c`, `sudo`, `$(...)`). */
-function parseLeadingVerb(segment: string): string | null {
+function parseLeadingVerb(
+  segment: string,
+): { verb: string; tokens: string[] } | null {
   const trimmed = segment.trim();
   if (!trimmed) return null;
 
@@ -363,7 +385,9 @@ function parseLeadingVerb(segment: string): string | null {
   if ((first === "bash" || first === "sh" || first === "zsh") && tokens[i + 1] === "-c") {
     return null;
   }
-  return first;
+  // `tokens.slice(i)` — env-assignments stripped so subcommand lookups index
+  // from the real verb (code-quality seat: `FOO=1 git status`).
+  return { verb: first, tokens: tokens.slice(i) };
 }
 
 /**
@@ -375,17 +399,18 @@ function parseLeadingVerb(segment: string): string | null {
  * events — every one a compound command where the real verb sits behind a
  * setup segment or inside a loop body).
  */
+// Known understatement: the FIRST meaningful verb wins — `ls; rm -rf dir`
+// labels "Exploring project structure" while the rm runs. A compound mixing
+// read + mutate is a label-fidelity limit, not a leak (labels are always
+// table values); revisit if the fallback data shows the pattern matters.
 function findMeaningfulVerb(
   command: string,
-): { verb: string; segment: string } | null {
+): { verb: string; tokens: string[]; segment: string } | null {
   const segments = command.split(/;|&&|\|\||\||\n/);
+  let sleepCandidate: { verb: string; tokens: string[]; segment: string } | null = null;
   for (const rawSegment of segments) {
     let segment = rawSegment.trim();
     if (!segment) continue;
-    const head = segment.split(/\s+/)[0];
-    // Loop/conditional headers (`for n in …`, `if cmd; then`) — the work
-    // lives in a `do`/`then` body segment, not the header.
-    if (HEADER_KEYWORDS.has(head)) continue;
     // Body keywords (`do`, `then`, `else`) prefix the actual command.
     for (let guard = 0; guard < 4; guard++) {
       const tokens = segment.trim().split(/\s+/);
@@ -395,12 +420,32 @@ function findMeaningfulVerb(
       }
       break;
     }
-    const verb = parseLeadingVerb(segment);
-    if (!verb) continue;
+    // Wrapper verbs (`nohup`, `time`, `nice`) — strip the head and re-parse
+    // the same segment rather than skipping the whole thing.
+    for (let guard = 0; guard < 3; guard++) {
+      const tokens = segment.trim().split(/\s+/);
+      if (tokens.length > 1 && WRAPPER_VERBS.has(tokens[0])) {
+        segment = tokens.slice(1).join(" ");
+        continue;
+      }
+      break;
+    }
+    const parsed = parseLeadingVerb(segment);
+    if (!parsed) continue;
+    const { verb, tokens } = parsed;
+    // Loop/conditional headers — checked on the POST-env-skip verb too, so
+    // `FOO=1 for n in …` doesn't surface `for` as the verb.
+    if (HEADER_KEYWORDS.has(verb)) continue;
     if (SETUP_NOISE_VERBS.has(verb)) continue;
-    return { verb, segment: segment.trim() };
+    // `sleep` masks the real work in `sleep 30 && gh pr checks` — prefer a
+    // later meaningful segment; keep it when nothing better exists.
+    if (verb === "sleep") {
+      sleepCandidate ??= { verb, tokens, segment: segment.trim() };
+      continue;
+    }
+    return { verb, tokens, segment: segment.trim() };
   }
-  return null;
+  return sleepCandidate;
 }
 
 /**
@@ -408,6 +453,13 @@ function findMeaningfulVerb(
  * as the safe default for unknown verbs (fires `reportSilentFallback` so the
  * allowlist can be tightened from prod data).
  */
+/** #9515 security seat — only allowlist-shaped tokens reach Sentry; a raw
+ *  first-token like `OPENAI_API_KEY=sk-…` or a credential URL must never
+ *  leave the box in the `verb` extra. */
+function sanitizeVerbForTelemetry(tok: string): string {
+  return /^[a-z][a-z0-9_.-]{0,39}$/.test(tok) ? tok : "<unparseable>";
+}
+
 export function mapBashVerb(command: string): string {
   const found = findMeaningfulVerb(command);
 
@@ -416,26 +468,44 @@ export function mapBashVerb(command: string): string {
       feature: "command-center",
       op: "tool-label-fallback",
       message: "Unparseable Bash verb",
-      extra: { verb: command.trim().split(/\s+/)[0] ?? "" },
+      extra: { verb: sanitizeVerbForTelemetry(command.trim().split(/\s+/)[0] ?? "") },
     });
     return "Working…";
   }
 
-  const { verb, segment } = found;
-  const sub = segment.split(/\s+/).slice(1, 3).join(" ");
+  const { verb, tokens } = found;
 
   // Subcommand-aware verbs come first — safe business maps, never raw
   // subcommand interpolation (#9515: `git rev-parse` is jargon, not copy).
   if (verb === "git") {
-    const first = segment.split(/\s+/)[1] ?? "";
+    const first = tokens[1] ?? "";
     return GIT_SUBCOMMAND_LABELS[first] ?? "Working with the repository";
   }
   if (verb === "gh") {
-    return (
-      GH_SUBCOMMAND_LABELS[sub] ??
-      GH_SUBCOMMAND_LABELS[sub.split(" ")[0] ?? ""] ??
-      "Querying GitHub"
-    );
+    // Flag-first invocations (`gh -R owner/repo pr view 5`) are idiomatic —
+    // scan for the first known NOUN rather than fixed positions (agent-native
+    // seat), then its verb. The fallback is neutral, not read-flavored:
+    // `gh api -X DELETE` must not render as "Querying".
+    let noun: string | undefined;
+    let nounIdx = -1;
+    for (let i = 1; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t?.startsWith("-")) continue;
+      if (t && GH_NOUNS.has(t)) {
+        noun = t;
+        nounIdx = i;
+        break;
+      }
+    }
+    if (noun !== undefined) {
+      const next = tokens[nounIdx + 1] ?? "";
+      return (
+        GH_SUBCOMMAND_LABELS[`${noun} ${next}`] ??
+        GH_SUBCOMMAND_LABELS[noun] ??
+        "Working with GitHub"
+      );
+    }
+    return "Working with GitHub";
   }
 
   const label = BASH_VERB_LABELS[verb];
@@ -445,7 +515,7 @@ export function mapBashVerb(command: string): string {
     feature: "command-center",
     op: "tool-label-fallback",
     message: "Unknown Bash verb",
-    extra: { verb },
+    extra: { verb: sanitizeVerbForTelemetry(verb) },
   });
   return "Working…";
 }
@@ -474,10 +544,10 @@ export function buildToolLabel(
     case "Bash": {
       const cmd = input?.command;
       if (typeof cmd !== "string") return FALLBACK_LABELS.Bash;
-      // Strip workspace/sandbox paths from the command before verb mapping so
-      // SUSPECTED_LEAK_SHAPE instrumentation fires consistently, then derive
-      // the verb label. The verb label itself is the safe default — we never
-      // emit the raw command string to the client.
+      // Strip workspace/sandbox paths for the LEAK-SHAPE instrumentation only
+      // (the return is intentionally discarded — `mapBashVerb` maps the raw
+      // command through its own env/wrapper/segment walk, and the label is
+      // always a table value, never derived text).
       stripWorkspacePath(cmd.replace(/\n/g, " "), workspacePath);
       return mapBashVerb(cmd);
     }
@@ -504,7 +574,7 @@ export function buildToolLabel(
       return FALLBACK_LABELS.WebSearch;
 
     default:
-      return FALLBACK_LABELS[toolName] ?? "Working...";
+      return FALLBACK_LABELS[toolName] ?? "Working…";
   }
 }
 

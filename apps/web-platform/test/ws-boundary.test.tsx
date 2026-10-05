@@ -53,6 +53,9 @@ class MockWebSocket {
 }
 
 function deliver(msg: unknown) {
+  // Loud-no-op guard: a silent `wsInstance?.` no-op would produce an
+  // unactionable "0 calls" when the socket never connected (test seat).
+  if (!wsInstance) throw new Error("socket never constructed");
   act(() => {
     wsInstance?.onmessage?.(
       new MessageEvent("message", { data: JSON.stringify(msg) }),
@@ -123,18 +126,37 @@ describe("useWebSocket — boundary admission (#9515)", () => {
     expect(unknownCalls.length).toBe(0);
   });
 
+  it("narration scoped to another conversationId is dropped (cross-tab guard)", async () => {
+    const { result } = renderHook(() => useWebSocket("conv-1"));
+    await act(async () => {});
+
+    deliver({
+      type: "reasoning_narration",
+      message: "Other tab's work…",
+      conversationId: "some-other-conv",
+    });
+
+    expect(result.current.liveNarration).toBeNull();
+  });
+
   it("valid turn_summary frame is admitted (was dropped pre-fix)", async () => {
-    renderHook(() => useWebSocket("conv-1"));
+    const { result } = renderHook(() => useWebSocket("conv-1"));
     await act(async () => {});
 
     deliver({
       type: "turn_summary",
       summary: "Done",
+      seq: 5,
     });
 
     const unknownCalls = reportSilentFallback.mock.calls.filter(
       ([, opts]) => (opts as { op?: string }).op === "ws-unknown-event",
     );
     expect(unknownCalls.length).toBe(0);
+    // "Admitted" means it reached the reducer — a parse-then-drop regression
+    // in the dispatch switch would keep this green on the op assertion alone.
+    expect(
+      result.current.messages.some((m) => m.type === "turn_summary"),
+    ).toBe(true);
   });
 });

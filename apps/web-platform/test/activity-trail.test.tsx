@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import React from "react";
 
@@ -13,6 +13,14 @@ vi.mock("@/lib/client-observability", () => ({
 }));
 
 afterEach(() => cleanup());
+
+// Elapsed assertions must not straddle a real-second boundary on a
+// CPU-starved worker — pin the clock (test seat 2.1).
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+});
+afterEach(() => vi.useRealTimers());
 
 describe("ActivityTrail", () => {
   it("renders prior steps dimmed with an overflow marker over the visible cap", () => {

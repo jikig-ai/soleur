@@ -1019,14 +1019,17 @@ export function ChatSurface({
                       showFullTitle={!!isFirst}
                       messageState={msg.state}
                       toolLabel={msg.toolLabel}
-                      toolsUsed={msg.toolsUsed}
                       activity={msg.activity}
                       currentActivityStartedAt={msg.currentActivityStartedAt}
                       interrupted={msg.interrupted}
                       liveNarration={
                         msg.id === narrationTargetId ? liveNarration : undefined
                       }
-                      liveNarrationStartedAt={liveNarrationStartedAt}
+                      liveNarrationStartedAt={
+                        msg.id === narrationTargetId
+                          ? liveNarrationStartedAt
+                          : undefined
+                      }
                       suppressLive={awaitingUserInput}
                       // #5282 AC12 — suppress the State-2 watchdog chip whenever
                       // State 1 (connection-lost banner) is showing, so the two
@@ -1193,7 +1196,9 @@ export function ChatSurface({
                 messageState="tool_use"
                 toolLabel="Routing to the right experts..."
                 liveNarration={!narrationTargetId ? liveNarration : undefined}
-                liveNarrationStartedAt={liveNarrationStartedAt}
+                liveNarrationStartedAt={
+                  !narrationTargetId ? liveNarrationStartedAt : undefined
+                }
                 suppressLive={awaitingUserInput}
                 getDisplayName={getDisplayName}
                 getIconPath={getIconPath}

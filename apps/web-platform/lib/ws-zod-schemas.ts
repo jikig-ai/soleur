@@ -18,6 +18,7 @@
 // internal API boundaries (registry signatures, mint helpers).
 
 import { z, type ZodError } from "zod";
+import { reportSilentFallback } from "@/lib/client-observability";
 import {
   type WSMessage,
   WORKFLOW_END_STATUSES,
@@ -286,7 +287,7 @@ const streamEndSchema = z.strictObject({
 const toolUseSchema = z.strictObject({
   type: z.literal("tool_use"),
   leaderId: domainLeaderIdSchema,
-  label: z.string(),
+  label: z.string().max(512),
   seq: replaySeqSchema,
 });
 // feat-concierge-stream-commands — inline Bash command/output stream.
@@ -342,6 +343,9 @@ const debugEventSchema = z.strictObject({
 const reasoningNarrationSchema = z.strictObject({
   type: z.literal("reasoning_narration"),
   message: z.string().max(20000),
+  // #9515 — conversation-scoped so the client can drop a frame intended for
+  // another tab's conversation before it lands in the trail (security seat).
+  conversationId: z.string().optional(),
 });
 const turnSummarySchema = z.strictObject({
   type: z.literal("turn_summary"),
@@ -688,18 +692,45 @@ export function parseWSMessage(raw: unknown): ParseWSMessageResult {
 // drift: the schema is the single source of truth.
 // ---------------------------------------------------------------------------
 
+// Review seat: memoized module-level — the parse-failure path is the only
+// caller but a malformed-frame storm should not rebuild the set per frame.
+let _wsMessageTypeLiterals: ReadonlySet<string> | null = null;
 export function wsMessageTypeLiterals(): ReadonlySet<string> {
-  const types = new Set<string>();
-  for (const arm of wsMessageSchema.options) {
-    const variants = (arm as { options?: unknown[] }).options;
-    if (!Array.isArray(variants)) continue;
-    for (const variant of variants) {
-      const shape = (variant as { shape?: Record<string, unknown> }).shape;
-      const typeField = shape?.type as { value?: unknown } | undefined;
-      if (typeof typeField?.value === "string") types.add(typeField.value);
+  if (_wsMessageTypeLiterals === null) {
+    const types = new Set<string>();
+    for (const arm of wsMessageSchema.options) {
+      const variants = (arm as { options?: unknown[] }).options;
+      if (!Array.isArray(variants)) continue;
+      for (const variant of variants) {
+        const shape = (variant as { shape?: Record<string, unknown> }).shape;
+        const typeField = shape?.type as
+          | { value?: unknown; values?: unknown[] }
+          | undefined;
+        // Prefer `.values` — `.value` THROWS on a multi-member ZodLiteral in
+        // zod 4 (agent-native seat), and a future wrapped/enum `type` field
+        // must degrade silently, not crash inside the breadcrumb path.
+        const values = Array.isArray(typeField?.values)
+          ? typeField.values
+          : typeField && typeof typeField.value === "string"
+            ? [typeField.value]
+            : [];
+        for (const v of values) {
+          if (typeof v === "string") types.add(v);
+        }
+      }
     }
+    // Fail-loud rail: an empty set would reclassify every future shape-miss
+    // as `ws-unknown-event` — indistinguishable from correct. A drifted zod
+    // internals walk is caught here on the FIRST parse failure, not by audit.
+    if (types.size === 0) {
+      reportSilentFallback(
+        new Error("wsMessageTypeLiterals derived an empty discriminator set"),
+        { feature: "ws-zod-schemas", op: "ws-type-literals-empty" },
+      );
+    }
+    _wsMessageTypeLiterals = types;
   }
-  return types;
+  return _wsMessageTypeLiterals;
 }
 
 // ---------------------------------------------------------------------------

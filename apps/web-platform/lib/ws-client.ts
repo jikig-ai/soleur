@@ -308,7 +308,7 @@ const SESSION_ENDED_COPY: Record<string, string> = {
   worktree_enter_failed: "Stopped — workspace setup failed.",
 };
 
-function sessionEndedCopy(reason: string): string {
+export function sessionEndedCopy(reason: string): string {
   return SESSION_ENDED_COPY[reason] ?? "Session ended.";
 }
 
@@ -394,18 +394,28 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : state.streamState;
       const narrationSuperseded =
         action.msg.type === "tool_use" && state.liveNarration !== null;
+      // #9515 — a turn ENDS when this event drained streams that were live
+      // (`size > 0 → 0`); arms that never touch activeStreams (workflow_*,
+      // debug_event, turn_summary, interactive_prompt) must not fold narration
+      // just because the map happens to be momentarily empty (review seat).
+      const turnDrained =
+        state.activeStreams.size > 0 && result.activeStreams.size === 0;
+      const shouldFold = turnDrained || narrationSuperseded;
+      const fold = shouldFold
+        ? foldNarrationIntoTrail(
+            result.messages,
+            result.activeStreams,
+            state.liveNarration,
+            state.liveNarrationStartedAt,
+          )
+        : null;
+      // #9515 — a superseded narration with nowhere to fold (chip-only path:
+      // no live-ish text bubble) STAYS live — the fallback line renders it
+      // until a bubble exists, instead of vanishing unrecorded (review seat).
+      const keepNarration =
+        !shouldFold || (narrationSuperseded && !turnDrained && fold?.folded === false);
       return {
-        // #9515 — when this event ended the turn (activeStreams emptied),
-        // fold the last narration into the bubble's trail.
-        messages:
-          result.activeStreams.size === 0 || narrationSuperseded
-            ? foldNarrationIntoTrail(
-                result.messages,
-                result.activeStreams,
-                state.liveNarration,
-                state.liveNarrationStartedAt,
-              )
-            : result.messages,
+        messages: fold ? fold.messages : result.messages,
         activeStreams: result.activeStreams,
         workflow: result.workflow,
         spawnIndex: result.spawnIndex,
@@ -415,14 +425,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         connection: state.connection,
         // #5370 — tear down the live narration line when the turn fully ends
         // (the last stream drained); otherwise carry it through unchanged.
-        liveNarration:
-          result.activeStreams.size === 0 || narrationSuperseded
-            ? null
-            : state.liveNarration,
-        liveNarrationStartedAt:
-          result.activeStreams.size === 0 || narrationSuperseded
-            ? null
-            : state.liveNarrationStartedAt,
+        liveNarration: keepNarration ? state.liveNarration : null,
+        liveNarrationStartedAt: keepNarration
+          ? state.liveNarrationStartedAt
+          : null,
       };
     }
     case "set_live_narration": {
@@ -431,7 +437,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // `activity[]` (consecutive-dedup + cap inside `pushActivity`), so the
       // in-turn step history persists for the rest of the turn. The slot
       // carries only the CURRENT step.
-      const messages = foldNarrationIntoTrail(
+      const fold = foldNarrationIntoTrail(
         state.messages,
         state.activeStreams,
         state.liveNarration,
@@ -439,16 +445,27 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       );
       return {
         ...state,
-        messages,
+        messages: fold.messages,
         liveNarration: action.message,
         liveNarrationStartedAt: Date.now(),
       };
     }
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
+      // #9515 — terminal escalation drains streams: fold the last narration
+      // like every other turn-end arm (review seat F5 — the only drop).
+      const timeoutFold =
+        state.activeStreams.size > 0 && result.activeStreams.size === 0
+          ? foldNarrationIntoTrail(
+              result.messages,
+              result.activeStreams,
+              state.liveNarration,
+              state.liveNarrationStartedAt,
+            )
+          : null;
       return {
         ...state,
-        messages: result.messages,
+        messages: timeoutFold ? timeoutFold.messages : result.messages,
         activeStreams: result.activeStreams,
         // #5370 — a timeout that escalates the last leader to error ends the
         // turn (activeStreams emptied) → tear down the live narration line.
@@ -481,7 +498,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         state.activeStreams,
         state.liveNarration,
         state.liveNarrationStartedAt,
-      );
+      ).messages;
       return {
         ...state,
         messages: sweptMessages,
@@ -507,14 +524,20 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return state.streamState === "streaming"
         ? {
             ...state,
-            // #9515 — Stop leaves transitional bubbles honest: interrupted,
-            // trail folded, so a resuming frame can't create a second box.
+            // #9515 — Stop leaves transitional bubbles honest: `stopped`
+            // (non-rebindable `interrupted`), trail folded — frames racing in
+            // behind the abort (the cc path's abort_turn is a no-op) spawn a
+            // FRESH box instead of resurrecting a contradictory
+            // Working+Interrupted one (review seats' convergent P1). The map
+            // clears too, or idx-resolved frames would re-enter a transitional
+            // state while the stale flag still showed "Interrupted".
             messages: foldNarrationIntoTrail(
-              sweepTransitional(state.messages),
+              sweepTransitional(state.messages, { stopped: true }),
               state.activeStreams,
               state.liveNarration,
               state.liveNarrationStartedAt,
-            ),
+            ).messages,
+            activeStreams: new Map(),
             streamState: "stopping",
             liveNarration: null,
             liveNarrationStartedAt: null,
@@ -541,7 +564,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               state.activeStreams,
               state.liveNarration,
               state.liveNarrationStartedAt,
-            );
+            ).messages;
       return {
         ...state,
         messages,
@@ -1462,6 +1485,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // connection_change-non-live) + the turn-ending stream_event. This
           // frame is live-only (no seq), so it bypassed the replay-dedup gate
           // above and never replays on reconnect.
+          // #9515 — sendToClient is user-scoped (all the user's sockets), so a
+          // conversation-scoped frame guards against landing in ANOTHER tab's
+          // conversation and persisting in its trail (security seat).
+          if (
+            msg.conversationId !== undefined &&
+            msg.conversationId !== realConversationIdRef.current
+          ) {
+            break;
+          }
           dispatch({ type: "set_live_narration", message: msg.message });
           break;
         }
@@ -1699,7 +1731,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // completion checkmark only appears on messages that completed via a
       // WS stream event in the current session. renderBubbleContent handles
       // undefined state via its default branch (MarkdownRenderer), which is
-      // functionally identical to case "done" for messages without toolsUsed.
+      // functionally identical to case "done" for messages without an activity trail.
       // See #2218 (checkmark on historical bubbles) and #2139 (original fix).
       attachments: (m.message_attachments ?? []).map((a) => ({
         id: a.id,

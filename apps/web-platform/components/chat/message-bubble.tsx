@@ -101,7 +101,6 @@ export const MessageBubble = memo(function MessageBubble({
   showFullTitle = false,
   messageState,
   toolLabel,
-  toolsUsed,
   retrying = false,
   getDisplayName,
   getIconPath,
@@ -123,7 +122,6 @@ export const MessageBubble = memo(function MessageBubble({
   showFullTitle?: boolean;
   messageState?: MessageState;
   toolLabel?: string;
-  toolsUsed?: string[];
   /** FR5 (#2861) / FR4 (#5240): when true, show the honest "No response yet"
    *  chip on tool_use bubbles (nothing is actually retried). */
   retrying?: boolean;
@@ -267,7 +265,7 @@ export const MessageBubble = memo(function MessageBubble({
                 messageState,
                 content,
                 toolLabel,
-                toolsUsed,
+                activity,
                 retrying,
                 isDone,
                 variant,
@@ -292,7 +290,7 @@ export const MessageBubble = memo(function MessageBubble({
               activity={activity}
               interrupted={interrupted}
               current={
-                suppressLive || interrupted
+                suppressLive || interrupted || retrying
                   ? null
                   : liveNarration
                     ? { label: liveNarration, startedAt: liveNarrationStartedAt }
@@ -394,7 +392,7 @@ function renderBubbleContent({
   messageState,
   content,
   toolLabel,
-  toolsUsed,
+  activity,
   retrying,
   isDone,
   variant,
@@ -404,7 +402,7 @@ function renderBubbleContent({
   messageState: MessageState | undefined;
   content: string;
   toolLabel: string | undefined;
-  toolsUsed: string[] | undefined;
+  activity: ActivityEntry[] | undefined;
   retrying: boolean;
   isDone: boolean;
   variant: "full" | "sidebar";
@@ -425,6 +423,13 @@ function renderBubbleContent({
   // content stays verbatim. `reportFallthrough` mirrors to Sentry when a
   // `/workspaces/` or `/tmp/claude-` shape survives the canonical pattern
   // table — this is the success metric for FR2+FR3.
+  // #9515 — "Used:" reads the same deduped trail the box recorded (the
+  // plan's single-accumulator fold; `toolsUsed` was deleted).
+  const usedToolLabels = [
+    ...new Set(
+      (activity ?? []).filter((e) => e.kind === "tool").map((e) => e.label),
+    ),
+  ];
   const scrubbedContent = formatAssistantText(content, {
     reportFallthrough: (shape) =>
       reportSilentFallback(null, {
@@ -438,9 +443,10 @@ function renderBubbleContent({
     case "thinking":
       return <ThinkingDots />;
     case "tool_use":
-      if (retrying) return <RetryingChip label={toolLabel} />;
+      if (retrying)
+        return <RetryingChip label={toolLabel ? formatAssistantText(toolLabel) : toolLabel} />;
       if (suppressToolStatus) return <ThinkingDots />;
-      return toolLabel ? <ToolStatusChip label={toolLabel} /> : <ThinkingDots />;
+      return toolLabel ? <ToolStatusChip label={formatAssistantText(toolLabel)} /> : <ThinkingDots />;
     case "streaming":
       return (
         <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
@@ -458,7 +464,7 @@ function renderBubbleContent({
               <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
             <span className="text-sm">
-              Agent stopped responding after: {toolLabel ?? "Working"}
+              Agent stopped responding after: {toolLabel ? formatAssistantText(toolLabel) : "Working"}
             </span>
           </div>
           <a
@@ -473,11 +479,11 @@ function renderBubbleContent({
         </div>
       );
     case "done":
-      if (content === "" && toolsUsed && toolsUsed.length > 0) {
+      if (content === "" && usedToolLabels.length > 0) {
         return (
           <div className="flex items-center gap-1.5 text-xs text-soleur-text-muted">
             <span>Used:</span>
-            {toolsUsed.map((t, i) => (
+            {usedToolLabels.map((t, i) => (
               <span key={i} className="rounded bg-soleur-bg-surface-2 px-1.5 py-0.5">
                 {t}
               </span>

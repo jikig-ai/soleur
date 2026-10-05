@@ -63,11 +63,10 @@ describe("client streaming state machine", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].state).toBe("done");
     expect(messages[0].content).toBe("Result text");
-    // toolsUsed now stores human-readable labels (not raw SDK tool names) — see #2138
-    expect(messages[0].toolsUsed).toEqual([
-      "Reading file...",
-      "Running command...",
-    ]);
+    // The trail records human-readable labels (not raw SDK tool names) — #2138/#9515
+    expect(
+      messages[0].activity?.filter((e) => e.kind === "tool").map((e) => e.label),
+    ).toEqual(["Reading file...", "Running command..."]);
   });
 
   test("replace semantics: 3 cumulative partials = final text, not 3x", () => {
@@ -156,11 +155,9 @@ describe("client streaming state machine", () => {
       { type: "stream_end", leaderId: "cto" },
     ] as WSMessage[] as StreamEvent[]);
 
-    expect(messages[0].toolsUsed).toEqual([
-      "Reading file...",
-      "Searching code...",
-      "Running command...",
-    ]);
+    expect(
+      messages[0].activity?.filter((e) => e.kind === "tool").map((e) => e.label),
+    ).toEqual(["Reading file...", "Searching code...", "Running command..."]);
     expect(messages[0].state).toBe("done");
   });
 
@@ -185,10 +182,9 @@ describe("client streaming state machine", () => {
 
     expect(messages[0].state).toBe("done");
     expect(messages[0].content).toBe("");
-    expect(messages[0].toolsUsed).toEqual([
-      "Reading file...",
-      "Running command...",
-    ]);
+    expect(
+      messages[0].activity?.filter((e) => e.kind === "tool").map((e) => e.label),
+    ).toEqual(["Reading file...", "Running command..."]);
   });
 
   test("timerAction is returned on every state-transition event", () => {
