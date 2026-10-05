@@ -517,10 +517,14 @@ sequential-fallback` — no subagent spawn surface in this harness)
 **Skipped specialists:** none — `soleur:product:design:ux-design-lead`
 not required at ADVISORY tier; the shared UI-surface term list excludes
 "pure copy or style tweaks with no structural/layout change", which is
-the whole diff (no new interactive surface, no new `.tsx` component,
-wireframe N/A)
-**Pencil available:** N/A (advisory — copy-only change on existing
-components)
+the whole diff (no new interactive surface, no new `.tsx` component —
+wireframe not *required* at this tier; one exists anyway, below)
+**Pencil available:** yes (headless CLI). Wireframe artifact committed:
+`knowledge-base/product/design/chat/workflow-ended-copy-states.pen` —
+ended bar in both styling arms (emerald `Finished` vs red `Cost cap
+reached` badge) and the transcript card rendering mapped copy.
+Satisfies deepen-plan Phase 4.9's committed-`.pen` probe under either
+reading of the copy-tweak exclusion.
 
 #### Findings
 
