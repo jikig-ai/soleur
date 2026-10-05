@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=979
-# generated-at=2026-10-04T13:54:21Z
+# generated-at=2026-10-05T15:17:45Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -148,6 +148,8 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	2
 plugins/soleur/test/ci-path-gating.test.sh	5
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	5
 plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	7
+plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	7
+plugins/soleur/test/codeql-main-alert-gate.test.sh	5
 plugins/soleur/test/compaction-state-hook.test.sh	6
 plugins/soleur/test/concurrent-ship.test.sh	3
 plugins/soleur/test/debug-probe-residue.test.sh	6
@@ -197,6 +199,9 @@ plugins/soleur/test/lint-rejected-register.test.sh	6
 plugins/soleur/test/lint-squash-ci-directives.test.sh	3
 plugins/soleur/test/machinery-drain-floor.test.sh	1
 plugins/soleur/test/main-health-monitor-workflow.test.sh	5
+plugins/soleur/test/merge-queue-cla-verify.test.sh	3
+plugins/soleur/test/merge-queue-cla-workflow-wiring.test.sh	7
+plugins/soleur/test/merge-queue-stall-check.test.sh	5
 plugins/soleur/test/monitor-pr-checks.test.sh	7
 plugins/soleur/test/net-issue-flow.test.sh	8
 plugins/soleur/test/notice-frontmatter.test.sh	6
@@ -219,6 +224,7 @@ plugins/soleur/test/regenerate-shard-manifest.test.sh	4
 plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh	2
 plugins/soleur/test/render-c4-model.test.sh	1
 plugins/soleur/test/required-checks-canonical-parity.test.sh	8
+plugins/soleur/test/required-checks-merge-group-coverage.test.sh	3
 plugins/soleur/test/resolve-debt.test.sh	8
 plugins/soleur/test/resolve-git-root.test.sh	4
 plugins/soleur/test/resolve-target-decision.test.sh	1
@@ -318,6 +324,7 @@ scripts/followthrough-varq-ban	6
 scripts/followthrough-varq-ban-live	2
 scripts/followthroughs/pr-battery-gate-saving-9323	1
 scripts/followthroughs/t5-skip-persistence-bound-7510	8
+scripts/followthroughs/tty-ack-migration-9387	7
 scripts/generate-kb-index-live	7
 scripts/ghcr-read-retired-8036	3
 scripts/git-data-boot-poll-8178	1
