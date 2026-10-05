@@ -242,7 +242,7 @@ content-hash label equals `host_scripts_content_hash` at the same commit. This f
 where its existence is recorded. The expected readiness row is `luks=1 luks_arm=formatted escrow=ok`. The
 reboot proof is on the probe row, not the readiness row (which is emitted once per instance): after a
 workflow-issued hcloud reboot, the next daily probe row must carry a **new** `boot_id`, `device_type=crypto_LUKS`
-and `mount_source=/dev/mapper/workspaces` (the new `boot_id` is evidence that a reboot happened; no judge requires it). The host's SSH key changes, so the committed pin is re-captured
+and `mount_source=/dev/mapper/workspaces` (the new `boot_id` is evidence that a reboot happened; since the #9372 workflow change the soak-marker judge and the follow-through both require it, see the 2026-10-05 addendum). The host's SSH key changes, so the committed pin is re-captured
 (`scripts/capture-web-2-host-key.sh`, plus the admin-ip step its runbook names) as part of #9372; none of the SSH
 consumers affected in that window is in the LUKS path, but `apply-deploy-pipeline-fix` fails closed until the
 pin is re-captured. The window is web-2 only (weight 0, serving nothing, holding no user data); web-1 is
@@ -701,3 +701,53 @@ recorded on #9377, but no proof record exists under `knowledge-base/` and this c
 cells keep "intended to be scoped". C2: the pre-split token is not retired, so the narrowing holds for new births only. C3
 (#9372 items), C6 (state restore substrate, #7992) and the web-2 statements are unchanged. Nothing here says web-2 is
 encrypted.
+
+## Addendum — 2026-10-05 (#9372, offline PR: the workflow is merged inert)
+
+**Status of this addendum.** The decision below is true of the **code** at merge. The rebirth has **not** run; nothing here says
+web-2 is LUKS-backed. The workflow is dispatch-only with `plan_only` defaulting to true, and a dispatch needs the owner's explicit
+go-ahead plus the `web-platform-infra-apply` reviewer approval.
+
+**D10 — the rebirth is `-replace` over five explicit targets, not a destroy plan plus `web-host-create`.** The "Live conversion"
+section above describes the operation as delete the volume, remove the state address, destroy the server and attachment, then run
+`web-host-create`. Measured against the repo, a destroy-mode plan on the server also takes its dependents (including
+`hcloud_firewall_attachment.web`, which would strip web-1's firewall), and the create job is not dispatchable from another
+workflow. So `.github/workflows/web2-luks-rebirth.yml` (a new file: `apply-web-platform-infra.yml` is at its byte cap) deletes the
+empty volume through the Hetzner API (detach, then DELETE, 404 meaning already gone), forgets the volume and its attachment with
+`terraform state rm`, and then applies ONE `-replace` of `hcloud_server.web["web-2"]` over five `-target`s (server, private NIC,
+keyed volume, volume attachment, fleet firewall attachment). With the volume absent from state the plan CREATES it, raw (no
+`format`, D2), and `prevent_destroy` is never tripped because Terraform never destroys the volume.
+
+**Contracts.** (1) `tests/scripts/lib/web-host-rebirth-gate.sh` grades two plans with its own allow-set, never reusing the birth
+gate, the replace gate or `web2_retire_allow` (each header forbids it): `pre` (dry plan on current state; the volume is a no-op),
+`post` (after the delete and `state rm`; the volume is created raw, size, labels and name checked), and `post-heal`. Allowed
+action sets must EQUAL an allow-list entry, so a volume delete, forget or replace is unrepresentable; every destroy is pinned to
+a physical id captured from Hetzner (server id and name, NIC `server_id`, attachment `volume_id`); the by-name web-1 refusal is
+the first statement. (2) A pure classifier (`tests/scripts/lib/web2-rebirth-classify.sh`) maps Hetzner and state to `proceed`, a
+named `heal:` window (detach done, delete done, state rm done, apply midway, volume created) or `refuse:` (already reborn,
+orphan raw volume, wrong shape, attached elsewhere, duplicate name, push-apply pause not real) before any write, so a re-dispatch
+after any crash heals or refuses. (3) Emptiness evidence is the 7-day Better Stack `host_metrics` series (hour coverage, freshness,
+a 1 GiB ceiling, a 15 to 21.5 GB total), and never-pooled evidence is the soak marker's absence by exact-name membership over
+secret names. (4) The escrow preflight runs before any Terraform command or Hetzner call; a missing escrow does NOT refuse the
+format (the volume is empty; the readiness verdict goes RED and the soak marker is withheld).
+
+**What this change altered outside the workflow.** The reboot proof is now REQUIRED where it was only diagnostic:
+`scripts/lib/web2-luks-rows.sh` gains `w2l_reboot_seen`, which compares the `boot_id` tokens of the GREEN probe and readiness
+verdicts (known and different), and both the marker-absent branch of `w2l_judge` (so `WORKSPACES_LUKS_CUTOVER_AT`, and with it any
+weight, cannot be written on the readiness row alone) and the follow-through require it. A new `reboot_not_seen` reason is
+`not_live`, not red, between a rebirth and its first reboot.
+
+**Known limits and what is unconfirmed.** The Better Stack JSON paths for the used-bytes series and whether `dm-*` excludes the
+mapper device in `vector.toml` are unverified until the first live query (an absent field fails closed). `cryptsetup open
+--test-passphrase` against a header-image file is covered by shims only. The birth-time recovery check (the escrowed header
+object exists, begins with the LUKS magic and carries the UUID in its name; the Doppler and Terraform-state passphrases agree;
+a test unlock of the downloaded header) is a **birth-time consistency check, not a restore test**: it does not prove the live
+volume opens, that the backup matches the live volume, that either copy survives loss, or that the state bucket is versioned
+(#7992). It does not discharge the recovery or re-escrow acceptance for a data-bearing host; web-2 stays at weight 0 and holds no
+workspace data until those and #7992 are done. The marker config's only token is read/write today (#9358), bound to one
+names-only step that a census holds to that. Authorization is process, not mechanism: the typed confirm is a typo guard.
+
+**Single use and retirement.** The workflow, `scripts/web2-rebirth*.sh`, `tests/scripts/lib/web-host-rebirth-gate.sh` and
+`tests/scripts/lib/web2-rebirth-classify.sh` are deleted after use in the closing change (runbook
+`web2-luks-rebirth-9372.md`, "Closing checklist"), together with the retirement of `apply-web-escrow-create.yml` and the flip of the
+rotation HALT's `create` exemption, which the apply path of this workflow requires to have merged first.
