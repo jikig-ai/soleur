@@ -164,6 +164,15 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
   });
 
+  // #9482: cron-merge-queue-stall-dispatch is a dispatch-hybrid (mint token +
+  // workflow_dispatch to the stall-check workflow); the probe runs in the GHA
+  // executor, so the Node side holds no git and opens no PR. Never Tier-2
+  // deferred: a deferred tick is a missed stall check. Asserted here so the
+  // sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("merge-queue-stall-dispatch (#9482, dispatch-hybrid) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-merge-queue-stall-dispatch")).toBe(false);
+  });
+
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
