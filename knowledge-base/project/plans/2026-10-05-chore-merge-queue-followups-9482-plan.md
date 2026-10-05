@@ -82,6 +82,10 @@ Checked by command, today (2026-10-05, UTC):
 
 ### Pilot measurements already taken (inputs to the work phase, NOT the deliverable)
 
+> **Superseded 2026-10-05 (work phase):** the frozen-definition run replaced these pilot figures. Final: before 2.50 (n=40,
+> window 10-01T18:59Z to 10-04T13:49Z), after 0.83 (n=12), delta 1.67 against the 1.3 break-even (above it, small after-window).
+> The #9482 comment 5992118670 is the record; the numbers below are kept as the planning-time pilot.
+
 These came from throwaway `gh` pulls during planning. The work phase re-runs them with a frozen definition and
 records the final numbers; they are here so the plan's triage verdicts are grounded.
 
