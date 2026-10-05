@@ -49,7 +49,7 @@ things, neither of which is main moving:
    was only 22% of it. Rebuilds, PR-run churn and other workflows fill the rest.
 
 The plan fixes the failure causes (highest yield first), makes a dev-server compile failure fail at
-server readiness (about 2 min) instead of after 14, and records the contention decision with its numbers. It does
+server readiness (about 3 min) instead of after 14, and records the contention decision with its numbers. It does
 **not** change any ruleset parameter, does not touch ADR-270, and does not redo draft PR #9511
 (Sentry route for the stall dispatcher and the ADR canary log; branch
 `feat-one-shot-9482-merge-queue-followups`, files listed in Research Insights).
