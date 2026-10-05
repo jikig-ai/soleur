@@ -180,7 +180,8 @@ capture_trigger=0
 # so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
 # ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
 # fixture-only edit reaches neither; see the trust-boundary note above.
-# grep exits 0 on a match, 1 on none, above 1 when it could not run: only a CLEAN miss may skip the gate.
+# grep exits 0 on a match, 1 on none, above 1 when it could not run (a bad pattern): only a CLEAN miss may skip the gate. A
+# failed here-string redirect also returns 1, so this routing does not cover a redirect failure.
 ct_rc=0
 grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' <<<"$CHANGED" || ct_rc=$?
 if (( ct_rc != 1 )); then

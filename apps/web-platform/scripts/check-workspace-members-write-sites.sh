@@ -98,8 +98,8 @@ while IFS= read -r line; do
   lineno="${rest%%:*}"
   end_lineno=$((lineno + 6))
   # Slice the file lines [lineno..lineno+6] and look for a mutation verb.
-  if sed -n "${lineno},${end_lineno}p" "$filepath" 2>/dev/null | \
-       grep -qE '\.(insert|update|delete|upsert)\('; then
+  if grep -qE '\.(insert|update|delete|upsert)\(' \
+       < <(sed -n "${lineno},${end_lineno}p" "$filepath" 2>/dev/null); then
     TS_WRITES="${TS_WRITES}${line}"$'\n'
   fi
 done <<< "$TS_WRITE_FROM_LINES"

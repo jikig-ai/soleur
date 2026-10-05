@@ -77,6 +77,9 @@ there receives `EPIPE` instead of dying — with a perfectly good GNU grep. Meas
 | default | 141 | **INVERTS** (defect live) |
 | inherited `SIG_IGN` | 0 | **CORRECT** (defect absent) |
 
+> **Superseded 2026-10-05 (#9217):** the `inherited SIG_IGN` row holds for an external writer only; a builtin
+> `printf`/`echo` writer returns 1 there and the defect is live on the runner. See the addendum at the end of this note.
+
 Two causes produce the same non-141 and mean **opposite** things — the instrument is blind (grep
 drained), or **the defect cannot occur here at all**. The probe collapsed them into one and named the
 wrong one, confidently, in the script whose subject is confident claims nobody measured. It now
@@ -350,5 +353,5 @@ bash apps/web-platform/infra/scripts/sigpipe-triage-feasibility.sh --pathspec <s
 | inherited `SIG_IGN` | builtin `printf`/`echo` | **1** (EPIPE) | **INVERTS** (defect live) |
 
 So a green CI run is evidence for the external-writer sites only. The site counts in this note are unchanged, but they
-cover `apps/web-platform/infra/`; repo-wide on 2026-10-05 the figure was 1,131 code lines (see the learning
+cover `apps/web-platform/infra/`; repo-wide on 2026-10-05 the guard's own derivation gave 1,107 code lines in 1,644 files (see the learning
 `2026-10-05-the-pipefail-sweep-was-seven-times-the-tracker-figure-and-the-audits-absent-in-ci-row-was-wrong.md`).

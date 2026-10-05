@@ -186,7 +186,8 @@ viol() { V+=("escrow-split-contract:FAIL $1: $2"); }
 # code <file>: the file with comment-only lines removed, so a comment that mentions the name never trips the census.
 code() { grep -vE '^[[:space:]]*(#|//)' "$1" 2>/dev/null || true; }
 # viol_if_code_matches <file> <ERE> <viol-file> <msg>: a MATCH in the comment-stripped file is a violation, and so is a
-# grep that could not run (rc above 1): an error must never read as "clean". No pipe: the reader cannot take a signal.
+# grep that could not run (rc above 1, e.g. a bad ERE). An unreadable file is NOT distinguished from a miss: code() ends in
+# `|| true`, so grep then sees empty input. No pipe, so the reader exiting early cannot flip the verdict.
 viol_if_code_matches() {
   local rc=0
   grep -qE -- "$2" < <(code "$1") || rc=$?

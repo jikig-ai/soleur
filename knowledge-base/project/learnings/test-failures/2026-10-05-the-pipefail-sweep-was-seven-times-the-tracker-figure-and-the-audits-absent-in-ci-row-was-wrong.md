@@ -3,9 +3,10 @@
 ## Problem
 
 Three trackers (#9217, #6601, #7005) cite "41 production and 148 test-harness sites" for pipe-fed early-exit `grep -q`
-under `pipefail`. Re-measured repo-wide on 2026-10-05 the real figure was **1,131 code lines in 1,644 swept files** (166
-production lines in 82 files under `scripts/`, `plugins/`, `apps/web-platform/` and `apps/cla-evidence/`; the rest test
-harness and infra/CI). The July figure was `apps/web-platform/infra/` only, with a different normalisation. A plan sized
+under `pipefail`. Re-measured repo-wide on 2026-10-05 with the guard's own derivation (`PATTERN_V2` over every non-ignored
+file with a covered extension, comment lines and marked lines dropped) the figure was **1,107 code lines in 1,644 swept
+files** on the unconverted tree: 166 production lines in 82 files under `scripts/`, `plugins/`, `apps/web-platform/` and
+`apps/cla-evidence/` (164 in 81 converted, 2 left as an LLM prompt literal), the rest test harness and infra/CI. The July figure was `apps/web-platform/infra/` only, with a different normalisation. A plan sized
 from the tracker title would have been an order of magnitude too small, and the guard's existing model (one array entry,
 one pin count and one affected-paths entry per file) cannot hold 300 files: the affected-paths edit alone arms the full
 battery (about 2,900 s of runner time per push).
@@ -21,8 +22,10 @@ runner. The audit now carries a corrected row.
 ## Solution
 
 - The guard derives its population (`git grep --no-index --exclude-standard` over every covered extension) and asserts
-  zero outside a shrink-only deferral table (glob, mode, ceiling, tracker). A subtree reaching zero makes its own row
-  stale, so the converting wave deletes the row; a ceiling can only fall. Nothing is enumerated per file.
+  zero outside a deferral table (glob, mode, ceiling, tracker). A subtree reaching zero makes its own row stale, so the
+  converting wave deletes the row. Shrink-only is a convention: `=` rows are tight, `<=` rows tolerate slack until the wave
+  PR lowers the number, which is why every loose row is test-shaped (`*` crosses `/` in a row glob, so a loose row that also
+  matched production code would let a new production instance hide in its slack). Nothing is enumerated per file.
 - `--exclude-standard` is load-bearing: without it the scan read `node_modules` (24.3 s versus 1.0 s, ten stray hits).
 - Conversion rules came from reading the real files, not from the pattern: `printf '%s'` heading a chain that ends in
   `tail -c 2` flips under a head-of-chain here-string (the newline reaches `tail`), a side-effecting producer under `set -e`
@@ -40,6 +43,12 @@ runner. The audit now carries a corrected row.
 - Residuals a line regex cannot close are listed with counts in the guard header (`| head`, multi-line awk, `read`, a
   reader behind a variable or a function); the producer-side form (a stub that never reads the stdin it is fed) needs a
   join to the owning suite and is a separate wave.
+
+- The review panel found the guard narrower than its name in four places a self-run battery could not see: an unanchored
+  comment filter and marker (a violating line could hide behind `:3:#` or a marker-shaped string), an untested dispatch
+  (`exit "$FAIL"` could be softened with the suite green), a canary check satisfied by a nested path, and loose rows that
+  also owned production files. Each now has a probe and a mutation row; the lesson is to drive the whole chain on a scratch
+  root and to mutate the guard, not only the code it guards.
 
 ## Session Errors
 

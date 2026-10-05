@@ -192,9 +192,12 @@ if command -v docker >/dev/null; then
   echo "==> proving the new credential authenticates"
   NEWPOOL="$(doppler secrets get DATABASE_URL_POOLER -p "$PROJECT" -c "$CONFIG" --plain)"
   printf 'PGURL=%s\n' "$NEWPOOL" > "$_tmp/denv"   # --env-file keeps it out of argv
+  # Captured, not piped: a side-effecting producer under set -e. The producer's status is KEPT: a run that printed 1 and then
+  # exited non-zero (a timeout, a docker error) is not proof that the new credential authenticates.
+  PROOF_RC=0
   PROOF_OUT="$(timeout 180 docker run --rm --env-file "$_tmp/denv" postgres:16-alpine \
-       sh -c 'psql "$PGURL" --no-psqlrc -tAq -c "select 1;"' 2>/dev/null || true)"
-  if grep -q '^1$' <<<"$PROOF_OUT"; then
+       sh -c 'psql "$PGURL" --no-psqlrc -tAq -c "select 1;"' 2>/dev/null)" || PROOF_RC=$?
+  if (( PROOF_RC == 0 )) && grep -q '^1$' <<<"$PROOF_OUT"; then
     echo "    OK"
   else
     echo "ERROR: the new credential does NOT authenticate." >&2
