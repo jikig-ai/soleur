@@ -45,9 +45,8 @@ if [[ "$state" != "OPEN" ]]; then
 fi
 
 # (b) Idempotent record-once: bail if a prior run already recorded the evidence.
-if gh issue view "$ISSUE" --json comments 2>/dev/null \
-     | jq -r '.comments[].body // empty' 2>/dev/null \
-     | grep -qF "$SENTINEL"; then
+if grep -qF "$SENTINEL" \
+     < <(gh issue view "$ISSUE" --json comments 2>/dev/null | jq -r '.comments[].body // empty' 2>/dev/null); then
   echo "already recorded — sentinel present on #$ISSUE"
   exit 0
 fi
@@ -82,8 +81,8 @@ for id in $ids; do
   # and miss a real PASS, so the read is deliberately uncapped. The regex is
   # intentionally UNANCHORED: every GH Actions log line is timestamp-prefixed, so
   # `^RESULT:` would never match; run.ts emits exactly one RESULT line.
-  result="$(gh run view --job "$jobid" --log 2>/dev/null \
-              | grep -m1 -oE 'RESULT: (PASS|FAIL|CANT-RUN[^[:space:]]*)' || true)"
+  result="$(grep -m1 -oE 'RESULT: (PASS|FAIL|CANT-RUN[^[:space:]]*)' \
+              < <(gh run view --job "$jobid" --log 2>/dev/null) || true)"
   if [[ "$result" == "RESULT: PASS" ]]; then
     found_run="$id"
     found_url="$(printf '%s' "$runs" | jq -r --arg id "$id" \

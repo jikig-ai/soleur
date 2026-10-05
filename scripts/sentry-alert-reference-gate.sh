@@ -170,11 +170,11 @@ sed 's/^/  /' <<<"$diff_report" >&2
 # detector id moving — the monitor-binding gate owns that invariant. Branch on
 # the rule NAME (the `tojson`-rendered prefix of each leaf line); a diff that
 # touches both prints both hints.
-if ! grep -vE '\.detectorIds(\.[0-9]+)?: ' <<<"$diff_report" | grep -q .; then
+if ! grep -q . < <(grep -vE '\.detectorIds(\.[0-9]+)?: ' <<<"$diff_report"); then
   if grep -qE '^"cron-monitor-failure"\.detectorIds' <<<"$diff_report"; then
     echo "::error::Hint: the ONLY differing leaf is detectorIds of \"cron-monitor-failure\" — the cron routing set changed (a sentry_cron_monitor was routed or unrouted, or recreated with a new detector id; see the two-PR rule in apps/web-platform/infra/sentry/README.md). This is not an authoring error: regenerate alert-reference.json from this run's sentry-alert-reference-expected-<run-id> CI artifact and commit it in this PR." >&2
   fi
-  if grep -vE '^"cron-monitor-failure"\.' <<<"$diff_report" | grep -q .; then
+  if grep -q . < <(grep -vE '^"cron-monitor-failure"\.' <<<"$diff_report"); then
     echo "::error::Hint: the ONLY differing leaf is detectorIds — the issue-stream detector id moved (see scripts/sentry-monitor-binding-gate.sh); this is not an authoring error, but the reference still needs regenerating." >&2
   fi
 fi
