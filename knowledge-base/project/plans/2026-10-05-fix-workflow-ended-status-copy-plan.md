@@ -5,6 +5,10 @@ slug: fix-workflow-ended-status-copy
 branch: fix-workflow-ended-copy
 type: fix
 lane: cross-domain
+priority: P2
+domain: engineering
+brand_survival_threshold: none
+requires_cpo_signoff: false
 ---
 
 # fix: map dormant workflow_ended status renders through founder-facing copy
@@ -12,426 +16,362 @@ lane: cross-domain
 ## Overview
 
 Two dormant render sites — the `workflow_ended` transcript card in
-`components/chat/chat-surface.tsx` and the outcome badge in
-`components/chat/workflow-lifecycle-bar.tsx` — render the raw
-`WorkflowEndStatus` enum token (`internal_error`, `cost_ceiling`, ...)
-verbatim. No server→client `workflow_ended` emitter exists today
-(`server/cc-dispatcher.ts` routes terminal statuses to `session_ended`
-until Stage 3), so the leak is dormant — but the moment a Stage-3 emitter
+`chat-surface.tsx` and the outcome badge in `workflow-lifecycle-bar.tsx` —
+render the raw `WorkflowEndStatus` enum token (`internal_error`,
+`cost_ceiling`, ...) verbatim. No server→client `workflow_ended` emitter
+exists today (cc-dispatcher routes terminal statuses to `session_ended`
+until Stage 3), so the leak is dormant, but the moment a Stage-3 emitter
 lands it reintroduces the exact defect fixed for `session_ended` at
-commit `d715256ba0` (#9526). This change maps `status` through
-badge-length founder-facing copy at both sites, mirroring the merged
-session-ended-copy pattern (exhaustive map, membership-gated resolver,
-generic fallback, warn-level unmapped report), and extends the test
-surface so no snake_case token can reach the DOM.
+d715256ba0 (#9526). This change maps `status` through founder-facing copy
+at both sites, mirroring the merged session-ended-copy pattern
+(membership-gated resolver, generic fallback, warn-level unmapped
+report), and extends the test surface so no snake_case token can reach
+the DOM.
 
-Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed);
-no `spec.md` exists for `fix-workflow-ended-copy`.
+`lane:` note: no `spec.md` exists for this branch (one-shot pipeline
+entry, no brainstorm) — `cross-domain` retained per the fail-closed
+default.
+
+## Problem Statement / Motivation
+
+`session_ended` leaked `internal_error` verbatim into the founder
+transcript until #9526 mapped `reason` through `SESSION_ENDED_COPY`. The
+two `workflow_ended` render sites carry the same latent defect, documented
+in place at both sites with a comment pointing at this follow-up:
+
+- `apps/web-platform/components/chat/chat-surface.tsx` › `case
+  "workflow_ended"` renders `{msg.status}` raw inside a red/emerald span
+  (line ~1120).
+- `apps/web-platform/components/chat/workflow-lifecycle-bar.tsx` ›
+  `ended` branch renders `{lifecycle.status}` raw in the status badge
+  (line ~90).
+
+The leak is dormant for the live-WS path — `grep -rn 'type:
+"workflow_ended"' apps/web-platform/server/` returns zero (rc=1), and
+`cc-dispatcher.ts` still routes terminal statuses to `session_ended`
+"until Stage 3" (comment at cc-dispatcher.ts:4109-4116; ws-handler.ts:2904
+lists `workflow_ended` among server→client-only frame types). But the
+render path is NOT dead code: the e2e injector already drives it
+(`cc-soleur-go-routing.e2e.ts` sends `status:"cost_ceiling"` and
+`status:"completed"` frames), so any injected, replayed, or future-emitted
+frame renders the raw token to a founder today — the same class the Stage
+3 emitter will exercise unconditionally.
+
+## Proposed Solution
+
+### Design
+
+One new sibling module plus four call-site edits, mirroring
+d715256ba0's pattern 1:1:
+
+1. **`apps/web-platform/lib/workflow-ended-copy.ts`** (new) — the
+   `workflow_ended` counterpart of `session-ended-copy.ts`:
+
+   - `WORKFLOW_ENDED_BADGE_COPY: Record<WorkflowEndStatus, string>` —
+     terse pill labels for the lifecycle badge (exhaustive over the
+     9-member union; a new status without a row is a `tsc` error).
+     Proposed labels: `completed`→"Completed", `user_aborted`→"Stopped",
+     `cost_ceiling`→"Cost cap reached", `idle_timeout`→"Timed out",
+     `plugin_load_failure`→"Could not start", `runner_runaway`→"Stalled",
+     `internal_error`→"Error", `session_revoked`→"Revoked",
+     `worktree_enter_failed`→"Workspace error". (Wording is tunable at
+     review; the contract is "short, honest, no internal jargon".)
+   - `WORKFLOW_ENDED_BADGE_GENERIC = "Ended"` — badge fallback.
+   - `hasWorkflowEndedBadge(status)` / `workflowEndedBadge(status)` —
+     hasOwnProperty-gated membership test + `{copy, mapped}` resolver,
+     the `isWorkflowBucket` idiom (review-seat P1 at d715256ba0: a bare
+     index on a wire string resolves `Object.prototype` members).
+   - `WORKFLOW_ENDED_GENERIC_COPY` — "This workflow ended. Start a new
+     conversation to continue."
+   - `workflowEndedCopy(status)` — thin wrapper over `sessionEndedCopy()`
+     for the transcript card: mapped statuses reuse the parity-pinned
+     `SESSION_ENDED_COPY` sentence verbatim (zero new sentence copy,
+     existing parity test keeps guarding drift vs
+     `WORKFLOW_END_USER_MESSAGES`); unmapped falls back to
+     `WORKFLOW_ENDED_GENERIC_COPY` so a generic line says "workflow", not
+     "session".
+
+2. **`chat-surface.tsx`** — replace the `{msg.status}` render with
+   `{workflowEndedCopy(msg.status).copy}`. The `msg.status ===
+   "completed"` emerald/red styling check stays keyed on the raw status
+   (internal logic, not rendered text). Update the dormant-leak comment
+   to describe the mapping.
+
+3. **`workflow-lifecycle-bar.tsx`** — replace the `{lifecycle.status}`
+   badge render with `{workflowEndedBadge(lifecycle.status).copy}`.
+   Keep `lifecycle.status === "completed"` styling check and the
+   `data-lifecycle-status={lifecycle.status}` attribute keyed on the raw
+   status — the attribute is a deliberate test hook the e2e relies on
+   (e2e comment at cc-soleur-go-routing.e2e.ts:281-283: distinguish
+   terminations "without coupling to copy"), not founder-facing text.
+
+4. **`lib/ws-client.ts`** — in the grouped `stream_event` case arm, add a
+   `workflow_ended`-specific unmapped-status warn mirroring the
+   `session_ended` block at ws-client.ts:1290-1306: `warnSilentFallback`
+   with `feature: "ws-client"`, `op: "workflow-ended-unmapped-status"`,
+   `message: "workflow_ended arrived with an unmapped status"`,
+   `extra: { status: String(msg.status).slice(0, 64) }`. Fires once per
+   frame at the wire boundary (never per render — the reducer stays
+   deliberately pure and render-site warns would fire on every React
+   re-render).
+
+5. **Tests** — new `test/workflow-ended-copy.test.tsx` (module + render
+   coverage), updates to `test/workflow-lifecycle-bar.test.tsx` (the
+   `toContain("completed")` assertion becomes the mapped label
+   "Completed") and `e2e/cc-soleur-go-routing.e2e.ts` FR2.4 (keep the
+   `data-lifecycle-status` attribute selector; add a mapped-copy text
+   assertion and a negative raw-token assertion on rendered text).
+
+### Alternative approaches considered
+
+| Alternative | Verdict | Why |
+|---|---|---|
+| Reuse `SESSION_ENDED_COPY` sentence in the badge pill | Rejected | The badge is a `rounded-full px-2 py-0.5 text-[10px]` pill with no truncation; a ~90-char sentence overflows the sticky bar row. A terse-label map buys a property the sentence map cannot (badge-appropriate copy). |
+| Duplicate the sentence map as `WORKFLOW_ENDED_STATUS_COPY` | Rejected | Duplicating sentences creates a drift surface `SESSION_ENDED_COPY`'s parity test already guards; `workflowEndedCopy` delegates instead. |
+| Rename `session-ended-copy.ts` to `lifecycle-copy.ts` | Rejected | Import churn for a cosmetic gain; the sibling-file layout mirrors the precedent 1:1. |
+| Warn inside the resolvers | Rejected | Resolvers run at render time (React re-renders) — warn once per frame at the ws-client boundary, exactly where `session-ended-unmapped-reason` fires. |
+| Warn inside `chat-state-machine.ts` | Rejected | The reducer is deliberately pure ("the hook layer owns timers and other side effects", module docstring). |
 
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
 
-- `d715256ba0` exists — "fix(web-platform): render founder copy for
-  session_ended reasons, not raw enums (#9526)". Its diff added
-  `lib/session-ended-copy.ts` (119 LoC), the ws-client mapping+warn arm,
-  `test/session-ended-copy.test.tsx` (284 LoC), and the two dormant
-  `workflow_ended` render-site comments this plan retires.
-- **No `workflow_ended` server→client emitter has shipped.** Grep of
-  `apps/web-platform/server/` for `type: "workflow_ended"`: zero hits.
-  `ws-handler.ts` `case "workflow_ended"` is the client→server inbound
-  *rejection* arm ("server-to-client only"), not an emitter.
-  `cc-dispatcher.ts` still carries the "until Stage 3 … route terminal
-  statuses to `session_ended`" comment at its `onWorkflowEnded` terminal
-  branch. **The dormant-render premise holds.**
-- **Wire status vocabulary == `WorkflowEndStatus` exactly.**
-  `lib/ws-zod-schemas.ts › workflowEndedSchema` declares
-  `status: z.enum(WORKFLOW_END_STATUSES)` — a *closed* enum, not the
-  free-form `z.string()` that `session_ended.reason` carries. All
-  inbound frames pass `parseWSMessage` (ws-client.ts), so a non-union
-  status is rejected with `ws-zod-parse-failure` before the reducer ever
-  sees it. The e2e injector routes through the same mocked-WS parse path.
-- Cited files all exist: `lib/session-ended-copy.ts`,
-  `components/chat/chat-surface.tsx`, `components/chat/workflow-lifecycle-bar.tsx`,
-  `server/cc-dispatcher.ts`, `lib/ws-zod-schemas.ts`,
-  `test/session-ended-copy.test.tsx`, `e2e/cc-soleur-go-routing.e2e.ts`.
-- Collision surface verified live: draft PR **#9051**
-  "feat(codex): wire Web lifecycle and history safeguards"
-  (author deruelle, head `feat-one-shot-codex-web-live-paths`, OPEN/draft)
-  touches `chat-surface.tsx` + `ws-zod-schemas.ts` — assessed disjoint
-  hunks; merge-conflict watch item only.
-
-### Property List / Cut List (Phase 0.6b)
-
-Restated properties:
-
-- **P1** — no raw `WorkflowEndStatus` token renders as visible DOM text
-  at either `workflow_ended` surface.
-- **P2** — `completed` stays visually distinct (emerald vs red keys off
-  the raw `status` value — keep the styling check, replace only the
-  rendered text). Union-member classification for the styling predicate
-  (sharp-edge: single-enum-condition FRs must enumerate every member):
-  `completed` → emerald; all 8 other members (`user_aborted`,
-  `cost_ceiling`, `idle_timeout`, `plugin_load_failure`,
-  `runner_runaway`, `internal_error`, `session_revoked`,
-  `worktree_enter_failed`) → red; the generic fallback (unreachable via
-  validated frames) renders red.
-- **P3** — a status outside the known set renders honest generic copy
-  and never a non-string (no render crash, no token leak).
-- **P4** — badge copy is pill-length: the ended badge is a
-  `text-[10px]` `rounded-full` pill inside a compact flex row; a 60–95
-  char sentence cannot fit it.
-- **P5** — an unmapped status self-reports (WARN-level Sentry event), so
-  a new emitter/status landing without copy is triaged, not silently
-  absorbed — the `session_ended` precedent's triage channel.
-
-Mechanisms named in the ask:
-
-| Mechanism | Property bought | Already covered? |
+| Cited premise | Verified | Result |
 |---|---|---|
-| Reuse `SESSION_ENDED_COPY` verbatim | P1, P3, P5 | Partially — its values are transcript *sentences* (e.g. cost_ceiling ≈ 95 chars); fails P4 in the pill badge |
-| Sibling `WORKFLOW_ENDED_STATUS_COPY` map + resolver | P1–P5 | Nothing existing provides badge-length labels for `workflow_ended` |
+| Commit `d715256ba0` merged session-ended fix | `git show d715256ba0` | Held — `fix(web-platform): render founder copy for session_ended reasons` (#9526): `lib/session-ended-copy.ts` (80 LoC map + resolvers), `ws-client.ts` warn + render, `test/session-ended-copy.test.tsx` (177 LoC). |
+| Two dormant raw-status renders | read both files | Held — `chat-surface.tsx:1120` `{msg.status}` (JSX text), `workflow-lifecycle-bar.tsx:90` `{lifecycle.status}` (JSX text). Census over `components/` confirms exactly 2 JSX-text sites (line 1042 is a `status={msg.status}` **prop** on MessageBubble — different type, not a render; `data-lifecycle-status` at :73 is an attribute). |
+| No `workflow_ended` server→client emitter | `grep -rn 'type: "workflow_ended"' apps/web-platform/server/` → rc=1, zero matches | Held. cc-dispatcher.ts:4109-4116 comment still routes terminal→`session_ended` pending Stage 3; ws-handler.ts:2904 treats the frame as server→client-only. **Correction to the "dormant" framing:** the e2e injector drives the render path today, so it is dormant only for the live-WS path, not unreachable. |
+| Frame `status` may be a wider union than `WorkflowEndStatus` | `ws-zod-schemas.ts:547` | **Corrected** — `status: z.enum(WORKFLOW_END_STATUSES)`, exactly `WorkflowEndStatus` (9 members, `lib/types.ts:20-54`), a **closed** enum — unlike `session_ended.reason` which is free-form `z.string()`. Reuse of `SESSION_ENDED_COPY` is sanctioned (vocabulary == `WorkflowEndStatus`); membership-gated resolvers remain for non-Zod paths (test injector, future unvalidated channels) since a closed-schema value can still arrive unvalidated. |
+| e2e "asserts on the lifecycle bar — update that assertion to the mapped copy" | read e2e:253-301, 487-513 | **Corrected** — FR2.4 asserts the `data-lifecycle-status="cost_ceiling"` **attribute** (deliberately decoupled from copy per comment :281-283), not rendered text. Response: keep the attribute assertion; ADD a mapped-copy text assertion + a `not.toContainText("cost_ceiling")` leak assertion. `workflow-lifecycle-bar.test.tsx:61` `toContain("completed")` DOES need updating (case-sensitive; "Completed" ≠ "completed"). |
+| Open draft PR #9051 (deruelle) touches chat-surface.tsx + ws-zod-schemas.ts disjoint | `gh pr view 9051` | Held — draft, `feat-one-shot-codex-web-live-paths`, file list adds codex lifecycle source + migrations + one chat-surface test file; no `workflow_ended`/`session_ended` content. Merge-conflict watch item, not a blocker. |
 
-**Cut list:** "reuse SESSION_ENDED_COPY verbatim" — cut because P4
-(pill-length label) is unsatisfiable with transcript sentences and the
-dormant path gets no visual iteration before a Stage-3 emitter lands.
-Existing mechanisms checked (authority files grepped): `lib/session-ended-copy.ts`
-(sentence map, `session_ended` frame contract), `server/cc-workflow-end-messages.ts ›
-WORKFLOW_END_USER_MESSAGES` (server-side error-path sentences, `completed: ""`
-deliberately empty — unusable for the terminal frame), `components/chat/chat-copy.ts ›
-CONTEXT_RESET_COPY` (closed-union map precedent, context_reset reasons only).
+### Property List (Phase 0.6b)
 
-### Relevant code anchors
+- P1: No `WorkflowEndStatus` token — known, unknown, or proto-key —
+  reaches the DOM as rendered text at either site.
+- P2: Founder-facing copy per status — sentence for the transcript card
+  (parity-pinned reuse), terse label for the badge pill.
+- P3: `completed` stays visually distinct — emerald vs red keyed on the
+  raw status value; only rendered text changes.
+- P4: An unmapped status self-reports via warn-level Sentry so a new
+  emitter is triaged, not silently absorbed.
+- P5: Copy-map exhaustiveness is compile-time enforced
+  (`Record<WorkflowEndStatus, string>`) and test-pinned.
 
-- `lib/session-ended-copy.ts` — the merged precedent: exhaustive
-  `Record<SessionEndedRenderableReason, string>`, `SESSION_ENDED_GENERIC_COPY`,
-  `hasSessionEndedCopy` (hasOwnProperty-gated — the P1 review fix: a
-  free-form string resolving `Object.prototype` members like
-  `"constructor"` would dispatch a non-string into the render path),
-  `sessionEndedCopy()` returning `{copy, mapped}`.
-- `lib/types.ts › WORKFLOW_END_STATUSES` — 9-member tuple, single source
-  for the Zod enum and the `WorkflowEndStatus` union (bidirectional
-  assert rail with `server/soleur-go-runner.ts`).
-- `server/cc-workflow-end-messages.ts › WORKFLOW_END_USER_MESSAGES` —
-  sentence-voiced map for the non-terminal `{type:"error"}` path;
-  `SESSION_ENDED_COPY` is pinned verbatim to it on shared non-empty keys
-  by the parity test.
-- `components/chat/chat-surface.tsx › case "workflow_ended"` — renders
-  `{msg.status}` raw (red/emerald span); carries the
-  "map through SESSION_ENDED_COPY" follow-up comment.
-- `components/chat/workflow-lifecycle-bar.tsx` — `ended` branch renders
-  `{lifecycle.status}` raw in the badge; `data-lifecycle-status` attr
-  deliberately carries the raw status (e2e selector hook — stays raw).
-- `lib/chat-state-machine.ts` — `ChatWorkflowEndedMessage.status` and
-  `WorkflowLifecycleState.ended.status` are both typed
-  `WorkflowEndStatus`; the `workflow_ended` reducer arm is the single
-  state-ingress for both render surfaces.
-- `lib/ws-client.ts` — `session_ended` arm (suppression set →
-  `sessionEndedCopy` → `warnSilentFallback` on unmapped → dispatch);
-  `workflow_ended` falls in the grouped `stream_event` pass-through.
-- `lib/client-observability.ts › warnSilentFallback` — warn-level
-  Sentry `captureMessage` helper.
-- `test/mocks/use-websocket.ts › createWebSocketMock` — the ChatSurface
-  render-test seam (`messages` injectable via overrides; pattern from
-  `test/chat-surface-context-reset.test.tsx`).
-- `test/workflow-lifecycle-bar.test.tsx` line asserting
-  `toContain("completed")` — breaks once the badge renders mapped copy;
-  must be updated to the label.
-- `e2e/cc-soleur-go-routing.e2e.ts` — FR2.4-cost-ceiling test injects
-  `workflow_ended{status:"cost_ceiling"}` and selects on
-  `[data-lifecycle-status="cost_ceiling"]` (attribute hook, stays raw);
-  the task's "update that assertion to the mapped copy" lands as a
-  *visible-text* assertion added beside it (see Reconciliation).
+### Cut List (Phase 0.6b)
 
-### Institutional learnings applied
+- Second sentence map duplicating `SESSION_ENDED_COPY` → P2-sentence
+  already bought by delegation to `sessionEndedCopy` → cut.
+- Wire/schema change (status already `z.enum(WORKFLOW_END_STATUSES)`) →
+  no property → cut.
+- Module rename to `lifecycle-copy.ts` → cosmetic, no property → cut.
+- Suppression set for `workflow_ended` (every status renders; nothing is
+  suppressed) → no property → cut.
+- `data-lifecycle-status` attribute mapping → attribute is a test hook
+  intentionally decoupled from copy; not founder-facing text → cut
+  (stays raw by design).
 
-- `2026-05-12-task-subagent-prompt-text-only.md` — Task subagents receive
-  prompt text only (n/a — no Task tool in this harness; research inline).
-- `cq-assert-anchor-not-bare-token` / `cq-cite-content-anchor-not-line-number`
-  — tests assert mapped copy strings + `data-*` hooks, never layout
-  (`cq-jsdom-no-layout-gated-assertions`).
-- `cq-test-fixtures-synthesized-only` — all frames/messages synthesized.
-- `cq-silent-fallback-must-mirror-to-sentry` — the generic-fallback path
-  reports via `warnSilentFallback`, never silently.
-- Session state for `feat-one-shot-cc-dispatcher-extract-workflow-end-messages`
-  — notes `WORKFLOW_END_USER_MESSAGES` is pure data; the new module
-  mirrors that purity (map + resolvers, no Sentry import; warn lives at
-  the ws-client call site).
+### Relevant file paths
 
-### Gate-run notes
+- `apps/web-platform/lib/session-ended-copy.ts` — precedent module
+  (SESSION_ENDED_COPY, hasSessionEndedCopy/sessionEndedCopy,
+  SESSION_ENDED_GENERIC_COPY, SESSION_ENDED_SUPPRESSED).
+- `apps/web-platform/lib/types.ts:20-54` — `WORKFLOW_END_STATUSES`
+  (9 members) + `WorkflowEndStatus`; `soleur-go-runner.ts` is canonical
+  via `_AssertWorkflowEndStatusMatches`.
+- `apps/web-platform/lib/ws-zod-schemas.ts:544-549` — `workflow_ended`
+  frame: `status: z.enum(WORKFLOW_END_STATUSES)` (closed enum).
+- `apps/web-platform/lib/ws-client.ts:1290-1306` — warn + copy-resolve
+  precedent (`session-ended-unmapped-reason` op, 64-char bound).
+- `apps/web-platform/lib/chat-state-machine.ts:1617-1638` — pure reducer
+  arm producing `ChatWorkflowEndedMessage` + `workflow.state="ended"`
+  (status typed `WorkflowEndStatus` on both).
+- `apps/web-platform/server/cc-workflow-end-messages.ts:28-52` —
+  `WORKFLOW_END_USER_MESSAGES` parity source (sentences).
+- `apps/web-platform/test/session-ended-copy.test.tsx` — test pattern to
+  mirror (exhaustiveness, snake_case, proto-key, ws-client warn,
+  unmapped fallback).
+- `apps/web-platform/test/mocks/use-websocket.ts` +
+  `test/mocks/use-team-names.ts` — existing harness for ChatSurface
+  render tests (`chat-surface-context-reset.test.tsx` is the template).
 
-- Phase 1.4 network-outage check: no trigger tokens — skipped.
-- Phase 1.5 community discovery: stack is TypeScript/Next.js (covered);
-  no uncovered-stack signatures — skipped.
-- Phase 1.5b functional overlap: no Task/subagent spawn capability in
-  this harness; overlap risk is nil by inspection (repo-internal copy
-  mapping for a repo-internal WS frame) — recorded rather than spawned.
-- Phase 1.6 external research: skipped — strong local context; the fix
-  replicates a just-merged in-repo pattern.
-- Phase 1.8 skill-description budget: no SKILL.md `description:` edits —
-  skipped.
-- Phase 2.8 IaC routing: no new infrastructure — skipped.
-- Phase 2.10 ADR/C4: no architectural decision (copy-map addition
-  following the established ADR-025 lifecycle-notice family pattern; no
-  ownership/substrate/resolver-boundary change) — skipped.
-- Phase 2.11 Encryption Posture: no persistent store or new
-  cross-component connection — skipped.
-- Phase 3 SpecFlow: no Task spawn; edge cases enumerated inline
-  (enum widening → tsc/CI fails closed; proto-key string → resolver
-  membership gate; absent `summary` → optional render unchanged;
-  history-fetch `workflowEndedAt` is a timestamp gate, not a status
-  render — verified `ws-client.ts` lines around the `workflowEndedAt`
-  seeding, no third render site).
-- Phase 4.5 scoped advisor consult: no Task spawn; the change is
-  near-trivially mechanical (mirror of a merged module). Skipped.
-- Plan Review fan-out: requires Task subagents — unavailable in this
-  harness; substituted by the Phase 6.5 sharp-edges verification pass and
-  deferred to `soleur:review`'s seats at PR time.
+### Institutional learnings
+
+- plan-sharp-edges: an FR conditioning on a single union value must
+  classify EVERY member — the `completed`-vs-rest styling is stated
+  explicitly per member (FR-3).
+- plan-sharp-edges: absence-greps false-fail on legitimate occurrences —
+  no-leak assertions scope to rendered text (`textContent` /
+  `toContainText`), never `innerHTML` (`data-lifecycle-status`
+  legitimately contains `cost_ceiling`).
+- `cq-union-widening-grep-three-patterns` — `Record<WorkflowEndStatus,
+  string>` keeps map exhaustiveness compile-time-enforced on union
+  widening.
+- Test-runner edge: vitest projects collect `test/**/*.test.ts` (node)
+  and `test/**/*.test.tsx` (jsdom) only — the new test file lands under
+  `test/` and matches. Run via `cd apps/web-platform &&
+  ./node_modules/.bin/vitest run <file>`; typecheck via
+  `./node_modules/.bin/tsc --noEmit` (repo root has no npm workspaces).
+
+### Related issues/PRs
+
+- #9526 / d715256ba0 — merged precedent (this plan's pattern source).
+- #3827, #2885/#2886 — status-enum drift fix and Stage 3/4 lifecycle
+  surfaces that introduced the renders.
+- #4440, #5313 — `session_revoked`, `worktree_enter_failed` additions
+  (the union-widening path this design is exhaustiveness-railed for).
+- #9051 (draft, deruelle) — merge-conflict watch item; disjoint content
+  (codex lifecycle), verified.
+- #3374, #3242 — open code-review issues mentioning `ws-zod-schemas.ts`
+  (other frames; we do not edit that file — informational only).
 
 ## Research Reconciliation — Spec vs. Codebase
 
-| Spec claim (brief) | Reality on this branch | Plan response |
+| Spec/ask claim | Codebase reality | Plan response |
 |---|---|---|
-| "no server→client `workflow_ended` emitter exists yet" | Holds — zero `type: "workflow_ended"` emit sites under `server/`; `cc-dispatcher` terminal branch still routes to `session_ended` | Fix lands as dormant-hardening ahead of Stage 3 |
-| "the Zod schema … may be a wider set than WorkflowEndStatus" | Narrower reading — `status: z.enum(WORKFLOW_END_STATUSES)`, a closed union; non-members die at `parseWSMessage` | Map keyed on `WorkflowEndStatus`; resolver+fallback kept for schema-widening forward-compat, not because free-form values can arrive today |
-| "e2e … asserts on the lifecycle bar — update that assertion to the mapped copy" | The existing assertion keys on `data-lifecycle-status="cost_ceiling"` — an attribute hook that stays raw by design | Keep the attribute selector; ADD a visible-text assertion for the mapped label + a `not.toContainText` raw-token guard on the badge |
-| "renders `{msg.status}` raw" / "`{lifecycle.status}` raw" | Confirmed at both sites, each carrying the follow-up comment | Replace rendered text only; styling check keeps `status === "completed"` |
+| "status field may be a wider set than WorkflowEndStatus" | `z.enum(WORKFLOW_END_STATUSES)` — identical vocabulary, closed enum | Reuse `SESSION_ENDED_COPY` via delegation for the card; new badge map keyed on the same union. |
+| "update that [e2e] assertion to the mapped copy" | Assertion is on the `data-lifecycle-status` attribute, intentionally decoupled from copy | Keep attribute assertion; add text-level copy + no-leak assertions. |
+| "renders ... dormant because no server→client emitter exists" | True for live-WS; e2e injector + test suite already exercise the render path | Same fix, reframed urgency: reachable today via injected/replayed frames. |
+| "Extend test/session-ended-copy.test.tsx (or a new test)" | Precedent test is module-resident | New sibling `test/workflow-ended-copy.test.tsx` mirrors the precedent file. |
 
-## Problem Statement / Motivation
+## Technical Considerations
 
-`workflow_ended` frames carry a machine enum (`status:
-z.enum(WORKFLOW_END_STATUSES)`). Both client render sites interpolate it
-verbatim: "Workflow brainstorm ended: internal_error" and a red pill
-reading `internal_error`. Today no emitter reaches them, but the frames,
-types, reducer arm, card, badge, and e2e injector path all exist — the
-leak is armed and waiting for Stage 3. #9526 paid a 5-seat review round
-to learn that `session_ended` leaked the same way; this plan applies the
-fix proactively while the surface is still dormant.
-
-## Proposed Solution
-
-Add a sibling copy module `apps/web-platform/lib/workflow-ended-copy.ts`
-mirroring `lib/session-ended-copy.ts`:
-
-```ts
-export const WORKFLOW_ENDED_STATUS_COPY: Record<WorkflowEndStatus, string> = {
-  completed: "Finished",
-  user_aborted: "Stopped",
-  cost_ceiling: "Cost cap reached",
-  idle_timeout: "Timed out",
-  plugin_load_failure: "Plugin failed to load",
-  runner_runaway: "Agent stalled",
-  internal_error: "Something went wrong",
-  session_revoked: "Session revoked",
-  worktree_enter_failed: "Workspace error",
-};
-export const WORKFLOW_ENDED_GENERIC_COPY = "Ended";
-export function hasWorkflowEndedCopy(status: string): status is WorkflowEndStatus { … }
-export function workflowEndedStatusCopy(status: string): { copy: string; mapped: boolean } { … }
-```
-
-Labels above are draft wording — they mirror the semantics of the
-already-reviewed sentence copy (`WORKFLOW_END_USER_MESSAGES` /
-`SESSION_ENDED_COPY`) at pill length; final wording is a taste item for
-review. Module stays pure data + pure resolvers (no Sentry import),
-matching the session-ended module's contract.
-
-Then:
-
-1. `chat-surface.tsx › case "workflow_ended"`: render
-   `workflowEndedStatusCopy(msg.status).copy` inside the existing
-   red/emerald span; keep `msg.status === "completed"` as the styling
-   condition; replace the dormant-render comment with a pointer to the
-   new module.
-2. `workflow-lifecycle-bar.tsx`: render
-   `workflowEndedStatusCopy(lifecycle.status).copy` in the badge; keep
-   `lifecycle.status === "completed"` styling and raw
-   `data-lifecycle-status`; replace its comment likewise.
-3. `lib/ws-client.ts`: at the `stream_event` group, add a narrow
-   `msg.type === "workflow_ended" && !hasWorkflowEndedCopy(msg.status)`
-   arm calling `warnSilentFallback(null, {feature:"ws-client",
-   op:"workflow-ended-unmapped-status", message:"workflow_ended arrived
-   with an unmapped status", extra:{status: …slice(0,64)}})` before the
-   dispatch — forward-compat tripwire (unreachable today: `z.enum`
-   rejects non-members upstream; live the day the schema widens to a
-   free-form string, exactly like `session_ended.reason`).
-
-### Alternative approaches considered
-
-| Approach | Verdict |
-|---|---|
-| Reuse `SESSION_ENDED_COPY` verbatim at both sites | Rejected — values are transcript sentences (up to ~95 chars); the badge is a `text-[10px]` pill. P4 unsatisfied; and the dormant path gets no visual iteration before Stage 3, so "fix the wrap later" means "a founder sees the wrap first" |
-| Resolve+store `statusLabel` in the reducer arm (components render the field) | Rejected — adds state-shape churn to `ChatWorkflowEndedMessage` + `WorkflowLifecycleState` for no benefit; render-site resolution matches the `CONTEXT_RESET_COPY[msg.reason]` precedent |
-| Rename `session-ended-copy.ts` → shared `lifecycle-copy.ts` | Rejected — rename churn across ws-client/tests plus a muddied per-frame module contract; a frame-named sibling file is symmetric without the churn |
-| Map in the reducer arm + warn there | Rejected — the reducer is documented pure; a Sentry side effect inside dispatch double-fires under StrictMode dev renders. Warn lives at the ws-client boundary, same layer as the `session_ended` warn |
-
-## Implementation Phases
-
-### Phase 1 — RED (tests first per `cq-write-failing-tests-before`)
-
-1.1 Create `apps/web-platform/test/workflow-ended-copy.test.tsx`
-    covering:
-
-- map exhaustiveness: `Object.keys(WORKFLOW_ENDED_STATUS_COPY).sort()`
-  equals `[...WORKFLOW_END_STATUSES].sort()`;
-- no-snake_case leak guard over every copy value + the generic
-  fallback (regex `/[a-zA-Z]+_[a-zA-Z]+/`, same as the session test);
-- `hasWorkflowEndedCopy` rejects `Object.prototype` keys
-  (`"constructor"`, `"__proto__"`, …) and unknown statuses, accepts
-  every union member;
-- `workflowEndedStatusCopy` returns `{mapped:false, copy:GENERIC}`
-  for an unknown status;
-- component render: `<WorkflowLifecycleBar lifecycle={{state:"ended",
-  workflow:"brainstorm", status:"internal_error", summary:"x"}}/>`
-  renders the mapped label and never the raw token; a `completed`
-  render keeps the emerald class (styling keys off raw status);
-- ChatSurface render: inject a synthesized
-  `{type:"workflow_ended", workflow:"plan", status:"internal_error"}`
-  message via `createWebSocketMock` (pattern:
-  `test/chat-surface-context-reset.test.tsx`) → card contains the
-  mapped label, `internal_error` nowhere in the DOM.
-
-1.2 Update `test/workflow-lifecycle-bar.test.tsx` — the
-   `toContain("completed")` assertion now asserts the mapped label
-   (e.g. `WORKFLOW_ENDED_STATUS_COPY.completed`) and adds a
-   not-to-contain raw-token guard on a failure status.
-1.3 Update `e2e/cc-soleur-go-routing.e2e.ts` — beside the
-   `[data-lifecycle-status="cost_ceiling"]` selector, assert the ended
-   bar's visible text contains the mapped label and does NOT contain
-   `cost_ceiling` as text (attribute stays raw; scope the negative to
-   text, not the DOM attribute).
-
-### Phase 2 — GREEN
-
-2.1 Create `lib/workflow-ended-copy.ts` (map + resolvers + docstrings
-    noting the closed-enum wire type and the forward-compat rationale).
-2.2 Edit `chat-surface.tsx` `workflow_ended` card — swap rendered text,
-    keep styling condition, retire the dormant comment.
-2.3 Edit `workflow-lifecycle-bar.tsx` badge — same swap.
-2.4 Edit `lib/ws-client.ts` — unmapped-status `warnSilentFallback` arm.
-
-### Phase 3 — Verify
-
-3.1 `cd apps/web-platform && ./node_modules/.bin/vitest run
-    test/workflow-ended-copy.test.tsx test/workflow-lifecycle-bar.test.tsx
-    test/session-ended-copy.test.tsx` green. (Runner is vitest —
-    `bunfig.toml` sets `pathIgnorePatterns = ["**"]`, so `bun test`
-    matches nothing; the new `.tsx` suite lands in the happy-dom project
-    via `test/**/*.test.tsx` per `vitest.config.ts`.)
-3.2 `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean —
-    the `Record<WorkflowEndStatus, string>` constraint pins
-    exhaustiveness at compile time.
-3.3 Playwright leg: `cd apps/web-platform && npx playwright test
-    e2e/cc-soleur-go-routing.e2e.ts` if runnable in this environment;
-    otherwise flag for CI.
+- **Import boundary:** `workflow-ended-copy.ts` lives in `lib/` beside
+  `session-ended-copy.ts`, imports `sessionEndedCopy` + `type
+  WorkflowEndStatus` — client-safe (no `server/` imports); consumers are
+  `"use client"` components and `ws-client.ts`.
+- **Purity:** the reducer (`chat-state-machine.ts`) is untouched; warn
+  fires in `ws-client.ts` at the wire boundary.
+- **Zod semantics:** unknown statuses are dropped at parse on the live-WS
+  path (`z.enum` reject → existing `reportSilentFallback` at
+  ws-zod-schemas.ts:726). The generic fallback + warn covers non-Zod
+  channels (e2e injector, test mocks, any future unvalidated source) —
+  defense-in-depth, not dead code.
+- **Copy provenance:** card sentences come from `SESSION_ENDED_COPY`,
+  which the existing parity test pins verbatim to
+  `WORKFLOW_END_USER_MESSAGES` — no new sentence copy is authored. Badge
+  labels are new terse copy in the same voice family.
+- **Styling contract:** `completed`→emerald, all other 8 members
+  (`user_aborted`, `cost_ceiling`, `idle_timeout`,
+  `plugin_load_failure`, `runner_runaway`, `internal_error`,
+  `session_revoked`, `worktree_enter_failed`)→red — unchanged; keyed on
+  raw `status` both before and after.
 
 ## Files to Create
 
-- `apps/web-platform/lib/workflow-ended-copy.ts`
-- `apps/web-platform/test/workflow-ended-copy.test.tsx`
+- `apps/web-platform/lib/workflow-ended-copy.ts` — badge map, generic
+  fallbacks, and membership-gated resolvers (`WORKFLOW_ENDED_BADGE_COPY`,
+  `WORKFLOW_ENDED_BADGE_GENERIC`, `WORKFLOW_ENDED_GENERIC_COPY`,
+  `hasWorkflowEndedBadge`, `workflowEndedBadge`, `workflowEndedCopy`).
+- `apps/web-platform/test/workflow-ended-copy.test.tsx` — module +
+  component + ws-client boundary coverage (FR-5).
 
 ## Files to Edit
 
-- `apps/web-platform/components/chat/chat-surface.tsx` — `case
-  "workflow_ended"` rendered text + comment
-- `apps/web-platform/components/chat/workflow-lifecycle-bar.tsx` —
-  ended-badge rendered text + comment
-- `apps/web-platform/lib/ws-client.ts` — unmapped-status warn arm at the
-  `stream_event` group
-- `apps/web-platform/test/workflow-lifecycle-bar.test.tsx` — mapped-copy
-  assertions
-- `apps/web-platform/e2e/cc-soleur-go-routing.e2e.ts` — visible-text
-  assertion + raw-token text guard beside the attribute selector
+- `apps/web-platform/components/chat/chat-surface.tsx` — map `msg.status`
+  through `workflowEndedCopy`; keep styling check; update comment.
+- `apps/web-platform/components/chat/workflow-lifecycle-bar.tsx` — map
+  `lifecycle.status` through `workflowEndedBadge`; keep styling check +
+  `data-lifecycle-status` attribute; update comment.
+- `apps/web-platform/lib/ws-client.ts` — `workflow_ended` unmapped-status
+  `warnSilentFallback` at the stream-event boundary.
+- `apps/web-platform/lib/session-ended-copy.ts` — one-line docstring
+  note naming the sibling module (no behavior change).
+- `apps/web-platform/test/workflow-lifecycle-bar.test.tsx` — update the
+  `toContain("completed")` assertion to the mapped badge label.
+- `apps/web-platform/e2e/cc-soleur-go-routing.e2e.ts` — FR2.4: add
+  mapped-copy + no-raw-token text assertions (attribute selector kept).
+
+## Open Code-Review Overlap
+
+Checked `gh issue list --label code-review --state open` bodies against
+every planned path — **None** for the planned files. Informational only:
+#3374 and #3242 mention `apps/web-platform/lib/ws-zod-schemas.ts`
+(`slot_reclaimed`, `tool_use` frames) — that file is not in this plan's
+edit list. Disposition: acknowledge — unrelated frames, no action.
 
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** a raw internal enum
-  token (`internal_error`, `cost_ceiling`) rendered in the chat
-  transcript card and/or the sticky lifecycle badge when a workflow
-  ends — reads as an unfinished, leaky product surface. (Worst case
-  equals today's dormant behavior; the fix is forward-hardening.)
-- **If this leaks, the user's [data / workflow / money] is exposed via:**
-  nothing — the token is internal status vocabulary only; no PII,
-  secrets, or cost data beyond what the UI already shows.
+  token (`internal_error`, `cost_ceiling`) or a wrong/missing label in
+  the ended-workflow transcript card or the sticky lifecycle badge —
+  cosmetic confusion on a status surface.
+- **If this leaks, the user's [data / workflow / money] is exposed
+  via:** nothing — the values are internal enum names and static copy;
+  no user data, credentials, or money path is touched.
 - **Brand-survival threshold:** `none`
-- **Threshold decision (challengeable):** the failure mode is cosmetic
-  text on an already-dormant surface; no data, workflow, or money
-  exposure, so it does not reach `single-user incident`.
+- **Threshold decision (challengeable):** display-copy change on a
+  render path whose only exposure is cosmetic text; diff paths
+  (`components/`, `lib/{ws-client,workflow-ended-copy,
+  session-ended-copy}.ts`, `test/`, `e2e/`) match none of the preflight
+  Check 6.1 sensitive-path regex branches (verified against
+  `plugins/soleur/skills/preflight/SKILL.md` Step 6.1).
 
 ## Observability
 
+The change adds one warn-level Sentry signal (the unmapped-status
+triage). `lib/` paths are outside the Phase-2.9 trigger set; emitted
+anyway because a new Sentry event is the honest thing to declare.
+
 ```yaml
 liveness_signal:
-  what: "Sentry warning event 'workflow_ended arrived with an unmapped status' stays at ~0 — a nonzero rate means an emitter shipped without copy"
-  cadence: "per workflow_ended frame (fires only on unmapped status)"
-  alert_target: "Sentry issue (warnSilentFallback → captureMessage, level: warning)"
-  configured_in: "apps/web-platform/lib/ws-client.ts (warn arm) + lib/workflow-ended-copy.ts (resolver mapped flag)"
-
+  what: warn-level Sentry event op=workflow-ended-unmapped-status on a
+        workflow_ended frame carrying a status with no copy row
+  cadence: once per unmapped wire frame
+  alert_target: Sentry web-platform project (searchable warning event)
+  configured_in: apps/web-platform/lib/ws-client.ts (stream_event boundary)
 error_reporting:
-  destination: "Sentry via warnSilentFallback (@/lib/client-observability), same channel as the session_ended unmapped-reason warn"
-  fail_loud: "captureMessage 'workflow_ended arrived with an unmapped status' with op=workflow-ended-unmapped-status and the 64-char-bound status token"
-
+  destination: Sentry web-platform via @sentry/nextjs
+    (lib/client-observability.ts warnSilentFallback -> captureMessage,
+    warning level)
+  fail_loud: captureMessage "workflow_ended arrived with an unmapped
+    status" with extra.status bounded to 64 chars
 failure_modes:
-  - mode: "new WorkflowEndStatus member lands without a copy row"
-    detection: "tsc Record<WorkflowEndStatus,string> exhaustiveness + vitest key-equality test (CI-time fail-closed); warn event if a non-validated path ever delivers it (runtime)"
-    alert_route: "CI failure; Sentry issue"
-  - mode: "copy value itself leaks a snake_case token"
-    detection: "no-snake_case vitest guard over every map value + generic fallback"
-    alert_route: "CI failure"
-  - mode: "raw token re-rendered at a site (regression)"
-    detection: "component render tests assert mapped label present + raw token absent; e2e asserts badge text"
-    alert_route: "CI failure"
-
+  - mode: new WorkflowEndStatus variant added without a badge row
+    detection: tsc error on Record<WorkflowEndStatus,string> plus
+      key-parity test red
+    alert_route: CI (pre-merge)
+  - mode: unmapped status arrives on a non-Zod channel (injector,
+      future unvalidated source)
+    detection: warnSilentFallback op=workflow-ended-unmapped-status
+    alert_route: Sentry web-platform
 logs:
-  where: "browser console + Sentry event stream (client-observability captureMessage)"
-  retention: "Sentry project retention"
-
+  where: client-observability pino-free path; Sentry captureMessage is
+    the durable record
+  retention: Sentry project retention
 discoverability_test:
-  command: grep -c "workflow-ended-unmapped-status" apps/web-platform/lib/ws-client.ts
-  expected_output: "1"
+  command: grep -n workflow-ended-unmapped-status apps/web-platform/lib/ws-client.ts
+  expected_output: workflow-ended-unmapped-status
 ```
 
 ## Guard Contract
 
-### Guard 1 — no raw WorkflowEndStatus token reaches the DOM
+### Guard 1 — workflow_ended raw-enum DOM-leak guard
 
-**Property.** No `WorkflowEndStatus` enum token renders as visible text
-on either `workflow_ended` DOM surface; every wire-reachable status
-resolves to founder-facing copy, and every other string resolves to the
+**Property.** No `WorkflowEndStatus` wire token — known member, unknown
+string, or `Object.prototype` key — reaches the DOM as rendered text at
+either render site; every status renders founder-facing copy or a
 generic fallback.
 
-**Assembly.** Two DOM-egress chokepoints: `chat-surface.tsx › case
-"workflow_ended"` (renders `ChatWorkflowEndedMessage.status`) and
-`workflow-lifecycle-bar.tsx › ended` badge (renders
-`WorkflowLifecycleState.ended.status`). Both fields are written only by
-the `workflow_ended` reducer arm in `lib/chat-state-machine.ts`, which
-consumes Zod-gated frames (`z.enum(WORKFLOW_END_STATUSES)` via
-`parseWSMessage`) — one state-ingress, two render-egresses; the
-`data-lifecycle-status` attribute is deliberately out of scope (machine
-hook, not rendered text).
+**Assembly.** Every path that renders a workflow-end status as text:
+`chat-surface.tsx` › `case "workflow_ended"` card and
+`workflow-lifecycle-bar.tsx` › `ended` badge — census-verified complete
+(`grep -n '^\s*{msg\.status}\s*$'` =1, `'^\s*{lifecycle\.status}\s*$'` =1;
+the `status={msg.status}` MessageBubble prop and `data-lifecycle-status`
+attribute are a different type/test hook, out of the property's scope).
+The chokepoint both sites must flow through is the
+`lib/workflow-ended-copy.ts` resolver pair; the wire-side complement is
+the `workflow-ended-unmapped-status` warn in `ws-client.ts`.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
-|---|----------|----------|
-| 1 | Restore `{msg.status}` raw interpolation in the chat-surface card | RED — ChatSurface render test: "internal_error" absent, mapped label present |
-| 2 | Restore `{lifecycle.status}` raw render in the badge | RED — bar render test + e2e text assertion |
-| 3 | Add a 10th `WORKFLOW_END_STATUSES` member with no copy row | RED — `Record<WorkflowEndStatus,string>` fails `tsc`; key-equality test fails |
-| 4 | Change a copy value to a snake_case token (e.g. `"agent_idle_now"`) | RED — leak-guard regex over all values + generic |
-| 5 | (harness) Flip the card test's negative to `toContain("internal_error")` | RED — proves the assertion reads the live DOM rather than vacuously passing |
-| 6 | (must-PASS, non-canonical) Render the badge with `status:"runner_runaway"` — a member used by no other fixture | PASS — membership is per-status, not fixture-bound |
-
-## Open Code-Review Overlap
-
-- `#3374` (slot_reclaimed WS frame) and `#3280` (useWebSocket
-  history-fetch refactor) touch `lib/ws-client.ts` — **acknowledge**:
-  different regions (frame emission / history fetch vs. one warn arm in
-  the dispatch group); no fold-in.
-- `#3374` and `#3242` (tool_use raw name field) touch
-  `lib/ws-zod-schemas.ts` — **acknowledge**: this plan does not edit the
-  schema at all.
-- No open code-review issues name the two component files, the copy
-  module, the test files, or the e2e file.
+|---|---|---|
+| 1 | Revert `chat-surface.tsx` card to `{msg.status}` raw | RED — ChatSurface render test asserts mapped copy for `internal_error` |
+| 2 | Drop the `hasOwnProperty` membership gate (bare `WORKFLOW_ENDED_BADGE_COPY[status]` index) | RED — proto-key test: `"constructor"` must yield generic copy and a string, not an inherited member |
+| 3 | Add a 10th member to `WORKFLOW_END_STATUSES` with no badge row (second member after compliant set) | RED — `Record<WorkflowEndStatus,string>` tsc rail + key-parity test |
+| 4 | (suite) Keep the unmapped-status warn assertion but change the injected fixture to a mapped status | RED — the warn assertion fires only when the frame is genuinely unmapped; a mapped fixture must red the harness |
+| 5 | (must-PASS, non-canonical) `workflowEndedBadge("user_aborted")` — a mapped status that is NOT `completed` (the styling-divergent member) renders "Stopped" | PASS |
 
 ## Scope Check
 
@@ -439,176 +379,194 @@ hook, not rendered text).
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---|---|---|
-| 1 | "first check whether a `workflow_ended` emitter has since shipped (grep server/ for `type: "workflow_ended"` and check the Zod schema in lib/ws-zod-schemas.ts for the frame's status field type — it may be a wider set than WorkflowEndStatus, e.g. a separate workflow-status union)" | Research Insights › Premise Validation | mapped — verified: no emitter; `status` is the closed `z.enum(WORKFLOW_END_STATUSES)` |
-| 2 | "map `status` through copy instead of rendering raw" | FR: Phase 2.1–2.3; Files to Create `lib/workflow-ended-copy.ts`; Files to Edit `chat-surface.tsx`, `workflow-lifecycle-bar.tsx` | mapped |
-| 3 | "Keep `completed` visually distinct (emerald vs red styling already keys off it — preserve the styling check, only replace the rendered text)" | Phase 2.2–2.3 styling-condition clause + AC | mapped |
-| 4 | "Extend test/session-ended-copy.test.tsx (or a new test) with: copy-map exhaustiveness, no-snake_case leak guard, and a component/hook-level render test asserting `{status:"internal_error"}` never reaches the DOM" | Phase 1.1; new `test/workflow-ended-copy.test.tsx` | mapped |
-| 5 | "e2e/cc-soleur-go-routing.e2e.ts injects `status:"cost_ceiling"` and asserts on the lifecycle bar — update that assertion to the mapped copy" | Phase 1.3 | mapped |
-| 6 | "open draft PR … touches chat-surface.tsx and ws-zod-schemas.ts in DISJOINT hunks — note it in the plan as a merge-conflict watch item, do not abort on it" | Dependencies & Risks | mapped |
+| 1 | "first check whether a `workflow_ended` emitter has since shipped (grep server/ for `type: "workflow_ended"` and check the Zod schema in lib/ws-zod-schemas.ts for the frame's status field type)" | Research Insights › Premise Validation | mapped — done: no emitter; `z.enum(WORKFLOW_END_STATUSES)` |
+| 2 | "map `status` through copy instead of rendering raw" | FR-1 (module), FR-2/FR-3 (two render sites) | mapped |
+| 3 | "Keep `completed` visually distinct (emerald vs red styling already keys off it — preserve the styling check, only replace the rendered text)" | FR-3 / Proposed Solution §Styling contract | mapped |
+| 4 | "copy-map exhaustiveness, no-snake_case leak guard, and a component/hook-level render test asserting `{status:"internal_error"}` never reaches the DOM" | FR-5 (new test file) | mapped |
+| 5 | "e2e/cc-soleur-go-routing.e2e.ts injects `status:"cost_ceiling"` and asserts on the lifecycle bar — update that assertion to the mapped copy" | FR-7 — corrected per Reconciliation (attribute assertion kept; text assertions added) | mapped |
+| 6 | "the review-seat P1 (hasOwnProperty-gated lookup on free-form wire strings) and the WARN-level unmapped-reason Sentry report" | FR-1 resolvers + FR-4 warn | mapped |
+| 7 | "note it in the plan as a merge-conflict watch item, do not abort on it" | Dependencies & Risks | mapped |
 
 ### Plan-Item Provenance
 
 | Plan item | User words cited (verbatim quote) | Verdict |
-|-----------|-----------------------------------|---------|
-| `lib/workflow-ended-copy.ts` (new map + resolvers) | "add a sibling `WORKFLOW_ENDED_STATUS_COPY` map + resolver in lib/session-ended-copy.ts (or a renamed shared lifecycle-copy module)" — sibling file named `workflow-ended-copy.ts` per frame-module convention | asked |
-| `chat-surface.tsx` edit | "case "workflow_ended" — renders `{msg.status}` raw (red/emerald span)" | asked |
-| `workflow-lifecycle-bar.tsx` edit | "renders `{lifecycle.status}` raw in the status badge" | asked |
-| `ws-client.ts` warn arm | "the WARN-level unmapped-reason Sentry report" | asked |
-| `test/workflow-ended-copy.test.tsx` (new) | "Extend test/session-ended-copy.test.tsx (or a new test)" | asked |
-| `test/workflow-lifecycle-bar.test.tsx` update | — | inferred — justification: its existing `toContain("completed")` assertion breaks the moment the badge renders copy; the fix is not landable without updating it |
-| `e2e/cc-soleur-go-routing.e2e.ts` update | "update that assertion to the mapped copy" | asked |
+|---|---|---|
+| `lib/workflow-ended-copy.ts` (new) | "add a sibling `WORKFLOW_ENDED_STATUS_COPY` map + resolver in lib/session-ended-copy.ts (or a renamed shared lifecycle-copy module)" | asked — sibling-module arm chosen |
+| chat-surface.tsx card mapping | "renders `{msg.status}` raw (red/emerald span)" + "map `status` through copy" | asked |
+| workflow-lifecycle-bar.tsx badge mapping | "renders `{lifecycle.status}` raw in the status badge" + "map `status` through copy" | asked |
+| ws-client.ts warn | "the WARN-level unmapped-reason Sentry report" | asked |
+| `WORKFLOW_ENDED_BADGE_COPY` short labels | — | inferred — justification: the badge is a `text-[10px] rounded-full` pill with no truncation; the parity-pinned sentences (~90 chars) overflow the sticky-bar row, so badge-appropriate copy is a property the sentence map cannot satisfy |
+| session-ended-copy.ts docstring line | — | inferred — justification: one line naming the sibling keeps the "single source of truth" pointer honest; no behavior change |
+| `test/workflow-lifecycle-bar.test.tsx` update | "a component/hook-level render test asserting `{status:"internal_error"}` never reaches the DOM" | asked — existing assertion must move to the mapped label |
+| e2e text assertions | "update that assertion to the mapped copy" | asked — attribute kept per its own decoupling comment |
 
 ### Split Assessment
 
 - Subsystems touched: 1 — `apps/web-platform`
-- Planned files: 7 (2 create, 5 edit) | Estimated changed lines: ~220
+- Planned files: 8 | Estimated changed lines: ~350
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
 ## Acceptance Criteria
 
-- [ ] AC1: `chat-surface.tsx` `workflow_ended` card renders
-  `workflowEndedStatusCopy(msg.status).copy`; the raw `{msg.status}`
-  interpolation and dormant-render comment are gone; the
-  `msg.status === "completed"` emerald/red styling check is preserved.
-- [ ] AC2: `workflow-lifecycle-bar.tsx` ended badge renders
-  `workflowEndedStatusCopy(lifecycle.status).copy`; raw
-  `{lifecycle.status}` and its comment gone; `=== "completed"` styling
-  and raw `data-lifecycle-status` attribute preserved.
-- [ ] AC3: `lib/workflow-ended-copy.ts` exports
-  `WORKFLOW_ENDED_STATUS_COPY` (a `Record<WorkflowEndStatus, string>` —
-  tsc fails on a missing member), `WORKFLOW_ENDED_GENERIC_COPY`,
-  `hasWorkflowEndedCopy` (hasOwnProperty-gated), and
-  `workflowEndedStatusCopy` (`{copy, mapped}`).
-- [ ] AC4: `lib/ws-client.ts` reports `warnSilentFallback` with
-  `op: "workflow-ended-unmapped-status"` when a `workflow_ended` frame's
-  status fails `hasWorkflowEndedCopy` — before the stream_event dispatch,
-  with the status truncated to 64 chars in `extra`.
-- [ ] AC5: `test/workflow-ended-copy.test.tsx` covers exhaustiveness,
-  the snake_case leak guard, proto-key/unknown membership rejection,
-  and component renders asserting `internal_error` never reaches the DOM
-  at either surface (mapped label rendered instead).
-- [ ] AC6: `test/workflow-lifecycle-bar.test.tsx` asserts the mapped
-  label for `completed` (not the raw token) plus a raw-token negative on
-  a failure status; suite green.
-- [ ] AC7: `e2e/cc-soleur-go-routing.e2e.ts` asserts the ended bar's
-  visible text shows the mapped label for `cost_ceiling` and does not
-  contain the raw token as text; the `data-lifecycle-status` attribute
-  selector is unchanged.
-- [ ] AC8: `cd apps/web-platform && ./node_modules/.bin/vitest run` on
-  the touched suites is green; `./node_modules/.bin/tsc --noEmit` clean.
+- [ ] AC1: `grep -cn '^\s*{msg\.status}\s*$' apps/web-platform/components/chat/chat-surface.tsx` returns `0` AND `grep -cn '^\s*{lifecycle\.status}\s*$' apps/web-platform/components/chat/workflow-lifecycle-bar.tsx` returns `0` (both currently `1` — verified 2026-10-05).
+- [ ] AC2: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` exits clean — including the exhaustiveness rail (`Record<WorkflowEndStatus, string>`).
+- [ ] AC3: `cd apps/web-platform && ./node_modules/.bin/vitest run test/workflow-ended-copy.test.tsx` passes — exhaustiveness (badge keys == `WORKFLOW_END_STATUSES`), no-snake_case in every badge label + both generics, proto-key rejection (`constructor`/`__proto__`/... → generic + string), resolver `mapped` semantics, ChatSurface card render with `status:"internal_error"` shows copy not the token, `WorkflowLifecycleBar` render with `status:"internal_error"` shows the badge label not the token, ws-client boundary warns `workflow-ended-unmapped-status` on an injected unmapped status.
+- [ ] AC4: `./node_modules/.bin/vitest run test/session-ended-copy.test.tsx test/workflow-lifecycle-bar.test.tsx test/chat-state-machine.test.ts test/cc-soleur-go-end-to-end-render.test.tsx` passes — no regression on the touched suites.
+- [ ] AC5: `grep -cn 'workflow-ended-unmapped-status' apps/web-platform/lib/ws-client.ts` returns >= 1.
+- [ ] AC6: Both files still carry the raw-status styling keys — `grep -n 'status === "completed"' apps/web-platform/components/chat/chat-surface.tsx apps/web-platform/components/chat/workflow-lifecycle-bar.tsx` returns >= 2 — and `data-lifecycle-status` remains keyed on the raw `lifecycle.status`.
+- [ ] AC7: `e2e/cc-soleur-go-routing.e2e.ts` FR2.4 retains the `[data-lifecycle-status="cost_ceiling"]` selector AND asserts the mapped badge copy in rendered text plus `not.toContainText("cost_ceiling")` on the ended bar.
+- [ ] AC8: No other render site displays a `WorkflowEndStatus` token: `git grep -n '{lifecycle.status}\|{msg.status}' -- 'apps/web-platform/components/**/*.tsx'` shows only non-text-prop/attribute uses.
 
 ## Domain Review
 
-**Domains relevant:** Product (mechanical UI-surface override —
-`components/chat/*.tsx` in Files to Edit)
+**Domains relevant:** Marketing, Product (mechanical UI-surface match)
+
+### Marketing
+
+**Status:** reviewed (orchestrator-assessed — sequential fallback; no
+independent leader ran)
+**Assessment:** the diff authors ~9 terse badge labels — founder-facing
+copy, so the domain is semantically relevant (content/messaging), but
+the labels are status indicators in the same voice family as the already
+approved `WORKFLOW_END_USER_MESSAGES`/`SESSION_ENDED_COPY` sentences
+(parity-pinned). Label wording is flagged for review-panel taste review;
+no brand-guide deviation identified.
 
 ### Product/UX Gate
 
-**Tier:** advisory — modifies rendered *text* of two existing components;
-no new page/flow/component file; the shared ui-surface term list
-excludes "pure copy or style tweaks with no structural/layout change"
-from the wireframe requirement. (The plan skill's mechanical override
-says "force tier = BLOCKING" on any glob match; the tier definitions —
-BLOCKING = *creates* new surfaces, ADVISORY = modifies existing — are
-followed on substance, matching the `2026-06-05-likec4-contrast` and
-`2026-05-29-kb-drift-messages` advisory precedents. Recorded as a
-decision-challenge note rather than silently diverging from the letter.)
+**Tier:** advisory
 **Decision:** auto-accepted (pipeline)
-**Agents invoked:** none — no Task/subagent spawn capability in this
-harness; the inline spec-flow pass is recorded in Research Insights
+**Agents invoked:** none (pipeline; `Reviewed-Coverage:
+sequential-fallback` — no subagent spawn surface in this harness)
 **Skipped specialists:** none — `soleur:product:design:ux-design-lead`
-not required: no new UI surface, pure copy tweak
-**Pencil available:** yes (headless CLI — `check_deps.sh` Tier 0 OK,
-Node 26). Fallback: if deepen-plan Phase 4.9's mechanical halt fires on
-the `components/**` glob anyway, generate a minimal `.pen` for the
-ended-state badge/card under `knowledge-base/product/design/web-platform/`
-and reference it here — the artifact is cheap to produce in this
-environment and is the gate's only satisfiable arm.
+not required at ADVISORY tier; the shared UI-surface term list excludes
+"pure copy or style tweaks with no structural/layout change", which is
+the whole diff (no new interactive surface, no new `.tsx` component,
+wireframe N/A)
+**Pencil available:** N/A (advisory — copy-only change on existing
+components)
 
 #### Findings
 
-Copy-integrity fix on a dormant surface; UX substance is "badge gets a
-pill-length founder label instead of a machine token". The
-`data-lifecycle-status` attribute intentionally keeps the raw enum —
-machine-readable test hook, not rendered text.
+The mechanical UI-surface glob matched `components/**/*.tsx` in Files
+to Edit, so Product relevance is forced — honestly recorded. Under the
+three-tier rubric the change modifies existing components without adding
+interactive surfaces → ADVISORY, auto-accepted in pipeline context per
+the gate's own headless arm. The `wg-ui-feature-requires-pen-wireframe`
+block does not fire: the shared term list's exclusion clause classifies
+this as not-a-UI-surface change.
 
 ## Test Scenarios
 
-- Given a `workflow_ended{status:"internal_error"}` frame reaches the
-  reducer, when ChatSurface renders the card, then the founder sees
-  "Something went wrong" (label) — never `internal_error`.
-- Given `lifecycle={state:"ended", status:"cost_ceiling"}`, when the bar
-  renders, then the badge shows "Cost cap reached" and
-  `data-lifecycle-status` remains `cost_ceiling`.
-- Given `status:"completed"`, when both surfaces render, then the
-  emerald (not red) styling applies and the label reads "Finished".
-- Given a status string outside the union (cast/injected past the type
-  boundary), when a component renders it, then it shows "Ended" — and a
-  wire-path delivery would fire the `workflow-ended-unmapped-status`
-  Sentry warning at the ws-client boundary.
-- Regression: `session_ended` copy path unchanged —
-  `session-ended-copy.test.tsx` stays green untouched.
-- E2E: injecting `workflow_ended{status:"cost_ceiling"}` produces a
-  visible badge with the mapped label and no raw-token text.
+- Given a `workflow_ended{status:"internal_error"}` message in the chat
+  state, when ChatSurface renders the card, then the DOM contains
+  `SESSION_ENDED_COPY.internal_error` ("Something went wrong on our
+  side. Try sending the message again.") and NOT the token
+  `internal_error` (rendered text scope).
+- Given `lifecycle={state:"ended", status:"internal_error"}`, when
+  WorkflowLifecycleBar renders, then the badge shows
+  `WORKFLOW_ENDED_BADGE_COPY.internal_error` and
+  `container.textContent` does NOT contain `internal_error`.
+- Given `lifecycle={state:"ended", status:"completed"}`, when the badge
+  renders, then it shows "Completed" AND keeps the emerald classes
+  (`bg-emerald-900/40 text-emerald-300`); any other status keeps the
+  red classes.
+- Given an injected `workflow_ended` frame with a status outside
+  `WORKFLOW_END_STATUSES` (non-Zod path), when ws-client dispatches it,
+  then `warnSilentFallback` fires once with
+  `op:"workflow-ended-unmapped-status"` and both sites render generic
+  copy.
+- Given `status:"constructor"` (proto-key), when the resolvers run, then
+  both return the generic copy with `mapped:false` — no inherited-member
+  resolution, `typeof copy === "string"`.
+- Given a new `WorkflowEndStatus` variant added to
+  `WORKFLOW_END_STATUSES` without a badge row, when `tsc --noEmit` runs,
+  then it fails on the `Record<WorkflowEndStatus, string>` rail.
+- **Vitest:** `cd apps/web-platform && ./node_modules/.bin/vitest run
+  test/workflow-ended-copy.test.tsx` expects all-green.
+- **E2E (existing suite, updated assertion):** FR2.4 in
+  `cc-soleur-go-routing.e2e.ts` — `data-lifecycle-status="cost_ceiling"`
+  bar visible AND `toContainText` the mapped label AND
+  `not.toContainText("cost_ceiling")` on rendered text.
 
 ## Success Metrics
 
-- Zero raw `WorkflowEndStatus` tokens in rendered text at both surfaces
-  (unit + e2e assertions).
-- `workflow-ended-unmapped-status` Sentry events at ~0; a nonzero rate
-  self-reports the next unmapped emitter.
-- Adding a `WORKFLOW_END_STATUSES` member without copy is a compile
-  error, not a leak.
+- Zero `{…status}` JSX-text renders of `WorkflowEndStatus` remain
+  (grep-verified census, AC1/AC8).
+- `workflow-ended-unmapped-status` warn op exists and fires only on
+  genuinely-unmapped frames (AC3/AC5).
+- Every new `WorkflowEndStatus` variant fails `tsc` until it has copy
+  (compile-time rail, Guard Contract row 3).
 
 ## Dependencies & Risks
 
-- **Merge-conflict watch (assessed, non-blocking):** open draft PR
-  #9051 "feat(codex): wire Web lifecycle and history safeguards"
-  (`feat-one-shot-codex-web-live-paths`, deruelle) touches
-  `chat-surface.tsx` and `ws-zod-schemas.ts` in disjoint hunks —
-  zero `workflow_ended`/`session_ended` content. If it merges first,
-  rebase-conflict risk is confined to `chat-surface.tsx` hunk locality.
-- **dormant-path caveat:** both surfaces are unreachable from the live
-  server today; the render tests + e2e injector are the only exercisers.
-  Visual polish of label-in-pill is verifiable only via the render
-  tests until Stage 3 ships an emitter.
-- **deepen-plan 4.9 halt risk:** the mechanical UI-surface glob matches
-  `components/chat/*.tsx`; if the gate does not honor the
-  copy-tweak exclusion, produce the minimal `.pen` (Pencil headless CLI
-  verified available) and reference it.
-
-## References & Research
-
-- Precedent implementation: `lib/session-ended-copy.ts`,
-  `lib/ws-client.ts › case "session_ended"`, merged at `d715256ba0`
-  (#9526) — including the review-seat P1 (hasOwnProperty-gated lookup)
-  and the warn-level unmapped report.
-- Server-side sibling: `server/cc-workflow-end-messages.ts ›
-  WORKFLOW_END_USER_MESSAGES`.
-- Closed-union direct-index precedent: `components/chat/chat-copy.ts ›
-  CONTEXT_RESET_COPY` consumed as `CONTEXT_RESET_COPY[msg.reason]`.
-- Routing context: `server/cc-dispatcher.ts › onWorkflowEnded`
-  ("until Stage 3" comment); `lib/types.ts › WORKFLOW_END_STATUSES`;
-  `lib/ws-zod-schemas.ts › workflowEndedSchema`.
-- Test patterns: `test/session-ended-copy.test.tsx`,
-  `test/chat-surface-context-reset.test.tsx`,
-  `test/workflow-lifecycle-bar.test.tsx`,
-  `e2e/cc-soleur-go-ws-injector.ts`.
+- **Merge-conflict watch:** open draft PR #9051
+  (`feat-one-shot-codex-web-live-paths`, deruelle) edits
+  `chat-surface.tsx` and `ws-zod-schemas.ts` in disjoint content (codex
+  lifecycle + history transfer). Verified no `workflow_ended` /
+  `session_ended` overlap. If it merges first, rebase and re-run AC1/AC8
+  census greps. Do not abort on it.
+- **Stage-3 emitter timing:** the fix is forward-compat — when a real
+  `workflow_ended` emitter ships, copy is already in place; statuses
+  added later still fail `tsc` until mapped.
+- **Copy-vocabulary skew:** if Stage 3 emits a `workflow_ended.status`
+  outside `WorkflowEndStatus`, the Zod enum rejects it on the live path;
+  the warn + generic fallback covers unvalidated channels.
+- **Label wording:** badge labels are taste-class copy; review panel may
+  tune wording (mechanical contract: terse, honest, no snake_case).
 
 ## Sharp Edges
 
-- The `data-lifecycle-status` attribute MUST stay raw — it is the e2e
-  hook distinguishing `cost_ceiling` from `completed`; mapping it would
-  break the selector contract. Only *rendered text* changes.
-- `warnSilentFallback` lives in `@/lib/client-observability` and the new
-  copy module must stay pure (no Sentry import) — the warn fires at the
-  ws-client dispatch boundary, same layer as the `session_ended` warn.
-- Do not "fix" `WORKFLOW_END_USER_MESSAGES.completed` (`""` by design) or
-  re-derive copy from it — the badge label map is a separate surface.
-- A plan whose `## User-Brand Impact` section is empty, contains only
-  `TBD`/`TODO`/placeholder text, or omits the threshold will fail
-  `deepen-plan` Phase 4.6 — this plan's section is filled.
-- If the schema ever widens `status` to `z.string()` (mirroring
-  `session_ended.reason`), the membership-gated resolver + warn become
-  load-bearing instantly — do not strip them as "unreachable".
+- The "assert no raw token in the DOM" test MUST scope to rendered text
+  (`container.textContent` / Playwright `toContainText`), never
+  `innerHTML`/`outerHTML` — `data-lifecycle-status="cost_ceiling"`
+  legitimately keeps the raw token as a test hook and a naive sweep
+  false-fails (sharp-edge: absence-grep on a surface with legitimate
+  occurrences).
+- `workflow-lifecycle-bar.test.tsx:61` currently asserts
+  `toContain("completed")` — case-sensitive, breaks on the mapped
+  "Completed"; update it in the same diff (a hidden third consumer).
+- The `status={msg.status}` prop at chat-surface.tsx:1042 is a
+  MessageBubble prop (different status type) — do NOT map it; AC1's
+  anchored grep (`^\s*{msg\.status}\s*$`) already excludes it.
+- The reducer stays pure: no warn/copy-resolution inside
+  `chat-state-machine.ts`.
+- New test file must land under `apps/web-platform/test/` — vitest
+  projects only collect `test/**/*.test.ts(x)` (verified
+  `vitest.config.ts` include globs).
+
+## References & Research
+
+- Precedent: commit d715256ba0 / PR #9526 — `lib/session-ended-copy.ts`,
+  `ws-client.ts:1290-1306`, `test/session-ended-copy.test.tsx`.
+- Status vocabulary: `lib/types.ts:20-54` (`WORKFLOW_END_STATUSES`,
+  canonical twin `soleur-go-runner.ts` via
+  `_AssertWorkflowEndStatusMatches`); schema `lib/ws-zod-schemas.ts:544-549`.
+- Sentence parity source: `server/cc-workflow-end-messages.ts:28-52`.
+- Render sites: `components/chat/chat-surface.tsx:1097-1128`,
+  `components/chat/workflow-lifecycle-bar.tsx:69-107`.
+- Label-divergence precedent: `components/chat/conversations-rail.tsx:27-53`
+  (`RAIL_STATUS_LABEL` intentionally diverges from ops `STATUS_LABELS`).
+- ChatSurface test harness: `test/chat-surface-context-reset.test.tsx`,
+  `test/mocks/use-websocket.ts`, `test/mocks/use-team-names.ts`.
+
+## Implementation Phases
+
+1. **Phase 1 — Contract first.** Write `lib/workflow-ended-copy.ts`
+   (map + generics + resolvers) and `test/workflow-ended-copy.test.tsx`
+   module-level tests; write the two component render tests and the
+   ws-client warn test as RED first (failing tests before
+   implementation per `cq-write-failing-tests-before` — the module
+   tests define the contract the renders consume).
+2. **Phase 2 — Render sites.** Map `msg.status` (card) and
+   `lifecycle.status` (badge) through the resolvers; keep styling checks
+   and `data-lifecycle-status`; update both dormant-leak comments +
+   the `session-ended-copy.ts` docstring line.
+3. **Phase 3 — Wire warn.** Add the `workflow_ended` unmapped-status
+   `warnSilentFallback` in `ws-client.ts`'s `stream_event` arm.
+4. **Phase 4 — Test updates.** Update `workflow-lifecycle-bar.test.tsx`
+   label assertion; add the FR2.4 e2e text assertions.
+5. **Phase 5 — Verify.** AC1-AC8 greps, `tsc --noEmit`, the four touched
+   vitest suites; `npx markdownlint-cli2` on authored docs if any are
+   committed in the PR.
