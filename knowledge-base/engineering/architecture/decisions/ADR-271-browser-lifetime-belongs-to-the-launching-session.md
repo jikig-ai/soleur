@@ -181,8 +181,24 @@ The published statement "the heartbeat is the likely cause" was made before this
 
 **Not proven:**
 
-- **Live idle survival after the fix.** The recipe below is agent-executable. It is UNTESTED: it was not executed when this ADR
-  was written, and its first run is after the merge. Until it passes, this ADR stays `adopting`.
+- **Live idle survival after the fix: steps 1-3 PASSED once on 2026-10-05 for the plugin registration; step 4 was NOT run.**
+  Run: one `claude -p` process (`--plugin-dir <worktree>/plugins/soleur` at `4fea153121`, `--include-hook-events --verbose`,
+  `PLAYWRIGHT_MCP_HEADLESS=1`, `--allowedTools mcp__plugin_soleur_playwright__*`, stdin held open on a FIFO), three turns:
+  `browser_navigate about:blank`, 75 s idle, `browser_snapshot`, 20 s idle, `browser_snapshot`. All three tool results succeeded
+  (turns 2 and 3 returned `Page URL: about:blank`, no "Target page, context or browser has been closed"). The stream's `init`
+  event named the worktree copy as the loaded `soleur` plugin, so the installed-copy ambiguity did not arise. Six `Stop` hook
+  events were emitted (two per turn, matching the two registered `Stop` commands; the removed hook would make three), and the
+  step-3 filter on the child transcript printed 0. Two limits on that evidence: (a) a stream `Stop` event carries NO command
+  (see the recorded line in step 2), so "no `Stop` event names `browser-cleanup`" is vacuous for the stream; the count of two per
+  turn and the surviving browser are the evidence. (b) There is no positive control: the pre-fix copy `4dbd1affe8eb` was not run
+  against the same recipe (its plugin registration has no `--chromium-fallback`, so on this Chrome-less host it cannot launch,
+  and the run would be INCONCLUSIVE, not a failure). Step 4 could not run here: the project registration pins
+  `channel: chrome` (`.claude/playwright-mcp.config.json`) and `/opt/google/chrome/chrome` is absent, so its first
+  `browser_navigate` fails with "Chromium distribution 'chrome' is not found"; the plugin registration has no lease, so a second
+  process on it gets "Browser is already in use" (Consequences). An earlier run on the same day, with both registrations
+  allowed and this session's own browser still open on the plugin profile, failed both launches and was INCONCLUSIVE.
+  Until step 4 is run on a host with Google Chrome, or the operator moves it out of the acceptance check, this ADR stays
+  `adopting`.
   1. From a checkout carrying this change, start ONE headless process that stays alive across turns:
      `claude -p --plugin-dir <checkout>/plugins/soleur --input-format stream-json --output-format stream-json
      --include-hook-events` (stream-json under `-p` may also require `--verbose`; add it if the CLI refuses). Keep its stdin open
@@ -193,9 +209,10 @@ The published statement "the heartbeat is the likely cause" was made before this
   2. Assert which hooks loaded from the `--include-hook-events` output, do not assume it: with `--plugin-dir` and the installed
      copy both named `soleur`, which one loads is undetermined. Pass only if at least one `Stop` hook event was emitted AND no
      `Stop` hook event names `browser-cleanup`. A `browser-cleanup` command means the installed copy won; the run says nothing
-     about the fix, so update and retry. UNTESTED, like the whole recipe: the field names of a stream-json hook event were not
-     observed (running the recipe loads a browser server), so the first run must record one real `--include-hook-events` line
-     here. Do not require `unkept-promise-hook` or `stop-hook` in the event: in this project's transcripts neither hook leaves any
+     about the fix, so update and retry. Observed 2026-10-05, one real `--include-hook-events` line (`-p` stream-json, claude 2.1.289):
+     `{"type":"system","subtype":"hook_started","hook_id":"a3635fb3-7d9a-46fc-a7fe-0c7f79b19ae8","hook_name":"Stop","hook_event":"Stop","uuid":"b1e4ef41-5546-47d6-8139-16789d338fb3","session_id":"d2add08c-c834-418f-a084-7f8c2ca3fede"}`;
+     the matching `hook_response` adds `outcome` (`success`) and `exit_code` (0). There is no `command` field, so assert the
+     per-turn COUNT of `Stop` `hook_started` events (2 with the fix, 3 with the removed hook), not a command name. Do not require `unkept-promise-hook` or `stop-hook` in the event: in this project's transcripts neither hook leaves any
      `command`-carrying attachment (measured below, 0 of 143), because they print nothing, and a stream may omit them the same way.
   3. Acceptance filter on the process's transcript (`~/.claude/projects/<slug>/<session>.jsonl`):
      `jq -c 'select(.attachment.hookEvent=="Stop" and (.attachment.command|tostring|test("browser-cleanup")))' <transcript> | wc -l`
