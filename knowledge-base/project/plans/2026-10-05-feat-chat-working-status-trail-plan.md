@@ -218,14 +218,16 @@ discoverability_test:
 
 ### Guard 1 — WS frame admission (schema-is-authority)
 
-- **Property.** Every frame valid per `wsMessageSchema` reaches the reducer;
-  every frame whose `type` matches no schema variant reports
-  `ws-unknown-event` before dispatch.
-- **Assembly.** The zod discriminated union itself — members enter via
-  `ws-zod-schemas.ts` variants, coverage proved bidirectionally by the
-  existing `_SchemaCovers` type rail (union ↔ schema). Population is DERIVED
-  from the parse authority; there is no second literal to drift.
-- **Mutation matrix.**
+**Property.** Every frame valid per `wsMessageSchema` reaches the reducer;
+every frame whose `type` matches no schema variant reports
+`ws-unknown-event` before dispatch.
+
+**Assembly.** The zod discriminated union itself — members enter via
+`ws-zod-schemas.ts` variants, coverage proved bidirectionally by the
+existing `_SchemaCovers` type rail (union ↔ schema). Population is DERIVED
+from the parse authority; there is no second literal to drift.
+
+**Mutation matrix.**
   | Mutation | Expected |
   |---|---|
   | Add `WSMessage` variant without a schema | tsc RED (`_SchemaCovers`) |
@@ -234,9 +236,9 @@ discoverability_test:
   | Restore a pre-parse `type` allowlist check | vitest RED (boundary test asserts parse handles admission) |
   | Dispatch a bogus-`type` frame | `ws-unknown-event` breadcrumb (must-PASS for the report, must-REJECT for dispatch) |
   | Dispatch a valid `reasoning_narration` frame | `set_live_narration` (precondition-satisfying row: admitted AND routed) |
-- **Anchor.** Schema ↔ union are two artifacts in the same diff discipline;
-  `_SchemaCovers` is a compile-time rail — weakening requires editing both
-  schema and union, which tsc flags.
+**Anchor.** Schema ↔ union are two artifacts in the same diff discipline;
+`_SchemaCovers` is a compile-time rail — weakening requires editing both
+schema and union, which tsc flags.
 
 ## Scope Check
 
