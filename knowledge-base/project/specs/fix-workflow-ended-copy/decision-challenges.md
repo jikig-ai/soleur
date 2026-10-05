@@ -1,43 +1,54 @@
 # Decision Challenges — fix-workflow-ended-copy
 
-Headless pipeline run (one-shot → plan → deepen-plan). Items below were
-recorded rather than asked, per the headless arm of the plan skill's
-review/apply gates.
+Recorded per the headless-pipeline arm: deviations from the operator's
+literal instructions that are backed by mechanical evidence are recorded
+here (and surfaced in the plan) instead of a synchronous question.
 
-## 2026-10-05 — Product/UX tier classification deviation
+## DC-1 — WARN-level unmapped-reason Sentry report → dropped (unreachable)
 
-- **Challenge:** The `soleur:plan` Phase 2.5 mechanical UI-surface
-  override literally reads "force Product-relevant = true AND tier =
-  BLOCKING" on any `components/**` glob match in Files to Edit. This plan
-  edits `components/chat/chat-surface.tsx` and
-  `components/chat/workflow-lifecycle-bar.tsx`, so the letter of the
-  override yields BLOCKING — which would make plan Phase 2.5 the sole
-  mandated producer of a `.pen` wireframe for a copy-text fix.
-- **Applied instead:** Tier **advisory** (auto-accepted, pipeline). The
-  tier definitions — BLOCKING = *creates* new pages/flows/components,
-  ADVISORY = modifies existing surfaces — plus the shared
-  ui-surface-terms exclusion ("pure copy or style tweaks with no
-  structural/layout change" need no wireframe) both classify this as
-  advisory. In-repo precedent: `2026-06-05-likec4-contrast` and
-  `2026-05-29-kb-drift-messages` plans, both advisory over component
-  edits.
-- **Residual risk:** deepen-plan Phase 4.9's halt is mechanical on the
-  glob — it may still halt demanding a committed `.pen`. Fallback is
-  armed: Pencil headless CLI verified available (`check_deps.sh` Tier 0,
-  Node 26); generate a minimal `.pen` under
-  `knowledge-base/product/design/web-platform/` and reference it in the
-  plan if the halt fires.
-- **Process note:** the literal "AND tier = BLOCKING" phrasing of the
-  override appears unreachable-by-design (any component edit would force
-  blocking, making ADVISORY unreachable through the mechanical path) —
-  worth a skill-text reconciliation at review/ship if the panel agrees.
+**Operator's stated direction** (verbatim): "Reference the merged
+session-ended-copy work at commit d715256ba0 for the full pattern,
+including the review-seat P1 (hasOwnProperty-gated lookup on free-form
+wire strings) and the WARN-level unmapped-reason Sentry report."
 
-## 2026-10-05 — Taste item: badge label wording
+**Initial plan design:** a `warnSilentFallback` with
+`op: "workflow-ended-unmapped-status"` inside the `stream_event` arm of
+`ws-client.ts`, mirroring `session-ended-unmapped-reason`
+(ws-client.ts:1290-1306).
 
-- `WORKFLOW_ENDED_STATUS_COPY` label strings ("Finished", "Stopped",
-  "Cost cap reached", "Timed out", "Plugin failed to load", "Agent
-  stalled", "Something went wrong", "Session revoked", "Workspace error",
-  generic "Ended") are draft wording mirroring the reviewed
-  `WORKFLOW_END_USER_MESSAGES`/`SESSION_ENDED_COPY` sentence semantics at
-  pill length. Final wording is a taste call for review — the mechanism
-  (map shape, resolver, warn channel) is independent of the strings.
+**Evidence gathered (deepen verify-the-negative pass, 2026-10-05):**
+
+- `apps/web-platform/lib/ws-client.ts:951` runs `parseWSMessage(parsed)`
+  on EVERY incoming frame before dispatch; on failure it reports via the
+  existing `ws-zod-parse-failure`/`ws-unknown-event` Sentry events
+  (lines 952-976).
+- `apps/web-platform/lib/ws-zod-schemas.ts:547` declares
+  `workflow_ended.status` as `z.enum(WORKFLOW_END_STATUSES)` — a closed
+  enum, unlike `session_ended.reason` which is `z.string()` (free-form,
+  where an unmapped value is live-reachable).
+- `apps/web-platform/e2e/cc-soleur-go-ws-injector.ts:76-88` sends frames
+  over the real intercepted socket → injector frames pass the same parse
+  gate. Same for the vitest MockWebSocket harness (`serverSend` drives
+  `onmessage`).
+- `apps/web-platform/test/ws-zod-schemas.test.ts:310`
+  ("workflow_ended with unknown status rejects") already covers the drop.
+- Adding a status to `WORKFLOW_END_STATUSES` without copy fails `tsc` on
+  `Record<WorkflowEndStatus, string>` — compile-time coverage, stronger
+  than warn.
+
+**Consequence:** a warn inside the parse-gated `stream_event` arm can
+never fire on any existing channel; a future non-WS channel would
+bypass that code location entirely. It is dead code masquerading as
+coverage — rejected under the mechanism-minimality gate.
+
+**Resolution:** the warn is dropped; the asked *property* ("unmapped
+statuses self-report") is preserved by (a) `ws-zod-parse-failure`
+upstream (error-level, pre-existing), (b) the `Record<>` tsc rail
+(compile-time), and (c) the membership-gated resolvers' generic
+fallback for direct-construction channels. A comment in `ws-client.ts`'s
+`stream_event` arm documents where the coverage lives. The
+hasOwnProperty-gated P1 idiom is retained verbatim in the resolvers.
+
+**Disclosure:** `Reviewed-Coverage: sequential-fallback` — this
+assessment ran as an inline verify-the-negative pass by the deepen-plan
+author, not an independent review seat.
