@@ -291,27 +291,6 @@ export interface ChatState {
 
 export type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
 
-/** #9515 — `session_ended.reason` is wire-internal vocabulary
- *  (snake_case, unbounded `z.string()`). Never interpolate raw reasons into
- *  user copy — every known reason gets a complete sentence; unknown/future
- *  reasons degrade to the honest generic rather than a jargon leak. */
-const SESSION_ENDED_COPY: Record<string, string> = {
-  user_aborted: "Stopped — send a new message to continue.",
-  closed: "Session ended.",
-  completed: "Done.",
-  idle_timeout: "Session ended after being idle too long.",
-  plugin_load_failure: "Session ended — a plugin failed to load.",
-  internal_error: "Session ended — something went wrong on our side.",
-  session_revoked: "Session ended — access was revoked.",
-  cost_ceiling: "Stopped — the run reached its cost limit.",
-  runner_runaway: "Stopped — the run exceeded its limits.",
-  worktree_enter_failed: "Stopped — workspace setup failed.",
-};
-
-export function sessionEndedCopy(reason: string): string {
-  return SESSION_ENDED_COPY[reason] ?? "Session ended.";
-}
-
 export type ChatAction =
   | { type: "stream_event"; msg: StreamEventMsg }
   | { type: "timeout"; leaderId: string }

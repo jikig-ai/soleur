@@ -368,18 +368,3 @@ describe("#9515 review pins", () => {
     expect(next.liveNarration).toBe("Thinking…");
   });
 });
-
-import { sessionEndedCopy } from "../lib/ws-client";
-
-describe("sessionEndedCopy (#9515 reason→copy map)", () => {
-  test("every mapped reason is a sentence, never the raw enum", () => {
-    expect(sessionEndedCopy("user_aborted")).toMatch(/^Stopped/);
-    expect(sessionEndedCopy("completed")).not.toContain("completed");
-    expect(sessionEndedCopy("closed")).not.toBe("closed");
-    expect(sessionEndedCopy("idle_timeout")).toMatch(/idle/i);
-  });
-  test("unknown reasons fall back to the generic sentence — raw enum never echoes", () => {
-    expect(sessionEndedCopy("plugin_load_failure")).toBeDefined();
-    expect(sessionEndedCopy("some_future_reason")).toBe("Session ended.");
-  });
-});
