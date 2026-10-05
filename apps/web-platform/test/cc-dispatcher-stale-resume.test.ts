@@ -137,7 +137,7 @@ function framesOfType(sendToClient: ReturnType<typeof vi.fn>, type: string) {
 /** Minimal SoleurGoRunner stub; `dispatch` behavior is per-test. */
 function makeStubRunner(
   dispatchImpl: (args: {
-    events: { onStaleResume?: (info: { deadSessionId: string | null }) => void };
+    events: { onStaleResume?: (info: { deadSessionId: string }) => void };
     sessionId?: string;
     contextResetNotice?: string;
   }) => Promise<{ queryReused: boolean }>,
@@ -187,15 +187,15 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
   });
 
-  it("clears session_id, emits context_reset, and re-dispatches cold — deferred past the dying activeQueries entry", async () => {
+  it("clears session_id, emits context_reset, and re-dispatches cold — after the dying activeQueries entry is deleted", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const args = baseDispatchArgs(sendToClient, { sessionId: "sess-dead" });
 
     // `entryActive` models the runner's `activeQueries` map: true while a
-    // dispatch owns the entry, cleared by the simulated closeQuery that
-    // runs after onStaleResume inside the first dispatch. A synchronous
-    // re-dispatch (the ordering bug this fix exists to prevent) would
-    // observe `true` and take the queryReused path.
+    // dispatch owns the entry. The real runner emits `onStaleResume`
+    // AFTER `closeQuery`'s `activeQueries.delete`, so this stub clears the
+    // entry BEFORE firing the event — a re-dispatch that observed `true`
+    // would prove the listener ran on the dying entry.
     let entryActive = false;
     const reusedSeen: boolean[] = [];
     const stubRunner = makeStubRunner(async (dispatchArgs) => {
@@ -203,9 +203,9 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
       reusedSeen.push(reused);
       entryActive = true;
       if (reusedSeen.length === 1) {
-        dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
-        // Simulated closeQuery → activeQueries.delete.
+        // Simulated closeQuery → activeQueries.delete PRECEDES emit.
         entryActive = false;
+        dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
       }
       return { queryReused: reused };
     });
@@ -248,14 +248,22 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     expect(reusedSeen).toEqual([false, false]);
   });
 
-  it("is a no-op when the dispatch never attempted a resume (sessionId absent)", async () => {
+  it("recovers keyed on the payload even when the dispatch arg's sessionId is absent (arg-falsy/state-truthy divergence)", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
-    const args = baseDispatchArgs(sendToClient); // no sessionId
+    const args = baseDispatchArgs(sendToClient); // no sessionId arg
 
+    // `state.sessionId` can rebind mid-stream on an SDK session-id change,
+    // so the runner can fire with a truthy dead id even when the dispatch
+    // arg carried none. Gating on the arg would silently drop recovery;
+    // the payload is authoritative.
+    let calls = 0;
     const stubRunner = makeStubRunner(async (dispatchArgs) => {
-      // Fire anyway — the runner-side signature gates on state.sessionId,
-      // but the dispatcher belt-guards on its own arg too.
-      dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
+      calls++;
+      // First call only: the retry runs with sessionId: undefined, so in
+      // production the runner's own gate cannot re-fire.
+      if (calls === 1) {
+        dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
+      }
       return { queryReused: false };
     });
     __setCcRunnerForTests(stubRunner);
@@ -263,10 +271,10 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     await dispatchSoleurGo(args);
     await flushMicrotasks(20);
 
-    expect(stubRunner.dispatch).toHaveBeenCalledTimes(1);
-    expect(clearStaleSessionIdCalls()).toHaveLength(0);
-    expect(args.onSessionIdPersisted).not.toHaveBeenCalledWith(null);
-    expect(framesOfType(sendToClient, "context_reset")).toHaveLength(0);
+    expect(stubRunner.dispatch).toHaveBeenCalledTimes(2);
+    expect(clearStaleSessionIdCalls()).toHaveLength(1);
+    expect(args.onSessionIdPersisted).toHaveBeenCalledWith(null);
+    expect(framesOfType(sendToClient, "context_reset")).toHaveLength(1);
     expect(framesOfType(sendToClient, "session_ended")).toHaveLength(0);
   });
 

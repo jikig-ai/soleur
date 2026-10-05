@@ -57,6 +57,7 @@ import {
   type SoleurGoRunner,
   type QueryFactory,
   type QueryFactoryArgs,
+  type DispatchArgs,
   type DispatchEvents,
   type WorkflowEnd,
 } from "./soleur-go-runner";
@@ -2489,6 +2490,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // #9538 — dispatcher-driven stale-resume re-dispatch carries its own
   // notice (the guard did not fire on this invocation — the session died
   // mid-stream on the PREVIOUS turn), so append it at the same site.
+  // Double-append is unreachable today: the only caller pairs this field
+  // with `sessionId: undefined`, so the guard's own notice path
+  // early-returns above.
   if (args.contextResetNotice) {
     effectiveSystemPrompt += `\n\n${args.contextResetNotice}`;
   }
@@ -4254,15 +4258,17 @@ export async function dispatchSoleurGo(
         sessionId: capturedSessionId,
       });
     },
-    onStaleResume: (_info) => {
+    onStaleResume: (info) => {
       // #9538 — mid-stream stale-resume recovery. The runner's
       // `consumeStream` catch fired this instead of a terminal
       // `internal_error` (which would leave `conversations.session_id`
       // pointing at the dead session and wedge every subsequent send).
-      // Belt-guard on the dispatch arg: only a dispatch that attempted a
-      // resume can produce this signature — the runner's own
-      // `state.sessionId` gate is the primary check.
-      if (!sessionId) return;
+      // Gate on the PAYLOAD, not the dispatch arg: `state.sessionId` can
+      // rebind mid-stream on an SDK session-id change, so the runner's
+      // state — delivered here — is authoritative. Gating on the arg
+      // would silently drop recovery (no clear, no retry, no frame) in
+      // the arg-falsy/state-truthy divergence.
+      if (!info.deadSessionId) return;
       // Honesty frame FIRST — the client sees the existing
       // `context_reset` contract (reason "prefill-guard" is the
       // sanctioned reuse; the wire copy is generic and accurate), not
@@ -4277,82 +4283,62 @@ export async function dispatchSoleurGo(
       // in-memory `state.sessionId` is already dead with the query.
       onSessionIdPersisted?.(null);
       void clearCcSessionId({ userId, conversationId });
-      // DEFERRED (microtask), load-bearing: this callback runs BEFORE
-      // `closeQuery`'s `activeQueries.delete` in the runner's catch. A
-      // synchronous `runner.dispatch` here would hit the still-present
-      // dying entry, take the `queryReused` path, and push the user
-      // message into a closed input queue — silently lost. The retry is
-      // bounded: `sessionId: undefined` means no `resume:` is attempted,
-      // so the stale signature cannot re-fire on the retried turn.
-      queueMicrotask(() => {
-        void runner
-          .dispatch({
-            conversationId,
+      // Synchronous re-dispatch is SAFE — the runner emits this AFTER
+      // `closeQuery`'s `activeQueries.delete`, so the dying entry cannot
+      // take the `queryReused` path (see `DispatchEvents.onStaleResume`).
+      // `sessionId: undefined` bounds the recovery: no `resume:` is
+      // attempted, so the stale signature cannot re-fire on the retried
+      // turn.
+      void runner
+        .dispatch({
+          ...dispatchArgs,
+          sessionId: undefined,
+          contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC,
+        })
+        .catch(async (retryErr) => {
+          // Retry-failure contract mirrors the dispatch-time catch:
+          // mirror (no KeyInvalidError discrimination needed — the
+          // retry's own dispatch catch does not run here), generic
+          // client frame, and `active` → `failed` revert guarded on
+          // `hasActiveCcQuery` so a concurrent live turn's row is left
+          // untouched. Does NOT clear session_id again — the stale id
+          // is already gone and the retry ran cold.
+          mirrorWithDebounce(
+            retryErr,
+            {
+              feature: "cc-dispatcher",
+              op: "stale-resume-retry",
+              extra: { conversationId, userId },
+            },
             userId,
-            userMessage,
-            currentRouting,
-            events,
-            persistActiveWorkflow,
-            sessionId: undefined,
-            contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC,
-            routineAuthoring: args.routineAuthoring,
-            crmLead: args.crmLead,
-            persona: args.persona,
-            artifactPath,
-            documentKind,
-            documentContent,
-            documentExtractError,
-            documentExtractMeta,
-            setDelegationContext,
-            setBashAutonomous,
-            workspacePath: callerWorkspacePath ?? workspacePath,
-          })
-          .catch(async (retryErr) => {
-            // Retry-failure contract mirrors the dispatch-time catch:
-            // mirror (no KeyInvalidError discrimination needed — the
-            // retry's own dispatch catch does not run here), generic
-            // client frame, and `active` → `failed` revert guarded on
-            // `hasActiveCcQuery` so a concurrent live turn's row is left
-            // untouched. Does NOT clear session_id again — the stale id
-            // is already gone and the retry ran cold.
-            mirrorWithDebounce(
-              retryErr,
-              {
-                feature: "cc-dispatcher",
-                op: "stale-resume-retry",
-                extra: { conversationId, userId },
-              },
-              userId,
-              `stale-resume-retry:${
-                retryErr instanceof Error
-                  ? retryErr.constructor.name
-                  : "unknown"
-              }`,
-            );
-            sendToClient(userId, {
-              type: "error",
-              message:
-                "Dashboard router is unavailable — try again shortly.",
-            });
-            if (!hasActiveCcQuery(conversationId)) {
-              try {
-                await updateConversationFor(
-                  userId,
-                  conversationId,
-                  { status: "failed" },
-                  {
-                    feature: "cc-dispatcher",
-                    op: "stale-resume-retry-revert",
-                    onlyIfStatusIn: ["active"],
-                    expectMatch: false,
-                  },
-                );
-              } catch {
-                // Mirror already fired inside updateConversationFor.
-              }
-            }
+            `stale-resume-retry:${
+              retryErr instanceof Error
+                ? retryErr.constructor.name
+                : "unknown"
+            }`,
+          );
+          sendToClient(userId, {
+            type: "error",
+            message: "Dashboard router is unavailable — try again shortly.",
           });
-      });
+          if (!hasActiveCcQuery(conversationId)) {
+            try {
+              await updateConversationFor(
+                userId,
+                conversationId,
+                { status: "failed" },
+                {
+                  feature: "cc-dispatcher",
+                  op: "stale-resume-retry-revert",
+                  onlyIfStatusIn: ["active"],
+                  expectMatch: false,
+                },
+              );
+            } catch {
+              // Mirror already fired inside updateConversationFor.
+            }
+          }
+        });
     },
   };
 
@@ -4378,41 +4364,49 @@ export async function dispatchSoleurGo(
     },
   );
 
+  // #9538 — hoisted so `events.onStaleResume` can re-dispatch the SAME turn
+  // with `{...dispatchArgs, sessionId: undefined, contextResetNotice}`:
+  // any field added here later rides the retry automatically instead of
+  // silently diverging between two literals. `events.onStaleResume`'s
+  // closure reads this binding — TDZ-safe: it can only fire mid-stream,
+  // after the `await runner.dispatch(dispatchArgs)` below has resolved.
+  const dispatchArgs: DispatchArgs = {
+    conversationId,
+    userId,
+    userMessage,
+    currentRouting,
+    events,
+    persistActiveWorkflow,
+    sessionId: sessionId ?? undefined,
+    routineAuthoring: args.routineAuthoring,
+    crmLead: args.crmLead,
+    // feat-wire-concierge-support-chat — forward the support persona to the
+    // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
+    persona: args.persona,
+    artifactPath,
+    documentKind,
+    documentContent,
+    documentExtractError,
+    documentExtractMeta,
+    // BYOK Delegations PR-A (#4232) closure-capture: bridge the
+    // lease body in realSdkQueryFactory to this dispatchSoleurGo
+    // scope so onResult can read leaseDelegationCtx and route
+    // persistTurnCost through the merged atomic RPC.
+    setDelegationContext,
+    // feat-concierge-stream-commands — bridge the streaming posture (D1)
+    // from realSdkQueryFactory's lease body to this scope so the
+    // command_stream emit gate (onToolUse/onToolResult) knows whether the
+    // workspace is autonomous.
+    setBashAutonomous,
+    // 2026-05-06 Bug A1 fix — thread workspacePath through so the
+    // runner builds the system prompt with workspace-absolute Read
+    // instructions. Falls back to the locally-resolved value (set by
+    // the `.then` above) when the caller didn't pre-resolve it.
+    workspacePath: callerWorkspacePath ?? workspacePath,
+  };
+
   try {
-    await runner.dispatch({
-      conversationId,
-      userId,
-      userMessage,
-      currentRouting,
-      events,
-      persistActiveWorkflow,
-      sessionId: sessionId ?? undefined,
-      routineAuthoring: args.routineAuthoring,
-      crmLead: args.crmLead,
-      // feat-wire-concierge-support-chat — forward the support persona to the
-      // runner → realSdkQueryFactory (repo-gate bypass + skill/tool scope).
-      persona: args.persona,
-      artifactPath,
-      documentKind,
-      documentContent,
-      documentExtractError,
-      documentExtractMeta,
-      // BYOK Delegations PR-A (#4232) closure-capture: bridge the
-      // lease body in realSdkQueryFactory to this dispatchSoleurGo
-      // scope so onResult can read leaseDelegationCtx and route
-      // persistTurnCost through the merged atomic RPC.
-      setDelegationContext,
-      // feat-concierge-stream-commands — bridge the streaming posture (D1)
-      // from realSdkQueryFactory's lease body to this scope so the
-      // command_stream emit gate (onToolUse/onToolResult) knows whether the
-      // workspace is autonomous.
-      setBashAutonomous,
-      // 2026-05-06 Bug A1 fix — thread workspacePath through so the
-      // runner builds the system prompt with workspace-absolute Read
-      // instructions. Falls back to the locally-resolved value (set by
-      // the `.then` above) when the caller didn't pre-resolve it.
-      workspacePath: callerWorkspacePath ?? workspacePath,
-    });
+    await runner.dispatch(dispatchArgs);
   } catch (err) {
     // Turn-start revert: the flip above set the row `active`; this catch is
     // the single boundary every dispatch failure funnels through, so revert

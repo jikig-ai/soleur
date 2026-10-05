@@ -963,13 +963,14 @@ export interface DispatchEvents {
    * NOT a `WorkflowEnd` variant — this path emits no `internal_error`,
    * so it must not route through `onWorkflowEnded`'s terminal handling.
    *
-   * **Load-bearing ordering:** the callback fires BEFORE `closeQuery`'s
-   * `activeQueries.delete`. A listener that re-dispatches MUST defer
-   * (microtask) past the delete — a synchronous re-dispatch hits the
-   * still-present dying entry, takes the `queryReused` path, and pushes
-   * the user message into a closed input queue (silently lost).
+   * **Ordering:** fires AFTER `closeQuery(state)` — whose
+   * `activeQueries.delete` has already run — so a listener may
+   * re-dispatch synchronously; the dying entry cannot take the
+   * `queryReused` path. `deadSessionId` carries `state.sessionId`
+   * (non-null on this arm) — authoritative when the dispatcher's own
+   * dispatch arg and the rebound state id diverge.
    */
-  onStaleResume?: (info: { deadSessionId: string | null }) => void;
+  onStaleResume?: (info: { deadSessionId: string }) => void;
 }
 
 export interface DispatchArgs {
@@ -1062,7 +1063,8 @@ export interface DispatchArgs {
    * session died mid-stream — so `realSdkQueryFactory`'s guard-driven
    * notice path never runs). Forwarded straight through to
    * `QueryFactoryArgs.contextResetNotice`, which appends it to
-   * `effectiveSystemPrompt` at the existing notice site.
+   * `effectiveSystemPrompt` at the existing notice site. Ignored on the
+   * warm/`queryReused` path — the factory is never invoked there.
    */
   contextResetNotice?: string;
 }
@@ -2588,16 +2590,31 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // the same failure forever at zero tokens. It must NOT
       // `reportSilentFallback` either — expected operational behavior,
       // same reasoning as the legacy `agent-runner.ts` re-throw arm.
-      const isStaleResume =
+      // `state.sessionId` doubles as the recovery payload — non-null
+      // exactly when this dispatch attempted a resume (a warm
+      // `queryReused` turn never re-resumes, so no `queryReused` check is
+      // needed). The `deadSessionId !== null` test below carries both the
+      // signature match AND the type narrowing for the emit.
+      const deadSessionId =
         err instanceof Error &&
-        err.message.includes("No conversation found with session ID") &&
-        !!state.sessionId;
+        err.message.includes("No conversation found with session ID")
+          ? state.sessionId
+          : null;
+      // `reportSilentFallback` below was unconditional pre-#9538. Preserve
+      // that for a stale signature landing on an already-CLOSED query —
+      // the arm inside `!state.closed` never runs there, so without this
+      // the error would leave zero telemetry of any tier.
+      const wasClosed = state.closed;
       if (!state.closed) {
-        if (isStaleResume) {
+        if (deadSessionId !== null) {
           // Warn-tier occurrence marker (NOT error tier): the Sentry warn
           // stream counts recoveries; `extra.conversationId` groups repeat
           // fires so a clear that did not land is distinguishable from a
-          // new dead session.
+          // new dead session. `lastBlockKind` carries evidence for the
+          // speculative edge where the signature fires after content
+          // already streamed (SDK-internal re-resume): buffered text is
+          // dropped with the dead query, and this field is its only
+          // record.
           warnSilentFallback(null, {
             feature: "soleur-go-runner",
             op: "stale-resume-recovery",
@@ -2605,17 +2622,19 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
               "stale resume — cleared session_id and re-dispatching cold",
             extra: {
               conversationId: state.conversationId,
-              deadSessionId: state.sessionId,
+              deadSessionId,
+              lastBlockKind: state.lastBlockKind,
             },
           });
           state.closed = true;
-          // Fires BEFORE closeQuery's `activeQueries.delete` — the
-          // listener's re-dispatch MUST defer to a microtask (see the
-          // DispatchEvents.onStaleResume docstring).
+          // Teardown BEFORE emit: `closeQuery` drains the close-hook
+          // (bash-gate drain, tool-attempt flush, worktree-lease release)
+          // and runs `activeQueries.delete` — a listener's synchronous
+          // re-dispatch lands on a clean map and takes the cold path
+          // (see `DispatchEvents.onStaleResume`).
+          closeQuery(state);
           try {
-            state.events.onStaleResume?.({
-              deadSessionId: state.sessionId,
-            });
+            state.events.onStaleResume?.({ deadSessionId });
           } catch (listenerErr) {
             reportSilentFallback(listenerErr, {
               feature: "soleur-go-runner",
@@ -2623,7 +2642,6 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
               extra: { conversationId: state.conversationId },
             });
           }
-          closeQuery(state);
         } else if (
           // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
           // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
@@ -2651,7 +2669,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           });
         }
       }
-      if (!isStaleResume) {
+      if (deadSessionId === null || wasClosed) {
         reportSilentFallback(err, {
           feature: "soleur-go-runner",
           op: "consumeStream",
