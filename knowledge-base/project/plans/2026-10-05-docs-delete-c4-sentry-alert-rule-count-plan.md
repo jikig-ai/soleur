@@ -62,7 +62,7 @@ are stale. The proposed mechanism (delete prose) is not in any ADR's rejected-al
 
 1. The C4 edge prose never states a derived count that nothing verifies.
 2. A reader of the edge still learns the routing contract (email, `target_type issue_owners`,
-   fallthrough `ActiveMembers`, some non-paging halves set `NoOne`) and where the authoritative list
+   fallthrough `ActiveMembers`, a few rules set `NoOne`) and where the authoritative list
    lives (`issue-alerts.tf`).
 3. The compiled artifact `model.likec4.json` matches the `.c4` source byte-for-byte (freshness gate).
 
@@ -116,9 +116,9 @@ only. Two substitutions inside that one description string, applied to the exact
 1. Replace
    `Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers — 40 of the 43 `sentry_alert` rules in issue-alerts.tf; three deliberately set fallthrough_type NoOne — `byok_cap_exceeded`, `git_data_boot_warning` (the non-paging half of the git-data boot severity split) and `web_luks_boot_warning` (the non-paging half of the fresh-boot LUKS stage split, #6931).`
    with
-   `Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers; a few rules, the non-paging halves of a severity split, deliberately set fallthrough_type NoOne instead (issue-alerts.tf is the authoritative list).`
+   `Issue alerts route to email → target_type issue owners with fallthrough_type ActiveMembers; a few rules set fallthrough_type NoOne instead (issue-alerts.tf is the authoritative list).`
 2. Replace `by design there and a defect anywhere else` with
-   `by design on those non-paging halves and a defect anywhere else`.
+   `by design only where issue-alerts.tf says so and a defect anywhere else`.
 
 Everything else in the description stays byte-identical (the "Every rule is a `sentry_alert`" sentence,
 the FROZEN `auth_per_user_loop`/`sandbox_startup_failure` sentence, the live-fidelity script sentence,
@@ -220,7 +220,7 @@ edge description, in which case it folds into this PR. Recorded result at plan t
 - [ ] The `sentry -> founder` description in `model.c4` contains no "N of the M" count and none of the
       names `byok_cap_exceeded`, `git_data_boot_warning`, `web_luks_boot_warning` inside the routing
       sentence; it still states email, `target_type issue owners`, `fallthrough_type ActiveMembers`,
-      that some non-paging halves set `NoOne`, and points at `issue-alerts.tf` as the authoritative list.
+      that a few rules set `NoOne`, and points at `issue-alerts.tf` as the authoritative list.
       Verify: `git diff -U0 origin/main -- knowledge-base/engineering/architecture/diagrams/model.c4`
       shows one changed line and the removed text is gone.
 - [ ] The "by design there" back-reference is reworded so it does not dangle.

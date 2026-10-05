@@ -6,7 +6,7 @@ Plan: knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-c
 
 - 1.1 Read model.c4 (edge `sentry -> founder`), views.c4 and spec.c4 once; confirm the description text matches the plan.
 - 1.2 Replace the "40 of the 43 ... three deliberately set NoOne ..." clause with the qualitative sentence (no number, no rule names, points at issue-alerts.tf).
-- 1.3 Reword "by design there and a defect anywhere else" to "by design on those non-paging halves and a defect anywhere else".
+- 1.3 Reword "by design there and a defect anywhere else" to "by design only where issue-alerts.tf says so and a defect anywhere else".
 - 1.4 Verify the diff is one changed line in model.c4.
 
 ## Phase 2: Re-render
