@@ -527,6 +527,13 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #9372: the rebirth recovery-check suite drives shims against the script and asserts no secret file is left in its own temp
+# directory; its verdict is scoped to the script, not to corpus drift.
+AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
+  "scripts/web2-rebirth-recovery-check.sh"
+  "scripts/web2-rebirth-recovery-check.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
