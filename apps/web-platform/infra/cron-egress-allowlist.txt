@@ -73,7 +73,8 @@ api.supabase.com
 registry.npmjs.org
 #
 # GitHub Actions log + artifact downloads (agent sessions in the web-platform
-# container; GITHUB_EGRESS_DOMAINS in server/agent-runner-sandbox-config.ts).
+# container; GITHUB_ACTIONS_LOG_ACCOUNTS in server/agent-runner-sandbox-config.ts
+# mirrors this fleet in the sandbox domain filter — keep the two in sync).
 # api.github.com 302s /actions/{runs,jobs}/.../logs and artifact zips to signed
 # per-account Azure Blob URLs. These are the exact GitHub-owned accounts:
 # productionresultssa0..99 resolve today EXCEPT sa22 (NXDOMAIN), verified

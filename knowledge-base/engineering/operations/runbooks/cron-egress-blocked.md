@@ -230,26 +230,29 @@ drop inside `*.blob.core.windows.net`).
 
 Layered fix is already in place:
 
-- **Domain layer** — `GITHUB_EGRESS_DOMAINS` in
-  `server/agent-runner-sandbox-config.ts` carries `*.blob.core.windows.net`
-  (the SDK proxy only supports `*.`-prefix wildcards; exact-account scoping is
-  delegated to the IP layer).
-- **IP layer** — `cron-egress-allowlist.txt` enumerates the GitHub-owned
-  accounts `productionresultssa0..99` minus `sa22` (NXDOMAIN). Each account is
-  a dedicated `blob.<cluster>prdstrz<NN>.trafficmanager.net` VIP — there is no
-  shared frontend, so enumeration is the only option.
+- **Domain layer** — `GITHUB_ACTIONS_LOG_ACCOUNTS` (spread into
+  `ENTITLED_EGRESS_DOMAINS`) in `server/agent-runner-sandbox-config.ts`
+  enumerates the same GitHub-owned accounts. Exact hosts, no wildcard:
+  `*.blob.core.windows.net` would admit every Azure storage account, and
+  exact hosts keep the domain filter GitHub-scoped even outside the prod
+  nftables boundary.
+- **IP layer** — `cron-egress-allowlist.txt` enumerates the same
+  accounts `productionresultssa0..99` minus `sa22` (NXDOMAIN). Each account
+  is a dedicated `blob.<cluster>prdstrz<NN>.trafficmanager.net` VIP — there
+  is no shared frontend, so enumeration is the only option.
 
 Maintenance:
 
-- **GitHub mints `productionresultsa100+`** → its signed URLs fail closed.
-  Verify the new host resolves (`getent ahostsv4`), append it to the allowlist
-  block, and bump the fleet guards in `cron-egress-firewall.test.sh`.
-- **An account is deleted** → its line starts NXDOMAINing, the resolver counts
-  a failure per tick, and `FAILCOUNT_ESCALATE` pages — remove the line and
-  update the same guards.
-- **A non-GitHub blob URL is dropped** → intended. Only the enumerated
-  productionresultsa VIPs are allowlisted; the `*.blob.core.windows.net`
-  domain wildcard cannot widen past the IP set in production.
+- **GitHub mints `productionresultssa100+`** → its signed URLs fail closed.
+  Verify the new host resolves (`getent ahostsv4`), append it to BOTH the
+  allowlist block and `GITHUB_ACTIONS_LOG_ACCOUNTS`, and bump the fleet
+  guards in `cron-egress-firewall.test.sh`.
+- **An account is deleted** → its line starts NXDOMAINing, the resolver
+  counts a failure per tick, and `FAILCOUNT_ESCALATE` pages — remove the
+  line and update the same guards.
+- **A non-GitHub blob URL is dropped** → intended. Its host fails the
+  sandbox domain filter outright AND its VIP is absent from the nftables
+  set — denied at both layers.
 
 ## Intended-by-design drops (NOT a gap — do not "fix" by allowlisting) — #5676
 

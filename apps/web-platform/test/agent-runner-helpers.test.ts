@@ -153,6 +153,14 @@ describe("buildAgentSandboxConfig drift guard", () => {
   });
 });
 
+// Expected signed-URL account fleet, generated locally (NOT imported from the
+// source const) so a typo in the source list cannot self-verify: sa0..sa99
+// minus sa22 (NXDOMAIN — see the docblock on GITHUB_ACTIONS_LOG_ACCOUNTS).
+const EXPECTED_SA_ACCOUNTS = Array.from(
+  { length: 100 },
+  (_, i) => `productionresultssa${i}.blob.core.windows.net`,
+).filter((h) => h !== "productionresultssa22.blob.core.windows.net");
+
 describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", () => {
   let root: string;
   let own: string;
@@ -176,10 +184,15 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     rmSync(`${root}-c4-staging`, { recursive: true, force: true });
   });
 
-  it("allowGithubEgress: true → GitHub + Actions-blob allowlist; egress widens NOTHING else", () => {
+  it("allowGithubEgress: true → GitHub + npm + Actions-blob allowlist; egress widens NOTHING else", () => {
     const result = buildAgentSandboxConfig(own, { allowGithubEgress: true });
     expect(result.network).toEqual({
-      allowedDomains: ["github.com", "api.github.com", "*.blob.core.windows.net", "registry.npmjs.org"],
+      allowedDomains: [
+        "github.com",
+        "api.github.com",
+        "registry.npmjs.org",
+        ...EXPECTED_SA_ACCOUNTS,
+      ],
       allowManagedDomainsOnly: true,
     });
     // Filesystem is unchanged by the egress flag.

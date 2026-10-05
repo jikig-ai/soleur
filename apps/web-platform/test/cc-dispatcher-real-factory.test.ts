@@ -1133,6 +1133,14 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // Sandbox GitHub egress lockstep (#5041 follow-up) — egress and the
   // entitled token move together. The sandbox-config mock delegates to the
   // REAL implementation in this block so the assertions reach the actual
+// Expected signed-URL account fleet, generated locally (NOT imported from the
+// source const) so a typo in the source list cannot self-verify: sa0..sa99
+// minus sa22 (NXDOMAIN — see the docblock on GITHUB_ACTIONS_LOG_ACCOUNTS).
+const EXPECTED_SA_ACCOUNTS = Array.from(
+  { length: 100 },
+  (_, i) => `productionresultssa${i}.blob.core.windows.net`,
+).filter((h) => h !== "productionresultssa22.blob.core.windows.net");
+
   // allowedDomains the SDK receives (call-arg pinning alone cannot prove
   // the flag maps to the GitHub hosts).
   // -------------------------------------------------------------------------
@@ -1181,8 +1189,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(opts.sandbox.network.allowedDomains).toEqual([
         "github.com",
         "api.github.com",
-        "*.blob.core.windows.net",
         "registry.npmjs.org",
+        ...EXPECTED_SA_ACCOUNTS,
       ]);
     });
 

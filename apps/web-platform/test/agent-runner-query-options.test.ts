@@ -279,6 +279,14 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
   });
 });
 
+// Expected signed-URL account fleet, generated locally (NOT imported from the
+// source const) so a typo in the source list cannot self-verify: sa0..sa99
+// minus sa22 (NXDOMAIN — see the docblock on GITHUB_ACTIONS_LOG_ACCOUNTS).
+const EXPECTED_SA_ACCOUNTS = Array.from(
+  { length: 100 },
+  (_, i) => `productionresultssa${i}.blob.core.windows.net`,
+).filter((h) => h !== "productionresultssa22.blob.core.windows.net");
+
 describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 follow-up)", () => {
   it("truthy ghToken → sandbox allowlist carries the GitHub hosts + Actions blob/npm downloads", () => {
     const opts = buildAgentQueryOptions({
@@ -290,8 +298,8 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
     expect(opts.sandbox?.network?.allowedDomains).toEqual([
       "github.com",
       "api.github.com",
-      "*.blob.core.windows.net",
       "registry.npmjs.org",
+      ...EXPECTED_SA_ACCOUNTS,
     ]);
   });
 
