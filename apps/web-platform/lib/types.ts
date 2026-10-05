@@ -403,9 +403,14 @@ export type WSMessage =
   // from the stream-replay buffer (unlike `debug_event`, which IS buffered
   // for reconnect/remount replay), so it never replays on reconnect and is
   // never persisted. The client stores it in a transient `liveNarration`
-  // slot torn down on every turn-end path. Optional conversation scoping
-  // prevents a late provider frame from reaching a replacement session.
-  | { type: "reasoning_narration"; message: string; conversationId?: string }
+  // slot torn down on every turn-end path.
+  | {
+      type: "reasoning_narration";
+      message: string;
+      /** #9515 — conversation-scoped so a user-scoped socket drop lands
+       *  narration only in the tab running that conversation. */
+      conversationId?: string;
+    }
   // `turn_summary` is the DURABLE per-turn record ("✓ Fixed the side panel…").
   // Persisted as a `messages` row (message_kind='turn_summary', mig 105) AND
   // buffered (carries `seq`) so it survives reconnect + history refetch.

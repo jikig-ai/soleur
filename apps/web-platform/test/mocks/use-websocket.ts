@@ -53,6 +53,7 @@ export function createWebSocketMock(
     historyLoading: false,
     streamState: "idle" as const,
     liveNarration: null,
+    liveNarrationStartedAt: null,
     abort: vi.fn(),
     connection: { phase: "live" } as const,
     resumeAfterUnrecoverable: vi.fn(),

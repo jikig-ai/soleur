@@ -384,10 +384,17 @@ async function measureRoutingChip(page: Page) {
     .first();
   await expect(card).toBeVisible();
   return card.evaluate((cardEl) => {
-    const label = cardEl.querySelector(
+    // #9515 — the consolidated box suppresses the body ToolStatusChip when
+    // the activity trail's live line owns the current step; the label lives
+    // in `live-narration`. Query both so the contract survives either path.
+    // The live line's first span is the amber pulse dot; the label is the
+    // text span (`min-w-0` is the wrap-enabled class on it).
+    const label = (cardEl.querySelector(
+      '[data-testid="live-narration"] span.min-w-0',
+    ) ?? cardEl.querySelector(
       '[data-testid="tool-status-chip"] span',
-    ) as HTMLElement | null;
-    if (!label) throw new Error("routing chip has no tool-status-chip label");
+    )) as HTMLElement | null;
+    if (!label) throw new Error("routing chip has no status label");
     const lineHeight = parseFloat(getComputedStyle(label).lineHeight);
     return {
       overflow: cardEl.scrollWidth - cardEl.clientWidth,
