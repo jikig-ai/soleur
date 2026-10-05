@@ -9,6 +9,8 @@
 #   heal:state_rm_done         state is clean and the old server still exists; continue at the `post` plan
 #   heal:apply_midway          the volume and the server are both gone; the `post` plan creates both
 #   heal:volume_created        the raw volume exists (in state) and is not yet attached; use mode post-heal
+#   resume:post_apply          the rebirth already ran (state holds the new volume, attached to web-2, server younger than 72 h):
+#                              nothing is replaced; only the read-only readiness poll, the recovery check and the reboot run
 #   refuse:<reason>            nothing is written; the reason names the state this workflow cannot heal
 #
 # Inputs are plain key=value words so the classifier is testable without Hetzner or Terraform. A missing,
@@ -24,19 +26,20 @@
 #   names=<id,id>|none           ids of every volume named soleur-web-platform-data-web-2
 #   web2_sid=<server id>         web-2's server id as captured from Hetzner
 #   web2_vols=<id,id>|none|server_absent   volume ids attached to web-2
+#   web2_age_s=<n>|none          age of web-2's Hetzner server in seconds (none = unknown or absent)
 #   state_vol=<id>|none          the id Terraform state holds for hcloud_volume.workspaces["web-2"]
 #   state_server=present|absent  hcloud_server.web["web-2"] is in state
 
 web2_rebirth_classify() {
   local apply="" pause="" pin="" pin_status="" pin_format="" pin_name_ok="" pin_server="" names="" web2_sid=""
-  local web2_vols="" state_vol="" state_server="" kv k v
+  local web2_vols="" state_vol="" state_server="" web2_age="" kv k v
   for kv in "$@"; do
     k="${kv%%=*}"; v="${kv#*=}"
     case "$k" in
       apply) apply="$v" ;; pause) pause="$v" ;; pin) pin="$v" ;; pin_status) pin_status="$v" ;;
       pin_format) pin_format="$v" ;; pin_name_ok) pin_name_ok="$v" ;; pin_server) pin_server="$v" ;;
       names) names="$v" ;; web2_sid) web2_sid="$v" ;; web2_vols) web2_vols="$v" ;;
-      state_vol) state_vol="$v" ;; state_server) state_server="$v" ;;
+      state_vol) state_vol="$v" ;; state_server) state_server="$v" ;; web2_age_s) web2_age="$v" ;;
       *) echo "refuse:bad_input_unknown_key_${k}"; return 0 ;;
     esac
   done
@@ -44,6 +47,7 @@ web2_rebirth_classify() {
   [[ "$pin_status" =~ ^(present|absent)$ && "$state_server" =~ ^(present|absent)$ ]] || { echo "refuse:bad_input"; return 0; }
   [[ "$state_vol" =~ ^([0-9]+|none)$ && "$names" =~ ^([0-9]+(,[0-9]+)*|none)$ ]] || { echo "refuse:bad_input"; return 0; }
   [[ "$web2_vols" =~ ^([0-9]+(,[0-9]+)*|none|server_absent)$ ]] || { echo "refuse:bad_input"; return 0; }
+  [[ "$web2_age" =~ ^([0-9]+|none)$ ]] || { echo "refuse:bad_input"; return 0; }
   if [[ "$pin_status" == "present" ]]; then
     [[ "$pin_format" =~ ^(ext4|none|other)$ && "$pin_name_ok" =~ ^(yes|no)$ && "$pin_server" =~ ^([0-9]+|none)$ ]] || { echo "refuse:bad_input"; return 0; }
   fi
@@ -51,17 +55,30 @@ web2_rebirth_classify() {
   local -a name_ids=() w2_ids=()
   [[ "$names" == "none" ]] || IFS=, read -r -a name_ids <<<"$names"
   [[ "$web2_vols" == "none" || "$web2_vols" == "server_absent" ]] || IFS=, read -r -a w2_ids <<<"$web2_vols"
-  local id in_names other_names=0 other_attached=0
-  for id in "${name_ids[@]}"; do [[ "$id" == "$pin" ]] || other_names=$((other_names + 1)); done
+  local id in_names other_names=0 other_attached=0 pin_listed=0
+  for id in "${name_ids[@]}"; do
+    if [[ "$id" == "$pin" ]]; then pin_listed=1; else other_names=$((other_names + 1)); fi
+  done
   for id in "${w2_ids[@]}"; do [[ "$id" == "$pin" ]] || other_attached=$((other_attached + 1)); done
 
   [[ "$apply" == "yes" && "$pause" != "yes" ]] && { echo "refuse:push_apply_pause_not_real"; return 0; }          # CLS:PAUSE
+
+  # A server Hetzner knows that state does not hold cannot be healed by any window below: the post plan would try to create a
+  # second server with the same name. Refuse; a person decides (the runbook names the remedy).
+  [[ "$state_server" == "absent" && "$web2_vols" != "server_absent" ]] && { echo "refuse:orphan_server"; return 0; }   # CLS:ORPHAN-SERVER
 
   # Single use: a volume other than the pin is already in state and attached to web-2.
   if [[ "$state_vol" != "none" && "$state_vol" != "$pin" ]]; then
     in_names=0; for id in "${name_ids[@]}"; do [[ "$id" == "$state_vol" ]] && in_names=1; done
     [[ "$in_names" -eq 0 ]] && { echo "refuse:state_volume_unknown_to_hetzner"; return 0; }                          # CLS:STATE-UNKNOWN
-    for id in "${w2_ids[@]}"; do [[ "$id" == "$state_vol" ]] && { echo "refuse:already_reborn"; return 0; }; done   # CLS:REBORN
+    for id in "${w2_ids[@]}"; do
+      if [[ "$id" == "$state_vol" ]]; then
+        # Single use: a LATER dispatch must not touch a host that may hold data. Within 72 h of the rebirth only the read-only
+        # resume path (readiness, recovery check, reboot) is offered; an unknown age fails closed.
+        if [[ "$web2_age" =~ ^[0-9]+$ && "$web2_age" -le 259200 ]]; then echo "resume:post_apply"; else echo "refuse:already_reborn"; fi   # CLS:REBORN
+        return 0
+      fi
+    done
   fi
 
   if [[ "$pin_status" == "present" ]]; then
@@ -75,7 +92,11 @@ web2_rebirth_classify() {
   fi
 
   # The pinned id is gone (404).
-  local n_names="${#name_ids[@]}"
+  local n_names="${#name_ids[@]}" n_attached="${#w2_ids[@]}"
+  [[ "$pin_listed" -eq 1 ]] && { echo "refuse:inconsistent_pin_listing"; return 0; }                                              # CLS:INCONSISTENT
+  # No window below expects ANY volume attached to web-2 (the REBORN case above already returned): a volume there would be
+  # detached by the server replace.
+  [[ "$n_attached" -gt 0 ]] && { echo "refuse:web2_holds_another_volume"; return 0; }                                               # CLS:FOREIGN-GONE
   [[ "$n_names" -gt 1 ]] && { echo "refuse:duplicate_volume_name"; return 0; }                                                 # CLS:DUP-NAME-GONE
   if [[ "$n_names" -eq 0 ]]; then
     if [[ "$state_vol" == "$pin" ]]; then echo "heal:delete_done"; return 0; fi

@@ -3,12 +3,13 @@
 # Called by .github/workflows/web2-luks-rebirth.yml; every destructive call here is pinned to a CONSTANT physical id
 # and re-asserted at the call, so a re-dispatch after any crash heals or refuses before it writes.
 #
-#   presence          GET web-1 (it must hold the live LUKS volume): a token from another project answers 404 for a
-#                     live volume, so no 404 below means "gone" until this passed
-#   classify          observe Hetzner + Terraform state, run web2_rebirth_classify, set outputs verdict/web2_sid
+#   classify          presence proof (web-1 must hold the live LUKS volume: a token from another project answers 404 for a live
+#                     volume, so no 404 below means "gone" until this passed), observe Hetzner + Terraform state, run
+#                     web2_rebirth_classify, set outputs verdict/web2_sid/pin_desc
 #   delete-volume     detach (only if attached), DELETE the pinned plaintext volume, prove 404 + empty name lookup
 #   state-rm          forget the volume and its attachment from state: ids equal the pin, serial +1, lineage unchanged
-#   ready-poll        wait for a SOLEUR_FRESH_BOOT_READY row newer than the run anchor: luks=1 luks_arm=formatted escrow=ok
+#   ready-poll        wait for a SOLEUR_FRESH_BOOT_READY row newer than web-2's Hetzner creation time:
+#                     luks=1 luks_arm=formatted escrow=ok (read-only; scripts/web2-rebirth-ready-poll.sh)
 #   reboot            re-resolve web-2 BY NAME, refuse web-1's id, require the post-apply state id, POST reboot
 #   flip-precondition the rotation HALT's create exemption is flipped and apply-web-escrow-create.yml is retired
 #   summary           the dispatch summary (names, ids and booleans only; no secret value)
@@ -46,6 +47,7 @@ hapi() {
   local code rc=0
   local -a extra=()
   [[ -n "${3:-}" ]] && extra=(-H 'Content-Type: application/json' --data "$3")
+  : > "$HBODY"   # a transport error must not leave the PREVIOUS call's body to be read as this one's
   code="$(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN" \
     | curl -sS --max-time 15 --config - -X "$1" "${extra[@]}" -o "$HBODY" -w '%{http_code}' "https://api.hetzner.cloud/v1$2")" || rc=$?
   [[ "$rc" -eq 0 ]] || code="000"
@@ -60,6 +62,11 @@ fail() {
 }
 need_token() { [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"; printf '::add-mask::%s\n' "$HCLOUD_TOKEN"; }
 out() { [[ -z "${GITHUB_OUTPUT:-}" ]] || printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+# Every subcommand that WRITES refuses unless the dispatch is an apply run: plan_only can never reach a write through this file,
+# whatever the workflow's step conditions say.
+require_apply() { [[ "${APPLY:-}" == yes ]] || fail "$1 refused: this is not an apply dispatch (APPLY='${APPLY:-}'); plan_only never writes"; }
+# The loader's legacy arm exports a READ-ONLY Hetzner token first; a write verb answered 403 almost always means that.
+write_hint() { [[ "$1" == 403 ]] && printf ' (403: the loader exported a read-only Hetzner token; the write verbs need the Tier-B write token)' || true; }
 
 presence_proof() {
   local code
@@ -94,7 +101,8 @@ state_ident() { (cd "$INFRA_DIR" && terraform state pull | jq -c "$STATE_JQ"); }
 
 # observe — sets PIN_STATUS PIN_FORMAT PIN_NAME_OK PIN_SERVER NAMES WEB2_SID WEB2_VOLS (Hetzner) from the API.
 observe_hetzner() {
-  local code
+  local code created created_epoch
+  WEB2_AGE_S=none; PIN_DESC=unknown
   code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
   case "$code" in
     200)
@@ -102,8 +110,9 @@ observe_hetzner() {
       PIN_FORMAT="$(jq -r 'if .volume.format == "ext4" then "ext4" elif .volume.format == null then "none" else "other" end' "$HBODY")"
       PIN_NAME_OK=no
       jq -e --arg n "$PINNED_VOLUME_NAME" --arg a "$VOLUME_LABEL_APP" '.volume.name == $n and .volume.labels == {app: $a}' "$HBODY" >/dev/null && PIN_NAME_OK=yes
-      PIN_SERVER="$(jq -r '.volume.server // "none"' "$HBODY")" ;;
-    404) PIN_STATUS=absent; PIN_FORMAT=none; PIN_NAME_OK=no; PIN_SERVER=none ;;
+      PIN_SERVER="$(jq -r '.volume.server // "none"' "$HBODY")"
+      PIN_DESC="$(jq -r '"id=\(.volume.id) name=\(.volume.name) size_gb=\(.volume.size) format=\(.volume.format // "none") labels=\(.volume.labels | tojson) attached_to=\(.volume.server // "none")"' "$HBODY")" ;;
+    404) PIN_DESC=absent; PIN_STATUS=absent; PIN_FORMAT=none; PIN_NAME_OK=no; PIN_SERVER=none ;;
     *) fail "GET /volumes/${PINNED_VOLUME_ID} -> ${code} (error.code=$(errcode)): neither present nor gone; nothing is written" ;;
   esac
   code="$(hapi GET "/volumes?name=${PINNED_VOLUME_NAME}")"
@@ -114,13 +123,15 @@ observe_hetzner() {
   case "$(jq -r '.servers | length' "$HBODY")" in
     0) WEB2_SID=0; WEB2_VOLS=server_absent ;;
     1) WEB2_SID="$(jq -r '.servers[0].id | tostring' "$HBODY")"
-       WEB2_VOLS="$(jq -r '[.servers[0].volumes[] | tostring] | join(",")' "$HBODY")"; [[ -n "$WEB2_VOLS" ]] || WEB2_VOLS=none ;;
+       WEB2_VOLS="$(jq -r '[.servers[0].volumes[] | tostring] | join(",")' "$HBODY")"; [[ -n "$WEB2_VOLS" ]] || WEB2_VOLS=none
+       created="$(jq -r '.servers[0].created // empty' "$HBODY")"
+       if created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" && [[ "$created_epoch" =~ ^[0-9]+$ ]]; then
+         WEB2_AGE_S="$(( $(date -u +%s) - created_epoch ))"; (( WEB2_AGE_S >= 0 )) || WEB2_AGE_S=none
+       fi ;;
     *) fail "more than one server is named ${WEB2_NAME}: ambiguous; nothing is written" ;;
   esac
   [[ "$WEB2_SID" != "$WEB1_SERVER_ID" ]] || fail "the server named ${WEB2_NAME} has web-1's id: refusing"
 }
-
-cmd_presence() { need_token; presence_proof; echo "presence proven: web-1 (${WEB1_SERVER_ID}) holds the live LUKS volume ${LUKS_VOLUME_ID}"; }
 
 cmd_classify() { # apply=yes|no
   need_token; presence_proof
@@ -131,9 +142,10 @@ cmd_classify() { # apply=yes|no
   state_vol="$(jq -r '.vol' <<<"$ident")"; state_server="absent"; [[ "$(jq -r '.server' <<<"$ident")" != none ]] && state_server=present
   [[ "$(jq -r '.web1' <<<"$ident")" == 1 ]] || fail "hcloud_server.web[\"web-1\"] is not in this state: wrong state object; nothing is written"
   verdict="$(web2_rebirth_classify apply="$apply" pause="$pause" pin="$PINNED_VOLUME_ID" pin_status="$PIN_STATUS" pin_format="$PIN_FORMAT" \
-    pin_name_ok="$PIN_NAME_OK" pin_server="$PIN_SERVER" names="$NAMES" web2_sid="$WEB2_SID" web2_vols="$WEB2_VOLS" state_vol="$state_vol" state_server="$state_server")"
-  echo "classifier: pin=${PIN_STATUS}/${PIN_FORMAT} attached_to=${PIN_SERVER} named_ids=${NAMES} web2_sid=${WEB2_SID} web2_vols=${WEB2_VOLS} state_vol=${state_vol} state_server=${state_server} pause=${pause}"
-  out verdict "$verdict"; out web2_sid "$WEB2_SID"
+    pin_name_ok="$PIN_NAME_OK" pin_server="$PIN_SERVER" names="$NAMES" web2_sid="$WEB2_SID" web2_vols="$WEB2_VOLS" state_vol="$state_vol" state_server="$state_server" web2_age_s="$WEB2_AGE_S")"
+  echo "classifier: pin=${PIN_STATUS}/${PIN_FORMAT} attached_to=${PIN_SERVER} named_ids=${NAMES} web2_sid=${WEB2_SID} web2_vols=${WEB2_VOLS} state_vol=${state_vol} state_server=${state_server} pause=${pause} web2_age_s=${WEB2_AGE_S}"
+  echo "pinned volume: ${PIN_DESC}"
+  out verdict "$verdict"; out web2_sid "$WEB2_SID"; out pin_desc "$PIN_DESC"
   echo "verdict: ${verdict}"
   case "$verdict" in refuse:*) fail "the rebirth REFUSES before any write: ${verdict}" ;; esac
 }
@@ -143,11 +155,17 @@ stage_allowed() { local v="$1" a; shift; for a in "$@"; do [[ "$v" == "$a" ]] &&
 
 cmd_delete_volume() {
   need_token
-  local v="${VERDICT:?VERDICT is required}" code action_id i st
+  require_apply delete-volume
+  local v="${VERDICT:?VERDICT is required}" code action_id st
   if ! stage_allowed "$v" proceed heal:detach_done; then
-    case "$v" in heal:delete_done|heal:state_rm_done|heal:apply_midway|heal:volume_created) echo "delete-volume: skipped (${v}: the volume is already gone)"; return 0 ;; esac
+    case "$v" in heal:delete_done|heal:state_rm_done|heal:apply_midway|heal:volume_created|resume:post_apply) echo "delete-volume: skipped (${v}: the volume is already gone)"; return 0 ;; esac
     fail "delete-volume: refused in state '${v}'"
   fi
+  # THE CHOKEPOINT for the irreversible step: a skipped or failed evidence step leaves its output EMPTY, and an empty proof
+  # refuses here whatever the workflow's step conditions did. (The workflow passes each step's own output.)
+  case "${EMPTINESS:-}" in PASS*) : ;; *) fail "delete-volume refused: no PASS emptiness verdict from the evidence step (got '${EMPTINESS:-}'); nothing is deleted" ;; esac
+  [[ "${NEVER_POOLED:-}" == absent ]] || fail "delete-volume refused: no never-pooled proof (got '${NEVER_POOLED:-}'); nothing is deleted"
+  [[ "${PRE_PLAN:-}" == graded ]] || fail "delete-volume refused: the pre plan was not graded (got '${PRE_PLAN:-}'); nothing is deleted"
   presence_proof
   code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
   [[ "$code" == 200 ]] || fail "re-assert: GET /volumes/${PINNED_VOLUME_ID} -> ${code}"
@@ -160,10 +178,10 @@ cmd_delete_volume() {
       || fail "re-assert: volume ${PINNED_VOLUME_ID} is attached to ${attached}, which is not the server named ${WEB2_NAME}"
     [[ "$attached" != "$WEB1_SERVER_ID" ]] || fail "re-assert: refusing, the volume is attached to web-1"
     code="$(hapi POST "/volumes/${PINNED_VOLUME_ID}/actions/detach" '{}')"
-    [[ "$code" == 201 ]] || fail "detach -> ${code} (error.code=$(errcode))"
+    [[ "$code" == 201 ]] || fail "detach -> ${code} (error.code=$(errcode))$(write_hint "$code")"
     action_id="$(jq -r '.action.id | tostring' "$HBODY")"
     [[ "$action_id" =~ ^[0-9]+$ ]] || fail "detach returned no action id"
-    for i in $(seq 1 24); do
+    for _ in $(seq 1 24); do
       code="$(hapi GET "/actions/${action_id}")"
       [[ "$code" == 200 ]] || fail "action ${action_id} -> ${code}"
       st="$(jq -r '.action.status' "$HBODY")"
@@ -174,20 +192,22 @@ cmd_delete_volume() {
     [[ "$st" == success ]] || fail "detach action ${action_id} did not finish in time"
   fi
   code="$(hapi DELETE "/volumes/${PINNED_VOLUME_ID}")"
-  case "$code" in 204|404) : ;; *) fail "DELETE /volumes/${PINNED_VOLUME_ID} -> ${code} (error.code=$(errcode))" ;; esac
+  case "$code" in 204|404) : ;; *) fail "DELETE /volumes/${PINNED_VOLUME_ID} -> ${code} (error.code=$(errcode))$(write_hint "$code")" ;; esac
   code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
   [[ "$code" == 404 ]] || fail "volume ${PINNED_VOLUME_ID} still answers ${code} after the delete"
   code="$(hapi GET "/volumes?name=${PINNED_VOLUME_NAME}")"
   [[ "$code" == 200 && "$(jq -r '.volumes | length' "$HBODY")" == 0 ]] || fail "a volume named ${PINNED_VOLUME_NAME} still exists after the delete"
   echo "deleted: volume ${PINNED_VOLUME_ID} (${PINNED_VOLUME_NAME}) is gone (404, empty name lookup)"
+  out volume_deleted "${PINNED_VOLUME_ID} (404 and an empty name lookup proven)"
 }
 
 cmd_state_rm() {
   need_token
+  require_apply state-rm
   local v="${VERDICT:?VERDICT is required}" pre pre_list pre_serial pre_lineage vol att post post_list want_list code
   local -a addrs=()
   if ! stage_allowed "$v" proceed heal:detach_done heal:delete_done; then
-    case "$v" in heal:state_rm_done|heal:apply_midway|heal:volume_created) echo "state-rm: skipped (${v}: state is already clean)"; return 0 ;; esac
+    case "$v" in heal:state_rm_done|heal:apply_midway|heal:volume_created|resume:post_apply) echo "state-rm: skipped (${v}: state is already clean)"; return 0 ;; esac
     fail "state-rm: refused in state '${v}'"
   fi
   presence_proof
@@ -213,15 +233,27 @@ cmd_state_rm() {
   want_list="$(grep -vxF -f <(printf '%s\n' "${addrs[@]}") <<<"$pre_list" || true)"
   [[ "$post_list" == "$want_list" ]] || fail "terraform state list changed by more than the removed addresses"
   echo "forgot ${#addrs[@]} address(es): ${addrs[*]} (serial ${pre_serial} -> $((pre_serial + 1)), lineage unchanged)"
+  out state_forgotten "${addrs[*]} (serial ${pre_serial} -> $((pre_serial + 1)), lineage unchanged)"
 }
 
 # The readiness poll reads Better Stack through the shared rows helper, which the soak-marker census holds to READ-ONLY
 # (no write verb in the file). This file carries Hetzner write verbs, so the poll lives in its own allow-listed reader.
-cmd_ready_poll() { exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" "$@"; }
+# The anchor is web-2's own Hetzner creation time, so the readiness row must be newer than THIS server (it also makes a resume
+# dispatch correct: the row emitted at birth is newer than the server, whichever run is polling for it).
+cmd_ready_poll() {
+  need_token
+  local code created created_epoch
+  code="$(hapi GET "/servers?name=${WEB2_NAME}")"
+  [[ "$code" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]] || fail "ready-poll: could not resolve exactly one server named ${WEB2_NAME} (${code})"
+  created="$(jq -r '.servers[0].created // empty' "$HBODY")"
+  created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" && [[ "$created_epoch" =~ ^[0-9]+$ ]] || fail "ready-poll: the server's creation time is unreadable ('${created}')"
+  exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" "$created_epoch"
+}
 
 cmd_reboot() {
   need_token
-  local sid state_sid code action_id i st ident
+  require_apply reboot
+  local sid state_sid code action_id st ident
   code="$(hapi GET "/servers?name=${WEB2_NAME}")"
   [[ "$code" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]] || fail "reboot: could not resolve exactly one server named ${WEB2_NAME} (${code})"
   sid="$(jq -r '.servers[0].id | tostring' "$HBODY")"
@@ -230,7 +262,7 @@ cmd_reboot() {
   ident="$(state_ident)"; state_sid="$(jq -r '.server' <<<"$ident")"
   [[ "$state_sid" == "$sid" ]] || fail "reboot: the resolved id ${sid} differs from the id in the post-apply state (${state_sid})"
   code="$(hapi POST "/servers/${sid}/actions/reboot" '{}')"
-  [[ "$code" == 201 ]] || fail "reboot -> ${code} (error.code=$(errcode))"
+  [[ "$code" == 201 ]] || fail "reboot -> ${code} (error.code=$(errcode))$(write_hint "$code")"
   action_id="$(jq -r '.action.id | tostring' "$HBODY")"
   [[ "$action_id" =~ ^[0-9]+$ ]] || fail "reboot returned no action id"
   for _ in $(seq 1 24); do
@@ -258,26 +290,54 @@ cmd_flip_precondition() { # apply=yes|no
 }
 
 cmd_summary() {
-  { echo "## web-2 LUKS rebirth (#9372, single-use)"
+  # The dispatch summary: names, ids, booleans and measured values only (no secret value). It claims only what THIS run measured:
+  # MODE and JOB_STATUS decide which sentence is true. Printed to the run log as well as the step summary (the step summary has
+  # no API; the log does).
+  local approvers="unavailable" new_host="n/a" status="${JOB_STATUS:-unknown}" now_utc started="${STARTED_AT:-n/a}"
+  now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [[ -n "${GH_TOKEN:-}" && -n "${RUN_ID:-}" && -n "${REPO:-}" ]]; then
+    approvers="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" --jq '[.[] | "\(.user.login) (\(.state))"] | join(", ")' 2>/dev/null || true)"
+    [[ -n "$approvers" ]] || approvers="none recorded"
+  fi
+  if [[ "${MODE:-}" == apply && "$status" == success && -n "${HCLOUD_TOKEN:-}" ]]; then
+    if [[ "$(hapi GET "/servers?name=${WEB2_NAME}")" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]]; then
+      new_host="$(jq -r '.servers[0] | "server_id=\(.id) location=\(.datacenter.location.name // "unknown") volumes=\([.volumes[] | tostring] | join(","))"' "$HBODY")"
+    fi
+  fi
+  {
+    echo "## web-2 LUKS rebirth (#9372, single-use)"
     echo ""
     echo "| item | value |"
     echo "|---|---|"
-    echo "| target | ${HOST_KEY} only (${WEB2_NAME}); web-1 (${WEB1_SERVER_ID}) untouched and refused by name |"
-    echo "| plaintext volume pinned for deletion | ${PINNED_VOLUME_ID} (${PINNED_VOLUME_NAME}) |"
-    echo "| classifier verdict | ${VERDICT:-n/a} |"
-    echo "| emptiness | ${EMPTINESS:-n/a} |"
-    echo "| never pooled | ${NEVER_POOLED:-n/a} |"
-    echo "| image | ${PINNED_IMAGE:-unresolved} (tag ${IMAGE_TAG:-n/a}) |"
-    echo "| mode | ${MODE:-n/a} |"
-    echo "| run | ${RUN_URL:-n/a} (actor ${ACTOR:-n/a}) |"
+    echo "| mode / job status | ${MODE:-n/a} / ${status} |"
+    echo "| reason | ${REASON:-n/a} |"
+    echo "| commit / run | ${SHA:-n/a} / ${RUN_URL:-n/a} |"
+    echo "| dispatcher / approver(s) | ${ACTOR:-n/a} / ${approvers} |"
+    echo "| started / summarised (UTC) | ${started} / ${now_utc} |"
+    echo "| target | ${HOST_KEY} only (${WEB2_NAME}); web-1 (${WEB1_SERVER_ID}) is never targeted: by-name refusal in the plan gate, reboot re-resolves web-2 by name |"
+    echo "| classifier verdict | ${VERDICT:-not reached} |"
+    echo "| plaintext volume (pinned) | ${PIN_DESC:-not reached} |"
+    echo "| emptiness evidence | ${EMPTINESS:-not run} |"
+    echo "| never pooled (soak marker absent, names only) | ${NEVER_POOLED:-not run} |"
+    echo "| image | ${PINNED_IMAGE:-unresolved} (tag ${IMAGE_TAG:-n/a}); host-scripts hash equal to the checkout: ${COHERENCE:-not run} |"
+    echo "| volume delete | ${DELETED:-not run} |"
+    echo "| state forget | ${FORGOT:-not run} |"
+    echo "| readiness row | ${READY:-not run} |"
+    echo "| recovery check | ${RECOVERY:-not run} |"
+    echo "| reborn host | ${new_host} |"
     echo ""
-    echo "Nothing is claimed until the graded reboot proof: a luks-monitor probe row on a boot_id other than the readiness row's, crypto_LUKS on /dev/mapper/workspaces. Until then web-2 is *provisioned, proof pending*, stays at weight 0 and holds no workspace data."
-    echo "Follow-through to enrol on #6931 (earliest = rebirth + 3 days): \`<!-- soleur:followthrough script=scripts/followthroughs/web2-luks-live-6931.sh earliest=$(date -u -d '+3 days' +%Y-%m-%d) secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->\`"
-  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+    case "${MODE:-}:${status}" in
+      plan_only:*) echo "**plan_only: no write of any kind occurred. Nothing has been rebirthed.**" ;;
+      apply:success)
+        echo "The rebirth applied and a reboot was **issued**. **Nothing is claimed until the graded reboot proof:** a luks-monitor probe row on a boot_id other than the readiness row's, crypto_LUKS on /dev/mapper/workspaces. Until then web-2 is *provisioned, proof pending*; the soak marker (and so any weight) waits for that proof, and web-2 holds no workspace data."
+        echo ""
+        echo "Follow-through: a directive for scripts/followthroughs/web2-luks-live-6931.sh is already enrolled on #6931; UPDATE its \`earliest=\` to $(date -u -d '+3 days' +%Y-%m-%d) (rebirth + 3 days). Do not add a second directive." ;;
+      *) echo "**The rebirth did not complete (job status ${status}).** Re-dispatch with the same inputs: the classifier names the window and heals it, resumes the post-apply stages (resume:post_apply), or refuses before writing." ;;
+    esac
+  } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 }
 
 case "${1:-}" in
-  presence) cmd_presence ;;
   classify) shift; cmd_classify "$@" ;;
   delete-volume) cmd_delete_volume ;;
   state-rm) cmd_state_rm ;;
@@ -285,5 +345,5 @@ case "${1:-}" in
   reboot) cmd_reboot ;;
   flip-precondition) shift; cmd_flip_precondition "$@" ;;
   summary) cmd_summary ;;
-  *) echo "usage: web2-rebirth.sh presence|classify <yes|no>|delete-volume|state-rm|ready-poll <epoch>|reboot|flip-precondition <yes|no>|summary" >&2; exit 2 ;;
+  *) echo "usage: web2-rebirth.sh classify <yes|no>|delete-volume|state-rm|ready-poll <epoch>|reboot|flip-precondition <yes|no>|summary" >&2; exit 2 ;;
 esac

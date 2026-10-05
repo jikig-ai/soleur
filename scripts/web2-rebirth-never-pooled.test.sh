@@ -18,6 +18,14 @@ case "$MODE" in
   array_present) echo '["WORKSPACES_LUKS_CUTOVER_AT","X"]' ;;
   obj_present) echo '{"WORKSPACES_LUKS_CUTOVER_AT":{},"X":{}}' ;;
   prefix) echo '["WORKSPACES_LUKS_CUTOVER_AT_OLD"]' ;;
+  empty_array) echo '[]' ;;
+  empty_object) echo '{}' ;;
+  wrapped_names) echo '{"names":["WORKSPACES_LUKS_CUTOVER_AT"]}' ;;
+  wrapped_secrets) echo '{"secrets":{"WORKSPACES_LUKS_CUTOVER_AT":{}}}' ;;
+  array_of_objects) echo '[{"name":"WORKSPACES_LUKS_CUTOVER_AT"}]' ;;
+  lowercase) echo '["workspaces_luks_cutover_at"]' ;;
+  number_array) echo '[1,2]' ;;
+  string_body) echo '"WORKSPACES_LUKS_CUTOVER_AT"' ;;
 esac
 SH
 chmod +x "$TMP/bin/doppler"
@@ -30,6 +38,14 @@ run "marker absent (array form) -> 0" 0 array_absent
 run "marker present (array form) -> REFUSED 1" 1 array_present
 run "marker present (object form) -> REFUSED 1" 1 obj_present
 run "a prefix-colliding name is not the marker -> 0" 0 prefix
+run "an empty array is a legitimate absent (the config holds only the marker) -> 0" 0 empty_array
+run "an empty object is a legitimate absent -> 0" 0 empty_object
+run "a wrapper object {names:[marker]} is a shape we cannot read -> 3 (not 'absent')" 3 wrapped_names
+run "a wrapper object {secrets:{marker}} -> 3" 3 wrapped_secrets
+run "an array of objects naming the marker -> 3 (not 'absent')" 3 array_of_objects
+run "a lowercase name list -> 3" 3 lowercase
+run "an array of numbers -> 3" 3 number_array
+run "a bare JSON string -> 3" 3 string_body
 run "a failed list is not 'absent' -> 3" 3 fail
 run "a non-JSON body is not 'absent' -> 3" 3 html
 run "no token -> 3 and no doppler call" 3 array_absent ""

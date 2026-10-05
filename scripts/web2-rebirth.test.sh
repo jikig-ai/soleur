@@ -34,20 +34,28 @@ esac
 path="${url#https://api.hetzner.cloud/v1}"
 vol_json() { jq -cn --arg id "$1" --arg name "$2" --arg fmt "$3" --arg srv "$4" --arg app "${5:-soleur-web-platform}" '{volume:{id:($id|tonumber),name:$name,format:(if $fmt=="none" then null else $fmt end),server:(if $srv=="none" then null else ($srv|tonumber) end),labels:{app:$app}}}'; }
 case "$method $path" in
-  "GET /servers/123931471") reply 200 '{"server":{"id":123931471,"name":"soleur-web-platform","volumes":[106443278]}}' ;;
+  "GET /servers/123931471")
+    case "$(cat "$W/web1_mode" 2>/dev/null || echo ok)" in
+      404) reply 404 '{"error":{"code":"not_found"}}' ;;
+      rename) reply 200 '{"server":{"id":123931471,"name":"someone-else","volumes":[106443278]}}' ;;
+      novol) reply 200 '{"server":{"id":123931471,"name":"soleur-web-platform","volumes":[]}}' ;;
+      *) reply 200 '{"server":{"id":123931471,"name":"soleur-web-platform","volumes":[106443278]}}' ;;
+    esac ;;
   "GET /servers?name=soleur-web-2")
     if [[ -f "$W/server_absent" ]]; then reply 200 '{"servers":[]}'
-    else reply 200 "$(jq -cn --arg id "$(cat "$W/server_id")" --argjson v "[$(cat "$W/server_vols")]" '{servers:[{id:($id|tonumber),name:"soleur-web-2",volumes:$v}]}')"; fi ;;
+    else reply 200 "$(jq -cn --arg id "$(cat "$W/server_id")" --arg c "$(cat "$W/server_created")" --argjson v "[$(cat "$W/server_vols")]" '{servers:[{id:($id|tonumber),name:"soleur-web-2",created:$c,volumes:$v}]}')"; fi ;;
   "GET /volumes/106466179")
-    if [[ -f "$W/pin_gone" ]]; then reply 404 '{"error":{"code":"not_found"}}'
+    if [[ -f "$W/pin_code" ]]; then reply "$(cat "$W/pin_code")" '{"error":{"code":"boom"}}'
+    elif [[ -f "$W/pin_gone" ]]; then reply 404 '{"error":{"code":"not_found"}}'
     else reply 200 "$(vol_json 106466179 "$(cat "$W/pin_name")" "$(cat "$W/pin_format")" "$(cat "$W/pin_server")" "$(cat "$W/pin_app")")"; fi ;;
   "GET /volumes?name=soleur-web-platform-data-web-2")
     ids=""; [[ -f "$W/pin_gone" ]] || ids="106466179"
     for x in $(cat "$W/other_named" 2>/dev/null); do ids="$ids $x"; done
     reply 200 "$(printf '%s\n' $ids | jq -Rn '[inputs | select(length>0) | {id: tonumber}] | {volumes: .}')" ;;
-  "POST /volumes/106466179/actions/detach") echo none > "$W/pin_server"; echo "DETACH" >> "$W/writes.log"; reply 201 '{"action":{"id":9,"status":"running"}}' ;;
-  "GET /actions/9") reply 200 '{"action":{"id":9,"status":"success"}}' ;;
-  "GET /actions/10") reply 200 '{"action":{"id":10,"status":"success"}}' ;;
+  "POST /volumes/106466179/actions/detach")
+    if [[ -f "$W/detach_code" ]]; then reply "$(cat "$W/detach_code")" '{"error":{"code":"locked"}}'
+    else echo none > "$W/pin_server"; echo "DETACH" >> "$W/writes.log"; reply 201 '{"action":{"id":9,"status":"running"}}'; fi ;;
+  "GET /actions/9"|"GET /actions/10") id="${path##*/}"; reply 200 "$(jq -cn --argjson id "$id" --arg st "$(cat "$W/action_status" 2>/dev/null || echo success)" '{action:{id:$id,status:$st,error:{code:"x"}}}')" ;;
   "DELETE /volumes/106466179")
     echo "DELETE-VOLUME" >> "$W/writes.log"
     case "$(cat "$W/delete_code" 2>/dev/null || echo 204)" in
@@ -80,8 +88,11 @@ cat > "$TMP/bin/gh" <<'SH'
 #!/usr/bin/env bash
 W="${WORLD:?}"
 case "$1 $2" in
-  "api repos/"*) st="$(cat "$W/wf_state" 2>/dev/null || echo disabled_manually)"; printf '{"state":"%s"}' "$st" ;;
-  "run list") printf '[]' ;;
+  "api repos/"*)
+    wf="${2##*/}"; st="$(cat "$W/wf_state.$wf" 2>/dev/null || cat "$W/wf_state" 2>/dev/null || echo disabled_manually)"
+    case "$2" in *"/approvals") printf '[{"user":{"login":"approver-one"},"state":"approved"}]'; exit 0 ;; esac
+    printf '{"state":"%s"}' "$st" ;;
+  "run list") if [[ -f "$W/busy" ]]; then printf '[{"status":"in_progress"}]'; else printf '[]'; fi ;;
   *) echo "unexpected gh $*" >> "$W/unexpected.log"; exit 1 ;;
 esac
 SH
@@ -93,6 +104,7 @@ world() {
   echo "$SID" > "$W/server_id"; echo "$PIN" > "$W/server_vols"; echo "$SID" > "$W/pin_server"
   echo soleur-web-platform-data-web-2 > "$W/pin_name"; echo ext4 > "$W/pin_format"; echo soleur-web-platform > "$W/pin_app"
   : > "$W/calls.log"; : > "$W/writes.log"
+  date -u -d '@'"$(( $(date -u +%s) - 7200 ))" +%Y-%m-%dT%H:%M:%S+00:00 > "$W/server_created"
   local svol="$PIN" satt="$PIN" ssrv="$SID" web1=1 f
   for f in "$@"; do
     case "$f" in
@@ -107,6 +119,15 @@ world() {
       pin_server=*) echo "${f#*=}" > "$W/pin_server" ;;
       delete_code=*) echo "${f#*=}" > "$W/delete_code" ;;
       wf_state=*) echo "${f#*=}" > "$W/wf_state" ;;
+      wf_deploy_state=*) echo "${f#*=}" > "$W/wf_state.apply-deploy-pipeline-fix.yml" ;;
+      busy) touch "$W/busy" ;;
+      web1_mode=*) echo "${f#*=}" > "$W/web1_mode" ;;
+      server_age=*) date -u -d '@'"$(( $(date -u +%s) - ${f#*=} ))" +%Y-%m-%dT%H:%M:%S+00:00 > "$W/server_created" ;;
+      pin_code=*) echo "${f#*=}" > "$W/pin_code" ;;
+      detach_code=*) echo "${f#*=}" > "$W/detach_code" ;;
+      action_status=*) echo "${f#*=}" > "$W/action_status" ;;
+      att=*) satt="${f#*=}" ;;
+      state_server_none) ssrv=none ;;
       no_bump) touch "$W/state_no_bump" ;;
       lineage_change) touch "$W/state_lineage_change" ;;
       no_web1) web1=0 ;;
@@ -141,7 +162,8 @@ run() { # <name> <want-rc> <want-substring|-> <cmd...>   (env from the caller: W
   echo x >> "$TMP/runs"
   o="$(env PATH="$TMP/bin:/usr/bin:/bin" WORLD="$WORLD" HCLOUD_TOKEN=tok REPO=o/r GH_TOKEN=x INFRA_DIR="$TMP" GITHUB_OUTPUT="$WORLD/gh_out" GITHUB_STEP_SUMMARY="$WORLD/summary" \
         WEB2_REBIRTH_POLL_INTERVAL_S=0 WEB2_REBIRTH_ACTION_POLL_S=0 WEB2_REBIRTH_POLL_ATTEMPTS=2 \
-        BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p ${EXTRA_ENV:-} \
+        BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
+        APPLY=yes EMPTINESS="PASS hours=168" NEVER_POOLED=absent PRE_PLAN=graded ${EXTRA_ENV:-} \
         bash "$SCRIPT_UNDER_TEST" "$@" 2>&1)" || rc=$?
   LASTOUT="$o"
   if [[ "$rc" -ne "$want" ]]; then printf 'FAILED %s (rc=%s want=%s) %s\n' "$name" "$rc" "$want" "${o:0:240}"; return; fi
@@ -165,7 +187,17 @@ battery() {
   world pin_gone state_vol_none; run "classify: state rm done" 0 "heal:state_rm_done" classify no
   world pin_gone state_vol_none server_absent; run "classify: apply midway" 0 "heal:apply_midway" classify no
   world pin_gone state_vol_none other_named=$NEWV; run "classify: orphan raw volume refuses" 1 "orphan_raw_volume" classify no
-  world pin_gone state_vol=$NEWV other_named=$NEWV web2_vols=$NEWV; run "classify: already reborn refuses" 1 "already_reborn" classify no
+  world pin_gone state_vol=$NEWV other_named=$NEWV web2_vols=$NEWV; run "classify: a rebirth that already ran within 72 h resumes (nothing is replaced)" 0 "verdict: resume:post_apply" classify no
+  check "classify: the resume verdict is exported" "$([[ "$(verdict_of)" == resume:post_apply ]]; echo $?)"
+  world pin_gone state_vol=$NEWV other_named=$NEWV web2_vols=$NEWV server_age=400000; run "classify: a rebirth older than 72 h refuses (single use)" 1 "already_reborn" classify no
+  world pin_gone state_vol_none state_server_none; run "classify: an orphan server (Hetzner has web-2, state does not) refuses" 1 "orphan_server" classify no
+  world pin_code=500; run "classify: a 5xx on the pinned volume is neither present nor gone (nothing is written)" 1 "neither present nor gone" classify no
+  world web1_mode=404; run "classify: presence proof: web-1 answering 404 means this token cannot see the project" 1 "presence proof" classify no
+  world web1_mode=rename; run "classify: presence proof: a server with another name is not web-1" 1 "presence proof" classify no
+  world web1_mode=novol; run "classify: presence proof: web-1 without the live LUKS volume" 1 "does not hold the live LUKS volume" classify no
+  world wf_deploy_state=active; run "classify: apply with ONE push-apply workflow still active refuses" 1 "push_apply_pause_not_real" classify yes
+  world busy; run "classify: apply with a queued or running push-apply run refuses" 1 "push_apply_pause_not_real" classify yes
+  world; run "classify: the pinned volume description is exported for the summary" 0 "pinned volume: id=106466179" classify no
   world pin_format=none; run "classify: a formatted pinned volume refuses" 1 "not_the_empty_plaintext_one" classify no
   world pin_server=999; run "classify: pinned volume attached elsewhere refuses" 1 "attached_elsewhere" classify no
   world other_named=$NEWV; run "classify: two volumes with the name refuse" 1 "duplicate_volume_name" classify no
@@ -183,6 +215,24 @@ battery() {
   world pin_server=999; EXTRA_ENV="VERDICT=proceed" run "delete: re-asserts the attached server" 1 "not the server named" delete-volume
   world delete_code=404; EXTRA_ENV="VERDICT=proceed" run "delete: a 404 on DELETE is an idempotent success only if the pin then 404s" 1 "still answers" delete-volume
   world delete_code=423; EXTRA_ENV="VERDICT=proceed" run "delete: a locked volume fails" 1 "DELETE /volumes" delete-volume
+  world detach_code=500; EXTRA_ENV="VERDICT=proceed" run "delete: a failed detach stops before the DELETE" 1 "detach -> 500" delete-volume
+  check "delete: nothing was deleted after a failed detach" "$([[ "$(writes)" != *DELETE-VOLUME* ]]; echo $?)"
+  world action_status=error; EXTRA_ENV="VERDICT=proceed" run "delete: a failed detach action stops before the DELETE" 1 "failed" delete-volume
+  check "delete: nothing was deleted after a failed detach action" "$([[ "$(writes)" != *DELETE-VOLUME* ]]; echo $?)"
+  world action_status=running; EXTRA_ENV="VERDICT=proceed" run "delete: a detach action that never finishes stops before the DELETE" 1 "did not finish in time" delete-volume
+  world other_named=888; EXTRA_ENV="VERDICT=proceed" run "delete: a volume still carrying the name after the delete fails" 1 "still exists after the delete" delete-volume
+  world; EXTRA_ENV="VERDICT=proceed APPLY=no" run "delete: plan_only (APPLY=no) refuses before any call" 1 "not an apply dispatch" delete-volume
+  check "delete: APPLY=no made no Hetzner call" "$([[ ! -s "$WORLD/calls.log" ]]; echo $?)"
+  world; EXTRA_ENV="VERDICT=proceed EMPTINESS=" run "delete: an empty emptiness proof (skipped step) refuses" 1 "no PASS emptiness verdict" delete-volume
+  world; EXTRA_ENV="VERDICT=proceed EMPTINESS=RED-reason=not_empty" run "delete: a RED emptiness verdict refuses" 1 "no PASS emptiness verdict" delete-volume
+  world; EXTRA_ENV="VERDICT=proceed NEVER_POOLED=" run "delete: an empty never-pooled proof refuses" 1 "no never-pooled proof" delete-volume
+  world; EXTRA_ENV="VERDICT=proceed PRE_PLAN=" run "delete: an ungraded pre plan refuses" 1 "pre plan was not graded" delete-volume
+  check "delete: no write after any refused evidence row" "$([[ -z "$(writes)" ]]; echo $?)"
+  world web1_mode=404; EXTRA_ENV="VERDICT=proceed" run "delete: presence proof failing refuses before the DELETE" 1 "presence proof" delete-volume
+  check "delete: no write after a failed presence proof" "$([[ -z "$(writes)" ]]; echo $?)"
+  world pin_server=$W1 web2_vols=none; EXTRA_ENV="VERDICT=proceed" run "delete: a volume attached to web-1's id is refused" 1 "not the server named" delete-volume
+  world delete_code=403; EXTRA_ENV="VERDICT=proceed" run "delete: a 403 on a write names the token tier" 1 "read-only Hetzner token" delete-volume
+  world pin_gone; EXTRA_ENV="VERDICT=resume:post_apply" run "delete: a resume verdict never deletes" 0 "skipped" delete-volume
   # ---- state-rm ----
   world pin_gone; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: forgets exactly the pinned addresses (serial +1)" 0 "serial 5 -> 6" state-rm
   check "state-rm: one state write naming both addresses" "$([[ "$(writes)" == *'STATE-RM hcloud_volume.workspaces["web-2"] hcloud_volume_attachment.workspaces["web-2"]'* ]]; echo $?)"
@@ -195,30 +245,66 @@ battery() {
   world pin_gone no_bump; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: refuses a serial that did not move by one" 1 "exactly one state write" state-rm
   world pin_gone lineage_change; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: refuses a changed lineage" 1 "exactly one state write" state-rm
   world pin_gone state_vol_none; EXTRA_ENV="VERDICT=heal:state_rm_done" run "state-rm: a clean state skips" 0 "skipped" state-rm
+  world pin_gone state_vol=$NEWV; EXTRA_ENV="VERDICT=resume:post_apply" run "state-rm: a resume verdict never forgets anything" 0 "skipped" state-rm
+  world pin_gone; EXTRA_ENV="VERDICT=heal:delete_done APPLY=no" run "state-rm: plan_only (APPLY=no) refuses" 1 "not an apply dispatch" state-rm
+  check "state-rm: APPLY=no wrote nothing" "$([[ -z "$(writes)" ]]; echo $?)"
+  world pin_gone att=888; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: an attachment whose volume_id is not the pin refuses before any write" 1 "attachment volume_id" state-rm
+  check "state-rm: no STATE-RM write for a foreign attachment id" "$([[ -z "$(writes)" ]]; echo $?)"
+  world pin_gone web1_mode=404; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: presence proof failing refuses" 1 "presence proof" state-rm
+  world pin_gone no_web1; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: a state without web-1 vanishes web-1 from the check" 1 "web-1" state-rm
   # ---- reboot ----
   world pin_gone state_vol_none; run "reboot: re-resolves by name and issues the reboot" 0 "reboot issued" reboot
   check "reboot: the write names web-2's id" "$([[ "$(writes)" == "REBOOT /servers/$SID/actions/reboot " ]]; echo $?)"
   world; echo "$W1" > "$WORLD/server_id"; run "reboot: refuses web-1's id" 1 "web-1's id" reboot
   check "reboot: nothing was rebooted" "$([[ -z "$(writes)" ]]; echo $?)"
   world; echo 4242 > "$WORLD/server_id"; run "reboot: refuses an id that differs from the post-apply state" 1 "differs from the id in the post-apply state" reboot
-  # ---- flip precondition ----
-  world; run "flip: plan_only reports PENDING and exits 0" 0 "PENDING" flip-precondition no
-  world; run "flip: apply refuses while the exemption is not flipped" 1 "NOT met" flip-precondition yes
-  # ---- ready-poll ----
-  world; now="$(date -u +%s)"
+  world; EXTRA_ENV="APPLY=no" run "reboot: plan_only (APPLY=no) refuses before any call" 1 "not an apply dispatch" reboot
+  check "reboot: APPLY=no made no write" "$([[ -z "$(writes)" ]]; echo $?)"
+  world action_status=running; run "reboot: an action that never finishes fails" 1 "did not finish in time" reboot
+  # ---- flip precondition: driven in a SANDBOX tree so the verdict never depends on what the repo's own retirement state is ----
+  flip_case() { # <name> <want-rc> <want-substring> <apply yes|no> <filter: real|two|zero|garbage> <escrow workflow: present|absent>
+    local sb="$TMP/flip.$RANDOM" saved="$SCRIPT_UNDER_TEST"
+    mkdir -p "$sb/scripts" "$sb/tests/scripts/lib" "$sb/tests/scripts/fixtures/web-host-rebirth" "$sb/.github/workflows"
+    cp "$saved" "$sb/scripts/web2-rebirth.sh"; cp "$ROOT/tests/scripts/lib/web2-rebirth-classify.sh" "$sb/tests/scripts/lib/"
+    cp "$ROOT/tests/scripts/fixtures/web-host-rebirth/passphrase-create.json" "$sb/tests/scripts/fixtures/web-host-rebirth/"
+    case "$5" in
+      real) cp "$ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq" "$sb/tests/scripts/lib/" ;;
+      two) printf '{"luks_passphrase_rotations": 2}\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
+      zero) printf '{"luks_passphrase_rotations": 0}\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
+      garbage) printf '"not an object"\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
+    esac
+    [[ "$6" == present ]] && : > "$sb/.github/workflows/apply-web-escrow-create.yml"
+    world; SCRIPT_UNDER_TEST="$sb/scripts/web2-rebirth.sh" run "$1" "$2" "$3" flip-precondition "$4"
+    SCRIPT_UNDER_TEST="$saved"
+  }
+  flip_case "flip: the real filter (create exempt today) and the escrow workflow present: plan_only reports PENDING, rc 0" 0 "PENDING" no real present
+  flip_case "flip: the real filter: an apply run refuses" 1 "NOT met" yes real present
+  flip_case "flip: exemption flipped (rotations 2) and the escrow workflow RETIRED: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes two absent
+  flip_case "flip: exemption flipped but the escrow workflow still present: an apply run refuses" 1 "NOT met" yes two present
+  flip_case "flip: workflow retired but the exemption not flipped (rotations 0): an apply run refuses" 1 "NOT met" yes zero absent
+  flip_case "flip: plan_only with only one condition met reports PENDING, rc 0" 0 "PENDING" no two present
+  flip_case "flip: an unevaluable filter is a refusal, never a pass" 1 "could not be evaluated" yes garbage absent
+  # ---- ready-poll (the anchor is web-2's own Hetzner creation time) ----
   rdy_row() { jq -cn --arg age "$1" --arg arm "$2" --arg esc "$3" --arg boot "$4" '{ts:"2026-10-06 04:00:00",age_s:$age,message:("SOLEUR_FRESH_BOOT_READY ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=" + $arm + " escrow=" + $esc + " boot_id=" + $boot + " host=soleur-web-2 reason=none boot_window_s=900")}'; }
-  rdy_row 60 formatted ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
-  run "ready: a fresh formatted ok row passes" 0 "luks_arm=formatted" ready-poll "$((now - 600))"
-  rdy_row 60 formatted ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
-  run "ready: a row OLDER than the run anchor is not this birth (times out)" 1 "no fresh GREEN readiness row" ready-poll "$((now - 30))"
-  rdy_row 60 noop ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
-  run "ready: luks_arm other than formatted is refused" 1 "not formatted" ready-poll "$((now - 600))"
-  rdy_row 60 formatted missing 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
-  run "ready: escrow missing is RED" 1 "readiness row is RED" ready-poll "$((now - 600))"
-  : > "$WORLD/bs_body"; run "ready: no rows at all times out" 1 "no fresh GREEN readiness row" ready-poll "$((now - 600))"
-  # ---- summary ----
-  world; EXTRA_ENV="VERDICT=proceed" run "summary: prints the closing claim guard" 0 "-" summary
-  check "summary: claims nothing before the reboot proof" "$(grep -q 'Nothing is claimed until the graded reboot proof' "$WORLD/summary"; echo $?)"
+  world server_age=600; rdy_row 60 formatted ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
+  run "ready: a row newer than the server's creation passes" 0 "luks_arm=formatted" ready-poll
+  world server_age=30; rdy_row 60 formatted ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
+  run "ready: a row OLDER than the server's creation is not this birth (times out)" 1 "no fresh GREEN readiness row" ready-poll
+  world server_age=600; rdy_row 60 noop ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
+  run "ready: luks_arm other than formatted is refused" 1 "not formatted" ready-poll
+  world server_age=600; rdy_row 60 formatted missing 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
+  run "ready: escrow missing is RED" 1 "readiness row is RED" ready-poll
+  world server_age=600; : > "$WORLD/bs_body"; run "ready: no rows at all times out" 1 "no fresh GREEN readiness row" ready-poll
+  world server_absent; run "ready: no server named web-2 refuses before any Better Stack read" 1 "could not resolve exactly one server" ready-poll
+  # ---- summary: it claims only what THIS run measured ----
+  world; EXTRA_ENV="MODE=plan_only JOB_STATUS=success VERDICT=proceed REASON=because SHA=abc123" run "summary: a plan_only run" 0 "plan_only: no write of any kind occurred" summary
+  check "summary: plan_only prints the reason and the commit" "$([[ "$LASTOUT" == *because* && "$LASTOUT" == *abc123* ]]; echo $?)"
+  check "summary: plan_only never claims a rebirth or prints the follow-through" "$([[ "$LASTOUT" != *provisioned* && "$LASTOUT" != *Follow-through* ]]; echo $?)"
+  world; EXTRA_ENV="MODE=apply JOB_STATUS=failure VERDICT=proceed" run "summary: a failed apply run" 0 "did not complete" summary
+  check "summary: a failed run does not claim provisioning or the follow-through" "$([[ "$LASTOUT" != *provisioned* && "$LASTOUT" != *Follow-through* ]]; echo $?)"
+  world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=proceed RUN_ID=77 EMPTINESS=PASS-x" run "summary: a successful apply run" 0 "Nothing is claimed until the graded reboot proof" summary
+  check "summary: success prints the reborn host, the approver and the update-not-enrol instruction" "$([[ "$LASTOUT" == *"server_id=1001"* && "$LASTOUT" == *approver-one* && "$LASTOUT" == *"already enrolled"* ]]; echo $?)"
+  check "summary: the step summary file received the same text" "$(grep -q 'Nothing is claimed until the graded reboot proof' "$WORLD/summary"; echo $?)"
   # ---- structural ----
   check "no unexpected API call in any row" "$(! ls "$TMP"/world.*/unexpected.log >/dev/null 2>&1; echo $?)"
   n=$((n + 1))
@@ -232,15 +318,18 @@ while IFS= read -r line; do
 done <<<"$report"
 ran="${ran:-0}"
 printf 'real script: %s world scenarios, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 40 ]] || { echo "  FAIL scenario floor: ran ${ran} < 40"; fails=$((fails + 1)); }
+[[ "$ran" -ge 77 ]] || { echo "  FAIL scenario floor: ran ${ran} < 77"; fails=$((fails + 1)); }
 
-mutate() { # <name> <old> <new> [file under scripts/ to mutate, default web2-rebirth.sh]
-  local name="$1" old="$2" new="$3" target="${4:-web2-rebirth.sh}" copy after
-  rm -rf "$TMP/mut"; mkdir -p "$TMP/mut/scripts" "$TMP/mut/tests/scripts/lib" "$TMP/mut/tests/scripts/fixtures" "$TMP/mut/.github/workflows"
-  copy="$TMP/mut/scripts/$target"
-  cp "$SCRIPT" "$TMP/mut/scripts/web2-rebirth.sh"; cp "$ROOT/scripts/web2-rebirth-ready-poll.sh" "$TMP/mut/scripts/"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$TMP/mut/scripts/"
-  cp "$ROOT/tests/scripts/lib/web2-rebirth-classify.sh" "$ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq" "$TMP/mut/tests/scripts/lib/"
-  cp -r "$ROOT/tests/scripts/fixtures/web-host-rebirth" "$TMP/mut/tests/scripts/fixtures/"
+# Mutants are independent (each works in its own sandbox tree and fake worlds), so up to MUT_JOBS run at once; every mutant writes
+# its verdict line to its own file and the lines are counted once all have finished.
+MUT_JOBS="${MUT_JOBS:-6}"; MUT_SEQ=0; mkdir -p "$TMP/mres"
+_mutate_run() { # <idx> <name> <old> <new> [file]
+  local idx="$1" name="$2" old="$3" new="$4" target="${5:-web2-rebirth.sh}" copy after mdir="$TMP/mut.$BASHPID"
+  mkdir -p "$mdir/scripts" "$mdir/tests/scripts/lib" "$mdir/tests/scripts/fixtures" "$mdir/.github/workflows"
+  copy="$mdir/scripts/$target"
+  cp "$SCRIPT" "$mdir/scripts/web2-rebirth.sh"; cp "$ROOT/scripts/web2-rebirth-ready-poll.sh" "$mdir/scripts/"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$mdir/scripts/"
+  cp "$ROOT/tests/scripts/lib/web2-rebirth-classify.sh" "$ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq" "$mdir/tests/scripts/lib/"
+  cp -r "$ROOT/tests/scripts/fixtures/web-host-rebirth" "$mdir/tests/scripts/fixtures/"
   if ! python3 - "$copy" "$old" "$new" <<'PY'
 import sys
 p, old, new = sys.argv[1:4]
@@ -249,9 +338,15 @@ if s.count(old) != 1:
     sys.exit(1)
 open(p, "w").write(s.replace(old, new))
 PY
-  then echo "  FAIL mutation '${name}': the edit did not land exactly once"; fails=$((fails + 1)); return; fi
-  after="$(battery "$TMP/mut/scripts/web2-rebirth.sh" 2>&1 | grep -c '^FAILED')"
-  if [[ "$after" -gt 0 ]]; then echo "  ok   mutation killed: ${name} (${after} rows red)"; else echo "  FAIL mutation SURVIVED: ${name}"; fails=$((fails + 1)); fi
+  then echo "  FAIL mutation '${name}': the edit did not land exactly once" > "$TMP/mres/$idx"; return; fi
+  after="$(battery "$mdir/scripts/web2-rebirth.sh" 2>&1 | grep -c '^FAILED')"
+  if [[ "$after" -gt 0 ]]; then echo "  ok   mutation killed: ${name} (${after} rows red)" > "$TMP/mres/$idx"; else echo "  FAIL mutation SURVIVED: ${name}" > "$TMP/mres/$idx"; fi
+  rm -rf "$mdir"
+}
+mutate() { # <name> <old> <new> [file under scripts/ to mutate, default web2-rebirth.sh]
+  MUT_SEQ=$((MUT_SEQ + 1))
+  while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$MUT_JOBS" ]]; do sleep 0.3; done
+  _mutate_run "$MUT_SEQ" "$@" &
 }
 mutate "delete: the ext4/name re-assert is dropped" '.volume.format == "ext4" and .volume.name == $n and .volume.labels == {app: $a}' 'true'
 mutate "delete: the stage guard is dropped" 'if ! stage_allowed "$v" proceed heal:detach_done; then' 'if false; then'
@@ -272,5 +367,47 @@ mutate "ready: the formatted-arm requirement is dropped" '[[ "$row_arm" == forma
 mutate "classify: the pause is forced real" '[[ "$apply" == yes ]] && { pause_real && pause=yes || pause=no; }' 'pause=yes'
 mutate "classify: the web-1-in-state sanity check is dropped" '[[ "$(jq -r '"'"'.web1'"'"' <<<"$ident")" == 1 ]] || fail' 'true || fail'
 
+mutate "delete: require_apply dropped (plan_only could delete)" '  require_apply delete-volume
+' ''
+mutate "state-rm: require_apply dropped" '  require_apply state-rm
+' ''
+mutate "reboot: require_apply dropped" '  require_apply reboot
+' ''
+mutate "delete: the emptiness proof requirement is dropped" '  case "${EMPTINESS:-}" in PASS*) : ;; *) fail "delete-volume refused: no PASS emptiness verdict from the evidence step (got '"'"'${EMPTINESS:-}'"'"'); nothing is deleted" ;; esac
+' ''
+mutate "delete: the never-pooled proof requirement is dropped" '  [[ "${NEVER_POOLED:-}" == absent ]] || fail "delete-volume refused: no never-pooled proof (got '"'"'${NEVER_POOLED:-}'"'"'); nothing is deleted"
+' ''
+mutate "delete: the pre-plan-graded requirement is dropped" '  [[ "${PRE_PLAN:-}" == graded ]] || fail "delete-volume refused: the pre plan was not graded (got '"'"'${PRE_PLAN:-}'"'"'); nothing is deleted"
+' ''
+mutate "delete: the presence proof is dropped" '  presence_proof
+  code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
+  [[ "$code" == 200 ]] || fail "re-assert' '  code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
+  [[ "$code" == 200 ]] || fail "re-assert'
+mutate "state-rm: the presence proof is dropped" '  presence_proof
+  code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
+  [[ "$code" == 404 ]]' '  code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
+  [[ "$code" == 404 ]]'
+mutate "classify: the presence proof is dropped" '  need_token; presence_proof
+  local apply' '  need_token
+  local apply'
+mutate "classify: only one push-apply workflow is checked" '  for wf in apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml; do' '  for wf in apply-web-platform-infra.yml; do'
+mutate "classify: a busy push-apply run is ignored" '    [[ "$busy" == 0 ]] || return 1' '    true'
+mutate "delete: a failed detach is ignored" '    [[ "$code" == 201 ]] || fail "detach -> ${code}' '    true || fail "detach -> ${code}'
+mutate "delete: a failed detach action is ignored" '      [[ "$st" == error ]] && fail "detach action' '      false && fail "detach action'
+mutate "delete: an unfinished detach action is ignored" '    [[ "$st" == success ]] || fail "detach action ${action_id} did not finish in time"' '    true || fail "detach action ${action_id} did not finish in time"'
+mutate "delete: the empty-name-lookup proof is dropped" '  [[ "$code" == 200 && "$(jq -r '"'"'.volumes | length'"'"' "$HBODY")" == 0 ]] || fail "a volume named' '  true || fail "a volume named'
+mutate "classify: a 5xx on the pinned volume is accepted" 'fail "GET /volumes/${PINNED_VOLUME_ID} -> ${code} (error.code=$(errcode)): neither present nor gone; nothing is written"' 'true'
+mutate "flip: the rotations==2 requirement is dropped" '  [[ "$n" -eq 2 ]] || ok=no' ':'
+mutate "flip: the escrow-workflow-absent requirement is dropped" '  [[ ! -e "${_ROOT}/.github/workflows/apply-web-escrow-create.yml" ]] || absent=no' ':'
+mutate "reboot: an unfinished reboot action is ignored" '  fail "reboot action ${action_id} did not finish in time"' '  true'
+mutate "ready: the anchor is not the server creation time" '  exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" "$created_epoch"' '  exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" 0'
+mutate "classify: web2_age_s is not handed to the classifier" ' web2_age_s="$WEB2_AGE_S")"' ')"'
+mutate "summary: a plan_only run reaches the success claim" '      plan_only:*) echo' '      plan_only:never) echo'
+mutate "summary: a failed run reaches the success claim" '      apply:success)' '      apply:*)'
+
+wait
+# One verdict line per mutant: count them against the number launched (a mutant that never wrote its line is a failure).
+for f in "$TMP"/mres/*; do cat "$f"; grep -q '^  FAIL' "$f" && fails=$((fails + 1)); done
+[[ "$(find "$TMP/mres" -type f | wc -l | tr -d ' ')" -eq "$MUT_SEQ" ]] || { echo "  FAIL a mutant did not report ($(find "$TMP/mres" -type f | wc -l | tr -d ' ') of ${MUT_SEQ})"; fails=$((fails + 1)); }
 [[ "$fails" -eq 0 ]] && { echo "web2-rebirth: all scenarios and mutations passed"; exit 0; }
 echo "web2-rebirth: ${fails} FAILED"; exit 1

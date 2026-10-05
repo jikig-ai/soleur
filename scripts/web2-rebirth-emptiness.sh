@@ -6,8 +6,15 @@
 #
 # PASS needs ALL of, from one aggregate over 7 days (hot AND archive arm):
 #   - filesystem_used_bytes: at least 160 of 168 distinct hours covered (a gappy series is not evidence),
-#     the newest row at most 1800 s old (a dark host is not evidence), and a maximum at most 1 GiB (the
-#     stated ceiling: an empty ext4 volume holds only its own metadata, a populated one holds user data);
+#     the newest row at most 1800 s old (a dark host is not evidence), a MINIMUM above zero (a missing `value` path
+#     reads as 0 in ClickHouse, so zero is "field absent", never "empty"), a maximum at most 1 GiB (a COARSE ceiling:
+#     an empty ext4 volume holds only its own metadata, a populated one holds user data, and 1 GiB is deliberately far
+#     above the unmeasured empty baseline), and a spread (maximum minus minimum) of at most 64 MiB: a volume that took
+#     writes during the 7 days moves, an idle empty one does not. The printed min/max are what the owner reads before
+#     approving the dispatch; the first live run is also the first measurement of the real empty baseline.
+#   - W2R_DETACHED=1 (heal:detach_done only: the volume was detached by an earlier run of this workflow that had already
+#     proven it empty, and a detached device stops reporting): freshness is not required and coverage drops to 24 hours;
+#     the zero floor, the ceiling, the spread and the volume-size window still apply.
 #   - filesystem_total_bytes: every sample between 15e9 and 21.5e9 bytes, which is the 20 GB volume and not the
 #     root disk, so a mis-mounted /mnt/data cannot pass as "small".
 # Zero rows is a named RED ("field absent or web-2 dark"), never a pass. A transport failure is rc 2 (no verdict).
@@ -37,6 +44,8 @@ W2R_LOOKBACK_DAYS=7
 W2R_MIN_HOURS=160
 W2R_MAX_NEWEST_AGE_S=1800
 W2R_MAX_USED_BYTES=1073741824
+W2R_MAX_SPREAD_BYTES=67108864
+W2R_DETACHED_MIN_HOURS=24
 W2R_TOTAL_MIN_BYTES=15000000000
 W2R_TOTAL_MAX_BYTES=21500000000
 
@@ -59,8 +68,10 @@ FORMAT JSONEachRow"
 w2r_emptiness_verdict() {
   local f="$1" out
   if ! jq -e -s 'all(.[]; type == "object")' "$f" >/dev/null 2>&1; then printf 'RED reason=emptiness_body_unparseable\n'; return 0; fi
-  out="$(jq -r -s --argjson minh "$W2R_MIN_HOURS" --argjson maxage "$W2R_MAX_NEWEST_AGE_S" --argjson maxused "$W2R_MAX_USED_BYTES" \
-    --argjson tmin "$W2R_TOTAL_MIN_BYTES" --argjson tmax "$W2R_TOTAL_MAX_BYTES" '
+  local detached=false minh="$W2R_MIN_HOURS"
+  if [[ "${W2R_DETACHED:-0}" == 1 ]]; then detached=true; minh="$W2R_DETACHED_MIN_HOURS"; fi
+  out="$(jq -r -s --argjson minh "$minh" --argjson maxage "$W2R_MAX_NEWEST_AGE_S" --argjson maxused "$W2R_MAX_USED_BYTES" --argjson maxspread "$W2R_MAX_SPREAD_BYTES" \
+    --argjson detached "$detached" --argjson tmin "$W2R_TOTAL_MIN_BYTES" --argjson tmax "$W2R_TOTAL_MAX_BYTES" '
     def num: if type == "number" then . elif type == "string" and test("^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$") then tonumber else null end;
     (map({(.metric_name): .}) | add // {}) as $m
     | ($m.filesystem_used_bytes) as $u
@@ -68,12 +79,14 @@ w2r_emptiness_verdict() {
     | if $u == null then "RED reason=used_bytes_absent_or_host_dark"
       elif ($u.hours | num) == null or ($u.newest_age_s | num) == null or ($u.vmax | num) == null then "RED reason=used_bytes_malformed"
       elif ($u.hours | num) < $minh then "RED reason=coverage_gap hours=\($u.hours | num)"
-      elif ($u.newest_age_s | num) > $maxage then "RED reason=stale newest_age_s=\($u.newest_age_s | num)"
+      elif ($detached | not) and ($u.newest_age_s | num) > $maxage then "RED reason=stale newest_age_s=\($u.newest_age_s | num)"
+      elif ($u.vmin | num) == null or ($u.vmin | num) <= 0 then "RED reason=used_bytes_zero_or_missing"
       elif ($u.vmax | num) > $maxused then "RED reason=not_empty max_used_bytes=\($u.vmax | num)"
+      elif (($u.vmax | num) - ($u.vmin | num)) > $maxspread then "RED reason=not_flat spread_bytes=\(($u.vmax | num) - ($u.vmin | num))"
       elif $t == null then "RED reason=total_bytes_absent"
       elif ($t.vmin | num) == null or ($t.vmax | num) == null then "RED reason=total_bytes_malformed"
       elif ($t.vmin | num) < $tmin or ($t.vmax | num) > $tmax then "RED reason=not_the_20gb_volume total_min=\($t.vmin | num) total_max=\($t.vmax | num)"
-      else "PASS hours=\($u.hours | num) newest_age_s=\($u.newest_age_s | num) max_used_bytes=\($u.vmax | num) min_used_bytes=\($u.vmin | num) ceiling_bytes=\($maxused)" end' "$f" 2>/dev/null)" || out=""
+      else "PASS hours=\($u.hours | num) newest_age_s=\($u.newest_age_s | num) max_used_bytes=\($u.vmax | num) min_used_bytes=\($u.vmin | num) ceiling_bytes=\($maxused) spread_bytes=\(($u.vmax | num) - ($u.vmin | num)) detached=\($detached)" end' "$f" 2>/dev/null)" || out=""
   [[ -n "$out" ]] || out="RED reason=emptiness_judge_error"
   printf '%s\n' "$out"
 }

@@ -34,8 +34,13 @@ if ! names="$(doppler secrets --only-names --json -p "$W2L_MARKER_PROJECT" -c "$
   echo "web2-rebirth-never-pooled: could not list the secret names of ${W2L_MARKER_PROJECT}/${W2L_MARKER_CONFIG}. A failed read is not 'absent'."
   exit 3
 fi
-if ! jq -e 'type == "array" or type == "object"' >/dev/null 2>&1 <<<"$names"; then
-  echo "web2-rebirth-never-pooled: the name list was not JSON. Fail closed."
+# STRICT SHAPE: an absence answer is only as good as the shape it was read from. Accept exactly (a) an array of secret NAMES, or
+# (b) an object KEYED by secret name, where every name matches ^[A-Z][A-Z0-9_]*$ (Doppler secret names). Anything else
+# (a wrapper object such as {"names":[...]}, an array of objects, a lowercase key) is a shape this script cannot read an
+# absence from, so it is exit 3, never "absent". An EMPTY array or object is legitimate (the config holds only the marker).
+if ! jq -e '(type == "array" and all(.[]; type == "string" and test("^[A-Z][A-Z0-9_]*$")))
+          or (type == "object" and all(keys[]; test("^[A-Z][A-Z0-9_]*$")))' >/dev/null 2>&1 <<<"$names"; then
+  echo "web2-rebirth-never-pooled: the name list is not an array of secret names or an object keyed by secret name. A shape this script cannot read an absence from is not 'absent'."
   exit 3
 fi
 if jq -e --arg n "$W2L_MARKER_NAME" '(if type == "array" then . else keys end) | any(. == $n)' >/dev/null 2>&1 <<<"$names"; then
