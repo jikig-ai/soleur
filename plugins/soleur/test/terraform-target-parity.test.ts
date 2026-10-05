@@ -76,7 +76,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 /** Suite-level cardinality floor — see the final describe in this file (#7656 C8). */
 // Exactly `grep -cE '^\s*test\(' plugins/soleur/test/terraform-target-parity.test.ts` (the final describe counts the
 // same pattern). Re-derive with that command and edit this constant in the same change as any added or removed test.
-const TEST_FLOOR = 275;
+const TEST_FLOOR = 278;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6678,6 +6678,46 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
     expect(droppedWeb).not.toBe(message);
     expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
+  });
+});
+
+// --- #9372: the single-use web-2 rebirth's five-target set ---------------------------------------------------
+// `-target` walks a resource's DEPENDENCIES, never its dependents, so the rebirth names every member of the operation
+// explicitly: the server (replaced), its private NIC, the keyed volume (created raw after the Hetzner-side delete and the
+// state rm), the volume attachment, and the fleet firewall attachment (which only UPDATES). The two plan steps (`pre`, graded
+// before anything is touched, and `post`, graded before the apply) must carry exactly the same set, and it must name
+// web-2 only. The plan gate (tests/scripts/lib/web-host-rebirth-gate.sh) grades what the plan DOES; this row pins what the
+// plan is ALLOWED TO REACH.
+describe("web2-luks-rebirth.yml: the five-target set (#9372)", () => {
+  const REBIRTH_WF = resolve(REPO_ROOT, ".github/workflows/web2-luks-rebirth.yml");
+  const EXPECTED = [
+    "hcloud_firewall_attachment.web",
+    'hcloud_server.web["web-2"]',
+    'hcloud_server_network.web["web-2"]',
+    'hcloud_volume.workspaces["web-2"]',
+    'hcloud_volume_attachment.workspaces["web-2"]',
+  ].sort();
+  const planSteps = (): Array<{ name: string; run: string }> => {
+    const doc = parseYaml(readFileSync(REBIRTH_WF, "utf8")) as { jobs: { rebirth: { steps: Array<{ name?: string; run?: string }> } } };
+    return doc.jobs.rebirth.steps.filter((st) => typeof st.run === "string" && /terraform\s+plan\b/.test(st.run)).map((st) => ({ name: st.name ?? "", run: st.run as string }));
+  };
+  const targetsOf = (run: string): string[] => [...run.matchAll(/-target='([^']+)'/g)].map((m) => m[1]).sort();
+  const replacesOf = (run: string): string[] => [...run.matchAll(/-replace='([^']+)'/g)].map((m) => m[1]);
+
+  test("there are exactly two plan steps (pre and post), so the set below is not vacuous", () => {
+    expect(planSteps().map((p) => /`(pre|post)`/.exec(p.name)?.[1])).toEqual(["pre", "post"]);
+  });
+
+  test("both plans carry exactly the five targets, web-2 only, plus one -replace of the server", () => {
+    for (const p of planSteps()) {
+      expect([p.name, targetsOf(p.run)]).toEqual([p.name, EXPECTED]);
+      expect([p.name, replacesOf(p.run)]).toEqual([p.name, ['hcloud_server.web["web-2"]']]);
+      expect(p.run).not.toContain("web-1");
+    }
+  });
+
+  test("no sixth member can ride in: the volume's own destroy is not reachable (no destroy flag on either plan)", () => {
+    for (const p of planSteps()) expect([p.name, /-destroy\b/.test(p.run)]).toEqual([p.name, false]);
   });
 });
 

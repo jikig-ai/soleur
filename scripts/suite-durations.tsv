@@ -455,6 +455,10 @@ scripts/watchdog-arm-soak-9237	2235	measured
 scripts/web-fresh-boot-zot-8651	447	measured
 scripts/web-host-escrow-preflight	979	floor
 scripts/web2-luks-live-6931	22262	measured
+scripts/web2-rebirth	53875	measured
+scripts/web2-rebirth-emptiness	1786	measured
+scripts/web2-rebirth-never-pooled	1000	floor
+scripts/web2-rebirth-recovery-check	25797	measured
 scripts/workspaces-plaintext-hold-9348	695	measured
 scripts/zot-fill-rate-7341	2792	measured
 scripts/zot-last-err-redact-7500	1378	measured
@@ -544,7 +548,9 @@ tests/scripts/vector-redeliver-wiring	427	measured
 tests/scripts/vendor-pin-gate-verdict	56	measured
 tests/scripts/weakness-miner	298	measured
 tests/scripts/web-host-birth-gate	1984	measured
+tests/scripts/web-host-rebirth-gate	18655	measured
 tests/scripts/web-host-replace-gate	6621	measured
+tests/scripts/web2-rebirth-classify	1028	measured
 tests/scripts/workspaces-luks-cutover-gate	957	measured
 tests/scripts/workspaces-luks-recut-gate	1034	measured
 tests/scripts/write-known-hosts	644	measured
