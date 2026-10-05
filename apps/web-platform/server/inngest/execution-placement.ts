@@ -53,6 +53,10 @@ export const EXECUTION_PLACEMENT: Readonly<Record<string, { placement: Execution
     placement: "portable",
     reason: "host-free: mints an actions:write-scoped App token and POSTs a workflow_dispatch; deliberately runner-independent so it fires while the GHA queue it measures is starved (#9273)",
   },
+  "cron-merge-queue-stall-dispatch": {
+    placement: "portable",
+    reason: "host-free: mints an actions:write-scoped App token and POSTs a workflow_dispatch; the probe itself runs on a GitHub-hosted runner (#9482)",
+  },
   "sla-issue-process": {
     placement: "portable",
     reason: "host-free: no host-local marker in its import closure (needs prd secrets only)",

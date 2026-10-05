@@ -264,8 +264,10 @@ pass 45 minutes without being stalled. The position filter reduces those false p
 and does not remove them. The title ends `(suspected, verify first)` and the body leads
 with the agent-runnable triage (live queue read, the entry's `merge_group` runs: an
 in-progress run is a healthy build, no run is a real stall). The fix is an Inngest
-`workflow_dispatch` cron, a follow-up
-(`decision-challenges.md`, Follow-up (a)); a canary row measures the `schedule` gap.
+`workflow_dispatch` cron, `cron-merge-queue-stall-dispatch` (landed with #9482
+follow-up (a); ADR-033's 2026-06-02 scope note: trigger on Inngest, execution in the
+ephemeral runner). The workflow's `schedule:` is now the fallback, and the function
+header is the authority for the timing story; a canary row measures the `schedule` gap.
 The probe is blind to a disabled queue by design (the drift cron owns that).
 
 ## CLA synthetic trust model
@@ -563,7 +565,8 @@ order.
 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
     the 15-minute window between the 45-minute threshold and the 60-minute timeout;
-    a wider median gap makes Follow-up (a) the next change.
+    a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
+    dispatched-run spacing and runner-start latency are measured on #9482 after merge).
 
 GitHub's documentation does not settle items 1, 3, 8 and the squash-message source;
 each is recorded as a measurement with a defined fallback, not as an assumption.
