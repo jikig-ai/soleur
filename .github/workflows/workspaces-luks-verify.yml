@@ -1007,8 +1007,10 @@ jobs:
   # body, any defective row, and rows going missing after the marker exists are still RED.
   #
   # CUSTODY. The write token (DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER, workspaces-luks-fresh-boot.tf) is
-  # scoped to the one marker config and is used by this job ONLY (the follow-through grades from probe rows
-  # and holds no Doppler credential). The job runs on the default branch alone: a `schedule:` event is
+  # scoped to the one marker config and is used by this job (the follow-through grades from probe rows and holds
+  # no Doppler credential). The ONE other holder is the single-use web-2 rebirth workflow (#9372), which binds it to
+  # one step running scripts/web2-rebirth-never-pooled.sh, a names-only reader that the census in
+  # workspaces-luks-verify-workflow.test.sh holds to no write verb (the token is read/write until #9358). The job runs on the default branch alone: a `schedule:` event is
   # always the default branch, and a dispatch is refused from any other ref, so a branch copy of this file
   # or of the helper never runs with the token. A present marker is KEPT while GREEN and removed on a non-GREEN
   # run, so its VALUE is advisory / shape-only downstream (lb-weight-gate.sh checks the shape; sourcing the

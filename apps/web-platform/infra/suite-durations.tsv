@@ -140,7 +140,7 @@ apps/web-platform/infra/web-hosts-fanout-parity.test.sh	0	measured
 apps/web-platform/infra/web-private-nic-guard.test.sh	500	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	12000	measured
 apps/web-platform/infra/web-zot-consumer-probe.test.sh	0	measured
-apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh	65275	measured
+apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh	60000	measured
 apps/web-platform/infra/webhook-doppler-token-reread.test.sh	2000	measured
 apps/web-platform/infra/workspaces-boot-unlock.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	0	measured

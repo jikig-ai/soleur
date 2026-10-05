@@ -615,3 +615,36 @@ Also decided here:
   rows to one `boot_id`; T04 inverts), `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` Guard 3 fixtures,
   its header comment ("never a boot_id equality") and mutations 9, 11 and 16; re-run `lb-weight-gate-with-marker.test.sh` and
   `preflight-discoverability-test.test.ts`.
+
+## Review round 1 (11-seat panel at ef785e632c, 2026-10-05): structural-cause roll-up and dispositions
+
+**Structural cause (one gap, many instances).** The destructive path's wiring was pinned by what each step DECIDES and not by whether the decision is OBEYED:
+a skipped evidence step, an `if:` widened with `always()`, a `|| true`, an unpinned apply operand, an unclassified new write step and an
+unexercised presence proof all left the suites green (measured by four seats). Fixed at the chokepoint, not instance by instance:
+`scripts/web2-rebirth.sh delete-volume` refuses unless the emptiness, never-pooled and pre-plan proofs are present (each is the step's own
+output, empty when skipped) and every write subcommand refuses unless `APPLY=yes`; the workflow suite classifies EVERY step as read-only or write,
+pins each write step's `if:` to an exact spelling, pins the apply operand to `tfplan-post`, drives the apply, readiness and recovery step bodies,
+and carries a positive control for its own filter (the first draft of that filter errored silently and passed).
+
+**Fixed inline (each with a row that reds without it):** nic-wait-gate scan (CI red) now names the rebirth's key-literal targets explicitly;
+discoverability baseline 44 to 45 and the Observability block's layer citations; the gate is visible to the plan-gate-preamble census and
+dedupes violations; the classifier gained `resume:post_apply` (post-apply failures were unresumable), `refuse:orphan_server`,
+`refuse:inconsistent_pin_listing` and a foreign-volume refusal in every heal window; `heal:detach_done` no longer dead-ends on the freshness bound
+(`W2R_DETACHED`); emptiness gained a non-zero floor (a missing value path read as 0) and the 64 MiB spread rule plan review had cut; never-pooled
+refuses any list shape it cannot interpret; the readiness anchor is web-2's own Hetzner creation time; the `image_tag` strip (a `v` input burned a
+dispatch); cryptsetup is installed with retries BEFORE the destructive steps; the summary claims only what the run measured and lists the
+evidence the CPO/CLO required; flip-precondition rows run in a sandbox (they were time-bombed); parity rows for the Hetzner helper copies and the
+volume name/label literals; the follow-through and marker suites gained the readiness-boot_id-unknown row; stale `boot_id`, custody and PASS-list prose.
+
+**Deviations from this plan, recorded:** (1) S5's "anti-pooling check green at the ref" and the summary's "serving weight 0" are NOT implemented: no
+weight orchestrator exists in the repo, so web-2's weight is not measurable here; the summary no longer asserts it and the dispatch is only from
+`main`, where `lb-weight-gate.test.sh` has run. (2) S12(a) compares the escrowed header's own UUID to its object name, not to the live volume's UUID
+(unobservable without host access). (3) The 1 GiB emptiness ceiling stays coarse by necessity (the real empty baseline is unmeasured offline): the
+owner approves on the printed values.
+
+**Accepted, not changed (P3 or out of scope), with the reason:** the env-name collision risk for `APPLY` against a Doppler secret of that name needs
+write access to the Tier-B Doppler project, which already owns the infra; `terraform state rm` cannot prevent a lost update on the lockless R2
+backend (detected after the fact, #7992); the post plan cannot be graded before the irreversible delete (a refused post plan leaves a safe stuck
+state the classifier heals); the firewall-attachment `update` is pinned by action only (its `server_ids` are unknown at plan time); the stale
+CONSUMERS comment on the marker token in `workspaces-luks-fresh-boot.tf` is corrected in the closing change (a `.tf` edit would wake the paused
+push-apply); the C4 clause stays on the `doppler -> hetzner` edge. No scope-out issue was filed.

@@ -724,11 +724,18 @@ gate, the replace gate or `web2_retire_allow` (each header forbids it): `pre` (d
 action sets must EQUAL an allow-list entry, so a volume delete, forget or replace is unrepresentable; every destroy is pinned to
 a physical id captured from Hetzner (server id and name, NIC `server_id`, attachment `volume_id`); the by-name web-1 refusal is
 the first statement. (2) A pure classifier (`tests/scripts/lib/web2-rebirth-classify.sh`) maps Hetzner and state to `proceed`, a
-named `heal:` window (detach done, delete done, state rm done, apply midway, volume created) or `refuse:` (already reborn,
-orphan raw volume, wrong shape, attached elsewhere, duplicate name, push-apply pause not real) before any write, so a re-dispatch
-after any crash heals or refuses. (3) Emptiness evidence is the 7-day Better Stack `host_metrics` series (hour coverage, freshness,
-a 1 GiB ceiling, a 15 to 21.5 GB total), and never-pooled evidence is the soak marker's absence by exact-name membership over
-secret names. (4) The escrow preflight runs before any Terraform command or Hetzner call; a missing escrow does NOT refuse the
+named `heal:` window (detach done, delete done, state rm done, apply midway, volume created), `resume:post_apply` (the rebirth
+already ran within 72 h: only the read-only readiness poll, the recovery check and the reboot run, nothing is replaced) or `refuse:`
+(already reborn, orphan raw volume, orphan server, a foreign volume attached to web-2, an inconsistent pin listing, wrong shape,
+attached elsewhere, duplicate name, push-apply pause not real) before any write, so a re-dispatch after any crash heals, resumes or
+refuses. `scripts/web2-rebirth.sh` is also the chokepoint for the irreversible step: its write subcommands refuse unless the run is an
+apply dispatch, and `delete-volume` refuses unless the emptiness, never-pooled and pre-plan-graded proofs (each step's own output, empty
+when the step was skipped) are present. (3) Emptiness evidence is the 7-day Better Stack `host_metrics` series (hour coverage, freshness, a non-zero minimum, a 1 GiB
+ceiling, a 64 MiB spread, a 15 to 21.5 GB total; freshness is dropped only for `heal:detach_done`). The ceiling is a COARSE bound,
+so the printed used-bytes values are what the owner approves on, and the first live query is the first measurement of the real empty
+baseline. Never-pooled evidence is the soak marker's absence by exact-name membership over secret names, from a list shape the
+reader can interpret (anything else is a refusal). Web-2's serving weight is NOT measured: no weight orchestrator exists in the repo
+at this SHA, and the summary says so instead of asserting weight 0. (4) The escrow preflight runs before any Terraform command or Hetzner call; a missing escrow does NOT refuse the
 format (the volume is empty; the readiness verdict goes RED and the soak marker is withheld).
 
 **What this change altered outside the workflow.** The reboot proof is now REQUIRED where it was only diagnostic:

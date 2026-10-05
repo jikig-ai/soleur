@@ -53,7 +53,13 @@ hapi() {
   [[ "$rc" -eq 0 ]] || code="000"
   printf '%s' "$code"
 }
-errcode() { local v; v="$(jq -r '.error.code // empty' "$HBODY" 2>/dev/null | head -c 64 || true)"; printf '%s' "${v:-none}"; }
+# errcode — the API's .error.code only (never the body), at most 64 bytes. Byte-identical (modulo whitespace) to the forget
+# workflow's copy; the workflow suite pins that.
+errcode() {
+  local v
+  v="$(jq -r '.error.code // empty' "$HBODY" 2>/dev/null | head -c 64 || true)"
+  printf '%s' "${v:-none}"
+}
 fail() {
   local m="$*"
   m="${m//%/%25}"; m="${m//$'\r'/%0D}"; m="${m//$'\n'/%0A}"

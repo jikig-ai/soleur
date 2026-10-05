@@ -30,8 +30,11 @@
 # still opens the header); the readiness row's is the off-host HEADER copy. Both are required to earn the marker.
 # The `key=value` tokens are parsed as a MAP, not a fixed sequence: an unknown extra key is ignored (an
 # emitter may grow a field), while a duplicated key, a missing required key or an unequal one is RED.
-# `boot_id` is DIAGNOSTIC ONLY: it is printed (uuid, else `unknown`) and never joined or required, because the
-# readiness row is per-instance and the probe row per-boot, so the two legitimately differ after any reboot.
+# `boot_id` is printed (uuid, else `unknown`) and is NOT part of the age join, because the readiness row is
+# per-instance and the probe row per-boot, so the two legitimately differ after any reboot. Since #9372 it is,
+# however, REQUIRED to DIFFER (both known) by w2l_reboot_seen: the marker-absent decision in w2l_judge and the
+# follow-through need a probe row from a boot other than the one that emitted the readiness row, which is the
+# only evidence that the volume REOPENS after a reboot.
 #
 # THE JOIN IS INSTANCE-LEVEL. A probe row certifies the instance that wrote a green readiness row when it is
 # NOT OLDER than that row (probe age_s <= readiness age_s): older, and it may belong to the host this one

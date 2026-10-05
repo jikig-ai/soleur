@@ -126,6 +126,42 @@ PY2
 
   chk "S22 no step is continue-on-error (a failed step must be a red run)" "$([[ "$(jqs '[.[] | select(.cont != null and .cont != false)] | length')" == 0 ]]; echo $?)"
 
+  # ---- parity: the literals this operation restates must equal their authorities (a drifted copy is a wrong target)
+  local FORGET="$REPO/.github/workflows/workspaces-plaintext-forget.yml" GATE="$REPO/tests/scripts/lib/web-host-rebirth-gate.sh" SERVER_TF="$REPO/apps/web-platform/infra/server.tf"
+  cat > "$TMP/parity.py" <<'PY3'
+import re, sys
+forget = open(sys.argv[1]).read(); mine = open(sys.argv[2]).read()
+def fn(text, name):
+    m = re.search(r'^[ \t]*' + name + r'\(\) \{\n(.*?)^[ \t]*\}\n', text, re.S | re.M)
+    return None if not m else re.sub(r'\s+', ' ', m.group(1)).strip()
+bad = []
+for name in ("errcode", "fail"):
+    a, b = fn(forget, name), fn(mine, name)
+    if a is None or b is None or a != b: bad.append(name + "()")
+curl = "curl -sS --max-time 15 --config - -X \"$1\" \"${extra[@]}\" -o \"$HBODY\" -w '%{http_code}' \"https://api.hetzner.cloud/v1$2\""
+if curl not in forget or curl not in mine: bad.append("curl line")
+def const(text, pat):
+    m = re.search(pat, text, re.M); return m.group(1) if m else None
+pairs = [("WEB1_SERVER_ID", r'^\s*WEB1_SERVER_ID: "(\d+)"', r'^WEB1_SERVER_ID="(\d+)"'),
+         ("LUKS_VOLUME_ID", r'^\s*LUKS_VOLUME_ID: "(\d+)"', r'^LUKS_VOLUME_ID="(\d+)"'),
+         ("WEB1_SERVER_NAME", r'^\s*WEB1_SERVER_NAME: (\S+)', r'^WEB1_SERVER_NAME="([^"]+)"')]
+for n, pf, pm in pairs:
+    a, b = const(forget, pf), const(mine, pm)
+    if a is None or a != b: bad.append(n)
+print(",".join(bad) if bad else "equal")
+PY3
+  if [[ -f "$FORGET" ]]; then
+    chk "S30 the Hetzner helpers (errcode, fail, the curl line) and the web-1 constants equal the forget workflow's copies" "$([[ "$(python3 "$TMP/parity.py" "$FORGET" "$SCRIPT_REAL")" == equal ]]; echo $?)"
+  else
+    # The forget workflow is single-use and is deleted by its own closing PR; the constants then have no second copy to drift from.
+    chk "S30 (forget workflow retired: nothing to compare against)" 0
+  fi
+  local sname slabel
+  sname="$(sed -nE 's/^PINNED_VOLUME_NAME="([^"]+)".*/\1/p' "$SCRIPT_REAL" | head -1)"
+  slabel="$(sed -nE 's/^VOLUME_LABEL_APP="([^"]+)".*/\1/p' "$SCRIPT_REAL" | head -1)"
+  chk "S31 the volume name literal equals the gate's template and server.tf's name for web-2" "$([[ "$sname" == soleur-web-platform-data-web-2 && "$(grep -c 'soleur-web-platform-data-\\(\$k)' "$GATE")" -ge 1 && "$(grep -c '"soleur-web-platform-data-${each.key}"' "$SERVER_TF")" -ge 1 ]]; echo $?)"
+  chk "S32 the volume label literal equals the gate's constant and server.tf's label" "$([[ "$slabel" == "$(sed -nE 's/^_WEB_HOST_REBIRTH_VOLUME_LABEL_APP="([^"]+)".*/\1/p' "$GATE")" && -n "$slabel" && "$(awk '/resource "hcloud_volume" "workspaces"/{f=1} f&&/app +=/{print; exit}' "$SERVER_TF")" == *"\"$slabel\""* ]]; echo $?)"
+
   # ---- behavioral: the extracted step bodies run under GitHub's production shell
   local sb="$TMP/sb.$RANDOM"; mkdir -p "$sb/apps/web-platform/infra" "$sb/tests/scripts/lib" "$sb/bin" "$sb/scripts"
   cp "$REPO/tests/scripts/lib/web-host-rebirth-gate.sh" "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$sb/tests/scripts/lib/"
@@ -234,7 +270,7 @@ while IFS= read -r line; do
   case "$line" in FAILED*) fails=$((fails + 1)); printf 'FAIL - %s\n' "${line#FAILED }" ;; RAN*) ran="${line#RAN }" ;; *) [[ -z "$line" ]] || printf '       %s\n' "$line" ;; esac
 done <<<"$report"
 printf 'real workflow: %s assertions, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 63 ]] || { echo "FAIL - assertion floor: ran ${ran} < 63"; fails=$((fails + 1)); }
+[[ "$ran" -ge 66 ]] || { echo "FAIL - assertion floor: ran ${ran} < 66"; fails=$((fails + 1)); }
 
 # Mutants are independent (each works on its own copy of the workflow and its own sandbox), so up to MUT_JOBS run at once; every mutant
 # writes its verdict line to its own file and the lines are counted once all have finished.

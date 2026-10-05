@@ -15,7 +15,10 @@
 #   1. the newest web-2 readiness row (emitted once per instance) is GREEN and at least SOAK_DAYS old;
 #   2. probe rows are GREEN (crypto_LUKS on /dev/mapper/workspaces, escrow ok) in at least SOAK_DAYS distinct
 #      24 h buckets counted from that readiness row, and the NEWEST probe row is GREEN and fresh (<= 26 h);
-#   3. no non-green probe row (a FAIL line, a malformed one, a non-LUKS OK) at or after that readiness row.
+#   3. no non-green probe row (a FAIL line, a malformed one, a non-LUKS OK) at or after that readiness row;
+#   4. the REBOOT is evidenced (#9372): the newest probe row's boot_id and the readiness row's are both known and
+#      DIFFER (w2l_reboot_seen). Three GREEN days on the boot that formatted the volume prove it opened once, never
+#      that it reopens, so without this arm the soak would pass on a host that was never rebooted.
 #
 # Exit semantics (sweep-followthroughs.sh rc→word map):
 #   0 = PASS              the soak is met

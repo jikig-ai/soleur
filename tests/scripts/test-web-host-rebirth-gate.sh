@@ -241,7 +241,7 @@ echo "  ok   destroy-guard readings measured on both fixtures"
 
 # ---- mutation battery: remove each load-bearing arm from a COPY; the battery must go red
 mutate() { # <name> <sed-script>
-  local name="$1" script="$2" copy="$TMP/gate.mut.sh" before after
+  local name="$1" script="$2" copy="$TMP/gate.mut.sh" after
   cp "$GATE" "$copy"
   sed -i -E "$script" "$copy"
   if cmp -s "$GATE" "$copy"; then echo "  FAIL mutation '${name}' did not change the gate (the anchor drifted)"; fails=$((fails + 1)); return; fi

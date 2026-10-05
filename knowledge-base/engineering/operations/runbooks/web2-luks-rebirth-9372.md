@@ -14,80 +14,103 @@ the authorization. Do not dispatch from a menu answer or a "continue".
 1. The **retirement change** is merged: it deletes `apply-web-escrow-create.yml` and flips the rotation HALT's `create`
    exemption in `tests/scripts/lib/destroy-guard-filter-web-platform.jq`. An apply dispatch refuses until it is (the
    `flip-precondition` step prints `NOT met`; a `plan_only` run prints `PENDING`).
-2. Both push-apply workflows are paused and idle: `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` are
-   `disabled_manually`, with nothing queued or running (an apply run refuses otherwise).
-3. `image_tag` is a release built from a commit that carries the fresh-boot provisioner, and the coherence preflight proves
-   the image's baked host-scripts hash equals `local.host_scripts_content_hash` at the dispatch commit.
-4. `bash scripts/web-host-escrow-preflight.sh` is green (the workflow runs it first, before any Terraform command or Hetzner call).
+2. Both push-apply workflows are paused and idle. Check both, nothing may be queued or running:
 
-## Dispatch
+   ```bash
+   gh api repos/jikig-ai/soleur/actions/workflows/apply-web-platform-infra.yml --jq .state      # disabled_manually
+   gh api repos/jikig-ai/soleur/actions/workflows/apply-deploy-pipeline-fix.yml --jq .state     # disabled_manually
+   ```
+
+3. `image_tag` is a published web-platform release that carries the fresh-boot provisioner: take the newest tag at or after the
+   merge commit of the PR that added this workflow (`gh release list --limit 5`). Either `v3.1.2` or `3.1.2` is accepted. The
+   coherence preflight proves the image's baked host-scripts hash equals `local.host_scripts_content_hash` at the dispatch commit.
+4. The Hetzner token the run uses must be the write-capable one. A `403` on detach, DELETE or reboot (the error names it) means
+   the credential loader exported the read-only token: stop and fix the loader's Tier-B secret before re-dispatching.
+5. `bash scripts/web-host-escrow-preflight.sh` is green (the workflow runs it first, before any Terraform command or Hetzner call).
+
+## Dispatch and watch
 
 Plan first (the default; no write of any kind):
 
 ```bash
 gh workflow run web2-luks-rebirth.yml --ref main \
   -f confirm=REBIRTH-web-2-LUKS -f expected_volume_id=106466179 -f image_tag=<vX.Y.Z> -f plan_only=true -f reason='<why>'
+gh run list --workflow web2-luks-rebirth.yml --limit 1 --json databaseId,status,conclusion,url
+gh run watch <databaseId> --exit-status          # confirm the run actually started: the shared concurrency group keeps one
+                                                 # running and one pending run, and a queued run can displace an older pending one
 ```
 
-Read the run summary and the classifier verdict. Only after the owner approves **that** apply, dispatch with `-f plan_only=false`
-and approve the `web-platform-infra-apply` environment gate. Confirm the run actually started: the shared concurrency
-group keeps one running and one pending run, and a queued run can displace an older pending one.
+Read the run log's `verdict:` line, the printed `pinned volume:` line, the emptiness verdict (it prints the minimum, maximum,
+spread and ceiling) and the dispatch summary. **The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
+printed used-bytes values before approving the apply, and the first live run is also the first measurement of the real empty
+baseline. Only after the owner approves **that** apply, dispatch with `-f plan_only=false` and approve the
+`web-platform-infra-apply` environment gate. The classifier verdict is also a job output (`verdict`).
 
 ## The classifier: what each verdict means
 
-Every dispatch starts by classifying Hetzner and Terraform state. The run writes nothing until the verdict is `proceed` or a
-`heal:` window. A `refuse:` ends the run RED before any write.
+Every dispatch starts by classifying Hetzner and Terraform state. The run writes nothing until the verdict is `proceed`, a
+`heal:` window or `resume:post_apply`. A `refuse:` ends the run RED before any write. Every write step additionally requires its
+proofs (the delete step refuses unless the emptiness, never-pooled and pre-plan proofs are present) and `plan_only` can never
+reach a write.
 
 | Verdict | What is true | What the run does |
 |---|---|---|
 | `proceed` | the pinned ext4 volume is attached to web-2 and held by state | full path |
-| `heal:detach_done` | detached last time | continues at DELETE |
+| `heal:detach_done` | detached last time | continues at DELETE; the emptiness gate drops its freshness bound (a detached device stops reporting) |
 | `heal:delete_done` | volume gone (404), state still holds it | continues at `state rm` |
 | `heal:state_rm_done` | state is clean, the old server exists | continues at the `post` plan |
 | `heal:apply_midway` | volume and server both gone | the `post` plan creates both |
 | `heal:volume_created` | the raw volume exists in state, not attached | the `post-heal` plan |
-| `refuse:already_reborn` | state holds another volume attached to web-2 | **single use**: a second rebirth needs a new reviewed pin and PR |
-| `refuse:orphan_raw_volume` | a raw volume with the name exists and state does not hold it | delete it by the same pinned API path in a reviewed re-dispatch; never import by hand |
+| `resume:post_apply` | the rebirth already ran (new volume in state and attached to web-2, server younger than 72 h) | **nothing is replaced**: only the read-only readiness poll, the recovery check and the reboot run |
+| `refuse:already_reborn` | the same, but the server is older than 72 h or its age is unknown | **single use**: a second rebirth needs a new reviewed pin and PR |
+| `refuse:orphan_raw_volume` | a raw volume with the name exists and state does not hold it | not healed automatically (it could hold data). The owner confirms in Hetzner that it is raw and unattached, deletes it (a production write needing the owner's approval), then re-dispatches |
+| `refuse:orphan_server` | Hetzner has a web-2 server that state does not hold | the post plan would try to create a second server of that name. The owner decides: import it into state or delete it (a production write), then re-dispatch |
+| `refuse:web2_holds_another_volume` | web-2 has a volume other than the pin attached | the server replace would detach it; stop and read the classifier line |
 | `refuse:pinned_volume_not_the_empty_plaintext_one` | the pin is not ext4, or its name/labels differ | stop; the premise is false |
-| `refuse:pinned_volume_attached_elsewhere`, `refuse:web2_holds_another_volume`, `refuse:duplicate_volume_name`, `refuse:state_*` | the world does not match the contract | stop and read the classifier line in the log |
+| `refuse:inconsistent_pin_listing`, `refuse:pinned_volume_attached_elsewhere`, `refuse:duplicate_volume_name`, `refuse:state_*` | the world does not match the contract | stop and read the classifier line in the log |
 | `refuse:push_apply_pause_not_real` | a push apply could re-create a plaintext volume | pause both workflows, wait for idle, re-dispatch |
 
-A **failed boot is not healed here**: use `web_host_replace` for web-2 (it carries the new volume forward by design).
-**There is no escrow retry.** While the host is still empty, an `escrow=missing` birth can only be redone by a second
-rebirth, which `refuse:already_reborn` blocks; that needs a new reviewed pin.
+A **failed boot is not healed here**: use `web_host_replace` for web-2 (it carries the new volume forward by design). After a
+completed apply, a failed readiness poll, recovery check or reboot is resumed by re-dispatching with the same inputs
+(`resume:post_apply`). **There is no escrow retry.** While the host is still empty, an `escrow=missing` birth can only be redone by
+a second rebirth, which `refuse:already_reborn` blocks after 72 h; that needs a new reviewed pin.
 
 ## What the run proves, and what it does not
 
-Evidence before any write, all read without SSH: 7 days of Better Stack `host_metrics` used-bytes for `/mnt/data`
-(hour coverage, freshness, a 1 GiB ceiling, and a 15 to 21.5 GB total so a mis-mounted root disk cannot pass), the soak
-marker absent by exact-name membership over secret **names**, the Hetzner volume still ext4 with the pinned id, name and labels.
-The Better Stack JSON paths and the `dm-*` exclusion in `vector.toml` are **unconfirmed until the first live query**; an
+Evidence before any write, all read without SSH: 7 days of Better Stack `host_metrics` used-bytes for `/mnt/data` (hour coverage,
+freshness, a non-zero minimum because a missing value path reads as 0, the 1 GiB ceiling, a 64 MiB spread so a volume that took
+writes is not "idle", and a 15 to 21.5 GB total so a mis-mounted root disk cannot pass), the soak marker absent by exact-name
+membership over secret **names** (a list shape the reader cannot interpret is a refusal, never "absent"), the Hetzner volume still
+ext4 with the pinned id, name and labels. **Not measured by this run:** web-2's serving weight (no weight orchestrator exists in the
+repo at this SHA; the marker is the only seam and the dispatch is only from `main` where the anti-pooling CI suite `lb-weight-gate.test.sh` has run). The Better Stack JSON paths and the `dm-*` exclusion in `vector.toml` are **unconfirmed until the first live query**; an
 absent field fails closed.
 
-After the apply: a `SOLEUR_FRESH_BOOT_READY` row newer than the run with `luks=1 luks_arm=formatted escrow=ok`; a read-only
-birth-time consistency check of the escrowed header and the two passphrase copies (`restore NOT exercised; open until #7992
-and a restore drill`); then an hcloud reboot is **issued**. The run never claims the volume reopens: the proof is a later
-luks-monitor probe row on a `boot_id` other than the readiness row's, `crypto_LUKS` on `/dev/mapper/workspaces`, graded by
-`scripts/followthroughs/web2-luks-live-6931.sh` (enrolled on #6931 with `earliest` = rebirth + 3 days) and required by the soak
-marker. Until then web-2 is *provisioned, proof pending*, at weight 0, holding no workspace data.
+After the apply: a `SOLEUR_FRESH_BOOT_READY` row newer than web-2's own Hetzner creation time with `luks=1 luks_arm=formatted
+escrow=ok`; a read-only birth-time consistency check of the escrowed header and the two passphrase copies (`restore NOT exercised;
+open until #7992 and a restore drill`); then an hcloud reboot is **issued**. The run never claims the volume reopens: the proof is a
+later luks-monitor probe row on a `boot_id` other than the readiness row's, `crypto_LUKS` on `/dev/mapper/workspaces`, graded by
+`scripts/followthroughs/web2-luks-live-6931.sh` and required by the soak marker. Until then web-2 is *provisioned, proof pending*, at
+weight 0, holding no workspace data. The dispatch summary (also printed to the run log) lists the evidence: reason, commit,
+dispatcher and approver(s), timestamps, the old volume's id/name/size/labels, emptiness and never-pooled verdicts, image and hash
+equality, the delete and forget results, the readiness row, the escrow object facts and the new server id and location. It makes the
+"provisioned, proof pending" claim only on a successful apply run.
 
-Caveats: the token that reads the marker config is read/write today (a read-only token is a prerequisite on #9358); the web-class
-R2 pair the recovery check reads may be write-capable (#9461); the state bucket has no object versioning (#7992); the Doppler and
-Terraform-state copies of the passphrase share one blast radius.
+Caveats: the token that reads the marker config is read/write today (a read-only token is a prerequisite on #9358); the web-class R2
+pair the recovery check reads may be write-capable (#9461); the state bucket has no object versioning (#7992) and `terraform state rm`
+detects a lost update only after the fact; the Doppler and Terraform-state copies of the passphrase share one blast radius. While
+web-2 is being replaced, web-1 carries the watchdog dispatch clock alone and web-2's own heartbeat alert may fire: that is expected
+for the window, not a fault.
 
 ## Closing checklist (a separate change; none of it ships with the workflow)
 
-1. Copy the dispatch summary (run id, SHA, actor, approver, timestamps) into the closing change: run logs expire.
-2. Flip the `hcloud_volume.workspaces` ledger row to `luks` (`live_verification: available`, `live_coverage_floor` 2 to 3), and
-   supersede the Article 30 and compliance-posture sentences conditioned on this event with dated markers (the CLO agent
-   owns the wording; the two cells stay byte-equal after bold removal). **No cell says "LUKS-backed at boot" before the graded reboot proof.**
-3. Re-capture web-2's SSH host-key pin (`scripts/capture-web-2-host-key.sh`); `apply-deploy-pipeline-fix` fails closed until then.
-   Re-enable the push-apply workflows only after that.
-4. Enrol the follow-through directive on #6931 (printed in the dispatch summary).
-5. Delete `web2-luks-rebirth.yml`, `scripts/web2-rebirth*.sh` and their tests, `tests/scripts/lib/web-host-rebirth-gate.sh`,
-   `tests/scripts/lib/web2-rebirth-classify.sh`, the fixtures, the suite registrations and the `MAIN_ROOT_TF_WORKFLOWS` entry (census 5 to 4), and record the use in ADR-263.
-6. Decision date **2026-10-15**: the dispatch has run and the ledger flip is in review, or the encryption-posture exception on
-   `hcloud_volume.workspaces` (expires 2026-10-22) is extended citing #6931.
+| # | Step | Who |
+|---|---|---|
+| 1 | Copy the dispatch summary (run id, SHA, dispatcher, approver, timestamps) into the closing change: run logs expire | the engineer or agent landing the change |
+| 2 | Flip the `hcloud_volume.workspaces` ledger row to `luks` (`live_verification: available`, `live_coverage_floor` 2 to 3), and supersede the Article 30 and compliance-posture sentences conditioned on this event with dated markers (the two cells stay byte-equal after bold removal). **No cell says "LUKS-backed at boot" before the graded reboot proof.** | the CLO agent drafts, the owner holds a veto |
+| 3 | Re-capture web-2's SSH host-key pin (`scripts/capture-web-2-host-key.sh`, which needs the new IP printed in the summary); `apply-deploy-pipeline-fix` fails closed until then. Re-enable the push-apply workflows only after that | the engineer, then the owner re-enables |
+| 4 | UPDATE the existing follow-through directive on #6931 (`earliest=` to rebirth + 3 days, printed in the summary); do not add a second | the engineer |
+| 5 | Delete `web2-luks-rebirth.yml`, `scripts/web2-rebirth*.sh` and their tests, `tests/scripts/lib/web-host-rebirth-gate.sh`, `tests/scripts/lib/web2-rebirth-classify.sh`, the fixtures, the suite registrations and the `MAIN_ROOT_TF_WORKFLOWS` entry (census 5 to 4), and record the use in ADR-263. Also correct the CONSUMERS comment on `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER` in `workspaces-luks-fresh-boot.tf` (it names only the verify workflow and the sweeper) in that change | the engineer |
+| 6 | Decision date **2026-10-15**: the dispatch has run and the ledger flip is in review, or the encryption-posture exception on `hcloud_volume.workspaces` (expires 2026-10-22) is extended citing #6931 | the owner |
 
 ## References
 
