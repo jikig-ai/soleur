@@ -105,12 +105,22 @@ sessions (the string a running session loaded cannot be changed from here).
 
 **A login that should persist is missing in the repo registration:** that session was
 given a numbered slot or a `-p<pid>` directory. Run `grep -a 'was skipped:' "$(ls -t
-~/.cache/claude-cli-nodejs/*/mcp-logs-*playwright*/*.jsonl | head -1)"` (the newest log
-whose `"cwd"` is this project, as in the connect-failure steps below); the line names why
-slot 0 (the persistent profile) was not used. Ask the other session to close its browser (`browser_close`), then
-reconnect. A reason naming another HOST (a renamed host or a copied home directory) is
-cleared by hand: after confirming no Chrome of yours uses that profile, `rm
-<slot-0 dir>/Singleton*`, which removes only the stale lock files and no login.
+~/.cache/claude-cli-nodejs/"$(pwd | sed 's/[^A-Za-z0-9]/-/g')"/mcp-logs-playwright/*.jsonl |
+head -1)"` from the project directory: the repo registration logs under `mcp-logs-playwright`
+in the directory named after the working directory with every character that is not a
+letter or digit replaced by a dash (`/.worktrees/` becomes `--worktrees-`). The plugin
+registration's `mcp-logs-plugin-soleur-playwright` never runs the slot script and never
+prints that line. The line names why slot 0 (the persistent profile) was not used, and the
+remedy depends on the reason:
+
+- "its lock is held by another live launch": the lease is held by the other session's
+  proxy process, and `browser_close` does not release it (it closes Chrome, not the
+  proxy). End that session, or disconnect its Playwright MCP server, then reconnect.
+- "its SingletonLock names a live Chrome": that Chrome must exit, for example
+  `browser_close` in the session that owns it, then reconnect.
+- A reason naming another HOST (a renamed host or a copied home directory) is
+  cleared by hand: after confirming no Chrome of yours uses that profile, `rm
+  <slot-0 dir>/Singleton*`, which removes only the stale lock files and no login.
 
 A search for another killer must cover every enabled plugin's `hooks.json` (the installed
 copy too), not only `settings.json`. The server's ping heartbeat is not a cause on stdio
