@@ -33,3 +33,15 @@
 - Route: `soleur:go` → `soleur:one-shot` (route_decision emitted)
 - Draft PR: #9562
 - Worktree: .worktrees/feat-one-shot-session-completion-inline
+
+## Work/Review/QA Phase (this session)
+- Implementation complete: `task_completed` WS frame + `isConversationViewed` suppression seam + inline `TaskCompletedCard` (mount-anchored read-mark).
+- tsc --noEmit clean; targeted vitest suites green (16 task-completed tests + adjacent suites).
+- Review: design pass (2 seats) → full panel (8 seats, code class, single-user-incident tier) → all P1/P2 fixed inline across 3 commits → fix round (12 seats + verifier): all PASS/CONCUR.
+- Deferred residual filed: #9567 (pendingId/resolvedId divergence).
+- QA: plan scenarios are integration-prose; 9/9 mapped to passing unit/component tests; no browser steps required.
+- seats tally ~23; ci_cycles 0 (CI will run on push/ship).
+
+## Pipeline (updated)
+- Route: go → one-shot; phases done: plan → work → review → qa → compound.
+- Next: ship (PR #9562).
