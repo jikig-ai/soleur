@@ -170,3 +170,22 @@ compatible recovery build/rehearsal, authenticated branch screenshots and
 mode-specific dispositions incomplete. The subsequent main sync and browser
 skill correction require fresh exact-head checks. Draft/default-off and all
 existing provider, credential, shared-write and cohort limits remain in force.
+
+## Addendum — 2026-10-05 regular-browser account evidence
+
+The operator reports account access in their regular browser and a project
+hard limit subsequently set to US$5. Available expiry controls and a “Global”
+region label are reported; configured expiry, agreement/custody and actual
+data controls remain unresolved. The attributable [CLO account-evidence
+addendum](clo-decision-packet.md#account-evidence-addendum--2026-10-05) owns
+the safe-reference facts, supersession and independent mode dispositions.
+No raw account identifier, email or credential value is retained here.
+
+At source head `c968c74e0c8fe6c583f313c0b822701a3059bdbc`,
+[CI](https://github.com/jikig-ai/soleur/actions/runs/37288875047) and
+[tenant integration](https://github.com/jikig-ai/soleur/actions/runs/37288874914)
+passed. PR #9051 reported draft and CLEAN. These code checks precede this
+evidence-only update and do not qualify provider execution, recovery,
+authenticated screenshots or either Web matrix. No provider request,
+credential-value inspection, shared database/production write or flag/cohort
+change was made by this continuation; local suites remain skipped.

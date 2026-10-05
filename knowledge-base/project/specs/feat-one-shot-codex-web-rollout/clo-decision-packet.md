@@ -88,3 +88,55 @@ The actual runtime requires verified DPA and known transfer evidence even for
 synthetic data, while the current Web composition selects unqualified customer
 data. Keep the PR draft and feature default-off; migration, preview/QA, routine
 and per-mode Web qualification gates remain independent.
+
+## Account-evidence addendum — 2026-10-05
+
+Internal reassessment by `soleur:legal:clo` at source head
+`c968c74e0c8fe6c583f313c0b822701a3059bdbc`, based on sanitized
+operator-reported facts and the existing mode audit. This is draft internal
+review, not an executed agreement or external counsel opinion.
+
+The operator reports successful sign-in in their regular browser, an API
+organization displayed as “Personal organization”, existing project
+`operator-api-project`, and nominated owner/payer
+`operator-openai-api-account`. The earlier report that Jikigai/Soleur is the
+owning and agreement-accepting entity remains operator-reported. Neither the
+display label nor these reports independently verifies administrative
+authority, contracting party, applicable agreement or DPA coverage.
+
+The operator now reports that the control is a project hard limit and that
+it has been set to US$5. This actual-setting report was not independently
+verified through the dashboard or API.
+
+> **Superseded 2026-10-05 (PR #9051):** The earlier US$50 spend-control
+> observation is historical; the operator subsequently identified the
+> control as a project hard limit and reported setting it to US$5.
+
+Official [spend-limit documentation](https://developers.openai.com/api/docs/guides/spend-limits),
+retrieved on 2026-10-05, distinguishes monthly hard limits from alerts and
+describes enforcement lag and possible overspend. The reported US$5 setting
+therefore does not by itself establish the authorized US$5 total maximum
+and seven-day expiry after setup.
+
+The operator reports available key-expiry controls and region label
+“Global”. No configured key-expiry deadline or key creation is evidenced.
+Official [key guidance](https://developers.openai.com/api/docs/guides/production-best-practices),
+retrieved on 2026-10-05, describes expiration and administrator maximum
+lifetimes; it does not verify this account's configuration. The region label
+does not establish actual processing locations, transfer basis, training,
+retention or erasure controls.
+
+API-key disposition remains **PENDING — no live authorization**. Safe
+account/project nomination and reported spending controls narrow existing
+gaps; applicable agreement/DPA coverage, precise hosted custody permission,
+configured expiry, actual data/transfer controls and independent Web
+qualification remain unresolved. The existing managed hosted-auth path
+remains **BLOCKED — provider-permitted integration required**, carrying
+forward the 2026-10-03 mode audit independently of these API-account facts.
+
+Existing permission remains bounded to one internal synthetic workspace,
+US$5 total and seven days after setup. This reassessment authorizes no
+provider request, credential-value inspection, shared database/production
+write or flag/cohort change. Local suites remain skipped at operator
+direction. Neither mode gains live authorization or qualification; customer
+content remains blocked, and PR #9051 remains draft with Codex default-off.
