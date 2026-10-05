@@ -39,6 +39,7 @@ import {
 import {
   applyPrefillGuard,
   CONTEXT_RESET_NOTICE_GENERIC,
+  CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
 } from "./agent-prefill-guard";
 
 import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
@@ -1326,6 +1327,7 @@ async function releaseCcWorktreeLease(
 async function replicateAndReleaseCcWorktreeLease(
   userId: string,
   conversationId: string,
+  opts?: { skipRelease?: boolean },
 ): Promise<void> {
   const key = makeWorktreeLeaseKey(userId, conversationId);
   const record = _ccWorktreeLeases.get(key);
@@ -1361,7 +1363,16 @@ async function replicateAndReleaseCcWorktreeLease(
     // Already reported (feature: worktree_lease) inside replicateToGitData;
     // swallow so a replication failure never wedges the lease release below.
   } finally {
-    await record.handle.release();
+    // #9538 — the stale-resume arm skips the release: the listener's
+    // synchronous re-dispatch re-acquires same-host keep-gen moments later,
+    // and a deferred release would tombstone (`heartbeat_at = '-infinity'`)
+    // the row out from under the fresh handle (migration-116 release matches
+    // on host_id + generation regardless of recency). The held heartbeat
+    // keeps the row live through the retry; its `onLost` self-terminates
+    // (~2 missed beats) after the retry's own close releases normally.
+    if (!opts?.skipRelease) {
+      await record.handle.release();
+    }
   }
 }
 
@@ -1592,7 +1603,7 @@ export function handleCcCloseQuery({
 }: {
   conversationId: string;
   userId: string;
-  reason?: "disconnected";
+  reason?: "disconnected" | "stale-resume";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
   // TR3 (#5843) — flush the aggregated tool-attempt row for this session. Once
@@ -1607,7 +1618,9 @@ export function handleCcCloseQuery({
   // mirrored to Sentry inside). No-op when the lease path was gated off / already
   // released. The push-options ride the git-data push ONLY (never the in-sandbox
   // agent's GitHub origin push).
-  void replicateAndReleaseCcWorktreeLease(userId, conversationId);
+  void replicateAndReleaseCcWorktreeLease(userId, conversationId, {
+    skipRelease: reason === "stale-resume",
+  });
   if (reason === "disconnected") {
     void checkpointInflightWorkForConversation(
       userId,
@@ -3270,6 +3283,232 @@ async function clearCcSessionId(args: {
  * backwards compatibility (Stage 3 will add dedicated `workflow_*`
  * events).
  */
+
+/**
+ * Shared dispatch-failure boundary — the classification + revert + mirror +
+ * client-frame contract every `runner.dispatch` failure funnels through.
+ * Extracted so the #9538 stale-resume retry honors the SAME taxonomy as the
+ * primary dispatch-time catch (KeyInvalidError → `key_invalid`,
+ * MissingByokKeyError → `byok_key_missing`, `denied_jti` → session_revoked +
+ * session_ended, RepoNotReadyError/WorkspaceNotReadyError → info breadcrumb
+ * with NO error-tier mirror, generic → mirror + router-unavailable frame +
+ * `active`→`failed` revert). Divergence note: callers pass `sessionId:
+ * undefined` when the column was already cleared (the stale-resume retry) —
+ * the generic arm's clear-on-non-KeyInvalid then no-ops.
+ */
+async function reportDispatchSoleurGoError(
+  err: unknown,
+  ctx: {
+    userId: string;
+    conversationId: string;
+    sendToClient: (userId: string, message: WSMessage) => boolean;
+    sessionId: string | null | undefined;
+    onSessionIdPersisted?: ((sessionId: string | null) => void) | undefined;
+    mirrorOp: string;
+    revertOp: string;
+  },
+): Promise<void> {
+    // Turn-start revert: the flip above set the row `active`; this catch is
+    // the single boundary every dispatch failure funnels through, so revert
+    // here — `onlyIfStatusIn: ["active"]` confines the write to rows still
+    // holding the value we set (a concurrent gate-resolve / supersede write
+    // wins and is left untouched). Same shape as the legacy
+    // `updateConversationStatusIfActive` abort/result path (#3463).
+    //
+    // Provenance guard (review P-finding): the status-value guard cannot
+    // distinguish "active we just set" from "active a CONCURRENT live turn
+    // set" — ws-handler fires `chat` per frame without serialization, so a
+    // parallel dispatch on the same conversation is reachable. A live Query
+    // is the authoritative discriminator: when `hasActiveCcQuery` reports a
+    // running loop, THIS throw is a rejected duplicate and the row legitimately
+    // belongs to the other turn — `failed` would both lie on the badge and
+    // drop the row out of the orphan-ledger's live-status set (a live slot
+    // could then be force-released as orphaned). Best-effort: a revert
+    // write/mint failure must not mask the primary dispatch error below.
+    if (!hasActiveCcQuery(ctx.conversationId)) {
+      try {
+        await updateConversationFor(
+          ctx.userId,
+          ctx.conversationId,
+          { status: "failed" },
+          {
+            feature: "cc-dispatcher",
+            op: ctx.revertOp,
+            onlyIfStatusIn: ["active"],
+            expectMatch: false,
+          },
+        );
+      } catch {
+        // Mirror already fired inside updateConversationFor for real errors.
+      }
+    }
+    const errorClass =
+      err instanceof KeyInvalidError
+        ? "KeyInvalidError"
+        : err instanceof Error
+          ? err.constructor.name
+          : "unknown";
+    // #5394 — a `cloning`/`error` repo block is an EXPECTED transient/benign
+    // state, NOT an incident: skip the Sentry mirror (else every cloning-window
+    // turn pages). A structured logger.info breadcrumb keeps the rate
+    // observable in Better Stack without Sentry noise (no alert on `cloning`;
+    // alert on a `code=error` spike). This is the novel pattern — Missing/
+    // KeyInvalidError ARE mirrored because they are real failures.
+    if (err instanceof RepoNotReadyError) {
+      log.info(
+        {
+          feature: "cc-dispatcher",
+          op: "repo-readiness-gate",
+          code: err.code,
+          userIdHash: hashUserId(ctx.userId),
+          conversationId: ctx.conversationId,
+        },
+        "repo-readiness gate: blocked dispatch (repo not ready)",
+      );
+    } else if (err instanceof WorkspaceNotReadyError) {
+      // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
+      // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
+      // breadcrumb already fired, deduped). Info breadcrumb keeps the rate
+      // observable without paging.
+      log.info(
+        {
+          feature: "cc-dispatcher",
+          op: "workspace-not-ready-gate",
+          kind: err.state.kind,
+          userIdHash: hashUserId(ctx.userId),
+          conversationId: ctx.conversationId,
+        },
+        "workspace-not-ready gate: blocked dispatch (workspace not ready)",
+      );
+    } else {
+      mirrorWithDebounce(
+        err,
+        {
+          feature: "cc-dispatcher",
+          op: ctx.mirrorOp,
+          extra: { conversationId: ctx.conversationId, userId: ctx.userId },
+        },
+        ctx.userId,
+        `${ctx.mirrorOp}:${errorClass}`,
+      );
+    }
+    // R10 — KeyInvalidError surfaces with errorCode so the client can
+    // prompt for a fresh BYOK key. Mirrors the KeyInvalidError →
+    // errorCode: "key_invalid" branch in agent-runner.ts
+    // handleSessionError. All other failures fall back to the generic
+    // router-unavailable message without an errorCode.
+    if (
+      err instanceof RuntimeAuthError &&
+      err.cause === "denied_jti"
+    ) {
+      // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
+      // mint or any other tenant-RPC inside the dispatch surfaced
+      // `RuntimeAuthError("denied_jti")` before the runner emitted its
+      // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
+      // agents/API consumers observing this turn receive the same
+      // terminal discriminator the runner-level catch would have emitted
+      // for a mid-stream throw.
+      //
+      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
+      // so the lookup+sanitize logic stays shared with agent-runner and
+      // soleur-go-runner. Helper returns the looked-up status if a caller
+      // needs the raw fields; this site only needs the emit side effect.
+      await tryEmitRevocationNotice(ctx.userId, (frame) =>
+        ctx.sendToClient(ctx.userId, frame),
+      );
+      // Pair with the terminal session_ended frame so the client
+      // reducer clears streamState (`clear_streams` in ws-client.ts).
+      // Disambiguator `ctx.conversationId` lets multi-tab clients route
+      // this to the correct tab; matches the pre-existing
+      // session_ended emit-site shape elsewhere in this dispatcher.
+      ctx.sendToClient(ctx.userId, {
+        type: "session_ended",
+        reason: "session_revoked",
+        conversationId: ctx.conversationId,
+      });
+    } else if (err instanceof MissingByokKeyError) {
+      // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
+      // key. Info-level breadcrumb captures workspace context;
+      // `byok_key_missing` errorCode tells the client to render the
+      // configure-banner linking to /dashboard/settings/byok rather
+      // than the key-invalid prompt.
+      reportMissingByokKey(err);
+      ctx.sendToClient(ctx.userId, {
+        type: "error",
+        message:
+          "Configure your BYOK key to run agents in this workspace.",
+        errorCode: "byok_key_missing",
+      });
+    } else if (err instanceof KeyInvalidError) {
+      ctx.sendToClient(ctx.userId, {
+        type: "error",
+        message: "Your API key is invalid — set up a fresh key to continue.",
+        errorCode: "key_invalid",
+      });
+    } else if (err instanceof RepoNotReadyError) {
+      // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
+      // user-facing message (and `repo_setup_failed` errorCode on the error
+      // branch, so the client can render the reconnect CTA). MUST sit ABOVE the
+      // generic `else` so it does NOT hit the `session_id`-clearing path below —
+      // a transient cloning/error block must not nuke a resumable session.
+      ctx.sendToClient(ctx.userId, {
+        type: "error",
+        message: err.message,
+        ...(err.errorCode ? { errorCode: err.errorCode } : {}),
+      });
+    } else if (err instanceof WorkspaceNotReadyError) {
+      // ADR-044 PR-1 (FR2) — db-error → transient copy, NO errorCode (no CTA: a
+      // transient fault must not tell the user to take a structural action).
+      // no-repo-switch → `workspace_switch_required` + `switchToWorkspaceId` so
+      // the client renders the workspace-switcher affordance (carrying the
+      // discarded claim id). MUST sit ABOVE the generic `else` so a benign block
+      // does not nuke a resumable session.
+      ctx.sendToClient(ctx.userId, {
+        type: "error",
+        message: err.message,
+        ...(err.state.kind === "no-repo-switch"
+          ? {
+              errorCode: "workspace_switch_required" as const,
+              switchToWorkspaceId: err.state.targetTeamId,
+            }
+          : {}),
+      });
+    } else {
+      // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
+      // a persisted session_id but the runner rejected for a reason
+      // other than KeyInvalidError. Plan §R7 documents this trade-off:
+      // the predicate is broad ("any non-KeyInvalidError"), which means
+      // a transient backend error (network blip, BYOK fetch failure,
+      // workspace patch failure) will also clear a legitimate session_id
+      // and force a cold-start on the next turn. Acceptable cost: the
+      // SDK rebuilds from the persisted `messages` rows on next dispatch
+      // and the prefill guard's history-probe handles assistant-
+      // terminated threads — at most one turn of degraded latency.
+      // Narrowing to typed SDK error classes is tracked separately and
+      // is out of scope for the activation PR. Fire-and-forget; the
+      // user-facing generic-error message lands either way. Update the
+      // in-process cache alongside the DB write so the next chat-case
+      // warm-cache turn does not forward the now-stale value.
+      if (ctx.sessionId) {
+        ctx.onSessionIdPersisted?.(null);
+        void clearCcSessionId({
+          userId: ctx.userId,
+          conversationId: ctx.conversationId,
+        });
+      }
+      ctx.sendToClient(ctx.userId, {
+        type: "error",
+        message: "Dashboard router is unavailable — try again shortly.",
+      });
+    }
+    // Belt-and-suspenders: drain ccBashGates here too. The runner's
+    // onCloseQuery hook covers normal close paths, but a dispatch-time
+    // throw before the runner takes ownership of the Query may leave
+    // stranded entries (e.g. concurrent register from a prior turn).
+    cleanupCcBashGatesForConversation(ctx.userId, ctx.conversationId);
+}
+
+
 export async function dispatchSoleurGo(
   args: DispatchSoleurGoArgs,
 ): Promise<void> {
@@ -4269,76 +4508,72 @@ export async function dispatchSoleurGo(
       // would silently drop recovery (no clear, no retry, no frame) in
       // the arg-falsy/state-truthy divergence.
       if (!info.deadSessionId) return;
-      // Honesty frame FIRST — the client sees the existing
-      // `context_reset` contract (reason "prefill-guard" is the
-      // sanctioned reuse; the wire copy is generic and accurate), not
+      // A turn that died mid-`tool_use` gets the re-confirmation copy +
+      // reason — a proposed action the user saw must not silently re-run.
+      const isToolOrphan = info.lastBlockKind === "tool_use";
+      const retry = () => {
+        // A concurrent send that claimed `activeQueries` between the
+        // dying close and now owns the conversation — the user's newer
+        // turn supersedes; re-dispatching would clobber it.
+        if (hasActiveCcQuery(conversationId)) return;
+        void runner
+          .dispatch({
+            ...dispatchArgs,
+            sessionId: undefined,
+            // Strip the recovery listener — a repeat signature on the
+            // retried turn degrades to the normal `internal_error` path,
+            // which is what BOUNDS the recovery to one re-dispatch
+            // (state.sessionId rebinds on the first result, so the arm
+            // would otherwise be armed again for the iterator's lifetime).
+            events: { ...events, onStaleResume: undefined },
+            contextResetNotice: isToolOrphan
+              ? CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN
+              : CONTEXT_RESET_NOTICE_GENERIC,
+          })
+          .catch(async (retryErr) => {
+            // Same taxonomy as the primary dispatch catch — this is the
+            // retry's sole error boundary, so it must discriminate
+            // (key_invalid / byok_key_missing / session_revoked / benign
+            // blocks with no mirror), not collapse to a generic frame.
+            try {
+              await reportDispatchSoleurGoError(retryErr, {
+                userId,
+                conversationId,
+                sendToClient,
+                // Already cleared above — never re-clear for the retry.
+                sessionId: undefined,
+                onSessionIdPersisted,
+                mirrorOp: "stale-resume-retry",
+                revertOp: "stale-resume-retry-revert",
+              });
+            } catch (reportErr) {
+              reportSilentFallback(reportErr, {
+                feature: "cc-dispatcher",
+                op: "stale-resume-retry-report",
+                extra: { conversationId, userId },
+              });
+            }
+          });
+      };
+      // Durable recovery FIRST — a throwing `sendToClient`/cache callback
+      // must not strand the clear+retry (the listener try/catch in the
+      // runner would mirror the throw but leave `session_id` wedged).
+      // `clearCcSessionId` resolves before the retry so its persist can
+      // never lose the ordering race; on its own failure it mirrors
+      // internally and the retry still runs (persist heals the column).
+      void clearCcSessionId({ userId, conversationId }).then(retry, retry);
+      // Drop the dead turn's buffered assistant text — without this a
+      // zero-text retry would persist the partial as a `complete` row.
+      state.setText("");
+      onSessionIdPersisted?.(null);
+      // Honesty frame — the client sees the existing `context_reset`
+      // contract (reusing the prefill-guard/tool-orphan reasons), not
       // silent amnesia or an `internal_error`.
       sendToClient(userId, {
         type: "context_reset",
-        reason: "prefill-guard",
+        reason: isToolOrphan ? "tool_use_orphan" : "prefill-guard",
         conversationId,
       });
-      // Clear the stale id: in-process cache AND DB, same pair the
-      // dispatch-time stale-clear uses (R7). Fire-and-forget — the
-      // in-memory `state.sessionId` is already dead with the query.
-      onSessionIdPersisted?.(null);
-      void clearCcSessionId({ userId, conversationId });
-      // Synchronous re-dispatch is SAFE — the runner emits this AFTER
-      // `closeQuery`'s `activeQueries.delete`, so the dying entry cannot
-      // take the `queryReused` path (see `DispatchEvents.onStaleResume`).
-      // `sessionId: undefined` bounds the recovery: no `resume:` is
-      // attempted, so the stale signature cannot re-fire on the retried
-      // turn.
-      void runner
-        .dispatch({
-          ...dispatchArgs,
-          sessionId: undefined,
-          contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC,
-        })
-        .catch(async (retryErr) => {
-          // Retry-failure contract mirrors the dispatch-time catch:
-          // mirror (no KeyInvalidError discrimination needed — the
-          // retry's own dispatch catch does not run here), generic
-          // client frame, and `active` → `failed` revert guarded on
-          // `hasActiveCcQuery` so a concurrent live turn's row is left
-          // untouched. Does NOT clear session_id again — the stale id
-          // is already gone and the retry ran cold.
-          mirrorWithDebounce(
-            retryErr,
-            {
-              feature: "cc-dispatcher",
-              op: "stale-resume-retry",
-              extra: { conversationId, userId },
-            },
-            userId,
-            `stale-resume-retry:${
-              retryErr instanceof Error
-                ? retryErr.constructor.name
-                : "unknown"
-            }`,
-          );
-          sendToClient(userId, {
-            type: "error",
-            message: "Dashboard router is unavailable — try again shortly.",
-          });
-          if (!hasActiveCcQuery(conversationId)) {
-            try {
-              await updateConversationFor(
-                userId,
-                conversationId,
-                { status: "failed" },
-                {
-                  feature: "cc-dispatcher",
-                  op: "stale-resume-retry-revert",
-                  onlyIfStatusIn: ["active"],
-                  expectMatch: false,
-                },
-              );
-            } catch {
-              // Mirror already fired inside updateConversationFor.
-            }
-          }
-        });
     },
   };
 
@@ -4408,201 +4643,15 @@ export async function dispatchSoleurGo(
   try {
     await runner.dispatch(dispatchArgs);
   } catch (err) {
-    // Turn-start revert: the flip above set the row `active`; this catch is
-    // the single boundary every dispatch failure funnels through, so revert
-    // here — `onlyIfStatusIn: ["active"]` confines the write to rows still
-    // holding the value we set (a concurrent gate-resolve / supersede write
-    // wins and is left untouched). Same shape as the legacy
-    // `updateConversationStatusIfActive` abort/result path (#3463).
-    //
-    // Provenance guard (review P-finding): the status-value guard cannot
-    // distinguish "active we just set" from "active a CONCURRENT live turn
-    // set" — ws-handler fires `chat` per frame without serialization, so a
-    // parallel dispatch on the same conversation is reachable. A live Query
-    // is the authoritative discriminator: when `hasActiveCcQuery` reports a
-    // running loop, THIS throw is a rejected duplicate and the row legitimately
-    // belongs to the other turn — `failed` would both lie on the badge and
-    // drop the row out of the orphan-ledger's live-status set (a live slot
-    // could then be force-released as orphaned). Best-effort: a revert
-    // write/mint failure must not mask the primary dispatch error below.
-    if (!hasActiveCcQuery(conversationId)) {
-      try {
-        await updateConversationFor(
-          userId,
-          conversationId,
-          { status: "failed" },
-          {
-            feature: "cc-dispatcher",
-            op: "turn-start-revert",
-            onlyIfStatusIn: ["active"],
-            expectMatch: false,
-          },
-        );
-      } catch {
-        // Mirror already fired inside updateConversationFor for real errors.
-      }
-    }
-    const errorClass =
-      err instanceof KeyInvalidError
-        ? "KeyInvalidError"
-        : err instanceof Error
-          ? err.constructor.name
-          : "unknown";
-    // #5394 — a `cloning`/`error` repo block is an EXPECTED transient/benign
-    // state, NOT an incident: skip the Sentry mirror (else every cloning-window
-    // turn pages). A structured logger.info breadcrumb keeps the rate
-    // observable in Better Stack without Sentry noise (no alert on `cloning`;
-    // alert on a `code=error` spike). This is the novel pattern — Missing/
-    // KeyInvalidError ARE mirrored because they are real failures.
-    if (err instanceof RepoNotReadyError) {
-      log.info(
-        {
-          feature: "cc-dispatcher",
-          op: "repo-readiness-gate",
-          code: err.code,
-          userIdHash: hashUserId(userId),
-          conversationId,
-        },
-        "repo-readiness gate: blocked dispatch (repo not ready)",
-      );
-    } else if (err instanceof WorkspaceNotReadyError) {
-      // ADR-044 PR-1 — transient db-error or member-reset-to-empty-solo. Benign
-      // dispatch block, NOT an incident: skip the Sentry mirror (the divergence
-      // breadcrumb already fired, deduped). Info breadcrumb keeps the rate
-      // observable without paging.
-      log.info(
-        {
-          feature: "cc-dispatcher",
-          op: "workspace-not-ready-gate",
-          kind: err.state.kind,
-          userIdHash: hashUserId(userId),
-          conversationId,
-        },
-        "workspace-not-ready gate: blocked dispatch (workspace not ready)",
-      );
-    } else {
-      mirrorWithDebounce(
-        err,
-        {
-          feature: "cc-dispatcher",
-          op: "dispatch",
-          extra: { conversationId, userId },
-        },
-        userId,
-        `dispatch:${errorClass}`,
-      );
-    }
-    // R10 — KeyInvalidError surfaces with errorCode so the client can
-    // prompt for a fresh BYOK key. Mirrors the KeyInvalidError →
-    // errorCode: "key_invalid" branch in agent-runner.ts
-    // handleSessionError. All other failures fall back to the generic
-    // router-unavailable message without an errorCode.
-    if (
-      err instanceof RuntimeAuthError &&
-      err.cause === "denied_jti"
-    ) {
-      // #4440 follow-up to #4418 — JWT-deny propagation. A persistUserMessage
-      // mint or any other tenant-RPC inside the dispatch surfaced
-      // `RuntimeAuthError("denied_jti")` before the runner emitted its
-      // own WorkflowEnd. Synthesize a `session_revoked` WS frame so
-      // agents/API consumers observing this turn receive the same
-      // terminal discriminator the runner-level catch would have emitted
-      // for a mid-stream throw.
-      //
-      // Routes through `tryEmitRevocationNotice` (server/revocation-emit.ts)
-      // so the lookup+sanitize logic stays shared with agent-runner and
-      // soleur-go-runner. Helper returns the looked-up status if a caller
-      // needs the raw fields; this site only needs the emit side effect.
-      await tryEmitRevocationNotice(userId, (frame) =>
-        sendToClient(userId, frame),
-      );
-      // Pair with the terminal session_ended frame so the client
-      // reducer clears streamState (`clear_streams` in ws-client.ts).
-      // Disambiguator `conversationId` lets multi-tab clients route
-      // this to the correct tab; matches the pre-existing
-      // session_ended emit-site shape elsewhere in this dispatcher.
-      sendToClient(userId, {
-        type: "session_ended",
-        reason: "session_revoked",
-        conversationId,
-      });
-    } else if (err instanceof MissingByokKeyError) {
-      // Phase 3.2 AC-D (Kieran N4): fail-closed when member has no BYOK
-      // key. Info-level breadcrumb captures workspace context;
-      // `byok_key_missing` errorCode tells the client to render the
-      // configure-banner linking to /dashboard/settings/byok rather
-      // than the key-invalid prompt.
-      reportMissingByokKey(err);
-      sendToClient(userId, {
-        type: "error",
-        message:
-          "Configure your BYOK key to run agents in this workspace.",
-        errorCode: "byok_key_missing",
-      });
-    } else if (err instanceof KeyInvalidError) {
-      sendToClient(userId, {
-        type: "error",
-        message: "Your API key is invalid — set up a fresh key to continue.",
-        errorCode: "key_invalid",
-      });
-    } else if (err instanceof RepoNotReadyError) {
-      // #5394 — the repo is `cloning` or its setup `error`'d. Emit the honest
-      // user-facing message (and `repo_setup_failed` errorCode on the error
-      // branch, so the client can render the reconnect CTA). MUST sit ABOVE the
-      // generic `else` so it does NOT hit the `session_id`-clearing path below —
-      // a transient cloning/error block must not nuke a resumable session.
-      sendToClient(userId, {
-        type: "error",
-        message: err.message,
-        ...(err.errorCode ? { errorCode: err.errorCode } : {}),
-      });
-    } else if (err instanceof WorkspaceNotReadyError) {
-      // ADR-044 PR-1 (FR2) — db-error → transient copy, NO errorCode (no CTA: a
-      // transient fault must not tell the user to take a structural action).
-      // no-repo-switch → `workspace_switch_required` + `switchToWorkspaceId` so
-      // the client renders the workspace-switcher affordance (carrying the
-      // discarded claim id). MUST sit ABOVE the generic `else` so a benign block
-      // does not nuke a resumable session.
-      sendToClient(userId, {
-        type: "error",
-        message: err.message,
-        ...(err.state.kind === "no-repo-switch"
-          ? {
-              errorCode: "workspace_switch_required" as const,
-              switchToWorkspaceId: err.state.targetTeamId,
-            }
-          : {}),
-      });
-    } else {
-      // #3266 R7 — stale-resume cleanup. The dispatch was attempted with
-      // a persisted session_id but the runner rejected for a reason
-      // other than KeyInvalidError. Plan §R7 documents this trade-off:
-      // the predicate is broad ("any non-KeyInvalidError"), which means
-      // a transient backend error (network blip, BYOK fetch failure,
-      // workspace patch failure) will also clear a legitimate session_id
-      // and force a cold-start on the next turn. Acceptable cost: the
-      // SDK rebuilds from the persisted `messages` rows on next dispatch
-      // and the prefill guard's history-probe handles assistant-
-      // terminated threads — at most one turn of degraded latency.
-      // Narrowing to typed SDK error classes is tracked separately and
-      // is out of scope for the activation PR. Fire-and-forget; the
-      // user-facing generic-error message lands either way. Update the
-      // in-process cache alongside the DB write so the next chat-case
-      // warm-cache turn does not forward the now-stale value.
-      if (sessionId) {
-        onSessionIdPersisted?.(null);
-        void clearCcSessionId({ userId, conversationId });
-      }
-      sendToClient(userId, {
-        type: "error",
-        message: "Dashboard router is unavailable — try again shortly.",
-      });
-    }
-    // Belt-and-suspenders: drain ccBashGates here too. The runner's
-    // onCloseQuery hook covers normal close paths, but a dispatch-time
-    // throw before the runner takes ownership of the Query may leave
-    // stranded entries (e.g. concurrent register from a prior turn).
-    cleanupCcBashGatesForConversation(userId, conversationId);
+    await reportDispatchSoleurGoError(err, {
+      userId,
+      conversationId,
+      sendToClient,
+      sessionId,
+      onSessionIdPersisted,
+      mirrorOp: "dispatch",
+      revertOp: "turn-start-revert",
+    });
   }
 }
 

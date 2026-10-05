@@ -63,6 +63,7 @@ import {
   mirrorWithDebounce,
 } from "./observability";
 import { stripStopGateMarkup } from "./stop-gate-markup";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
 import { RepoNotReadyError } from "./repo-readiness";
@@ -968,9 +969,18 @@ export interface DispatchEvents {
    * re-dispatch synchronously; the dying entry cannot take the
    * `queryReused` path. `deadSessionId` carries `state.sessionId`
    * (non-null on this arm) — authoritative when the dispatcher's own
-   * dispatch arg and the rebound state id diverge.
+   * dispatch arg and the rebound state id diverge. `lastBlockKind`
+   * carries the block telemetry the dispatcher needs to pick the
+   * tool-orphan reset notice (a turn that died mid-`tool_use` warrants
+   * the re-confirmation copy, not the generic one). When no listener is
+   * wired (non-cc callers, or the retry's deliberately stripped events),
+   * the runner falls back to the normal `internal_error` terminal frame —
+   * a dead resume with no recovery still ends the turn honestly.
    */
-  onStaleResume?: (info: { deadSessionId: string }) => void;
+  onStaleResume?: (info: {
+    deadSessionId: string;
+    lastBlockKind: "text" | "tool_use" | null;
+  }) => void;
 }
 
 export interface DispatchArgs {
@@ -1162,6 +1172,11 @@ export interface QueryFactoryArgs {
 
 export type QueryFactory = (args: QueryFactoryArgs) => Promise<Query> | Query;
 
+/** Why a query closed — threaded to `deps.onCloseQuery` so the cc hook can
+ *  distinguish a dead-resume recovery close (keep the lease held; the retry
+ *  re-acquires it) from a disconnect grace-abort (checkpoint in-flight work). */
+export type CloseQueryReason = "disconnected" | "stale-resume";
+
 export interface SoleurGoRunnerDeps {
   queryFactory: QueryFactory;
   now?: () => number;
@@ -1199,7 +1214,9 @@ export interface SoleurGoRunnerDeps {
     // #5356 — only a disconnect grace-abort carries a reason; the cc dispatcher
     // hook checkpoints in-flight work iff `reason === "disconnected"`. Natural
     // completion / idle reap / bare close leave it undefined (→ no checkpoint).
-    reason?: "disconnected";
+    // #9538 — "stale-resume" marks the dead-resume recovery close; the hook
+    // replicates but keeps the lease HELD for the synchronous re-dispatch.
+    reason?: CloseQueryReason;
   }) => void;
 }
 
@@ -1208,7 +1225,7 @@ export interface SoleurGoRunner {
   hasActiveQuery(conversationId: string): boolean;
   activeQueriesSize(): number;
   reapIdle(): number;
-  closeConversation(conversationId: string, reason?: "disconnected"): void;
+  closeConversation(conversationId: string, reason?: CloseQueryReason): void;
   /**
    * Drain EVERY active query on process shutdown (SIGTERM). Aborts WITHOUT
    * a checkpoint reason — matching the legacy `abortAllSessions` parity
@@ -2085,7 +2102,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeQuery(state);
   }
 
-  function closeQuery(state: ActiveQuery, reason?: "disconnected"): void {
+  function closeQuery(state: ActiveQuery, reason?: CloseQueryReason): void {
     clearRunaway(state);
     clearTurnHardCap(state);
     // #3040 Finding 4 — defense-in-depth: reset paused fields so a stale
@@ -2591,13 +2608,15 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // `reportSilentFallback` either — expected operational behavior,
       // same reasoning as the legacy `agent-runner.ts` re-throw arm.
       // `state.sessionId` doubles as the recovery payload — non-null
-      // exactly when this dispatch attempted a resume (a warm
-      // `queryReused` turn never re-resumes, so no `queryReused` check is
-      // needed). The `deadSessionId !== null` test below carries both the
-      // signature match AND the type narrowing for the emit.
+      // whenever a session was attempted or captured (a warm `queryReused`
+      // turn never re-resumes, so no `queryReused` check is needed: its
+      // iterator cannot produce this signature, and a rebound id still
+      // names a session the SDK just reported dead). The
+      // `deadSessionId !== null` test below carries both the signature
+      // match AND the type narrowing for the emit.
       const deadSessionId =
         err instanceof Error &&
-        err.message.includes("No conversation found with session ID")
+        err.message.includes(SDK_STALE_RESUME_SESSION_ID)
           ? state.sessionId
           : null;
       // `reportSilentFallback` below was unconditional pre-#9538. Preserve
@@ -2606,7 +2625,28 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // the error would leave zero telemetry of any tier.
       const wasClosed = state.closed;
       if (!state.closed) {
-        if (deadSessionId !== null) {
+        if (
+          // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
+          // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
+          // by throwing through the for-await. When `cause === "denied_jti"`
+          // the session is irrecoverably revoked; emit the discriminated
+          // `session_revoked` terminal status so cc-dispatcher routes it
+          // through the terminal `session_ended` family and agents/API
+          // consumers receive the operator-supplied reason instead of a
+          // generic "Something went wrong". Best-effort RPC: a null status
+          // here just leaves reason/deniedAt null (the helper already
+          // mirrored any RPC failure to Sentry). Ordered FIRST so a
+          // revocation error can never be consumed by the stale arm.
+          err instanceof RuntimeAuthError &&
+          err.cause === "denied_jti"
+        ) {
+          const status = await lookupRevocationStatusSafe(state.userId);
+          emitWorkflowEnded(state, {
+            status: "session_revoked",
+            reason: status?.reason ?? null,
+            deniedAt: status?.deniedAt ?? null,
+          });
+        } else if (deadSessionId !== null) {
           // Warn-tier occurrence marker (NOT error tier): the Sentry warn
           // stream counts recoveries; `extra.conversationId` groups repeat
           // fires so a clear that did not land is distinguishable from a
@@ -2628,40 +2668,53 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           });
           state.closed = true;
           // Teardown BEFORE emit: `closeQuery` drains the close-hook
-          // (bash-gate drain, tool-attempt flush, worktree-lease release)
-          // and runs `activeQueries.delete` — a listener's synchronous
+          // (bash-gate drain, tool-attempt flush, lease replication) and
+          // runs `activeQueries.delete` — a listener's synchronous
           // re-dispatch lands on a clean map and takes the cold path
-          // (see `DispatchEvents.onStaleResume`).
-          closeQuery(state);
-          try {
-            state.events.onStaleResume?.({ deadSessionId });
-          } catch (listenerErr) {
-            reportSilentFallback(listenerErr, {
-              feature: "soleur-go-runner",
-              op: "onStaleResume",
-              extra: { conversationId: state.conversationId },
-            });
+          // (see `DispatchEvents.onStaleResume`). The "stale-resume"
+          // reason lets the close-hook keep the worktree lease HELD — the
+          // retry re-acquires same-host keep-gen, and a deferred release
+          // would tombstone the row out from under it (migration-116).
+          closeQuery(state, "stale-resume");
+          const staleListener = state.events.onStaleResume;
+          if (staleListener) {
+            try {
+              staleListener({
+                deadSessionId,
+                lastBlockKind: state.lastBlockKind,
+              });
+            } catch (listenerErr) {
+              reportSilentFallback(listenerErr, {
+                feature: "soleur-go-runner",
+                op: "onStaleResume",
+                extra: { conversationId: state.conversationId },
+              });
+              // Terminal-honesty fallback: a throwing listener stranded
+              // the recovery — emit the terminal frame the client expects
+              // rather than leaving a silently dead turn.
+              try {
+                state.events.onWorkflowEnded({
+                  status: "internal_error",
+                  error: "stale-resume recovery listener failed",
+                });
+              } catch {
+                // Best-effort — the mirror above already carries it.
+              }
+            }
+          } else {
+            // No recovery wired (non-cc consumer, or the retry's
+            // deliberately stripped events — which is what BOUNDS the
+            // recovery to one re-dispatch: a repeat signature on the
+            // retried turn lands here and terminates honestly).
+            try {
+              state.events.onWorkflowEnded({
+                status: "internal_error",
+                error: "stale-resume recovery unavailable",
+              });
+            } catch {
+              // Best-effort — the turn is already closed.
+            }
           }
-        } else if (
-          // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
-          // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
-          // by throwing through the for-await. When `cause === "denied_jti"`
-          // the session is irrecoverably revoked; emit the discriminated
-          // `session_revoked` terminal status so cc-dispatcher routes it
-          // through the terminal `session_ended` family and agent/API
-          // consumers receive the operator-supplied reason instead of a
-          // generic "Something went wrong". Best-effort RPC: a null status
-          // here just leaves reason/deniedAt null (the helper already
-          // mirrored any RPC failure to Sentry).
-          err instanceof RuntimeAuthError &&
-          err.cause === "denied_jti"
-        ) {
-          const status = await lookupRevocationStatusSafe(state.userId);
-          emitWorkflowEnded(state, {
-            status: "session_revoked",
-            reason: status?.reason ?? null,
-            deniedAt: status?.deniedAt ?? null,
-          });
         } else {
           emitWorkflowEnded(state, {
             status: "internal_error",

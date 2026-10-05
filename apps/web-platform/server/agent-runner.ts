@@ -37,6 +37,7 @@ import {
 } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 import {
   ERR_ATTACHMENT_NOT_FOUND,
   ERR_WORKSPACE_NOT_PROVISIONED,
@@ -2737,7 +2738,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     } else if (
       resumeSessionId &&
       err instanceof Error &&
-      err.message.includes("No conversation found with session ID")
+      err.message.includes(SDK_STALE_RESUME_SESSION_ID)
     ) {
       // Resume-specific error: clean up the typing indicator and re-throw
       // so the caller's .catch() fallback can fire (clear stale session_id,
