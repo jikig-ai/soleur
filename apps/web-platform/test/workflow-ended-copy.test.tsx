@@ -14,7 +14,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { WORKFLOW_END_STATUSES } from "@/lib/types";
 import {
   WORKFLOW_ENDED_BADGE_COPY,
-  WORKFLOW_ENDED_BADGE_GENERIC,
+  WORKFLOW_ENDED_BADGE_GENERIC_COPY,
   WORKFLOW_ENDED_GENERIC_COPY,
   hasWorkflowEndedBadge,
   workflowEndedBadge,
@@ -41,8 +41,8 @@ describe("WORKFLOW_ENDED_BADGE_COPY", () => {
         /[a-zA-Z]+_[a-zA-Z]+/,
       );
     }
-    expect(WORKFLOW_ENDED_BADGE_GENERIC.length).toBeGreaterThan(0);
-    expect(WORKFLOW_ENDED_BADGE_GENERIC).not.toMatch(/[a-zA-Z]+_[a-zA-Z]+/);
+    expect(WORKFLOW_ENDED_BADGE_GENERIC_COPY.length).toBeGreaterThan(0);
+    expect(WORKFLOW_ENDED_BADGE_GENERIC_COPY).not.toMatch(/[a-zA-Z]+_[a-zA-Z]+/);
     expect(WORKFLOW_ENDED_GENERIC_COPY.length).toBeGreaterThan(0);
     expect(WORKFLOW_ENDED_GENERIC_COPY).not.toMatch(/[a-zA-Z]+_[a-zA-Z]+/);
   });
@@ -67,13 +67,32 @@ describe("workflow-ended resolvers", () => {
     expect(hasWorkflowEndedBadge("internal_error")).toBe(true);
   });
 
+  it("resolvers return generic copy with mapped:false for proto keys", () => {
+    // Resolver-level proto-key coverage — a bare-index or `in`-operator
+    // mutation inside the resolver (dropping the hasOwnProperty gate)
+    // must turn this RED, not just the membership-guard test above.
+    for (const protoKey of ["constructor", "__proto__", "toString"]) {
+      const badge = workflowEndedBadge(protoKey);
+      expect(badge, `badge resolver leaked inherited member for ${protoKey}`).toEqual({
+        copy: WORKFLOW_ENDED_BADGE_GENERIC_COPY,
+        mapped: false,
+      });
+      expect(typeof badge.copy).toBe("string");
+      const card = workflowEndedCopy(protoKey);
+      expect(card, `card resolver leaked inherited member for ${protoKey}`).toEqual({
+        copy: WORKFLOW_ENDED_GENERIC_COPY,
+        mapped: false,
+      });
+      expect(typeof card.copy).toBe("string");
+    }
+  });
+
   it("workflowEndedBadge returns generic copy with mapped:false for non-members", () => {
     // Direct-construction channels (tests, future non-WS sources) can carry
     // a status outside the Zod enum — the generic fallback bounds the render.
     const resolved = workflowEndedBadge("brand_new_status");
     expect(resolved.mapped).toBe(false);
-    expect(resolved.copy).toBe(WORKFLOW_ENDED_BADGE_GENERIC);
-    expect(typeof resolved.copy).toBe("string");
+    expect(resolved.copy).toBe(WORKFLOW_ENDED_BADGE_GENERIC_COPY);
   });
 
   it("workflowEndedBadge returns the label with mapped:true for members", () => {
@@ -96,6 +115,13 @@ describe("workflow-ended resolvers", () => {
     const resolved = workflowEndedCopy("brand_new_status");
     expect(resolved.mapped).toBe(false);
     expect(resolved.copy).toBe(WORKFLOW_ENDED_GENERIC_COPY);
+    // "closed" is a SessionEndedRenderableReason but NOT a
+    // WorkflowEndStatus — the delegation must not claim it mapped for a
+    // frame that can never carry it.
+    expect(workflowEndedCopy("closed")).toEqual({
+      copy: WORKFLOW_ENDED_GENERIC_COPY,
+      mapped: false,
+    });
   });
 });
 
@@ -125,7 +151,7 @@ describe("WorkflowLifecycleBar — ended badge copy", () => {
     expect(container.textContent).not.toContain("internal_error");
   });
 
-  it("keeps completed emerald and every other status red", () => {
+  it("keeps completed emerald", () => {
     const { container } = render(
       <WorkflowLifecycleBar
         lifecycle={{ state: "ended", workflow: "plan", status: "completed" }}
@@ -136,6 +162,19 @@ describe("WorkflowLifecycleBar — ended badge copy", () => {
     );
     expect(pill).not.toBeNull();
     expect(pill?.textContent).toBe(WORKFLOW_ENDED_BADGE_COPY.completed);
+  });
+
+  it("keeps non-completed statuses red — literal pin on the error label", () => {
+    const { container } = render(
+      <WorkflowLifecycleBar
+        lifecycle={{ state: "ended", workflow: "plan", status: "idle_timeout" }}
+      />,
+    );
+    const pill = container.querySelector(
+      '[data-lifecycle-status="idle_timeout"] .bg-red-900\\/40',
+    );
+    expect(pill).not.toBeNull();
+    expect(pill?.textContent).toBe("Timed out");
   });
 });
 

@@ -264,7 +264,7 @@ test.describe("cc-soleur-go routing: FR2.4 cost circuit-breaker", () => {
     await expect(page.locator('[data-lifecycle-state="active"]')).toBeVisible();
 
     // Synthesized cumulative cost — `usage_update` is handled by an out-of-
-    // reducer setState (`ws-client.ts:791-806`) and threaded into the
+    // reducer setState (`ws-client.ts › case "usage_update"`) and threaded into the
     // lifecycle bar via a chat-surface prop merge (#3774). Therefore it goes
     // through the typed `sendControl` channel, not `send`.
     injector.sendControl({
@@ -479,12 +479,12 @@ test.describe("cc-soleur-go routing: FR2.8 subprocess reuse", () => {
 // ---------------------------------------------------------------------------
 // FR2.9 — Ended-state UX.
 //
-// `workflow_ended` reducer (chat-state-machine.ts:728) sets
-// `workflow.state="ended"`; WorkflowLifecycleBar then renders the
-// "Start new conversation" button (workflow-lifecycle-bar.tsx:91-97).
+// `workflow_ended` reducer (chat-state-machine.ts › case "workflow_ended")
+// sets `workflow.state="ended"`; WorkflowLifecycleBar then renders the
+// "Start new conversation" button (workflow-lifecycle-bar.tsx › ended branch).
 // ChatSurface flips `workflowEnded={true}` on ChatInput, which forces
-// `disabled = rawDisabled || workflowEnded` (chat-input.tsx:99) and swaps
-// the placeholder to "This conversation has ended" (chat-input.tsx:100-102).
+// `disabled = rawDisabled || workflowEnded` and swaps the placeholder to
+// "This conversation has ended" (chat-input.tsx › ChatInput props).
 // The placeholder is the file-documented structural test hook.
 // ---------------------------------------------------------------------------
 

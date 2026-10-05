@@ -45,7 +45,7 @@ export const WORKFLOW_ENDED_BADGE_COPY: Record<WorkflowEndStatus, string> = {
  * via direct construction (the Zod enum drops unknown wire statuses at
  * parse).
  */
-export const WORKFLOW_ENDED_BADGE_GENERIC = "Ended";
+export const WORKFLOW_ENDED_BADGE_GENERIC_COPY = "Ended";
 
 /**
  * Transcript-card fallback for an unmapped `status`. Says "workflow",
@@ -84,22 +84,25 @@ export function workflowEndedBadge(status: string): {
 } {
   return hasWorkflowEndedBadge(status)
     ? { copy: WORKFLOW_ENDED_BADGE_COPY[status], mapped: true }
-    : { copy: WORKFLOW_ENDED_BADGE_GENERIC, mapped: false };
+    : { copy: WORKFLOW_ENDED_BADGE_GENERIC_COPY, mapped: false };
 }
 
 /**
  * Resolve the transcript-card sentence for a wire `status`. Delegates
  * to `sessionEndedCopy` for mapped statuses — SESSION_ENDED_COPY is
  * parity-pinned to server `WORKFLOW_END_USER_MESSAGES`, so reusing it
- * adds zero new sentence copy and inherits the drift guard. Unmapped
- * statuses get the workflow-generic fallback.
+ * adds zero new sentence copy and inherits the drift guard. Membership
+ * is gated on `hasWorkflowEndedBadge` first so `mapped` means "known
+ * WorkflowEndStatus" on both resolvers — `sessionEndedCopy`'s wider
+ * domain (`SessionEndedRenderableReason` ⊋ `WorkflowEndStatus`, e.g.
+ * `"closed"`) must not leak `mapped:true` for a status this frame can
+ * never carry. Unmapped statuses get the workflow-generic fallback.
  */
 export function workflowEndedCopy(status: string): {
   copy: string;
   mapped: boolean;
 } {
-  const resolved = sessionEndedCopy(status);
-  return resolved.mapped
-    ? resolved
+  return hasWorkflowEndedBadge(status)
+    ? sessionEndedCopy(status)
     : { copy: WORKFLOW_ENDED_GENERIC_COPY, mapped: false };
 }
