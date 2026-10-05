@@ -410,3 +410,21 @@ refused because the worktree root has no configuration. No infrastructure
 change occurred; git status still showed only the intended documentation edits.
 Read the shebang before executing a script and use its declared interpreter,
 including for a help probe. The corrected Python help invocation succeeded.
+
+## Continuation errors — 2026-10-05
+
+The browser skill's independent-session examples used `--session-name`, which
+CLI 0.22.3 defines as a persistence name. The commands reached the shared
+`default` daemon, and a later `--headed` request was ignored. Corrected the
+owning skill to use `--session` for isolation and verify a visible window before
+credential handoff. A fresh headed session was separately listed and its
+mapped Chrome window reached OpenAI sign-in. A persistence name or an `open`
+success alone proves neither isolation, visibility nor authentication.
+
+The session-start cleanup initially printed sandbox lock refusals despite a
+zero wrapper exit. Its authorized retry completed. A prior temporary gate
+script was absent and guessed source/glob paths failed; subsequent discovery
+used the active worktree's file inventory. Oversized skill and status reads
+again truncated results: read bounded sections and print selected API fields,
+not entire response objects. Existing learning covers these visible errors;
+they do not warrant a new cross-cutting rule.

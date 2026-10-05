@@ -212,10 +212,20 @@ agent-browser find placeholder "Search..." fill "query"
 
 ## Sessions (Parallel Browsers)
 
+Use `--session` to select an isolated browser daemon. `--session-name` only
+names automatically saved/restored cookies and local storage; it does not
+isolate concurrent browsers. A new persistence name can still reach an
+already-running daemon, where `--headed` is ignored. For a credential handoff,
+start a fresh `--session` with `--headed` and verify its window is visible
+before asking the operator to sign in.
+
 ```bash
 # Run multiple independent browser sessions
-agent-browser --session-name browser1 open https://site1.com
-agent-browser --session-name browser2 open https://site2.com
+agent-browser --session browser1 open https://site1.com
+agent-browser --session browser2 open https://site2.com
+
+# List active isolated sessions
+agent-browser session list
 
 # List saved states
 agent-browser state list

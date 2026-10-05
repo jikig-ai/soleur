@@ -137,3 +137,36 @@ remains blocked under the [mode audit](../../../legal/audits/2026-10-03-codex-we
 Neither mode's Web matrix nor routine-consumer qualification is completed.
 Keep the PR draft and Codex default-off. No shared database/production write or
 flag/cohort mutation occurred; local suites remain skipped at operator direction.
+
+## Addendum — 2026-10-05 browser isolation and remaining evidence
+
+The initial access recheck displayed Cloudflare human verification, but its
+`--session-name` argument selected a persistence name rather than an isolated
+browser daemon. That observation does not establish task-isolated account
+authentication. The isolation label in the preceding access record must not
+be inferred from that flag alone. The browser skill now distinguishes
+`--session` isolation from `--session-name` persistence.
+
+A fresh headed `--session codex9051-verify-20261005` reached OpenAI's sign-in
+page. A desktop window probe confirmed a visible, mapped Chrome window, and
+the CLI confirmed the new session separately from `default`. The browser
+remains open for direct operator sign-in. No account authentication, project,
+credential reference or spending/expiry control has been verified. No
+credential value was inspected or inference requested; US$5/seven-day controls
+remain prerequisites rather than operational controls.
+
+At source head `48905982ad5e7712bb4d30aa28ae88577dc4653f`,
+[CI](https://github.com/jikig-ai/soleur/actions/runs/37223921041) and
+[tenant integration](https://github.com/jikig-ai/soleur/actions/runs/37223920992)
+completed successfully. The branch deployment lookup still returned no
+records. CI artifacts contain timings and a Docker build record; the
+builder-only job does not establish a runnable recovery application. The
+credential-free migration-down scan returned `codex-forward-only`; it
+qualifies only refusal classification, not database recovery or a rehearsal.
+The routine producer still requires legacy binding and the inspected
+agent-native-audit consumer invokes Claude; neither establishes a qualifying
+Codex routine consumer. These observations leave both Web matrices, the
+compatible recovery build/rehearsal, authenticated branch screenshots and
+mode-specific dispositions incomplete. The subsequent main sync and browser
+skill correction require fresh exact-head checks. Draft/default-off and all
+existing provider, credential, shared-write and cohort limits remain in force.
