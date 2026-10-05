@@ -20,10 +20,15 @@ import { mirrorWithDebounce } from "@/server/observability";
 // The buffered streaming family — "frames the client re-applies on replay".
 // NOT `error` (a replayed error could re-fire a toast and durably widens the
 // blast radius of any unsanitized diagnostic field; see ADR-059 / plan Risks).
-// Also excluded: `command_stream` / `debug_event` — these carry their own
-// phase/append state machine and large (byte-capped) payloads, and are render-
-// only/ephemeral; replaying them is out of scope for v1 (a reconnect mid-Bash-
-// stream falls back to the honest history refetch).
+// Also excluded: `command_stream` — it carries its own phase/append state
+// machine and large (byte-capped) payloads, and is render-only/ephemeral; a
+// reconnect mid-Bash-stream falls back to the honest history refetch.
+// `debug_event` IS buffered (fix-debug-stream-replay): each frame is a
+// self-contained append with no phase state, and buffering lets the debug
+// panel repopulate after a transient disconnect or a leave-and-return
+// remount. Re-emitted frames carry `replayed: true` so the client's
+// watchdog-heartbeat logic treats them as stale, never live, liveness
+// evidence (lib/chat-state-machine.ts `debug_event` case).
 export type BufferedWSMessage = Extract<
   WSMessage,
   | { type: "stream_start" }
@@ -33,8 +38,9 @@ export type BufferedWSMessage = Extract<
   | { type: "tool_progress" }
   | { type: "usage_update" }
   | { type: "session_ended" }
+  | { type: "debug_event" }
   // feat-reasoning-chat-boxes (#5370) — the DURABLE per-turn summary IS buffered
-  // (unlike `reasoning_narration`, which stays live-only like debug_event): it
+  // (unlike `reasoning_narration`, which stays live-only): it
   // must survive a within-grace reconnect replay so the confirmed box does not
   // vanish mid-turn. Persistence (messages row) covers the reload case; buffering
   // covers the reconnect case.
@@ -59,6 +65,7 @@ const BUFFERED_FRAME_TYPE_MAP: Record<BufferedWSMessage["type"], true> = {
   usage_update: true,
   session_ended: true,
   turn_summary: true,
+  debug_event: true,
 };
 
 export const BUFFERED_FRAME_TYPES: ReadonlySet<WSMessage["type"]> = new Set(
