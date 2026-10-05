@@ -958,7 +958,11 @@ async function emitNarration(opts: {
     const raw = typeof input.message === "string" ? input.message : "";
     const redacted = redactNarrationOrDrop(raw, "message", userId, conversationId);
     if (!redacted) return; // null (dropped) or empty → emit nothing
-    sendToClient(userId, { type: "reasoning_narration", message: redacted });
+    sendToClient(userId, {
+      type: "reasoning_narration",
+      message: redacted,
+      conversationId,
+    });
     return;
   }
 

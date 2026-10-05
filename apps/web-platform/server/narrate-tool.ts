@@ -71,8 +71,9 @@ export function buildNarrationTools(_opts: BuildNarrationToolsOpts) {
       NARRATE_TOOL,
       "Show the user a SHORT, plain-language live status line describing what " +
         "you are doing RIGHT NOW (e.g. \"Looking into your billing settings…\", " +
-        "\"Drafting the reply…\"). This is transient — it is replaced by your " +
-        "next narrate call and disappears when the turn ends; it is NOT saved. " +
+        "\"Drafting the reply…\"). Your latest call becomes the live step; " +
+        "superseded lines stay visible as dimmed prior steps until the turn " +
+        "ends, then disappear — nothing is saved. " +
         "Call it at meaningful milestones during a longer turn so the user is " +
         "never staring at a silent spinner. Plain language only — never include " +
         "internal identifiers, file paths, skill names, issue numbers, or any " +

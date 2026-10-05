@@ -3,13 +3,13 @@ import { applyStreamEvent, applyTimeout, MAX_LIVENESS_REARMS } from "../lib/chat
 import type { ChatMessage } from "../lib/chat-state-machine";
 import type { DomainLeaderId } from "../server/domain-leaders";
 
-// Helper: produce a `Map<DomainLeaderId, number>` from string-keyed test
+// Helper: produce a `Map<DomainLeaderId, string>` from string-keyed test
 // fixtures so individual tests don't need to spell the typed-Map ctor each
 // time. Stage 3 (#2885) tightened `activeStreams` to `Map<DomainLeaderId,
 // number>`; tests pass arbitrary opaque keys (incl. "ghost") that the
 // reducer treats as inert no-ops.
-function makeStreams(entries: [string, number][] = []): Map<DomainLeaderId, number> {
-  return new Map(entries as [DomainLeaderId, number][]);
+function makeStreams(entries: [string, string][] = []): Map<DomainLeaderId, string> {
+  return new Map(entries as [DomainLeaderId, string][]);
 }
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,6 @@ function thinkingMessage(leaderId: string): ChatMessage {
     type: "text",
     leaderId: leaderId as any,
     state: "thinking",
-    toolsUsed: [],
   };
 }
 
@@ -35,7 +34,7 @@ function thinkingMessage(leaderId: string): ChatMessage {
 describe("chat-state-machine timeout behavior", () => {
   test("tool_use event resets the timer (#2430)", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, {
       type: "tool_use",
@@ -50,7 +49,7 @@ describe("chat-state-machine timeout behavior", () => {
 
   test("stream event resets the timer", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, {
       type: "stream",
@@ -75,7 +74,7 @@ describe("chat-state-machine timeout behavior", () => {
     // to error. Simulate the "second" timeout by seeding retrying: true.
     const msg: ChatMessage = { ...thinkingMessage("cpo"), retrying: true };
     const prev: ChatMessage[] = [msg];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -86,7 +85,7 @@ describe("chat-state-machine timeout behavior", () => {
   test("applyTimeout: second consecutive timeout on tool_use bubble transitions to error", () => {
     const msg: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", retrying: true };
     const prev: ChatMessage[] = [msg];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -96,7 +95,7 @@ describe("chat-state-machine timeout behavior", () => {
   test("applyTimeout does NOT affect streaming bubble", () => {
     const msg: ChatMessage = { ...thinkingMessage("cpo"), state: "streaming" };
     const prev: ChatMessage[] = [msg];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -133,7 +132,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
 
   test("review_gate transitions a thinking peer bubble to done", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo"), thinkingMessage("cto")];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
 
     const result = applyStreamEvent(prev, streams, reviewGateEvent("g1"));
 
@@ -150,7 +149,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
     const toolBubble: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", toolLabel: "Read foo.md" };
     const streamingBubble: ChatMessage = { ...thinkingMessage("cto"), state: "streaming", content: "Working on..." };
     const prev: ChatMessage[] = [toolBubble, streamingBubble];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
 
     const result = applyStreamEvent(prev, streams, reviewGateEvent("g2", "Continue?"));
 
@@ -162,7 +161,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
     const doneBubble: ChatMessage = { ...thinkingMessage("cpo"), state: "done", content: "Final answer" };
     const prev: ChatMessage[] = [doneBubble];
     // Empty activeStreams — done bubble already transitioned out
-    const streams = new Map<DomainLeaderId, number>();
+    const streams = new Map<DomainLeaderId, string>();
 
     const result = applyStreamEvent(prev, streams, reviewGateEvent("g3", "OK?"));
 
@@ -180,7 +179,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
       { ...thinkingMessage("cto"), state: "done", content: "Prior answer" },
       { ...thinkingMessage("coo"), state: "streaming", content: "streaming..." },
     ];
-    const streams = makeStreams([["cpo", 0], ["coo", 3]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["coo", "stream-coo-1"]]);
 
     const result = applyStreamEvent(prev, streams, reviewGateEvent("g4"));
 
@@ -197,7 +196,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
     // upstream state), the OOB guard at `if (idx >= updated.length) continue`
     // must skip silently rather than throw.
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
-    const streams = makeStreams([["cpo", 0], ["ghost", 42]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["ghost", "stream-ghost-1"]]);
 
     const result = applyStreamEvent(prev, streams, reviewGateEvent("g5"));
 
@@ -208,7 +207,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
 
   test("stream_end on single leader transitions to done (regression sentinel)", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, streamEndEvent("cpo"));
 
@@ -222,7 +221,7 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
     const cpoBubble: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use" };
     const ctoBubble: ChatMessage = { ...thinkingMessage("cto"), state: "tool_use" };
     const prev: ChatMessage[] = [cpoBubble, ctoBubble];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
 
     const result = applyStreamEvent(prev, streams, streamEndEvent("cpo"));
 
@@ -255,7 +254,7 @@ describe("chat-state-machine tool_progress event (FR4 #2861)", () => {
   test("tool_progress on tool_use bubble resets watchdog without mutating messages", () => {
     const toolBubble: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", toolLabel: "Searching code" };
     const prev: ChatMessage[] = [toolBubble];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, toolProgressEvent("cpo" as any) as any);
 
@@ -266,7 +265,7 @@ describe("chat-state-machine tool_progress event (FR4 #2861)", () => {
 
   test("tool_progress for unknown leader is an inert no-op", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, toolProgressEvent("cto" as any) as any);
 
@@ -283,7 +282,7 @@ describe("chat-state-machine tool_progress event (FR4 #2861)", () => {
       retrying: true,
     };
     const prev: ChatMessage[] = [retryingBubble];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, toolProgressEvent("cpo" as any) as any);
 
@@ -301,7 +300,7 @@ describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
   test("first applyTimeout on tool_use bubble flags retrying (no state transition)", () => {
     const msg: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", toolLabel: "Searching code" };
     const prev: ChatMessage[] = [msg];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -321,7 +320,7 @@ describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
       retrying: true,
     };
     const prev: ChatMessage[] = [msg];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -334,7 +333,7 @@ describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
 
   test("first applyTimeout on thinking bubble (no toolLabel) also flags retrying", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -352,7 +351,7 @@ describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
       state: "error",
     };
     // activeStreams already cleared by the `error` branch in ws-client.
-    const streams = new Map<DomainLeaderId, number>();
+    const streams = new Map<DomainLeaderId, string>();
 
     const result = applyTimeout([errorBubble], streams, "cpo");
 
@@ -379,7 +378,7 @@ describe("chat-state-machine STUCK_TIMEOUT_MS constant", () => {
 describe("Stage 4 — new ChatMessage variants from /soleur:go events", () => {
   function makeContext() {
     const prev: ChatMessage[] = [thinkingMessage("cmo")];
-    const streams = new Map<DomainLeaderId, number>([["cmo" as DomainLeaderId, 0]]);
+    const streams = new Map<DomainLeaderId, string>([["cmo" as DomainLeaderId, "stream-cmo-1"]]);
     return { prev, streams };
   }
 
@@ -405,11 +404,8 @@ describe("Stage 4 — new ChatMessage variants from /soleur:go events", () => {
       expect(group.children[0].task).toBe("Audit performance");
       expect(group.children[0].status).toBeUndefined();
     }
-    // spawnIndex should now know about s-1.
-    expect(result.spawnIndex.get("s-1")).toEqual({
-      messageIdx: prev.length,
-      childIdx: 0,
-    });
+    // spawnIndex records s-1 (dedup key only — the payload was write-only).
+    expect(result.spawnIndex.has("s-1")).toBe(true);
   });
 
   test("second subagent_spawn with matching parentId appends to existing group", () => {
@@ -435,10 +431,7 @@ describe("Stage 4 — new ChatMessage variants from /soleur:go events", () => {
       expect(group.children[1].spawnId).toBe("s-2");
       expect(group.children[1].leaderId).toBe("cmo");
     }
-    expect(r2.spawnIndex.get("s-2")).toEqual({
-      messageIdx: prev.length,
-      childIdx: 1,
-    });
+    expect(r2.spawnIndex.has("s-2")).toBe(true);
   });
 
   test("subagent_complete reverse-looks up via spawnIndex and mutates only the matching child", () => {
@@ -728,16 +721,16 @@ describe("Stage 4 — new ChatMessage variants from /soleur:go events", () => {
     expect(r2.messages.filter((m) => m.type === "tool_use_chip").length).toBe(0);
   });
 
-  test("activeStreams is keyed by DomainLeaderId (Map<DomainLeaderId, number>)", () => {
+  test("activeStreams is keyed by DomainLeaderId (Map<DomainLeaderId, string>)", () => {
     // After Stage 3, the StreamEventResult and the reducer hold a typed key.
     // This test exercises the typed boundary by minting a key via `as DomainLeaderId`
     // and asserting the reducer carries it forward without coercion.
-    const streams: Map<DomainLeaderId, number> = new Map();
+    const streams: Map<DomainLeaderId, string> = new Map();
     const result = applyStreamEvent([], streams, {
       type: "stream_start",
       leaderId: "cmo" as DomainLeaderId,
     } as any);
-    // The post-state Map type narrows to Map<DomainLeaderId, number>; if the
+    // The post-state Map type narrows to Map<DomainLeaderId, string>; if the
     // signature regressed to Map<string, number> the test still passes at
     // runtime. The compile-time gate is `tsc --noEmit` from apps/web-platform.
     expect(result.activeStreams.size).toBe(1);
@@ -822,7 +815,6 @@ function toolUseMessage(leaderId: string, extra: Partial<ChatMessage> = {}): Cha
     leaderId: leaderId as any,
     state: "tool_use",
     toolLabel: "Reading file...",
-    toolsUsed: ["Reading file..."],
     ...extra,
   } as ChatMessage;
 }
@@ -838,7 +830,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
     const prev: ChatMessage[] = [
       toolUseMessage("cpo", { retrying: true, livenessRearms: 2 }),
     ];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, debugToolUse());
 
@@ -854,7 +846,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
       toolUseMessage("cpo", { retrying: true }),
       toolUseMessage("cto"),
     ];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -873,7 +865,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
       toolUseMessage("cpo", { retrying: true }),
       toolUseMessage("cto", { state: "streaming" }),
     ];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -886,7 +878,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
     const prev: ChatMessage[] = [
       toolUseMessage("cpo", { state: "thinking", retrying: true, livenessRearms: 1 }),
     ];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, debugToolUse());
 
@@ -898,7 +890,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
   test("AC3: genuine hang — sole active leader still escalates to error (bracketed against AC2)", () => {
     // Same retrying bubble as AC2, but with NO sibling active → must escalate.
     const prev: ChatMessage[] = [toolUseMessage("cpo", { retrying: true })];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyTimeout(prev, streams, "cpo");
 
@@ -911,7 +903,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
       toolUseMessage("cpo", { retrying: true }),
       toolUseMessage("cto"),
     ];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
 
     for (let call = 1; call <= MAX_LIVENESS_REARMS; call++) {
       const r = applyTimeout(messages, streams, "cpo");
@@ -930,12 +922,12 @@ describe("#5240 leader-liveness watchdog reset", () => {
       toolUseMessage("cpo", { retrying: true }),
       toolUseMessage("cto"),
     ];
-    const both = makeStreams([["cpo", 0], ["cto", 1]]);
+    const both = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
     const rearmed = applyTimeout(seed, both, "cpo");
     expect(rearmed.messages[0].state).toBe("tool_use");
 
     // cto goes silent (removed from activeStreams) → cpo is now last.
-    const onlyCpo = makeStreams([["cpo", 0]]);
+    const onlyCpo = makeStreams([["cpo", "stream-cpo-1"]]);
     const escalated = applyTimeout(rearmed.messages, onlyCpo, "cpo");
     expect(escalated.messages[0].state).toBe("error");
     expect(escalated.activeStreams.has("cpo" as DomainLeaderId)).toBe(false);
@@ -951,14 +943,14 @@ describe("#5240 leader-liveness watchdog reset", () => {
       toolUseMessage("cpo", { retrying: true }),
       toolUseMessage("cto"),
     ];
-    const streams = makeStreams([["cpo", 0], ["cto", 1]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"], ["cto", "stream-cto-1"]]);
     const result = applyStreamEvent(prev, streams, debugToolUse());
     expect(result.timerAction).toBeUndefined();
   });
 
   test("AC7c: debug reasoning/result never reset_all (ceiling kept tight)", () => {
     const prev: ChatMessage[] = [toolUseMessage("cpo", { retrying: true })];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
     for (const kind of ["reasoning", "result"] as const) {
       const result = applyStreamEvent(prev, streams, {
         type: "debug_event",
@@ -977,7 +969,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
     const prev: ChatMessage[] = [
       toolUseMessage("cpo", { retrying: true, livenessRearms: 2 }),
     ];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const result = applyStreamEvent(prev, streams, {
       type: "debug_event",
@@ -997,7 +989,7 @@ describe("#5240 leader-liveness watchdog reset", () => {
     // activeStreams. reset_all may re-arm its timer, but a follow-up timeout
     // no-ops (transitional-state guard) — no resurrection.
     const prev: ChatMessage[] = [toolUseMessage("cpo", { state: "error" })];
-    const streams = makeStreams([["cpo", 0]]);
+    const streams = makeStreams([["cpo", "stream-cpo-1"]]);
 
     const afterDebug = applyStreamEvent(prev, streams, debugToolUse());
     expect(afterDebug.messages[0].state).toBe("error");
@@ -1024,7 +1016,6 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
       leaderId: leaderId as DomainLeaderId,
       state: "error",
       toolLabel: "Working",
-      toolsUsed: ["Bash"],
     };
   }
 
@@ -1046,7 +1037,7 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
     expect(result.messages[0].state).toBe("tool_use");
     expect(result.messages[0].toolLabel).toBe("Running command…");
     expect(result.messages[0].retrying).toBeUndefined();
-    expect(result.activeStreams.get(CC)).toBe(0);
+    expect(result.activeStreams.get(CC)).toBe("stream-cc_router-err");
     expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
     // Must NOT append a tool_use_chip when recovering.
     expect(result.messages.some((m) => m.type === "tool_use_chip")).toBe(false);
@@ -1100,7 +1091,7 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].state).toBe("streaming");
     expect(result.messages[0].state).not.toBe("error");
-    expect(result.activeStreams.get(CC)).toBe(0);
+    expect(result.activeStreams.get(CC)).toBe("stream-cc_router-err");
     expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
     const blocks = (result.messages[0] as { commandBlocks?: { command: string }[] })
       .commandBlocks;
@@ -1118,7 +1109,7 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
 
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].state).toBe("thinking");
-    expect(result.activeStreams.get(CC)).toBe(0);
+    expect(result.activeStreams.get(CC)).toBe("stream-cc_router-err");
     expect(result.timerAction).toEqual({ type: "reset", leaderId: CC });
   });
 
@@ -1145,8 +1136,7 @@ describe("chat-state-machine orphan Stage-2 error recovery (Path A)", () => {
       type: "text",
       leaderId: CC,
       state: "streaming",
-      toolsUsed: [],
-    };
+      };
     const prev: ChatMessage[] = [oldError, newerLive];
     const streams = makeStreams();
 
