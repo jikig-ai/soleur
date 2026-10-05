@@ -3,9 +3,12 @@
 // The wire `reason` is a free-form `z.string()`
 // (ws-zod-schemas.ts › sessionEndedSchema). Live emitters send
 // `turn_complete` (agent-runner.ts per-turn end), `closed`
-// (ws-handler.ts › close_conversation), `user_aborted`
+// (ws-handler.ts › case "close_conversation"), `user_aborted`
 // (agent-runner.ts abort ack), or a terminal `WorkflowEndStatus`
-// routed through cc-dispatcher.ts › TERMINAL_WORKFLOW_END_STATUSES.
+// routed through cc-dispatcher.ts › TERMINAL_WORKFLOW_END_STATUSES
+// (6 of the 9 variants today — the rest route to `{ type: "error" }`
+// frames; the full-union keying below is deliberate forward-compat so
+// promoting a status to terminal never lands copy-less).
 // Rendering the raw token leaked internal enum names to founders
 // ("Session ended: internal_error") — this module is the single
 // source of truth for the transcript line, following the
@@ -13,16 +16,17 @@
 // (ADR-025 lifecycle-notice family).
 //
 // Voice mirrors server/cc-workflow-end-messages.ts ›
-// WORKFLOW_END_USER_MESSAGES — keep the two aligned: that map feeds
-// the non-terminal `{ type: "error" }` path, this one feeds the
-// terminal `session_ended` path.
+// WORKFLOW_END_USER_MESSAGES verbatim (pinned by the parity test in
+// test/session-ended-copy.test.tsx): that map feeds the non-terminal
+// `{ type: "error" }` path, this one feeds the terminal
+// `session_ended` path.
 
 import type { WorkflowEndStatus } from "./types";
 
 /**
  * Every `reason` value the `session_ended` frame can carry: the
- * `WorkflowEndStatus` variants routed by cc-dispatcher.ts ›
- * TERMINAL_WORKFLOW_END_STATUSES, plus the two lifecycle reasons
+ * `WorkflowEndStatus` variants (whether they route to `session_ended`
+ * today or could be promoted to it), plus the two lifecycle reasons
  * emitted outside the runner (`turn_complete`, `closed`).
  */
 export type SessionEndedReason = WorkflowEndStatus | "turn_complete" | "closed";
@@ -39,8 +43,9 @@ export type SessionEndedRenderableReason = Exclude<
   SessionEndedSuppressedReason
 >;
 
-export const SESSION_ENDED_SUPPRESSED: ReadonlySet<SessionEndedReason> =
-  new Set<SessionEndedReason>(["turn_complete"]);
+export const SESSION_ENDED_SUPPRESSED: ReadonlySet<string> = new Set([
+  "turn_complete",
+]);
 
 /**
  * Copy per renderable reason. The `Record<SessionEndedRenderableReason,
@@ -73,8 +78,42 @@ export const SESSION_ENDED_COPY: Record<SessionEndedRenderableReason, string> =
  * Fallback for a `reason` outside the known set. The wire type is
  * `z.string()`, so a new emitter can ship a reason this map does not
  * know; the founder still gets an honest, actionable line instead of a
- * raw token. ws-client.ts emits a Sentry breadcrumb when this fires so
- * the unmapped reason is triaged rather than silently absorbed.
+ * raw token. ws-client.ts reports a warning-level Sentry event when
+ * this fires so the unmapped reason is triaged rather than silently
+ * absorbed.
  */
 export const SESSION_ENDED_GENERIC_COPY =
   "This session ended. Send a new message to continue.";
+
+/**
+ * Runtime membership test over SESSION_ENDED_COPY — the
+ * `hasOwnProperty` idiom from lib/messages/workflow-copy.ts ›
+ * isWorkflowBucket. A bare `SESSION_ENDED_COPY[reason]` lookup is NOT
+ * safe here: `reason` is a free-form `z.string()`, and a value matching
+ * an `Object.prototype` key ("constructor", "toString", "__proto__")
+ * resolves a non-nullish inherited member, defeating the generic
+ * fallback and dispatching a non-string into `ChatMessage.content`
+ * (a React render crash). Consumers: check membership with this guard,
+ * then index.
+ */
+export function hasSessionEndedCopy(
+  reason: string,
+): reason is SessionEndedRenderableReason {
+  return Object.prototype.hasOwnProperty.call(SESSION_ENDED_COPY, reason);
+}
+
+/**
+ * Resolve the transcript line for a wire `reason`. `mapped` tells the
+ * caller whether the reason had its own copy row — the unmapped branch
+ * is the one worth a Sentry breadcrumb (an unmapped reason means a new
+ * emitter shipped without copy). Membership-gated via
+ * hasSessionEndedCopy, never a bare index.
+ */
+export function sessionEndedCopy(reason: string): {
+  copy: string;
+  mapped: boolean;
+} {
+  return hasSessionEndedCopy(reason)
+    ? { copy: SESSION_ENDED_COPY[reason], mapped: true }
+    : { copy: SESSION_ENDED_GENERIC_COPY, mapped: false };
+}

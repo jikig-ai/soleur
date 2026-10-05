@@ -26,11 +26,8 @@ export type { ConnectionPhase } from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import {
-  SESSION_ENDED_COPY,
-  SESSION_ENDED_GENERIC_COPY,
   SESSION_ENDED_SUPPRESSED,
-  type SessionEndedReason,
-  type SessionEndedRenderableReason,
+  sessionEndedCopy,
 } from "@/lib/session-ended-copy";
 import { reportSilentFallback, warnSilentFallback } from "@/lib/client-observability";
 import * as Sentry from "@sentry/nextjs";
@@ -1178,17 +1175,24 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // reason renders founder-facing copy from SESSION_ENDED_COPY;
           // the raw wire token ("internal_error" et al.) never reaches
           // the transcript. An unmapped reason falls back to generic
-          // copy + a Sentry breadcrumb so the new reason is triaged.
-          if (!SESSION_ENDED_SUPPRESSED.has(msg.reason as SessionEndedReason)) {
-            const copy =
-              SESSION_ENDED_COPY[msg.reason as SessionEndedRenderableReason] ??
-              SESSION_ENDED_GENERIC_COPY;
-            if (copy === SESSION_ENDED_GENERIC_COPY) {
-              Sentry.addBreadcrumb({
-                category: "session-ended",
-                message: "session-ended-unmapped-reason",
-                level: "warning",
-                data: { reason: msg.reason },
+          // copy + a warning-level Sentry event (searchable, unlike a
+          // breadcrumb that only rides a later capture) so the new
+          // reason is triaged.
+          if (!SESSION_ENDED_SUPPRESSED.has(msg.reason)) {
+            // sessionEndedCopy is membership-gated (hasOwnProperty):
+            // `reason` is a free-form wire string, and an Object.prototype
+            // key ("constructor") would otherwise resolve an inherited
+            // member and dispatch a non-string into the transcript.
+            const { copy, mapped } = sessionEndedCopy(msg.reason);
+            if (!mapped) {
+              // 64-char bound mirrors the rawPrefix truncation in this
+              // file — `reason` is z.string() with no length cap, and
+              // a malformed-frame storm should not inflate ingestion.
+              warnSilentFallback(null, {
+                feature: "ws-client",
+                op: "session-ended-unmapped-reason",
+                message: "session_ended arrived with an unmapped reason",
+                extra: { reason: msg.reason.slice(0, 64) },
               });
             }
             dispatch({

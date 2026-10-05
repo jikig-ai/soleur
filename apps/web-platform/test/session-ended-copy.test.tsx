@@ -15,15 +15,21 @@ import {
   SESSION_ENDED_COPY,
   SESSION_ENDED_GENERIC_COPY,
   SESSION_ENDED_SUPPRESSED,
+  hasSessionEndedCopy,
 } from "@/lib/session-ended-copy";
+import { WORKFLOW_END_USER_MESSAGES } from "@/server/cc-workflow-end-messages";
 
 describe("SESSION_ENDED_COPY", () => {
   it("has an entry for every renderable session_ended reason", () => {
     // Every WorkflowEndStatus plus the non-runner lifecycle reasons the
     // frame carries (ws-handler.ts close_conversation, agent-runner.ts).
-    const expectedKeys = [...WORKFLOW_END_STATUSES, "closed"].filter(
-      (r) => !SESSION_ENDED_SUPPRESSED.has(r as never),
-    );
+    // "turn_complete" is included so the suppression filter is load-bearing
+    // — without it the filter could never remove anything.
+    const expectedKeys = [
+      ...WORKFLOW_END_STATUSES,
+      "closed",
+      "turn_complete",
+    ].filter((r) => !SESSION_ENDED_SUPPRESSED.has(r));
     expect(Object.keys(SESSION_ENDED_COPY).sort()).toEqual(expectedKeys.sort());
   });
 
@@ -37,11 +43,47 @@ describe("SESSION_ENDED_COPY", () => {
       // The defect this fixes: `Session ended: ${reason}` rendered enum
       // names verbatim. Guard against reintroduction in ANY row.
       expect(copy, `copy for ${reason} leaks a raw token`).not.toMatch(
-        /[a-z]+_[a-z]+/,
+        /[a-zA-Z]+_[a-zA-Z]+/,
       );
     }
     expect(SESSION_ENDED_GENERIC_COPY.length).toBeGreaterThan(0);
-    expect(SESSION_ENDED_GENERIC_COPY).not.toMatch(/[a-z]+_[a-z]+/);
+    expect(SESSION_ENDED_GENERIC_COPY).not.toMatch(/[a-zA-Z]+_[a-zA-Z]+/);
+  });
+
+  it("stays verbatim with WORKFLOW_END_USER_MESSAGES for shared statuses", () => {
+    // Drift guard — the two maps are parallel copy sources for the same
+    // conditions on different wire paths (`{type:"error"}` frames vs the
+    // terminal `session_ended` frame). Every shared key whose server copy
+    // is non-empty must match verbatim; `completed` is `""` server-side
+    // by design (that path is handled via the terminal frame).
+    for (const status of WORKFLOW_END_STATUSES) {
+      const serverCopy = WORKFLOW_END_USER_MESSAGES[status];
+      if (serverCopy === "") continue;
+      expect(SESSION_ENDED_COPY[status], `copy drift for ${status}`).toBe(
+        serverCopy,
+      );
+    }
+  });
+
+  it("hasSessionEndedCopy rejects Object.prototype keys and unknown reasons", () => {
+    // The free-form wire `reason` must never resolve an inherited member —
+    // a "constructor"/"__proto__" reason would otherwise bypass the
+    // generic fallback and dispatch a non-string into ChatMessage.content.
+    for (const protoKey of [
+      "constructor",
+      "toString",
+      "hasOwnProperty",
+      "__proto__",
+      "valueOf",
+      "isPrototypeOf",
+    ]) {
+      expect(hasSessionEndedCopy(protoKey), protoKey).toBe(false);
+    }
+    expect(hasSessionEndedCopy("brand_new_reason")).toBe(false);
+    expect(hasSessionEndedCopy("internal_error")).toBe(true);
+    expect(hasSessionEndedCopy("closed")).toBe(true);
+    // Suppressed reasons have no copy row by design.
+    expect(hasSessionEndedCopy("turn_complete")).toBe(false);
   });
 });
 
@@ -51,6 +93,19 @@ describe("SESSION_ENDED_COPY", () => {
 const mockGetSession = vi.fn().mockResolvedValue({
   data: { session: { access_token: "test-token" } },
 });
+
+const { captureMessageSpy } = vi.hoisted(() => ({
+  captureMessageSpy: vi.fn(),
+}));
+
+// ws-client imports `* as Sentry` (addBreadcrumb for the conversationId
+// mismatch); the unmapped-reason path goes through warnSilentFallback →
+// captureMessage. Mock the module surface both call paths use.
+vi.mock("@sentry/nextjs", () => ({
+  addBreadcrumb: vi.fn(),
+  captureMessage: (...args: unknown[]) => captureMessageSpy(...args),
+  captureException: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -173,5 +228,57 @@ describe("useWebSocket — session_ended transcript copy", () => {
     expect(result.current.messages.at(-1)?.content).not.toContain(
       "brand_new_reason",
     );
+    // The unmapped reason must self-report — warnSilentFallback routes
+    // to captureMessage at warning level.
+    await waitFor(() => {
+      expect(captureMessageSpy).toHaveBeenCalledWith(
+        "session_ended arrived with an unmapped reason",
+        expect.objectContaining({
+          level: "warning",
+          tags: expect.objectContaining({
+            op: "session-ended-unmapped-reason",
+          }),
+        }),
+      );
+    });
   });
+
+  it("an Object.prototype-key reason yields generic copy + string content (no render crash)", async () => {
+    // Regression gate for the prototype-chain bypass: `SESSION_ENDED_COPY[
+    // "constructor"]` resolves an inherited member — the fallback MUST be
+    // membership-gated (hasSessionEndedCopy), not truthiness-gated, or a
+    // crafted frame dispatches a non-string into ChatMessage.content.
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("cid-1"));
+
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "cid-1" });
+    serverSend({ type: "session_ended", reason: "constructor" });
+
+    await waitFor(() => {
+      const last = result.current.messages.at(-1);
+      expect(last?.content).toBe(SESSION_ENDED_GENERIC_COPY);
+    });
+    expect(typeof result.current.messages.at(-1)?.content).toBe("string");
+  });
+
+  it.each(["closed", "session_revoked", "user_aborted"] as const)(
+    "session_ended{%s} renders its mapped copy",
+    async (reason) => {
+      const { useWebSocket } = await import("@/lib/ws-client");
+      const { result } = renderHook(() => useWebSocket("cid-1"));
+
+      await connectAndAuth(result);
+      serverSend({ type: "session_started", conversationId: "cid-1" });
+      serverSend({ type: "session_ended", reason });
+
+      await waitFor(() => {
+        expect(result.current.messages.at(-1)?.content).toBe(
+          SESSION_ENDED_COPY[reason],
+        );
+      });
+      // A mapped reason must not fire the unmapped-reason warning.
+      expect(captureMessageSpy).not.toHaveBeenCalled();
+    },
+  );
 });
