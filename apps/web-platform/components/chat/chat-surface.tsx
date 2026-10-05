@@ -1041,7 +1041,6 @@ export function ChatSurface({
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}
-                      commandBlocks={msg.commandBlocks}
                     />
                   );
                   break;
