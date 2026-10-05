@@ -166,3 +166,71 @@ data/transfer controls and independent Web qualification remain unresolved.
 This continuation grants no provider request, credential-value inspection,
 shared database/production write or flag/cohort change. Keep PR #9051 draft,
 Codex default-off and customer content blocked.
+
+## Public-source CLO reassessment — 2026-10-05
+
+Scoped internal assessment by `soleur:legal:clo`, reviewed against PR #9051
+source head `fa166b66d0695f5038d996613817ca686ce49d57`. This supplements the
+2026-10-03 mode audit; it grants no live execution authorization.
+
+**Agreement/DPA: public contractual text established; account applicability
+unresolved.** The [Services Agreement](https://openai.com/policies/services-agreement/)
+covers API use, permits integration into customer applications (§2.2), and
+incorporates the DPA for personal-data processing (§5.3). The
+[DPA](https://openai.com/policies/data-processing-addendum/) permits acceptance
+through agreement acceptance or service use; a separately signed private DPA
+is therefore not inherently required when the applicable standard agreement
+incorporates it. Its §4.1 provides SCC or adequacy safeguards for EEA/Swiss
+onward transfers. Public text establishes these mechanisms conditionally; it
+does not establish this account's contracting entity, acceptance, or amendments.
+
+**Custody: founder testing and third-party BYOK require different findings.**
+The Services Agreement §3.3(g) restricts transfers of API keys involving third
+parties. [Key-safety guidance](https://help.openai.com/en/articles/5112595-best-practices-for-api-key-safety)
+supports keeping one's own key on one's own backend. Internal testing where
+Jikigai is both API customer and application operator may therefore differ
+from hosting another customer's credential. This is a conditional
+interpretation, not verified account equivalence or blanket BYOK permission.
+“Personal organization” and operator-reported Jikigai ownership do not resolve
+that distinction. `createCodexApiKeyProviderForUser()` retrieves encrypted
+credentials and `createCodexApiKeyProvider()` decrypts them server-side; the
+application has credential custody.
+
+**Data controls: documented baseline established; configuration and request
+behavior unresolved.** [API data controls](https://developers.openai.com/api/docs/guides/your-data)
+specify no model training by default unless opted in, default abuse-log
+retention up to 30 days with legal/safety exceptions, and Responses
+application-state storage for at least 30 days under its default storage
+behavior. ZDR/MAM require approval. Residency excludes system/account metadata;
+“Global” alone proves neither regional processing nor EEA confinement.
+[Subprocessor disclosures](https://openai.com/policies/sub-processor-list/)
+identify multiple processing countries, not this request's locations.
+Defaults can inform a conservative assessment; they cannot substantiate
+stronger account-specific claims.
+
+| Mode | Internal disposition |
+|---|---|
+| API key | **PENDING — no live authorization.** |
+| Existing managed hosted auth | **BLOCKED — provider-permitted integration required.** |
+
+[App Server guidance](https://learn.chatgpt.com/docs/app-server) places a broad
+commercial/hosted authentication restriction before its mode descriptions.
+Existing managed auth remains blocked. Generic API integration permission
+does not conclusively settle that warning's scope for the proposed API-key
+App Server authentication route.
+
+The smallest remaining evidence is: a sanitized binding between the nominated
+account, accepting entity and applicable standard agreement/amendments;
+confirmed same-entity custody or explicit permission for the proposed
+third-party arrangement; resolution of the exact App Server authentication
+route's permitted scope; and reviewed endpoint/storage behavior, training
+opt-in status, applicable retention/transfer baseline and bounded test
+controls. Key existence, actual deadline, recovery rehearsal, authenticated
+screenshots, routine consumer and separate Web matrices remain independent
+prerequisites.
+
+Customer content remains blocked; PR stays draft/default-off. No credential
+inspection, inference request, authenticated account inspection, shared write
+or cohort change occurred. External counsel escalation retains the audit's
+existing triggers; unresolved substantive vendor-term interpretation has the
+existing [AI vendor terms route](../../../legal/recommended-tools.md#ai-vendor-terms).

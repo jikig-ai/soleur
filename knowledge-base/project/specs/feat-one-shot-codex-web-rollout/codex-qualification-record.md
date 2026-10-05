@@ -198,3 +198,19 @@ for its scope: reported administrator configuration, not an evidenced key or
 its deadline, test-window extension, live authorization or Web qualification.
 The earlier configured-control gap is historical; all remaining gates and
 action prohibitions persist.
+
+## Addendum — 2026-10-05 public agreement and data-control research
+
+The operator requested direct online verification of agreement, custody and
+data-control evidence. The attributable [public-source CLO reassessment](clo-decision-packet.md#public-source-clo-reassessment--2026-10-05)
+owns the retrieved policy findings, conditional standard-DPA coverage and
+remaining account/route gaps. It retains API-key PENDING and existing managed
+hosted-auth BLOCKED without granting live authorization. The reported US$5
+project limit and seven-day maximum key lifetime do not establish an actual
+key/deadline or either Web matrix. Customer content stays blocked and the PR
+stays draft/default-off.
+
+The [offline compilation record](../feat-one-shot-codex-web-live-paths/offline-build-fa166b66.md)
+records successful exact-source Next and custom server builds with synthetic
+configuration. Its Node 26/webpack artifacts do not qualify a production
+recovery candidate, retained-schema rehearsal or authenticated preview.

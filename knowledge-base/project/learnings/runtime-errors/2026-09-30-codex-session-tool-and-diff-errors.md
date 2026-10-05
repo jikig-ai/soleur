@@ -456,3 +456,46 @@ The operator reported another verification loop. One redacted inspection of
 challenge at `auth.openai.com`. No challenge retry or browser-state copy followed.
 This establishes an access blocker, not account authentication or verified
 spending/expiry controls.
+
+## Public-source continuation errors — 2026-10-05
+
+The workflow tally's `init`, `incr` and `gate` operations acquire locks in
+protected Git metadata. In this sandbox they printed read-only-filesystem
+refusals while returning zero with `UNKNOWN`. Each required operation was
+retried with approved escalation. Once this boundary is established, use
+the approved escalation for every lock-taking tally command, including
+apparently observational gates, rather than repeating the failing call.
+
+Several combined skill/status reads truncated output, and guessed
+`next.config.mjs`, `server/db.ts` and `.markdownlint-cli2.jsonc` paths were absent. Discover paths
+before reading, keep each read bounded, and select only needed metadata.
+An unbounded `tsc --showConfig` diagnostic also returned an oversized file
+inventory; subsequent compiler probes reported only byte counts and exit data.
+
+The isolated credential-free Next build reported an empty TypeScript
+configuration. A direct compiler read succeeded, while Next's subprocess
+probe returned `EPERM`, zero output and an apparent zero status. The failure
+was sandbox-related, not evidence of malformed application configuration.
+The approved retry used another clean source export outside the sandbox,
+with the same cleared environment and no application startup. Build logs
+and explicit return codes determine its result; no success is inferred from
+the retry's launch or the previous remote CI.
+
+The escalated build's initial app-only export omitted repository modules
+imported by the app's TypeScript check. Exporting the same-head plugin and
+script support modules resolved that failure without changing application
+source. The server wrapper then omitted the local executable PATH that npm
+normally supplies; its `esbuild` invocation returned 127. Running the reviewed
+package script with that path restored passed. Export the compiler's entire
+source/import context, and reproduce package-script environment semantics
+before treating a wrapper failure as a source regression. No test suite or
+application runtime was started.
+
+The five-file documentation lint retry hit sandbox DNS `EAI_AGAIN` while
+resolving the npm registry and could not write its home-directory log.
+The approved escalated retry exited zero but reported zero files checked.
+The canonical `scripts/markdown-lint.sh` confirmed these project artifacts
+are excluded by `.markdownlintignore`; neither result is five-file coverage.
+A separate pinned-binary check of the new offline-build record passed with
+the ignore path disabled. A failed registry lookup or an excluded-file pass
+is not a completed lint check of those files.
