@@ -113,6 +113,8 @@ of another session's disk usage. Litmus: three runs of an UNCHANGED tree giving 
 harness defect, never a re-run to repeat. A harness whose setup (`cp`/`mkdir`/`mktemp`) fails must `exit 2`, not
 continue into a confident wrong result.
 
+- **A NEW `.test.sh`'s fixture dir arms two repo-global ratchets that a targeted run cannot see:** `mktemp` with no owning `trap` (`lint-trap-tempfile-ownership` rule (c); a second `EXIT` trap would replace `test-helpers.sh`'s composed one, #8659) and an operand not provably absolute (`fixture-relative-assert`). Use `"$INCIDENTS_REPO_ROOT/<name>-$$"`, `assert_fixture_dir "$DIR"` before the `mkdir`/redirects AND again right before `rm -rf` (the scanner's guard window stops at the nearest function head), and run both suites by name before pushing. Never regenerate the baseline.
+
 ## Rejected shapes (do not reintroduce)
 
 - Hardlink copies (`cp -al`): hardlinks write THROUGH to the live repo, so a mutation edits the real file (#8800).
