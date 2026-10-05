@@ -186,8 +186,8 @@ The published statement "the heartbeat is the likely cause" was made before this
   stream-json --include-hook-events --verbose`, `PLAYWRIGHT_MCP_HEADLESS=1`, `--allowedTools mcp__plugin_soleur_playwright__*`,
   stdin held open on a FIFO, three turns. The `init` event names the loaded plugin (`soleur@inline`, the worktree path), so the
   loaded copy was asserted and not assumed. **Run 2 carries the acceptance.** Turn 1 navigated to a `data:` page whose title is a
-  unique marker. Turn 2 came 76 s after turn 1's `Stop` and turn 3 came 27 s after turn 2's (transcript timestamps; only the first
-  gap exceeds the recipe's 60 s). Both snapshots returned the marker page, not `about:blank`, and no "Target page, context or
+  unique marker. Turn 2's snapshot completed 80 s after turn 1's `Stop` and turn 3's 26 s after turn 2's (transcript timestamps; only the
+  first gap exceeds the recipe's 60 s). Both snapshots returned the marker page, not `about:blank`, and no "Target page, context or
   browser has been closed". The transcript's three `stop_hook_summary` records (13:44:44Z, 13:46:06Z, 13:46:34Z) each carry
   `hookCount: 2` and the commands `stop-hook.sh` and `unkept-promise-hook.sh`, none named `browser-cleanup`; the stream carried six
   `Stop` `hook_started` events. A separate `pstree -p <claude pid>` sampler (every 5 s, 13:45:25Z to 13:46:55Z) saw one Chrome main
