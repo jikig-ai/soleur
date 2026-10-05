@@ -218,11 +218,11 @@ handling is a separate change (tracked, see Deferrals).
 - Registration `env` precedent: `apps/web-platform/server/inngest/functions/cron-ux-audit.ts` writes `env` into its `.mcp.json` overlay.
 - `.mcp.json` changes load only on a full Claude Code restart, not on `/mcp` reconnect (existing note in `playwright-mcp.config.json`); hooks.json changes load on plugin reload/restart. Live confirmation must follow a restart.
 - The old hook, if exercised in a RED demonstration, would kill every real Playwright Chrome on the host. All RED demonstrations MUST use a `pgrep` PATH shim that emits only the decoy pid (see Test Scenarios). Never run the old hook unshimmed.
-- Mixed-version transition: a session still running the old launch string will `pkill -9` on its next reconnect and may kill a new-style session's Chrome once. One-time; note in the PR.
+- Mixed-version transition: a session still running the old launch string runs `pkill -9 -f` on EVERY start and `/mcp` reconnect, and its unanchored patterns match every slot of a new-style session, so it can kill that session's Chrome repeatedly until it restarts (ADR-271 Consequences; the first "once" was wrong). Note it in the PR.
 - Disk: numbered slots are bounded (32 directories, reused). The `$base-$$` fallback (no `flock`, e.g. stock macOS, or exhaustion) is NOT bounded: it creates one directory per launch and nothing reaps it; the project `.mcp.json` is a Linux dev-machine config, and the SKILL.md note documents manual removal of `playwright-mcp-profile-*` directories. A `SingletonLock` pointing at a recycled live pid makes a slot look busy, which is the safe direction.
 - P5 rests on pipe-EOF, the proxy teardown and Playwright's stdin watchdog; `Proxy.teardown` does not run if the proxy is SIGKILLed, so the deepen pass ran that scratch probe (own temp profile, bundled Chromium, headless, descendants of the spawned proxy only): everything exited within 60 ms of the SIGKILL. The result goes in the learning; it is not a CI row.
 - cron-ux-audit writes its own `.mcp.json` overlay and does not use the reaper (grep of `cron-ux-audit.ts` finds no pkill).
-- Not in scope: plugin registration profile contention (it never kills; a second session gets Playwright's clear "already in use" error), the Wayland/Vulkan mitigation, `.claude/playwright-mcp.config.json` (no change needed).
+- Not in scope: plugin registration profile contention (it never kills; a second session gets Playwright's "already in use" error for the first session's WHOLE lifetime, because the `Stop` hook that happened to free the profile every turn is gone and nothing replaces it; remedy `browser_close` or end the other session, ADR-271 Consequences), the Wayland/Vulkan mitigation, `.claude/playwright-mcp.config.json` (no change needed).
 
 ## Architecture Decision (ADR/C4)
 
@@ -417,8 +417,9 @@ keyword, per the brief. The PR body says "Ref #9281" and notes the hook is remov
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** browser skills still die mid-flow (the status quo), or, worse, the browser fails to start at all (a slot-script or fallback bug), so `qa`, `ux-audit` and credential handoff stop working.
-- **If this leaks, the user's workflow is exposed via:** no new egress or credential path. The residual is that the Chrome-absent fallback runs bundled Chromium without the Chromium sandbox on Linux; the redaction proxy's guarantees are untouched and its full suite is a gate.
+- **If this lands broken, the user experiences:** browser skills still die mid-flow (the status quo), or, worse, the browser fails to start at all (a slot-script or fallback bug), so `qa`, `ux-audit` and credential handoff stop working. One class of host gets no browser BY DESIGN (fail-closed, CTO ruling, ADR-271 decision 4): a Chrome-less host without unprivileged user namespaces, or one running as root, where the sandboxed bundled-Chromium fallback cannot start. The first browser call returns Playwright's sandbox error, the proxy never offers a way past it, and the remedy (install Google Chrome, or use a non-root user) is in `agent-browser/SKILL.md` troubleshooting and pointed to from `qa`, `ux-audit` and `work`.
+- **If this leaks, the user's workflow is exposed via:** no new egress path, and "no new credential path" was wrong as first written: the numbered slot directories and the unique `-p<pid>` fallback directories are additional at-rest credential stores (mode 700; any login done in one persists there, removal is manual). The bundled-Chromium fallback keeps the Chromium sandbox through `--sandbox`, so the earlier "no sandbox" residual is retired; the redaction proxy's guarantees are untouched and its full suite is a gate.
+- **Delivery to stale copies:** the fix reaches a user only through a plugin update plus a restart by the user. An installed plugin copy keeps registering the `Stop` hook until `claude plugin update soleur@soleur`, and an old `.mcp.json` launch string in another checkout keeps its `pkill -9 -f` patterns, which kill the proxy, server and Chrome of every slot on each start or `/mcp` reconnect of that session until it restarts (ADR-271 Consequences; the diagnosis playbook is in `agent-browser/SKILL.md`).
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** the failure is a recurring reliability defect across many users rather than a single-user data incident, and the credential-redaction path is unchanged, so not `single-user incident`.
 
@@ -540,10 +541,10 @@ session's MCP log across a day of parallel use; zero hook-kill lines in transcri
 ## Dependencies & Risks
 
 - R1: The hook is not the only killer in someone's environment (user-global hooks). Mitigation: the learning documents the correlation method for finding any other.
-- R2: `flock` is util-linux; absent on stock macOS. The project `.mcp.json` is already Linux-specific (X11 env, pkill); fallback to `$base-$$` keeps it working.
+- R2: `flock` is util-linux; absent on stock macOS. The project `.mcp.json` is already Linux-specific (X11 env, pkill); fallback to `$base-p$$` keeps it working.
 - R3: Editing a security-reviewed proxy. Mitigation: opt-in flag, no sink changes, full 77-mutant suite plus new rows; cut-to-own-PR seam.
-- R4: Mixed-version one-time kill during rollout (see Technical Considerations).
-- R5: The fallback browser lacks the Chromium sandbox on Linux (documented residual).
+- R4: Mixed-version kills during rollout are not one-time: an old-string session kills any slot's Chrome on each of its starts until it restarts (see Technical Considerations).
+- R5: RETIRED by the CTO ruling (2026-10-04, ADR-271 decision 4): the fallback appends `--sandbox`, so it keeps the Chromium sandbox. Its cost is a launch failure on a host without unprivileged user namespaces (designed fail-closed, see User-Brand Impact). The earlier text was: "The fallback browser lacks the Chromium sandbox on Linux (documented residual)".
 
 ## References & Research
 
