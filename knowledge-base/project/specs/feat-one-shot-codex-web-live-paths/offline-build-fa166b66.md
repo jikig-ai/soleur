@@ -66,3 +66,14 @@ as exclusive or wholly synthetic and was not used. No protected-value
 comparison, application replacement, authenticated screenshot, routine
 consumer or provider Web matrix was exercised. Keep PR #9051 draft and Codex
 default-off.
+
+## Artifact-location correction — 2026-10-05
+
+The earlier source export was moved, without deletion, to the local ignored
+directory `.soleur/offline-candidate-fa166b66/`. The application TypeScript
+include also scanned the copied source under `test-results/`, producing 384
+errors entirely within that export. Relocation removed the unintended scan;
+the application typecheck then passed. The earlier path is historical, and
+the retained artifact hashes above still need verification before reuse.
+See the [Node 22 continuation](node22-build-76c3da26.md) for the later
+compilation observations and remaining qualification limits.

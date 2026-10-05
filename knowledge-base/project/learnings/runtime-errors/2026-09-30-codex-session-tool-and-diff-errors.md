@@ -499,3 +499,36 @@ are excluded by `.markdownlintignore`; neither result is five-file coverage.
 A separate pinned-binary check of the new offline-build record passed with
 the ignore path disabled. A failed registry lookup or an excluded-file pass
 is not a completed lint check of those files.
+
+## Resync and compiler errors — 2026-10-05
+
+- A removed `/tmp` gate helper and guessed review-reference/learning paths
+  caused failed reads. Recreate temporary helpers from the installed skill
+  and discover referenced files with `rg --files` rather than guessing.
+  Large combined reads also truncated, and a bounded `cut` pipeline printed
+  a broken-pipe error; select smaller sections and inspect each command's
+  status instead of assuming the aggregate stream was complete.
+- Session cleanup, workflow-tally locks and remerge comparison could not
+  create their temporary git/state files inside the sandbox. GitHub probes
+  also intermittently failed there. Their approved escalated retries ran;
+  a skipped lock or failed transport is not successful maintenance or a
+  remote-state measurement. Review agents can consume the lead's approved
+  remerge diff or compare parent trees without rerouting git object writes.
+- The retained export under `apps/web-platform/test-results/` was ignored by
+  git but included by TypeScript's recursive globs. All 384 errors came from
+  that copied tree. Move source-bearing compiler artifacts outside the app,
+  retain the failed log, and rerun the app compiler; gitignore does not
+  define compiler scope. The corrected typecheck exited zero.
+- The first Node 22 wrapper mounted packages under `/deps/app` and
+  `/deps/root`, which removed the `node_modules` ancestor needed for Node
+  self-import resolution. Mount them under `/deps/app/node_modules` and
+  `/deps/root/node_modules`, preserving the package-resolution boundary.
+- The corrected, network-disabled Next build refused the public Inter font
+  download. Record that full-build failure separately from independent
+  server/config compilation passes. Do not turn partial Next products or a
+  font stub into a qualified application artifact, or silently relax egress.
+- A branch-name run-list query returned older commits. Filter runs by the
+  full source SHA and verify each returned `headSha` before treating its
+  verdict as current. An unverified expanded main hash in the first record
+  draft was replaced with the measured second-parent SHA before commit;
+  never expand a known abbreviated hash by assumption.

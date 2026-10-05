@@ -51,6 +51,23 @@ This branch has no `spec.md` with a valid `lane:`; planning defaults to `cross-d
 
 The resumed fix also covers these concrete failure modes:
 
+- A member replaces a conversation while a scoped `tool_use.label` or
+  `reasoning_narration.message` is in flight. A late frame could otherwise
+  paint the previous conversation's activity in the new chat. The optional
+  conversation identifier remains validated by `ws-zod-schemas.ts` and
+  `ws-client.ts` rejects a mismatched identifier before replay-cursor or
+  reducer updates. The cross-tab narration case in `ws-boundary.test.tsx`
+  pins this boundary. These are preserved source controls and inspected test
+  definitions, not live qualification.
+- An authenticated member stops a turn or loses the socket while
+  `liveNarration` and `activity[]` are populated. Stale activity could claim
+  work continues after it ends. `ws-client.ts`'s reducer clears narration on
+  turn drain, Stop, non-live connection transitions and terminal timeout;
+  `MessageBubble` suppresses current activity while interrupted or parked
+  and omits the trail on terminal bubbles. The teardown cases in
+  `reasoning-narration-frame.test.ts` and the interrupted-end/Stop cases in
+  `chat-state-machine-activity.test.ts` pin these transitions. This source
+  review does not establish browser behavior on a qualified preview.
 - A member closes or replaces a pending first turn while conversation insertion
   is awaiting the database. Binding it afterward could run work they cancelled.
   `createConversation()` checks `isActive()` after awaited reads, insert and
