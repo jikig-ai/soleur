@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Suite for tty-ack-migration-9387.sh. The probe is NOTIFY-ONLY, so the contract under test is
-# negative: no input and no source edit may make it exit 0 (the sweeper would CLOSE the tracker)
-# or 1 (read as FAIL). Drives every exit arm through a fixed-clock seam, pins the probe's source,
-# and mutates a copy of it to prove the checks can go red.
+# negative: no input and no source edit may make it exit 0 (the sweeper would CLOSE the tracker) or 1
+# (read as FAIL). Drives every exit arm through a fixed-clock seam, runs the probe through its own
+# shebang the way the sweeper does, pins its source, and mutates a copy of it to prove the checks can
+# go red.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -82,13 +83,14 @@ fi
 BEFORE=$(date -u -d '2026-10-05T12:00:00Z' +%s)
 AFTER=$((DEADLINE + 3600))
 
-# run_probe <probe> [VAR=val ...] -> sets OUT (stdout+stderr) and RC. LC_ALL=C.UTF-8 is forced in so the
-# probe's own `export LC_ALL=C` is what is under test; bash is invoked by absolute path so a caller's PATH
-# override cannot hide the interpreter.
+# run_probe <probe> [VAR=val ...] -> sets OUT (stdout+stderr) and RC. PATH leads with the stub gh/curl
+# directory, so a call to either is logged and refused rather than reaching the real one; a later PATH=
+# argument overrides it. LC_ALL=C.UTF-8 is forced in (a locale the probe's own `export LC_ALL=C`
+# overrides); bash is invoked by absolute path so a PATH override cannot hide the interpreter.
 OUT=""; RC=0
 run_probe() {
   local probe=$1; shift
-  OUT=$(env LC_ALL=C.UTF-8 STUB_CALLS="$CALLS" "$@" "$BASH_ABS" "$probe" 2>&1); RC=$?
+  OUT=$(env LC_ALL=C.UTF-8 PATH="$BIN:/usr/bin:/bin" STUB_CALLS="$CALLS" "$@" "$BASH_ABS" "$probe" 2>&1); RC=$?
 }
 
 # case_ <name> <want-rc> <want-substring> [VAR=val ...]
@@ -126,13 +128,14 @@ row clock-trailing-newline     3 "CANNOT ESTABLISH" $'1792108800\n'
 row clock-fullwidth-digits     3 "CANNOT ESTABLISH" $'\xef\xbc\x91\xef\xbc\x97\xef\xbc\x99'
 row clock-arabic-indic-digits  3 "CANNOT ESTABLISH" $'\xd9\xa1\xd9\xa7\xd9\xa9'
 
-SAW_01=0; TABLE_BAD=0
+SAW_01=0; TABLE_BAD=0; TABLE_ENV=()
 # run_table <probe> <report|quiet>: rc and verdict word must both match, and rc must never be 0 or 1.
+# TABLE_ENV carries extra VAR=val arguments (the TZ pass).
 run_table() {
   local probe=$1 mode=$2 i
   TABLE_BAD=0
   for i in "${!T_NAME[@]}"; do
-    run_probe "$probe" NOW_EPOCH="${T_VAL[$i]}"
+    run_probe "$probe" NOW_EPOCH="${T_VAL[$i]}" "${TABLE_ENV[@]}"
     if [ "$RC" -eq 0 ] || [ "$RC" -eq 1 ]; then SAW_01=1; fi
     if [ "$RC" -eq "${T_RC[$i]}" ] && [[ "$OUT" == *"${T_SUB[$i]}"* ]] && [ "$RC" -ne 0 ] && [ "$RC" -ne 1 ]; then
       if [ "$mode" = report ]; then ok "${T_NAME[$i]}"; fi
@@ -143,23 +146,73 @@ run_table() {
   done
 }
 
-# exit_ops <file>: the operand of every `exit` on an executable (non-comment) line; a bare exit prints nothing.
+# tz_bad <probe>: the whole table again under a non-UTC zone, so a deadline taken as local midnight
+# (rather than the UTC instant) cannot pass on a UTC runner. Sets TABLE_BAD.
+tz_bad() {
+  TABLE_ENV=(TZ=Pacific/Auckland)
+  run_table "$1" quiet
+  TABLE_ENV=()
+}
+
+# date_check <probe> <report|quiet>: `date` absent or garbage-printing, each with and without the clock
+# seam, must be exit 3 with the verdict word. Sets DATE_BAD.
+DATE_BAD=0
+date_check() {
+  local probe=$1 mode=$2 name
+  DATE_BAD=0
+  for name in absent-no-seam absent-with-seam garbage-no-seam garbage-with-seam; do
+    case "$name" in
+      absent-no-seam)    run_probe "$probe" PATH="$EMPTYDIR" ;;
+      absent-with-seam)  run_probe "$probe" PATH="$EMPTYDIR" NOW_EPOCH="$AFTER" ;;
+      garbage-no-seam)   run_probe "$probe" PATH="$GARB:/usr/bin:/bin" ;;
+      garbage-with-seam) run_probe "$probe" PATH="$GARB:/usr/bin:/bin" NOW_EPOCH="$AFTER" ;;
+    esac
+    if [ "$RC" -eq 3 ] && [[ "$OUT" == *"CANNOT ESTABLISH"* ]]; then
+      if [ "$mode" = report ]; then ok "date-$name"; fi
+    else
+      DATE_BAD=$((DATE_BAD + 1))
+      if [ "$mode" = report ]; then no "date-$name (rc=$RC)"; fi
+    fi
+  done
+}
+
+# exec_ok <probe>: run the probe through its own shebang under env -i, exactly as the sweeper does
+# (the other checks all call `bash <probe>`, which cannot see a broken shebang or a missing exec bit).
+exec_ok() {
+  local probe=$1 rc
+  [ -x "$probe" ] || return 1
+  env -i PATH=/usr/bin:/bin HOME="$SUITE_TMP" NOW_EPOCH="$BEFORE" "$probe" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 2 ] || return 1
+  env -i PATH=/usr/bin:/bin HOME="$SUITE_TMP" NOW_EPOCH="$AFTER" "$probe" >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 5 ]
+}
+
+# exit_ops <file>: the operand of every `exit` on an executable (non-comment) line; a bare exit prints
+# the sentinel <bare> so it can neither vanish from the list nor shadow a later bad operand.
 exit_ops() {
-  grep -vE '^[[:space:]]*#' "$1" | grep -oE '\bexit\b([[:space:]]+[^[:space:];&|)]+)?' | sed -E 's/^exit[[:space:]]*//'
+  grep -vE '^[[:space:]]*#' "$1" | grep -oE '\bexit\b([[:space:]]+[^[:space:];&|)]+)?' \
+    | sed -E 's/^exit[[:space:]]*//' | awk '{ print ($0 == "" ? "<bare>" : $0) }'
 }
 
 # pins <file>: the source-level half of the contract. Prints the first reason and returns 1 on any breach.
 pins() {
   local f=$1 n bad
+  if [ "$(head -n 1 "$f")" != '#!/usr/bin/env bash' ]; then echo "shebang is not exactly #!/usr/bin/env bash"; return 1; fi
+  if grep -q $'\r' "$f"; then echo "carriage return in the file"; return 1; fi
   n=$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '\bexit\b')
   if [ "$n" -lt 3 ]; then echo "only $n exit sites (floor 3)"; return 1; fi
   bad=$(exit_ops "$f" | grep -vxE '2|3|5' | head -n 1)
-  if [ -n "$bad" ] || [ "$(exit_ops "$f" | wc -l)" -ne "$n" ]; then echo "exit operand outside {2,3,5}: '${bad:-bare exit}'"; return 1; fi
+  if [ -n "$bad" ] || [ "$(exit_ops "$f" | wc -l)" -ne "$n" ]; then echo "exit operand outside {2,3,5}: '${bad:-count mismatch}'"; return 1; fi
   if grep -vE '^[[:space:]]*#' "$f" | grep -qE '(^|[[:space:];])set[[:space:]]+(-[a-zA-Z]*[eu]|-o[[:space:]]+(errexit|nounset))'; then
     echo "set -e / set -u present"; return 1
   fi
   if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\btrap\b'; then echo "trap present"; return 1; fi
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\b(gh|curl|wget)\b'; then echo "gh/curl/wget on an executable line"; return 1; fi
+  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\b(exec|eval|source|kill)\b|^[[:space:]]*\.[[:space:]]'; then
+    echo "exec/eval/source/kill on an executable line"; return 1
+  fi
+  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\b(gh|curl|wget|ssh|nc|ncat|python3?|perl|node|git|openssl)\b|/dev/(tcp|udp)'; then
+    echo "network client or git on an executable line"; return 1
+  fi
   return 0
 }
 
@@ -168,16 +221,22 @@ nogh_clean() {
   local probe=$1 v
   assert_fixture_dir "$CALLS"
   : > "$CALLS"
-  for v in "$BEFORE" "$AFTER"; do run_probe "$probe" PATH="$BIN:/usr/bin:/bin" NOW_EPOCH="$v"; done
+  for v in "$BEFORE" "$AFTER"; do run_probe "$probe" NOW_EPOCH="$v"; done
   [ ! -s "$CALLS" ]
 }
 
-# check_all <probe>: pins + clock table + no-gh. 0 only when every one of them is clean.
+# check_all <probe>: pins + clock table (UTC and a non-UTC zone) + date-unusable arms + exec through the
+# shebang + no-gh. 0 only when every one of them is clean.
 check_all() {
   local probe=$1 bad=0
   pins "$probe" >/dev/null || bad=1
   run_table "$probe" quiet
   [ "$TABLE_BAD" -eq 0 ] || bad=1
+  tz_bad "$probe"
+  [ "$TABLE_BAD" -eq 0 ] || bad=1
+  date_check "$probe" quiet
+  [ "$DATE_BAD" -eq 0 ] || bad=1
+  exec_ok "$probe" || bad=1
   nogh_clean "$probe" || bad=1
   return "$bad"
 }
@@ -185,53 +244,59 @@ check_all() {
 # --- the real probe
 run_table "$PROBE" report
 if [ "$SAW_01" -eq 0 ]; then ok "table-never-rc-0-or-1"; else no "table-never-rc-0-or-1 (a clock row produced rc 0 or 1)"; fi
+tz_bad "$PROBE"
+if [ "$TABLE_BAD" -eq 0 ]; then ok "table-holds-under-a-non-utc-zone"; else no "table-holds-under-a-non-utc-zone ($TABLE_BAD rows)"; fi
 
 run_probe "$PROBE" NOW_EPOCH=""
 if { [ "$RC" -eq 2 ] || [ "$RC" -eq 5 ]; } && [[ "$OUT" == *"2026-10-16"* ]]; then ok "empty-seam-falls-through-to-real-clock"
 else no "empty-seam-falls-through-to-real-clock (rc=$RC)"; fi
 
-# date unusable: absent (empty PATH dir) and garbage-printing, each with and without the clock seam.
-run_probe "$PROBE" PATH="$EMPTYDIR"
-if [ "$RC" -eq 3 ]; then ok "date-absent-no-seam"; else no "date-absent-no-seam (rc=$RC)"; fi
-run_probe "$PROBE" PATH="$EMPTYDIR" NOW_EPOCH="$AFTER"
-if [ "$RC" -eq 3 ]; then ok "date-absent-with-seam"; else no "date-absent-with-seam (rc=$RC)"; fi
-run_probe "$PROBE" PATH="$GARB:/usr/bin:/bin"
-if [ "$RC" -eq 3 ] && [[ "$OUT" == *"CANNOT ESTABLISH"* ]]; then ok "date-garbage-no-seam"; else no "date-garbage-no-seam (rc=$RC)"; fi
-run_probe "$PROBE" PATH="$GARB:/usr/bin:/bin" NOW_EPOCH="$AFTER"
-if [ "$RC" -eq 3 ] && [[ "$OUT" == *"CANNOT ESTABLISH"* ]]; then ok "date-garbage-with-seam"; else no "date-garbage-with-seam (rc=$RC)"; fi
+date_check "$PROBE" report
 
-# The production shape: the sweeper's env -i, no seams. Clock-independent outcomes only, so the suite does
-# not rot on the deadline. Credential canaries are set in the environment and must never be printed.
+if exec_ok "$PROBE"; then ok "exec-through-shebang-under-env-i"; else no "exec-through-shebang-under-env-i"; fi
+
+# The production shape: the sweeper's env -i, no seams, real clock (clock-independent outcomes only, so
+# the suite does not rot on the deadline), then once per verdict arm through the seam. Credential
+# canaries are set in the environment and must never be printed.
 OUT=$(env -i PATH=/usr/bin:/bin HOME="$SUITE_TMP" GH_TOKEN=canary-gh-9387 SENTRY_ACTIONS_RO_TOKEN=canary-sentry-9387 "$BASH_ABS" "$PROBE" 2>&1); RC=$?
 if [ "$RC" -eq 2 ] || [ "$RC" -eq 5 ]; then ok "prod-shape-rc-in-2-or-5"; else no "prod-shape-rc-in-2-or-5 (rc=$RC out=${OUT:0:120})"; fi
-if [[ "$OUT" != *canary-gh-9387* && "$OUT" != *canary-sentry-9387* ]]; then ok "prod-shape-prints-no-credential"
-else no "prod-shape-prints-no-credential"; fi
+for v in "$BEFORE" "$AFTER"; do
+  OUT=$(env -i PATH=/usr/bin:/bin HOME="$SUITE_TMP" NOW_EPOCH="$v" GH_TOKEN=canary-gh-9387 SENTRY_ACTIONS_RO_TOKEN=canary-sentry-9387 "$BASH_ABS" "$PROBE" 2>&1); RC=$?
+  if [[ "$OUT" != *canary-gh-9387* && "$OUT" != *canary-sentry-9387* ]]; then ok "prod-shape-prints-no-credential-at-$v"
+  else no "prod-shape-prints-no-credential-at-$v"; fi
+done
 
 # No gh / curl on either verdict arm.
 if nogh_clean "$PROBE"; then ok "no-gh-or-curl-call-on-either-arm"; else no "no-gh-or-curl-call-on-either-arm ($(head -n 1 "$CALLS"))"; fi
 
-# Both verdict messages go to stdout and name the date; exit-5 carries the two-step instruction in order.
-run_probe "$PROBE" NOW_EPOCH="$BEFORE"
-if [[ "$OUT" == *"2026-10-16"* ]]; then ok "not-yet-names-the-date"; else no "not-yet-names-the-date"; fi
-OUT_STDOUT=$(env LC_ALL=C.UTF-8 NOW_EPOCH="$AFTER" "$BASH_ABS" "$PROBE" 2>/dev/null)
-if [[ "$OUT_STDOUT" == *"2026-10-16"* && "$OUT_STDOUT" == *"ACTION REQUIRED"* ]]; then ok "action-required-on-stdout-names-the-date"
-else no "action-required-on-stdout-names-the-date"; fi
-IA=${OUT_STDOUT%%"(a)"*}; IB=${OUT_STDOUT%%"(b)"*}
-if [[ "$OUT_STDOUT" == *"(a)"* && "$OUT_STDOUT" == *"(b)"* && ${#IA} -lt ${#IB} ]]; then ok "step-a-precedes-step-b"
-else no "step-a-precedes-step-b"; fi
-A_PART=${OUT_STDOUT#*"(a)"}; A_PART=${A_PART%%"(b)"*}
+# Both verdict messages go to stdout and name the date and the tracker; exit-5 carries the three-step
+# instruction in order.
+OUT_NY=$(env LC_ALL=C.UTF-8 NOW_EPOCH="$BEFORE" "$BASH_ABS" "$PROBE" 2>/dev/null)
+if [[ "$OUT_NY" == *"2026-10-16"* && "$OUT_NY" == *"#9387"* && "$OUT_NY" == *"NOT YET"* && "$OUT_NY" != *"ACTION REQUIRED"* ]]; then ok "not-yet-on-stdout-names-date-and-tracker-and-no-other-verdict"
+else no "not-yet-on-stdout-names-date-and-tracker-and-no-other-verdict"; fi
+if [[ "$OUT_NY" == *"earliest="* ]]; then ok "not-yet-names-the-earliest-drift-hint"; else no "not-yet-names-the-earliest-drift-hint"; fi
+OUT_AR=$(env LC_ALL=C.UTF-8 NOW_EPOCH="$AFTER" "$BASH_ABS" "$PROBE" 2>/dev/null)
+if [[ "$OUT_AR" == *"2026-10-16"* && "$OUT_AR" == *"#9387"* && "$OUT_AR" == *"ACTION REQUIRED"* && "$OUT_AR" != *"NOT YET"* ]]; then ok "action-required-on-stdout-names-date-and-tracker-and-no-other-verdict"
+else no "action-required-on-stdout-names-date-and-tracker-and-no-other-verdict"; fi
+IA=${OUT_AR%%"(a)"*}; IB=${OUT_AR%%"(b)"*}; IC=${OUT_AR%%"(c)"*}
+if [[ "$OUT_AR" == *"(a)"* && "$OUT_AR" == *"(b)"* && "$OUT_AR" == *"(c)"* && ${#IA} -lt ${#IB} && ${#IB} -lt ${#IC} ]]; then ok "steps-a-b-c-in-order"
+else no "steps-a-b-c-in-order"; fi
+A_PART=${OUT_AR#*"(a)"}; A_PART=${A_PART%%"(b)"*}
 if [[ "$A_PART" == *"bootstrap-runs.jsonl"* && "$A_PART" == *"founder"* && "$A_PART" == *"ADR-264"* ]]; then ok "step-a-names-ledger-founder-adr"
 else no "step-a-names-ledger-founder-adr"; fi
 if [[ "$A_PART" == *"ledger line is not evidence of approval"* && "$A_PART" == *"approved by YOU at the prompt"* ]]; then ok "step-a-asks-for-the-operators-own-approval"
 else no "step-a-asks-for-the-operators-own-approval"; fi
-B_PART=${OUT_STDOUT#*"(b)"}
+B_PART=${OUT_AR#*"(b)"}; B_PART=${B_PART%%"(c)"*}
 if [[ "$B_PART" == *"start the migration"* ]]; then ok "step-b-says-start-the-migration"; else no "step-b-says-start-the-migration"; fi
+C_PART=${OUT_AR#*"(c)"}
+if [[ "$C_PART" == *"close #9387"* && "$C_PART" == *"remove its follow-through label"* ]]; then ok "step-c-says-close-and-remove-the-label"
+else no "step-c-says-close-and-remove-the-label"; fi
 
 # Direct source pins on the real probe.
-if why=$(pins "$PROBE"); then ok "source-pins-exit-set-no-errexit-no-trap-no-gh"; else no "source-pins ($why)"; fi
+if why=$(pins "$PROBE"); then ok "source-pins-shebang-exit-set-no-errexit-no-trap-no-exec-no-network"; else no "source-pins ($why)"; fi
 if grep -qE '^export LC_ALL=C$' "$PROBE"; then ok "pin-lc-all-c"; else no "pin-lc-all-c"; fi
-if grep -q 'NOTIFY-ONLY' "$PROBE" && grep -qE '^# RETIREMENT:' "$PROBE"; then ok "header-has-notify-only-and-retirement"
-else no "header-has-notify-only-and-retirement"; fi
+if grep -qE '^# NOTIFY-ONLY:' "$PROBE" && grep -qE '^# CREDENTIAL POSTURE:' "$PROBE" && grep -qE '^# RETIREMENT:' "$PROBE"; then ok "header-has-notify-only-credential-posture-and-retirement"
+else no "header-has-notify-only-credential-posture-and-retirement"; fi
 
 # --- mutation arms: one edit to a copy of the probe; the checks above, run against the copy, must go red.
 # The edit is asserted to have LANDED (a mutant identical to the probe would report the baseline), and the
@@ -247,6 +312,7 @@ mutant() {
   if [ -n "$all" ]; then src=${src//"$old"/"$new"}; else src=${src/"$old"/"$new"}; fi
   assert_fixture_dir "$dest"
   printf '%s\n' "$src" > "$dest"
+  chmod +x "$dest"
   if cmp -s "$PROBE" "$dest"; then no "$name (the mutation did not land)"; return; fi
   if check_all "$dest"; then no "$name (mutant NOT caught)"; else ok "$name"; fi
 }
@@ -257,10 +323,20 @@ mutant M3-ge-becomes-gt               '$NOW >= 10#'              '$NOW > 10#'
 mutant M4-octal-hazard-no-base-prefix '10#'                      ''                        all
 mutant M5-verdict-falls-off-the-end   $'\nexit 2'               $'\ntrue'
 mutant M6-adds-a-gh-call              $'export LC_ALL=C\n'     $'export LC_ALL=C\ngh issue view 9387 >/dev/null 2>&1\n'
+mutant M7-adds-set-e                  $'export LC_ALL=C\n'     $'export LC_ALL=C\nset -e\n'
+mutant M8-adds-an-exit-trap           $'export LC_ALL=C\n'     $'export LC_ALL=C\ntrap : EXIT\n'
+mutant M9-broken-shebang              '#!/usr/bin/env bash'      '#!/usr/bin/env bsh'
+mutant M10-dead-bare-exit-after-last  $'\nexit 2'               $'\nexit 2\nexit'
+mutant M11-adds-exec-true             $'export LC_ALL=C\n'     $'export LC_ALL=C\nexec true\n'
+mutant M12-drops-deadline-validation  '"$DEADLINE_EPOCH" =~ ^[0-9]{1,12}$ && ' ''
+mutant M13-deadline-as-local-midnight 'date -u -d "$DEADLINE_ISO"' 'date -d "${DEADLINE_ISO%Z}"'
+mutant M14-adds-a-dev-tcp-connect     $'export LC_ALL=C\n'     $'export LC_ALL=C\nexec 3<>/dev/tcp/127.0.0.1/9\n'
 
+# The floor below is the exact count of passing assertions in a green run; raise it in the same edit
+# that adds an assertion or an arm.
 printf '\n%s passed, %s failed\n' "$pass" "$failc"
-if [ "$pass" -lt 41 ]; then
-  printf 'FAIL: ran only %s passing assertions (<41)\n' "$pass" >&2
+if [ "$pass" -lt 54 ]; then
+  printf 'FAIL: ran only %s passing assertions (<54)\n' "$pass" >&2
   exit 1
 fi
 [ "$failc" -eq 0 ]
