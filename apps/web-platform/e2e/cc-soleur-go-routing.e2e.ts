@@ -19,8 +19,8 @@
 //     router is the dispatcher itself; what it routes INTO is the WorkflowName.
 //     Tests pick `"brainstorm"` as the routed workflow.
 //   - FR2.4 cost circuit-breaker — closed inline (#3774). Threaded the
-//     existing `usageData.totalCostUsd` (driven by ws-client.ts:791-806's
-//     out-of-reducer setState) into `WorkflowLifecycleBar` via a chat-
+//     existing `usageData.totalCostUsd` (driven by ws-client.ts ›
+//     `case "usage_update"` out-of-reducer setState) into `WorkflowLifecycleBar` via a chat-
 //     surface prop-merge. Added `data-lifecycle-status` attribute on the
 //     bar's ended branch so the existing `cost_ceiling` terminal status
 //     (lib/types.ts:WORKFLOW_END_STATUSES) is DOM-distinguishable from a
@@ -236,8 +236,8 @@ test.describe("cc-soleur-go routing: FR2.3 @CTO mid-workflow", () => {
 //
 // Originally scoped out as #3774; flipped inline per code-simplicity DISSENT
 // at review time. The minimal client wire added in this PR:
-//   - `usage_update` (handled out-of-reducer at `ws-client.ts:791-806` as
-//     today, via setUsageData) is now threaded into `WorkflowLifecycleBar`
+//   - `usage_update` (handled out-of-reducer at `ws-client.ts ›
+//     case "usage_update"`, via setUsageData) is now threaded into `WorkflowLifecycleBar`
 //     via a chat-surface prop-merge — when `workflow.state === "active"`,
 //     `cumulativeCostUsd` is overridden with `usageData.totalCostUsd` so
 //     the bar can render the running total without introducing a second
