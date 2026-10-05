@@ -67,7 +67,11 @@ fail() {
   exit 1
 }
 need_token() { [[ -n "${HCLOUD_TOKEN:-}" ]] || fail "the infra-credentials loader exported no HCLOUD_TOKEN"; printf '::add-mask::%s\n' "$HCLOUD_TOKEN"; }
-out() { [[ -z "${GITHUB_OUTPUT:-}" ]] || printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+# One line per output: a value with a newline (a Hetzner name, an API field) must not be able to start a second `key=value` line.
+out() { local v="${2//$'\r'/ }"; v="${v//$'\n'/ }"; [[ -z "${GITHUB_OUTPUT:-}" ]] || printf '%s=%s\n' "$1" "$v" >> "$GITHUB_OUTPUT"; }
+# clean — a value printed into the run log or the step-summary table: no newline (so no value can start a line of its own, and every table row starts
+# with `|`, which a workflow command cannot), no table pipe, bounded.
+clean() { local v="$*"; v="${v//$'\r'/ }"; v="${v//$'\n'/ }"; v="${v//|//}"; printf '%s' "${v:0:300}"; }
 # Every subcommand that WRITES refuses unless the dispatch is an apply run: plan_only can never reach a write through this file,
 # whatever the workflow's step conditions say.
 require_apply() { [[ "${APPLY:-}" == yes ]] || fail "$1 refused: this is not an apply dispatch (APPLY='${APPLY:-}'); plan_only never writes"; }
@@ -131,7 +135,8 @@ observe_hetzner() {
     1) WEB2_SID="$(jq -r '.servers[0].id | tostring' "$HBODY")"
        WEB2_VOLS="$(jq -r '[.servers[0].volumes[] | tostring] | join(",")' "$HBODY")"; [[ -n "$WEB2_VOLS" ]] || WEB2_VOLS=none
        created="$(jq -r '.servers[0].created // empty' "$HBODY")"
-       if created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" && [[ "$created_epoch" =~ ^[0-9]+$ ]]; then
+       # An absent creation time must stay UNKNOWN: `date -d ""` is midnight today, which would read as an age of hours and offer a resume.
+       if [[ -n "$created" ]] && created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" && [[ "$created_epoch" =~ ^[0-9]+$ ]]; then
          WEB2_AGE_S="$(( $(date -u +%s) - created_epoch ))"; (( WEB2_AGE_S >= 0 )) || WEB2_AGE_S=none
        fi ;;
     *) fail "more than one server is named ${WEB2_NAME}: ambiguous; nothing is written" ;;
@@ -172,6 +177,7 @@ cmd_delete_volume() {
   case "${EMPTINESS:-}" in PASS*) : ;; *) fail "delete-volume refused: no PASS emptiness verdict from the evidence step (got '${EMPTINESS:-}'); nothing is deleted" ;; esac
   [[ "${NEVER_POOLED:-}" == absent ]] || fail "delete-volume refused: no never-pooled proof (got '${NEVER_POOLED:-}'); nothing is deleted"
   [[ "${PRE_PLAN:-}" == graded ]] || fail "delete-volume refused: the pre plan was not graded (got '${PRE_PLAN:-}'); nothing is deleted"
+  [[ "${FLIP:-}" == met ]] || fail "delete-volume refused: the flip precondition was not reported MET by its step (got '${FLIP:-}'); nothing is deleted"
   presence_proof
   code="$(hapi GET "/volumes/${PINNED_VOLUME_ID}")"
   [[ "$code" == 200 ]] || fail "re-assert: GET /volumes/${PINNED_VOLUME_ID} -> ${code}"
@@ -252,13 +258,16 @@ cmd_ready_poll() {
   code="$(hapi GET "/servers?name=${WEB2_NAME}")"
   [[ "$code" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]] || fail "ready-poll: could not resolve exactly one server named ${WEB2_NAME} (${code})"
   created="$(jq -r '.servers[0].created // empty' "$HBODY")"
-  created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" && [[ "$created_epoch" =~ ^[0-9]+$ ]] || fail "ready-poll: the server's creation time is unreadable ('${created}')"
+  # An empty creation time must refuse: `date -d ""` is midnight today and would anchor the poll hours in the past.
+  [[ -n "$created" ]] && created_epoch="$(date -u -d "$created" +%s 2>/dev/null)" && [[ "$created_epoch" =~ ^[0-9]+$ ]] || fail "ready-poll: the server's creation time is unreadable ('${created}')"
   exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" "$created_epoch"
 }
 
 cmd_reboot() {
   need_token
   require_apply reboot
+  # A reboot is only for a host that was never certified: with the soak marker present web-2 may already hold data, and a resume must not touch it.
+  [[ "${NEVER_POOLED:-}" == absent ]] || fail "reboot refused: no never-pooled proof (got '${NEVER_POOLED:-}'); nothing is rebooted"
   local sid state_sid code action_id st ident
   code="$(hapi GET "/servers?name=${WEB2_NAME}")"
   [[ "$code" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]] || fail "reboot: could not resolve exactly one server named ${WEB2_NAME} (${code})"
@@ -288,7 +297,7 @@ cmd_flip_precondition() { # apply=yes|no
   [[ "$n" -eq 2 ]] || ok=no
   [[ ! -e "${_ROOT}/.github/workflows/apply-web-escrow-create.yml" ]] || absent=no
   echo "flip precondition: luks_passphrase_rotations over a create of the web-class pair = ${n} (needs 2); apply-web-escrow-create.yml absent = ${absent}"
-  if [[ "$ok" == yes && "$absent" == yes ]]; then echo "flip precondition: MET"; return 0; fi
+  if [[ "$ok" == yes && "$absent" == yes ]]; then echo "flip precondition: MET"; out met met; return 0; fi
   if [[ "$apply" == yes ]]; then
     fail "flip precondition NOT met: the retirement change (delete apply-web-escrow-create.yml and flip the rotation HALT's create exemption) must merge before this dispatch formats web-2"
   fi
@@ -297,48 +306,61 @@ cmd_flip_precondition() { # apply=yes|no
 
 cmd_summary() {
   # The dispatch summary: names, ids, booleans and measured values only (no secret value). It claims only what THIS run measured:
-  # MODE and JOB_STATUS decide which sentence is true. Printed to the run log as well as the step summary (the step summary has
-  # no API; the log does).
-  local approvers="unavailable" new_host="n/a" status="${JOB_STATUS:-unknown}" now_utc started="${STARTED_AT:-n/a}"
+  # MODE, JOB_STATUS and the verdict decide which sentence is true. EVERY value is passed through clean(): `reason` is free text from the
+  # dispatcher and the API fields come from outside, so none may start a workflow command or break the table. Printed to the run log as
+  # well as the step summary (the step summary has no API; the log does).
+  local approvers="unavailable (not queried)" new_host="n/a" status="${JOB_STATUS:-unknown}" now_utc started="${STARTED_AT:-n/a}" created_epoch="" earliest resumed=no
   now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  [[ "${VERDICT:-}" == resume:post_apply ]] && resumed=yes
   if [[ -n "${GH_TOKEN:-}" && -n "${RUN_ID:-}" && -n "${REPO:-}" ]]; then
-    approvers="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" --jq '[.[] | "\(.user.login) (\(.state))"] | join(", ")' 2>/dev/null || true)"
-    [[ -n "$approvers" ]] || approvers="none recorded"
+    if approvers="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" --jq '[.[] | "\(.user.login) (\(.state))"] | join(", ")' 2>/dev/null)"; then
+      [[ -n "$approvers" ]] || approvers="none recorded"
+    else
+      approvers="unavailable (the approvals API did not answer)"
+    fi
   fi
   if [[ "${MODE:-}" == apply && "$status" == success && -n "${HCLOUD_TOKEN:-}" ]]; then
     if [[ "$(hapi GET "/servers?name=${WEB2_NAME}")" == 200 && "$(jq -r '.servers | length' "$HBODY")" == 1 ]]; then
-      new_host="$(jq -r '.servers[0] | "server_id=\(.id) location=\(.datacenter.location.name // "unknown") volumes=\([.volumes[] | tostring] | join(","))"' "$HBODY")"
+      new_host="$(jq -r '.servers[0] | "server_id=\(.id) location=\(.datacenter.location.name // "unknown") volumes=\([.volumes[] | tostring] | join(",")) created=\(.created // "unknown")"' "$HBODY")"
+      created_epoch="$(date -u -d "$(jq -r '.servers[0].created // empty' "$HBODY")" +%s 2>/dev/null || true)"
     fi
   fi
+  # The follow-through's `earliest` is the REBIRTH + 3 days, i.e. the server's own creation time (never "today", which on a resume is wrong).
+  if [[ "$created_epoch" =~ ^[0-9]+$ ]]; then earliest="$(date -u -d "@$((created_epoch + 259200))" +%Y-%m-%d)"; else earliest="(read the server's creation time from Hetzner and add 3 days)"; fi
   {
     echo "## web-2 LUKS rebirth (#9372, single-use)"
     echo ""
     echo "| item | value |"
     echo "|---|---|"
-    echo "| mode / job status | ${MODE:-n/a} / ${status} |"
-    echo "| reason | ${REASON:-n/a} |"
-    echo "| commit / run | ${SHA:-n/a} / ${RUN_URL:-n/a} |"
-    echo "| dispatcher / approver(s) | ${ACTOR:-n/a} / ${approvers} |"
-    echo "| started / summarised (UTC) | ${started} / ${now_utc} |"
+    echo "| mode / job status | $(clean "${MODE:-n/a}") / $(clean "$status") |"
+    echo "| reason | $(clean "${REASON:-n/a}") |"
+    echo "| commit / run | $(clean "${SHA:-n/a}") / $(clean "${RUN_URL:-n/a}") |"
+    echo "| dispatcher / approver(s) | $(clean "${ACTOR:-n/a}") / $(clean "$approvers") |"
+    echo "| started / summarised (UTC) | $(clean "$started") / ${now_utc} |"
     echo "| target | ${HOST_KEY} only (${WEB2_NAME}); web-1 (${WEB1_SERVER_ID}) is never targeted: by-name refusal in the plan gate, reboot re-resolves web-2 by name |"
-    echo "| classifier verdict | ${VERDICT:-not reached} |"
-    echo "| plaintext volume (pinned) | ${PIN_DESC:-not reached} |"
-    echo "| emptiness evidence | ${EMPTINESS:-not run} |"
-    echo "| never pooled (soak marker absent, names only) | ${NEVER_POOLED:-not run} |"
-    echo "| image | ${PINNED_IMAGE:-unresolved} (tag ${IMAGE_TAG:-n/a}); host-scripts hash equal to the checkout: ${COHERENCE:-not run} |"
-    echo "| volume delete | ${DELETED:-not run} |"
-    echo "| state forget | ${FORGOT:-not run} |"
-    echo "| readiness row | ${READY:-not run} |"
-    echo "| recovery check | ${RECOVERY:-not run} |"
-    echo "| reborn host | ${new_host} |"
+    echo "| classifier verdict | $(clean "${VERDICT:-not reached}") |"
+    echo "| plaintext volume (pinned) | $(clean "${PIN_DESC:-not reached}") |"
+    echo "| emptiness evidence | $(clean "${EMPTINESS:-not run}") |"
+    echo "| never pooled (soak marker absent, names only) | $(clean "${NEVER_POOLED:-not run}") |"
+    echo "| image | $(clean "${PINNED_IMAGE:-unresolved}") (tag $(clean "${IMAGE_TAG:-n/a}")); host-scripts hash equal to the checkout: $(clean "${COHERENCE:-not run}") |"
+    echo "| volume delete | $(clean "${DELETED:-not run}") |"
+    echo "| state forget | $(clean "${FORGOT:-not run}") |"
+    echo "| readiness row | $(clean "${READY:-not run}") |"
+    echo "| recovery check | $(clean "${RECOVERY:-not run}") |"
+    echo "| web-2 now | $(clean "${new_host}") |"
     echo ""
     case "${MODE:-}:${status}" in
       plan_only:*) echo "**plan_only: no write of any kind occurred. Nothing has been rebirthed.**" ;;
       apply:success)
-        echo "The rebirth applied and a reboot was **issued**. **Nothing is claimed until the graded reboot proof:** a luks-monitor probe row on a boot_id other than the readiness row's, crypto_LUKS on /dev/mapper/workspaces. Until then web-2 is *provisioned, proof pending*; the soak marker (and so any weight) waits for that proof, and web-2 holds no workspace data."
+        if [[ "$resumed" == yes ]]; then
+          echo "**This was a RESUME:** nothing was replaced or deleted. The post plan may only have added what a partly failed apply left missing; then the readiness poll, the recovery check and a reboot ran."
+        else
+          echo "The rebirth applied and a reboot was **issued**."
+        fi
+        echo "**Nothing is claimed until the graded reboot proof:** a luks-monitor probe row on a boot_id other than the readiness row's, crypto_LUKS on /dev/mapper/workspaces. Until then web-2 is *provisioned, proof pending*; the soak marker (and so any weight) waits for that proof, and web-2 holds no workspace data."
         echo ""
-        echo "Follow-through: a directive for scripts/followthroughs/web2-luks-live-6931.sh is already enrolled on #6931; UPDATE its \`earliest=\` to $(date -u -d '+3 days' +%Y-%m-%d) (rebirth + 3 days). Do not add a second directive." ;;
-      *) echo "**The rebirth did not complete (job status ${status}).** Re-dispatch with the same inputs: the classifier names the window and heals it, resumes the post-apply stages (resume:post_apply), or refuses before writing." ;;
+        echo "Follow-through: a directive for scripts/followthroughs/web2-luks-live-6931.sh is already enrolled on #6931; UPDATE its \`earliest=\` to ${earliest} (rebirth + 3 days). Do not add a second directive." ;;
+      *) echo "**The rebirth did not complete (job status $(clean "$status")).** Re-dispatch with the same inputs: the classifier names the window and heals it, resumes the post-apply stages (resume:post_apply), or refuses before writing." ;;
     esac
   } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 }

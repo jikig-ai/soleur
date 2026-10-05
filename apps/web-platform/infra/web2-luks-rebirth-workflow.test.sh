@@ -49,7 +49,9 @@ PY
 
 battery() {
   local wf="$1" n=0 steps top
-  steps="$(python3 "$TMP/wfq.py" "$wf" steps)"; top="$(python3 "$TMP/wfq.py" "$wf" top)"
+  if ! steps="$(python3 "$TMP/wfq.py" "$wf" steps 2>/dev/null)" || ! top="$(python3 "$TMP/wfq.py" "$wf" top 2>/dev/null)"; then
+    printf 'FAILED S0 the workflow does not parse (a parse error is not a mutation kill)\nRAN 0\n'; return
+  fi
   chk() { n=$((n + 1)); [[ "$2" -eq 0 ]] || printf 'FAILED %s\n' "$1"; }
   jqs() { jq -r "$1" <<<"$steps"; }
   jqt() { jq -r "$1" <<<"$top"; }
@@ -65,7 +67,7 @@ battery() {
   chk "S6 the Terraform version is pinned and equal in both variables" "$([[ "$(jqt '.env.TERRAFORM_VERSION')" == "$(jqt '.env.TF_VAR_terraform_version')" && "$(jqt '.env.TERRAFORM_VERSION')" =~ ^[0-9.]+$ && "$(jqt '.env.INFRA_DIR')" == apps/web-platform/infra ]]; echo $?)"
   local script_pin; script_pin="$(sed -nE 's/^PINNED_VOLUME_ID="([0-9]+)".*/\1/p' "$SCRIPT_REAL" | head -1)"
   chk "S7 the physical-id pin is the same constant in the workflow and the script" "$([[ -n "$script_pin" && "$(jqt '.env.PINNED_VOLUME_ID')" == "$script_pin" && "$script_pin" == 106466179 ]]; echo $?)"
-  chk "S8 the job timeout is bounded" "$([[ "$(jqt '.job_timeout')" -le 60 ]]; echo $?)"
+  chk "S8 the job timeout is bounded" "$([[ "$(jqt '.job_timeout')" =~ ^[0-9]+$ && "$(jqt '.job_timeout')" -ge 1 && "$(jqt '.job_timeout')" -le 60 ]]; echo $?)"
 
   local pf; pf="$(idx 'Escrow readiness preflight')"
   chk "S9 the escrow preflight is exactly the pinned one-liner with a 2-minute bound, DOPPLER_TOKEN only and no condition" "$([[ "$pf" -ge 0 && "$(jq -r --argjson i "$pf" '.[$i].run | rtrimstr("\n")' <<<"$steps")" == "bash scripts/web-host-escrow-preflight.sh" && "$(jq -r --argjson i "$pf" '.[$i].timeout' <<<"$steps")" == 2 && "$(jq -r --argjson i "$pf" '.[$i].if' <<<"$steps")" == null && "$(jq -r --argjson i "$pf" '.[$i].env | keys | join(",")' <<<"$steps")" == DOPPLER_TOKEN && "$(jq -r --argjson i "$pf" '.[$i].wd' <<<"$steps")" == null && "$(jq -r --argjson i "$pf" '.[$i].shell' <<<"$steps")" == null && "$(jq -r --argjson i "$pf" '.[$i].cont' <<<"$steps")" == null ]]; echo $?)"
@@ -80,11 +82,10 @@ battery() {
   chk "S11 the steps run in the contracted order" "$([[ "$ic" -gt 0 && "$ifl" -gt "$ic" && "$ipre" -gt "$ifl" && "$iin" -gt "$ipre" && "$ds" -gt "$iin" && "$sr" -gt "$ds" && "$ipost" -gt "$sr" && "$ia" -gt "$ipost" && "$ir" -gt "$ia" && "$ir2" -gt "$ir" && "$irb" -gt "$ir2" ]]; echo $?)"
   # EVERY step with a run body is either on the read-only list or on the write list, so a NEW step cannot slip in unclassified; every
   # write step's `if:` equals one of two exact spellings (a substring test lets `always() && env.APPLY == 'yes'` through).
-  local F1 F2 RO WR unclassified badif
+  local F1 RO WR unclassified badif
   F1="\${{ env.APPLY == 'yes' }}"
-  F2="\${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}"
   RO='["Validate dispatch inputs","Verify required secrets","Extract backend credentials","Escrow readiness preflight","Terraform init","Generate ephemeral SSH","Assert runner is amd64","Resolve the image digest","Coherence preflight","Classify state","Emptiness evidence","Never-pooled evidence","Flip precondition","Terraform plan `pre`","Remove plan files","Name the heal window","Dispatch summary"]'
-  WR="$(jq -cn --arg f1 "$F1" --arg f2 "$F2" '{"Install cryptsetup":$f1,"Delete the empty plaintext volume":$f1,"Forget the volume":$f1,"Terraform plan `post`":$f2,"Terraform apply":$f2,"Wait for the fresh-boot readiness row":$f1,"Birth-time recovery check":$f1,"Issue the hcloud reboot":$f1}')"
+  WR="$(jq -cn --arg f1 "$F1" '{"Install cryptsetup":$f1,"Delete the empty plaintext volume":$f1,"Forget the volume":$f1,"Terraform plan `post`":$f1,"Terraform apply":$f1,"Wait for the fresh-boot readiness row":$f1,"Birth-time recovery check":$f1,"Issue the hcloud reboot":$f1}')"
   unclassified="$(jq -r --argjson ro "$RO" --argjson wr "$WR" '[.[] | select(.run != null) | .name as $n | select((([$ro[]] + ($wr | keys)) | any(. as $p | $n | startswith($p))) | not) | .name] | join(" | ")' <<<"$steps")" || unclassified="JQ-ERROR"
   chk "S12 every step with a run body is classified read-only or write (an unclassified step: ${unclassified})" "$([[ -z "$unclassified" ]]; echo $?)"
   badif="$(jq -r --argjson wr "$WR" '[.[] | select(.run != null) | . as $s | ($wr | to_entries[] | select(.key as $k | $s.name | startswith($k))) as $m | select($s.if != $m.value) | "\($s.name) -> \($s.if)"] | join(" | ")' <<<"$steps")" || badif="JQ-ERROR"
@@ -97,8 +98,9 @@ battery() {
   chk "S12d every write step on the list EXISTS (a guard over a missing step is vacuous)" "$([[ "$(jq -r --argjson wr "$WR" '[.[] | .name as $n | select($wr | keys | any(. as $p | $n | startswith($p)))] | length' <<<"$steps")" -eq 8 ]]; echo $?)"
   chk "S12e no run body swallows a failure with || true, except the cleanup step and the digest resolve (its shape check follows)" "$([[ "$(jq -r '[.[] | select(((.name | startswith("Remove plan files")) or (.name | startswith("Resolve the image digest"))) | not) | select((.run // "") | test("\\|\\| *true"))] | length' <<<"$steps")" == 0 ]]; echo $?)"
   local EV; EV="\${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}"
-  chk "S12f the evidence steps and the pre plan run exactly in the proceed and detach-done windows" "$([[ "$(jq -r --arg ev "$EV" '[.[] | select((.name | startswith("Emptiness evidence")) or (.name | startswith("Never-pooled evidence")) or (.name | startswith("Terraform plan `pre`"))) | select(.if == $ev)] | length' <<<"$steps")" == 3 ]]; echo $?)"
-  chk "S12g the delete step receives each evidence step's OWN output (a skipped step leaves it empty, and the script refuses)" "$([[ "$(jq -r --argjson i "$ds" '.[$i].env | "\(.EMPTINESS)|\(.NEVER_POOLED)|\(.PRE_PLAN)|\(.VERDICT)"' <<<"$steps")" == "\${{ steps.emptiness.outputs.verdict }}|\${{ steps.pooled.outputs.verdict }}|\${{ steps.preplan.outputs.graded }}|\${{ steps.classify.outputs.verdict }}" ]]; echo $?)"
+  chk "S12f the emptiness step and the pre plan run exactly in the proceed and detach-done windows" "$([[ "$(jq -r --arg ev "$EV" '[.[] | select((.name | startswith("Emptiness evidence")) or (.name | startswith("Terraform plan `pre`"))) | select(.if == $ev)] | length' <<<"$steps")" == 2 ]]; echo $?)"
+  chk "S12f2 the never-pooled step has NO condition (it runs for every verdict: the delete AND the reboot need its proof)" "$([[ "$(jq -r '[.[] | select(.name | startswith("Never-pooled evidence"))][0] | .if' <<<"$steps")" == null ]]; echo $?)"
+  chk "S12g the delete step receives each evidence step's OWN output (a skipped step leaves it empty, and the script refuses)" "$([[ "$(jq -r --argjson i "$ds" '.[$i].env | "\(.EMPTINESS)|\(.NEVER_POOLED)|\(.PRE_PLAN)|\(.VERDICT)|\(.FLIP)"' <<<"$steps")" == "\${{ steps.emptiness.outputs.verdict }}|\${{ steps.pooled.outputs.verdict }}|\${{ steps.preplan.outputs.graded }}|\${{ steps.classify.outputs.verdict }}|\${{ steps.flip.outputs.met }}" ]]; echo $?)"
   local apply_run; apply_run="$(jq -r --argjson i "$ia" '.[$i].run' <<<"$steps")"
   chk "S12h the apply step applies exactly the graded post plan file, interactively approved by nothing else (no -auto-approve, one apply)" "$([[ "$apply_run" == *"terraform apply -no-color -input=false tfplan-post"* && "$apply_run" != *auto-approve* && "$(grep -o 'terraform apply -' <<<"$apply_run" | wc -l | tr -d ' ')" == 1 ]]; echo $?)"
   chk "S12i the plans write tfplan-pre and tfplan-post and show exactly those files" "$([[ "$(jq -r --argjson i "$ipre" '.[$i].run' <<<"$steps")" == *"-out=tfplan-pre"* && "$(jq -r --argjson i "$ipre" '.[$i].run' <<<"$steps")" == *"terraform show -json tfplan-pre > tfplan-pre.json"* && "$(jq -r --argjson i "$ipost" '.[$i].run' <<<"$steps")" == *"-out=tfplan-post"* && "$(jq -r --argjson i "$ipost" '.[$i].run' <<<"$steps")" == *"terraform show -json tfplan-post > tfplan-post.json"* ]]; echo $?)"
@@ -109,6 +111,20 @@ PY2
 )" == *"steps.classify.outputs.verdict"* ]]; echo $?)"
   chk "S12k the pin step strips a leading v before the resolver (it prepends one itself)" "$([[ "$(jqs '[.[] | select(.name | startswith("Resolve the image digest"))][0].run')" == *'${IMAGE_TAG_INPUT#v}'* ]]; echo $?)"
   chk "S12l the cleanup removes Terraform's timestamped state backups too" "$([[ "$(jqs '[.[] | select(.name | startswith("Remove plan files"))][0].run')" == *'./terraform.tfstate.*.backup'* ]]; echo $?)"
+  local pre_lit req_lit
+  pre_lit="$(jq -r --argjson i "$ipre" '.[$i].run' <<<"$steps" | sed -nE "s/.*printf 'graded=([a-z]+)\\\\n'.*/\1/p" | head -1)"
+  req_lit="$(sed -nE 's/.*\[\[ "\$\{PRE_PLAN:-\}" == ([a-z]+) \]\].*/\1/p' "$SCRIPT_REAL" | head -1)"
+  chk "S12m the literal the pre-plan step EXPORTS equals the literal delete-volume REQUIRES (they disagreed once: ${pre_lit} vs ${req_lit})" "$([[ -n "$pre_lit" && "$pre_lit" == "$req_lit" ]]; echo $?)"
+  chk "S12n no run body talks to Hetzner or the hcloud CLI directly (every Hetzner call is inside a classified script)" "$([[ "$(jq -r '[.[] | select((.run // "") | test("curl |api\\.hetzner\\.cloud|(^|[^A-Za-z0-9_-])hcloud +"))] | length' <<<"$steps")" == 0 ]]; echo $?)"
+  chk "S12o the only Terraform verbs in a run body are init, plan, apply, show and console (state surgery lives in the script)" "$([[ "$(jq -r '[.[] | (.run // "") | scan("(?:^|[^A-Za-z0-9_-])terraform +(?:-[^ ]+ +)*([a-z]+)") | .[0]] | map(select(. != "init" and . != "plan" and . != "apply" and . != "show" and . != "console")) | length' <<<"$steps")" == 0 ]]; echo $?)"
+  chk "S12p no run body swallows a failure with || true, || exit 0, || echo, || : or | cat (cleanup and the digest resolve excepted)" "$([[ "$(jq -r '[.[] | select(((.name | startswith("Remove plan files")) or (.name | startswith("Resolve the image digest"))) | not) | select((.run // "") | test("\\|\\| *(true|exit 0|echo|:)|\\| *cat( |$)|; *true( |$)"))] | length' <<<"$steps")" == 0 ]]; echo $?)"
+  chk "S12q the only third-party or local actions are checkout, setup-terraform and the credential loader (a new uses: step is unclassified)" "$([[ "$(jq -r '[.[] | select(.uses != null) | .uses | select((startswith("actions/checkout@") or startswith("hashicorp/setup-terraform@") or . == "./.github/actions/infra-credentials") | not)] | length' <<<"$steps")" == 0 ]]; echo $?)"
+  chk "S12r the readiness step calls ready-poll and the reboot step calls reboot (a swapped subcommand would reboot early)" "$([[ "$(jq -r --argjson i "$ir" '.[$i].run' <<<"$steps")" == *"web2-rebirth.sh ready-poll"* && "$(jq -r --argjson i "$irb" '.[$i].run' <<<"$steps")" == *"web2-rebirth.sh reboot"* ]]; echo $?)"
+  chk "S12s the emptiness step's detached-mode switch is exactly the detach-done verdict (not a constant)" "$([[ "$(jq -r '[.[] | select(.name | startswith("Emptiness evidence"))][0].env.W2R_DETACHED' <<<"$steps")" == "\${{ steps.classify.outputs.verdict == 'heal:detach_done' && '1' || '0' }}" ]]; echo $?)"
+  chk "S12t the reboot step receives the never-pooled proof" "$([[ "$(jq -r --argjson i "$irb" '.[$i].env.NEVER_POOLED' <<<"$steps")" == "\${{ steps.pooled.outputs.verdict }}" ]]; echo $?)"
+  chk "S12u the main-only guard is exactly github.ref == refs/heads/main" "$([[ "$(jqt '.job_if')" == "\${{ github.ref == 'refs/heads/main' }}" ]]; echo $?)"
+  chk "S12v the preflights that gate the destructive path are present and fail closed (empty WANT hash, digest shape, SENTRY_DSN read and non-empty)" "$([[ "$(jqs '[.[] | select(.name | startswith("Coherence preflight"))][0].run')" == *'-z "$WANT"'* && "$(jqs '[.[] | select(.name | startswith("Coherence preflight"))][0].run')" == *host-image-coherence-preflight.sh* && "$(jqs '[.[] | select(.name | startswith("Resolve the image digest"))][0].run')" == *'sha256:[0-9a-f]{64}'* && "$(jqs '[.[] | select(.name | startswith("Extract backend credentials"))][0].run')" == *'-z "$DSN"'* && "$(jqs '[.[] | select(.name | startswith("Extract backend credentials"))][0].run')" == *'dsn_rc'* ]]; echo $?)"
+  chk "S12w the resume plan drops -replace and the post plan keeps it otherwise (the gate's resume mode would refuse a replace anyway)" "$([[ "$(jq -r --argjson i "$ipost" '.[$i].run' <<<"$steps")" == *'if [[ "$VERDICT" == "resume:post_apply" ]]; then MODE=resume; REPLACE=(); fi'* ]]; echo $?)"
   chk "S12b the write steps exist (a guard over an empty set is vacuous)" "$([[ "$(jq -r '[.[] | select(((.run // "") | test("web2-rebirth\\.sh (delete-volume|state-rm|reboot|ready-poll)|terraform apply")))] | length' <<<"$steps")" -ge 4 ]]; echo $?)"
   local tg_pre tg_post
   tg_pre="$(jq -r --argjson i "$ipre" '.[$i].run' <<<"$steps" | grep -oE "(-target|-replace)='[^']+'" | LC_ALL=C sort | tr '\n' ' ')"
@@ -128,7 +144,8 @@ PY2
 
   # ---- parity: the literals this operation restates must equal their authorities (a drifted copy is a wrong target)
   local FORGET="$REPO/.github/workflows/workspaces-plaintext-forget.yml" GATE="$REPO/tests/scripts/lib/web-host-rebirth-gate.sh" SERVER_TF="$REPO/apps/web-platform/infra/server.tf"
-  cat > "$TMP/parity.py" <<'PY3'
+  local pp="$TMP/parity.$BASHPID.py"
+  cat > "$pp" <<'PY3'
 import re, sys
 forget = open(sys.argv[1]).read(); mine = open(sys.argv[2]).read()
 def fn(text, name):
@@ -151,7 +168,7 @@ for n, pf, pm in pairs:
 print(",".join(bad) if bad else "equal")
 PY3
   if [[ -f "$FORGET" ]]; then
-    chk "S30 the Hetzner helpers (errcode, fail, the curl line) and the web-1 constants equal the forget workflow's copies" "$([[ "$(python3 "$TMP/parity.py" "$FORGET" "$SCRIPT_REAL")" == equal ]]; echo $?)"
+    chk "S30 the Hetzner helpers (errcode, fail, the curl line) and the web-1 constants equal the forget workflow's copies" "$([[ "$(python3 "$pp" "$FORGET" "$SCRIPT_REAL")" == equal ]]; echo $?)"
   else
     # The forget workflow is single-use and is deleted by its own closing PR; the constants then have no second copy to drift from.
     chk "S30 (forget workflow retired: nothing to compare against)" 0
@@ -230,6 +247,10 @@ SH
   chk "B15 the canonical post plan passes in mode post" "$([[ "$RC" -eq 0 && "$OUT" == *"post plan graded (post)"* ]]; echo $?)"
   runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$FIX/post.json" WEB2_SID=1001 VERDICT=heal:volume_created
   chk "B16 heal:volume_created grades in mode post-heal (so a create-volume plan is refused there)" "$([[ "$RC" -ne 0 && "$OUT" == *"REFUSED the post-heal plan"* ]]; echo $?)"
+  runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$FIX/resume.json" WEB2_SID=2002 VERDICT=resume:post_apply
+  chk "B15b the resume plan (adds only, no replace) passes in mode resume, with no stock preflight" "$([[ "$RC" -eq 0 && "$OUT" == *"post plan graded (resume)"* ]]; echo $?)"
+  runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$FIX/post.json" WEB2_SID=2002 VERDICT=resume:post_apply
+  chk "B15c a replace plan is REFUSED on a resume (the rebirth plan must never run twice)" "$([[ "$RC" -ne 0 && "$OUT" == *"REFUSED the resume plan"* ]]; echo $?)"
   jq '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change.after) += {"format":"ext4"}' "$FIX/post.json" > "$sb/post.bad.json"
   runstep 'Terraform plan `post`' apps/web-platform/infra FIXTURE="$sb/post.bad.json" WEB2_SID=1001 VERDICT=proceed
   chk "B17 a post plan that creates a formatted volume fails the step" "$([[ "$RC" -ne 0 && "$OUT" != *"post plan graded"* ]]; echo $?)"
@@ -246,9 +267,10 @@ SH
   printf '#!/usr/bin/env bash\necho "attempt 1: RED reason=ready_escrow"\nexit 1\n' > "$sb/scripts/web2-rebirth.sh"
   runstep 'Wait for the fresh-boot readiness row' .
   chk "B22 a failing readiness poll fails the step (the exit code is propagated, not swallowed by the capture)" "$([[ "$RC" -ne 0 ]]; echo $?)"
-  printf '#!/usr/bin/env bash\necho "escrow object: key=k size_bytes=1 etag=e"\necho "escrow checks: single_object=yes"\necho "web2-rebirth-recovery-check: PASS birth-time consistency check; restore NOT exercised"\nexit 0\n' > "$sb/scripts/web2-rebirth-recovery-check.sh"
+  printf '#!/usr/bin/env bash\necho "::add-mask::SECRETPASSPHRASE"\necho "web2-rebirth-recovery-check: PASS birth-time consistency check; restore NOT exercised"\nprintf "escrow object: key=k size_bytes=1 etag=e;escrow checks: single_object=yes\\n" > "$W2_FACTS_FILE"\nexit 0\n' > "$sb/scripts/web2-rebirth-recovery-check.sh"
   runstep 'Birth-time recovery check' . TF_VAR_doppler_token_tf=dp.pt.x
-  chk "B23 a passing recovery check exports the escrow facts" "$([[ "$RC" -eq 0 && "$(cat "$sb/gh_out")" == facts=escrow\ object:* ]]; echo $?)"
+  chk "B23 a passing recovery check exports the escrow facts (read from W2_FACTS_FILE)" "$([[ "$RC" -eq 0 && "$(cat "$sb/gh_out")" == facts=escrow\ object:* ]]; echo $?)"
+  chk "B23b the recovery step never writes the script's stdout (the ::add-mask:: lines) to disk" "$([[ -z "$(grep -rlF SECRETPASSPHRASE "$sb" --include='*' 2>/dev/null | grep -v '/scripts/')" && ! -e "$sb/recovery.out" ]]; echo $?)"
   printf '#!/usr/bin/env bash\necho "::error::boom"\nexit 1\n' > "$sb/scripts/web2-rebirth-recovery-check.sh"
   runstep 'Birth-time recovery check' . TF_VAR_doppler_token_tf=dp.pt.x
   chk "B24 a failing recovery check fails the step" "$([[ "$RC" -ne 0 ]]; echo $?)"
@@ -270,7 +292,7 @@ while IFS= read -r line; do
   case "$line" in FAILED*) fails=$((fails + 1)); printf 'FAIL - %s\n' "${line#FAILED }" ;; RAN*) ran="${line#RAN }" ;; *) [[ -z "$line" ]] || printf '       %s\n' "$line" ;; esac
 done <<<"$report"
 printf 'real workflow: %s assertions, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 66 ]] || { echo "FAIL - assertion floor: ran ${ran} < 66"; fails=$((fails + 1)); }
+[[ "$ran" -ge 81 ]] || { echo "FAIL - assertion floor: ran ${ran} < 81"; fails=$((fails + 1)); }
 
 # Mutants are independent (each works on its own copy of the workflow and its own sandbox), so up to MUT_JOBS run at once; every mutant
 # writes its verdict line to its own file and the lines are counted once all have finished.
@@ -287,7 +309,9 @@ if s.count(old) != 1:
 open(p, "w").write(s.replace(old, new))
 PY
   then echo "FAIL - mutation '${label}': the edit did not land exactly once (a mutant that lands nothing proves nothing)" > "$TMP/mres/$idx"; return; fi
-  after="$(battery "$copy" 2>&1 | grep -c '^FAILED')"
+  local bout; bout="$(battery "$copy" 2>&1)"
+  if grep -q '^FAILED S0' <<<"$bout"; then echo "FAIL - mutation '${label}' broke the YAML: a parse error is not a kill" > "$TMP/mres/$idx"; rm -f "$copy"; return; fi
+  after="$(grep -c '^FAILED' <<<"$bout")"
   if [[ "$after" -gt 0 ]]; then echo "ok   - mutation killed: ${label} (${after} rows red)" > "$TMP/mres/$idx"; else echo "FAIL - mutation SURVIVED: ${label}" > "$TMP/mres/$idx"; fi
   rm -f "$copy"
 }
@@ -304,27 +328,30 @@ mutate "the APPLY guard is removed from the reboot step" "      - name: Issue th
         if: \${{ env.APPLY == 'yes' }}
 " "      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
 "
-mutate "the APPLY guard is removed from the post plan" "      - name: Terraform plan \`post\` (graded; the raw volume is created) + stock preflight
-        if: \${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}
-" "      - name: Terraform plan \`post\` (graded; the raw volume is created) + stock preflight
+mutate "the APPLY guard is removed from the post plan" "      - name: Terraform plan \`post\` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
+        if: \${{ env.APPLY == 'yes' }}
+" "      - name: Terraform plan \`post\` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
 "
-mutate "the resume exclusion is dropped from the post plan" "      - name: Terraform plan \`post\` (graded; the raw volume is created) + stock preflight
-        if: \${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}" "      - name: Terraform plan \`post\` (graded; the raw volume is created) + stock preflight
-        if: \${{ env.APPLY == 'yes' }}"
-mutate "the resume exclusion is dropped from the apply" "      - name: Terraform apply (exactly the graded post plan)
-        if: \${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}" "      - name: Terraform apply (exactly the graded post plan)
-        if: \${{ env.APPLY == 'yes' }}"
+mutate "the resume plan keeps -replace (a resume would replace the new host)" 'if [[ "$VERDICT" == "resume:post_apply" ]]; then MODE=resume; REPLACE=(); fi' 'if [[ "$VERDICT" == "resume:post_apply" ]]; then MODE=resume; fi'
+mutate "the apply step gains a resume exclusion that skips a needed add" "      - name: Terraform apply (exactly the graded post plan)
+        if: \${{ env.APPLY == 'yes' }}" "      - name: Terraform apply (exactly the graded post plan)
+        if: \${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}"
 mutate "the delete step if: gains an always() (a substring check would pass)" "        id: delete
         if: \${{ env.APPLY == 'yes' }}" "        id: delete
         if: \${{ always() && env.APPLY == 'yes' }}"
+mutate "the delete step loses the flip proof" '          FLIP: ${{ steps.flip.outputs.met }}' '          FLIP: met'
+mutate "the pre plan exports a literal the script does not accept" "printf 'graded=graded\\n' >> \"\$GITHUB_OUTPUT\"" "printf 'graded=pre\\n' >> \"\$GITHUB_OUTPUT\""
+mutate "the reboot step loses the never-pooled proof" '          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+        run: bash scripts/web2-rebirth.sh reboot' '        run: bash scripts/web2-rebirth.sh reboot'
+mutate "the resume plan grades in the wrong mode" 'then MODE=resume; REPLACE=(); fi' 'then MODE=post; REPLACE=(); fi'
+mutate "the recovery step captures stdout to a file again" '          facts="${RUNNER_TEMP}/recovery-facts.txt"; rc=0' '          facts="${RUNNER_TEMP}/recovery-facts.txt"; rc=0; : > "${RUNNER_TEMP}/recovery.out"; echo ::add-mask::SECRETPASSPHRASE > "${RUNNER_TEMP}/recovery.out"'
 mutate "the delete step swallows a failure" '        run: bash scripts/web2-rebirth.sh delete-volume' '        run: bash scripts/web2-rebirth.sh delete-volume || true'
 mutate "the emptiness step never runs" "      - name: Emptiness evidence (7 days of Better Stack host_metrics, fail-closed)
         id: emptiness
         if: \${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}" "      - name: Emptiness evidence (7 days of Better Stack host_metrics, fail-closed)
         id: emptiness
         if: false"
-mutate "the never-pooled step never runs" "        id: pooled
-        if: \${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}" "        id: pooled
+mutate "the never-pooled step never runs" "        id: pooled" "        id: pooled
         if: false"
 mutate "the pre plan never runs" "        id: preplan
         if: \${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}" "        id: preplan
@@ -370,8 +397,8 @@ mutate "the emptiness exit code is swallowed" '          exit "$rc"
 mutate "the readiness poll exit code is swallowed" '          printf '"'"'line=%s\n'"'"' "$(grep -E '"'"'^ready:'"'"' "$out" | tail -n 1 | head -c 400)" >> "$GITHUB_OUTPUT"
           exit "$rc"' '          printf '"'"'line=%s\n'"'"' "$(grep -E '"'"'^ready:'"'"' "$out" | tail -n 1 | head -c 400)" >> "$GITHUB_OUTPUT"
           exit 0'
-mutate "the recovery check exit code is swallowed" 'head -c 600)" >> "$GITHUB_OUTPUT"
-          exit "$rc"' 'head -c 600)" >> "$GITHUB_OUTPUT"
+mutate "the recovery check exit code is swallowed" 'tr '"'"'\n'"'"' '"'"' '"'"')" >> "$GITHUB_OUTPUT"; fi
+          exit "$rc"' 'tr '"'"'\n'"'"' '"'"' '"'"')" >> "$GITHUB_OUTPUT"; fi
           exit 0'
 mutate "the environment is swapped for the reviewer-less one" 'environment: web-platform-infra-apply' 'environment: infra-privileged'
 mutate "the main-only guard is removed" "    if: \${{ github.ref == 'refs/heads/main' }}

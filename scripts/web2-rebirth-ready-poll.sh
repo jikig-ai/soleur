@@ -22,8 +22,9 @@ anchor="${1:?anchor epoch required}"
 # shellcheck source=scripts/lib/web2-luks-rows.sh
 source "${_ROOT}/scripts/lib/web2-luks-rows.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+# The lookback below is 4 days: a resume is offered up to 72 h after the rebirth, and the once-per-instance readiness row is that old by then.
 for i in $(seq 1 "${WEB2_REBIRTH_POLL_ATTEMPTS:-24}"); do
-  if w2l_fetch_ready "$tmp/ready.jsonl" 1 20; then
+  if w2l_fetch_ready "$tmp/ready.jsonl" 4 20; then
     verdict="$(w2l_ready_verdict "$tmp/ready.jsonl")"
     if [[ "$verdict" == GREEN* ]]; then
       age="${verdict##* age_s=}"; now="$(date -u +%s)"

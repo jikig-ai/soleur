@@ -184,6 +184,32 @@ battery() {
   f="$(mut pre '(.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]") | .change.before) = "not-an-object"')"
   expect "refuse: an attachment entry whose before is a string (pin arm cannot evaluate it)" 1 "jq-error: pin-volume" pre "$f"
 
+
+  # ---- resume mode: a re-dispatch after the rebirth ran may only ADD what a partly failed apply left missing
+  local R="$FIX/resume.json"
+  expect "pass: canonical resume plan (everything already applied; all no-ops)" 0 "PASS" resume "$R" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_server_network.web[\"web-2\"]") | .change) |= (.actions=["create"] | .before=null)')"
+  expect "pass: resume plan that creates a missing private NIC" 0 "PASS" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_volume_attachment.workspaces[\"web-2\"]") | .change) |= (.actions=["create"] | .before=null)')"
+  expect "pass: resume plan that re-creates a missing volume attachment" 0 "PASS" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_firewall_attachment.web") | .change.actions) = ["update"]')"
+  expect "pass: resume plan that updates the firewall attachment" 0 "PASS" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_server.web[\"web-2\"]") | .change.actions) = ["delete","create"]')"
+  expect "refuse: a resume plan that REPLACES the server" 1 "unexpected action" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_server.web[\"web-2\"]") | .change.actions) = ["update"]')"
+  expect "refuse: a resume plan that updates the server (reboot class)" 1 "reboot" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change) |= (.actions=["create"] | .before=null | .after={"name":"soleur-web-platform-data-web-2","size":20,"labels":{"app":"soleur-web-platform"}})')"
+  expect "refuse: a resume plan that CREATES a volume (a second raw volume)" 1 "unexpected action" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change.actions) = ["delete"]')"
+  expect "refuse: a resume plan that deletes the volume" 1 "unexpected action" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change.before.id) = "106466179"')"
+  expect "refuse: a resume plan whose surviving volume IS the pinned plaintext one" 1 "pinned" resume "$f" "$KEY" 2002 "$VID"
+  f="$(mut resume '(.resource_changes[] | select(.address=="hcloud_volume.workspaces[\"web-2\"]") | .change.before.format) = "ext4"')"
+  expect "refuse: a resume plan whose surviving volume is formatted ext4" 1 "format" resume "$f" "$KEY" 2002 "$VID"
+  expect "refuse: a resume plan for a server id that is not the plan's" 1 "pin: server" resume "$R" "$KEY" 4242 "$VID"
+  expect "refuse: the ordinary post fixture graded as resume (it replaces the server and creates the volume)" 1 "unexpected action" resume "$Q" "$KEY" 2002 "$VID"
+  expect "refuse: web-1 by name in resume mode" 1 "REFUSES" resume "$R" "web-1" 2002 "$VID"
+
   printf 'RAN %s\n' "$n"
 }
 
@@ -201,7 +227,7 @@ passes=$((ran - fails))
 printf '\nreal gate: %s assertions, %s passed, %s failed\n' "$ran" "$passes" "$fails"
 
 # ---- harness rows: the suite cannot go quiet
-FLOOR=67
+FLOOR=80
 if [[ ! -f "$GATE" ]]; then echo "  FAIL gate file missing: $GATE"; fails=$((fails + 1)); fi
 if [[ "$ran" -lt "$FLOOR" ]]; then echo "  FAIL assertion floor: ran ${ran} < ${FLOOR} (a deleted or skipped row must not pass)"; fails=$((fails + 1)); fi
 if [[ ! -s "$FIX/pre.json" || ! -s "$FIX/post.json" ]]; then echo "  FAIL canonical fixtures missing"; fails=$((fails + 1)); fi

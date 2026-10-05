@@ -262,9 +262,8 @@ jobs:
           printf 'verdict=%s\n' "$(head -n 1 "$out" | head -c 200)" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
-      - name: Never-pooled evidence (the soak marker is absent; names only)
+      - name: Never-pooled evidence (the soak marker is absent; names only; every verdict, because the reboot needs it too)
         id: pooled
-        if: ${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}
         env:
           # READ/WRITE today (a read-only token is a prerequisite on #9358); bound to THIS step only and used by one allow-listed,
           # names-only reader that the census in workspaces-luks-verify-workflow.test.sh holds to that.
@@ -275,6 +274,7 @@ jobs:
           printf 'verdict=absent\n' >> "$GITHUB_OUTPUT"
 
       - name: Flip precondition (the rotation HALT's create exemption is flipped and the escrow-create workflow retired)
+        id: flip
         run: bash scripts/web2-rebirth.sh flip-precondition "$APPLY"
 
       - name: Terraform plan `pre` (scoped rebirth, graded before anything is touched) + stock preflight
@@ -316,7 +316,8 @@ jobs:
             exit 1
           fi
           echo "pre plan graded and stock preflight passed"
-          printf 'graded=pre\n' >> "$GITHUB_OUTPUT"
+          # The literal below is what scripts/web2-rebirth.sh delete-volume requires of PRE_PLAN (a suite pins both sides).
+          printf 'graded=graded\n' >> "$GITHUB_OUTPUT"
 
       - name: Install cryptsetup (read-only header check)
         if: ${{ env.APPLY == 'yes' }}
@@ -335,6 +336,7 @@ jobs:
           EMPTINESS: ${{ steps.emptiness.outputs.verdict }}
           NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
           PRE_PLAN: ${{ steps.preplan.outputs.graded }}
+          FLIP: ${{ steps.flip.outputs.met }}
         run: bash scripts/web2-rebirth.sh delete-volume
 
       - name: Forget the volume and its attachment from Terraform state (serial +1, lineage unchanged)
@@ -344,8 +346,8 @@ jobs:
           VERDICT: ${{ steps.classify.outputs.verdict }}
         run: bash scripts/web2-rebirth.sh state-rm
 
-      - name: Terraform plan `post` (graded; the raw volume is created) + stock preflight
-        if: ${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}
+      - name: Terraform plan `post` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
+        if: ${{ env.APPLY == 'yes' }}
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -355,11 +357,14 @@ jobs:
           # shellcheck disable=SC2153
           set +e
           set -uo pipefail
-          MODE=post
+          MODE=post; REPLACE=(-replace='hcloud_server.web["web-2"]')
           [[ "$VERDICT" == "heal:volume_created" ]] && MODE=post-heal
+          # resume:post_apply plans WITHOUT -replace and with the resume mode: the gate then allows only ADDING what a partly failed
+          # apply left missing (the NIC, the attachment, the firewall update); a replace or a volume create is refused.
+          if [[ "$VERDICT" == "resume:post_apply" ]]; then MODE=resume; REPLACE=(); fi
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-post \
-              -replace='hcloud_server.web["web-2"]' \
+              ${REPLACE[@]+"${REPLACE[@]}"} \
               -target='hcloud_server.web["web-2"]' \
               -target='hcloud_server_network.web["web-2"]' \
               -target='hcloud_volume.workspaces["web-2"]' \
@@ -376,19 +381,21 @@ jobs:
             echo "::error::the rebirth gate REFUSED the ${MODE} plan. Nothing was applied; the volume is already gone, so a re-dispatch re-plans this window."
             exit 1
           fi
-          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"
-          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
-          [[ -n "$HCLOUD_TOKEN" ]] || { echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN."; exit 1; }
-          export HCLOUD_TOKEN
-          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-          if ! stock_preflight_gate tfplan-post.json; then
-            echo "::error::stock preflight ABORTED on the post plan."
-            exit 1
+          if [[ "$MODE" != resume ]]; then
+            HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"
+            [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+            [[ -n "$HCLOUD_TOKEN" ]] || { echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN."; exit 1; }
+            export HCLOUD_TOKEN
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            if ! stock_preflight_gate tfplan-post.json; then
+              echo "::error::stock preflight ABORTED on the post plan."
+              exit 1
+            fi
           fi
           echo "post plan graded (${MODE}) and stock preflight passed"
 
       - name: Terraform apply (exactly the graded post plan)
-        if: ${{ env.APPLY == 'yes' && steps.classify.outputs.verdict != 'resume:post_apply' }}
+        if: ${{ env.APPLY == 'yes' }}
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -422,21 +429,27 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "${TF_VAR_doppler_token_tf:-}" ]] || { echo "::error::the loader exported no workplace-scope provider token (TF_VAR_doppler_token_tf); the recovery check cannot read the web-class config."; exit 1; }
-          out="${RUNNER_TEMP}/recovery.out"; rc=0
-          DOPPLER_TOKEN="$TF_VAR_doppler_token_tf" bash scripts/web2-rebirth-recovery-check.sh > "$out" || rc=$?
-          cat "$out"
-          printf 'facts=%s\n' "$(grep -E '^(escrow object|escrow checks):' "$out" | tr '\n' ';' | head -c 600)" >> "$GITHUB_OUTPUT"
+          # The script's stdout carries ::add-mask:: lines for the passphrase and the R2 credentials: it must reach the runner and
+          # NEVER a file. The non-secret facts come back through a dedicated file the script writes itself.
+          facts="${RUNNER_TEMP}/recovery-facts.txt"; rc=0
+          DOPPLER_TOKEN="$TF_VAR_doppler_token_tf" W2_FACTS_FILE="$facts" bash scripts/web2-rebirth-recovery-check.sh || rc=$?
+          if [[ -s "$facts" ]]; then printf 'facts=%s\n' "$(head -c 600 "$facts" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"; fi
           exit "$rc"
 
       - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
         if: ${{ env.APPLY == 'yes' }}
+        env:
+          # The script REFUSES to reboot without the never-pooled proof: with the soak marker present web-2 may already hold data.
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
         run: bash scripts/web2-rebirth.sh reboot
 
       # Plan files hold the passphrase in prior_state: they are never uploaded, and a stray local copy is removed.
       - name: Remove plan files and any local state backup
         if: always()
         working-directory: ${{ env.INFRA_DIR }}
-        run: rm -f tfplan-pre tfplan-post tfplan-pre.json tfplan-post.json terraform.tfstate.backup ./*.tfstate.backup ./terraform.tfstate.*.backup 2>/dev/null || true
+        run: |
+          rm -f tfplan-pre tfplan-post tfplan-pre.json tfplan-post.json terraform.tfstate.backup ./*.tfstate.backup ./terraform.tfstate.*.backup 2>/dev/null || true
+          rm -f "${RUNNER_TEMP}/emptiness.out" "${RUNNER_TEMP}/ready.out" "${RUNNER_TEMP}/recovery-facts.txt" 2>/dev/null || true
 
       - name: Name the heal window on failure
         if: failure()

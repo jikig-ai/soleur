@@ -34,6 +34,13 @@ if ! names="$(doppler secrets --only-names --json -p "$W2L_MARKER_PROJECT" -c "$
   echo "web2-rebirth-never-pooled: could not list the secret names of ${W2L_MARKER_PROJECT}/${W2L_MARKER_CONFIG}. A failed read is not 'absent'."
   exit 3
 fi
+# The marker name appearing ANYWHERE in the answer as a quoted string (an element, a key, or nested inside a wrapper object whatever its
+# spelling) is "present": a shape-independent positive read, so no wrapper can hide it. Only exact-quoted occurrences count (the
+# prefix-colliding `..._OLD` does not).
+if grep -qF "\"${W2L_MARKER_NAME}\"" <<<"$names"; then
+  echo "web2-rebirth-never-pooled: REFUSED — the soak marker name appears in the answer for ${W2L_MARKER_PROJECT}/${W2L_MARKER_CONFIG}: web-2 was certified, so its volume may carry data. This operation is only for a never-pooled host."
+  exit 1
+fi
 # STRICT SHAPE: an absence answer is only as good as the shape it was read from. Accept exactly (a) an array of secret NAMES, or
 # (b) an object KEYED by secret name, where every name matches ^[A-Z][A-Z0-9_]*$ (Doppler secret names). Anything else
 # (a wrapper object such as {"names":[...]}, an array of objects, a lowercase key) is a shape this script cannot read an

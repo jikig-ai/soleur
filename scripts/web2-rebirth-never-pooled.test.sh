@@ -20,17 +20,20 @@ case "$MODE" in
   prefix) echo '["WORKSPACES_LUKS_CUTOVER_AT_OLD"]' ;;
   empty_array) echo '[]' ;;
   empty_object) echo '{}' ;;
+  wrapped_upper) echo '{"NAMES":["OTHER_NAME"]}' ;;
   wrapped_names) echo '{"names":["WORKSPACES_LUKS_CUTOVER_AT"]}' ;;
   wrapped_secrets) echo '{"secrets":{"WORKSPACES_LUKS_CUTOVER_AT":{}}}' ;;
   array_of_objects) echo '[{"name":"WORKSPACES_LUKS_CUTOVER_AT"}]' ;;
   lowercase) echo '["workspaces_luks_cutover_at"]' ;;
   number_array) echo '[1,2]' ;;
   string_body) echo '"WORKSPACES_LUKS_CUTOVER_AT"' ;;
+  string_other) echo '"x"' ;;
 esac
 SH
 chmod +x "$TMP/bin/doppler"
+runs=0
 run() { # <name> <want-rc> <mode> [token]
-  : > "$TMP/calls"
+  runs=$((runs + 1)); : > "$TMP/calls"
   out="$(env -i PATH="$TMP/bin:/usr/bin:/bin" HOME="$TMP" CALLS="$TMP/calls" MODE="$3" ${4-DOPPLER_TOKEN=tok} bash "$SCRIPT" 2>&1)"; rc=$?
   if [[ "$rc" -eq "$2" ]]; then echo "  ok   $1"; else echo "  FAIL $1 (rc=$rc want=$2): ${out:0:160}"; fails=$((fails + 1)); fi
 }
@@ -40,12 +43,14 @@ run "marker present (object form) -> REFUSED 1" 1 obj_present
 run "a prefix-colliding name is not the marker -> 0" 0 prefix
 run "an empty array is a legitimate absent (the config holds only the marker) -> 0" 0 empty_array
 run "an empty object is a legitimate absent -> 0" 0 empty_object
-run "a wrapper object {names:[marker]} is a shape we cannot read -> 3 (not 'absent')" 3 wrapped_names
-run "a wrapper object {secrets:{marker}} -> 3" 3 wrapped_secrets
-run "an array of objects naming the marker -> 3 (not 'absent')" 3 array_of_objects
+run "a wrapper object {names:[marker]} is still a PRESENT marker (quoted anywhere) -> REFUSED 1" 1 wrapped_names
+run "a wrapper object {secrets:{marker}} is a PRESENT marker -> REFUSED 1" 1 wrapped_secrets
+run "an array of objects naming the marker is a PRESENT marker -> REFUSED 1" 1 array_of_objects
+run "an uppercase wrapper object that does NOT hold the marker is a legitimate absent -> 0" 0 wrapped_upper
 run "a lowercase name list -> 3" 3 lowercase
 run "an array of numbers -> 3" 3 number_array
-run "a bare JSON string -> 3" 3 string_body
+run "a bare JSON string that IS the marker name is a PRESENT marker -> REFUSED 1" 1 string_body
+run "a bare JSON string that is not the marker is a shape we cannot read -> 3" 3 string_other
 run "a failed list is not 'absent' -> 3" 3 fail
 run "a non-JSON body is not 'absent' -> 3" 3 html
 run "no token -> 3 and no doppler call" 3 array_absent ""
@@ -58,5 +63,7 @@ cp "$SCRIPT" "$TMP/mut.sh"; mkdir -p "$TMP/lib"; cp "$DIR/lib/"*.sh "$TMP/lib/";
 sed -i -E 's/any\(\. == \$n\)/any(. != $n)/' "$TMP/web2-rebirth-never-pooled.sh"
 SCRIPT="$TMP/web2-rebirth-never-pooled.sh"; before=$fails; run "MUTANT (membership inverted) fails the absent row" 0 array_absent
 if [[ "$fails" -gt "$before" ]]; then echo "  ok   mutation killed: inverted membership"; fails=$before; else echo "  FAIL mutation survived"; fails=$((fails + 1)); fi
+# floor: the number of driven rows (deleting rows must not pass)
+[[ "$runs" -ge 19 ]] || { echo "  FAIL row floor: ran ${runs} < 19"; fails=$((fails + 1)); }
 [[ "$fails" -eq 0 ]] && { echo "web2-rebirth-never-pooled: all assertions passed"; exit 0; }
 echo "web2-rebirth-never-pooled: ${fails} FAILED"; exit 1

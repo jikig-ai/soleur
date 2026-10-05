@@ -45,6 +45,8 @@ battery() {
   chk "RED: total below the volume range (root-disk-like small mount)" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 1000000000 1000000000 240)\n"
   chk "RED: total above the volume range (root-disk-like large mount)" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 20000000000 80000000000 240)\n"
   chk "RED: malformed used row" "RED reason=used_bytes_malformed" "{\"metric_name\":\"filesystem_used_bytes\"}\n${good_total}\n"
+  chk "RED: a metric_name that is not a string makes the judge ERROR, which must be RED (never PASS)" "RED reason=emptiness_judge_error" '{"metric_name":["a"],"hours":"168","vmin":1,"vmax":2,"newest_age_s":"5"}\n'
+  W2R_DETACHED=0 chk "RED: W2R_DETACHED=0 does not relax freshness (only 1 does)" "RED reason=stale" "$(row filesystem_used_bytes 168 28000000 28500000 90000)\n${good_total}\n"
   chk "RED: unparseable body (HTML error page)" "RED reason=emptiness_body_unparseable" "<html>502</html>\n"
   chk "PASS: ClickHouse quoted 64-bit integers are accepted" "PASS" '{"metric_name":"filesystem_used_bytes","n":"9","hours":"168","vmin":"1","vmax":"2","newest_age_s":"5"}\n{"metric_name":"filesystem_total_bytes","n":"9","hours":"168","vmin":"20000000000","vmax":"20000000000","newest_age_s":"5"}\n'
   # SQL shape
@@ -61,7 +63,7 @@ while IFS= read -r line; do
   case "$line" in FAILED*) fails=$((fails + 1)); printf '  FAIL %s\n' "${line#FAILED }" ;; RAN*) ran="${line#RAN }" ;; *) [[ -z "$line" ]] || printf '       %s\n' "$line" ;; esac
 done <<<"$report"
 printf 'real script: %s assertions, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 27 ]] || { echo "  FAIL assertion floor: ran ${ran} < 27"; fails=$((fails + 1)); }
+[[ "$ran" -ge 29 ]] || { echo "  FAIL assertion floor: ran ${ran} < 29"; fails=$((fails + 1)); }
 
 # A transport failure is NOT a verdict: shim `curl` so the query script fails, run the main path, and require rc 2.
 mkdir -p "$TMP/bin"; printf '#!/usr/bin/env bash\nexit 7\n' > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
@@ -87,6 +89,7 @@ mutate() { # <name> <sed-script>
 }
 mutate "coverage rule removed"  's/elif \(\$u\.hours \| num\) < \$minh then/elif false then/'
 mutate "staleness rule removed" 's/elif \(\$detached \| not\) and \(\$u\.newest_age_s \| num\) > \$maxage then/elif false then/'
+mutate "a judge error reads as PASS" 's/out="RED reason=emptiness_judge_error"/out="PASS"/'
 mutate "detached relaxation made unconditional" 's/elif \(\$detached \| not\) and/elif false and/'
 mutate "zero floor removed" 's/elif \(\$u\.vmin \| num\) == null or \(\$u\.vmin \| num\) <= 0 then/elif false then/'
 mutate "spread rule removed" 's/elif \(\(\$u\.vmax \| num\) - \(\$u\.vmin \| num\)\) > \$maxspread then/elif false then/'

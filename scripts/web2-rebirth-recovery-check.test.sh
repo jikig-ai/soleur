@@ -105,6 +105,10 @@ battery() {
   # ---- the happy path and its properties
   chk "PASS: every check green" 0 "PASS birth-time consistency check; restore NOT exercised; open until #7992 and a restore drill"
   as "the success line is the LAST line, verbatim" '[[ "$(tail -n1 <<<"$out")" == "web2-rebirth-recovery-check: PASS birth-time consistency check; restore NOT exercised; open until #7992 and a restore drill" ]]'
+  chk "PASS with W2_FACTS_FILE: the non-secret facts are written to the file" 0 "PASS" W2_FACTS_FILE="$TMP/work/facts.txt"
+  as "the facts file names the object and the checks, and holds NO secret and no ::add-mask:: line" '[[ -s "$TMP/work/facts.txt" ]] && grep -q "escrow object: key=workspaces-luks-header-" "$TMP/work/facts.txt" && grep -q "escrow checks:" "$TMP/work/facts.txt" && ! grep -qF -e "$KEY" -e "$RSECRET" -e "$KID" -e "::add-mask::" "$TMP/work/facts.txt"'
+  chk "PASS without W2_FACTS_FILE" 0 "PASS"
+  as "without W2_FACTS_FILE no facts file is written" '[[ ! -e "$TMP/work/facts.txt" ]]'
   as "the output states the passphrase copies agree" '[[ "$out" == *"passphrase copies agree: yes"* ]]'
   as "no forbidden claim in the output" '! grep -qiE "$FORBIDDEN" <<<"$out"'
   as "the passphrase never reaches any shim argv" '! grep -qF -e "$KEY" "$TMP/log/argv.log"'

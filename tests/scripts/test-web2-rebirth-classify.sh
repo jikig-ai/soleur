@@ -40,6 +40,10 @@ battery() {
   want "RESUME: the rebirth already ran within 72 h (read-only resume path, nothing is replaced)" resume:post_apply pin_status=absent names=$NEW web2_vols=$NEW state_vol=$NEW
   want "REFUSE 2: already reborn and older than 72 h (single use)" refuse:already_reborn pin_status=absent names=$NEW web2_vols=$NEW state_vol=$NEW web2_age_s=259201
   want "RESUME boundary: exactly 72 h is still resumable" resume:post_apply pin_status=absent names=$NEW web2_vols=$NEW state_vol=$NEW web2_age_s=259200
+  want "REFUSE: resume is not offered while the pinned volume still exists" refuse:state_does_not_hold_the_pinned_volume pin_status=present names=$PIN,$NEW web2_vols=$NEW state_vol=$NEW
+  want "REFUSE: resume is not offered when web-2 also holds a foreign volume" refuse:web2_holds_another_volume pin_status=absent names=$NEW web2_vols=$NEW,888 state_vol=$NEW
+  want "REFUSE: an absurdly long age is malformed input (no arithmetic overflow)" refuse:bad_input pin_status=absent names=$NEW web2_vols=$NEW state_vol=$NEW web2_age_s=99999999999999999999
+  want "REFUSE: an orphan server also refuses in the proceed window (pin present, state has no server)" refuse:orphan_server state_server=absent
   want "REFUSE 2: an unknown server age fails closed (no resume)" refuse:already_reborn pin_status=absent names=$NEW web2_vols=$NEW state_vol=$NEW web2_age_s=none
   want "REFUSE: an orphan server (Hetzner has web-2, state does not)" refuse:orphan_server pin_status=absent names=none web2_vols=none state_vol=none state_server=absent
   want "REFUSE: a foreign volume attached to web-2 in the delete-done window" refuse:web2_holds_another_volume pin_status=absent names=none web2_vols=888 state_vol=$PIN
@@ -87,7 +91,7 @@ while IFS= read -r line; do
   case "$line" in FAILED*) fails=$((fails + 1)); printf '  FAIL %s\n' "${line#FAILED }" ;; RAN*) ran="${line#RAN }" ;; *) [[ -z "$line" ]] || printf '       %s\n' "$line" ;; esac
 done <<<"$report"
 printf '\nreal classifier: %s assertions, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 51 ]] || { echo "  FAIL assertion floor: ran ${ran} < 51"; fails=$((fails + 1)); }
+[[ "$ran" -ge 55 ]] || { echo "  FAIL assertion floor: ran ${ran} < 55"; fails=$((fails + 1)); }
 
 mutate() { # <marker>
   local m="$1" copy="$TMP/cls.mut.sh" after
@@ -97,7 +101,7 @@ mutate() { # <marker>
   after="$(battery "$copy" 2>&1 | grep -c '^FAILED')"
   if [[ "$after" -gt 0 ]]; then echo "  ok   mutation killed: ${m} (${after} red)"; else echo "  FAIL mutation SURVIVED: ${m}"; fails=$((fails + 1)); fi
 }
-for m in PAUSE ORPHAN-SERVER STATE-UNKNOWN REBORN PIN-SHAPE PIN-ELSEWHERE WEB2-OTHER DUP-NAME STATE-PIN INCONSISTENT FOREIGN-GONE DUP-NAME-GONE ORPHAN RM-ID RM-SERIAL RM-LINEAGE; do mutate "$m"; done
+for m in PAUSE ORPHAN-SERVER STATE-UNKNOWN RESUME-PIN RESUME-FOREIGN REBORN PIN-SHAPE PIN-ELSEWHERE WEB2-OTHER DUP-NAME STATE-PIN INCONSISTENT FOREIGN-GONE DUP-NAME-GONE ORPHAN RM-ID RM-SERIAL RM-LINEAGE; do mutate "$m"; done
 
 [[ "$fails" -eq 0 ]] && { echo "web2-rebirth-classify: all assertions and mutations passed"; exit 0; }
 echo "web2-rebirth-classify: ${fails} FAILED"; exit 1

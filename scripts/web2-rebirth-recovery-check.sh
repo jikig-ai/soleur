@@ -132,7 +132,12 @@ if [[ "$sha_d" == "$sha_t" ]]; then echo "passphrase copies agree: yes"; else ec
 # its header and keyslots and opens nothing; the passphrase arrives on stdin (printf is a builtin, so it is not argv).
 printf '%s' "$pass_d" | cryptsetup open --test-passphrase --key-file=- "$W/hdr.img" >/dev/null 2>&1 || fail "cryptsetup --test-passphrase did not accept the passphrase against the escrowed header (a wrong passphrase, an unreadable header image, or a cryptsetup or environment fault: this check cannot tell which)"   # RC:TESTPASS
 
-echo "escrow object: key=${key} size_bytes=${obj_size:-unknown} etag=${obj_etag:-unknown} version_id=not-exposed(no-bucket-versioning,#7992)"
-echo "escrow checks: single_object=yes luks_magic=yes header_uuid_matches_object_name=yes passphrase_copies_agree=yes test_passphrase_accepted=yes"
+facts_obj="escrow object: key=${key} size_bytes=${obj_size:-unknown} etag=${obj_etag:-unknown} version_id=not-exposed(no-bucket-versioning,#7992)"
+facts_chk="escrow checks: single_object=yes luks_magic=yes header_uuid_matches_object_name=yes passphrase_copies_agree=yes test_passphrase_accepted=yes"
+echo "$facts_obj"
+echo "$facts_chk"
+# The workflow reads the facts from THIS file (names, sizes and booleans only), so its step never has to write this script's stdout to
+# disk: that stdout carries the ::add-mask:: lines for the passphrase and the R2 credentials, which must only ever reach the runner.
+if [[ -n "${W2_FACTS_FILE:-}" ]]; then printf '%s;%s\n' "$facts_obj" "$facts_chk" > "$W2_FACTS_FILE"; fi
 
 echo "web2-rebirth-recovery-check: PASS birth-time consistency check; restore NOT exercised; open until #7992 and a restore drill"

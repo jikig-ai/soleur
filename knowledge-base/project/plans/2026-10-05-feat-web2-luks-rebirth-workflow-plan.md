@@ -648,3 +648,18 @@ backend (detected after the fact, #7992); the post plan cannot be graded before 
 state the classifier heals); the firewall-attachment `update` is pinned by action only (its `server_ids` are unknown at plan time); the stale
 CONSUMERS comment on the marker token in `workspaces-luks-fresh-boot.tf` is corrected in the closing change (a `.tf` edit would wake the paused
 push-apply); the C4 clause stays on the `doppler -> hetzner` edge. No scope-out issue was filed.
+
+## Review round 2 (fix batch after the round-1 verification)
+
+The verification pass found the resume design incomplete and one critical wiring defect; all are fixed with rows that red without the fix.
+**Critical:** the pre-plan step exported `graded=pre` while `delete-volume` required `graded`, so every real apply would have refused at the delete
+(the suites pinned each side with its own literal); a joint row now compares the two literals, and the delete step also requires a
+`FLIP=met` proof from the flip-precondition step. **Resume** is now a real mode: the classifier offers it only when the pinned volume is gone and the
+new volume is the only one web-2 holds; the post plan runs without `-replace` in a third gate mode (`resume`: add-only, zero server creates, server
+id pinned to the live web-2); the stock preflight is skipped on resume; the never-pooled proof runs on every verdict and the reboot refuses without
+it (a certified web-2 may hold data); the readiness reader looks back 4 days so a 72 h-old row is found; `W2R_DETACHED=1` relaxes freshness AND
+coverage to 24 h (the zero floor, ceiling, spread and size window still apply). **Hygiene:** the recovery step no longer writes the script's
+stdout (it carries `::add-mask::` lines) to disk; the facts come through `W2_FACTS_FILE`; a quoted marker name anywhere in the names answer
+counts as present; every output value is single-line and every summary value is sanitised; an absent server `created` is "unknown", never midnight.
+The suites gained structural pins (no direct Hetzner/hcloud in a run body, only init/plan/apply/show/console, no swallowed failures, the exact
+`uses:` set, the exact main-only `if`, the preflight guards), a per-battery working directory and a parse guard so a YAML break is not a mutation kill.

@@ -725,7 +725,9 @@ action sets must EQUAL an allow-list entry, so a volume delete, forget or replac
 a physical id captured from Hetzner (server id and name, NIC `server_id`, attachment `volume_id`); the by-name web-1 refusal is
 the first statement. (2) A pure classifier (`tests/scripts/lib/web2-rebirth-classify.sh`) maps Hetzner and state to `proceed`, a
 named `heal:` window (detach done, delete done, state rm done, apply midway, volume created), `resume:post_apply` (the rebirth
-already ran within 72 h: only the read-only readiness poll, the recovery check and the reboot run, nothing is replaced) or `refuse:`
+already ran: state holds the new volume as web-2's only volume, the pinned plaintext volume is gone, the soak marker is absent and the server is
+younger than 72 h, the bound being "a rebirth that has not yet had time to be certified"; nothing is replaced or deleted: a third plan mode may only
+ADD what a partly failed apply left missing, then the readiness poll, the recovery check and the reboot run) or `refuse:`
 (already reborn, orphan raw volume, orphan server, a foreign volume attached to web-2, an inconsistent pin listing, wrong shape,
 attached elsewhere, duplicate name, push-apply pause not real) before any write, so a re-dispatch after any crash heals, resumes or
 refuses. `scripts/web2-rebirth.sh` is also the chokepoint for the irreversible step: its write subcommands refuse unless the run is an

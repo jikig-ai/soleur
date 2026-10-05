@@ -14,6 +14,10 @@
 #                attachment. This plan cannot exist before the destructive step, which is why `pre` exists.
 #   `post-heal`  a re-dispatch after an apply died with the raw volume already created: the volume is a
 #                NO-OP (and must not be the pinned old one), its attachment may already exist.
+#   `resume`     a re-dispatch after the rebirth already ran (classifier: resume:post_apply). The plan is planned WITHOUT
+#                `-replace` and may only ADD what a partly failed apply left missing (the private NIC, the volume
+#                attachment, the fleet firewall update): the server and the volume are NO-OPs, nothing is replaced,
+#                deleted or forgotten.
 #
 # THE VOLUME IS NEVER DESTROYED BY TERRAFORM. `hcloud_volume.workspaces` carries prevent_destroy, and no
 # arm of any mode permits a delete, forget or replace of it: allowed actions are compared as sorted SETS
@@ -26,7 +30,7 @@
 # FAIL CLOSED: a jq that errors inside any arm contributes a violation; an unreadable or unclassifiable
 # plan aborts in the shared preamble; non-numeric ids abort.
 #
-# Usage: web_host_rebirth_gate <pre|post|post-heal> <plan.json> <host-key> <server-id> <volume-id>
+# Usage: web_host_rebirth_gate <pre|post|post-heal|resume> <plan.json> <host-key> <server-id> <volume-id>
 
 _WEB_HOST_REBIRTH_LUKS_PINNED_KEY="web-1"
 _WEB_HOST_REBIRTH_VOLUME_SIZE=20
@@ -40,16 +44,17 @@ fi
 # The address -> allowed-action-sets table, shared by the allow-set arm and the requirement arm.
 _WEB_HOST_REBIRTH_SPECS='def specs($mode; $k):
   [ {a: "hcloud_server.web[\"\($k)\"]",
-     ok: (if $mode == "pre" then [["create","delete"]] else [["create","delete"],["create"]] end)},
+     ok: (if $mode == "pre" then [["create","delete"]] elif $mode == "resume" then [["no-op"]] else [["create","delete"],["create"]] end)},
     {a: "hcloud_server_network.web[\"\($k)\"]",
-     ok: (if $mode == "pre" then [["create","delete"]] else [["create","delete"],["create"]] end)},
+     ok: (if $mode == "pre" then [["create","delete"]] elif $mode == "resume" then [["no-op"],["create"]] else [["create","delete"],["create"]] end)},
     {a: "hcloud_volume_attachment.workspaces[\"\($k)\"]",
      ok: (if $mode == "pre" then [["create","delete"],["create"]]
           elif $mode == "post" then [["create"]]
+          elif $mode == "resume" then [["no-op"],["create"]]
           else [["create"],["no-op"]] end)},
     {a: "hcloud_volume.workspaces[\"\($k)\"]",
      ok: (if $mode == "post" then [["create"]] else [["no-op"]] end)},
-    {a: "hcloud_firewall_attachment.web", ok: [["update"]]} ];'
+    {a: "hcloud_firewall_attachment.web", ok: (if $mode == "resume" then [["update"],["no-op"]] else [["update"]] end)} ];'
 
 # Each arm prints one violation per line (nothing when clean). A jq failure prints a "jq-error" line.
 _whrb_allow_set() { # <mode> <plan> <key>
@@ -78,7 +83,8 @@ _whrb_required() { # <mode> <plan> <key>
     | (if $n != 1 then "missing: \($a) entries=\($n) (expected exactly 1)" else empty end),
       ( "hcloud_server.web[\"\($k)\"]" as $want
         | [$d.resource_changes[] | select(.type == "hcloud_server") | select(.change.actions | index("create"))] as $c
-        | if ($c | length) != 1 or ($c[0].address != $want)
+        | if $mode == "resume" then (if ($c | length) != 0 then "server creates=\($c | length) in a resume plan (nothing may be replaced)" else empty end)
+          elif ($c | length) != 1 or ($c[0].address != $want)
           then "server creates=\($c | length) address=\($c[0].address // "none") (expected exactly one create of \($want))"
           else empty end )' < "$2" 2>/dev/null) || { echo "jq-error: required"; return 0; }
   [[ -z "$out" ]] || printf '%s\n' "$out"
@@ -94,11 +100,11 @@ _whrb_reboot() { # <plan>
   [[ -z "$out" ]] || printf '%s\n' "$out"
 }
 
-_whrb_pin_server() { # <plan> <key> <server-id>
+_whrb_pin_server() { # <plan> <key> <server-id> <mode>
   local out
-  out=$(jq -r --arg k "$2" --arg sid "$3" '
+  out=$(jq -r --arg k "$2" --arg sid "$3" --arg mode "${4:-}" '
     .resource_changes[]
-    | select(.change.actions | index("delete"))
+    | select((.change.actions | index("delete")) or ($mode == "resume" and .address == "hcloud_server.web[\"\($k)\"]"))
     | if .address == "hcloud_server.web[\"\($k)\"]" then
         (if ((.change.before.id | tostring) != $sid) or (.change.before.name != "soleur-\($k)")
          then "pin: server destroy id=\(.change.before.id) name=\(.change.before.name) is not the captured server \($sid) / soleur-\($k)" else empty end)
@@ -119,7 +125,7 @@ _whrb_pin_volume() { # <mode> <plan> <key> <server-id> <volume-id>
       elif (.address == "hcloud_volume.workspaces[\"\($k)\"]") and $mode == "pre" then
         (if ((.change.before.id | tostring) != $vid)
          then "pin: the live volume id=\(.change.before.id) is not the pinned volume \($vid)" else empty end)
-      elif (.address == "hcloud_volume.workspaces[\"\($k)\"]") and $mode == "post-heal" then
+      elif (.address == "hcloud_volume.workspaces[\"\($k)\"]") and ($mode == "post-heal" or $mode == "resume") then
         (if ((.change.before.id | tostring) == $vid)
          then "pinned: the surviving volume is the pinned plaintext volume \($vid), which must already be gone" else empty end)
       else empty end' < "$2" 2>/dev/null) || { echo "jq-error: pin-volume"; return 0; }
@@ -135,7 +141,7 @@ _whrb_raw_volume() { # <mode> <plan> <key>
     | if ($v | length) != 1 then "volume entries=\($v | length)"
       else $v[0].change as $c
         | (if $mode == "post" then $c.after else $c.before end) as $o
-        | ( if $mode == "post-heal" then
+        | ( if $mode == "post-heal" or $mode == "resume" then
               (if ($o.format // null) != null then "volume not raw: format=\($o.format | tojson) on the surviving volume" else empty end)
             else
               (if ($c.after | type) != "object" then "volume not raw: format verdict after-not-object"
@@ -164,8 +170,8 @@ web_host_rebirth_gate() {
   fi
 
   case "$mode" in
-    pre|post|post-heal) ;;
-    *) echo "web_host_rebirth_gate: ABORT — mode must be one of pre, post, post-heal (got '${mode}')."; return 1 ;;
+    pre|post|post-heal|resume) ;;
+    *) echo "web_host_rebirth_gate: ABORT — mode must be one of pre, post, post-heal, resume (got '${mode}')."; return 1 ;;
   esac
   if [[ -z "$host_key" ]]; then
     echo "web_host_rebirth_gate: ABORT — no host key supplied. The gate cannot verify WHICH host is being reborn without the request it grades against."
@@ -186,7 +192,7 @@ web_host_rebirth_gate() {
   viol+="$(_whrb_allow_set "$mode" "$plan_json" "$host_key")${nl}"                          # GATE:ALLOW-SET
   viol+="$(_whrb_required "$mode" "$plan_json" "$host_key")${nl}"                           # GATE:REQUIRED
   viol+="$(_whrb_reboot "$plan_json")${nl}"                                                 # GATE:REBOOT
-  viol+="$(_whrb_pin_server "$plan_json" "$host_key" "$server_id")${nl}"                    # GATE:PIN-SERVER
+  viol+="$(_whrb_pin_server "$plan_json" "$host_key" "$server_id" "$mode")${nl}"                    # GATE:PIN-SERVER
   viol+="$(_whrb_pin_volume "$mode" "$plan_json" "$host_key" "$server_id" "$volume_id")${nl}"  # GATE:PIN-VOLUME
   viol+="$(_whrb_raw_volume "$mode" "$plan_json" "$host_key")${nl}"                         # GATE:RAW-VOLUME
 

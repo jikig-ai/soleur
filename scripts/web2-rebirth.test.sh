@@ -8,6 +8,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/.." && pwd)"
 SCRIPT="${ROOT}/scripts/web2-rebirth.sh"
+EXTRA_ARR=()
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
 PIN=106466179; SID=1001; W1=123931471; NEWV=777
@@ -100,7 +101,7 @@ chmod +x "$TMP/bin/"*
 
 # world <scenario flags...> — build the fake world. Defaults: the FIRST dispatch (pin attached to web-2, in state).
 world() {
-  W="$TMP/world.$RANDOM"; rm -rf "$W"; mkdir -p "$W"; export WORLD="$W"
+  W="${BATTERY_DIR:-$TMP}/world.$RANDOM"; rm -rf "$W"; mkdir -p "$W"; export WORLD="$W"
   echo "$SID" > "$W/server_id"; echo "$PIN" > "$W/server_vols"; echo "$SID" > "$W/pin_server"
   echo soleur-web-platform-data-web-2 > "$W/pin_name"; echo ext4 > "$W/pin_format"; echo soleur-web-platform > "$W/pin_app"
   : > "$W/calls.log"; : > "$W/writes.log"
@@ -121,6 +122,8 @@ world() {
       wf_state=*) echo "${f#*=}" > "$W/wf_state" ;;
       wf_deploy_state=*) echo "${f#*=}" > "$W/wf_state.apply-deploy-pipeline-fix.yml" ;;
       busy) touch "$W/busy" ;;
+      server_created_empty) : > "$W/server_created" ;;
+      pin_name=*) printf '%b\n' "${f#*=}" > "$W/pin_name" ;;
       web1_mode=*) echo "${f#*=}" > "$W/web1_mode" ;;
       server_age=*) date -u -d '@'"$(( $(date -u +%s) - ${f#*=} ))" +%Y-%m-%dT%H:%M:%S+00:00 > "$W/server_created" ;;
       pin_code=*) echo "${f#*=}" > "$W/pin_code" ;;
@@ -159,11 +162,11 @@ PY
 run() { # <name> <want-rc> <want-substring|-> <cmd...>   (env from the caller: WORLD, VERDICT, ...)
   local name="$1" want="$2" sub="$3"; shift 3
   local o rc=0
-  echo x >> "$TMP/runs"
+  echo x >> "$BATTERY_DIR/runs"
   o="$(env PATH="$TMP/bin:/usr/bin:/bin" WORLD="$WORLD" HCLOUD_TOKEN=tok REPO=o/r GH_TOKEN=x INFRA_DIR="$TMP" GITHUB_OUTPUT="$WORLD/gh_out" GITHUB_STEP_SUMMARY="$WORLD/summary" \
         WEB2_REBIRTH_POLL_INTERVAL_S=0 WEB2_REBIRTH_ACTION_POLL_S=0 WEB2_REBIRTH_POLL_ATTEMPTS=2 \
         BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p \
-        APPLY=yes EMPTINESS="PASS hours=168" NEVER_POOLED=absent PRE_PLAN=graded ${EXTRA_ENV:-} \
+        APPLY=yes EMPTINESS="PASS hours=168" NEVER_POOLED=absent PRE_PLAN=graded FLIP=met ${EXTRA_ENV:-} ${EXTRA_ARR[@]+"${EXTRA_ARR[@]}"} \
         bash "$SCRIPT_UNDER_TEST" "$@" 2>&1)" || rc=$?
   LASTOUT="$o"
   if [[ "$rc" -ne "$want" ]]; then printf 'FAILED %s (rc=%s want=%s) %s\n' "$name" "$rc" "$want" "${o:0:240}"; return; fi
@@ -172,11 +175,14 @@ run() { # <name> <want-rc> <want-substring|-> <cmd...>   (env from the caller: W
 verdict_of() { sed -n 's/^verdict=//p' "$WORLD/gh_out" | tail -1; }
 writes() { tr '\n' ' ' < "$WORLD/writes.log"; }
 check() { # <name> <condition-result 0|1>
+  echo x >> "$BATTERY_DIR/checks"
   if [[ "$2" -ne 0 ]]; then printf 'FAILED %s\n' "$1"; fi
 }
 
 battery() {
-  SCRIPT_UNDER_TEST="$1"; local n=0
+  # Every battery works in its OWN directory: concurrent mutant batteries share $TMP, and a world, a runs counter or an unexpected.log
+  # from another battery must never be attributed to this one.
+  SCRIPT_UNDER_TEST="$1"; local n=0; BATTERY_DIR="$(mktemp -d "$TMP/b.XXXXXX")"; : > "$BATTERY_DIR/runs"; : > "$BATTERY_DIR/checks"
   # ---- classify ----
   world; run "classify: first dispatch proceeds" 0 "verdict: proceed" classify no; check "classify wrote verdict output" "$([[ "$(verdict_of)" == proceed ]]; echo $?)"
   world; run "classify: apply with a real pause proceeds" 0 "verdict: proceed" classify yes
@@ -201,6 +207,10 @@ battery() {
   world pin_format=none; run "classify: a formatted pinned volume refuses" 1 "not_the_empty_plaintext_one" classify no
   world pin_server=999; run "classify: pinned volume attached elsewhere refuses" 1 "attached_elsewhere" classify no
   world other_named=$NEWV; run "classify: two volumes with the name refuse" 1 "duplicate_volume_name" classify no
+  world pin_gone state_vol=$NEWV other_named=$NEWV web2_vols=$NEWV server_created_empty; run "classify: a server with NO creation time never resumes (an empty date reads as midnight today)" 1 "already_reborn" classify no
+  world pin_name='x\nverdict=heal:detach_done'; run "classify: a volume name with a newline cannot inject a second verdict output line" 1 "not_the_empty_plaintext_one" classify no
+  check "classify: exactly ONE verdict= output line" "$([[ "$(grep -c '^verdict=' "$WORLD/gh_out")" == 1 ]]; echo $?)"
+  check "classify: every output is a single line (no continuation of the injected text)" "$([[ "$(grep -vc '^[a-z_0-9]*=' "$WORLD/gh_out")" == 0 ]]; echo $?)"
   # ---- delete-volume ----
   world; VERDICT=proceed EXTRA_ENV="VERDICT=proceed" run "delete: detach then delete, then 404 proven" 0 "is gone" delete-volume
   check "delete: write order is DETACH then DELETE-VOLUME" "$([[ "$(writes)" == "DETACH DELETE-VOLUME " ]]; echo $?)"
@@ -233,6 +243,9 @@ battery() {
   world pin_server=$W1 web2_vols=none; EXTRA_ENV="VERDICT=proceed" run "delete: a volume attached to web-1's id is refused" 1 "not the server named" delete-volume
   world delete_code=403; EXTRA_ENV="VERDICT=proceed" run "delete: a 403 on a write names the token tier" 1 "read-only Hetzner token" delete-volume
   world pin_gone; EXTRA_ENV="VERDICT=resume:post_apply" run "delete: a resume verdict never deletes" 0 "skipped" delete-volume
+  world; EXTRA_ENV="VERDICT=proceed FLIP=" run "delete: a flip precondition not reported MET refuses" 1 "flip precondition was not reported MET" delete-volume
+  check "delete: no write after a missing flip proof" "$([[ -z "$(writes)" ]]; echo $?)"
+  world; EXTRA_ENV="VERDICT=proceed FLIP=pending" run "delete: a PENDING flip precondition refuses" 1 "flip precondition was not reported MET" delete-volume
   # ---- state-rm ----
   world pin_gone; EXTRA_ENV="VERDICT=heal:delete_done" run "state-rm: forgets exactly the pinned addresses (serial +1)" 0 "serial 5 -> 6" state-rm
   check "state-rm: one state write naming both addresses" "$([[ "$(writes)" == *'STATE-RM hcloud_volume.workspaces["web-2"] hcloud_volume_attachment.workspaces["web-2"]'* ]]; echo $?)"
@@ -259,6 +272,8 @@ battery() {
   check "reboot: nothing was rebooted" "$([[ -z "$(writes)" ]]; echo $?)"
   world; echo 4242 > "$WORLD/server_id"; run "reboot: refuses an id that differs from the post-apply state" 1 "differs from the id in the post-apply state" reboot
   world; EXTRA_ENV="APPLY=no" run "reboot: plan_only (APPLY=no) refuses before any call" 1 "not an apply dispatch" reboot
+  world; EXTRA_ENV="NEVER_POOLED=" run "reboot: no never-pooled proof (marker present or step skipped) refuses before any call" 1 "no never-pooled proof" reboot
+  check "reboot: nothing was rebooted without the never-pooled proof" "$([[ -z "$(writes)" ]]; echo $?)"
   check "reboot: APPLY=no made no write" "$([[ -z "$(writes)" ]]; echo $?)"
   world action_status=running; run "reboot: an action that never finishes fails" 1 "did not finish in time" reboot
   # ---- flip precondition: driven in a SANDBOX tree so the verdict never depends on what the repo's own retirement state is ----
@@ -296,6 +311,7 @@ battery() {
   run "ready: escrow missing is RED" 1 "readiness row is RED" ready-poll
   world server_age=600; : > "$WORLD/bs_body"; run "ready: no rows at all times out" 1 "no fresh GREEN readiness row" ready-poll
   world server_absent; run "ready: no server named web-2 refuses before any Better Stack read" 1 "could not resolve exactly one server" ready-poll
+  world server_created_empty; run "ready: an unreadable creation time refuses (the anchor never falls back to 0)" 1 "creation time is unreadable" ready-poll
   # ---- summary: it claims only what THIS run measured ----
   world; EXTRA_ENV="MODE=plan_only JOB_STATUS=success VERDICT=proceed REASON=because SHA=abc123" run "summary: a plan_only run" 0 "plan_only: no write of any kind occurred" summary
   check "summary: plan_only prints the reason and the commit" "$([[ "$LASTOUT" == *because* && "$LASTOUT" == *abc123* ]]; echo $?)"
@@ -305,10 +321,24 @@ battery() {
   world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=proceed RUN_ID=77 EMPTINESS=PASS-x" run "summary: a successful apply run" 0 "Nothing is claimed until the graded reboot proof" summary
   check "summary: success prints the reborn host, the approver and the update-not-enrol instruction" "$([[ "$LASTOUT" == *"server_id=1001"* && "$LASTOUT" == *approver-one* && "$LASTOUT" == *"already enrolled"* ]]; echo $?)"
   check "summary: the step summary file received the same text" "$(grep -q 'Nothing is claimed until the graded reboot proof' "$WORLD/summary"; echo $?)"
+  world; EXTRA_ENV="MODE=apply JOB_STATUS=success VERDICT=resume:post_apply RUN_ID=77" run "summary: a RESUME run says nothing was replaced" 0 "This was a RESUME" summary
+  local want_earliest; want_earliest="$(date -u -d "@$(( $(date -u +%s) - 7200 + 259200 ))" +%Y-%m-%d)"
+  check "summary: a resume run does not claim the rebirth applied, and the follow-through date is the server's creation + 3 days" "$([[ "$LASTOUT" != *"The rebirth applied"* && "$LASTOUT" == *"to ${want_earliest} (rebirth + 3 days)"* ]]; echo $?)"
+  world; EXTRA_ARR=("MODE=plan_only" "JOB_STATUS=success" "VERDICT=proceed" "REASON=$(printf 'x\n::error::forged | row')")
+  run "summary: free text cannot start a workflow command or break the table" 0 "plan_only" summary
+  EXTRA_ARR=()
+  check "summary: no output line starts with ::" "$([[ "$(grep -c '^::' <<<"$LASTOUT")" == 0 && "$LASTOUT" != *"| row"* ]]; echo $?)"
   # ---- structural ----
-  check "no unexpected API call in any row" "$(! ls "$TMP"/world.*/unexpected.log >/dev/null 2>&1; echo $?)"
+  # the dispatcher's verbs are exactly this set (a new verb must be classified here, in the same edit), and EVERY function that writes
+  # (a Hetzner POST/DELETE, a state rm) calls require_apply before it does
+  local verbs; verbs="$(sed -nE 's/^  ([a-z-]+)\) .*cmd_[a-z_]+.*;;$/\1/p' "$SCRIPT_UNDER_TEST" | LC_ALL=C sort | tr '\n' ' ')"
+  check "the dispatcher serves exactly the known verbs (got: ${verbs})" "$([[ "$verbs" == "classify delete-volume flip-precondition ready-poll reboot state-rm summary " ]]; echo $?)"
+  local unguarded; unguarded="$(awk '/^cmd_[a-z_]+\(\) \{/{name=$1; has=0; writes=0} /require_apply/{has=1} /hapi (POST|DELETE)|terraform state rm/{ if(!has) bad[name]=1 } END{for(k in bad) printf "%s ", k}' "$SCRIPT_UNDER_TEST")"
+  check "every function that writes calls require_apply first (unguarded: ${unguarded})" "$([[ -z "$unguarded" ]]; echo $?)"
+
+  check "no unexpected API call in any row of THIS battery" "$(! ls "$BATTERY_DIR"/world.*/unexpected.log >/dev/null 2>&1; echo $?)"
   n=$((n + 1))
-  printf 'RAN %s\n' "$(wc -l < "$TMP/runs" | tr -d ' ')"
+  printf 'RAN %s\n' "$(( $(wc -l < "$BATTERY_DIR/runs") + $(wc -l < "$BATTERY_DIR/checks") ))"
 }
 
 fails=0
@@ -318,7 +348,7 @@ while IFS= read -r line; do
 done <<<"$report"
 ran="${ran:-0}"
 printf 'real script: %s world scenarios, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 77 ]] || { echo "  FAIL scenario floor: ran ${ran} < 77"; fails=$((fails + 1)); }
+[[ "$ran" -ge 119 ]] || { echo "  FAIL scenario floor: ran ${ran} < 119"; fails=$((fails + 1)); }
 
 # Mutants are independent (each works in its own sandbox tree and fake worlds), so up to MUT_JOBS run at once; every mutant writes
 # its verdict line to its own file and the lines are counted once all have finished.
@@ -397,6 +427,14 @@ mutate "delete: a failed detach action is ignored" '      [[ "$st" == error ]] &
 mutate "delete: an unfinished detach action is ignored" '    [[ "$st" == success ]] || fail "detach action ${action_id} did not finish in time"' '    true || fail "detach action ${action_id} did not finish in time"'
 mutate "delete: the empty-name-lookup proof is dropped" '  [[ "$code" == 200 && "$(jq -r '"'"'.volumes | length'"'"' "$HBODY")" == 0 ]] || fail "a volume named' '  true || fail "a volume named'
 mutate "classify: a 5xx on the pinned volume is accepted" 'fail "GET /volumes/${PINNED_VOLUME_ID} -> ${code} (error.code=$(errcode)): neither present nor gone; nothing is written"' 'true'
+mutate "delete: the flip proof requirement is dropped" '  [[ "${FLIP:-}" == met ]] || fail "delete-volume refused: the flip precondition was not reported MET by its step (got '"'"'${FLIP:-}'"'"'); nothing is deleted"
+' ''
+mutate "reboot: the never-pooled proof requirement is dropped" '  [[ "${NEVER_POOLED:-}" == absent ]] || fail "reboot refused: no never-pooled proof (got '"'"'${NEVER_POOLED:-}'"'"'); nothing is rebooted"
+' ''
+mutate "classify: an absent creation time reads as an age" '       if [[ -n "$created" ]] && created_epoch=' '       if created_epoch='
+mutate "ready: an unreadable creation time is accepted" '|| fail "ready-poll: the server'"'"'s creation time is unreadable' '|| true # ready-poll: the server'"'"'s creation time is unreadable'
+mutate "output: newlines in a value are no longer stripped" 'local v="${2//$'"'"'\r'"'"'/ }"; v="${v//$'"'"'\n'"'"'/ }";' 'local v="$2";'
+mutate "summary: the resume sentence is dropped" '          echo "**This was a RESUME:** nothing' '          echo "**This was not a resume:** nothing'
 mutate "flip: the rotations==2 requirement is dropped" '  [[ "$n" -eq 2 ]] || ok=no' ':'
 mutate "flip: the escrow-workflow-absent requirement is dropped" '  [[ ! -e "${_ROOT}/.github/workflows/apply-web-escrow-create.yml" ]] || absent=no' ':'
 mutate "reboot: an unfinished reboot action is ignored" '  fail "reboot action ${action_id} did not finish in time"' '  true'

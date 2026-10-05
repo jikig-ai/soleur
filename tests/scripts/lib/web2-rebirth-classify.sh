@@ -9,8 +9,9 @@
 #   heal:state_rm_done         state is clean and the old server still exists; continue at the `post` plan
 #   heal:apply_midway          the volume and the server are both gone; the `post` plan creates both
 #   heal:volume_created        the raw volume exists (in state) and is not yet attached; use mode post-heal
-#   resume:post_apply          the rebirth already ran (state holds the new volume, attached to web-2, server younger than 72 h):
-#                              nothing is replaced; only the read-only readiness poll, the recovery check and the reboot run
+#   resume:post_apply          the rebirth already ran (state holds the new volume, the ONLY volume attached to web-2, the pin gone,
+#                              server younger than 72 h): nothing is replaced; a plan that may only ADD what a partly failed apply left
+#                              missing, then the readiness poll, the recovery check and the reboot run
 #   refuse:<reason>            nothing is written; the reason names the state this workflow cannot heal
 #
 # Inputs are plain key=value words so the classifier is testable without Hetzner or Terraform. A missing,
@@ -47,7 +48,7 @@ web2_rebirth_classify() {
   [[ "$pin_status" =~ ^(present|absent)$ && "$state_server" =~ ^(present|absent)$ ]] || { echo "refuse:bad_input"; return 0; }
   [[ "$state_vol" =~ ^([0-9]+|none)$ && "$names" =~ ^([0-9]+(,[0-9]+)*|none)$ ]] || { echo "refuse:bad_input"; return 0; }
   [[ "$web2_vols" =~ ^([0-9]+(,[0-9]+)*|none|server_absent)$ ]] || { echo "refuse:bad_input"; return 0; }
-  [[ "$web2_age" =~ ^([0-9]+|none)$ ]] || { echo "refuse:bad_input"; return 0; }
+  [[ "$web2_age" =~ ^([0-9]{1,12}|none)$ ]] || { echo "refuse:bad_input"; return 0; }
   if [[ "$pin_status" == "present" ]]; then
     [[ "$pin_format" =~ ^(ext4|none|other)$ && "$pin_name_ok" =~ ^(yes|no)$ && "$pin_server" =~ ^([0-9]+|none)$ ]] || { echo "refuse:bad_input"; return 0; }
   fi
@@ -55,7 +56,7 @@ web2_rebirth_classify() {
   local -a name_ids=() w2_ids=()
   [[ "$names" == "none" ]] || IFS=, read -r -a name_ids <<<"$names"
   [[ "$web2_vols" == "none" || "$web2_vols" == "server_absent" ]] || IFS=, read -r -a w2_ids <<<"$web2_vols"
-  local id in_names other_names=0 other_attached=0 pin_listed=0
+  local id x foreign in_names other_names=0 other_attached=0 pin_listed=0
   for id in "${name_ids[@]}"; do
     if [[ "$id" == "$pin" ]]; then pin_listed=1; else other_names=$((other_names + 1)); fi
   done
@@ -73,8 +74,13 @@ web2_rebirth_classify() {
     [[ "$in_names" -eq 0 ]] && { echo "refuse:state_volume_unknown_to_hetzner"; return 0; }                          # CLS:STATE-UNKNOWN
     for id in "${w2_ids[@]}"; do
       if [[ "$id" == "$state_vol" ]]; then
-        # Single use: a LATER dispatch must not touch a host that may hold data. Within 72 h of the rebirth only the read-only
-        # resume path (readiness, recovery check, reboot) is offered; an unknown age fails closed.
+        # Resume is only offered for a settled rebirth: the pinned plaintext volume is GONE and the new volume is the ONLY volume web-2 holds.
+        [[ "$pin_status" != "absent" ]] && { echo "refuse:state_does_not_hold_the_pinned_volume"; return 0; }                # CLS:RESUME-PIN
+        foreign=0; for x in "${w2_ids[@]}"; do [[ "$x" == "$state_vol" ]] || foreign=1; done
+        [[ "$foreign" -eq 1 ]] && { echo "refuse:web2_holds_another_volume"; return 0; }                                      # CLS:RESUME-FOREIGN
+        # Single use: a LATER dispatch must not touch a host that may hold data. Within 72 h of the rebirth only the resume path
+        # (a plan that may only ADD what a partly failed apply left missing, then readiness, recovery check, reboot) is offered; an
+        # unknown age fails closed. The workflow additionally requires the soak marker to be absent.
         if [[ "$web2_age" =~ ^[0-9]+$ && "$web2_age" -le 259200 ]]; then echo "resume:post_apply"; else echo "refuse:already_reborn"; fi   # CLS:REBORN
         return 0
       fi
@@ -109,6 +115,8 @@ web2_rebirth_classify() {
   # Exactly one volume carries the name and it is not the pin.
   if [[ "$state_vol" == "none" ]]; then echo "refuse:orphan_raw_volume"; return 0; fi                                               # CLS:ORPHAN
   if [[ "$state_vol" == "${name_ids[0]}" ]]; then echo "heal:volume_created"; return 0; fi
+  # Unreachable by construction (state's volume was proven to be among the names, and exactly one id carries the name, so it IS
+  # name_ids[0]); kept as the fail-closed default so a future edit to the rules above cannot fall through to a verdict.
   echo "refuse:state_volume_mismatch"
 }
 

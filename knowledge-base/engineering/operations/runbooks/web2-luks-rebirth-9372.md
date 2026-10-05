@@ -43,7 +43,8 @@ gh run watch <databaseId> --exit-status          # confirm the run actually star
 Read the run log's `verdict:` line, the printed `pinned volume:` line, the emptiness verdict (it prints the minimum, maximum,
 spread and ceiling) and the dispatch summary. **The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
 printed used-bytes values before approving the apply, and the first live run is also the first measurement of the real empty
-baseline. Only after the owner approves **that** apply, dispatch with `-f plan_only=false` and approve the
+baseline. In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
+floor, the ceiling, the spread and the size window still apply. Only after the owner approves **that** apply, dispatch with `-f plan_only=false` and approve the
 `web-platform-infra-apply` environment gate. The classifier verdict is also a job output (`verdict`).
 
 ## The classifier: what each verdict means
@@ -61,8 +62,9 @@ reach a write.
 | `heal:state_rm_done` | state is clean, the old server exists | continues at the `post` plan |
 | `heal:apply_midway` | volume and server both gone | the `post` plan creates both |
 | `heal:volume_created` | the raw volume exists in state, not attached | the `post-heal` plan |
-| `resume:post_apply` | the rebirth already ran (new volume in state and attached to web-2, server younger than 72 h) | **nothing is replaced**: only the read-only readiness poll, the recovery check and the reboot run |
+| `resume:post_apply` | the rebirth already ran: the new volume is in state and is the ONLY volume web-2 holds, the pinned volume is gone, the soak marker is absent and the server is younger than 72 h | **nothing is replaced or deleted**: a resume plan (no `-replace`; it may only ADD what a partly failed apply left missing, e.g. the NIC, the attachment or the firewall update), then the readiness poll, the recovery check and the reboot |
 | `refuse:already_reborn` | the same, but the server is older than 72 h or its age is unknown | **single use**: a second rebirth needs a new reviewed pin and PR |
+| `refuse:state_does_not_hold_the_pinned_volume` | web-2 already holds the new volume but the pinned volume still exists | not a settled rebirth: stop and read the classifier line |
 | `refuse:orphan_raw_volume` | a raw volume with the name exists and state does not hold it | not healed automatically (it could hold data). The owner confirms in Hetzner that it is raw and unattached, deletes it (a production write needing the owner's approval), then re-dispatches |
 | `refuse:orphan_server` | Hetzner has a web-2 server that state does not hold | the post plan would try to create a second server of that name. The owner decides: import it into state or delete it (a production write), then re-dispatch |
 | `refuse:web2_holds_another_volume` | web-2 has a volume other than the pin attached | the server replace would detach it; stop and read the classifier line |
@@ -72,8 +74,10 @@ reach a write.
 
 A **failed boot is not healed here**: use `web_host_replace` for web-2 (it carries the new volume forward by design). After a
 completed apply, a failed readiness poll, recovery check or reboot is resumed by re-dispatching with the same inputs
-(`resume:post_apply`). **There is no escrow retry.** While the host is still empty, an `escrow=missing` birth can only be redone by
-a second rebirth, which `refuse:already_reborn` blocks after 72 h; that needs a new reviewed pin.
+(`resume:post_apply`); the readiness reader looks back 4 days so the once-per-instance readiness row of a 72 h-old rebirth is still found, and the
+never-pooled step runs on every verdict and the reboot refuses without its proof (with the soak marker present the run goes RED before any write and nothing is touched).
+**There is no escrow retry.** An `escrow=missing` birth can only be redone by a second rebirth, which `refuse:already_reborn` blocks
+once the server is older than 72 h and which needs a new reviewed pin in any case.
 
 ## What the run proves, and what it does not
 
