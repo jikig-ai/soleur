@@ -228,7 +228,7 @@ non-reproducible flakes carry a stated hypothesis; (P5) evidence lands on existi
    `printf |` feeds) drains stdin (`[[ ${FIXTURE_NO_DRAIN:-0} == 1 ]] || cat >/dev/null`), with a one-line comment
    citing the contract (real `ssh` reads stdin to EOF), and `FIXTURE_NO_DRAIN` exported through `drive`'s explicit
    env list (otherwise the control row silently equals row 1). (c) Convert the one `tr … | grep -q` site
-   (line 722) to `grep -q … < <(tr '\r' '\n' < "$f")`. (d) Two race rows through a new helper (not `hk_mutant`,
+   (line 722) to `grep -q … < <(tr '\r' '\n' < "$f")`. (d) The race rows (a landing check, a must-PASS late producer, a non-draining control, plus two review-added pins) through a new helper (not `hk_mutant`,
    which compares only `outcome_reason`): rewrite the single `printf 'DOPPLER_TOKEN` call to `slow_printf …` and
    prepend a `slow_printf` function. `slow_printf` is a HANDSHAKE, not a fixed sleep: it polls, bounded
    (about 5 s), for a sentinel file that the no-drain stub creates only when it handles the `luks-monitor.sh`
@@ -479,7 +479,7 @@ the `tar` stub writes nothing so no race can fire). The race rows drive the real
 | 1 | Delete the stdin drain from the stub's probe arm | RED: row 1 reports `unavailable/unparsed` with a non-zero probe rc (verified in the review reproduction: rc 141 default, rc 1 with SIGPIPE ignored) |
 | 2 | Dispatch: make the `slow_printf` rewrite match nothing, or match twice | RED (the helper asserts the call token appears exactly once and the derived body differs from the original) |
 | 3 | Delete one new race row | RED (`pass < WF_MIN_ASSERTIONS`; the floor is a lower bound only, so lowering it is not detectable and is not claimed) |
-| 4 | Add a second pipe-fed stub invocation to the body (a new `printf … \| ${WEB_HOST_SSH}`) without a drain | RED only if the race row set includes it: the helper rewrites every `printf '…' \|` producer feeding `${WEB_HOST_SSH}` and the landing check counts them, so an unrewritten new pipe fails the count |
+| 4 | Add a second pipe-fed stub invocation to the body (a new `printf … \| ${WEB_HOST_SSH}`) without a drain | NOT covered by the landed rows (corrected in review): the helper rewrites only the one `printf 'DOPPLER_TOKEN` call and the landing check pins exactly that site plus a one-line diff against production, so a second unrewritten pipe is invisible; the stub's `*tar\ xzf*` arm now drains stdin as the one other pipe the body has, and the guard header names the producer side as unseen |
 | 5 | Remove `</dev/null` from `drive()`'s body invocation and run the suite as `sleep 20 \| timeout 8 bash suite` | RED (rc 124 hang); a row in the suite's own self-check is not feasible, so this is a one-off PR-body mutation |
 
 **Harness rows.** Positive control on the same input: the slow body with `FIXTURE_NO_DRAIN=1` must produce
@@ -548,9 +548,9 @@ which review sees. No stored expectation sits outside the diff; that is the acce
 
 - [x] 1.1 `reap-archive-persistence.test.sh`: 11 sites, `grep -q X < <(producer)`.
 - [x] 1.2 `cron-egress-firewall.test.sh`: 33 sites; throwaway inverse diff on changed lines only (33 segments;
-  34 here-string sites and 0 pipe-fed after) plus the discriminating census-flip row.
+  35 here-string sites, 33 converted plus 2 that already were, and 0 pipe-fed after) plus the discriminating census-flip row.
 - [x] 1.3 `workspaces-luks-verify-workflow.test.sh`: `</dev/null` in `drive`, probe-arm drain,
-  `FIXTURE_NO_DRAIN` plumbing, line 722, `slow_printf` helper and two rows, exact floor in the same commit.
+  `FIXTURE_NO_DRAIN` plumbing, line 722, `slow_printf` helper and the race rows (landing check, late-producer must-PASS, non-draining control; review added the drained-text and sentinel-release rows), exact floor in the same commit.
 - [x] 1.4 Guard: header correction FIRST, then `FILES_7376`, dedicated scan function, probe additions;
   affected-paths block by hand; `bash scripts/lint-orphan-test-suites.sh`.
 - [x] 1.5 Ratchets: `bash plugins/soleur/test/fixture-relative-assert.test.sh`, the trap-ownership lint, and
@@ -563,7 +563,7 @@ which review sees. No stored expectation sits outside the diff; that is the acce
 
 ### Phase 3: verification
 
-- [x] 3.1 The three suites green serially (cron 308/0, reap 45/0, luks 313 plus the new rows / 0).
+- [x] 3.1 The three suites green serially (cron 308/0, reap 45/0, luks 318 after review: 313 plus five race-row assertions / 0).
 - [x] 3.2 Informational: reap and luks loaded runs after the fix (record counts).
 - [x] 3.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh` green; `bash scripts/test-affected-derive.test.sh` green;
   `python3 scripts/lint-guard-contract.py` green on this plan.
@@ -591,7 +591,7 @@ which review sees. No stored expectation sits outside the diff; that is the acce
 - [x] The three suites contain zero pipe-fed early-exit greps: `bash .claude/hooks/grep-q-pipe-guard.test.sh`
   exits 0 and prints `PASS: grep-q-zero-7376-pass`.
 - [x] Assertion counts are unchanged except for the new rows: cron 308 passed / 0 failed, reap 45 / 0, luks
-  313 plus the two race rows / 0, and `WF_MIN_ASSERTIONS` equals the new green count exactly.
+  318 (313 plus the five race-row assertions added across the work and review rounds) / 0, and `WF_MIN_ASSERTIONS` equals the new green count exactly.
 - [x] `drive()` runs the body with `</dev/null`; the suite finishes when started as `sleep 20 | timeout 8 bash <suite>`
   (no hang).
 - [x] The luks race rows are RED against the pre-fix stub (row 1 fails with `unavailable/unparsed`) and GREEN

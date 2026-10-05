@@ -18,7 +18,7 @@ Branch: `feat-one-shot-ci-flakes-queue-slowness-9482`. PR body uses `Ref #N` onl
 - 1.2 `cron-egress-firewall.test.sh`
   - 1.2.1 Rewrite the 33 sites (31 lines) `echo "$V" | grep -q... PAT` to `grep -q... PAT <<<"$V"`, global and
     quote-aware; hand-review sites whose `$V` can start with `-`.
-  - 1.2.2 Throwaway inverse diff over changed lines only: 33 segments; afterwards 34 here-string sites, 0 pipe-fed.
+  - 1.2.2 Throwaway inverse diff over changed lines only: 33 segments; afterwards 35 here-string sites (33 converted plus 2 pre-existing), 0 pipe-fed.
   - 1.2.3 Discriminating sandbox row: flip the census pattern at the `m$k` site; the suite must go RED.
 - 1.3 `workspaces-luks-verify-workflow.test.sh`
   - 1.3.1 `drive()`: add `</dev/null` to the `bash -e "${REASSERT:-...}"` call (:690).
@@ -54,7 +54,7 @@ Branch: `feat-one-shot-ci-flakes-queue-slowness-9482`. PR body uses `Ref #N` onl
 
 ## Phase 3: verification
 
-- 3.1 Suites green serially (cron 308/0, reap 45/0, luks 313 plus 2 rows / 0).
+- 3.1 Suites green serially (cron 308/0, reap 45/0, luks 318 after review / 0).
 - 3.2 Informational loaded runs (reap, luks).
 - 3.3 Guard prints `grep-q-zero-7376-pass`; `bash scripts/test-affected-derive.test.sh`;
   `python3 scripts/lint-guard-contract.py`; `npx markdownlint-cli2` on plan and this file.

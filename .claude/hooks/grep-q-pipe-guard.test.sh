@@ -31,7 +31,12 @@
 # pipe split across lines is not seen (widening tracked in #7005). What pins the WIRE is
 # apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh, which requires every battery that
 # sources the lib to actually reach it.
-# #7376 added three infra/plugin suites whose 2026-10-05 CI flakes were this same mechanism (FILES_7376):
+# #7376 (the tracker for these flakes; the fix PR is #9525) added three infra/plugin suites whose
+# 2026-10-05 CI flakes were this same mechanism (FILES_7376). TO ADD A FILE to FILES_7376, make three
+# edits together: the array, the member-count literal `!= 3` in the pin check below, and the file's path in
+# AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh (hand-
+# maintained; the parity check below fails if it is missing, otherwise `--affected` would not select this
+# guard when that suite changes):
 #   apps/web-platform/infra/cron-egress-firewall.test.sh
 #   apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 #   plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh
@@ -86,9 +91,12 @@ PATTERN_AWK_EXIT='(^|[^|])\|&?[[:space:]]*awk[^|]*[^[:alnum:]_]exit([^[:alnum:]_
 # against SIGPIPE in general — `-c` reads all its input. Bare `| grep -c` is deliberately NOT
 # matched: it is the safe counting form this file's header recommends.
 PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+--([[:space:]]|$)'
-# Not matched (no instance in the scanned paths today): command/env/\grep/egrep wrappers,
-# grep inside { }, a pipe split across lines, and `| head` (the #8664 files keep 19 one-line
-# `| head -1` sites whose producers are single short writes). Widening is tracked in #7005.
+# Not matched (no instance in the scanned paths today): command/env/\grep/egrep/rg wrappers
+# (`LC_ALL=C grep -q`, `timeout 5 grep -q`, `/usr/bin/grep -q`), grep inside { } or ( ), flags AFTER the
+# pattern or after an argument-taking flag (`grep -e p -q`, `grep -A1 -q p`), `grep -l`, a pipe split
+# across lines, and `| head` / `| sed 1q` / `| read` / a multi-line awk program (the #8664 files keep 19
+# one-line `| head -1` sites whose producers are single short writes; the three #7376 suites keep ~17).
+# Widening is tracked in #7005.
 
 # A PATTERN that does not compile must not read as "no hits": every grep below
 # folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
@@ -191,8 +199,19 @@ distinct() { printf '%s\n' "$@" | sort -u | wc -l; }
 if [[ -n "$missing_pins" ]] || (( $(distinct "${FILES_7024[@]}") != 2 || $(distinct "${FILES_8664[@]}") != 2 \
       || $(distinct "${FILES_8855[@]}") != 6 || $(distinct "${FILES_7376[@]}") != 3 )); then
   FAIL=1
-  echo "FAIL: a pinned file is not tracked, or a pin list lost a member, so its pin covers nothing:${missing_pins:- (member count changed)}"
-  echo "  If a file was renamed, update FILES_7024/FILES_8664/FILES_8855/FILES_7376 in this file to the new path; do not delete the entry."
+  echo "FAIL: a pinned file is not tracked, or a pin list changed size, so its pin covers nothing:${missing_pins:- (member count changed)}"
+  echo "  Sizes now: FILES_7024=$(distinct "${FILES_7024[@]}") (pinned 2), FILES_8664=$(distinct "${FILES_8664[@]}") (pinned 2), FILES_8855=$(distinct "${FILES_8855[@]}") (pinned 6), FILES_7376=$(distinct "${FILES_7376[@]}") (pinned 3)."
+  echo "  If a file was renamed, update the FILES_* list in this file to the new path; do not delete the entry. If you ADDED a member, raise the matching literal in the (( ... != N )) test above (and, for FILES_7376, the affected-paths array named in the header)."
+fi
+# FILES_7376 must also be declared as edges of this guard in the affected-paths index, or a local
+# `--affected` run that edits one of those suites would not select the guard (hand-maintained block).
+unwired_7376=""
+for f in "${FILES_7376[@]}"; do
+  grep -qF -- "\"$f\"" scripts/lib/test-affected-paths.sh || unwired_7376="$unwired_7376 $f"
+done
+if [[ -n "$unwired_7376" ]]; then
+  FAIL=1
+  echo "FAIL: FILES_7376 members missing from AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS in scripts/lib/test-affected-paths.sh:$unwired_7376"
 fi
 # The scan both the #8664 and #8855 passes use: all three patterns, comment lines stripped. The
 # non-vacuity probe below drives THIS function, so dropping a pattern or widening the comment
@@ -280,7 +299,10 @@ scan_7376() {
   scan_pipes "${paths[@]}"
 }
 hits_7376="$(scan_7376 .)"
-if [[ -n "$hits_7376" ]]; then
+if [[ "$hits_7376" == UNRESOLVED:* ]]; then
+  FAIL=1
+  echo "FAIL: the #7376 scan could not read its input, so nothing was scanned: $hits_7376"
+elif [[ -n "$hits_7376" ]]; then
   FAIL=1
   echo "FAIL: pipe-into-grep-q found in a suite #7376 took to zero"
   echo "$hits_7376" | sed 's/^/  /'
@@ -345,6 +367,8 @@ cat > "$probe/bad-7376.sh" <<'EOF'
 ! echo "$x" | grep -qF "HIT"
 echo "$x" | grep -qx 'p' && MISS+="p "
 git -C "$r" log --oneline -3 --format=%s | grep -q 'chore(archive-kb)'
+echo "$x" | awk '/p/ { exit }'
+echo "$x" | grep -q p # a code line with a trailing comment is still code
 EOF
 cat > "$probe/good-7376.sh" <<'EOF'
 ! grep -qF "HIT" <<<"$x"
@@ -390,6 +414,8 @@ p7376_bad_lines=$(wc -l < "$probe/bad-7376.sh")
 p7376_bad_hits=$(scan_pipes "$probe/bad-7376.sh" | grep -c . || true)
 p7376_good_hits=$(scan_pipes "$probe/good-7376.sh" | grep -c . || true)
 p7376_comment_hits=$(scan_pipes "$probe/comment-7376.sh" | grep -c . || true)
+# An unreadable input is reported as UNRESOLVED (never as "no hits").
+p7376_unreadable=$(scan_pipes "$probe/does-not-exist.sh" 2>/dev/null | grep -c '^UNRESOLVED' || true)
 if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" && "$good_hits" == 0 \
       && "$awk_bad_hits" == 1 && "$awk_good_hits" == 0 \
       && "$scorer_bad_lines" -gt 0 && "$scorer_bad_hits" == "$scorer_bad_lines" \
@@ -397,6 +423,7 @@ if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" &
       && "$scan_bad_hits" == "$scorer_bad_lines" && -s "$probe/comment-scorer.sh" && "$scan_comment_hits" == 0 \
       && "$p7376_bad_lines" -gt 0 && "$p7376_bad_hits" == "$p7376_bad_lines" \
       && -s "$probe/good-7376.sh" && "$p7376_good_hits" == 0 && -s "$probe/comment-7376.sh" && "$p7376_comment_hits" == 0 \
+      && "$p7376_unreadable" == 1 \
       && "$wire_members" == "${#FILES_7376[@]}" && "$p7376_wire_hits" == "${#FILES_7376[@]}" ]]; then
   echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
@@ -408,7 +435,7 @@ else
   echo "  piped scorer matched:    ${scorer_bad_hits:-<grep error>}/$scorer_bad_lines, fixed: ${scorer_good_hits:-<grep error>} (want 0)"
   echo "  scan_scorers reported:   ${scan_bad_hits:-<error>}/$scorer_bad_lines bad lines, ${scan_comment_hits:-<error>} comment lines (want 0)"
   echo "  scan_pipes (#7376):      ${p7376_bad_hits:-<error>}/$p7376_bad_lines bad lines, ${p7376_good_hits:-<error>} safe lines, ${p7376_comment_hits:-<error>} comment lines (want 0 and 0)"
-  echo "  scan_7376 wiring:        ${p7376_wire_hits:-<error>} hits over $wire_members scratch members (want one per member: ${#FILES_7376[@]})"
+  echo "  scan_7376 wiring:        ${p7376_wire_hits:-<error>} hits over $wire_members scratch members (want one per member: ${#FILES_7376[@]}); unreadable-input reports: ${p7376_unreadable:-<error>} (want 1)"
 fi
 
 exit "$FAIL"

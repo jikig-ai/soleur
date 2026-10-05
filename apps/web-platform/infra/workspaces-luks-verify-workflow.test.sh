@@ -644,7 +644,10 @@ case "$*" in
     [[ -n "${FIXTURE_EXISTING_BASELINE:-}" ]] && printf 'WORKSPACES_COUNT=%s\n' "$FIXTURE_EXISTING_BASELINE"
     exit 0 ;;
   *WORKSPACES_COUNT=*) exit 0 ;;
-  *tar\ xzf*) exit 0 ;;
+  # Drain here too: `tar czf - | ssh ... "tar xzf -"` is the same producer->stub pipe as the probe's
+  # (#7376). Today the tar stub emits nothing, so this cannot race; draining keeps it that way if a
+  # fixture ever makes the tar stub write.
+  *tar\ xzf*) cat >/dev/null; exit 0 ;;
   # (#8706) the informational unit-state read. Its own arm, so it never falls through to the probe
   # arm below (which would replay FIXTURE_PROBE_LOG and FIXTURE_PROBE_RC a second time). A forged
   # workflow command rides along to prove the line prefix keeps remote text inert.
@@ -666,7 +669,9 @@ if [[ "$*" == *luks-monitor.sh* ]]; then
     : > "${PROBE_SENTINEL:-/dev/null}"
   else
     : > "${PROBE_SENTINEL:-/dev/null}"
-    cat >/dev/null
+    # Keep what was read: the late-producer row asserts the .env text actually ARRIVED, which no
+    # timing-based check can (a stub that stops draining but exits late looks identical).
+    cat > "${PROBE_STDIN:-/dev/null}"
   fi
 fi
 [[ -n "${FIXTURE_PROBE_LOG:-}" ]] && printf '%s\n' "$FIXTURE_PROBE_LOG"
@@ -688,7 +693,7 @@ EOS
     local rc=0
     local calls="${CALLS:-$SCRATCH/calls.default}"
     local out="$calls.out" genv="$calls.env"
-    : > "$out"; : > "$genv"; : > "$calls"; rm -f "$calls.sentinel"
+    : > "$out"; : > "$genv"; : > "$calls"; rm -f "$calls.sentinel" "$calls.sentinel.released" "$calls.probe-stdin"
     PATH="$SCRATCH/bin:$PATH" \
     SSH_CALLS="$calls" \
     GITHUB_OUTPUT="$out" GITHUB_ENV="$genv" \
@@ -704,7 +709,7 @@ EOS
     ALARM_SELFTEST="${SELFTEST:-}" \
     FIXTURE_UNITSTATE_RC="${USRC:-0}" \
       FIXTURE_HOSTKEY_FAIL="${HKFAIL:-0}" \
-      FIXTURE_NO_DRAIN="${NODRAIN:-0}" PROBE_SENTINEL="$calls.sentinel" \
+      FIXTURE_NO_DRAIN="${NODRAIN:-0}" PROBE_SENTINEL="$calls.sentinel" PROBE_STDIN="$calls.probe-stdin" \
       bash -e "${REASSERT:-$SCRATCH/reassert.sh}" >"$calls.stdout" 2>&1 </dev/null || rc=$?
     printf '%s\n' "$rc" > "$calls.rc"
     sed -n 's/^outcome_class=//p' "$out" | tail -1
@@ -998,38 +1003,61 @@ EOS
   # stdin, so a printf scheduled after the stub had gone took SIGPIPE (rc 141) or, with SIGPIPE ignored as
   # on the CI runner, EPIPE (rc 1); under pipefail that became the probe rc, which is none of 0/3/127/255,
   # so the body classified `unavailable/unparsed` instead of `selftest` (run 37296532619). slow_printf
-  # delays ONLY that printf until the stub has handled the probe call (a handshake on a sentinel the stub
-  # creates, bounded ~5 s), which forces the late-producer ordering deterministically instead of hoping
-  # for CPU contention. Both rows run with SIGPIPE ignored, the CI disposition, on every host.
-  slow_re="$SCRATCH/reassert.slow.sh"
+  # delays ONLY that printf until the stub has begun handling the probe call (a bounded ~5 s hand-off on
+  # a sentinel the stub creates), which forces the late-producer ordering instead of hoping for CPU
+  # contention. The hand-off is asserted, not assumed: slow_printf records whether it was released by the
+  # sentinel or by its timeout, and the rows fail on a timeout. The rows run a REWRITTEN COPY of the
+  # extracted production body that differs from it in exactly that one printf line (pinned below), so
+  # they prove the STUB's stdin drain, not the production body; the unmutated rows above cover the
+  # production body. Both rows run with SIGPIPE ignored, the CI disposition, on every host.
+  slow_re="$SCRATCH/reassert.slow.sh"; slow_body="$SCRATCH/reassert.slowbody.sh"
+  sed -E "s/^([[:space:]]*)printf 'DOPPLER_TOKEN/\1slow_printf 'DOPPLER_TOKEN/" "$SCRATCH/reassert.sh" > "$slow_body"
   {
     cat <<'EOS'
 slow_printf() {
   local i=0
   while [[ ! -e "${PROBE_SENTINEL:-/nonexistent}" && "$i" -lt 100 ]]; do sleep 0.05; i=$((i + 1)); done
+  # Record WHY the wait ended: a timeout means the hand-off never happened, which the rows below
+  # turn into a failure instead of a silently weaker (timing-only) test.
+  if [[ -e "${PROBE_SENTINEL:-/nonexistent}" ]]; then echo sentinel; else echo timeout; fi > "${PROBE_SENTINEL:-/dev/null}.released"
   # shellcheck disable=SC2059  # a transparent wrapper: the caller owns the format string
   printf "$@"
 }
 EOS
-    sed -E "s/^([[:space:]]*)printf 'DOPPLER_TOKEN/\1slow_printf 'DOPPLER_TOKEN/" "$SCRATCH/reassert.sh"
+    cat "$slow_body"
   } > "$slow_re"
   slow_sites=$(grep -c "^slow_printf 'DOPPLER_TOKEN" "$slow_re" || true)
-  if [[ "$slow_sites" == 1 ]] && ! cmp -s "$slow_re" "$SCRATCH/reassert.sh"; then
-    ok "RACE: the producer-delay rewrite landed on exactly the one printf call site"
+  # `diff` prints one `<` and one `>` per changed line: exactly one line may differ from production.
+  slow_changed=$(diff "$SCRATCH/reassert.sh" "$slow_body" | grep -c '^[<>]' || true)
+  if [[ "$slow_sites" == 1 && "$slow_changed" == 2 ]]; then
+    ok "RACE: the producer-delay rewrite landed on exactly the one printf call site and changed nothing else"
   else
-    no "RACE: the producer-delay rewrite did not land once (sites=$slow_sites) — the race rows below would measure nothing"
+    no "RACE: the producer-delay rewrite did not land once (sites=$slow_sites changed_diff_lines=$slow_changed, want 1 and 2) — the race rows below would measure nothing"
   fi
   sp_calls="$SCRATCH/calls.slowprod"
   c_slow=$( (trap '' PIPE; EV=workflow_dispatch SELFTEST=true CALLS="$sp_calls" REASSERT="$slow_re" PRC=0 PLOG="$READYZ_OK" drive) )
   expect_class "RACE: a producer delayed past the stub's start still classifies selftest (the stub drains stdin)" "selftest" "$c_slow"
+  # The row above cannot tell a drained stub from one that merely exits inside the poll window, so
+  # assert the .env text actually ARRIVED, and that the hand-off was the sentinel and not the timeout.
+  if grep -q '^DOPPLER_TOKEN=' "$sp_calls.probe-stdin" 2>/dev/null; then
+    ok "RACE: the draining stub received the .env text the workflow piped to it"
+  else
+    no "RACE: the stub did not receive the piped .env text — it exited without reading stdin, so the row above is timing luck"
+  fi
+  if [[ "$(cat "$sp_calls.sentinel.released" 2>/dev/null)" == sentinel ]]; then
+    ok "RACE: the late producer was released by the stub's sentinel (the hand-off happened)"
+  else
+    no "RACE: the late producer was released by its timeout, not the sentinel — the hand-off never happened, so the ordering was not forced"
+  fi
   nd_calls="$SCRATCH/calls.nodrain"
   c_nodrain=$( (trap '' PIPE; EV=workflow_dispatch SELFTEST=true CALLS="$nd_calls" REASSERT="$slow_re" NODRAIN=1 PRC=0 PLOG="$READYZ_OK" drive) )
   nd_probe_rc="$(sed -n 's/^luks-monitor probe rc=//p' "$nd_calls.stdout" | tail -1)"
   if [[ "$c_nodrain" == unavailable && "$(reason_of "$nd_calls")" == unparsed \
-        && "$nd_probe_rc" =~ ^[0-9]+$ && ! "$nd_probe_rc" =~ ^(0|3|127|255)$ ]]; then
-    ok "RACE CONTROL: the same late producer against a stub that never reads stdin fails (probe rc=$nd_probe_rc, unavailable/unparsed)"
+        && "$nd_probe_rc" =~ ^[0-9]+$ && ! "$nd_probe_rc" =~ ^(0|3|127|255)$ \
+        && "$(cat "$nd_calls.sentinel.released" 2>/dev/null)" == sentinel ]]; then
+    ok "RACE CONTROL: the same late producer against a stub that never reads stdin fails (probe rc=$nd_probe_rc, unavailable/unparsed, released by sentinel)"
   else
-    no "RACE CONTROL: the non-draining stub did not reproduce the failure (class=${c_nodrain:-<none>} reason=$(reason_of "$nd_calls") probe_rc=${nd_probe_rc:-<none>}) — the race rows above cannot fail"
+    no "RACE CONTROL: the non-draining stub did not reproduce the failure (class=${c_nodrain:-<none>} reason=$(reason_of "$nd_calls") probe_rc=${nd_probe_rc:-<none>} released=$(cat "$nd_calls.sentinel.released" 2>/dev/null || echo none)) — the race rows above cannot fail"
   fi
 
   # `outcome_reason` PRODUCED, not just consumed. Every alarm fixture supplies RSN= at the consumer,
@@ -1093,7 +1121,7 @@ EOS
     OUTCOME_CLASS="${CLASS:-}" REASON="${RSN:-none}" \
     FIXTURE_ISSUE_LIST="${LIST:-[]}" FIXTURE_ISSUE_VIEW="${VIEW:-}" \
     RUN_URL="https://example.invalid/run/1" GH_TOKEN="fixture" \
-      bash -e "$SCRATCH/alarm.sh" >/dev/null 2>&1 || rc=$?
+      bash -e "$SCRATCH/alarm.sh" >/dev/null 2>&1 </dev/null || rc=$?
     LAST_GH="$calls"; LAST_ALARM_RC="$rc"
   }
 
@@ -1135,7 +1163,9 @@ EOS
   # not by the titles — two classes could share a title and still count as distinct, which is the
   # exact vacuity the comment above says this extraction exists to rule out. Terminate on the
   # FIRST ` --label` instead.
-  title_of() { sed -n 's/.*--title \(.*\)/\1/p' "$1" | head -1 | sed 's/ --label.*//'; }
+  # `sed -n 1p` rather than `head -1`: under pipefail a reader that exits early (head) can SIGPIPE the
+  # writer and abort this `set -e` suite when a log holds two or more --title lines (#7376 class).
+  title_of() { sed -n 's/.*--title \(.*\)/\1/p' "$1" | sed -n 1p | sed 's/ --label.*//'; }
 
   # AC9d — SEVERITY ROUTING, which had ZERO assertions (the suite contained no occurrence of
   # `p0-critical` or `p1-high` at all). The contract is that the p0 goes where the USER DATA is, so
@@ -2155,8 +2185,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # History: #8706 132 -> 143; #6931 143 -> 184 (Guard 3), then Guard 3 review rework (51 registered scenarios
 # each asserting rc, calls, final state, outcome and reason; structural rows evaluated over grids; the
 # occurrence-based census with planted writers; mutation rows 1-21) -> 313; #7376 the producer-side
-# SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316.
-WF_MIN_ASSERTIONS=316
+# SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316; review:
+# the drained-text and hand-off-by-sentinel rows 316 -> 318.
+WF_MIN_ASSERTIONS=318
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1
