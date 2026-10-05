@@ -12,6 +12,25 @@ type: feat
 
 Note: the spec for this branch carries no `lane:` (there is no spec file), so `lane` defaulted to `cross-domain` (fail-closed). The change is a single-domain engineering/CI-tooling change.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05
+**Sections enhanced:** Research Insights, Scope Check, Implementation Phases, Guard Contract, Observability
+**Review inputs:** code-simplicity-reviewer and test-design-reviewer (plan review), plus the deepen-plan halt gates 4.6-4.12 run mechanically (guard-contract lint green, infra-human-steps lint green, PAT sweep clean, cited rule ids and issue numbers verified live). A full 40-agent fan-out was deliberately not run: the change is a 30-line clock-only probe and two registration lines, and the research that matters (exit-code vocabulary, sweeper behaviour, registration surface, bash pitfalls) was measured directly.
+
+### Key Improvements
+
+1. Scope Check rewritten to the canonical three-table schema (Ask Mapping, Plan-Item Provenance, Split Assessment); deepen-plan 4.12 would have halted on the prior two-column table.
+2. Observability `expected_output` changed from `NOT YET` (a spaced value that Check 10 would reject as prose, and that goes stale after the date) to `2026-10-16`, which both verdict messages print.
+3. Hardening measured on this bash and folded in: `[[ 08 -ge 5 ]]` silently takes the wrong arm (not a crash), 20-digit values wrap under `10#`, `[0-9]` can match non-ASCII digits in a UTF-8 locale (so `LC_ALL=C`), `set -u` aborts with an uncontrolled status, and the deadline's own `date -d` call needs the same validation as the clock.
+4. Suite trimmed after simplicity review (registration arm and per-row header greps cut; six mutants instead of eight) while keeping the discriminating zero-padded-epoch-above-deadline arm the test-design review asked for.
+
+### New Considerations Discovered
+
+- `do-not-autoclose` is not read by the sweeper (it is the triage-automation label); it is applied because the brief asks for it, and the never-0 probe is what actually prevents closure.
+- Exit 5 comments on every sweep until the tracker is hand-closed; intended, and the message says how to stop it.
+- Both `scripts/<name>` and `scripts/followthroughs/<name>` run_suite label forms exist; the newer prefixed form is used.
+
 ## Overview
 
 Issue #9387 ("operator-scripts: migrate the TTY-ack scripts to the staged approval gate (ADR-264)") is a `deferred-scope-out` tracker. Its re-evaluation trigger has two parts: a real harness-approved write recorded in the staged-gate run ledger, and the plugin hook being live for two weeks. The ledger (`bootstrap-runs.jsonl`) lives on the founder's machine and the sweeper cannot read it, and ADR-264 states that a ledger line is not evidence of approval (an agent that reads the hook can mint its own receipt). So the only part of the trigger a CI probe can honestly evaluate is the date.
@@ -78,14 +97,42 @@ The brief names `ccla-representative-icla-7922.sh` (438 lines) and its test (121
 
 ## Scope Check
 
-| Ask | Maps to |
-|---|---|
-| 1. probe script, notify-only, exit 2 / 5, message (a) then (b), no secrets, no gh, header with credential posture + notify-only + `RETIREMENT:`, test suite asserting never-0/never-1, registration | Phases 1-2 |
-| 2. no `.github/workflows` / `.github/actions` edit; stop and ask if needed | Constraint; verified no workflow edit is needed (Research Insights) |
-| 3. after on main: copy probe to main checkout untracked, edit #9387 (labels + unfenced column-0 directive, full ISO `earliest=`) | Phase 3 |
-| Constraints: no prod writes beyond the issue edit; CI is the gate; admin merge SHA-pinned via admin-merge-ready.sh, Reviewed-By-Soleur trailer; never print secrets; do not start the migration | Phase 3 + Sharp Edges |
+### Ask Mapping
 
-No inferred items. The only addition beyond the literal ask is the manifest regeneration, which is what "register where the suite-shard manifest requires" means in practice.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Add scripts/followthroughs/<short-name>-9387.sh plus a .test.sh suite (mirror scripts/followthroughs/ccla-representative-icla-7922.sh and its test)." [brief] | Files to Create (probe + suite); Phase 1 | mapped |
+| 2 | "The probe is NOTIFY-ONLY: never exit 0 (it must not close the tracker), never exit 1." [brief] | Phase 1.2 probe body; Guard 1 | mapped |
+| 3 | "Exit 2 = NOT YET before 2026-10-16T00:00:00Z; exit 5 = ACTION REQUIRED on or after that date, with a message telling the operator to (a) confirm the first real harness-approved write was approved by them at the prompt ... then (b) start the migration." [brief] | Phase 1.2 probe body (message arm in Phase 1.1) | mapped |
+| 4 | "The probe declares no secrets and makes no gh call." [brief] | Phase 1.2 header + no-gh arm; directive without `secrets=` in Phase 3.4 | mapped |
+| 5 | "State the credential posture, the notify-only invariant and a RETIREMENT: line in the header, and assert the never-0/never-1 contract in the test suite." [brief] | Phase 1.2 header; Phase 1.1 source pins and header arm | mapped |
+| 6 | "Register the test where scripts/test-all.sh / the suite-shard manifest requires." [brief] | Phase 2; Files to Edit | mapped |
+| 7 | "Do NOT edit .github/workflows or .github/actions ... If the plan needs a workflow edit, stop and ask." [brief] | Acceptance Criteria (no `.github/**` path in the diff); Research Insights (no workflow edit needed) | mapped |
+| 8 | "After the script is on main ... copy the probe there untracked before editing the issue" [brief] | Phase 3.2 | mapped |
+| 9 | "edit issue #9387: add labels follow-through and do-not-autoclose, and append an UNFENCED column-0 directive with earliest=2026-10-16T00:00:00Z (full ISO form, no secrets)." [brief] | Phase 3.4-3.5 | mapped |
+| 10 | "CI is the test gate and skip the long local battery; admin merge on green CI is allowed (no workflow edits), SHA-pinned via admin-merge-ready.sh from the primary checkout; merging needs the Reviewed-By-Soleur trailer" [brief] | Phase 1.3, Phase 3.1 | mapped |
+| 11 | "Do not start the #9387 migration itself." [brief] | Out of scope (Overview); Phase 3.6 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| scripts/followthroughs/tty-ack-migration-9387.sh | "Add scripts/followthroughs/<short-name>-9387.sh" (asks 1-5) | asked |
+| scripts/followthroughs/tty-ack-migration-9387.test.sh | "plus a .test.sh suite" (asks 1, 5) | asked |
+| scripts/test-all.sh run_suite line | "Register the test where scripts/test-all.sh / the suite-shard manifest requires." (ask 6) | asked |
+| suite-shard-legs.tsv / suite-durations.tsv rows | "the suite-shard manifest" (ask 6) | asked |
+| Probe input hardening (digits-only clock, `LC_ALL=C`, base-10 compare, validated deadline) | — | inferred — justification: the never-1 contract in ask 2 fails if a hostile clock or a zero-padded value aborts arithmetic with an uncontrolled status or silently takes the wrong arm; measured on this bash |
+| In-suite mutation arms M1-M6 | "assert the never-0/never-1 contract in the test suite" (ask 5) | asked |
+| Phase 3 post-merge copy, edit and verification-by-pull | "copy the probe there untracked before editing the issue" (ask 8); "edit issue #9387" (ask 9) | asked |
+| `## Guard Contract` and `## Observability` sections | — | inferred — justification: plan Phases 2.9 and 2.12 enforcement contracts require them when the deliverable is a guard-shaped CI probe; they add no code beyond the probe and suite |
+| `Ref #9387` (never `Closes`) in the PR body | "it must not close the tracker" (ask 2) | asked |
+
+### Split Assessment
+
+- Subsystems touched: 1 — scripts
+- Planned files: 5 (2 created, 3 edited: test-all.sh and two generated TSVs) | Estimated changed lines: 350
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Open Code-Review Overlap
 
@@ -119,7 +166,7 @@ Assertions, by group:
 - **`date` unusable**: probe run with a PATH holding no `date` (absolute `bash`), and with a PATH `date` shim that prints garbage -> 3. Because the probe also resolves the deadline with `date -d`, the shim arm is run both with and without the seam set (with `NOW_EPOCH` set, only the deadline call is exercised); the probe validates `DEADLINE_EPOCH` with the same digits-only regex.
 - **Production shape**: `env -i PATH=... HOME=... bash probe` with no seams (the sweeper's exact shape); rc must be in {2,5} (clock-independent set so the suite does not rot on the deadline); also run with `GH_TOKEN`/`SENTRY_ACTIONS_RO_TOKEN` canaries set in the outer env and assert the canary strings appear in no output (inert credential posture).
 - **No `gh`, no network**: put a stub `gh` (and `curl`) earlier on PATH that logs every call and exits 99; run both verdict arms; assert the log is empty. Source pin: no executable (non-comment) line contains a `gh`/`curl`/`wget` word.
-- **Message arm (exit 5)**: output contains, in this order, a step (a) that names `bootstrap-runs.jsonl`, the founder's machine, `ADR-264` and that a ledger line is not evidence of approval, and that the operator approved the first real write at the prompt; then a step (b) that says start the migration. Assert (a) precedes (b) by character index. Exit-2 output contains `NOT YET` and `2026-10-16`.
+- **Message arm (exit 5)**: output contains, in this order, a step (a) that names `bootstrap-runs.jsonl`, the founder's machine, `ADR-264` and that a ledger line is not evidence of approval, and that the operator approved the first real write at the prompt; then a step (b) that says start the migration. Assert (a) precedes (b) by character index. Both verdict messages go to stdout and contain `2026-10-16` (the Observability probe matches on it); exit-2 output also contains `NOT YET`, exit-5 output `ACTION REQUIRED`.
 - **Never-0 / never-1 contract (the guard) — source pins and behaviour**: every `exit` operand in the probe's executable lines is a literal in {2,3,5}; no `exit` with a variable operand; no bare `exit`; no `set -e`, `set -u`, `set -o errexit|nounset`, no `trap ... EXIT` that could rewrite the status; the stub-driven arms plus the hostile-clock table never produce rc 0 or 1 (assert rc not in {0,1} over the whole input table, not just per-row expected values).
 - **In-suite mutation arms (guard matrix, below; six mutants)**: copy the probe into the suite's sandbox, apply a single edit, and assert that the matching check (the source-pin checker, or the behavioural clock run against the mutant) goes red; the unmutated copy goes through the identical function and must come out clean (pristine-copy control; a mutant that fails to land, detected by asserting the edit changed the verdict block's line range rather than by `cmp`, is an instrument error, not a catch). One checker function serves the real probe and every mutant, so the arms test the checker, not a copy of it.
 - **Header arm (one pin)**: the probe's leading comment block contains `NOTIFY-ONLY` and a `RETIREMENT:` line (the content of the RETIREMENT line is reviewed, not machine-checked; a probe-with-no-retirement is the failure, and a grep per named row would be a second copy of the list).
@@ -230,10 +277,10 @@ logs:
   retention: GitHub default Actions log retention; comments permanent
 discoverability_test:
   command: bash scripts/followthroughs/tty-ack-migration-9387.sh
-  expected_output: NOT YET
+  expected_output: 2026-10-16
 ```
 
-(The `expected_output` literal is correct only before 2026-10-16; after that date the same command prints `ACTION REQUIRED`, which is the signal working.)
+Both verdict messages (NOT YET and ACTION REQUIRED) are printed to stdout and both name `2026-10-16`, so this literal matches on either side of the date (Check 10 substring-matches single-token literals; a value with a space such as `NOT YET` would be rejected as prose by deepen-plan Phase 4.7). The suite pins that both verdict messages contain the date. The CANNOT ESTABLISH message goes to stderr, matching the 9348 template.
 
 ## Guard Contract
 

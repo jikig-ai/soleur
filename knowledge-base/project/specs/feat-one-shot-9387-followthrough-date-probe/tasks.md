@@ -12,7 +12,7 @@ Plan: knowledge-base/project/plans/2026-10-05-feat-enroll-9387-notify-only-date-
   - 1.1.5 date unusable: absent, garbage shim (with and without seam) -> 3
   - 1.1.6 Production shape (env -i, no seams): rc in {2,5}; credential canaries never printed
   - 1.1.7 No gh/curl: stub log empty on both verdict arms; source pin on executable lines
-  - 1.1.8 Message arm: exit-5 names bootstrap-runs.jsonl, founder machine, ADR-264, ledger line is not approval evidence; (a) before (b); exit-2 names NOT YET and 2026-10-16
+  - 1.1.8 Message arm: exit-5 names bootstrap-runs.jsonl, founder machine, ADR-264, ledger line is not approval evidence; (a) before (b); both verdict messages go to stdout and contain 2026-10-16; exit-2 says NOT YET, exit-5 says ACTION REQUIRED
   - 1.1.9 Source pins: every exit operand literal in {2,3,5}; no set -e/-u; LC_ALL=C; header has NOTIFY-ONLY and RETIREMENT:
   - 1.1.10 Six mutation arms M1-M6 with pristine-copy control
 - 1.2 Run the suite red (probe missing aborts loudly), then write scripts/followthroughs/tty-ack-migration-9387.sh
