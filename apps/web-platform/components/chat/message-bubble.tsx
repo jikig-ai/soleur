@@ -191,7 +191,12 @@ export const MessageBubble = memo(function MessageBubble({
   // every live-ish assistant bubble (priors + live step + elapsed +
   // interrupted marker in ONE surface). Done/error/hydrated bubbles never
   // reach it — turn end collapses for free.
-  const showTrail = role === "assistant" && (isActive || interrupted);
+  // `interrupted` counts as live-ish only while the bubble is NOT terminal —
+  // a re-bound bubble that later ends done keeps the flag as history but
+  // must render the normal Done card, not a stale Interrupted chip.
+  const showTrail =
+    role === "assistant" &&
+    (isActive || (interrupted && !isDone && !isError));
 
   const borderStyle = isError
     ? "border-2 border-red-900/60"

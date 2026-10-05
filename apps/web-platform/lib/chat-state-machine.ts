@@ -1324,6 +1324,7 @@ export function applyStreamEvent(
       updated[idx] = {
         ...target,
         state: "done",
+        interrupted: false,
         activity: seedActivityFromChips(
           target.toolLabel
             ? pushActivity(target.activity, {
@@ -1363,6 +1364,7 @@ export function applyStreamEvent(
           updated[idx] = {
             ...m,
             state: "done",
+            interrupted: false,
             activity: m.toolLabel
               ? pushActivity(m.activity, {
                   label: m.toolLabel,
@@ -1415,6 +1417,7 @@ export function applyStreamEvent(
           updated[idx] = {
             ...m,
             state: "done",
+            interrupted: false,
             activity: m.toolLabel
               ? pushActivity(m.activity, {
                   label: m.toolLabel,
@@ -2073,7 +2076,7 @@ export function applyTimeout(
     const { retrying: _retrying, livenessRearms: _rearms, ...rest } = updated[idx];
     void _retrying;
     void _rearms;
-    updated[idx] = { ...rest, state: "error" };
+    updated[idx] = { ...rest, state: "error", interrupted: false };
     const nextStreams = new Map(activeStreams);
     nextStreams.delete(leaderId as DomainLeaderId);
     return {
