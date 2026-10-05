@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Follow-through for tracker #9387 (migrate the TTY-ack operator scripts to the staged approval gate).
+# The tracker's re-evaluation trigger is: the staged gate has recorded a real harness-approved write in
+# a run ledger AND the plugin hook has been live for two weeks. The hook went live 2026-10-02, so the
+# date half falls due on 2026-10-16T00:00:00Z. This probe reports that date and nothing else.
+#
+# NOTIFY-ONLY: this probe never exits 0, so the sweeper never closes #9387 (closing it is the
+# operator's act once the migration has landed), and it never exits 1, because the sweeper reads 1 as
+# FAIL. Exit 5 repeats on every daily sweep from the deadline until the operator closes the tracker.
+#
+# It cannot read the ledger half. The run ledger (bootstrap-runs.jsonl) lives on the founder's machine,
+# not in CI, and ADR-264 says a ledger line is not evidence of approval: an agent that reads the hook
+# can mint its own receipt. So the ACTION REQUIRED message asks the operator to confirm the approval
+# themselves before starting.
+#
+# Exit semantics (sweep-followthroughs.sh contract):
+#   2 = NOT YET             the deadline has not arrived.
+#   5 = ACTION REQUIRED     the deadline has arrived (the deadline second itself counts).
+#   3 = CANNOT ESTABLISH    the clock or the deadline did not resolve to a plain epoch.
+#
+# CREDENTIAL POSTURE: none. The tracker directive declares no secrets=. The probe makes no network,
+# git or file read and calls no CLI other than `date`; its only inputs are the system clock and the
+# NOW_EPOCH test seam, which the sweeper's `env -i` does not forward, so the seam is inert in production.
+#
+# Why there is no set -e and no set -u: either one aborts with a status the probe did not choose (often
+# 1), which would break the never-1 contract. Every exit below is a literal 2, 3 or 5.
+#
+# RETIREMENT: delete this probe, scripts/followthroughs/tty-ack-migration-9387.test.sh, the
+# `run_suite "scripts/followthroughs/tty-ack-migration-9387"` line with its comment in scripts/test-all.sh,
+# and the two rows for it in scripts/suite-shard-legs.tsv and scripts/suite-durations.tsv (regenerate with
+# `python3 scripts/regenerate-shard-manifest.py --incremental --write`), once #9387 is closed. At
+# retirement re-census with `git grep tty-ack-migration`.
+
+export LC_ALL=C
+
+DEADLINE_ISO='2026-10-16T00:00:00Z'
+DEADLINE_EPOCH=$(date -u -d "$DEADLINE_ISO" +%s 2>/dev/null)
+NOW="${NOW_EPOCH:-$(date -u +%s 2>/dev/null)}"
+# Plain ASCII digits only, at most 12 (20 digits wrap under base-10 conversion). Anything else is
+# "could not measure", never a verdict.
+if ! [[ "$DEADLINE_EPOCH" =~ ^[0-9]{1,12}$ && "$NOW" =~ ^[0-9]{1,12}$ ]]; then
+  echo "CANNOT ESTABLISH: the clock or the deadline did not resolve to an epoch" >&2
+  exit 3
+fi
+
+# 10# forces base 10: a zero-padded value such as 08 is an invalid octal literal otherwise, and the
+# comparison would error and silently take the NOT YET arm.
+if (( 10#$NOW >= 10#$DEADLINE_EPOCH )); then
+  printf '%s\n' \
+    "ACTION REQUIRED: the ${DEADLINE_ISO%%T*} re-evaluation date for #9387 has arrived. Do these in order, then close #9387 by hand (this probe never closes it and will comment again on every sweep until you do)." \
+    "  (a) Confirm the first real harness-approved write was approved by YOU at the prompt. The run ledger (bootstrap-runs.jsonl) lives on the founder's machine, so this probe cannot read it, and ADR-264 says a ledger line is not evidence of approval: an agent that reads the hook can mint its own receipt." \
+    "  (b) Only then start the migration of the TTY-ack scripts to the staged approval gate."
+  exit 5
+fi
+echo "NOT YET: the ${DEADLINE_ISO%%T*} re-evaluation date for #9387 has not arrived."
+exit 2
