@@ -487,6 +487,24 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
     expect(contextResetCalls).toHaveLength(0);
   });
 
+  // #9538 — the stale-resume retry's own notice channel: the guard's
+  // `contextResetNotice` field only covers the guard-fired case; the
+  // dispatcher-driven re-dispatch carries its notice via
+  // `QueryFactoryArgs.contextResetNotice`, appended at the same site.
+  it("appends args.contextResetNotice to systemPrompt (stale-resume retry notice hop)", async () => {
+    await realSdkQueryFactory(
+      makeArgs({
+        systemPrompt: "BASE",
+        // biome-ignore lint/suspicious/noExplicitAny: QueryFactoryArgs field under test
+        contextResetNotice: "RETRY-RESET-NOTICE",
+      } as any),
+    );
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(opts.systemPrompt).toContain("BASE");
+    expect(opts.systemPrompt).toContain("RETRY-RESET-NOTICE");
+  });
+
   it("does NOT carry the notice forward across calls when the guard does not fire on the second call (multi-turn non-accumulation, AC6b)", async () => {
     // First call: guard fires
     mockApplyPrefillGuard.mockResolvedValueOnce({

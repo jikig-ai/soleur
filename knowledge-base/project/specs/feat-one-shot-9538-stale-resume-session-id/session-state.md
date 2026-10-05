@@ -14,7 +14,7 @@
 
 ### Decisions
 - Recoverable signal = new optional `DispatchEvents.onStaleResume({ deadSessionId })` rather than a `WorkflowEnd` union variant or `internal_error` string-sniffing — matches the issue's "do NOT emit terminal `internal_error`" ask.
-- Re-dispatch deferred (microtask) past `closeQuery`'s `activeQueries.delete` — a synchronous retry would collide with the dying query entry and silently lose the user message.
+- Re-dispatch is synchronous-safe: the runner emits `onStaleResume` AFTER `closeQuery` (whose `activeQueries.delete` lands first), so the retry never collides with the dying entry. The retry itself is deferred past the `clearCcSessionId` write via `.then` so a fresh `persist` can never lose the ordering race.
 - Issue premise corrected: the cc path has no `messages`-replay primitive (`loadConversationHistory`/`buildReplayPrompt` are `agent-runner`-private), so recovery uses the existing `context_reset` honesty contract; DB-replay parity descoped to a tracking issue.
 - Prefill-guard `[]`→drop-resume caller-gated (`dropResumeOnEmptyHistory: true` on the cc factory only) because legacy `agent-runner` shares the guard and its `.catch` replay preserves full context.
 - Occurrence counting via `warnSilentFallback` (`op: "stale-resume-recovery"`, warn-tier Sentry) — no error-tier event, per the issue.

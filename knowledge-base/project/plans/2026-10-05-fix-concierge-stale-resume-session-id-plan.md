@@ -291,3 +291,8 @@ Two open `code-review` issues touch planned files:
 - Learning: `knowledge-base/project/learnings/2026-04-12-startAgentSession-catch-block-swallows-resume-errors.md`
 - Prefill guard: `apps/web-platform/server/agent-prefill-guard.ts` (`applyPrefillGuard`), plan `knowledge-base/project/plans/2026-05-05-fix-cc-concierge-prefill-on-resume-plan.md`
 - Draft PR: #9541
+
+
+---
+
+**Post-review amendments (design-pass + panel, committed 91262d62ab and later):** The ordering trap resolved by INVERSION, not deferral — `onStaleResume` emits AFTER `closeQuery` (whose `activeQueries.delete` lands first), so the retry is synchronous-safe; the dispatch itself defers past `clearCcSessionId` via `.then` (write-ordering). Panel fixes: retry strips `events.onStaleResume` (bounds recovery to one re-dispatch — `state.sessionId` rebinds on the first result), `hasActiveCcQuery` guard before retry (concurrent-send clobber), retry catch reuses the extracted `reportDispatchSoleurGoError` (typed-error taxonomy parity), `onStaleResume` payload carries `lastBlockKind` (tool-use-orphan notice selection), `closeQuery` gains a `"stale-resume"` reason so the close-hook keeps the worktree lease HELD through the synchronous re-acquire (migration-116 tombstone window), and both no-listener/throwing-listener cases fall back to `internal_error` (terminal honesty).

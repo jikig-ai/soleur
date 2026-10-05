@@ -87,10 +87,10 @@ const {
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
   // Drift-guard for #3250: `realSdkQueryFactory` calls `getSessionMessages`
-  // when `args.resumeSessionId` is set. Returning `[]` keeps the guard's
-  // empty-history branch from blocking these tests and matches the
-  // behavior asserted by the prefill-guard test file's empty-history
-  // scenario.
+  // when `args.resumeSessionId` is set. `[]` exercises the guard's
+  // empty-history branch — which, since #9538 added the cc caller's
+  // `dropResumeOnEmptyHistory: true`, now DROPS the resume id; tests that
+  // need resume to survive override with a user-terminated history.
   getSessionMessages: mockGetSessionMessages,
   // Return inspectable shapes so the soleur_platform always-build assertion
   // (#5370 T2) can read tool names off the registered server. `tool(name,…)`

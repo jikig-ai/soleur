@@ -99,7 +99,13 @@ describe("consumeStream — stale-resume discriminator (#9538)", () => {
     const mock = createMockQuery();
     const runner = makeRunner(mock);
     const events = makeEvents();
-    const onStaleResume = vi.fn();
+    let activeAtEmit: boolean | null = null;
+    const onStaleResume = vi.fn(() => {
+      // Load-bearing ordering (AC4): emit must follow closeQuery's
+      // activeQueries.delete — a synchronous re-dispatch here can never
+      // take the `queryReused` path on the dying entry.
+      activeAtEmit = runner.hasActiveQuery("conv-stale");
+    });
     events.onStaleResume = onStaleResume;
 
     await runner.dispatch(dispatchArgs(events, "dead-id"));
@@ -108,7 +114,10 @@ describe("consumeStream — stale-resume discriminator (#9538)", () => {
     await flushMicrotasks(20);
 
     expect(onStaleResume).toHaveBeenCalledTimes(1);
-    expect(onStaleResume).toHaveBeenCalledWith({ deadSessionId: "dead-id" });
+    expect(onStaleResume).toHaveBeenCalledWith(
+      expect.objectContaining({ deadSessionId: "dead-id" }),
+    );
+    expect(activeAtEmit).toBe(false);
     // The terminal contract is bypassed entirely — no WorkflowEnd at all
     // (an `internal_error` would disable the client input via
     // `session_ended` and wedge the conversation).
@@ -168,7 +177,7 @@ describe("consumeStream — stale-resume discriminator (#9538)", () => {
     );
   });
 
-  it("a throwing onStaleResume listener is contained (query still closes)", async () => {
+  it("a throwing onStaleResume listener falls back to internal_error (terminal honesty)", async () => {
     const mock = createMockQuery();
     const runner = makeRunner(mock);
     const events = makeEvents();
@@ -181,13 +190,61 @@ describe("consumeStream — stale-resume discriminator (#9538)", () => {
     mock.emitError(new Error(STALE_MSG));
     await flushMicrotasks(20);
 
-    expect(events._ended).toHaveLength(0);
+    // The listener throw mirrors under its own op AND the turn still ends
+    // with a terminal frame — a stranded client (streaming state with no
+    // WorkflowEnd) is worse than a failed recovery.
+    expect(events._ended).toHaveLength(1);
+    expect(events._ended[0]?.status).toBe("internal_error");
     expect(mock.isClosed()).toBe(true);
-    // The listener throw mirrors under its own op — it must not re-enter
-    // the stale arm or leak as the turn's error.
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ op: "onStaleResume" }),
     );
+  });
+
+  it("stale signature with NO onStaleResume listener → internal_error fallback (bounded consumers)", async () => {
+    const mock = createMockQuery();
+    const runner = makeRunner(mock);
+    const events = makeEvents();
+    // Deliberately un-wired — a consumer that doesn't implement the event
+    // still gets terminal honesty instead of a silently dead turn. This is
+    // also the retry-bound mechanism: the retried turn's events strip the
+    // listener, so a repeat signature lands here.
+    events.onStaleResume = undefined;
+
+    await runner.dispatch(dispatchArgs(events, "dead-id"));
+
+    mock.emitError(new Error(STALE_MSG));
+    await flushMicrotasks(20);
+
+    expect(events._ended).toHaveLength(1);
+    expect(events._ended[0]?.status).toBe("internal_error");
+    // The warn-tier marker still counts the recovery signal.
+    expect(mockWarnSilentFallback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ op: "stale-resume-recovery" }),
+    );
+  });
+
+  it("forwards DispatchArgs.contextResetNotice to the query factory", async () => {
+    const mock = createMockQuery();
+    let captured: { contextResetNotice?: string } | null = null;
+    const runner = createSoleurGoRunner({
+      queryFactory: (factoryArgs) => {
+        captured = factoryArgs;
+        return mock.query;
+      },
+      now: () => Date.now(),
+      wallClockTriggerMs: 30_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      ...dispatchArgs(events, "dead-id"),
+      contextResetNotice: "RESET-NOTICE",
+    });
+
+    expect(captured).not.toBeNull();
+    expect(captured!.contextResetNotice).toBe("RESET-NOTICE");
   });
 });

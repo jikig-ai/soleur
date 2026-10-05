@@ -3,10 +3,11 @@
  * `DispatchEvents.onStaleResume` (mid-stream `No conversation found with
  * session ID` on a dispatch that attempted `resume:`), the dispatcher
  * clears `conversations.session_id`, emits the `context_reset` honesty
- * frame, and re-dispatches the same turn cold — DEFERRED past
- * `closeQuery`'s `activeQueries.delete` so the retry cannot take the
- * `queryReused` path on the dying entry (which would silently drop the
- * user's message).
+ * frame, and re-dispatches the same turn cold. The runner emits
+ * `onStaleResume` AFTER `closeQuery`'s `activeQueries.delete`, so the
+ * retry cannot take the `queryReused` path on the dying entry (which
+ * would silently drop the user's message); the dispatch itself is
+ * deferred past the `clearCcSessionId` write via `.then`.
  *
  * Mirrors the mock-pattern at `cc-dispatcher-session-id-writer.test.ts`.
  */
@@ -107,7 +108,10 @@ import {
   __setCcRunnerForTests,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
-import { CONTEXT_RESET_NOTICE_GENERIC } from "@/server/agent-prefill-guard";
+import {
+  CONTEXT_RESET_NOTICE_GENERIC,
+  CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
+} from "@/server/agent-prefill-guard";
 import type { WSMessage } from "@/lib/types";
 import { flushMicrotasks } from "./helpers/soleur-go-fixtures";
 
@@ -137,7 +141,12 @@ function framesOfType(sendToClient: ReturnType<typeof vi.fn>, type: string) {
 /** Minimal SoleurGoRunner stub; `dispatch` behavior is per-test. */
 function makeStubRunner(
   dispatchImpl: (args: {
-    events: { onStaleResume?: (info: { deadSessionId: string }) => void };
+    events: {
+      onStaleResume?: (info: {
+        deadSessionId: string;
+        lastBlockKind: "text" | "tool_use" | null;
+      }) => void;
+    };
     sessionId?: string;
     contextResetNotice?: string;
   }) => Promise<{ queryReused: boolean }>,
@@ -205,7 +214,10 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
       if (reusedSeen.length === 1) {
         // Simulated closeQuery → activeQueries.delete PRECEDES emit.
         entryActive = false;
-        dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
+        dispatchArgs.events.onStaleResume?.({
+          deadSessionId: "sess-dead",
+          lastBlockKind: "text",
+        });
       }
       return { queryReused: reused };
     });
@@ -238,10 +250,15 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
       sessionId?: string;
       contextResetNotice?: string;
       userMessage?: string;
+      events?: { onStaleResume?: unknown };
     };
     expect(retry.sessionId).toBeUndefined();
     expect(retry.contextResetNotice).toBe(CONTEXT_RESET_NOTICE_GENERIC);
     expect(retry.userMessage).toBe("hi");
+    // The retry's events strip onStaleResume — a repeat signature
+    // degrades to `internal_error` instead of re-dispatching: this is
+    // what bounds the recovery to one re-dispatch per user message.
+    expect(retry.events?.onStaleResume).toBeUndefined();
 
     // AC4: the retry observed the map already cleared — fresh query
     // construction, never the dying entry's input queue.
@@ -262,7 +279,10 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
       // First call only: the retry runs with sessionId: undefined, so in
       // production the runner's own gate cannot re-fire.
       if (calls === 1) {
-        dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
+        dispatchArgs.events.onStaleResume?.({
+          deadSessionId: "sess-dead",
+          lastBlockKind: "text",
+        });
       }
       return { queryReused: false };
     });
@@ -286,7 +306,10 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     const stubRunner = makeStubRunner(async (dispatchArgs) => {
       calls++;
       if (calls === 1) {
-        dispatchArgs.events.onStaleResume?.({ deadSessionId: "sess-dead" });
+        dispatchArgs.events.onStaleResume?.({
+          deadSessionId: "sess-dead",
+          lastBlockKind: "text",
+        });
         return { queryReused: false };
       }
       throw new Error("retry factory blew up");
@@ -324,5 +347,96 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
       onlyIfStatusIn: ["active"],
       expectMatch: false,
     });
+  });
+  it("skips the retry when a concurrent turn already claimed the conversation (activeQueries guard)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const args = baseDispatchArgs(sendToClient, { sessionId: "sess-dead" });
+
+    const stubRunner = makeStubRunner(
+      async (dispatchArgs) => {
+        dispatchArgs.events.onStaleResume?.({
+          deadSessionId: "sess-dead",
+          lastBlockKind: "text",
+        });
+        return { queryReused: false };
+      },
+      // A newer user send registered the slot in the window between the
+      // dying close and the deferred retry — re-dispatching would clobber
+      // it and orphan the newer query.
+      () => true,
+    );
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo(args);
+    await flushMicrotasks(20);
+
+    // The clear + honesty frame still land; only the re-dispatch is held.
+    expect(stubRunner.dispatch).toHaveBeenCalledTimes(1);
+    expect(clearStaleSessionIdCalls()).toHaveLength(1);
+    expect(framesOfType(sendToClient, "context_reset")).toHaveLength(1);
+  });
+
+  it("selects the tool_use_orphan reason + notice when the turn died mid-tool_use", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const args = baseDispatchArgs(sendToClient, { sessionId: "sess-dead" });
+
+    const stubRunner = makeStubRunner(async (dispatchArgs) => {
+      dispatchArgs.events.onStaleResume?.({
+        deadSessionId: "sess-dead",
+        lastBlockKind: "tool_use",
+      });
+      return { queryReused: false };
+    });
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo(args);
+    await flushMicrotasks(20);
+
+    const resets = framesOfType(sendToClient, "context_reset");
+    expect(resets).toHaveLength(1);
+    expect((resets[0]![1] as { reason?: string }).reason).toBe(
+      "tool_use_orphan",
+    );
+    const retry = stubRunner.dispatch.mock.calls[1]![0] as {
+      contextResetNotice?: string;
+    };
+    expect(retry.contextResetNotice).toBe(
+      CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
+    );
+  });
+
+  it("retry KeyInvalidError keeps the actionable key_invalid contract (typed taxonomy)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const args = baseDispatchArgs(sendToClient, { sessionId: "sess-dead" });
+
+    const { KeyInvalidError } = await import("@/lib/types");
+    let calls = 0;
+    const stubRunner = makeStubRunner(async (dispatchArgs) => {
+      calls++;
+      if (calls === 1) {
+        dispatchArgs.events.onStaleResume?.({
+          deadSessionId: "sess-dead",
+          lastBlockKind: "text",
+        });
+        return { queryReused: false };
+      }
+      throw new KeyInvalidError();
+    });
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo(args);
+    await flushMicrotasks(20);
+
+    // The retry's sole error boundary must discriminate like the primary
+    // catch: key_invalid errorCode + actionable copy, NOT the generic
+    // "try again shortly" dead-end.
+    const errorFrames = framesOfType(sendToClient, "error");
+    expect(errorFrames.length).toBeGreaterThan(0);
+    const frame = errorFrames[0]![1] as {
+      errorCode?: string;
+      message?: string;
+    };
+    expect(frame.errorCode).toBe("key_invalid");
+    expect(frame.message).not.toContain("try again shortly");
   });
 });
