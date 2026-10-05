@@ -271,7 +271,15 @@ scan_pipes() { # <files...> -> the offending code lines, or nothing
   fi
   printf '%s\n' "$out" | grep -vE ':[0-9]+:[[:space:]]*#' || true
 }
-hits_7376="$(scan_pipes "${FILES_7376[@]}")"
+# scan_7376 [root]: scan every FILES_7376 member under <root> (default: the repo). The probe below
+# points it at a scratch copy of each real member with one bad line appended, which proves the pass
+# reads the pin list's members and not some other set.
+scan_7376() {
+  local root="${1:-.}" f paths=()
+  for f in "${FILES_7376[@]}"; do paths+=("$root/$f"); done
+  scan_pipes "${paths[@]}"
+}
+hits_7376="$(scan_7376 .)"
 if [[ -n "$hits_7376" ]]; then
   FAIL=1
   echo "FAIL: pipe-into-grep-q found in a suite #7376 took to zero"
@@ -349,6 +357,19 @@ cat > "$probe/comment-7376.sh" <<'EOF'
   # history: this used to read  echo "$x" | grep -q 'p'
 EOF
 
+# Wiring: a scratch copy of EACH real pinned member plus one appended bad line; the pass must report
+# exactly one hit per member (so a member that is not read, or a real member that already carries a
+# hit, both change the count).
+mkdir -p "$probe/root"
+wire_members=0
+for _f in "${FILES_7376[@]}"; do
+  mkdir -p "$probe/root/$(dirname "$_f")"
+  if cp "$_f" "$probe/root/$_f" && printf '%s\n' 'echo "$x" | grep -q p' >> "$probe/root/$_f"; then
+    wire_members=$((wire_members + 1))
+  fi
+done
+p7376_wire_hits=$(scan_7376 "$probe/root" | grep -c . || true)
+
 # Every bad line must match and no good line may, compared as COUNTS: a grep error
 # prints no count, so it can never equal the line total or 0 (a negated `grep -q`
 # would read exit 2 as a pass). Both files must be non-empty, or either half
@@ -375,7 +396,8 @@ if [[ "$bad_lines" -gt 0 && "$bad_hits" == "$bad_lines" && -s "$probe/good.sh" &
       && -s "$probe/good-scorer.sh" && "$scorer_good_hits" == 0 \
       && "$scan_bad_hits" == "$scorer_bad_lines" && -s "$probe/comment-scorer.sh" && "$scan_comment_hits" == 0 \
       && "$p7376_bad_lines" -gt 0 && "$p7376_bad_hits" == "$p7376_bad_lines" \
-      && -s "$probe/good-7376.sh" && "$p7376_good_hits" == 0 && -s "$probe/comment-7376.sh" && "$p7376_comment_hits" == 0 ]]; then
+      && -s "$probe/good-7376.sh" && "$p7376_good_hits" == 0 && -s "$probe/comment-7376.sh" && "$p7376_comment_hits" == 0 \
+      && "$wire_members" == "${#FILES_7376[@]}" && "$p7376_wire_hits" == "${#FILES_7376[@]}" ]]; then
   echo "PASS: guard pattern matches the forbidden shapes and not the fixed shapes (incl. || herestrings, #8807)"
 else
   FAIL=1
@@ -386,6 +408,7 @@ else
   echo "  piped scorer matched:    ${scorer_bad_hits:-<grep error>}/$scorer_bad_lines, fixed: ${scorer_good_hits:-<grep error>} (want 0)"
   echo "  scan_scorers reported:   ${scan_bad_hits:-<error>}/$scorer_bad_lines bad lines, ${scan_comment_hits:-<error>} comment lines (want 0)"
   echo "  scan_pipes (#7376):      ${p7376_bad_hits:-<error>}/$p7376_bad_lines bad lines, ${p7376_good_hits:-<error>} safe lines, ${p7376_comment_hits:-<error>} comment lines (want 0 and 0)"
+  echo "  scan_7376 wiring:        ${p7376_wire_hits:-<error>} hits over $wire_members scratch members (want one per member: ${#FILES_7376[@]})"
 fi
 
 exit "$FAIL"
