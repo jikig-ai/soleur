@@ -1,15 +1,15 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
 import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
 
 /**
  * The /signup "no account" banner. The nav-pending island also renders
  * role="status" while the /login -> /signup navigation settles, so an
- * unfiltered getByRole("status") hits two elements and the non-retrying
- * toContainText calls fail with a strict-mode violation (#9170). Select the
+ * unfiltered getByRole("status") hits two elements and toContainText fails at
+ * once with a strict-mode violation instead of polling (#9170). Select the
  * banner by its text instead.
  */
-const noAccountBanner = (page: import("@playwright/test").Page) =>
+const noAccountBanner = (page: Page) =>
   page.getByRole("status").filter({ hasText: /no Soleur account found/i });
 
 // ---------- OTP Login Flow Tests ----------

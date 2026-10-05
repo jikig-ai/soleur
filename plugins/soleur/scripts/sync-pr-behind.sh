@@ -40,8 +40,9 @@
 #      marker in the per-worktree git dir, left by a queued sighting) or carrying a CURRENT
 #      RemovedFromMergeQueueEvent (newer than the auto-merge re-arm and than the head commit) is a
 #      dequeue — a failed merge_group run, or a removal: `kind=dequeued rc=13`, exit 13, nothing merged or
-#      pushed; the line has the reason and the recovery. Auto-merge state is NOT consulted (unmeasured
-#      after a failed merge_group run). One re-read after a short nap precedes the report, so the
+#      pushed; the line has the reason and the recovery. Auto-merge state is NOT consulted (measured 2026-10-05,
+#      #9482: it stays armed after a failed_checks removal and GitHub re-queues the PR; a removed PR is
+#      reported whether or not it is still armed). One re-read after a short nap precedes the report, so the
 #      queue's own merge landing (not queued, OPEN, about to read MERGED) is never one. A PR with neither
 #      marker nor event keeps the old reading (not queued yet / re-enqueues itself after a push). A dequeue
 #      reached through the marker alone is reported ONCE: --step (exit 13) and --queue-state (the `dequeued` print) each
@@ -210,7 +211,7 @@ query($owner: String!, $name: String!, $number: Int!) {
 
 # dq_candidate <marker> — 0 iff QS_OUT reads the PR out of the queue and OPEN AND it either was seen queued (the
 # marker, per worktree git dir) or has a CURRENT removal event. Auto-merge state is NOT consulted: after a failed
-# merge_group run it is unmeasured, and a removed PR must be reported whether or not it is still armed. Only a PR with
+# merge_group run it stays armed (measured 2026-10-05, #9482) and GitHub may re-queue the PR, and a removed PR must be reported whether or not it is still armed. Only a PR with
 # neither marker nor event keeps the old reading (not queued yet, or a push dequeued it and it re-enqueues itself).
 dq_candidate() {
   local v st am rm

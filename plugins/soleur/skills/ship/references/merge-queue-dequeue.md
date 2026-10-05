@@ -4,7 +4,7 @@
 
 Loaded from [ship/SKILL.md](../SKILL.md) Phase 7 and [merge-pr/SKILL.md](../../merge-pr/SKILL.md) §5.2 when the poll prints `[ship.phase7.dequeued]` or a `[ship.phase7.sync_failed]` line for `kind=dequeued` (exit 13), or times out with the PR OPEN and not in the queue.
 
-A red `merge_group` run does not fail the PR: it removes it from the queue (a `RemovedFromMergeQueueEvent` on the PR timeline, with a `reason`), leaving the PR `OPEN`. Measured 2026-10-05 (#9482): after a `failed_checks` removal auto-merge stayed armed and GitHub put the PR back at the end of the queue 2 to 3 minutes later, with no `AutoMerge*` event in between (two PRs); a `manual` removal (a push) was not re-added. No check here depends on that, so read `--queue-state` before re-arming. The PR head's checks stay green, because the failing run is on the queue's temp ref (`gh-readonly-queue/main/pr-<N>-<sha>`). A re-queued entry fails the same way unless its cause is fixed, so polling alone does not recover a deterministic failure.
+A red `merge_group` run does not fail the PR: it removes it from the queue (a `RemovedFromMergeQueueEvent` on the PR timeline, with a `reason`), leaving the PR `OPEN`. Measured 2026-10-05 (#9482): after a `failed_checks` removal auto-merge stayed armed and GitHub put the PR back at the end of the queue 2 to 3.5 minutes later (two PRs: 3m20s and 2m03s), with no `AutoMerge*` event in between. The one `manual` removal measured (#9477, a push) was not re-added by GitHub; it was re-armed explicitly 19 seconds later, so that is not proof auto-merge is cleared. Read `--queue-state` before pushing or re-arming (recipe steps 2 and 3). The PR head's checks stay green, because the failing run is on the queue's temp ref (`gh-readonly-queue/main/pr-<N>-<sha>`). A re-queued entry fails the same way unless its cause is fixed, so polling alone does not recover a deterministic failure.
 
 A red **advisory** job (a `merge_group` job that is not in `scripts/required-checks.txt`, for example `lint-bot-statuses`) reddens the run but does not remove the PR. Do not push to a queued PR over it: the push removes the entry with `reason=manual` and costs a full re-queue (#9477: 15:11:45 enqueue, 15:13:46 manual removal, merged 16:07:56).
 
@@ -26,8 +26,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh" "$N" --queue-state   # <q
 **Recover (agent-run, ONE re-enqueue):**
 
 1. Read why: `gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-'"$N"'-"))'`, then `gh run view <databaseId> --log-failed` for the failing job. The limit is 100 because one queue entry runs about 8 workflows.
-2. Fix it on the PR branch. A conflict or lockfile / `kb-index` drift: `git merge origin/main` locally (merge-pr §3.1 "Route conflicts"), resolve, commit, push.
-3. Re-arm once: `gh pr merge "$N" --squash --auto`, then re-run the Phase 7 poll.
+2. Before pushing, read `--queue-state`. `queued` means GitHub already re-queued the PR: a flake needs no push, and a push removes it from the queue again (`reason=manual`, a full re-queue). Push only a fix for a failure that will recur. Fix it on the PR branch. A conflict or lockfile / `kb-index` drift: `git merge origin/main` locally (merge-pr §3.1 "Route conflicts"), resolve, commit, push.
+3. Re-arm once, only when `gh pr view "$N" --json autoMergeRequest --jq '.autoMergeRequest'` prints `null`: `gh pr merge "$N" --squash --auto`, then re-run the Phase 7 poll.
 4. A second dequeue of the same PR: stop and report it to the operator with the failing run URL. Do not loop.
 
 Never `gh pr update-branch`, push, or `--admin` a PR that is IN the queue. A push dequeues it, and `--admin` skips the `merge_group` verification the queue exists to run.

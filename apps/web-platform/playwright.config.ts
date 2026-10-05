@@ -70,6 +70,11 @@ export default defineConfig({
       // the suite start and fail one test at a time (64 reds, ~14 min). The
       // URL poll treats a 5xx as not ready and fails here, at the timeout.
       // The poll triggers the cold compile, hence 180s rather than 120s.
+      // Playwright starts the two entries one after the other, each with its
+      // own deadline, so the worst case for a broken compile is 2 x 180s (the
+      // e2e job allows 20 min). /login renders app/layout.tsx and nothing
+      // behind auth, so this covers the root-layout compile only; a failure
+      // in (dashboard)/ or the auth path still shows up per test.
       url: `http://localhost:${PUBLIC_PORT}/login`,
       timeout: 180_000,
       reuseExistingServer: !process.env.CI,
@@ -87,6 +92,7 @@ export default defineConfig({
     // Server for authenticated tests (mock Supabase for middleware auth)
     {
       command: `npm run dev`,
+      // Same readiness contract as the public server above (url, 180s).
       url: `http://localhost:${AUTH_PORT}/login`,
       timeout: 180_000,
       reuseExistingServer: !process.env.CI,

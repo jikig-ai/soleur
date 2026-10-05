@@ -1,16 +1,21 @@
 /**
  * Guard: no build-time network font fetch (merge-queue slow-failures work, Ref #9482).
  *
- * `next/font/google` fetches the font from fonts.gstatic.com inside the compile of
- * `app/layout.tsx`. When that fetch fails the first compile of the authenticated e2e
- * dev server 5xx's, and every authenticated test then fails one by one (64 reds in
- * about 14 min instead of about 3). The font is vendored under `assets/fonts/` and
- * loaded through `next/font/local`; this suite keeps it that way.
+ * `next/font/google` resolves the font loader (a network fetch, suspected as the
+ * transient cause, #8785) inside the compile of `app/layout.tsx`. When that fails the
+ * first compile of the authenticated e2e dev server 5xx's, and every authenticated
+ * test then fails one by one (64 reds in about 14 min instead of about 3). The font is
+ * vendored under `assets/fonts/` and loaded through `next/font/local`; this suite keeps
+ * it that way.
  *
  * Property: no source file under apps/web-platform imports `next/font/google` or
- * names fonts.googleapis.com / fonts.gstatic.com, and every vendored font asset exists
- * and is non-empty. It does NOT prove the asset is untampered: its hash is recorded
- * only in assets/fonts/README.md (a truncated file fails `next build` and e2e).
+ * names fonts.googleapis.com / fonts.gstatic.com, the one required vendored asset
+ * exists, starts with the WOFF2 magic and is non-empty, and `app/fonts.ts` points at
+ * it. It does NOT prove the asset is untampered: its hash is recorded only in
+ * assets/fonts/README.md (a truncated file fails `next build` and e2e).
+ *
+ * The scan reads raw text on purpose (no comment stripping): a comment that names the
+ * host is also a hit, which keeps the rule trivially explainable.
  *
  * The sweep is parameterised on an enumerator so the mutation rows below run against a
  * synthesized temp tree (a temp dir is not a repository). Production enumerates with
@@ -30,7 +35,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
 const APP_ROOT = join(__dirname, "..");
 const SELF = "test/no-network-fonts.test.ts";
@@ -45,6 +50,8 @@ const SWEPT_EXTENSIONS = new Set([
   ".cjs",
   ".css",
   ".scss",
+  ".html",
+  ".mdx",
 ]);
 // Ignored by path SEGMENT, never by substring.
 const IGNORED_SEGMENTS = new Set(["node_modules", ".next"]);
@@ -57,11 +64,17 @@ const FORBIDDEN =
 
 type Enumerator = (root: string) => string[];
 
+// An inherited GIT_DIR / GIT_INDEX_FILE (a hook environment) would point git at the
+// caller's repository instead of `root`, so strip the whole GIT_ prefix.
+const GIT_FREE_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")),
+) as NodeJS.ProcessEnv;
+
 function enumerateGit(root: string): string[] {
   return execFileSync(
     "git",
     ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-    { cwd: root, maxBuffer: 64 * 1024 * 1024 },
+    { cwd: root, maxBuffer: 64 * 1024 * 1024, env: GIT_FREE_ENV },
   )
     .toString("utf8")
     .split("\0")
@@ -84,8 +97,7 @@ function enumerateWalk(root: string): string[] {
 function isSwept(rel: string): boolean {
   if (rel === SELF) return false;
   if (rel.split(sep).some((seg) => IGNORED_SEGMENTS.has(seg))) return false;
-  const base = basename(rel);
-  return SWEPT_EXTENSIONS.has(extname(rel)) || base.startsWith("next.config.");
+  return SWEPT_EXTENSIONS.has(extname(rel));
 }
 
 interface SweepOptions {
@@ -115,6 +127,8 @@ function sweep(root: string, enumerate: Enumerator, opts: SweepOptions): number 
     const full = join(root, asset);
     if (!existsSync(full) || statSync(full).size === 0) {
       problems.push(`${asset}: vendored font missing or empty`);
+    } else if (readFileSync(full).subarray(0, 4).toString("latin1") !== "wOF2") {
+      problems.push(`${asset}: vendored font is not a WOFF2 file`);
     }
   }
   if (scanned < opts.minFiles) {
@@ -150,7 +164,6 @@ describe("no build-time network font fetch", () => {
       minFiles: MIN_FILES,
       requiredAssets: REQUIRED_ASSETS,
     });
-    console.log(`scanned ${scanned} files`);
     expect(scanned).toBeGreaterThanOrEqual(MIN_FILES);
   });
 
@@ -237,6 +250,120 @@ describe("no build-time network font fetch", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+  });
+
+  describe("axes the first rows did not edit", () => {
+    // One forbidden file per swept extension: dropping any extension from
+    // SWEPT_EXTENSIONS must turn one of these red.
+    for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts", ".cjs", ".css", ".scss", ".html", ".mdx"]) {
+      it(`a forbidden reference in a ${ext} file is found`, () => {
+        const root = tree({
+          "app/fonts.ts": LOCAL_FONT,
+          [`lib/x${ext}`]: "https://fonts.googleapis.com/css2?family=Inter\n",
+          ...ASSET,
+        });
+        try {
+          expect(() => sweep(root, enumerateWalk, FIXTURE_OPTS)).toThrow(
+            new RegExp(`lib/x\\${ext}: network font reference`),
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    }
+
+    // One row per alternative of FORBIDDEN, each ALONE.
+    for (const [name, text] of [
+      ["next/font/google", `import { Inter } from "next/font/google";`],
+      ["fonts.googleapis.com", `@import url(https://fonts.googleapis.com/css2);`],
+      ["fonts.gstatic.com", `src: url(https://fonts.gstatic.com/s/inter/v20/x.woff2);`],
+    ] as const) {
+      it(`the ${name} alternative alone is found`, () => {
+        const root = tree({ "app/fonts.ts": LOCAL_FONT, "app/y.css": `${text}\n`, ...ASSET });
+        try {
+          expect(() => sweep(root, enumerateWalk, FIXTURE_OPTS)).toThrow(
+            /app\/y\.css: network font reference/,
+          );
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+    }
+
+    // Every top-level directory the real tree sweeps must contribute: ignoring
+    // a whole directory (server/, e2e/, hooks/, ...) must not hide behind the floor's headroom.
+    it("each top-level source directory contributes scanned files in the real tree", () => {
+      const tops = new Set(
+        enumerateGit(APP_ROOT)
+          .filter(isSwept)
+          .map((rel) => rel.split(sep)[0])
+          .filter((seg) => seg.length > 0),
+      );
+      for (const dir of ["app", "components", "lib", "server", "e2e", "test", "hooks", "scripts"]) {
+        expect(tops.has(dir), `${dir}/ contributed no swept file`).toBe(true);
+      }
+    });
+
+    it("a vendored font that is not a WOFF2 file fails", () => {
+      const root = tree({
+        "app/fonts.ts": LOCAL_FONT,
+        "assets/fonts/inter-latin-wght.woff2": "not-a-font",
+      });
+      try {
+        expect(() => sweep(root, enumerateWalk, FIXTURE_OPTS)).toThrow(
+          /not a WOFF2 file/,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("an unreadable swept path throws instead of being skipped (only ENOENT is tolerated)", () => {
+      const root = tree({ "app/fonts.ts": LOCAL_FONT, ...ASSET });
+      mkdirSync(join(root, "app/dir.ts"));
+      try {
+        expect(() =>
+          sweep(root, () => ["app/fonts.ts", "app/dir.ts"], FIXTURE_OPTS),
+        ).toThrow(/EISDIR/);
+        expect(
+          sweep(root, () => ["app/fonts.ts", "app/gone.ts"], FIXTURE_OPTS),
+        ).toBe(1);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("enumerateGit lists untracked files and honours .gitignore (flags --others, --exclude-standard)", () => {
+      const root = tree({
+        ".gitignore": "gen/\n",
+        "app/fonts.ts": LOCAL_FONT,
+        "app/new-untracked.ts": `import { Inter } from "next/font/google";\n`,
+        "gen/ignored.ts": `import { Inter } from "next/font/google";\n`,
+        ...ASSET,
+      });
+      try {
+        execFileSync("git", ["init", "-q"], { cwd: root, env: GIT_FREE_ENV });
+        const listed = enumerateGit(root).sort();
+        expect(listed).toContain("app/new-untracked.ts");
+        expect(listed).not.toContain("gen/ignored.ts");
+        // The git enumerator and the plain walk agree once ignore rules are applied.
+        const walked = enumerateWalk(root).filter((r) => !r.startsWith(".git" + sep) && !r.startsWith("gen" + sep)).sort();
+        expect(listed).toEqual(walked);
+        expect(() => sweep(root, enumerateGit, FIXTURE_OPTS)).toThrow(
+          /app\/new-untracked\.ts: network font reference/,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("app/fonts.ts loads the required vendored asset", () => {
+    const src = readFileSync(join(APP_ROOT, "app/fonts.ts"), "utf8");
+    const m = /src:\s*"([^"]+\.woff2)"/.exec(src);
+    expect(m, "fonts.ts must load a .woff2 through next/font/local").not.toBeNull();
+    const target = resolve(join(APP_ROOT, "app"), m![1]);
+    expect(REQUIRED_ASSETS.map((a) => join(APP_ROOT, a))).toContain(target);
   });
 
   describe("harness rows", () => {

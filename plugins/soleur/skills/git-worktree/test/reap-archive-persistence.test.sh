@@ -556,8 +556,8 @@ run_cleanup "$CLONE_G" "$OUT_G"
 # Restore perms before assertions (and so the EXIT trap's rm -rf can clean up).
 chmod -R u+w "$CLONE_G" 2>/dev/null || true
 
-# One failure of fixture G was seen under shard contention with only the first
-# three SOLEUR_ markers in its message (cause unproven, #7376 class). $OUT_G
+# One failure of fixture G was seen under shard contention with no diagnostics
+# beyond the assertion text (cause unproven, #7376 class). $OUT_G
 # lives under $TMP and the EXIT trap deletes it, so inline everything a reader
 # needs to tell a STAGED outcome from a COMMITTED one from a hook failure,
 # flattened to one line.
@@ -565,7 +565,7 @@ g_diag() {
   local markers tailout status log
   markers="$(grep 'SOLEUR_' "$OUT_G" 2>/dev/null | tr '\n' '|')"
   tailout="$(tail -20 "$OUT_G" 2>/dev/null | tr '\n' '|')"
-  status="$(git -C "$CLONE_G" status --short 2>&1 | tr '\n' '|')"
+  status="$(git --no-optional-locks -C "$CLONE_G" status --short 2>&1 | tr '\n' '|')"
   log="$(git -C "$CLONE_G" log --oneline -5 feat-actor 2>&1 | tr '\n' '|')"
   printf 'markers=[%s] tail20=[%s] status=[%s] log=[%s]' "$markers" "$tailout" "$status" "$log"
 }
@@ -586,6 +586,14 @@ if git -C "$CLONE_G" log --oneline -3 --format=%s feat-actor | grep -q 'chore(ar
   pass "G: tracked plan still committed — failed spec move did not abort the reap"
 else
   fail "G: plan archive commit missing — the mv failure aborted the run ($(g_diag))"
+fi
+# The diagnostic only runs inside the three failure arms above, so nothing else
+# exercises it: pin that it still emits every field a reader needs.
+G_DIAG_OUT="$(g_diag)"
+if [[ "$G_DIAG_OUT" == *"markers=["*"] tail20=["*"] status=["*"] log=["*"]" ]]; then
+  pass "G: failure diagnostic carries markers, tail20, status and log"
+else
+  fail "G: failure diagnostic is missing a field: $G_DIAG_OUT"
 fi
 
 # ===========================================================================
