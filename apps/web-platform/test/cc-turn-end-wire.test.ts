@@ -67,7 +67,7 @@ function idleState(): ChatState {
     messages: [],
     activeStreams: new Map(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
     streamState: "idle",
     connection: { phase: "live" },
     liveNarration: null,

@@ -15,6 +15,8 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import {
   applyStreamEvent,
   applyTimeout,
+  foldNarrationIntoTrail,
+  sweepTransitional,
   type ChatMessage,
   type StreamEventResult,
   type WorkflowLifecycleState,
@@ -229,7 +231,7 @@ export const OPEN_MEMBERSHIP_REVOKED_TERMINAL_EVENT =
  *  subsequent unrelated dispatches. */
 export interface ChatState {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   /** Stage 4 (#2886): ambient lifecycle-bar slice. */
   workflow: WorkflowLifecycleState;
   /** Stage 4 (#2886): reverse-lookup index for `subagent_complete`. */
@@ -279,9 +281,34 @@ export interface ChatState {
    * turn-end arm + on the turn-ending `stream_event` (activeStreams emptied).
    */
   liveNarration: string | null;
+  /** #9515 — ms epoch the current narration began (elapsed renders live);
+   *  when a narration is superseded it folds into the tip bubble's
+   *  `activity[]` carrying this as `startedAt`. */
+  liveNarrationStartedAt?: number | null;
 }
 
 export type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
+
+/** #9515 — `session_ended.reason` is wire-internal vocabulary
+ *  (snake_case, unbounded `z.string()`). Never interpolate raw reasons into
+ *  user copy — every known reason gets a complete sentence; unknown/future
+ *  reasons degrade to the honest generic rather than a jargon leak. */
+const SESSION_ENDED_COPY: Record<string, string> = {
+  user_aborted: "Stopped — send a new message to continue.",
+  closed: "Session ended.",
+  completed: "Done.",
+  idle_timeout: "Session ended after being idle too long.",
+  plugin_load_failure: "Session ended — a plugin failed to load.",
+  internal_error: "Session ended — something went wrong on our side.",
+  session_revoked: "Session ended — access was revoked.",
+  cost_ceiling: "Stopped — the run reached its cost limit.",
+  runner_runaway: "Stopped — the run exceeded its limits.",
+  worktree_enter_failed: "Stopped — workspace setup failed.",
+};
+
+function sessionEndedCopy(reason: string): string {
+  return SESSION_ENDED_COPY[reason] ?? "Session ended.";
+}
 
 export type ChatAction =
   | { type: "stream_event"; msg: StreamEventMsg }
@@ -364,7 +391,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ? "idle"
             : state.streamState;
       return {
-        messages: result.messages,
+        // #9515 — when this event ended the turn (activeStreams emptied),
+        // fold the last narration into the bubble's trail.
+        messages:
+          result.activeStreams.size === 0
+            ? foldNarrationIntoTrail(
+                result.messages,
+                state.activeStreams,
+                state.liveNarration,
+                state.liveNarrationStartedAt,
+              )
+            : result.messages,
         activeStreams: result.activeStreams,
         workflow: result.workflow,
         spawnIndex: result.spawnIndex,
@@ -376,11 +413,31 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // (the last stream drained); otherwise carry it through unchanged.
         liveNarration:
           result.activeStreams.size === 0 ? null : state.liveNarration,
+        liveNarrationStartedAt:
+          result.activeStreams.size === 0
+            ? null
+            : state.liveNarrationStartedAt,
       };
     }
-    case "set_live_narration":
+    case "set_live_narration": {
       // #5370 — single-slot set; teardown happens on the turn-end arms.
-      return { ...state, liveNarration: action.message };
+      // #9515 — the SUPERSEDED narration folds into the tip bubble's
+      // `activity[]` (consecutive-dedup + cap inside `pushActivity`), so the
+      // in-turn step history persists for the rest of the turn. The slot
+      // carries only the CURRENT step.
+      const messages = foldNarrationIntoTrail(
+        state.messages,
+        state.activeStreams,
+        state.liveNarration,
+        state.liveNarrationStartedAt,
+      );
+      return {
+        ...state,
+        messages,
+        liveNarration: action.message,
+        liveNarrationStartedAt: Date.now(),
+      };
+    }
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
       return {
@@ -391,6 +448,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // turn (activeStreams emptied) → tear down the live narration line.
         liveNarration:
           result.activeStreams.size === 0 ? null : state.liveNarration,
+        liveNarrationStartedAt:
+          result.activeStreams.size === 0
+            ? null
+            : state.liveNarrationStartedAt,
         // FR5 (#2861): first timeout returns `{type:"reset"}` so the watchdog
         // restarts against the same leader; second consecutive timeout returns
         // `{type:"clear"}`. Propagate either (may be undefined for stale
@@ -405,16 +466,28 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // `state: "active"` and stale spawnIndex entries linger.
       // #3448 PR2: also resets streamState to "idle" — atomicity invariant
       // for the per-turn lifecycle slice.
+      // #9515 — transitional bubbles left mid-turn (socket remount /
+      // reconnect / session_ended / teardown) get the honest `interrupted`
+      // marker + their final step folded into the trail — NOT a fresh box
+      // on resume. The superseded narration folds into the tip bubble too.
+      const sweptMessages = foldNarrationIntoTrail(
+        sweepTransitional(state.messages),
+        state.activeStreams,
+        state.liveNarration,
+        state.liveNarrationStartedAt,
+      );
       return {
         ...state,
+        messages: sweptMessages,
         activeStreams: new Map(),
         workflow: { state: "idle" },
-        spawnIndex: new Map(),
+        spawnIndex: new Set(),
         streamState: "idle",
         pendingTimerAction: undefined,
         // #5370 — turn teardown (session_ended / socket remount / abort
         // completion) clears the transient live narration line.
         liveNarration: null,
+        liveNarrationStartedAt: null,
       };
     case "enter_stopping":
       // #3448 PR2: idempotent under double-click — only "streaming" → "stopping".
@@ -425,7 +498,20 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // #5370 — user Stop tears down the live narration line (the turn is
       // ending; the line must never persist as a finished record).
       return state.streamState === "streaming"
-        ? { ...state, streamState: "stopping", liveNarration: null }
+        ? {
+            ...state,
+            // #9515 — Stop leaves transitional bubbles honest: interrupted,
+            // trail folded, so a resuming frame can't create a second box.
+            messages: foldNarrationIntoTrail(
+              sweepTransitional(state.messages),
+              state.activeStreams,
+              state.liveNarration,
+              state.liveNarrationStartedAt,
+            ),
+            streamState: "stopping",
+            liveNarration: null,
+            liveNarrationStartedAt: null,
+          }
         : state;
     case "connection_change": {
       // #5282 — sticky guard (AC11): once `unrecoverable`, the in-flight
@@ -440,13 +526,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       // Latest-wins (AC4): the slice holds exactly one phase, so rapid
       // disconnect→reconnect→disconnect can never stack banners.
+      const messages =
+        action.phase === "live"
+          ? state.messages
+          : foldNarrationIntoTrail(
+              state.messages,
+              state.activeStreams,
+              state.liveNarration,
+              state.liveNarrationStartedAt,
+            );
       return {
         ...state,
+        messages,
         connection: { phase: action.phase, resumedAt: action.resumedAt },
         // #5370 — a non-live transition (disconnect/reconnecting/unrecoverable)
         // tears down the stale live narration line; the live-only frame does
         // not replay, so a stale line would otherwise hang on reconnect.
+        // #9515 — its text folds into the trail instead of vanishing.
         liveNarration: action.phase === "live" ? state.liveNarration : null,
+        liveNarrationStartedAt:
+          action.phase === "live" ? state.liveNarrationStartedAt : null,
       };
     }
     case "reset_connection":
@@ -531,12 +630,13 @@ export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
-    activeStreams: new Map<DomainLeaderId, number>(),
+    activeStreams: new Map<DomainLeaderId, string>(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
     streamState: "idle",
     connection: { phase: "live" },
     liveNarration: null,
+    liveNarrationStartedAt: null,
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the

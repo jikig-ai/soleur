@@ -18,7 +18,7 @@ type StreamEvent = Parameters<typeof applyStreamEvent>[2];
 
 function processEvents(events: StreamEvent[]): ChatMessage[] {
   let messages: ChatMessage[] = [];
-  let activeStreams = new Map<DomainLeaderId, number>();
+  let activeStreams = new Map<DomainLeaderId, string>();
   for (const evt of events) {
     const result = applyStreamEvent(messages, activeStreams, evt);
     messages = result.messages;
@@ -93,7 +93,7 @@ describe("client streaming state machine", () => {
 
     const states: MessageState[] = [];
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<DomainLeaderId, number>();
+    let activeStreams = new Map<DomainLeaderId, string>();
     for (const evt of events) {
       const result = applyStreamEvent(messages, activeStreams, evt);
       messages = result.messages;
@@ -194,7 +194,7 @@ describe("client streaming state machine", () => {
   test("timerAction is returned on every state-transition event", () => {
     const start = applyStreamEvent(
       [],
-      new Map<DomainLeaderId, number>(),
+      new Map<DomainLeaderId, string>(),
       { type: "stream_start", leaderId: "cmo" } as StreamEvent,
     );
     expect(start.timerAction).toEqual({ type: "reset", leaderId: "cmo" });
@@ -212,7 +212,7 @@ describe("timeout guard (#2136)", () => {
   test("timeout does not clobber a bubble in 'streaming' state", () => {
     // Seed: thinking → streaming (via a stream event); then fire timeout.
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<DomainLeaderId, number>();
+    let activeStreams = new Map<DomainLeaderId, string>();
     const s1 = applyStreamEvent(messages, activeStreams, {
       type: "stream_start",
       leaderId: "cmo",
@@ -236,7 +236,7 @@ describe("timeout guard (#2136)", () => {
 
   test("timeout does not clobber a bubble in 'done' state", () => {
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<DomainLeaderId, number>();
+    let activeStreams = new Map<DomainLeaderId, string>();
     const s1 = applyStreamEvent(messages, activeStreams, {
       type: "stream_start",
       leaderId: "cmo",
@@ -257,7 +257,7 @@ describe("timeout guard (#2136)", () => {
   test("first timeout on stuck 'thinking' bubble flags retrying; second transitions to 'error' (FR5 #2861)", () => {
     const s1 = applyStreamEvent(
       [],
-      new Map<DomainLeaderId, number>(),
+      new Map<DomainLeaderId, string>(),
       { type: "stream_start", leaderId: "cmo" } as StreamEvent,
     );
     expect(s1.messages[0].state).toBe("thinking");
@@ -279,7 +279,7 @@ describe("timeout guard (#2136)", () => {
 
   test("first timeout on stuck 'tool_use' bubble flags retrying; second transitions to 'error' (FR5 #2861)", () => {
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<DomainLeaderId, number>();
+    let activeStreams = new Map<DomainLeaderId, string>();
     const s1 = applyStreamEvent(messages, activeStreams, {
       type: "stream_start",
       leaderId: "cmo",
@@ -312,7 +312,7 @@ describe("tool_use timer reset (#2430)", () => {
   test("tool_use event returns timerAction 'reset' to restart stuck-state timer", () => {
     const s1 = applyStreamEvent(
       [],
-      new Map<DomainLeaderId, number>(),
+      new Map<DomainLeaderId, string>(),
       { type: "stream_start", leaderId: "cmo" } as StreamEvent,
     );
 
@@ -327,7 +327,7 @@ describe("tool_use timer reset (#2430)", () => {
 
   test("each successive tool_use resets the timer", () => {
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<DomainLeaderId, number>();
+    let activeStreams = new Map<DomainLeaderId, string>();
 
     const s1 = applyStreamEvent(messages, activeStreams, {
       type: "stream_start",

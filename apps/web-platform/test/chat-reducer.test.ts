@@ -7,7 +7,7 @@ function emptyState(): ChatState {
     messages: [],
     activeStreams: new Map(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
     streamState: "idle",
     connection: { phase: "live" },
     liveNarration: null,
@@ -53,9 +53,9 @@ describe("chatReducer", () => {
   test("clear_streams empties activeStreams and clears pendingTimerAction", () => {
     const state: ChatState = {
       messages: [],
-      activeStreams: new Map([["cpo", 0]]),
+      activeStreams: new Map([["cpo", "m0"]]),
       workflow: { state: "idle" },
-      spawnIndex: new Map(),
+      spawnIndex: new Set(),
       streamState: "idle",
       connection: { phase: "unrecoverable" },
       liveNarration: null,
@@ -82,11 +82,9 @@ describe("chatReducer", () => {
     // stale subagent indices linger.
     const state: ChatState = {
       messages: [],
-      activeStreams: new Map([["cpo", 0]]),
+      activeStreams: new Map([["cpo", "m0"]]),
       workflow: { state: "active", workflow: "brainstorm" },
-      spawnIndex: new Map([
-        ["s-1", { messageIdx: 0, childIdx: 0 }],
-      ]),
+      spawnIndex: new Set(["s-1"]),
       streamState: "idle",
       connection: { phase: "live" },
       liveNarration: null,
@@ -125,9 +123,9 @@ describe("chatReducer", () => {
     // the pending action to avoid resetting a timer that just fired.
     const state: ChatState = {
       messages: [],
-      activeStreams: new Map([["cpo", 0]]),
+      activeStreams: new Map([["cpo", "m0"]]),
       workflow: { state: "idle" },
-      spawnIndex: new Map(),
+      spawnIndex: new Set(),
       streamState: "idle",
       connection: { phase: "live" },
       liveNarration: null,
