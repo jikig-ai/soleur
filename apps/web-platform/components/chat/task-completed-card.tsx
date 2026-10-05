@@ -22,6 +22,12 @@ import { warnSilentFallback } from "@/lib/client-observability";
  * surface + nav badge reconcile (ADR-067). A failed mark leaves the row
  * unread — over-notify — and the failure itself is mirrored.
  *
+ * Residual: mount ≠ in-view — a card mounting below the fold while the
+ * operator is scrolled up still marks the row read (painted ≠ viewed). Same
+ * accepted-residual class as the mounted-but-backgrounded tab documented at
+ * session-registry `isConversationViewed`; viewport-anchoring via an
+ * IntersectionObserver is the upgrade path if ever required.
+ *
  * SECURITY: the title renders through `sanitizeDisplayString` (the
  * InboxItemRow invariant — bidi/control strip + 200-char cap) as a plain
  * React text node — never markdown, never dangerouslySetInnerHTML. It is
@@ -51,7 +57,7 @@ export function TaskCompletedCard({
           void globalMutate(swrKeys.inbox("active"));
         } else {
           warnSilentFallback(null, {
-            feature: "ws-client",
+            feature: "task-completed-card",
             op: "task-completed-mark-read",
             message: "task_completed read-mark POST returned non-ok",
             extra: { status: res.status },
@@ -60,7 +66,7 @@ export function TaskCompletedCard({
       })
       .catch((err) => {
         warnSilentFallback(err, {
-          feature: "ws-client",
+          feature: "task-completed-card",
           op: "task-completed-mark-read",
           message: "task_completed read-mark POST failed",
         });

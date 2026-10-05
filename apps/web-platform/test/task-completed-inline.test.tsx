@@ -11,6 +11,8 @@ import { TaskCompletedCard } from "../components/chat/task-completed-card";
 // render-anchored read-mark POST — mount-anchored, so "read" implies the card
 // actually committed to the tree.
 
+let fetchSpy: MockInstance;
+
 const mockGetSession = vi.fn().mockResolvedValue({
   data: { session: { access_token: "test-token" } },
 });
@@ -69,7 +71,7 @@ describe("chatReducer — task_completed", () => {
       msg: {
         type: "task_completed",
         conversationId: "conv-1",
-        inboxItemId: "inbox-9",
+        inboxItemId: "11111111-1111-4111-8111-111111111110",
         title: "Soleur finished your request",
       },
     });
@@ -78,14 +80,12 @@ describe("chatReducer — task_completed", () => {
     const msg = next.messages[0] as ChatTaskCompletedMessage;
     expect(msg.type).toBe("task_completed");
     expect(msg.content).toBe("Soleur finished your request");
-    expect(msg.inboxItemId).toBe("inbox-9");
+    expect(msg.inboxItemId).toBe("11111111-1111-4111-8111-111111111110");
     expect(msg.role).toBe("assistant");
   });
 });
 
 describe("TaskCompletedCard — render-anchored read-mark", () => {
-  let fetchSpy: MockInstance;
-
   beforeEach(() => {
     fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -100,7 +100,7 @@ describe("TaskCompletedCard — render-anchored read-mark", () => {
     const { getByTestId, getByText } = render(
       <TaskCompletedCard
         title="Soleur finished your request"
-        inboxItemId="inbox-1"
+        inboxItemId="11111111-1111-4111-8111-111111111111"
       />,
     );
 
@@ -109,13 +109,28 @@ describe("TaskCompletedCard — render-anchored read-mark", () => {
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/inbox/inbox-1/state",
+        "/api/inbox/11111111-1111-4111-8111-111111111111/state",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({ action: "read" }),
         }),
       );
     });
+  });
+
+  it("strips bidi/control chars and caps the title at 200 chars (InboxItemRow invariant)", () => {
+    // Discriminating input: a clean title would pass with or without
+    // sanitizeDisplayString — this one only renders correctly THROUGH it.
+    const dirty = `done‮e\u0000${"x".repeat(300)}`;
+    const { container } = render(
+      <TaskCompletedCard
+        title={dirty}
+        inboxItemId="11111111-1111-4111-8111-111111111115"
+      />,
+    );
+    const rendered = container.querySelector("p")!.textContent!;
+    expect(rendered).not.toContain("‮");
+    expect(rendered.length).toBeLessThanOrEqual(201); // 200 cap + ellipsis
   });
 });
 
@@ -128,7 +143,7 @@ describe("useWebSocket — task_completed frame", () => {
     originalWebSocket = globalThis.WebSocket;
     // @ts-expect-error — mock constructor shape
     globalThis.WebSocket = MockWebSocket;
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ messages: [] }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -175,7 +190,7 @@ describe("useWebSocket — task_completed frame", () => {
     serverSend({
       type: "task_completed",
       conversationId: "conv-live-1",
-      inboxItemId: "inbox-1",
+      inboxItemId: "11111111-1111-4111-8111-111111111111",
       title: "Soleur finished your request",
     });
 
@@ -189,7 +204,16 @@ describe("useWebSocket — task_completed frame", () => {
     const msg = result.result.current.messages.find(
       (m) => m.type === "task_completed",
     ) as ChatTaskCompletedMessage;
-    expect(msg.inboxItemId).toBe("inbox-1");
+    expect(msg.inboxItemId).toBe("11111111-1111-4111-8111-111111111111");
+
+    // The ws case itself must NOT fire the read-mark — the POST lives only in
+    // TaskCompletedCard's mount effect so "read" implies painted. A fetch
+    // added back into the ws case would regress this silently.
+    await act(async () => {});
+    const inboxCalls = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).includes("/api/inbox/"),
+    );
+    expect(inboxCalls).toHaveLength(0);
   });
 
   it("drops a frame bound to a different conversation", async () => {
@@ -198,15 +222,21 @@ describe("useWebSocket — task_completed frame", () => {
     serverSend({
       type: "task_completed",
       conversationId: "conv-other-9",
-      inboxItemId: "inbox-2",
+      inboxItemId: "11111111-1111-4111-8111-111111111112",
       title: "Soleur finished your request",
     });
 
-    // Give the (absent) dispatch a tick, then assert nothing landed.
+    // Give the (absent) dispatch a tick, then assert nothing landed — no card,
+    // and no read-mark POST for the foreign row.
     await act(async () => {});
     expect(
       result.result.current.messages.some((m) => m.type === "task_completed"),
     ).toBe(false);
+    expect(
+      fetchSpy.mock.calls.filter(([url]) =>
+        String(url).includes("/api/inbox/"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("a seq-bearing foreign-conversation frame does not advance this surface's replay cursor", async () => {
@@ -218,7 +248,7 @@ describe("useWebSocket — task_completed frame", () => {
     serverSend({
       type: "task_completed",
       conversationId: "conv-other-9",
-      inboxItemId: "inbox-3",
+      inboxItemId: "11111111-1111-4111-8111-111111111113",
       title: "x",
       seq: 99,
     });
@@ -227,7 +257,7 @@ describe("useWebSocket — task_completed frame", () => {
     serverSend({
       type: "task_completed",
       conversationId: "conv-live-1",
-      inboxItemId: "inbox-4",
+      inboxItemId: "11111111-1111-4111-8111-111111111114",
       title: "y",
       seq: 1,
     });

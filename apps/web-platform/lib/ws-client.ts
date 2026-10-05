@@ -990,13 +990,31 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         // seq-bearing frame bound to ANOTHER conversation (sendToClient is
         // user-scoped) must be dropped before the cursor advances, or its
         // foreign seq would silently swallow this surface's own later frames
-        // (and corrupt the reconnect ack). task_completed is the first frame
-        // guaranteed to arrive cross-conversation on every completion.
+        // (and corrupt the reconnect ack). Coverage is limited to convId-
+        // bearing types (task_completed required, usage_update required,
+        // session_ended optional) — convId-less buffered frames can't be
+        // foreign-detected (pre-existing gap). task_completed is the first
+        // frame guaranteed to arrive cross-conversation on every completion.
         if (
           "conversationId" in msg &&
           typeof msg.conversationId === "string" &&
           msg.conversationId !== realConversationIdRef.current
         ) {
+          // Preserve the session_ended mismatch breadcrumb — that case's
+          // designed observability (below) is unreachable for stamped frames
+          // once they drop here.
+          if (msg.type === "session_ended") {
+            Sentry.addBreadcrumb({
+              category: "abort-turn",
+              message: "session-ended-conversationid-mismatch",
+              level: "warning",
+              data: {
+                received: msg.conversationId,
+                current: realConversationIdRef.current,
+                droppedAt: "seq-gate",
+              },
+            });
+          }
           return;
         }
         if (frameSeq <= lastRenderedSeqRef.current) {
@@ -1274,6 +1292,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // current realConversationId so the observability stays — if the
           // server ever produces such a frame, the breadcrumb surfaces it
           // for triage instead of leaving a silent Stop UI deadlock.
+          // feat-session-completion-inline addendum: a STAMPED (seq-bearing)
+          // session_ended bound to another conversation now drops earlier at
+          // the replay seq gate (its foreign seq would corrupt this surface's
+          // cursor) — that narrows (b)'s "gate nothing" to unseq'd or
+          // matching frames and makes the breadcrumb unreachable for stamped
+          // mismatches. Deliberate: a foreign-conversation session_ended
+          // wiping this surface's streams was worse cross-talk than the
+          // wedge it guarded, and a diverged-binding session (issue #9567)
+          // drops every convId frame anyway.
           const targetConv = realConversationIdRef.current;
           if (
             msg.conversationId &&

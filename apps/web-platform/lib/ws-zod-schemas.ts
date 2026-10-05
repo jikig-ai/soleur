@@ -359,7 +359,7 @@ const turnSummarySchema = z.strictObject({
 const taskCompletedSchema = z.strictObject({
   type: z.literal("task_completed"),
   conversationId: z.string(),
-  inboxItemId: z.string(),
+  inboxItemId: z.uuid(),
   title: z.string().max(20000),
   seq: replaySeqSchema,
 });

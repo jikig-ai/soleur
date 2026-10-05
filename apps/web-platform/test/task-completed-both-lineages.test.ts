@@ -44,7 +44,7 @@ describe("task_completed producer covers both agent-run lineages", () => {
       /import \{[^}]*sendToClient[^}]*\} from ["']\.\/ws-handler["']/,
     );
     expect(read("agent-runner.ts")).toMatch(
-      /notifyTaskCompleted\(\{[\s\S]*?emit:\s*sendToClient/,
+      /notifyTaskCompleted\(\{[\s\S]*?emit:\s*sendToClient\b/,
     );
     // cc-dispatcher aliases it `defaultSendToClient` (its `sendToClient` param
     // is the per-call injected sink) — the pin pins the alias.
@@ -52,7 +52,7 @@ describe("task_completed producer covers both agent-run lineages", () => {
       /import \{[^}]*sendToClient as defaultSendToClient[^}]*\} from ["']\.\/ws-handler["']/,
     );
     expect(read("cc-dispatcher.ts")).toMatch(
-      /notifyTaskCompleted\(\{[\s\S]*?emit:\s*defaultSendToClient/,
+      /notifyTaskCompleted\(\{[\s\S]*?emit:\s*defaultSendToClient\b/,
     );
     // And the seam reads the viewing predicate from the leaf registry —
     // notifications.ts must NOT import the ws-handler graph (import cycle).
