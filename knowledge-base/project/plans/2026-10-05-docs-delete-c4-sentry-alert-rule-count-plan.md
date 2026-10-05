@@ -27,7 +27,7 @@ brand_survival_threshold: none
 ### New Considerations Discovered
 
 - Gate results: 4.6 pass (concrete User-Brand Impact, threshold none, scope-out bullet present); 4.7 skip (pure docs); 4.8 pass (no PAT-shaped tokens); 4.9 skip (no UI surface); 4.10 skip (no store or connection; `.tf` files are cited, not edited); 4.11 skip (no guard is delivered, the operator explicitly declined the parity row); 4.12 pass.
-- Re-measured live: 43 `sentry_alert` resources in `issue-alerts.tf`, 4 `fallthrough_type = "NoOne"`, 1 more in `cron-monitor-alerts.tf`; PR #9302 merged 2026-09-30T19:46:09Z; #9312 open.
+- Re-measured live: 43 `sentry_alert` resources in `issue-alerts.tf`, 3 `fallthrough_type = "NoOne"` rules (`git_data_boot_warning`, `byok_cap_exceeded`, `web_luks_boot_warning`; a fourth `grep -c` hit is the comment at `issue-alerts.tf:241`, and `auth_per_user_loop` is `ActiveMembers`), 1 more `sentry_alert` in `cron-monitor-alerts.tf`; PR #9302 merged 2026-09-30T19:46:09Z; #9312 open.
 - Issue #9312's body itself says the original count read "36 of the 38" and that PR #9263 would change it again; both are superseded by this deletion, and the number would have gone stale a third time without any test noticing.
 - Risk: rendering needs network through `npx` with the pinned `--before` date. A failed render never overwrites the committed artifact, and CI `c4-model-freshness` is the backstop.
 
@@ -36,11 +36,12 @@ brand_survival_threshold: none
 The C4 model's `sentry -> founder` edge (`knowledge-base/engineering/architecture/diagrams/model.c4`,
 line 815) carries a derived cardinality in prose: "40 of the 43 `sentry_alert` rules in
 issue-alerts.tf; three deliberately set fallthrough_type NoOne" followed by a hand-enumerated list of
-three rule names. It was wrong on arrival in PR #9302 (review decision-challenge DC-5, issue #9312):
-`apps/web-platform/infra/sentry/issue-alerts.tf` has 43 `sentry_alert` resources and FOUR with
-`fallthrough_type = "NoOne"` (the fourth, `auth_per_user_loop`, is unnamed in the text), so the
-sentence should have read 39 of 43. Nothing checks it: `plugins/soleur/test/c4-count-parity.test.sh`
-has no row for this count.
+three rule names (review decision-challenge DC-5 on PR #9302, issue #9312). The sentence is ACCURATE
+today (`apps/web-platform/infra/sentry/issue-alerts.tf` has 43 `sentry_alert` resources and three with
+`fallthrough_type = "NoOne"`; an earlier draft of this plan wrongly counted four because a `grep -c`
+also matched a comment). The reason to delete it is maintenance, not a wrong number: nothing checks it
+(`plugins/soleur/test/c4-count-parity.test.sh` has no row for this count), it was hand-bumped once
+already, and every new alert rule needs a hand edit.
 
 The operator already chose the resolution at the go-dispatch prompt: DELETE the number. Do not keep
 it, do not add a parity row. The edit removes the "N of the M" count and the hand-enumerated NoOne
@@ -55,7 +56,7 @@ writes.
 `model.c4:815` on this branch still carries the sentence (draft PR #9527 is OPEN, branch is clean and
 current with origin/main for `diagrams/`). Counts re-measured on the worktree:
 `grep -c '^resource "sentry_alert"'` = 43 in `issue-alerts.tf`, 1 in `cron-monitor-alerts.tf`;
-`grep -c 'fallthrough_type *= *"NoOne"' issue-alerts.tf` = 4. The premise holds. No external premises
+`grep -c 'fallthrough_type *= *"NoOne"' issue-alerts.tf` = 4, of which one is a comment (`:241`) and three are rules (`git_data_boot_warning`, `byok_cap_exceeded`, `web_luks_boot_warning`), so the count in the prose is correct. The premise "the count is already wrong" does NOT hold; the deletion rests on maintenance cost. No external premises
 are stale. The proposed mechanism (delete prose) is not in any ADR's rejected-alternatives table.
 
 **Property List.**
@@ -69,10 +70,10 @@ are stale. The proposed mechanism (delete prose) is not in any ADR's rejected-al
 **Cut List.**
 
 - Add a `c4-count-parity` row for the rule count -> operator decision: delete, not verify (a parity row
-  would also need a fourth-NoOne-aware derivation and re-pin on every alert PR; the number buys nothing
-  the file reference does not).
+  would need a derivation of both the rule total and the NoOne subset and a re-pin on every alert PR; the
+  number buys nothing the file reference does not).
 - Keep the three NoOne rule names -> property 2 is served by "see issue-alerts.tf for the authoritative
-  list"; the names are a second hand-maintained copy that already drifted (missed `auth_per_user_loop`).
+  list"; the names are a second hand-maintained copy that each rule change must edit by hand.
 - Edit ADR-031 amendments or the archived plans/specs that mention these rule names -> dated
   append-only records, deliberately untouched.
 
@@ -84,7 +85,11 @@ are stale. The proposed mechanism (delete prose) is not in any ADR's rejected-al
   (a `title` string). No other file contains "40 of the 43" or "three deliberately".
 - No assertion in `plugins/soleur/test/{c4-count-parity,c4-model-freshness,render-c4-model}.test.sh`
   references `sentry_alert`, `issue-alerts` or `NoOne` (grep returned zero hits), so nothing pins the
-  removed sentence. `c4-count-parity` rows are clause-anchored to other edges.
+  removed sentence. `c4-count-parity` rows are clause-anchored to other edges. Only
+  `c4-model-freshness` exercises this edit (it re-renders `model.c4` and byte-compares
+  `model.likec4.json`); `c4-count-parity` never reads the `sentry -> founder` edge and
+  `render-c4-model` runs on synthetic fixtures, so both are regression guards for neighbouring edges
+  and the renderer, not evidence for this change.
 - `ADR-031-sentry-as-iac.md` does not contain the count (its `43` hits are timestamps). ADR-198 line
   ~402 mentions `git_data_boot_warning` with `NoOne` as a dated historical record: do not edit.
 - `apps/web-platform/test/sentry-*-op-contract.test.ts` assert `fallthrough_type` on the `.tf` source
@@ -145,10 +150,10 @@ one `title` line (~2701) that mirrors the edge description, plus no layout/order
 bash plugins/soleur/test/c4-model-freshness.test.sh
 bash plugins/soleur/test/c4-count-parity.test.sh
 bash plugins/soleur/test/render-c4-model.test.sh
-git grep -n "40 of the 43\|three deliberately\|of the 43 .sentry_alert" -- ':!**/archive/**' ':!knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md' ':!knowledge-base/project/specs/feat-one-shot-9312-c4-alert-rule-count/**'
+git grep -n "40 of the 43\|three deliberately set\|of the 43 .sentry_alert" -- ':!**/archive/**' ':!knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md' ':!knowledge-base/project/specs/feat-one-shot-9312-c4-alert-rule-count/**'
 ```
 
-The final grep must return nothing outside archived records and this feature's own plan/tasks (they
+The final grep must return nothing outside archived records and this feature's own plan/tasks/session-state (they
 cite the old sentence as a migration record, exactly like `**/archive/**`). Also run
 `npx markdownlint-cli2` (or the repo's lint wrapper) on the changed `.md` files only if the work phase
 adds any (the diff itself touches `.c4` and `.json`, not markdown, apart from plan/tasks, which must
@@ -171,6 +176,7 @@ amendments.
 
 - `knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md` (this file)
 - `knowledge-base/project/specs/feat-one-shot-9312-c4-alert-rule-count/tasks.md`
+- `knowledge-base/project/specs/feat-one-shot-9312-c4-alert-rule-count/session-state.md` (the pipeline's plan-phase hand-off record)
 
 ## Open Code-Review Overlap
 
@@ -204,12 +210,12 @@ edge description, in which case it folds into this PR. Recorded result at plan t
 | Files to Edit: model.likec4.json | "re-render model.likec4.json via plugins/soleur/scripts/render-c4-model.sh" | asked |
 | Phase 1 substitution 2 (reword "by design there") | — | inferred — justification: the clause "by design there" refers to the enumerated rules being deleted, so leaving it makes the surviving description wrong |
 | Phase 3 test runs and residual grep | "satisfy the C4 freshness/parity tests" | asked |
-| Files to Create: this plan and tasks.md | — | inferred — justification: the soleur:plan pipeline contract requires the plan file and tasks.md as the hand-off to soleur:work |
+| Files to Create: this plan, tasks.md and session-state.md | — | inferred — justification: the soleur:plan pipeline contract requires the plan file and tasks.md as the hand-off to soleur:work |
 
 ### Split Assessment
 
 - Subsystems touched: 1 - knowledge-base (plus plan/spec artifacts in the same root)
-- Planned files: 4 | Estimated changed lines: 4
+- Planned files: 5 | Estimated changed lines: 5
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR
 
@@ -217,18 +223,19 @@ edge description, in which case it folds into this PR. Recorded result at plan t
 
 ### Pre-merge (PR)
 
-- [ ] The `sentry -> founder` description in `model.c4` contains no "N of the M" count and none of the
+- [x] The `sentry -> founder` description in `model.c4` contains no "N of the M" count and none of the
       names `byok_cap_exceeded`, `git_data_boot_warning`, `web_luks_boot_warning` inside the routing
       sentence; it still states email, `target_type issue owners`, `fallthrough_type ActiveMembers`,
       that a few rules set `NoOne`, and points at `issue-alerts.tf` as the authoritative list.
       Verify: `git diff -U0 origin/main -- knowledge-base/engineering/architecture/diagrams/model.c4`
       shows one changed line and the removed text is gone.
-- [ ] The "by design there" back-reference is reworded so it does not dangle.
-- [ ] `git diff --stat origin/main` lists exactly the two diagram files plus this plan and tasks.md
-      (no other `.c4` line changed; no `.github/` file changed).
-- [ ] `bash plugins/soleur/test/c4-model-freshness.test.sh`, `c4-count-parity.test.sh` and
-      `render-c4-model.test.sh` all pass (each prints its pass count and exits 0).
-- [ ] No test or script pins the removed sentence: the Phase 3 `git grep` returns no non-archive hit.
+- [x] The "by design there" back-reference is reworded so it does not dangle.
+- [x] `git diff --stat origin/main` lists exactly the two diagram files plus this plan, tasks.md and
+      session-state.md (no other `.c4` line changed; no `.github/` file changed).
+- [x] `bash plugins/soleur/test/c4-model-freshness.test.sh`, `c4-count-parity.test.sh` and
+      `render-c4-model.test.sh` all pass (each prints its pass count and exits 0). Only the freshness
+      suite is evidence for this edit; the other two guard neighbouring edges and the renderer.
+- [x] No test or script pins the removed sentence: the Phase 3 `git grep` returns no non-archive hit.
 - [ ] PR #9527 body contains `Closes #9312`.
 - [ ] CI green (`test`, `c4`-related shards, markdown lint). If only the e2e job (#8785 flake) is red,
       one `gh run rerun --failed`.
@@ -239,7 +246,7 @@ edge description, in which case it folds into this PR. Recorded result at plan t
 
 ## Test Scenarios
 
-- Mutation check (manual, local, not committed): re-insert `40 of the 43` into `model.c4` without
+- Mutation check (manual, local, not committed; not run in this PR, the freshness test's own byte comparison is the standing gate): re-insert `40 of the 43` into `model.c4` without
   re-rendering -> `c4-model-freshness.test.sh` must go RED (proves the artifact gate sees the edge).
 - Idempotence: run `render-c4-model.sh` twice -> second run produces no diff.
 - Negative: confirm `git grep -c "sentry_alert" plugins/soleur/test/c4-count-parity.test.sh` is 0
@@ -283,8 +290,9 @@ modeled, unchanged; (b) external system `sentry` - already modeled, unchanged; (
 stores touched - none; (d) actor-surface access relationships - the `sentry -> founder` paging
 relationship is unchanged, only its description loses a count. Derived cardinalities: this edge held
 one unverified count; it is deleted rather than added to `c4-count-parity`. The other counts on this
-and neighboring edges are already gated by `c4-count-parity.test.sh` rows C1-C9, and the green run of
-that suite in Phase 3 is the evidence nothing else moved.
+and neighboring edges are already gated by `c4-count-parity.test.sh` rows C1-C9. That suite does not
+read the `sentry -> founder` edge, so its green run says nothing about this edit; the freshness test
+and the one-line diff are the evidence.
 
 ### Sequencing
 
