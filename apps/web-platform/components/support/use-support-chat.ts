@@ -15,6 +15,7 @@ import {
   parseSupportSseChunks,
   reduceSupportFrame,
   initialSupportStream,
+  composeSupportBubbleText,
   type SupportStreamState,
 } from "@/lib/support-sse";
 
@@ -153,12 +154,22 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Stream state is hoisted to send() scope so the fallback paths below
+      // can compose `handoffMarkdown` — a deny-recorded handoff survives the
+      // canned-text overwrite (#9539: the affordance previously emitted on
+      // error-terminal turns and was then discarded before render).
+      let state: SupportStreamState = initialSupportStream();
+
       // The honest canned fallback used on any transport/persona failure so a
-      // stuck user is never dead-ended (keeps the KB escape hatch).
+      // stuck user is never dead-ended (keeps the KB escape hatch). A recorded
+      // "Ask an agent" handoff is appended — the fallback must not silently
+      // drop the one escape path the turn produced.
       const fallback = () => {
         clearIdleTimer();
         patch(supportId, {
-          text: getSupportReply(trimmed, chipKey),
+          text:
+            getSupportReply(trimmed, chipKey) +
+            (state.handoffMarkdown ? `\n\n${state.handoffMarkdown}` : ""),
           streaming: false,
           error: true,
         });
@@ -194,7 +205,7 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buf = "";
-          let state: SupportStreamState = initialSupportStream();
+          state = initialSupportStream();
 
           for (;;) {
             const { done, value } = await reader.read();
@@ -208,21 +219,28 @@ export function useSupportChat(live: boolean = false): UseSupportChat {
             }
             if (state.status === "error") {
               // Server surfaced an error frame — show honest fallback text.
+              // The handoff markdown composes into the fallback via `state`.
               fallback();
               return;
             }
-            if (state.text.length > 0) {
-              patch(supportId, { text: state.text, streaming: true });
+            if (composeSupportBubbleText(state).length > 0) {
+              patch(supportId, {
+                text: composeSupportBubbleText(state),
+                streaming: true,
+              });
             }
           }
 
           clearIdleTimer();
-          if (state.text.trim().length === 0) {
+          if (state.text.trim().length === 0 && !state.handoffMarkdown) {
             // Empty result (S3) — never leave a blank bubble; honest fallback.
             fallback();
             return;
           }
-          patch(supportId, { text: state.text, streaming: false });
+          patch(supportId, {
+            text: composeSupportBubbleText(state),
+            streaming: false,
+          });
         } catch (err) {
           if ((err as { name?: string })?.name === "AbortError") {
             // Deliberate abort (panel close / new turn) — leave state as-is.

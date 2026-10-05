@@ -28,7 +28,9 @@ export type PermissionLayer =
   | "canUseTool-deny-default"
   | "canUseTool-bash"
   | "canUseTool-soleur-go-ux"
-  | "canUseTool-support-skill";
+  | "canUseTool-support-skill"
+  | "canUseTool-support-bash"
+  | "canUseTool-support-question";
 
 export function logPermissionDecision(
   layer: PermissionLayer,

@@ -51,6 +51,7 @@ import {
 import { warnSilentFallback } from "./observability";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { isSupportAllowedSkill } from "./support-directive";
+import { denySupport } from "./support-escalation";
 import type { Persona } from "./workspace-mode";
 
 const log = createChildLogger("permission");
@@ -283,6 +284,27 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
     // Review gates: intercept AskUserQuestion
     if (toolName === "AskUserQuestion") {
+      // Support persona (#9539): the gate below emits `review_gate` over
+      // `deps.sendToClient` — the WS sink — which a support-panel user can
+      // never answer (the SSE turn dies at the route cap while the gate
+      // stalls for REVIEW_GATE_TIMEOUT_MS, then auto-allows with a
+      // synthesized selection). Schema removal (`SUPPORT_EXTRA_DISALLOWED_
+      // TOOLS`) is the primary lever; this belt covers a model emitting a
+      // removed tool. NO escalation record — a clarifying question is not an
+      // engineering attempt.
+      if (ctx.persona === "support") {
+        logPermissionDecision(
+          "canUseTool-support-question",
+          toolName,
+          "deny",
+          "no interactive surface",
+        );
+        return {
+          behavior: "deny" as const,
+          message:
+            "This chat can't render interactive questions — ask the user directly in your reply text.",
+        };
+      }
       const gateId = randomUUID();
       const gate = extractReviewGateInput(toolInput);
 
@@ -380,6 +402,20 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         };
       }
       if (isBashCommandBlocked(command)) {
+        // Support persona: a blocklisted attempt is still a write attempt —
+        // deny with the handoff message AND record the escalation so the
+        // turn ends with the "Ask an agent" affordance rather than a bare
+        // pattern-mismatch dead-end.
+        if (ctx.persona === "support") {
+          return denySupport({
+            conversationId: ctx.conversationId,
+            toolName,
+            source: "bash",
+            message:
+              "This chat is read-only app help — I can't run that command. For engineering work, use \"Ask an agent\" (the Command Center, /dashboard/chat/new).",
+            detail: "BLOCKED_BASH_PATTERNS match",
+          });
+        }
         log.info(
           {
             sec: true,
@@ -458,6 +494,27 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             extra: { leadingToken },
           });
         }
+      }
+
+      // Support persona (#9539): a non-safe Bash command on a support turn
+      // must never reach any interactive gate — every path below emits over
+      // `deps.sendToClient`, the WS sink a support-panel user cannot answer:
+      // the review-gate (stalls REVIEW_GATE_TIMEOUT_MS while the SSE turn
+      // dies at the route cap), the autonomous-disclosure hold (a consent ack
+      // granted on the WRONG surface), and — on an acked autonomous
+      // workspace — the silent auto-allow itself (the command would EXECUTE
+      // inside the read-only sandbox, still inside the WS-emit blast radius
+      // of `notifyOfflineUser` + `waiting_for_user` writes). Deny here,
+      // record the escalation, and let the route render the handoff
+      // affordance at turn end.
+      if (ctx.persona === "support") {
+        return denySupport({
+          conversationId: ctx.conversationId,
+          toolName,
+          source: "bash",
+          message:
+            "This chat is read-only app help — I can't run that command. For engineering work, use \"Ask an agent\" (the Command Center, /dashboard/chat/new).",
+        });
       }
 
       // Issue B part 2 — autonomous/trusted bypass. Placed AFTER the
@@ -913,21 +970,14 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         logPermissionDecision("canUseTool-support-skill", toolName, "allow", requested);
         return allow(toolInput);
       }
-      log.info(
-        { sec: true, tool: toolName, decision: "deny-support-skill", requested },
-        "Support persona denied a non-allowlisted skill",
-      );
-      logPermissionDecision(
-        "canUseTool-support-skill",
+      return denySupport({
+        conversationId: ctx.conversationId,
         toolName,
-        "deny",
-        requested || "(missing)",
-      );
-      return {
-        behavior: "deny" as const,
+        source: "skill",
         message:
-          "Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — use \"Ask an agent\" (the Command Center).",
-      };
+          "Support can only use app-help (knowledge-base search). For engineering work — building, fixing, or deploying — use \"Ask an agent\" (the Command Center, /dashboard/chat/new).",
+        detail: requested || "(missing)",
+      });
     }
 
     // Safe SDK tools (no filesystem-path inputs). See tool-path-checker.ts.

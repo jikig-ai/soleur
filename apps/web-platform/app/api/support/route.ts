@@ -18,20 +18,29 @@ import { resolveIdentity } from "@/lib/feature-flags/identity";
 import { getRuntimeFlag } from "@/lib/feature-flags/server";
 import { dispatchSoleurGo } from "@/server/cc-dispatcher";
 import { resolveOrCreateSupportConversation } from "@/server/support-conversation";
-import { formatSupportSseFrame } from "@/lib/support-sse";
+import {
+  formatSupportSseFrame,
+  supportTerminalPrefixFrames,
+  SUPPORT_TERMINAL_FRAME_TYPES,
+} from "@/lib/support-sse";
+import {
+  consumeSupportEscalation,
+  clearSupportEscalation,
+} from "@/server/support-escalation";
+import { truncateSupportHandoffTask } from "@/lib/support-handoff";
 import { sanitizeErrorForClient } from "@/server/error-sanitizer";
 import { reportSilentFallback } from "@/server/observability";
 import { verifiedUserId } from "@/server/request-auth";
+import { createChildLogger } from "@/server/logger";
 import type { WSMessage } from "@/lib/types";
+
+const log = createChildLogger("support-route");
 
 // Hard cap on how long the SSE response is held open waiting for the turn to
 // finish. A well-behaved turn ends with a `stream_end`/`session_ended` frame far
 // sooner; this only backstops a turn that crashes mid-stream or is reaped without
 // a terminal frame (the client also has its own 30s idle watchdog).
 const SUPPORT_TURN_MAX_MS = 120_000;
-
-// Frame types that mean "the turn is over" — the signal to close the SSE response.
-const SUPPORT_TERMINAL_FRAME_TYPES = new Set(["stream_end", "session_ended", "error"]);
 
 export async function POST(request: Request): Promise<Response> {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -96,6 +105,17 @@ export async function POST(request: Request): Promise<Response> {
     async start(controller) {
       let closed = false;
 
+      // #9539 — drop any escalation flag left by a PRIOR turn on this reused
+      // support conversation (`resolveOrCreateSupportConversation` is sticky
+      // and the stream has no `cancel` handler, so a zombie dispatch can
+      // record a deny after its own teardown). Clearing at stream OPEN, not
+      // only at teardown, makes the record→consume window strictly
+      // turn-scoped — without it the next innocent turn's terminal frame
+      // would consume the stale flag and render a handoff for a deny that
+      // never happened.
+      clearSupportEscalation(conversationId);
+      const handoffTask = truncateSupportHandoffTask(message);
+
       // CRITICAL: `dispatchSoleurGo` resolves as soon as the turn's SDK query is
       // *started* — the runner consumes it on a fire-and-forget background task
       // (`void consumeStream` in soleur-go-runner.ts), so `onText`/`stream` frames
@@ -118,10 +138,32 @@ export async function POST(request: Request): Promise<Response> {
 
       const enqueue = (msg: WSMessage): boolean => {
         if (closed) return false;
+        // #9539 — at the terminal boundary, if a deny path recorded an
+        // escalation this turn, emit the `support_handoff` frame BEFORE the
+        // terminal frame (the stream closes on terminal, so ordering is
+        // load-bearing; a `stream` frame's replace-text semantics is the
+        // other reason the emit is terminal-adjacent). Consume-on-read makes
+        // this fire exactly once per recorded deny, never unconditionally.
+        const handoff = SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)
+          ? consumeSupportEscalation(conversationId)
+          : null;
         try {
-          controller.enqueue(encoder.encode(formatSupportSseFrame(msg)));
+          for (const frame of supportTerminalPrefixFrames(
+            msg,
+            handoff === null
+              ? null
+              : { type: "support_handoff", task: handoffTask, conversationId },
+          )) {
+            controller.enqueue(encoder.encode(formatSupportSseFrame(frame)));
+          }
         } catch {
           return false;
+        }
+        if (handoff !== null) {
+          log.info(
+            { sec: true, conversationId, source: handoff },
+            "support-handoff-emitted",
+          );
         }
         if (SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)) finishTurn();
         return true;
@@ -150,6 +192,14 @@ export async function POST(request: Request): Promise<Response> {
       await turnComplete;
       clearTimeout(capTimer);
       closed = true;
+      // Teardown flag hygiene: a deny recorded by a turn that died without a
+      // terminal frame (cap timer, client abort, crash) must not bleed into
+      // the next send on this reused conversation. The
+      // `support-handoff-cleared-unconsumed` marker distinguishes "flag
+      // orphaned" from "never recorded" in the deny→emit observability join.
+      if (clearSupportEscalation(conversationId)) {
+        log.info({ sec: true, conversationId }, "support-handoff-cleared-unconsumed");
+      }
       try {
         controller.close();
       } catch {

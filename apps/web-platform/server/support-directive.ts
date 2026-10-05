@@ -19,6 +19,8 @@
 // The directive lives ONLY in the trusted system-prompt channel (server append),
 // never in `context.content`. It MUST NOT contain any gate-bypass phrasing.
 
+import { SUPPORT_AGENT_SESSION_HREF } from "@/lib/support-handoff";
+
 /**
  * The single support-allowed skill set. `help` is deliberately EXCLUDED — it
  * enumerates the full engineering command surface, which is not support-
@@ -52,6 +54,15 @@ export const SUPPORT_SKILLS_OPTION: readonly string[] = Array.from(
  * and NOT the additive-hint-only violation ADR-070 forbids — because Edit/Write/
  * Task/Agent are tools a support user NEVER legitimately needs, so their removal
  * breaks no valid flow.
+ *
+ * #9539 addendum — `AskUserQuestion`/`TodoWrite`/`ExitPlanMode` are removed for
+ * the same never-legitimately-needed reason: each emits a `review_gate` /
+ * `interactive_prompt` frame over `defaultSendToClient` (the WS sink) and
+ * registers a `pendingPrompts` entry a support-panel user can never answer —
+ * the support SSE transport has no prompt surface, so a turn that emits one
+ * stalls until the route cap kills the stream. The `canUseTool`
+ * `AskUserQuestion` persona-deny is defense-in-depth for a model that emits a
+ * schema-removed tool.
  */
 export const SUPPORT_EXTRA_DISALLOWED_TOOLS: readonly string[] = [
   "Edit",
@@ -60,6 +71,9 @@ export const SUPPORT_EXTRA_DISALLOWED_TOOLS: readonly string[] = [
   "NotebookEdit",
   "Task",
   "Agent",
+  "AskUserQuestion",
+  "TodoWrite",
+  "ExitPlanMode",
 ];
 
 /**
@@ -88,6 +102,6 @@ You are **Soleur Support** — an in-app help assistant for an end user of the S
 
 **Answer from the knowledge base.** Use the \`kb-search\` skill to find the relevant product-help article, then answer in plain language and link the user to the right place in the app. If \`kb-search\` returns nothing relevant, say so honestly and point the user to their **Knowledge Base** in the left sidebar — never invent an answer.
 
-**Stay in scope.** You are app-help support only. You **never edit code, never run engineering workflows** (plan / work / ship / deploy / one-shot / review / drain), and **never touch a repository**. The only skill available to you is \`kb-search\`. If the user asks you to build, fix, deploy, or change something in their project, explain that this chat is for app help and point them to **"Ask an agent"** (the Command Center) for engineering work.
+**Stay in scope.** You are app-help support only. You **never edit code, never run engineering workflows** (plan / work / ship / deploy / one-shot / review / drain), and **never touch a repository**. The only skill available to you is \`kb-search\`. If the user asks you to build, fix, deploy, or change something in their project, answer in ONE sentence that this chat is app help and include the link [Ask an agent](${SUPPORT_AGENT_SESSION_HREF}) — a write-capable agent session can take the task.
 
 **Be honest.** You are an AI assistant and may be wrong. Do not claim to have taken an action you cannot take. Keep answers short and specific to the user's question.`;
