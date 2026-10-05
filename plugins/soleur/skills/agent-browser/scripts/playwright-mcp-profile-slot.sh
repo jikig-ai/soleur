@@ -204,9 +204,17 @@ _pwslot_claim() {
 }
 
 # _pwslot_flock_usable -> 0 when `flock -E 75 -w 0 <fd>` works here (util-linux flock; stock macOS has none, busybox lacks -E)
+# The probe locks /dev/null, ONE inode every concurrent launch on the host shares, so a probe that loses that race answers
+# rc 75: the value -E was given, which only a flock that understands -E can return. 75 therefore proves the capability exactly
+# as 0 does; reading it as "unusable" sent simultaneous launches down the no-lease branch and onto one shared slot 0.
+# A flock without -E exits with a usage error (not 75), so it still reads as unusable.
 _pwslot_flock_usable() {
   command -v flock > /dev/null 2>&1 || return 1
   flock -E 75 -w 0 8 8< /dev/null > /dev/null 2>&1
+  case $? in
+    0 | 75) return 0 ;;
+  esac
+  return 1
 }
 
 if _pwslot_flock_usable; then

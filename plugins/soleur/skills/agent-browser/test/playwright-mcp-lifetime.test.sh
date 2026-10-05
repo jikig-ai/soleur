@@ -849,13 +849,21 @@ launch() {
   ( cd "$root" && exec env "$@" SHIM_OUT="$G2/$tag.jsonl" HOME="$home" PATH="${LAUNCH_PATH:-$G2/bin:$PATH}" bash -c "$cmd" ) < "$fifo" > /dev/null 2> "$G2/$tag.err" &
   printf '%s' "$!" > "$G2/$tag.pid"; own "$!"; disown "$!"
 }
-wait_ready() {  # <tag> — the shim ran (its argv is recorded) or the launch died first
+# wait_ready <tag> — 0 when the shim ran (its argv is recorded), 1 when the launch died first. A launch that is STILL RUNNING
+# after 30 s without reaching the shim is UNRESOLVED (a loaded host, not a verdict on any guard): the suite stops with that
+# message instead of letting the row read as "mutant survived".
+wait_ready() {
   local tag="$1" i=0
-  while [[ ! -s "$G2/$tag.jsonl" && $i -lt 150 ]]; do
+  while [[ ! -s "$G2/$tag.jsonl" && $i -lt 300 ]]; do
     if ! alive "$(cat "$G2/$tag.pid")"; then break; fi
     sleep 0.1; i=$((i + 1))
   done
-  [[ -s "$G2/$tag.jsonl" ]]
+  if [[ -s "$G2/$tag.jsonl" ]]; then return 0; fi
+  if alive "$(cat "$G2/$tag.pid")"; then
+    printf 'UNRESOLVED: launch %s was still running after 30 s without reaching the server shim; the host is too loaded to judge this row, rerun when it is idle\n' "$tag" >&2
+    exit 2
+  fi
+  return 1
 }
 end_launch() {  # <tag> — close the launch's stdin (kill its sleeper), wait for it to exit
   local tag="$1" s
@@ -1089,6 +1097,49 @@ LAUNCH_PATH="$NOPS" run_n nopsd "$REPO_ROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
 nopsd_cleared() { prof_is "$(prof0 "$H")" && no_link "$(prof0 "$H")"; }
 assert_true 'Guard 2 must-PASS: with ps absent a dead owner'"'"'s lock is still cleared (/proc and kill -0 answer without ps)' nopsd_cleared
 
+# --- launches released at the SAME instant (a barrier): the flock capability probe must not make them contend ---
+# The rows above start their launches one after another, which is why a probe that locked one shared inode (/dev/null) and
+# read a lost race as "no usable flock" stayed green: concurrent launches then took the no-lease branch and shared slot 0.
+# bar_launch <tag> <home> <go-microsecond-epoch> <script> [VAR=val...]: sources <script>, records $prof, holds fd 9 (exec sleep) like the proxy
+BAR_PIDS="$WORK/bar-pids"; : > "$BAR_PIDS"
+bar_launch() {
+  local tag="$1" home="$2" go="$3" script="$4"; shift 4
+  rm -f "$G2/$tag.prof" "$G2/$tag.err"
+  mkdir -p "$home"
+  ( cd "$REPO_ROOT" && exec env "$@" HOME="$home" PW_PROFILE_SLOT0_WAIT_S=0.3 bash -c 'r=$(( ($1 - ${EPOCHREALTIME/./}) / 1000 - 150 )); if [ "$r" -gt 0 ]; then printf -v s "%d.%03d" $((r / 1000)) $((r % 1000)); sleep "$s"; fi; while [ "${EPOCHREALTIME/./}" -lt "$1" ]; do :; done; . "$2" || exit 1; printf "%s\n" "$prof" > "$3"; exec sleep 12' _ "$go" "$script" "$G2/$tag.prof" ) > /dev/null 2> "$G2/$tag.err" &
+  printf '%s\n' "$!" >> "$BAR_PIDS"; own "$!"; disown "$!"
+}
+# barrier_run <pfx> <home> <n> <script> [VAR=val...]: n launches released together; sets BAR_RAN (profiles recorded), BAR_DISTINCT, BAR_NOTES ("no usable flock" notes)
+# A launch that never records a profile is UNRESOLVED (a loaded host), never a verdict: the suite stops with that message.
+BAR_RAN=0; BAR_DISTINCT=0; BAR_NOTES=0
+barrier_run() {
+  local pfx="$1" home="$2" n="$3" script="$4" i t=0 go; shift 4
+  : > "$BAR_PIDS"; BAR_RAN=0; BAR_DISTINCT=0; BAR_NOTES=0
+  go=$(( ${EPOCHREALTIME/./} + 2500000 ))
+  for ((i = 1; i <= n; i++)); do bar_launch "$pfx-$i" "$home" "$go" "$script" "$@"; done
+  while [[ $t -lt 600 ]]; do
+    BAR_RAN=0; for ((i = 1; i <= n; i++)); do if [[ -s "$G2/$pfx-$i.prof" ]]; then BAR_RAN=$((BAR_RAN + 1)); fi; done
+    if [[ $BAR_RAN -eq $n ]]; then break; fi
+    sleep 0.1; t=$((t + 1))
+  done
+  if [[ $BAR_RAN -ne $n ]]; then printf 'UNRESOLVED: only %d of %d barrier launches (%s) recorded a profile within 60 s; the host is too loaded to judge this row, rerun when it is idle\n' "$BAR_RAN" "$n" "$pfx" >&2; exit 2; fi
+  BAR_DISTINCT="$(cat "$G2/$pfx"-*.prof | sort -u | grep -c . || true)"
+  BAR_NOTES="$(cat "$G2/$pfx"-*.err | grep -c 'no usable flock' || true)"
+  reap_list "$BAR_PIDS"
+}
+BAR_N=12
+barrier_run bar "$G2/h-bar" "$BAR_N" "$REPO_ROOT/$SLOT_REL"
+assert_true "Guard 2: $BAR_N launches released at the same instant under one HOME resolve $BAR_N DISTINCT profiles (no two share a slot)" test "$BAR_RAN:$BAR_DISTINCT" = "$BAR_N:$BAR_N"
+assert_true 'Guard 2: those simultaneous launches printed ZERO "no usable flock" notes (flock is present, so a lost probe race must not take the no-lease branch)' test "$BAR_NOTES" -eq 0
+# the probe's own contention, made deterministic: a flock whose capability probe (-E 75 -w 0 8) answers 75, as util-linux does when another launch holds /dev/null
+PROBEBUSY="$G2/probe-busy-bin"; mkdir -p "$PROBEBUSY"
+printf '#!/usr/bin/env bash\nif [[ "$*" == "-E 75 -w 0 8" ]]; then exit 75; fi\nexec %q "$@"\n' "$(command -v flock)" > "$PROBEBUSY/flock"; chmod +x "$PROBEBUSY/flock"
+probe_busy_state() { [[ "$(PATH="$PROBEBUSY:$PATH" flock -E 75 -w 0 8 8< /dev/null; echo $?)" == 75 && "$(PATH="$PROBEBUSY:$PATH" flock -n -E 75 "$G2/hc-unlocked-probe" true; echo $?)" == 0 ]]; }
+: > "$G2/hc-unlocked-probe"
+assert_true 'Guard 2 harness: the probe-busy flock answers 75 to the capability probe only and runs every other flock call for real' probe_busy_state
+barrier_run pb "$G2/h-pb" 2 "$REPO_ROOT/$SLOT_REL" "PATH=$PROBEBUSY:$PATH"
+assert_true 'Guard 2: a capability probe that answers 75 (a concurrent probe held the lock) still means flock works: two launches get two leased profiles and no "no usable flock" note' test "$BAR_RAN:$BAR_DISTINCT:$BAR_NOTES" = "2:2:0"
+
 # --- all 32 slots busy: the launch falls back to a unique directory, never blocking, never killing ---
 H="$G2/h-full"; mkdir -p "$H/.cache"
 cat > "$HELP/holdn.py" <<'PY'
@@ -1208,8 +1259,9 @@ if [[ -n "$MROOT" ]]; then
   m9_srv_dead() { if [[ "$RN_RAN" -eq 1 ]] && wait_dead "$D_SRV" 3; then return 0; fi; return 1; }
   red 'Guard 2 mutant 9: a pkill of bin/playwright-mcp servers → the sibling-server decoy dies' m9_srv_dead
 fi
-# 10 — kills whatever holds a file open inside the claimed profile (a /proc fd scan: no pkill, no pgrep, no process name)
-slot_mutant 10-kill-fd-holders "$A_END" 'for _pwslot_h in /proc/[0-9]*; do for _pwslot_f in "$_pwslot_h"/fd/*; do case "$(readlink "$_pwslot_f" 2>/dev/null)" in "$prof"/*) if [ "${_pwslot_h#/proc/}" != "$$" ]; then kill -9 "${_pwslot_h#/proc/}"; fi ;; esac; done; done; '"$A_END"
+# 10 — kills whatever holds a file open inside the claimed profile (one bounded /proc fd selector: no pkill, no pgrep, no process name;
+#      a per-process readlink walk costs ~18 s at ~600 host processes and outlasts the launch window, so the selector must not scale with the host)
+slot_mutant 10-kill-fd-holders "$A_END" 'for _pwslot_h in $(find /proc/[0-9]*/fd -maxdepth 1 -lname "$prof/*" 2>/dev/null | cut -d/ -f3); do if [ "$_pwslot_h" != "$$" ]; then kill -9 "$_pwslot_h"; fi; done; '"$A_END"
 if [[ -n "$MROOT" ]]; then
   H="$G2/h-m10"; spawn_decoys "$H"
   run_n g2m10 "$MROOT" "$H" "$MCP_ARGS" 1 overlap "$FAST"
@@ -1311,6 +1363,16 @@ if [[ -n "$MROOT" ]]; then
   m21_pair_broken() { ! wait_pairs_grace "$MROOT/$SLOT_REL" "$REPO_ROOT/$PROXY_REL_PATH"; }
   red 'Guard 2 mutant 21: the same lowered default no longer covers the proxy teardown → the pairing row fails' m21_pair_broken
 fi
+# 22 — the capability probe read strictly (rc 0 only): a probe that loses the shared /dev/null lock (rc 75) means "no usable flock"
+slot_mutant 22-probe-strict $'    0 | 75) return 0 ;;' $'    0) return 0 ;;'
+if [[ -n "$MROOT" ]]; then
+  barrier_run g2m22 "$G2/h-m22" "$BAR_N" "$MROOT/$SLOT_REL"
+  m22_real_race() { [[ "$BAR_NOTES" -ge 1 || "$BAR_DISTINCT" -lt "$BAR_N" ]]; }
+  red "Guard 2 mutant 22: the strict rc-0 probe → among $BAR_N simultaneous launches some print the false \"no usable flock\" note or share a profile" m22_real_race
+  barrier_run g2m22b "$G2/h-m22b" 2 "$MROOT/$SLOT_REL" "PATH=$PROBEBUSY:$PATH"
+  m22_probe_busy() { [[ "$BAR_NOTES" -ge 1 ]]; }
+  red 'Guard 2 mutant 22: the strict rc-0 probe, a probe answering 75 → "no usable flock" is printed and the launch takes the no-lease branch (the deterministic form)' m22_probe_busy
+fi
 
 # ===========================================================================
 # Guard 3 — the registrations
@@ -1354,13 +1416,13 @@ if [[ $((pass + fail)) -ne $cases ]]; then
   printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d) — a row did not report\n' "$((pass + fail))" "$cases" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=49   # Guard 1: 21 static + 3 dynamic mutants; Guard 2: mutants 1-5 and 7-21 (6 is a harness row); Guard 3: mutants 1-5
-EXPECTED_RED_ROWS=53   # the 49 mutants, one extra row for Guard 2 mutant 21, plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
+EXPECTED_MUTANTS=50   # Guard 1: 21 static + 3 dynamic mutants; Guard 2: mutants 1-5 and 7-22 (6 is a harness row); Guard 3: mutants 1-5
+EXPECTED_RED_ROWS=55   # the 50 mutants, one extra row each for Guard 2 mutants 21 and 22, plus the three harness rows (Guard 1, Guard 2 #6, Hygiene)
 if [[ $mutants_declared -ne $EXPECTED_MUTANTS || $red_rows -ne $EXPECTED_RED_ROWS ]]; then
   printf '[FATAL] mutation matrix: %d mutants / %d mutation rows ran, expected %d / %d — a row vanished\n' "$mutants_declared" "$red_rows" "$EXPECTED_MUTANTS" "$EXPECTED_RED_ROWS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=168
+MIN_ASSERTIONS=175
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
   printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1
