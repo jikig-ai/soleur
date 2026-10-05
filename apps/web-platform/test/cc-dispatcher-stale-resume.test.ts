@@ -38,6 +38,9 @@ vi.mock("@/server/conversation-writer", async () => {
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+  infoSilentFallback: vi.fn(),
+  hashUserId: (u: string) => `hash-${u}`,
+  mirrorP0Deduped: vi.fn(),
   // #3369: mirrorWithDebounce extracted to observability.
   // These dispatcher tests do not exercise the debounce TTL, so
   // the stub forwards every call straight through to the spy.
@@ -107,6 +110,8 @@ import {
   dispatchSoleurGo,
   __setCcRunnerForTests,
   __resetDispatcherForTests,
+  __registerCcWorktreeLeaseForTests,
+  handleCcCloseQuery,
 } from "@/server/cc-dispatcher";
 import {
   CONTEXT_RESET_NOTICE_GENERIC,
@@ -438,5 +443,110 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     };
     expect(frame.errorCode).toBe("key_invalid");
     expect(frame.message).not.toContain("try again shortly");
+  });
+  it("defers the retry until the session_id clear resolves (write-ordering pin)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const args = baseDispatchArgs(sendToClient, { sessionId: "sess-dead" });
+
+    // Hold the clear's UPDATE — a retry that fires before it commits lets
+    // the retried turn's persist lose the ordering race to the pending
+    // `session_id = null` write.
+    let resolveClear!: (v: { ok: boolean }) => void;
+    const clearGate = new Promise<{ ok: boolean }>((r) => {
+      resolveClear = r;
+    });
+    mockUpdateConversationFor.mockImplementation(
+      (_u: string, _c: string, patch: Record<string, unknown>) => {
+        if ("session_id" in patch) return clearGate as never;
+        return Promise.resolve({ ok: true }) as never;
+      },
+    );
+
+    const stubRunner = makeStubRunner(async (dispatchArgs) => {
+      dispatchArgs.events.onStaleResume?.({
+        deadSessionId: "sess-dead",
+        lastBlockKind: "text",
+      });
+      return { queryReused: false };
+    });
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo(args);
+    await flushMicrotasks(20);
+
+    // Clear in flight — retry must not have dispatched.
+    expect(stubRunner.dispatch).toHaveBeenCalledTimes(1);
+    resolveClear({ ok: true });
+    await flushMicrotasks(20);
+    expect(stubRunner.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("still retries when the session_id clear rejects (persist heals the column)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const args = baseDispatchArgs(sendToClient, { sessionId: "sess-dead" });
+
+    mockUpdateConversationFor.mockImplementation(
+      (_u: string, _c: string, patch: Record<string, unknown>) => {
+        if ("session_id" in patch) {
+          return Promise.reject(new Error("clear blew up")) as never;
+        }
+        return Promise.resolve({ ok: true }) as never;
+      },
+    );
+
+    const stubRunner = makeStubRunner(async (dispatchArgs) => {
+      dispatchArgs.events.onStaleResume?.({
+        deadSessionId: "sess-dead",
+        lastBlockKind: "text",
+      });
+      return { queryReused: false };
+    });
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo(args);
+    await flushMicrotasks(20);
+
+    // `.then(retry, retry)` runs the retry on the rejected arm too — a
+    // failed clear must not strand the user message (the retry's own
+    // persist heals the column on its first result).
+    expect(stubRunner.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("handleCcCloseQuery detaches (not releases) the worktree lease on stale-resume (tombstone fix)", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const detach = vi.fn();
+    __registerCcWorktreeLeaseForTests("u-stale", "conv-stale", {
+      leaseGeneration: 1,
+      release,
+      detach,
+    });
+
+    handleCcCloseQuery({
+      conversationId: "conv-stale",
+      userId: "u-stale",
+      reason: "stale-resume",
+    });
+    await flushMicrotasks(20);
+
+    // Migration-116 tombstone window: the retry's same-host keep-gen
+    // acquire would land AFTER a deferred release — detach keeps the row
+    // live through the re-acquire while stopping the dead handle's
+    // heartbeat (a zombie beat resurrects the tombstone forever).
+    expect(release).not.toHaveBeenCalled();
+    expect(detach).toHaveBeenCalledTimes(1);
+  });
+
+  it("control: a non-stale close still releases the worktree lease", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    __registerCcWorktreeLeaseForTests("u-ctl", "conv-ctl", {
+      leaseGeneration: 1,
+      release,
+      detach: vi.fn(),
+    });
+
+    handleCcCloseQuery({ conversationId: "conv-ctl", userId: "u-ctl" });
+    await flushMicrotasks(20);
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });

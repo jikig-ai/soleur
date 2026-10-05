@@ -404,11 +404,19 @@ export const WORKTREE_LEASE_HEARTBEAT_MS = 50_000;
 export const MAX_CONSECUTIVE_TOUCH_MISSES = 2;
 
 /** A held lease's lifetime handle: the fencing generation to present on the
- *  git-data push, and an idempotent release that stops the heartbeat + frees
- *  the row. */
+ *  git-data push, an idempotent release that stops the heartbeat + frees the
+ *  row, and a detach that stops the heartbeat WITHOUT freeing the row. */
 export interface WorktreeLeaseHandle {
   leaseGeneration: number;
   release(): Promise<void>;
+  /** Stop heartbeating + unregister from the SIGTERM drain, WITHOUT
+   *  tombstoning the row. Used by the cc stale-resume close (#9538): the
+   *  recovery retry's same-host keep-gen acquire needs the row alive, but
+   *  the dead handle must not keep beating — `touch_worktree_lease` has
+   *  no liveness predicate, so a zombie beat would resurrect the
+   *  tombstone every ~50s forever (and keep the row permanently pinned
+   *  to this host, blocking cross-host reclaim). */
+  detach(): void;
 }
 
 /**
@@ -481,6 +489,12 @@ export async function acquireAndHoldWorktreeLease(
       clearInterval(heartbeat);
       unregisterHeldLease(heldToken);
       await releaseWorktreeLease(workspaceId, worktreeId, hostId, leaseGeneration);
+    },
+    detach: (): void => {
+      if (settled) return;
+      settled = true;
+      clearInterval(heartbeat);
+      unregisterHeldLease(heldToken);
     },
   };
 }

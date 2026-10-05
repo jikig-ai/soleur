@@ -177,6 +177,32 @@ describe("consumeStream — stale-resume discriminator (#9538)", () => {
     );
   });
 
+  it("closes the dying query with reason \"stale-resume\" so the close-hook keeps the lease held", async () => {
+    // Migration-116: a same-host re-acquire keeps `lease_generation`, so a
+    // deferred release from the dying close would tombstone the fresh
+    // retry's lease row. The "stale-resume" reason is what lets
+    // `handleCcCloseQuery` replicate but skip `handle.release()`.
+    const mock = createMockQuery();
+    const reasons: (string | undefined)[] = [];
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      onCloseQuery: (a) => {
+        reasons.push(a.reason);
+      },
+      now: () => Date.now(),
+      wallClockTriggerMs: 30_000,
+    });
+    const events = makeEvents();
+    events.onStaleResume = vi.fn();
+
+    await runner.dispatch(dispatchArgs(events, "dead-id"));
+
+    mock.emitError(new Error(STALE_MSG));
+    await flushMicrotasks(20);
+
+    expect(reasons).toEqual(["stale-resume"]);
+  });
+
   it("a throwing onStaleResume listener falls back to internal_error (terminal honesty)", async () => {
     const mock = createMockQuery();
     const runner = makeRunner(mock);

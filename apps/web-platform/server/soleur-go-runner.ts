@@ -2599,9 +2599,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // resume })` fine and dies HERE, inside the iterator — past the
       // dispatch-time catch that already clears the column (R7). The
       // `state.sessionId` gate is load-bearing: the signature only means
-      // "dead resume" when a resume was actually attempted (a warm
-      // `queryReused` turn never re-resumes, so no `queryReused` check is
-      // needed). This arm must NOT emit `internal_error` — the terminal
+      // "dead resume" when a session is actually attached. This arm must
+      // NOT emit `internal_error` — the terminal
       // `session_ended` disables client input while the stale
       // `conversations.session_id` survives, so every retry reproduces
       // the same failure forever at zero tokens. It must NOT
@@ -3440,7 +3439,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
   function closeConversation(
     conversationId: string,
-    reason?: "disconnected",
+    reason?: CloseQueryReason,
   ): void {
     const state = activeQueries.get(conversationId);
     if (!state) return;
