@@ -9,8 +9,8 @@
 # A gate that has never been seen red is not a gate.
 #
 # Renders with the pinned likec4@1.50.0, same as c4-model-freshness.test.sh: the
-# `test-scripts` CI shard installs it globally and `npx -y` fetches it locally on
-# first run. When the CLI is genuinely unreachable the producer degrades cleanly
+# `test-scripts` CI shard installs it globally (which only warms npx's download cache) and
+# `npx -y` fetches it locally on first run. When the CLI is genuinely unreachable the producer degrades cleanly
 # (status=degraded reason=likec4-unavailable), which this suite treats as a SKIP
 # rather than a failure — an offline runner must not red the build, but it must
 # also not silently report coverage it did not obtain.

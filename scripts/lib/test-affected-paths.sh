@@ -1562,3 +1562,20 @@ AFFECTED_TESTS_SCRIPTS_SCRATCH_RESIDUE_PATHS=(
   "tests/scripts/test-scratch-residue.sh"
   "tests/scripts/test-weakness-miner.sh"
 )
+
+# plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime — the browser-lifetime guard contract.
+# Its verdict is a property of the hook registry (every command of every event, plus the scripts they invoke),
+# both MCP registrations, the slot script the project launch string sources, the proxy that string runs and the
+# config it names. Argv literals reach only the slot script and the proxy; the registry and registrations are
+# read from parsed JSON at test time, so no derivation sees them.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_AGENT_BROWSER_TEST_PLAYWRIGHT_MCP_LIFETIME_TEST_SH_PATHS=(
+  ".claude/playwright-mcp.config.json"
+  ".mcp.json"
+  "plugins/soleur/.mcp.json"
+  "plugins/soleur/hooks/"
+  "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-profile-slot.sh"
+  "plugins/soleur/skills/agent-browser/scripts/playwright-mcp-redact-proxy.py"
+  "plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py"
+  "plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)

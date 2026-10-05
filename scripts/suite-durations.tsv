@@ -92,6 +92,7 @@ plugins/soleur/scripts/precommit-guard.test.sh	689	measured
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	25667	measured
 plugins/soleur/scripts/sync-pr-behind.test.sh	1589	measured
 plugins/soleur/scripts/taste-profile-update.test.sh	484	measured
+plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh	979	floor
 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	155155	measured
 plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh	2658	measured
 plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	174	measured

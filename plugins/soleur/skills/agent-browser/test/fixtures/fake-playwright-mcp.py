@@ -13,7 +13,9 @@ FAKE_PW_UNPROMPTED, FAKE_PW_OVERSIZE, FAKE_PW_NOTIFY (a notifications/message
 carrying a tree before the result), FAKE_PW_CANCEL (relayed-set notifications whose
 reason, _meta and requestId carry tree text), FAKE_PW_SERVER_REQUEST (a sampling/createMessage
 request carrying a tree), FAKE_PW_GRANDCHILD (the direct child exits on EOF while a
-SIGTERM-ignoring grandchild holds the group). `browser_snapshot` with a `filename`
+SIGTERM-ignoring grandchild holds the group), FAKE_PW_ENV_ECHO (one stderr line naming the value of
+PLAYWRIGHT_MCP_PING_TIMEOUT_MS the server was started with, `<unset>` when it is absent: the observable for
+"the proxy does not strip that variable"). `browser_snapshot` with a `filename`
 argument WRITES the raw fixture tree to that path (as the real server does).
 """
 import base64, json, os, signal, subprocess, sys, time  # noqa: E401
@@ -29,6 +31,9 @@ TOOL_FILE = {"browser_navigate": "navigate", "browser_snapshot": "snapshot", "br
 out = sys.stdout.buffer
 if E.get("FAKE_PW_ARGV_OUT"):
     open(E["FAKE_PW_ARGV_OUT"], "w").write("\n".join(sys.argv[1:]) + "\n")
+if E.get("FAKE_PW_ENV_ECHO"):
+    sys.stderr.write("fake-playwright-mcp: env PLAYWRIGHT_MCP_PING_TIMEOUT_MS=%s\n" % E.get("PLAYWRIGHT_MCP_PING_TIMEOUT_MS", "<unset>"))
+    sys.stderr.flush()
 if E.get("FAKE_PW_HOLD"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     hold = subprocess.Popen(["sleep", "300"])  # models Chrome: same group, outlives EOF

@@ -344,6 +344,152 @@ describe("bundle helpers — semantics on synthesized blobs", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Install-tree pin. The Dockerfile `cli-tools` stage installs this CLI globally with
+// NO `--before` date: its tree is the package plus its exact-pinned platform packages and
+// nothing floating, and a date would ETARGET at the current pin (a version published late on
+// day D is invisible to `--before=D`). That is only true while the lock entry says so, so the
+// premise is asserted here, offline, on every host. The lock is valid evidence for a global
+// install because the Dockerfile pin equals the package.json pin (the first test above).
+// Residual, accepted (ADR-191, 2026-10-04): the entry carries `hasInstallScript: true`; its postinstall
+// places the native binary, so this install keeps lifecycle scripts (the likec4 install does not).
+// ---------------------------------------------------------------------------
+type LockEntry = {
+  version?: string;
+  dependencies?: unknown;
+  peerDependencies?: unknown;
+  bundleDependencies?: unknown;
+  bundledDependencies?: unknown;
+  optionalDependencies?: Record<string, string>;
+};
+
+// Every field through which an entry could pull in something not pinned by name in the lock.
+const FLOATING_FIELDS = ["dependencies", "peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies"] as const;
+
+function checkClaudeCodeLock(
+  lock: { packages?: Record<string, LockEntry> },
+  pin: string,
+): string[] {
+  const violations: string[] = [];
+  const packages = lock.packages ?? {};
+  const mainKey = `node_modules/${PKG}`;
+  const entry = packages[mainKey];
+  if (!entry) return [`lock has no ${mainKey} entry — examined 0 claude-code entries`];
+  if (entry.version !== pin) {
+    violations.push(`lock entry version ${entry.version} differs from the package.json pin ${pin} (stale lock after a pin bump)`);
+  }
+  if (entry.dependencies !== undefined) violations.push(`${mainKey} has a dependencies block (a floating tree)`);
+  if (entry.peerDependencies !== undefined) violations.push(`${mainKey} has a peerDependencies block`);
+  if (entry.bundleDependencies !== undefined || entry.bundledDependencies !== undefined) violations.push(`${mainKey} has a bundled dependencies block`);
+  const optional = entry.optionalDependencies ?? {};
+  // An entry with no platform packages at all would make every loop below vacuous.
+  if (Object.keys(optional).length === 0) violations.push(`${mainKey} has no optionalDependencies — examined 0 platform packages`);
+  for (const [name, range] of Object.entries(optional)) {
+    if (!name.startsWith(`${PKG}-`)) violations.push(`optionalDependency ${name} is not a ${PKG}-<platform> package`);
+    if (range !== entry.version) violations.push(`optionalDependency ${name} is "${range}", not exactly ${entry.version}`);
+  }
+  const expected = Object.keys(optional).map((n) => `node_modules/${n}`).sort();
+  const actual = Object.keys(packages).filter((k) => k.startsWith(`${mainKey}-`)).sort();
+  for (const k of expected.filter((k) => !actual.includes(k))) violations.push(`optionalDependency ${k} has no lock entry`);
+  for (const k of actual.filter((k) => !expected.includes(k))) violations.push(`lock entry ${k} is not an optionalDependency of ${PKG}`);
+  for (const k of actual) {
+    // A platform package is a leaf at exactly the main version: nothing it declares can float.
+    if (packages[k].version !== entry.version) violations.push(`${k} is ${packages[k].version}, not ${entry.version}`);
+    for (const f of FLOATING_FIELDS) {
+      if (packages[k][f] !== undefined) violations.push(`${k} has a ${f} block (a floating tree)`);
+    }
+  }
+  return violations;
+}
+
+describe("pinned claude-code install tree — two exact-pinned packages, nothing floating (every host)", () => {
+  it("the real lock entry has no floating dependencies and matches the pin", () => {
+    const lock = JSON.parse(readFileSync(join(APP_ROOT, "package-lock.json"), "utf8"));
+    expect(checkClaudeCodeLock(lock, readPin())).toEqual([]);
+  });
+
+  type FixtureLock = { packages: Record<string, LockEntry> };
+  const lockOf = (version: string, platforms: string[]): FixtureLock => ({
+    packages: {
+      [`node_modules/${PKG}`]: {
+        version,
+        optionalDependencies: Object.fromEntries(platforms.map((p) => [`${PKG}-${p}`, version])),
+      } as LockEntry,
+      ...Object.fromEntries(platforms.map((p) => [`node_modules/${PKG}-${p}`, { version } as LockEntry])),
+    },
+  });
+  const PLATS = ["linux-x64", "linux-arm64", "darwin-arm64"];
+  const run = (lock: FixtureLock, pin = "2.1.284") => checkClaudeCodeLock(lock, pin).join("\n");
+
+  it("control: a compliant fixture lock is clean", () => {
+    expect(checkClaudeCodeLock(lockOf("2.1.284", PLATS), "2.1.284")).toEqual([]);
+  });
+
+  it("row 1: a dependencies block on the claude-code entry is caught", () => {
+    const lock = lockOf("2.1.284", PLATS);
+    lock.packages[`node_modules/${PKG}`].dependencies = { "left-pad": "^1.0.0" };
+    expect(run(lock)).toMatch(/has a dependencies block/);
+  });
+
+  it("row 2: an optionalDependency that is a range rather than the exact version is caught", () => {
+    const lock = lockOf("2.1.284", PLATS);
+    lock.packages[`node_modules/${PKG}`].optionalDependencies![`${PKG}-linux-x64`] = "^2.1.284";
+    expect(run(lock)).toMatch(/not exactly 2\.1\.284/);
+  });
+
+  it("row 3: a platform entry carrying dependencies, and one foreign to optionalDependencies, are caught", () => {
+    const lock = lockOf("2.1.284", PLATS);
+    lock.packages[`node_modules/${PKG}-linux-arm64`].dependencies = { x: "1" };
+    expect(run(lock)).toMatch(/node_modules\/@anthropic-ai\/claude-code-linux-arm64 has a dependencies block/);
+    const foreign = lockOf("2.1.284", PLATS);
+    foreign.packages[`node_modules/${PKG}-win32-x64`] = { version: "2.1.284" };
+    expect(run(foreign)).toMatch(/win32-x64 is not an optionalDependency/);
+  });
+
+  it("row 3b: every other field a platform entry could float through, a skewed platform version, and bundled deps are caught", () => {
+    for (const f of ["peerDependencies", "optionalDependencies", "bundleDependencies", "bundledDependencies"] as const) {
+      const lock = lockOf("2.1.284", PLATS);
+      (lock.packages[`node_modules/${PKG}-linux-x64`] as Record<string, unknown>)[f] = f.startsWith("bundle") ? ["x"] : { x: "^1" };
+      expect(run(lock), f).toMatch(new RegExp(`claude-code-linux-x64 has a ${f} block`));
+    }
+    const skew = lockOf("2.1.284", PLATS);
+    skew.packages[`node_modules/${PKG}-linux-x64`].version = "2.1.283";
+    expect(run(skew)).toMatch(/claude-code-linux-x64 is 2\.1\.283, not 2\.1\.284/);
+    // Both spellings npm accepts, each on the MAIN entry, each with its own verdict line.
+    for (const f of ["bundleDependencies", "bundledDependencies"] as const) {
+      const bundled = lockOf("2.1.284", PLATS);
+      bundled.packages[`node_modules/${PKG}`][f] = ["x"];
+      expect(run(bundled), f).toMatch(/has a bundled dependencies block/);
+    }
+    const peer = lockOf("2.1.284", PLATS);
+    peer.packages[`node_modules/${PKG}`].peerDependencies = { x: "^1" };
+    expect(run(peer)).toMatch(/has a peerDependencies block/);
+    const foreignName = lockOf("2.1.284", PLATS);
+    foreignName.packages[`node_modules/${PKG}`].optionalDependencies!["left-pad"] = "2.1.284";
+    expect(run(foreignName)).toMatch(/optionalDependency left-pad is not a @anthropic-ai\/claude-code-<platform> package/);
+  });
+
+  it("row 3c: an entry with no platform packages is not a clean tree, it is an unexamined one", () => {
+    expect(run(lockOf("2.1.284", []))).toMatch(/examined 0 platform packages/);
+  });
+
+  it("row 4: a lock with no claude-code entry fails instead of passing vacuously", () => {
+    expect(run({ packages: {} })).toMatch(/examined 0 claude-code entries/);
+  });
+
+  it("row 5: a stale lock (version differs from the pin) and a missing platform entry are caught", () => {
+    expect(run(lockOf("2.1.283", PLATS))).toMatch(/differs from the package\.json pin 2\.1\.284/);
+    const lock = lockOf("2.1.284", PLATS);
+    delete lock.packages[`node_modules/${PKG}-darwin-arm64`];
+    expect(run(lock)).toMatch(/claude-code-darwin-arm64 has no lock entry/);
+  });
+
+  it("must-PASS: a ninth compliant platform package, and a lock plus pin both moved to another version, are clean", () => {
+    expect(checkClaudeCodeLock(lockOf("2.1.284", [...PLATS, "freebsd-x64"]), "2.1.284")).toEqual([]);
+    expect(checkClaudeCodeLock(lockOf("2.1.290", PLATS), "2.1.290")).toEqual([]);
+  });
+});
+
 if (!HAVE_BIN && !MUST_RUN) {
   process.stderr.write(
     `[skip] ${BIN} not installed on ${process.platform}-${process.arch}; ` +
