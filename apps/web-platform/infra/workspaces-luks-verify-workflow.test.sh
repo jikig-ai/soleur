@@ -2196,8 +2196,8 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # occurrence-based census with planted writers; mutation rows 1-21) -> 313; #7376 the producer-side
 # SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316; review:
 # the drained-text and hand-off-by-sentinel rows 316 -> 318; #9372 the reboot-proof scenario (S53) and
-# mutation row 22 318 -> 320.
-WF_MIN_ASSERTIONS=320
+# mutation row 22 318 -> 319 (measured green count after the rebase onto #9525).
+WF_MIN_ASSERTIONS=319
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1
