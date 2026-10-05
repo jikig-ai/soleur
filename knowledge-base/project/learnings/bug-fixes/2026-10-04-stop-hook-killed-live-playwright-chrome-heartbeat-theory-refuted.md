@@ -196,3 +196,21 @@ registering it until `claude plugin update soleur@soleur` and a restart by the u
     `attachment.command` filter "stronger" than the kill-text filter while their own positive control printed 107 for both.
     - **Prevention:** when a sentence compares two measurements, print both numbers next to it and let them decide the adjective;
       transcripts record only hooks that printed, so a quiet hook is invisible to either filter.
+11. **A documented remedy named the wrong release mechanism.** The playbook told the user to run `browser_close` in the other
+    session to free slot 0, but the slot-0 lease is the flock held by the proxy process, which `browser_close` does not stop. The
+    verification pass reproduced it with no browser (a live holder with no Chrome still made the second launch skip slot 0).
+    - **Prevention:** a remedy sentence names the process that holds the resource and the command that releases it, and the
+      remedy is split by the printed reason; run the release step once in a scratch HOME before documenting it.
+12. **A mutation row passed or failed on a race that may not happen.** Guard 2 mutant 22's "real race" row went red only if the
+    simultaneous launches collided, so a loaded host could make the suite red for a reason unrelated to the code. The
+    verification pass measured about one clean trial in six under CPU load and the row was dropped in favour of the
+    deterministic probe-busy row.
+    - **Prevention:** a RED row for a mutant must be deterministic; a probabilistic race belongs only on the GREEN side, with a
+      stub that forces the contended outcome on the RED side.
+13. **The lead's affected gate was refused and could not stand in for a local run.** `test-all.sh --affected` degraded to a full
+    run (`runner-changed`, because the diff touches the affected-paths library) and refused because another session's full run
+    was in flight. The refusal was not overridden and the other session's run was not touched; the PR's suites were run
+    directly and CI is the gate.
+    - **Prevention:** when a diff changes the test runner or its path map, expect the affected gate to widen to the full gate and
+      run it before the review rounds start, while no sibling session holds the host, or rely on the CI-verified battery check
+      at ship instead of racing a sibling.
