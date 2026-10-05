@@ -29,6 +29,20 @@ call, the numeric type-id join key and every `.datacenters` read are deleted. Th
 the EU-only residency filter for the alternatives list, keeps the distinct stock-miss and API-blip messages, and
 keeps the repair-path text for #6463.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05
+**Sections enhanced:** Observability, Research Insights (related issues), Risks
+**Research agents used:** six-reviewer plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CTO devex) ran before this pass; this pass ran the deepen-plan halt gates and the live-verification checklist directly (a second fan-out was judged redundant against the panel's coverage of the same plan text).
+
+### Key Improvements
+1. Observability probe rewritten: the first draft's `discoverability_test.command` ran the whole suite (rejected by Phase 4.7: suite-shaped, cap risk). Replaced with a one-line `git grep -c` liveness-line probe whose `expected_output` is a matchable literal.
+2. Citation correction: #6393 is a merged PR (the relocation that wedged the deploy leg), not a wedge issue; wording fixed and verified live with `gh issue view`.
+3. jq version risk recorded (verified on 1.8.2 only; runners ship 1.7.x).
+
+### Gate results
+User-Brand Impact present with a valid threshold (4.6); Observability schema present, probe verb allowlisted, SSH-free, under the cap (4.7); no PAT-shaped variable (4.8); no UI surface (4.9); Encryption Posture not triggered (no `.tf`/migration/cloud-init/compose file, no store or connection; section states N/A with reason) (4.10); `lint-guard-contract.py` green on 5 entries and the Assembly rows name chokepoints, not today's members (4.11); one unfenced `## Scope Check`, every ask quoted from the brief, no `status: BLOCKED` (4.12); cited rule ids exist (`cq-test-fixtures-synthesized-only`, `cq-write-failing-tests-before`); cited issues verified live (#9377, #8609, #7044, #6730 open; #6463, #6400, #6453, #6570, #6969 closed; #6393 merged). Verify-the-negative: `git grep -n datacenters -- .github scripts plugins/soleur/skills` returns nothing, and nothing outside the lib and its suite references `_stock_fetch`, `HCLOUD_API` or `_stock_eu_locations_for`, so the "no workflow parses /datacenters" and "callers unchanged" claims hold.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim in the brief | Reality (verified in this worktree) | Plan response |
@@ -95,7 +109,7 @@ Mechanical, applied: capture the verdict with `|| verdict=""` (Kieran H1: jq 1.8
 
 ### Related issues and PRs
 
-#6463 (closed; the repair path the abort text cites), #6393/#6400 (the wedge the gate prevents), #7044 (open: preamble retrofit of this gate; acknowledged, not folded in), #6453, #6570, #6730, #6969 (added callers).
+#6463 (closed; the repair path the abort text cites), #6393 (merged PR whose relocation wedged the web-1 deploy leg ~10 h, per the gate's own header; PIR correction #6400), which is the failure the gate prevents, #7044 (open: preamble retrofit of this gate; acknowledged, not folded in), #6453, #6570, #6730, #6969 (added callers).
 
 ## User-Brand Impact
 
@@ -250,9 +264,11 @@ logs:
   where: GitHub Actions run logs (apply-web-platform-infra.yml)
   retention: GitHub default run-log retention
 discoverability_test:
-  command: bash tests/scripts/test-stock-preflight-gate.sh
-  expected_output: stock-preflight-gate:
+  command: git grep -c 'stock-preflight PASS:' -- '*stock-preflight-gate.sh'
+  expected_output: stock-preflight-gate.sh:1
 ```
+
+The command proves the positive liveness line still exists in the gate (a rotted gate silent on success would not carry it) in well under Check 10's 15-second cap. It deliberately is NOT the suite (`bash tests/scripts/test-stock-preflight-gate.sh` is the way to TEST the gate, not to DISCOVER its signal; plan Phase 2.9 rejects a suite-shaped probe).
 
 ## Guard Contract
 
@@ -465,6 +481,7 @@ Required before `soleur:work`: confirm that authorizing only on a literal boolea
 - `hcloud` provider create/refresh paths may still depend on removed API surface; unknowable offline (AC9).
 - Do not hard-code today's stock anywhere in a test or comment; the measured "cpx22 available in fsn1/nbg1/hel1/sin" lives only in the PR body.
 - Stale prose left on purpose: ADR-143/154 and `variables.tf`/`zot-registry.tf` cite `/v1/datacenters` as dated measurements; the lib header gets one dated pointer to the equivalent `GET /v1/server_types?name=cx33` probe for ADR-154's re-evaluation trigger.
+- Local verification used jq 1.8.2. GitHub-hosted runners ship jq 1.7.x: before shipping, re-run the verdict/alternatives programs over the T7/T15-T18 body table under jq 1.7 if obtainable (the programs use only `has`, `any`-free constructs, `IN`, `.[]?`, `paste`; jq's print-then-exit-5 on trailing bytes is version-dependent, which is why the capture checks the exit status instead of relying on it).
 - A plan whose `## User-Brand Impact` section is empty, contains only TBD/TODO/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. This one is filled; keep it filled.
 
 ## PR body reminder
