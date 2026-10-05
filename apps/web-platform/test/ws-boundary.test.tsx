@@ -91,7 +91,7 @@ describe("useWebSocket — boundary admission (#9515)", () => {
   });
 
   it("shape-miss on a known type reports ws-zod-parse-failure, not ws-unknown-event", async () => {
-    const { result } = renderHook(() => useWebSocket("conv-1"));
+    renderHook(() => useWebSocket("conv-1"));
     await act(async () => {});
 
     // `stream` is a real union member but `content` is missing — the
@@ -124,7 +124,7 @@ describe("useWebSocket — boundary admission (#9515)", () => {
   });
 
   it("valid turn_summary frame is admitted (was dropped pre-fix)", async () => {
-    const { result } = renderHook(() => useWebSocket("conv-1"));
+    renderHook(() => useWebSocket("conv-1"));
     await act(async () => {});
 
     deliver({

@@ -392,10 +392,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           : isCcTurnEnd && state.streamState !== "idle"
             ? "idle"
             : state.streamState;
-      // #9515 — the narration slot holds ONE current step. A tool_use
-      // SUPERSEDES a live narration (the tool is the newer step — latest
-      // wins, mirroring AI-harness UIs); the superseded text folds into the
-      // bubble's trail rather than vanishing. Same fold on turn end.
       const narrationSuperseded =
         action.msg.type === "tool_use" && state.liveNarration !== null;
       return {
@@ -469,7 +465,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         pendingTimerAction: result.timerAction,
       };
     }
-    case "clear_streams":
+    case "clear_streams": {
       // Review F1: clear_streams must also reset workflow and spawnIndex.
       // Otherwise after `key_invalid` / `session_ended` / socket remount
       // (`connect()`), the lifecycle bar still renders the old workflow's
@@ -499,6 +495,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         liveNarration: null,
         liveNarrationStartedAt: null,
       };
+    }
     case "enter_stopping":
       // #3448 PR2: idempotent under double-click — only "streaming" → "stopping".
       // "idle" / "stopping" are no-ops. Send-of-`abort_turn` is performed
