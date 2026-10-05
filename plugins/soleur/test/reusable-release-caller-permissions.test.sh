@@ -140,10 +140,14 @@ calling_job_names() {
 # fail direction is a loud FAIL, not a silent pass).
 workflow_perms() {
   local file="$1"
+  # LAST-wins on a duplicate `permissions:` key (YAML semantics): buffer each
+  # block and emit only the final one — unioning blocks would let a granted
+  # earlier block satisfy while the effective later one denies.
   awk '
-    /^permissions[[:space:]]*:[[:space:]]*$/ { inblock = 1; next }
-    inblock && /^[A-Za-z]/ { exit }
-    inblock { print }
+    /^permissions[[:space:]]*:[[:space:]]*$/ { inblock = 1; buf = ""; next }
+    inblock && /^[A-Za-z]/ { inblock = 0 }
+    inblock { buf = buf $0 ORS }
+    END { printf "%s", buf }
   ' "$file"
 }
 

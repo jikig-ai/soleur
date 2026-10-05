@@ -36,11 +36,14 @@
 #   - `github_token:` must carry a NON-EMPTY scalar — a bare key yields
 #     inputs.github_token == '' at the action and OIDC is still attempted;
 #   - a `# id-token: write` comment satisfies nothing (`^`-anchored matching);
-#   - consumer detection tolerates `uses :`, quoted values, and
-#     `Anthropics`-case, and a second sweep flags any `claude-code-action`
-#     mention on a non-canonical `uses` line (flow-style steps) — KNOWN LIMIT:
-#     an expression `uses: ${{ matrix.act }}` carries no literal name and is
-#     invisible to this guard;
+#   - consumer detection tolerates `uses :`, quoted values, and owner/repo
+#     case variants; a second sweep flags any `claude-code-action` mention on
+#     a non-canonical `uses` line (flow-style steps) plus bare `uses:` keys
+#     (value continuing on the next line). KNOWN LIMITS: an expression
+#     `uses: ${{ matrix.act }}` carries no literal name and is invisible;
+#     `with:` written BEFORE `uses:` or in flow form `with: {}`, and `uses:`
+#     text inside `strategy.matrix`/`env:`/`run:` scalars, all read as
+#     fail-LOUD red (over-strict, never silent);
 #   - composite actions under .github/actions/*/action.y*ml run inside the
 #     CALLING job's permission context — statically unverifiable, so a
 #     consumer step inside a composite must carry `github_token:` on its own
@@ -65,11 +68,11 @@ ACT_DIR="${ACT_DIR:-$REPO_ROOT/.github/actions}"
 # step-shaped line, tolerant of a quoted scalar, pre-colon whitespace, and
 # owner-case variants. `# uses: …` comments still cannot match (the `#` sits
 # where the pattern wants whitespace-or-dash).
-USES_ERE="^[[:space:]]+(-[[:space:]]+)?uses[[:space:]]*:[[:space:]]*[\"']?[Aa]nthropics/claude-code-action@"
+USES_ERE="^[[:space:]]+(-[[:space:]]+)?uses[[:space:]]*:[[:space:]]*[\"']?[Aa]nthropics/[Cc]laude-[Cc]ode-[Aa]ction@"
 # The same ERE in awk's dynamic-regexp form, for matching inside an accumulated
 # multi-line job buffer: a consumer `uses:` is preceded by a newline or the
 # buffer start (comments still cannot match — the `#` precedes the run).
-AWK_USES_ERE="(\\n|^)[[:space:]]+(-[[:space:]]+)?uses[[:space:]]*:[[:space:]]*[\"']?[Aa]nthropics/claude-code-action@"
+AWK_USES_ERE="(\\n|^)[[:space:]]+(-[[:space:]]+)?uses[[:space:]]*:[[:space:]]*[\"']?[Aa]nthropics/[Cc]laude-[Cc]ode-[Aa]ction@"
 # `write` terminated by whitespace, EOL, or a `#` comment (POSIX classes; the
 # GNU-only `\b` is not portable to mawk/BusyBox environments). `id-token :`
 # with a pre-colon space is legal YAML GitHub accepts — tolerate it.
@@ -190,7 +193,9 @@ consumer_step_tokens() {
       if (incons) {
         if (ind < uind) { flush(); next }
         if (ind == uind) {
-          if ($0 ~ /^[[:space:]]+with[[:space:]]*:[[:space:]]*(#.*)?$/) { inwith = 1; wind = 0 }
+          # A second `with:` key REPLACES the first (YAML last-wins) — reset the
+          # token flag too, or the dead block would bleed github_token forward.
+          if ($0 ~ /^[[:space:]]+with[[:space:]]*:[[:space:]]*(#.*)?$/) { inwith = 1; wind = 0; got_tok = 0 }
           else inwith = 0
           next
         }
@@ -205,6 +210,24 @@ consumer_step_tokens() {
   '
 }
 
+# Print lines in <file> that look like claude-code-action consumers but evade
+# the canonical ERE: (a) any `uses:`-shaped line mentioning the action that
+# canonical matching rejected, and (b) a `uses:` key with NO same-line value —
+# the name can continue on the next deeper-indented line, which both the census
+# and arm (a) would miss. Full-line comments satisfy nothing; anything else is
+# flagged for human eyes (fail-loud, never silently skipped).
+evasion_lines() {
+  { grep -nEi 'claude-code-action' "$1" \
+      | sed -E 's/^[0-9]+://' \
+      | grep -E 'uses[[:space:]]*:' \
+      | grep -vE "$USES_ERE" \
+      | grep -vE '^[[:space:]]*#'
+    grep -nE 'uses[[:space:]]*:[[:space:]]*(#.*)?$' "$1" \
+      | sed -E 's/^[0-9]+://' \
+      | grep -vE '^[[:space:]]*#'
+  } | sort -u
+}
+
 # ---------------------------------------------------------------------------
 # Census: scan every workflow file in $1 (and composite actions in $2), evaluate
 # every consuming STEP. Returns 0 when every consumer resolves a token path AND
@@ -216,23 +239,16 @@ census_dir() {
   local -a files=() jobs=() verdicts=() afiles=()
 
   # The population is the UNION of canonically-anchored consumers and ANY file
-  # mentioning the action at all — a flow-style or misspelled `uses` that the
-  # canonical ERE misses must still reach the evasion sweep.
+  # mentioning the action at all (case-insensitive — GitHub resolves owner/repo
+  # case-insensitively) — a flow-style, split-line, or misspelled `uses` that
+  # the canonical ERE misses must still reach the evasion sweep.
   mapfile -t files < <({ grep -rlE "$USES_ERE" "$dir"/*.yml "$dir"/*.yaml; \
-    grep -rl 'claude-code-action' "$dir"/*.yml "$dir"/*.yaml; } 2>/dev/null | sort -u)
+    grep -rli 'claude-code-action' "$dir"/*.yml "$dir"/*.yaml; } 2>/dev/null | sort -u)
   for file in "${files[@]:-}"; do
     [[ -n "$file" ]] || continue
     name="${file##*/}"
 
-    # Anchor-evasion sweep: a `claude-code-action` mention on a `uses`-shaped
-    # line that the canonical ERE did NOT match (flow-style step lists and
-    # spellings the ERE does not cover) is a consumer this census would judge
-    # blind. Comments are excluded; they satisfy nothing.
-    evaders="$(grep -nE 'claude-code-action' "$file" \
-      | sed -E 's/^[0-9]+://' \
-      | grep -E 'uses[[:space:]]*:' \
-      | grep -vE "$USES_ERE" \
-      | grep -vE '^[[:space:]]*#' || true)"
+    evaders="$(evasion_lines "$file")"
     if [[ -n "$evaders" ]]; then
       echo "  FAIL: $name: claude-code-action on a non-canonical uses: line (possible anchor evasion):"
       printf '%s\n' "$evaders" | sed 's/^/      | /'
@@ -310,12 +326,23 @@ census_dir() {
 
   # Composite actions: a consumer inside .github/actions/*/action.y*ml inherits
   # the CALLER job's permissions — statically unverifiable — so the step must
-  # carry its own github_token: to be resolvable.
-  mapfile -t afiles < <(grep -rlE "$USES_ERE" \
-    "$actdir"/*/action.yml "$actdir"/*/action.yaml 2>/dev/null | sort)
+  # carry its own github_token: to be resolvable. Same union population +
+  # evasion sweep as workflows.
+  mapfile -t afiles < <({ grep -rlE "$USES_ERE" "$actdir"/*/action.yml "$actdir"/*/action.yaml; \
+    grep -rliE 'claude-code-action' "$actdir"/*/action.yml "$actdir"/*/action.yaml; } \
+    2>/dev/null | sort -u)
   for file in "${afiles[@]:-}"; do
     [[ -n "$file" ]] || continue
     name="${file#"$REPO_ROOT/"}"
+
+    evaders="$(evasion_lines "$file")"
+    if [[ -n "$evaders" ]]; then
+      echo "  FAIL: $name: claude-code-action on a non-canonical uses: line (possible anchor evasion):"
+      printf '%s\n' "$evaders" | sed 's/^/      | /'
+      failures=$((failures + 1))
+    fi
+
+    grep -qE "$USES_ERE" "$file" || continue
     mapfile -t verdicts < <(consumer_step_tokens < "$file")
     if [[ "${#verdicts[@]}" -eq 0 ]]; then
       echo "  FAIL: $name: composite contains consumer uses: but no consumer step resolved"
@@ -745,6 +772,80 @@ jobs:
     steps: [{uses: anthropics/claude-code-action@deadbeef}]
 YAML
 fixture_row "20 flow-style uses: evasion sweep" "$FIX/row20" FAIL "anchor evasion"
+
+# Row 21: owner/repo name is case-insensitive on GitHub — `Claude-Code-Action`
+# resolves the same action. Expect RED (seen by census, lacks a token path).
+mkfixture "$FIX/row21" "case-var.yml" <<'YAML'
+name: case-var
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/Claude-Code-Action@deadbeef
+YAML
+fixture_row "21 repo-name case variant" "$FIX/row21" FAIL "no id-token: write"
+
+# Row 22: split-line evasion — `uses:` with no same-line value, the action name
+# continuing on the next deeper-indented line (legal YAML). Expect RED.
+mkfixture "$FIX/row22" "split.yml" <<'YAML'
+name: split
+on: workflow_dispatch
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses:
+          anthropics/claude-code-action@deadbeef
+YAML
+fixture_row "22 split-line uses: value" "$FIX/row22" FAIL "anchor evasion"
+
+# Row 23: duplicate `with:` keys — YAML last-wins, so the second (token-less)
+# block is the effective one; the first's github_token must NOT satisfy.
+# Expect RED.
+mkfixture "$FIX/row23" "dup-with.yml" <<'YAML'
+name: dup-with
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@deadbeef
+        with:
+          github_token: ${{ github.token }}
+        with:
+          prompt: do things
+YAML
+fixture_row "23 duplicate with: keys last-wins" "$FIX/row23" FAIL "no id-token: write"
+
+# Row 24: composite action with a flow-style consumer — the evasion sweep must
+# reach .github/actions/ too. Expect RED.
+mkfixture "$FIX/row24" "wf.yml" <<'YAML'
+name: wf
+on: workflow_dispatch
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: anthropics/claude-code-action@deadbeef
+YAML
+mkfixture "$FIX/row24-actions/wrap" "action.yml" <<'YAML'
+name: wrap
+runs:
+  using: composite
+  steps: [{uses: anthropics/claude-code-action@deadbeef}]
+YAML
+fixture_row "24 composite flow-style consumer" "$FIX/row24" FAIL "anchor evasion" "$FIX/row24-actions"
 
 echo ""
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
