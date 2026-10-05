@@ -1,6 +1,6 @@
 # Tasks: delete the C4 sentry_alert rule count (#9312)
 
-Plan: knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md
+Plan: knowledge-base/project/plans/archive/20261005-154508-2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md
 
 ## Phase 1: Edit the edge description
 

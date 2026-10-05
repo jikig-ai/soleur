@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261005-154508-2026-10-05-docs-delete-c4-sentry-alert-rule-count-plan.md
 - Status: complete
 
 ### Errors
