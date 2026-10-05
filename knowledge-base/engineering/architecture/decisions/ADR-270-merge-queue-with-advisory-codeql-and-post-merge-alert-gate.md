@@ -582,6 +582,15 @@ each is recorded as a measurement with a defined fallback, not as an assumption.
   commit landed (the job itself ran 3 min 39 s; the 9 to 11 min estimate was n=1 on a different commit).
 - Items 1, 3 to 5 and 7 to 10: pending; recorded on #9454 as each canary completes.
 
+### Addendum 2026-10-05 (#9482)
+
+Definitions, commands and caveats are in [the #9482 measurement comment](https://github.com/jikig-ai/soleur/issues/9482#issuecomment-5992118670); the numbers below are the record.
+
+- Item 4: pending. No `weakness-miner.yml` PR has merged since adoption (the last, #9479, merged before the queue); the next scheduled fire is 2026-10-11T06:00Z. Status stays `adopting` until one clean pass.
+- Item 9: sync merges (proxy for sync pushes) per merged human PR: 2.50 before (n=40), 0.83 after (n=12, about 17 h), a delta of 1.67 against the 1.3 break-even; first reading, small after-window.
+- Item 10: dispatched runs of `merge-queue-stall-check.yml` start 10.0 min apart (within 10 s) with 4 to 5 s runner start (n=5, quiet window); no executor heartbeat. A red executor run alerts nobody (tracked in #9513).
+- Item 3 (partial): push SHA equals `merge_group.head_sha` for 13 of the 15 completed push runs on `main` (snapshot 2026-10-05 ~09:50Z); the other 2 are the adoption merge and the admin-bypass canary (Follow-up (c), tracked in #9512).
+
 ## Cost Impacts
 
 No new vendor or subscription. A queue adds one `merge_group` run per candidate on
