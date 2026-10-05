@@ -1181,6 +1181,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(opts.sandbox.network.allowedDomains).toEqual([
         "github.com",
         "api.github.com",
+        "*.blob.core.windows.net",
+        "registry.npmjs.org",
       ]);
     });
 

@@ -280,7 +280,7 @@ describe("buildAgentQueryOptions — in-sandbox git askpass threading (item 1c)"
 });
 
 describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 follow-up)", () => {
-  it("truthy ghToken → sandbox allowlist carries exactly the two GitHub hosts", () => {
+  it("truthy ghToken → sandbox allowlist carries the GitHub hosts + Actions blob/npm downloads", () => {
     const opts = buildAgentQueryOptions({
       ...minArgs,
       ghToken: "ghs_install_tok",
@@ -290,6 +290,8 @@ describe("buildAgentQueryOptions — GitHub egress derived from ghToken (#5041 f
     expect(opts.sandbox?.network?.allowedDomains).toEqual([
       "github.com",
       "api.github.com",
+      "*.blob.core.windows.net",
+      "registry.npmjs.org",
     ]);
   });
 

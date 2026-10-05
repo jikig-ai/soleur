@@ -220,6 +220,37 @@ No SSH, no dashboard-eyeball: read the `retained` count and the `egress-blocked`
 CIDR to "fix" a rotation drop — that is the wrong layer and the wrong blast
 radius.
 
+## Remediation (Actions log/artifact download — `productionresultssa<N>`)
+
+Symptom: `gh run view --log`, `gh run download`, or `gh api
+.../actions/{runs,jobs}/.../logs` works until the redirect, then the fetch of
+the signed URL is dropped (agent session: sandbox-proxy deny or, with the
+domain allowlisted, an `egress-blocked` `DST=20.209.x.x|57.150.x.x|135.130.x.x`
+drop inside `*.blob.core.windows.net`).
+
+Layered fix is already in place:
+
+- **Domain layer** — `GITHUB_EGRESS_DOMAINS` in
+  `server/agent-runner-sandbox-config.ts` carries `*.blob.core.windows.net`
+  (the SDK proxy only supports `*.`-prefix wildcards; exact-account scoping is
+  delegated to the IP layer).
+- **IP layer** — `cron-egress-allowlist.txt` enumerates the GitHub-owned
+  accounts `productionresultssa0..99` minus `sa22` (NXDOMAIN). Each account is
+  a dedicated `blob.<cluster>prdstrz<NN>.trafficmanager.net` VIP — there is no
+  shared frontend, so enumeration is the only option.
+
+Maintenance:
+
+- **GitHub mints `productionresultsa100+`** → its signed URLs fail closed.
+  Verify the new host resolves (`getent ahostsv4`), append it to the allowlist
+  block, and bump the fleet guards in `cron-egress-firewall.test.sh`.
+- **An account is deleted** → its line starts NXDOMAINing, the resolver counts
+  a failure per tick, and `FAILCOUNT_ESCALATE` pages — remove the line and
+  update the same guards.
+- **A non-GitHub blob URL is dropped** → intended. Only the enumerated
+  productionresultsa VIPs are allowlisted; the `*.blob.core.windows.net`
+  domain wildcard cannot widen past the IP set in production.
+
 ## Intended-by-design drops (NOT a gap — do not "fix" by allowlisting) — #5676
 
 The single `op=egress_blocked` Sentry issue groups **every** blocked destination

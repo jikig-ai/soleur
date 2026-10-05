@@ -147,15 +147,32 @@ export type AgentSandboxConfig = {
 } & { [x: string]: unknown };
 
 /**
- * Exact-host egress allowlist for the Concierge's in-sandbox GitHub
- * surface. No wildcards — `gh` (REST + GraphQL) needs `api.github.com`;
- * raw `git push/fetch` via the GIT_ASKPASS path needs `github.com`.
- * Widening beyond these two hosts (gist/upload/CDN) requires its own
+ * Egress allowlist for the Concierge's in-sandbox GitHub surface.
+ * `gh` (REST + GraphQL) needs `api.github.com`; raw `git push/fetch`
+ * via the GIT_ASKPASS path needs `github.com`.
+ *
+ * `*.blob.core.windows.net` (widening reviewed): GitHub's Actions log
+ * and artifact download endpoints 302 to signed per-account Azure Blob
+ * hosts (`productionresultssa<N>.blob.core.windows.net`). The SDK proxy
+ * only supports `*.`-prefix wildcards, so the exact-account scoping
+ * lives one layer down: the container egress firewall
+ * (cron-egress-allowlist.txt) allowlists ONLY the GitHub-owned
+ * productionresultssa hosts, so a non-GitHub blob URL still dies at
+ * nftables even though it passes this domain filter. Widening further
+ * (gist/upload/CDN, GitHub user-content domains) requires its own
  * security review — each added host is exfiltration surface.
+ *
+ * `registry.npmjs.org` — entitled sessions regenerate package-lock.json
+ * via `npx npm@11` (the lockfile-sync gate pins npm@11); npm serves
+ * metadata and tarballs from this one host. Not GitHub — it rides the
+ * same entitled-token gate because the sessions that mint a ghToken
+ * are exactly the ones doing dependency work.
  */
 const GITHUB_EGRESS_DOMAINS = Object.freeze([
   "github.com",
   "api.github.com",
+  "*.blob.core.windows.net",
+  "registry.npmjs.org",
 ] as const);
 
 /**

@@ -176,10 +176,10 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     rmSync(`${root}-c4-staging`, { recursive: true, force: true });
   });
 
-  it("allowGithubEgress: true → exact-host GitHub allowlist; egress widens NOTHING else", () => {
+  it("allowGithubEgress: true → GitHub + Actions-blob allowlist; egress widens NOTHING else", () => {
     const result = buildAgentSandboxConfig(own, { allowGithubEgress: true });
     expect(result.network).toEqual({
-      allowedDomains: ["github.com", "api.github.com"],
+      allowedDomains: ["github.com", "api.github.com", "*.blob.core.windows.net", "registry.npmjs.org"],
       allowManagedDomainsOnly: true,
     });
     // Filesystem is unchanged by the egress flag.
