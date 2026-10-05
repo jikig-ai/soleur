@@ -1,6 +1,6 @@
 ---
 title: Browser lifetime belongs to the launching session
-status: adopting
+status: accepted
 date: 2026-10-04
 supersedes: none
 issue: none
@@ -14,9 +14,10 @@ brand_survival_threshold: aggregate pattern
 
 ## Status
 
-**Adopting — 2026-10-04.** Flips to `accepted` when the agent-executable live check in "Proven and not proven" passes. That
-check is untested: it has not been run, and its first run is after the merge. The merge of the PR that carries this ADR does
-not by itself establish it, so the decision is recorded `adopting`, not `accepted` (the ADR-270 precedent).
+**Accepted — 2026-10-05.** Recorded `adopting` on 2026-10-04 (the ADR-270 precedent) because the live idle-survival check had not
+run. It ran on 2026-10-05 and steps 1-3 passed ("Proven and not proven"). With the operator's agreement the lease check, recipe
+step 4, is no longer part of the acceptance check: it tests the slot lease (Decision 3), not idle survival, and it needs a host
+with Google Chrome, which this host lacks. It stays listed under "Not proven", and #9281 stays open for it.
 
 ## Context
 
@@ -181,7 +182,7 @@ The published statement "the heartbeat is the likely cause" was made before this
 
 **Not proven:**
 
-- **Live idle survival after the fix: steps 1-3 PASSED once on 2026-10-05 for the plugin registration; step 4 was NOT run.**
+- **Live idle survival after the fix: PASSED once on 2026-10-05 (steps 1-3, plugin registration). Step 4 is carved out below.**
   Run: one `claude -p` process (`--plugin-dir <worktree>/plugins/soleur` at `4fea153121`, `--include-hook-events --verbose`,
   `PLAYWRIGHT_MCP_HEADLESS=1`, `--allowedTools mcp__plugin_soleur_playwright__*`, stdin held open on a FIFO), three turns:
   `browser_navigate about:blank`, 75 s idle, `browser_snapshot`, 20 s idle, `browser_snapshot`. All three tool results succeeded
@@ -197,8 +198,8 @@ The published statement "the heartbeat is the likely cause" was made before this
   `browser_navigate` fails with "Chromium distribution 'chrome' is not found"; the plugin registration has no lease, so a second
   process on it gets "Browser is already in use" (Consequences). An earlier run on the same day, with both registrations
   allowed and this session's own browser still open on the plugin profile, failed both launches and was INCONCLUSIVE.
-  Until step 4 is run on a host with Google Chrome, or the operator moves it out of the acceptance check, this ADR stays
-  `adopting`.
+  The operator agreed on 2026-10-05 to carve step 4 out of the acceptance check, so this ADR is `accepted` on steps 1-3. One
+  pass is one run on one host; the recipe stays here to be re-run on a plugin or `@playwright/mcp` pin change.
   1. From a checkout carrying this change, start ONE headless process that stays alive across turns:
      `claude -p --plugin-dir <checkout>/plugins/soleur --input-format stream-json --output-format stream-json
      --include-hook-events` (stream-json under `-p` may also require `--verbose`; add it if the CLI refuses). Keep its stdin open
@@ -223,9 +224,13 @@ The published statement "the heartbeat is the likely cause" was made before this
      the filter detects a loaded hook only when a Chrome was alive at that `Stop`, which step 1 guarantees (a browser is open at
      every turn end). The kill text itself lives in `attachment.stderr`, not `stdout`. A bare `grep -c` of the kill sentence is
      not the check: the sentence also appears in quoted text such as this ADR.
-  4. Repeat with one parallel process on the same checkout (it takes slot 1) and confirm the first browser is still answering.
+  4. CARVED OUT of the acceptance check (not run): repeat with one parallel process on the same checkout (it takes slot 1) and
+     confirm the first browser is still answering. Needs a host with Google Chrome (the project registration pins `channel:
+     chrome`) and is tracked under the lease item below.
   The user's own interactive session still needs a restart by the USER (an agent cannot restart its own host); a `/mcp`
   reconnect reuses the cached `.mcp.json` command and does not reload hooks.
+- **The slot lease under a live parallel session (recipe step 4).** Unexercised live: the concurrent-launch proof above is a suite
+  row, and the lease has not been observed with two real `claude -p` sessions on a host with Google Chrome. #9281 stays open for it.
 - **That the machine's loaded plugin copy has the hook removed.** Confirmed present on this host on 2026-10-04: the installed copy
   `4dbd1affe8eb` registers `browser-cleanup-hook.sh`. The fix reaches a user only after the plugin carrying this change is
   released and installed (`claude plugin update soleur@soleur`, then a restart by the user); the installed version is a git
