@@ -1067,6 +1067,12 @@ export function ChatSurface({
                         Workflow{" "}
                         <span className="font-semibold">{msg.workflow}</span>{" "}
                         ended:{" "}
+                        {/* Dormant raw-enum render — no server→client
+                            `workflow_ended` emitter exists yet (cc-dispatcher
+                            routes terminal statuses to session_ended until
+                            Stage 3). When one ships, map status through
+                            lib/session-ended-copy.ts › SESSION_ENDED_COPY
+                            before it can leak like internal_error did. */}
                         <span
                           className={
                             msg.status === "completed"
