@@ -72,6 +72,15 @@ chmod +x "$GARB/date"
 EMPTYDIR="$SUITE_TMP/empty"
 mkdir -p "$EMPTYDIR"
 assert_fixture_dir "$EMPTYDIR"
+# A `date` that answers the clock read (+%s) with $FAKE_NOW and delegates every other call (the
+# deadline's -d parse) to the real one, so the probe's NO-SEAM clock path can reach a verdict.
+REAL_DATE="$(command -v date)"
+FAKEDATE="$SUITE_TMP/fakedate"
+mkdir -p "$FAKEDATE"
+assert_fixture_dir "$FAKEDATE"
+assert_fixture_dir "$FAKEDATE/date"
+printf '#!/bin/sh\ncase "$*" in *-d*) exec %s "$@" ;; esac\necho "$FAKE_NOW"\n' "$REAL_DATE" > "$FAKEDATE/date"
+chmod +x "$FAKEDATE/date"
 
 # The deadline, computed here with a different date spelling than the probe's, then cross-checked.
 DEADLINE=$(date -u -d '2026-10-16T00:00:00Z' +%s)
@@ -85,8 +94,10 @@ AFTER=$((DEADLINE + 3600))
 
 # run_probe <probe> [VAR=val ...] -> sets OUT (stdout+stderr) and RC. PATH leads with the stub gh/curl
 # directory, so a call to either is logged and refused rather than reaching the real one; a later PATH=
-# argument overrides it. LC_ALL=C.UTF-8 is forced in (a locale the probe's own `export LC_ALL=C`
-# overrides); bash is invoked by absolute path so a PATH override cannot hide the interpreter.
+# argument overrides it (so every override below keeps $BIN first). LC_ALL=C.UTF-8 is forced in, a
+# locale where [0-9] matches no non-ASCII digit, so these rows do NOT exercise the probe's own
+# `export LC_ALL=C`: that line is pinned by `pins` and exercised by locale_check. Bash is invoked by
+# absolute path so a PATH override cannot hide the interpreter.
 OUT=""; RC=0
 run_probe() {
   local probe=$1; shift
@@ -164,8 +175,8 @@ date_check() {
     case "$name" in
       absent-no-seam)    run_probe "$probe" PATH="$EMPTYDIR" ;;
       absent-with-seam)  run_probe "$probe" PATH="$EMPTYDIR" NOW_EPOCH="$AFTER" ;;
-      garbage-no-seam)   run_probe "$probe" PATH="$GARB:/usr/bin:/bin" ;;
-      garbage-with-seam) run_probe "$probe" PATH="$GARB:/usr/bin:/bin" NOW_EPOCH="$AFTER" ;;
+      garbage-no-seam)   run_probe "$probe" PATH="$BIN:$GARB:/usr/bin:/bin" ;;
+      garbage-with-seam) run_probe "$probe" PATH="$BIN:$GARB:/usr/bin:/bin" NOW_EPOCH="$AFTER" ;;
     esac
     if [ "$RC" -eq 3 ] && [[ "$OUT" == *"CANNOT ESTABLISH"* ]]; then
       if [ "$mode" = report ]; then ok "date-$name"; fi
@@ -181,10 +192,49 @@ date_check() {
 exec_ok() {
   local probe=$1 rc
   [ -x "$probe" ] || return 1
-  env -i PATH=/usr/bin:/bin HOME="$SUITE_TMP" NOW_EPOCH="$BEFORE" "$probe" >/dev/null 2>&1; rc=$?
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$SUITE_TMP" NOW_EPOCH="$BEFORE" "$probe" >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 2 ] || return 1
-  env -i PATH=/usr/bin:/bin HOME="$SUITE_TMP" NOW_EPOCH="$AFTER" "$probe" >/dev/null 2>&1; rc=$?
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$SUITE_TMP" NOW_EPOCH="$AFTER" "$probe" >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 5 ]
+}
+
+# realclock_check <probe> <report|quiet>: with NO seam, the probe must read the clock itself and reach
+# the right verdict (a fake `date` supplies the time). Sets RC_BAD.
+RC_BAD=0
+realclock_check() {
+  local probe=$1 mode=$2 name want now
+  RC_BAD=0
+  for name in realclock-before realclock-after; do
+    if [ "$name" = realclock-before ]; then want=2; now=$BEFORE; else want=5; now=$AFTER; fi
+    run_probe "$probe" PATH="$BIN:$FAKEDATE:/usr/bin:/bin" FAKE_NOW="$now"
+    if [ "$RC" -eq "$want" ]; then
+      if [ "$mode" = report ]; then ok "$name"; fi
+    else
+      RC_BAD=$((RC_BAD + 1))
+      if [ "$mode" = report ]; then no "$name (rc=$RC want=$want)"; fi
+    fi
+  done
+}
+
+# locale_check <probe> <report|quiet>: in a UTF-8 locale where [0-9] matches a non-ASCII digit
+# (en_US.utf8: fullwidth/Arabic-Indic 1 and 7 match, 9 does not), a probe without its own
+# `export LC_ALL=C` silently reports NOT YET. Skipped, loudly, where that locale is not installed.
+# Sets LOC_BAD.
+LOC_BAD=0
+locale_check() {
+  local probe=$1 mode=$2
+  LOC_BAD=0
+  if ! locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then
+    if [ "$mode" = report ]; then ok "locale-nonascii-digit (skipped: en_US.utf8 is not installed here)"; fi
+    return 0
+  fi
+  run_probe "$probe" LC_ALL=en_US.utf8 NOW_EPOCH=$'\xef\xbc\x91\xef\xbc\x97'
+  if [ "$RC" -eq 3 ] && [[ "$OUT" == *"CANNOT ESTABLISH"* ]]; then
+    if [ "$mode" = report ]; then ok "locale-nonascii-digit-under-en-us-utf8"; fi
+  else
+    LOC_BAD=1
+    if [ "$mode" = report ]; then no "locale-nonascii-digit-under-en-us-utf8 (rc=$RC)"; fi
+  fi
 }
 
 # exit_ops <file>: the operand of every `exit` on an executable (non-comment) line; a bare exit prints
@@ -198,6 +248,7 @@ exit_ops() {
 pins() {
   local f=$1 n bad
   if [ "$(head -n 1 "$f")" != '#!/usr/bin/env bash' ]; then echo "shebang is not exactly #!/usr/bin/env bash"; return 1; fi
+  if ! grep -qE '^export LC_ALL=C$' "$f"; then echo "export LC_ALL=C is missing"; return 1; fi
   if grep -q $'\r' "$f"; then echo "carriage return in the file"; return 1; fi
   n=$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '\bexit\b')
   if [ "$n" -lt 3 ]; then echo "only $n exit sites (floor 3)"; return 1; fi
@@ -226,7 +277,8 @@ nogh_clean() {
 }
 
 # check_all <probe>: pins + clock table (UTC and a non-UTC zone) + date-unusable arms + exec through the
-# shebang + no-gh. 0 only when every one of them is clean.
+# shebang + the no-seam real-clock path + the non-ASCII-digit locale arm + no-gh. 0 only when every one
+# of them is clean.
 check_all() {
   local probe=$1 bad=0
   pins "$probe" >/dev/null || bad=1
@@ -237,6 +289,10 @@ check_all() {
   date_check "$probe" quiet
   [ "$DATE_BAD" -eq 0 ] || bad=1
   exec_ok "$probe" || bad=1
+  realclock_check "$probe" quiet
+  [ "$RC_BAD" -eq 0 ] || bad=1
+  locale_check "$probe" quiet
+  [ "$LOC_BAD" -eq 0 ] || bad=1
   nogh_clean "$probe" || bad=1
   return "$bad"
 }
@@ -254,6 +310,8 @@ else no "empty-seam-falls-through-to-real-clock (rc=$RC)"; fi
 date_check "$PROBE" report
 
 if exec_ok "$PROBE"; then ok "exec-through-shebang-under-env-i"; else no "exec-through-shebang-under-env-i"; fi
+realclock_check "$PROBE" report
+locale_check "$PROBE" report
 
 # The production shape: the sweeper's env -i, no seams, real clock (clock-independent outcomes only, so
 # the suite does not rot on the deadline), then once per verdict arm through the seam. Credential
@@ -331,12 +389,15 @@ mutant M11-adds-exec-true             $'export LC_ALL=C\n'     $'export LC_ALL=C
 mutant M12-drops-deadline-validation  '"$DEADLINE_EPOCH" =~ ^[0-9]{1,12}$ && ' ''
 mutant M13-deadline-as-local-midnight 'date -u -d "$DEADLINE_ISO"' 'date -d "${DEADLINE_ISO%Z}"'
 mutant M14-adds-a-dev-tcp-connect     $'export LC_ALL=C\n'     $'export LC_ALL=C\nexec 3<>/dev/tcp/127.0.0.1/9\n'
+mutant M15-real-clock-read-dropped    '${NOW_EPOCH:-$(date -u +%s 2>/dev/null)}' '${NOW_EPOCH:-0}'
+mutant M16-computed-gh-call           $'export LC_ALL=C\n'     $'export LC_ALL=C\nG=g; ${G}h issue view 9387 >/dev/null 2>&1\n'
+mutant M17-drops-the-lc-all-export    $'export LC_ALL=C\n'     ''
 
 # The floor below is the exact count of passing assertions in a green run; raise it in the same edit
 # that adds an assertion or an arm.
 printf '\n%s passed, %s failed\n' "$pass" "$failc"
-if [ "$pass" -lt 54 ]; then
-  printf 'FAIL: ran only %s passing assertions (<54)\n' "$pass" >&2
+if [ "$pass" -lt 60 ]; then
+  printf 'FAIL: ran only %s passing assertions (<60)\n' "$pass" >&2
   exit 1
 fi
 [ "$failc" -eq 0 ]

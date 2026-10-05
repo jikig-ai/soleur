@@ -7,8 +7,9 @@
 # NOTIFY-ONLY: this probe never exits 0, so the sweeper never closes #9387 (closing it is the
 # operator's act once the migration has landed), and it never exits 1, because the sweeper reads 1 as
 # FAIL. Exit 5 repeats on every daily sweep from the deadline until the tracker stops being swept.
-# Closing it is not enough: the sweeper keeps running a closed tracker's probe for 14 days while the
-# follow-through label is on, so the label has to come off as well (the message says so).
+# Closing it is not enough: while the follow-through label is on, the sweeper keeps running the probe
+# of a tracker closed as completed for up to 14 more days, so the label has to come off as well (the
+# message says so).
 #
 # It cannot read the ledger half. The run ledger (bootstrap-runs.jsonl) lives on the founder's machine,
 # not in CI, and ADR-264 says a ledger line is not evidence of approval: an agent that reads the hook
@@ -38,7 +39,7 @@
 # knowledge-base/project/specs are the planning records for this probe and stay as history.
 
 # C locale so [0-9] below is ASCII-only: in a UTF-8 locale it can match non-ASCII digits, and the
-# arithmetic below would then abort with status 1.
+# comparison below would then error and silently report NOT YET.
 export LC_ALL=C
 
 DEADLINE_ISO='2026-10-16T00:00:00Z'
@@ -58,7 +59,7 @@ if (( 10#$NOW >= 10#$DEADLINE_EPOCH )); then
     "ACTION REQUIRED: the ${DEADLINE_ISO%%T*} re-evaluation date for #9387 has arrived. Do these in order. This probe never closes the tracker and comments again on every daily sweep until the tracker leaves the sweep (step c)." \
     "  (a) Confirm the first real harness-approved write was approved by YOU at the prompt. The run ledger (bootstrap-runs.jsonl) lives on the founder's machine, so this probe cannot read it, and ADR-264 says a ledger line is not evidence of approval: an agent that reads the hook can mint its own receipt." \
     "  (b) Only then start the migration of the TTY-ack scripts to the staged approval gate." \
-    "  (c) When the migration has landed, close #9387 by hand AND remove its follow-through label: a tracker closed with the label still on is swept for 14 more days."
+    "  (c) When the migration has landed, close #9387 by hand AND remove its follow-through label: a tracker closed with the label still on can be swept for up to 14 more days."
   exit 5
 fi
 echo "NOT YET: the ${DEADLINE_ISO%%T*} re-evaluation date for #9387 has not arrived. (Seeing this as a tracker comment means the directive's earliest= is earlier than this date.)"

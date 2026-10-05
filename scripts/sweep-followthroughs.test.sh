@@ -587,7 +587,15 @@ t11b_closed_action_required_comments_without_reopening() {
                       "issue comment 6657" "$calls"
   assert_not_contains "T11b does NOT reopen on exit 5" \
                       "issue reopen" "$calls"
-  unset GH_TOKEN; rm -rf "$root"
+  # The comment BODY is the other half of the fix: the unfixed arm posted an empty one (the stub's
+  # recorded body is the file the printf pipeline wrote).
+  assert_contains     "T11b the comment body carries the verdict heading" \
+                      "### Sweeper run: ACTION REQUIRED (exit 5" "$(cat "$root/comment-6657" 2>/dev/null)"
+  assert_contains     "T11b the comment body tells the operator how to stop it" \
+                      "Remove the \`follow-through\` label" "$(cat "$root/comment-6657" 2>/dev/null)"
+  # $root lives under SUITE_TMP, which the suite removes at exit; no per-test rm -rf (a destructive
+  # write the fixture-relative ratchet prices, #7708).
+  unset GH_TOKEN
 }
 
 # --- T12 (AC14): does not re-litigate the sweeper's own PASS closure --------
@@ -1637,7 +1645,7 @@ assert_contains     "T19 rc=3 renders as CANNOT ESTABLISH" \
                     '3) verdict="CANNOT ESTABLISH" ;;' "$(cat "$SUT")"
 # #8657: the CLOSED path had no `5)` arm, so exit 5 fell into its TRANSIENT catch-all and posted
 # NOTHING. These are source assertions like their T19 siblings above; the behavioural coverage is
-# the closed-path dispatch rows elsewhere in this file. Pinned on the arm AND on the decision it
+# T11b (the closed-path exit-5 row). Pinned on the arm AND on the decision it
 # makes, because "has a 5) arm" would be satisfied by one that reopens.
 assert_contains     "T19c the CLOSED path maps rc=5 to ACTION REQUIRED, not TRANSIENT" \
                     'action="comment"; verdict="ACTION REQUIRED"' "$(cat "$SUT")"
@@ -1682,7 +1690,7 @@ if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
 fi
 # Absolute floor at the MEASURED green count -- a lower bound, so adding rows never trips it;
 # re-measure and raise it in the same commit that adds a row.
-MIN_ASSERTIONS=191
+MIN_ASSERTIONS=195
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 1

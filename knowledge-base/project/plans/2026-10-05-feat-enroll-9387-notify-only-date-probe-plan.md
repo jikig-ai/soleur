@@ -28,7 +28,7 @@ Note: the spec for this branch carries no `lane:` (there is no spec file), so `l
 ### New Considerations Discovered
 
 - `do-not-autoclose` is not read by the follow-through sweeper; it is read by the stale deferred-scope-out cron (`cron-stale-deferred-scope-outs`, a 90-day kill switch), and #9387 is a `deferred-scope-out` tracker, so it is the label that protects the tracker before 2026-10-16 (the sweeper posts nothing until then). The never-0 probe is what prevents the sweeper from closing it.
-- Review correction (2026-10-05): the sweeper keeps running a CLOSED tracker's probe for 14 days while it carries the `follow-through` label, and its closed-set exit-5 arm is defective (reported separately). The exit-5 message and the RETIREMENT line therefore tell the operator to remove the `follow-through` label when closing.
+- Review correction (2026-10-05): the sweeper keeps running a CLOSED tracker's probe for 14 days while it carries the `follow-through` label, and its closed-set exit-5 arm was defective (it reopened the tracker); that is fixed in this PR (T11b). The exit-5 message and the RETIREMENT line therefore tell the operator to remove the `follow-through` label when closing.
 - Exit 5 comments on every sweep until the tracker is hand-closed; intended, and the message says how to stop it.
 - Both `scripts/<name>` and `scripts/followthroughs/<name>` run_suite label forms exist; the newer prefixed form is used.
 
