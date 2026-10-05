@@ -539,3 +539,11 @@ is not a completed lint check of those files.
   again truncated; use smaller targeted reads. The first audit-defect filing
   was refused for missing milestone and filing-exit fields. The corrected
   invocation supplies both and created issue 9553 before the inline fix.
+- The vendored-font source compiled, but Node 22's default heap crashed in
+  Next's TypeScript phase. Retain the failed export/log and retry the same
+  pinned source with explicit `NODE_OPTIONS=--max-old-space-size=4096` and
+  an 8 GiB container limit. The credential-free, network-disabled retry passed
+  all compilation steps; this is a concrete compiler workaround, not runtime
+  recovery evidence. A guessed root GDPR-script path also failed; the actual
+  hook command in `lefthook.yml` points into the installed skill's `scripts/`
+  directory. Docker metadata reads required an approved socket-access retry.
