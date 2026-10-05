@@ -136,6 +136,12 @@ build_sandbox() {
   if [[ "$with_lib" == "with-lib" ]]; then
     cp "$AFF_LIB" "$dir/lib/" || return 1
   fi
+  # Duration manifests the runner-changed banner sums. Absent by default (the banner
+  # then says "duration unknown"); an arm that asserts the cost clause supplies a
+  # synthetic directory so the expected minutes are a fixture fact, not a live number.
+  if [[ -n "${SANDBOX_MANIFEST_DIR:-}" ]]; then
+    cp "$SANDBOX_MANIFEST_DIR"/*.tsv "$dir/" || return 1
+  fi
   python3 - "$out" <<'PY' || return 1
 import sys, re
 path = sys.argv[1]
@@ -432,6 +438,57 @@ if [[ "$_rc" == "0" ]] && (( _ran + _decl >= $(runnable_n "$ARM_SB") )) \
   pass "k: a diff touching the runner degrades to full (runner-changed)"
 else
   fail "k: rc=$_rc ran=${_ran}"
+fi
+
+# --- Rows k2-k4: the runner-changed banner and --help (RUNNER EDITS) ---------------
+# The full-fallback arm must say WHAT happened, what it COSTS and how to PREVIEW or scope
+# it: before this, a registration-only edit read as a bare MODE=full with no cost and no
+# escape, which looks like a hang. k2 is the no-manifest arm, k3 pins the cost clause to a
+# synthetic manifest (a hardcoded number cannot satisfy it), k4 the --help block.
+_k_mode='[affected] MODE=full (degraded: runner-changed) — selection declines disabled; relevance declines still apply.'
+cases=$((cases + 1))
+SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  -- --affected
+if grep -qF 'this diff edits the runner' <<<"$ARM_OUT" \
+   && grep -qF 'the battery is running in FULL' <<<"$ARM_OUT" \
+   && grep -qF 'duration unknown, manifest unavailable' <<<"$ARM_OUT" \
+   && grep -qF 'bash scripts/test-all.sh --print-selection' <<<"$ARM_OUT" \
+   && grep -qF -- '--affected --affected-scope=staged' <<<"$ARM_OUT" \
+   && grep -qF 'INDEX only' <<<"$ARM_OUT" \
+   && grep -qF 'TEST_GROUP=affected is a different selector' <<<"$ARM_OUT" \
+   && grep -qxF -- "$_k_mode" <<<"$ARM_OUT"; then
+  pass "k2: the runner-changed banner states cause, preview and scope commands, and keeps the MODE=full line verbatim"
+else
+  fail "k2: banner missing a required clause; out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -8)"
+fi
+
+cases=$((cases + 1))
+_k3_dir="$TESTROOT/k3-manifests"; mkdir -p "$_k3_dir" || { echo "FATAL: k3 fixture dir" >&2; exit 2; }
+assert_fixture_dir "$_k3_dir"
+printf '# synthetic\nzz/a\t120000\tmeasured\nzz/b\t30000\tmeasured\n' > "$_k3_dir/suite-durations.tsv"
+printf '# synthetic\nzz/c\t30000\tmeasured\n' > "$_k3_dir/suite-durations-heavy.tsv"
+SANDBOX_MANIFEST_DIR="$_k3_dir" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  -- --affected
+# 120000 + 30000 + 30000 ms = 3 minutes exactly.
+if grep -qF 'about 3 min of suite time at manifest weights, serial and uncontended' <<<"$ARM_OUT" \
+   && ! grep -qF 'duration unknown' <<<"$ARM_OUT"; then
+  pass "k3: the banner's N is the manifest sum (3 min for the synthetic 180000 ms)"
+else
+  fail "k3: cost clause wrong; out: $(grep -F 'battery is running' <<<"$ARM_OUT" | head -2)"
+fi
+
+cases=$((cases + 1))
+_k4_out=$(env $ENV_SCRUB SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --help 2>&1) || true
+if grep -qF 'RUNNER EDITS' <<<"$_k4_out" \
+   && grep -qF 'bash scripts/test-all.sh --print-selection' <<<"$_k4_out" \
+   && grep -qF -- '--affected --affected-scope=staged' <<<"$_k4_out" \
+   && grep -qF 'TEST_GROUP=affected is a DIFFERENT, heuristic selector' <<<"$_k4_out" \
+   && grep -qF 'not an escape from the fallback' <<<"$_k4_out"; then
+  pass "k4: --help carries the RUNNER EDITS block with the preview and staged-scope commands"
+else
+  fail "k4: --help lacks the RUNNER EDITS block"
 fi
 
 # --- Row l: SOLEUR_SUBAGENT refusal — affected proceeds, --full refuses -----------
@@ -2005,7 +2062,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=86
+MIN_CASES=89
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2

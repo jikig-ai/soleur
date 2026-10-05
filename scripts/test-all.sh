@@ -334,11 +334,26 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         of the real diff (print-only; never narrows a real run).
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
+                        Selects on the INDEX only: committed edits are not in that
+                        window, and a NEW suite is selected only if its files are staged.
   --enumerate           emit the leg's assigned registration labels; runs nothing.
   --enumerate-commands  emit each registration's argv as SUITE_COMMAND records.
   --capacity            report whether the box can absorb another full gate.
   --print-suite-globs   print the registration glob list.
   --help                this text.
+
+RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-paths.sh):
+  Those two files ARE the gate's selection logic, so such a diff degrades --affected to
+  the FULL battery and prints AFFECTED_FALLBACK reason=runner-changed plus a banner that
+  states the expected duration. Registering a new suite is itself such an edit.
+  Preview what any diff selects, running nothing:
+      bash scripts/test-all.sh --print-selection
+  Scope an edit you have judged safe (selects on the INDEX only, so stage the new
+  suite's files too):
+      git add <files> && bash scripts/test-all.sh --affected --affected-scope=staged
+  TEST_GROUP=affected is a DIFFERENT, heuristic selector (#8591): it has no runner-changed
+  arm, its content-reference signal selects every suite whose text mentions the changed
+  path, and it cannot be combined with --affected. It is not an escape from the fallback.
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
@@ -3022,6 +3037,35 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
+# Cost of the full battery for the runner-changed banner: the sum of the duration
+# manifests (second column, milliseconds), in whole minutes. Fails (rc 1) when either
+# manifest is absent or carries no rows, so the banner says "unknown" instead of guessing.
+_aff_full_cost_min() {
+  local _d _f _s _tot=0
+  _d="$(dirname "${BASH_SOURCE[0]}")"
+  for _f in suite-durations.tsv suite-durations-heavy.tsv; do
+    [[ -r "$_d/$_f" ]] || return 1
+    _s="$(LC_ALL=C awk -F'\t' '/^#/ || NF < 2 { next } $2 ~ /^[0-9]+$/ { s += $2; n++ } END { if (n > 0) printf "%d", s; else exit 1 }' "$_d/$_f")" || return 1
+    _tot=$(( _tot + _s ))
+  done
+  printf '%d' $(( (_tot + 30000) / 60000 ))
+}
+
+# The runner-changed banner (stderr). It states the cause, the cost, and the escape — and
+# never echoes diff text: this output is read by agents, so a printed source line would be
+# a prompt-injection channel. Everything here is a fixed sentence.
+_aff_runner_banner() {
+  local _n
+  if _n="$(_aff_full_cost_min)"; then
+    echo "[affected] this diff edits the runner (scripts/test-all.sh or scripts/lib/test-affected-paths.sh); the battery is running in FULL (about ${_n} min of suite time at manifest weights, serial and uncontended; contended runs take longer)." >&2
+  else
+    echo "[affected] this diff edits the runner (scripts/test-all.sh or scripts/lib/test-affected-paths.sh); the battery is running in FULL (duration unknown, manifest unavailable)." >&2
+  fi
+  echo "[affected] preview what any diff selects, running nothing: bash scripts/test-all.sh --print-selection" >&2
+  echo "[affected] to scope an edit you have judged safe: git add it, then bash scripts/test-all.sh --affected --affected-scope=staged (selects on the INDEX only: committed edits are not in that window, and a NEW suite is selected only if its files are staged)." >&2
+  echo "[affected] TEST_GROUP=affected is a different selector and does not narrow a runner edit; see --help (RUNNER EDITS)." >&2
+}
+
 _MIN_ALWAYS_ON_DECLARED=141
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
@@ -3161,6 +3205,7 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
   fi
   if [[ -n "$_aff_fallback" ]]; then
     printf 'AFFECTED_FALLBACK\treason=%s\n' "$_aff_fallback"
+    [[ "$_aff_fallback" == "runner-changed" ]] && _aff_runner_banner
     # Degraded is NOT `--full`: `_FULL_GATE` stays 0, so `not_in_diff`
     # relevance declines still apply — the banner must not claim otherwise.
     echo "[affected] MODE=full (degraded: ${_aff_fallback}) — selection declines disabled; relevance declines still apply." >&2
