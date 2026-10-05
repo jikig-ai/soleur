@@ -1875,6 +1875,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     toolUseId: string,
   ): void {
     if (!pendingPrompts || !emitInteractivePrompt) return;
+    // ADR-113 addendum (#9539): a support dispatch has NO interactive surface —
+    // its transport is a per-request SSE stream while `emitInteractivePrompt`
+    // writes to the process WS sink and `pendingPrompts` entries are answerable
+    // via `interactive_prompt_response` over the user's Command Center socket
+    // (a cross-surface tool_result injection into a no-interaction turn).
+    // `SUPPORT_EXTRA_DISALLOWED_TOOLS` schema removal is the primary lever;
+    // this is the chokepoint belt for a model emitting a removed tool.
+    if (state.persona === "support") return;
     const classified = classifyInteractiveTool(toolName, toolInput, cwd);
     if (!classified) return;
     const promptId = mintPromptId(randomUUID());
