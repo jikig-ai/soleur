@@ -49,6 +49,11 @@ locals {
     # sentry_alert.stale_bot_pr (issue-alerts.tf) → email; the unrouted
     # monitor itself still opens a Sentry issue on failure.
     scheduled_bot_pr_reaper = "48h stale-bot-PR watchdog (sentry_alert.stale_bot_pr) covers a dead reaper pending a routing decision (#9274)"
+    # #9482 follow-up (a) — the merge-queue stall dispatcher's liveness monitor, added under the
+    # two-PR rule: its detector id does not exist until the first apply, so routing is PR 2 (#9493).
+    # Real cover meanwhile: a failed dispatch POST raises a reportSilentFallback Sentry issue and the
+    # workflow's own schedule: fallback keeps firing; the unrouted monitor still opens a Sentry issue.
+    scheduled_merge_queue_stall_dispatch = "failed dispatch POST raises a reportSilentFallback Sentry issue and the workflow schedule: fallback keeps firing; routing is PR 2 (#9493)"
     # #6931 — the web-2 soak-marker job's liveness monitor, added under the two-PR rule: the in-run
     # ci/luks-verify-web2 GitHub issue is the primary channel; route this after its first measured check-in.
     workspaces_luks_verify_web2 = "in-run ci/luks-verify-web2 GitHub issue is the primary channel; route after the first measured check-in (#9372)"
