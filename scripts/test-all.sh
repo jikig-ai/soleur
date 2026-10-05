@@ -347,9 +347,11 @@ RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-p
   the FULL battery and prints AFFECTED_FALLBACK reason=runner-changed plus a banner that
   states the expected duration. Registering a new suite is itself such an edit, so a
   REGISTRATION-ONLY diff (nothing but new single-line run_suite registrations for NEW
-  suites, each directly below another registration) takes the bounded selection
-  instead: the run prints AFFECTED_RUNNER_IN_SCOPE reason=registration-only and
-  AFFECTED_SUMMARY ... fallback=none. Any other line, in either file, keeps the fallback.
+  suites, each directly below another registration, plus at most one new
+  AFFECTED_*_PATHS block or ALWAYS_ON_SUITES entry for a suite the same diff registers)
+  takes the bounded selection instead: the run prints AFFECTED_RUNNER_IN_SCOPE
+  reason=registration-only and AFFECTED_SUMMARY ... fallback=none. Any other line, in
+  either file, keeps the fallback.
   Preview what any diff selects, running nothing:
       bash scripts/test-all.sh --print-selection
   Scope an edit you have judged safe (selects on the INDEX only, so stage the new
@@ -2113,7 +2115,12 @@ _diff_edge_hit() {
 #       be a complete single-line registration, which keeps added lines out of backslash
 #       continuations, heredocs and multi-line strings.
 #   G4  `bash -n` passes on both post-image files.
-#   Any hunk in scripts/lib/test-affected-paths.sh is semantic in this slice.
+#   Index file: only (a) ONE contiguous added `AFFECTED_<MAP(label)>_PATHS=( ... )` block (opener
+#       directly below another array's `)` or entry, closer a lone `)`, all in one hunk) and (b) ONE
+#       added entry of ALWAYS_ON_SUITES, each bound to a label ADDED in this same diff (G5). The
+#       array name must be defined exactly once, not be an AFFECTED_CONSUMED_EDGES target, and not
+#       be the name any OTHER live label maps to (checked post-walk against the live stream).
+#       Any other added index line is semantic.
 # The post-walk pre-pass additionally requires every added label to occur EXACTLY ONCE in the live
 # enumerate stream and every anchor label at least once (a registration-shaped line inside a
 # string is text, not a registration).
@@ -2138,6 +2145,13 @@ _aff_rd_diff() {
       --src-prefix=a/ --dst-prefix=b/ -U0 "$_b" -- scripts/test-all.sh scripts/lib/test-affected-paths.sh 2>/dev/null
 }
 # aff-rd-seam-end
+# The census normalisation of a registration label into its AFFECTED_<LABEL>_PATHS array name:
+# uppercased, every non-alphanumeric to `_`, leading `_` dropped. NOT injective (`a/b-c` and `a/b_c`
+# collide), which is why an index declaration is bound to a label added in the same diff and the
+# pre-pass checks no other live label maps to the same name.
+_aff_label_map() {
+  printf '%s' "$1" | LC_ALL=C tr 'a-z' 'A-Z' | LC_ALL=C sed -e 's/[^A-Z0-9]/_/g' -e 's/^_*//'
+}
 _aff_classify_runner_diff() {
   _aff_runner_class=""
   _aff_runner_reason=""
@@ -2145,7 +2159,10 @@ _aff_classify_runner_diff() {
   _aff_runner_offenders=()
   _aff_runner_added_labels=()
   _aff_runner_anchor_labels=()
-  local _root _text _rc _tag _a _b _f
+  _aff_runner_index_arrays=()
+  _aff_runner_index_entries=()
+  _aff_runner_index_pairs=()
+  local _root _text _rc _tag _a _b _f _l _m _ok
   _root="$(_aff_rd_root)" || { _aff_runner_class=undecidable; _aff_runner_reason="no-repo-root"; return 0; }
   [[ -n "$_root" && -f "$_root/scripts/test-all.sh" ]] || { _aff_runner_class=undecidable; _aff_runner_reason="no-post-image"; return 0; }
   _rc=0
@@ -2188,6 +2205,7 @@ _aff_classify_runner_diff() {
       for (; i <= n; i++) if (a[i] !~ /^[A-Za-z0-9_.\/@=:-]+$/) return ""
       return label
     }
+    function endblk(f, n) { if (blk == 1) { viol("INDEX-BLOCK", f, n); blk = 0 } }
     function load(f, arr,    k, line, path) {
       path = root "/" f; k = 0
       while ((getline line < path) > 0) { k++; arr[f, k] = line }
@@ -2196,7 +2214,7 @@ _aff_classify_runner_diff() {
     }
     BEGIN { RUNNER = "scripts/test-all.sh"; INDEX = "scripts/lib/test-affected-paths.sh"
             file = ""; inhunk = 0; seen = 0; nadd = 0
-            nrun = load(RUNNER, post) }
+            nrun = load(RUNNER, post); nidx = load(INDEX, post); blk = 0 }
     {
       line = $0
       if (inhunk) {
@@ -2205,7 +2223,36 @@ _aff_classify_runner_diff() {
         else if (c == "+") {
           body = substr(line, 2); rem_new--
           cur = nl_new; nl_new++; nadd++
-          if (file == INDEX) { viol("INDEX-HUNK", file, cur) }
+          if (file == INDEX) {
+            # Index declarations (G3): ONE contiguous added AFFECTED_<MAP>_PATHS=( ... ) block, or ONE
+            # added entry of ALWAYS_ON_SUITES. Everything else in this file is semantic. Binding to a
+            # label added in the same diff, and the injectivity rules, are checked by the caller.
+            if (body ~ /\r/) { viol("G2-cr", file, cur) }
+            else if (blk == 1) {
+              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+              else if (body == ")") { blk = 0 }
+              else { viol("INDEX-SHAPE", file, cur); blk = 0 }
+            } else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) {
+              j = cur - 1
+              while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
+              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/))) viol("INDEX-ANCHOR", file, cur)
+            } else if (body ~ /^AFFECTED_[A-Z0-9_]+_PATHS=\($/) {
+              j = cur - 1
+              while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
+              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/)) {
+                blk = 1; nm = body; sub(/=\($/, "", nm); printf "R\t%s\n", nm
+              } else viol("INDEX-ANCHOR", file, cur)
+            } else if (body ~ /^  "[A-Za-z0-9_.\/-]+"( +#.*)?$/) {
+              j = cur - 1; enc = ""
+              while (j >= 1) {
+                if (post[file, j] == ")") break
+                if (post[file, j] ~ /^[A-Za-z_][A-Za-z0-9_]*=\($/) { enc = post[file, j]; break }
+                j--
+              }
+              if (enc == "ALWAYS_ON_SUITES=(") { lab = body; sub(/^  "/, "", lab); sub(/".*$/, "", lab); printf "E\t%s\n", lab }
+              else viol("INDEX-SHAPE", file, cur)
+            } else viol("INDEX-SHAPE", file, cur)
+          }
           else {
             if (body ~ /\r/) { viol("G2-cr", file, cur) }
             else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { kind = "free" }
@@ -2227,8 +2274,8 @@ _aff_classify_runner_diff() {
             }
           }
         }
-        else { viol("G0-header", file, 0); inhunk = 0; next }
-        if (rem_old <= 0 && rem_new <= 0) inhunk = 0
+        else { viol("G0-header", file, 0); inhunk = 0; endblk(file, nl_new); next }
+        if (rem_old <= 0 && rem_new <= 0) { inhunk = 0; endblk(file, nl_new) }
         next
       }
       if (line ~ /^diff --git a\/[^ ]+ b\/[^ ]+$/) {
@@ -2251,7 +2298,7 @@ _aff_classify_runner_diff() {
       }
       viol("G0-header", file, 0)
     }
-    END { if (seen == 0) print "E\tno-diff-header"; printf "N\t%d\n", nadd }
+    END { endblk(file, nl_new); if (seen == 0) print "Z\tno-diff-header"; printf "N\t%d\n", nadd }
   ' <<<"$_text")" || { _aff_runner_class=undecidable; _aff_runner_reason="awk-failed"; return 0; }
   local _n_added=0
   while IFS=$'\t' read -r _tag _a _b; do
@@ -2261,13 +2308,50 @@ _aff_classify_runner_diff() {
         if (( ${#_aff_runner_offenders[@]} < 3 )); then _aff_runner_offenders+=("${_b} ${_a}"); fi ;;
       L) _aff_runner_added_labels+=("$_a") ;;
       A) _aff_runner_anchor_labels+=("$_a") ;;
-      E) _aff_runner_class=undecidable; _aff_runner_reason="$_a" ;;
+      Z) _aff_runner_class=undecidable; _aff_runner_reason="$_a" ;;
+      R) _aff_runner_index_arrays+=("$_a") ;;
+      E) _aff_runner_index_entries+=("$_a") ;;
       N) _n_added="$_a" ;;
     esac
   done <<<"$_out"
   [[ "$_aff_runner_class" == undecidable ]] && return 0
   if (( _aff_runner_off_n > 0 )); then _aff_runner_class=semantic; return 0; fi
   if (( _n_added == 0 )); then _aff_runner_class=undecidable; _aff_runner_reason="no-added-lines"; return 0; fi
+  # G5 binding and array-name injectivity (index declarations). Every declared array / always-on
+  # entry must name a label ADDED in this diff, so a registration can never touch an existing suite's
+  # selection; the array must be defined exactly once in the post-image and must not be the target of
+  # an AFFECTED_CONSUMED_EDGES pair (an explicit pair can name an array no label maps to).
+  local _idx="$_root/scripts/lib/test-affected-paths.sh" _bound _cnt
+  for _a in ${_aff_runner_index_arrays[@]+"${_aff_runner_index_arrays[@]}"}; do
+    _bound=""
+    for _l in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do
+      _m="AFFECTED_$(_aff_label_map "$_l")_PATHS"
+      if [[ "$_m" == "$_a" ]]; then _bound="$_l"; break; fi
+    done
+    if [[ -z "$_bound" ]]; then
+      _aff_runner_off_n=$(( _aff_runner_off_n + 1 )); (( ${#_aff_runner_offenders[@]} < 3 )) && _aff_runner_offenders+=("scripts/lib/test-affected-paths.sh:0 INDEX-UNBOUND")
+      continue
+    fi
+    _cnt="$(grep -c -x -F -- "${_a}=(" "$_idx" 2>/dev/null)" || _cnt=0
+    if [[ "$_cnt" != "1" ]] || grep -q -F -- "|${_a}\"" "$_idx" 2>/dev/null; then
+      _aff_runner_off_n=$(( _aff_runner_off_n + 1 )); (( ${#_aff_runner_offenders[@]} < 3 )) && _aff_runner_offenders+=("scripts/lib/test-affected-paths.sh:0 INDEX-ARRAY-NAME")
+      continue
+    fi
+    _aff_runner_index_pairs+=("${_a}|${_bound}")
+  done
+  for _a in ${_aff_runner_index_entries[@]+"${_aff_runner_index_entries[@]}"}; do
+    _ok=0
+    for _l in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do
+      if [[ "$_l" == "$_a" ]]; then _ok=1; break; fi
+    done
+    if (( _ok == 0 )); then
+      _aff_runner_off_n=$(( _aff_runner_off_n + 1 )); (( ${#_aff_runner_offenders[@]} < 3 )) && _aff_runner_offenders+=("scripts/lib/test-affected-paths.sh:0 INDEX-UNBOUND")
+    fi
+  done
+  if (( _aff_runner_off_n > 0 )); then _aff_runner_class=semantic; return 0; fi
+  # A diff that registers nothing is not a registration-only edit (a comment-only change could not
+  # alter behaviour, but the claim this class makes is "adds new suites"): it keeps the full fallback.
+  if (( ${#_aff_runner_added_labels[@]} == 0 )); then _aff_runner_class=undecidable; _aff_runner_reason="no-registration"; return 0; fi
   # G4: both post-images must parse. `-n` only parses; the ambient environment cannot run code.
   for _f in scripts/test-all.sh scripts/lib/test-affected-paths.sh; do
     if [[ -L "$_root/$_f" || ! -f "$_root/$_f" ]] \
@@ -3268,7 +3352,11 @@ _aff_rule_sentence() {
     G2-cr)           echo "a carriage return in an added line" ;;
     G2-anchor)       echo "no registration line directly above it; first-in-group insertions are refused" ;;
     G2-label-dup)    echo "two added registrations share one label" ;;
-    INDEX-HUNK)      echo "edits to the declarations lib are not admitted; the orphan census asks for one only when the suite's SUT derivation reaches nothing" ;;
+    INDEX-SHAPE)     echo "an added line in the declarations lib outside the two admitted shapes (one new AFFECTED_<LABEL>_PATHS block, or one ALWAYS_ON_SUITES entry, for a suite added in this diff)" ;;
+    INDEX-ANCHOR)    echo "an added array block must start directly below another array's closing line or entry" ;;
+    INDEX-BLOCK)     echo "an added array block that does not close inside the same hunk" ;;
+    INDEX-UNBOUND)   echo "a declaration for a suite this diff does not register (a declaration for an existing suite can narrow its selection)" ;;
+    INDEX-ARRAY-NAME) echo "the array name is defined twice, targeted by an AFFECTED_CONSUMED_EDGES pair, or also the name of another live label" ;;
     G4-syntax)       echo "the post-image does not parse" ;;
     LABEL-NOT-UNIQUE) echo "a registration aliases an existing label, including loop- and glob-generated ones" ;;
     ANCHOR-NOT-LIVE) echo "the registration above it is not live in the enumerate stream (text inside a string?)" ;;
@@ -3344,6 +3432,7 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
   _aff_runner_offenders=()
   _aff_runner_added_labels=()
   _aff_runner_anchor_labels=()
+  _aff_runner_index_pairs=()
   if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )) \
      && [[ "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] && (( _AFF_LIB_OK == 1 )) \
      && [[ "$_diff_detect_ok" == "1" && "$_diff_head_ok" == "1" ]] && (( _PRINT_PATHS_REQ == 0 )); then
@@ -3486,6 +3575,19 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
               [[ "$_aff_x" == "$_aff_l" ]] && _aff_c=$(( _aff_c + 1 ))
             done
             if (( _aff_c < 1 )); then _aff_uniq_bad="ANCHOR-NOT-LIVE $_aff_l"; break; fi
+          done
+        fi
+        # Injectivity (iv): the label-to-array map is not injective, so a declared array that some
+        # OTHER live label (loop- and glob-generated ones included) also maps to would overwrite or
+        # alias that suite's edges. Every pair `array|label` must have no second claimant.
+        if [[ -z "$_aff_uniq_bad" ]]; then
+          for _aff_pair in ${_aff_runner_index_pairs[@]+"${_aff_runner_index_pairs[@]}"}; do
+            for _aff_x in ${_aff_label[@]+"${_aff_label[@]}"}; do
+              [[ "$_aff_x" == "${_aff_pair#*|}" ]] && continue
+              if [[ "AFFECTED_$(_aff_label_map "$_aff_x")_PATHS" == "${_aff_pair%%|*}" ]]; then
+                _aff_uniq_bad="INDEX-ARRAY-NAME ${_aff_pair#*|}"; break 2
+              fi
+            done
           done
         fi
       fi

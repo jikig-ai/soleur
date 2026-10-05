@@ -493,8 +493,12 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`, no option-shaped first
     argument, no quote, substitution, redirect, `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that
     is not blank or a comment must itself be a complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line
-    strings); **G4** `bash -n` passes on both post-images; any hunk in `scripts/lib/test-affected-paths.sh` is semantic. The pre-pass then requires every
-    added label to occur exactly once in the live `--enumerate-commands` stream and every anchor label at least once, because loops and globs produce
+    strings); **G3** the only admitted additions to `scripts/lib/test-affected-paths.sh` are one contiguous `AFFECTED_<MAP(label)>_PATHS=( ... )` block
+    (opener directly below another array's closing `)` or entry, entries in a closed charset, closer a lone `)`, all in one hunk) and one entry of
+    `ALWAYS_ON_SUITES`, each bound (**G5**) to a label ADDED in the same diff, with the array defined exactly once and not named by any
+    `AFFECTED_CONSUMED_EDGES` pair, because the label-to-array map is not injective; **G4** `bash -n` passes on both post-images. The pre-pass then requires every
+    added label to occur exactly once in the live `--enumerate-commands` stream, every anchor label at least once, and no OTHER live label to map to a
+    declared array name, because loops and globs produce
     about half of the live registrations and their labels never appear as literals; any other count degrades to the full fallback through the same print
     block (never a new ladder arm, which repeated the #9197 defect). Anything the classifier cannot decide (no merge-base, a git error, `--paths` mode, an
     empty diff text) is `undecidable` and behaves as semantic. The classifier is not computed under `--affected-scope=staged`, which stays byte-identical.
@@ -506,8 +510,8 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     diff names it, and the residual argument rests on that edge. **Why this reverses the 2026-09-29 option-d rejection in part:** that row feared "fragile
     diff-content inspection" and said the dangerous narrowing edit is data-shaped. A closed allowlist of whole-line shapes models none of bash's syntax and
     every miss falls toward the full battery, so it is not fragile in the way that matters; and the only data edit that can narrow (a new
-    `AFFECTED_*_PATHS` array on an existing unclassified label turns "always runs" into "runs only when its edge is touched") is refused because no
-    index hunk is admitted. **Measured:** of 226 runner-touching commits since 2026-06-01, 152 (67%) fit the grammar including the anchor rule and 139 add
+    `AFFECTED_*_PATHS` array on an existing unclassified label turns "always runs" into "runs only when its edge is touched") is refused because every
+    declaration must bind to a label the same diff registers. **Measured:** of 226 runner-touching commits since 2026-06-01, 152 (67%) fit the grammar including the anchor rule and 139 add
     a registration; the full battery is 91.4 min at manifest weights against 58.6 min for a bounded selection (a 36% saving, not minutes: 13.6 min of the
     43 edge suites are heavy batteries that are not runner-SUT, and narrowing those is a separate, deferred concept). **Accepted residual**, the same class
     as decision 10's with a larger window (the whole branch, not one commit's index): the classifier lives in the file it judges, so a PR that edits it is
@@ -520,5 +524,6 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     deliver the narrowing; its banner half is kept for the fail-closed arm); a selection-equivalence oracle (sees selection metadata only, costs two walks);
     a classifier in a third file (an edit to it would not match the two-file trigger); admitting deletions or edits (a removed `run_suite` is a narrowing
     edit by definition); `SUITE_GLOBS` auto-discovery of root `scripts/*.test.sh` (162 explicit registrations make it a mass conversion, and "registration
-    is a reviewed act" is a property worth keeping). Index declarations (a new `AFFECTED_*_PATHS` block, an `ALWAYS_ON_SUITES` entry) are a separable
-    follow-on slice bound to labels registered in the same diff.
+    is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
+    runner-only line. They serve about 3.5% of the measured demand (5 of 142 registration-only commits touched the index) and were kept because the
+    operator named "a new AFFECTED_*_PATHS array" as registration-only.

@@ -228,7 +228,7 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     apps/web-platform/infra/run-registered-suites.sh|\\
     tests/commands/sync-domain-model|\\
     plugins/soleur/test/c4-model-freshness.test.sh|\\
-    test/x-community|plugins/soleur|zz/new-suite) : ;;
+    test/x-community|plugins/soleur|zz/new-suite|scripts/lint-dual_lockfile) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -514,12 +514,12 @@ fi
 # H1/H2 swap in a permissive and a reject-all stub and require the table to notice.
 _rc_src="$TESTROOT/classifier.sh"
 awk '/^_aff_rd_root\(\) \{$/ { on = 1 } on { print } on && /^_aff_classify_runner_diff\(\) \{$/ { inf = 1 } inf && /^}$/ { exit }' "$RUNNER" > "$_rc_src"
-_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
+_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_label_map|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
 cases=$((cases + 1))
-if [[ "$_rc_defs" == "3" ]] && bash -n "$_rc_src"; then
-  pass "rc0: the classifier extracts as three functions and parses"
+if [[ "$_rc_defs" == "4" ]] && bash -n "$_rc_src"; then
+  pass "rc0: the classifier extracts as four functions and parses"
 else
-  fail "rc0: classifier extraction found $_rc_defs of 3 functions (or it does not parse)"
+  fail "rc0: classifier extraction found $_rc_defs of 4 functions (or it does not parse)"
 fi
 
 RC_BASE_RUNNER='#!/usr/bin/env bash
@@ -540,6 +540,19 @@ x=1 \
 RC_BASE_LIB='ALWAYS_ON_SUITES=(
   "a/one"
 )
+AFFECTED_CONSUMED_EDGES=(
+  "a/two|AFFECTED_A_TWO_PATHS"
+)
+CLOSURE_LEAF_FILES=(
+  "scripts/test-all.sh"
+)
+_aff_helper() {
+  :
+}
+AFFECTED_A_TWO_PATHS=(
+  "a/two.test.sh"
+  "scripts/lib/test-affected-paths.sh"   # THIS FILE
+)
 '
 
 rc_g() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
@@ -552,7 +565,15 @@ rc_mk_repo() {
   mkdir -p "$d/scripts/lib" || return 98
   printf '%s' "$RC_BASE_RUNNER" > "$d/scripts/test-all.sh" || return 98
   if [[ "${2:-}" == "broken-lib" ]]; then printf 'if then\n' > "$d/scripts/lib/test-affected-paths.sh"
-  else printf '%s' "$RC_BASE_LIB" > "$d/scripts/lib/test-affected-paths.sh"; fi
+  else
+    printf '%s' "$RC_BASE_LIB" > "$d/scripts/lib/test-affected-paths.sh"
+    # edges-pair: an explicit AFFECTED_CONSUMED_EDGES pair already targets the array a new label maps to.
+    # has-x-new: that array is already defined in the base lib.
+    case "${2:-}" in
+      edges-pair) printf 'AFFECTED_CONSUMED_EDGES+=(\n  "a/zzz|AFFECTED_X_NEW_PATHS"\n)\n' >> "$d/scripts/lib/test-affected-paths.sh" ;;
+      has-x-new)  printf 'AFFECTED_X_NEW_PATHS=(\n  "x/old.test.sh"\n)\n' >> "$d/scripts/lib/test-affected-paths.sh" ;;
+    esac
+  fi
   rc_g -C "$d" init -q -b main . \
     && rc_g -C "$d" config user.email t@t && rc_g -C "$d" config user.name t \
     && rc_g -C "$d" config commit.gpgsign false \
@@ -573,6 +594,18 @@ rc_rep() {
   PAT="$pat" NEW="$new" DEL="${4:-}" awk '$0 == ENVIRON["PAT"] && !done { done = 1; if (ENVIRON["DEL"] == "") print ENVIRON["NEW"]; next } { print }' \
     "$d/scripts/test-all.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/test-all.sh"
 }
+rc_lib_append() { # dir text...
+  local d="$1"; shift
+  assert_fixture_dir "$d"
+  printf '%s\n' "$1" >> "$d/scripts/lib/test-affected-paths.sh"
+}
+rc_lib_ins() { # dir pattern text
+  local d="$1" pat="$2" txt="$3"
+  assert_fixture_dir "$d"
+  PAT="$pat" TXT="$txt" awk '{ print } $0 == ENVIRON["PAT"] && !done { printf "%s\n", ENVIRON["TXT"]; done = 1 }' \
+    "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"
+}
+RC_BLOCK=$'\n# x/new — declared edge\nAFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'
 RC_TWO='  run_suite "a/two" bash a/two.test.sh'
 RC_ONE='  run_suite "a/one" bash a/one.test.sh'
 
@@ -622,6 +655,21 @@ m_s_formfeed()     { rc_ins "$1" "$RC_TWO" $'\f'; }
 m_s_nbsp()         { rc_ins "$1" "$RC_TWO" $'\xc2\xa0'; }
 m_s_label_dup()    { rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\n  run_suite "x/new" bash x/other.test.sh'; }
 m_s_index_hunk()   { local d="$1"; assert_fixture_dir "$d"; printf '  "a/two"\n' >> "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
+m_ok_idx_block()   { m_ok_single "$1"; rc_lib_append "$1" "$RC_BLOCK"; }
+m_ok_idx_always()  { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' '  "x/new"'; }
+m_ok_idx_both()    { m_ok_idx_block "$1"; rc_lib_ins "$1" '  "a/one"' '  "x/new"'; }
+m_s_idx_unbound()  { rc_lib_append "$1" $'AFFECTED_A_ONE_PATHS=(\n  "a/one.test.sh"\n)'; }
+m_s_idx_closure()  { m_ok_single "$1"; rc_lib_ins "$1" '  "scripts/test-all.sh"' '  "x/new.test.sh"'; }
+m_s_idx_consumed() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two|AFFECTED_A_TWO_PATHS"' '  "x/new|AFFECTED_X_NEW_PATHS"'; }
+m_s_idx_always_unbound() { rc_lib_ins "$1" '  "a/one"' '  "a/two"'; }
+m_s_idx_unclosed() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"'; }
+m_s_idx_edges_target() { m_ok_idx_block "$1"; }
+m_s_idx_dup_def()  { m_ok_idx_block "$1"; }
+m_s_idx_in_function() { m_ok_single "$1"; rc_lib_ins "$1" '  :' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
+m_s_idx_closer_cmd() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n) ; _aff_fallback='; }
+m_s_idx_nested()   { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two.test.sh"' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
+m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
+m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
 m_s_committed()    { rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; rc_g -C "$1" commit -q -am semantic; m_ok_single "$1"; }
 m_u_empty()        { :; }
 m_u_no_origin()    { rc_g -C "$1" update-ref -d refs/remotes/origin/main; m_ok_single "$1"; }
@@ -634,7 +682,10 @@ RC_TABLE=(
   'ok_bun|m_ok_bun|registration-only:x/bun|'
   'ok_blank_comment|m_ok_blank_comment|registration-only:x/new|'
   'ok_two_in_hunk|m_ok_two_in_hunk|registration-only:x/n1,x/n2|'
-  'ok_comment_only|m_ok_comment_only|registration-only:|'
+  'ok_comment_only|m_ok_comment_only|undecidable:no-registration|'
+  'ok_idx_block|m_ok_idx_block|registration-only:x/new|'
+  'ok_idx_always|m_ok_idx_always|registration-only:x/new|'
+  'ok_idx_both|m_ok_idx_both|registration-only:x/new|'
   'ok_mnemonic|m_ok_mnemonic|registration-only:x/new|'
   's_fallback|m_s_fallback|semantic:G2-shape|'
   's_floor|m_s_floor|semantic:G1-removal|'
@@ -671,7 +722,19 @@ RC_TABLE=(
   's_formfeed|m_s_formfeed|semantic:G2-shape|'
   's_nbsp|m_s_nbsp|semantic:G2-shape|'
   's_label_dup|m_s_label_dup|semantic:G2-label-dup|'
-  's_index_hunk|m_s_index_hunk|semantic:INDEX-HUNK|'
+  's_index_hunk|m_s_index_hunk|semantic:INDEX-SHAPE|'
+  's_idx_unbound|m_s_idx_unbound|semantic:INDEX-UNBOUND|'
+  's_idx_closure|m_s_idx_closure|semantic:INDEX-SHAPE|'
+  's_idx_consumed|m_s_idx_consumed|semantic:INDEX-SHAPE|'
+  's_idx_always_unbound|m_s_idx_always_unbound|semantic:INDEX-UNBOUND|'
+  's_idx_unclosed|m_s_idx_unclosed|semantic:INDEX-BLOCK|'
+  's_idx_edges_target|m_s_idx_edges_target|semantic:INDEX-ARRAY-NAME|edges-pair'
+  's_idx_dup_def|m_s_idx_dup_def|semantic:INDEX-ARRAY-NAME|has-x-new'
+  's_idx_nested|m_s_idx_nested|semantic:G4-syntax|'
+  's_idx_in_function|m_s_idx_in_function|semantic:INDEX-ANCHOR|'
+  's_idx_closer_cmd|m_s_idx_closer_cmd|semantic:INDEX-SHAPE|'
+  's_idx_comment_alone|m_s_idx_comment_alone|undecidable:no-registration|'
+  's_idx_removed|m_s_idx_removed|semantic:G1-removal|'
   's_committed|m_s_committed|semantic:G2-shape|'
   's_broken_lib|m_ok_single|semantic:G4-syntax|broken-lib'
   'u_empty|m_u_empty|undecidable:empty-diff-text|'
@@ -897,6 +960,56 @@ if grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed' <<<"$ARM_OUT" \
   pass "re9: under staged scope the class is not computed (the runner-changed note is unchanged)"
 else
   fail "re9: out: $(grep -F 'AFFECTED_RUNNER' <<<"$ARM_OUT" | head -3 | tr '\n' '|')"
+fi
+
+# re10/re11: index declarations ride only with a registration of the SAME diff. re11: a new suite
+# plus its own AFFECTED_<MAP>_PATHS block stays bounded. re10: the array name that `scripts/lint-dual_lockfile`
+# maps to is ALSO the name of the live label `scripts/lint-dual-lockfile` (the map is not injective), so the
+# declaration would overwrite that suite's edges and the post-walk check degrades to full.
+re_idx_root() { # $1 = name, $2 = runner line 3 (the added registration), remaining = lib lines
+  local d name="$1" reg="$2"; shift 2
+  d=$(re_root "$name" "$RE_DUAL" "$reg") || return 98
+  assert_fixture_dir "$d"
+  : > "$d/scripts/lib/test-affected-paths.sh" || return 98
+  local l; for l in "$@"; do printf '%s\n' "$l" >> "$d/scripts/lib/test-affected-paths.sh"; done
+  printf '%s' "$d"
+}
+re_idx_diff() { # $1 = added runner line, $2.. = added lib block lines (lib lines start at 4)
+  local reg="$1"; shift
+  local out
+  out=$'diff --git a/scripts/lib/test-affected-paths.sh b/scripts/lib/test-affected-paths.sh\nindex 1111111..2222222 100644\n--- a/scripts/lib/test-affected-paths.sh\n+++ b/scripts/lib/test-affected-paths.sh'
+  out+=$'\n'"@@ -3,0 +4,$# @@"
+  local l; for l in "$@"; do out+=$'\n'"+${l}"; done
+  out+=$'\n'"$(re_diff 3 1 "$reg")"
+  printf '%s' "$out"
+}
+RE_LIB_HEAD=('ALWAYS_ON_SUITES=(' '  "a/one"' ')')
+cases=$((cases + 1))
+_re11_block=('AFFECTED_ZZ_NEW_SUITE_PATHS=(' '  "zz/new.test.sh"' '  "scripts/lib/test-affected-paths.sh"' ')')
+_re11_root=$(re_idx_root re11 "$RE_NEW" "${RE_LIB_HEAD[@]}" "${_re11_block[@]}")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re11_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$RE_NEW" "${_re11_block[@]}")" -- --print-selection
+_re11_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=registration-only' <<<"$ARM_OUT" && grep -qF 'fallback=none' <<<"$_re11_sum"; then
+  pass "re11: a registration plus its own declared-edge block stays bounded"
+else
+  fail "re11: summary='${_re11_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+cases=$((cases + 1))
+RE_COLL='  run_suite "scripts/lint-dual_lockfile" bash scripts/lint-dual_lockfile.test.sh'
+_re10_block=('AFFECTED_SCRIPTS_LINT_DUAL_LOCKFILE_PATHS=(' '  "scripts/lint-dual_lockfile.test.sh"' '  "scripts/lib/test-affected-paths.sh"' ')')
+_re10_root=$(re_idx_root re10 "$RE_COLL" "${RE_LIB_HEAD[@]}" "${_re10_block[@]}")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_COLL}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re10_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$RE_COLL" "${_re10_block[@]}")" -- --print-selection
+_re10_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re10_sum" && grep -qF '[INDEX-ARRAY-NAME]' <<<"$ARM_OUT" \
+   && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "re10: a declared array another live label also maps to degrades to full (INDEX-ARRAY-NAME)"
+else
+  fail "re10: summary='${_re10_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
 fi
 
 # H5: the extraction under test is the runner's own text — the classifier the matrix drove is
@@ -2481,7 +2594,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=104
+MIN_CASES=106
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
