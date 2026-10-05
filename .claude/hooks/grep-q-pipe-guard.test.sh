@@ -397,7 +397,7 @@ SWEEP_DEFERRALS=(
   '*/test-* | <= | 7 | #9217'
   '*.test.sh | <= | 2 | #9217'
   'apps/web-platform/infra/* | = | 92 | #9217'
-  '.github/* | = | 46 | #9217'
+  '.github/* | = | 45 | #9217'
   'lefthook.yml | = | 1 | #9217'
 )
 
@@ -453,7 +453,7 @@ sweep_verdict() {
         if [[ "$path" == ${r_glob[i]} ]]; then owner=$i; break; fi
       done
     fi
-    if (( owner >= 0 )); then r_n[owner]=$(( r_n[owner] + 1 )); else undeferred+="$line"$'\n'; nund=$(( nund + 1 )); fi
+    if [[ "$owner" != -1 ]]; then r_n[owner]=$(( r_n[owner] + 1 )); else undeferred+="$line"$'\n'; nund=$(( nund + 1 )); fi
   done <<<"$scan"
   for i in "${!r_glob[@]}"; do
     n="${r_n[i]}"; ceil="${r_ceil[i]}"; mode="${r_mode[i]}"; slack=$(( ceil - n ))
