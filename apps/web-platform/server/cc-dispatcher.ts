@@ -1895,11 +1895,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // persistent chip reflects server truth (`bashAutonomous && acked`), NOT a
     // message-presence heuristic. A held (un-acked) disclosure is "Approve each";
     // only an acked autonomous workspace is "Auto-run on". Re-pushed by the
-    // ws-handler on a successful in-session ack-release.
-    defaultSendToClient(args.userId, {
-      type: "autonomous_posture",
-      autonomous: bashAutonomous && autonomousAckAtMs != null,
-    });
+    // ws-handler on a successful in-session ack-release. Gated off support
+    // (#9539): the frame is WS-bound and meaningless to an SSE-only turn.
+    if (args.persona !== "support") {
+      defaultSendToClient(args.userId, {
+        type: "autonomous_posture",
+        autonomous: bashAutonomous && autonomousAckAtMs != null,
+      });
+    }
 
     // Parse the connected repo's owner/repo ONCE from the server-resolved
     // repoUrl (never tool input). Reused by the installation self-heal below
@@ -2357,7 +2360,14 @@ export const realSdkQueryFactory: QueryFactory = async (
             "c4-visualizer flag resolve failed; Concierge diagram write disabled",
         });
       }
-      if (c4Enabled) {
+      // ADR-113 addendum (#9539): `edit_c4_diagram` commits to the user's repo
+      // via the installation token — a real write that executes in the
+      // dispatch process, entirely outside `allowWrite:[]`. Registering it
+      // (and advertising it via c4PromptAddendum) on a read-only support
+      // dispatch contradicts the persona invariant, so the whole c4 surface
+      // — tool build, platformToolNames entry, prompt addendum — is gated on
+      // a non-support persona at the single assignment point.
+      if (c4Enabled && args.persona !== "support") {
         c4Tools = buildC4ConciergeTools({
           userId: args.userId,
           installationId: effectiveInstallationId,
@@ -2798,7 +2808,17 @@ export const realSdkQueryFactory: QueryFactory = async (
         // #3338 — auto-approve the cc-router's read-only tool surface so they
         // don't pay a canUseTool round-trip per call. This is auto-approve,
         // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
-        allowedTools: [...CC_PATH_ALLOWED_TOOLS],
+        // #9539 — the auto-approve list must not undo the support schema
+        // removal: `allowedTools` bypasses `canUseTool` entirely, so a member
+        // of BOTH lists (TodoWrite, ExitPlanMode) would be auto-approved on
+        // support with no persona belt ever seeing the call. Filter the
+        // overlap for support; the read tools support needs (Read/Glob/Grep/
+        // LS/NotebookRead, kb-search's corpus path) stay auto-approved.
+        allowedTools: CC_PATH_ALLOWED_TOOLS.filter(
+          (t) =>
+            args.persona !== "support" ||
+            !SUPPORT_EXTRA_DISALLOWED_TOOLS.includes(t),
+        ),
         // #3338 — HARD-BLOCK Edit/Write at the SDK level so the model
         // cannot emit them. Bash is intentionally NOT in this list — it is
         // sandbox-gated (permission-callback Bash gate / safe-bash /
@@ -3603,7 +3623,11 @@ export async function dispatchSoleurGo(
   ];
   void resolveC4Eligible(userId)
     .then((eligible) => {
-      if (eligible) registeredPlatformToolNames.push(C4_TOOL_FQN);
+      // #9539 — support dispatches never register the c4 write tool (gated in
+      // the factory), so the advertise list must not claim it either.
+      if (eligible && args.persona !== "support") {
+        registeredPlatformToolNames.push(C4_TOOL_FQN);
+      }
     })
     .catch((err) => {
       reportSilentFallback(err, {
