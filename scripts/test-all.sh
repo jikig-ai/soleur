@@ -5638,6 +5638,11 @@ if want_scripts; then
   # (#9307 PR-B) the committed read recorder's verdict function and live reader. Appended LAST in the
   # block for the same positional-shard reason; its manifest row comes from the shard regeneration.
   run_suite "scripts/audit-suite-reads" bash scripts/audit-suite-reads.test.sh
+  # #9387: exit-code harness for the notify-only date probe (2 = NOT YET, 5 = ACTION REQUIRED, 3 = cannot
+  # establish; never 0 or 1, which would close the tracker or read as FAIL). Explicit run_suite because
+  # scripts/followthroughs/ matches no SUITE_GLOBS entry; appended LAST in the block so no earlier
+  # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/followthroughs/tty-ack-migration-9387" bash scripts/followthroughs/tty-ack-migration-9387.test.sh
 fi
 
 # Named bun-test entries — bun shard.
