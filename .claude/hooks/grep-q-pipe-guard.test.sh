@@ -99,10 +99,25 @@ PATTERN_PIPED_SCORER='(^|[^|])\|&?[[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:sp
 # one-line `| head -1` sites whose producers are single short writes; the three #7376 suites keep ~17).
 # Widening is tracked in #7005.
 
+# PATTERN_V2 is the widened reader pattern the DERIVED SWEEP (scan_sweep, below) uses. The four named
+# passes above keep PATTERN, so none of them can turn red on a spelling they never carried. Five parts so
+# each can be mutated on its own (the harness rows in the sweep section name them):
+#   LEAD   a single bar (or |&), then optionally a brace or paren group opener
+#   WRAP   command|builtin|exec|env|nice|stdbuf -x|timeout N, or VAR=x, any number, no flags of their own
+#   BIN    grep, egrep, fgrep, \grep or an absolute path ending in one of them
+#   ARG    flags, long flags, and the argument-taking -e/-f/-A/-B/-C/-m with its operand
+#   EARLY  the early-exit flag: -q/-m in a cluster, --quiet, --silent, --max-count
+SWEEP_LEAD='(^|[^|])\|&?[[:space:]]*(\{[[:space:]]+|\([[:space:]]*)?'
+SWEEP_WRAP='((command|builtin|exec|env|nice|stdbuf[[:space:]]+-[a-zA-Z]+|timeout[[:space:]]+[0-9a-z.]+)[[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
+SWEEP_BIN='(\\|/[^[:space:]]*/)?(e|f)?grep'
+SWEEP_ARG='([[:space:]]+(-[A-Za-z0-9]+|--[a-z-]+(=[^[:space:]]+)?|-[efABCm][[:space:]]+[^[:space:]]+))*'
+SWEEP_EARLY='[[:space:]]+(-[A-Za-z]*[qm][A-Za-z0-9]*|--quiet|--silent|--max-count)'
+PATTERN_V2="${SWEEP_LEAD}${SWEEP_WRAP}${SWEEP_BIN}${SWEEP_ARG}${SWEEP_EARLY}"
+
 # A PATTERN that does not compile must not read as "no hits": every grep below
 # folds exit 2 into exit 1 (`|| true`, `! grep`), so it would pass all three
 # checks having scanned nothing (#8807 review).
-for _pat in "$PATTERN" "$PATTERN_AWK_EXIT" "$PATTERN_PIPED_SCORER"; do
+for _pat in "$PATTERN" "$PATTERN_AWK_EXIT" "$PATTERN_PIPED_SCORER" "$PATTERN_V2"; do
   rc=0; grep -E -- "$_pat" </dev/null >/dev/null 2>&1 || rc=$?
   if [[ "$rc" -ne 1 ]]; then
     echo "UNRESOLVED: a guard pattern does not compile as an ERE (grep rc=$rc) — this suite asserted nothing"
@@ -235,6 +250,15 @@ fi
 # filter reds there even when no pinned file carries a hit.
 # A read error is NOT "no hits": it prints an UNRESOLVED line, which the caller then reports as a
 # FAIL (this runs inside $( ), so an exit here would only leave the subshell).
+# The comment filter every scan shares: drops `path:NN:<spaces>#...` lines. `--marker` also drops a line carrying the
+# per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out).
+_strip_comments() { # [--marker], stdin -> stdout
+  if [[ "${1:-}" == --marker ]]; then
+    grep -vE ':[0-9]+:[[:space:]]*#' | grep -vE "$ALLOW_MARKER" || true
+  else
+    grep -vE ':[0-9]+:[[:space:]]*#' || true
+  fi
+}
 scan_scorers() { # <files...> -> the offending lines, or nothing
   local out rc=0
   out="$(grep -HnE -- "$PATTERN|$PATTERN_AWK_EXIT|$PATTERN_PIPED_SCORER" "$@")" || rc=$?
@@ -242,7 +266,7 @@ scan_scorers() { # <files...> -> the offending lines, or nothing
     echo "UNRESOLVED: scan_scorers could not read its input (grep rc=$rc) — nothing was scanned"
     return 0
   fi
-  printf '%s\n' "$out" | grep -vE ':[0-9]+:[[:space:]]*#' || true
+  printf '%s\n' "$out" | _strip_comments
 }
 hits_8664="$(scan_scorers "${FILES_8664[@]}")"
 # The battery's scorer self-test is the deterministic backstop for its scorer; deleting it would
@@ -305,7 +329,7 @@ scan_pipes() { # <files...> -> the offending code lines, or nothing
     echo "UNRESOLVED: scan_pipes could not read its input (grep rc=$rc) — nothing was scanned"
     return 0
   fi
-  printf '%s\n' "$out" | grep -vE ':[0-9]+:[[:space:]]*#' || true
+  printf '%s\n' "$out" | _strip_comments
 }
 # scan_7376 [root]: scan every FILES_7376 member under <root> (default: the repo). The probe below
 # points it at a scratch copy of each real member with one bad line appended, which proves the pass
@@ -327,6 +351,150 @@ elif [[ -n "$hits_7376" ]]; then
   echo "  Use grep -q PATTERN <<<\"\$var\" or grep -q PATTERN < <(producer); the reader must not exit before the writer."
 else
   echo "PASS: grep-q-zero-7376-pass (cron-egress, luks-verify and reap-archive suites)"
+fi
+
+# ---------------------------------------------------------------------------------------------------
+# THE DERIVED SWEEP (#9217, #6601, #7005). The named passes above pin a handful of files one by one;
+# repo-wide that is ~1,100 sites in ~300 files, so enumerating them does not scale and every entry would
+# also need an edit of scripts/lib/test-affected-paths.sh (which arms the full battery on every push).
+# This pass derives its population instead: every non-ignored file with a covered extension, scanned with
+# PATTERN_V2, asserted ZERO outside the deferral table. A file added next month under a new directory is in
+# the population without any edit. Limits, stated plainly: a LINE search (a shape split across lines is not
+# seen), coverage by EXTENSION (an extensionless script with a shebang is not swept), and `git grep` reads
+# the working tree, so run this suite from the checkout you edited.
+#
+# Flags, and why each is there (measured on this tree): --no-index lets the probe plant files that are not
+# tracked; --exclude-standard keeps it out of node_modules and ignored trees (1.0 s versus 24.3 s and ten stray
+# hits without it); -a makes a NUL-bearing file searchable as text; core.excludesFile=/dev/null stops a
+# developer's global ignore file changing the local result.
+SWEEP_PATHSPEC=(
+  ':(glob)**/*.sh' ':(glob)**/*.bash' ':(glob)**/*.bats' ':(glob)**/*.yml' ':(glob)**/*.yaml'
+  ':(glob)**/*.tf' ':(glob)**/*.template' ':(glob)**/*.js'
+  ':(exclude)knowledge-base'
+  # This file carries the forbidden shape in its own probe fixtures, so it cannot sweep itself.
+  ':(exclude).claude/hooks/grep-q-pipe-guard.test.sh'
+)
+# One swept file under each of these must exist, or the derivation is reading the wrong tree.
+SWEEP_CANARIES=('scripts/' 'plugins/soleur/' 'apps/web-platform/scripts/' 'apps/cla-evidence/')
+SWEEP_FLOOR=1000   # measured ~1,500 swept files; a truncated population reads UNRESOLVED, never "no hits"
+
+# What is deferred, one row per line: glob | mode | ceiling | tracker. A row is an OWNER for the hits under it, first
+# match wins (so ORDER is semantic: a more specific row goes above a broader one), a FILES_* member is never deferred.
+#   mode `=`   the subtree is small and slow-moving: hits must equal the ceiling (lower it when you convert one)
+#   mode `<=`  the wave that converts it owns tightening: hits must stay at or below the ceiling; slack is printed
+# A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
+# Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
+# review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
+SWEEP_DEFERRALS=(
+  'plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js | = | 2 | #9217'
+  '.claude/* | <= | 91 | #9217'
+  'tests/* | <= | 181 | #9217'
+  'plugins/soleur/test/* | <= | 137 | #9217'
+  'plugins/soleur/*.test.sh | <= | 66 | #9217'
+  'apps/web-platform/*.test.sh | <= | 187 | #9217'
+  '.github/scripts/test/* | <= | 11 | #9217'
+  'scripts/*.test.sh | <= | 120 | #9217'
+  '*/test-* | <= | 7 | #9217'
+  '*.test.sh | <= | 2 | #9217'
+  'apps/web-platform/infra/* | = | 92 | #9217'
+  '.github/* | = | 46 | #9217'
+  'lefthook.yml | = | 1 | #9217'
+)
+
+# scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match
+# (path:line:text, comment lines and marked lines dropped). `git grep` exits 1 for "no hits" and above 1 on a
+# fatal error: only the first is zero hits. The caller turns UNRESOLVED into a top-level exit 3 (this runs inside
+# $( ), where an exit would only leave the subshell).
+scan_sweep() {
+  local root="$1" out rc=0 files nfiles c
+  files="$(git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard -al -e '' -- "${SWEEP_PATHSPEC[@]}")" || rc=$?
+  if (( rc > 1 )); then
+    echo "SWEPT: 0 files"
+    echo "UNRESOLVED: scan_sweep could not list its population in $root (git grep rc=$rc) — nothing was scanned"
+    return 0
+  fi
+  nfiles=$(printf '%s\n' "$files" | grep -c . || true)
+  echo "SWEPT: $nfiles files"
+  for c in "${SWEEP_CANARIES[@]}"; do
+    grep -q -- "^$c" <<<"$files" || echo "UNRESOLVED: no swept file under $c in $root — the population is not the repository's"
+  done
+  rc=0
+  out="$(git -c core.excludesFile=/dev/null -C "$root" grep --no-index --exclude-standard -anE -e "$PATTERN_V2" -- "${SWEEP_PATHSPEC[@]}")" || rc=$?
+  if (( rc > 1 )); then
+    echo "UNRESOLVED: scan_sweep could not read its input in $root (git grep rc=$rc) — nothing was scanned"
+    return 0
+  fi
+  printf '%s\n' "$out" | _strip_comments --marker | grep . || true
+}
+
+# sweep_verdict <scan output> -> prints the PASS/FAIL lines and DEFERRED lines, sets SWEEP_FAIL=1 on failure.
+# Runs in the caller's shell (no $( )) so it can set the failure flag; the row arithmetic is plain bash.
+sweep_verdict() {
+  local scan="$1" line path i owner row glob mode ceil tracker n slack
+  local -a r_glob=() r_mode=() r_ceil=() r_tracker=() r_n=()
+  local undeferred="" nund=0 pinned=" ${FILES_7024[*]} ${FILES_8664[*]} ${FILES_8855[*]} ${FILES_7376[*]} "
+  for row in "${SWEEP_DEFERRALS[@]}"; do
+    IFS='|' read -r glob mode ceil tracker <<<"$row"
+    glob="${glob#"${glob%%[![:space:]]*}"}"; glob="${glob%"${glob##*[![:space:]]}"}"
+    mode="${mode//[[:space:]]/}"; ceil="${ceil//[[:space:]]/}"; tracker="${tracker//[[:space:]]/}"
+    r_glob+=("$glob"); r_mode+=("$mode"); r_ceil+=("$ceil"); r_tracker+=("$tracker"); r_n+=(0)
+    if [[ ! "$ceil" =~ ^[0-9]+$ || ! "$tracker" =~ ^#[0-9]+$ || ( "$mode" != "=" && "$mode" != "<=" ) ]]; then
+      SWEEP_FAIL=1
+      echo "FAIL: malformed deferral row '$row' (want: glob | = or <= | ceiling | #tracker)"
+    fi
+  done
+  while IFS= read -r line; do
+    [[ -n "$line" && "$line" != SWEPT:* ]] || continue
+    path="${line%%:*}"
+    owner=-1
+    if [[ "$pinned" != *" $path "* ]]; then
+      for i in "${!r_glob[@]}"; do
+        # shellcheck disable=SC2053  # the glob is the point: the row's glob is matched as a pattern
+        if [[ "$path" == ${r_glob[i]} ]]; then owner=$i; break; fi
+      done
+    fi
+    if (( owner >= 0 )); then r_n[owner]=$(( r_n[owner] + 1 )); else undeferred+="$line"$'\n'; nund=$(( nund + 1 )); fi
+  done <<<"$scan"
+  for i in "${!r_glob[@]}"; do
+    n="${r_n[i]}"; ceil="${r_ceil[i]}"; mode="${r_mode[i]}"; slack=$(( ceil - n ))
+    echo "DEFERRED: ${r_glob[i]} ($n hits, ceiling $ceil, mode $mode, slack $slack, ${r_tracker[i]})"
+    if (( n == 0 )); then
+      SWEEP_FAIL=1; echo "FAIL: stale deferral: ${r_glob[i]} has no hits left — delete its row from SWEEP_DEFERRALS in the PR that converted it"
+    elif (( n > ceil )); then
+      SWEEP_FAIL=1; echo "FAIL: deferral ceiling exceeded: ${r_glob[i]} has $n hits, ceiling $ceil — a new early-exit pipe landed in a deferred subtree; use the forms in this file's header"
+    elif [[ "$mode" == "=" ]] && (( n < ceil )); then
+      SWEEP_FAIL=1; echo "FAIL: deferral ceiling is loose: ${r_glob[i]} has $n hits, ceiling $ceil — lower the ceiling to $n"
+    fi
+  done
+  if (( nund > 0 )); then
+    SWEEP_FAIL=1
+    echo "FAIL: pipe-into-early-exit-grep outside the deferral table ($nund site(s)); under pipefail a match can read as a miss (#9217)"
+    printf '%s' "$undeferred" | sed 's/^/  /'
+    echo
+    echo "  Rewrite: echo/printf \"\$V\" | grep -q P   ->  grep -q P <<<\"\$V\""
+    echo "           producer | grep -q P              ->  grep -q P < <(producer)   (read-only producer, inside a condition)"
+    echo "           cat FILE | grep -q P              ->  grep -q P FILE"
+    echo "           a bare pipeline under set -e      ->  out=\$(producer); grep -q P <<<\"\$out\"   (keeps the producer's status)"
+    echo "           an intentional demo of the shape  ->  append  # sigpipe-demo: intentional  to that line"
+  fi
+}
+
+SWEEP_FAIL=0
+sweep_scan="$(scan_sweep .)"
+if grep -q '^UNRESOLVED:' <<<"$sweep_scan"; then
+  echo "$sweep_scan" | grep '^UNRESOLVED:'
+  exit 3
+fi
+n_swept="$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$sweep_scan")"
+if [[ ! "${n_swept:-0}" =~ ^[0-9]+$ ]] || (( ${n_swept:-0} < SWEEP_FLOOR )); then
+  SWEEP_FAIL=1
+  echo "FAIL: the derived sweep read ${n_swept:-<no count>} files, below the floor of $SWEEP_FLOOR — the population is truncated, so a pass would assert nothing"
+fi
+sweep_verdict "$sweep_scan"
+if (( SWEEP_FAIL )); then
+  FAIL=1
+else
+  echo "PASS: grep-q-zero-sweep-pass ($n_swept files swept; deferrals above)"
 fi
 
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
@@ -473,6 +641,124 @@ else
   echo "  scan_pipes (#7376):      ${p7376_bad_hits:-<error>}/$p7376_bad_lines bad lines, ${p7376_good_hits:-<error>} safe lines, ${p7376_comment_hits:-<error>} comment lines (want 0 and 0)"
   echo "  scan_7376 wiring:        ${p7376_wire_hits:-<error>} hits over $wire_members scratch members (want one per member: ${#FILES_7376[@]}); unreadable-input reports: ${p7376_unreadable:-<error>} (want 1)"
   echo "  parity check probe:      ${parity_missing:-<error>} missing (want 2: a member only in another array, a commented-out one), present member reported missing: ${parity_has_third:-<error>} (want 0), no-array index unresolved: ${parity_unresolved:-<error>} (want 1)"
+fi
+
+# ---------------------------------------------------------------------------------------------------
+# Probe for the derived sweep and PATTERN_V2 (#9217). Every conjunct below names its own diagnostic: one
+# boolean cannot say which half broke, and a deleted assignment would abort under `set -u` with no message.
+sweep_probe_fail=()
+
+# PATTERN_V2 fixtures, in their own files: appending these to bad.sh/good.sh would break the V1 conjunct above.
+cat > "$probe/bad-v2.sh" <<'EOF'
+x | LC_ALL=C grep -q p
+x | LC_ALL=C LANG=C grep -q p
+x | command env LC_ALL=C grep -q p
+x | env LC_ALL=C grep -qE p
+x | exec grep -q p
+x | nice grep -q p
+x | timeout 5 grep -q p
+x | stdbuf -oL grep -q p
+x | { grep -m1 -E v || [ $? -eq 1 ]; }
+x | (grep -q p)
+x |& grep -q p
+x | grep --quiet p
+x | grep --silent p
+x | grep --max-count=1 p
+x | grep -e p -q
+x | grep -A 1 -q p
+x | \grep -q p
+x | /usr/bin/grep -q p
+x | egrep -q p
+x | fgrep -q p
+x | grep -iEm1 p
+EOF
+cat > "$probe/good-v2.sh" <<'EOF'
+grep -q p <<<"$x"
+a || grep -q p <<<"$x"
+x | grep -c p
+x | grep -v p
+x | grep -cE p
+x | grep -F -- "$m"
+x | grep -E 'a-q'
+x | grep -l p
+x | grep -oE p
+x | sed 's/a/b/'
+grep -e p -q "$f"
+EOF
+V2_BAD_LINES=21; V2_GOOD_LINES=11   # pinned literals: deleting a fixture line cannot lower both sides
+v2_bad_lines=$(wc -l < "$probe/bad-v2.sh")
+v2_good_lines=$(wc -l < "$probe/good-v2.sh")
+v2_bad_hits=$(grep -cE -- "$PATTERN_V2" "$probe/bad-v2.sh" || true)
+v2_good_hits=$(grep -cE -- "$PATTERN_V2" "$probe/good-v2.sh" || true)
+# scan_sweep uses `git grep -E`, not grep -E: run the same fixtures through it so a dialect divergence shows.
+v2_git_bad=$(git -C "$probe" grep --no-index -nE -e "$PATTERN_V2" -- bad-v2.sh | grep -c . || true)
+v2_git_good=$(git -C "$probe" grep --no-index -nE -e "$PATTERN_V2" -- good-v2.sh | grep -c . || true)
+[[ "$v2_bad_lines" == "$V2_BAD_LINES" && "$v2_good_lines" == "$V2_GOOD_LINES" ]] \
+  || sweep_probe_fail+=("v2-fixtures: a fixture file changed length (bad $v2_bad_lines/$V2_BAD_LINES, good $v2_good_lines/$V2_GOOD_LINES)")
+[[ "$v2_bad_hits" == "$V2_BAD_LINES" ]] || sweep_probe_fail+=("v2-bad: PATTERN_V2 matched ${v2_bad_hits:-<grep error>}/$V2_BAD_LINES forbidden spellings")
+[[ "$v2_good_hits" == 0 ]] || sweep_probe_fail+=("v2-good: PATTERN_V2 matched ${v2_good_hits:-<grep error>} safe lines (want 0)")
+[[ "$v2_git_bad" == "$V2_BAD_LINES" && "$v2_git_good" == 0 ]] \
+  || sweep_probe_fail+=("v2-git-dialect: git grep matched ${v2_git_bad:-<error>}/$V2_BAD_LINES bad and ${v2_git_good:-<error>} good (want all and 0)")
+
+# The sweep itself, on a scratch root with one file under EACH canary root: a bad line, plus a comment line, a marked
+# line and the `a || grep` shape that must NOT be reported. Each root uses a different V2-only spelling, so the sweep
+# is proved to run PATTERN_V2 and not PATTERN. A gitignored directory must stay unscanned.
+sr="$probe/sweeproot"
+mkdir -p "$sr/scripts" "$sr/plugins/soleur" "$sr/apps/web-platform/scripts" "$sr/apps/cla-evidence" "$sr/ignored"
+_noise() { printf '%s\n' '# echo "$y" | grep -q p' 'echo "$z" | grep -q p # sigpipe-demo: intentional' 'a || grep -q p <<<"$x"'; }
+{ _noise; echo 'echo "$x" | grep -q p'; }              > "$sr/scripts/x.sh"
+{ _noise; echo 'echo "$x" | LC_ALL=C grep -q p'; }     > "$sr/plugins/soleur/x.sh"
+{ _noise; echo 'echo "$x" | { grep -m1 p || true; }'; } > "$sr/apps/web-platform/scripts/x.sh"
+{ _noise; echo 'echo "$x" | grep --quiet p'; }         > "$sr/apps/cla-evidence/x.sh"
+echo 'echo "$x" | grep -q p' > "$sr/ignored/x.sh"
+echo 'ignored/' > "$sr/.gitignore"
+sw_out="$(scan_sweep "$sr")"
+sw_hits=$(grep -c '^[^:]*:[0-9]*:' <<<"$sw_out" || true)
+sw_roots=$(grep -E '^(scripts|plugins/soleur|apps/web-platform/scripts|apps/cla-evidence)/x\.sh:' <<<"$sw_out" | cut -d: -f1 | sort -u | grep -c . || true)
+sw_swept=$(sed -n '1s/^SWEPT: \([0-9]*\) files$/\1/p' <<<"$sw_out")
+sw_unres=$(grep -c '^UNRESOLVED:' <<<"$sw_out" || true)
+[[ "$sw_hits" == 4 && "$sw_roots" == 4 ]] || sweep_probe_fail+=("sweep-wiring: ${sw_hits:-<err>} hits over ${sw_roots:-<err>} canary roots (want exactly one per root: 4 and 4; a comment, a marked line, the || shape and a gitignored dir must not count)")
+[[ "$sw_swept" == 4 && "$sw_unres" == 0 ]] || sweep_probe_fail+=("sweep-population: swept ${sw_swept:-<err>} files (want 4: the ignored one is excluded), ${sw_unres:-<err>} UNRESOLVED lines (want 0)")
+# An unreadable root and a population missing the canaries are UNRESOLVED, never "no hits".
+mkdir -p "$probe/emptyroot" && echo 'true' > "$probe/emptyroot/x.sh"
+un_missing=$(scan_sweep "$probe/does-not-exist" 2>/dev/null | grep -c '^UNRESOLVED:' || true)
+un_canary=$(scan_sweep "$probe/emptyroot" | grep -c '^UNRESOLVED: no swept file under' || true)
+[[ "$un_missing" -ge 1 && "$un_canary" == "${#SWEEP_CANARIES[@]}" ]] \
+  || sweep_probe_fail+=("sweep-unresolved: unreadable root reported ${un_missing:-<err>} times (want >=1), missing canaries reported ${un_canary:-<err>} (want ${#SWEEP_CANARIES[@]})")
+
+# The deferral table's own checks, driven on synthetic scan output with a synthetic table (so a real subtree reaching
+# zero cannot be what these read). Each row isolates one check; the carve-out row uses a REAL FILES_7376 member.
+_vp() { # <expected substring or -> <table row...> -- <scan lines...>
+  local want="$1" rows=() lines=() out
+  shift
+  while [[ "${1:-}" != "--" && $# -gt 0 ]]; do rows+=("$1"); shift; done
+  shift
+  lines=("$@")
+  out="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=("${rows[@]}"); sweep_verdict "$(printf '%s\n' "${lines[@]}")"; echo "SWEEP_FAIL=$SWEEP_FAIL" )"
+  if [[ "$want" == - ]]; then
+    [[ "$out" == *"SWEEP_FAIL=0" && "$out" != *"FAIL:"* ]]
+  else
+    [[ "$out" == *"SWEEP_FAIL=1"* && "$out" == *"$want"* ]]
+  fi
+}
+_vp -                   'a/* | = | 2 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t'          || sweep_probe_fail+=("deferral-ok: a row whose hits equal its ceiling was rejected")
+_vp 'stale deferral'    'a/* | = | 2 | #1' --                                   || sweep_probe_fail+=("deferral-stale: a row with zero hits was not reported stale")
+_vp 'ceiling exceeded'  'a/* | <= | 1 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t'         || sweep_probe_fail+=("deferral-ceiling: hits above a ceiling were accepted")
+_vp 'ceiling is loose'  'a/* | = | 3 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t'          || sweep_probe_fail+=("deferral-tight: a tight (=) row with slack was accepted")
+_vp -                   'a/* | <= | 3 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t'         || sweep_probe_fail+=("deferral-loose-ok: a loose (<=) row with slack was rejected")
+_vp 'outside the deferral table' 'a/* | = | 1 | #1' -- 'a/x.sh:1:t' 'b/z.sh:2:t' || sweep_probe_fail+=("deferral-undeferred: a hit under no row was accepted")
+_vp 'malformed deferral row' 'a/* | = | 1 | no-tracker' -- 'a/x.sh:1:t'         || sweep_probe_fail+=("deferral-tracker: a row without a #tracker token was accepted")
+_vp 'outside the deferral table' 'apps/* | <= | 9 | #1' -- "${FILES_7376[0]}:1:t" || sweep_probe_fail+=("deferral-carveout: a pinned FILES_7376 member was deferred by a broader row")
+own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2'); sweep_verdict $'a/b/x.sh:1:t\na/y.sh:2:t'; echo "SWEEP_FAIL=$SWEEP_FAIL" )"
+[[ "$own" == *"DEFERRED: a/b/* (1 hits"* && "$own" == *"DEFERRED: a/* (1 hits"* && "$own" == *"SWEEP_FAIL=0" ]] \
+  || sweep_probe_fail+=("deferral-owner: first-match-wins did not give each overlapping row its own hit")
+
+if (( ${#sweep_probe_fail[@]} == 0 )); then
+  echo "PASS: grep-q-sweep-probe-pass (PATTERN_V2 fixtures, sweep wiring, deferral checks)"
+else
+  FAIL=1
+  echo "FAIL: the derived sweep's own probe is broken — the sweep could pass over a violation:"
+  printf '  %s\n' "${sweep_probe_fail[@]}"
 fi
 
 exit "$FAIL"
