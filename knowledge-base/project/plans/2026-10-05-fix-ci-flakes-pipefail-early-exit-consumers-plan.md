@@ -11,6 +11,34 @@ lane: cross-domain
 
 # fix: remove the pipefail early-exit-consumer flake class from three CI suites and triage the other 2026-10-05 flakes
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05. **Gates run:** 4.6 user-brand, 4.7 observability, 4.8 PAT, 4.9 UI (n/a), 4.10
+encryption (n/a), 4.11 guard contract (lint green), 4.12 scope check. **Agents:** test-design-reviewer,
+spec-flow-analyzer, verify-the-negative pass, plus the earlier plan-review panel (DHH, Kieran, code-simplicity,
+CTO). Not run: the full 40-agent review sweep and per-skill fan-out; the change is test-only shell and the
+research was done from primary logs, so a wide sweep would add cost without recall (stated deviation).
+
+### Key improvements
+
+1. **`drive()` gets `</dev/null`**; the stdin drain would otherwise hang the luks suite under an inherited open
+   pipe (reproduced rc 124).
+2. **Race rows use a handshake, not a fixed 0.4 s sleep**, and run under `(trap '' PIPE; …)` so CI's ignored
+   SIGPIPE (rc 1, not 141) is covered on every host; the new rc assertion is "non-zero and not in {0,3,127,255}".
+3. **Guard 1 gains wiring rows against the real files**; the runtime SIGPIPE control was cut (T4 in
+   `test-sentry-full-root-apply.sh` already owns it).
+4. **Affected-paths block is hand-maintained** (no generator; the derive suite does not read it), and the
+   exact-equality `fixture-relative-assert` baseline is added to the verification list.
+5. **Tracker comments move after the draft PR's CI legs are green.**
+6. `ls`/`git` sites use `< <(producer)` so no capture hoist changes evaluation order.
+
+### New considerations discovered
+
+- The race produces false PASSES on negated and `&&`-chained sites, not only false failures.
+- The guard does not see the luks suite's producer-side mechanism; only the race rows hold it.
+- Of the five observed ejections only the deterministic `lint-bot-statuses` one is not a flake, and
+  `Infra Validation` does not run on `merge_group` (verified at `infra-validation.yml` triggers).
+
 `lane:` note: no spec.md exists for this branch (one-shot path), so the lane defaults to
 `cross-domain` (fail-closed, TR2). The work is engineering-only.
 
@@ -123,7 +151,7 @@ the reap suite uses `mktemp -d` per run. No cross-suite collision explains any o
 
 ### Impact on the queue
 
-Only 4a and the e2e flakes eject merge-queue entries (`Infra Validation` does not run on `merge_group`; items
+Of the flakes in this plan, only 4a and the e2e flakes eject merge-queue entries (lint-bot-statuses also ejected one entry, deterministically; `Infra Validation` does not run on `merge_group`; items
 2 and 3 cost PR re-runs and `ci/main-broken` noise, not queue rebuilds). Ejections observed 2026-10-04/05:
 font x2, `role=status` x1, reap-archive x1, lint-bot-statuses x1 (deterministic). PR-2 is therefore the
 larger queue lever and should start as soon as this PR is up.
@@ -178,45 +206,59 @@ non-reproducible flakes carry a stated hypothesis; (P5) evidence lands on existi
 
 ## Proposed Solution (PR-1, this branch)
 
-1. **`reap-archive-persistence.test.sh`.** Replace the 11 pipe-fed early-exit greps. One idiom for all 11
-   sites (no regex-to-glob semantic change): capture then here-string, `reap_out="$(ls DIR 2>/dev/null)"; grep -q X
-   <<<"$reap_out"` (and `git …` the same way), negated forms keep their `!`. The capture variable gets a name
-   distinct from the `out` locals at lines 203/211. Same assertion text, same count (45).
+1. **`reap-archive-persistence.test.sh`.** Replace the 11 pipe-fed early-exit greps with one idiom that keeps
+   each site's one-line shape (including the `if … | grep -q … \` chains at 370 and 499, where hoisting a
+   capture would change evaluation order): `grep -q X < <(producer)`. The producer's status is discarded by
+   the process substitution, so SIGPIPE on it cannot reach the verdict, and the guard's `PATTERN` does not match
+   it. The `ls` helpers `spec_arch`/`plan_arch` use the same form. Negated forms keep their `!`. Same assertion
+   text, same count (45).
 2. **`cron-egress-firewall.test.sh`.** Mechanically rewrite the 33 `echo "$V" | grep -q… PAT` sites (31
    lines) to `grep -q… PAT <<<"$V"`, globally and quote-aware (patterns contain spaces, parentheses and
-   `$((…))`). No pattern text changes. Verified by a throwaway inverse-transform diff (script pasted in the PR
-   body, not committed) showing exactly 33 changed segments, plus a rescan with the guard's pattern finding
-   zero. Any site whose `$V` can start with `-` is reviewed by hand (`echo` would eat a leading `-n`).
-3. **`workspaces-luks-verify-workflow.test.sh`.** (a) `sshstub` drains stdin at the top of the stub, guarded by `[[ -p /dev/stdin ]]` (not a tty test, which
-   would hang under a non-closing inherited stdin), so every pipe-fed arm (probe, host-key failure, tar
-   extract) cannot see a closed pipe regardless of scheduling; a one-line comment cites the contract (real
-   `ssh` reads stdin to EOF). (b) Convert the one `tr … | grep -q` site (line 722) to
-   `cr_out="$(tr '\r' '\n' < f)"; grep -q … <<<"$cr_out"`. (c) Two race rows. The producer `printf` sits on
-   workflow line 481 and its pipe on continuation line 482, so a line-oriented `sed` cannot wrap it: rewrite
-   the single token `printf 'DOPPLER_TOKEN` to `slow_printf 'DOPPLER_TOKEN` and prepend a `slow_printf`
-   function that sleeps 0.4 s then calls `printf`, with a `grep -c` check that the edit landed exactly once.
-   This needs a small new helper (not `hk_mutant`, which compares only `outcome_reason`): it asserts class,
-   reason and probe rc. Row 1 (must-PASS): delayed body vs the draining stub classifies `selftest`. Row 2
-   (positive control, same input): the delayed body against `FIXTURE_NO_DRAIN=1` classifies
-   `unavailable/unparsed` with a probe rc outside {0,3,127,255}. rc is asserted as "non-zero and not one of
-   those", never 141, because CI ignores SIGPIPE and `printf` then returns 1. (d) Raise `WF_MIN_ASSERTIONS`
-   to the new exact green count.
-4. **`grep-q-pipe-guard.test.sh`.** Add `FILES_7376` (the three suites), its tracked-file check, a member
-   count pin (3, distinct), and a pass `grep-q-zero-7376-pass` using a DEDICATED scan function over `PATTERN`
-   plus `PATTERN_AWK_EXIT` with the comment filter (not `scan_scorers`, which also applies
-   `PATTERN_PIPED_SCORER` and would flag safe `grep -cF --` lines at cron:719/780/1371 and luks:1090); the
-   non-vacuity probe drives that same function. Add ONE **runtime control**, reusing the existing
-   `yes | grep -q y` control pattern at `tests/scripts/test-sentry-full-root-apply.sh:349/373` rather than
-   inventing a third copy: a producer that prints the needle on line 1 and then at least 200 KB of
-   non-matching lines (the causal quantity, written after the reader can exit; the producer is generated, so
-   the floor is by construction, asserted once with `wc -c`). On that input the old shape must return
-   non-zero under pipefail with SIGPIPE default (141) and with `trap '' PIPE` (the CI case, EPIPE, status
-   non-zero), and the here-string and capture shapes must return 0. If the environment cannot exhibit the
-   failure the control reports `environment cannot exhibit the race` (a distinct, named result), not a generic
-   RED, so the control cannot become a flake source; run it 50 times under load before merging. Whether this
-   control stays is a Taste item recorded in `decision-challenges.md`.
-5. **Trackers** (comments only, posted at ship time): #7376, #7432, #9217, #8785, #9167, #9170, #8022,
-   plus one factual observation on #9482 about item 4b. PR body uses `Ref #…`, never `Closes`.
+   `$((…))`). No pattern text changes. Verified two ways: a throwaway inverse-transform diff (pasted in the PR
+   body, not committed) applied ONLY to lines changed in the diff, showing exactly 33 changed segments; and one
+   discriminating sandbox row that flips a converted census pattern (the `m$k` site at :1347) and requires the
+   suite to go RED, because a round trip proves bijection, not equivalence. Any site whose `$V` can start with
+   `-` is reviewed by hand (`echo` would eat a leading `-n`). The race also produces false PASSES on negated and
+   `&&`-chained sites (for example :1348 `… grep -qxF "HIT …clean.ts" && MISS+=…`, :1280 `! echo … | grep -qF`),
+   which is the stronger reason for the sweep.
+3. **`workspaces-luks-verify-workflow.test.sh`.** (a) `drive()` runs the body with `</dev/null` (add it to the
+   `bash -e "${REASSERT:-$SCRATCH/reassert.sh}"` line at :690) so only the workflow's own `printf |` and
+   `tar |` pipes are pipes; without it any stub arm that drains an inherited open stdin hangs the suite
+   (reproduced: `sleep 20 | timeout 8 bash …` timed out, rc 124). (b) The probe arm of `sshstub` (the arm that
+   `printf |` feeds) drains stdin (`[[ ${FIXTURE_NO_DRAIN:-0} == 1 ]] || cat >/dev/null`), with a one-line comment
+   citing the contract (real `ssh` reads stdin to EOF), and `FIXTURE_NO_DRAIN` exported through `drive`'s explicit
+   env list (otherwise the control row silently equals row 1). (c) Convert the one `tr … | grep -q` site
+   (line 722) to `grep -q … < <(tr '\r' '\n' < "$f")`. (d) Two race rows through a new helper (not `hk_mutant`,
+   which compares only `outcome_reason`): rewrite the single `printf 'DOPPLER_TOKEN` call to `slow_printf …` and
+   prepend a `slow_printf` function. `slow_printf` is a HANDSHAKE, not a fixed sleep: it polls, bounded
+   (about 5 s), for a sentinel file that the no-drain stub creates only when it handles the `luks-monitor.sh`
+   probe call (`"$*" == *luks-monitor.sh*`, so the earlier `mktemp`/`tar` calls cannot pre-create it) after
+   closing its stdin (`exec 0<&-`), then calls `printf`; in drain mode it polls the same bound and proceeds. The
+   landing check asserts the call token `^slow_printf 'DOPPLER_TOKEN` appears exactly once (the function
+   definition adds a second `slow_printf`, so a bare count of 2 is expected) and the derived body differs from
+   the original. Row 1 (must-PASS): the slow body against the draining stub classifies `selftest`. Row 2
+   (positive control, same input): against `FIXTURE_NO_DRAIN=1` it classifies `unavailable/unparsed` with a probe
+   rc outside {0,3,127,255}. Both rows run under `(trap '' PIPE; …)` so the CI disposition (rc 1) is exercised
+   on every host, and the assertion is "non-zero and not one of those", never 141. No luks row may be
+   conditional (the floor is exact). (e) Raise `WF_MIN_ASSERTIONS` to the new exact green count in the SAME
+   commit that lands the rows (the suite is never red on a stale floor), and re-bump after any later edit.
+4. **`grep-q-pipe-guard.test.sh`.** Header first: correct the falsified 64 KiB statements, and state that the luks
+   suite's real mechanism (the producer-side `printf |` into a stub) is NOT seen by this pin and is held by the
+   race rows. Then add `FILES_7376` (the three suites), its tracked-file check, a distinct member-count pin (3),
+   and a pass `grep-q-zero-7376-pass` through a DEDICATED scan function over `PATTERN` plus `PATTERN_AWK_EXIT`
+   with the comment filter (not `scan_scorers`, which also applies `PATTERN_PIPED_SCORER` and would flag safe
+   `grep -cF --` lines at cron:719/780/1371 and luks:1090); the non-vacuity probe drives that same function and
+   gains a negated-site good/bad pair. The guard file itself needs no `# sigpipe-demo: intentional` marker (its own
+   first pass drops `.test.sh` and it is in no `FILES_*` list); do not add it to `FILES_7376`. **No new runtime
+   control**: the repo already carries one at `tests/scripts/test-sentry-full-root-apply.sh:340-380` (the
+   `yes | grep -q y` control, the `type -t grep` shim guard, and a labelled "NOT EXERCISED" pass), and CI runs
+   with SIGPIPE ignored (rc 1 there, not 141), so a second copy would only be a bash-semantics test and a
+   potential flake source; the header cross-references T4 instead. The affected-paths block is updated by hand
+   (see Files to Edit).
+5. **Trackers** (comments only), posted AFTER the draft PR exists and the Infra Validation and `test-scripts`
+   legs are green, each linking the PR as "pending merge" and idempotent (grep for an existing marker comment
+   before posting): #7376, #7432, #9217, #8785, #9167, #9170, #8022, plus one factual observation on #9482 about
+   item 4b. PR body uses `Ref #…`, never `Closes`.
 
 ### What this PR deliberately does not do
 
@@ -297,12 +339,15 @@ backlog); `otp-login.e2e.ts`, `live-verify/run.ts`, `hooks/use-conversations.ts`
 - `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` (stub drain, 1 rewrite, race rows,
   floor; ~60 lines)
 - `plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh` (11 rewrites; ~30 lines)
-- `.claude/hooks/grep-q-pipe-guard.test.sh` (`FILES_7376` pass, count pin, runtime control; ~55 lines)
-- `scripts/lib/test-affected-paths.sh` only if `bash scripts/test-affected-derive.test.sh` fails after the
-  guard edit. Consumer of that list: `scripts/test-all.sh --affected`, which reads the
-  `AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS` block so the guard runs when a pinned suite
-  changes; the block currently names `FILES_8664` and `FILES_7024` members and not the three new files.
-  Regenerate per that suite's message rather than hand-editing.
+- `.claude/hooks/grep-q-pipe-guard.test.sh` (`FILES_7376` pass, count pin, header correction, probe additions; ~35 lines)
+- `scripts/lib/test-affected-paths.sh`: add the three suite paths to the hand-maintained
+  `AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS` block (line ~1399; there is no generator, and
+  `scripts/test-affected-derive.test.sh` does not read it, so it will not go red). Consumer: `scripts/test-all.sh
+  --affected`, which runs the guard when a pinned suite changes. Verify with `bash scripts/lint-orphan-test-suites.sh`
+  and its `.test.sh`. Optionally add a guard row asserting the block is a superset of `FILES_7376`.
+- `plugins/soleur/test/fixture-relative-assert.baseline.txt` only if `bash plugins/soleur/test/fixture-relative-assert.test.sh`
+  reports a delta (the luks, cron and reap suites are pinned there at 18, 5 and 1; equality is exact); run
+  `--write-baseline` in the same commit only when the delta is explained by the edit.
 
 ## Files to Create (PR-1)
 
@@ -355,8 +400,13 @@ logs:
   retention: GitHub artifact retention (default 90 days)
 discoverability_test:
   command: bash .claude/hooks/grep-q-pipe-guard.test.sh
-  expected_output: PASS: grep-q-zero-7376-pass
+  expected_output: grep-q-zero-7376-pass
 ```
+
+The command name matches Check 10's suite-shaped heuristic (`.test.sh`), argued down by measurement: the guard
+is a 5-pass `git grep` scan, `time bash .claude/hooks/grep-q-pipe-guard.test.sh` measured 0.47 s and 0.55 s
+(2026-10-05), far inside the 15 s cap, and it prints one `PASS: grep-q-zero-<n>-pass` line per pass, so the
+literal `grep-q-zero-7376-pass` is matchable (whitespace-free token).
 
 ## Architecture Decision (ADR/C4)
 
@@ -378,66 +428,68 @@ and must run the Product/UX and brand gates at its own plan time.)
 ### Guard 1 — named-file pipe-into-early-exit-grep pin (`FILES_7376`)
 
 **Property.** None of the three suites contains a pipe feeding a `grep` that can stop at its first match, and
-the pin cannot go silent.
+the pin cannot go silent or be wired to the wrong files.
 
 **Assembly.** The population is every line of the three named files matching the guard's own `PATTERN` or
 `PATTERN_AWK_EXIT` after comment lines are stripped: `apps/web-platform/infra/cron-egress-firewall.test.sh`,
 `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`,
 `plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh`. The scan is by pattern over whole
 files (not a list of today's sites), so a site added later at any line is a member. The chokepoint is the
-`FILES_7376` array plus a dedicated scan function (PATTERN + PATTERN_AWK_EXIT, not `scan_scorers`); the tracked-file check and the distinct-count pin protect the array
-itself. Not covered, by design and named in the guard header: multi-line pipes, `| head`, wrappers, and files
-outside the array (growth is by naming a file, #9217).
+`FILES_7376` array plus one dedicated scan function (PATTERN + PATTERN_AWK_EXIT, not `scan_scorers`); the
+tracked-file check and the distinct-count pin protect the array itself. Not covered, by design and stated in the
+guard header: multi-line pipes, `| head`, wrappers, files outside the array (growth is by naming a file, #9217),
+and the luks suite's producer-side mechanism (held by Guard 2).
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Re-add `echo "$X" \| grep -q p` to `cron-egress-firewall.test.sh` | RED naming the file and line |
-| 2 | Re-add `git -C d log -3 \| grep -q p` to `reap-archive-persistence.test.sh` | RED |
-| 3 | Re-add `printf x \| grep -qE p` to `workspaces-luks-verify-workflow.test.sh` | RED |
-| 4 | Dispatch: empty the `FILES_7376` array, or point one entry at a renamed path | RED (tracked-file and member-count pin) |
-| 5 | Second member after a compliant first: a probe fixture whose last line is a bad site after compliant ones | RED (scan covers every line, not the first) |
+| 1 | Wiring, per real file: append `echo "$x" \| grep -q p` to each of the three suites in turn (mutate in place, restore with a trap; assert the append landed with `git diff --numstat` showing one added line) | RED, exit 1, naming that file |
+| 2 | Dispatch: wire the pass to the wrong array (`"${FILES_8855[@]}"`), empty `FILES_7376`, or point one entry at a renamed path | RED (the wrong-array arm reds through row 1: the appended bad line in a pinned file goes undetected, so row 1 itself fails; empty and renamed arms through the tracked-file and member-count pin; run with `</dev/null` so an empty array cannot make `grep` read stdin) |
+| 3 | Second member after a compliant first: a heredoc probe whose bad site is the LAST line after compliant `<<<` and `< <(` lines | RED (the scan covers every line, not the first) |
+| 4 | Shape variety in one heredoc probe row: `echo \| grep -q`, `git -C d log -3 \| grep -q`, `printf x \| grep -qE`, `tr \| grep -q` | RED on each (one axis: PATTERN is producer-agnostic, so this is one row, not four) |
 
-**Harness rows.** One edit to the SUITE: delete the runtime SIGPIPE control and the guard must go RED on a
-missing-control check, not pass. Rows 1-3 and 5 run as checked-in probe fixtures through the dedicated scan
-function (the guard resolves repo-relative paths via `git grep`, so a scratch copy would yield no hits and read
-green); row 4 runs with `</dev/null` so an emptied array cannot make `grep` read stdin. Must-PASS input that is not the canonical: a
-here-string site, an `a || grep -q p <<<"$x"` site (already in the probe's good fixtures) and a
-capture-then-here-string line must stay clean, so a guard that rejects everything cannot pass.
+**Harness rows.** One edit to the SUITE: widen the dedicated function's comment filter so it also drops code
+lines containing `#`, and the negated-site and `|| grep -q p <<<"$x"` must-PASS probes plus row 1 must catch it.
+Must-PASS inputs that are not the canonical: a here-string line, an `a || grep -q p <<<"$x"` line, a
+`grep -q p < <(cmd)` line and a negated `! grep -q p <<<"$x"` line stay clean, so a guard that rejects everything
+cannot pass.
 
-**Anchor.** The pin stores no hash or count of sites, only a member count of the named files. A weakening
-(drop a file and lower the count) lands in the same diff as the guard, so this proves consistency, not
-integrity; that is the accepted limit of every `FILES_*` pass in this file, backstopped by review and by the
+**Anchor.** The pin stores no hash or count of sites, only a member count of the named files. A weakening (drop a
+file and lower the count) lands in the same diff as the guard, so this proves consistency, not integrity; that
+is the accepted limit of every `FILES_*` pass in this file, backstopped by review and by the
 `git ls-files --error-unmatch` check.
 
-### Guard 2 — luks stub drains stdin (race row with positive control)
+### Guard 2 — luks stub drains stdin (race rows with positive control)
 
-**Property.** The pipeline `printf … | ${WEB_HOST_SSH} …` in the reassert body cannot report a non-zero pipe
-status because the stub always consumes its stdin to EOF, regardless of how the producer is scheduled and
-whether SIGPIPE is default or ignored.
+**Property.** The pipeline `printf … | ${WEB_HOST_SSH} …` at workflow lines 481-482 cannot report a non-zero
+pipe status because the stub's probe arm consumes its stdin to EOF, regardless of how the producer is scheduled
+and whether SIGPIPE is default or ignored.
 
-**Assembly.** Every arm of `sshstub` that can be the right-hand side of a pipe in the extracted reassert
-body: the probe invocation (`printf | sshstub`), the host-key-failure early exit and the `tar xzf` arm (where
-the `tar` stub writes nothing, so it is safe only by accident). The drain is hoisted to the top of the stub so
-all arms are covered by one chokepoint. The race row drives the real extracted body, not a model.
+**Assembly.** The pipes into the stub in the extracted reassert body are exactly two: the probe invocation
+(`printf | sshstub`, workflow :481-482) and the bundle ship (`tar czf - | sshstub 'tar xzf -'`, :401-402, where
+the `tar` stub writes nothing so no race can fire). The race rows drive the real extracted body (via the
+`slow_printf` rewrite of the single producer call), not a model. The host-key-failure arm exits at the first
+(`mktemp`) call before any pipe exists and is not covered by these rows; the claim is limited to the probe arm.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the stdin drain from the stub | RED: row 1 reports `unavailable/unparsed` with a non-zero probe rc |
-| 2 | Dispatch: make the `slow_printf` rewrite match nothing | RED (the helper asserts the derived body differs from the original and the edit landed exactly once) |
-| 3 | Delete one new race row | RED (`pass < WF_MIN_ASSERTIONS`; the floor is a lower bound only, so lowering it cannot be detected and is not claimed) |
-| 4 | Run row 1 with SIGPIPE ignored (`trap '' PIPE`) | still passes (drain makes both environments safe); with the drain removed it goes RED, rc 1 |
+| 1 | Delete the stdin drain from the stub's probe arm | RED: row 1 reports `unavailable/unparsed` with a non-zero probe rc (verified in the review reproduction: rc 141 default, rc 1 with SIGPIPE ignored) |
+| 2 | Dispatch: make the `slow_printf` rewrite match nothing, or match twice | RED (the helper asserts the call token appears exactly once and the derived body differs from the original) |
+| 3 | Delete one new race row | RED (`pass < WF_MIN_ASSERTIONS`; the floor is a lower bound only, so lowering it is not detectable and is not claimed) |
+| 4 | Add a second pipe-fed stub invocation to the body (a new `printf … \| ${WEB_HOST_SSH}`) without a drain | RED only if the race row set includes it: the helper rewrites every `printf '…' \|` producer feeding `${WEB_HOST_SSH}` and the landing check counts them, so an unrewritten new pipe fails the count |
+| 5 | Remove `</dev/null` from `drive()`'s body invocation and run the suite as `sleep 20 \| timeout 8 bash suite` | RED (rc 124 hang); a row in the suite's own self-check is not feasible, so this is a one-off PR-body mutation |
 
-**Harness rows.** Positive control on the same input: the delayed body with `FIXTURE_NO_DRAIN=1` must produce
-`unavailable/unparsed` with a probe rc outside {0,3,127,255}, proving the environment can exhibit the race in
-whichever SIGPIPE disposition it runs. Must-PASS non-canonical: row 1 itself is a delayed (non-canonical)
-producer that must still classify `selftest`.
+**Harness rows.** Positive control on the same input: the slow body with `FIXTURE_NO_DRAIN=1` must produce
+`unavailable/unparsed` with a probe rc outside {0,3,127,255}, in both SIGPIPE dispositions (`(trap '' PIPE; …)`
+forces the ignored case on every host), proving the environment can exhibit the race. Must-PASS non-canonical:
+row 1 itself is a delayed, non-canonical producer that must still classify `selftest`.
 
-**Anchor.** The race row compares against the pristine body's class on the same fixture computed in the same
-run (the `hk_mutant` technique), so no stored expectation can be edited in the same diff to weaken it.
+**Anchor.** The race rows assert literal classes (`selftest`, `unavailable/unparsed`) against a handshake that
+removes the wall-clock dependence; a weakening would have to edit the rows and the exact floor in the same diff,
+which review sees. No stored expectation sits outside the diff; that is the accepted limit.
 
 ## Scope Check
 
@@ -464,16 +516,17 @@ run (the `hk_mutant` technique), so no stored expectation can be edited in the s
 |-----------|-----------------------------------|---------|
 | Guard 1 (`FILES_7376` pass) | "Add a regression guard where it is cheap" (ask 9) | asked |
 | Guard 2 race rows | "make sure every new assertion can fail (mutation-check it)" (ask 9) | asked |
-| Runtime SIGPIPE control in the guard | "make sure every new assertion can fail" (ask 9) | asked |
 | Conversions in the three suites | "Fix the root cause" (ask 8) | asked |
-| `scripts/lib/test-affected-paths.sh` regeneration | — | inferred — justification: the guard's affected-map block must list its named files or `--affected` runs skip the guard when a pinned suite changes |
+| `scripts/lib/test-affected-paths.sh` block and the `fixture-relative-assert` baseline | — | inferred — justification: the guard's affected-map block must list its named files or `--affected` runs skip the guard when a pinned suite changes; the exact-equality fixture ratchet moves with row edits |
 | Learning file | — | inferred — justification: wg-every-session-error-must-produce-either (a rule or a learning) for the producer-side variant and the corrected threshold |
 | PR-2 / PR-3 specs | "list the rest as explicit follow-ups tied to existing trackers" | asked |
+| `slow_printf` helper (luks race rows) | "reproducing it (loop the suite under load ...)" and "make sure every new assertion can fail" | asked |
+| `decision-challenges.md` (Taste items from plan review) | — | inferred — justification: plan Phase "Plan Review" headless arm requires persisting Taste / User-Challenge findings there for `ship` to render |
 
 ### Split Assessment
 
 - Subsystems touched: 5 — `apps/web-platform`, `plugins/soleur`, `.claude`, `scripts`, `knowledge-base`
-- Planned files: 8 | Estimated changed lines: ~250
+- Planned files: 9 | Estimated changed lines: ~250
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — the root-count threshold fires only because one root cause is expressed in
   four directories (three test suites and the guard that pins them) plus plan artifacts. Splitting the guard
@@ -482,52 +535,53 @@ run (the `hk_mutant` technique), so no stored expectation can be edited in the s
 
 ## Implementation Phases
 
-### Phase 0: measure RED before touching anything
+### Phase 0: measure RED first (informational)
 
-- [ ] 0.1 Informational baseline on the unfixed tree: `for i in $(seq 1 24); do bash <reap suite> > "$S/b$i" 2>&1 & done; wait`
-  and count suites with a `FAIL:` line (measured today: 3 of 24; 9 of 56 across runs). Reap only; the cron
-  suite never reproduced locally (0 of 6,000), so no cron stress comparison is claimed.
+- [ ] 0.1 Informational baseline on the unfixed tree for the reap suite only (cron never reproduced locally, 0 of
+  6,000): `for i in $(seq 1 24); do env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE bash <reap suite> > "$S/b$i" 2>&1 & done; wait`
+  and count suites with a `FAIL:` line (measured: 3 of 24; 9 of 56). The `env -u` matters: the suite exits 97 on
+  an inherited git-location variable, which would record 24 FATALs and read as zero reproductions.
 - [ ] 0.2 Re-run the luks race demonstration (extract the `reassert` step with `python3 -c yaml`, delay the
-  producer 0.4 s, run with the suite's stub) and record `unavailable unparsed` and the non-zero probe rc.
-- [ ] 0.3 Write the new race rows and the guard's `FILES_7376` pass first (RED against the unfixed suites).
+  producer, run with the suite's non-draining stub) and record `unavailable unparsed` and the non-zero probe rc.
 
-### Phase 1: fixes
+### Phase 1: fixes (one commit per suite; floor bump with its rows)
 
-- [ ] 1.1 `reap-archive-persistence.test.sh`: 11 sites, helpers first, one capture-then-here-string idiom.
-- [ ] 1.2 `cron-egress-firewall.test.sh`: 33 sites rewritten mechanically; prove with the throwaway inverse diff.
-- [ ] 1.3 `workspaces-luks-verify-workflow.test.sh`: stub drain, one rewrite, race rows, new exact floor.
-- [ ] 1.4 FIRST update the guard header comment (the falsified 64 KiB statements, the most contributor-visible
-  change), then the affected-paths edge block (expected to need regeneration, not conditional, whenever a
-  pinned file is added; use the owning suite's message).
+- [ ] 1.1 `reap-archive-persistence.test.sh`: 11 sites, `grep -q X < <(producer)`.
+- [ ] 1.2 `cron-egress-firewall.test.sh`: 33 sites; throwaway inverse diff on changed lines only (33 segments;
+  34 here-string sites and 0 pipe-fed after) plus the discriminating census-flip row.
+- [ ] 1.3 `workspaces-luks-verify-workflow.test.sh`: `</dev/null` in `drive`, probe-arm drain,
+  `FIXTURE_NO_DRAIN` plumbing, line 722, `slow_printf` helper and two rows, exact floor in the same commit.
+- [ ] 1.4 Guard: header correction FIRST, then `FILES_7376`, dedicated scan function, probe additions;
+  affected-paths block by hand; `bash scripts/lint-orphan-test-suites.sh`.
+- [ ] 1.5 Ratchets: `bash plugins/soleur/test/fixture-relative-assert.test.sh`, the trap-ownership lint, and
+  shellcheck on the three edited suites; fix or explain every delta.
 
-### Phase 2: mutation checks (each must go RED; paste the load-bearing three in the PR body)
+### Phase 2: mutation checks (assert each mutation LANDED with `cmp` / `git diff --numstat`; working tree clean after)
 
-- [ ] 2.1 Guard 1 rows 1-5 and Guard 2 rows 1-4 from the matrices above, one at a time (Guard 1 via checked-in
-  probe fixtures, Guard 2 on the suite).
-  Assert each mutation LANDED (`cmp` against the original, or a `grep -c` landing count) before reading its
-  result; a sed that matches nothing reads as a green row.
-- [ ] 2.2 Label any surviving mutant as "fixtures do not exercise it" or "equivalent, proved".
+- [ ] 2.1 Guard 1 rows 1-4 and Guard 2 rows 1-5; paste the load-bearing three in the PR body.
+- [ ] 2.2 Label any surviving mutant: fixtures do not exercise it, or equivalent (proved).
 
 ### Phase 3: verification
 
-- [ ] 3.1 The three suites green serially (cron 308/0, reap 45/0, luks 313+k/0).
-- [ ] 3.2 Informational: same stress recipe as 0.1 on the fixed tree for reap and luks (record counts); run the
-  guard's runtime control 50 times under load.
-- [ ] 3.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh` green; `bash scripts/test-affected-derive.test.sh`
-  green; `python3 scripts/lint-guard-contract.py` green on this plan.
-- [ ] 3.4 Post the tracker comments (list below) and open the PR with `Ref #…` lines only.
+- [ ] 3.1 The three suites green serially (cron 308/0, reap 45/0, luks 313 plus the new rows / 0).
+- [ ] 3.2 Informational: reap and luks loaded runs after the fix (record counts).
+- [ ] 3.3 `bash .claude/hooks/grep-q-pipe-guard.test.sh` green; `bash scripts/test-affected-derive.test.sh` green;
+  `python3 scripts/lint-guard-contract.py` green on this plan.
+- [ ] 3.4 Open the DRAFT PR. Treat its first Infra Validation and `test-scripts` runs (the legs the suites
+  actually run in; local serial runs do not reproduce their contention) as the verification gate.
+- [ ] 3.5 Only then post the tracker comments (below), linking the PR as pending merge, idempotently.
 
 ### Tracker fold list (comments, no new issues)
 
 | Issue | Evidence to add |
 |---|---|
-| #7376 | Items 2/3/4a root cause (SIGPIPE class, contention as trigger), the CI `echo: write error: Broken pipe` line, the 0.4 s producer-delay demo, loaded-vs-serial counts, suites fixed by this PR |
+| #7376 | Items 2/3/4a root cause (SIGPIPE class, contention as trigger), the CI `echo: write error: Broken pipe` line, the delayed-producer demo, loaded-vs-serial counts, suites fixed by the PR (pending merge) |
 | #7432 | Item 2's premise ("cannot fire") is falsified; item 1 (`JOBS=1`) unchanged |
 | #9217 | Threshold correction for the whole class (4 KiB chunks, multi-write producers, `git log` at 3 lines), the three newly pinned files; #7005 and #6601 get a one-line cross-link |
-| #8785 | Two new occurrences (runs 37224723661, 37295454362), the sticky-5xx mechanism, the offline repro, escalate per its own criterion, PR-2 plan |
+| #8785 | Two new occurrences (runs 37224723661, 37295454362), the sticky-5xx mechanism, the offline repro, escalate per its own criterion, PR-2 planned |
 | #9167 | The string is mocked at `otp-login.e2e.ts:141`; both 64-red runs are the font failure |
 | #9170 | New occurrence (run 37216842585) and the PR-2 fix direction |
-| #8022 | The harness history table (8 PASS / 2 FAIL / 2 CANT-RUN), the #9270 boundary, the skipped-not-passed correction, PR-3 plan |
+| #8022 | The harness history table (8 PASS / 2 FAIL / 2 CANT-RUN), the #9270 boundary, the skipped-not-passed correction, PR-3 planned |
 | #9482 | Observation only: PR 9477 entered the queue at 15:12 while its own PR-level run (same head) had failed `lint-bot-statuses`; not acted on |
 
 ## Acceptance Criteria
@@ -537,52 +591,60 @@ run (the `hk_mutant` technique), so no stored expectation can be edited in the s
 - [ ] The three suites contain zero pipe-fed early-exit greps: `bash .claude/hooks/grep-q-pipe-guard.test.sh`
   exits 0 and prints `PASS: grep-q-zero-7376-pass`.
 - [ ] Assertion counts are unchanged except for the new rows: cron 308 passed / 0 failed, reap 45 / 0, luks
-  313 plus the new rows / 0, and `WF_MIN_ASSERTIONS` equals the new green count exactly.
-- [ ] Applying the inverse transform (`grep -q… PAT <<<"$V"` back to `echo "$V" | grep -q… PAT`) to the new
-  `cron-egress-firewall.test.sh` yields a file identical to the pre-change file (proves the conversion changed
-  no pattern text).
-- [ ] The luks race row classifies `selftest` against the draining stub with the producer delayed 0.4 s, and
-  `unavailable/unparsed` (probe rc outside {0,3,127,255}) against the `FIXTURE_NO_DRAIN=1` control.
+  313 plus the two race rows / 0, and `WF_MIN_ASSERTIONS` equals the new green count exactly.
+- [ ] `drive()` runs the body with `</dev/null`; the suite finishes when started as `sleep 20 | timeout 8 bash <suite>`
+  (no hang).
+- [ ] The luks race rows are RED against the pre-fix stub (row 1 fails with `unavailable/unparsed`) and GREEN
+  after: row 1 classifies `selftest` and row 2 (`FIXTURE_NO_DRAIN=1`) classifies `unavailable/unparsed` with a
+  probe rc outside {0,3,127,255}, both under `(trap '' PIPE; …)`.
+- [ ] Cron conversion: the inverse transform over the changed lines shows exactly 33 changed segments; after the
+  change the file has 34 here-string `grep -q` sites and 0 pipe-fed ones; flipping the `m$k` census pattern in a
+  sandbox turns the suite RED.
 - [ ] Informational, recorded in the PR body and NOT a gate (the rates are probabilistic: 3/24 and 9/56 on the
   unfixed tree): reap-suite loaded runs before and after. The deterministic gates are the luks race rows, the
   guard and the mutation rows.
 
 ### Guard / quality gates
 
-- [ ] Every Guard 1 and Guard 2 mutation row was executed and went RED (pasted in the PR body); any survivor
-  is labelled.
-- [ ] `python3 scripts/lint-guard-contract.py` passes on this plan.
+- [ ] Every Guard 1 and Guard 2 mutation row was executed and went RED (the load-bearing three pasted in the PR
+  body); each mutation was proved to have landed; any survivor is labelled.
+- [ ] `python3 scripts/lint-guard-contract.py` passes on this plan; `bash scripts/lint-orphan-test-suites.sh`,
+  `bash plugins/soleur/test/fixture-relative-assert.test.sh`, the trap-ownership lint and shellcheck pass on the
+  edited files.
 - [ ] No change under `infra/github/**`; ADR-270 file untouched (`git diff --stat` shows neither).
-- [ ] PR body uses `Ref #7376`, `Ref #7432` and `Ref #9217` (no `Closes`; #7005 and #6601 are cross-linked in comments only).
-- [ ] Tracker comments posted per the fold list; no new GitHub issue created.
+- [ ] PR body uses `Ref #7376`, `Ref #7432` and `Ref #9217` (no `Closes`; #7005 and #6601 are cross-linked in
+  comments only).
+- [ ] Tracker comments posted after the PR's Infra Validation and `test-scripts` legs are green; no new GitHub
+  issue created.
 
 ## Test Scenarios
 
-- Given the unfixed reap suite, when 24 copies run in parallel, then at least one reports `FAIL: G:` while
-  the commit exists in `git log` (RED); after the fix, none do.
-- Given the luks reassert body with a 0.4 s delayed producer, when the stub does not drain stdin, then the
-  class is `unavailable`, reason `unparsed`, probe rc non-zero; when it drains, then the class is `selftest`.
-- Given a 200 KB producer whose first line matches, when piped to `grep -q` under pipefail, then the status
-  is non-zero (141, or 1 with SIGPIPE ignored); when read through a here-string or a captured variable, then it is 0 (guard control).
-- Given a new `| grep -q` added to a pinned suite, then the guard reds naming the file and line.
+- Given the unfixed reap suite, when 24 copies run in parallel, then at least one may report `FAIL: G:` while the
+  commit exists in `git log` (informational); after the fix none do.
+- Given the luks reassert body with the producer held until the stub has closed its stdin, when the stub does not
+  drain, then the class is `unavailable`, reason `unparsed`, probe rc non-zero (1 or 141); when it drains, then
+  the class is `selftest`.
+- Given a new `| grep -q` appended to any pinned suite, then the guard reds naming that file.
 - Browser/API verification: not applicable (no UI or external service); all checks are local shell.
 
 ## Risks and Sharp Edges
 
 - Any new `mktemp` in a `*.test.sh` owes an owning EXIT trap placed BEFORE `source test-helpers.sh`
-  (`lint-trap-tempfile-ownership` rule (c)); the new rows reuse the existing `$SCRATCH` and need none.
+  (`lint-trap-tempfile-ownership` rule (c)); the new rows reuse the existing `$SCRATCH` and need none. The
+  guard's wiring-row mutations restore through a trap.
 - The stub is a fake for `ssh`; the real contract it must replay is "reads stdin to EOF when the remote
   command does not", which is exactly what the drain adds. A stub that ignores stdin sits above the code under
   test.
+- The reap suite exits 97 on an inherited `GIT_*` location variable; any loop launched from a hook or ship
+  context needs `env -u`.
 - Run `npx markdownlint-cli2` on this plan and on `tasks.md` before the first commit (hard tabs and
   list-after-heading are the recurring violations).
-- A here-string appends a trailing newline exactly as `echo` does; `printf '%s'` producers would differ, but
-  every converted site is an `echo`. The inverse-transform AC covers it.
-- Keep the `!` placement identical to the original `if ! … | grep -q` when converting to the capture idiom;
-  under `set -u` an unset capture variable aborts the same way the old `echo "$V"` did.
-- The luks floor is exact. Count the new rows by running the suite, then set the floor in the same edit.
-- Do not "fix" item 3 by serialising the suite or widening anything: the CI log proves the mechanism, and the
-  here-string form removes it at any `-P`.
+- A here-string appends a trailing newline exactly as `echo` does; every converted cron site is an `echo`.
+- Under `set -u` an unset variable aborts the same way the old `echo "$V"` did; keep the `!` placement identical
+  to the original `if ! … | grep -q`.
+- The luks floor is exact. Count the new rows by running the suite and set the floor in the same commit.
+- Do not "fix" item 3 by serialising the suite or widening anything: the CI log proves the early-exit reader,
+  and the here-string form removes it at any `-P`.
 - A plan whose `## User-Brand Impact` is empty fails deepen-plan Phase 4.6; this one is filled
   (`threshold: none`, scope-out stated).
 - Running `next dev` for PR-2 experiments mutates `apps/web-platform/tsconfig.json` and drops untracked
