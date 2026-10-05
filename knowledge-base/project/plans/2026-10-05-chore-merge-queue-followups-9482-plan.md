@@ -29,6 +29,22 @@ Everything lands in the draft PR #9511 (branch `feat-one-shot-9482-merge-queue-f
 says `Ref #9482` and `Ref #9493`; neither is closed by merge (see Sharp Edges for why #9493 is closed by
 hand after the apply is read back).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-05. **Agents:** observability-coverage-reviewer, architecture-strategist, plus live verification
+(cited PRs/issues, labels, rule ids, the discoverability command, the Sentry read-back command, the stall-title anchor).
+
+Key improvements: (1) item 2's threshold reconciled with ADR-270's break-even (a before-minus-after delta of about 1.3,
+which the pilot puts at the margin) and (d) downgraded to "not yet robustly measurable"; (2) (c)'s evidence gets a
+denominator and the real deploy-chain constraint (`workflow_run` arm needs a push-event `CI` success; any change keyed
+per SHA); (3) a red `merge-queue-stall-check.yml` run alerts nobody, recorded as an accepted gap with a tracked follow-up so
+#9493 is not closed on quiet-window data; (4) Observability layer citations added; (5) the Scope Check rewritten to the
+canonical schema; (6) the existing canary-log runbook (#9485) is indexed.
+
+New considerations: the ADR heading says `# ADR-269` while the file is ADR-270 (pre-existing, not touched here); the
+Network-Outage gate keyword `timeout` in this plan means the merge-queue check timeout, not a connectivity symptom, so that
+gate does not apply.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -147,23 +163,6 @@ arms `gh pr merge --squash --auto` with `github.token`), so they do not satisfy 
 | "(b), (c), (d): re-read the issue for their definitions" | Each has a stated trigger. (c)'s fired on measured data; (b) and (d) did not. (c)'s "must still emit the CI completion event the deploy waits on" makes it a deploy-chain change, not a one-file edit. | Verdict per follow-up on #9482; (c) gets its own issue; no code for (b)/(c)/(d) here. |
 | "#9493: route the monitor" | #9493 also asks for the heartbeat decision from measured data. | Both are in this plan; #9493 is closed by hand after the apply is read back, not by the merge. |
 
-## Scope Check
-
-Ask mapping (every ask maps to a deliverable; nothing is `inferred`: the one inferred item, a follow-through probe, was cut at plan review):
-
-| Ask | Deliverable | Provenance |
-|-----|-------------|------------|
-| Item 1: observe next weakness-miner PR | Phase 1.1 pull and record (or "pending" with the re-run command) | ask |
-| Item 2: sync-push count | Phase 1.2 | ask |
-| Item 3: (b), (c), (d) | Phase 1.3 verdicts; one tracking issue for (c) | ask |
-| Item 3: do not act on the three operator decisions | Explicit non-goal; the verdict comment restates "defaults stand" | ask |
-| Item 4: route the monitor | Phase 2 | ask |
-| Heartbeat decision (from #9493 body) | Phase 1.4 | ask (#9493) |
-| ADR stays `adopting` | Non-goal; ADR gets only dated evidence lines | ask |
-
-Split assessment: one PR is right. The only code is a one-label Terraform routing move and its one-value reference-file
-edit; everything else is data pulls recorded on the issue plus a short ADR evidence record.
-
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** nothing user-facing. A wrongly moved monitor label either leaves the
@@ -193,7 +192,7 @@ content is read or written. The measurements read only public PR/issue/run metad
 All pulls use `gh` and, for Sentry, the read-only Doppler `prd` token (`SENTRY_IAC_AUTH_TOKEN`). Nothing is asked of the
 operator. Results are posted as ONE combined comment on #9482 with four headed blocks (1.1 to 1.4), plus a pointer on #9493 and a
 one-line pointer on #9454 (the ADR says canary results are recorded there); Phase 3 adds a short ADR-270 record that links
-to the comment instead of restating it.
+to the comment (and #9454) instead of restating it.
 
 **1.1 Item 1: weakness-miner PR through the queue.**
 
@@ -204,7 +203,10 @@ to the comment instead of restating it.
   `ADDED_TO_MERGE_QUEUE_EVENT`, `REMOVED_FROM_MERGE_QUEUE_EVENT` with `reason`, `MERGED_EVENT`): enqueue to merge in
   minutes; the `merge_group` CI run (`gh api "repos/{o}/{r}/actions/runs?event=merge_group"` filtered on
   `head_branch` starting `gh-readonly-queue/main/pr-<N>-`); and any `merge-queue-stall` issue whose title
-  starts `merge-queue stall: PR #<N> pending` (the stall workflow's own anchor, so PR 9 does not match PR 94; all states).
+  starts `merge-queue stall: PR #<N> pending` (the stall workflow's own anchor, so PR 9 does not match PR 94). The workflow's own dedupe reads only open issues, so
+  query `gh issue list --label merge-queue-stall --state all --limit 200 --json number,title` and prefix-match the title
+  client-side with `jq` (`gh --search` cannot do starts-with). A missing stall issue is NOT proof of a clean pass: the probe
+  is best-effort by ADR-270's own text.
   Also list any OPEN `ci/weakness-digest-*` PR created after the cutoff (a stuck, never-merged bot PR is the failure
   item 4 exists to catch, and a merged-only search cannot see it). Note the merge lag: recent digests merged about 5.5 h
   after the 06:00 fire (#9479 at 11:51Z, #9037 at 11:30Z), so "no merged PR" on Sunday morning is not yet a finding.
@@ -221,7 +223,16 @@ commits (REST `pulls/{n}/commits`, `--paginate`) with two parents whose second p
 syncs predate the queue); before = the 40 most recent human PRs merged before it (ADR canary 9 asks "before and after").
 Report n, total and mean per window, say the bias direction (commits not pushes; hook share not separable), and post the
 exact shell used. Run the procedure once at work time and take the number from that run (the pilot above used n=12 to 13).
-Compare the after-mean with follow-up (d)'s 1.3 threshold.
+Report the after-mean (what (d)'s trigger literally names:
+"sync pushes per merged PR at or above 1.3") AND the before-minus-after delta (ADR-270 "Runner capacity" puts the queue's
+break-even at about 1.3 REMOVED resyncs per merged PR, a delta; the pilot's 2.13 minus 0.83 to 1.00 is 1.13 to 1.30, at the
+margin, so the break-even question is open and matters more for the `accepted` flip than (d) does). Split by merge
+message as a hint only: `Merge branch 'main' into ...` with a GitHub web-flow committer is `gh pr update-branch`; the
+other forms are local `git merge` (hook or ship/merge-pr fence, not separable from each other); verify the split against a
+sample before asserting it. Further caveats to state: rebase-style syncs and force-pushed PRs leave no merge commit (so the
+count is not strictly an upper bound), a sibling-branch merge whose second parent later reached main is a false positive,
+the after window is about one day (Sunday afternoon through Monday) against 40 weekday PRs before, and PRs in flight at
+cutover carry pre-queue syncs. Label the ADR row "sync merges (proxy)".
 
 **1.3 Item 3: follow-up triage. Verdict per follow-up, each quoted against its own trigger.**
 
@@ -229,8 +240,8 @@ Compare the after-mean with follow-up (d)'s 1.3 threshold.
 |-----------|----------------------|-----------------------|------------------------------------------|---------|
 | (a) | landed | merged in #9491 | n/a | none |
 | (b) `codeql-to-issues.yml` fails closed | first `codeql-gate-degraded` issue, or the ADR flip to `accepted` | 0 such issues; gate 15/15 green; ADR still `adopting` | Yes, when its trigger fires | NOT done: trigger not fired. Verdict "not fired" recorded. |
-| (c) skip duplicate push-to-main CI run | canary records push SHA == `merge_group.head_sha` | 12/12 pairs match (fired) | Yes, but it is a deploy-chain redesign (the push run is what the `workflow_run` trust ladder and `post-merge-monitor.yml` read) | NOT done here: file a new tracking issue (`deferred-automation`, `Ref #9482`) carrying the 12/12 evidence, the one-line constraint "must still emit the CI completion event the deploy waits on", the value at stake (one duplicate `ci.yml` run, p50 17.6 min of runner time, per queue merge; quote the actual per-day count from `gh run list`), and a re-evaluation trigger (when the deploy chain is next touched, or runner-minute cost becomes binding). The consumer list is the future plan's job (it goes stale). Milestone from `knowledge-base/product/roadmap.md`. |
-| (d) hook skips pre-enqueue sync under the queue rule | sync pushes per merged PR at or above 1.3 | 0.83 to 1.00 on the pilot (below) | Yes, when its trigger fires | NOT done: trigger not fired on the frozen number. If the frozen after-mean is at or above 1.3, STOP and file it as its own plan; do not implement inline. |
+| (c) skip duplicate push-to-main CI run | canary records push SHA == `merge_group.head_sha` | 12/12 queue-merged commits have a successful `merge_group` run on the same SHA (fired; a SQUASH queue fast-forwards `main` to the candidate, so this holds by construction for queue merges) | Yes, but it is a deploy-chain redesign (the push run is what the `workflow_run` trust ladder and `post-merge-monitor.yml` read) | NOT done here: file a new tracking issue (`deferred-automation`, `Ref #9482`) carrying the 12/12 evidence, the denominator (all `main` commits since adoption, how many have a green `merge_group` run on the same SHA, and what the non-matches were: `--admin` and bypass merges and direct pushes create commits no `merge_group` run built), the constraint stated precisely (`web-platform-release.yml`'s `workflow_run` arm needs a push-event `CI` run on `main` with conclusion `success`, otherwise `resolve-target` clean-skips and the release never deploys; any change must therefore be keyed per SHA, "skip only when a green `merge_group` run exists for this exact head SHA", never a static removal of the push run; basing the trust ladder on `merge_group` is a trust-model change because `merge_group` runs use the candidate's workflow definitions; whether an all-jobs-skipped `ci.yml` run concludes `success` is unmeasured), the value at stake (one duplicate `ci.yml` run, p50 17.6 min of runner time, per queue merge; quote the actual per-day count from `gh run list`), and a re-evaluation trigger (when the deploy chain is next touched, or runner-minute cost becomes binding). The consumer list is the future plan's job (it goes stale). Milestone from `knowledge-base/product/roadmap.md`. |
+| (d) hook skips pre-enqueue sync under the queue rule | sync pushes per merged PR at or above 1.3 | 0.83 to 1.00 on the pilot (below 1.3), but n=12 over about one day | Yes, when its trigger fires | NOT done. Verdict "not fired on the pilot, not yet robustly measurable": re-run when 7 days or n>=30 post-adoption PRs exist, recorded as the revisit trigger in the combined comment (#9482 stays the tracker). If a frozen after-mean is at or above 1.3, STOP and file it as its own plan; do not implement inline. |
 
 Operator decisions 1 to 3 (deploy hold default NO, threshold `aggregate pattern`, no `.github/**` gate): the verdict
 comment restates "defaults stand, not acted on". Nothing in this PR touches them.
@@ -247,9 +258,15 @@ longest gap between consecutive job starts and the count of gaps over 15 minutes
 45-minute threshold and the 60-minute timeout is what a coverage gap must stay under; one slow job is retried by the next
 tick, a sustained gap is what misses a stall). Say plainly that this is a default-no with a revisit trigger, not a
 decision the data can flip from a quiet window (the dispatcher header cites a ~20 min p90 on a congested pool,
-2026-09-24): no executor-side heartbeat unless max latency or a gap exceeds 15 minutes. Also check whether a red
-`merge-queue-stall-check.yml` run (a broken token, a failed `gh` call) alerts anywhere today; if not, record that as an
-accepted gap alongside the latency gap. Record in the combined #9482 comment and on #9493.
+2026-09-24): no executor-side heartbeat unless max latency or a gap exceeds 15 minutes. Settled at plan time (checked, read-only): a red
+`merge-queue-stall-check.yml` run (a GraphQL error, a token problem, a failed issue create under `set -euo pipefail`)
+alerts nobody: the workflow has no `if: failure()` step, no Sentry or notify step and no secrets, nothing consumes its run
+conclusion, and dispatched runs have the Inngest GitHub App as actor so GitHub's native failure email goes nowhere. The
+dispatcher's green check-in means "dispatched", not "probe executed". Record that as an accepted gap in the combined
+#9482 comment and on #9493, and file ONE small tracked follow-up (`deferred-automation`, `Ref #9493`) for a secretless
+route, for example a dispatcher-side check of the previous dispatched run's `conclusion` through the `actions:write`
+token it already holds, which would also cover the runner-wait gap; revisit trigger: a missed stall, or a start gap over
+15 minutes measured under load. Record in the combined #9482 comment and on #9493.
 
 ### Phase 2: route the monitor (Terraform, two-PR rule PR 2)
 
@@ -286,6 +303,8 @@ under "Canary results", add a SHORT dated block (recorded 2026-10-05), 3 to 5 li
 definitions: item 4 pending (next fire date); item 9 the sync-merge numbers; item 10 the dispatched-run spacing and
 job-start latency summary; item 3 partial ("push SHA == merge_group head SHA, 12/12"). Do NOT edit the `## Status` section, the
 `status:` frontmatter, or any "Follow-up" definition. The (b)/(c)/(d) verdicts live on #9482 and, for (c), its new issue.
+Also add one table row each for canaries 4, 9 and 10 to `knowledge-base/engineering/operations/runbooks/merge-queue-canary-log.md`
+(the per-canary index created in #9485; it records "result on #9454" for canary 1), pointing at the combined #9482 comment.
 
 ### Phase 4: ship and post-merge verification
 
@@ -298,7 +317,8 @@ reads prose). After merge:
    (command in the Sentry README, extended with `| index("2359391")`).
 3. File the (c) tracking issue and the one-line pointer comments (#9454, #9493).
 4. Comment the heartbeat decision and the apply read-back on #9493, then close #9493 by hand (`gh issue close 9493`
-   with the evidence). Post the combined measurement comment and final summary on #9482 (pending items: item 4 awaits the 2026-10-11 fire, the three
+   with the evidence) once the executor-visibility follow-up (Phase 1.4) exists, so the unmeasured-under-load decision is
+   tracked rather than closed. Post the combined measurement comment and final summary on #9482 (pending items: item 4 awaits the 2026-10-11 fire, the three
    operator decisions, (b), (d), and the new (c) issue).
 
 ## Files to Edit
@@ -307,6 +327,7 @@ reads prose). After merge:
 - `apps/web-platform/infra/sentry/cron-monitors.tf` (comment only)
 - `apps/web-platform/infra/sentry/alert-reference.json` (one id appended, derived locally; CI gate is the proof)
 - `knowledge-base/engineering/architecture/decisions/ADR-270-merge-queue-with-advisory-codeql-and-post-merge-alert-gate.md` (short dated evidence block only)
+- `knowledge-base/engineering/operations/runbooks/merge-queue-canary-log.md` (three index rows pointing at the #9482 comment)
 
 Glob check: each path exists on `origin/main`. `cron-merge-queue-stall-dispatch.ts` is deliberately NOT edited: its header
 already says the heartbeat decision is "tracked by the routing follow-up issue", which stays true.
@@ -315,11 +336,48 @@ already says the heartbeat decision is "tracked by the routing follow-up issue",
 
 - `knowledge-base/project/specs/feat-one-shot-9482-merge-queue-followups/tasks.md` (derived from this plan)
 
-New GitHub issue (not a file): the (c) tracking issue, filed at ship.
+New GitHub issues (not files), filed at ship: the (c) tracking issue and one executor-visibility follow-up for the stall check (`Ref #9493`).
 
 ## Open Code-Review Overlap
 
 Queried the open `code-review` issues against every planned path: no issue names any path above. Disposition: none.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "ADR item 4: observe the next weakness-miner.yml PR flowing through the merge queue without stalling. Check `gh pr list --search \"weakness-miner\" --state merged`, then each PR's queue timeline (enqueue -> merge) and any stall-check issue filed." [brief] | Phase 1.1 | mapped |
+| 2 | "Until one clean pass, ADR-270 stays adopting. Do not flip it to adopted without that evidence." [brief] | Phase 3 (status untouched), Acceptance Criteria ADR-status check | mapped |
+| 3 | "Measure the hook's sync-push count per merged PR (currently unmeasured). Pick a window of merged PRs, count the BEHIND-sync pushes each needed, and record the numbers on #9482." [brief] | Phase 1.2, Phase 3 | mapped |
+| 4 | "Follow-ups (b), (c), (d) from #9482: re-read the issue body for their definitions before touching them." [brief] | Phase 1.3 | mapped |
+| 5 | "Do NOT act on the three operator decisions; their defaults stand until the operator answers." [brief] | Phase 1.3 closing paragraph, Non-goals in Overview | mapped |
+| 6 | "#9493: route the scheduled-merge-queue-stall-dispatch Sentry monitor (two-PR rule: the monitor was declared unrouted in cron-monitor-alerts.tf, citing #9493)." [brief] | Phase 2, Files to Edit (three Sentry files) | mapped |
+| 7 | "decide, from measured data, whether an executor-side heartbeat step in `merge-queue-stall-check.yml` is worth adding" [issue #9493] | Phase 1.4 | mapped |
+| 8 | "PR bodies use `Ref #9482`, never `Closes`." [brief] | Phase 4, Acceptance Criteria PR-body checks | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Phase 1.1 weakness-miner pull | asks 1 and 2 | asked |
+| Phase 1.2 sync-merge count | ask 3 | asked |
+| Phase 1.3 follow-up verdict table | ask 4 | asked |
+| Phase 1.3 tracking issue for (c) | ask 4 ("re-read the issue body for their definitions before touching them"); the wg-when-deferring rule requires a tracker for a fired, deferred follow-up | inferred — justification: (c)'s trigger fired and the change is deferred out of this PR, so the repo's deferral rule needs an issue carrying the evidence and a re-evaluation trigger |
+| Phase 1.4 heartbeat measurement | ask 7 | asked |
+| Phase 2 and the three Sentry files | ask 6 | asked |
+| Phase 3 ADR-270 evidence block | ask 3 ("record the numbers") and ask 2 | inferred — justification: the ADR names its own canary rows (9, 10, 4) and says results are recorded; a short linked block keeps the ADR from contradicting #9482. Plan review kept it short and may cut it. |
+| Canary-log index rows | ask 3 ("record the numbers") | inferred — justification: the runbook created in #9485 is the per-canary index and would otherwise omit canaries 4, 9 and 10 |
+| Pointer comments on #9454 and #9493 | ask 7 and the ADR's own "recorded ... on #9454" instruction | inferred — justification: one-line pointers only, so the ADR's stated record location stays true |
+| `tasks.md` | pipeline artifact for `soleur:work` | inferred — justification: the work skill executes against it |
+
+### Split Assessment
+
+- Subsystems touched: 2 — apps/web-platform, knowledge-base
+- Planned files: 6 | Estimated changed lines: 45 (excluding the plan and tasks files)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## Acceptance Criteria
 
@@ -336,7 +394,7 @@ Queried the open `code-review` issues against every planned path: no issue names
 ### Measurement deliverables (one combined comment on #9482, verified by reading it back; one-line pointers on #9493 and #9454)
 
 - [ ] Item 1 block: either the post-adoption weakness-miner PR timelines (enqueue to merge, `merge_group` run, stall-issue check, open-PR check) or the explicit "pending, next fire 2026-10-11T06:00Z" line with the re-run commands; it states ADR-270 stays `adopting`.
-- [ ] Item 2 block: frozen definition, both windows, n, totals, means (after-window excludes #9455), the bias direction, the exact commands, and the comparison to 1.3.
+- [ ] Item 2 block: frozen definition, both windows, n, totals, means (after-window excludes #9455), the before-minus-after delta against the ADR's 1.3 break-even, the caveats, the exact commands, and the comparison of the after-mean to (d)'s 1.3.
 - [ ] Item 3 block: a verdict row each for (b), (c), (d) quoting the trigger and evidence, plus "operator decisions 1 to 3: defaults stand, not acted on".
 - [ ] Heartbeat block: n, window, median and max job-start latency, longest gap between starts and count of gaps over 15 minutes, whether a red stall-check run alerts anywhere, and the default-no decision with its revisit trigger. Posted in the combined #9482 comment and on #9493.
 
@@ -344,7 +402,7 @@ Queried the open `code-review` issues against every planned path: no issue names
 
 - [ ] `apply-sentry-infra.yml` run on the merge commit succeeded; plan was one in-place update, zero destroy.
 - [ ] Live read shows the `cron-monitor-failure` workflow `detectorIds` includes `2359391`.
-- [ ] The (c) tracking issue exists (`deferred-automation`, evidence, value at stake, trigger, roadmap milestone, `Ref #9482`).
+- [ ] The (c) tracking issue exists (`deferred-automation`, evidence and denominator, the per-SHA constraint, value at stake, trigger, roadmap milestone, `Ref #9482`). The executor-visibility follow-up exists (`deferred-automation`, `Ref #9493`, revisit trigger) before #9493 is closed.
 - [ ] #9493 closed by hand with the read-back and heartbeat decision; #9482 stays open.
 
 ## Observability
@@ -360,16 +418,19 @@ error_reporting:
   fail_loud: true; a failed dispatch is an error-status check-in, not a silent skip
 failure_modes:
   - mode: dispatcher dead or Inngest outage
-    detection: missed check-in on the monitor (Sentry issue plus, after this change, email)
-    alert_route: sentry_alert.cron_monitor_failure email
+    detection: Sentry monitor `scheduled-merge-queue-stall-dispatch` missed check-in (inngest-heartbeat layer)
+    alert_route: sentry_alert.cron_monitor_failure email, after this change
   - mode: dispatch POST fails
-    detection: reportSilentFallback Sentry issue plus an error-status check-in
-    alert_route: Sentry issue; email via the same alert once the monitor fails a check-in
+    detection: sentry-correlation reportSilentFallback issue from the Inngest function, plus a Sentry monitor error-status check-in
+    alert_route: the Sentry monitor failure reaches email through sentry_alert.cron_monitor_failure; the silent-fallback issue is Sentry-only
   - mode: dispatched run delayed on the runner pool (not detected today)
-    detection: measured job-start latency in Phase 1.4 (a recorded accepted gap, not a new alert)
-    alert_route: none by design (accepted gap, decision recorded on #9493)
+    detection: workflow run log job timestamps, measured once in Phase 1.4 (an accepted gap, not a new alert)
+    alert_route: none by design (accepted gap, decision recorded on #9493 with a revisit trigger)
+  - mode: executor run red (GraphQL or gh error, issue-create failure)
+    detection: workflow run log of merge-queue-stall-check.yml is the only signal
+    alert_route: none (accepted gap, tracked follow-up from Phase 1.4)
   - mode: weakness-miner PR stalls or bypasses the queue
-    detection: the existing merge-queue-stall issue (best-effort probe) and the item 1 re-run on #9482
+    detection: the merge-queue-stall issue filed by the workflow (workflow run log layer, best-effort) and the item 1 re-run on #9482
     alert_route: stall issue is action-required
 logs:
   where: GitHub Actions run logs for apply-sentry-infra.yml; Sentry cron monitor history
@@ -379,12 +440,14 @@ discoverability_test:
   expected_output: 1
 ```
 
-The discoverability command prints `0` on the tree today (the label is only in the unrouted map; run at plan time) and `1` once Phase 2 lands, so it
+This is the Check 10 source probe (it proves the `.tf` edit); the live route read-back in Phase 4 is the post-merge probe.
+The command prints `0` on the tree today (the label is only in the unrouted map; run at plan time) and `1` once Phase 2 lands, so it
 proves the change rather than the status quo. Check 10 runs it at ship against the final tree.
 
 Affected-surface note (2.9.2): the dispatcher runs on the Inngest host (a surface the operator cannot inspect directly).
-The in-surface probe already exists: the dispatcher itself posts the check-in and raises `reportSilentFallback`, so the
-signal is emitted from the surface, not inferred from the host. This plan adds routing for that signal, no new probe.
+The dispatcher side already emits from its own surface (check-in plus `reportSilentFallback`); this plan adds routing for
+that signal. The executor runner is the blind surface (a red run alerts nobody); that gap is recorded and tracked, not
+closed here.
 
 ## Infrastructure (IaC)
 
@@ -408,6 +471,13 @@ The routing-parity guard, the `alert-reference.json` plan-vs-committed gate in `
 
 Sentry detector and workflow objects are already in use for 60+ monitors on this org; adding one id to an existing workflow
 needs no tier change.
+
+## Encryption Posture
+
+Not applicable under plan Phase 2.11's skip condition: no persistent store and no new cross-component connection is
+introduced. The `.tf` edit moves one detector id inside an existing Sentry alert workflow (the existing vendor HTTPS API,
+unchanged), and the measurements read public GitHub metadata. Recorded here because the deepen-plan trigger matches any
+`.tf` path.
 
 ## Architecture Decision (ADR/C4)
 
