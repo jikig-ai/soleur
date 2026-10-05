@@ -577,3 +577,23 @@ No `.tf` file and no `deploy_pipeline_fix` trigger file is edited.
 - Do not add the volume to a destroy-mode plan; dependents include the firewall attachment, which must only UPDATE.
 - `plan_only` runs must print the flip precondition as PENDING, not skip it silently.
 - The Better Stack JSON paths and the `dm-*` behaviour are unconfirmed until the first live query; fail closed on any absence.
+
+## Plan-review fixes (architecture review, 2026-10-05, PROCEED-WITH-FIXES)
+
+Applied above: `actions: read`; S2/S2b split with the exact preflight step shape; S13 reboot-target pin and Guard 3 row 7b;
+Guard 1 rows 11-14; closing-checklist item 2b; registrations (`test-all.sh`, root TSVs, parity env equality and five-target
+pin row); cuts (escrow-preflight edit, row-count/spread/diagnostic emptiness rules, token-compare `w2l_reboot_seen`).
+Also decided here:
+
+- **Orphan volume.** An apply that dies after the Hetzner volume create but before the state write leaves a raw, state-less
+  volume. The classifier returns `refuse:orphan_raw_volume` with a runbook arm (delete it through the same pinned API path
+  in a reviewed re-dispatch, never import by hand); it is never silently adopted.
+- **Never-pooled marker read (S5).** The marker lives in the `prd_workspaces_luks_marker` Doppler config, which the tiered
+  loader token may not reach. S5 reads the key NAME only, with `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER` bound to that one step
+  (as `web2_marker` binds it); an unreadable config is a refusal, never "absent". Phase 0 confirms the binding exists for this workflow.
+- **Environment.** `web-platform-infra-apply` is used (not `infra-privileged`) because it carries a human reviewer set covered
+  by the DP-11 F8 non-empty-reviewers guard; the forget and escrow-create precedents run non-destructive-to-hosts operations.
+- **Tests that change with `w2l_reboot_seen`.** `scripts/followthroughs/web2-luks-live-6931.test.sh` (row helpers default both
+  rows to one `boot_id`; T04 inverts), `apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` Guard 3 fixtures,
+  its header comment ("never a boot_id equality") and mutations 9, 11 and 16; re-run `lb-weight-gate-with-marker.test.sh` and
+  `preflight-discoverability-test.test.ts`.
