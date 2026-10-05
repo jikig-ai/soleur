@@ -200,6 +200,8 @@ bundled download prints Playwright's own instruction; `agent-browser/SKILL.md` r
 verified command `npx @playwright/mcp@0.0.78 install-browser chromium` (checked against
 `install-browser --help` on the pinned package).
 
+Superseded 2026-10-04 (review): the CTO ruled Option 2, so the fallback appends `--browser chromium --sandbox` and keeps the sandbox on (ADR-271 decision 4); this residual, the "no new credential path" sentence in User-Brand Impact (slot and fallback profile directories are additional at-rest credential stores, mode 700, removal manual) and R5 no longer hold as written.
+
 ### D. The ping-timeout setting (per the brief), honestly labelled
 
 Add `"env": {"PLAYWRIGHT_MCP_PING_TIMEOUT_MS": "0"}` to both registrations. It is **inert on stdio in
@@ -527,6 +529,8 @@ guarantees, which are unchanged. No UI surface (no files under components/ or ap
 - Given no `flock` on PATH, then the launch uses a `$base-$$` directory and still starts.
 - Given a Chrome-less host (seam), plugin argv gets `--browser chromium`; Chrome present, it does not.
 - Live (after merge, user-run): restart Claude Code, navigate once, wait over 60 seconds idle across at least three assistant turns in this and one parallel session, then take a snapshot; and `grep -c "Browser cleanup: killed"` on the new session transcript is 0.
+
+Superseded 2026-10-04 (review): "user-run" is withdrawn for the idle-survival check; an agent can run it headless with `claude -p --plugin-dir ... --include-hook-events` (recipe in ADR-271, untested until the first post-merge run), and the acceptance filter is the `jq` over `attachment.hookEvent`/`attachment.command`, not the bare `grep -c`.
 
 ## Success Metrics
 
