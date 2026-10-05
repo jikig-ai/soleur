@@ -187,7 +187,7 @@ step_has_github_token() {
 # ---------------------------------------------------------------------------
 census_dir() {
   local dir="$1"
-  local consumers=0 failures=0 file name jobs job verdict jv wv block
+  local consumers=0 failures=0 file name jobs job jv wv block
   local -a files=()
 
   mapfile -t files < <(grep -rlE "$USES_ERE" "$dir"/*.yml "$dir"/*.yaml 2>/dev/null | sort)
