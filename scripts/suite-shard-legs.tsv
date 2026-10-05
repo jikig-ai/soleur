@@ -95,6 +95,7 @@ plugins/soleur/scripts/precommit-guard.test.sh	2
 plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	2
 plugins/soleur/scripts/sync-pr-behind.test.sh	7
 plugins/soleur/scripts/taste-profile-update.test.sh	3
+plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh	3
 plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	7
 plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh	1
 plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	1

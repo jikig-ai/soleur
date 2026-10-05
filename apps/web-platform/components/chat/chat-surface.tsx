@@ -726,7 +726,7 @@ export function ChatSurface({
   }, [streamState, awaitingUserInput, realConversationId, conversationId]);
 
   // feat-debug-mode-stream — the separate debug drawer. Visibility is the
-  // dev-cohort `debug-mode` flag; the panel filters debug_event frames out of
+  // `debug-mode` flag (all roles during beta); the panel filters debug_event frames out of
   // the main message flow (they render null inline). `connected` drives the
   // disconnected affordance; `hadCompletedTurn` sharpens the empty-vs-
   // unavailable hint. Emission is server-gated independently — this only

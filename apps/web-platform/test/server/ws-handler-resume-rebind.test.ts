@@ -132,6 +132,7 @@ vi.mock("@/lib/supabase/tenant", () => {
 });
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
+import { streamReplayBuffer } from "@/server/stream-replay-buffer";
 
 function makeSession(): ClientSession {
   const ws = {
@@ -156,10 +157,12 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     singleSpy.mockClear();
     engineRunSpy.mockReset();
     engineRunSpy.mockResolvedValue({ data: null, error: null });
+    streamReplayBuffer.reset();
   });
 
   afterEach(() => {
     sessions.delete(USER_ID);
+    streamReplayBuffer.reset();
   });
 
   it("aligns current_workspace_id to conversations.workspace_id via set_current_workspace_id", async () => {
@@ -201,6 +204,43 @@ describe("ws-handler resume_session — FR1 workspace rebind", () => {
     );
     expect(frames).toContain("error");
     expect(frames).not.toContain("session_started");
+  });
+
+  it("rejoin replay: buffered debug_event frames re-emit marked `replayed` (leave-and-return)", async () => {
+    // fix-debug-stream-replay — a remount sends resume_session, never
+    // resume_stream, so the debug panel would otherwise come back empty.
+    // The rebind tail replays the conversation's buffered debug frames.
+    streamReplayBuffer.stamp(CONV_ID, {
+      type: "stream",
+      content: "not-replayed",
+      partial: true,
+      leaderId: "cto",
+    });
+    streamReplayBuffer.stamp(CONV_ID, {
+      type: "debug_event",
+      kind: "tool_use",
+      label: "tool",
+      body: "{}",
+    });
+    const session = makeSession();
+    sessions.set(USER_ID, session);
+
+    await handleMessage(
+      USER_ID,
+      JSON.stringify({ type: "resume_session", conversationId: CONV_ID }),
+    );
+
+    const sendMock2 = session.ws.send as unknown as { mock: { calls: unknown[][] } };
+    const rejoinFrames = sendMock2.mock.calls.map(
+      (c: unknown[]) => JSON.parse(c[0] as string) as { type: string; replayed?: boolean },
+    );
+    // The debug frame replays marked replayed; stream frames do NOT — the
+    // remount's history fetch owns the persisted transcript.
+    const debug = rejoinFrames.filter((f) => f.type === "debug_event");
+    expect(debug).toHaveLength(1);
+    expect(debug[0].replayed).toBe(true);
+    expect(rejoinFrames.some((f) => f.type === "stream")).toBe(false);
+    expect(rejoinFrames.some((f) => f.type === "session_started")).toBe(true);
   });
 
   it("does NOT rebind when the conversation's repo is out of scope (gate precedes the switch)", async () => {

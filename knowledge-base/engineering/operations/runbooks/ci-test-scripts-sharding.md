@@ -301,7 +301,7 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
   n == ci.yml leg count, labels ⊆ registered, no dups, every leg pinned,
   provenance present.
 - `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` — toolchain
-  parity asserted on both jobs (bun, likec4, gitleaks).
+  parity asserted on both jobs (bun, gitleaks on both; likec4 on test-scripts only).
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
   synthetic `test` check has six `needs:` jobs; a failed or skipped heavy
   matrix fails it.

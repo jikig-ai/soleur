@@ -1290,14 +1290,15 @@ export function applyStreamEvent(
       // non-thinking/tool_use bubbles, so a re-armed dangling timer is harmless.
       // Only `kind: "tool_use"` counts; `reasoning`/`result` are weaker / can
       // fire post-turn and are excluded to keep the ceiling tight.
-      // INVARIANT (enforced, not just asserted): debug events are LIVE-ONLY, so
-      // this heartbeat can never fire on a dead socket. #5290's stream-replay
-      // buffer EXCLUDES `debug_event` from its `BufferedWSMessage` family
-      // (server/stream-replay-buffer.ts) — and that exclusion is compiler-
-      // enforced via `BUFFERED_FRAME_TYPE_MAP` (a `Record<BufferedWSMessage
-      // ["type"], true>`), so a buffered/replayed gap frame can never be a
-      // debug_event. If a future change adds debug_event to the buffered family
-      // it becomes a tsc error there AND re-opens this hole — keep it excluded.
+      // INVARIANT: a debug heartbeat must only fire on LIVE liveness evidence.
+      // `debug_event` IS a member of the #5290 stream-replay buffer family
+      // (server/stream-replay-buffer.ts), so buffered frames CAN reach this
+      // reducer twice — on a transient-reconnect `resume_stream` replay and on
+      // a leave-and-return session rebind. Every re-emitted frame carries
+      // `replayed: true` (server/ws-handler.ts `replayBufferedDebugEvents` and
+      // the resume_stream re-emit loop), so the heartbeat paths below gate on
+      // `!event.replayed`: replayed frames still append to the panel log but
+      // never re-arm the watchdog or rebind an orphan bubble on stale evidence.
       const debugMsg: ChatDebugEventMessage = {
         id: `debug-${crypto.randomUUID()}`,
         role: "assistant",
@@ -1311,8 +1312,9 @@ export function applyStreamEvent(
       // Stage-2 error text bubble exists, a debug tool_use is unambiguous
       // liveness for that orphan — rebind + reset that leader (not reset_all
       // against an empty timer map). Multi-orphan stays inert.
+      // `replayed` frames are stale evidence — never rebind on them.
       // Use findRecoverableErrorBubble (tip contract) — not any historical error.
-      if (event.kind === "tool_use" && activeStreams.size === 0) {
+      if (event.kind === "tool_use" && !event.replayed && activeStreams.size === 0) {
         const orphanLeaders = new Map<DomainLeaderId, number>();
         const seenLeaders = new Set<DomainLeaderId>();
         for (let i = prev.length - 1; i >= 0; i--) {
@@ -1342,7 +1344,8 @@ export function applyStreamEvent(
         }
       }
 
-      const isHeartbeat = event.kind === "tool_use" && activeStreams.size === 1;
+      const isHeartbeat =
+        event.kind === "tool_use" && !event.replayed && activeStreams.size === 1;
       if (!isHeartbeat) {
         return {
           messages: [...prev, debugMsg],
