@@ -597,6 +597,8 @@ command, imports nothing and arms no heartbeat. It runs in `infra-privileged` an
 `terraform-apply-web-platform-host` (the lockless R2 state's only serializer), not the job-level `web-1-swap` group, because
 it touches no SSH bridge credential.
 
+> **Superseded 2026-10-04 (#9492), in part:** "do not exist" no longer holds. A dispatch of `apply-web-platform-infra.yml` (run 37209725107) created all five resources at 14:35 UTC. A plan-only run of this workflow (run 37222472359) then reported `No changes`, and the readiness diagnostic (run 37222879953) failed only on the two R2 names, the operator mint. A dispatch of this workflow therefore plans nothing to create today; it stays single-use and retires with #9372 (below). The 2026-10-03 addendum's statements that the push-apply has not created the web-class key are superseded the same way, and the first live apply has happened, so re-evaluation trigger 1 (the CLO's measured supersession, counsel review C4) is due; it is tracked on #9377 and not performed here. The sentence above is kept as the dated record.
+
 **The gate shape.** (1) An inverted allow-set: every plan entry that is neither no-op nor read must be exactly `["create"]`
 at one of the five addresses; any other address, any other verb list, an indexed or module-prefixed spelling, an entry whose
 action list is missing or empty, or a `doppler_config.workspaces_luks_web` change aborts before any mutation. The workflow
