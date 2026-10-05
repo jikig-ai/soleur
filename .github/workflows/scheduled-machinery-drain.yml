@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
   issues: write
+  # claude-code-action mints its app token via OIDC (setupGitHubToken ->
+  # getOidcToken); without this grant the drain step dies ~15 s in — measured on
+  # runs 35580861691/36402277938/37287175185 (2026-09-21..10-05). Recurrence 3 of
+  # the missing-id-token class; see
+  # knowledge-base/project/learnings/2026-05-04-schedule-once-template-missing-id-token.md
+  id-token: write
 
 concurrency:
   group: scheduled-machinery-drain
@@ -152,11 +158,24 @@ jobs:
         run: |
           set -euo pipefail
           TITLE="issue-flow: weekly measurement"
-          # `--search` is NOT combined with `--label` here: measured 2026-09-10,
-          # gh issue list silently discards --search when --label is present.
-          existing="$(gh issue list --state open --limit 100 \
-            --json number,title \
-            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")"
+          # Census, not a positional window: `gh issue list --limit 100` sits
+          # ~1700 open issues below the standing issue, so `existing` was always
+          # empty and the step re-filed its own issue every week (four live
+          # duplicates measured 2026-10-05). `search/issues` `in:title` is the
+          # same API the pre/post candidate counts already use; the exact-title
+          # + keep-open + meta/machinery + github-actions[bot] filter means a
+          # human-filed same-titled issue is neither selected nor closed.
+          matches="$(gh api "search/issues?q=repo:${{ github.repository }}+is:issue+is:open+in:title+%22issue-flow%3A+weekly+measurement%22&sort=created&order=desc&per_page=100" \
+            --jq "[.items[] | select(.title == \"$TITLE\"
+                    and .user.login == \"github-actions[bot]\"
+                    and ([.labels[].name] | index(\"keep-open\") != null)
+                    and ([.labels[].name] | index(\"meta/machinery\") != null)) | .number]")"
+          # `matches` is a JSON array of numbers sorted newest-first — keep it
+          # JSON (bare `.[].number` lines would break the `.[0]` reads below).
+          # Label membership uses index(), NEVER contains(): jq `contains` on an
+          # array takes an array argument and `contains("x")` is a type error.
+          existing="$(jq -r '.[0] // empty' <<<"$matches")"   # newest = canonical
+          dupes="$(jq -r '.[1:][]?' <<<"$matches")"           # one number per line
           # Tilde fences, not backticks. A backtick inside a single-quoted
           # string trips shellcheck SC2016 (actionlint exits non-zero on it, and
           # CI runs actionlint), while a backtick inside a DOUBLE-quoted string
@@ -172,6 +191,14 @@ jobs:
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
             echo "updated standing issue #$existing"
+            # Self-healing consolidation: older bot-authored same-titled issues
+            # are leftovers of the positional-window bug; close them with a
+            # pointer so the standing set converges to exactly one.
+            printf '%s\n' "$dupes" | while IFS= read -r n; do
+              [ -n "$n" ] || continue
+              gh issue close "$n" --comment "Superseded by #$existing — the weekly measurement consolidates to one standing issue."
+              echo "closed duplicate standing issue #$n"
+            done
           else
             # `keep-open` is the drain kill-switch (group-by-area.sh excludes it
             # from every candidate set; the sweeper skips it): the standing

@@ -166,6 +166,16 @@ Console/Playwright or operator-with-evidence surface (see #5814 acceptance). **D
 vector:** Stage A's `concurrency` collapses only same-head-SHA runs; a multi-SHA push-storm can fan
 out N agent dispatches, so the **spend cap — not concurrency — is the bound** on a push-storm.
 
+**OIDC posture (amended 2026-10-05):** Stage A's claude-code-action step authenticates via the
+`github_token:` input — the job's own `contents: read` GITHUB_TOKEN — which makes the action's
+`setupGitHubToken` early-return before `getOidcToken()` (verified at pin 20f0b248). `id-token:
+write` is deliberately NOT granted: the job executes the untrusted PR head, and a minted OIDC
+token is exchangeable at Anthropic's app-token endpoint for `contents:write` /
+`pull-requests:write` / `issues:write` app credentials — which would hand PR-head code exactly
+the write capability this split exists to withhold. The invariant is upheld, not re-decided; a
+future action bump that drops the `github_token` bypass must find another credential path that
+does not grant OIDC minting to Stage A.
+
 ## Alternatives Considered
 
 | Approach | Verdict |
