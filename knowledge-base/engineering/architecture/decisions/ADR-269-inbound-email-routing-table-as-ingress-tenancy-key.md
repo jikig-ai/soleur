@@ -157,4 +157,3 @@ transfer basis is the Standard Contractual Clauses plus the EU-U.S. Data Privacy
 existing Resend Inbound posture recorded in ADR-055 (US custody), so it is not a new transfer for the current
 pipeline, but it removes Inboxes as a candidate for any inbox that must be EU-resident. The routing table stays
 vendor-neutral; a per-user or per-agent inbox needs a different provider or a self-hosted receiver, tracked in #9459.
-
