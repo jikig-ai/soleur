@@ -47,6 +47,7 @@ import type {
 } from "@/lib/chat-state-machine";
 import { deriveReconnectView } from "@/lib/chat-state-machine";
 import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
+import { workflowEndedCopy } from "@/lib/workflow-ended-copy";
 import { Button } from "@/components/ui/button";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
@@ -1104,12 +1105,10 @@ export function ChatSurface({
                         Workflow{" "}
                         <span className="font-semibold">{msg.workflow}</span>{" "}
                         ended:{" "}
-                        {/* Dormant raw-enum render — no server→client
-                            `workflow_ended` emitter exists yet (cc-dispatcher
-                            routes terminal statuses to session_ended until
-                            Stage 3). When one ships, map status through
-                            lib/session-ended-copy.ts › SESSION_ENDED_COPY
-                            before it can leak like internal_error did. */}
+                        {/* Status renders through lib/workflow-ended-copy.ts ›
+                            workflowEndedCopy — the raw enum token never reaches
+                            the transcript. Styling still keys on the raw
+                            status (completed=emerald, rest=red). */}
                         <span
                           className={
                             msg.status === "completed"
@@ -1117,7 +1116,7 @@ export function ChatSurface({
                               : "text-red-400"
                           }
                         >
-                          {msg.status}
+                          {workflowEndedCopy(msg.status).copy}
                         </span>
                       </p>
                       {msg.summary ? (

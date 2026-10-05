@@ -3,6 +3,7 @@
 import React from "react";
 import { Button } from "@/components/ui/button";
 import type { WorkflowLifecycleState } from "@/lib/chat-state-machine";
+import { workflowEndedBadge } from "@/lib/workflow-ended-copy";
 
 /**
  * Stage 4 (#2886) — WorkflowLifecycleBar component.
@@ -84,10 +85,11 @@ export function WorkflowLifecycleBar({
                   : "bg-red-900/40 text-red-300"
               }`}
             >
-              {/* Same dormant raw-enum render as chat-surface.tsx ›
-                  workflow_ended — when a server emitter ships, map status
-                  through lib/session-ended-copy.ts › SESSION_ENDED_COPY. */}
-              {lifecycle.status}
+              {/* Status renders through lib/workflow-ended-copy.ts ›
+                  workflowEndedBadge (terse label register — the sentence
+                  copy overflows this pill). Styling still keys on the raw
+                  status (completed=emerald, rest=red). */}
+              {workflowEndedBadge(lifecycle.status).copy}
             </span>
             {lifecycle.summary ? (
               <span className="truncate text-xs text-soleur-text-secondary">{lifecycle.summary}</span>

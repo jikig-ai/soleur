@@ -292,6 +292,11 @@ test.describe("cc-soleur-go routing: FR2.4 cost circuit-breaker", () => {
       '[data-lifecycle-state="ended"][data-lifecycle-status="cost_ceiling"]',
     );
     await expect(endedBar).toBeVisible();
+    // Rendered text carries the mapped badge copy — the raw enum token
+    // must never reach the DOM (toContainText scopes to text, so the
+    // data-lifecycle-status attribute does not trip the negative).
+    await expect(endedBar).toContainText("Cost cap reached");
+    await expect(endedBar).not.toContainText("cost_ceiling");
     // Refusal-of-further-turns proven by the ChatInput's disabled+placeholder
     // hook (same path FR2.9 exercises for `completed`).
     await expect(
