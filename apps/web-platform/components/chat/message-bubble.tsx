@@ -8,7 +8,8 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import type { AttachmentRef, MessageState } from "@/lib/types";
-import type { CommandBlock } from "@/lib/chat-state-machine";
+import type { ActivityEntry, CommandBlock } from "@/lib/chat-state-machine";
+import { ActivityTrail } from "@/components/chat/activity-trail";
 import { formatAssistantText } from "@/lib/format-assistant-text";
 import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/lib/client-observability";
@@ -109,6 +110,12 @@ export const MessageBubble = memo(function MessageBubble({
   status,
   usage,
   commandBlocks,
+  activity,
+  currentActivityStartedAt,
+  interrupted = false,
+  liveNarration,
+  liveNarrationStartedAt,
+  suppressLive = false,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -139,6 +146,25 @@ export const MessageBubble = memo(function MessageBubble({
    *  again at render (belt-and-suspenders Art. 14 gate). Empty/undefined on
    *  bubbles that ran no commands. */
   commandBlocks?: CommandBlock[];
+  /** #9515 — session-only in-turn step history (dimmed priors). Rendered
+   *  only while the bubble is live-ish (transitional state or
+   *  `interrupted`) — done/error/hydrated bubbles skip it, so teardown
+   *  needs no mutation. */
+  activity?: ActivityEntry[];
+  /** ms epoch the current tool step began (elapsed renders live). */
+  currentActivityStartedAt?: number;
+  /** #9515 — mid-flap honest marker: swept transitional bubble awaiting a
+   *  rebind. Renders the neutral "Interrupted" chip + keeps the trail
+   *  visible; never the amber Working pill. */
+  interrupted?: boolean;
+  /** #9515 — the turn's live narration folded INTO this bubble (the
+   *  consolidated box — the standalone "Still working…" line is gone). */
+  liveNarration?: string | null;
+  liveNarrationStartedAt?: number | null;
+  /** #9515 — parked-gate suppression: an unresolved review_gate /
+   *  autonomous_disclosure parks the turn on the operator, so the live
+   *  line must not claim "still working". The trail itself still renders. */
+  suppressLive?: boolean;
   // Review F5 (#2886): the `parentId` prop, the `ml-6` indentClass, and the
   // `data-parent-id` attribute were removed — they had no production caller.
   // SubagentGroup renders its child rows directly with their own indentation
@@ -230,6 +256,26 @@ export const MessageBubble = memo(function MessageBubble({
 
           {commandBlocks && commandBlocks.length > 0 && (
             <CommandStreamBlocks blocks={commandBlocks} />
+          )}
+
+          {/* #9515 — consolidated working box: in-turn step trail + the
+              live narration/tool step + honest Interrupted marker, all
+              INSIDE the bubble. Render-gated on live-ish state so done /
+              error / hydrated bubbles never show a stale trail. */}
+          {role === "assistant" && (isActive || interrupted) && (
+            <ActivityTrail
+              activity={activity}
+              interrupted={interrupted}
+              current={
+                suppressLive || interrupted
+                  ? null
+                  : liveNarration
+                    ? { label: liveNarration, startedAt: liveNarrationStartedAt }
+                    : toolLabel
+                      ? { label: toolLabel, startedAt: currentActivityStartedAt }
+                      : null
+              }
+            />
           )}
 
           {attachments && attachments.length > 0 && (

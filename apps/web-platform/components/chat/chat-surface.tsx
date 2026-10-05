@@ -34,6 +34,7 @@ import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { TurnSummaryBubble } from "@/components/chat/turn-summary-bubble";
+import { ActivityTrail } from "@/components/chat/activity-trail";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
@@ -242,6 +243,7 @@ export function ChatSurface({
     historyLoading,
     streamState,
     liveNarration,
+    liveNarrationStartedAt,
     abort,
     connection,
     resumeAfterUnrecoverable,
@@ -683,6 +685,30 @@ export function ChatSurface({
       !m.resolved,
   );
 
+  // #9515 — the consolidated working box: liveNarration renders INSIDE the
+  // sole active leader's newest transitional text bubble (the same tip the
+  // reducer's foldNarrationIntoTrail targets). When no bubble exists yet —
+  // narration can arrive before the first stream/tool_use — a thin
+  // standalone live line renders below the list (one working surface at a
+  // time, never two).
+  const narrationTargetId = (() => {
+    if (!liveNarration || activeLeaderIds.length !== 1) return undefined;
+    const leader = activeLeaderIds[0];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (
+        m.type === "text" &&
+        m.leaderId === leader &&
+        (m.state === "thinking" ||
+          m.state === "tool_use" ||
+          m.state === "streaming")
+      ) {
+        return m.id;
+      }
+    }
+    return undefined;
+  })();
+
   // Deterministic rail-refresh signal for the VIEWED conversation's status
   // (PR #9270 — same class as CONVERSATION_CREATED_EVENT above: the rail's
   // realtime UPDATE can miss or die unobserved mid-view, so its badge stayed
@@ -994,6 +1020,14 @@ export function ChatSurface({
                       messageState={msg.state}
                       toolLabel={msg.toolLabel}
                       toolsUsed={msg.toolsUsed}
+                      activity={msg.activity}
+                      currentActivityStartedAt={msg.currentActivityStartedAt}
+                      interrupted={msg.interrupted}
+                      liveNarration={
+                        msg.id === narrationTargetId ? liveNarration : undefined
+                      }
+                      liveNarrationStartedAt={liveNarrationStartedAt}
+                      suppressLive={awaitingUserInput}
                       // #5282 AC12 — suppress the State-2 watchdog chip whenever
                       // State 1 (connection-lost banner) is showing, so the two
                       // can never render simultaneously.
@@ -1149,6 +1183,8 @@ export function ChatSurface({
             // subsequent in-flight assistant turn rather than rendering a
             // distinct flat row. Outer wrapper preserves the routing-chip
             // testid for existing presence/absence assertions.
+            // #9515 — the routing chip IS the working box while it shows:
+            // narration folds INTO it (no separate line below).
             <div className="flex justify-start" data-testid="routing-chip">
               <MessageBubble
                 role="assistant"
@@ -1156,6 +1192,9 @@ export function ChatSurface({
                 leaderId={CC_ROUTER_LEADER_ID}
                 messageState="tool_use"
                 toolLabel="Routing to the right experts..."
+                liveNarration={!narrationTargetId ? liveNarration : undefined}
+                liveNarrationStartedAt={liveNarrationStartedAt}
+                suppressLive={awaitingUserInput}
                 getDisplayName={getDisplayName}
                 getIconPath={getIconPath}
                 variant={variant}
@@ -1163,42 +1202,27 @@ export function ChatSurface({
             </div>
           )}
 
-          {/* feat-reasoning-chat-boxes (#5370) — transient live narration line.
-              Shows the agent's deliberate plain-language status near the Working
-              badge while a turn is in flight. The slot is gated only on
-              `streamState === "streaming"`; the CONTENT falls back to a
-              "Still working…" placeholder when `liveNarration === null` — which
-              is exactly the spec-flow Finding 4 reconnect case: the live frame is
-              live-only (never buffered), so a mid-turn reconnect nulls
-              `liveNarration` while the turn is still streaming. The placeholder
-              keeps the user oriented instead of leaving a blank gap, and is
-              immediately replaced when the next `narrate` frame arrives. It
-              disappears on turn-end (the reducer nulls liveNarration AND
-              streamState leaves "streaming" on every turn-end path), so it is
-              still fully inert outside an in-flight turn.
-
-              feat-one-shot-concierge-web-duplicate-question-box — additionally
-              gated on `!awaitingUserInput`: while an unresolved review_gate /
-              autonomous_disclosure parks the turn on the operator, the amber
-              prompt card is the waiting-for-input surface, so this spinner is
-              suppressed to avoid a contradictory "Still working…" signal. See
-              the `awaitingUserInput` derivation above for the turn-scoping and
-              why informational interactive_prompt cards are excluded. */}
-          {streamState === "streaming" && !awaitingUserInput && (
-            <div
-              data-testid="live-narration"
-              aria-live="polite"
-              className="flex items-center gap-2 px-1 text-sm text-soleur-text-secondary"
-            >
-              <span
-                aria-hidden="true"
-                className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+          {/* #9515 — consolidated working box: the live narration renders
+              INSIDE the active bubble via ActivityTrail (narrationTargetId).
+              This fallback line exists ONLY for the pre-bubble window — a
+              narration can arrive before the first stream/tool_use creates
+              the box it will fold into. Once a bubble exists the narration
+              lives inside it and this line disappears — one working surface,
+              never two. Gated on `!awaitingUserInput` for the same parked-
+              gate suppression as the in-box live line. */}
+          {streamState === "streaming" &&
+            liveNarration &&
+            !narrationTargetId &&
+            !isClassifying &&
+            !awaitingUserInput && (
+              <ActivityTrail
+                activity={undefined}
+                current={{
+                  label: liveNarration,
+                  startedAt: liveNarrationStartedAt,
+                }}
               />
-              <span className="min-w-0 [overflow-wrap:anywhere]">
-                {liveNarration ?? "Still working…"}
-              </span>
-            </div>
-          )}
+            )}
 
           <NotificationPrompt visible={showNotificationPrompt} />
           {/* PR-B (#3603) — per-thread transparency marker for the

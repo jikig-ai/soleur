@@ -162,6 +162,8 @@ interface UseWebSocketReturn {
    *  the in-flight turn, or null. Rendered near the "Working…" badge; torn down
    *  by the reducer on every turn-end path. Live-only (never persisted). */
   liveNarration: string | null;
+  /** #9515 — ms epoch the current narration began; elapsed renders live. */
+  liveNarrationStartedAt?: number | null;
   /** User-initiated Stop. Sends `{ type: "abort_turn", conversationId }` and
    *  optimistically transitions `streamState` to `"stopping"`. No-op when
    *  `streamState !== "streaming"` (idempotent under double-click) or when
@@ -390,14 +392,20 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           : isCcTurnEnd && state.streamState !== "idle"
             ? "idle"
             : state.streamState;
+      // #9515 — the narration slot holds ONE current step. A tool_use
+      // SUPERSEDES a live narration (the tool is the newer step — latest
+      // wins, mirroring AI-harness UIs); the superseded text folds into the
+      // bubble's trail rather than vanishing. Same fold on turn end.
+      const narrationSuperseded =
+        action.msg.type === "tool_use" && state.liveNarration !== null;
       return {
         // #9515 — when this event ended the turn (activeStreams emptied),
         // fold the last narration into the bubble's trail.
         messages:
-          result.activeStreams.size === 0
+          result.activeStreams.size === 0 || narrationSuperseded
             ? foldNarrationIntoTrail(
                 result.messages,
-                state.activeStreams,
+                result.activeStreams,
                 state.liveNarration,
                 state.liveNarrationStartedAt,
               )
@@ -412,9 +420,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // #5370 — tear down the live narration line when the turn fully ends
         // (the last stream drained); otherwise carry it through unchanged.
         liveNarration:
-          result.activeStreams.size === 0 ? null : state.liveNarration,
+          result.activeStreams.size === 0 || narrationSuperseded
+            ? null
+            : state.liveNarration,
         liveNarrationStartedAt:
-          result.activeStreams.size === 0
+          result.activeStreams.size === 0 || narrationSuperseded
             ? null
             : state.liveNarrationStartedAt,
       };
@@ -2077,6 +2087,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     historyLoading,
     streamState: chatState.streamState,
     liveNarration: chatState.liveNarration,
+    liveNarrationStartedAt: chatState.liveNarrationStartedAt,
     abort,
     connection: chatState.connection,
     resumeAfterUnrecoverable,
