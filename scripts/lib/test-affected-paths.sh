@@ -1199,6 +1199,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MACHINERY_DRAIN_FLOOR_TEST_SH_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# plugins/soleur/test/claude-code-action-auth.test.sh — a census over every workflow file; any
+# new or edited workflow under .github/workflows/ can add a consumer (or strip a token path), so
+# the directory prefix is the edge. Derived edges reach none of the workflow subjects.
+AFFECTED_PLUGINS_SOLEUR_TEST_CLAUDE_CODE_ACTION_AUTH_TEST_SH_PATHS=(
+  ".github/workflows/"
+  "plugins/soleur/test/claude-code-action-auth.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # plugins/soleur/test/main-health-monitor-workflow.test.sh — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_PLUGINS_SOLEUR_TEST_MAIN_HEALTH_MONITOR_WORKFLOW_TEST_SH_PATHS=(

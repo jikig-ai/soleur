@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=979
-# generated-at=2026-10-05T15:17:45Z
+# generated-at=2026-10-05T19:17:53Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -144,6 +144,7 @@ plugins/soleur/test/ci-concurrency-key.test.sh	1843	measured
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	95	measured
 plugins/soleur/test/ci-path-gating.test.sh	204	measured
 plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh	770	measured
+plugins/soleur/test/claude-code-action-auth.test.sh	979	floor
 plugins/soleur/test/cloud-init-strip-helpers-mutation.test.sh	3031	measured
 plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh	979	floor
 plugins/soleur/test/codeql-main-alert-gate.test.sh	979	floor
