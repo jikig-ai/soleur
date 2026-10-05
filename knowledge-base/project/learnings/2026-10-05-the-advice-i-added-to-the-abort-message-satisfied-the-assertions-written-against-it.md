@@ -83,7 +83,8 @@ plan premises became data in ten minutes.
    three. **Prevention:** regenerate row anchors after each lib edit and drop rows that mutate only an assertion.
 8. **The turn ended with a first-person commitment still pending; the stop hook refused.** Recovery: took the next
    action (drafted the PR body) and declared the blocking background jobs. **Prevention:** none beyond the hook.
-9. **One transient `gh` connection reset in the plan phase** (forwarded from session-state.md); re-ran. One-off.
+9. **The bullet compound routed into a plugin reference file tripped a repo-global ratchet in CI** (`apps/web-platform/test/plugin-root-anchoring.test.ts` R2: a NEW `bash scripts/test-all.sh` anchor in `plugins/soleur/skills/review/references/risk-tier-and-fix-rounds.md`). The required `test` check failed on the first tick after marking ready; no selected suite referenced the file, which is the documented blind spot of a file-selected suite set. Recovery: spelled the command without the `bash scripts/` prefix and ran the ratchet suite itself (`vitest run test/plugin-root-anchoring.test.ts`, 47/47). **Prevention:** after routing text into any `plugins/**` file, run the repo-wide ratchets that scan plugin text (`plugin-root-anchoring`) before pushing, and never write `bash scripts/<x>` in plugin prose.
+10. **One transient `gh` connection reset in the plan phase** (forwarded from session-state.md); re-ran. One-off.
 
 ## Tags
 category: workflow-issues
