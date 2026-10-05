@@ -167,6 +167,34 @@ describe("applyPrefillGuard", () => {
     );
   });
 
+  // #9538 — `dropResumeOnEmptyHistory` (cc-only opt-in): `[]` for a known
+  // id is the deleted/rotated-file shape, and passing `resume:` through
+  // dies mid-stream in the SDK iterator. The cc caller drops resume +
+  // takes the generic reset notice instead; the legacy caller keeps
+  // pass-through because its `.catch` replay restores `messages` history.
+  it("drops resume with the generic notice when dropResumeOnEmptyHistory is set", async () => {
+    mockGetSessionMessages.mockResolvedValueOnce([]);
+
+    const result = await applyPrefillGuard({
+      ...COMMON_ARGS,
+      resumeSessionId: "s",
+      feature: "cc-concierge",
+      dropResumeOnEmptyHistory: true,
+    });
+
+    expect(result).toEqual({
+      safeResumeSessionId: undefined,
+      contextResetNotice: CONTEXT_RESET_NOTICE_GENERIC,
+      reason: "prefill-guard",
+    });
+    // The empty-history warn still fires — same observability op as the
+    // pass-through arm so occurrence counting survives the flag.
+    expect(mockWarnSilentFallback).toHaveBeenCalledOnce();
+    expect(mockWarnSilentFallback.mock.calls[0][1].op).toBe(
+      "prefill-guard-empty-history",
+    );
+  });
+
   it("preserves resume and emits sanitized probe-failed warn when getSessionMessages throws", async () => {
     const probeErr = Object.assign(
       new Error(
