@@ -387,9 +387,10 @@ Verdict → Result mapping (pure function, exported):
                        the rail (via=<direct|reload> elapsed=<N>s
                        checks=<n>)`
   absent            → FAIL:  `conversation <id> persisted but did NOT
-                       appear in the rail within <total>b budget
+                       appear in the rail within <total>s budget
                        (checks=<n> reloads=<m> rail_state=<…> rpc_row=<…>
-                       active_repo=<…>) (the #5391/#5436 class, #9581)`
+                       active_repo=<…> [reload_err=<name> only when the
+                       reload threw]) (the #5391/#5436 class, #9581)`
   page/reload dies  → CANT-RUN `rail-check:<waitFailureState diagnostic>`
                        (Target-closed / navigation-destroyed classes —
                        the page cannot reach a verdict; consistent with
