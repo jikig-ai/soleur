@@ -1916,7 +1916,7 @@ describe("#3993 /vision/ demotes internal codenames + preserves the freshness bl
 // -- #9579/#9580 trust-copy guards ------------------------------------------
 // Three guards (hosted-claims copy, computed counts, attribution) plus a hero
 // structure check. The contract and mutation matrices live in
-// knowledge-base/project/plans/2026-10-06-fix-homepage-copy-and-trust-fixes-plan.md
+// knowledge-base/project/plans/archive/20261006-134940-2026-10-06-fix-homepage-copy-and-trust-fixes-plan.md
 // (## Guard Contract). Visible text comes from ./lib/visible-text (a character
 // scan, not a tag-strip regex: js/incomplete-multi-character-sanitization).
 
