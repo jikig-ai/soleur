@@ -10,7 +10,7 @@ Run tests from `apps/web-platform` with `./node_modules/.bin/vitest run <file>`.
 - [x] 0.2 Write `test/server/inngest/cron-community-monitor-allowlist.test.ts` (`decide()` over the lines `buildAllowlistLines` produces; `no-file-tools` denies Read/Glob/Grep/Write/Edit/MultiEdit/Task/Agent/Skill and is per-cron; the reproduced bypass probes and `gh issue list --jq env` denied; posting verbs `bsky post`, `linkedin post-content`, `x post-tweet` denied and still present in the scripts; prompt-parity over every router literal; one spawned-hook row through `runHookSelfTest`).
 - [x] 0.3 Write `test/server/inngest/cron-community-monitor-publication-flow.test.ts` (valid, replay, issue-exists-digest-absent recovery via PATCH on a closed issue, invalid/missing/oversized, timeout, non-zero exit with valid message, sidecar red/missing override, list-read throws, 5xx retry, milestone failure, PATCH-target checks, commit failure PATCHes the notice, token custody by permissions, both tokens redacted, audit fallback uses the installation client).
 - [x] 0.4 Add `no-file-tools` rows to `test/server/inngest/cron-bash-allowlist-hook.test.ts`; extend `exactPaths`/`isPathAllowed`/count-marker rows in `cron-safe-commit.test.ts`; add `finalMessage` rows to the substrate suite and `withholdModelOutput` rows to `cron-shared.test.ts`.
-- [x] 0.5a Spike S3: confirm no prompt step needs a file-reading tool (evidence: the 2026-10-05 digest note "output exceeded inline limit"); if one does, switch to the `read-root` allow-list fallback in the plan and record it in ADR-272.
+- [x] 0.5a Spike S3: confirm no prompt step needs a file-reading tool (evidence: the 2026-10-05 digest note "output exceeded inline limit"); if one does, switch to the `read-root` allow-list fallback in the plan and record it in ADR-273.
 - [x] 0.5 Spike S2: confirm the read-permission set against `apps/web-platform/infra/github-app-manifest.json` and GitHub's per-endpoint table; confirm `mintInstallationToken` accepts it.
 - [x] 0.6 Run the new suites; confirm each fails for the expected reason.
 
@@ -47,7 +47,7 @@ Run tests from `apps/web-platform` with `./node_modules/.bin/vitest run <file>`.
 
 ## Phase 6: records
 
-- [x] 6.1 ADR-272 (re-verify the ordinal at ship), including the RED-streak trigger and the forward-path-only claim.
+- [x] 6.1 ADR-273 (re-verify the ordinal at ship), including the RED-streak trigger and the forward-path-only claim.
 - [x] 6.2 C4: `api -> kb` edge text; regenerate `model.likec4.json` and the mirror; run the C4 tests and `c4-model-freshness`/`c4-count-parity`.
 - [x] 6.3 Legal: register PA-32 (a)/(c)/(f)/(g) and PA-31 (g), posture rows (#7119, #7122 stays OPEN for daily-triage, cite #9606), DPIA residuals and triggers, LIA R4 row, `statutory-response-catalog.md`/`ccla-register.md` check; append-only supersede markers; no `docs/legal/` edits.
 - [x] 6.4 CLO attestation `knowledge-base/legal/audits/2026-10-clo-attestation-7122.md` with re-evaluation triggers.

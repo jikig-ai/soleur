@@ -509,7 +509,7 @@ Recorded so the next reader does not inherit them.
 
 ## Addendum - 2026-10-06 (#7122)
 
-Append-only; nothing above is edited. Source decision: ADR-272.
+Append-only; nothing above is edited. Source decision: ADR-273.
 
 **The run-report population gains a second kind of filer.** The 2026-09-11 addendum defines the population as every cron whose run
 completion is verified by its own scheduled issue, and describes the `run-report-label` exit (exit 0) as the substrate-issued
@@ -527,8 +527,8 @@ eight crons that call `resolveOutputAwareOk` are unchanged, including the exit-0
 (an agent relabelling a digest `meta/machinery` to pass the gate) cannot recur for this cron, because the agent files nothing.
 
 **Two consequences to read with the sweeper.** The sweeper keys on the title, the author and an audit-stub body prefix, so the handler's
-`not committed - see Sentry` notice line (the dangling-link repair in ADR-272, which replaces only the `Digest file:` line) does not exempt that issue: it is closed
+`not committed - see Sentry` notice line (the dangling-link repair in ADR-273, which replaces only the `Digest file:` line) does not exempt that issue: it is closed
 at 9 days like any report, and the closing comment's wording ("the digest file it links is committed") does not describe a
 notice issue. The `FAILED`-title and audit-self-report-body exemptions still protect the handler-authored failure issue.
 `resolveOutputAwareOk` also changes role for this cron: it is advisory telemetry after a handler write and no longer a gate
-(ADR-272, interaction with ADR-126).
+(ADR-273, interaction with ADR-126).

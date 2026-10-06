@@ -1128,7 +1128,7 @@ export async function cronCommunityMonitorHandler({
           });
         }
 
-        // --- heartbeat gate (ADR-272). The handler WROTE the issue itself: when
+        // --- heartbeat gate (ADR-273). The handler WROTE the issue itself: when
         //     publication.ok the publish step either returned `published` or threw
         //     (and the catch below reddens the run), so "an issue landed" is a fact
         //     the handler already holds, not something to re-read from GitHub. The
@@ -1268,7 +1268,7 @@ export async function cronCommunityMonitorHandler({
         });
       }
 
-      // --- advisory verify-output (ADR-272). AFTER persistence on purpose: it is
+      // --- advisory verify-output (ADR-273). AFTER persistence on purpose: it is
       //     telemetry about the handler's own issue write, it emits RED events and
       //     costs a GitHub read, and none of that may delay or gate the commit. Only
       //     for a CREATED issue (a PATCH of an existing one is exactly what a

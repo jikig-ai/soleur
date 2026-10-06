@@ -66,7 +66,7 @@ This PR-class split deliberately preserved each live cron's production-proven me
 
 ## Addendum - 2026-10-06 (#7122)
 
-Append-only; nothing above is edited. Source decision: ADR-272.
+Append-only; nothing above is edited. Source decision: ADR-273.
 
 **Authorship of the committed bytes is now a platform responsibility too, for one cron.** The decision above makes persistence
 the platform's job; for `cron-community-monitor` the handler also authors what is persisted (a digest rendered from a validated
@@ -90,5 +90,5 @@ content. A refusal is stage `integrity` with a closed-vocabulary reason and no b
 
 **What this does not change.** The merge-mode table, the two permanent exemptions and the four parity invariants stand. Community
 stays in the `auto` class. The Consequences bullet on monitoring semantics applies: an `integrity` refusal is a Sentry and
-issue-comment signal, and the handler's `patch-digest-notice` (ADR-272) repairs the public issue the refusal would otherwise leave
+issue-comment signal, and the handler's `patch-digest-notice` (ADR-273) repairs the public issue the refusal would otherwise leave
 linking a digest that did not land.

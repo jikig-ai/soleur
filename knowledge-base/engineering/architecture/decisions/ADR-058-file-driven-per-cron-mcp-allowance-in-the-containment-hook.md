@@ -39,7 +39,7 @@ A `cronName` arg/env would force the hook to duplicate `CRON_MCP_ALLOWLISTS` ins
 
 ## Addendum - 2026-10-06 (#7122)
 
-Append-only; nothing above is edited. Source decision: ADR-272.
+Append-only; nothing above is edited. Source decision: ADR-273.
 
 **A fourth directive shape, and the first one that is not an allowance.** The file grammar above (`mcp-allow`, `navigate-origin`,
 and the ADR-216 `run-report-label`) gains `no-file-tools`: a bare flag line, written by the substrate (`buildAllowlistLines`, from
@@ -59,4 +59,4 @@ tool denial nor the grammar (the hook tests assert it), and `runHookSelfTest` re
 
 **Not a second source of truth for the CLI layer.** The community cron also passes `--disallowedTools` (a CLI-level second layer).
 That list is independent of this directive, and the hook remains the load-bearing layer: how the flag composes with a hook `allow`
-is not provable offline (ADR-272 decision item 3).
+is not provable offline (ADR-273 decision item 3).

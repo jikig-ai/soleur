@@ -14,7 +14,7 @@
 // One metrics table (COMMUNITY_METRICS) drives the schema, the renderer and the
 // example embedded in the agent prompt, so a key added in one place appears in
 // all three. The schema bounds STRUCTURE, not truth: an injection can still pick
-// in-range numbers or enum members (accepted residual, see ADR-272).
+// in-range numbers or enum members (accepted residual, see ADR-273).
 //
 // TRIPWIRE: the only zod constructors this module may use are the closed-domain
 // ones (strict objects, enums, literals, integers, numbers, booleans, arrays). A

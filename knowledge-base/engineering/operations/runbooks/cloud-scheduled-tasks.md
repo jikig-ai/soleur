@@ -774,12 +774,12 @@ an incident. Rule them out in order:
 Note the re-spawn in cases 2 and 3 costs a full agent run, and the re-spawned agent files its own
 dated issue — so **two issues with the same dated title for one day is expected**, not a bug.
 
-### H13 — Community publication rejected (`cron-community-monitor`, #7122 / ADR-272)
+### H13 — Community publication rejected (`cron-community-monitor`, #7122 / ADR-273)
 
 The `scheduled-community-monitor` monitor goes RED and Sentry holds an event with
 `op: community-publication-rejected`. Since #7122 the agent no longer files the issue
 or writes the digest: its final message is a one-line JSON draft that the handler
-validates against a closed schema and renders itself (ADR-272). A rejected draft is
+validates against a closed schema and renders itself (ADR-273). A rejected draft is
 **loud and never published**; nothing from the model's output reaches the repository or
 the issue. The failure-path audit issue is handler-authored and withholds the model's
 output by design, so the issue body will not tell you why: Sentry will.
@@ -837,7 +837,7 @@ vocabulary and numbers:
    branch, proceeds, and opens a **second PR** for the same file; this predates #7122.
 3. **Two follow-up triggers, written down so nobody improvises:**
    - **Three consecutive RED runs with `reason: schema`** trigger the documented follow-up
-     in ADR-272: coerce unknown enum members to `other` (the PA-27 `MAIL_CLASS_ALLOWLIST`
+     in ADR-273: coerce unknown enum members to `other` (the PA-27 `MAIL_CLASS_ALLOWLIST`
      precedent) instead of rejecting. It is an enum-parse edit plus its test, small enough
      to do inline rather than file.
    - **Two consecutive `reason: parse` rejections are possible abuse, not drift.** A

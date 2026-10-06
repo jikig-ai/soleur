@@ -7,9 +7,9 @@ related_issues: [7119, 7121, 7123, 7124, 9606]
 attestation-authority: clo
 status: DISCHARGED (CLO internal v1 sign-off, 2026-10-06, conditional on merge of PR #9596; prose cross-checked against the implementation; makes no determination on R1-R5, the lawful basis or the substitution question, which stay for counsel at #7119; external counsel re-review reserved for the section 7 triggers)
 scope: "Forward path of cron-community-monitor only. Does not cover cron-daily-triage, the published corpus, the lawful-basis conclusion or any docs/legal/ text."
-related_adrs: [ADR-272]
+related_adrs: [ADR-273]
 related:
-  - knowledge-base/engineering/architecture/decisions/ADR-272-schema-constrained-handler-side-publication.md
+  - knowledge-base/engineering/architecture/decisions/ADR-273-schema-constrained-handler-side-publication.md
   - knowledge-base/legal/article-30-register.md
   - knowledge-base/legal/compliance-posture.md
   - knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md
@@ -31,7 +31,7 @@ OPEN for it, so a reader of the closed issue should follow that pointer.
 
 ## 2. What changed (forward path of one cron)
 
-From the merge of #7122, for `cron-community-monitor` only (technical record: ADR-272):
+From the merge of #7122, for `cron-community-monitor` only (technical record: ADR-273):
 
 1. **The published bytes are no longer model-authored.** The model's final message is a one-line JSON draft. The handler parses it
    against a closed schema whose leaves are bounded integers and closed enum members; there is no free-text field. The handler
@@ -47,7 +47,7 @@ From the merge of #7122, for `cron-community-monitor` only (technical record: AD
    publication verb, thirteen exact-literal read-only collector invocations (the only agent-chosen token is the numeric Discord channel id in `discord messages <uint> 50`), a READ-scoped
    installation token for the clone and the spawn; the GitHub write token is minted only after the spawn. The Discord, Bluesky, X
    and LinkedIn credentials that the read collectors need, several of them posting credentials, **remain in the spawn
-   environment** (ADR-272 residual (g)); the agent cannot use them to publish because it has no posting verb, file tool or
+   environment** (ADR-273 residual (g)); the agent cannot use them to publish because it has no posting verb, file tool or
    code-execution path, not because they are absent.
 4. **Failure publishes nothing from the model.** A rejected or missing draft turns the run RED with a Sentry event carrying codes
    and counts only, and the failure-path audit issue withholds the model's output.
@@ -74,7 +74,7 @@ The wording to use, and no stronger:
 | Human gate | **None.** The digest still auto-merges (`mergeMode: "auto"`). A human gate is the stated fallback if counsel requires one. |
 | Numeric truth | An injection (or a collector error) can still choose in-range integers; the schema bounds structure, not truth. The collector-status sidecar (#6695) binds github status into the render; nothing verifies the counts themselves. |
 | Enum selection | Which enum members are published (statuses, failure causes, topic categories) remains model-influenced. |
-| Covert integer channel | About 35 free integers could encode a secret that reached the agent's context. The routes that put secrets into context were narrowed, but non-GitHub collector credentials remain in the spawn environment (ADR-272 residual (g)), and a numeric Discord channel id (digits only) is the one agent-chosen argument; the HN query word is a pinned literal (residual (e)). |
+| Covert integer channel | About 35 free integers could encode a secret that reached the agent's context. The routes that put secrets into context were narrowed, but non-GitHub collector credentials remain in the spawn environment (ADR-273 residual (g)), and a numeric Discord channel id (digits only) is the one agent-chosen argument; the HN query word is a pinned literal (residual (e)). |
 | Memoised final message | The agent's redacted final message (up to 16 KiB, community monitor only) is stored in the `claude-eval` step output before validation. It is Inngest run state, not published; its retention is not re-measured here. |
 | Anthropic ingestion | Raw collected text (Discord messages, comments, Hacker News posts) still reaches Anthropic; **no PII scrub exists on that input** (#7124, PA-31 §(g)(8)). Anthropic retention and the unsigned Zero-Retention amendment are unchanged. |
 | Published corpus | The 80+ digests (45 with the commenter table, 65 naming stargazers) remain published in a public repository with two forks; Art. 17 is still not implementable against append-only history. |
@@ -124,7 +124,7 @@ operands and pass the HN query through `sys.argv`. `discord members`, `hn trendi
 verbs remain). A related finding (agent-planted `.git` state reaching the handler's git steps) is closed by sanitising `.git`,
 disabling hooks, fsmonitor and attributes, staging filter-free and requiring the staged bytes to equal the handler's rendered
 bytes (the second round also made the handler refuse to push anything but one commit on the fetched origin tip, and removed replace refs, commondir and alternates
-the agent could plant). Residual (e) is rewritten in ADR-272: with the HN query pinned to a literal, no agent-chosen string can reach `hn.algolia.com` through an
+the agent could plant). Residual (e) is rewritten in ADR-273: with the HN query pinned to a literal, no agent-chosen string can reach `hn.algolia.com` through an
 argument. This is recorded here as a review event, not as a determination.
 
 ## 7. Re-evaluation triggers
@@ -138,7 +138,7 @@ Re-assess this attestation (and the markers it describes) on any of:
    structure the injection finding is about, and is also a trigger 4 event in the DPIA screening memo section 5.
 5. Observed injected content reaching a published artefact (DPIA residual (b) trigger).
 6. Two consecutive `parse` rejections of the daily draft (possible abuse), or three consecutive `schema` rejections leading to the
-   documented unknown-enum coercion (ADR-272): re-check that the coercion keeps every published leaf in a closed set.
+   documented unknown-enum coercion (ADR-273): re-check that the coercion keeps every published leaf in a closed set.
 7. A change to the collectors or router verbs that sends the agent's context a larger or more identifying set of fields.
 8. **Any new allowlisted verb, or any script that interpolates an argument** (into a shell arithmetic context, an interpreter's
    program text, a URL, a query or a jq program): the argument-injection finding in section 6a is exactly this class, and the

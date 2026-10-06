@@ -10,7 +10,7 @@ tags: [claude-eval, prompt-injection, publication, containment-hook, credentials
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-272: Schema-constrained, handler-side publication for claude-eval crons that publish to a public surface
+# ADR-273: Schema-constrained, handler-side publication for claude-eval crons that publish to a public surface
 
 ## Status
 

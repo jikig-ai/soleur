@@ -328,7 +328,7 @@ Run commands from `apps/web-platform` with `./node_modules/.bin/vitest run <file
   - Guard 1 row 2's leaf-count floor derives from `Object.keys(<metrics table>)` independently of the
     enumerator under test; Guard 3 row 6 asserts `expect(prBodyArg).toBeTypeOf("string")`; the
     posting-verb source test asserts a non-empty match count (no `skipIf`).
-- Spike S3 (no file tools needed): confirm from the prompt, the router scripts and recent digests that no step needs `Read`/`Glob`/`Grep` (large router outputs are truncated inline by the Bash tool, not spilled to a file the agent must read; the 2026-10-05 digest note "output exceeded inline limit" is the evidence to check). If a spill-read IS required, fall back to a `read-root <ephemeralRoot>` allow-list directive (resolve every path-bearing field of `Read`/`Glob`/`Grep` — `file_path`, `path`, `pattern`, `glob` — under that root, deny `..`, a leading `/`, `.git`, `.claude`; set `HOME` to `ephemeralRoot`) instead of removing the tools; record the choice in ADR-272.
+- Spike S3 (no file tools needed): confirm from the prompt, the router scripts and recent digests that no step needs `Read`/`Glob`/`Grep` (large router outputs are truncated inline by the Bash tool, not spilled to a file the agent must read; the 2026-10-05 digest note "output exceeded inline limit" is the evidence to check). If a spill-read IS required, fall back to a `read-root <ephemeralRoot>` allow-list directive (resolve every path-bearing field of `Read`/`Glob`/`Grep` — `file_path`, `path`, `pattern`, `glob` — under that root, deny `..`, a leading `/`, `.git`, `.claude`; set `HOME` to `ephemeralRoot`) instead of removing the tools; record the choice in ADR-273.
 - Spike S2 (token): confirm against the GitHub App manifest (`apps/web-platform/infra/github-app-manifest.json`)
   and GitHub's per-endpoint permission table that `{contents, issues, pull_requests}: read` covers every
   `github-community.sh` call (table in Phase 5); confirm `mintInstallationToken` accepts the narrowed
@@ -376,7 +376,7 @@ fails on any other `z.` call (`z.string`, `z.email`, `z.record`, `z.any`, `z.cus
   layer; removes the tools from the model's pool and the sub-agent route that otherwise rests on hook
   inheritance) and `--allowedTools` becomes `Bash`. **The hook `no-file-tools` directive is the
   LOAD-BEARING layer**: no cron spawn passes `--disallowedTools` today, the repo cannot prove offline how it
-  composes with a hook `allow`, and `S1` exercises only the hook. ADR-272 says so; the flag assertion is an
+  composes with a hook `allow`, and `S1` exercises only the hook. ADR-273 says so; the flag assertion is an
   argv test only, and the first post-merge run is the live evidence (a `Write` attempt must appear as a hook
   denial, not a write).
 - Run-report leaf: `RunReportCron` gains a closed union `filer: "agent" | "handler"` (default `"agent"`;
@@ -438,7 +438,7 @@ fails on any other `z.` call (`z.string`, `z.email`, `z.record`, `z.any`, `z.cus
 
 ### Phase 6 — records
 
-ADR-272, C4 edge-text edit + compiled-model regeneration, register/posture/DPIA/LIA wording per the CLO
+ADR-273, C4 edge-text edit + compiled-model regeneration, register/posture/DPIA/LIA wording per the CLO
 list below, CLO attestation, runbook entry.
 
 ### Phase 7 — post-merge verification (no SSH)
@@ -452,7 +452,7 @@ the Acceptance Criteria.
 - `apps/web-platform/test/server/inngest/cron-community-publication.test.ts` — schema leaf-injection, render grammar fuzz, constructor-allowlist source test.
 - `apps/web-platform/test/server/inngest/cron-community-monitor-publication-flow.test.ts` — handler flow (valid/invalid/timeout/replay/recovery/sidecar-red/token custody).
 - `apps/web-platform/test/server/inngest/cron-community-monitor-allowlist.test.ts` — allowlist closure + real-hook probes + `no-file-tools` probes.
-- `knowledge-base/engineering/architecture/decisions/ADR-272-schema-constrained-handler-side-publication.md` — ordinal verified free across all `origin/*` refs at plan time; re-verify at ship.
+- `knowledge-base/engineering/architecture/decisions/ADR-273-schema-constrained-handler-side-publication.md` — ordinal verified free across all `origin/*` refs at plan time; re-verify at ship.
 - `knowledge-base/project/specs/feat-one-shot-7122-community-monitor-output-allowlist/decision-challenges.md` — Taste challenge (written).
 - `knowledge-base/legal/audits/2026-10-clo-attestation-7122.md` — counsel-ready attestation draft with re-evaluation triggers (see Domain Review).
 
@@ -508,7 +508,7 @@ None. (Queried the 200 most recent open `code-review` issues for every planned c
 | Phase 5 credential custody (read token, post-spawn write token) | "under a bot identity with write access" | asked |
 | `filer` union in `_cron-run-reports.ts` | — | inferred — justification: `runHookSelfTest` aborts every spawn whose run-report directive cannot file; the leaf must stop emitting the directive for a handler-filed cron |
 | Sidecar-before-render binding | — | inferred — justification: otherwise the model can publish github numbers over a collector that reported failure, which is the same untrusted-structure class |
-| ADR-272 + C4 edge text | — | inferred — justification: Phase 2.10 of the plan skill makes the ADR and C4 update a deliverable of any trust-boundary change |
+| ADR-273 + C4 edge text | — | inferred — justification: Phase 2.10 of the plan skill makes the ADR and C4 update a deliverable of any trust-boundary change |
 | Register / posture / DPIA / LIA wording, CLO attestation | — | inferred — justification: the register, posture row and DPIA memo currently state "NO output allowlist"; shipping the allowlist without superseding those leaves a recorded TOM that lies |
 | Runbook triage entry | — | inferred — justification: a new RED reason needs a no-SSH first step or `hr-no-ssh-fallback-in-runbooks` is violated at the next incident |
 | Decision-challenges file | — | inferred — justification: headless runs must persist Taste decisions for `ship` to render (ADR-084) |
@@ -537,7 +537,7 @@ None. (Queried the 200 most recent open `code-review` issues for every planned c
 ### Product (CPO)
 
 **Status:** reviewed — SIGN-OFF WITH CONDITIONS, conditions folded in
-**Assessment:** threshold `single-user incident` is right; the "user" at risk is named third parties (republished usernames, a defamatory injected sentence). Conditions: (1) add `externalContributors` and `externalInteractions` integers so outside activity stays visible without a name (done); (2) runbook entry states the day is lost and not retried, the founder does nothing for a single occurrence, and three consecutive REDs triggers the follow-up of coercing unknown enum members to `other` — recorded in the runbook and ADR-272 rather than a new issue (done, Deferral Tracking); (3) scope the closure claim to the forward path (Overview, ADR, PR body) (done); (4) Decision Challenge reframed as three options (done). The first post-deploy RED (in-flight run) goes in the PR body's first line; a visible format discontinuity at the cutover date is noted in the runbook.
+**Assessment:** threshold `single-user incident` is right; the "user" at risk is named third parties (republished usernames, a defamatory injected sentence). Conditions: (1) add `externalContributors` and `externalInteractions` integers so outside activity stays visible without a name (done); (2) runbook entry states the day is lost and not retried, the founder does nothing for a single occurrence, and three consecutive REDs triggers the follow-up of coercing unknown enum members to `other` — recorded in the runbook and ADR-273 rather than a new issue (done, Deferral Tracking); (3) scope the closure claim to the forward path (Overview, ADR, PR body) (done); (4) Decision Challenge reframed as three options (done). The first post-deploy RED (in-flight run) goes in the PR body's first line; a visible format discontinuity at the cutover date is noted in the runbook.
 
 **Product/UX Gate:** NONE — no user-facing UI surface (no component/page/layout path in Files to Edit/Create; the mechanical UI-surface override does not fire).
 
@@ -597,7 +597,7 @@ the ops this change touches (checked under `apps/web-platform/infra/sentry/`). T
 
 ### ADR
 
-New ADR-272 (ordinal free across every `origin/*` ref at plan time; `soleur:ship` re-verifies): **claude-eval
+New ADR-273 (ordinal free across every `origin/*` ref at plan time; `soleur:ship` re-verifies): **claude-eval
 crons that publish to a public surface do so handler-side from a closed-schema draft; the agent has no
 write or publication capability and no write credential during its run.** It cites
 `ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn` (not the other two ADR-033
@@ -656,7 +656,7 @@ each in turn; a second test runs the rendered output of a fuzz of valid drafts t
 
 **Anchor.** The schema and its tests live in one PR, so one diff can weaken both. The independent anchor
 is the leaf-count floor derived from the metrics table (removing a field must also edit the table the
-expected count derives from), the constructor-allowlist source test and the ADR-272 review.
+expected count derives from), the constructor-allowlist source test and the ADR-273 review.
 
 ### Guard 2 — Containment closure (verbs, write primitive, credential)
 
@@ -736,14 +736,14 @@ TLS-verified Octokit path. The plan introduces neither a `.tf` file, a migration
 - [x] `cron-safe-commit-parity.test.ts`, `cron-run-report-labels-parity.test.ts` (rows i, ii split, ii′ with `no-file-tools`), `cron-claude-eval-substrate.test.ts`, `cron-community-monitor*.test.ts` and `cron-bash-allowlist-hook.test.ts` green; `heartbeatOk && !spawnResult.abortedByTimeout` and `PERSISTENCE: Do NOT run git add` anchors unchanged; `bash plugins/soleur/test/issue-flow-measure.test.sh` still passes.
 - [x] `ensureScheduledAuditIssue` with `withholdModelOutput: true` renders neither tail; default behavior for the other callers is byte-identical (existing tests unchanged).
 - [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `./node_modules/.bin/vitest run test/server/inngest/cron-community-publication.test.ts test/server/inngest/cron-community-monitor-publication-flow.test.ts test/server/inngest/cron-community-monitor-allowlist.test.ts test/server/inngest/cron-safe-commit.test.ts test/server/inngest/cron-safe-commit-parity.test.ts test/server/inngest/cron-run-report-labels-parity.test.ts test/server/inngest/cron-claude-eval-substrate.test.ts test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/inngest/cron-community-monitor.test.ts test/repo-wide-containment.test.ts test/c4-code-syntax.test.ts test/c4-render.test.ts test/c4-canonical-mirror.test.ts` passes; `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
-- [x] `python3 scripts/lint-guard-contract.py` passes on this plan; ADR-272 exists and states the forward-path-only claim; register, posture, DPIA and LIA carry append-only supersede markers per the CLO list; `soleur:gdpr-gate` run on the diff at the work-phase exit.
+- [x] `python3 scripts/lint-guard-contract.py` passes on this plan; ADR-273 exists and states the forward-path-only claim; register, posture, DPIA and LIA carry append-only supersede markers per the CLO list; `soleur:gdpr-gate` run on the diff at the work-phase exit.
 - [ ] PR body first line states that merging redeploys the unattended publisher with no flag (rollback = revert) and that the first RED after merge may be an in-flight run; it states `Closes #7122`, `Relates to #7119` (R5 and the legal decision remain open), and links the Decision Challenge.
 - [x] Sibling tracking issue #9606 is cited in the register, the ADR and the posture row; the RED-streak trigger is in the runbook entry and the ADR.
 
 ### Post-merge (verified by an agent, not the founder)
 
 - [ ] Fire `cron/community-monitor.manual-trigger` via `soleur:trigger-cron`; then poll with a bounded loop (merge-queue latency): the Sentry check-in is OK, exactly one `[Scheduled] Community Monitor - <date>` issue exists (the `discoverability_test` command prints `scheduled-community-monitor`, and `gh issue list --label scheduled-community-monitor --state all --limit 1` shows today's title — closed issues count), and `gh api repos/jikig-ai/soleur/contents/knowledge-base/support/community/<date>-digest.md` returns 200.
-- [ ] No Sentry `collector-status-failed` event for the run (proves the read token suffices); if present, apply Phase 5's fallback and amend ADR-272.
+- [ ] No Sentry `collector-status-failed` event for the run (proves the read token suffices); if present, apply Phase 5's fallback and amend ADR-273.
 - [ ] Update register §(f)'s live-state note only after this first run (the first publication since 2026-06-08).
 
 ## Test Scenarios
@@ -777,8 +777,8 @@ TLS-verified Octokit path. The plan introduces neither a `.tf` file, a migration
 
 - Retroactive erasure of the published digests, R1-R5 legal decisions, DPIA: #7119, #7121 (open).
 - Input-side minimisation before Anthropic egress; numeric provenance beyond the #6695 sidecar: #7124 (open).
-- **Sibling tracking issue (#9606, filed with this plan):** "generalize schema-constrained handler-side publication to claude-eval crons that ingest third-party content" — covers `cron-daily-triage` (a PA-32 member that comments publicly), `cron-competitive-analysis`, `cron-growth-audit`, `cron-seo-aeo-audit`, `cron-content-generator`, `cron-growth-execution`; re-evaluation criteria: after ADR-272 lands; milestone `Post-MVP / Later`; also records the unmodeled collection sources in C4.
-- **RED-streak follow-up (documented in place, not filed):** if three consecutive runs end `community-publication-rejected` with reason `schema`, coerce unknown enum members to `other` (PA-27 style) rather than rejecting. The trigger and action are written into the runbook entry and ADR-272; a separate issue was not filed because the measured fix (an enum-parse edit, its test, one runbook line) is inside the inline threshold the filing gate enforces (`wg-defer-only-after-inline-triage`).
+- **Sibling tracking issue (#9606, filed with this plan):** "generalize schema-constrained handler-side publication to claude-eval crons that ingest third-party content" — covers `cron-daily-triage` (a PA-32 member that comments publicly), `cron-competitive-analysis`, `cron-growth-audit`, `cron-seo-aeo-audit`, `cron-content-generator`, `cron-growth-execution`; re-evaluation criteria: after ADR-273 lands; milestone `Post-MVP / Later`; also records the unmodeled collection sources in C4.
+- **RED-streak follow-up (documented in place, not filed):** if three consecutive runs end `community-publication-rejected` with reason `schema`, coerce unknown enum members to `other` (PA-27 style) rather than rejecting. The trigger and action are written into the runbook entry and ADR-273; a separate issue was not filed because the measured fix (an enum-parse edit, its test, one runbook line) is inside the inline threshold the filing gate enforces (`wg-defer-only-after-inline-triage`).
 - Interactive `/soleur:community digest`: operator-attended, outside the unattended-publisher threat model.
 - Pre-existing duplicate-PR race on a same-day manual trigger: unchanged.
 
@@ -821,7 +821,7 @@ CLO, CPO). Mechanical findings were auto-applied; Taste items are in `decision-c
 ## Review Revisions (2026-10-06)
 
 Appended after the 13-seat panel review of the implementation (PR #9596). The plan body above is the record of what was planned and is
-not edited; where it conflicts with this section, this section is what shipped. Source decision: ADR-272.
+not edited; where it conflicts with this section, this section is what shipped. Source decision: ADR-273.
 
 | Plan said | Shipped | Why |
 |---|---|---|
@@ -835,8 +835,8 @@ not edited; where it conflicts with this section, this section is what shipped. 
 | `SpawnResult.finalMessage` is captured for every cron. | **Opt-in `captureFinalMessage`**, passed only by community monitor. | Three sibling crons spread the whole `SpawnResult` into Sentry extras; a field nobody asked for must not exist on their result. |
 | The PATCH-target author gate uses a bot login derived from the build-time environment. | **The login is resolved with `getAppSlug()`** (`<slug>[bot]`). A bot-authored digest under another login warns (`community-publication-bot-login-mismatch`) and a new issue is created; it is never overwritten. | A wrong login fails open to a duplicate; the mismatch was silent. |
 | `community-publication-rejected` and the issue-failed op carry the Error. | **Message path (null error)** for `community-publication-rejected`, `community-publication-issue-failed` and `community-publication-notice-failed`, with closed-vocabulary extras. | The Error path loses the `op` tag in Sentry (#8629). |
-| "No write credential" for the agent. | **"No GitHub write credential"**. | The Discord, Bluesky, X and LinkedIn credentials for the read collectors remain in the spawn environment (ADR-272 residual (g)). |
-| The first post-merge run is the live evidence that `Write` is denied. | **A healthy first run proves neither layer** (if `--disallowedTools` works the model never attempts `Write`); a denial naming a file tool in `deniedTools` shows only that the model still reached for it. | Stated in ADR-272 decision item 3 and the attestation. |
+| "No write credential" for the agent. | **"No GitHub write credential"**. | The Discord, Bluesky, X and LinkedIn credentials for the read collectors remain in the spawn environment (ADR-273 residual (g)). |
+| The first post-merge run is the live evidence that `Write` is denied. | **A healthy first run proves neither layer** (if `--disallowedTools` works the model never attempts `Write`); a denial naming a file tool in `deniedTools` shows only that the model still reached for it. | Stated in ADR-273 decision item 3 and the attestation. |
 | Process lifecycle as in the substrate. | **Process-group SIGKILL on every exit** and a bounded `STDIO_CLOSE_WAIT_MS` stdout drain after `exit`. | A grandchild could outlive the run and read the write token minted afterwards; resolving on `exit` alone lost the final `result` line. |
 
 Plan-side numbers read against this table: "16" (verbs) is 14, "18" (spawn env keys) is 17 from `buildSpawnEnv` (19 in the child with

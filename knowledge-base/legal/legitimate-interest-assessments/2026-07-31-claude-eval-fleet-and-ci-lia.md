@@ -481,7 +481,7 @@ finding that the existing corpus cannot be erased, is the only honest dispositio
 > tool") no longer describes `cron-community-monitor`: from the merge of #7122 its digest and tracking
 > issue are rendered by the handler from a closed schema (bounded integers and closed enum members; no
 > free-text field), and the agent has no write tool, no publication verb and no write credential
-> during its run (ADR-272). That is a different mechanism that reaches R4's objective for **future**
+> during its run (ADR-273). That is a different mechanism that reaches R4's objective for **future**
 > output of that one cron. Whether it substitutes for R4, and what it means for R1-R3 (future output is
 > structurally incapable of that content), is **for counsel at #7119**. It does not touch the
 > already-published 80 digests (R5), `cron-daily-triage` (no output allowlist, no human gate, no hook;
@@ -490,7 +490,7 @@ finding that the existing corpus cannot be erased, is the only honest dispositio
 
 > **Further correction 2026-10-06 (#7122, review) - the R4 row only; append-only.** In the note above, "no write
 > credential" is read as "**no GitHub write credential**" (the Discord, Bluesky, X and LinkedIn credentials for the read
-> collectors remain in the spawn environment; ADR-272 residual (g)), and "reaches R4's objective" is withdrawn in favour of
+> collectors remain in the spawn environment; ADR-273 residual (g)), and "reaches R4's objective" is withdrawn in favour of
 > "**narrows** the exposure R4 described, for future output of that one cron": no redaction pass was built and nothing
 > here treats R4 as met. Counts that can single a person out are not limited to external contributors, interactions and
 > topic counts: Discord `members` and `messages` for a private guild and `newStargazers` can too, and with the period fixed
@@ -498,7 +498,7 @@ finding that the existing corpus cannot be erased, is the only honest dispositio
 > to the published artefacts; the agent's redacted final message (up to 16 KiB) is memoised in the `claude-eval` step
 > output, unvalidated, and is not republished. Whether any of this substitutes for R4 is for counsel at #7119.
 
-> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument other than a numeric Discord channel id, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-272 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
+> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument other than a numeric Discord channel id, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-273 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
 
 ---
 
