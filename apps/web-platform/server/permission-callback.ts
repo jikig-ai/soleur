@@ -293,7 +293,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   // recording an escalation for them would emit a spurious support_handoff
   // frame, the very thing their "no interactive surface" comments forbid.)
   // This mirrors denySupport's own contract ("every present and future
-  // escalating support deny path gets record + telemetry for free") one level
+  // ESCALATING support deny path gets record + telemetry for free") one level
   // up — a future deny site that calls `deny(` cannot forget the field.
   // The spread order makes deps.repoConnected authoritative even if a call site
   // passed its own; an unwired dep records `undefined` (the frame then omits

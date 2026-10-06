@@ -66,8 +66,9 @@ export function truncateSupportHandoffTask(
  *   support bubble).
  * - `true` → the `?msg=` link WITHOUT the "(needs a connected repo)" caveat —
  *   the precondition was verified at deny time.
- * - `undefined` → the legacy copy byte-identical (dep-unwired emitters and
- *   pre-resolution denies carry no flag; additive-safe backward compat).
+ * - `undefined` → the legacy copy byte-identical (dep-unwired emitters,
+ *   wired-but-degraded reads, and pre-resolution denies carry no flag;
+ *   additive-safe backward compat).
  *
  * `encodeURIComponent` deliberately leaves `!~*'()` literal — an unbalanced `)`
  * inside the task would close a bare markdown destination early and truncate

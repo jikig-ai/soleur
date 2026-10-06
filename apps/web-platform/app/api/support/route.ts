@@ -188,7 +188,7 @@ export async function POST(request: Request): Promise<Response> {
                   task: handoffTask,
                   conversationId,
                   // #9556 — undefined drops the key at JSON.stringify, keeping
-                  // the frame additive-safe for dep-unwired emitters.
+                  // the frame additive-safe for dep-unwired/degraded emitters.
                   repoConnected: consumedEscalation.repoConnected,
                 },
           )) {

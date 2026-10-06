@@ -46,7 +46,7 @@ Change class: `code` · Tier: `none` (plan frontmatter + declared sensitive-path
 | PR body needs `Closes #9556/#9557` | ship-time artifact | git-history-analyzer | P3 — ship handles |
 | cc-dispatcher.ts:2145 path-join warning | pre-existing, untouched line | semgrep-sast | none — not in diff |
 
-Clean lenses (no findings filed): security-sentinel, performance-oracle, semgrep-sast (PR-introduced). All other seats filed P3-class findings only — no P1s anywhere in the first round.
+Clean lenses (no findings filed): security-sentinel, performance-oracle, semgrep-sast (PR-introduced). All other seats filed P2-or-P3 findings — no P1s anywhere in the first round.
 
 ### Fix round 1 (fd4a137b..13451984d3, seats=10)
 

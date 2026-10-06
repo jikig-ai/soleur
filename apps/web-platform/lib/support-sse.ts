@@ -28,8 +28,8 @@ export type SupportSseMessage =
        * #9556 — whether the dispatching workspace had a connected repo at deny
        * time (recorded, not re-resolved — zero extra DB reads). OPTIONAL so the
        * field stays additive-safe across the JSON parse boundary: frames from
-       * dep-unwired emitters omit it and the copy builder falls back to the
-       * legacy caveat arm.
+       * dep-unwired or degraded-read emitters omit it and the copy builder
+       * falls back to the legacy caveat arm.
        */
       repoConnected?: boolean;
     };
