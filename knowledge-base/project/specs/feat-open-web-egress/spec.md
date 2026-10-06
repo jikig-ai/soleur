@@ -113,6 +113,48 @@ denied-destination classes; per-session entitlement decision logged
 - TR6: Drift-guard updates: `agent-runner-helpers.test.ts`,
   `cron-egress-firewall.test.sh`, `terraform-target-parity.test.ts`
   (-target allowlist for the new gateway resources).
+- TR7 (Phase-0 spike, measured 2026-10-05 against the vendored
+  `claude-agent-sdk-linux-x64@0.3.284` binary, `-p` + `--settings
+  {sandbox:{enabled,failIfUnavailable,enableWeakerNestedSandbox,
+  network:{allowedDomains, httpProxyPort:28711}}}` — two loopback
+  listeners discriminating "bridged port" vs "shared netns"):
+  - **POSITIVE — `httpProxyPort` is a host-side port SRT chains to.** The
+    sandboxed child runs in a separate netns (readlink /proc/self/ns/net
+    differs from host) and sees `HTTP_PROXY=http://localhost:3128` — SRT's
+    own allowlist proxy inside the netns — plus
+    `CLAUDE_CODE_HOST_HTTP_PROXY_PORT=28711` naming our host port. A child
+    `curl https://example.com/` (example.com NOT in allowedDomains) arrived
+    at the host listener as `CONNECT example.com:443` — so under
+    `httpProxyPort` SRT forwards upstream WITHOUT applying its own domain
+    filter: the gateway owns all policy, as TR1 predicts, and
+    `deniedDomains` emission stays cut (it would filter nothing anyway).
+  - **The child's localhost is NOT the container loopback.** Direct
+    `curl http://localhost:28711` and `:18081` both fail —
+    connect-refused inside the netns. Only the SRT-bridged proxy ports
+    work. Consequence for the forwarder design: the forwarder MUST live on
+    the container's real loopback (the "in-container" of the plan means
+    host-of-sandbox, not in-netns) and is reached only via SRT's internal
+    proxy → upstream chain. The forwarder port is never directly dialable
+    by the sandboxed child — an accidental hardening, not a leak.
+  - **SRT pre-fills `no_proxy` with the RFC1918/link-local set** —
+    private-IP requests bypass the proxy and die in the netns. Belt under
+    the Squid CIDR denies.
+  - **In-process WebFetch ignores sandbox `httpProxyPort` entirely** —
+    with no env proxy on the CLI process it fetched example.com direct
+    (no listener hit). It DOES honor process-env `HTTP(S)_PROXY`:
+    rerunning with `HTTP_PROXY=http://127.0.0.1:28711` on the CLI env
+    produced `CONNECT api.anthropic.com:443` and Datadog-intake CONNECTs
+    at the listener — ambient env-proxy steers ALL in-process fetch,
+    including the model API call itself (first arm died: API call got my
+    listener's 502). PR-B consequence: WebFetch can only transit the
+    gateway via `query({options:{env:{HTTP_PROXY,HTTPS_PROXY,NO_PROXY}}}`
+    on the spawned CLI subprocess — per-dispatch, never ambient on the
+    dispatcher — and NO_PROXY MUST enumerate the platform control plane
+    (api.anthropic.com, Sentry, Statsig, Datadog, Supabase, Stripe, GitHub
+    endpoints) or those calls transit the tenant gateway. Failure mode if
+    a platform host is missed: Squid allows public hosts, so the call
+    would still work but platform auth headers transit the egress path —
+    list completeness is a hard requirement, not a nicety.
 
 ## Open Questions (parked from brainstorm)
 

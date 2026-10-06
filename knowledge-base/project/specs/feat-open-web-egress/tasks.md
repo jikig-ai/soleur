@@ -56,10 +56,18 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
 
 ## Phase 2 — PR-B: Product wiring
 
-- [ ] 2.0 **Phase-0 spike (gate):** `query()` + `network.httpProxyPort` under
+- [x] 2.0 **Phase-0 spike (gate):** `query()` + `network.httpProxyPort` under
       pinned SDK — observe where the connection lands (SRT netns/unix-socket
       semantics); verify in-process WebFetch honors `HTTP_PROXY`. Record
       outcome in spec.md; a negative re-scopes task 2.4
+      — DONE 2026-10-05, spec TR7: POSITIVE. `httpProxyPort` is a host port
+      SRT chains to via its in-netns proxy (child sees
+      `HTTP_PROXY=localhost:3128`, `CLAUDE_CODE_HOST_HTTP_PROXY_PORT=<ours>`);
+      CONNECT for non-allowed domains forwards upstream unfiltered → gateway
+      owns all policy. In-process WebFetch ignores sandbox proxy settings;
+      it honors only process-env `HTTP(S)_PROXY` → task 2.4 must set env
+      proxy on the spawned CLI subprocess with NO_PROXY covering the
+      platform control plane.
 - [ ] 2.1 Migration `1XX_workspace_web_egress.sql` + `.down.sql` (clone 101):
       column, member-read RPC (NULL→false), owner-write RPC (P0001),
       `-- LAWFUL_BASIS: consent (Art. 6(1)(a))` annotation
