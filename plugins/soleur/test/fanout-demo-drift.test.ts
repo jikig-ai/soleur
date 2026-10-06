@@ -76,6 +76,12 @@ export function statusLabelKeys(typesText: string): string[] {
 
 // The section of the homepage this feature owns: the <section> holding the figure, found by
 // section-depth so a nested <section> cannot hide the rest of it from every guard.
+// window-assembly: fanoutSection — complete against the ONE `<section class="landing-section
+// fanout-section">` subtree and nothing wider. Three assertions carry that claim: the built page
+// holds exactly one `class="fanout-figure"` (so a second figure cannot sit outside the window),
+// the instrument test drives a nested `<section>` and requires the tail inside it to stay in the
+// window, and the section holds exactly four rows. Content added to the page outside this
+// section is not a fan-out concern and is covered by the sibling homepage drift suites.
 function fanoutSection(html: string): string {
   const start = html.indexOf('<section class="landing-section fanout-section"');
   if (start === -1) throw new Error("fanout section not found in the built homepage");

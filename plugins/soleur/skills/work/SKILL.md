@@ -1446,7 +1446,6 @@ See [references/key-principles.md](${CLAUDE_PLUGIN_ROOT}/skills/work/references/
   "files skipping MORE than before must be 0".
 
 - **A pre-merge vendor probe must replay the merge's exact transition.** Build the probe's mutation from the Terraform plan's `~ update` diff — create the object in the FROM state, PATCH the full changed attribute set in one call, read back — never from the end-state declaration alone. **Why:** #7884 — probe 1 created an already-`keyword` monitor and changed one field; the merge converts `status`→`keyword` with five fields, and a refusal there wedges every later infra apply. See `knowledge-base/project/learnings/integration-issues/2026-09-15-my-vendor-probe-tested-a-different-transition-than-the-merge-applies.md`.
-- **A forked or spawned agent running this skill cannot run Phase 4** — it has no agent surface, so `soleur:review`, `soleur:compound` and `soleur:ship` never run and the PR stays draft. When delegating a plan to a fork, brief it to stop after the implementation tail (tests, push) and return; the parent runs review, compound and ship. **Why:** #9577 — the fork built, tested and pushed the homepage demo, then reported that review/compound/ship needed agents; the parent ran them.
 - **Analysis paralysis** - Don't overthink, read the plan and execute
 - **Skipping clarifying questions** - Ask now, not after building wrong thing
 - **Ignoring plan references** - The plan has links for a reason
