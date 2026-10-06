@@ -1,9 +1,11 @@
 ${id} parses to the space-joined line, not the literal indicator
 ${surface} restates the cap, and states the runtime's number
-'${name}' matches the plan's text exactly
-'overridden-line' carries the founder's reason verbatim
-'pass' matches the plan's sentence with the sha filled in
---command-out writes the exact command text, with no trailing newline
+'${name}' matches the pinned text exactly
+--base must be the remote default branch (HEAD is refused; refs/remotes/origin/main is accepted)
+--command-out writes the exact command bytes, with no trailing newline, even for an UNTRUSTED block
+--no-pr states there is no PR: the operator-authored freeze is OK (must-PASS)
+--plan /dev/zero and --plan <fifo> are FAIL, never read
+--plan outside the plans directory is FAIL
 04-dns-fail.md contains the typo'd hostname (regression-snapshot invariant)
 8-state decision matrix exists with exactly one PASS terminal
 A1 every allowlisted verb is accepted
@@ -71,9 +73,12 @@ Form B — bold-wrapped `**Expected output:**` line
 Form B — fenced code block following prose key
 Form B — prose `Expected output:` line
 G1 the number of plans declaring credentials_required equals the baseline
-Guard 1: a verify that skips the freeze comparison lets an edited command through
-Guard 2: a classify that returns FAILED-AS-EXPECTED unconditionally makes the VACUOUS case disappear
-Guard 3: deleting the headless refusal lets a headless OVERRIDDEN through
+Guard 1: a static rule set without the pin check accepts an unpinned script
+Guard 1: a verify that skips the freeze comparison lets an edited command through as OK
+Guard 2: a classify that ignores sandbox health reports PASSED over a broken sandbox
+Guard 2: a classify whose baseline vacuous branch is dead reports FAILED-AS-EXPECTED for a check that already passes
+Guard 3: a verify without the PR-login check trusts a forged operator email
+Guard 3: deleting the headless refusal lets a headless OVERRIDDEN through (exit 0 and a row)
 I1 inline command is unchanged
 Locale the Step 10.4 parse is C-locale pinned, so a UTF-8 caller gets the same bytes
 N1 stops at a sibling key; parseExpected still reads it
@@ -115,89 +120,106 @@ Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B
 Step 10.4 resolves both Check 10 operands through the loader token, never the git root
 Step 10.5 reject set includes newline
 TRAIL-WS the fixture's raw command line still ends in whitespace
-a PR author equal to the authenticated login is trusted
-a PR author who is not the authenticated login is UNTRUSTED
-a YAML reformat with equal canonical fields still passes (must-PASS)
-a baseline with a non-zero rc is FAILED-AS-EXPECTED
-a baseline with rc 0 but expected absent is FAILED-AS-EXPECTED (a real fail)
+a PR author who is not the authenticated login is UNTRUSTED (pr-author)
 a block frozen before any code is OK and reports its identity
 a block quoted under a non-Acceptance-Criteria heading is ignored (Guard 1 row 7)
+a block reviewed on main (merge-base freeze) needs no authorship anchor and no PR flag
+a block under a SUFFIXED heading ('## Acceptance Criteria (v2)') is found, not silently NO-BLOCK
+a block under an unrecognised heading is an ERROR in candidate mode (it cannot be baselined and frozen unseen)
 a block with no freeze commit (uncommitted working tree) is FAIL
-a code commit that precedes the freeze is an ordering violation
-a command check with no command is FAIL
-a command with pipes and newlines cannot break the row apart
-a creates path that already exists is FAIL
-a creates path that is PRESENT does not exempt rc 127
-a field the schema does not define is FAIL
-a freeze authored by another identity is UNTRUSTED, exit 1
-a freeze authored by the local identity is trusted (must-PASS)
-a freeze committed together with code is an ordering violation: stop-and-ask, not FAIL
-a headless failing check is recorded as STOPPED-AWAITING-FOUNDER, with the underlying outcome kept
-a judgement check carries no command and passes
-a learnings-only commit before the freeze does not fail it (must-PASS)
-a listed creates path that is absent makes any non-zero baseline rc a valid fail
-a merge-base freeze (reviewed on main) is trusted whoever wrote it
-a non-hex output hash is refused
-a pass after failures says so
-a pin that is not HEAD's blob is FAIL
-a pin whose sha is not the blob at the freeze is FAIL
-a pinned script that does not exist at the freeze is FAIL
-a plan already on main is frozen at the merge-base copy (must-PASS)
-a plan already on main that the branch then edits is CHANGED
+a block with no freeze commit passes the static rules and every pin against HEAD
+a block with two command keys is FAIL unparseable
+a changed command keeps the frozen command beside it in the reason column
+a command containing | is escaped and stays in its cell
+a commit that only adds a learning after the freeze does not disturb it (must-PASS)
+a directory that is not a repository is FAIL not-a-repository
+a dirty tree is recorded as +uncommitted in tested_sha
+a failing health control makes the verdict INVALID at BOTH polarities
+a flow collection with content is refused (only the literals [] and {} are accepted)
+a forged operator email alone is NOT trusted when the PR login is unknown
+a freeze authored by someone other than the local operator is UNTRUSTED
+a hostile log line cannot make summary quadratic
+a judgement check is never classified
+a missing --control-rc is a usage error (no permissive default), and so is a missing --verify-json
+a pin on a symlink is FAIL: the pointed-at file could change unnoticed
+a pin that does not match the blob at the freeze is FAIL pin-not-at-freeze
+a plain rename keeps its freeze (the block is unchanged, so it resolves, must-PASS)
+a plan merged to main is found through tasks.md's Plan: line (merge-base freeze)
+a plan over 1 MiB is FAIL unparseable, not read whole
 a plan with no founder_check block and no history is NO-BLOCK
 a quoted copy does not disturb a real block elsewhere (must-PASS)
-a rebased branch with new SHAs still passes (must-PASS)
-a removed hash line is tolerated and the recomputed identity is reported
-a row carries rc, attempt, sha, hash and output hash but no output text
-a symlinked plan is FAIL, never followed
-a timeout is never exempted by creates
-a verb off the probe allowlist is FAIL
-a verify that always exits 0 does NOT report a changed command
-acceptance: a non-zero rc is FAILED even when expected is present
-acceptance: rc 0 with an empty expected is PASSED
-acceptance: rc 0 with expected absent is FAILED
-acceptance: rc 0 with expected present in stdout is PASSED
-an edited expected after the freeze is CHANGED-SINCE-APPROVAL
-an edited field with a STALE hash is FAIL (the block disagrees with itself)
-an interpreter verb with every script pinned by blob sha passes
-an uncommitted block validates and reports the identity to write into hash:
+a quoted curl verb is still curl: rc 6 is INVALID
+a re-freeze cannot supersede a freeze that was reviewed on main
+a re-freeze commit authored by someone other than the operator is ignored
+a reason that looks like a secret is refused (the log is committed and may be public)
+a rebased branch (fresh SHAs) with the same content is still OK (must-PASS)
+a reformatted block with the same canonical fields is still OK (must-PASS)
+a row carries every column; the path is derived from the branch; the marker is metadata only
+a shell-active block is refused at VERIFY (nothing is shown or run)
+a stale hash: line (fields edited, hash not) is FAIL hash-mismatch
+a symlinked plan is FAIL and is never opened (a link to /dev/zero returns promptly)
+a verb gate that cannot be run is FAIL verb-gate-unavailable, never an accept
+a verify record with a non-hex hash or sha is refused, including a valid hex prefix with junk after it
+a verify stub that exits 0 does NOT report a changed command (and prints nothing)
+acceptance: --stdout-file carries the output the expected text is matched against
+an UNCOMMITTED edit of the pinned script is caught too (the run reads the working tree)
+an archived plan whose block was edited afterwards is still CHANGED-SINCE-APPROVAL
+an empty expected in the record is matched by exit 0 alone (the expected text comes from the record, not argv)
+an internal error is one JSON FAIL line and exit 4, never a traceback
+an interpreter command naming a pinned script is OK
+an interpreter script that is not pinned (or not at HEAD) is refused at baseline
+an operator-authored 're-freeze' commit supersedes the first freeze: OK, refreeze true
+an override needs a reason and names what it overrides; a blank reason is refused
 an unknown name is a usage error
-an unknown polarity is a usage error, exit 2
-an unparseable block is FAIL, never SKIP
+an unresolvable base with NO block anywhere is NO-BLOCK, exit 0 (a repo that never used the feature ships)
+an unresolvable base with a block on disk is FAIL base-unresolvable
+an unsafe branch name or a detached HEAD writes nothing (no path is invented)
+archival is the same plan even when git cannot see a rename (the body was rewritten): the archive prefix is stripped
 awk interpreter is a known implementation (mawk or gawk)
-candidate mode does not accept a stale hash
+baseline needs a candidate record and acceptance refuses one
+candidate mode is refused when a freeze exists, unless --refreeze says this is a deliberate change
 classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')
-creates naming a path that already exists at the freeze (a stub) is FAIL
-creates with a non-interpreter verb passes when the path is absent at the freeze
-credentials_required is FAIL (a check needing credentials is a judgement check)
+classify refuses a record whose verify outcome is not OK (a changed check is never run)
+code committed BEFORE the freeze is flagged as an ordering failure
+commit-log commits ONLY the log, in one commit, and is a no-op the second time
+commit-log with no log is a no-op
+compound's archival (git mv into plans/archive/<ts>-name.md) is the SAME plan: OK, not freeze-without-block
+deleting the plan after its freeze is FAIL freeze-without-block, never a SKIP
 each rung of the detection ladder ends in an action
+editing ${field} after the freeze (with a recomputed hash) is CHANGED-SINCE-APPROVAL
+editing the pinned script after the freeze is CHANGED-SINCE-APPROVAL (pinned-script-changed)
 empty Form A block scalar (`command: |` with no continuation) returns empty
+every Bash block that reads PREFLIGHT_TMP derives it in the same block
 every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)
+every documented script call goes through the plugin root with the unresolved-root guard
 every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
-exactly two subprocess call sites: git and the verb gate
-headless refuses FOUNDER-CONFIRMED and writes nothing
-headless refuses OVERRIDDEN and writes nothing
-headless with an approved block and no sandbox is STOPPED-AWAITING-FOUNDER; without a block it stays SKIP-NOSANDBOX
-instrument: the ban regex fires on a known positive (so the negative assertion above can fail)
-interactive OVERRIDDEN with a reason is recorded as an override, never as a pass
-interactive OVERRIDDEN without a reason is refused
+every row yields exactly the expected reason
+every row yields exactly the expected verdict
+every wording constant is named at least once as `text <key>`
+headless: ${outcome} is recorded as STOPPED-AWAITING-FOUNDER with the cause kept
+headless: OVERRIDDEN and FOUNDER-CONFIRMED are refused (exit 3) and write no row
+headless: a missing sandbox with an approved block stops the run
+injection through the reason cannot forge a row or smuggle escapes
+instrument: the ban regex fires on a known positive (so the negative assertions can fail)
+instrument: the table has both accepting and rejecting rows and many distinct reasons
+instrument: the three documents were found and carry fenced blocks
+instrument: the walker finds a third subprocess use, any spelling, and an os.system
 it declares no sandbox of its own
-kind must be command or judgement
 list match (comma-joined)
 list match (or-joined)
+matching PR author and operator login is OK and reports the comparison happened
 modeFlagsOn sees the mode flags, not the query flags
-no block is still NO-BLOCK
-no plan change on the branch is NO-BLOCK, exit 0 (the SKIP banner case)
-no shell-out primitives
+no block at all is an ERROR in candidate mode, never a success
+no documented call types plan-authored or agent-chosen values into a shell word
+no founder-facing guidance uses 'verified', 'proven' or 'safe'
+no plan change on the branch is NO-BLOCK, exit 0, with the pinned banner
 no string contains 'verified', 'proven' or 'safe' (no exemption: the CLO ruled the negation out)
 normalizes trailing newline before comparing
+only _git and _verb_gate reference subprocess, and nothing else can start a process
+only one of the two logins supplied is unmeasurable, never skipped
 parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)
 preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)
-prints founder-check: no log before any run
-prints the row count over a populated log
-rc ${rc} is INVALID in both polarities (tooling, not a result)
-rc ${rc} is INVALID when the first token is curl
-rc ${rc} is an ordinary result when the first token is not curl
+prints the row count, `no log` with none, and fails on a --log path that does not exist
 rejects command-substitution as FAIL
 rejects empty stdout against non-empty expected
 rejects parameter-expansion ($VAR, ${VAR}) as FAIL
@@ -206,18 +228,6 @@ rejects ssh commands as FAIL
 returns empty string when block absent
 returns empty string when command field absent
 returns the block when present
-row 1: a baseline that already passes is VACUOUS
-row 1: an edited command after the freeze is CHANGED-SINCE-APPROVAL
-row 2: a plan deleted after the freeze is FAIL, never SKIP
-row 2: a plan renamed after the freeze is FAIL
-row 2: a plan stripped of its block while a freeze exists is FAIL
-row 3: a second differing block added after a compliant first is FAIL
-row 3: an unhealthy sandbox is INVALID, never a baseline fail
-row 4: edit expected AND recompute hash in one commit is still CHANGED
-row 4: rc 127 for a target NOT listed in creates is INVALID
-row 5: editing a pinned script after the freeze is CHANGED-SINCE-APPROVAL
-row 6: an interpreter verb naming a script that is not pinned is FAIL
-row 6: creates combined with an interpreter verb is FAIL
 shardTokensOn sees a *_SHARD= selector, not only TEST_GROUP and positional (#7936)
 shipped block, root set but empty: the test -r guard fails closed at /skills/
 shipped block, root unset: aborts before any parser runs, decoy ledger stays empty
@@ -229,25 +239,26 @@ surface 2 (plan-issue-templates.md) — exactly 3 blocks, each set-equal to cano
 surface 2b — discoverability_test sub-fields agree across canonical + all 3 template blocks
 surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
-the aggregate row says ran, returned success against the sha — never a bare PASS
-the creates exemption is baseline-only: an acceptance run with an absent target is an ordinary FAILED
+the candidate hash is what the plan skill writes into hash: (a stale one is FAIL)
 the default under uncertainty is the full battery, and covers ENFORCEMENT not just existence
 the extracted block is the real one (non-empty, carries the fail-closed test)
-the founder's own words are required
 the gate and rejectReason agree on verdict and reason for every shape
 the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
-the log is append-only: a second row leaves the first byte-identical
-the mutants themselves are driven: the anchors exist in the production script
+the log path follows an ARCHIVED spec directory (compound moves it)
+the mutants themselves are driven: every anchor exists exactly once in the production script
 the parity table is non-vacuous — it contains both accepts and rejects
+the pinned set equals the script's own set: a new constant without a pin is RED
+the reason, the cause and the rejection detail are substituted from the arguments and the record
+the same edit without the re-freeze subject stays CHANGED-SINCE-APPROVAL
+the sha is filled in, with the dirty qualifier when the tree had uncommitted changes
 the skip predicate is pinned — widening it cannot silently shrink coverage
-the static rules still apply: a verb off the allowlist is FAIL
-the stdout marker is metadata only: outcome, hash, tested_sha
-there is no way to hand the log the command's output
+the verb literal in the plan reference equals the verb gate's allowlist, and INTERPRETERS is a subset of it
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)
 twin control: the pre-migration git-root block DOES execute the decoy
 two blocks in one Acceptance Criteria section is FAIL
 two plans each carrying a block is FAIL
-with no --log it reads the current branch's spec directory
+unknown or case-variant outcomes and modes are usage errors, never recorded
+verify emits the head sha and whether the tree is dirty
 work/SKILL.md defines the fallback once, with the conditional stated
 §9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query
 §9 prescribes the affected gate

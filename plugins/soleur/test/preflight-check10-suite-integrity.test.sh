@@ -66,9 +66,9 @@ MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
 # same rule. An EMPTY manifest previously passed vacuously as
 # "[ok] all 0 manifest tests still declared", so this floor is what makes the
 # primary identity control non-vacuous.
-MIN_TESTS=319
-MIN_ASSERTIONS=1507
-MIN_MANIFEST_LINES=253
+MIN_TESTS=347
+MIN_ASSERTIONS=1806
+MIN_MANIFEST_LINES=264
 
 PASS=0
 FAIL=0
@@ -579,17 +579,39 @@ if [[ "$SEC13" == *"Step 10.5"* ]]; then
 else
   fail "Check 13 does not name Step 10.5 as the place the command runs"
 fi
+# The wrapper itself lives in the reference, and is where a second fence would actually be written, so
+# the reference is scanned with the section. The array test is case-insensitive (`bwrap_args=(` is the
+# same array) and the shell-invocation test covers every spelling that runs a string as a program:
+# `bash -c`, `sh -c`, `bash -lc`, `bash -ec`, `bash --command` and an `env`-prefixed form.
+REF13_FILE="plugins/soleur/skills/preflight/references/check-13-founder-check.md"
+REF13="$(cat "$REF13_FILE" 2>/dev/null)"
 cases=$((cases + 1))
-if [[ "$SEC13" =~ (BWRAP_ARGS|BWRAP_PROC|GIT_BIND)[[:space:]]*=\( ]]; then
+if [[ -n "$REF13" && "$REF13" == *"Step 10.5"* && "$REF13" == *"OUT=\$("* ]]; then
+  pass "the Check 13 reference carries the Step 10.5 wrapper"
+else
+  fail "the Check 13 reference is missing or carries no Step 10.5 wrapper — the scans below would run over nothing"
+fi
+SCAN13="$SEC13"$'\n'"$REF13"
+cases=$((cases + 1))
+shopt -s nocasematch
+if [[ "$SCAN13" =~ (BWRAP_ARGS|BWRAP_PROC|GIT_BIND)[[:space:]]*=\( ]]; then
+  shopt -u nocasematch
   fail "Check 13 declares a sandbox-argument array of its own — the sandbox is Step 10.5's alone"
 else
+  shopt -u nocasematch
   pass "Check 13 declares no sandbox-argument array"
 fi
 cases=$((cases + 1))
-if [[ "$SEC13" =~ bash[[:space:]]+-c ]]; then
+if [[ "$SCAN13" =~ (^|[^[:alnum:]_/.-])(ba|z|da)?sh[[:space:]]+(-[a-zA-Z]*c([[:space:]]|$)|--command) ]]; then
   fail "Check 13 runs a command with a direct shell invocation — it must go through the Step 10.5 fence"
 else
   pass "Check 13 has no direct shell invocation of the command"
+fi
+cases=$((cases + 1))
+if [[ "$REF13" == *"sed 's/SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX/SOLEUR_FOUNDER_CHECK_NOSANDBOX/g'"* ]]; then
+  pass "the wrapper renames Check 10's fleet marker so Check 13's dark runs are not counted as Check 10's"
+else
+  fail "the wrapper no longer renames SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX — a dark Check 13 would be counted as a dark Check 10"
 fi
 
 # --- 2. The suites actually execute, and clear the floor --------------------
@@ -831,7 +853,7 @@ done
 # the suspect cannot witness the suspect — measured on the previous shape: fail() neutered, the
 # gate printed a clean total and exited 0.
 # 35 = the previous 29, plus 2 per-suite source checks and 4 Check 13 section checks (#9578).
-MIN_CHECKS=35
+MIN_CHECKS=37
 if [[ "$cases" -lt "$MIN_CHECKS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d check(s) dispatched, floor is %d — the gate itself went silent.\n' \
     "$cases" "$MIN_CHECKS" >&2

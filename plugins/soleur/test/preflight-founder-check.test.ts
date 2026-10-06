@@ -6,17 +6,20 @@
 // inherited GIT_DIR (plugin AGENTS.md "Test Fixture Conventions").
 //
 // What each describe pins is named after the Guard it serves in the plan's `## Guard Contract`:
-//   Guard 1  frozen-block integrity        -> "verify: ..." and the Guard 1 mutants
-//   Guard 2  must-fail baseline            -> "classify: ..." and the Guard 2 mutants
+//   Guard 1  frozen-block integrity        -> "verify: ..." (resolution, freeze, rules)
+//   Guard 2  must-fail baseline            -> "classify: ..."
 //   Guard 3  consent before run            -> "verify: authorship" and "log: ..."
 //   Guard 4  single sandbox chokepoint     -> "Guard 4: ..."
 //
-// The harness rows at the bottom edit THIS suite's subject (a stub, a deleted refusal) and require
-// the observable to change, so a suite that asserts nothing cannot stay green. The counts are also
-// floored from OUTSIDE by preflight-check10-suite-integrity.test.sh.
-import { afterAll, describe, expect, test } from "bun:test";
+// Pure decision tables (the static rules, the classify matrix) run IN-PROCESS through one python
+// import each; everything that touches git or files goes through the CLI on a copied base repo.
+// The harness rows at the bottom edit THIS suite's subject (a stub, a deleted refusal) and
+// require the observable to change POSITIVELY, so a suite that asserts nothing cannot stay green.
+// The counts are also floored from OUTSIDE by preflight-check10-suite-integrity.test.sh.
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -29,27 +32,34 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { gitFixtureEnv } from "./lib/git-fixture-env";
 
+setDefaultTimeout(30_000);
+
 // FOUNDER_CHECK_SCRIPT is a seam for the mutation battery only: it points the whole suite at a
 // MUTATED COPY of the script (with probe-verb-gate.sh beside it) so a surviving mutant is a measured
 // result. Unset, the suite drives the production script.
-const SCRIPT =
-  process.env.FOUNDER_CHECK_SCRIPT ?? join(import.meta.dir, "..", "skills", "preflight", "scripts", "founder-check.py");
+const SKILL_DIR = join(import.meta.dir, "..", "skills", "preflight");
+const SCRIPT = process.env.FOUNDER_CHECK_SCRIPT ?? join(SKILL_DIR, "scripts", "founder-check.py");
+const GATE = join(SKILL_DIR, "scripts", "probe-verb-gate.sh");
 const FIXTURES = join(import.meta.dir, "fixtures", "founder-check");
 const PLANS = "knowledge-base/project/plans";
 const OPERATOR = "fixture@example.com"; // gitFixtureEnv()'s synthesized identity
 const STRANGER = "stranger@example.com";
+const TMP = process.env.TMPDIR ?? "/var/tmp";
+const HEX64 = "f".repeat(64);
+const SHA40 = "a".repeat(40);
 
 // ---------------------------------------------------------------------------------------------
 // Block rendering. Independent of the script: the canonical hash is recomputed here from the
-// documented definition (sha256 over sorted-key compact JSON of the six canonical fields).
+// documented definition (sha256 over sorted-key compact JSON of the seven canonical fields).
 // ---------------------------------------------------------------------------------------------
 type Fields = {
   kind: string;
   text: string;
   command: string;
   expected: string;
-  creates: string[];
   pins: Record<string, string>;
+  approved_by: string;
+  approved_at: string;
 };
 
 const BASE: Fields = {
@@ -57,15 +67,17 @@ const BASE: Fields = {
   text: "the home page says hello",
   command: "grep -c hello site/index.html",
   expected: "1",
-  creates: [],
   pins: {},
+  approved_by: "founder",
+  approved_at: "2026-10-06",
 };
 
 function canonicalHash(f: Fields): string {
   const pins = Object.fromEntries(Object.entries(f.pins).sort(([a], [b]) => (a < b ? -1 : 1)));
   const obj = {
+    approved_at: f.approved_at,
+    approved_by: f.approved_by,
     command: f.command,
-    creates: f.creates,
     expected: f.expected,
     kind: f.kind,
     pins,
@@ -83,23 +95,21 @@ type RenderOpts = {
 function renderBlock(f: Fields, opts: RenderOpts = {}): string {
   const hash = opts.hash === undefined ? canonicalHash(f) : opts.hash;
   const lines: string[] = [];
+  const pinLines = (indent: string) =>
+    Object.keys(f.pins).length === 0
+      ? [`${indent}pins: {}`]
+      : [`${indent}pins:`, ...Object.entries(f.pins).map(([k, v]) => `${indent}  ${k}: ${v}`)];
   if (opts.style === "reformatted") {
-    // Same canonical fields, different bytes: single quotes, reordered keys, flow collections,
-    // trailing comments.
+    // Same canonical fields, different bytes: single quotes, reordered keys, trailing comments.
     const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
     lines.push("founder_check:");
     lines.push(`  text: ${q(f.text)}   # the founder's own words`);
     lines.push(`  kind: ${f.kind}`);
     lines.push(`  expected: ${q(f.expected)}`);
     lines.push(`  command: ${q(f.command)}`);
-    lines.push(`  creates: [${f.creates.join(", ")}]`);
-    lines.push(
-      `  pins: {${Object.entries(f.pins)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ")}}`,
-    );
-    lines.push(`  approved_at: "2026-10-06"`);
-    lines.push(`  approved_by: "founder"`);
+    lines.push(...pinLines("  "));
+    lines.push(`  approved_at: "${f.approved_at}"`);
+    lines.push(`  approved_by: "${f.approved_by}"`);
     if (hash !== null) lines.push(`  hash: ${q(hash)}`);
   } else {
     const q = (s: string) => JSON.stringify(s);
@@ -108,18 +118,9 @@ function renderBlock(f: Fields, opts: RenderOpts = {}): string {
     lines.push(`  text: ${q(f.text)}`);
     lines.push(`  command: ${q(f.command)}`);
     lines.push(`  expected: ${q(f.expected)}`);
-    if (f.creates.length === 0) lines.push("  creates: []");
-    else {
-      lines.push("  creates:");
-      for (const c of f.creates) lines.push(`    - ${c}`);
-    }
-    if (Object.keys(f.pins).length === 0) lines.push("  pins: {}");
-    else {
-      lines.push("  pins:");
-      for (const [k, v] of Object.entries(f.pins)) lines.push(`    ${k}: ${v}`);
-    }
-    lines.push(`  approved_by: "founder"`);
-    lines.push(`  approved_at: "2026-10-06"`);
+    lines.push(...pinLines("  "));
+    lines.push(`  approved_by: ${q(f.approved_by)}`);
+    lines.push(`  approved_at: ${q(f.approved_at)}`);
     if (hash !== null) lines.push(`  hash: "${hash}"`);
   }
   for (const e of opts.extra ?? []) lines.push(`  ${e}`);
@@ -133,7 +134,8 @@ function scaffold(name: string, subs: Record<string, string>): string {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Repo fixture.
+// Repo fixture. One base repo is built once and COPIED per test (init plus four git calls per
+// test dominated the old suite's runtime).
 // ---------------------------------------------------------------------------------------------
 const made: string[] = [];
 afterAll(() => {
@@ -142,28 +144,62 @@ afterAll(() => {
 
 type Run = { status: number; stdout: string; stderr: string; json: any };
 
+function runPy(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; script?: string; input?: string; timeout?: number } = {}): Run {
+  const r = spawnSync("python3", [opts.script ?? SCRIPT, ...args], {
+    cwd: opts.cwd,
+    env: opts.env,
+    input: opts.input,
+    encoding: "utf8",
+    timeout: opts.timeout ?? 25_000,
+  });
+  let json: any = null;
+  try {
+    json = JSON.parse(r.stdout);
+  } catch {
+    // not JSON: leave null so an assertion on `json?.x` fails loudly instead of throwing here
+  }
+  return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", json };
+}
+
+let baseDir: string | null = null;
+function gitIn(dir: string, args: string[], extra: Record<string, string> = {}): string {
+  const r = spawnSync("git", ["-c", "commit.gpgsign=false", ...args], {
+    cwd: dir,
+    env: { ...gitFixtureEnv(dir), ...extra },
+    encoding: "utf8",
+  });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+  return r.stdout;
+}
+function buildBase(): string {
+  if (baseDir) return baseDir;
+  const dir = mkdtempSync(join(TMP, "fc-base-"));
+  made.push(dir);
+  gitIn(dir, ["init", "-q", "-b", "main"]);
+  writeFileSync(join(dir, "README.md"), "fixture\n");
+  gitIn(dir, ["add", "-A"]);
+  gitIn(dir, ["commit", "-q", "-m", "base"]);
+  gitIn(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  gitIn(dir, ["checkout", "-q", "-b", "feat-x"]);
+  baseDir = dir;
+  return dir;
+}
+
 class Repo {
   dir: string;
+  scratch: string;
   constructor() {
-    this.dir = mkdtempSync(join(process.env.TMPDIR ?? "/var/tmp", "fc-"));
-    made.push(this.dir);
-    this.git(["init", "-q", "-b", "main"]);
-    this.write("README.md", "fixture\n");
-    this.commit("base");
-    this.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    this.git(["checkout", "-q", "-b", "feat-x"]);
+    this.dir = mkdtempSync(join(TMP, "fc-"));
+    this.scratch = mkdtempSync(join(TMP, "fcs-"));
+    made.push(this.dir, this.scratch);
+    rmSync(this.dir, { recursive: true, force: true });
+    cpSync(buildBase(), this.dir, { recursive: true });
   }
   env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     return { ...gitFixtureEnv(this.dir), ...extra };
   }
   git(args: string[], extra: Record<string, string> = {}): string {
-    const r = spawnSync("git", ["-c", "commit.gpgsign=false", ...args], {
-      cwd: this.dir,
-      env: this.env(extra),
-      encoding: "utf8",
-    });
-    if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
-    return r.stdout;
+    return gitIn(this.dir, args, extra);
   }
   write(rel: string, content: string) {
     const p = join(this.dir, rel);
@@ -179,8 +215,8 @@ class Repo {
     this.write(`${PLANS}/${name}`, body);
   }
   /** Commit a plan carrying `block` under the Acceptance Criteria heading. */
-  freeze(f: Fields = BASE, name = "p.md", email = OPERATOR, opts: RenderOpts = {}): string {
-    this.plan(name, scaffold("plan-ac.md", { BLOCK: renderBlock(f, opts) }));
+  freeze(f: Fields = BASE, name = "p.md", email = OPERATOR, opts: RenderOpts = {}, fixture = "plan-ac.md"): string {
+    this.plan(name, scaffold(fixture, { BLOCK: renderBlock(f, opts) }));
     return this.commit("plan: freeze", email);
   }
   /** Land a file on main (the usual home of a pinned script), then rebase the branch onto it. */
@@ -192,52 +228,55 @@ class Repo {
     this.git(["checkout", "-q", "feat-x"]);
     this.git(["rebase", "-q", "main"]);
   }
-  advanceMain() {
-    // A new commit on main, then origin/main follows it: the situation after a rebase.
-    this.git(["checkout", "-q", "main"]);
-    this.write("main-only.txt", "x\n");
-    this.commit("main moves");
-    this.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    this.git(["checkout", "-q", "feat-x"]);
+  blob(rel: string): string {
+    return this.git(["rev-parse", `HEAD:${rel}`]).trim();
   }
   py(args: string[], extra: Record<string, string> = {}, script = SCRIPT): Run {
-    const r = spawnSync("python3", [script, ...args], {
-      cwd: this.dir,
-      env: this.env(extra),
-      encoding: "utf8",
-    });
-    let json: any = null;
-    try {
-      json = JSON.parse(r.stdout);
-    } catch {
-      // not JSON: leave null so the assertion on `json?.x` fails loudly instead of throwing here
-    }
-    return { status: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, json };
+    return runPy(args, { cwd: this.dir, env: this.env(extra), script });
   }
+  /** verify as the ship gate runs it; `--no-pr` unless the test is about the PR anchor. */
   verify(extra: string[] = [], script = SCRIPT): Run {
-    return this.py(["verify", "--base", "origin/main", ...extra], {}, script);
+    return this.py(["verify", "--base", "origin/main", ...(extra.includes("--pr-author") ? [] : ["--no-pr"]), ...extra], {}, script);
   }
-}
-
-function classify(args: string[], script = SCRIPT): Run {
-  const r = spawnSync("python3", [script, "classify", ...args], { encoding: "utf8" });
-  let json: any = null;
-  try {
-    json = JSON.parse(r.stdout);
-  } catch {
-    /* see Repo.py */
+  /** verify, writing its decision record to a file outside the repo (so it cannot dirty the tree). */
+  verifyFile(extra: string[] = [], name = "vj.json"): { file: string; run: Run } {
+    const file = join(this.scratch, name);
+    return { file, run: this.verify(["--out", file, ...extra]) };
   }
-  return { status: r.status ?? -1, stdout: r.stdout, stderr: r.stderr, json };
 }
 
 // ---------------------------------------------------------------------------------------------
+// In-process harness: ONE python import runs a whole decision table.
+// ---------------------------------------------------------------------------------------------
+function harness(code: string, data: unknown, script = SCRIPT): any {
+  const prog = [
+    "import importlib.util, json, sys",
+    'spec = importlib.util.spec_from_file_location("fc", sys.argv[1])',
+    "fc = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(fc)",
+    "data = json.load(sys.stdin)",
+    code,
+    "print(json.dumps(out))",
+  ].join("\n");
+  const r = spawnSync("python3", ["-I", "-c", prog, script], { input: JSON.stringify(data), encoding: "utf8", timeout: 60_000 });
+  if (r.status !== 0) throw new Error(`harness failed: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+const cmdBlock = (over: Partial<Fields & { creates: string[] }> = {}): Record<string, unknown> => ({
+  ...BASE,
+  ...over,
+});
+
+// ---------------------------------------------------------------------------------------------
 describe("verify: resolution", () => {
-  test("no plan change on the branch is NO-BLOCK, exit 0 (the SKIP banner case)", () => {
+  test("no plan change on the branch is NO-BLOCK, exit 0, with the pinned banner", () => {
     const r = new Repo();
     r.write("src/a.txt", "a\n");
     r.commit("code only");
     const v = r.verify();
     expect(v.json?.outcome).toBe("NO-BLOCK");
+    expect(v.json?.banner).toBe("No founder-stated check guarded this ship. Nothing was run on your behalf.");
     expect(v.status).toBe(0);
   });
 
@@ -252,8 +291,7 @@ describe("verify: resolution", () => {
     const r = new Repo();
     r.plan("p.md", scaffold("plan-quoted-non-ac.md", { BLOCK: renderBlock(BASE) }));
     r.commit("plan quoting the shape");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("NO-BLOCK");
+    expect(r.verify().json?.outcome).toBe("NO-BLOCK");
   });
 
   test("a quoted copy does not disturb a real block elsewhere (must-PASS)", () => {
@@ -271,15 +309,17 @@ describe("verify: resolution", () => {
     expect(v.json?.block?.command).toBe(BASE.command);
   });
 
+  test("a block under a SUFFIXED heading ('## Acceptance Criteria (v2)') is found, not silently NO-BLOCK", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", OPERATOR, {}, "plan-ac-suffixed.md");
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.block?.command).toBe(BASE.command);
+  });
+
   test("two blocks in one Acceptance Criteria section is FAIL", () => {
     const r = new Repo();
-    r.plan(
-      "p.md",
-      scaffold("plan-two-blocks.md", {
-        BLOCK: renderBlock(BASE),
-        BLOCK2: renderBlock({ ...BASE, command: "grep -c other f" }),
-      }),
-    );
+    r.plan("p.md", scaffold("plan-two-blocks.md", { BLOCK: renderBlock(BASE), BLOCK2: renderBlock({ ...BASE, command: "grep -c other f" }) }));
     r.commit("two blocks");
     const v = r.verify();
     expect(v.json?.outcome).toBe("FAIL");
@@ -296,15 +336,48 @@ describe("verify: resolution", () => {
     expect(v.json?.reason).toBe("multiple-plans");
   });
 
-  test("a symlinked plan is FAIL, never followed", () => {
+  test("a symlinked plan is FAIL and is never opened (a link to /dev/zero returns promptly)", () => {
     const r = new Repo();
     r.write("elsewhere/real.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
     mkdirSync(join(r.dir, PLANS), { recursive: true });
     symlinkSync(join(r.dir, "elsewhere", "real.md"), join(r.dir, PLANS, "p.md"));
-    r.commit("symlinked plan");
+    symlinkSync("/dev/zero", join(r.dir, PLANS, "z.md"));
+    r.commit("symlinked plans");
     const v = r.verify();
+    expect(v.status).not.toBe(-1); // not killed by the timeout
     expect(v.json?.outcome).toBe("FAIL");
     expect(v.json?.reason).toBe("symlinked-plan");
+  });
+
+  test("--plan /dev/zero and --plan <fifo> are FAIL, never read", () => {
+    const r = new Repo();
+    const z = r.verify(["--plan", "/dev/zero"]);
+    expect(z.status).not.toBe(-1);
+    expect(z.json?.outcome).toBe("FAIL");
+    expect(z.json?.reason).toBe("plan-not-regular");
+    mkdirSync(join(r.dir, PLANS), { recursive: true });
+    const fifo = join(r.dir, PLANS, "fifo.md");
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    const f = r.verify(["--plan", `${PLANS}/fifo.md`]);
+    expect(f.status).not.toBe(-1);
+    expect(f.json?.reason).toBe("plan-not-regular");
+  });
+
+  test("--plan outside the plans directory is FAIL", () => {
+    const r = new Repo();
+    r.write("elsewhere/x.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    const v = r.verify(["--plan", "elsewhere/x.md"]);
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("plan-outside-plans-dir");
+  });
+
+  test("a plan over 1 MiB is FAIL unparseable, not read whole", () => {
+    const r = new Repo();
+    r.plan("p.md", "x".repeat(1_600_000));
+    r.commit("a huge plan");
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("unparseable");
   });
 
   test("a block with no freeze commit (uncommitted working tree) is FAIL", () => {
@@ -313,6 +386,62 @@ describe("verify: resolution", () => {
     const v = r.verify();
     expect(v.json?.outcome).toBe("FAIL");
     expect(v.json?.reason).toBe("no-freeze");
+  });
+
+  test("an unresolvable base with a block on disk is FAIL base-unresolvable", () => {
+    const r = new Repo();
+    r.freeze();
+    r.git(["update-ref", "-d", "refs/remotes/origin/main"]);
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("base-unresolvable");
+    expect(v.status).toBe(1);
+  });
+
+  test("an unresolvable base with NO block anywhere is NO-BLOCK, exit 0 (a repo that never used the feature ships)", () => {
+    const r = new Repo();
+    r.git(["update-ref", "-d", "refs/remotes/origin/main"]);
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("NO-BLOCK");
+    expect(v.json?.base_note).toBe("base-unresolvable");
+    expect(v.status).toBe(0);
+  });
+
+  test("a directory that is not a repository is FAIL not-a-repository", () => {
+    const d = mkdtempSync(join(TMP, "fc-nogit-"));
+    made.push(d);
+    const v = runPy(["verify", "--repo", d], { cwd: d, env: gitFixtureEnv(d) });
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("not-a-repository");
+    expect(v.status).toBe(1);
+  });
+
+  test("--base must be the remote default branch (HEAD is refused; refs/remotes/origin/main is accepted)", () => {
+    const r = new Repo();
+    r.freeze();
+    const bad = r.py(["verify", "--base", "HEAD", "--no-pr"]);
+    expect(bad.json?.outcome).toBe("FAIL");
+    expect(bad.json?.reason).toBe("base-not-default-branch");
+    const full = r.py(["verify", "--base", "refs/remotes/origin/main", "--no-pr"]);
+    expect(full.json?.outcome).toBe("OK");
+  });
+
+  test("a plan merged to main is found through tasks.md's Plan: line (merge-base freeze)", () => {
+    const r = new Repo();
+    r.git(["checkout", "-q", "main"]);
+    r.plan("m.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("main: reviewed plan");
+    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    r.git(["checkout", "-q", "feat-x"]);
+    r.git(["rebase", "-q", "main"]);
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    expect(r.verify().json?.outcome).toBe("NO-BLOCK"); // the branch never touched the plan
+    r.write("knowledge-base/project/specs/feat-x/tasks.md", `# Tasks\n\nPlan: ${PLANS}/m.md\n`);
+    r.commit("tasks names the plan");
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.freeze_source).toBe("merge-base");
   });
 });
 
@@ -327,73 +456,98 @@ describe("verify: freeze comparison (Guard 1)", () => {
     expect(v.json?.freeze_source).toBe("branch");
     expect(v.json?.freeze_sha).toBe(sha);
     expect(v.json?.hash).toBe(canonicalHash(BASE));
+    expect(v.json?.first_token).toBe("grep");
     expect(v.status).toBe(0);
   });
 
-  test("a YAML reformat with equal canonical fields still passes (must-PASS)", () => {
+  test("a reformatted block with the same canonical fields is still OK (must-PASS)", () => {
     const r = new Repo();
     r.freeze();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE, { style: "reformatted" }) }));
-    r.commit("work reformats the plan");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.freeze(BASE, "p.md", OPERATOR, { style: "reformatted" });
+    expect(r.verify().json?.outcome).toBe("OK");
+  });
+
+  for (const [field, edit] of [
+    ["kind", { kind: "judgement" }],
+    ["text", { text: "the home page says goodbye" }],
+    ["command", { command: "grep -c hi site/index.html" }],
+    ["expected", { expected: "2" }],
+    ["pins", { pins: { "scripts/x.sh": SHA40 } }],
+    ["approved_by", { approved_by: "someone else" }],
+    ["approved_at", { approved_at: "2026-10-07" }],
+  ] as [string, Partial<Fields>][]) {
+    test(`editing ${field} after the freeze (with a recomputed hash) is CHANGED-SINCE-APPROVAL`, () => {
+      const r = new Repo();
+      r.freeze();
+      r.write("src/a.txt", "a\n");
+      r.commit("code");
+      r.freeze({ ...BASE, ...edit } as Fields, "p.md");
+      const v = r.verify();
+      expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
+      expect(v.json?.changed_fields).toContain(field);
+      expect(v.json?.frozen?.command).toBe(BASE.command); // the prompt can show what was approved
+      expect(v.status).toBe(1);
+    });
+  }
+
+  test("a stale hash: line (fields edited, hash not) is FAIL hash-mismatch", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", OPERATOR, { hash: "0".repeat(64) });
+    expect(r.verify().json?.reason).toBe("hash-mismatch");
+  });
+
+  test("a rebased branch (fresh SHAs) with the same content is still OK (must-PASS)", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.git(["checkout", "-q", "main"]);
+    r.write("main-only.txt", "x\n");
+    r.commit("main moves");
+    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    r.git(["checkout", "-q", "feat-x"]);
+    r.git(["rebase", "-q", "main"]);
+    expect(r.verify().json?.outcome).toBe("OK");
+  });
+
+  test("a commit that only adds a learning after the freeze does not disturb it (must-PASS)", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("knowledge-base/project/learnings/2026-10-06-x.md", "# x\n");
+    r.commit("learning");
+    expect(r.verify().json?.outcome).toBe("OK");
+  });
+
+  test("code committed BEFORE the freeze is flagged as an ordering failure", () => {
+    const r = new Repo();
+    r.write("src/a.txt", "a\n");
+    r.commit("code first");
+    r.freeze();
     const v = r.verify();
+    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
+    expect(v.json?.reasons).toContain("ordering");
+  });
+
+  test("a block reviewed on main (merge-base freeze) needs no authorship anchor and no PR flag", () => {
+    const r = new Repo();
+    r.git(["checkout", "-q", "main"]);
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("main: reviewed plan", STRANGER);
+    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    r.git(["checkout", "-q", "feat-x"]);
+    r.git(["rebase", "-q", "main"]);
+    r.write("knowledge-base/project/specs/feat-x/tasks.md", `# Tasks\n\nPlan: ${PLANS}/p.md\n`);
+    r.write("src/a.txt", "a\n");
+    r.commit("code, with tasks.md naming the plan");
+    const v = r.py(["verify", "--base", "origin/main"]); // no --no-pr on purpose
+    expect(v.json?.freeze_source).toBe("merge-base");
     expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.flags).toEqual([]);
   });
 
-  test("row 1: an edited command after the freeze is CHANGED-SINCE-APPROVAL", () => {
-    const r = new Repo();
-    r.freeze();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "grep -c hi site/index.html" }) }));
-    r.commit("work edits the command");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-    expect(v.json?.changed_fields).toContain("command");
-    expect(v.status).toBe(1);
-  });
-
-  test("an edited expected after the freeze is CHANGED-SINCE-APPROVAL", () => {
-    const r = new Repo();
-    r.freeze();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "" }) }));
-    r.commit("work weakens expected");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-    expect(v.json?.changed_fields).toContain("expected");
-  });
-
-  test("row 4: edit expected AND recompute hash in one commit is still CHANGED", () => {
-    const r = new Repo();
-    r.freeze();
-    const weakened = { ...BASE, expected: "" };
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(weakened) })); // hash recomputed
-    r.commit("block and hash edited together");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-    // the hash agrees with the file; only the freeze copy disagrees
-    expect(v.json?.hash).toBe(canonicalHash(weakened));
-  });
-
-  test("an edited field with a STALE hash is FAIL (the block disagrees with itself)", () => {
-    const r = new Repo();
-    r.freeze();
-    r.plan(
-      "p.md",
-      scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "" }, { hash: canonicalHash(BASE) }) }),
-    );
-    r.commit("field edited, hash left");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("hash-mismatch");
-  });
-
-  test("a removed hash line is tolerated and the recomputed identity is reported", () => {
-    const r = new Repo();
-    r.freeze(BASE, "p.md", OPERATOR, { hash: null });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("OK");
-    expect(v.json?.hash).toBe(canonicalHash(BASE));
-  });
-
-  test("row 2: a plan deleted after the freeze is FAIL, never SKIP", () => {
+  test("deleting the plan after its freeze is FAIL freeze-without-block, never a SKIP", () => {
     const r = new Repo();
     r.freeze();
     r.git(["rm", "-q", `${PLANS}/p.md`]);
@@ -403,682 +557,832 @@ describe("verify: freeze comparison (Guard 1)", () => {
     expect(v.json?.reason).toBe("freeze-without-block");
   });
 
-  test("row 2: a plan renamed after the freeze is FAIL", () => {
+  test("a plain rename keeps its freeze (the block is unchanged, so it resolves, must-PASS)", () => {
     const r = new Repo();
     r.freeze();
-    r.git(["mv", `${PLANS}/p.md`, `${PLANS}/renamed.md`]);
-    r.commit("rename the plan");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-  });
-
-  test("row 2: a plan stripped of its block while a freeze exists is FAIL", () => {
-    const r = new Repo();
-    r.freeze();
-    r.plan("p.md", scaffold("plan-no-block.md", {}));
-    r.commit("strip the block");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("freeze-without-block");
-  });
-
-  test("row 3: a second differing block added after a compliant first is FAIL", () => {
-    const r = new Repo();
-    r.freeze();
-    r.plan(
-      "p.md",
-      scaffold("plan-two-blocks.md", {
-        BLOCK: renderBlock(BASE),
-        BLOCK2: renderBlock({ ...BASE, command: "grep -c other f" }),
-      }),
-    );
-    r.commit("add a second block");
-    expect(r.verify().json?.outcome).toBe("FAIL");
-  });
-
-  test("a rebased branch with new SHAs still passes (must-PASS)", () => {
-    const r = new Repo();
-    r.freeze();
-    r.write("src/a.txt", "a\n");
-    r.commit("code");
-    r.advanceMain();
-    r.git(["rebase", "-q", "main"]);
+    r.git(["mv", `${PLANS}/p.md`, `${PLANS}/q.md`]);
+    r.commit("rename");
     const v = r.verify();
     expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.plan).toBe(`${PLANS}/q.md`);
   });
 
-  test("a learnings-only commit before the freeze does not fail it (must-PASS)", () => {
+  test("compound's archival (git mv into plans/archive/<ts>-name.md) is the SAME plan: OK, not freeze-without-block", () => {
     const r = new Repo();
-    r.write("knowledge-base/project/learnings/note.md", "# note\n");
-    r.commit("learning");
     r.freeze();
     r.write("src/a.txt", "a\n");
     r.commit("code");
-    expect(r.verify().json?.outcome).toBe("OK");
-  });
-
-  test("a plan already on main is frozen at the merge-base copy (must-PASS)", () => {
-    const r = new Repo();
-    r.git(["checkout", "-q", "main"]);
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
-    r.commit("plan merged on main");
-    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    r.git(["checkout", "-q", "feat-x"]);
-    r.git(["rebase", "-q", "main"]);
-    r.write("src/a.txt", "a\n");
-    r.commit("code");
-    const v = r.verify(["--plan", `${PLANS}/p.md`]);
+    mkdirSync(join(r.dir, PLANS, "archive"), { recursive: true });
+    r.git(["mv", `${PLANS}/p.md`, `${PLANS}/archive/20261006-120000-p.md`]);
+    r.commit("archive the plan");
+    const v = r.verify();
     expect(v.json?.outcome).toBe("OK");
-    expect(v.json?.freeze_source).toBe("merge-base");
+    expect(v.json?.plan).toBe(`${PLANS}/archive/20261006-120000-p.md`);
   });
 
-  test("a plan already on main that the branch then edits is CHANGED", () => {
+  test("archival is the same plan even when git cannot see a rename (the body was rewritten): the archive prefix is stripped", () => {
     const r = new Repo();
-    r.git(["checkout", "-q", "main"]);
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
-    r.commit("plan merged on main");
-    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    r.git(["checkout", "-q", "feat-x"]);
-    r.git(["rebase", "-q", "main"]);
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "" }) }));
-    r.commit("branch weakens the check");
-    expect(r.verify(["--plan", `${PLANS}/p.md`]).json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-  });
-
-  test("a freeze committed together with code is an ordering violation: stop-and-ask, not FAIL", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
-    r.write("src/a.txt", "a\n");
-    r.commit("plan and code together");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-    expect(v.json?.reasons).toContain("ordering");
-  });
-
-  test("a code commit that precedes the freeze is an ordering violation", () => {
-    const r = new Repo();
-    r.write("src/a.txt", "a\n");
-    r.commit("code first");
     r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.git(["rm", "-q", `${PLANS}/p.md`]);
+    const filler = Array.from({ length: 80 }, (_, i) => `Unrelated archived line ${i} ${"x".repeat(30)}`).join("\n");
+    r.plan("archive/20261006-120000-p.md", `# archived\n\n${filler}\n\n## Acceptance Criteria\n\n${renderBlock(BASE)}\n`);
+    r.commit("archive with a rewritten body");
     const v = r.verify();
-    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-    expect(v.json?.reasons).toContain("ordering");
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.plan).toBe(`${PLANS}/archive/20261006-120000-p.md`);
+  });
+
+  test("an archived plan whose block was edited afterwards is still CHANGED-SINCE-APPROVAL", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    mkdirSync(join(r.dir, PLANS, "archive"), { recursive: true });
+    r.git(["mv", `${PLANS}/p.md`, `${PLANS}/archive/20261006-120000-p.md`]);
+    r.plan("archive/20261006-120000-p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "9" }) }));
+    r.commit("archive and edit");
+    expect(r.verify().json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
   });
 });
 
-describe("verify: block rules", () => {
-  test("a verb off the probe allowlist is FAIL", () => {
+describe("verify: re-freeze (a deliberate change is a real act)", () => {
+  const V2: Fields = { ...BASE, expected: "2" };
+  const setup = () => {
     const r = new Repo();
-    r.freeze({ ...BASE, command: "ls site" });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("verb-gate");
-  });
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    return r;
+  };
 
-  test("kind must be command or judgement", () => {
-    const r = new Repo();
-    r.freeze({ ...BASE, kind: "vibes" });
-    expect(r.verify().json?.reason).toBe("invalid-kind");
-  });
-
-  test("a judgement check carries no command and passes", () => {
-    const r = new Repo();
-    r.freeze({ ...BASE, kind: "judgement", command: "", expected: "" });
+  test("an operator-authored 're-freeze' commit supersedes the first freeze: OK, refreeze true", () => {
+    const r = setup();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    const sha = r.commit("plan: re-freeze founder-stated check");
     const v = r.verify();
     expect(v.json?.outcome).toBe("OK");
-    expect(v.json?.block?.kind).toBe("judgement");
+    expect(v.json?.refreeze).toBe(true);
+    expect(v.json?.freeze_sha).toBe(sha);
+    expect(v.json?.block?.expected).toBe("2");
   });
 
-  test("credentials_required is FAIL (a check needing credentials is a judgement check)", () => {
-    const r = new Repo();
-    r.plan(
-      "p.md",
-      scaffold("plan-ac.md", {
-        BLOCK: renderBlock(BASE, { extra: ["credentials_required: [SOME_TOKEN]"] }),
-      }),
-    );
-    r.commit("plan: freeze");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("credentials-required");
+  test("the same edit without the re-freeze subject stays CHANGED-SINCE-APPROVAL", () => {
+    const r = setup();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    r.commit("plan: quietly edit the check");
+    expect(r.verify().json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
   });
 
-  test("a field the schema does not define is FAIL", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE, { extra: ["retries: 3"] }) }));
-    r.commit("plan: freeze");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("unknown-field");
+  test("a re-freeze commit authored by someone other than the operator is ignored", () => {
+    const r = setup();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    r.commit("plan: re-freeze founder-stated check", STRANGER);
+    expect(r.verify().json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
   });
 
-  test("the founder's own words are required", () => {
+  test("a re-freeze cannot supersede a freeze that was reviewed on main", () => {
     const r = new Repo();
-    r.freeze({ ...BASE, text: "" });
-    expect(r.verify().json?.reason).toBe("missing-field");
+    r.git(["checkout", "-q", "main"]);
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("main: reviewed plan");
+    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    r.git(["checkout", "-q", "feat-x"]);
+    r.git(["rebase", "-q", "main"]);
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    r.commit("plan: re-freeze founder-stated check");
+    expect(r.verify().json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
+  });
+});
+
+describe("verify: the pinned-script and pin rules", () => {
+  const SCRIPT_SRC = "#!/usr/bin/env bash\necho 1\n";
+  const withScript = () => {
+    const r = new Repo();
+    r.mainFile("scripts/ok.sh", SCRIPT_SRC);
+    return r;
+  };
+
+  test("an interpreter command naming a pinned script is OK", () => {
+    const r = withScript();
+    r.freeze({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } });
+    expect(r.verify().json?.outcome).toBe("OK");
   });
 
-  test("a command check with no command is FAIL", () => {
-    const r = new Repo();
-    r.freeze({ ...BASE, command: "" });
-    expect(r.verify().json?.reason).toBe("missing-field");
-  });
-
-  test("an unparseable block is FAIL, never SKIP", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: "```yaml\nfounder_check:\n  kind command\n    : : :\n```" }));
-    r.commit("plan: freeze");
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("unparseable");
-  });
-
-  test("row 6: an interpreter verb naming a script that is not pinned is FAIL", () => {
-    const r = new Repo();
-    r.mainFile("scripts/check.sh", "echo ok\n");
-    r.freeze({ ...BASE, command: "bash scripts/check.sh", expected: "ok" });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("unpinned-script");
-  });
-
-  test("an interpreter verb with every script pinned by blob sha passes", () => {
-    const r = new Repo();
-    r.mainFile("scripts/check.sh", "echo ok\n");
-    const blob = r.git(["rev-parse", "HEAD:scripts/check.sh"]).trim();
-    r.freeze({ ...BASE, command: "bash scripts/check.sh", expected: "ok", pins: { "scripts/check.sh": blob } });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("OK");
-  });
-
-  test("row 5: editing a pinned script after the freeze is CHANGED-SINCE-APPROVAL", () => {
-    const r = new Repo();
-    r.mainFile("scripts/check.sh", "echo ok\n");
-    const blob = r.git(["rev-parse", "HEAD:scripts/check.sh"]).trim();
-    r.freeze({ ...BASE, command: "bash scripts/check.sh", expected: "ok", pins: { "scripts/check.sh": blob } });
-    r.write("scripts/check.sh", "echo always-ok\n");
-    r.commit("work rewrites the pinned script");
+  test("editing the pinned script after the freeze is CHANGED-SINCE-APPROVAL (pinned-script-changed)", () => {
+    const r = withScript();
+    r.freeze({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } });
+    r.write("scripts/ok.sh", SCRIPT_SRC + "echo 2\n");
+    r.commit("edit the pinned script");
     const v = r.verify();
     expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
     expect(v.json?.reasons).toContain("pinned-script-changed");
   });
 
-  test("a pin whose sha is not the blob at the freeze is FAIL", () => {
-    const r = new Repo();
-    r.mainFile("scripts/check.sh", "echo ok\n");
-    r.freeze({
-      ...BASE,
-      command: "bash scripts/check.sh",
-      expected: "ok",
-      pins: { "scripts/check.sh": "0".repeat(40) },
-    });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("pin-not-at-freeze");
+  test("an UNCOMMITTED edit of the pinned script is caught too (the run reads the working tree)", () => {
+    const r = withScript();
+    r.freeze({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } });
+    r.write("scripts/ok.sh", SCRIPT_SRC + "echo evil\n");
+    expect(r.verify().json?.reasons).toContain("pinned-script-changed");
   });
 
-  test("a pinned script that does not exist at the freeze is FAIL", () => {
-    const r = new Repo();
-    r.freeze({
-      ...BASE,
-      command: "bash scripts/new.sh",
-      expected: "ok",
-      pins: { "scripts/new.sh": "1".repeat(40) },
-    });
+  test("a pin that does not match the blob at the freeze is FAIL pin-not-at-freeze", () => {
+    const r = withScript();
+    r.freeze({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": SHA40 } });
     expect(r.verify().json?.reason).toBe("pin-not-at-freeze");
   });
 
-  test("row 6: creates combined with an interpreter verb is FAIL", () => {
+  test("a pin on a symlink is FAIL: the pointed-at file could change unnoticed", () => {
     const r = new Repo();
-    r.freeze({ ...BASE, command: "python3 scripts/new.py", expected: "ok", creates: ["scripts/new.py"] });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("creates-with-interpreter");
-  });
-
-  test("creates with a non-interpreter verb passes when the path is absent at the freeze", () => {
-    const r = new Repo();
-    r.freeze({ ...BASE, command: "grep -c hello site/new.html", expected: "1", creates: ["site/new.html"] });
-    expect(r.verify().json?.outcome).toBe("OK");
-  });
-
-  test("creates naming a path that already exists at the freeze (a stub) is FAIL", () => {
-    const r = new Repo();
-    r.write("site/new.html", "stub\n");
-    r.commit("stub already present");
-    r.freeze({ ...BASE, command: "grep -c hello site/new.html", expected: "1", creates: ["site/new.html"] });
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("FAIL");
-    expect(v.json?.reason).toBe("creates-exists-at-freeze");
-  });
-});
-
-describe("verify --candidate (baseline mode: a block with no freeze yet)", () => {
-  const candidate = (r: Repo) => r.verify(["--candidate"]);
-
-  test("an uncommitted block validates and reports the identity to write into hash:", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE, { hash: null }) }));
-    const v = candidate(r);
-    expect(v.json?.outcome).toBe("OK");
-    expect(v.json?.freeze_source).toBe("candidate");
-    expect(v.json?.hash).toBe(canonicalHash(BASE));
-  });
-
-  test("--command-out writes the exact command text, with no trailing newline", () => {
-    const r = new Repo();
-    const cmd = "grep -c 'it''s' site/index.html";
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: cmd }) }));
-    const out = join(r.dir, "cmd.txt");
-    const v = r.verify(["--candidate", "--command-out", out]);
-    expect(v.json?.outcome).toBe("OK");
-    expect(readFileSync(out, "utf8")).toBe(cmd);
-  });
-
-  test("no block is still NO-BLOCK", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-no-block.md", {}));
-    expect(candidate(r).json?.outcome).toBe("NO-BLOCK");
-  });
-
-  test("the static rules still apply: a verb off the allowlist is FAIL", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "ls site" }) }));
-    expect(candidate(r).json?.reason).toBe("verb-gate");
-  });
-
-  test("a creates path that already exists is FAIL", () => {
-    const r = new Repo();
-    r.write("site/new.html", "stub\n");
-    r.commit("stub");
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, creates: ["site/new.html"], command: "grep -c a site/new.html" }) }));
-    expect(candidate(r).json?.reason).toBe("creates-exists-at-freeze");
-  });
-
-  test("a pin that is not HEAD's blob is FAIL", () => {
-    const r = new Repo();
-    r.mainFile("scripts/check.sh", "echo ok\n");
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "bash scripts/check.sh", pins: { "scripts/check.sh": "2".repeat(40) } }) }));
-    expect(candidate(r).json?.reason).toBe("pin-not-at-freeze");
-  });
-
-  test("candidate mode does not accept a stale hash", () => {
-    const r = new Repo();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "" }, { hash: canonicalHash(BASE) }) }));
-    expect(candidate(r).json?.reason).toBe("hash-mismatch");
-  });
-});
-
-describe("verify: authorship (Guard 3)", () => {
-  test("a freeze authored by another identity is UNTRUSTED, exit 1", () => {
-    const r = new Repo();
-    r.freeze(BASE, "p.md", STRANGER);
-    const v = r.verify();
-    expect(v.json?.outcome).toBe("UNTRUSTED");
-    expect(v.status).toBe(1);
-  });
-
-  test("a freeze authored by the local identity is trusted (must-PASS)", () => {
-    const r = new Repo();
-    r.freeze(BASE, "p.md", OPERATOR);
-    expect(r.verify().json?.outcome).toBe("OK");
-  });
-
-  test("a PR author who is not the authenticated login is UNTRUSTED", () => {
-    const r = new Repo();
-    r.freeze();
-    const v = r.verify(["--pr-author", "someone-else", "--operator-login", "the-operator"]);
-    expect(v.json?.outcome).toBe("UNTRUSTED");
-  });
-
-  test("a PR author equal to the authenticated login is trusted", () => {
-    const r = new Repo();
-    r.freeze();
-    const v = r.verify(["--pr-author", "the-operator", "--operator-login", "the-operator"]);
-    expect(v.json?.outcome).toBe("OK");
-  });
-
-  test("a merge-base freeze (reviewed on main) is trusted whoever wrote it", () => {
-    const r = new Repo();
-    r.git(["checkout", "-q", "main"]);
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
-    r.commit("plan merged on main", STRANGER);
-    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    r.git(["checkout", "-q", "feat-x"]);
-    r.git(["rebase", "-q", "main"]);
-    expect(r.verify(["--plan", `${PLANS}/p.md`]).json?.outcome).toBe("OK");
+    r.mainFile("scripts/real.sh", SCRIPT_SRC);
+    symlinkSync("real.sh", join(r.dir, "scripts", "link.sh"));
+    r.commit("a link");
+    r.freeze({ ...BASE, command: "bash scripts/link.sh", pins: { "scripts/link.sh": r.blob("scripts/link.sh") } });
+    expect(r.verify().json?.reason).toBe("pin-not-at-freeze");
   });
 });
 
 // ---------------------------------------------------------------------------------------------
-describe("classify (Guard 2)", () => {
-  const A = (rc: number, extra: string[] = []) => ["--rc", String(rc), "--polarity", "acceptance", ...extra];
-  const B = (rc: number, extra: string[] = []) => ["--rc", String(rc), "--polarity", "baseline", ...extra];
+describe("verify: the static rules (in-process table)", () => {
+  const PIN = { "scripts/ok.sh": SHA40 };
+  type Row = [string, Record<string, unknown>, string | null];
+  const rows: Row[] = [
+    ["a plain grep", cmdBlock(), null],
+    ["a judgement check", cmdBlock({ kind: "judgement", command: "" }), null],
+    ["a pinned interpreter script", cmdBlock({ command: "bash scripts/ok.sh --flag", pins: PIN }), null],
+    ["an expected literal holding < and >", cmdBlock({ expected: "<h1>hello</h1>" }), null],
+    ["a verb off the allowlist", cmdBlock({ command: "rm -rf x" }), "verb-gate"],
+    ["a semicolon", cmdBlock({ command: "grep a f; id" }), "shell-active-token"],
+    ["a pipe", cmdBlock({ command: "grep a f | wc -l" }), "shell-active-token"],
+    ["an ampersand in a URL", cmdBlock({ command: "curl http://x/?a=1&b=2" }), "shell-active-token"],
+    ["a backtick", cmdBlock({ command: "grep `id` f" }), "shell-active-token"],
+    ["a command substitution", cmdBlock({ command: "grep $(id) f" }), "shell-active-token"],
+    ["a parameter expansion", cmdBlock({ command: "grep $HOME f" }), "shell-active-token"],
+    ["a command substitution in expected", cmdBlock({ expected: "$(id)" }), "shell-active-token"],
+    ["a backtick in expected", cmdBlock({ expected: "`id`" }), "shell-active-token"],
+    ["a NUL byte in the command", cmdBlock({ command: "grep a\u0000b f" }), "control-character"],
+    ["a newline in the command", cmdBlock({ command: "grep a f\nid" }), "control-character"],
+    ["an ESC in expected", cmdBlock({ expected: "a\u001bb" }), "control-character"],
+    ["an unpinned interpreter script", cmdBlock({ command: "bash scripts/new.sh" }), "unpinned-script"],
+    ["a double-quoted interpreter verb", cmdBlock({ command: '"bash" scripts/new.sh' }), "unpinned-script"],
+    ["a backslash-escaped interpreter verb", cmdBlock({ command: "\\bash scripts/new.sh" }), "unpinned-script"],
+    ["a single-quoted interpreter verb", cmdBlock({ command: "'python3' scripts/new.py" }), "unpinned-script"],
+    ["a split-quoted interpreter verb", cmdBlock({ command: 'ba""sh scripts/new.sh' }), "unpinned-script"],
+    ["an inline program (-c)", cmdBlock({ command: "bash -c 'bash scripts/new.sh'" }), "interpreter-option"],
+    ["python -m", cmdBlock({ command: "python3 -m mymod" }), "interpreter-option"],
+    ["node --import", cmdBlock({ command: "node --import=./w.mjs app.mjs" }), "interpreter-option"],
+    ["a bare-name operand", cmdBlock({ command: "bash check" }), "script-operand-required"],
+    ["bun run", cmdBlock({ command: "bun run verify" }), "script-operand-required"],
+    ["bun test", cmdBlock({ command: "bun test" }), "script-operand-required"],
+    ["an interpreter with no operand", cmdBlock({ command: "bash" }), "script-operand-required"],
+    ["an absolute script path", cmdBlock({ command: "bash /home/op/x.sh" }), "absolute-script-path"],
+    ["a traversing script path", cmdBlock({ command: "bash ../x.sh" }), "script-path-traversal"],
+    ["git -c", cmdBlock({ command: "git -c alias.t=x t" }), "dangerous-option"],
+    ["git -cname=value", cmdBlock({ command: "git -calias.t=x t" }), "dangerous-option"],
+    ["rg --pre", cmdBlock({ command: "rg --pre ./x foo f" }), "dangerous-option"],
+    ["curl -K", cmdBlock({ command: "curl -K cfg http://x" }), "dangerous-option"],
+    ["a bearer token in the command", cmdBlock({ command: 'curl -H "Authorization: Bearer abcdefgh12345" http://x' }), "secret-shape"],
+    ["a token in the founder's words", cmdBlock({ text: "check with ghp_" + "a".repeat(30) }), "secret-shape"],
+    ["a credentialed URL in expected", cmdBlock({ expected: "https://user:hunter2@host/x" }), "secret-shape"],
+    ["a password assignment", cmdBlock({ command: "grep password=hunter22 f" }), "secret-shape"],
+    ["credentials_required", { ...cmdBlock(), credentials_required: "x" }, "credentials-required"],
+    ["an unknown field", { ...cmdBlock(), extra: "x" }, "unknown-field"],
+    ["a creates field (cut in v2)", { ...cmdBlock(), creates: ["a"] }, "unknown-field"],
+    ["an invalid kind", cmdBlock({ kind: "maybe" }), "invalid-kind"],
+    ["an empty text", cmdBlock({ text: "  " }), "missing-field"],
+    ["an empty command", cmdBlock({ command: "  " }), "missing-field"],
+    ["a pin that is not a sha", cmdBlock({ command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": "nope" } }), "unparseable"],
+    ["a pin path that traverses", cmdBlock({ command: "bash scripts/ok.sh", pins: { "../x.sh": SHA40 } }), "unparseable"],
+  ];
 
-  test("acceptance: rc 0 with an empty expected is PASSED", () => {
-    const c = classify(A(0, ["--stdout", "anything"]));
-    expect(c.json?.outcome).toBe("PASSED");
-    expect(c.json?.expected_matched).toBe(true);
-  });
-
-  test("acceptance: rc 0 with expected present in stdout is PASSED", () => {
-    expect(classify(A(0, ["--stdout", "total 34 rows", "--expected", "34"])).json?.outcome).toBe("PASSED");
-  });
-
-  test("acceptance: rc 0 with expected absent is FAILED", () => {
-    const c = classify(A(0, ["--stdout", "total 3 rows", "--expected", "34"]));
-    expect(c.json?.outcome).toBe("FAILED");
-    expect(c.json?.expected_matched).toBe(false);
-  });
-
-  test("acceptance: a non-zero rc is FAILED even when expected is present", () => {
-    expect(classify(A(1, ["--stdout", "34", "--expected", "34"])).json?.outcome).toBe("FAILED");
-  });
-
-  test("row 1: a baseline that already passes is VACUOUS", () => {
-    expect(classify(B(0, ["--stdout", "ok", "--expected", "ok"])).json?.outcome).toBe("VACUOUS");
-  });
-
-  test("a baseline with a non-zero rc is FAILED-AS-EXPECTED", () => {
-    expect(classify(B(1, ["--stdout", ""])).json?.outcome).toBe("FAILED-AS-EXPECTED");
-  });
-
-  test("a baseline with rc 0 but expected absent is FAILED-AS-EXPECTED (a real fail)", () => {
-    expect(classify(B(0, ["--stdout", "no", "--expected", "yes"])).json?.outcome).toBe("FAILED-AS-EXPECTED");
-  });
-
-  for (const rc of [124, 126, 127]) {
-    test(`rc ${rc} is INVALID in both polarities (tooling, not a result)`, () => {
-      expect(classify(A(rc)).json?.outcome).toBe("INVALID");
-      expect(classify(B(rc)).json?.outcome).toBe("INVALID");
+  test("every row yields exactly the expected reason", () => {
+    // An exception is recorded as a value, so a guard whose deletion makes the code crash is killed
+    // by a failed assertion on that row and not by the harness dying (a crash is not a kill).
+    const code = [
+      "out = []",
+      "for b in data:",
+      "    try:",
+      "        out.append(fc.static_problem(b))",
+      "    except Exception as e:",
+      "        out.append('EXC:' + type(e).__name__)",
+    ].join("\n");
+    const got: (string | null)[] = harness(code, rows.map((r) => r[1]));
+    expect(got.length).toBe(rows.length);
+    rows.forEach(([name, , want], i) => {
+      expect([name, got[i]]).toEqual([name, want]);
     });
-  }
-
-  for (const rc of [6, 7, 28]) {
-    test(`rc ${rc} is INVALID when the first token is curl`, () => {
-      expect(classify(B(rc, ["--first-token", "curl"])).json?.outcome).toBe("INVALID");
-      expect(classify(A(rc, ["--first-token", "curl"])).json?.outcome).toBe("INVALID");
-    });
-    test(`rc ${rc} is an ordinary result when the first token is not curl`, () => {
-      expect(classify(A(rc, ["--first-token", "git"])).json?.outcome).toBe("FAILED");
-    });
-  }
-
-  test("row 3: an unhealthy sandbox is INVALID, never a baseline fail", () => {
-    // bwrap's own runtime errors surface as an ordinary rc 1
-    const c = classify(B(1, ["--sandbox-healthy", "false"]));
-    expect(c.json?.outcome).toBe("INVALID");
-    expect(c.json?.reason).toBe("sandbox-unhealthy");
   });
 
-  test("row 4: rc 127 for a target NOT listed in creates is INVALID", () => {
-    expect(classify(B(127, ["--first-token", "bash"])).json?.outcome).toBe("INVALID");
+  test("instrument: the table has both accepting and rejecting rows and many distinct reasons", () => {
+    expect(rows.filter((r) => r[2] === null).length).toBeGreaterThanOrEqual(4);
+    expect(new Set(rows.map((r) => r[2]).filter(Boolean)).size).toBeGreaterThanOrEqual(12);
   });
 
-  test("a listed creates path that is absent makes any non-zero baseline rc a valid fail", () => {
-    for (const rc of [1, 2, 126, 127]) {
-      const c = classify(B(rc, ["--creates", "scripts/new.sh", "--target-present", "false"]));
-      expect(c.json?.outcome).toBe("FAILED-AS-EXPECTED");
+  test("a shell-active block is refused at VERIFY (nothing is shown or run)", () => {
+    const r = new Repo();
+    r.freeze({ ...BASE, command: "grep a f; id" });
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("shell-active-token");
+  });
+
+  test("a block with two command keys is FAIL unparseable", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", OPERATOR, { extra: ['command: "grep -c b f"'] });
+    expect(r.verify().json?.reason).toBe("unparseable");
+  });
+
+  test("a flow collection with content is refused (only the literals [] and {} are accepted)", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", OPERATOR, { hash: null, extra: ["pins: {a: b}"] });
+    // the extra line duplicates `pins:`, which is also refused; either way a flow map is not accepted
+    expect(r.verify().json?.outcome).toBe("FAIL");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("verify: authorship (Guard 3)", () => {
+  const frozen = (email: string) => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", email);
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    return r;
+  };
+
+  test("a freeze authored by someone other than the local operator is UNTRUSTED", () => {
+    const v = frozen(STRANGER).verify();
+    expect(v.json?.outcome).toBe("UNTRUSTED");
+    expect(v.json?.flags).toContain("freeze-author");
+    expect(v.json?.freeze_author).toBe(STRANGER);
+    expect(v.json?.block?.command).toBe(BASE.command); // shown, never run
+  });
+
+  test("a forged operator email alone is NOT trusted when the PR login is unknown", () => {
+    const r = frozen(OPERATOR); // a contributor can set --author to the maintainer's public email
+    const v = r.py(["verify", "--base", "origin/main"]); // a PR may exist and no login was supplied
+    expect(v.json?.outcome).toBe("UNTRUSTED");
+    expect(v.json?.flags).toContain("pr-author-unmeasurable");
+    expect(v.json?.pr_author_checked).toBe(false);
+  });
+
+  test("only one of the two logins supplied is unmeasurable, never skipped", () => {
+    const r = frozen(OPERATOR);
+    const a = r.py(["verify", "--base", "origin/main", "--pr-author", "someone"]);
+    const b = r.py(["verify", "--base", "origin/main", "--operator-login", "someone"]);
+    for (const v of [a, b]) {
+      expect(v.json?.outcome).toBe("UNTRUSTED");
+      expect(v.json?.flags).toContain("pr-author-unmeasurable");
     }
   });
 
-  test("a timeout is never exempted by creates", () => {
-    expect(classify(B(124, ["--creates", "x/y", "--target-present", "false"])).json?.outcome).toBe("INVALID");
+  test("matching PR author and operator login is OK and reports the comparison happened", () => {
+    const v = frozen(OPERATOR).py(["verify", "--base", "origin/main", "--pr-author", "Jean", "--operator-login", "jean"]);
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.pr_author_checked).toBe(true);
   });
 
-  test("a creates path that is PRESENT does not exempt rc 127", () => {
-    expect(classify(B(127, ["--creates", "x/y", "--target-present", "true"])).json?.outcome).toBe("INVALID");
+  test("a PR author who is not the authenticated login is UNTRUSTED (pr-author)", () => {
+    const v = frozen(OPERATOR).py(["verify", "--base", "origin/main", "--pr-author", "contributor", "--operator-login", "jean"]);
+    expect(v.json?.outcome).toBe("UNTRUSTED");
+    expect(v.json?.flags).toContain("pr-author");
   });
 
-  test("the creates exemption is baseline-only: an acceptance run with an absent target is an ordinary FAILED", () => {
-    const c = classify(A(1, ["--creates", "scripts/new.sh", "--target-present", "false"]));
-    expect(c.json?.outcome).toBe("FAILED");
-    expect(classify(A(127, ["--creates", "scripts/new.sh", "--target-present", "false"])).json?.outcome).toBe("INVALID");
+  test("--no-pr states there is no PR: the operator-authored freeze is OK (must-PASS)", () => {
+    const v = frozen(OPERATOR).verify();
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.pr_author_checked).toBe(false);
   });
 
-  test("an unknown polarity is a usage error, exit 2", () => {
-    const c = classify(["--rc", "0", "--polarity", "sideways"]);
-    expect(c.status).toBe(2);
-    expect(c.stderr).toContain("polarity");
+  test("verify emits the head sha and whether the tree is dirty", () => {
+    const r = frozen(OPERATOR);
+    const clean = r.verify();
+    expect(clean.json?.head_sha).toBe(r.git(["rev-parse", "HEAD"]).trim());
+    expect(clean.json?.dirty).toBe(false);
+    r.write("src/dirty.txt", "x\n");
+    expect(r.verify().json?.dirty).toBe(true);
+  });
+});
+
+describe("verify: outputs and failure modes", () => {
+  test("--command-out writes the exact command bytes, with no trailing newline, even for an UNTRUSTED block", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", STRANGER);
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const f = join(r.scratch, "cmd.txt");
+    const v = r.verify(["--command-out", f]);
+    expect(v.json?.outcome).toBe("UNTRUSTED");
+    expect(readFileSync(f, "utf8")).toBe(BASE.command);
+  });
+
+  test("a verb gate that cannot be run is FAIL verb-gate-unavailable, never an accept", () => {
+    const dir = mkdtempSync(join(TMP, "fcng-"));
+    made.push(dir);
+    const lone = join(dir, "founder-check.py"); // no probe-verb-gate.sh beside it
+    writeFileSync(lone, readFileSync(SCRIPT, "utf8"));
+    expect(harness("out = fc.static_problem(data)", cmdBlock())).toBeNull();
+    expect(harness("out = fc.static_problem(data)", cmdBlock(), lone)).toBe("verb-gate-unavailable");
+  });
+
+  test("an internal error is one JSON FAIL line and exit 4, never a traceback", () => {
+    const v = runPy(["verify", "--repo", join(TMP, "fc-does-not-exist-" + process.pid)], { cwd: TMP, env: gitFixtureEnv(TMP) });
+    expect(v.status).toBe(4);
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("internal-error");
+    expect(v.stderr).not.toContain("Traceback");
   });
 });
 
 // ---------------------------------------------------------------------------------------------
-describe("log (Guard 3 and the leakage rule)", () => {
-  const row = (extra: string[]) => [
-    "log",
-    "--log",
-    "specs/founder-check-log.md",
-    "--kind",
-    "command",
-    "--command",
-    "grep -c hello site/index.html",
-    "--rc",
-    "1",
-    "--attempt-n",
-    "1",
-    "--tested-sha",
-    "abc1234",
-    "--hash",
-    "f".repeat(64),
-    "--output-sha256",
-    "e".repeat(64),
-    "--expected-matched",
-    "false",
-    ...extra,
+describe("classify: the verdict matrix (in-process)", () => {
+  // [rc, stdout, expected, polarity, first_token, sandbox_healthy] -> [outcome, matched, reason]
+  const rows: [string, [number, string, string, string, string, boolean], string, string][] = [
+    ["acceptance pass", [0, "ok", "ok", "acceptance", "grep", true], "PASSED", "ran-returned-success"],
+    ["acceptance pass, empty expected means exit 0", [0, "", "", "acceptance", "grep", true], "PASSED", "ran-returned-success"],
+    ["acceptance rc 0 but expected absent", [0, "no", "ok", "acceptance", "grep", true], "FAILED", "non-zero-or-expected-absent"],
+    ["acceptance rc 1", [1, "ok", "ok", "acceptance", "grep", true], "FAILED", "non-zero-or-expected-absent"],
+    ["baseline rc 0 + matched is vacuous", [0, "ok", "ok", "baseline", "grep", true], "VACUOUS", "baseline-passes"],
+    ["baseline rc 1 is a valid fail", [1, "", "ok", "baseline", "grep", true], "FAILED-AS-EXPECTED", "baseline-fails"],
+    ["baseline rc 0 but expected absent is a valid fail", [0, "no", "ok", "baseline", "grep", true], "FAILED-AS-EXPECTED", "baseline-fails"],
+    ["rc 124 (timeout) is INVALID", [124, "", "ok", "acceptance", "grep", true], "INVALID", "tooling-rc-124"],
+    ["rc 126 is INVALID, even at baseline", [126, "", "ok", "baseline", "rg", true], "INVALID", "tooling-rc-126"],
+    ["rc 127 is INVALID, even at baseline", [127, "", "ok", "baseline", "rg", true], "INVALID", "tooling-rc-127"],
+    ["curl rc 6 is INVALID", [6, "", "ok", "acceptance", "curl", true], "INVALID", "curl-rc-6"],
+    ["curl rc 28 at baseline is INVALID", [28, "", "ok", "baseline", "curl", true], "INVALID", "curl-rc-28"],
+    ["rc 6 for a non-curl verb is an ordinary fail", [6, "", "ok", "acceptance", "grep", true], "FAILED", "non-zero-or-expected-absent"],
+    ["an unhealthy sandbox is INVALID at acceptance", [0, "ok", "ok", "acceptance", "grep", false], "INVALID", "sandbox-unhealthy"],
+    ["an unhealthy sandbox is INVALID at baseline too", [1, "", "ok", "baseline", "grep", false], "INVALID", "sandbox-unhealthy"],
   ];
-  const logOf = (r: Repo) => {
-    const p = join(r.dir, "specs", "founder-check-log.md");
-    return existsSync(p) ? readFileSync(p, "utf8") : "";
-  };
 
-  test("headless refuses OVERRIDDEN and writes nothing", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "headless", "--outcome", "OVERRIDDEN", "--reason", "because"]));
-    expect(x.status).toBe(3);
-    expect(logOf(r)).toBe("");
-  });
-
-  test("headless refuses FOUNDER-CONFIRMED and writes nothing", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "headless", "--outcome", "FOUNDER-CONFIRMED"]));
-    expect(x.status).toBe(3);
-    expect(logOf(r)).toBe("");
-  });
-
-  test("interactive OVERRIDDEN without a reason is refused", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "interactive", "--outcome", "OVERRIDDEN"]));
-    expect(x.status).toBe(3);
-    expect(logOf(r)).toBe("");
-  });
-
-  test("interactive OVERRIDDEN with a reason is recorded as an override, never as a pass", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "interactive", "--outcome", "OVERRIDDEN", "--reason", "shipping a hotfix"]));
-    expect(x.status).toBe(0);
-    const log = logOf(r);
-    expect(log).toContain("OVERRIDDEN");
-    expect(log).toContain("shipping a hotfix");
-    expect(log).not.toMatch(/PASSED/);
-  });
-
-  test("a headless failing check is recorded as STOPPED-AWAITING-FOUNDER, with the underlying outcome kept", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "headless", "--outcome", "FAILED"]));
-    expect(x.status).toBe(0);
-    const log = logOf(r);
-    expect(log).toContain("STOPPED-AWAITING-FOUNDER");
-    expect(log).toContain("FAILED");
-    expect(x.stdout).toContain("outcome=STOPPED-AWAITING-FOUNDER");
-  });
-
-  test("headless with an approved block and no sandbox is STOPPED-AWAITING-FOUNDER; without a block it stays SKIP-NOSANDBOX", () => {
-    const r = new Repo();
-    const withBlock = r.py(row(["--mode", "headless", "--outcome", "SKIP-NOSANDBOX", "--block-present", "true"]));
-    expect(withBlock.stdout).toContain("outcome=STOPPED-AWAITING-FOUNDER");
-    const without = r.py(row(["--mode", "headless", "--outcome", "SKIP-NOSANDBOX", "--block-present", "false"]));
-    expect(without.stdout).toContain("outcome=SKIP-NOSANDBOX");
-  });
-
-  test("the log is append-only: a second row leaves the first byte-identical", () => {
-    const r = new Repo();
-    r.py(row(["--mode", "interactive", "--outcome", "FAILED"]));
-    const first = logOf(r);
-    r.py(row(["--mode", "interactive", "--outcome", "PASSED", "--attempt-n", "2"]));
-    const second = logOf(r);
-    expect(second.startsWith(first)).toBe(true);
-    expect(second.length).toBeGreaterThan(first.length);
-  });
-
-  test("a row carries rc, attempt, sha, hash and output hash but no output text", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "interactive", "--outcome", "FAILED"]));
-    expect(x.status).toBe(0);
-    const log = logOf(r);
-    for (const needle of ["abc1234", "f".repeat(64), "e".repeat(64), "FAILED"]) expect(log).toContain(needle);
-  });
-
-  test("there is no way to hand the log the command's output", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "interactive", "--outcome", "FAILED", "--output", "SECRET-VALUE"]));
-    expect(x.status).toBe(2);
-    expect(x.stderr).toContain("--output");
-    expect(logOf(r)).not.toContain("SECRET-VALUE");
-  });
-
-  test("a non-hex output hash is refused", () => {
-    const r = new Repo();
-    const x = r.py(
-      row(["--mode", "interactive", "--outcome", "FAILED"]).map((a) => (a === "e".repeat(64) ? "SECRET-VALUE" : a)),
-    );
-    expect(x.status).toBe(3);
-    expect(x.stderr).toContain("output-sha256");
-    expect(logOf(r)).not.toContain("SECRET-VALUE");
-  });
-
-  test("a command with pipes and newlines cannot break the row apart", () => {
-    const r = new Repo();
-    const args = row(["--mode", "interactive", "--outcome", "FAILED"]).map((a) =>
-      a === "grep -c hello site/index.html" ? "grep a | b\nINJECTED ROW" : a,
-    );
-    expect(r.py(args).status).toBe(0);
-    const dataRows = logOf(r)
-      .split("\n")
-      .filter((l) => l.startsWith("| ") && !l.startsWith("| kind") && !l.startsWith("| ---"));
-    expect(dataRows.length).toBe(1);
-  });
-
-  test("the stdout marker is metadata only: outcome, hash, tested_sha", () => {
-    const r = new Repo();
-    const x = r.py(row(["--mode", "interactive", "--outcome", "FAILED"]));
-    const marker = x.stdout.split("\n").find((l) => l.startsWith("SOLEUR_FOUNDER_CHECK_RESULT"));
-    expect(marker).toBe(`SOLEUR_FOUNDER_CHECK_RESULT outcome=FAILED hash=${"f".repeat(64)} tested_sha=abc1234`);
-    expect(marker).not.toContain("grep");
+  test("every row yields exactly the expected verdict", () => {
+    const got: [string, boolean, string][] = harness("out = [list(fc.classify(*c)) for c in data]", rows.map((r) => r[1]));
+    expect(got.length).toBe(rows.length);
+    rows.forEach(([name, , outcome, reason], i) => {
+      expect([name, got[i][0], got[i][2]]).toEqual([name, outcome, reason]);
+    });
   });
 });
 
-describe("summary (the layer-7 discoverability probe)", () => {
-  test("prints founder-check: no log before any run", () => {
+describe("classify: the CLI reads the verify record and measured inputs only", () => {
+  const frozenFile = (cmd = BASE.command, expected = "1") => {
     const r = new Repo();
-    const x = r.py(["summary"]);
-    expect(x.status).toBe(0);
-    expect(x.stdout.trim()).toBe("founder-check: no log");
+    r.freeze({ ...BASE, command: cmd, expected });
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe("OK");
+    return { r, file };
+  };
+  const cls = (r: Repo, args: string[]) => r.py(["classify", ...args]);
+
+  test("acceptance: --stdout-file carries the output the expected text is matched against", () => {
+    const { r, file } = frozenFile();
+    const out = join(r.scratch, "out.txt");
+    writeFileSync(out, "the count is 1\n");
+    const pass = cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--stdout-file", out]);
+    expect(pass.json?.outcome).toBe("PASSED");
+    expect(pass.json?.expected_matched).toBe(true);
+    writeFileSync(out, "nothing here\n");
+    expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--stdout-file", out]).json?.outcome).toBe("FAILED");
   });
 
-  test("prints the row count over a populated log", () => {
-    const r = new Repo();
-    const args = (n: number, outcome: string) => [
-      "log", "--log", "specs/founder-check-log.md", "--mode", "interactive", "--outcome", outcome,
-      "--kind", "command", "--command", "grep -c a f", "--rc", "1", "--attempt-n", String(n),
-      "--tested-sha", "abc1234", "--hash", "f".repeat(64),
-    ];
-    r.py(args(1, "FAILED"));
-    r.py(args(2, "PASSED"));
-    const x = r.py(["summary", "--log", "specs/founder-check-log.md"]);
-    expect(x.stdout.split("\n")[0]).toBe("founder-check: 2 rows");
+  test("an empty expected in the record is matched by exit 0 alone (the expected text comes from the record, not argv)", () => {
+    const { r, file } = frozenFile(BASE.command, "");
+    expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).json?.outcome).toBe("PASSED");
   });
 
-  test("a pass after failures says so", () => {
-    const r = new Repo();
-    const args = (n: number, outcome: string) => [
-      "log", "--log", "specs/founder-check-log.md", "--mode", "interactive", "--outcome", outcome,
-      "--kind", "command", "--command", "grep -c a f", "--rc", "1", "--attempt-n", String(n),
-      "--tested-sha", "abc1234", "--hash", "f".repeat(64),
-    ];
-    r.py(args(1, "FAILED"));
-    r.py(args(2, "FAILED"));
-    r.py(args(3, "PASSED"));
-    const x = r.py(["summary", "--log", "specs/founder-check-log.md"]);
-    expect(x.stdout).toContain("PASSED on attempt 3 after 2 failures");
+  test("a failing health control makes the verdict INVALID at BOTH polarities", () => {
+    const { r, file } = frozenFile();
+    const a = cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "1"]);
+    expect(a.json?.outcome).toBe("INVALID");
+    expect(a.json?.reason).toBe("sandbox-unhealthy");
   });
 
-  test("with no --log it reads the current branch's spec directory", () => {
+  test("a missing --control-rc is a usage error (no permissive default), and so is a missing --verify-json", () => {
+    const { r, file } = frozenFile();
+    expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0"]).status).toBe(2);
+    expect(cls(r, ["--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+  });
+
+  test("a quoted curl verb is still curl: rc 6 is INVALID", () => {
+    const { r, file } = frozenFile('"curl" -s http://example.invalid/x');
+    expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "6", "--control-rc", "0"]).json?.outcome).toBe("INVALID");
+  });
+
+  test("classify refuses a record whose verify outcome is not OK (a changed check is never run)", () => {
     const r = new Repo();
-    r.write(
-      "knowledge-base/project/specs/feat-x/founder-check-log.md",
-      "| kind | outcome |\n| --- | --- |\n| command | FAILED |\n",
-    );
-    expect(r.py(["summary"]).stdout.split("\n")[0]).toBe("founder-check: 1 rows");
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.freeze({ ...BASE, expected: "9" });
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
+    expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+  });
+
+  test("baseline needs a candidate record and acceptance refuses one", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    const cand = r.verifyFile(["--candidate"], "cand.json");
+    expect(cand.run.json?.outcome).toBe("OK");
+    expect(cand.run.json?.reason).toBe("candidate");
+    expect(cls(r, ["--verify-json", cand.file, "--polarity", "baseline", "--rc", "1", "--control-rc", "0"]).json?.outcome).toBe("FAILED-AS-EXPECTED");
+    expect(cls(r, ["--verify-json", cand.file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+    const { r: fr, file } = frozenFile();
+    expect(cls(fr, ["--verify-json", file, "--polarity", "baseline", "--rc", "1", "--control-rc", "0"]).status).toBe(2);
+  });
+
+  test("a judgement check is never classified", () => {
+    const r = new Repo();
+    r.freeze({ ...BASE, kind: "judgement", command: "" });
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe("OK");
+    expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+  });
+});
+
+describe("verify --candidate (baseline mode)", () => {
+  test("a block with no freeze commit passes the static rules and every pin against HEAD", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    const v = r.verify(["--candidate"]);
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.hash).toBe(canonicalHash(BASE));
+  });
+
+  test("the candidate hash is what the plan skill writes into hash: (a stale one is FAIL)", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE, { hash: "0".repeat(64) }) }));
+    expect(r.verify(["--candidate"]).json?.reason).toBe("hash-mismatch");
+  });
+
+  test("an interpreter script that is not pinned (or not at HEAD) is refused at baseline", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "bash scripts/new.sh" }) }));
+    expect(r.verify(["--candidate"]).json?.reason).toBe("unpinned-script");
+  });
+
+  test("no block at all is an ERROR in candidate mode, never a success", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-no-block.md", {}));
+    const v = r.verify(["--candidate"]);
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("no-block-candidate");
+    expect(v.status).toBe(1);
+  });
+
+  test("a block under an unrecognised heading is an ERROR in candidate mode (it cannot be baselined and frozen unseen)", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-quoted-non-ac.md", { BLOCK: renderBlock(BASE) }));
+    expect(r.verify(["--candidate"]).json?.reason).toBe("no-block-candidate");
+  });
+
+  test("candidate mode is refused when a freeze exists, unless --refreeze says this is a deliberate change", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.freeze({ ...BASE, expected: "2" });
+    const refused = r.verify(["--candidate"]);
+    expect(refused.json?.outcome).toBe("FAIL");
+    expect(refused.json?.reason).toBe("candidate-refused-frozen");
+    const ok = r.verify(["--candidate", "--refreeze"]);
+    expect(ok.json?.outcome).toBe("OK");
+    expect(ok.json?.refreeze).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+describe("log: the only writer of outcomes", () => {
+  const FROZEN = () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    return r;
+  };
+  const LOGDIR = "knowledge-base/project/specs/feat-x";
+  const logPath = (r: Repo) => join(r.dir, LOGDIR, "founder-check-log.md");
+  const log = (r: Repo, vj: string, extra: string[], input?: string, env: Record<string, string> = {}) =>
+    runPy(["log", "--verify-json", vj, "--polarity", "acceptance", ...extra], { cwd: r.dir, env: r.env(env), input });
+  const cells = (r: Repo): string[][] =>
+    readFileSync(logPath(r), "utf8")
+      .split("\n")
+      .filter((l) => l.startsWith("|"))
+      .slice(2)
+      .map((l) => l.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim()));
+  const COLS = ["kind", "polarity", "command", "rc", "outcome", "underlying", "attempt_n", "tested_sha", "block_hash", "time_utc", "expected_matched", "reason"];
+
+  test("a row carries every column; the path is derived from the branch; the marker is metadata only", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    const cl = join(r.scratch, "cl.json");
+    const out = join(r.scratch, "out.txt");
+    writeFileSync(out, "SECRET-OUTPUT-TEXT 1\n");
+    r.py(["classify", "--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--stdout-file", out, "--out", cl]);
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "PASSED", "--classify-json", cl, "--attempt-n", "2"]);
+    expect(l.status).toBe(0);
+    expect(l.stdout.trim()).toBe(`SOLEUR_FOUNDER_CHECK_RESULT outcome=PASSED hash=${canonicalHash(BASE)} tested_sha=${r.git(["rev-parse", "HEAD"]).trim().slice(0, 12)}`);
+    const text = readFileSync(logPath(r), "utf8");
+    expect(text).not.toContain("SECRET-OUTPUT-TEXT"); // the log never holds output text
+    const [row] = cells(r);
+    const o = Object.fromEntries(COLS.map((c, i) => [c, row[i]]));
+    expect(o.kind).toBe("command");
+    expect(o.polarity).toBe("acceptance");
+    expect(o.command).toBe(BASE.command);
+    expect(o.rc).toBe("0");
+    expect(o.outcome).toBe("PASSED");
+    expect(o.attempt_n).toBe("2");
+    expect(o.tested_sha).toBe(r.git(["rev-parse", "HEAD"]).trim().slice(0, 12));
+    expect(o.block_hash).toBe(canonicalHash(BASE));
+    expect(o.expected_matched).toBe("true");
+    expect(o.time_utc).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+  });
+
+  test("a dirty tree is recorded as +uncommitted in tested_sha", () => {
+    const r = FROZEN();
+    r.write("src/dirty.txt", "x\n");
+    const { file } = r.verifyFile();
+    log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(cells(r)[0][COLS.indexOf("tested_sha")]).toMatch(/^[0-9a-f]{12}\+uncommitted$/);
+  });
+
+  for (const outcome of ["FAILED", "INVALID", "CHANGED-SINCE-APPROVAL", "UNTRUSTED", "NEEDS-YOUR-EYES", "BLOCK-REJECTED"]) {
+    test(`headless: ${outcome} is recorded as STOPPED-AWAITING-FOUNDER with the cause kept`, () => {
+      const r = FROZEN();
+      const { file } = r.verifyFile();
+      const l = log(r, file, ["--mode", "headless", "--outcome", outcome]);
+      expect(l.status).toBe(0);
+      expect(l.stdout).toContain("outcome=STOPPED-AWAITING-FOUNDER");
+      const row = cells(r)[0];
+      expect(row[COLS.indexOf("outcome")]).toBe("STOPPED-AWAITING-FOUNDER");
+      expect(row[COLS.indexOf("underlying")]).toBe(outcome);
+    });
+  }
+
+  test("headless: a missing sandbox with an approved block stops the run", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    log(r, file, ["--mode", "headless", "--outcome", "SKIP-NOSANDBOX"]);
+    const row = cells(r)[0];
+    expect(row[COLS.indexOf("outcome")]).toBe("STOPPED-AWAITING-FOUNDER");
+    expect(row[COLS.indexOf("underlying")]).toBe("SKIP-NOSANDBOX");
+  });
+
+  test("headless: OVERRIDDEN and FOUNDER-CONFIRMED are refused (exit 3) and write no row", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    for (const o of ["OVERRIDDEN", "FOUNDER-CONFIRMED"]) {
+      const l = log(r, file, ["--mode", "headless", "--outcome", o, "--underlying", "FAILED", "--reason-stdin"], "because\n");
+      expect(l.status).toBe(3);
+    }
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("unknown or case-variant outcomes and modes are usage errors, never recorded", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    for (const bad of ["overridden", "OVERRIDDEN ", "NOPE", "pass"]) {
+      expect(log(r, file, ["--mode", "headless", "--outcome", bad]).status).toBe(2);
+    }
+    for (const bad of ["Headless", "HEADLESS", "interactive "]) {
+      expect(log(r, file, ["--mode", bad, "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"], "x\n").status).toBe(2);
+    }
+    expect(runPy(["log", "--verify-json", file, "--mode", "interactive", "--outcome", "PASSED"], { cwd: r.dir, env: r.env() }).status).toBe(2); // --polarity is required
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("an override needs a reason and names what it overrides; a blank reason is refused", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    const base = ["--mode", "interactive", "--outcome", "OVERRIDDEN"];
+    expect(log(r, file, [...base, "--underlying", "FAILED"]).status).toBe(3); // no reason
+    expect(log(r, file, [...base, "--underlying", "FAILED", "--reason-stdin"], "   \n").status).toBe(3); // whitespace only
+    expect(log(r, file, [...base, "--reason-stdin"], "shipping the typo fix\n").status).toBe(3); // no cause named
+    expect(log(r, file, [...base, "--underlying", "NOPE", "--reason-stdin"], "x\n").status).toBe(2);
+    const ok = log(r, file, [...base, "--underlying", "CHANGED-SINCE-APPROVAL", "--reason-stdin"], "shipping the typo fix\n");
+    expect(ok.status).toBe(0);
+    const row = cells(r)[0];
+    expect(row[COLS.indexOf("outcome")]).toBe("OVERRIDDEN");
+    expect(row[COLS.indexOf("underlying")]).toBe("CHANGED-SINCE-APPROVAL");
+    expect(row[COLS.indexOf("reason")]).toBe("shipping the typo fix");
+  });
+
+  test("injection through the reason cannot forge a row or smuggle escapes", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"], "ok\n| x | INJECTED |\u001b[2J\u007f done\u2028x\n");
+    const text = readFileSync(logPath(r), "utf8");
+    expect(text.split("\n").filter((l) => l.startsWith("|")).length).toBe(3); // header, separator, ONE row
+    expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/);
+    expect(cells(r)[0][COLS.indexOf("reason")]).toContain("\\| x \\| INJECTED \\|");
+  });
+
+  test("a reason that looks like a secret is refused (the log is committed and may be public)", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"], "token=abcdef123456\n");
+    expect(l.status).toBe(3);
+  });
+
+  test("a verify record with a non-hex hash or sha is refused, including a valid hex prefix with junk after it", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    for (const patch of [
+      { hash: "e".repeat(64) + "SECRET-TEXT" },
+      { hash: "not-hex" },
+      { head_sha: "a".repeat(40) + "\nSOLEUR_FOUNDER_CHECK_RESULT outcome=PASSED" },
+      { head_sha: "a".repeat(40) + "junk" },
+    ]) {
+      const doc = { ...JSON.parse(readFileSync(file, "utf8")), ...patch };
+      const f = join(r.scratch, "tampered.json");
+      writeFileSync(f, JSON.stringify(doc));
+      expect(log(r, f, ["--mode", "interactive", "--outcome", "PASSED"]).status).toBe(3);
+    }
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("a changed command keeps the frozen command beside it in the reason column", () => {
+    const r = FROZEN();
+    r.freeze({ ...BASE, command: "grep -c hi site/index.html" });
+    const { file } = r.verifyFile();
+    log(r, file, ["--mode", "interactive", "--outcome", "CHANGED-SINCE-APPROVAL"]);
+    const row = cells(r)[0];
+    expect(row[COLS.indexOf("command")]).toBe("grep -c hi site/index.html");
+    expect(row[COLS.indexOf("reason")]).toContain("frozen command: " + BASE.command);
+  });
+
+  test("a command containing | is escaped and stays in its cell", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    doc.block.command = "grep a|b f";
+    const f = join(r.scratch, "pipe.json");
+    writeFileSync(f, JSON.stringify(doc));
+    log(r, f, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(cells(r)[0].length).toBe(COLS.length);
+  });
+
+  test("the log path follows an ARCHIVED spec directory (compound moves it)", () => {
+    const r = FROZEN();
+    const arch = join(r.dir, "knowledge-base/project/specs/archive/20261006-120000-feat-x");
+    mkdirSync(arch, { recursive: true });
+    const { file } = r.verifyFile();
+    log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(existsSync(join(arch, "founder-check-log.md"))).toBe(true);
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("an unsafe branch name or a detached HEAD writes nothing (no path is invented)", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    r.git(["checkout", "-q", "--detach"]);
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(l.status).toBe(3);
+  });
+
+  test("commit-log commits ONLY the log, in one commit, and is a no-op the second time", () => {
+    const r = FROZEN();
+    const { file } = r.verifyFile();
+    log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    r.write("src/other.txt", "staged elsewhere\n");
+    r.git(["add", "src/other.txt"]);
+    const before = r.git(["rev-parse", "HEAD"]).trim();
+    const c = r.py(["commit-log"]);
+    expect(c.status).toBe(0);
+    expect(r.git(["log", "-1", "--format=%s"]).trim()).toBe("founder-check: log");
+    expect(r.git(["rev-list", "--count", `${before}..HEAD`]).trim()).toBe("1");
+    expect(r.git(["show", "--name-only", "--format=", "HEAD"]).trim()).toBe(`${LOGDIR}/founder-check-log.md`);
+    expect(r.git(["diff", "--cached", "--name-only"]).trim()).toBe("src/other.txt"); // untouched
+    const again = r.py(["commit-log"]);
+    expect(again.stdout).toContain("already committed");
+    expect(r.git(["rev-list", "--count", `${before}..HEAD`]).trim()).toBe("1");
+  });
+
+  test("commit-log with no log is a no-op", () => {
+    const r = FROZEN();
+    const c = r.py(["commit-log"]);
+    expect(c.status).toBe(0);
+    expect(c.stdout).toContain("no log");
+  });
+});
+
+describe("summary", () => {
+  test("prints the row count, `no log` with none, and fails on a --log path that does not exist", () => {
+    const r = new Repo();
+    expect(r.py(["summary"]).stdout.trim()).toBe("founder-check: no log");
+    const miss = r.py(["summary", "--log", join(r.scratch, "typo.md")]);
+    expect(miss.status).toBe(1);
+    r.freeze();
+    const { file } = r.verifyFile();
+    r.py(["log", "--verify-json", file, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    r.py(["log", "--verify-json", file, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    expect(r.py(["summary"]).stdout.trim()).toBe("founder-check: 2 rows");
+  });
+
+  test("a hostile log line cannot make summary quadratic", () => {
+    const r = new Repo();
+    const f = join(r.scratch, "log.md");
+    writeFileSync(f, "| a | b |\n| --- | --- |\n|" + " ".repeat(40_000) + "x\n");
+    const t0 = Date.now();
+    const s = r.py(["summary", "--log", f]);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(s.stdout.trim()).toBe("founder-check: 1 rows");
   });
 });
 
 // ---------------------------------------------------------------------------------------------
 describe("wording constants", () => {
-  const text = (name: string, extra: string[] = []) =>
-    spawnSync("python3", [SCRIPT, "text", name, ...extra], { encoding: "utf8" });
+  const text = (name: string, extra: string[] = []) => runPy(["text", name, ...extra]);
+  const listed = (): string[] => runPy(["text", "--list"]).stdout.trim().split("\n");
 
   const EXACT: Record<string, string> = {
     judgement: "You confirmed this by looking. No command ran for it.",
     "first-use":
-      "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what will run before it runs. The check runs on this computer in a limited environment that can still use your network connection. One check does not cover everything. The text and command you approve are committed to this repository, which may be public, so do not put passwords or keys in them.",
-    "no-block": "No founder-stated check was defined. Nothing was run on your behalf.",
+      "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what will run before it runs. The check runs on this computer in a limited environment that can still use your network connection, reach this computer's own services and read every file in this project folder, including files you have not committed. One check does not cover everything. The text and command you approve are committed to this repository, which may be public, so do not put passwords or keys in them.",
+    "capture-question": "What would you check to know this is done?",
+    "approval-ask": "Approve exactly this check as written? Say yes to approve it, or tell me what to change.",
+    "no-block": "No founder-stated check guarded this ship. Nothing was run on your behalf.",
     "no-sandbox": "Your check did not run on this computer, so nothing was checked.",
-    "no-sandbox-ask": "Your check did not run on this computer, so nothing was checked. Continue without it?",
+    "failed-ask": "Your check did not pass. How should this proceed?",
     "invalid-ask": "Your check could not run properly, so it says nothing about your work. How should this proceed?",
+    "changed-ask": "The check you approved has changed since you approved it. How should this proceed?",
+    "rejected-ask": "Your check could not be used as written: {detail} How should this proceed?",
+    "untrusted-fail": "This check was not written by you, so it was not run. The command and who wrote it are shown above. To use a check, state your own, or run this one by hand.",
+    "eyes-ask": "Does this meet what you stated?",
+    "reason-prompt": "In one line, why are you continuing? This is saved in the repository log, which may be public, so do not put passwords or keys in it.",
+    "overridden-failed": "Founder check did not pass and you chose to continue: <reason>",
+    "overridden-invalid": "Founder check could not run properly, so it checked nothing, and you chose to continue: <reason>",
+    "overridden-changed": "Founder check changed after you approved it, so it was not run, and you chose to continue: <reason>",
+    "overridden-rejected": "Founder check could not be used as written, so it was not run, and you chose to continue: <reason>",
+    "headless-stop": "Your check was stopped because it could not be used, and an unattended run cannot decide that for you. Run this step again with you present to retry, change the check or continue anyway.",
+    "baseline-ok": "Your check fails today, as it should before the work. This shows only that the check can fail. It does not show that it checks what you care about.",
+    "baseline-vacuous": "Your check already passes before any work is done, so it cannot tell you whether the work is done.",
     "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
-    "overridden-line": "Founder check did not pass and you chose to continue: <reason>",
-    "nosandbox-continued": "Your check did not run on this computer, so it has not checked this work. You chose to continue.",
-    "headless-stop": "Your check did not pass, could not run, or needs your decision, and an unattended run cannot decide that for you. Run this step again with you present to retry, change the check or continue anyway.",
-    "untrusted-ask": "This check was not written by you. Running it executes the command shown above on this computer, in a limited environment that can still use your network connection. Run it?",
+    pass: "Your check passed. This shows only that the check you wrote ran against <sha>, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it.",
+    "aggregate-pass": "Founder check: ran, returned success against <sha>",
   };
 
   for (const [name, want] of Object.entries(EXACT)) {
-    test(`'${name}' matches the plan's text exactly`, () => {
+    test(`'${name}' matches the pinned text exactly`, () => {
       const t = text(name);
       expect(t.status).toBe(0);
-      expect(t.stdout.trimEnd()).toBe(want);
+      expect(t.stdout.trimEnd()).toBe(want.replace("{detail}", ""));
     });
   }
 
-  test("'pass' matches the plan's sentence with the sha filled in", () => {
-    const t = text("pass", ["--sha", "abc1234"]);
-    expect(t.stdout.trimEnd()).toBe(
-      "Your check passed. This shows only that the check you wrote ran against abc1234, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it.",
+  test("the pinned set equals the script's own set: a new constant without a pin is RED", () => {
+    expect(listed().sort()).toEqual(Object.keys(EXACT).sort());
+  });
+
+  test("the sha is filled in, with the dirty qualifier when the tree had uncommitted changes", () => {
+    const r = new Repo();
+    r.freeze();
+    const clean = r.verifyFile();
+    const sha = r.git(["rev-parse", "HEAD"]).trim().slice(0, 12);
+    expect(runPy(["text", "pass", "--verify-json", clean.file]).stdout).toContain(`ran against ${sha}, finished`);
+    r.write("src/dirty.txt", "x\n");
+    const dirty = r.verifyFile([], "dirty.json");
+    expect(runPy(["text", "pass", "--verify-json", dirty.file]).stdout).toContain(`ran against ${sha} plus uncommitted changes, finished`);
+    expect(runPy(["text", "aggregate-pass", "--verify-json", dirty.file]).stdout.trim()).toBe(`Founder check: ran, returned success against ${sha} plus uncommitted changes`);
+  });
+
+  test("the reason, the cause and the rejection detail are substituted from the arguments and the record", () => {
+    expect(text("overridden-failed", ["--reason", "shipping the typo fix"]).stdout.trim()).toBe(
+      "Founder check did not pass and you chose to continue: shipping the typo fix",
     );
-  });
-
-  test("'overridden-line' carries the founder's reason verbatim", () => {
-    const t = text("overridden-line", ["--reason", "shipping the typo fix"]);
-    expect(t.stdout.trimEnd()).toBe("Founder check did not pass and you chose to continue: shipping the typo fix");
-  });
-
-  test("the aggregate row says ran, returned success against the sha — never a bare PASS", () => {
-    const t = text("aggregate-pass", ["--sha", "abc1234"]);
-    expect(t.stdout.trimEnd()).toBe("Founder check: ran, returned success against abc1234");
+    for (const [cause, phrase] of [
+      ["FAILED", "it did not pass"],
+      ["INVALID", "it could not run properly"],
+      ["CHANGED-SINCE-APPROVAL", "it changed after you approved it"],
+      ["UNTRUSTED", "you did not write it"],
+      ["NEEDS-YOUR-EYES", "it needs your own eyes on the result"],
+      ["BLOCK-REJECTED", "it could not be used as written"],
+      ["SKIP-NOSANDBOX", "it could not run on this computer"],
+    ]) {
+      expect(text("headless-stop", ["--underlying", cause]).stdout).toContain(`stopped because ${phrase},`);
+    }
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "rm -rf x" }) }));
+    const { file } = r.verifyFile(["--candidate"]);
+    expect(runPy(["text", "rejected-ask", "--verify-json", file]).stdout).toContain("could not be used as written: the candidate block is not acceptable as written");
   });
 
   test("no string contains 'verified', 'proven' or 'safe' (no exemption: the CLO ruled the negation out)", () => {
-    const names = [...Object.keys(EXACT), "pass", "aggregate-pass"];
-    expect(names.length).toBeGreaterThanOrEqual(13); // every constant is covered, none dropped
+    const names = listed();
+    expect(names.length).toBeGreaterThanOrEqual(23); // every constant is covered, none dropped
     for (const n of names) {
-      const s = text(n, ["--sha", "abc1234"]).stdout;
+      const s = text(n, ["--reason", "x", "--underlying", "FAILED"]).stdout;
       expect(s.length).toBeGreaterThan(20); // an empty read must not satisfy a negative assertion
       expect(s).not.toMatch(/verified|proven|safe/i);
     }
   });
 
-  test("instrument: the ban regex fires on a known positive (so the negative assertion above can fail)", () => {
+  test("instrument: the ban regex fires on a known positive (so the negative assertions can fail)", () => {
     expect("it is safe and verified and proven, unsafe too").toMatch(/verified|proven|safe/i);
     expect("risky").not.toMatch(/verified|proven|safe/i);
   });
@@ -1091,95 +1395,228 @@ describe("wording constants", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-describe("Guard 4: the script holds no sandbox and never executes the founder command", () => {
-  const read = () => readFileSync(SCRIPT, "utf8");
+describe("docs: the references say what the script does", () => {
+  const read = (p: string) => readFileSync(join(import.meta.dir, "..", "skills", p), "utf8");
+  const REF = read("preflight/references/check-13-founder-check.md");
+  const PLANREF = read("plan/references/plan-founder-check.md");
+  const SKILL = read("preflight/SKILL.md");
+  const SEC13 = SKILL.slice(SKILL.indexOf("### Check 13:"), SKILL.indexOf("## Phase 2: Aggregate Go/No-Go Report"));
+  const fences = (md: string): string[] => [...md.matchAll(/```[a-z]*\n([\s\S]*?)```/g)].map((m) => m[1]);
+  const WORDS = (): string[] => runPy(["text", "--list"]).stdout.trim().split("\n");
 
-  test("no shell-out primitives", () => {
-    const src = read();
-    for (const bad of ["os.system", "shell=True", "os.popen", "os.exec", "os.spawn", "bash -c", "pty.spawn"]) {
-      expect(src.includes(bad)).toBe(false);
+  test("instrument: the three documents were found and carry fenced blocks", () => {
+    expect(REF.length).toBeGreaterThan(2000);
+    expect(PLANREF.length).toBeGreaterThan(1000);
+    expect(SEC13.length).toBeGreaterThan(500);
+    expect(fences(REF).length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("no founder-facing guidance uses 'verified', 'proven' or 'safe'", () => {
+    // Prose only: a fenced block is code (the Step 10.5 fence names a DT_STDOUT_SAFE variable).
+    const prose = (md: string) => md.replace(/```[a-z]*\n[\s\S]*?```/g, "");
+    for (const [name, doc] of [["reference", REF], ["plan reference", PLANREF], ["SKILL.md Check 13", SEC13]]) {
+      expect([name, prose(doc).match(/verified|proven|safe/gi)]).toEqual([name, null]);
     }
   });
 
-  test("exactly two subprocess call sites: git and the verb gate", () => {
-    const calls = read().match(/subprocess\.(run|Popen|call|check_output|check_call)\(/g) ?? [];
-    expect(calls.length).toBe(2);
+  test("every wording constant is named at least once as `text <key>`", () => {
+    const all = REF + PLANREF + SEC13;
+    for (const k of WORDS()) expect([k, all.includes(`text ${k}`)]).toEqual([k, true]);
   });
 
-  test("it declares no sandbox of its own", () => {
-    const src = read();
-    expect(/BWRAP_ARGS\s*=\s*\(/.test(src)).toBe(false);
-    expect(/\bbwrap\b/.test(src.replace(/#.*$/gm, ""))).toBe(false);
+  test("every documented script call goes through the plugin root with the unresolved-root guard", () => {
+    const calls = (REF + PLANREF + SEC13).match(/python3 \S*founder-check\.py"?/g) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(6);
+    for (const c of calls) expect(c).toBe('python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py"');
+    expect(REF).toContain("CLAUDE_PLUGIN_ROOT is unset");
+    expect(REF).not.toMatch(/python3 plugins\/soleur\/skills\/preflight/);
+  });
+
+  test("every Bash block that reads PREFLIGHT_TMP derives it in the same block", () => {
+    const blocks = fences(REF + PLANREF).filter((b) => b.includes("$PREFLIGHT_TMP"));
+    expect(blocks.length).toBeGreaterThanOrEqual(3);
+    for (const b of blocks) expect(b).toContain('PREFLIGHT_TMP="$(git rev-parse --git-dir)"');
+  });
+
+  test("no documented call types plan-authored or agent-chosen values into a shell word", () => {
+    for (const b of fences(REF + PLANREF + SEC13)) {
+      expect(b).not.toMatch(/--(command|expected|hash|first-token|creates|sandbox-healthy|target-present|tested-sha|output-sha256|reason)\s+["<]/);
+      expect(b).not.toMatch(/--(command|expected|reason)\s/);
+    }
+  });
+
+  test("the verb literal in the plan reference equals the verb gate's allowlist, and INTERPRETERS is a subset of it", () => {
+    const gate = readFileSync(GATE, "utf8").match(/PROBE_VERB_ALLOWLIST='([^']*)'/)?.[1]?.trim().split(/\s+/) ?? [];
+    expect(gate.length).toBeGreaterThanOrEqual(8);
+    const planVerbs = PLANREF.match(/first word must be one of `([^`]*)`/)?.[1]?.split(/\s+/) ?? [];
+    expect([...planVerbs].sort()).toEqual([...gate].sort());
+    const interp: string[] = harness("out = list(fc.INTERPRETERS)", null);
+    expect(interp.length).toBeGreaterThanOrEqual(3);
+    for (const v of interp) expect(gate).toContain(v);
   });
 });
 
 // ---------------------------------------------------------------------------------------------
-// Harness rows: edit the SUBJECT and require the observable to change. A suite that asserts
-// nothing cannot pass these.
+// Guard 4: the script holds no sandbox and never executes the founder command. Walked as an AST,
+// not grepped: a grep for spellings is a denylist, and a third call written any other way passed it.
+// ---------------------------------------------------------------------------------------------
+const AST_WALK = `
+import ast, json, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+tree = ast.parse(src)
+BAD_OS = ("system", "popen", "execv", "execve", "execl", "execlp", "execvp", "spawnv", "spawnl", "spawnvp", "posix_spawn", "fork", "forkpty")
+funcs, bad = set(), []
+def walk(node, fn):
+    for ch in ast.iter_child_nodes(node):
+        f = ch.name if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+        if isinstance(ch, ast.Name) and ch.id == "subprocess":
+            funcs.add(fn or "<module>")
+        if isinstance(ch, ast.Attribute) and isinstance(ch.value, ast.Name) and ch.value.id == "os" and ch.attr in BAD_OS:
+            bad.append("os." + ch.attr)
+        if isinstance(ch, ast.Name) and ch.id in ("eval", "exec", "compile", "__import__", "ctypes", "pty"):
+            bad.append(ch.id)
+        if isinstance(ch, (ast.Import, ast.ImportFrom)):
+            names = [a.name for a in ch.names] + ([ch.module] if isinstance(ch, ast.ImportFrom) and ch.module else [])
+            for n in names:
+                if n.split(".")[0] in ("ctypes", "pty", "pexpect", "shlex_run"):
+                    bad.append("import " + n)
+        walk(ch, f)
+walk(tree, None)
+print(json.dumps({"funcs": sorted(funcs), "bad": bad}))
+`;
+function astWalk(file: string): { funcs: string[]; bad: string[] } {
+  const r = spawnSync("python3", ["-I", "-c", AST_WALK, file], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`ast walk failed: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+describe("Guard 4: the script holds no sandbox and never executes the founder command", () => {
+  test("only _git and _verb_gate reference subprocess, and nothing else can start a process", () => {
+    const w = astWalk(SCRIPT);
+    expect(w.funcs).toEqual(["_git", "_verb_gate"]);
+    expect(w.bad).toEqual([]);
+  });
+
+  test("instrument: the walker finds a third subprocess use, any spelling, and an os.system", () => {
+    const dir = mkdtempSync(join(TMP, "fcast-"));
+    made.push(dir);
+    const f = join(dir, "x.py");
+    writeFileSync(f, "import subprocess, os\ndef _git(): subprocess.run(['x'])\ndef sneaky():\n    subprocess.getoutput ('id')\n    os.system('id')\n");
+    const w = astWalk(f);
+    expect(w.funcs).toEqual(["_git", "sneaky"]);
+    expect(w.bad).toEqual(["os.system"]);
+  });
+
+  test("it declares no sandbox of its own", () => {
+    const src = readFileSync(SCRIPT, "utf8").replace(/#.*$/gm, "");
+    expect(/BWRAP_ARGS\s*=\s*\(/i.test(src)).toBe(false);
+    expect(/\bbwrap\b/i.test(src)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Harness rows: edit the SUBJECT and require the observable to change POSITIVELY. A suite that
+// asserts nothing cannot pass these, and a mutant that merely crashes is not a kill: every mutant
+// must compile, and each row asserts the mutated behaviour, not just a difference.
 // ---------------------------------------------------------------------------------------------
 describe("harness rows (the suite goes RED when the subject is gutted)", () => {
   const mutate = (anchor: string, replacement: string): string => {
     const text = readFileSync(SCRIPT, "utf8");
-    if (!text.includes(anchor)) throw new Error(`mutation anchor absent from founder-check.py: ${anchor}`);
-    const dir = mkdtempSync(join(process.env.TMPDIR ?? "/var/tmp", "fcm-"));
+    const n = text.split(anchor).length - 1;
+    if (n !== 1) throw new Error(`mutation anchor must occur exactly once in founder-check.py (found ${n}): ${anchor}`);
+    const dir = mkdtempSync(join(TMP, "fcm-"));
     made.push(dir);
     const p = join(dir, "founder-check.py");
     writeFileSync(p, text.replace(anchor, replacement));
-    // the verb gate is resolved relative to the script, so carry it along
-    const gate = join(dirname(SCRIPT), "probe-verb-gate.sh");
-    writeFileSync(join(dir, "probe-verb-gate.sh"), readFileSync(gate, "utf8"), { mode: 0o755 });
+    writeFileSync(join(dir, "probe-verb-gate.sh"), readFileSync(GATE, "utf8"), { mode: 0o755 });
+    const c = spawnSync("python3", ["-I", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", p], { encoding: "utf8" });
+    if (c.status !== 0) throw new Error(`the mutant does not compile (a crash is not a kill): ${c.stderr}`);
     return p;
   };
+  const changedRepo = () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.freeze({ ...BASE, command: "grep -c hi f" });
+    return r;
+  };
 
-  test("a verify that always exits 0 does NOT report a changed command", () => {
-    const stub = join(mkdtempSync(join(process.env.TMPDIR ?? "/var/tmp", "fcm-")), "founder-check.py");
-    made.push(dirname(stub));
+  test("a verify stub that exits 0 does NOT report a changed command (and prints nothing)", () => {
+    const dir = mkdtempSync(join(TMP, "fcm-"));
+    made.push(dir);
+    const stub = join(dir, "founder-check.py");
     writeFileSync(stub, "import sys\nsys.exit(0)\n");
-    const r = new Repo();
-    r.freeze();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "grep -c hi f" }) }));
-    r.commit("edit");
+    const r = changedRepo();
     expect(r.verify([], SCRIPT).json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
-    expect(r.verify([], stub).json?.outcome).not.toBe("CHANGED-SINCE-APPROVAL");
+    const s = r.verify([], stub);
+    expect(s.status).toBe(0);
+    expect(s.stdout).toBe("");
   });
 
-  test("Guard 3: deleting the headless refusal lets a headless OVERRIDDEN through", () => {
-    const mutant = mutate("HEADLESS_REFUSED = frozenset({\"OVERRIDDEN\", \"FOUNDER-CONFIRMED\"})", "HEADLESS_REFUSED = frozenset()");
-    const r = new Repo();
-    const args = [
-      "log", "--log", "specs/l.md", "--mode", "headless", "--outcome", "OVERRIDDEN", "--reason", "x",
-      "--kind", "command", "--command", "grep -c a f", "--rc", "1", "--attempt-n", "1",
-      "--tested-sha", "abc1234", "--hash", "f".repeat(64),
-    ];
-    expect(r.py(args).status).toBe(3);
-    expect(r.py(args, {}, mutant).status).not.toBe(3);
-  });
-
-  test("Guard 2: a classify that returns FAILED-AS-EXPECTED unconditionally makes the VACUOUS case disappear", () => {
-    const mutant = mutate("# mutation-anchor: baseline-vacuous", "return Result(\"FAILED-AS-EXPECTED\", matched, \"mutant\")");
-    const args = ["--rc", "0", "--polarity", "baseline", "--stdout", "ok", "--expected", "ok"];
-    expect(classify(args).json?.outcome).toBe("VACUOUS");
-    expect(classify(args, mutant).json?.outcome).not.toBe("VACUOUS");
-  });
-
-  test("Guard 1: a verify that skips the freeze comparison lets an edited command through", () => {
-    const mutant = mutate("changed = [k for k in CANONICAL_FIELDS if head_c[k] != frozen_c[k]]", "changed = []");
+  test("Guard 3: deleting the headless refusal lets a headless OVERRIDDEN through (exit 0 and a row)", () => {
+    const mutant = mutate('HEADLESS_REFUSED = frozenset({"OVERRIDDEN", "FOUNDER-CONFIRMED"})', "HEADLESS_REFUSED = frozenset()");
     const r = new Repo();
     r.freeze();
-    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "grep -c hi f" }) }));
-    r.commit("edit");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const { file } = r.verifyFile();
+    const args = ["log", "--verify-json", file, "--polarity", "acceptance", "--mode", "headless", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"];
+    expect(runPy(args, { cwd: r.dir, env: r.env(), input: "x\n" }).status).toBe(3);
+    const m = runPy(args, { cwd: r.dir, env: r.env(), input: "x\n", script: mutant });
+    expect(m.status).toBe(0);
+    expect(m.stdout).toContain("outcome=STOPPED-AWAITING-FOUNDER".replace("STOPPED-AWAITING-FOUNDER", "OVERRIDDEN"));
+  });
+
+  test("Guard 2: a classify whose baseline vacuous branch is dead reports FAILED-AS-EXPECTED for a check that already passes", () => {
+    const mutant = mutate('        if rc == 0 and matched:\n            return Result("VACUOUS", matched, "baseline-passes")', '        if False:\n            return Result("VACUOUS", matched, "baseline-passes")');
+    const row = [0, "ok", "ok", "baseline", "grep", true];
+    expect(harness("out = list(fc.classify(*data))", row)[0]).toBe("VACUOUS");
+    expect(harness("out = list(fc.classify(*data))", row, mutant)[0]).toBe("FAILED-AS-EXPECTED");
+  });
+
+  test("Guard 2: a classify that ignores sandbox health reports PASSED over a broken sandbox", () => {
+    const mutant = mutate('    if not sandbox_healthy:\n        return Result("INVALID", matched, "sandbox-unhealthy")', "    if False:\n        return Result(\"INVALID\", matched, \"sandbox-unhealthy\")");
+    const row = [0, "ok", "ok", "acceptance", "grep", false];
+    expect(harness("out = list(fc.classify(*data))", row)[0]).toBe("INVALID");
+    expect(harness("out = list(fc.classify(*data))", row, mutant)[0]).toBe("PASSED");
+  });
+
+  test("Guard 1: a verify that skips the freeze comparison lets an edited command through as OK", () => {
+    const mutant = mutate("changed = [k for k in CANONICAL_FIELDS if head_c[k] != frozen_c[k]]", "changed = []");
+    const r = changedRepo();
     expect(r.verify([], SCRIPT).json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
     expect(r.verify([], mutant).json?.outcome).toBe("OK");
   });
 
-  test("the mutants themselves are driven: the anchors exist in the production script", () => {
+  test("Guard 1: a static rule set without the pin check accepts an unpinned script", () => {
+    const mutant = mutate("        if key not in normalised:\n            return \"unpinned-script\"", "        if False:\n            return \"unpinned-script\"");
+    const row = cmdBlock({ command: "bash scripts/new.sh" });
+    expect(harness("out = fc.static_problem(data)", row)).toBe("unpinned-script");
+    expect(harness("out = fc.static_problem(data)", row, mutant)).toBeNull();
+  });
+
+  test("Guard 3: a verify without the PR-login check trusts a forged operator email", () => {
+    const mutant = mutate('        elif not a.no_pr:\n            flags.append("pr-author-unmeasurable")', "        elif False:\n            flags.append(\"pr-author-unmeasurable\")");
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    expect(r.py(["verify", "--base", "origin/main"]).json?.outcome).toBe("UNTRUSTED");
+    expect(r.py(["verify", "--base", "origin/main"], {}, mutant).json?.outcome).toBe("OK");
+  });
+
+  test("the mutants themselves are driven: every anchor exists exactly once in the production script", () => {
     const text = readFileSync(SCRIPT, "utf8");
     for (const a of [
-      "HEADLESS_REFUSED = frozenset({\"OVERRIDDEN\", \"FOUNDER-CONFIRMED\"})",
-      "# mutation-anchor: baseline-vacuous",
+      'HEADLESS_REFUSED = frozenset({"OVERRIDDEN", "FOUNDER-CONFIRMED"})',
+      '        if rc == 0 and matched:\n            return Result("VACUOUS", matched, "baseline-passes")',
+      '    if not sandbox_healthy:\n        return Result("INVALID", matched, "sandbox-unhealthy")',
       "changed = [k for k in CANONICAL_FIELDS if head_c[k] != frozen_c[k]]",
+      '        if key not in normalised:\n            return "unpinned-script"',
+      '        elif not a.no_pr:\n            flags.append("pr-author-unmeasurable")',
     ]) {
-      expect(text.includes(a)).toBe(true);
+      expect(text.split(a).length - 1).toBe(1);
     }
   });
 });
