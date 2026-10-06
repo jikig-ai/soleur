@@ -353,7 +353,7 @@ ADR-272 and the W1 C4 edits ship in PR 1; the W2 and W3 amendments and component
 - [x] Phase 0 measurements recorded in `phase-0-measurements.md`; results confirmed the mechanism and changed two things (OAuth token is already withheld by the CLI; the fixture cannot be re-captured, #9614).
 - [x] `buildAgentSandboxConfig` returns typed `credentials.envVars` denying exactly the auth variables `buildAgentEnv` can inject; `agent-sandbox-credential-deny.test.ts` green (set equality, deny mode, service tokens and `GH_TOKEN` not denied, read-only config too), mutation battery 7/7. Absent/both/neither cases ride the existing `agent-env*.test.ts` scheme tests.
 - [x] Live probe shows the Anthropic key absent in sandboxed Bash with the CLI turn completing (`phase-0-measurements.md`), and `sandbox-credential-deny-argv.test.ts` asserts the real SDK argv carries both `--unsetenv` pairs on every CI run; mutation battery 5/5.
-- [ ] **Amended:** the committed canary fixture is not re-captured (SDK 0.3.284's `--tmpfs <HOME>/.claude/bridge-spawn` cannot be projected; tracked in #9614). `sandbox-canary-regression.test.sh` and `sandbox-canary.test.ts` stay green in the affected gate, which is run once at exit.
+- [x] **Amended:** the committed canary fixture is not re-captured (SDK 0.3.284's `--tmpfs <HOME>/.claude/bridge-spawn` cannot be projected; tracked in #9614). `sandbox-canary-regression.test.sh` (11/11) and `sandbox-canary.test.ts` are green.
 - [x] ADR-272 written, ADR-075 addendum added, C4 edge edited and `model.likec4.json` regenerated, `c4-code-syntax`, `c4-render`, `c4-count-parity` and `c4-model-freshness` green. The `adr-ordinals` check against fresh `origin/main` is re-run at ship.
 - [x] Art. 30 register TOM entry added for the measured control only; no public legal document gains a security claim.
 
@@ -408,6 +408,8 @@ Deviations from the plan as written, each with its reason:
 - **The canary fixture is not re-captured** (see the amended acceptance criterion and #9614). The argv-level guard is a new CI test that drives the canary's own capture function, so the property is checked on every run without the fixture.
 - **The drift test lives in `agent-sandbox-credential-deny.test.ts`**, not `agent-runner-sandbox-config.test.ts` (that file covers Sentry tagging) or `agent-runner-helpers.test.ts` (it mocks the module the new test needs real).
 - **Prompt line:** one unconditional `## Credentials` block in `agent-runner.ts`, with its test in `agent-runner-tools.test.ts`. The cc-soleur-go prompt path has no Connected Services block and is unchanged.
+
+- **The affected gate was stopped, not completed, locally.** `bash scripts/test-all.sh --affected` (167 selected suites) ran for about two hours under sibling-worktree contention and was stopped before its epilogue: 747 suite results had passed and exactly one had failed, the `apps/web-platform [unit]` project, whose single red was `oauth-token-injection-site.test.ts` (the new names module is a second module naming the OAuth variable). That guard was sharpened (it now also pins who may reference the shared identifiers and that the names module never touches the environment; mutation-checked 4/4), and the 12 related suites, `tsc` and the canary regression suite were re-run green. The required `test` context in CI runs the full battery on the PR head and is the merge gate.
 
 ## Non-Goals / Deferrals
 
