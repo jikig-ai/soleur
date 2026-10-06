@@ -123,9 +123,11 @@ a block frozen before any code is OK and reports its identity
 a block quoted under a non-Acceptance-Criteria heading is ignored (Guard 1 row 7)
 a block with no freeze commit (uncommitted working tree) is FAIL
 a code commit that precedes the freeze is an ordering violation
+a command check with no command is FAIL
 a command with pipes and newlines cannot break the row apart
 a creates path that already exists is FAIL
 a creates path that is PRESENT does not exempt rc 127
+a field the schema does not define is FAIL
 a freeze authored by another identity is UNTRUSTED, exit 1
 a freeze authored by the local identity is trusted (must-PASS)
 a freeze committed together with code is an ordering violation: stop-and-ask, not FAIL
@@ -226,8 +228,10 @@ surface 2b — discoverability_test sub-fields agree across canonical + all 3 te
 surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
 the aggregate row says ran, returned success against the sha — never a bare PASS
+the creates exemption is baseline-only: an acceptance run with an absent target is an ordinary FAILED
 the default under uncertainty is the full battery, and covers ENFORCEMENT not just existence
 the extracted block is the real one (non-empty, carries the fail-closed test)
+the founder's own words are required
 the gate and rejectReason agree on verdict and reason for every shape
 the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
 the log is append-only: a second row leaves the first byte-identical

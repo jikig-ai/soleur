@@ -543,6 +543,27 @@ describe("verify: block rules", () => {
     expect(v.json?.reason).toBe("credentials-required");
   });
 
+  test("a field the schema does not define is FAIL", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE, { extra: ["retries: 3"] }) }));
+    r.commit("plan: freeze");
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("unknown-field");
+  });
+
+  test("the founder's own words are required", () => {
+    const r = new Repo();
+    r.freeze({ ...BASE, text: "" });
+    expect(r.verify().json?.reason).toBe("missing-field");
+  });
+
+  test("a command check with no command is FAIL", () => {
+    const r = new Repo();
+    r.freeze({ ...BASE, command: "" });
+    expect(r.verify().json?.reason).toBe("missing-field");
+  });
+
   test("an unparseable block is FAIL, never SKIP", () => {
     const r = new Repo();
     r.plan("p.md", scaffold("plan-ac.md", { BLOCK: "```yaml\nfounder_check:\n  kind command\n    : : :\n```" }));
@@ -807,6 +828,12 @@ describe("classify (Guard 2)", () => {
 
   test("a creates path that is PRESENT does not exempt rc 127", () => {
     expect(classify(B(127, ["--creates", "x/y", "--target-present", "true"])).json?.outcome).toBe("INVALID");
+  });
+
+  test("the creates exemption is baseline-only: an acceptance run with an absent target is an ordinary FAILED", () => {
+    const c = classify(A(1, ["--creates", "scripts/new.sh", "--target-present", "false"]));
+    expect(c.json?.outcome).toBe("FAILED");
+    expect(classify(A(127, ["--creates", "scripts/new.sh", "--target-present", "false"])).json?.outcome).toBe("INVALID");
   });
 
   test("an unknown polarity is a usage error, exit 2", () => {

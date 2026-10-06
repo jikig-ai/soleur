@@ -66,9 +66,9 @@ MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
 # same rule. An EMPTY manifest previously passed vacuously as
 # "[ok] all 0 manifest tests still declared", so this floor is what makes the
 # primary identity control non-vacuous.
-MIN_TESTS=202
-MIN_ASSERTIONS=1266
-MIN_MANIFEST_LINES=152
+MIN_TESTS=311
+MIN_ASSERTIONS=1479
+MIN_MANIFEST_LINES=251
 
 PASS=0
 FAIL=0
@@ -830,7 +830,8 @@ done
 # reads $FAIL, which is the same counter a stubbed fail() stops moving. A floor enforced through
 # the suspect cannot witness the suspect — measured on the previous shape: fail() neutered, the
 # gate printed a clean total and exited 0.
-MIN_CHECKS=29
+# 35 = the previous 29, plus 2 per-suite source checks and 4 Check 13 section checks (#9578).
+MIN_CHECKS=35
 if [[ "$cases" -lt "$MIN_CHECKS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d check(s) dispatched, floor is %d — the gate itself went silent.\n' \
     "$cases" "$MIN_CHECKS" >&2
