@@ -4,17 +4,17 @@ Plan: knowledge-base/project/plans/2026-10-06-infra-repin-web-2-ssh-host-key-aft
 
 ## Phase 1: Core change
 
-- 1.1 Copy the captured file over apps/web-platform/infra/web-2-ssh-host-key.pub (cp, no edits)
-- 1.2 Verify byte identity with cmp against the captured file; git diff --stat shows only the pin file
-- 1.3 Verify ssh-keygen -lf prints SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ
+- [x] 1.1 Copy the captured file over apps/web-platform/infra/web-2-ssh-host-key.pub (cp, no edits)
+- [x] 1.2 Verify byte identity with cmp against the captured file; git diff --stat shows only the pin file
+- [x] 1.3 Verify ssh-keygen -lf prints SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ
 
 ## Phase 2: Hermetic tests (offline)
 
-- 2.1 bash scripts/capture-web-2-host-key.test.sh (expect 17 passed)
-- 2.2 bash apps/web-platform/infra/web-2-host-key-local.test.sh (pin-shape check incl. H1; expect 23 passed)
-- 2.3 bash apps/web-platform/infra/web-ghcr-deny.test.sh
-- 2.4 bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
-- 2.5 bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts
+- [x] 2.1 bash scripts/capture-web-2-host-key.test.sh (expect 17 passed)
+- [x] 2.2 bash apps/web-platform/infra/web-2-host-key-local.test.sh (pin-shape check incl. H1; expect 23 passed)
+- [x] 2.3 bash apps/web-platform/infra/web-ghcr-deny.test.sh
+- [x] 2.4 bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh
+- [x] 2.5 bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts
 
 ## Phase 3: PR
 
