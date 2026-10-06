@@ -10,14 +10,15 @@ case "$-" in
     ;;
 esac
 
-# Rule D MUST PASS: transport-confined AND the env-settable destination is
-# adjudicated against a LITERAL. Without this must-PASS row, making
-# `_adjudicated` return False unconditionally left the suite fully green -- the
-# pin limb had no fixture in the passing direction at all.
+# Derived from compliant-ruled-pinned-destination.sh: Rules A/B/C/D are clean, so
+# only Rule E (#9597, bearer token on curl argv) can fire here.
 readonly SINK_URL_PINNED="https://pinned.example/ingest"
 SINK_URL="${FIXTURE_SINK_URL:-$SINK_URL_PINNED}"
 if [ "$SINK_URL" != "https://pinned.example/ingest" ]; then
   printf 'refusing an unpinned destination\n' >&2
   exit 2
 fi
-curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true
+# Rule E MUST FIRE once: the header is built into a variable far from the call, and
+# the call site names only `$auth_hdr`. The curl line carries no literal "Bearer".
+auth_hdr="Authorization: Bearer ${SENTRY_AUTH_TOKEN}"
+curl --disable --noproxy '*' -sS -H "$auth_hdr" "$SINK_URL" || true

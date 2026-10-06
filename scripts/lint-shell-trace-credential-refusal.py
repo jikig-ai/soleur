@@ -28,6 +28,10 @@ invariant:
       `set -x` below a compliant preamble leaks every subsequent bind, and the
       five hand-written `set -x` warnings across three workflows are warning
       about exactly this shape.
+  Rules C and D are documented at their definitions below. Rule E (#9597) is the
+  argv-bearer ratchet: no curl command carries a bearer token in its own argument
+  list (see the Rule E block for the members, safe forms and blind spots), with its
+  own `path<TAB>site-count` baseline compared by equality in the repo-wide run.
 
 SCOPE EXCLUSIONS, each with a reason:
   *.test.sh / tests/  -- suites synthesize fake tokens per
@@ -1082,6 +1086,482 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
     return out
 
 
+# --- Rule E: no bearer token in a curl command's own argument list ------------
+# (#9597, sweep #7843) A bearer passed as `-H "Authorization: Bearer $TOK"` is an
+# ARGUMENT of the curl process: every local user reads it from /proc/<pid>/cmdline
+# and `ps` for the life of the request, and it lands in any argv audit log. Rule D
+# confines WHERE a credentialed curl may send it and says nothing about HOW the
+# credential travels, so it accepts this form -- which is why this is its own rule.
+#
+# The canonical form keeps the credential on curl's STDIN:
+#     curl --disable --noproxy '*' ... --config - "$URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOK")
+# (`-H @-` fed by a pipe and `--header @<(...)` are the other safe spellings).
+#
+# The property: no executed curl command carries a bearer in its OWN arguments, and
+# `--config -` calls do not re-expose it. Rule E runs on every logical command from
+# `_curl_commands()`, on that command's INVOCATION SEGMENT only -- never on the whole
+# pipeline assembly, which would flag the safe `printf 'Authorization: ...' | curl -H @-`.
+#
+# Members the property quantifies over:
+#   * the short `-H` and long `--header` flags, with or without a space (`-H"..."`),
+#     double- or single-quoted, any case of `Authorization`/`Bearer`, the header
+#     before OR after the URL, and any number of curl commands per script;
+#   * a header held in a VARIABLE (`h="Authorization: Bearer $T"` ... `-H "$h"`),
+#     resolved file-wide, and in an ARRAY (`=(`/`+=(`, inlined at the call site by
+#     `_inline_arrays`);
+#   * a second credential header (`apikey:`) on argv in a call that also carries a
+#     bearer, on argv or on stdin. A standalone anon-key `apikey:` call is safe;
+#   * the hazards of the stdin form itself, on a `--config -` / `-K -` call:
+#     `-v`/`--verbose`/`--trace*`/`-D -` print the config's headers to the terminal,
+#     a stdin body (`-d @-`, `--data-binary @-`, `-T -`, `--json @-`) cannot share a
+#     stdin that is already the config, and a here-string/heredoc feeding the header
+#     writes it to a temp file under bash.
+# NOT flagged: `-H @-`, `--header @<(...)`, `--config -`, `-K -`, `--config <(...)`,
+# a bearer inside a trailing comment, printed command text (`echo`/`printf` of a
+# curl command: curl is not in command position) and YAML (only shell is scanned).
+#
+# DOCUMENTED BLIND SPOTS: a curl hidden in a wrapper function (wrapper awareness is a
+# separate step), a header passed positionally (`-H "$2"`), a bearer in a script
+# SOURCED from a library, a second curl on the SAME physical line (the last one is
+# judged, as in Rule D), and multi-line quoted strings that print a curl command.
+#
+# Baseline E is `path<TAB>site-count`. Unlike the other baselines it is compared by
+# EQUALITY in the repo-wide run: a listed file must still offend and its live count
+# must match, so the baseline can only shrink in the same diff as the code it excuses.
+BASELINE_E_FILE = Path(__file__).resolve().parent / "lint-shell-trace-credential-refusal-e.baseline.txt"
+
+E_BEARER = re.compile(r"authorization\s*:\s*bearer", re.I)
+E_APIKEY = re.compile(r"^\s*apikey\s*:", re.I)
+# `-H"..."`: the value is glued to the flag. A flag whose value is the NEXT word is E_HDR_FLAG.
+E_HDR_ATTACHED = re.compile(r"^-H(?=.)")
+E_HDR_FLAG = re.compile(r"^(?:--header|-[A-Za-z]*H)$")
+E_VERBOSE = re.compile(r"^(?:--verbose|--trace[A-Za-z-]*|-[A-Za-z]*v[A-Za-z]*)$")
+E_STDIN_BODY = re.compile(
+    r"^(?:-d|--data|--data-binary|--data-raw|--data-ascii|--data-urlencode|--json|-F|--form|--form-string)$"
+)
+E_HEREDOC = re.compile(r"^<<")
+# An array EXPANSION word left over after `_inline_arrays` (declared in another
+# function, or assigned after `&&`, which the inliner's line-start anchor cannot see).
+E_ARRAY_WORD = re.compile(r"^\"?\$\{([A-Za-z_]\w*)\[[@*]\]\}\"?$")
+
+_E_BODY_AT_STDIN = re.compile(r"^(?:[^=@]*=)?@-$|^[^=@]+@-$")
+_E_KEYWORDS = frozenset({
+    "if", "then", "elif", "else", "while", "until", "do", "!", "{", "time",
+    "command", "exec", "builtin", "sudo", "nohup",
+})
+_E_ASSIGN_WORD = re.compile(r"^[A-Za-z_]\w*(?:\[[^\]]*\])?\+?=")
+_E_HELD_ASSIGN = re.compile(
+    r"^\s*(?:(?:local|export|readonly|declare|typeset)(?:\s+-[A-Za-z]+)*\s+)*([A-Za-z_]\w*)\+?=(.*)$"
+)
+_E_PRINTF_V = re.compile(r"^\s*printf\s+-v\s+([A-Za-z_]\w*)\s+(.*)$")
+# A heredoc WRITTEN TO A FILE (`cat > f <<EOF`, `... | tee f`) is code or config that is
+# deployed and run later, not printed text, so its body stays in scope.
+_HEREDOC_TO_FILE = re.compile(r"(?:^|[^<>&\d])\d*>>?\s*(?!&|/dev/(?:stderr|stdout|null|tty)\b)[^\s<>|;&]|\btee\b")
+_HEREDOC_OPEN = re.compile(r"(?<!<)<<(?!<)(-?)\s*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+def excluded_for_rule_e(rel: str) -> bool:
+    """Rule E's scope is Rule D's WITHOUT the exec-bit carve-out.
+
+    A bearer on argv is a hazard in a SOURCED library exactly as in an executed
+    script (the process table does not care how the shell got there), so every
+    `tests/scripts/lib/*-gate.sh` is in scope, not only the one that carries a
+    shebang and the exec bit. `*.test.sh`, `tests/` and `fixtures/` stay out for
+    Rule D's reason: they synthesize violations on purpose.
+    """
+    if PRODUCTION_GATE.search(rel):
+        return False
+    return any(
+        p.search(rel) for p in EXCLUDE_PATTERNS
+        if p.pattern != r"^scripts/lib/"
+    )
+
+
+def _heredoc_body_lines(lines: list[str]) -> set[int]:
+    """Indexes of lines that are the BODY of a heredoc that is printed, never executed.
+
+    A heredoc whose delimiter is never found is NOT treated as one: masking to the
+    end of the file on a `<<` that was really an arithmetic shift would hide every
+    later curl. A heredoc written to a FILE is not masked either (see _HEREDOC_TO_FILE).
+    """
+    masked: set[int] = set()
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        opener = "" if raw.lstrip().startswith("#") else strip_trailing_comment(raw)
+        m = _HEREDOC_OPEN.search(opener)
+        if not m or _HEREDOC_TO_FILE.search(opener):
+            i += 1
+            continue
+        delim, dash = m.group(3), m.group(1)
+        end = None
+        for j in range(i + 1, len(lines)):
+            cand = lines[j].lstrip("\t") if dash else lines[j]
+            if cand.rstrip() == delim:
+                end = j
+                break
+        if end is None:
+            i += 1
+            continue
+        masked.update(range(i + 1, end + 1))
+        i = end + 1
+    return masked
+
+
+def _e_held_names(lines: list[str]) -> set[str]:
+    """Variables the file assigns an `Authorization: Bearer ...` string, file-wide."""
+    held: set[str] = set()
+    for raw in lines:
+        line = strip_trailing_comment(strip_comment(raw))
+        if not line:
+            continue
+        m = _E_HELD_ASSIGN.match(line) or _E_PRINTF_V.match(line)
+        if m and E_BEARER.search(m.group(2)):
+            held.add(m.group(1))
+    return held
+
+
+def _e_skip_paren(s: str, i: int) -> int:
+    """Index just past the `)` that closes a `(` whose body starts at `i` (quote-aware)."""
+    n, q, depth = len(s), None, 1
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if q == "'":
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if q == '"':
+            if c == '"':
+                q = None
+            elif s.startswith("$(", i):
+                i = _e_skip_paren(s, i + 2)
+                continue
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+        elif s.startswith(("$(", "<(", ">("), i):
+            i = _e_skip_paren(s, i + 2)
+            continue
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _e_split(cmd: str) -> list[tuple[str, str]]:
+    """Split a logical command into (segment, separator-before) at the shell's own
+    command boundaries, QUOTE- and SUBSTITUTION-aware.
+
+    `_curl_commands` splits on every `;`/`|` including inside quotes and process
+    substitutions, which cuts a `< <(printf ... | ...)` feed in half. Here nothing
+    inside a quote splits, `<(`/`>(` stay inside one word, and a `$(...)`/backtick
+    substitution is replaced in its ENCLOSING command by an opaque placeholder while
+    its body is split recursively into segments of its own. That keeps
+    `curl "$base/x?e=$(jq ... '$v|@uri')" -H "$auth"` ONE command (the `-H` after the
+    substitution is still curl's argument) and still finds `x=$(curl ...)`.
+    """
+    out: list[tuple[str, str]] = []
+    cur: list[str] = []
+    q: str | None = None
+    pending = ""
+    n = len(cmd)
+    i = 0
+
+    def flush(next_sep: str) -> None:
+        nonlocal pending
+        out.append(("".join(cur), pending))
+        cur.clear()
+        pending = next_sep
+
+    def body(start: int, end: int) -> str:
+        return cmd[start:end - 1] if end > start and cmd[end - 1] == ")" else cmd[start:end]
+
+    while i < n:
+        c = cmd[i]
+        if q == "'":
+            cur.append(c)
+            if c == "'":
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if cmd.startswith("$(", i):
+            j = _e_skip_paren(cmd, i + 2)
+            out.extend(_e_split(body(i + 2, j)))
+            cur.append("__CMDSUB__")
+            i = j
+            continue
+        if c == "`":
+            j = cmd.find("`", i + 1)
+            j = n if j < 0 else j
+            out.extend(_e_split(cmd[i + 1:j]))
+            cur.append("__CMDSUB__")
+            i = j + 1
+            continue
+        if q == '"':
+            cur.append(c)
+            if c == '"':
+                q = None
+            i += 1
+            continue
+        if c in "'\"":
+            q = c
+            cur.append(c)
+            i += 1
+            continue
+        if cmd.startswith(("<(", ">("), i):
+            j = _e_skip_paren(cmd, i + 2)
+            cur.append(cmd[i:j])
+            i = j
+            continue
+        if c == "(":
+            j = _e_skip_paren(cmd, i + 1)
+            flush("")
+            out.extend(_e_split(body(i + 1, j)))
+            i = j
+            continue
+        if c in ";|" or cmd.startswith("&&", i):
+            j = i + 1
+            while j < n and cmd[j] in ";|&":
+                j += 1
+            flush(cmd[i:j])
+            i = j
+            continue
+        cur.append(c)
+        i += 1
+    flush("")
+    return [(s, sep) for s, sep in out if s.strip()]
+
+
+def _e_words(seg: str) -> list[str]:
+    """Shell words of one segment, RAW (quotes kept). `<(...)` is part of one word."""
+    words: list[str] = []
+    cur: list[str] = []
+    q: str | None = None
+    depth = 0
+    i, n = 0, len(seg)
+    while i < n:
+        c = seg[i]
+        if q:
+            cur.append(c)
+            if c == "\\" and q == '"' and i + 1 < n:
+                cur.append(seg[i + 1])
+                i += 2
+                continue
+            if c == q:
+                q = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(seg[i:i + 2])
+            i += 2
+            continue
+        if c in "'\"":
+            q = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif c.isspace() and depth == 0:
+            if cur:
+                words.append("".join(cur))
+                cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    if cur:
+        words.append("".join(cur))
+    return words
+
+
+def _e_unq(word: str) -> str:
+    """A word with its quote characters removed (adequate for classification)."""
+    return re.sub(r"[\"']", "", word)
+
+
+def _e_curl_args(seg: str) -> list[str] | None:
+    """The words after `curl` when curl is in COMMAND POSITION in this segment, else None.
+
+    Command position is what separates an executed curl from printed text:
+    `echo "curl -H 'Authorization: Bearer $T' ..."` has `echo` in front of it.
+    Only assignments, control keywords and the usual wrappers (`env`, `timeout`,
+    `nice`) may precede it.
+    """
+    words = _e_words(seg)
+    n = len(words)
+    i = 0
+    while i < n:
+        w = words[i]
+        if w in _E_KEYWORDS or _E_ASSIGN_WORD.match(w):
+            i += 1
+        elif w == "env":
+            i += 1
+            while i < n and (words[i].startswith("-") or "=" in words[i]):
+                i += 1
+        elif w in ("timeout", "nice"):
+            i += 1
+            while i < n and (words[i].startswith("-") or re.fullmatch(r"\d+[smhd]?", words[i])):
+                i += 1
+        else:
+            break
+    if i < n and re.fullmatch(r"(?:[\w./-]*/)?curl", words[i]):
+        return words[i + 1:]
+    return None
+
+
+def _e_header_value(args: list[str], i: int) -> tuple[str | None, int]:
+    """If `args[i]` is a header flag, -> (its RAW value, index of the next word); else (None, i)."""
+    w = args[i]
+    if E_HDR_ATTACHED.match(w):
+        return w[2:], i + 1
+    if w.startswith("--header="):
+        return w[len("--header="):], i + 1
+    if E_HDR_FLAG.match(w):
+        return (args[i + 1] if i + 1 < len(args) else ""), i + 2
+    return None, i
+
+
+def _e_bearer_arrays(lines: list[str], held_re: re.Pattern | None) -> set[str]:
+    """Arrays any assignment of which (`=(` or `+=(`, anywhere in a line) holds a bearer header."""
+    text = "\n".join(strip_trailing_comment(strip_comment(x)) for x in lines)
+    names: set[str] = set()
+    for m in re.finditer(r"(?<![\w$])([A-Za-z_]\w*)\+?=\(", text):
+        words = _e_words(text[m.end():_e_skip_paren(text, m.end())])
+        i = 0
+        while i < len(words):
+            val, nxt = _e_header_value(words, i)
+            if val is None:
+                i += 1
+                continue
+            hv = _e_unq(val)
+            if not hv.startswith("@") and (E_BEARER.search(hv) or (held_re and held_re.search(hv))):
+                names.add(m.group(1))
+            i = nxt
+    return names
+
+
+def _e_span(lines: list[str], i: int) -> tuple[int, int]:
+    """Physical-line span of the logical command `_curl_commands` builds for line `i`."""
+    start = i
+    for j in range(i - 1, max(-1, i - 5), -1):
+        prev = strip_comment(lines[j]).rstrip()
+        if prev.endswith("|") or prev.endswith("\\"):
+            start = j
+        else:
+            break
+    end = i
+    while end < len(lines) - 1 and strip_comment(lines[end]).rstrip().endswith("\\"):
+        end += 1
+    return start, end
+
+
+def check_rule_e(rel: str, lines: list[str]) -> list[str]:
+    """One finding per curl call site that carries a bearer on argv (see the Rule E block)."""
+    held = _e_held_names(lines)
+    held_re = re.compile(r"\$\{?(?:" + "|".join(map(re.escape, sorted(held))) + r")\b") if held else None
+    bearer_arrays = _e_bearer_arrays(lines, held_re)
+    in_heredoc = _heredoc_body_lines(lines)
+    seen_spans: set[tuple[int, int]] = set()
+    out: list[str] = []
+    for lineno, scopes in _curl_commands(lines):
+        if lineno in in_heredoc:
+            continue
+        # `_curl_commands` yields one entry per physical line that mentions curl, so a
+        # wrapped command whose continuation lines also say "curl" (`|| echo "(curl
+        # error)"`) is yielded twice with the same assembly. One site, one finding.
+        span = _e_span(lines, lineno)
+        if span in seen_spans:
+            continue
+        cmd, _invocation = scopes
+        segs = _e_split(cmd)
+        at, args = None, None
+        for k in range(len(segs) - 1, -1, -1):
+            found = _e_curl_args(segs[k][0])
+            if found is not None:
+                at, args = k, found
+                break
+        if args is None or at is None:
+            continue
+        seen_spans.add(span)
+
+        bearer_argv = apikey = cfg_stdin = hdr_stdin = False
+        verbose = body = heredoc = False
+        i = 0
+        while i < len(args):
+            w = args[i]
+            nxt = _e_unq(args[i + 1]) if i + 1 < len(args) else ""
+            val, after = _e_header_value(args, i)
+            am = E_ARRAY_WORD.match(w)
+            if am and am.group(1) in bearer_arrays:
+                bearer_argv = True
+            if val is not None:
+                hv = _e_unq(val)
+                if hv.startswith("@"):
+                    hdr_stdin = hdr_stdin or hv.startswith("@-")
+                elif E_BEARER.search(hv) or (held_re and held_re.search(hv)):
+                    bearer_argv = True
+                elif E_APIKEY.match(hv):
+                    apikey = True
+                i = after
+                continue
+            if w in ("-K", "--config") and nxt == "-":
+                cfg_stdin = True
+            elif w == "-K-":
+                cfg_stdin = True
+            if E_VERBOSE.match(w) or (w in ("-D", "--dump-header") and nxt == "-") or w == "-D-":
+                verbose = True
+            if E_STDIN_BODY.match(w) and _E_BODY_AT_STDIN.match(nxt):
+                body = True
+            elif re.match(r"^-d@-$|^--data[\w-]*=@-$", w):
+                body = True
+            elif (w in ("-T", "--upload-file") and nxt == "-") or w == "-T-":
+                body = True
+            if E_HEREDOC.match(w):
+                heredoc = True
+            i += 1
+        # A heredoc/here-string on the PRECEDING pipeline stage feeds the same stdin.
+        if segs[at][1].startswith("|") and at > 0:
+            if any(E_HEREDOC.match(w) for w in _e_words(segs[at - 1][0])):
+                heredoc = True
+
+        bearer_in_call = bearer_argv or bool(E_BEARER.search(cmd)) or bool(held_re and held_re.search(cmd))
+        reasons: list[str] = []
+        if bearer_argv:
+            reasons.append("a bearer header is an argument of this curl, readable by every local "
+                           "user in /proc/<pid>/cmdline and `ps`")
+        if apikey and bearer_in_call:
+            reasons.append("a second credential header (`apikey:`) travels on argv beside the bearer")
+        if cfg_stdin and verbose:
+            reasons.append("config-stdin hazard: -v/--verbose/--trace*/-D - prints the config's "
+                           "headers, Authorization included, to the terminal")
+        if cfg_stdin and body:
+            reasons.append("config-stdin hazard: a stdin body (`@-`, `-T -`) cannot share a stdin "
+                           "that is already the config")
+        if (cfg_stdin or hdr_stdin) and heredoc:
+            reasons.append("config-stdin hazard: a here-string/heredoc feeding the header writes it "
+                           "to a temp file; use a process substitution")
+        if reasons:
+            out.append(
+                f"{rel}:{lineno + 1}: bearer token on curl argv -- " + "; ".join(reasons) + ".\n"
+                "  Feed the header on stdin instead: "
+                "`curl … --config - \"$URL\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
+            )
+    return out
+
+
 def check_file(path: Path) -> tuple[int, list[str]]:
     """-> (status, violations). status 2 means cannot-evaluate."""
     try:
@@ -1089,7 +1569,8 @@ def check_file(path: Path) -> tuple[int, list[str]]:
     except ValueError:
         rel = str(path)
     d_excluded = excluded_for_rule_d(rel)
-    if excluded(rel) and d_excluded:
+    e_excluded = excluded_for_rule_e(rel)
+    if excluded(rel) and d_excluded and e_excluded:
         return 0, []
     try:
         text = path.read_text(encoding="utf-8")
@@ -1110,11 +1591,12 @@ def check_file(path: Path) -> tuple[int, list[str]]:
         abc += check_rule_b(rel, lines, preamble_at)
         abc += check_rule_c(rel, lines, preamble_at)
     d = [] if d_excluded else check_rule_d(rel, lines, preamble_at)
+    e = [] if e_excluded else check_rule_e(rel, lines)
     # Tagged by RULE, never by baseline file. `main()` owns the rule -> baseline
     # map; a tag like "abc" would encode the forgiveness partition in the
     # checker's return type, so splitting the A/B/C baseline later would mean
     # editing this function and every caller's vocabulary.
-    violations = [("abc_rule", v) for v in abc] + [("d", v) for v in d]
+    violations = [("abc_rule", v) for v in abc] + [("d", v) for v in d] + [("e", v) for v in e]
     return (1 if violations else 0), violations
 
 
@@ -1176,6 +1658,24 @@ def load_baseline_d() -> set[str]:
     return _load_list(BASELINE_D_FILE)
 
 
+def load_baseline_e() -> dict[str, int]:
+    """Baseline E: `path<TAB>site-count` per line. A malformed line is a hard error
+    (exit 2): a baseline that cannot be read must not silently suppress nothing."""
+    out: dict[str, int] = {}
+    if not BASELINE_E_FILE.exists():
+        return out
+    for n, ln in enumerate(BASELINE_E_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        path, sep, cnt = ln.partition("\t")
+        if not sep or not cnt.strip().isdigit() or int(cnt) < 1 or not path.strip():
+            print(f"{BASELINE_E_FILE.name}:{n}: malformed baseline E line (want `path<TAB>site-count`, "
+                  f"count >= 1): {ln!r}", file=sys.stderr)
+            sys.exit(2)
+        out[path.strip()] = int(cnt)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("paths", nargs="*")
@@ -1185,6 +1685,8 @@ def main() -> int:
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--write-baseline-d", action="store_true",
                     help="rewrite Rule D's baseline from a full-tree scan")
+    ap.add_argument("--write-baseline-e", action="store_true",
+                    help="rewrite Rule E's baseline (path<TAB>site-count) from a full-tree scan")
     args = ap.parse_args()
 
     targets = targets_from_args(args)
@@ -1195,14 +1697,23 @@ def main() -> int:
     scoped = args.changed or args.paths
     baseline = set() if scoped else load_baseline()
     baseline_d = set() if scoped else load_baseline_d()
+    # Rule E's baseline is {path: site-count} and suppresses by EQUALITY, not by file:
+    # `baseline_e_ok` collects the files whose live count equals the listed one and
+    # is what the rule -> suppression map below consults. A listed file that no
+    # longer offends, or whose count moved, is NOT in it and is reported instead.
+    baseline_e = {} if scoped else load_baseline_e()
+    baseline_e_ok: set[str] = set()
     # The rule -> suppression map lives HERE, in main(), which is the layer that
     # owns policy. check_file() only reports what it found.
-    baselines_by_rule = {"abc_rule": baseline, "d": baseline_d}
+    baselines_by_rule = {"abc_rule": baseline, "d": baseline_d, "e": baseline_e_ok}
     BASELINE_FOR = baselines_by_rule
 
     scanned = 0
     offenders: list[str] = []
     offenders_d: list[str] = []
+    offenders_e: list[str] = []
+    e_counts: dict[str, int] = {}
+    unevaluated: set[str] = set()
     all_violations: list[str] = []
     cannot_evaluate = False
 
@@ -1211,6 +1722,10 @@ def main() -> int:
         status, violations = check_file(path)
         if status == 2:
             cannot_evaluate = True
+            try:
+                unevaluated.add(str(path.relative_to(REPO_ROOT)))
+            except ValueError:
+                unevaluated.add(str(path))
             continue
         if violations:
             try:
@@ -1221,18 +1736,52 @@ def main() -> int:
                 offenders.append(rel)
             if any(rule == "d" for rule, _ in violations):
                 offenders_d.append(rel)
+            e_n = sum(1 for rule, _ in violations if rule == "e")
+            if e_n:
+                offenders_e.append(rel)
+                e_counts[rel] = e_n
+                if baseline_e.get(rel) == e_n:
+                    baseline_e_ok.add(rel)
             for rule, v in violations:
                 supp = BASELINE_FOR.get(rule, baselines_by_rule["abc_rule"])
                 if rel not in supp:
                     all_violations.append(v)
 
     if args.census:
-        print(f"scanned={scanned} offenders={len(offenders)} offenders_d={len(offenders_d)}")
+        print(f"scanned={scanned} offenders={len(offenders)} offenders_d={len(offenders_d)} "
+              f"offenders_e={len(offenders_e)}")
         for o in sorted(offenders):
             print(o)
         print("--- rule D ---")
         for o in sorted(offenders_d):
             print(o)
+        print("--- rule E ---")
+        for o in sorted(offenders_e):
+            print(o)
+        return 0
+
+    if args.write_baseline_e:
+        if scoped:
+            print(
+                "--write-baseline-e rewrites the ENTIRE Rule E baseline and must scan "
+                "the whole tree. Re-run it without --changed and without explicit paths.",
+                file=sys.stderr,
+            )
+            return 2
+        BASELINE_E_FILE.write_text(
+            "# Rule E (#9597): curl commands that carry a bearer token in their OWN argument\n"
+            "# list (readable by every local user in /proc/<pid>/cmdline), plus the hazards of\n"
+            "# the `--config -` form that replaces it. Format: `path<TAB>site-count`.\n"
+            "# SHRINK-ONLY: the repo-wide run compares this file to the live offender set by\n"
+            "# EQUALITY on path AND count -- a listed file must still offend, its count must\n"
+            "# match, and an offender not listed here fails the run. So an entry can only be\n"
+            "# lowered or deleted in the same diff that converts the call site; it can never\n"
+            "# be raised or added to excuse a new one. `--changed` and explicit paths bypass it.\n"
+            "# Regenerate with `--write-baseline-e` ONLY after converting sites.\n"
+            + "".join(f"{o}\t{e_counts[o]}\n" for o in sorted(e_counts)),
+            encoding="utf-8",
+        )
+        print(f"rule E baseline written: {len(e_counts)} entries, {sum(e_counts.values())} sites")
         return 0
 
     if args.write_baseline_d:
@@ -1289,6 +1838,25 @@ def main() -> int:
         )
         return 2
 
+    if not scoped:
+        # Equality, not suppression: report every baseline E entry the live scan
+        # contradicts. (A file that could not be read is reported by its own rc=2.)
+        for path_e, listed in sorted(baseline_e.items()):
+            if path_e in unevaluated:
+                continue
+            live = e_counts.get(path_e, 0)
+            if live == 0:
+                all_violations.append(
+                    f"{path_e}: listed in baseline E (#9597) but no longer carries a bearer token on "
+                    f"curl argv (or no longer exists).\n  Delete the entry: baseline E is shrink-only.\n"
+                )
+            elif live != listed:
+                all_violations.append(
+                    f"{path_e}: baseline E (#9597) lists {listed} site(s) but the live count is {live}.\n"
+                    f"  Baseline E is compared by equality and is shrink-only: convert the sites and "
+                    f"lower the entry; never raise it.\n"
+                )
+
     if all_violations:
         for v in all_violations:
             print(v, file=sys.stderr)
@@ -1306,7 +1874,8 @@ def main() -> int:
 
     print(
         f"OK: {scanned} scanned file(s), {len(offenders)} baselined (A/B/C), "
-        f"{len(offenders_d)} baselined (D)"
+        f"{len(offenders_d)} baselined (D), {len(baseline_e_ok)} baselined (Rule E: "
+        f"{sum(e_counts[p] for p in baseline_e_ok)} site(s))"
     )
     return 0
 

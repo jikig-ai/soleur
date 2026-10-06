@@ -78,6 +78,11 @@ rc_of() {
 
 PROBE_TOKEN="FAKE_notarealtoken_0000000000"
 
+# One Rule E finding per offending call site, always starting with this phrase.
+# Rows COUNT these messages: an rc alone cannot tell "Rule E fired once" from
+# "some other rule fired" or "Rule E fired on the wrong call".
+E_MSG_RE='^[^[:space:]]+:[0-9]+: bearer token on curl argv'
+
 reports() { # reports <basename> -> 0 if the last run named that file
   grep -q -- "$1" "$WORK/out" "$WORK/err"
 }
@@ -282,7 +287,7 @@ rc="$(rc_of "$LINT" --write-baseline "$FIX/compliant-canonical.sh")"
 _tpl="$REPO_ROOT/plugins/soleur/skills/ship/references/followthrough-stub-template.sh"
 if [ -f "$_tpl" ]; then
   cp "$_tpl" "$WORK/fx/probe-scaffolded.sh"
-  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl --disable --noproxy '"'"'*'"'"' -H "Authorization: Bearer $TOK" https://example.invalid >/dev/null 2>&1 || true\n' \
+  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl --disable --noproxy '"'"'*'"'"' --config - https://example.invalid < <(printf '"'"'header = "Authorization: Bearer %%s"\\n'"'"' "$TOK") >/dev/null 2>&1 || true\n' \
     >> "$WORK/fx/probe-scaffolded.sh"
   rc="$(rc_of "$LINT" "$WORK/fx/probe-scaffolded.sh")"
   [ "$rc" = "0" ] && pass "a probe scaffolded from the stub template passes the lint" \
@@ -331,7 +336,7 @@ if not m:
 open(sys.argv[2], "w", encoding="utf-8").write(
     "#!/usr/bin/env bash\nset -uo pipefail\n\n"
     + m.group(1)
-    + '\n\ncurl --disable --noproxy \'*\' -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true\n'
+    + '\n\ncurl --disable --noproxy \'*\' -sS --config - https://example.invalid/ < <(printf \'header = "Authorization: Bearer %s"\\n\' "$SENTRY_AUTH_TOKEN") || true\n'
 )
 PY
 then
@@ -393,9 +398,14 @@ fi
 # mutant's verdict changed on ITS OWN fixture. Each row names the fixture it
 # reddens -- a row scored against a fixture that does not exercise its class is
 # a row that cannot fail.
-mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc>
-  local label="$1" expr="$2" fx="$3" want_base="$4" want_mut="$5"
-  local sandbox="$WORK/mut.py" base mut
+#
+# Optional 6th arg: the exact number of Rule E messages the MUTANT run must print.
+# A Python syntax error in the mutant exits 1 and would read as a RED mutant, so
+# every row also refuses a mutant whose stderr carries a Traceback/SyntaxError --
+# that is an instrument error, never a kill.
+mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc> [<expected-mutant-E-count>]
+  local label="$1" expr="$2" fx="$3" want_base="$4" want_mut="$5" want_e="${6:-}"
+  local sandbox="$WORK/mut.py" base mut en
   cp "$LINT" "$sandbox" || { fail "$label: sandbox copy failed"; return; }
 
   base="$(rc_of "$LINT" "$fx")"
@@ -411,6 +421,17 @@ mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc
   fi
 
   mut="$(rc_of "$sandbox" "$fx")"
+  if grep -qE 'Traceback|SyntaxError' "$WORK/err"; then
+    fail "$label: INSTRUMENT ERROR -- the mutant crashed (Traceback/SyntaxError on stderr); a crash exits non-zero and would read as RED"
+    return
+  fi
+  if [ -n "$want_e" ]; then
+    en="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
+    if [ "$en" != "$want_e" ]; then
+      fail "$label: mutant printed $en Rule E message(s), expected $want_e"
+      return
+    fi
+  fi
   if [ "$mut" = "$want_mut" ]; then
     pass "$label: mutant verdict moved $want_base -> $mut"
   else
@@ -559,6 +580,256 @@ mutate_row 'D11 Rule D: bare `-` treated as a flag, hiding the operand after it'
   's/ and toks\[i - 1\] != "-":/:/' \
   "$FIX/violation-ruled-procsub-unpinned.sh" 1 0
 
+# --- Rule E (#9597): bearer token on curl argv --------------------------------
+# One row per fixture, and every row COUNTS Rule E's own messages (one per call
+# site) AND the lint's total violation count. rc alone cannot tell "Rule E fired on
+# the call it should" from "some other rule fired" or "Rule E fired twice on one
+# call". Each violation fixture starts from a Rule-A/B/C/D-clean copy, so the total
+# must equal the Rule E count. Each compliant fixture must exit 0 with zero Rule E
+# messages.
+E_ROWS=0
+e_row() { # <label> <lint> <fixture> <want-E-count>
+  local label="$1" lint="$2" fx="$3" want="$4" rc en tot
+  E_ROWS=$((E_ROWS + 1))
+  rc="$(rc_of "$lint" "$fx")"
+  if grep -qE 'Traceback|SyntaxError' "$WORK/err"; then
+    fail "$label: INSTRUMENT ERROR -- the lint crashed (Traceback/SyntaxError on stderr)"
+    return
+  fi
+  en="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
+  tot="$(grep -ohE '[0-9]+ violation\(s\)' "$WORK/err" | grep -oE '^[0-9]+')"
+  tot="${tot:-0}"
+  if [ "$want" = "0" ]; then
+    if [ "$rc" = "0" ] && [ "$en" = "0" ]; then
+      pass "$label: rc=0 with 0 Rule E messages"
+    else
+      fail "$label: expected rc=0 and 0 Rule E messages, got rc=$rc E=$en total=$tot"
+    fi
+  elif [ "$rc" = "1" ] && [ "$en" = "$want" ] && [ "$tot" = "$want" ]; then
+    pass "$label: rc=1 with exactly $want Rule E message(s) and no other rule firing"
+  else
+    fail "$label: expected rc=1, $want Rule E message(s) and $want total, got rc=$rc E=$en total=$tot"
+  fi
+}
+
+# Mutate a COPY of a fixture (never the corpus), assert the mutation landed, then
+# score the copy like any other fixture.
+fx_mut_row() { # <label> <perl-expr> <source-fixture> <want-E-count>
+  local label="$1" expr="$2" src="$3" want="$4" copy="$WORK/fxmut.sh"
+  cp "$src" "$copy" || { fail "$label: fixture copy failed"; return; }
+  perl -0pi -e "$expr" "$copy"
+  if diff -q "$src" "$copy" >/dev/null 2>&1; then
+    fail "$label: fixture mutation did NOT land -- the row would score the unmutated fixture"
+    return
+  fi
+  e_row "$label" "$LINT" "$copy" "$want"
+}
+
+e_row 'Rule E: literal -H "Authorization: Bearer" on argv is reported' "$LINT" "$FIX/violation-argv-bearer-literal.sh" 1
+e_row 'Rule E: a SECOND curl in the same script is judged too (compliant neighbour does not launder it)' "$LINT" "$FIX/violation-argv-bearer-second-member.sh" 1
+e_row 'Rule E: header held in a variable and passed as -H "$var" is reported' "$LINT" "$FIX/violation-argv-bearer-variable-held.sh" 1
+e_row 'Rule E: header held in an array (`=(`, `+=(` and an assignment after `&&`) is reported, one message per call site' "$LINT" "$FIX/violation-argv-bearer-array-held.sh" 3
+e_row 'Rule E: --header single-quoted lower case, -H"..." with no space, and a header AFTER the URL: one message each' "$LINT" "$FIX/violation-argv-bearer-long-form.sh" 3
+e_row 'Rule E: config-stdin hazards (-v, -d @-, here-string) on a --config - call: one message each' "$LINT" "$FIX/violation-argv-bearer-config-hazards.sh" 3
+
+# MUST-PASS rows. The canonical row is NOT the only one: a suite whose single
+# compliant fixture is the canonical form cannot tell "discriminates" from
+# "flags every curl that mentions a bearer".
+e_row 'Rule E: canonical `--config -` fed by a process substitution inside $(...) passes' "$LINT" "$FIX/compliant-stdin-bearer-procsub.sh" 0
+e_row 'Rule E: bare `--config -` fed by a process substitution passes' "$LINT" "$FIX/compliant-stdin-bearer-procsub-bare.sh" 0
+e_row 'Rule E: `printf ... | curl -H @-` passes (the assembly names a bearer, the invocation does not)' "$LINT" "$FIX/compliant-stdin-bearer-header-at-stdin.sh" 0
+e_row 'Rule E: --header @<(...), -K -, --config <(...), a trailing-comment bearer and a standalone anon-key apikey: all pass' "$LINT" "$FIX/compliant-all-safe-forms.sh" 0
+
+# Matrix row 1: the canonical compliant fixture with its --config - call replaced
+# by the argv form must read RED with exactly one Rule E message.
+fx_mut_row 'E1 canonical compliant with the --config - call replaced by -H "Authorization: Bearer"' \
+  's/--config - "\$SINK_URL" < <\(printf \x27header = "Authorization: Bearer %s"\\n\x27 "\$SENTRY_AUTH_TOKEN"\)/-H "Authorization: Bearer \${SENTRY_AUTH_TOKEN}" "\$SINK_URL"/' \
+  "$FIX/compliant-stdin-bearer-procsub.sh" 1
+
+# Floor on EXECUTED Rule E fixture rows: a dead dispatch (or a deleted loop) must
+# read RED, never "0 checked".
+if [ "$E_ROWS" -ge 11 ]; then
+  pass "Rule E: $E_ROWS fixture rows executed (floor 11)"
+else
+  fail "Rule E: only $E_ROWS fixture rows executed, floor is 11"
+fi
+
+# --census must agree with baseline E: a dispatch that never runs Rule E reports
+# offenders_e=0 against a non-empty baseline.
+BASE_E_FILE="$REPO_ROOT/scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+python3 "$LINT" --census >"$WORK/census" 2>"$WORK/census.err"
+census_e="$(head -1 "$WORK/census" | grep -oE 'offenders_e=[0-9]+' | cut -d= -f2)"
+base_e="$(grep -cvE '^(#|[[:space:]]*$)' "$BASE_E_FILE" 2>/dev/null)"
+if [ -n "$census_e" ] && [ "$census_e" = "$base_e" ]; then
+  pass "Rule E: --census offenders_e ($census_e) equals baseline E's length ($base_e)"
+else
+  fail "Rule E: --census offenders_e='$census_e' does not equal baseline E length '$base_e'"
+fi
+grep -qx -- '--- rule E ---' "$WORK/census" \
+  && pass "Rule E: --census carries a '--- rule E ---' list" \
+  || fail "Rule E: --census has no '--- rule E ---' list"
+
+# Matrix row 2: delete the check_rule_e assignment in check_file() (anchored on its
+# own line, scoped to that function). Mutant must read GREEN on a violation fixture.
+mutate_row 'E2 Rule E dispatch dead: the check_rule_e assignment in check_file() removed' \
+  's/(def check_file\(.*?)^(\s*)e = [^\n]*check_rule_e[^\n]*$/${1}${2}e = []/ms' \
+  "$FIX/violation-argv-bearer-literal.sh" 1 0 0
+
+# Matrix row 3: only the FIRST curl command judged -> the second member goes unseen.
+mutate_row 'E3 Rule E judges only the first curl command' \
+  's/(def check_rule_e\(.*?for \w+, \w+ in _curl_commands\(lines\))(:)/${1}[:1]${2}/s' \
+  "$FIX/violation-argv-bearer-second-member.sh" 1 0 0
+
+# Matrix row 4: variable-held, array-held and long-form members, each mutated away.
+mutate_row 'E4a Rule E: file-wide variable-held header resolution removed' \
+  's/(def check_rule_e\(.*?)held = _e_held_names\([^\n]*\)/${1}held = set()/s' \
+  "$FIX/violation-argv-bearer-variable-held.sh" 1 0 0
+# Array members are covered by TWO paths (call-site inlining, then a file-wide
+# fallback for expansions the inliner could not resolve), so killing either alone is
+# an equivalent mutant for the first two sites. E4b kills BOTH; E4e kills only the
+# fallback, which must lose exactly the `&&`-assigned third site.
+mutate_row 'E4b Rule E: array bodies resolved by neither the inliner nor the file-wide fallback' \
+  's/ARRAY_EXPANSION = re\.compile\(r"[^\n]*\n/ARRAY_EXPANSION = re.compile(r"(?!x)x")\n/; s/E_ARRAY_WORD = re\.compile\(r"[^\n]*\n/E_ARRAY_WORD = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-bearer-array-held.sh" 1 0 0
+mutate_row 'E4e Rule E: file-wide array fallback dropped (the `&&`-assigned array goes unseen)' \
+  's/E_ARRAY_WORD = re\.compile\(r"[^\n]*\n/E_ARRAY_WORD = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-bearer-array-held.sh" 1 1 2
+mutate_row 'E4c Rule E: bearer match made case-sensitive' \
+  's/(E_BEARER = re\.compile\([^\n]*), re\.I\)/${1})/' \
+  "$FIX/violation-argv-bearer-long-form.sh" 1 1 1
+mutate_row 'E4d Rule E: attached -H"..." (no space) form dropped' \
+  's/E_HDR_ATTACHED = re\.compile\(r"[^\n]*\n/E_HDR_ATTACHED = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-bearer-long-form.sh" 1 1 2
+
+# Matrix row 6 members, each mutated away on its own fixture.
+mutate_row 'E6a Rule E: -v/--verbose/--trace hazard dropped' \
+  's/E_VERBOSE = re\.compile\(r"[^\n]*\n/E_VERBOSE = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-bearer-config-hazards.sh" 1 1 2
+mutate_row 'E6b Rule E: stdin-body hazard dropped' \
+  's/E_STDIN_BODY = re\.compile\(\s*r"[^\n]*"\s*\)/E_STDIN_BODY = re.compile(r"(?!x)x")/' \
+  "$FIX/violation-argv-bearer-config-hazards.sh" 1 1 2
+mutate_row 'E6c Rule E: here-string/heredoc hazard dropped' \
+  's/E_HEREDOC = re\.compile\(r"[^\n]*\n/E_HEREDOC = re.compile(r"(?!x)x")\n/' \
+  "$FIX/violation-argv-bearer-config-hazards.sh" 1 1 2
+
+# --- Rule E baseline: a sandbox repo (rows 8 and 9) ----------------------------
+# The repo-wide arm compares baseline E to the live offender set on PATH AND COUNT.
+# That cannot be exercised against the real tree (editing the real baseline is
+# exactly what the rule forbids), so each row builds a mini git repo holding a
+# perl-mutated COPY of the lint, empty A/B/C and D baselines, baseline E, one
+# E-only offender and one clean file. `git init && git add` is what makes
+# `git ls-files` (the repo-wide walk) see them. The sandbox lives under $WORK; the
+# real checkout is never touched.
+SBX_N=0
+SBX=""
+SBX_GIT=(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git)
+sbx_repo() { # <baseline-E body (printf-escaped)> [<perl-expr applied to the lint copy>]
+  SBX_N=$((SBX_N + 1))
+  SBX="$WORK/sbx$SBX_N"
+  local lintc="$SBX/scripts/lint-shell-trace-credential-refusal.py"
+  mkdir -p "$SBX/scripts" || return 1
+  cp "$LINT" "$lintc" || return 1
+  if [ -n "${2:-}" ]; then
+    perl -0pi -e "$2" "$lintc"
+    if diff -q "$LINT" "$lintc" >/dev/null 2>&1; then
+      printf 'sbx_repo: perl mutation did not land\n' >&2
+      return 1
+    fi
+  fi
+  printf '# sandbox\n' > "$SBX/scripts/lint-shell-trace-credential-refusal.baseline.txt"
+  printf '# sandbox\n' > "$SBX/scripts/lint-shell-trace-credential-refusal-d.baseline.txt"
+  # shellcheck disable=SC2059
+  printf "# sandbox (#9597)\n$1" > "$SBX/scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+  cp "$FIX/violation-argv-bearer-literal.sh" "$SBX/scripts/offender.sh"
+  cp "$FIX/compliant-stdin-bearer-procsub.sh" "$SBX/scripts/clean.sh"
+  "${SBX_GIT[@]}" -C "$SBX" init -q >/dev/null 2>&1 && "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+}
+sbx_run() { # <lint-args...> -> echoes rc; runs from inside the sandbox
+  ( cd "$SBX" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE \
+      python3 scripts/lint-shell-trace-credential-refusal.py "$@" ) >"$WORK/out" 2>"$WORK/err"
+  printf '%s' "$?"
+}
+sbx_clean_run() { # -> 0 when the last run left no crash on stderr
+  ! grep -qE 'Traceback|SyntaxError' "$WORK/err"
+}
+
+# Sanity first: baseline E listing the offender with its exact count is GREEN.
+if sbx_repo 'scripts/offender.sh\t1\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "0" ] && grep -q 'Rule E' "$WORK/out" && sbx_clean_run; then
+    pass "Rule E baseline: an offender listed with its exact count is accepted and the OK line names Rule E"
+  else
+    fail "Rule E baseline: exact-count sandbox expected rc=0 naming Rule E, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+  # Row 9d: an explicit path BYPASSES baseline E, the repo-wide run above does not.
+  rc="$(sbx_run scripts/offender.sh)"
+  if [ "$rc" = "1" ] && grep -qE "$E_MSG_RE" "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline: an explicit path to a baselined file reports (bypass) while the repo-wide run does not"
+  else
+    fail "Rule E baseline: explicit path to a baselined offender should report rc=1, got rc=$rc"
+  fi
+  # --changed bypasses it too: commit, touch the offender, diff against the parent.
+  "${SBX_GIT[@]}" -C "$SBX" -c user.name=t -c user.email=t@t.invalid -c commit.gpgsign=false commit -qm base >/dev/null 2>&1
+  printf '# touched\n' >> "$SBX/scripts/offender.sh"
+  "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+  "${SBX_GIT[@]}" -C "$SBX" -c user.name=t -c user.email=t@t.invalid -c commit.gpgsign=false commit -qm touch >/dev/null 2>&1
+  rc="$(sbx_run --changed --base HEAD~1)"
+  if [ "$rc" = "1" ] && grep -qE "$E_MSG_RE" "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline: --changed bypasses baseline E and reports the touched offender"
+  else
+    fail "Rule E baseline: --changed on a baselined offender should report rc=1, got rc=$rc"
+  fi
+else
+  fail "Rule E baseline: could not build the sandbox repo"
+fi
+
+# Row 8: drop the "e" entry from the rule -> baseline map. An E-only offender listed
+# in baseline E must then REPORT (it falls back to the A/B/C list, which lacks it).
+if sbx_repo 'scripts/offender.sh\t1\n' 's/, "e": baseline_e_ok(?=\})//'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -qE "$E_MSG_RE" "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline M8: dropping the \"e\" entry from baselines_by_rule reddens a correctly baselined offender"
+  else
+    fail "Rule E baseline M8: mutant (no \"e\" map entry) should report rc=1, got rc=$rc: $(head -c 300 "$WORK/err")"
+  fi
+else
+  fail "Rule E baseline M8: could not build the mutated sandbox (mutation did not land?)"
+fi
+
+# Row 9: equality on path AND count.
+if sbx_repo 'scripts/offender.sh\t1\nscripts/clean.sh\t1\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/clean.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline M9a: a clean file listed in baseline E is reported (a listed file must still offend)"
+  else
+    fail "Rule E baseline M9a: clean file in baseline E should report rc=1 naming it, got rc=$rc"
+  fi
+fi
+if sbx_repo ''; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -qE "$E_MSG_RE" "$WORK/err" && grep -q 'scripts/offender.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline M9b: a still-violating file removed from baseline E is reported"
+  else
+    fail "Rule E baseline M9b: unlisted offender should report rc=1, got rc=$rc"
+  fi
+fi
+if sbx_repo 'scripts/offender.sh\t2\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/offender.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline M9c: a listed file whose live site count differs is reported (equality, not suppression)"
+  else
+    fail "Rule E baseline M9c: count 2 vs live 1 should report rc=1, got rc=$rc"
+  fi
+fi
+if sbx_repo 'scripts/offender.sh\t1\nscripts/gone.sh\t1\n'; then
+  rc="$(sbx_run)"
+  if [ "$rc" = "1" ] && grep -q 'scripts/gone.sh' "$WORK/err" && sbx_clean_run; then
+    pass "Rule E baseline M9d: a listed path that no longer exists is reported"
+  else
+    fail "Rule E baseline M9d: stale listed path should report rc=1 naming it, got rc=$rc"
+  fi
+fi
+
 # --- Guard 2 (#7946): Rule C empty-predicate hardening ------------------------
 # A single-credential file whose only `${VAR:+x}` limb was deleted leaves `[ -n "" ]`,
 # which Rule C's `":+" not in window` branch used to read as an UNCONDITIONAL refusal --
@@ -703,7 +974,8 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-MIN_ASSERTIONS=83
+# Re-measured at 115 (#9597, Rule E rows, fixtures, mutation rows and baseline-E sandbox rows).
+MIN_ASSERTIONS=115
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
