@@ -112,7 +112,7 @@ build() {
   case "$out" in /*) ;; *) out="$PWD/$out" ;; esac
   assert_fixture_dir "$W"; assert_fixture_dir "$out"
   mkdir -p "$W/img/blobs/sha256"
-  tok="$(curl -fsS --proto =https --retry 3 "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -er .token)" \
+  tok="$(curl --disable --noproxy '*' -fsS --proto =https --retry 3 "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -er .token)" \
     || die 1 "could not obtain an anonymous ghcr.io pull token for ${REPO}"
   # The token rides curl's stdin config channel, never its argv (/proc/<pid>/cmdline is world-readable).
   _bearer_ok "$tok" || die 1 "the ghcr.io pull token for ${REPO} is empty or has an unexpected shape (refusing to build a curl config from it)"

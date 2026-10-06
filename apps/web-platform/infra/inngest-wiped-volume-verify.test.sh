@@ -206,7 +206,7 @@ test_unusable_shape_secret_refused_before_wipe() {
     local out rc=0
     out=$(WVV_SECRET_OVERRIDE="$val" run_verify) || rc=$?
     assert_eq "unusable-shape secret ($label): exits 1" "1" "$rc"
-    assert_eq "unusable-shape secret ($label): reason no_secret via abort()" "no_secret" "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
+    assert_eq "unusable-shape secret ($label): reason secret_shape via abort()" "secret_shape" "$(jq -r .reason "${MOCKBIN}/verify.state" 2>/dev/null || echo "<no state>")"
     assert_contains "unusable-shape secret ($label): refusal is reported" "$out" "unusable shape"
     assert_eq "unusable-shape secret ($label): no stop/start/restart verb" "0" "$(count_unit_verbs)"
     assert_eq "unusable-shape secret ($label): data dir NOT wiped" "sqlite" "$(cat "${MOCKBIN}/inngest-data/main.db")"

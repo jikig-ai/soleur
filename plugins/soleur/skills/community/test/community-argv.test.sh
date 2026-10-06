@@ -278,4 +278,8 @@ done
 
 echo
 echo "community-argv.test.sh: $PASS passed, $FAIL failed"
+if [[ "$((PASS + FAIL))" -ne 101 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 101\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

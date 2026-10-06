@@ -1932,8 +1932,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 301 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 301. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 312 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 312. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

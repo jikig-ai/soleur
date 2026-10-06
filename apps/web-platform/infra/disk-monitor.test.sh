@@ -704,8 +704,8 @@ assert_token_refused() {
   [[ "$actual_exit" -eq 0 ]] || ok=0
   [[ ! -f "$mock_dir/curl_args" ]] || ok=0
   [[ ! -f "$mock_dir/curl_stdin" ]] || ok=0
-  grep -cF 'SOLEUR_DISK_MONITOR_SEND_SKIPPED channel=resend reason=token_shape' <<<"$output" >/dev/null || ok=0
-  grep -qF 'SOLEUR_DISK_MONITOR_SEND_SKIPPED channel=resend reason=token_shape' "$largs" 2>/dev/null || ok=0
+  grep -cF 'SOLEUR_DISK_MONITOR_REFUSED channel=resend reason=token_shape' <<<"$output" >/dev/null || ok=0
+  grep -qF 'SOLEUR_DISK_MONITOR_REFUSED channel=resend reason=token_shape' "$largs" 2>/dev/null || ok=0
   grep -qF -- "$frag" "$largs" 2>/dev/null && ok=0
   grep -cF -- "$frag" <<<"$output" >/dev/null && ok=0
   if [[ "$ok" -eq 1 ]]; then
@@ -716,9 +716,9 @@ assert_token_refused() {
   fi
   rm -rf "$mock_dir"
 }
-assert_token_refused "key with an embedded newline: curl not invoked, SEND_SKIPPED token_shape, exit 0" $'synthetic-fixture-token\nheader = "X-Injected: 1"' "X-Injected"
-assert_token_refused "key with a double quote: curl not invoked, SEND_SKIPPED token_shape, exit 0" 'synthetic-fixture"-token-0002' 'fixture"-token'
-assert_token_refused "key with a space: curl not invoked, SEND_SKIPPED token_shape, exit 0" 'synthetic fixture token 0003' 'fixture token'
+assert_token_refused "key with an embedded newline: curl not invoked, REFUSED token_shape (pages), exit 0" $'synthetic-fixture-token\nheader = "X-Injected: 1"' "X-Injected"
+assert_token_refused "key with a double quote: curl not invoked, REFUSED token_shape (pages), exit 0" 'synthetic-fixture"-token-0002' 'fixture"-token'
+assert_token_refused "key with a space: curl not invoked, REFUSED token_shape (pages), exit 0" 'synthetic fixture token 0003' 'fixture token'
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

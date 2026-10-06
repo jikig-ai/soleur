@@ -194,6 +194,8 @@ describe("configure-auth.sh keeps secrets off every argv (success path, both PAT
   it("the bearer still rides curl's stdin config and not argv", () => {
     expect(run.stdin).toContain(`header = "Authorization: Bearer ${SYN.token}"`);
     expect(run.argv).not.toContain(SYN.token);
+    // The bearer only ever goes to the pinned Management API host (the PAT-exfil seam the host-pin lint guards).
+    expect(run.argv).toContain("https://api.supabase.com/v1/projects/");
   });
 
   it("the body file is removed on success", () => {

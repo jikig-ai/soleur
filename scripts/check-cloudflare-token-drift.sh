@@ -1313,7 +1313,13 @@ access_probe() {
   # sent, nothing is known about the credential, never LIVE and never the destructive DEAD).
   if [[ -n "$id" ]]; then
     if ! _cfg_ok "$id" || ! _cfg_ok "$secret"; then
-      printf '[WARN] refusing to present an Access client id/secret containing a quote, backslash or control character; no request sent\n' >&2
+      # Names WHICH half is malformed (never its value) so a reader of the CI log knows what to fix:
+      # a permanent shape fault, so re-running cannot clear it — re-set the Doppler value.
+      local bad_half=""
+      _cfg_ok "$id" || bad_half="id"
+      _cfg_ok "$secret" || bad_half="${bad_half:+$bad_half and }secret"
+      printf '[WARN] refusing to present the Access client %s for %s: it is empty or contains a quote, backslash or control character (re-set the value in Doppler; re-running cannot clear this); no request sent\n' \
+        "$bad_half" "$host" >&2
       PROBE_CODE=000; PROBE_STAMPED=0; PROBE_MITIGATED=0; PROBE_ACCESS_REDIRECT=0
       return 0
     fi

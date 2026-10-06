@@ -118,4 +118,8 @@ refusal_row "user with a newline"                ZOT_PULL_USER  $'zot\npull'
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+if [[ "$((PASS + FAIL))" -ne 13 ]]; then
+  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly 13\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]]

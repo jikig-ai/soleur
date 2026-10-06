@@ -16,9 +16,9 @@ TMPD="$(mktemp -d -t flagsmith-stdin.XXXXXXXX)" || { echo "FATAL: mktemp failed"
 trap 'rm -rf "$TMPD"' EXIT
 case "$TMPD" in /*) : ;; *) echo "FATAL: scratch dir is not absolute" >&2; exit 2 ;; esac
 
-pass=0; fail=0
-ok()  { pass=$((pass + 1)); echo "[ok] $1"; }
-no()  { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
+PASS=0; FAIL=0
+pass() { PASS=$((PASS + 1)); echo "[ok] $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "[FAIL] $1" >&2; }
 
 SCRIPTS=(
   plugins/soleur/skills/flag-create/scripts/create.sh
@@ -55,7 +55,7 @@ drive() {
   local block="$1" tok="$2" row="$3"
   mkdir -p "$row"
   env -i PATH="$SHIM:$(dirname "$(type -P bash)"):$(dirname "$(type -P cat)")" SHIM_DIR="$row" TOKEN="$tok" \
-    "$(type -P bash)" -c 'set -u; . "$1"; _bearer_ok "$TOKEN" || exit 9; fs_api https://flagsmith.example.test/api/v1/projects/' _ "$block" </dev/null >/dev/null 2>&1
+    "$(type -P bash)" -c 'set -u; . "$1"; _bearer_ok "$TOKEN" || exit 9; fs_api https://flagsmith.example.test/api/v1/features/' _ "$block" </dev/null >/dev/null 2>&1
 }
 argv_has() { grep -aqF -- "$2" "$1"; }
 
@@ -63,15 +63,15 @@ i=0
 for s in "${SCRIPTS[@]}"; do
   i=$((i + 1)); name="$(basename "$s")"
   blk="$TMPD/$name.block"
-  if extract_block "$s" "$blk"; then ok "$name: the shipped _bearer_ok + fs_api block is extractable and uses --config -"
-  else no "$name: could not extract an _bearer_ok + fs_api block that uses --config -"; continue; fi
+  if extract_block "$s" "$blk"; then pass "$name: the shipped _bearer_ok + fs_api block is extractable and uses --config -"
+  else fail "$name: could not extract an _bearer_ok + fs_api block that uses --config -"; continue; fi
 
   drive "$blk" "$FIXTURE" "$TMPD/r$i-ok"; rc=$?
   if [[ "$rc" -eq 0 && -e "$TMPD/r$i-ok/1.argv" ]] && ! argv_has "$TMPD/r$i-ok/1.argv" "$FIXTURE" \
      && ! argv_has "$TMPD/r$i-ok/1.argv" 'Api-Key' \
      && [[ "$(cat "$TMPD/r$i-ok/1.stdin" 2>/dev/null)" == "header = \"Authorization: Api-Key $FIXTURE\"" ]]; then
-    ok "$name: a valid key is on curl's stdin config only (not in argv, no Api-Key header in argv)"
-  else no "$name: a valid key must be on stdin only (rc=$rc)"; fi
+    pass "$name: a valid key is on curl's stdin config only (not in argv, no Api-Key header in argv)"
+  else fail "$name: a valid key must be on stdin only (rc=$rc)"; fi
 
   hostile_ok=1
   for tok in $'syn-key\nurl = "http://127.0.0.1:9/x"' 'syn"key' 'syn key'; do
@@ -81,19 +81,19 @@ for s in "${SCRIPTS[@]}"; do
     # curl call may have been recorded.
     if [[ "$rc" -eq 0 || -e "$TMPD/r$i-bad$j/1.argv" ]]; then hostile_ok=0; fi
   done
-  if [[ "$hostile_ok" -eq 1 ]]; then ok "$name: a key with a newline+directive, a quote or a space is refused before any curl call"
-  else no "$name: a hostile key reached curl or was not refused"; fi
+  if [[ "$hostile_ok" -eq 1 ]]; then pass "$name: a key with a newline+directive, a quote or a space is refused before any curl call"
+  else fail "$name: a hostile key reached curl or was not refused"; fi
 
   # ordering + static pins on the real script text
   guard_line="$(grep -nF '_bearer_ok "$TOKEN"' "$s" | head -1 | cut -d: -f1)"
   first_use="$(grep -nE '^[^#]*\bfs_api (-|"|\$)' "$s" | grep -vE 'fs_api\(\)' | head -1 | cut -d: -f1)"
-  if [[ -n "$guard_line" && -n "$first_use" && "$guard_line" -lt "$first_use" ]]; then ok "$name: the shape guard runs before the first fs_api call"
-  else no "$name: _bearer_ok must precede the first fs_api call (guard line '${guard_line:-none}', first use '${first_use:-none}')"; fi
-  if [[ "$(grep -cE '^[^#]*-H "Authorization: Api-Key' "$s" || true)" == "0" ]]; then ok "$name: no curl carries an Authorization: Api-Key header on argv"
-  else no "$name: an Authorization: Api-Key header is back on a curl line"; fi
+  if [[ -n "$guard_line" && -n "$first_use" && "$guard_line" -lt "$first_use" ]]; then pass "$name: the shape guard runs before the first fs_api call"
+  else fail "$name: _bearer_ok must precede the first fs_api call (guard line '${guard_line:-none}', first use '${first_use:-none}')"; fi
+  if [[ "$(grep -cE '^[^#]*-H "Authorization: Api-Key' "$s" || true)" == "0" ]]; then pass "$name: no curl carries an Authorization: Api-Key header on argv"
+  else fail "$name: an Authorization: Api-Key header is back on a curl line"; fi
   # stdin is the curl CONFIG channel now: a body piped to `fs_api ... -d @-` would be parsed as config.
-  if [[ "$(grep -cE '^[^#]*(\| *fs_api|fs_api[^|#]*(-d|--data[a-z-]*|-T) +@-)' "$s" || true)" == "0" ]]; then ok "$name: no fs_api call takes its body on stdin (stdin is the curl config channel)"
-  else no "$name: an fs_api call takes its body on stdin (-d @- / piped), which conflicts with the stdin config"; fi
+  if [[ "$(grep -cE '^[^#]*(\| *fs_api|fs_api[^|#]*(-d|--data[a-z-]*|-T) +@-)' "$s" || true)" == "0" ]]; then pass "$name: no fs_api call takes its body on stdin (stdin is the curl config channel)"
+  else fail "$name: an fs_api call takes its body on stdin (-d @- / piped), which conflicts with the stdin config"; fi
 done
 
 # MUTATION: restoring the argv form in an extracted block must turn the valid-key assertion RED.
@@ -104,13 +104,16 @@ from='< <(printf '"'"'header = "Authorization: Api-Key %s"\n'"'"' "$TOKEN")'
 [[ "$text" == *"$from"* ]] || { echo "FATAL: mutation did not land (stdin form not found)" >&2; exit 2; }
 printf '%s' "${text/"$from"/'-H "Authorization: Api-Key $TOKEN"'}" > "$blk"
 drive "$blk" "$FIXTURE" "$TMPD/mut"; rc=$?
-if [[ "$rc" -eq 0 ]] && argv_has "$TMPD/mut/1.argv" "$FIXTURE"; then ok "mutation: restoring the argv form puts the key in a recorded argv (the valid-key row would go RED)"
-else no "mutation: the argv-restored mutant did not show the key in argv (rc=$rc); the assertions cannot see the regression"; fi
+if [[ "$rc" -eq 0 ]] && argv_has "$TMPD/mut/1.argv" "$FIXTURE"; then pass "mutation: restoring the argv form puts the key in a recorded argv (the valid-key row would go RED)"
+else fail "mutation: the argv-restored mutant did not show the key in argv (rc=$rc); the assertions cannot see the regression"; fi
+# The mutant must also FAIL the shipped valid-key predicate (stdin carries the exact header line and the
+# key is absent from argv) — proves the row above is red on the regression, not merely that the shim saw it.
+if [[ "$(cat "$TMPD/mut/1.stdin" 2>/dev/null)" != "header = \"Authorization: Api-Key $FIXTURE\"" ]] && argv_has "$TMPD/mut/1.argv" 'Api-Key'; then pass "mutation: the valid-key predicate (exact stdin line, no Api-Key in argv) goes RED on the argv-restored mutant"
+else fail "mutation: the argv-restored mutant still satisfies the valid-key predicate; the stdin-only assertion is vacuous"; fi
 
-echo "=== flagsmith-stdin-config: $pass passed, $fail failed ==="
-EXPECTED=25
-if [[ "$((pass + fail))" -ne "$EXPECTED" ]]; then
-  printf 'ANTI-VACUITY FLOOR: ran %s assertions, expected exactly %s\n' "$((pass + fail))" "$EXPECTED" >&2
+echo "=== flagsmith-stdin-config: $PASS passed, $FAIL failed ==="
+if [[ "$((PASS + FAIL))" -lt 26 ]]; then
+  printf 'anti-vacuity floor: ran %s assertions, expected at least 26 — an assertion row was deleted\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
-[[ "$fail" -eq 0 ]]
+[[ "$FAIL" -eq 0 ]]

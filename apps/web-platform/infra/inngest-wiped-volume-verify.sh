@@ -251,9 +251,9 @@ SECRET="$(read_secret)"
 [[ -n "$SECRET" ]] || abort "no_secret" "INNGEST_MANUAL_TRIGGER_SECRET unavailable"
 # Token-shape guard (argv-bearer sweep): the Bearer travels on curl's stdin config channel, so a
 # value that could break out of the config string is refused HERE — at the read, before the arm
-# curl and before any stop/wipe/start — through the same abort path as an unavailable secret.
+# curl and before any stop/wipe/start — through the abort path with its own reason (secret_shape), so Better Stack can tell it from a missing secret.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
-_bearer_ok "$SECRET" || abort "no_secret" "INNGEST_MANUAL_TRIGGER_SECRET has an unusable shape (characters outside the token charset); refusing before arm/stop/wipe"
+_bearer_ok "$SECRET" || abort "secret_shape" "INNGEST_MANUAL_TRIGGER_SECRET has an unusable shape (characters outside the token charset); refusing before arm/stop/wipe"
 MARKER_ID="${INNGEST_VERIFY_MARKER_ID:-${MARKER_PREFIX}$(date +%s%N)__}"
 FIRE_AT=$(date -u -d "+90 seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 marker_body=$(jq -nc --arg id "$MARKER_ID" --arg fa "$FIRE_AT" --arg chk "$NOOP_CHECK" \

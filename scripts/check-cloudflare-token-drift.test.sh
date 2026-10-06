@@ -558,7 +558,7 @@ prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${_bad}"
   grep -qF 'probe-failed' "$OUT" || _t4c=0
   ! grep -qE 'live entries: [1-9]' "$OUT" || _t4c=0
   ! grep -qE 'dead entries: [1-9]' "$OUT" || _t4c=0
-  grep -qF 'refusing to present an Access client id/secret' "$OUT" || _t4c=0
+  grep -qF 'refusing to present the Access client secret' "$OUT" || _t4c=0
   grep -qF -- "$_bad" "$CURL_LOG" && _t4c=0
   if [[ "$_t4c" == "1" ]]; then
     pass "secret [$_bad] refused: zero credentialed requests, nothing on stdin or argv, UNVERIFIABLE probe-failed"

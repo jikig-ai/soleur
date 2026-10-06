@@ -145,8 +145,8 @@ send_alert() {
   # plain http — it must NOT receive these flags.
   # (#9597) The credential rides stdin (`--config -`), one config per call.
   _bearer_ok "${RESEND_API_KEY:-}" || {
-    echo "WARNING: RESEND_API_KEY failed the token-shape guard, skipping send" >&2
-    emit_refusal "SOLEUR_RESOURCE_MONITOR_SEND_SKIPPED channel=resend reason=token_shape"
+    echo "WARNING: RESEND_API_KEY failed the token-shape guard, refusing to send" >&2
+    emit_refusal "SOLEUR_RESOURCE_MONITOR_REFUSED channel=resend reason=token_shape"
     return 0
   }
   local HTTP_CODE rc=0
