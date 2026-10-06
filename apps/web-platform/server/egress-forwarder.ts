@@ -49,7 +49,7 @@ function egressTokenDir(): string {
 function forwarderPath(): string {
   return (
     process.env.EGRESS_FORWARDER_PATH ??
-    join(process.cwd(), "infra", "egress-forwarder.mjs")
+    join(/* turbopackIgnore: true */ process.cwd(), "infra", "egress-forwarder.mjs")
   );
 }
 /** How long to wait for the forwarder's `egress-forwarder-listening <port>` line. */

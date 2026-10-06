@@ -90,7 +90,10 @@ export const ALLOWED_SERVICE_ENV_VARS = new Set(
 // token API). Injecting BOTH is the silent-API-billing trap (FR2): the SDK
 // prefers one but the operator believes they are on the subscription.
 const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY";
-const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
+// Exported: the #9534 web-egress deny census (agent-runner-sandbox-config.ts)
+// references the name through this binding — the CWE-526 sentinel scans for
+// the literal, which must stay single-site (this file).
+export const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
 
 /**
  * Optional env extras that are NOT service tokens and NOT auth vars.

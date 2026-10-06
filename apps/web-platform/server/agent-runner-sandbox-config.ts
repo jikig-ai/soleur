@@ -3,7 +3,7 @@ import { c4RenderStagingRoot } from "./c4-staging-root";
 import { basename, delimiter, join } from "path";
 import * as Sentry from "@sentry/nextjs";
 
-import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
+import { ALLOWED_SERVICE_ENV_VARS, OAUTH_ENV_VAR } from "./agent-env";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -313,7 +313,9 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
 //     readable") rather than a per-name judgment call. The `0` value only
 //     suppresses credential prompts — irrelevant once the credential set
 //     itself is denied.
-//   - `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` — the CLI auth vars.
+//   - `ANTHROPIC_API_KEY`, `OAUTH_ENV_VAR` — the CLI auth vars (the OAuth
+//     name stays a binding: the CWE-526 sentinel pins its literal to
+//     agent-env.ts).
 //     `deny` unsets for SANDBOXED COMMANDS ONLY (the CLI process keeps
 //     them; model calls unaffected — see plan §corrections).
 //   - every ALLOWED_SERVICE_ENV_VARS name — the full BYOK service-token
@@ -332,7 +334,7 @@ const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
       "GIT_USERNAME",
       "GIT_TERMINAL_PROMPT",
       "ANTHROPIC_API_KEY",
-      "CLAUDE_CODE_OAUTH_TOKEN",
+      OAUTH_ENV_VAR,
       ...ALLOWED_SERVICE_ENV_VARS,
     ]),
   ),
