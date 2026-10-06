@@ -104,6 +104,22 @@ export interface AgentQueryOptionsArgs {
    * undefined), so NOT part of the shared-field drift snapshot. Never logged.
    */
   gitAskpassScriptPath?: string;
+  /**
+   * feat-open-web-egress (#9534) — the dispatch's live egress forwarder.
+   * Present ONLY when the workspace's `web_egress` grant resolved true AND
+   * the forwarder spawn succeeded (fail-closed: the dispatcher omits the
+   * field on any failure — a dead proxy URL would strand the session's API
+   * calls against a refused listener). Carrying the live handle rather than
+   * a bare boolean makes the "entitled but unproxied" half-state
+   * unrepresentable (ADR-051 both-or-nothing precedent). Effects:
+   *  - env: `HTTP(S)_PROXY` credentialed URL → steers in-process WebFetch
+   *    AND the SRT-chained sandboxed path (Phase-0 spike, spec TR7);
+   *  - sandbox: `allowWebEgress` → credentials.envVars deny census +
+   *    denyRead additions;
+   *  - disallowedTools: `WebFetch` drops out (Phase-0 verified WebFetch
+   *    honors process-env proxy). `WebSearch` stays disallowed in Phase A.
+   */
+  webEgress?: { workspaceId: string; token: string; port: number };
   systemPrompt: string;
   /** SDK chain step 5 — the canUseTool callback. Required. */
   // biome-ignore lint/suspicious/noExplicitAny: SDK CanUseTool is a typed callable; helper accepts the SDK's type
@@ -251,7 +267,15 @@ export function buildAgentQueryOptions(
     // and resurrects premature `runner_runaway` on long single-tool turns.
     includePartialMessages: true,
     disallowedTools: [
-      ...CANONICAL_DISALLOWED_TOOLS,
+      // feat-open-web-egress (#9534) — WebFetch drops out ONLY when the
+      // workspace grant resolved true AND the forwarder is live (the
+      // webEgress handle's presence IS the Phase-0-verified condition —
+      // the spike confirmed in-process WebFetch honors process-env
+      // HTTP_PROXY). WebSearch stays disallowed in Phase A (server-side
+      // tool; needs no egress and coupling it to the grant is scope creep).
+      ...(args.webEgress
+        ? CANONICAL_DISALLOWED_TOOLS.filter((t) => t !== "WebFetch")
+        : CANONICAL_DISALLOWED_TOOLS),
       ...(args.extraDisallowedTools ?? []),
     ],
     systemPrompt: args.systemPrompt,
@@ -269,6 +293,10 @@ export function buildAgentQueryOptions(
       // the untrusted connected-repo copy. Proven to reach the bwrap-sandboxed
       // bash via env inheritance (F2, AC7a — plugin-root-propagation gate).
       pluginPath: trustedPluginPath,
+      // feat-open-web-egress (#9534) — per-session credentialed proxy env.
+      // Set only for the entitled+verified dispatch (see field doc); beats
+      // the ambient allowlist copy inside buildAgentEnv.
+      egressProxy: args.webEgress,
     }),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
     // share the same shape — identical except for the token-derived
@@ -291,6 +319,10 @@ export function buildAgentQueryOptions(
       readOnly: sandboxReadOnly,
       // ADR-113 — obscure the internal knowledge base from support (tool-level).
       denyReadExtra,
+      // feat-open-web-egress (#9534) — credential quarantine for the
+      // entitled session (envVars deny census + denyRead additions).
+      // Derived from the live handle, never a separately-threaded flag.
+      allowWebEgress: args.webEgress !== undefined,
     }),
     // Loaded-gun guard: both factories source args.pluginPath from getPluginPath()
     // (an absolute /app/ platform path). assertTrustedPluginPath fails LOUDLY if a

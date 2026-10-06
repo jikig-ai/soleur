@@ -176,6 +176,14 @@ import {
 // Issue B part 2 — per-workspace autonomous Bash toggle (fail-closed read).
 import { resolveBashAutonomous } from "./resolve-bash-autonomous";
 import { resolveDebugMode } from "./resolve-debug-mode";
+// feat-open-web-egress (#9534) — workspace "Agent web access" grant (member-
+// checked, fail-closed) + the per-session loopback forwarder lifecycle.
+import { resolveWebEgress } from "./resolve-web-egress";
+import {
+  reapOrphanEgressForwarders,
+  spawnEgressForwarder,
+  teardownEgressForwarder,
+} from "./egress-forwarder";
 import {
   resolveC4Eligible,
   resolveC4FlagEnabled,
@@ -1591,6 +1599,11 @@ export function handleCcCloseQuery({
   reason?: "disconnected";
 }): void {
   cleanupCcBashGatesForConversation(userId, conversationId);
+  // feat-open-web-egress (#9534) — kill the session's loopback forwarder and
+  // delete its token file (the file is the gateway-side validity window).
+  // Fires from EVERY close path (emit/reap/bare close) — the token must die
+  // with the session even when `onWorkflowEnded` does not run. Idempotent.
+  teardownEgressForwarder(conversationId);
   // TR3 (#5843) — flush the aggregated tool-attempt row for this session. Once
   // per ActiveQuery (closeQuery is `state.closed`-guarded at every call site);
   // fire-and-forget + fail-open (never throws, mirrors to Sentry on DB failure).
@@ -1776,6 +1789,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       isWorkspaceOwner,
       repoUrl,
       repoReadinessRow,
+      webEgressEntitled,
     ] =
       await Promise.all([
         fetchUserWorkspacePath(args.userId, activeWorkspaceId),
@@ -1810,6 +1824,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         // internally (a read blip → not_connected, never blocks a ready founder).
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
         getCurrentRepoStatus(args.userId, activeWorkspaceId),
+        // feat-open-web-egress (#9534) — the workspace's `web_egress` grant.
+        // Pure read in the Promise.all (zero extra round-trips); the
+        // member-checked RPC returns NULL→false on a non-member claim, so a
+        // resolver blip or membership reset can never over-grant egress.
+        // Keyed on the unified activeWorkspaceId (repoUrl precedent).
+        resolveWebEgress(args.userId, activeWorkspaceId),
       ]);
 
     // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
@@ -2772,6 +2792,53 @@ export const realSdkQueryFactory: QueryFactory = async (
       toolAttemptCollector,
     );
 
+    // feat-open-web-egress (#9534) — spawn the per-session loopback
+    // forwarder ONLY when the workspace grant resolved true for this
+    // dispatch. Scoped to the Command Center persona: the read-only support
+    // session (plugin-corpus cwd) never carries a workspace egress grant —
+    // widening it would expose the platform plugin root's network surface
+    // for no user-facing gain. Spawn runs LAST among the side-effects, just
+    // before sdkQuery: on ANY failure (token write, bind, gateway-side
+    // start) the session degrades to zero-egress (`webEgress` stays
+    // undefined → no proxy env, WebFetch stays disallowed, no credential
+    // census change) + Sentry — a dead forwarder must never produce a
+    // session whose CLI env proxies to a refused listener.
+    let webEgress:
+      | { workspaceId: string; token: string; port: number }
+      | undefined;
+    if (webEgressEntitled && mode.runRepoLifecycle) {
+      try {
+        const fwd = await spawnEgressForwarder(
+          args.conversationId,
+          activeWorkspaceId,
+        );
+        webEgress = {
+          workspaceId: activeWorkspaceId,
+          token: fwd.token,
+          port: fwd.port,
+        };
+        log.info(
+          {
+            feature: "cc-dispatcher",
+            op: "web-egress",
+            conversationId: args.conversationId,
+            workspaceId: activeWorkspaceId,
+            forwarderPort: fwd.port,
+            forwarderPid: fwd.pid,
+          },
+          "cc-dispatcher: web egress forwarder bound",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "cc-dispatcher",
+          op: "web-egress-forwarder-spawn",
+          extra: { userId: args.userId, workspaceId: activeWorkspaceId },
+          message:
+            "web-egress forwarder spawn failed; session proceeds zero-egress",
+        });
+      }
+    }
+
     return sdkQuery({
       prompt: args.prompt,
       options: buildAgentQueryOptions({
@@ -2792,6 +2859,10 @@ export const realSdkQueryFactory: QueryFactory = async (
         gitAskpassScriptPath,
         systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
+        // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
+        // the entitlement+spawn-verified condition (fail-closed: undefined
+        // when the grant is off or the spawn degraded).
+        webEgress,
         // readCcMcpAllowlist() (Phase 1: {}) plus the flag-gated, single-tool
         // soleur_platform server (edit_c4_diagram) merged in above.
         mcpServers: c4McpServers,
@@ -2881,6 +2952,11 @@ export const realSdkQueryFactory: QueryFactory = async (
     // indefinitely — wedging the workspace for every other host. No-op when the
     // lease path is gated off or the acquire never registered.
     await releaseCcWorktreeLease(args.userId, args.conversationId);
+    // feat-open-web-egress (#9534) — same leak class: a factory throw after
+    // the forwarder spawned must not leave a live token file + listener
+    // bound to a Query that never entered `activeQueries` (the close hook
+    // teardown only fires once registered).
+    teardownEgressForwarder(args.conversationId);
     // TR3 (#5843) — same leak class: the collector was registered just above, but
     // a factory throw means the Query never enters `activeQueries` so
     // `handleCcCloseQuery` never fires. Drop it here (flush is a harmless no-op —
@@ -3052,6 +3128,12 @@ export function getSoleurGoRunner(
     return _runner;
   }
   _runnerSendToClient = sendToClient;
+  // feat-open-web-egress (#9534) — orphan reaper. First runner construction
+  // is the dispatcher's startup boundary: kill any egress-forwarder.mjs
+  // left by a previous process (its ppid watchdog can't fire once
+  // reparented to init) and delete its stale token files. Best-effort —
+  // never throws into runner construction.
+  reapOrphanEgressForwarders();
   _runner = createSoleurGoRunner({
     queryFactory: realSdkQueryFactory,
     pendingPrompts: getPendingPromptRegistry(),
@@ -3500,6 +3582,34 @@ export async function dispatchSoleurGo(
       reportSilentFallback(err, {
         feature: "cc-dispatcher",
         op: "bash-autonomous-resolve",
+        extra: { userId, conversationId },
+      });
+    });
+
+  // feat-open-web-egress (#9534) — live-revocation on the warm path. The
+  // grant is resolved INSIDE `realSdkQueryFactory` (cold Query
+  // construction); on warm-query reuse the factory does not re-run, so an
+  // owner toggling "Agent web access" OFF mid-conversation would leave the
+  // forwarder + token file alive until session close — contradicting the
+  // toggle copy's "turning off revokes live web access". Re-resolve
+  // per-dispatch (same fire-and-forget pattern as resolveBashAutonomous
+  // above): a `false` result kills the forwarder + deletes the token file
+  // NOW — the CLI subprocess keeps its (dead) proxy env, so in-sandbox
+  // egress fails closed at the refused listener while the gateway-side
+  // token is already gone. A resolver ERROR must not tear down a live
+  // grant (a Supabase blip revoking egress = availability loss under a
+  // flag the owner still holds), so the catch leaves the forwarder be and
+  // mirrors. Enabling mid-session cannot retro-fit the already-spawned
+  // CLI's env — the on-flip applies to the NEXT cold dispatch, matching
+  // the toggle copy ("applies to sessions started after enabling").
+  void resolveWebEgress(userId)
+    .then((entitled) => {
+      if (!entitled) teardownEgressForwarder(conversationId);
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "web-egress-re-resolve",
         extra: { userId, conversationId },
       });
     });

@@ -68,16 +68,16 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
       it honors only process-env `HTTP(S)_PROXY` → task 2.4 must set env
       proxy on the spawned CLI subprocess with NO_PROXY covering the
       platform control plane.
-- [ ] 2.1 Migration `1XX_workspace_web_egress.sql` + `.down.sql` (clone 101):
+- [x] 2.1 Migration `156_workspace_web_egress.sql` + `.down.sql` (clone 101):
       column, member-read RPC (NULL→false), owner-write RPC (P0001),
       `-- LAWFUL_BASIS: consent (Art. 6(1)(a))` annotation
-- [ ] 2.2 `server/resolve-web-egress.ts` + `server/set-web-egress.ts`
+- [x] 2.2 `server/resolve-web-egress.ts` + `server/set-web-egress.ts`
       (fail-closed, Sentry-mirrored, P0001→403)
-- [ ] 2.3 `app/api/workspace/web-egress/route.ts` + `WebEgressToggle` on the
+- [x] 2.3 `app/api/workspace/web-egress/route.ts` + `WebEgressToggle` on the
       Scope Grants page (clone bash-autonomous; member locked state; on-state
       "applies to sessions started after enabling / turn-off revokes live"
       sub-line; CTA styling vs anti-slop; no audit-log link — deferred #9545)
-- [ ] 2.4 Dispatch wiring: `resolveWebEgress` pure read in the
+- [x] 2.4 Dispatch wiring: `resolveWebEgress` pure read in the
       `cc-dispatcher.ts` Promise.all (active-workspace-keyed, error→false+
       Sentry); post-read token mint + file write + forwarder spawn
       (bind :0; failure → degrade + Sentry); `buildAgentSandboxConfig`
@@ -88,12 +88,25 @@ Derived from `knowledge-base/project/plans/2026-10-05-feat-open-web-egress-plan.
       stays disallowed; forwarder teardown at session end + on re-resolve-
       false; dispatcher-startup orphan reaper; per-dispatch `HTTP_PROXY`
       (never ambient)
-- [ ] 2.5 Per-dispatch entitlement log (`webEgress` + forwarder port/PID);
+      — DONE; TR7 arm-3 correction: `httpProxyPort` NOT emitted (env proxy
+      URL carries the session token and covers both paths — sandboxed via
+      SRT chain + in-process WebFetch); `deniedDomains` stays cut
+- [x] 2.5 Per-dispatch entitlement log (`webEgress` + forwarder port/PID);
       forwarder exit → Sentry
-- [ ] 2.6 Legal pack: Art. 30 PA-2(d) amendment + DPIA screening;
+      — DONE: `cc-dispatcher: web egress forwarder bound` log carries
+      workspaceId/port/pid; mid-session exit → reportSilentFallback
+- [x] 2.6 Legal pack: Art. 30 PA-2(d) amendment + DPIA screening;
       privacy-policy/DPD/Eleventy mirror + `LEGAL_DOC_SHAS` repin; DPA
       Sch.4 TOM entry; AUP hosted-egress abuse clause
-- [ ] 2.7 ADR (deliverable of this PR) + C4 enumeration/update; legal
+- [x] 2.7 ADR (deliverable of this PR) + C4 enumeration/update; legal
       status-flip sweep (future-tense egress claims)
-- [ ] 2.8 AC verification pass incl. deterministic (non-LLM) security
+      — DONE: ADR-272; egressGw + egressForwarder + publicInternet in
+      model.c4 (likec4-parse-verified); no stale future-tense egress claims
+      found in docs/legal/
+- [x] 2.8 AC verification pass incl. deterministic (non-LLM) security
       scenarios per plan §Test Scenarios
+      — DONE at unit level: web-egress.test.ts (env census, denyRead,
+      forwarder lifecycle/auth/407/reaper), web-egress-access.test.ts
+      (fail-closed read, P0001→403, audit emit), cc-dispatcher factory
+      entitlement cases; gdpr-gate clean on the diff; infra-side ACs were
+      PR-A-verified, live-traffic ACs await dark-launch observation

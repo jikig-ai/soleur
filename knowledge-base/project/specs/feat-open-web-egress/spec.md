@@ -31,8 +31,9 @@ granularity.
   metadata/RFC1918/link-local/cluster-private/IP-literal denies,
   resolve-and-pin (DNS-rebinding), per-session CONNECT access log → Vector →
   Better Stack.
-- Phase A (this PR's scope): opted-in sessions get `network.httpProxyPort`
-  → gateway, `deniedDomains` guardrails, and `credentials.envVars: deny` on
+- Phase A (this PR's scope): opted-in sessions get a per-session credentialed
+  loopback-proxy env → forwarder → gateway (TR7 arm 3 — env proxy supersedes
+  `network.httpProxyPort`), `deniedDomains` guardrails, and `credentials.envVars: deny` on
   all token names — no readable secrets in-sandbox; WebFetch/WebSearch
   re-enabled only for web-entitled sessions.
 - Observability parity before the toggle ships: CONNECT log + denied-destination
@@ -68,10 +69,14 @@ wireframe's three states (off / confirm / on).
 
 `buildAgentSandboxConfig` gains a derived flag (ADR-051 precedent —
 `allowGithubEgress`-style, never independently threadable): when the
-workspace grant is on, emit `network.httpProxyPort` + `deniedDomains`
-(metadata-provider hosts, internal planes) + `credentials.envVars` deny list
-covering `GH_TOKEN`, `GIT_*`, all BYOK `serviceTokens` names, and the
-Anthropic credential names. `allowManagedDomainsOnly` stays on.
+workspace grant is on AND the forwarder spawned, emit
+`credentials.envVars` deny list covering `GH_TOKEN`, `GIT_*` auth names,
+all BYOK `serviceTokens` names, and the Anthropic credential names, plus
+`denyRead` for credential files + the token-dir mount. The egress path
+itself rides the spawned-CLI env proxy (TR7 arm 3) — `httpProxyPort` and
+`deniedDomains` emission stay cut (env covers both paths; deniedDomains
+would be dead config under a chained proxy). `allowManagedDomainsOnly`
+stays on.
 
 ### FR3: Egress gateway
 
@@ -155,6 +160,32 @@ denied-destination classes; per-session entitlement decision logged
     a platform host is missed: Squid allows public hosts, so the call
     would still work but platform auth headers transit the egress path —
     list completeness is a hard requirement, not a nicety.
+  - **Arm 3 (same spike, later session) — the env proxy alone steers the
+    SANDBOXED path too, and carries creds end-to-end.** With
+    `HTTP_PROXY=http://u:SPIKETOKEN@127.0.0.1:28711` on the spawned CLI
+    (no `httpProxyPort` at all), the sandboxed child's env showed
+    `HTTP_PROXY=http://srt.<id>:<rand>@localhost:3128` (SRT mints its OWN
+    per-session child creds for the in-netns hop) and the host listener
+    received `CONNECT …` for BOTH sandboxed `curl` (example.com) and
+    in-process fetches (api.anthropic.com, mcp-proxy.anthropic.com,
+    registry.npmjs.org, Datadog intake) — every one presenting
+    `Proxy-Authorization: Basic <u:SPIKETOKEN>`. Two design corrections:
+    (1) `network.httpProxyPort` is NOT needed — env proxy covers both
+    paths, and unlike `httpProxyPort` it can carry the session token as
+    URL creds (the forwarder's inbound-auth requirement is satisfiable
+    ONLY this way — a creds-less `httpProxyPort` chain would 407 every
+    sandboxed request); (2) the session token never enters the sandbox
+    child's env (SRT substitutes its own creds on the 3128 hop) — the
+    token lives only in the CLI-subprocess env + the host loopback.
+  - **NO_PROXY is not honored by the SDK's API path (measured).** With
+    both `NO_PROXY`/`no_proxy` set to include api.anthropic.com,
+    `CONNECT api.anthropic.com:443` still arrived at the proxy; the model
+    call eventually succeeded → the CLI retries direct on proxy refusal.
+    Consequence: platform control-plane traffic WILL transit the gateway
+    for entitled sessions (ordinary public CONNECTs Squid allows —
+    audit-attributed to the workspace token, TLS still end-to-end).
+    NO_PROXY is still emitted (hygiene; honored by curl-class stacks), but
+    exemption is NOT load-bearing — recorded in the ADR.
 
 ## Open Questions (parked from brainstorm)
 

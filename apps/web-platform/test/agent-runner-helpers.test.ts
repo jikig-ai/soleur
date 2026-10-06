@@ -29,6 +29,9 @@ import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 
 vi.mock("@/server/agent-env", () => ({
   buildAgentEnv: vi.fn(() => ({ ANTHROPIC_API_KEY: "sk-test" })),
+  // feat-open-web-egress (#9534): the sandbox-config deny census derives
+  // from this set at module load — keep it non-empty.
+  ALLOWED_SERVICE_ENV_VARS: new Set(["GITHUB_TOKEN", "STRIPE_SECRET_KEY"]),
 }));
 vi.mock("@/server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => async () => ({})),

@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, realpathSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
 import { basename, join } from "path";
 
+import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -279,6 +280,77 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
   ...GITHUB_ACTIONS_LOG_ACCOUNTS,
 ] as const);
 
+// feat-open-web-egress (#9534) — Phase-A credential quarantine for sessions
+// whose workspace enabled open web egress. With an open egress path, ANY
+// secret readable inside the sandbox is one prompt-injected `curl` away
+// from an attacker host — so the entitled session runs with NO readable
+// credentials in-sandbox (the UI copy promises "sessions run without stored
+// credentials in sandboxed commands"; the Phase-B broker #9543 restores
+// credentialed push). This census lives HERE (next to the deny emission) so
+// a new credential-bearing env var lands in the deny set the moment it is
+// added — derived from ALLOWED_SERVICE_ENV_VARS (the injection allowlist),
+// never hand-copied.
+//
+// Fixed names:
+//   - `GH_TOKEN`, `GIT_ASKPASS`, `GIT_INSTALLATION_TOKEN`, `GIT_USERNAME` —
+//     the in-sandbox gh/raw-git auth set (the askpass pair is deliberately
+//     injected for non-entitled sessions; under open egress it becomes an
+//     exfiltratable secret, so ALL four go — the both-or-nothing env pair
+//     is denied as a unit).
+//   - `GIT_TERMINAL_PROMPT` — not a secret, but denying the whole GIT_*
+//     auth surface keeps the census one rule ("no GIT_* auth plumbing
+//     readable") rather than a per-name judgment call. The `0` value only
+//     suppresses credential prompts — irrelevant once the credential set
+//     itself is denied.
+//   - `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` — the CLI auth vars.
+//     `deny` unsets for SANDBOXED COMMANDS ONLY (the CLI process keeps
+//     them; model calls unaffected — see plan §corrections).
+//   - every ALLOWED_SERVICE_ENV_VARS name — the full BYOK service-token
+//     census (STRIPE_SECRET_KEY, GITHUB_TOKEN, DOPPLER_TOKEN, …).
+// `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` are deliberately ABSENT: they
+// are `/dev/null` neutralizations, and denying them would undo the
+// neutralization (plan review correction (a)).
+// Deduped: ANTHROPIC_API_KEY and GITHUB_TOKEN appear in BOTH the fixed list
+// and ALLOWED_SERVICE_ENV_VARS (plan review correction (b)).
+const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
+  Array.from(
+    new Set([
+      "GH_TOKEN",
+      "GIT_ASKPASS",
+      "GIT_INSTALLATION_TOKEN",
+      "GIT_USERNAME",
+      "GIT_TERMINAL_PROMPT",
+      "ANTHROPIC_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      ...ALLOWED_SERVICE_ENV_VARS,
+    ]),
+  ),
+);
+
+/** Absolute paths denied to the entitled session's sandboxed commands:
+ *  the token-dir mount (a readable session token = gateway auth for the
+ *  session's whole lifetime) + the conventional credential file locations
+ *  (`GOOGLE_APPLICATION_CREDENTIALS` holds a PATH, so its target is a file
+ *  deny, not an env deny). `~` resolves against the container HOME. */
+function webEgressDenyReadPaths(): string[] {
+  const home = process.env.HOME ?? "/root";
+  const paths = [
+    process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens",
+    join(home, ".ssh"),
+    join(home, ".gnupg"),
+    join(home, ".netrc"),
+    join(home, ".aws"),
+    join(home, ".git-credentials"),
+    join(home, ".config", "gh"),
+    join(home, ".claude", ".credentials.json"),
+  ];
+  // A GOOGLE_APPLICATION_CREDENTIALS path (when set) is a credential FILE —
+  // deny its target too.
+  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (gac) paths.push(gac);
+  return paths;
+}
+
 
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
@@ -294,7 +366,20 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
  */
 export function buildAgentSandboxConfig(
   workspacePath: string,
-  opts?: { allowGithubEgress?: boolean; readOnly?: boolean; denyReadExtra?: readonly string[] },
+  opts?: {
+    allowGithubEgress?: boolean;
+    readOnly?: boolean;
+    denyReadExtra?: readonly string[];
+    /** feat-open-web-egress (#9534) — the workspace's `web_egress` grant is
+     *  ON for this dispatch AND the forwarder is live (fail-closed: the
+     *  dispatcher passes false when spawn fails). Phase-A quarantine:
+     *  `credentials.envVars` deny census unsets every secret var for
+     *  sandboxed commands and `denyRead` gains the credential-file + token-
+     *  dir paths. Open egress NEEDS no `httpProxyPort` here — the spawned
+     *  CLI's env proxy URL already steers both the in-process and the
+     *  SRT-chained sandboxed paths (Phase-0 spike, spec TR7). */
+    allowWebEgress?: boolean;
+  },
 ): AgentSandboxConfig {
   const { denyRead: siblingDeny, degraded } = enumerateSiblingDenyPaths(workspacePath);
   // ADR-113 — support-persona containment: additional absolute paths to obscure
@@ -326,7 +411,16 @@ export function buildAgentSandboxConfig(
     });
   }
   const denyRead = Array.from(
-    new Set([...siblingDeny, c4StagingRoot, ...(opts?.denyReadExtra ?? [])]),
+    new Set([
+      ...siblingDeny,
+      c4StagingRoot,
+      ...(opts?.denyReadExtra ?? []),
+      // feat-open-web-egress (#9534): credential files + the token-dir mount
+      // are denied ONLY for the entitled session (an unentitled session has
+      // no gateway credential to protect, and the extra denies would just be
+      // dead config there).
+      ...(opts?.allowWebEgress ? webEgressDenyReadPaths() : []),
+    ]),
   );
   // Structured, no-SSH observability of the isolation decision per dispatch
   // (observability-coverage-reviewer §Step 4.6 — the affected surface is the
@@ -382,5 +476,22 @@ export function buildAgentSandboxConfig(
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
     },
+    // feat-open-web-egress (#9534) — Phase-A credential quarantine. Present
+    // ONLY for the web-egress-entitled session: every secret-bearing env
+    // var is `deny`ed for sandboxed commands (the CLI process keeps them —
+    // in-process tools unaffected). No `mask` entries: masking would
+    // re-inject the real value at the SRT proxy for allowedDomains hosts,
+    // and under open egress the whole point is that NOTHING credential-
+    // shaped leaves the box through the agent's channel.
+    ...(opts?.allowWebEgress
+      ? {
+          credentials: {
+            envVars: WEB_EGRESS_ENV_DENY_CENSUS.map((name) => ({
+              name,
+              mode: "deny" as const,
+            })),
+          },
+        }
+      : {}),
   };
 }
