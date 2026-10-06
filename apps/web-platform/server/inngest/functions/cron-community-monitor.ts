@@ -30,7 +30,7 @@
 // PR mutates the resource in place (margin 60→30, runtime 10→55).
 //
 // SHAPE DIFF vs PR-7 cron-roadmap-review.ts:
-//   - buildSpawnEnv is WIDER: adds DISCORD_WEBHOOK_URL, DISCORD_BOT_TOKEN,
+//   - buildSpawnEnv is WIDER: adds DISCORD_BOT_TOKEN,
 //     DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD, LINKEDIN_ACCESS_TOKEN,
 //     LINKEDIN_PERSON_URN (the community-router.sh platform scripts need
 //     these to flip platforms from "disabled" → "enabled"), plus
@@ -93,6 +93,15 @@ import {
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
 import {
+  COMMUNITY_FAILURE_CAUSES,
+  COMMUNITY_STATUSES,
+  COMMUNITY_TOPIC_CATEGORIES,
+  MAX_PERIOD_DAYS,
+  MAX_TOPICS,
+  MIN_PERIOD_DAYS,
+  buildExampleDraftLine,
+} from "./_cron-community-publication";
+import {
   emitCommunityDigestFile,
   emitCronDedupSkip,
   emitCronDigestLiveness,
@@ -151,12 +160,23 @@ const CLAUDE_CODE_FLAGS = [
   "--",
 ];
 
-// Verbatim prompt extracted from
-// .github/workflows/scheduled-community-monitor.yml lines 92-168 (the
-// `prompt: |` block body, 12-space YAML indentation stripped).
-// Verbatim-extraction discipline: anchor strings asserted by the test
-// suite (cron-community-monitor.test.ts) to catch silent paraphrasing
-// across plan→work cycles.
+// The prompt (#7122): the agent only COLLECTS and CLASSIFIES. Its single
+// deliverable is its final message, ONE line of compact JSON that the handler
+// validates against the closed schema in _cron-community-publication.ts and then
+// renders into the digest file and the tracking issue itself. The agent has no
+// file tools, no issue/label verbs and no write credential, so nothing it writes
+// anywhere else is published. The example line and the enum lists below are
+// GENERATED from that module's constants, so the contract cannot drift from the
+// schema.
+//
+// Steps 1-2 keep the verbatim literal router invocations from the original GHA
+// workflow prompt (the containment hook allowlists them literally; the
+// allowlist parity test reads them out of THIS constant). Do not write a
+// backtick followed by a semicolon inside this template: that parity test finds
+// the end of the prompt by that two-character sequence.
+//
+// {{RUN_DATE}} stays in the prompt on purpose: injectRunDate() throws when the
+// sentinel is absent.
 //
 // LinkedIn collection note (#4049): the "LinkedIn (if enabled): … fetch-metrics"
 // step below is LIVE — it runs on every fire. TIER2_DEFERRED_CRONS is empty
@@ -165,26 +185,28 @@ const CLAUDE_CODE_FLAGS = [
 // digest #5357 carried real LinkedIn metrics: 3 followers, 2,137 impressions).
 // If a future Tier-2 deferral re-adds "community-monitor" to the set, collection
 // pauses behind the deferral heartbeat until restore.
-const COMMUNITY_MONITOR_PROMPT = `You are a community monitoring agent. Your job is to generate a daily
-community digest and create a GitHub Issue summarizing the findings.
+export const COMMUNITY_MONITOR_PROMPT = `You are a community monitoring agent. Your job is to collect community
+metrics from the enabled platforms and report them as ONE JSON draft in your
+final message. You cannot write files, create issues or post anywhere: the
+platform validates your draft, renders the digest and the tracking issue from
+fixed templates, and publishes them.
 
 IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
 Do NOT push directly to main.
 
-MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP / Later".
+Today's date is {{RUN_DATE}}. The platform derives every date itself; never put
+a date in your output.
 
 ## Instructions
 
 1. **Detect platforms** using the community router:
    Run: bash plugins/soleur/skills/community/scripts/community-router.sh platforms
-   This shows which platforms are enabled/disabled. If only GitHub and HN
-   are enabled (no Discord or X), create a GitHub Issue titled
-   "[Scheduled] Community Monitor - FAILED" with label
-   "scheduled-community-monitor" explaining the misconfiguration, then stop.
+   This shows which platforms are enabled/disabled. Report every disabled
+   platform with status "disabled" and keep collecting from the enabled ones.
 
 2. **Collect data** from enabled platforms. IMPORTANT: batch commands
-   into as few Bash calls as possible to conserve turns. Use \`;\` (not
-   \`&&\`) to chain commands so failures don't halt the batch.
+   into as few Bash calls as possible to conserve turns. Chain commands with a
+   semicolon (not a double ampersand) so failures don't halt the batch.
    IMPORTANT: the containment hook allowlists ONLY the literal command prefix
    \`bash plugins/soleur/skills/community/scripts/community-router.sh\`. You MUST
    write that full literal path in every invocation — do NOT assign it to a shell
@@ -192,7 +214,7 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    variable-expanded form will be denied as non-allowlisted.
    Batch 1 (Discord + X + Bluesky — single Bash call):
    - Discord (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info; bash plugins/soleur/skills/community/scripts/community-router.sh discord members; bash plugins/soleur/skills/community/scripts/community-router.sh discord channels\`
-     Then one more call to fetch messages for each channel ID from the output above.
+     Then one more call to fetch messages for each channel ID from the output above: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <channel_id>\` (one invocation per channel ID).
    - X/Twitter (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics\` to the same call.
      Do NOT call fetch-mentions or fetch-timeline (403 on Free tier).
    - Bluesky (if enabled): append \`bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics\` to the same call.
@@ -201,57 +223,47 @@ MILESTONE RULE: Every gh issue create command must include --milestone "Post-MVP
    - \`bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1; bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1; bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1; bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20; bash plugins/soleur/skills/community/scripts/community-router.sh hn trending --limit 30\`
    If any command in a batch fails, log the error and continue collecting the
    remaining platforms — but "continue" NEVER means the failure disappears from
-   the digest. Every failed command MUST surface as an explicit
-   "collection failed: <reason>" line in that platform's section (see step 4).
-   Never omit a section, and never substitute a number from a previous digest,
-   because a command failed.
+   your report. A platform whose commands failed is reported with status
+   "failed" (nothing usable) or "partial" (some numbers usable) and a
+   failureCause. Never omit a platform, and never substitute a number from a
+   previous digest, because a command failed. Use 0 for any number you could
+   not obtain.
 
-3. **Read brand guide** at knowledge-base/marketing/brand-guide.md (section ## Voice)
-   before writing any content. Match the brand voice in the digest.
+3. **Classify topics.** From this run's GitHub activity and discussion data,
+   count how many items fall under each topic category. Use only the categories
+   listed in step 4. Report counts only.
 
-4. **Generate digest** and write to knowledge-base/support/community/YYYY-MM-DD-digest.md
-   (use today's date). Follow the digest file contract from the community-manager
-   agent: frontmatter with period_start/period_end/generated_at — derive the
-   period from the collectors' own \`period_days\`/\`since\` fields, never from the
-   gap since the last committed digest, and never widen it to explain missing
-   data. Then sections
-   ## Period, ## Activity Summary, ## Top Contributors, and optional sections
-   ## Trending Topics, ## GitHub Activity, ## X/Twitter Metrics,
-   ## Bluesky Metrics, ## LinkedIn Activity, ## Hacker News Activity.
-   The ## GitHub Activity section must include a **Repository Stats** sub-section
-   with a table showing Stars, Forks, and Watchers counts, plus a list of
-   new stargazers in the period (username and starred date) from the repo-stats data.
-   Every one of those numbers must come from THIS run's repo-stats output. To
-   distinguish "GitHub quiet" from "GitHub broken": if a github command FAILED,
-   write an explicit "collection failed: <reason>" line under ## GitHub Activity
-   instead of the affected numbers. Do NOT carry a Stars/Forks/Watchers value
-   forward from a previous digest, do NOT label a stale number "(stale)", and do
-   NOT estimate one — an absent number is correct, a plausible wrong number is not.
-   If fetch-interactions returned any interactions, include a **Community Interactions**
-   sub-section with a markdown table: | User | Issue/PR | Comment |. Each row shows
-   the commenter, a link to the issue (e.g., #123), and a snippet of their comment.
-   Omit this sub-section entirely if there are no external interactions.
-   The ## LinkedIn Activity section (if LinkedIn was enabled) must report the
-   aggregate Company Page metrics from fetch-metrics: total followers plus the
-   aggregate post engagement (impressions, likes, comments, shares). Aggregate-
-   only — never list individual followers, commenters, or likers. To distinguish
-   "LinkedIn quiet" from "LinkedIn broken": if the LinkedIn fetch FAILED, write an
-   explicit "collection failed: <reason>" line under ## LinkedIn Activity rather
-   than silently omitting the section.
-   Summarize and aggregate -- do not store raw message transcripts. Brief
-   contextual quotes (under 100 chars) with attribution are acceptable.
-   If the file already exists for today, overwrite it.
-
-5. **Create GitHub Issue** titled "[Scheduled] Community Monitor - {{RUN_DATE}}"
-   with label "scheduled-community-monitor". Include a condensed summary:
-   platform status, key metrics, notable items, and a link to the digest file.
+4. **Report.** Your final message MUST be exactly ONE line of compact JSON: a
+   single object, no code fence, no text before or after it, no line breaks and
+   no keys other than the ones in this example (every key shown is required):
+   ${buildExampleDraftLine()}
+   Rules:
+   - status is one of: ${COMMUNITY_STATUSES.join(", ")}.
+   - failureCause is REQUIRED when status is partial or failed, and must be
+     OMITTED otherwise. It is one of: ${COMMUNITY_FAILURE_CAUSES.join(", ")}.
+   - Every metric is a non-negative whole number, except engagementRatePct,
+     which is a number from 0 to 100. Replace every 0 in the example with this
+     run's measured value; keep 0 only when the value is unavailable.
+   - Every number must come from THIS run's collector output. Do NOT carry a
+     value forward from a previous digest, do NOT estimate one, and do NOT
+     report an absent number as a measured one: an absent number is correct, a
+     plausible wrong number is not. For GitHub, a failed command means status
+     partial or failed with a failureCause, not a guess.
+   - periodDays is a whole number from ${MIN_PERIOD_DAYS} to ${MAX_PERIOD_DAYS}, taken from the collectors' own
+     period_days or since fields. Never derive it from the gap since the last
+     digest and never widen it to explain missing data.
+   - topics has at most ${MAX_TOPICS} entries, each {"category": <one of: ${COMMUNITY_TOPIC_CATEGORIES.join(", ")}>, "count": <whole number>}, and
+     each category appears at most once. Use an empty list when nothing applies.
+   - github externalContributors is the number of distinct accounts, other than
+     the maintainers and bots, that were active in the period.
+     externalInteractions is the number of their comments, issues and pull
+     requests from fetch-interactions. Report these as counts only.
+   - The draft has no field for names, usernames, quotes or message text. Do not
+     add one: any other shape is rejected and that day's digest is lost.
 
 PERSISTENCE: Do NOT run git add, git commit, git push, or gh pr create/merge.
 The platform commits and opens a PR for your changes automatically after the run.
-Only changes under knowledge-base/support/community/ are persisted — keep all edits inside that path.
-Creating the monitor issue above is REQUIRED: the platform only persists your changes after it verifies the issue exists.
-
-CLONE DEPTH RULE: This workspace was cloned with --depth=1. Do NOT use \`git log\` for staleness analysis (every file appears "just touched"). Use GitHub Issue \`updatedAt\` timestamps via \`gh issue list --json updatedAt,number\` instead. The containment hook only allows the \`gh issue\` / \`gh label\` verbs listed above plus the community-router.sh script — do NOT reach for any other \`gh\` sub-command or the raw API.
+You have no file-writing or issue-creating tools; do not try to use any.
 `;
 
 // Persistence allowlist (#5111): verbatim from the prompt's former scoped
@@ -370,8 +382,8 @@ export async function readCollectorStatus(
 // DOPPLER_*, GITHUB_APP_PRIVATE_KEY, SUPABASE_SERVICE_ROLE_KEY,
 // INNGEST_SIGNING_KEY, INNGEST_EVENT_KEY, STRIPE_SECRET_KEY) is excluded.
 //
-// PR-11 additions (bucket-ii authorization): DISCORD_WEBHOOK_URL,
-// DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD,
+// PR-11 additions (bucket-ii authorization): DISCORD_BOT_TOKEN,
+// DISCORD_GUILD_ID, BSKY_HANDLE, BSKY_APP_PASSWORD,
 // LINKEDIN_ACCESS_TOKEN, LINKEDIN_PERSON_URN, X_API_KEY, X_API_SECRET,
 // X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET — the community-router.sh platform
 // scripts need these to flip platforms from "disabled" → "enabled".
@@ -385,6 +397,10 @@ export async function readCollectorStatus(
 // not a line number: #7898 shifted this file by ~40 lines and the old `:611`
 // citation now lands on a loop terminator); the monitor is read-only and only the publisher
 // (cron-content-publisher.ts) arms posting.
+// #7122: DISCORD_WEBHOOK_URL is deliberately NOT forwarded. It is the Discord
+// POSTING credential, and no read-path verb consumes it (the community scripts
+// reference it only in discord-setup.sh), so handing it to a model run that
+// ingests outsiders' text would hand an injection a way to post publicly.
 // Defensive: ONLY the platform secrets the community-router.sh needs, NOT a
 // wholesale process.env passthrough.
 function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
@@ -394,7 +410,6 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     GH_TOKEN: installationToken,
-    DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
     DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
     DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID,
     BSKY_HANDLE: process.env.BSKY_HANDLE,

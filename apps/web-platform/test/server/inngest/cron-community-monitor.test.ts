@@ -8,8 +8,11 @@
 //   2. Prompt-canary anchors (## Instructions, community-router.sh path,
 //      Hacker News / Discord / Bluesky verbs, digest output path) — original
 //      anchors from the GHA prompt that must survive silent paraphrasing.
-//   3. Safety-guard anchors (MILESTONE RULE, platform-persistence
-//      directive, "Do NOT push directly to main"). NOTE: the prompt-level
+//   3. Safety-guard anchors (platform-persistence directive, "Do NOT push
+//      directly to main"). #7122: the agent no longer files the issue or writes
+//      the digest, so the MILESTONE RULE, brand-guide, issue-creation,
+//      CLONE DEPTH and quotes/contributor/interaction directives are asserted
+//      ABSENT below. NOTE: the prompt-level
 //      DEDUP RULE was removed in #6143 (same-day dedup is now code-side via
 //      digestIssueExistsForDate before the eval spawns) — a regression guard
 //      below asserts those three strings stay absent.
@@ -30,10 +33,21 @@ vi.hoisted(() => {
 });
 
 import {
+  COMMUNITY_MONITOR_PROMPT,
   cronCommunityMonitor,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-community-monitor";
+import {
+  COMMUNITY_FAILURE_CAUSES,
+  COMMUNITY_METRICS,
+  COMMUNITY_PLATFORMS,
+  COMMUNITY_STATUSES,
+  COMMUNITY_TOPIC_CATEGORIES,
+  buildExampleDraftLine,
+  parseCommunityDraft,
+} from "@/server/inngest/functions/_cron-community-publication";
+import { injectRunDate } from "@/server/inngest/functions/_cron-shared";
 
 describe("cronCommunityMonitor — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -126,15 +140,14 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "knowledge-base/support/community/",
         "digest output directory",
       ],
-      ["YYYY-MM-DD-digest.md", "digest filename pattern"],
-      ["[Scheduled] Community Monitor", "issue title prefix"],
+      // #7122: the dated digest filename, the `## Period` / `## Activity Summary`
+      // headings and the issue body are rendered handler-side from fixed templates
+      // (asserted in cron-community-publication.test.ts), so they are no longer
+      // prompt text. The title prefix is the shared constant the dedup read and the
+      // audit fallback use.
+      ["titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX", "issue title prefix (shared constant)"],
       ["scheduled-community-monitor", "label name"],
-      ['--milestone "Post-MVP / Later"', "MILESTONE RULE target"],
-      ["## Period", "digest section marker"],
-      ["## Activity Summary", "digest section marker"],
-      ["## Top Contributors", "digest section marker"],
-      ["Repository Stats", "GitHub Activity sub-section marker"],
-      ["Community Interactions", "GitHub Activity sub-section marker"],
+      ["discord messages <channel_id>", "Discord messages invocation (literal verb, prompt-parity)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh discord", "Discord platform invocation (literal path)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh github activity", "GitHub activity invocation (literal path)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions", "Hacker News invocation (literal path)"],
@@ -147,7 +160,6 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
 
   describe("safety-guard anchors (cohort discipline)", () => {
     it.each([
-      ["MILESTONE RULE:", "rule keyword"],
       [
         "Do NOT push directly to main",
         "no direct main writes (handler-side PR persistence)",
@@ -160,12 +172,69 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "opens a PR for your changes",
         "handler-side persistence note (#5111)",
       ],
-      [
-        "CLONE DEPTH RULE:",
-        "stale git-log misuse on --depth=1 clone",
-      ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
+    });
+  });
+
+  // #7122 — the agent can no longer publish: these directives were retired with
+  // the verbs/tools they drove. Asserting them ABSENT keeps a revert of the
+  // prompt rewrite from silently re-arming an instruction the hook now denies
+  // (which would only provoke denied filings and a RED monitor).
+  describe("#7122 — retired publication directives are absent from the prompt", () => {
+    it.each([
+      ["## Top Contributors", "contributor section directive (R3)"],
+      ["Community Interactions", "interaction table directive (R3)"],
+      ["| User | Issue/PR | Comment |", "commenter table"],
+      ["--milestone", "gh issue create flag"],
+      ["MILESTONE RULE", "issue-creation rule"],
+      ["gh issue", "any issue verb (create/list/comment)"],
+      ["gh label", "any label verb"],
+      ["Create GitHub Issue", "issue-creation step"],
+      ["brand-guide", "brand-guide read step"],
+      ["Brief contextual", "quote allowance (R3)"],
+      ["CLONE DEPTH RULE", "gh issue list dedup paragraph (env-dump verb)"],
+      ["Creating the monitor issue above is REQUIRED", "persistence gate sentence"],
+      ["Only changes under knowledge-base/support/community/", "persistence path sentence"],
+      ["FAILED", "retired misconfiguration-issue branch"],
+      ["new stargazers in the period (username", "stargazer username directive"],
+    ])("prompt does NOT contain %s (%s)", (removed) => {
+      expect(COMMUNITY_MONITOR_PROMPT).not.toContain(removed);
+    });
+  });
+
+  describe("#7122 — final-message draft contract (generated from the module's constants)", () => {
+    it("embeds the generated one-line example verbatim, and the example passes the schema", () => {
+      const line = buildExampleDraftLine();
+      expect(COMMUNITY_MONITOR_PROMPT).toContain(line);
+      expect(line).not.toMatch(/[\r\n]/);
+      expect(parseCommunityDraft(line).ok).toBe(true);
+    });
+
+    it("names every draft key and closed-enum member the schema defines", () => {
+      for (const key of ["periodDays", "platforms", "topics", "status", "failureCause", "metrics", "category", "count"]) {
+        expect(COMMUNITY_MONITOR_PROMPT, key).toContain(key);
+      }
+      for (const platform of COMMUNITY_PLATFORMS) {
+        expect(COMMUNITY_MONITOR_PROMPT, platform).toContain(`"${platform}":`);
+        for (const metric of Object.keys(COMMUNITY_METRICS[platform])) {
+          expect(COMMUNITY_MONITOR_PROMPT, `${platform}.${metric}`).toContain(`"${metric}"`);
+        }
+      }
+      for (const member of [...COMMUNITY_STATUSES, ...COMMUNITY_FAILURE_CAUSES, ...COMMUNITY_TOPIC_CATEGORIES]) {
+        expect(COMMUNITY_MONITOR_PROMPT, member).toContain(member);
+      }
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("ONE line of compact JSON");
+    });
+
+    it("keeps the {{RUN_DATE}} sentinel (injectRunDate throws without it)", () => {
+      expect(() => injectRunDate(COMMUNITY_MONITOR_PROMPT, "2026-10-06T08:00:00.000Z")).not.toThrow();
+      expect(injectRunDate(COMMUNITY_MONITOR_PROMPT, "2026-10-06T08:00:00.000Z")).toContain("2026-10-06");
+    });
+
+    it("tells the agent it has no file or issue tools and must not add a text field", () => {
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("You cannot write files, create issues or post anywhere");
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("no field for names, usernames, quotes or message text");
     });
   });
 
@@ -188,10 +257,11 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       expect(SUT_SOURCE).not.toContain(removed);
     });
 
-    it("still creates the dated digest issue unconditionally (prefix anchor present)", () => {
-      // The unconditional-create contract survives: step 5 files the issue on
-      // every run; the code-level dedup skip happens before the eval spawns.
-      expect(SUT_SOURCE).toContain("[Scheduled] Community Monitor");
+    it("still publishes the dated digest issue unconditionally (prefix constant wired)", () => {
+      // The unconditional-publish contract survives, now handler-side (#7122): the
+      // code-level dedup skip happens before the eval spawns and both the dedup read
+      // and the audit fallback key on the shared title prefix.
+      expect(SUT_SOURCE).toContain("titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX");
     });
   });
 });
@@ -211,7 +281,6 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
 
   describe("positive class — community vars MUST be allowlisted", () => {
     it.each([
-      "DISCORD_WEBHOOK_URL",
       "DISCORD_BOT_TOKEN",
       "DISCORD_GUILD_ID",
       "BSKY_HANDLE",
@@ -238,6 +307,10 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       [
         "GITHUB_APP_PRIVATE_KEY",
         "GitHub App PEM; full repo write across installations",
+      ],
+      [
+        "DISCORD_WEBHOOK_URL",
+        "Discord POSTING credential; no read-path verb consumes it (#7122)",
       ],
       [
         "SENTRY_AUTH_TOKEN",
