@@ -74,3 +74,7 @@ Productize candidate: none.
 - How vague checks are rewritten into something observable or flagged "needs your eyes" (plan stage; needs the spec-flow analysis of the fail/retry flow).
 - Whether the skill-description budget allows the new brainstorm and plan prompt text (plan stage, unverified).
 - (out of scope) Command Center capture of the check in the hosted app, and any hosted marketing, until #9620 is decided.
+
+## Addendum — 2026-10-06 (#9578, CLO wording review of the built text)
+
+> **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`pass`, `first-use`, `no-sandbox`, `no-sandbox-ask`, `invalid-ask`, `aggregate-judgement`, `overridden-line`, `nosandbox-continued`, `headless-stop`, `untrusted-ask`), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.

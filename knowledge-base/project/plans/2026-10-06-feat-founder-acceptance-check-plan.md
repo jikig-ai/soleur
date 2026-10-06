@@ -509,3 +509,7 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 - Brainstorm-side prompt (needs ceiling headroom in `brainstorm/SKILL.md`, a separate reviewed ceiling PR).
 - Multiple checks per plan, PR-body labels and a `founder-override` PR label, pre-supplied block for headless runs (needs `ship/SKILL.md` ceiling surgery).
 - Hosted Command Center capture: out of scope, waits on #9620.
+
+## Addendum — 2026-10-06 (#9578, CLO wording review of the built text)
+
+> **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`pass`, `first-use`, `no-sandbox`, `no-sandbox-ask`, `invalid-ask`, `aggregate-judgement`, `overridden-line`, `nosandbox-continued`, `headless-stop`, `untrusted-ask`), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.

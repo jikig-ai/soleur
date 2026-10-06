@@ -38,6 +38,7 @@ means "exit 0 only"), and one plain sentence beside them saying what the command
 approves the **exact text**, not a paraphrase. Tell the founder up front what the sandbox allows, so
 they are not surprised at ship:
 
+- the check runs on this computer in a limited environment that can still use your network connection, so read the command before approving; "sandbox" is not a promise of safety;
 - the first word must be one of `curl bash grep rg jq python3 node bun printf git`;
 - pipes, `&&`, `;`, `$VAR` and `$( )` are rejected; there is no shell state;
 - a 15-second cap, a read-only repository and a minimal PATH. Test runners and build commands

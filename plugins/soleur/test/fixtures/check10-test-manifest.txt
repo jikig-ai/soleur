@@ -1,6 +1,7 @@
 ${id} parses to the space-joined line, not the literal indicator
 ${surface} restates the cap, and states the runtime's number
 '${name}' matches the plan's text exactly
+'overridden-line' carries the founder's reason verbatim
 'pass' matches the plan's sentence with the sha filled in
 --command-out writes the exact command text, with no trailing newline
 04-dns-fail.md contains the typo'd hostname (regression-snapshot invariant)
@@ -177,6 +178,7 @@ exactly two subprocess call sites: git and the verb gate
 headless refuses FOUNDER-CONFIRMED and writes nothing
 headless refuses OVERRIDDEN and writes nothing
 headless with an approved block and no sandbox is STOPPED-AWAITING-FOUNDER; without a block it stays SKIP-NOSANDBOX
+instrument: the ban regex fires on a known positive (so the negative assertion above can fail)
 interactive OVERRIDDEN with a reason is recorded as an override, never as a pass
 interactive OVERRIDDEN without a reason is refused
 it declares no sandbox of its own
@@ -187,7 +189,7 @@ modeFlagsOn sees the mode flags, not the query flags
 no block is still NO-BLOCK
 no plan change on the branch is NO-BLOCK, exit 0 (the SKIP banner case)
 no shell-out primitives
-no string claims 'verified', 'proven' or 'safe' (the pass sentence's one negation is the exemption)
+no string contains 'verified', 'proven' or 'safe' (no exemption: the CLO ruled the negation out)
 normalizes trailing newline before comparing
 parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)
 preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)

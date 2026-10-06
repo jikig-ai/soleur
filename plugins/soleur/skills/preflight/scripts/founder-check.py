@@ -48,23 +48,48 @@ OUTCOMES = (
     "CHANGED-SINCE-APPROVAL", "STOPPED-AWAITING-FOUNDER",
 )
 
-# Wording is a contract (CLO-reviewed, pinned by tests). Never claim more than "ran and returned
-# success". The one use of the word "safe" is a negation inside the pass sentence.
+# Wording is a contract (CLO-reviewed, pinned by tests). Never claim more than "ran against the
+# sha, finished without an error and printed the expected text". No string uses the words
+# "verified", "proven" or "safe" (the CLO ruled the old negation exemption out, #9578).
 WORDING = {
     "pass": (
-        "Your check passed. This shows only that the check you wrote ran and returned success "
-        "against {sha}. It does not confirm the work is correct, complete or safe. Review the "
-        "result before relying on it."
+        "Your check passed. This shows only that the check you wrote ran against {sha}, "
+        "finished without an error and, if you set an expected result, printed it. It does not "
+        "show that the work is correct or complete, or free of problems this check does not look "
+        "for. Review the result before relying on it."
     ),
     "judgement": "You confirmed this by looking. No command ran for it.",
     "first-use": (
-        "A vague, wrong or unsafe check can pass broken work or run actions you did not intend. "
-        "Read what will run before it runs. One check does not cover everything. The text and "
-        "command you approve are committed to this repository."
+        "A vague, wrong or risky check can pass broken work or run actions you did not intend. "
+        "Read what will run before it runs. The check runs on this computer in a limited "
+        "environment that can still use your network connection. One check does not cover "
+        "everything. The text and command you approve are committed to this repository, which "
+        "may be public, so do not put passwords or keys in them."
     ),
     "no-block": "No founder-stated check was defined. Nothing was run on your behalf.",
-    "no-sandbox": "Your check did not run on this host.",
-    "no-sandbox-ask": "Your check did not run on this host. Continue without it?",
+    "no-sandbox": "Your check did not run on this computer, so nothing was checked.",
+    "no-sandbox-ask": (
+        "Your check did not run on this computer, so nothing was checked. Continue without it?"
+    ),
+    "invalid-ask": (
+        "Your check could not run properly, so it says nothing about your work. How should this "
+        "proceed?"
+    ),
+    "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
+    "overridden-line": "Founder check did not pass and you chose to continue: {reason}",
+    "nosandbox-continued": (
+        "Your check did not run on this computer, so it has not checked this work. You chose to "
+        "continue."
+    ),
+    "headless-stop": (
+        "Your check did not pass, could not run, or needs your decision, and an unattended run "
+        "cannot decide that for you. Run this step again with you present to retry, change the "
+        "check or continue anyway."
+    ),
+    "untrusted-ask": (
+        "This check was not written by you. Running it executes the command shown above on this "
+        "computer, in a limited environment that can still use your network connection. Run it?"
+    ),
     "aggregate-pass": "Founder check: ran, returned success against {sha}",
 }
 
@@ -687,7 +712,7 @@ def cmd_summary(a):
 
 
 def cmd_text(a):
-    print(WORDING[a.name].format(sha=a.sha))
+    print(WORDING[a.name].format(sha=a.sha, reason=a.reason))
     return 0
 
 
@@ -742,6 +767,7 @@ def build_parser():
     t = sub.add_parser("text", allow_abbrev=False)
     t.add_argument("name", choices=sorted(WORDING))
     t.add_argument("--sha", default="<sha>")
+    t.add_argument("--reason", default="<reason>")
     t.set_defaults(fn=cmd_text)
     return p
 

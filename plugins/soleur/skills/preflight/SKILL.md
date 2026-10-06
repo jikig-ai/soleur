@@ -1475,9 +1475,9 @@ Runs the check a founder wrote in their own words, approved as an exact command,
 1. **Resolve.** Run `founder-check.py verify` (reference section 1). `NO-BLOCK` is SKIP with the pinned banner; a missing block with freeze evidence is FAIL, never SKIP; `UNTRUSTED` and `CHANGED-SINCE-APPROVAL` stop and are decided in Phase 2.
 2. **Run only through Step 10.5.** The approved command runs in the Step 10.5 sandbox via the reference's wrapper, with `CMD` set to the command. Check 13 declares no sandbox of its own and never executes the command any other way. First run `true` through the same wrapper: it must return rc 0 (sandbox-health control).
 3. **Classify and record.** `founder-check.py classify` is the one chokepoint; `founder-check.py log` is the only writer of outcomes and prints the metadata-only `SOLEUR_FOUNDER_CHECK_RESULT` marker. Preflight commits nothing: ship stages `knowledge-base/` artifacts before preflight runs, so print `commit knowledge-base/project/specs/<branch>/founder-check-log.md` after logging.
-4. **Say only what is true.** A pass reads "ran, returned success against `<sha>`", from `founder-check.py text`. It never claims the work is verified.
+4. **Say only what is true.** A pass reads "ran, returned success against `<sha>`" in the aggregate row, beside the full pass sentence from `founder-check.py text pass`. It never claims the work is verified.
 
-`SKIP-NOSANDBOX` here is stated as "your check did not run on this host"; with an approved block present it stops the run (a gate that went dark must not read as green).
+`SKIP-NOSANDBOX` here is stated as "your check did not run on this computer, so nothing was checked"; with an approved block present it stops the run (a gate that went dark must not read as green).
 
 ## Phase 2: Aggregate Go/No-Go Report
 
@@ -1499,12 +1499,12 @@ After all checks complete, aggregate results into a structured report:
 | SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
 | Node-Only Encodings Banned in Client-Bundle | PASS/FAIL | <details> |
 | Discoverability Test Execution | PASS/FAIL/SKIP/SKIP-DECLARED/SKIP-NOSANDBOX | <details> — on SKIP-DECLARED, quote the declared `credentials_required` scope verbatim so the waiver is visible in the aggregate; on SKIP-NOSANDBOX, state plainly that Check 10 did not execute on this host and why |
-| Founder-Stated Check | ran-returned-success/FAIL/SKIP/SKIP-NOSANDBOX/OVERRIDDEN | `Founder check: ran, returned success against <sha>` (never a bare PASS), the exact command and expected string beside it; roll-up per reference section 4 |
+| Founder-Stated Check | ran-returned-success/FOUNDER-CONFIRMED/FAIL/SKIP/SKIP-NOSANDBOX/OVERRIDDEN | `Founder check: ran, returned success against <sha>` (never a bare PASS), the exact command and expected string beside it; roll-up per reference section 4 |
 
 **Overall: PASS / FAIL**
 ```
 
-On OVERRIDDEN add one closing line, `Founder check OVERRIDDEN: <reason>`; on SKIP-NOSANDBOX add `your check did not run; ship continues`.
+On OVERRIDDEN add the `overridden-line` text; on SKIP-NOSANDBOX with an approved block add the `nosandbox-continued` text (both from `founder-check.py text`). With no block add neither.
 
 ### If any FAIL
 
@@ -1517,7 +1517,7 @@ On OVERRIDDEN add one closing line, `Founder check OVERRIDDEN: <reason>`; on SKI
   1. "Fix and retry" -- fix the issues, then re-run preflight from Phase 1
   2. "Abort" -- stop the pipeline
 
-**Founder check (Check 13) prompts run here**, after the parallel checks finish: retry, restore or change the check, or accept anyway (recorded as `OVERRIDDEN`, with a reason) — reference section 5.
+**Founder check (Check 13) prompts run here**, after the parallel checks finish: retry, restore or change the check, or continue anyway (recorded as `OVERRIDDEN`, with a reason) — reference section 5.
 
 ### If all PASS or SKIP
 

@@ -98,9 +98,9 @@ aborts, all PASS or SKIP continues), with these classes:
 
 | Check 13 outcome | Rolls up as |
 | --- | --- |
-| PASSED, FOUNDER-CONFIRMED | PASS |
-| OVERRIDDEN | PASS, with the row printed and one closing line `Founder check OVERRIDDEN: <reason>` |
-| SKIP, SKIP-NOSANDBOX (no block), the no-block banner | SKIP. A SKIP-NOSANDBOX row also prints `your check did not run; ship continues` |
+| PASSED, FOUNDER-CONFIRMED | PASS. The aggregate row for FOUNDER-CONFIRMED is `founder-check.py text aggregate-judgement`, never the aggregate-pass row. |
+| OVERRIDDEN | PASS-with-flag, with the row printed and one closing line from `founder-check.py text overridden-line --reason "<reason>"` |
+| SKIP, SKIP-NOSANDBOX (no block), the no-block banner | SKIP. With no block print only the no-block banner. A SKIP-NOSANDBOX row with a block (interactive, the founder chose to continue) prints `founder-check.py text nosandbox-continued`. |
 | FAILED, INVALID, CHANGED-SINCE-APPROVAL, UNTRUSTED, NEEDS-YOUR-EYES, a block present with no sandbox, any headless stop | FAIL |
 
 The pass wording names the commit tested (`against <sha>`) because preflight runs before ship's
@@ -116,13 +116,14 @@ reaches this section:** every stopped outcome there is a FAIL, recorded as
 
 | Outcome | Ask | Answers |
 | --- | --- | --- |
-| FAILED, INVALID | "Your check did not pass. How should this proceed?" | **Retry** (back to section 2, `attempt_n` + 1) · **Restore or change the check** (show old and new text, ask to confirm, section 8) · **Accept anyway** (ask for a one-line reason, record `OVERRIDDEN`) |
-| CHANGED-SINCE-APPROVAL | Show both texts and the `changed_fields` / `reasons`. | **Restore the frozen text** · **Accept anyway** (reason required, `OVERRIDDEN`, log both texts) |
-| UNTRUSTED | Show the exact command, say who authored the freeze and that it does not match the local operator. "Run this command?" | **Yes** (run it once through section 2; the log row keeps the `UNTRUSTED` flag) · **No** (FAIL) |
+| FAILED | "Your check did not pass. How should this proceed?" | **Retry** (back to section 2, `attempt_n` + 1) · **Restore or change the check** (show old and new text, ask to confirm, section 8) · **Continue anyway and record that the check did not pass** (ask "In one line, why are you continuing? This is saved in the repository log.", record `OVERRIDDEN`) |
+| INVALID | `founder-check.py text invalid-ask` | the same three answers as FAILED |
+| CHANGED-SINCE-APPROVAL | Show both texts and the `changed_fields` / `reasons`. | **Restore the approved check** · **Continue anyway and record that it changed** (the same one-line reason prompt as FAILED, `OVERRIDDEN`, log both texts) |
+| UNTRUSTED | Show the exact command and who authored the freeze, then print `founder-check.py text untrusted-ask`. | **Yes** (run it once through section 2; the log row keeps the `UNTRUSTED` flag) · **No** (FAIL) |
 | NEEDS-YOUR-EYES (`kind: judgement`) | Show `text` and the evidence the work produced. "Does this meet what you stated?" | **Yes** → `FOUNDER-CONFIRMED`, print `text judgement` · **No** → enters the FAILED row above |
 | SKIP-NOSANDBOX with a block | `founder-check.py text no-sandbox-ask` | **Yes** (logged, continue) · **No** (FAIL) |
 
-"Accept anyway" is recorded as `OVERRIDDEN`, never as passed, and the roll-up row says so.
+Continuing anyway is recorded as `OVERRIDDEN`, never as passed, and the roll-up row says so. On every headless stop print `founder-check.py text headless-stop` in place of the generic "Fix the issues and re-run `soleur:ship`".
 
 ## 6. Recording (the only writer of outcomes)
 
@@ -158,9 +159,9 @@ under it, and nothing else in Phase 0 applies.
    `classify --polarity baseline` with `--creates <path>` for each listed path and
    `--target-present <true|false>` measured by checking those paths.
 4. Result:
-   - `FAILED-AS-EXPECTED`: valid. Record it with `--polarity baseline --rc <rc> --expected-matched <bool>`
+   - `FAILED-AS-EXPECTED`: print "Your check fails today, as it should before the work. This shows only that the check can fail. It does not show that it checks what you care about." Record it with `--polarity baseline --rc <rc> --expected-matched <bool>`
      (the freeze commit carries this row) and return success so the plan skill makes the freeze commit.
-   - `VACUOUS` (the check already passes): refuse. Offer **strengthen the check**, **mark it needs-your-eyes**, or
+   - `VACUOUS` (the check already passes): print "Your check already passes before any work is done, so it cannot tell you whether the work is done." Refuse. Offer **strengthen the check**, **mark it needs-your-eyes**, or
      **record it as already true and drop it**. A dropped check never reappears as a pass.
    - `INVALID`: refuse. Tooling failed, so this is no evidence the check can ever fail or pass.
      On a mise or asdf install `node` and `bun` return rc 127 inside the sandbox (its PATH is

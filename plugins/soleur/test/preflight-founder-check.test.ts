@@ -1031,10 +1031,16 @@ describe("wording constants", () => {
   const EXACT: Record<string, string> = {
     judgement: "You confirmed this by looking. No command ran for it.",
     "first-use":
-      "A vague, wrong or unsafe check can pass broken work or run actions you did not intend. Read what will run before it runs. One check does not cover everything. The text and command you approve are committed to this repository.",
+      "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what will run before it runs. The check runs on this computer in a limited environment that can still use your network connection. One check does not cover everything. The text and command you approve are committed to this repository, which may be public, so do not put passwords or keys in them.",
     "no-block": "No founder-stated check was defined. Nothing was run on your behalf.",
-    "no-sandbox": "Your check did not run on this host.",
-    "no-sandbox-ask": "Your check did not run on this host. Continue without it?",
+    "no-sandbox": "Your check did not run on this computer, so nothing was checked.",
+    "no-sandbox-ask": "Your check did not run on this computer, so nothing was checked. Continue without it?",
+    "invalid-ask": "Your check could not run properly, so it says nothing about your work. How should this proceed?",
+    "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
+    "overridden-line": "Founder check did not pass and you chose to continue: <reason>",
+    "nosandbox-continued": "Your check did not run on this computer, so it has not checked this work. You chose to continue.",
+    "headless-stop": "Your check did not pass, could not run, or needs your decision, and an unattended run cannot decide that for you. Run this step again with you present to retry, change the check or continue anyway.",
+    "untrusted-ask": "This check was not written by you. Running it executes the command shown above on this computer, in a limited environment that can still use your network connection. Run it?",
   };
 
   for (const [name, want] of Object.entries(EXACT)) {
@@ -1048,8 +1054,13 @@ describe("wording constants", () => {
   test("'pass' matches the plan's sentence with the sha filled in", () => {
     const t = text("pass", ["--sha", "abc1234"]);
     expect(t.stdout.trimEnd()).toBe(
-      "Your check passed. This shows only that the check you wrote ran and returned success against abc1234. It does not confirm the work is correct, complete or safe. Review the result before relying on it.",
+      "Your check passed. This shows only that the check you wrote ran against abc1234, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it.",
     );
+  });
+
+  test("'overridden-line' carries the founder's reason verbatim", () => {
+    const t = text("overridden-line", ["--reason", "shipping the typo fix"]);
+    expect(t.stdout.trimEnd()).toBe("Founder check did not pass and you chose to continue: shipping the typo fix");
   });
 
   test("the aggregate row says ran, returned success against the sha — never a bare PASS", () => {
@@ -1057,14 +1068,19 @@ describe("wording constants", () => {
     expect(t.stdout.trimEnd()).toBe("Founder check: ran, returned success against abc1234");
   });
 
-  test("no string claims 'verified', 'proven' or 'safe' (the pass sentence's one negation is the exemption)", () => {
+  test("no string contains 'verified', 'proven' or 'safe' (no exemption: the CLO ruled the negation out)", () => {
     const names = [...Object.keys(EXACT), "pass", "aggregate-pass"];
+    expect(names.length).toBeGreaterThanOrEqual(13); // every constant is covered, none dropped
     for (const n of names) {
-      let s = text(n, ["--sha", "abc1234"]).stdout;
+      const s = text(n, ["--sha", "abc1234"]).stdout;
       expect(s.length).toBeGreaterThan(20); // an empty read must not satisfy a negative assertion
-      s = s.replace("complete or safe", "complete");
-      expect(s).not.toMatch(/\b(verified|proven|safe)\b/i);
+      expect(s).not.toMatch(/verified|proven|safe/i);
     }
+  });
+
+  test("instrument: the ban regex fires on a known positive (so the negative assertion above can fail)", () => {
+    expect("it is safe and verified and proven, unsafe too").toMatch(/verified|proven|safe/i);
+    expect("risky").not.toMatch(/verified|proven|safe/i);
   });
 
   test("an unknown name is a usage error", () => {
