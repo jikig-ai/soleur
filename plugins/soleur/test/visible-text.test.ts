@@ -55,9 +55,9 @@ describe("visible-text scanner", () => {
   // itself a boundary and would hide a missing member). The list is written here,
   // not read from the scanner, so deleting a member from the scanner fails a row.
   const BLOCK = [
-    "address", "article", "aside", "blockquote", "dd", "details", "div", "dl", "dt",
-    "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
-    "header", "li", "main", "nav", "ol", "p", "section", "summary", "table", "td",
+    "address", "article", "aside", "blockquote", "caption", "dd", "details", "div", "dl", "dt",
+    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "legend", "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "td",
     "th", "tr", "ul",
   ];
   test.each(BLOCK)("a <%s> boundary separates bare neighbouring text", (tag) => {

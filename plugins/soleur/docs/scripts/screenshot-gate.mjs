@@ -166,6 +166,9 @@ function readPrivacyVisibility() {
       if (area > 0 && (w * h) / area < 0.9) why.push(`${tag} clips the line (${Math.round(((w * h) / area) * 100)}% visible)`);
     }
     if (!bg) {
+      // The first ancestor with any background colour decides the contrast. Its alpha is
+      // not blended outward (a translucent card over a different page colour reads as
+      // opaque): the limit is accepted because the hero card is opaque.
       const b = rgba(c.backgroundColor);
       if (b.a > 0) bg = b;
     }

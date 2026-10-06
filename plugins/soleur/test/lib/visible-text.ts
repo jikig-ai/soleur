@@ -16,10 +16,10 @@
 export const BOUNDARY = "\u0001";
 
 const BLOCK_TAGS = new Set([
-  "address", "article", "aside", "blockquote", "br", "dd",
-  "details", "div", "dl", "dt", "figcaption", "figure", "footer", "form",
-  "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main",
-  "nav", "ol", "p", "section", "summary", "table", "td", "th", "tr", "ul",
+  "address", "article", "aside", "blockquote", "br", "caption", "dd",
+  "details", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+  "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "legend", "li", "main",
+  "nav", "ol", "p", "pre", "section", "summary", "table", "td", "th", "tr", "ul",
 ]);
 
 const ENTITIES: Record<string, string> = {
@@ -30,9 +30,10 @@ const ENTITIES: Record<string, string> = {
   NonBreakingSpace: " ", shy: "", zwj: "", zwnj: "", ZeroWidthSpace: "",
 };
 
-// Characters a browser renders as nothing: every Unicode format character
+// Characters that cannot split a word for a reader: every Unicode format character
 // (soft hyphen, zero-width space and joiners, LRM/RLM, word joiner, BOM) plus the
-// combining grapheme joiner and the Mongolian vowel separator. Built with a
+// combining grapheme joiner and the Mongolian vowel separator. Variation selectors
+// and Hangul fillers are not stripped (none occurs on the site). Built with a
 // property escape and char codes, so no invisible character sits in this source.
 const INVISIBLE_RE = new RegExp("[\\p{Cf}" + String.fromCharCode(0x34f, 0x180e) + "]", "gu");
 

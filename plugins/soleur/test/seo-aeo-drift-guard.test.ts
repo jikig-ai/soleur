@@ -2012,10 +2012,12 @@ function faqLdAnswer(html: string, question: string): string {
 // Claude-plan / login wording is only true of the self-hosted version. The
 // vocabulary follows CLO audit section 6 (Pro / Max / Team / Enterprise, login,
 // seat, subscription limits and tokens), not just the spellings found on the site
-// today. Alternatives never overlap (an overlap cannot be told apart by any probe),
-// and every alternative is pinned by the ablation check below.
+// today. Two alternatives that match the same sentences cannot be told apart by any
+// probe, so such duplicates are removed; an alternative that is the ONLY one matching
+// some CLO-listed term (a bare "Claude Team") must stay, and the probe table says why.
+// Every alternative is pinned by the ablation check below.
 const PLAN_WORDING_RE =
-  /Claude(?: Code)?(?:\.ai)? (?:plan|Pro|Max|subscription|account|login|log-in|sign-?in|seat)\b|Claude\.ai\b|\b(?:Pro|Max|Team|Enterprise) (?:plan|subscription|seat)\b|\bPro\/Max\b|\bPro,? (?:or|and) Max\b|\bMax (?:or|and) Pro\b|\bAnthropic (?:subscription|account|login|plan)\b|\b(?:sign|log)(?:s|ged|ed)? ?in (?:to |with )?(?:Claude|Anthropic)\b|subscription (?:limits|tokens?|auth\w*)|usage limits|setup-token|\boauth\b/i;
+  /Claude(?: Code)?(?:\.ai)? (?:plan|Pro|Max|Team|Enterprise|subscription|account|login|log-in|sign-?in|seat)\b|Claude\.ai\b|\b(?:Pro|Max|Team|Enterprise) (?:plan|subscription|seat)\b|\bPro\/Max\b|\bPro,? (?:or|and) Max\b|\bMax (?:or|and) Pro\b|\bAnthropic (?:subscription|account|login|plan)\b|\b(?:sign|log)(?:s|ged|ed)? ?in (?:to |with )?(?:Claude|Anthropic)\b|subscription (?:limits|tokens?|auth\w*)|usage limits|setup-token|\boauth\b/i;
 const HOSTED_RE =
   /(?<!self-)\b(?:hosted|cloud platform|managed|Soleur Cloud|SaaS|web platform|cloud (?:version|tier|plan|edition)|web app|web dashboard|app\.soleur\.ai)\b/i;
 const PRIVACY_OVERCLAIM_RE =
@@ -2024,8 +2026,9 @@ const PRIVACY_OVERCLAIM_RE =
 // `(?:\w+ )?` in the first branch already absorbs "your "/"the ".
 const COVERS_CLAUDE_RE =
   /\b(?:bundl|includ|resell|cover)\w* (?:\w+ )?Claude (?:usage|costs?)\b|\bpay(?:s|ing)? for (?:your |the )?Claude (?:usage|costs?)\b|\bClaude (?:usage|costs?) (?:is|are) (?:included|covered|bundled)\b/i;
-// The permitted wording negates it ("plans don't include Claude usage"): a negation
-// only counts when it sits directly before the verb, not anywhere in the sentence.
+// The permitted wording negates it ("plans don't include Claude usage"). A negation
+// only counts when it sits within two words before A covering verb, not anywhere in the
+// sentence; it is not bound to the specific verb COVERS_CLAUDE_RE matched.
 const NEGATES_COVER_RE = /(?:\bnot|\bnever|\bno|n['’]t)\s+(?:\w+\s+){0,2}(?:bundl|includ|resell|cover)/i;
 // A hosted sentence that states a price or a way to buy must also say it is not
 // available yet (there is a waitlist, no checkout), and must not contradict that.
@@ -2087,11 +2090,17 @@ function violationsIn(
 // One function per corpus arm, so the self-tests below can drive each arm with a
 // synthetic page: an arm that is dropped, or fed nothing, then fails a test
 // instead of reading as a clean scan.
-type Scan = { violations: string[]; hostedText: Map<string, number>; hostedLd: number; hostedAttr: number };
+type Scan = {
+  violations: string[];
+  hostedText: Map<string, number>;
+  hostedAttrByPage: Map<string, number>;
+  hostedLd: number;
+  hostedAttr: number;
+};
 type Entry = { rel: string; html: string };
 
 function scanPages(entries: Entry[], corpus: Corpus): Scan {
-  const scan: Scan = { violations: [], hostedText: new Map(), hostedLd: 0, hostedAttr: 0 };
+  const scan: Scan = { violations: [], hostedText: new Map(), hostedAttrByPage: new Map(), hostedLd: 0, hostedAttr: 0 };
   for (const { rel, html } of entries) {
     const parts = pageParts(html);
     scan.violations.push(...violationsIn([...parts.text, ...parts.ld], corpus, `${rel}: `));
@@ -2103,6 +2112,7 @@ function scanPages(entries: Entry[], corpus: Corpus): Scan {
     scan.hostedText.set(rel, parts.text.filter((s) => HOSTED_RE.test(s) && s !== FOOTER_HOSTED_LABEL).length);
     scan.hostedLd += parts.ld.filter((s) => HOSTED_RE.test(s)).length;
     scan.hostedAttr += parts.attr.filter((s) => HOSTED_RE.test(s)).length;
+    scan.hostedAttrByPage.set(rel, parts.attr.filter((s) => HOSTED_RE.test(s)).length);
   }
   return scan;
 }
@@ -2202,7 +2212,7 @@ function unpinnedAlternatives(re: RegExp, probes: string[]): string[] {
 const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: number }> = {
   PLAN_WORDING_RE: {
     re: PLAN_WORDING_RE,
-    minAlternatives: 38,
+    minAlternatives: 50,
     probes: [
       "Hosted uses your Claude plan.", "Hosted uses your Claude Pro.", "Hosted uses your Claude Max.",
       "Hosted uses your Claude subscription.", "Hosted uses your Claude account.", "Hosted uses your Claude login.",
@@ -2210,6 +2220,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
       "Hosted uses Claude.ai.",
       "Hosted uses a Pro plan.", "Hosted uses a Max plan.", "Hosted uses a Team plan.", "Hosted uses an Enterprise plan.",
       "Hosted uses a Team subscription.", "Hosted uses a Team seat.",
+      "Hosted uses your Claude Team.", "Hosted uses your Claude Enterprise.",
       "Hosted uses Pro/Max.", "Hosted uses Pro or Max.", "Hosted uses Pro and Max.",
       "Hosted uses Max or Pro.", "Hosted uses Max and Pro.",
       "Hosted uses your Anthropic subscription.", "Hosted uses your Anthropic account.",
@@ -2222,7 +2233,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
   },
   HOSTED_RE: {
     re: HOSTED_RE,
-    minAlternatives: 11,
+    minAlternatives: 14,
     probes: [
       "The hosted platform.", "The cloud platform.", "The managed service.", "The Soleur Cloud.", "The SaaS.",
       "The web platform.", "The cloud version.", "The cloud tier.", "The cloud plan.", "The cloud edition.",
@@ -2231,7 +2242,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
   },
   PRIVACY_OVERCLAIM_RE: {
     re: PRIVACY_OVERCLAIM_RE,
-    minAlternatives: 30,
+    minAlternatives: 43,
     probes: [
       "Data is private.", "It is confidential.", "It is zero-knowledge.", "Data is encrypted.",
       "We never see it.", "It never sees it.", "It never leaves.", "It never reads it.", "It never shares it.",
@@ -2245,7 +2256,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
   },
   COVERS_CLAUDE_RE: {
     re: COVERS_CLAUDE_RE,
-    minAlternatives: 17,
+    minAlternatives: 22,
     probes: [
       "Plans bundle Claude usage.", "Plans include Claude usage.", "Plans resell Claude usage.", "Plans cover Claude usage.",
       "Plans include unlimited Claude usage.", "Plans cover your Claude usage.", "Plans cover the Claude usage.",
@@ -2265,7 +2276,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
   },
   AVAILABILITY_RE: {
     re: AVAILABILITY_RE,
-    minAlternatives: 9,
+    minAlternatives: 11,
     probes: [
       "Hosted costs $49.", "Hosted costs 49 dollars.", "Hosted costs ten per month.", "Hosted is 49/month.",
       "Hosted plans start low.", "Hosted plan from the start.", "Choose a paid tier.", "Upgrade to hosted.",
@@ -2274,7 +2285,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
   },
   NOT_YET_RE: {
     re: NOT_YET_RE,
-    minAlternatives: 14,
+    minAlternatives: 17,
     probes: [
       "Hosted costs $49, coming soon.", "Hosted costs $49, join the waitlist.", "Hosted costs $49, not yet.",
       "Hosted costs $49, pre-launch.", "Hosted costs $49 once it opens.", "Hosted costs $49 until launch.",
@@ -2285,7 +2296,7 @@ const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: nu
   },
   SELLS_NOW_RE: {
     re: SELLS_NOW_RE,
-    minAlternatives: 12,
+    minAlternatives: 13,
     probes: [
       "Hosted is $49, no waitlist.", "Hosted is $49, without waitlist.", "Use the checkout.", "Buy now.",
       "Hosted is available now.", "Hosted is open now.", "Hosted is live now.", "Sign up now.", "Start today.", "Start now.",
@@ -2331,10 +2342,17 @@ function pricingCardIssues(html: string): string[] {
     }
     const region = chunk.slice(0, chunk.indexOf("</a>", ctaAt) + 4);
     if (!/<span class="pricing-card-badge">Coming Soon<\/span>/.test(region)) issues.push(`card ${n + 1} has no Coming Soon badge`);
-    const cta = region.match(/<a\s([^>]*pricing-card-cta[^>]*)>([\s\S]*?)<\/a>/);
-    const waitlist = cta && /href="[^"]*#waitlist"/.test(cta[1]) && /waitlist/i.test(cta[2]);
-    const contact = cta && /href="mailto:[^"]+"/.test(cta[1]) && /\bcontact\b/i.test(cta[2]);
-    if (!waitlist && !contact) issues.push(`card ${n + 1} call to action is neither a waitlist link nor a contact link`);
+    // EVERY link in the card (up to the card's closing tag) must be a waitlist or contact link:
+    // a second button next to an intact waitlist link is still a buy button.
+    const cardEnd = chunk.indexOf("</div>", ctaAt);
+    const card = chunk.slice(0, cardEnd === -1 ? chunk.length : cardEnd);
+    const anchors = [...card.matchAll(/<a\s([^>]*)>([\s\S]*?)<\/a>/g)];
+    if (!anchors.some((a) => /pricing-card-cta/.test(a[1]))) issues.push(`card ${n + 1} has no call to action`);
+    for (const a of anchors) {
+      const waitlist = /href="[^"]*#waitlist"/.test(a[1]) && /waitlist/i.test(a[2]);
+      const contact = /href="mailto:[^"]+"/.test(a[1]) && /\bcontact\b/i.test(a[2]);
+      if (!waitlist && !contact) issues.push(`card ${n + 1} call to action is neither a waitlist link nor a contact link`);
+    }
   });
   return issues;
 }
@@ -2372,15 +2390,18 @@ describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted
     expect(arms.marketing.violations, `marketing:\n${arms.marketing.violations.join("\n")}`).toEqual([]);
     expect(arms.blog.violations, `blog:\n${arms.blog.violations.join("\n")}`).toEqual([]);
     expect(arms.llms.violations, `llms:\n${arms.llms.violations.join("\n")}`).toEqual([]);
-    // Floors, calibrated to the current corpus (measured, with one unit of slack where
-    // a legitimate copy edit should not break them): an empty page glob, or a scanner
-    // that reads only part of a page, must not read as clean.
+    // Floors, calibrated to the current corpus (measured; slack of zero to two units, so a
+    // legitimate copy edit may need to move one): an empty page glob, or a scanner that
+    // reads only part of a page, must not read as clean.
     expect(arms.marketing.hostedText.size, "marketing pages scanned").toBeGreaterThanOrEqual(20);
     expect(arms.blog.hostedText.size, "blog pages scanned").toBeGreaterThanOrEqual(25);
     const total = [...arms.marketing.hostedText.values()].reduce((a, b) => a + b, 0);
     expect(total, "hosted sentences in marketing visible text (footer label excluded)").toBeGreaterThanOrEqual(40);
     expect(arms.marketing.hostedLd, "hosted sentences in marketing JSON-LD").toBeGreaterThanOrEqual(20);
     expect(arms.marketing.hostedAttr, "hosted sentences in marketing attributes").toBeGreaterThanOrEqual(20);
+    // The aggregate attribute count is mostly one footer string repeated on every page, so
+    // the pages whose own meta tags carry hosted wording get their own floor.
+    expect(arms.marketing.hostedAttrByPage.get("pricing/index.html") ?? 0, "pricing meta/og/twitter hosted sentences").toBeGreaterThanOrEqual(3);
     const blogHosted = [...arms.blog.hostedText.values()].reduce((a, b) => a + b, 0);
     expect(blogHosted, "hosted sentences in blog visible text").toBeGreaterThanOrEqual(19);
     // Per page: the pages the CLO audit binds, and every page this PR rewrote, each
@@ -2408,6 +2429,8 @@ describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted
       ["Your Anthropic subscription covers the hosted version.", "marketing"],
       ["Hosted plans run on your Max plan.", "marketing"],
       ["Hosted runs on your Claude Enterprise plan.", "marketing"],
+      ["Hosted works with your Claude Team.", "marketing"],
+      ["Hosted works with Claude Enterprise.", "marketing"],
       ["Hosted Soleur uses your Claude Team seat.", "marketing"],
       ["Hosted runs on your Pro/Max login.", "marketing"],
       ["Use your Anthropic account on the hosted version.", "marketing"],
@@ -2480,6 +2503,8 @@ describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted
   });
 
   test("every alternative of every restated rule is pinned by a probe (ablation), and the detector can fail", () => {
+    // minAlternatives is the measured count: trimming an alternative together with its own probe
+    // then fails here instead of passing the dependence check it just removed itself from.
     for (const [name, { re, probes, minAlternatives }] of Object.entries(PROBES)) {
       const all = ablations(re);
       expect(all.length, `${name}: ablations generated`).toBeGreaterThanOrEqual(minAlternatives);
@@ -2578,6 +2603,8 @@ describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted
     expect(pricingCardIssues(ok + ok + fakeContact).join(), "contact text on a non-mailto link").toContain("neither");
     const badgeAfter = card("", '<a href="/pricing/#waitlist" class="btn pricing-card-cta">Join the waitlist</a><span class="pricing-card-badge">Coming Soon</span>');
     expect(pricingCardIssues(ok + ok + badgeAfter).join(), "badge only after the cta").toContain("card 3 has no Coming Soon badge");
+    const twoLinks = card('<span class="pricing-card-badge">Coming Soon</span>', '<a href="/pricing/#waitlist" class="btn pricing-card-cta">Join the waitlist</a><a href="/checkout" class="btn">Subscribe</a>');
+    expect(pricingCardIssues(ok + ok + twoLinks).join(), "a second, buy-style link beside an intact waitlist link").toContain("card 3 call to action is neither");
     const extraLabel = `${ok}${ok}${ok}<span class="pricing-card-label">Orphan</span>`;
     expect(pricingCardIssues(extraLabel).join(), "label without a card").toContain("tier labels");
   });
@@ -2819,14 +2846,15 @@ function hidingReasons(openTag: string): string[] {
   const attrs = new Map<string, string>();
   const body = openTag.replace(/^<\s*[A-Za-z][A-Za-z0-9]*/, "");
   for (const m of body.matchAll(/([^\s=/>"'`]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
-    attrs.set(m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? "");
+    // HTML keeps the FIRST of a duplicated attribute.
+    if (!attrs.has(m[1].toLowerCase())) attrs.set(m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? "");
   }
   if (attrs.has("hidden")) why.push("hidden attribute");
   if ((attrs.get("aria-hidden") ?? "").toLowerCase() === "true") why.push("aria-hidden=true");
-  const style = (attrs.get("style") ?? "").toLowerCase();
+  const style = (attrs.get("style") ?? "").toLowerCase().replace(/\/\*[\s\S]*?\*\//g, "");
   if (/(?:^|;)\s*display\s*:\s*none/.test(style)) why.push("display:none");
   if (/(?:^|;)\s*visibility\s*:\s*(?:hidden|collapse)/.test(style)) why.push("visibility:hidden");
-  if (/(?:^|;)\s*opacity\s*:\s*0(?![.\d])/.test(style)) why.push("opacity:0");
+  if (/(?:^|;)\s*opacity\s*:\s*0(?:\.0+)?\s*(?:;|$|!)/.test(style)) why.push("opacity:0");
   if (/(?:^|;)\s*(?:max-)?height\s*:\s*0(?![.\d])/.test(style)) why.push("height:0");
   if (/(?:^|;)\s*font-size\s*:\s*0(?![.\d])/.test(style)) why.push("font-size:0");
   if (/(?:^|;)\s*(?:-webkit-text-fill-|)color\s*:\s*transparent/.test(style)) why.push("transparent text");
@@ -2958,6 +2986,9 @@ describe("#9579 hiding predicate — which opening tags hide their contents", ()
     ['<div style="-webkit-text-fill-color:transparent">', "transparent text"],
     ['<div style="clip-path:inset(100%)">', "clip-path"],
     ['<div style="text-indent:-9999px">', "text-indent"],
+    ['<div style="display:/**/none">', "display:none"],
+    ['<div style="opacity: 0.0">', "opacity:0"],
+    ['<div style="display:none" style="color:red">', "display:none"],
     ['<div class="card sr-only">', "class sr-only"],
     ["<div class='d-none'>", "class d-none"],
     ["<div class=visually-hidden>", "class visually-hidden"],
@@ -2990,7 +3021,7 @@ describe("#9579 hiding predicate — which opening tags hide their contents", ()
 
   test.each([
     '<div class="card">', '<div style="margin:0">', '<div style="opacity:0.5">', '<div style="height:0.5rem">',
-    '<div aria-hidden="false">', '<div data-hidden="x">', '<div style="color:#fff">', "<section>", '<a href="/x" title="hidden">',
+    '<div aria-hidden="false">', '<div data-hidden="x">', '<div style="color:red" style="display:none">', '<div style="opacity:0.05">', '<div style="color:#fff">', "<section>", '<a href="/x" title="hidden">',
   ])("%s does not hide", (tag) => {
     expect(hidingReasons(tag)).toEqual([]);
   });
