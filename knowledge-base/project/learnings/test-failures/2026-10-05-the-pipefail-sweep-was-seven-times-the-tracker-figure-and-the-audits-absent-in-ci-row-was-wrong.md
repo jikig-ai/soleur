@@ -52,8 +52,25 @@ runner. The audit now carries a corrected row.
 
 ## Session Errors
 
-- A first transformer revision treated a trailing line-continuation backslash as part of the grep command and wrote the
-  here-string after it (`grep … \ <<<"$x"`), a syntax error in four files; `bash -n` over every changed file caught it
-  before any commit. Run `bash -n` over the whole changed set after any scripted rewrite.
-- The same revision read `||` after the reader as a further pipe stage and refused 13 sites that were fine; a count of
-  "HAND" sites that jumps after a transformer change is a signal to read the refusals, not to accept them.
+- **A transformer treated a trailing line-continuation backslash as part of the grep command and wrote the here-string after
+  it** (`grep … \ <<<"$x"`), a syntax error in four files. Recovery: `bash -n` over every changed file caught it before any
+  commit; fixed the tokenizer and reapplied. **Prevention:** run `bash -n` over the whole changed set after any scripted rewrite.
+- **The same transformer read `||` after the reader as a further pipe stage** and refused 13 fine sites. Recovery: the HAND
+  count jumped after a change, which prompted reading the refusals. **Prevention:** a refusal count that moves after a tool
+  change is a signal to read the refusals, not to accept them.
+- **My first probe-count pin counted comment text, then the rework skipped every line with a `#` before the tail** (the `#1`
+  tracker strings in the deferral probes), undercounting 15 of 27 checks. Recovery: two panel seats found it independently.
+  **Prevention:** count non-comment lines with a two-stage filter, and mutate-delete a check that carries a `#` in its own line.
+- **A test stub ended in `[[ -n "$X" ]] && exit 1`**, so with X unset the stub's last command returned 1 and every happy-path
+  case turned red. Recovery: the suite caught it at once. **Prevention:** end a stub with an explicit `if … ; then exit 1; fi`.
+- **A mutation-harness row written through a nested heredoc mangled `$` and quote characters** and left a broken Python file.
+  Recovery: removed the block and wrote the rows with the Write tool. **Prevention:** never build a harness row through a
+  shell heredoc inside another heredoc; write the file directly.
+- **Main moved under the branch twice** (sibling PRs merged about 13 test-harness early-exit pipes), pushing three loose
+  deferral rows over their ceilings. Recovery: merged main, re-measured, raised the three ceilings. **Prevention:** run the guard
+  on the tree merged with `origin/main` immediately before every push, and expect each loose-row wave to need a re-measure.
+- **The history seat reported "no collisions" while draft #9552 existed**, and a quality seat's counts disagreed with the
+  guard's own. Recovery: cross-checked each against `gh pr list` and the guard's output. **Prevention:** brief seats with the
+  exact command that produces each figure and verify one claim per seat yourself.
+- **Two review seats ran for about an hour** (long suites) before reporting. Recovery: a message asking for the final report.
+  **Prevention:** put a time budget and "no full suites" in the spawn prompt.
