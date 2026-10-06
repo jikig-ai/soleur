@@ -361,7 +361,7 @@ all is expected to be a failure of those two (deploys also seed `/mnt/data`, so 
   (C1 sign-off recorded as a pre-work gate and not self-attributed; C2 the PR body must not imply the gate is proven before the first
   post-merge plan-only dispatch, and the PASS line's min/max stay visible; C3 keep the live control in the PR body and do not waive
   AC9; C4 the PR body states `tags.host` has the same forgery bar as `host_name` but is weaker against hostname drift on a re-imaged host (decision-challenges item 7)). That advisory is NOT the owner's or CPO's sign-off: the
-  sign-off remains a gate before `soleur:work` begins. **Recorded 2026-10-06:** the owner answered an interactive question during the one-shot run with "Sign off, start work" (thresholds unchanged, ceiling decision deferred). That is the owner's own answer to a question put to them, quoted as given, not an agent attribution; the CPO advisory stays advisory.
+  sign-off remains a gate before `soleur:work` begins. **Recorded 2026-10-06:** the owner answered an interactive question during the one-shot run, after the plan phase and before the work phase began; the option they chose was labelled "Sign off, start work", and its description said all thresholds unchanged and the ceiling decision deferred. That is the owner's own answer to a question put to them, not an agent attribution (no session id is recorded here, so it cannot be re-checked from this document); the CPO advisory stays advisory.
 - Parent-plan CPO/CLO/CTO conditions carry forward unchanged (no threshold weakened, no data-protection surface, trust boundary unchanged).
 - Review-time (REQUIRED, AC9): `soleur:engineering:review:security-sentinel` and `soleur:engineering:review:user-impact-reviewer`,
   asked: can any input produce PASS without the stored rows proving emptiness; does any predicate widen what matches; does the path
@@ -421,7 +421,7 @@ Phase 4 (regression gates, all green): `bash scripts/web2-rebirth-emptiness.test
 `bash tests/scripts/test-destroy-guard-counter-web-platform.sh` (107); `bash plugins/soleur/test/c4-model-freshness.test.sh` and the
 count-parity test; `python3 scripts/lint-encryption-posture.py --repo-sweep`; `python3 scripts/lint-guard-contract.py` on this plan;
 `shellcheck` on the two scripts; markdownlint on edited docs.
-Phase 5 (ship): PR body uses `Ref #9372`; carries the live positive control, the Vector reproduction summary, the measured baseline
+Phase 5 (ship): PR body uses `Ref #9372`; carries the live positive control, the Vector reproduction summary, the observed level
 (about 16 MB used of 20 GB), the `tags.host` trust note, and states that no dispatch, approval, Doppler write, token mint, workflow
 toggle or Terraform apply happened. Post the root-cause comment on #6944 (answers its open question 1; does not close it) and a
 comment on #9372 naming the first post-merge plan-only dispatch as the next owner-gated step (so it does not stall silently).

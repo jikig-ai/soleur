@@ -119,6 +119,8 @@ battery() {
   local script="$1" n=0 got
   # shellcheck disable=SC1090
   source "$script"
+  # A mutant that BREAKS the script (a missing function, a dead SQL builder) must not be creditable as a kill: say so explicitly.
+  declare -F w2r_emptiness_verdict >/dev/null && declare -F w2r_sql_emptiness >/dev/null || printf 'CRASH the script under test did not define its functions\n'
   chk() { # <name> <want-prefix> <body>
     n=$((n + 1)); printf '%b' "$3" > "$TMP/b.jsonl"
     got="$(w2r_emptiness_verdict "$TMP/b.jsonl")"
@@ -127,17 +129,17 @@ battery() {
   chk "PASS: complete, fresh, small, right-sized series" "PASS" "${good_used}\n${good_total}\n"
   chk "RED: empty body (zero rows)" "RED reason=used_bytes_absent_or_host_dark" ""
   chk "RED: only the total metric present" "RED reason=used_bytes_absent_or_host_dark" "${good_total}\n"
-  chk "RED: coverage gap (159 hours)" "RED reason=coverage_gap" "$(row filesystem_used_bytes 159 28000000 28500000 240)\n${good_total}\n"
+  chk "RED: coverage gap (159 hours)" "RED reason=coverage_gap hours=159" "$(row filesystem_used_bytes 159 28000000 28500000 240)\n${good_total}\n"
   chk "PASS: exactly 160 hours" "PASS" "$(row filesystem_used_bytes 160 28000000 28500000 240)\n${good_total}\n"
-  chk "RED: stale newest row" "RED reason=stale" "$(row filesystem_used_bytes 168 28000000 28500000 1801)\n${good_total}\n"
+  chk "RED: stale newest row" "RED reason=stale newest_age_s=1801" "$(row filesystem_used_bytes 168 28000000 28500000 1801)\n${good_total}\n"
   chk "PASS: newest row exactly at the bound" "PASS" "$(row filesystem_used_bytes 168 28000000 28500000 1800)\n${good_total}\n"
-  chk "RED: maximum over the 1 GiB ceiling" "RED reason=not_empty" "$(row filesystem_used_bytes 168 1050000000 1073741825 240)\n${good_total}\n"
+  chk "RED: maximum over the 1 GiB ceiling" "RED reason=not_empty max_used_bytes=1073741825" "$(row filesystem_used_bytes 168 1050000000 1073741825 240)\n${good_total}\n"
   chk "PASS: maximum exactly at the ceiling (with a small spread)" "PASS" "$(row filesystem_used_bytes 168 1060000000 1073741824 240)\n${good_total}\n"
   chk "RED: a minimum of zero is a missing value path, not an empty volume" "RED reason=used_bytes_zero_or_missing" "$(row filesystem_used_bytes 168 0 28500000 240)\n${good_total}\n"
   chk "RED: all-zero series (every sample read as 0)" "RED reason=used_bytes_zero_or_missing" "$(row filesystem_used_bytes 168 0 0 240)\n${good_total}\n"
-  chk "RED: a series that moved by more than 64 MiB (a volume that took writes)" "RED reason=not_flat" "$(row filesystem_used_bytes 168 28000000 200000000 240)\n${good_total}\n"
+  chk "RED: a series that moved by more than 64 MiB (a volume that took writes)" "RED reason=not_flat spread_bytes=172000000" "$(row filesystem_used_bytes 168 28000000 200000000 240)\n${good_total}\n"
   chk "PASS: a spread of exactly 64 MiB" "PASS" "$(row filesystem_used_bytes 168 28000000 95108864 240)\n${good_total}\n"
-  chk "RED: a spread of 64 MiB + 1 byte" "RED reason=not_flat" "$(row filesystem_used_bytes 168 28000000 95108865 240)\n${good_total}\n"
+  chk "RED: a spread of 64 MiB + 1 byte" "RED reason=not_flat spread_bytes=67108865" "$(row filesystem_used_bytes 168 28000000 95108865 240)\n${good_total}\n"
   chk "PASS: 400 MB that sat flat is accepted under the coarse 1 GiB ceiling (the printed min and max are what the owner reads)" "PASS" "$(row filesystem_used_bytes 168 400000000 400000000 240)\n${good_total}\n"
   W2R_DETACHED=1 chk "DETACHED: a stale newest row is accepted (a detached device stops reporting)" "PASS" "$(row filesystem_used_bytes 30 28000000 28500000 90000)\n${good_total}\n"
   W2R_DETACHED=1 chk "DETACHED: coverage below 24 hours is still RED" "RED reason=coverage_gap" "$(row filesystem_used_bytes 23 28000000 28500000 90000)\n${good_total}\n"
@@ -145,17 +147,17 @@ battery() {
   W2R_DETACHED=1 chk "DETACHED: the zero floor still applies" "RED reason=used_bytes_zero_or_missing" "$(row filesystem_used_bytes 30 0 28500000 90000)\n${good_total}\n"
   chk "RED: without W2R_DETACHED a stale series is still RED (the relaxation is opt-in)" "RED reason=stale" "$(row filesystem_used_bytes 168 28000000 28500000 90000)\n${good_total}\n"
   chk "RED: total metric absent" "RED reason=total_bytes_absent" "${good_used}\n"
-  chk "RED: total below the volume range (root-disk-like small mount)" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 1000000000 1000000000 240)\n"
-  chk "RED: total above the volume range (root-disk-like large mount)" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 20000000000 80000000000 240)\n"
+  chk "RED: total below the volume range (root-disk-like small mount)" "RED reason=not_the_20gb_volume total_min=1000000000 total_max=1000000000" "${good_used}\n$(row filesystem_total_bytes 168 1000000000 1000000000 240)\n"
+  chk "RED: total above the volume range (root-disk-like large mount)" "RED reason=not_the_20gb_volume total_min=20000000000 total_max=80000000000" "${good_used}\n$(row filesystem_total_bytes 168 20000000000 80000000000 240)\n"
   chk "RED: malformed used row" "RED reason=used_bytes_malformed" "{\"metric_name\":\"filesystem_used_bytes\"}\n${good_total}\n"
   chk "RED: a used row without newest_age_s is malformed, never a freshness bypass" "RED reason=used_bytes_malformed" '{"metric_name":"filesystem_used_bytes","hours":"168","vmin":28000000,"vmax":28500000}\n'"${good_total}"'\n'
   chk "RED: a used row without vmax is malformed" "RED reason=used_bytes_malformed" '{"metric_name":"filesystem_used_bytes","hours":"168","vmin":28000000,"newest_age_s":"5"}\n'"${good_total}"'\n'
   chk "RED: a total row without vmax is malformed" "RED reason=total_bytes_malformed" "${good_used}"'\n{"metric_name":"filesystem_total_bytes","vmin":20000000000}\n'
   chk "RED: a total row without vmin is malformed" "RED reason=total_bytes_malformed" "${good_used}"'\n{"metric_name":"filesystem_total_bytes","vmax":20000000000}\n'
   chk "PASS: total exactly at the lower volume bound" "PASS" "${good_used}\n$(row filesystem_total_bytes 168 15000000000 15000000000 240)\n"
-  chk "RED: total one byte under the lower volume bound" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 14999999999 14999999999 240)\n"
+  chk "RED: total one byte under the lower volume bound" "RED reason=not_the_20gb_volume total_min=14999999999 total_max=14999999999" "${good_used}\n$(row filesystem_total_bytes 168 14999999999 14999999999 240)\n"
   chk "PASS: total exactly at the upper volume bound" "PASS" "${good_used}\n$(row filesystem_total_bytes 168 21500000000 21500000000 240)\n"
-  chk "RED: total one byte over the upper volume bound" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 21500000001 21500000001 240)\n"
+  chk "RED: total one byte over the upper volume bound" "RED reason=not_the_20gb_volume total_min=21500000001 total_max=21500000001" "${good_used}\n$(row filesystem_total_bytes 168 21500000001 21500000001 240)\n"
   chk "PASS line carries min, max, spread and detached in their own slots" "PASS hours=168 newest_age_s=240 max_used_bytes=28500000 min_used_bytes=28000000 ceiling_bytes=1073741824 spread_bytes=500000 detached=false" "${good_used}\n${good_total}\n"
   W2R_DETACHED=1 chk "DETACHED PASS line says detached=true" "PASS hours=30 newest_age_s=90000 max_used_bytes=28500000 min_used_bytes=28000000 ceiling_bytes=1073741824 spread_bytes=500000 detached=true" "$(row filesystem_used_bytes 30 28000000 28500000 90000)\n${good_total}\n"
   W2R_DETACHED=2 chk "RED: only the value 1 relaxes freshness (2 does not)" "RED reason=stale" "$(row filesystem_used_bytes 168 28000000 28500000 90000)\n${good_total}\n"
@@ -173,6 +175,7 @@ battery() {
   chk_cmd "control: not() inverts true and false" test "$(not true; echo $?)$(not false; echo $?)" = "10"
   chk_cmd "control: chk_cmd prints a FAILED line for a failing command" test "$(chk_cmd ctl false)" = "FAILED ctl"
   sql="$(w2r_sql_emptiness)"
+  [[ -n "$sql" ]] || printf 'CRASH w2r_sql_emptiness produced no SQL\n'
   paths="$(w2r_sql_paths "$sql")"; prc=$?
   chk_cmd "SQL paths parse under the strict grammar (rc ${prc}; ${paths//$'\n'/ | })" test "$prc" -eq 0
   conds="$(grep -E $'^COND\t' <<<"$paths" | sort || true)"
@@ -227,10 +230,11 @@ EOF
 # parse_report <report-text> [quiet]: the ONE parser of the battery's FAILED / RAN lines, used for the real run, every mutant
 # and the control below, so a neutered counter cannot hide behind a second one.
 parse_report() {
-  P_FAILS=0; P_RAN=0; local line
+  P_FAILS=0; P_RAN=0; P_CRASH=0; local line
   while IFS= read -r line; do
     case "$line" in
       FAILED*) P_FAILS=$((P_FAILS + 1)); [[ "${2:-}" == quiet ]] || printf '  FAIL %s\n' "${line#FAILED }" ;;
+      CRASH*) P_CRASH=$((P_CRASH + 1)); [[ "${2:-}" == quiet ]] || printf '  FAIL %s\n' "$line" ;;
       RAN*) P_RAN="${line#RAN }" ;;
       *) [[ -z "$line" || "${2:-}" == quiet ]] || printf '       %s\n' "$line" ;;
     esac
@@ -238,11 +242,11 @@ parse_report() {
 }
 fails=0; ran=0
 parse_report "$(battery "$SCRIPT" 2>&1)"
-fails=$P_FAILS; ran=$P_RAN
+fails=$((P_FAILS + P_CRASH)); ran=$P_RAN
 printf 'real script: %s assertions, %s failed\n' "$ran" "$fails"
 [[ "$ran" -ge 68 ]] || { echo "  FAIL assertion floor: ran ${ran} < 68"; fails=$((fails + 1)); }
-parse_report $'FAILED c1\nRAN 3\nnoise' quiet
-if [[ "$P_FAILS" -eq 1 && "$P_RAN" -eq 3 ]]; then echo "  ok   report parser control (1 failed, 3 ran)"; else echo "  FAIL report parser control (got ${P_FAILS} failed, ${P_RAN} ran)"; fails=$((fails + 1)); fi
+parse_report $'FAILED c1\nCRASH c2\nRAN 3\nnoise' quiet
+if [[ "$P_FAILS" -eq 1 && "$P_CRASH" -eq 1 && "$P_RAN" -eq 3 ]]; then echo "  ok   report parser control (1 failed, 1 crash, 3 ran)"; else echo "  FAIL report parser control (got ${P_FAILS} failed, ${P_CRASH} crash, ${P_RAN} ran)"; fails=$((fails + 1)); fi
 
 # A transport failure is NOT a verdict: shim `curl` so the query script fails, run the main path, and require rc 2.
 mkdir -p "$TMP/bin"; printf '#!/usr/bin/env bash\nexit 7\n' > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
@@ -253,13 +257,19 @@ if [[ "$rc" -eq 2 ]]; then echo "  ok   transport failure exits 2 (not a verdict
 printf '%s\n' "$good_used" "$good_total" > "$TMP/pass.body"; : > "$TMP/red.body"
 for spec in "pass:0" "red:1"; do
   nm="${spec%%:*}"; want="${spec##*:}"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/curl.args"\ncat "%s/%s.body"\n' "$TMP" "$TMP" "$nm" > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
+  printf '#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do if [ "$1" = -d ]; then printf "%%s" "$2" > "%s/curl.%s.sql"; fi; shift; done\ncat "%s/%s.body"\n' "$TMP" "$nm" "$TMP" "$nm" > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
   BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p PATH="$TMP/bin:$PATH" bash "$SCRIPT" >/dev/null 2>&1; rc=$?
   if [[ "$rc" -eq "$want" ]]; then echo "  ok   main exits ${want} on a ${nm} body"; else echo "  FAIL main exited ${rc} on a ${nm} body, want ${want}"; fails=$((fails + 1)); fi
 done
 
-# main must SEND the pinned query: the shim recorded the curl arguments of the last run (the SQL is passed with -d).
-if grep -qF "HAVING uniqExact(JSONExtractString(raw,'tags','device')) = 1" "$TMP/curl.args" && grep -qF "AND dt <= now()" "$TMP/curl.args" && grep -qF "soleur-web-2" "$TMP/curl.args" && grep -qF "'filesystem_used_bytes','filesystem_total_bytes'" "$TMP/curl.args"; then echo "  ok   main sends the pinned SQL to the query helper"; else echo "  FAIL main did not send the pinned SQL (HAVING, upper window bound, host, names)"; fails=$((fails + 1)); fi
+# main must SEND the pinned query: the shim wrote the whole -d argument of each run. betterstack-query.sh substitutes the table tokens,
+# so map the two table names back to the tokens and require EXACT equality with what w2r_sql_emptiness builds (both runs, not a substring).
+# shellcheck disable=SC1090
+exp_sql="$(source "$SCRIPT"; w2r_sql_emptiness)"
+for nm in pass red; do
+  got_sql="$(sed -E 's/remote\([^)]*\)/remote($BS_TABLE)/; s/s3Cluster\(primary, [^)]*\)/s3Cluster(primary, $BS_TABLE_S3)/' "$TMP/curl.${nm}.sql" 2>/dev/null)"
+  if [[ -n "$got_sql" && "$got_sql" == "$exp_sql" ]]; then echo "  ok   main sends exactly the pinned SQL (${nm} run)"; else echo "  FAIL main did not send exactly w2r_sql_emptiness' SQL on the ${nm} run"; fails=$((fails + 1)); fi
+done
 
 # A red BASELINE makes every mutation look killed, so the kill-counting only runs against a green one.
 BASE_RED="$fails"; MUT_N=0; MUT_KILLED=0
@@ -269,15 +279,15 @@ run_mutant() {
   local copy="$TMP/mut/web2-rebirth-emptiness.sh"
   mkdir -p "$TMP/mut/lib"; cp "$SCRIPT" "$copy"; cp "${DIR}/lib/"*.sh "$TMP/mut/lib/"; cp "${DIR}/betterstack-query.sh" "$TMP/mut/" 2>/dev/null
   sed -i -E "$1" "$copy"
-  if cmp -s "$SCRIPT" "$copy"; then M_LANDED=0; M_AFTER=0; return; fi
-  M_LANDED=1; parse_report "$(battery "$copy" 2>&1)" quiet; M_AFTER=$P_FAILS
+  if cmp -s "$SCRIPT" "$copy"; then M_LANDED=0; M_AFTER=0; M_CRASH=0; M_RAN=0; return; fi
+  M_LANDED=1; parse_report "$(battery "$copy" 2>&1)" quiet; M_AFTER=$P_FAILS; M_CRASH=$P_CRASH; M_RAN=$P_RAN
 }
-# mut_verdict: the ONE classifier of a mutant, used by mutate() and by the comment-only control. A legitimate kill reds a handful of
-# assertions; a mutant that merely BREAKS the script reds most of them (a syntax error measured at about 47 of 63), and that is a crash,
-# not a kill.
+# mut_verdict: the ONE classifier of a mutant, used by mutate() and by the controls. A mutant that BREAKS the battery is a crash, not a
+# kill: the battery printed a CRASH line (functions missing, no SQL built), its report is incomplete (RAN differs from the baseline), or
+# it reds more than a quarter of the assertions (a legitimate kill reds a handful; a syntax error measured at about 55 of 68).
 mut_verdict() {
   if [[ "$M_LANDED" -eq 0 ]]; then echo NOTLANDED
-  elif [[ $((M_AFTER * 4)) -gt "$ran" ]]; then echo BROKE
+  elif [[ "$M_CRASH" -gt 0 || "$M_RAN" -ne "$ran" || $((M_AFTER * 4)) -gt "$ran" ]]; then echo BROKE
   elif [[ "$M_AFTER" -gt 0 ]]; then echo KILLED
   else echo SURVIVED; fi
 }
@@ -329,6 +339,11 @@ mutate "hot arm pointed at another table" 's/remote\(\\\$BS_TABLE\)/remote(\\$BS
 if [[ "$BASE_RED" -eq 0 ]]; then
   run_mutant 's/^# Exit: 0 PASS.*$/# Exit: 0 PASS (comment-only control edit)/'
   if [[ "$(mut_verdict)" == SURVIVED ]]; then echo "  ok   control: a comment-only edit survives (the battery discriminates)"; else echo "  FAIL control: a comment-only edit was ${M_LANDED}/${M_AFTER} (verdict $(mut_verdict)), want SURVIVED"; fails=$((fails + 1)); fi
+    # known-crash controls: each must classify BROKE, or a crash would be creditable as a kill
+  run_mutant 's/^W2R_LOOKBACK_DAYS=7/W2R_LOOKBACK_DAYS=7 )/'
+  if [[ "$(mut_verdict)" == BROKE ]]; then echo "  ok   control: a syntax-breaking edit is BROKE, not a kill"; else echo "  FAIL control: a syntax-breaking edit classified $(mut_verdict), want BROKE"; fails=$((fails + 1)); fi
+  run_mutant 's/\$\{W2R_LOOKBACK_DAYS\}/${W2R_LOOKBACK_DAYZ}/'
+  if [[ "$(mut_verdict)" == BROKE ]]; then echo "  ok   control: an edit that kills the SQL builder is BROKE, not a kill"; else echo "  FAIL control: a dead SQL builder classified $(mut_verdict) (${M_AFTER} red), want BROKE"; fails=$((fails + 1)); fi
   if [[ "$MUT_KILLED" -ne "$MUT_N" ]]; then echo "  FAIL mutation accounting: ${MUT_KILLED} killed of ${MUT_N} launched"; fails=$((fails + 1)); fi
 fi
 [[ "$MUT_N" -ge 31 ]] || { echo "  FAIL mutation floor: ${MUT_N} mutate rows < 31"; fails=$((fails + 1)); }

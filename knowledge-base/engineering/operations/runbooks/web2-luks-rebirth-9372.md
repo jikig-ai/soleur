@@ -76,8 +76,8 @@ spread and ceiling) and the dispatch summary.
 **Reading an emptiness RED.** `RED reason=used_bytes_absent_or_host_dark` means no row for the used series survived the query: a dark host, a changed
 stored row shape, more than one distinct device reporting `/mnt/data` in the window, or a missing, empty or non-string `tags.device` on
 some row (the one-device clause drops that metric's whole group, so the same fault on the total series reads `total_bytes_absent`).
-The other reasons (`coverage_gap`, `stale`, `not_empty`, `not_flat`, `used_bytes_zero_or_missing`, `used_bytes_malformed`,
-`total_bytes_malformed`, `not_the_20gb_volume`) name the FIRST rule that failed, in that order; `emptiness_body_unparseable` and
+The other reasons name the FIRST rule that failed, in this order: `used_bytes_malformed`, `coverage_gap`, `stale`,
+`used_bytes_zero_or_missing`, `not_empty`, `not_flat`, `total_bytes_absent`, `total_bytes_malformed`, `not_the_20gb_volume`; `emptiness_body_unparseable` and
 `emptiness_judge_error` mean the answer could not be read, and exit code 2 means the read did not answer at all (no verdict). To re-run the read-only
 control without a dispatch: `doppler run -p soleur -c prd_terraform -- bash scripts/web2-rebirth-emptiness.sh` (prints `PASS ...` with
 hours, newest age, min, max and spread, or the RED reason); to see which devices report, run the same WHERE with a
