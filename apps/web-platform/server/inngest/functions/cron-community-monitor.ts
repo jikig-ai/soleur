@@ -307,7 +307,9 @@ put a date or a period in your output.
      stars, forks and watchers are \`stargazers_count\`, \`forks_count\` and
      \`subscribers_count\` from repo-stats (watchers is the subscriber count, NOT
      \`watchers_count\`, which GitHub keeps only as an alias of stars);
-     newStargazers is \`new_stargazers_count\`. issuesTouched and pullsTouched are
+     newStargazers is \`new_stargazers_count\`, except that when it is null (\`stargazers_unavailable\`
+     is true: this run's read-only token cannot list stargazers) you put 0 in newStargazers
+     and report github as "partial" with failureCause "auth". issuesTouched and pullsTouched are
      \`issues.count\` and \`pull_requests.count\` from activity. commits is the
      sum of the \`commits\` values in \`commit_authors\` from contributors.
    - Hacker News (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20\`

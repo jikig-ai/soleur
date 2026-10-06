@@ -411,13 +411,27 @@ cmd_repo_stats() {
   star_err=$(mktemp)
   _TMPFILES+=("$star_err")
 
+  # A READ-scoped installation token cannot list stargazers: GitHub answers 403
+  # "Resource not accessible by integration" unless the token carries contents:write
+  # (measured 2026-10-06 against REST and GraphQL; no read-level permission unlocks
+  # it). The cron spawns this script with a read-only token on purpose, so that
+  # response is the token's known limit and not a collector fault: the count is
+  # reported as null (unavailable) while everything else in repo-stats stays valid.
+  # Any other failure is still a hard failure.
+  local star_unavailable=0
   if ! gh api "repos/${repo}/stargazers?per_page=${PER_PAGE}" \
     -H "Accept: application/vnd.github.star+json" \
     --paginate >"$star_f" 2>"$star_err"; then
-    _CAUSE="stargazers-fetch-failed"
-    echo "GITHUB_COLLECTOR_CAUSE=stargazers: $(head -c 200 "$star_err" | tr '\n' ' ')" >&2
-    echo "Error: Failed to fetch stargazers" >&2
-    exit 1
+    if grep -qi 'Resource not accessible by integration' "$star_err"; then
+      star_unavailable=1
+      echo '[]' >"$star_f"
+      echo "WARN: stargazers are not readable with this token; new_stargazers_count is null" >&2
+    else
+      _CAUSE="stargazers-fetch-failed"
+      echo "GITHUB_COLLECTOR_CAUSE=stargazers: $(head -c 200 "$star_err" | tr '\n' ' ')" >&2
+      echo "Error: Failed to fetch stargazers" >&2
+      exit 1
+    fi
   fi
   check_array_response "$star_f" stargazers
 
@@ -428,6 +442,7 @@ cmd_repo_stats() {
     --arg since "$since" \
     --arg repo "$repo" \
     --argjson days "$days" \
+    --argjson unavailable "$star_unavailable" \
     '($stargazers | add // []) as $sg
     | ([$sg[] | select(.starred_at >= $since) | {login: .user.login, starred_at}]) as $new
     | {
@@ -438,7 +453,8 @@ cmd_repo_stats() {
       watchers_count: $repo_data.watchers_count,
       subscribers_count: $repo_data.subscribers_count,
       new_stargazers: $new,
-      new_stargazers_count: ($new | length),
+      new_stargazers_count: (if $unavailable == 1 then null else ($new | length) end),
+      stargazers_unavailable: ($unavailable == 1),
       period_days: $days
     }'
 }

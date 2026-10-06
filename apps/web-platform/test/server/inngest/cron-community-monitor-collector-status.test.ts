@@ -22,8 +22,8 @@ vi.hoisted(() => {
 });
 
 import { mkdtemp, mkdir, writeFile, rm, symlink, open } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -479,5 +479,74 @@ describe("paging must not discard the digest (separation invariant)", () => {
     expect(src).toMatch(
       /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
     );
+  });
+});
+
+describe("repo-stats under a read-scoped installation token (#7122 postmerge)", () => {
+  // GitHub answers 403 "Resource not accessible by integration" for the stargazers
+  // list unless the token carries contents:write (measured 2026-10-06). The cron
+  // deliberately spawns the collector with a read-only token, so that one response
+  // must degrade to a null count, never fail the whole repo-stats command; every other
+  // stargazers failure must still be a hard failure.
+  const SCRIPT = new URL(
+    "../../../../../plugins/soleur/skills/community/scripts/github-community.sh",
+    import.meta.url,
+  ).pathname;
+
+  function runRepoStats(stargazersStderr: string) {
+    const dir = mkdtempSync(join(tmpdir(), "soleur-fake-gh-"));
+    const statusDir = join(dir, "status");
+    const gh = join(dir, "gh");
+    writeFileSync(
+      gh,
+      [
+        "#!/usr/bin/env bash",
+        'if [[ "$*" == *"/stargazers"* ]]; then',
+        `  echo '${stargazersStderr}' >&2`,
+        "  exit 1",
+        "fi",
+        `echo '{"stargazers_count":16,"forks_count":5,"watchers_count":16,"subscribers_count":1}'`,
+      ].join("\n"),
+    );
+    chmodSync(gh, 0o755);
+    try {
+      const result = spawnSync("bash", [SCRIPT, "repo-stats", "1"], {
+        env: {
+          PATH: `${dir}:${process.env.PATH ?? ""}`,
+          HOME: dir,
+          GITHUB_REPOSITORY: "o/r",
+          SOLEUR_COLLECTOR_STATUS_DIR: statusDir,
+        } as unknown as NodeJS.ProcessEnv,
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+      let record = "";
+      try {
+        record = readFileSync(join(statusDir, STATUS_FILE), "utf8");
+      } catch {
+        /* no sidecar written */
+      }
+      return { result, record };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("the integration-403 on stargazers exits 0 with a null count and the other counts intact", () => {
+    const { result, record } = runRepoStats('{"message":"Resource not accessible by integration","status":"403"}');
+    expect(result.status).toBe(0);
+    const out = JSON.parse(result.stdout);
+    expect(out.new_stargazers_count).toBeNull();
+    expect(out.stargazers_unavailable).toBe(true);
+    expect(out.stargazers_count).toBe(16);
+    expect(out.forks_count).toBe(5);
+    expect(record).toContain('"exit":0');
+    expect(record).not.toContain("stargazers-fetch-failed");
+  });
+
+  it("any OTHER stargazers failure is still a hard failure with the closed cause", () => {
+    const { result, record } = runRepoStats("HTTP 500: Server Error");
+    expect(result.status).toBe(1);
+    expect(record).toContain("stargazers-fetch-failed");
   });
 });

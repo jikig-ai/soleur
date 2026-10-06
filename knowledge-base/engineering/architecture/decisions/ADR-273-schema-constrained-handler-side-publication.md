@@ -269,6 +269,10 @@ drops Top Contributors, Community Interactions, stargazer usernames, quotes and 
 - **Reversible.** The richer-digest options in the Decision Challenge are schema edits; Phase 5 (custody) is independently
   revertable.
 
+### Addendum 2026-10-06 (first production run)
+
+The first run on the read-only spawn token showed `github` as failed: GitHub answers `403 Resource not accessible by integration` for the stargazers list (REST and GraphQL) unless the installation token carries `contents: write`; no read-level permission unlocks it (probed one permission at a time and all together). Granting write to the spawn token would undo the point of this ADR, so `repo-stats` now treats that one response as an unavailable count (`new_stargazers_count: null`, `stargazers_unavailable: true`, exit 0) and the prompt reports `newStargazers` as 0 with github `partial` / `auth`. Any other stargazers failure is still a hard failure. Consequence: the digest's `New stargazers` value is not a measured count while the spawn token stays read-only.
+
 ## Cost Impacts
 
 None. No new vendor, tier or service; one extra installation-token mint per run.
