@@ -132,9 +132,10 @@ jobs:
           # (the trade the workspaces-luks-verify issue step already makes: a
           # duplicate is recoverable, a missed filing is not; the self-close
           # sweep drains dupes by label).
+          GH_LIST_ERR="$(mktemp)"
           if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
-            --label "ci/actions-queue-health" --json number,title 2>&1)"; then
-            echo "::error::dedupe query failed (gh issue list: $(printf '%s' "$ISSUE_LIST" | LC_ALL=C tr -cd '\40-\176' | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
+            --label "ci/actions-queue-health" --json number,title 2>"$GH_LIST_ERR")"; then
+            echo "::error::dedupe query failed (gh issue list: $(LC_ALL=C tr -cd '\40-\176' <"$GH_LIST_ERR" | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           elif ! EXISTING="$(printf '%s' "$ISSUE_LIST" | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty' 2>/dev/null)"; then
             echo "::error::dedupe query failed (jq parse) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
@@ -187,9 +188,10 @@ jobs:
           ISSUE_TITLE="[ci/actions-queue-health] Queue-health probe unavailable (API/prereq failure)"
           # Same repipe as the under-assignment step above: `gh --jq` does not
           # forward `--arg` (#9533), so the title match runs in a standalone jq.
+          GH_LIST_ERR="$(mktemp)"
           if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
-            --label "ci/actions-queue-health" --json number,title 2>&1)"; then
-            echo "::error::dedupe query failed (gh issue list: $(printf '%s' "$ISSUE_LIST" | LC_ALL=C tr -cd '\40-\176' | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
+            --label "ci/actions-queue-health" --json number,title 2>"$GH_LIST_ERR")"; then
+            echo "::error::dedupe query failed (gh issue list: $(LC_ALL=C tr -cd '\40-\176' <"$GH_LIST_ERR" | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           elif ! EXISTING="$(printf '%s' "$ISSUE_LIST" | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty' 2>/dev/null)"; then
             echo "::error::dedupe query failed (jq parse) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."

@@ -457,9 +457,13 @@ expect "queued jobs inside an in-progress run do not count as delivered" 1 "UNDE
 #     flag-shape pin. Count-shaped greps, never pipe-fed grep -q readers.
 QH_WF=".github/workflows/scheduled-actions-queue-health.yml"
 [ -f "$QH_WF" ] || { echo "FAIL - $QH_WF not found (run from the repo root)" >&2; exit 1; }
+# `--arg`/`--argjson` are jq's flags — gh rejects both in ANY position of its
+# own argv. Rather than pattern the gh side, strip the legitimate `| jq …`
+# segment (and comment lines) and assert neither flag survives anywhere.
 qh_jq_arg="$(sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba}' "$QH_WF" 2>/dev/null \
   | grep -vE '^[[:space:]]*#' \
-  | grep -cE 'gh +(api|issue|pr|run|release|repo|workflow) +[^|]*--arg\b' || true)"
+  | sed 's/| *jq[^|]*//g' \
+  | grep -cE -- '--arg(json)?\b' || true)"
 qh_failopen="$(grep -c -- 'if ! ISSUE_LIST=' "$QH_WF" 2>/dev/null || true)"
 if [ "$qh_jq_arg" -eq 0 ] && [ "$qh_failopen" -eq 2 ]; then
   pass "workflow carries zero '--arg-in-gh-argv' sites and both dedupe queries stay fail-open"
