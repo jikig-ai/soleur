@@ -522,7 +522,7 @@ function evaluationSinkFindings(code: string): string[] {
     }
   }
   if (/\bpython3?\s+-c\s+"(?:[^"\\]|\\.)*\$/.test(code)) findings.push("python -c program text interpolates a shell variable");
-  if (/\bjq\b[^\n]*?\s"\s*[.\[{(|](?:[^"\\\n]|\\.)*\$/.test(code)) findings.push("a double-quoted jq program interpolates a shell variable");
+  if (/\bjq\b[^\n]*?\s"\s*[.[{(|](?:[^"\\\n]|\\.)*\$/.test(code)) findings.push("a double-quoted jq program interpolates a shell variable");
   if (/\bjq\b(?:\s+-[A-Za-z-]+)*\s+"\$\{?\w+\}?"(?:\s|$)/m.test(code)) findings.push("a jq program is supplied from a variable");
   if (/\b(?:bash|sh|zsh)\s+-[a-z]*c\b/.test(code)) findings.push("bash/sh -c");
   for (const m of code.matchAll(/(^|[;&|(\s])eval\s+([^\n]*)/gm)) {

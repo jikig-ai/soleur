@@ -169,7 +169,7 @@ Digest markdown files follow this heading contract. Downstream tools depend on t
 **File naming:** `YYYY-MM-DD-digest.md`
 
 > **Interactive vs unattended digest (#7122).** The contract above, including `## Top Contributors` as Required, governs the
-> **interactive** digest this agent writes when an operator runs `/soleur:community digest`. The unattended Inngest cron
+> **interactive** digest this agent writes when an operator runs `soleur:community digest`. The unattended Inngest cron
 > (`cron-community-monitor`) does not follow this contract: its digest is rendered by the handler from a closed schema, in a
 > fixed, counts-and-statuses-only format that **omits** Top Contributors, Community Interactions and stargazer usernames
 > (and quotes and free-text Trending prose). That richness exists only in the interactive digest, by design; downstream

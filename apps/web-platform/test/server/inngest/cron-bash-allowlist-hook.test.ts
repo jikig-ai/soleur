@@ -1104,7 +1104,7 @@ describe("no-file-tools — strict argument grammar and exact-literal matching (
   const EXPLOITS: ReadonlyArray<[string, string]> = [
     ["array-subscript arithmetic payload, single-quoted", `${R} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`],
     ["same, after a channel id", `${R} discord messages 123 'HOME[$(id)]'`],
-    ["same, double-quoted", `${R} discord messages "HOME[\$(id)]"`],
+    ["same, double-quoted", `${R} discord messages "HOME[$(id)]"`],
     ["same, unquoted brackets", `${R} discord messages 1 HOME[1]`],
     ["python source breakout in --query (double-quoted)", `${R} hn mentions --query "x'+str(__import__('os').system('id'))+'"`],
     ["python source breakout in --query (single quote inside double)", `${R} hn mentions --query "x'+__import__('os').getcwd()+'"`],
