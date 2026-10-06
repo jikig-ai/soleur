@@ -27,6 +27,15 @@ import {
   dynamicItemBlock,
   missingEdge301Flags,
 } from "./lib/bulk-redirect-pairs";
+import {
+  decodeEntities,
+  openAncestors,
+  plainText,
+  sentencesOf,
+  tagsOf,
+  visibleText,
+  withoutInert,
+} from "./lib/visible-text";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -1234,15 +1243,16 @@ describe("#4410 /getting-started/ has a plain-language definition + external cit
 //   #3168 homepage memory-first deck-line under the H1
 //   #3167 /about/ full entity H1 (not bare "About")
 //   #3166 /pricing/ inline "concurrent conversation" definition near the table
-//   #3165 no hard prose agent/skill count on homepage/pricing/about (soft floor)
+//   #3165 no hard prose agent/skill count on pricing/about (soft floor; the homepage moved to computed counts, #9579 Guard 2)
 //   #3996 Cursor/Copilot comparison promoted OUT of <details> into a section
 // Presence checks use html.includes("literal") (not unanchored .test()) per the
 // js/regex/missing-regexp-anchor guidance; no tag-strip / &amp; decode.
 
 describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
-  // The three prose-bearing marketing pages targeted by #3165.
+  // The prose-bearing marketing pages that keep the 60+ soft floor (#3165).
+  // The homepage left this list in #9579: it renders computed stats.js counts,
+  // pinned by "#9579 Guard 2" below. Pricing/about stay on the floor.
   const PROSE_PAGES: { label: string; rel: string }[] = [
-    { label: "homepage", rel: "index.html" },
     { label: "/pricing/", rel: "pricing/index.html" },
     { label: "/about/", rel: "about/index.html" },
   ];
@@ -1294,7 +1304,7 @@ describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
     );
   });
 
-  test("#3165 no hard prose agent/skill count on homepage/pricing/about", () => {
+  test("#3165 no hard prose agent/skill count on pricing/about (homepage: see #9579 Guard 2)", () => {
     let checked = 0;
     for (const { label, rel } of PROSE_PAGES) {
       const html = readSite(rel);
@@ -1322,7 +1332,7 @@ describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
         `${label}: 60+ soft floor present in prose`,
       ).toBe(true);
     }
-    expect(checked, "all three prose pages asserted").toBe(PROSE_PAGES.length);
+    expect(checked, "both prose pages asserted").toBe(PROSE_PAGES.length);
   });
 
   test("#3996 Cursor/Copilot comparison is promoted OUT of <details> on the homepage", () => {
@@ -1353,10 +1363,11 @@ describe("#3165/#3166/#3167/#3168/#3996 marketing copy invariants", () => {
       "comparison lead renders outside any <details> (above-the-fold-ish, crawlable)",
     ).toBe(true);
 
-    // Hero jump-link to the promoted section keeps it discoverable from the fold.
+    // The hero reaches a comparison page that exists (#9579; the in-page
+    // anchor link was replaced, the section and its id stay for AEO).
     expect(
-      html.includes('href="#soleur-vs-copilots"'),
-      "hero links to the promoted comparison section",
+      html.includes('href="/compare/soleur-vs-cursor/"'),
+      "hero links to the Cursor comparison page",
     ).toBe(true);
   });
 });
@@ -1899,5 +1910,1203 @@ describe("#3993 /vision/ demotes internal codenames + preserves the freshness bl
       metaMatches[0][1].includes("Last updated"),
       '/vision/ last-updated block carries the "Last updated" label',
     ).toBe(true);
+  });
+});
+
+// -- #9579/#9580 trust-copy guards ------------------------------------------
+// Three guards (hosted-claims copy, computed counts, attribution) plus a hero
+// structure check. The contract and mutation matrices live in
+// knowledge-base/project/plans/archive/20261006-134940-2026-10-06-fix-homepage-copy-and-trust-fixes-plan.md
+// (## Guard Contract). Visible text comes from ./lib/visible-text (a character
+// scan, not a tag-strip regex: js/incomplete-multi-character-sanitization).
+
+const LD_BLOCK_RE = /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi;
+
+function ldBodies(html: string): string[] {
+  return [...html.matchAll(LD_BLOCK_RE)].map((m) => m[1]);
+}
+
+function jsonLdStrings(html: string): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") out.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  for (const body of ldBodies(html)) walk(JSON.parse(body));
+  return out;
+}
+
+function hasKey(v: unknown, keys: string[]): boolean {
+  if (Array.isArray(v)) return v.some((x) => hasKey(x, keys));
+  if (v && typeof v === "object") {
+    return Object.entries(v).some(([k, x]) => keys.includes(k) || hasKey(x, keys));
+  }
+  return false;
+}
+
+// Text a crawler or share card reads that no visible-text scan sees: meta
+// description / og / twitter content and alt, aria-label, title, placeholder.
+// Tags come from the quote-aware scanner (a `>` inside a quoted value does not
+// end the tag); values may be double-quoted, single-quoted or unquoted.
+function attributeTexts(html: string): string[] {
+  const out: string[] = [];
+  for (const { raw } of tagsOf(html)) {
+    if (raw.startsWith("</")) continue;
+    const isMeta = /^<meta\b/i.test(raw);
+    const metaOk = /\b(?:name|property)\s*=\s*["']?(?:description|og:[^"'\s>]*|twitter:[^"'\s>]*)(?=["'\s>])/i.test(raw);
+    for (const a of raw.matchAll(
+      /\b(alt|aria-label|title|content|placeholder)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+    )) {
+      if (a[1].toLowerCase() === "content" && !(isMeta && metaOk)) continue;
+      out.push(decodeEntities(a[2] ?? a[3] ?? a[4] ?? ""));
+    }
+  }
+  return out;
+}
+
+function relOf(abs: string): string {
+  return abs.slice(SITE.length + 1);
+}
+
+function allPages(): { rel: string; html: string }[] {
+  return walkHtmlFiles(SITE)
+    .map((abs) => ({ rel: relOf(abs), html: readFileSync(abs, "utf8") }))
+    .filter(({ html }) => !isMetaRefreshStub(html));
+}
+
+const marketingPages = () =>
+  allPages().filter(({ rel }) => !rel.startsWith("blog/") && !rel.startsWith("legal/"));
+const blogPages = () => allPages().filter(({ rel }) => rel.startsWith("blog/"));
+
+// The three places a claim lives: visible text, structured data, attributes.
+function pageParts(html: string): { text: string[]; ld: string[]; attr: string[] } {
+  return {
+    text: sentencesOf(visibleText(html)),
+    ld: jsonLdStrings(html).flatMap(sentencesOf),
+    attr: attributeTexts(html).flatMap(sentencesOf),
+  };
+}
+
+function faqAnswer(html: string, question: string): string {
+  const esc = question.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = html.match(
+    new RegExp(
+      `<summary class="faq-question">${esc}</summary>\\s*<p class="faq-answer">([\\s\\S]*?)</p>`,
+    ),
+  );
+  if (!m) throw new Error(`FAQ question not found: ${question}`);
+  return plainText(m[1]);
+}
+
+function faqLdAnswer(html: string, question: string): string {
+  for (const body of ldBodies(html)) {
+    const doc = JSON.parse(body) as { "@type"?: string; mainEntity?: any[] };
+    if (doc["@type"] !== "FAQPage") continue;
+    const q = (doc.mainEntity ?? []).find((e) => e.name === question);
+    if (q) return String(q.acceptedAnswer.text).replace(/\s+/g, " ").trim();
+  }
+  throw new Error(`FAQPage JSON-LD question not found: ${question}`);
+}
+
+// Claude-plan / login wording is only true of the self-hosted version. The
+// vocabulary follows CLO audit section 6 (Pro / Max / Team / Enterprise, login,
+// seat, subscription limits and tokens), not just the spellings found on the site
+// today. Two alternatives that match the same sentences cannot be told apart by any
+// probe, so such duplicates are removed; an alternative that is the ONLY one matching
+// some CLO-listed term (a bare "Claude Team") must stay, and the probe table says why.
+// Every alternative is pinned by the ablation check below.
+const PLAN_WORDING_RE =
+  /Claude(?: Code)?(?:\.ai)? (?:plan|Pro|Max|Team|Enterprise|subscription|account|login|log-in|sign-?in|seat)\b|Claude\.ai\b|\b(?:Pro|Max|Team|Enterprise) (?:plan|subscription|seat)\b|\bPro\/Max\b|\bPro,? (?:or|and) Max\b|\bMax (?:or|and) Pro\b|\bAnthropic (?:subscription|account|login|plan)\b|\b(?:sign|log)(?:s|ged|ed)? ?in (?:to |with )?(?:Claude|Anthropic)\b|subscription (?:limits|tokens?|auth\w*)|usage limits|setup-token|\boauth\b/i;
+const HOSTED_RE =
+  /(?<!self-)\b(?:hosted|cloud platform|managed|Soleur Cloud|SaaS|web platform|cloud (?:version|tier|plan|edition)|web app|web dashboard|app\.soleur\.ai)\b/i;
+const PRIVACY_OVERCLAIM_RE =
+  /\bprivate(?:ly)?\b|\bconfidential\b|zero-knowledge|\bencrypt\w*|\bnever (?:see|sees|leaves?|reads?|shares?|stores?|touch(?:es)?|access(?:es)?|views?)\b|(?:do(?:es)? not|don['’]t|doesn['’]t|did(?:n['’]t| not)|cannot|can['’]t|won['’]t|will not) (?:see|read|access|store|view|touch)\b|stays? (?:on|in) your (?:machine|device|laptop)|keeps? your (?:data|code|files) (?:safe|secure)/i;
+// Soleur paying for, bundling or reselling Claude usage (CLO 6.1.3). The optional
+// `(?:\w+ )?` in the first branch already absorbs "your "/"the ".
+const COVERS_CLAUDE_RE =
+  /\b(?:bundl|includ|resell|cover)\w* (?:\w+ )?Claude (?:usage|costs?)\b|\bpay(?:s|ing)? for (?:your |the )?Claude (?:usage|costs?)\b|\bClaude (?:usage|costs?) (?:is|are) (?:included|covered|bundled)\b/i;
+// The permitted wording negates it ("plans don't include Claude usage"). A negation
+// only counts when it sits within two words before A covering verb, not anywhere in the
+// sentence; it is not bound to the specific verb COVERS_CLAUDE_RE matched.
+const NEGATES_COVER_RE = /(?:\bnot|\bnever|\bno|n['’]t)\s+(?:\w+\s+){0,2}(?:bundl|includ|resell|cover)/i;
+// A hosted sentence that states a price or a way to buy must also say it is not
+// available yet (there is a waitlist, no checkout), and must not contradict that.
+const AVAILABILITY_RE =
+  /\$\s?\d|\b\d+ dollars\b|per month|\/month|\bplans? (?:start|from)\b|choose a paid|upgrade to|sign up for|subscribe/i;
+const NOT_YET_RE =
+  /coming soon|waitlist|not yet|pre-?launch|\b(?:once|until|when|after)\b[^.]{0,40}\b(?:opens?|launch\w*|(?:is|are) available|(?:is|are) ready)\b/i;
+const SELLS_NOW_RE =
+  /\b(?:no|without) waitlist\b|\bcheckout\b|\bbuy now\b|\b(?:available|open|live) now\b|\bsign up now\b|\bstart (?:today|now)\b/i;
+// No pricing tier has a priority-support line (Solo: email support; Startup: a
+// priority execution queue), so the phrase on a marketing page contradicts the card.
+const PRIORITY_SUPPORT_RE = /\bpriority support\b/i;
+const FOOTER_HOSTED_LABEL = "Hosted version (coming soon)";
+
+type Corpus = "marketing" | "blog";
+
+// Marketing pages: any plan/login wording must be about the self-hosted version
+// ALONE (a sentence that also names the hosted tier is flagged). Blog posts
+// legitimately quote other products' Claude plans, so there the wording is only
+// flagged when the same sentence names the hosted tier. Privacy over-claims are
+// flagged wherever a sentence names the hosted tier; availability and support-tier
+// wording are checked on marketing pages only (blog posts quote other products'
+// prices). `assumeHosted` treats every sentence as hosted for the availability rule
+// (used for pricing-page meta tags, which never name the tier but are about it).
+function violationsIn(
+  sentences: string[],
+  corpus: Corpus,
+  where = "",
+  opts: { assumeHosted?: boolean } = {},
+): string[] {
+  const out: string[] = [];
+  for (const s of sentences) {
+    const plan = PLAN_WORDING_RE.test(s);
+    const hosted = HOSTED_RE.test(s);
+    const selfHost = /self-host/i.test(s);
+    const planBad = corpus === "marketing" ? plan && (!selfHost || hosted) : plan && hosted;
+    if (planBad) out.push(`${where}plan wording applied to hosted: "${s}"`);
+    if (hosted && PRIVACY_OVERCLAIM_RE.test(s)) {
+      out.push(`${where}hosted sentence over-claims privacy: "${s}"`);
+    }
+    if (hosted && COVERS_CLAUDE_RE.test(s) && !NEGATES_COVER_RE.test(s)) {
+      out.push(`${where}hosted sentence says Soleur covers Claude usage: "${s}"`);
+    }
+    if (corpus === "marketing") {
+      if ((hosted || opts.assumeHosted === true) && AVAILABILITY_RE.test(s) && !NOT_YET_RE.test(s)) {
+        out.push(`${where}hosted availability stated without "coming soon": "${s}"`);
+      }
+      if (hosted && SELLS_NOW_RE.test(s)) {
+        out.push(`${where}hosted tier described as available now: "${s}"`);
+      }
+      if (PRIORITY_SUPPORT_RE.test(s)) {
+        out.push(`${where}"priority support" contradicts the pricing card (Solo: email support): "${s}"`);
+      }
+    }
+  }
+  return out;
+}
+
+// One function per corpus arm, so the self-tests below can drive each arm with a
+// synthetic page: an arm that is dropped, or fed nothing, then fails a test
+// instead of reading as a clean scan.
+type Scan = {
+  violations: string[];
+  hostedText: Map<string, number>;
+  hostedAttrByPage: Map<string, number>;
+  hostedLd: number;
+  hostedAttr: number;
+};
+type Entry = { rel: string; html: string };
+
+function scanPages(entries: Entry[], corpus: Corpus): Scan {
+  const scan: Scan = { violations: [], hostedText: new Map(), hostedAttrByPage: new Map(), hostedLd: 0, hostedAttr: 0 };
+  for (const { rel, html } of entries) {
+    const parts = pageParts(html);
+    scan.violations.push(...violationsIn([...parts.text, ...parts.ld], corpus, `${rel}: `));
+    // Meta tags and alt text of the pricing page are about the hosted tier even when
+    // the sentence never names it, so the availability rule treats them as hosted.
+    scan.violations.push(
+      ...violationsIn(parts.attr, corpus, `${rel}: `, { assumeHosted: rel === "pricing/index.html" }),
+    );
+    scan.hostedText.set(rel, parts.text.filter((s) => HOSTED_RE.test(s) && s !== FOOTER_HOSTED_LABEL).length);
+    scan.hostedLd += parts.ld.filter((s) => HOSTED_RE.test(s)).length;
+    scan.hostedAttr += parts.attr.filter((s) => HOSTED_RE.test(s)).length;
+    scan.hostedAttrByPage.set(rel, parts.attr.filter((s) => HOSTED_RE.test(s)).length);
+  }
+  return scan;
+}
+
+// llms.txt is Markdown: every line is its own unit, then split into sentences.
+function scanLlms(raw: string): { violations: string[]; hosted: number } {
+  const sentences = raw.split("\n").flatMap(sentencesOf);
+  return {
+    violations: violationsIn(sentences, "marketing", "llms.txt: "),
+    hosted: sentences.filter((s) => HOSTED_RE.test(s)).length,
+  };
+}
+
+// The assembled verdict, one record per corpus arm, so a test can assert each arm
+// by name (dropping `llms` or running `blog` as `marketing` then fails a test).
+function assemble(marketing: Entry[], blog: Entry[], llmsRaw: string) {
+  return {
+    marketing: scanPages(marketing, "marketing"),
+    blog: scanPages(blog, "blog"),
+    llms: scanLlms(llmsRaw),
+  };
+}
+
+const synthetic = (head: string, body: string, rel = "x/index.html"): Entry => ({
+  rel,
+  html: `<html><head>${head}</head><body>${body}</body></html>`,
+});
+const LD = (obj: string) => `<script type="application/ld+json">${obj}</script>`;
+
+// Ablation: for every group that has several alternatives, drop ONE alternative and
+// recompile. The vocabulary above is restated from the CLO audit, so a member no
+// probe depends on could be deleted with every row still green; the check below
+// requires, per member, a probe the full regex matches and the ablated one does not.
+function ablations(re: RegExp): { removed: string; re: RegExp }[] {
+  const src = re.source;
+  type G = { contentStart: number; seps: number[]; close: number };
+  const root: G = { contentStart: 0, seps: [], close: src.length };
+  const groups: G[] = [root];
+  const stack: G[] = [root];
+  let inClass = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      continue;
+    }
+    if (c === "[") {
+      inClass = true;
+      continue;
+    }
+    if (c === "(") {
+      let len = 1;
+      if (src[i + 1] === "?") len = src.startsWith("(?<!", i) || src.startsWith("(?<=", i) ? 4 : 3;
+      const g: G = { contentStart: i + len, seps: [], close: -1 };
+      groups.push(g);
+      stack.push(g);
+      i += len - 1;
+      continue;
+    }
+    if (c === ")") {
+      stack.pop()!.close = i;
+      continue;
+    }
+    if (c === "|") stack[stack.length - 1].seps.push(i);
+  }
+  const out: { removed: string; re: RegExp }[] = [];
+  for (const g of groups) {
+    if (g.seps.length === 0) continue;
+    const bounds = [g.contentStart - 1, ...g.seps, g.close];
+    for (let k = 0; k < bounds.length - 1; k++) {
+      const a = bounds[k] + 1;
+      const b = bounds[k + 1];
+      const last = k === bounds.length - 2;
+      const mutant = src.slice(0, last ? a - 1 : a) + src.slice(last ? b : b + 1);
+      try {
+        out.push({ removed: src.slice(a, b), re: new RegExp(mutant, re.flags) });
+      } catch {
+        // an ablation that no longer compiles is not a usable mutant
+      }
+    }
+  }
+  return out;
+}
+
+// Alternatives no probe depends on, for one regex.
+function unpinnedAlternatives(re: RegExp, probes: string[]): string[] {
+  return ablations(re)
+    .filter(({ re: m }) => !probes.some((p) => re.test(p) && !m.test(p)))
+    .map(({ removed }) => removed);
+}
+
+// One probe per alternative, each sentence matching the regex through that member only.
+const PROBES: Record<string, { re: RegExp; probes: string[]; minAlternatives: number }> = {
+  PLAN_WORDING_RE: {
+    re: PLAN_WORDING_RE,
+    minAlternatives: 50,
+    probes: [
+      "Hosted uses your Claude plan.", "Hosted uses your Claude Pro.", "Hosted uses your Claude Max.",
+      "Hosted uses your Claude subscription.", "Hosted uses your Claude account.", "Hosted uses your Claude login.",
+      "Hosted uses your Claude log-in.", "Hosted uses your Claude sign-in.", "Hosted uses your Claude seat.",
+      "Hosted uses Claude.ai.",
+      "Hosted uses a Pro plan.", "Hosted uses a Max plan.", "Hosted uses a Team plan.", "Hosted uses an Enterprise plan.",
+      "Hosted uses a Team subscription.", "Hosted uses a Team seat.",
+      "Hosted uses your Claude Team.", "Hosted uses your Claude Enterprise.",
+      "Hosted uses Pro/Max.", "Hosted uses Pro or Max.", "Hosted uses Pro and Max.",
+      "Hosted uses Max or Pro.", "Hosted uses Max and Pro.",
+      "Hosted uses your Anthropic subscription.", "Hosted uses your Anthropic account.",
+      "Hosted uses your Anthropic login.", "Hosted uses your Anthropic plan.",
+      "Hosted signs in with Claude.", "Hosted logged in with Anthropic.", "Hosted signed in with Anthropic.",
+      "Hosted users log in with Claude.", "Hosted users sign in to Anthropic.", "Hosted users sign in with Claude.",
+      "Hosted hits subscription limits.", "Hosted needs a subscription token.", "Hosted needs subscription authentication.",
+      "Hosted hits usage limits.", "Hosted needs a setup-token.", "Hosted needs OAuth.",
+    ],
+  },
+  HOSTED_RE: {
+    re: HOSTED_RE,
+    minAlternatives: 14,
+    probes: [
+      "The hosted platform.", "The cloud platform.", "The managed service.", "The Soleur Cloud.", "The SaaS.",
+      "The web platform.", "The cloud version.", "The cloud tier.", "The cloud plan.", "The cloud edition.",
+      "The web app.", "The web dashboard.", "Open app.soleur.ai.",
+    ],
+  },
+  PRIVACY_OVERCLAIM_RE: {
+    re: PRIVACY_OVERCLAIM_RE,
+    minAlternatives: 43,
+    probes: [
+      "Data is private.", "It is confidential.", "It is zero-knowledge.", "Data is encrypted.",
+      "We never see it.", "It never sees it.", "It never leaves.", "It never reads it.", "It never shares it.",
+      "It never stores it.", "It never touches it.", "It never accesses it.", "It never views it.",
+      "We do not see it.", "We don't see it.", "It doesn't see it.", "It didn't see it.", "It did not see it.",
+      "We cannot see it.", "We can't see it.", "We won't see it.", "We will not see it.",
+      "We do not read it.", "We do not access it.", "We do not store it.", "We do not view it.", "We do not touch it.",
+      "Data stays on your machine.", "Data stays in your device.", "Data stays on your laptop.",
+      "It keeps your data safe.", "It keeps your code secure.", "It keeps your files safe.",
+    ],
+  },
+  COVERS_CLAUDE_RE: {
+    re: COVERS_CLAUDE_RE,
+    minAlternatives: 22,
+    probes: [
+      "Plans bundle Claude usage.", "Plans include Claude usage.", "Plans resell Claude usage.", "Plans cover Claude usage.",
+      "Plans include unlimited Claude usage.", "Plans cover your Claude usage.", "Plans cover the Claude usage.",
+      "Plans cover Claude costs.",
+      "Soleur pays for Claude usage.", "Soleur is paying for Claude usage.", "Soleur pays for your Claude usage.",
+      "Soleur pays for the Claude usage.", "Soleur pays for Claude costs.",
+      "Claude usage is included.", "Claude usage are covered.", "Claude usage is bundled.", "Claude costs are included.",
+    ],
+  },
+  NEGATES_COVER_RE: {
+    re: NEGATES_COVER_RE,
+    minAlternatives: 8,
+    probes: [
+      "Plans do not include it.", "Plans never include it.", "Plans no longer include it.", "Plans don't include it.",
+      "Plans do not bundle it.", "Plans do not resell it.", "Plans do not cover it.",
+    ],
+  },
+  AVAILABILITY_RE: {
+    re: AVAILABILITY_RE,
+    minAlternatives: 11,
+    probes: [
+      "Hosted costs $49.", "Hosted costs 49 dollars.", "Hosted costs ten per month.", "Hosted is 49/month.",
+      "Hosted plans start low.", "Hosted plan from the start.", "Choose a paid tier.", "Upgrade to hosted.",
+      "Sign up for hosted.", "Subscribe to hosted.",
+    ],
+  },
+  NOT_YET_RE: {
+    re: NOT_YET_RE,
+    minAlternatives: 17,
+    probes: [
+      "Hosted costs $49, coming soon.", "Hosted costs $49, join the waitlist.", "Hosted costs $49, not yet.",
+      "Hosted costs $49, pre-launch.", "Hosted costs $49 once it opens.", "Hosted costs $49 until launch.",
+      "Hosted costs $49 when it opens.", "Hosted costs $49 after launch.", "Hosted costs $49 when it is available.",
+      "Hosted costs $49 after it is ready.", "Hosted costs $49 when plans are available.",
+      "Hosted costs $49 after plans are ready.",
+    ],
+  },
+  SELLS_NOW_RE: {
+    re: SELLS_NOW_RE,
+    minAlternatives: 13,
+    probes: [
+      "Hosted is $49, no waitlist.", "Hosted is $49, without waitlist.", "Use the checkout.", "Buy now.",
+      "Hosted is available now.", "Hosted is open now.", "Hosted is live now.", "Sign up now.", "Start today.", "Start now.",
+    ],
+  },
+};
+
+// What the page offers for sale, read from its structured data: an `availability`
+// key anywhere, a BuyAction/OrderAction, or a potentialAction. While only a waitlist
+// exists, none of them may appear on any marketing page.
+function orderability(html: string): string[] {
+  const why: string[] = [];
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if ("availability" in o) why.push(`availability: ${String(o.availability)}`);
+      if ("potentialAction" in o) why.push("potentialAction");
+      if (/^(?:Buy|Order|Trade|Rent)Action$/.test(String(o["@type"]))) why.push(`@type ${String(o["@type"])}`);
+      Object.values(o).forEach(walk);
+    }
+  };
+  for (const body of ldBodies(html)) walk(JSON.parse(body));
+  return why;
+}
+
+// The pricing tier cards: each must carry a "Coming Soon" badge and a waitlist link
+// before its own call to action (a waitlist link, or a mailto contact link for the
+// custom tier), so a card cannot be turned into a buy button while
+// the sentence-level guards (which only see hosted-token sentences) stay green.
+function pricingCardIssues(html: string): string[] {
+  const live = withoutInert(html);
+  const labels = (live.match(/class="pricing-card-label"/g) ?? []).length;
+  const cards = live.split('<div class="pricing-card">').slice(1);
+  const issues: string[] = [];
+  if (cards.length !== labels) issues.push(`${cards.length} cards but ${labels} tier labels`);
+  if (cards.length < 3) issues.push(`only ${cards.length} pricing cards`);
+  cards.forEach((chunk, n) => {
+    const ctaAt = chunk.indexOf("pricing-card-cta");
+    if (ctaAt === -1) {
+      issues.push(`card ${n + 1} has no call to action`);
+      return;
+    }
+    const region = chunk.slice(0, chunk.indexOf("</a>", ctaAt) + 4);
+    if (!/<span class="pricing-card-badge">Coming Soon<\/span>/.test(region)) issues.push(`card ${n + 1} has no Coming Soon badge`);
+    // EVERY link in the card (up to the card's closing tag) must be a waitlist or contact link:
+    // a second button next to an intact waitlist link is still a buy button.
+    const cardEnd = chunk.indexOf("</div>", ctaAt);
+    const card = chunk.slice(0, cardEnd === -1 ? chunk.length : cardEnd);
+    const anchors = [...card.matchAll(/<a\s([^>]*)>([\s\S]*?)<\/a>/g)];
+    if (!anchors.some((a) => /pricing-card-cta/.test(a[1]))) issues.push(`card ${n + 1} has no call to action`);
+    for (const a of anchors) {
+      const waitlist = /href="[^"]*#waitlist"/.test(a[1]) && /waitlist/i.test(a[2]);
+      const contact = /href="mailto:[^"]+"/.test(a[1]) && /\bcontact\b/i.test(a[2]);
+      if (!waitlist && !contact) issues.push(`card ${n + 1} call to action is neither a waitlist link nor a contact link`);
+    }
+  });
+  return issues;
+}
+
+// A page that shows "Last updated <date>" must carry the same date in its WebPage
+// dateModified (and so in the sitemap): page-freshness.njk asks for `date:` to equal
+// `last_updated:`, and a crawler that re-fetches on lastmod otherwise keeps stale copy.
+function freshnessMismatch(html: string): string | null {
+  const byline = html.match(/<span class="page-meta-updated">Last updated <time datetime="([^"]+)">/);
+  if (!byline) return null;
+  const mods: string[] = [];
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if (typeof o.dateModified === "string") mods.push(o.dateModified);
+      Object.values(o).forEach(walk);
+    }
+  };
+  for (const body of ldBodies(html)) walk(JSON.parse(body));
+  if (mods.length === 0) return `byline ${byline[1]} but no dateModified`;
+  const off = mods.filter((d) => !d.startsWith(byline[1]));
+  return off.length ? `byline ${byline[1]} but dateModified ${off.join(", ")}` : null;
+}
+
+describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted, no 'private', nothing orderable)", () => {
+  // Known gap, tracked in #9589: blog posts that state the hosted privacy posture
+  // without naming the hosted tier ("No code is stored on Soleur servers") carry no
+  // hosted token, so the sentence-local privacy rule cannot see them.
+  test("no marketing or blog sentence applies Claude plan/login wording to hosted, over-claims hosted privacy, or sells an unavailable hosted tier", () => {
+    const llmsPath = join(SITE, "llms.txt");
+    expect(existsSync(llmsPath), "llms.txt is built").toBe(true);
+    const arms = assemble(marketingPages(), blogPages(), readFileSync(llmsPath, "utf8"));
+    // Each arm by name, so a dropped or mis-corpused arm cannot hide behind the others.
+    expect(arms.marketing.violations, `marketing:\n${arms.marketing.violations.join("\n")}`).toEqual([]);
+    expect(arms.blog.violations, `blog:\n${arms.blog.violations.join("\n")}`).toEqual([]);
+    expect(arms.llms.violations, `llms:\n${arms.llms.violations.join("\n")}`).toEqual([]);
+    // Floors, calibrated to the current corpus (measured; slack of zero to two units, so a
+    // legitimate copy edit may need to move one): an empty page glob, or a scanner that
+    // reads only part of a page, must not read as clean.
+    expect(arms.marketing.hostedText.size, "marketing pages scanned").toBeGreaterThanOrEqual(20);
+    expect(arms.blog.hostedText.size, "blog pages scanned").toBeGreaterThanOrEqual(25);
+    const total = [...arms.marketing.hostedText.values()].reduce((a, b) => a + b, 0);
+    expect(total, "hosted sentences in marketing visible text (footer label excluded)").toBeGreaterThanOrEqual(40);
+    expect(arms.marketing.hostedLd, "hosted sentences in marketing JSON-LD").toBeGreaterThanOrEqual(20);
+    expect(arms.marketing.hostedAttr, "hosted sentences in marketing attributes").toBeGreaterThanOrEqual(20);
+    // The aggregate attribute count is mostly one footer string repeated on every page, so
+    // the pages whose own meta tags carry hosted wording get their own floor.
+    expect(arms.marketing.hostedAttrByPage.get("pricing/index.html") ?? 0, "pricing meta/og/twitter hosted sentences").toBeGreaterThanOrEqual(3);
+    const blogHosted = [...arms.blog.hostedText.values()].reduce((a, b) => a + b, 0);
+    expect(blogHosted, "hosted sentences in blog visible text").toBeGreaterThanOrEqual(19);
+    // Per page: the pages the CLO audit binds, and every page this PR rewrote, each
+    // carry hosted wording, so blinding one of them (aggregate still above its floor)
+    // cannot read as clean. The company-as-a-service count includes SaaS comparison
+    // sentences (9 measured, none about the hosted tier), so it only pins that the
+    // page is still read.
+    const perPage: [string, number][] = [
+      ["index.html", 4], ["pricing/index.html", 5], ["getting-started/index.html", 7],
+      ["about/index.html", 2], ["company-as-a-service/index.html", 8], ["vision/index.html", 1],
+      ["compare/soleur-vs-cursor/index.html", 2], ["compare/soleur-vs-devin/index.html", 1],
+    ];
+    for (const [rel, min] of perPage) {
+      expect(arms.marketing.hostedText.get(rel) ?? 0, `${rel} hosted sentences`).toBeGreaterThanOrEqual(min);
+    }
+    expect(arms.llms.hosted, "hosted sentences in llms.txt").toBeGreaterThanOrEqual(3);
+  });
+
+  test("rule self-test: known-bad sentences per arm are flagged, known-good wording is not", () => {
+    const bad: [string, Corpus][] = [
+      ["You choose the Claude plan that fits your usage.", "marketing"],
+      ["Hosted plan users pay their own Claude Pro, Max, or API costs.", "marketing"],
+      ["Sign in to hosted Soleur with your Claude account.", "marketing"],
+      ["Hosted uses your Claude.ai login.", "marketing"],
+      ["Your Anthropic subscription covers the hosted version.", "marketing"],
+      ["Hosted plans run on your Max plan.", "marketing"],
+      ["Hosted runs on your Claude Enterprise plan.", "marketing"],
+      ["Hosted works with your Claude Team.", "marketing"],
+      ["Hosted works with Claude Enterprise.", "marketing"],
+      ["Hosted Soleur uses your Claude Team seat.", "marketing"],
+      ["Hosted runs on your Pro/Max login.", "marketing"],
+      ["Use your Anthropic account on the hosted version.", "marketing"],
+      ["Hosted Soleur lets you sign in with Claude.", "marketing"],
+      ["Hosted users are signed in with Anthropic.", "marketing"],
+      ["Hosted runs on your Claude usage limits.", "marketing"],
+      ["Hosted needs your Claude subscription token.", "marketing"],
+      ["Self-hosted is free; hosted usage draws on your Claude Pro plan.", "marketing"],
+      ["Hosted Soleur runs on your Claude Pro plan.", "blog"],
+      ["Hosted Soleur: your Claude usage is included.", "marketing"],
+      ["Hosted plans bundle Claude usage.", "marketing"],
+      ["Hosted includes unlimited Claude usage.", "marketing"],
+      ["Soleur pays for your Claude usage on hosted.", "marketing"],
+      ["Hosted plans include Claude usage, no API key needed.", "marketing"],
+      ["Hosted plans include Claude usage, with no extra fee.", "marketing"],
+      ["Soleur Cloud keeps your data private.", "marketing"],
+      ["The cloud version keeps your data private.", "marketing"],
+      ["Your workspace data stays private on app.soleur.ai.", "marketing"],
+      ["The hosted version never sees your code.", "marketing"],
+      ["The hosted version never touches your code.", "marketing"],
+      ["Hosted workspaces are handled privately.", "marketing"],
+      ["Hosted workspaces are confidential.", "marketing"],
+      ["The web platform is zero-knowledge.", "marketing"],
+      ["Hosted data is end-to-end encrypted.", "marketing"],
+      ["Hosted data is encrypted at rest.", "marketing"],
+      ["We do not read your hosted files.", "marketing"],
+      ["We don't read your hosted files.", "marketing"],
+      ["We don’t read your hosted files.", "marketing"],
+      ["The hosted version doesn’t read your files.", "marketing"],
+      ["The hosted version does not store your code.", "marketing"],
+      ["We cannot view your hosted files.", "marketing"],
+      ["Hosted data stays on your machine.", "marketing"],
+      ["The hosted version keeps your data safe.", "marketing"],
+      ["Hosted plans start at $49 per month.", "marketing"],
+      ["Choose a paid tier for managed infrastructure.", "marketing"],
+      ["Upgrade to the hosted version whenever you are ready.", "marketing"],
+      ["Hosted plans start at $49 per month, no waitlist.", "marketing"],
+      ["Hosted plans start at $49 per month, checkout opens now.", "marketing"],
+      ["Hosted plans start at $49 per month, the dashboard opens in a new tab.", "marketing"],
+      ["The hosted version adds priority support.", "marketing"],
+      ["Priority support is included.", "marketing"],
+    ];
+    const good: [string, Corpus][] = [
+      ["Self-hosted runs with your Claude plan or an Anthropic API key.", "marketing"],
+      ["Hosted plans use your own Anthropic API key, billed by Anthropic to you.", "marketing"],
+      ["Soleur plans don’t include Claude usage.", "marketing"],
+      ["Hosted plans don’t include Claude usage.", "marketing"],
+      ["Hosted plans no longer include Claude usage.", "marketing"],
+      ["It runs inside your own Claude Code, so you pay for your own Claude usage.", "marketing"],
+      ["The hosted version is coming soon, from $49 per month.", "marketing"],
+      ["Hosted plans start at $49 per month once the waitlist opens.", "marketing"],
+      ["Hosted plans are $49 per month once hosted plans open.", "marketing"],
+      ["Join the waitlist for the hosted version.", "marketing"],
+      ["The hosted version adds email support.", "marketing"],
+      ["Startup adds a priority execution queue.", "marketing"],
+      ["Cowork is bundled with every Claude subscription.", "blog"],
+      ["Claude Pro runs $20/month.", "blog"],
+      ["SaaS tools work in isolation.", "marketing"],
+    ];
+    for (const [s, corpus] of bad) {
+      expect(violationsIn([s], corpus).length, `flagged: ${s}`).toBeGreaterThan(0);
+    }
+    for (const [s, corpus] of good) {
+      expect(violationsIn([s], corpus), `not flagged: ${s}`).toEqual([]);
+    }
+    // The availability rule is marketing-only and `assumeHosted` extends it to meta tags.
+    expect(violationsIn(["Plans start at $49 per month."], "marketing"), "no hosted token, not assumed").toEqual([]);
+    expect(violationsIn(["Plans start at $49 per month."], "marketing", "", { assumeHosted: true }).length).toBeGreaterThan(0);
+    expect(violationsIn(["Hosted plans start at $49 per month."], "blog"), "blog quotes other products' prices").toEqual([]);
+  });
+
+  test("every alternative of every restated rule is pinned by a probe (ablation), and the detector can fail", () => {
+    // minAlternatives is the measured count: trimming an alternative together with its own probe
+    // then fails here instead of passing the dependence check it just removed itself from.
+    for (const [name, { re, probes, minAlternatives }] of Object.entries(PROBES)) {
+      const all = ablations(re);
+      expect(all.length, `${name}: ablations generated`).toBeGreaterThanOrEqual(minAlternatives);
+      expect(probes.every((p) => re.test(p)), `${name}: every probe matches the full rule`).toBe(true);
+      expect(unpinnedAlternatives(re, probes), `${name}: alternatives no probe depends on`).toEqual([]);
+    }
+    // Control 1: with no probes, every alternative is unpinned (the detector is not vacuous).
+    expect(unpinnedAlternatives(PLAN_WORDING_RE, []).length).toBe(ablations(PLAN_WORDING_RE).length);
+    // Control 2: dropping the one probe a member depends on reports exactly that member.
+    const without = PROBES.PLAN_WORDING_RE.probes.filter((p) => p !== "Hosted uses your Claude seat.");
+    expect(unpinnedAlternatives(PLAN_WORDING_RE, without)).toEqual(["seat"]);
+    // Control 3: the generator sees nested groups, character classes and escapes.
+    expect(ablations(/a(?:b|c)[|x]\|d/).map((a) => a.removed)).toEqual(["b", "c"]);
+  });
+
+  test("arm wiring: a bad sentence that appears in only ONE input arm is still flagged, and each corpus keeps its own rules", () => {
+    const bad = "Hosted Soleur is private.";
+    const arms: [string, Entry, Corpus][] = [
+      ["marketing visible text", synthetic("", `<p>${bad}</p>`), "marketing"],
+      ["marketing JSON-LD", synthetic(LD(`{"@type":"Thing","description":"${bad}"}`), ""), "marketing"],
+      ["marketing alt", synthetic("", `<img alt="${bad}">`), "marketing"],
+      ["marketing meta description (single-quoted)", synthetic(`<meta name='description' content='${bad}'>`, ""), "marketing"],
+      ["marketing meta description (unquoted name)", synthetic(`<meta name=description content="${bad}">`, ""), "marketing"],
+      ["marketing og:description", synthetic(`<meta property="og:description" content="${bad}">`, ""), "marketing"],
+      ["marketing title after a quoted >", synthetic("", `<img alt="x > y" title="${bad}">`), "marketing"],
+      ["marketing aria-label with spaces around =", synthetic("", `<a aria-label = "${bad}">x</a>`), "marketing"],
+      ["marketing unquoted placeholder", synthetic("", "<input placeholder=Hosted.Soleur.is.private>"), "marketing"],
+      ["blog visible text", synthetic("", `<p>${bad}</p>`), "blog"],
+      ["blog JSON-LD", synthetic(LD(`{"@type":"Thing","description":"${bad}"}`), ""), "blog"],
+      ["blog meta description", synthetic(`<meta name="description" content="${bad}">`, ""), "blog"],
+    ];
+    for (const [arm, page, corpus] of arms) {
+      expect(scanPages([page], corpus).violations.length, `${arm} arm is wired`).toBeGreaterThan(0);
+    }
+    expect(scanLlms(`- [x](u): ${bad}\n`).violations.length, "llms.txt arm is wired").toBeGreaterThan(0);
+    // A zero-width character splits a word in every arm unless the arm normalises.
+    const soft = String.fromCharCode(0xad);
+    const split = `Hosted Soleur is pri${soft}vate.`;
+    expect(scanPages([synthetic(LD(`{"@type":"Thing","description":"${split}"}`), "")], "marketing").violations.length, "JSON-LD normalises").toBeGreaterThan(0);
+    expect(scanLlms(`- [x](u): ${split}\n`).violations.length, "llms.txt normalises").toBeGreaterThan(0);
+    expect(scanPages([synthetic(`<meta name="description" content="${split}">`, "")], "marketing").violations.length, "attributes normalise").toBeGreaterThan(0);
+    // The same arms stay quiet on clean content (the control for the assertions above).
+    const clean = synthetic(
+      `<meta name="description" content="Hosted Soleur is coming soon."> ${LD('{"@type":"Thing","description":"Hosted is coming soon."}')}`,
+      '<p>Hosted is coming soon.</p><img alt="Hosted is coming soon.">',
+    );
+    expect(scanPages([clean], "marketing").violations).toEqual([]);
+    expect(scanPages([clean], "blog").violations).toEqual([]);
+    expect(scanLlms("- [x](u): Hosted is coming soon.\n").violations).toEqual([]);
+    // Markdown list items carry no final period, so only the per-line split keeps a
+    // self-hosted-scoped entry from merging with a hosted one into a flagged "sentence".
+    expect(
+      scanLlms("- [A](u): Self-hosted runs with your Claude plan\n- [B](u): The hosted version is coming soon\n").violations,
+      "llms.txt entries are scanned line by line",
+    ).toEqual([]);
+    // A non-content meta tag and a non-meta `content` attribute are not claims.
+    expect(attributeTexts('<meta name="viewport" content="Hosted is private."><div content="Hosted is private.">')).toEqual([]);
+
+    // Assembly: the verdict is assembled per arm with the right corpus. A marketing-only
+    // rule (availability) fires in the marketing arm and the llms arm, never in blog; the
+    // blog rule (hosted AND plan wording in one sentence) fires in blog.
+    const price = "Hosted plans start at $49 per month.";
+    const planBlog = "Hosted Soleur runs on your Claude Pro plan.";
+    const a = assemble([synthetic("", `<p>${price}</p>`)], [synthetic("", `<p>${price}</p><p>${planBlog}</p>`)], `- [x](u): ${price}\n`);
+    expect(a.marketing.violations.length, "marketing arm: availability rule").toBe(1);
+    expect(a.blog.violations.length, "blog arm: only the plan sentence, not the price").toBe(1);
+    expect(a.blog.violations[0]).toContain("plan wording");
+    expect(a.llms.violations.length, "llms arm runs as marketing").toBe(1);
+    expect(assemble([], [], "").llms.hosted, "empty llms").toBe(0);
+  });
+
+  test("pricing meta tags are about the hosted tier even when no sentence names it", () => {
+    const meta = (c: string) => synthetic(`<meta name="description" content="${c}">`, "", "pricing/index.html");
+    expect(scanPages([meta("All 8 departments from $49/month.")], "marketing").violations.length, "price without coming soon").toBeGreaterThan(0);
+    expect(scanPages([meta("All 8 departments from $49/month once hosted plans open.")], "marketing").violations).toEqual([]);
+    expect(
+      scanPages([synthetic('<meta name="description" content="All 8 departments from $49/month.">', "", "about/index.html")], "marketing").violations,
+      "other pages are not assumed hosted",
+    ).toEqual([]);
+  });
+
+  test("pricing tier cards each carry a Coming Soon badge and a waitlist call to action", () => {
+    expect(pricingCardIssues(readSite("pricing/index.html"))).toEqual([]);
+    const card = (badge: string, cta: string, label = '<span class="pricing-card-label">Solo</span>') =>
+      `<div class="pricing-card">${label}${badge}${cta}</div>`;
+    const ok = card('<span class="pricing-card-badge">Coming Soon</span>', '<a href="/pricing/#waitlist" class="btn pricing-card-cta">Join the waitlist</a>');
+    expect(pricingCardIssues(ok.repeat(3))).toEqual([]);
+    expect(pricingCardIssues(ok.repeat(2)).join(), "too few cards").toContain("only 2 pricing cards");
+    const noBadge = card("", '<a href="/pricing/#waitlist" class="btn pricing-card-cta">Join the waitlist</a>');
+    expect(pricingCardIssues(ok + ok + noBadge).join(), "badge removed").toContain("card 3 has no Coming Soon badge");
+    const buy = card('<span class="pricing-card-badge">Coming Soon</span>', '<a href="/checkout" class="btn pricing-card-cta">Subscribe</a>');
+    expect(pricingCardIssues(ok + ok + buy).join(), "buy button").toContain("card 3 call to action is neither");
+    const contactCard = card('<span class="pricing-card-badge">Coming Soon</span>', '<a href="mailto:hello@soleur.ai" class="btn pricing-card-cta">Contact Us</a>');
+    expect(pricingCardIssues(ok + ok + contactCard), "a contact card is allowed").toEqual([]);
+    const fakeContact = card('<span class="pricing-card-badge">Coming Soon</span>', '<a href="/checkout" class="btn pricing-card-cta">Contact Us</a>');
+    expect(pricingCardIssues(ok + ok + fakeContact).join(), "contact text on a non-mailto link").toContain("neither");
+    const badgeAfter = card("", '<a href="/pricing/#waitlist" class="btn pricing-card-cta">Join the waitlist</a><span class="pricing-card-badge">Coming Soon</span>');
+    expect(pricingCardIssues(ok + ok + badgeAfter).join(), "badge only after the cta").toContain("card 3 has no Coming Soon badge");
+    const twoLinks = card('<span class="pricing-card-badge">Coming Soon</span>', '<a href="/pricing/#waitlist" class="btn pricing-card-cta">Join the waitlist</a><a href="/checkout" class="btn">Subscribe</a>');
+    expect(pricingCardIssues(ok + ok + twoLinks).join(), "a second, buy-style link beside an intact waitlist link").toContain("card 3 call to action is neither");
+    const extraLabel = `${ok}${ok}${ok}<span class="pricing-card-label">Orphan</span>`;
+    expect(pricingCardIssues(extraLabel).join(), "label without a card").toContain("tier labels");
+  });
+
+  test("no marketing page declares anything orderable in structured data; the hosted offer says coming soon", () => {
+    const offenders: string[] = [];
+    const pages = marketingPages();
+    for (const { rel, html } of pages) for (const w of orderability(html)) offenders.push(`${rel}: ${w}`);
+    expect(pages.length, "marketing pages scanned").toBeGreaterThanOrEqual(20);
+    expect(offenders, offenders.join("\n")).toEqual([]);
+    // orderability self-test: every way of declaring an orderable offer is seen.
+    const ld = (extra: string) => LD(`{"@type":"Thing"${extra}}`);
+    expect(orderability(ld(',"offers":{"@type":"Offer","availability":"https://schema.org/PreOrder"}')).length, "nested availability").toBe(1);
+    expect(orderability(ld(',"offers":[{"@type":"Offer","availability":"https://schema.org/InStock"}]')).length, "availability in a list").toBe(1);
+    expect(orderability(ld(',"potentialAction":{"@type":"ViewAction"}')).length, "potentialAction").toBe(1);
+    expect(orderability(LD('{"@type":"BuyAction"}')).length, "BuyAction").toBe(1);
+    expect(orderability(ld(',"offers":{"@type":"Offer","price":"49"}')), "price alone is not availability").toEqual([]);
+    // The one hosted offer: coming soon in its name, waitlist and email support in its description.
+    const offers: Record<string, unknown>[] = [];
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") {
+        if ((v as Record<string, unknown>)["@type"] === "Offer") offers.push(v as Record<string, unknown>);
+        Object.values(v).forEach(walk);
+      }
+    };
+    for (const body of ldBodies(readSite("index.html"))) walk(JSON.parse(body));
+    const hosted = offers.filter((o) => HOSTED_RE.test(String(o.name)));
+    expect(hosted.length, "exactly one hosted offer in the homepage JSON-LD").toBe(1);
+    expect(String(hosted[0].name), "hosted offer name").toMatch(/coming soon/i);
+    expect(String(hosted[0].description), "hosted offer description names the waitlist").toMatch(/waitlist/i);
+    expect(String(hosted[0].description), "hosted offer support wording matches the pricing card").toMatch(/email support/i);
+    const llms = readFileSync(join(SITE, "llms.txt"), "utf8").split("\n");
+    for (const label of ["Getting Started", "Pricing"]) {
+      const line = llms.find((l) => l.startsWith(`- [${label}]`));
+      expect(line, `llms.txt ${label} entry present`).toBeDefined();
+      expect(line!, `llms.txt ${label} entry says coming soon`).toMatch(/coming soon/i);
+    }
+  });
+
+  test("a page's visible 'Last updated' date and its WebPage dateModified agree", () => {
+    const withByline = marketingPages().filter(({ html }) => /page-meta-updated/.test(html));
+    expect(withByline.length, "pages with a visible byline").toBeGreaterThanOrEqual(7);
+    const mismatches = withByline
+      .map(({ rel, html }) => [rel, freshnessMismatch(html)] as const)
+      .filter(([, m]) => m !== null)
+      .map(([rel, m]) => `${rel}: ${m}`);
+    expect(mismatches, mismatches.join("\n")).toEqual([]);
+    // self-test
+    const page = (byline: string, mod: string) =>
+      `<span class="page-meta-updated">Last updated <time datetime="${byline}">x</time></span>${LD(`{"@type":"WebPage","dateModified":"${mod}"}`)}`;
+    expect(freshnessMismatch(page("2026-10-06", "2026-10-06T00:00:00Z")), "agree").toBeNull();
+    expect(freshnessMismatch(page("2026-10-06", "2026-06-01T00:00:00Z")), "disagree").toContain("dateModified");
+    expect(freshnessMismatch(`<span class="page-meta-updated">Last updated <time datetime="2026-10-06">x</time></span>`), "no dateModified").toContain("no dateModified");
+    expect(freshnessMismatch("<p>no byline</p>"), "no byline").toBeNull();
+  });
+
+  test("edited FAQ answers are identical in the visible answer and the FAQPage JSON-LD twin, and carry the claim phrase", () => {
+    const rows: { page: string; question: string; phrase?: string }[] = [
+      { page: "pricing/index.html", question: "Do I pay for Claude separately?", phrase: "billed by Anthropic to you" },
+      { page: "pricing/index.html", question: "Is there a free option?" },
+      { page: "index.html", question: "Is Soleur free?", phrase: "billed by Anthropic to you" },
+      { page: "index.html", question: "How do I get started?", phrase: "Anthropic API key" },
+      { page: "index.html", question: "What is Soleur?" },
+      { page: "getting-started/index.html", question: "What is the difference between the hosted version and self-hosted?", phrase: "(coming soon)" },
+    ];
+    for (const { page, question, phrase } of rows) {
+      const html = readSite(page);
+      const visible = faqAnswer(html, question);
+      const twin = faqLdAnswer(html, question);
+      expect(visible, `${page} "${question}" visible equals JSON-LD twin`).toBe(twin);
+      if (phrase) expect(visible, `${page} "${question}"`).toContain(phrase);
+    }
+  });
+});
+
+describe("#9579 Guard 2 — computed counts on the homepage (re-pin of #3165)", () => {
+  const STATS_JS = resolve(REPO_ROOT, "plugins/soleur/docs/_data/stats.js");
+  const NUM_WORD = "(?:sixty|seventy|eighty|ninety|one hundred|a hundred)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?";
+  const LITERAL_COUNT_RES = [
+    /\b\d{2,3}\+?(?:\s|&nbsp;|<[^>]{1,40}>)+(?:[A-Za-z-]+\s+){0,3}(?:agents|skills)\b/gi,
+    /\b\d{2,3}\+?-(?:agent|skill)s?\b/gi,
+    new RegExp(`\\b${NUM_WORD}\\s+(?:[A-Za-z-]+\\s+){0,3}(?:agents|skills)\\b`, "gi"),
+  ];
+
+  test("raw index.njk and page-freshness.njk carry no literal count in prose", () => {
+    const sources = [
+      { rel: "index.njk", floorOk: false, minLines: 200 },
+      { rel: "_includes/page-freshness.njk", floorOk: true, minLines: 25 },
+    ];
+    const hits: string[] = [];
+    for (const { rel, floorOk, minLines } of sources) {
+      const src = readFileSync(resolve(REPO_ROOT, "plugins/soleur/docs", rel), "utf8");
+      // Floor per file: a scan that examined nothing must not read as clean.
+      expect(src.split("\n").length, `${rel} lines scanned`).toBeGreaterThanOrEqual(minLines);
+      // Whole-source scan (not per line): a count hard-wrapped across two source
+      // lines ("67\n agents") is still one count to a reader.
+      for (const re of LITERAL_COUNT_RES) {
+        for (const m of src.matchAll(re)) {
+          // page-freshness.njk keeps the 60+ soft floor for every page without the flag.
+          if (floorOk && m[0].startsWith("60+")) continue;
+          hits.push(`${rel}:${src.slice(0, m.index).split("\n").length}: ${m[0].replace(/\s+/g, " ")}`);
+        }
+      }
+    }
+    expect(hits, hits.join("\n")).toEqual([]);
+  });
+
+  test("counting-pattern self-test: the spellings the scan exists to catch are caught", () => {
+    const caught = [
+      "67 AI agents", "<strong>67</strong> agents", "67&nbsp;agents", "67 fully autonomous AI agents",
+      "a 67-agent team", "Sixty AI agents", "103 workflow skills", "67\n    AI agents",
+    ];
+    for (const s of caught) {
+      expect(LITERAL_COUNT_RES.some((re) => [...s.matchAll(re)].length > 0), `caught: ${s}`).toBe(true);
+    }
+    expect(LITERAL_COUNT_RES.some((re) => [...("{{ stats.agents }} AI agents").matchAll(re)].length > 0)).toBe(false);
+  });
+
+  test("built homepage hero-sub, FAQ (HTML + JSON-LD), final CTA, summary and stat strip carry the stats.js counts", async () => {
+    const stats = (await import(STATS_JS)).default() as { agents: number; skills: number; departments: number };
+    expect(stats.agents, "stats.agents is a positive integer").toBeGreaterThan(0);
+    expect(stats.skills, "stats.skills is a positive integer").toBeGreaterThan(0);
+    const html = readSite("index.html");
+    const agentsRe = new RegExp(`\\b${stats.agents}\\s+(?:AI\\s+)?agents\\b`);
+    const skillsRe = new RegExp(`\\b${stats.skills}\\s+(?:AI\\s+)?skills\\b`);
+    const grab = (re: RegExp, what: string): string => {
+      const m = html.match(re);
+      expect(m, `homepage ${what} present`).not.toBeNull();
+      return plainText(m![1]);
+    };
+    const surfaces: { what: string; text: string }[] = [
+      { what: "hero-sub", text: grab(/<p class="hero-sub">([\s\S]*?)<\/p>/, "hero-sub") },
+      { what: "page summary", text: grab(/<p class="page-summary">([\s\S]*?)<\/p>/, "page summary") },
+      { what: "FAQ 'What is Soleur?'", text: faqAnswer(html, "What is Soleur?") },
+      { what: "FAQPage JSON-LD 'What is Soleur?'", text: faqLdAnswer(html, "What is Soleur?") },
+      { what: "final CTA", text: grab(/<section class="landing-cta">[\s\S]*?<\/h2>\s*<p>([\s\S]*?)<\/p>/, "final CTA") },
+    ];
+    for (const { what, text } of surfaces) {
+      expect(text, `${what} agents count`).toMatch(agentsRe);
+      expect(text, `${what} skills count`).toMatch(skillsRe);
+      expect(text.includes("60+"), `${what} has no 60+ soft floor`).toBe(false);
+    }
+    // The stat strip: value and label sit in sibling blocks, so pin the pair.
+    const strip = new Map<string, number>();
+    for (const m of html.matchAll(
+      /<div class="landing-stat-value"[^>]*>(\d+)<\/div>\s*<div class="landing-stat-label">([^<]+)<\/div>/g,
+    )) {
+      strip.set(m[2].trim(), Number(m[1]));
+    }
+    expect(strip.get("AI Agents"), "stat strip agents").toBe(stats.agents);
+    expect(strip.get("Skills"), "stat strip skills").toBe(stats.skills);
+    expect(strip.get("Departments"), "stat strip departments").toBe(stats.departments);
+    // statsLastVerified: a real ISO date, and the homepage renders exactly that value.
+    const verified = JSON.parse(readFileSync(SITE_JSON, "utf8")).statsLastVerified as string;
+    expect(verified, "statsLastVerified is an ISO date").toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const stamps = [...html.matchAll(/data-last-verified="([^"]*)"/g)].map((m) => m[1]);
+    expect(stamps.length, "stat tiles carry the verification date").toBeGreaterThanOrEqual(2);
+    expect(new Set(stamps), "every tile renders site.json statsLastVerified").toEqual(new Set([verified]));
+  });
+
+  test("pricing, about, vision, agents, skills, getting-started keep the 60+ soft floor in their page summary (opt-in flag is homepage-only)", () => {
+    const rels = [
+      "pricing/index.html", "about/index.html", "vision/index.html",
+      "agents/index.html", "skills/index.html", "getting-started/index.html",
+    ];
+    let checked = 0;
+    for (const rel of rels) {
+      const html = readSite(rel);
+      const m = html.match(/<p class="page-summary">([\s\S]*?)<\/p>/);
+      expect(m, `${rel} has a page summary`).not.toBeNull();
+      const text = plainText(m![1]);
+      expect(text.includes("60+"), `${rel} summary keeps the soft floor`).toBe(true);
+      expect(/\b\d{2,3}\s+(?:AI\s+)?agents\b/.test(text), `${rel} summary has no exact agent count`).toBe(false);
+      checked++;
+    }
+    expect(checked, "all cascade pages asserted").toBe(rels.length);
+  });
+});
+
+// Scope: the Inc./Amodei/Krieger attribution on every marketing page (visible text,
+// attributes and structured data) plus structured data on every page. Blog posts
+// carry the same Inc. sources and are tracked in #9589.
+const INC_SOURCE_RE = /<a\s[^>]*href="https:\/\/www\.inc\.com\/ben-sherry\/[^"]+"[^>]*>/i;
+const CLAIM_KEYS = ["subjectOf", "citation", "isBasedOn"];
+
+function pagesWithClaimKeys(entries: Entry[]): string[] {
+  return entries
+    .filter(({ html }) => ldBodies(html).some((b) => hasKey(JSON.parse(b), CLAIM_KEYS)))
+    .map(({ rel }) => rel);
+}
+const citingInc = (entries: Entry[]): string[] =>
+  entries.filter(({ html }) => jsonLdStrings(html).some((x) => /inc\.com/i.test(x))).map(({ rel }) => rel);
+
+// Each phrase paired with a sentence it must catch: an emptied or mistyped pattern
+// then fails the self-test instead of reading as a clean scan.
+const BANNED_ATTRIBUTION: [RegExp, string][] = [
+  [/as seen in/i, "As seen in Inc."],
+  [/featured in inc/i, "Featured in Inc. magazine"],
+  [/next couple of years/i, "he said in the next couple of years"],
+  [/i would not be surprised/i, "I would not be surprised if"],
+  [/predicted in an interview with inc/i, "predicted in an interview with Inc.com"],
+  [/\btold inc\b/i, "He told Inc.com that"],
+  [/\bassigns?\b[^.]{0,30}\b(?:probabilit|likelihood|chance)/i, "Anthropic's CEO assigns 70-80% probability"],
+  [/\bpredict(?:s|ed)\b[^.]{0,30}\b70.{0,3}80/i, "he predicted a 70-80% chance"],
+];
+
+// Every text arm, each normalised through sentencesOf (whitespace, hidden characters).
+function attributionOffenders(entries: Entry[]): string[] {
+  const offenders: string[] = [];
+  for (const { rel, html } of entries) {
+    const live = [
+      ...sentencesOf(visibleText(html)),
+      ...attributeTexts(html).flatMap(sentencesOf),
+      ...jsonLdStrings(html).flatMap(sentencesOf),
+    ];
+    for (const [re] of BANNED_ATTRIBUTION) {
+      for (const t of live) if (re.test(t)) offenders.push(`${rel} matches ${re}: "${t.slice(0, 100)}"`);
+    }
+  }
+  return offenders;
+}
+
+// The Inc. source must be a real anchor in live markup, not text inside a comment,
+// <template> or <noscript>.
+const liveIncAnchor = (html: string): boolean => INC_SOURCE_RE.test(withoutInert(html));
+
+const NON_AFFILIATION = "is an independent product, not affiliated with, sponsored by, or endorsed by Anthropic.";
+const footerHasNonAffiliation = (html: string): boolean => {
+  const footer = withoutInert(html).match(/<footer[\s\S]*?<\/footer>/);
+  return footer !== null && plainText(footer[0]).includes(NON_AFFILIATION);
+};
+
+// Why an opening tag hides what it contains. Attributes are read quote-aware in all
+// three value forms, names case-insensitively; `hidden` hides whatever its value.
+const HIDING_CLASSES = ["sr-only", "visually-hidden", "hidden", "d-none"];
+function hidingReasons(openTag: string): string[] {
+  const why: string[] = [];
+  const attrs = new Map<string, string>();
+  const body = openTag.replace(/^<\s*[A-Za-z][A-Za-z0-9]*/, "");
+  for (const m of body.matchAll(/([^\s=/>"'`]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g)) {
+    // HTML keeps the FIRST of a duplicated attribute.
+    if (!attrs.has(m[1].toLowerCase())) attrs.set(m[1].toLowerCase(), m[2] ?? m[3] ?? m[4] ?? "");
+  }
+  if (attrs.has("hidden")) why.push("hidden attribute");
+  if ((attrs.get("aria-hidden") ?? "").toLowerCase() === "true") why.push("aria-hidden=true");
+  const style = (attrs.get("style") ?? "").toLowerCase().replace(/\/\*[\s\S]*?\*\//g, "");
+  if (/(?:^|;)\s*display\s*:\s*none/.test(style)) why.push("display:none");
+  if (/(?:^|;)\s*visibility\s*:\s*(?:hidden|collapse)/.test(style)) why.push("visibility:hidden");
+  if (/(?:^|;)\s*opacity\s*:\s*0(?:\.0+)?\s*(?:;|$|!)/.test(style)) why.push("opacity:0");
+  if (/(?:^|;)\s*(?:max-)?height\s*:\s*0(?![.\d])/.test(style)) why.push("height:0");
+  if (/(?:^|;)\s*font-size\s*:\s*0(?![.\d])/.test(style)) why.push("font-size:0");
+  if (/(?:^|;)\s*(?:-webkit-text-fill-|)color\s*:\s*transparent/.test(style)) why.push("transparent text");
+  if (/(?:^|;)\s*clip-path\s*:\s*inset\(\s*(?:50|100)%/.test(style)) why.push("clip-path");
+  if (/(?:^|;)\s*text-indent\s*:\s*-\d{3,}/.test(style)) why.push("text-indent");
+  for (const t of (attrs.get("class") ?? "").split(/\s+/).filter(Boolean)) {
+    if (HIDING_CLASSES.includes(t)) why.push(`class ${t}`);
+  }
+  return why;
+}
+
+// Every ancestor of `targetIndex` that hides its contents, with the reason. The walk starts
+// at the document root, so <html>, <body>, <main> and the hero section all count.
+function hiddenAncestors(doc: string, targetIndex: number): string[] {
+  return openAncestors(doc, targetIndex).flatMap((tag) => hidingReasons(tag).map((r) => `${tag}: ${r}`));
+}
+
+describe("#9579 Guard 3 — attribution (no false Inc.com subject claim, no unverified quotation)", () => {
+  test("loop self-test: every claim key is flagged, at the top level and nested, and an Inc.com string anywhere in JSON-LD is flagged", () => {
+    const ld = (extra: string) =>
+      `<script type="application/ld+json" nonce="x">{"@type":"Organization"${extra}}</script>`;
+    const flagged = pagesWithClaimKeys([
+      { rel: "index.html", html: ld("") },
+      { rel: "x/index.html", html: ld(',"subjectOf":{"@type":"NewsArticle"}') },
+    ]);
+    expect(flagged).toEqual(["x/index.html"]);
+    for (const key of CLAIM_KEYS) {
+      expect(pagesWithClaimKeys([{ rel: "top", html: ld(`,"${key}":"x"`) }]), `${key} at the top level`).toEqual(["top"]);
+      expect(pagesWithClaimKeys([{ rel: "deep", html: ld(`,"a":[{"b":{"${key}":"x"}}]`) }]), `${key} nested`).toEqual(["deep"]);
+    }
+    expect(citingInc([{ rel: "n", html: ld(',"a":[{"b":["see https://www.inc.com/x"]}]') }]), "nested Inc.com string").toEqual(["n"]);
+    expect(citingInc([{ rel: "ok", html: ld(',"a":"https://example.com"') }])).toEqual([]);
+  });
+
+  test("no built page declares a subjectOf/citation claim or cites Inc.com in structured data", () => {
+    const all = allPages();
+    expect(all.length, "pages scanned").toBeGreaterThanOrEqual(60);
+    expect(pagesWithClaimKeys(all)).toEqual([]);
+    expect(citingInc(all), "pages whose JSON-LD names Inc.com").toEqual([]);
+  });
+
+  test("banned-phrase self-test: every pattern catches its own sample", () => {
+    for (const [re, sample] of BANNED_ATTRIBUTION) expect(re.test(sample), `${re} catches "${sample}"`).toBe(true);
+  });
+
+  test("arm wiring: a banned phrase in only ONE arm (text, attribute, JSON-LD), including whitespace and hidden-character variants, is flagged", () => {
+    const phrase = "As seen in Inc.";
+    const spaced = "As seen  in Inc.";
+    const soft = String.fromCharCode(0xad);
+    const hidden = `As se${soft}en in Inc.`;
+    const wrapped = "As seen\n    in Inc.";
+    for (const p of [phrase, spaced, hidden, wrapped]) {
+      const label = JSON.stringify(p);
+      expect(attributionOffenders([synthetic("", `<p>${p}</p>`)]).length, `text ${label}`).toBeGreaterThan(0);
+      expect(attributionOffenders([synthetic(`<meta property="og:description" content="${p}">`, "")]).length, `attribute ${label}`).toBeGreaterThan(0);
+      expect(attributionOffenders([synthetic(LD(`{"@type":"Thing","description":${JSON.stringify(p)}}`), "")]).length, `JSON-LD ${label}`).toBeGreaterThan(0);
+    }
+    expect(attributionOffenders([synthetic("", "<p>Inc. reported it.</p>")]), "clean page").toEqual([]);
+  });
+
+  test("the Inc. source must be a live anchor and the non-affiliation line must sit in the footer element", () => {
+    const a = '<a href="https://www.inc.com/ben-sherry/x/1" rel="noopener">as Inc. reported</a>';
+    expect(liveIncAnchor(`<p>${a}</p>`), "live anchor").toBe(true);
+    expect(liveIncAnchor(`<!-- ${a} -->`), "anchor inside a comment").toBe(false);
+    expect(liveIncAnchor(`<noscript>${a}</noscript>`), "anchor inside noscript").toBe(false);
+    expect(liveIncAnchor(`<template>${a}</template>`), "anchor inside template").toBe(false);
+    expect(liveIncAnchor('<p>https://www.inc.com/ben-sherry/x/1</p>'), "bare text is not a link").toBe(false);
+    expect(liveIncAnchor('<a href="https://example.com/">https://www.inc.com/ben-sherry/x/1</a>'), "wrong target").toBe(false);
+    const line = `Soleur ${NON_AFFILIATION}`;
+    expect(footerHasNonAffiliation(`<footer><span>${line}</span></footer>`), "in footer").toBe(true);
+    expect(footerHasNonAffiliation(`<p>${line}</p><footer>x</footer>`), "outside the footer").toBe(false);
+    expect(footerHasNonAffiliation(`<footer><!-- ${line} --></footer>`), "comment in the footer").toBe(false);
+    expect(footerHasNonAffiliation(`<p>${line}</p>`), "no footer").toBe(false);
+  });
+
+  test("no marketing page carries 'As seen in', the old paraphrase, or a 'told Inc.' framing; the Inc. source stays a real link", () => {
+    const pages = marketingPages();
+    expect(pages.length, "marketing pages scanned").toBeGreaterThanOrEqual(20);
+    const offenders = attributionOffenders(pages);
+    expect(offenders, offenders.join("\n")).toEqual([]);
+    // The attribution is still present and is a real anchor (not text inside a comment).
+    for (const rel of ["index.html", "about/index.html", "vision/index.html", "company-as-a-service/index.html"]) {
+      expect(liveIncAnchor(readSite(rel)), `${rel} links the Inc. source`).toBe(true);
+    }
+    for (const rel of ["about/index.html", "vision/index.html"]) {
+      expect(plainText(readSite(rel)), `${rel} says "as Inc. reported"`).toContain("as Inc. reported");
+    }
+    expect(plainText(readSite("company-as-a-service/index.html")), "CaaS dates the Krieger title").toContain(
+      "then Anthropic’s chief product officer",
+    );
+  });
+
+  test("the homepage quote section carries no quotation marks and keeps the non-affiliation line", () => {
+    const home = withoutInert(readSite("index.html"));
+    const quote = home.match(/<section class="landing-quote">([\s\S]*?)<\/section>/);
+    expect(quote, "quote section present").not.toBeNull();
+    expect(/<(?:blockquote|q)[\s>]/i.test(quote![1]), "no quotation element in the quote section").toBe(false);
+    const text = plainText(quote![1]);
+    const quoteMarks = String.fromCharCode(0x22, 0x201c, 0x201d, 0xab, 0xbb);
+    expect([...text].filter((c) => quoteMarks.includes(c)), "no quotation marks around the attribution").toEqual([]);
+    expect(text.includes("not affiliated with"), "non-affiliation line sits in the quote section").toBe(true);
+  });
+
+  test("the site-wide non-affiliation line is in the footer element itself", () => {
+    for (const rel of ["index.html", "pricing/index.html", "about/index.html"]) {
+      expect(footerHasNonAffiliation(readSite(rel)), `${rel} footer line`).toBe(true);
+    }
+  });
+});
+
+describe("#9579 hiding predicate — which opening tags hide their contents", () => {
+  test.each([
+    ["<form hidden>", "hidden attribute"],
+    ['<form hidden="">', "hidden attribute"],
+    ["<form hidden=hidden>", "hidden attribute"],
+    ['<form HIDDEN class="x">', "hidden attribute"],
+    ['<form hidden="until-found">', "hidden attribute"],
+    ['<div aria-hidden="true">', "aria-hidden=true"],
+    ["<div aria-hidden='true'>", "aria-hidden=true"],
+    ['<div style="display:none">', "display:none"],
+    ["<div style='display: none'>", "display:none"],
+    ["<div style=display:none>", "display:none"],
+    ['<div style="margin:0; visibility:hidden">', "visibility:hidden"],
+    ['<div style="opacity:0">', "opacity:0"],
+    ['<div style="height:0;overflow:hidden">', "height:0"],
+    ['<div style="max-height:0">', "height:0"],
+    ['<div style="font-size:0">', "font-size:0"],
+    ['<div style="color:transparent">', "transparent text"],
+    ['<div style="-webkit-text-fill-color:transparent">', "transparent text"],
+    ['<div style="clip-path:inset(100%)">', "clip-path"],
+    ['<div style="text-indent:-9999px">', "text-indent"],
+    ['<div style="display:/**/none">', "display:none"],
+    ['<div style="opacity: 0.0">', "opacity:0"],
+    ['<div style="display:none" style="color:red">', "display:none"],
+    ['<div class="card sr-only">', "class sr-only"],
+    ["<div class='d-none'>", "class d-none"],
+    ["<div class=visually-hidden>", "class visually-hidden"],
+    ['<div class="hidden">', "class hidden"],
+  ])("%s hides (%s)", (tag, reason) => {
+    expect(hidingReasons(tag)).toContain(reason);
+  });
+
+  test("hiddenAncestors reports every hiding ancestor, outermost first, and only those", () => {
+    const doc = (open: string) => `<html><body><main>${open}<section class="landing-hero"><div><p id="t">x</p></div></section></main></body></html>`;
+    const at = (html: string) => html.indexOf('<p id="t">');
+    const clean = doc("");
+    expect(hiddenAncestors(clean, at(clean)), "clean document").toEqual([]);
+    for (const [open, why] of [
+      ["<div hidden>", "hidden attribute"], ["<div style='display:none'>", "display:none"],
+      ['<div aria-hidden="true">', "aria-hidden=true"], ['<div class="d-none">', "class d-none"],
+    ] as const) {
+      const html = doc(open);
+      const got = hiddenAncestors(html, at(html));
+      expect(got.length, `${open} reported once`).toBe(1);
+      expect(got[0], `${open} reason`).toContain(why);
+    }
+    const body = clean.replace("<body>", "<body hidden>");
+    expect(hiddenAncestors(body, at(body)).join(), "the walk includes <body>").toContain("<body hidden>");
+    const html2 = clean.replace("<html>", '<html style="display:none">');
+    expect(hiddenAncestors(html2, at(html2)).join(), "the walk includes <html>").toContain("display:none");
+    const closed = '<div hidden></div><section><p id="t">x</p></section>';
+    expect(hiddenAncestors(closed, closed.indexOf('<p id="t">')), "a closed hidden sibling is not an ancestor").toEqual([]);
+  });
+
+  test.each([
+    '<div class="card">', '<div style="margin:0">', '<div style="opacity:0.5">', '<div style="height:0.5rem">',
+    '<div aria-hidden="false">', '<div data-hidden="x">', '<div style="color:red" style="display:none">', '<div style="opacity:0.05">', '<div style="color:#fff">', "<section>", '<a href="/x" title="hidden">',
+  ])("%s does not hide", (tag) => {
+    expect(hidingReasons(tag)).toEqual([]);
+  });
+});
+
+describe("#9579 hero structure — privacy line visible, one install CTA, hosted form labelled, compare link", () => {
+  const classTokens = (attrs: string): string[] =>
+    (attrs.match(/\bclass="([^"]*)"/)?.[1] ?? "").split(/\s+/).filter(Boolean);
+
+  test("hero follows the committed wireframe contract", () => {
+    // Inert markup (comments, <template>, <noscript>) is not what a visitor sees.
+    const live = withoutInert(readSite("index.html"));
+    const hero = live.match(/<section class="landing-hero">([\s\S]*?)<\/section>/);
+    expect(hero, "hero section present").not.toBeNull();
+    const h = hero![1];
+
+    // Privacy line: visible, id kept, described-by resolves, same text as /pricing/.
+    const privOpen = h.match(/<p([^>]*\bid="homepage-waitlist-privacy"[^>]*)>([\s\S]*?)<\/p>/);
+    expect(privOpen, "privacy <p> present").not.toBeNull();
+    const tokens = classTokens(privOpen![1]);
+    expect(tokens, "privacy line uses the visible newsletter-privacy class").toContain("newsletter-privacy");
+    for (const hiding of HIDING_CLASSES) {
+      expect(tokens.includes(hiding), `privacy line is not class ${hiding}`).toBe(false);
+    }
+    expect(/\bhidden\b|\bstyle=/.test(privOpen![1].replace(/\bclass="[^"]*"/, "")), "privacy line has no hidden/style attribute").toBe(false);
+    // Nor does any element that contains it (the walk starts at the document root, so the
+    // hero section, <main> and <body> count too).
+    expect(hidingReasons(`<p${privOpen![1]}>`), "privacy line's own tag hides nothing").toEqual([]);
+    const heroAt = live.indexOf(hero![0]);
+    const ancestors = openAncestors(live, heroAt + hero![0].indexOf(privOpen![0]));
+    expect(ancestors.length, "privacy line sits inside the hero's markup").toBeGreaterThan(2);
+    expect(hiddenAncestors(live, heroAt + hero![0].indexOf(privOpen![0])), "no ancestor of the privacy line hides it").toEqual([]);
+    expect(h.includes('aria-describedby="homepage-waitlist-privacy"'), "input described by the privacy line").toBe(true);
+    const pricing = withoutInert(readSite("pricing/index.html"));
+    const pPriv = pricing.match(/<p[^>]*\bid="newsletter-privacy-pricing-waitlist"[^>]*>([\s\S]*?)<\/p>/);
+    expect(pPriv, "pricing privacy <p> present").not.toBeNull();
+    const heroPriv = plainText(privOpen![2]);
+    expect(heroPriv, "hero and pricing privacy text are identical").toBe(plainText(pPriv![1]));
+    expect(heroPriv, "names the processor").toContain("Buttondown");
+    expect(heroPriv, "links the Privacy Policy").toContain("Privacy Policy");
+
+    // Exactly one primary CTA in the hero: the tagged self-hosted install link.
+    const primaries = [...h.matchAll(/\bclass="([^"]*)"/g)].filter((m) =>
+      m[1].split(/\s+/).includes("btn-primary"),
+    );
+    expect(primaries.length, "exactly one btn-primary in the hero").toBe(1);
+    const installs = [...h.matchAll(/<a\s([^>]*)>([\s\S]*?)<\/a>/g)].filter((m) =>
+      /\bhref="\/getting-started\/#self-hosted"/.test(m[1]),
+    );
+    expect(installs.length, "exactly one install CTA").toBe(1);
+    const installTokens = classTokens(installs[0][1]);
+    expect(installTokens, "install CTA is the primary button").toContain("btn-primary");
+    expect(installTokens, "install CTA is tagged for Plausible via its class").toContain(
+      "plausible-event-name=Hero+Self-host+Click",
+    );
+    const installText = plainText(installs[0][2]);
+    expect(installText, "install button label").toBe("Get the self-hosted version");
+    expect(/\bfree\b/i.test(installText), "no 'free' on the install button").toBe(false);
+
+    // Hosted submit is secondary; one compare link; old links gone.
+    const form = h.match(/<form[\s\S]*?<\/form>/);
+    expect(form, "hosted form present").not.toBeNull();
+    expect(/<button type="submit" class="btn btn-secondary">/.test(form![0]), "hosted submit is secondary").toBe(true);
+    expect(h.includes('href="/compare/soleur-vs-cursor/"'), "hero links the Cursor comparison page").toBe(true);
+    expect(h.includes('href="#soleur-vs-copilots"'), "old in-page anchor link removed from the hero").toBe(false);
+
+    // Plan line is two separate sentences; hosted one says API key only.
+    const sentences = sentencesOf(visibleText(h));
+    expect(sentences.some((s) => s.startsWith("Self-hosted runs inside your own Claude Code")), "self-hosted plan sentence").toBe(true);
+    const hostedLine = sentences.find((s) => s.startsWith("Hosted version (coming soon): bring your own Anthropic API key"));
+    expect(hostedLine, "hosted plan sentence present").toBeDefined();
+    expect(hostedLine!.includes("billed by Anthropic to you"), "hosted sentence names who bills").toBe(true);
+  });
+
+  test("a Discord line follows the FAQ list inside the FAQ section and uses site.discord", () => {
+    // Live markup only: a link moved into a comment is not a link.
+    const html = withoutInert(readSite("index.html"));
+    const discord = JSON.parse(readFileSync(SITE_JSON, "utf8")).discord as string;
+    const faqStart = html.indexOf('class="faq-list"');
+    expect(faqStart, "FAQ list located").toBeGreaterThan(-1);
+    const sectionEnd = html.indexOf("</section>", faqStart);
+    const lastItemEnd = html.lastIndexOf("</details>", sectionEnd);
+    const linkPos = html.indexOf(`href="${discord}"`, lastItemEnd);
+    // The footer also links Discord, so the link must sit before the FAQ section closes.
+    expect(linkPos > lastItemEnd && linkPos < sectionEnd, "Discord link sits after the last FAQ item, before the section closes").toBe(true);
+    expect(plainText(html.slice(lastItemEnd, sectionEnd)), "line names Discord").toContain("Discord");
   });
 });
