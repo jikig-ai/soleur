@@ -45,13 +45,22 @@ url=""
 out=""
 data=""
 header_auth=0
+argv_leak=0
+cfg=""
+first="\${1:-}"
+# The bearer must never be on argv; it arrives as a curl config on stdin.
+for a in "\$@"; do
+  case "\$a" in *"Authorization"*|*"\${CF_ADMIN_TOKEN:-@@none@@}"*) argv_leak=1 ;; esac
+done
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
     -X) method="\$2"; shift 2 ;;
     -o) out="\$2"; shift 2 ;;
     --data|-d) data="\$2"; shift 2 ;;
     --data-binary) data="\$2"; shift 2 ;;
-    -H) [[ "\$2" == *"Authorization: Bearer"* ]] && header_auth=1; shift 2 ;;
+    -H) [[ "\$2" == *"Authorization: Bearer"* ]] && argv_leak=1; shift 2 ;;
+    --config) cfg="\$2"; shift 2 ;;
+    --noproxy) shift 2 ;;
     --max-time) shift 2 ;;
     -fsS|-fS|-s|-S|-f|-i|--silent|--fail) shift ;;
     --) shift ;;
@@ -59,6 +68,10 @@ while [[ \$# -gt 0 ]]; do
     *) url="\$1"; shift ;;
   esac
 done
+if [[ "\$cfg" == "-" ]]; then
+  cfg_in=\$(cat)
+  [[ "\$cfg_in" == 'header = "Authorization: Bearer '*'"' ]] && header_auth=1
+fi
 # Read next response: STATUS<TAB>BODY
 read -r line < "\$queue" || { echo "curl stub: queue empty" >&2; exit 99; }
 sed -i '1d' "\$queue"
@@ -74,8 +87,8 @@ case "\$data" in
   *lock-put-modified.json)     data_tag=put-modify  ;;
   *)                           data_tag=""          ;;
 esac
-printf 'method=%s url=%s header_auth=%s cf_admin_in_env=%s data_len=%s data_tag=%s\n' \
-  "\$method" "\$url" "\$header_auth" "\$cf_admin_present" "\${#data}" "\$data_tag" >> "\$log"
+printf 'method=%s url=%s header_auth=%s argv_leak=%s first=%s cf_admin_in_env=%s data_len=%s data_tag=%s\n' \
+  "\$method" "\$url" "\$header_auth" "\$argv_leak" "\$first" "\$cf_admin_present" "\${#data}" "\$data_tag" >> "\$log"
 if [[ -n "\$out" ]]; then
   printf '%s' "\$body" > "\$out"
 else
@@ -275,6 +288,15 @@ if run_sut --shape=enabled-false >"$work/out.a" 2>&1; then
   # 4 lock-API curls + 1 verify + 1 token DELETE = 5 calls; aws: 2 calls.
   if [[ $(wc -l < "$work/curl.log") -eq 5 ]] && [[ $(wc -l < "$work/aws.log") -eq 2 ]]; then
     green "PASS: TS-OVERRIDE.a Shape A happy path (5 curl + 2 aws calls)"
+    # Every credentialed curl: bearer arrived on stdin config (header_auth=1),
+    # never on argv (argv_leak=0), with --disable as the first argument.
+    if [[ $(grep -c 'header_auth=1 argv_leak=0 first=--disable ' "$work/curl.log") -eq 5 ]]; then
+      green "PASS: TS-OVERRIDE.a all 5 curls carry the bearer on stdin, none on argv, --disable first"
+    else
+      red "FAIL: TS-OVERRIDE.a bearer channel wrong on at least one curl"
+      sed 's/^/  /' "$work/curl.log" >&2
+      fail=1
+    fi
   else
     red "FAIL: TS-OVERRIDE.a call counts off (curl=$(wc -l < "$work/curl.log") aws=$(wc -l < "$work/aws.log"))"
     sed 's/^/  /' "$work/curl.log" "$work/aws.log" >&2
@@ -453,8 +475,13 @@ R2_CLA_EVIDENCE_SECRET="$FP_HMAC" \
   ADMIN_ACTOR=stub@stub.invalid \
   GDPR_OVERRIDE_MAIN_TEST_SH="$work/main.test.sh" \
   GDPR_OVERRIDE_SENTINEL_DIR="$work/sentinel" \
-    bash -x "$SUT" --shape=enabled-false >"$work/out.j" 2>"$work/trace.j" || true
-if grep -F -- "$FP_BEARER" "$work/trace.j" >/dev/null \
+    bash -x "$SUT" --shape=enabled-false >"$work/out.j" 2>"$work/trace.j" || j_rc=$?
+# The script refuses to run under xtrace (exit 78, before any credential is bound), so
+# the trace must carry neither fingerprint AND the refusal must have fired.
+if [[ "${j_rc:-0}" -ne 78 ]] || ! grep -qF 'refusing to run under xtrace' "$work/trace.j"; then
+  red "FAIL: TS-OVERRIDE.j expected the xtrace refusal (rc=78); got rc=${j_rc:-0}"
+  fail=1
+elif grep -F -- "$FP_BEARER" "$work/trace.j" >/dev/null \
    || grep -F -- "$FP_HMAC" "$work/trace.j" >/dev/null; then
   red "FAIL: TS-OVERRIDE.j secret fingerprint leaked into xtrace output"
   grep -nF -- "$FP_BEARER" "$work/trace.j" | head -3 >&2 || true

@@ -5950,7 +5950,11 @@ describe("the ARM gate's deadlines fit its job", () => {
     // and then fires EXIT too, and bash defers the handler until the foreground `sleep` returns.
     expect(stripped).not.toMatch(/^\s*trap\b/m);
     // ONE PATCH implementation, with real status-code semantics rather than `-f` (#7658 E6).
-    expect(stripped.match(/curl\b/g)?.length).toBe(2);
+    // Since #7797 the bearer rides curl's stdin config channel, so the transport flags, the token
+    // guard and the header live in ONE wrapper (`bs_api`) holding the file's only `curl`; the two
+    // call sites (the GET and the PATCH) go through it, so what is pinned is one curl + two calls.
+    expect(stripped.match(/curl\b/g)?.length).toBe(1);
+    expect(stripped.match(/\$\(bs_api /g)?.length).toBe(2);
     expect(stripped).toMatch(/-w '%\{http_code\}'/);
     expect(stripped).toMatch(/\[\[ "\$HB_PATCH_CODE" =~ \^2 \]\]/);
     // The sweep's outcome vocabulary is closed and documented in the same file.
