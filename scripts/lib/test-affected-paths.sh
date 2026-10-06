@@ -877,6 +877,15 @@ AFFECTED_TESTS_SCRIPTS_BETTERSTACK_ROUNDTRIP_LATENCY_PATHS=(
   "tests/scripts/test-betterstack-roundtrip-latency.sh"
 )
 
+# tests/scripts/argv-bearer-sweep (#7843) — derived edges could not reach its subject: the population is
+# DISCOVERED (every tracked scripts/followthroughs probe holding a credentialed curl, run under a PATH-shim
+# curl), so the edge is the directory prefix, and the rows are keyed off the Rule E baseline.
+AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
+  "scripts/followthroughs/"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+)
+
 # tests/scripts/rule-id-regex-parity — derived edges could not reach its subject; declared from the
 # repo paths its suite file names.
 AFFECTED_TESTS_SCRIPTS_RULE_ID_REGEX_PARITY_PATHS=(

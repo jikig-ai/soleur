@@ -82,6 +82,7 @@ import {
   resolveBestEffortEvalOk,
   resolveOutputAwareOk,
   ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS,
+  COMMUNITY_SPAWN_TOKEN_PERMISSIONS,
   TIER2_DEFERRED_CRONS,
   verifyScheduledIssueCreated,
 } from "@/server/inngest/functions/_cron-shared";
@@ -223,6 +224,19 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     // issue-creator crons — defense-in-depth beneath the containment hook.
     expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS).not.toHaveProperty("pull_requests");
     expect(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS.contents).not.toBe("write");
+  });
+
+  it("COMMUNITY_SPAWN_TOKEN_PERMISSIONS is exactly contents/issues/pull_requests all read (#7122)", () => {
+    expect(COMMUNITY_SPAWN_TOKEN_PERMISSIONS).toEqual({
+      contents: "read",
+      issues: "read",
+      pull_requests: "read",
+    });
+    // The spawn credential carries NO write value at the token layer — the write
+    // token is minted only after the child has exited.
+    expect(Object.values(COMMUNITY_SPAWN_TOKEN_PERMISSIONS)).not.toContain("write");
+    // Distinct scope from the issue-creator preset (which holds issues:write).
+    expect(COMMUNITY_SPAWN_TOKEN_PERMISSIONS).not.toEqual(ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS);
   });
 
   it("ALL Tier-2 crons restored — TIER2_DEFERRED_CRONS is EMPTY (#5199)", () => {
@@ -900,6 +914,84 @@ describe("ensureScheduledAuditIssue (shared fallback)", () => {
       calls.find((c) => c.route.startsWith("POST"))!.params.body,
     );
     expect(body).toContain("(empty)");
+  });
+
+  // #7122 — withholdModelOutput: the community monitor's spawn tail is
+  // attacker-influenced model output and the audit issue is PUBLIC, so BOTH tail
+  // rows render a fixed sentinel (the redacted tail still reaches Sentry).
+  describe("withholdModelOutput (#7122)", () => {
+    const WITHHELD = "(withheld - model output is not published; see Sentry)";
+    const HOSTILE = {
+      ...SPAWN,
+      stdoutTail: "visit www.evil.example-free-money now",
+      stderrTail: "second-channel hostile-stderr-marker",
+    };
+    const ARGS = {
+      label: "scheduled-community-monitor",
+      titlePrefix: "[Scheduled] Community Monitor -",
+      cronName: "cron-community-monitor",
+      runStartedAt: RUN_STARTED_AT,
+    } as const;
+
+    async function bodyFor(extra: { withholdModelOutput?: boolean }, spawn = HOSTILE) {
+      const { octokit, calls } = fakeOctokit([]);
+      await ensureScheduledAuditIssue({ ...ARGS, spawnResult: spawn, octokit, ...extra });
+      const post = calls.find((c) => c.route.startsWith("POST"));
+      expect(post, "the audit issue POST never happened").toBeDefined();
+      expect(post!.params.body).toBeTypeOf("string");
+      return String(post!.params.body);
+    }
+
+    it("true: BOTH stdoutTail and stderrTail rows render the sentinel and no model bytes", async () => {
+      const body = await bodyFor({ withholdModelOutput: true });
+      expect(body).toContain(`| stdoutTail | \`${WITHHELD}\` |`);
+      expect(body).toContain(`| stderrTail | \`${WITHHELD}\` |`);
+      expect(body).not.toContain("www.evil.example-free-money");
+      expect(body).not.toContain("hostile-stderr-marker");
+      // The non-model signal rows are untouched (triage still works without the tails).
+      expect(body).toContain("| exitCode | `1` |");
+      expect(body).toContain("| durationMs | `368727` |");
+    });
+
+    it("true: an empty tail is also withheld (the sentinel replaces the (empty) form)", async () => {
+      const body = await bodyFor(
+        { withholdModelOutput: true },
+        { ...SPAWN, stdoutTail: "", stderrTail: "" },
+      );
+      expect(body).toContain(`| stdoutTail | \`${WITHHELD}\` |`);
+      expect(body).not.toContain("(empty)");
+    });
+
+    it("false and omitted: tails render exactly as before (same bytes as the pre-change body)", async () => {
+      const omitted = await bodyFor({});
+      const explicitFalse = await bodyFor({ withholdModelOutput: false });
+      expect(explicitFalse).toBe(omitted);
+      expect(omitted).toContain("| stdoutTail | `visit www.evil.example-free-money now` |");
+      expect(omitted).toContain("| stderrTail | `second-channel hostile-stderr-marker` |");
+      expect(omitted).not.toContain("withheld");
+    });
+
+    it("default body is byte-identical to the pre-#7122 template", async () => {
+      const body = await bodyFor({}, SPAWN);
+      expect(body).toBe(
+        "Automated FAILED self-report from `cron-community-monitor`.\n\n" +
+          "This run terminated WITHOUT producing a `scheduled-community-monitor` " +
+          "audit issue via the prompt (mid-eval crash / upstream API error / " +
+          "max-turns kill). The handler-level fallback (#4960) filed this issue so " +
+          "the run is not silent and the `cron-cloud-task-heartbeat` watchdog " +
+          "stays green.\n\n" +
+          "| Signal | Value |\n| --- | --- |\n" +
+          "| fn | `cron-community-monitor` |\n" +
+          `| runStartedAt | \`${RUN_STARTED_AT}\` |\n` +
+          "| exitCode | `1` |\n" +
+          "| signal | `null` |\n" +
+          "| abortedByTimeout | `false` |\n" +
+          "| durationMs | `368727` |\n" +
+          "| stdoutTail | `API Error: 500 Internal server error.` |\n" +
+          "| stderrTail | `(empty)` |\n\n" +
+          "Triage: `knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md` (H2).",
+      );
+    });
   });
 
   it("throws when neither octokit nor installationToken is provided", async () => {

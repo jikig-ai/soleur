@@ -63,15 +63,19 @@
 #   entries, not a vendor guarantee.
 #   Rate limit seen: 3600 requests/hour per project; one gate run costs one request per planned create.
 #   Probe by hand (read-only token; never paste a token into a transcript):
-#     curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY" \
-#       "https://api.hetzner.cloud/v1/server_types?name=<type>" | jq '.server_types[].locations'
+#     curl --disable --noproxy '*' -sS --config - "https://api.hetzner.cloud/v1/server_types?name=<type>" \
+#       < <(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN_READONLY") | jq '.server_types[].locations'
+#   (the token rides curl's stdin config channel, never its argument list; printf is the shell builtin)
 #
 # ENV SURFACE — what each variable can and cannot do. No variable this library defines forces a pass directly.
-#   HCLOUD_API redirects the single call and the bearer token with it, so a stub behind it returning
-#   `available:true` WOULD authorize: a non-default value is announced with a ::warning:: naming the host
-#   (userinfo, path and query stripped); no workflow in this repo sets it. curl's own environment (HTTPS_PROXY, CA
-#   bundle, ~/.curlrc) steers the same call and is not announced. A Doppler write already gives code execution on
-#   the runner, so this is disclosure, not a barrier. HCLOUD_TOKEN is read per call. STOCK_PREFLIGHT_EU_LOCATIONS
+#   HCLOUD_API would redirect the single call and the bearer token with it, so a stub behind it returning
+#   `available:true` WOULD authorize. It is therefore PINNED (#7797): the real transport (_stock_fetch) refuses to
+#   send the token to anything but the production base and makes ZERO requests (api_error=endpoint_not_pinned on the
+#   abort line); a non-default value is also announced with a ::warning:: naming the host (userinfo, path and query
+#   stripped). No workflow in this repo sets it; a test that needs another destination shims `curl` on PATH. curl is
+#   run with `--disable` (no ~/.curlrc) and `--noproxy '*'`, so its own environment no longer steers the call.
+#   HCLOUD_TOKEN is read per call and must match the token-shape allowlist, else ZERO requests are made
+#   (api_error=token_unusable). STOCK_PREFLIGHT_EU_LOCATIONS
 #   only feeds the advisory "orderable in EU" text and can never change the verdict or the exit code.
 # ACCEPTED LIMITS of the jq read, each needing a hostile TLS endpoint or code execution on the runner (either
 #   already holds full authority): duplicate JSON keys within one object resolve last-wins (jq's parser; Hetzner
@@ -115,8 +119,21 @@ _STOCK_DEFAULT_API="https://api.hetzner.cloud/v1"
 HCLOUD_API="${HCLOUD_API:-$_STOCK_DEFAULT_API}"
 # `--fail-with-body` (curl >= 7.76): a non-2xx answer exits 22 and still prints the body. Without it `curl -sS`
 # exits 0 on a 410, and the caller would have to guess from the body alone whether it was told "no".
+#
+# THE BEARER RIDES CURL'S STDIN CONFIG CHANNEL (`--config -`), fed by a process substitution whose `printf` is the shell
+# builtin, so it is in no process's argument list (/proc/<pid>/cmdline, `ps`). Two refusals precede any request, each a
+# non-zero return with a one-line JSON error body that _stock_api_error turns into `api_error=<code>` (the "NOT transient"
+# arm of the abort text): the destination is not the pinned production base (endpoint_not_pinned), or the token is empty or
+# of a shape that could inject a curl config line (token_unusable). The token value is never echoed.
+_stock_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 _stock_fetch() {
-  curl -sS --fail-with-body --max-time 20 -H "Authorization: Bearer ${HCLOUD_TOKEN:-}" "${HCLOUD_API}$1"
+  [[ "$HCLOUD_API" == "$_STOCK_DEFAULT_API" ]] || { printf '{"error":{"code":"endpoint_not_pinned"}}'; return 2; }
+  if ! _stock_bearer_ok "${HCLOUD_TOKEN:-}"; then
+    printf '{"error":{"code":"token_unusable"}}'
+    return 2
+  fi
+  curl --disable --noproxy '*' -sS --fail-with-body --max-time 20 --config - "${HCLOUD_API}$1" \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$HCLOUD_TOKEN")
 }
 
 # _stock_verdict <types_json> <type> <loc>

@@ -60,6 +60,10 @@ The **exit criterion** for this residual is Option C.
 - **D — path remap** (bind own to a sandbox-private mountpoint outside `/workspaces`): needs
   src≠dest bind, absent from the SDK. Dead.
 
+> **Addendum — 2026-10-06 (#9601):** this ADR covers filesystem read isolation between tenants. The owner's Anthropic
+> credential in the agent's own environment is a separate property, recorded in [ADR-272](./ADR-272-agent-credential-isolation-via-sandbox-credentials-deny.md)
+> (per-variable `sandbox.credentials` deny; the subprocess env scrub was rejected there).
+
 ## Consequences
 
 - The agent regains read+write of its own workspace; every existing sibling stays hidden.

