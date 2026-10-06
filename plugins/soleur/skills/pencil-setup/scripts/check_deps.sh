@@ -194,7 +194,7 @@ detect_pencil_cli() {
     return 1
   fi
   # Guard against evolus/pencil name collision
-  if pencil --version 2>&1 | grep -qi "pencil\.dev\|pencil v"; then
+  if grep -qi "pencil\.dev\|pencil v" < <(pencil --version 2>&1); then
     return 0
   fi
   # If --version doesn't confirm pencil.dev, check if mcp-server subcommand exists
@@ -207,11 +207,11 @@ detect_pencil_desktop() {
     macos)
       [[ -d "/Applications/Pencil.app" ]] && return 0
       # Spotlight fallback for non-standard install locations
-      mdfind "kMDItemCFBundleIdentifier == 'dev.pencil.desktop'" 2>/dev/null | grep -q . && return 0
+      grep -q . < <(mdfind "kMDItemCFBundleIdentifier == 'dev.pencil.desktop'" 2>/dev/null) && return 0
       ;;
     linux)
       # Check .deb installation
-      dpkg -s pencil 2>/dev/null | grep -q "Status:.*installed" && return 0
+      grep -q "Status:.*installed" < <(dpkg -s pencil 2>/dev/null) && return 0
       # Check AppImage
       find_appimage >/dev/null && return 0
       ;;

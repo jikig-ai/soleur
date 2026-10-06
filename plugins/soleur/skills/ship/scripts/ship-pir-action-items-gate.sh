@@ -141,7 +141,7 @@ check_one() {
   fi
   # Shape (b): no items, so the permitted sentence is the ONLY valid form. Anchored at column 0
   # so the template's own instructional prose (a backticked copy mid-sentence) cannot satisfy it.
-  if printf '%s\n' "$sec" | grep -qE "$SENTENCE_RE"; then
+  if grep -qE "$SENTENCE_RE" <<<"$sec"; then
     printf '[PASS] %s\n' "$f"
     return 0
   fi

@@ -19,7 +19,9 @@
 // WORKFLOW_END_USER_MESSAGES verbatim (pinned by the parity test in
 // test/session-ended-copy.test.tsx): that map feeds the non-terminal
 // `{ type: "error" }` path, this one feeds the terminal
-// `session_ended` path.
+// `session_ended` path. Sibling module lib/workflow-ended-copy.ts ›
+// workflowEndedCopy delegates here for the `workflow_ended` transcript
+// card (sentence register) and carries its own terse badge map.
 
 import type { WorkflowEndStatus } from "./types";
 

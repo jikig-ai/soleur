@@ -78,7 +78,7 @@ for path in "${preflight_paths[@]}"; do
     echo "::error::Could not fetch ${path} from main" >&2
     exit 1
   fi
-  if ! echo "$contents_b64" | base64 -d | grep -qF "$NEW_CHECK"; then
+  if ! grep -qF "$NEW_CHECK" < <(base64 -d <<<"$contents_b64"); then
     echo "::error::${path} on main does NOT include '$NEW_CHECK'." >&2
     echo "         Merge Phase 2 first, then re-run this script." >&2
     exit 1

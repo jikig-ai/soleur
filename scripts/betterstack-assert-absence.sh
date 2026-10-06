@@ -189,7 +189,7 @@ run_count() {
     printf 'UNPARSEABLE (expected exactly one "n" field, found %s)\n%s\n' "$n_matches" "$out" >&2
     return 1
   fi
-  if printf '%s' "$out" | grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error'; then
+  if grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error' <<<"$out"; then
     printf 'UNPARSEABLE (the response carries an error alongside the count — a partial answer is not an answer)\n%s\n' "$out" >&2
     return 1
   fi

@@ -881,14 +881,14 @@ self_test() {
   st_check "green fixture compared 3" "compared=3 expected=3" \
     "$(printf '%s\n' "$out" | sed -n 's/^canary-counts| //p')"
   st_check "green fixture emits the holds line" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| every delivery assertion holds at ' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| every delivery assertion holds at ' <<<"$out" && echo yes || echo no)"
 
   # 2. A missing delivered file — the under-delivery shape.
   rm -f "$root/del/a/two.md"
   st_run "$root/del" "$root/ref" "$sha_current" "$sha_current" ""
   st_check "missing file exits 1" "1" "$rc"
   st_check "missing file reports incomplete_delivery" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| incomplete_delivery: ' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| incomplete_delivery: ' <<<"$out" && echo yes || echo no)"
   cp -- "$root/ref/a/two.md" "$root/del/a/two.md" || { echo "FATAL: cp failed" >&2; exit 2; }
 
   # 3. The SECOND file in sort order corrupted, the first identical — a loop
@@ -897,7 +897,7 @@ self_test() {
   st_run "$root/del" "$root/ref" "$sha_current" "$sha_current" ""
   st_check "second-file corruption exits 1" "1" "$rc"
   st_check "second-file corruption names the file" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE "^canary-finding\| content_mismatch: 'a/two\.md' " && echo yes || echo no)"
+    "$(grep -qE "^canary-finding\| content_mismatch: 'a/two\.md' " <<<"$out" && echo yes || echo no)"
   cp -- "$root/ref/a/two.md" "$root/del/a/two.md" || { echo "FATAL: cp failed" >&2; exit 2; }
 
   # 4. An OLDER but internally consistent commit: freshness RED alone.
@@ -917,14 +917,14 @@ self_test() {
   st_run "$root/del" "$root/ref" "$sha_current" "$sha_current" ""
   st_check "empty reference body exits 1" "1" "$rc"
   st_check "empty reference body is reference_unreadable" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| reference_unreadable: ' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| reference_unreadable: ' <<<"$out" && echo yes || echo no)"
 
   # 7. An HTML error page where the delivered file is not HTML.
   printf '<!DOCTYPE html>\n<html><body>404</body></html>\n' > "$root/ref/three.sh"
   st_run "$root/del" "$root/ref" "$sha_current" "$sha_current" ""
   st_check "html error page exits 1" "1" "$rc"
   st_check "html error page is reference_unreadable" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| reference_unreadable: ' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| reference_unreadable: ' <<<"$out" && echo yes || echo no)"
   printf 'content of three.sh\n' > "$root/ref/three.sh"
 
   # 8. No reference listing at all: the completeness conjunct is UNAVAILABLE and
@@ -946,11 +946,11 @@ self_test() {
   set -e
   st_check "unresolved installPath exits 1" "1" "$rc"
   st_check "unresolved installPath token" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| installpath_unresolved: ' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| installpath_unresolved: ' <<<"$out" && echo yes || echo no)"
   st_check "unresolved installPath fails on cardinality" "yes" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| incomplete_delivery: compared=0' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| incomplete_delivery: compared=0' <<<"$out" && echo yes || echo no)"
   st_check "unresolved installPath never claims the assertions hold" "no" \
-    "$(printf '%s\n' "$out" | grep -qE '^canary-finding\| every delivery assertion holds' && echo yes || echo no)"
+    "$(grep -qE '^canary-finding\| every delivery assertion holds' <<<"$out" && echo yes || echo no)"
 
   rm -rf "$root"
 

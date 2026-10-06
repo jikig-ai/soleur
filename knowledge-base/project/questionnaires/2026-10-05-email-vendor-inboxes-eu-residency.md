@@ -2,7 +2,7 @@
 recipient_role: email infrastructure vendor
 needed_by: 2026-10-16
 blocked_decision: whether Resend Inboxes can be used for inbound email that must stay in the European Union, for individual users and for automated agents
-status: sent
+status: answered
 ---
 
 # Questions for my email infrastructure vendor
@@ -76,6 +76,36 @@ Is there a question I should have put on this list? Write it here with your answ
 >
 
 ## Answers
+
+Received 2026-10-05, from the vendor's founder and chief executive, the same day it was sent. Transcribed by
+question; quoted only where the exact wording is a commitment or a figure.
+
+**Overall: Inboxes does not meet the first condition (EU-only storage).** The vendor states it would rather
+say so now than have me wait for the deadline, and advises not to build on Inboxes for this requirement.
+
+1. **EU-only storage and processing: no.** All stored data (bodies, headers, attachments, metadata, logs,
+   backups) is in the United States.
+2. **Regions:** inbound mail is accepted in a receiving region tied to the domain (the Ireland region, eu-west-1,
+   is available), but storage, indexing and backups are in the US, so copies leave the EU.
+3. **Transfer mechanism:** Standard Contractual Clauses plus the EU-U.S. Data Privacy Framework. Quote: "We can't
+   commit in the DPA to EU-only storage or processing."
+4. **Retention:** inbox threads are kept until deleted. Quote: the formal retention policy for Inboxes "is being
+   finalized before GA." No per-inbox or per-message retention setting today.
+5. **Deletion:** a thread (moves to trash) and an inbox can be deleted through the API; the account can be deleted
+   from team settings. Backups are kept for 7 days; data is deleted within 90 days of account termination.
+6. **Erasure requests:** for mail users send into inboxes, I am the controller and delete the thread or inbox through
+   the API; where I cannot complete a request without the vendor, they assist under Section 7 of the DPA. Requests
+   about my own account data go to their support team and are completed within the one-month GDPR window.
+7. **Sub-processors:** published on the vendor's legal page; at least 14 days' written notice before adding or
+   replacing one.
+8. **DPA:** already in force for my account and covers all of the vendor's services, Inboxes included.
+9. **Pricing and limits:** not final. Direction: a few inboxes included per plan, a small monthly charge per extra
+   inbox, sent and received mail counting toward the plan quota; rate limits as the rest of the API. Public launch
+   is weeks away.
+10. **Breaking changes in the beta:** announced by email and in the changelog; the docs flag which response shapes may
+    change. No fixed notice period can be promised during the beta.
+
+The vendor will say if EU residency ever becomes available.
 
 ## Blocked on
 
