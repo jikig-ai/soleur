@@ -195,7 +195,7 @@ The conversion batteries do not touch them.
 Derivation 1 (string grep): `git grep -l 'Authorization: Bearer' -- '*.sh'` minus `*.test.sh`,
 `tests/`, `fixtures/` returns 79 files; the `-H "Authorization: Bearer` same-line subset is 59.
 Derivation 2 (logical-command census, the one used): the executable procedure
-`knowledge-base/project/specs/feat-one-shot-7843-argv-bearer-to-config-stdin/census-argv-bearer.py`
+`knowledge-base/project/specs/archive/20261006-171255-feat-one-shot-7843-argv-bearer-to-config-stdin/census-argv-bearer.py`
 joins backslash continuations, keeps commands whose argv carries a bearer header (`-H`/`--header`
 not followed by `@`, not a curl-config `header` line), adds variable-held (`-H "$header_auth"`) and
 array-held (`curl_args+=(-H ...)`, `_auth=(-H ...)`) headers, and includes the sourced production
@@ -303,8 +303,8 @@ ADR: `knowledge-base/engineering/architecture/decisions/ADR-202-enforce-runtime-
 - `tests/scripts/test-argv-bearer-sweep.sh` (manifest-driven shim battery; Guard 2)
 - `scripts/lint-shell-trace-credential-refusal-e.baseline.txt` (Rule E baseline: the 11 Tier 2 files with per-file site counts)
 - `scripts/fixtures/shell-trace-refusal/violation-argv-bearer-literal.sh`, `violation-argv-bearer-second-member.sh`, `violation-argv-bearer-variable-held.sh`, `violation-argv-bearer-array-held.sh`, `violation-argv-bearer-long-form.sh`, `violation-argv-bearer-wrapper.sh`, `violation-argv-bearer-config-hazards.sh`, `violation-ruled-wrapper-env-url.sh` (Rule D wrapper case), `compliant-stdin-bearer-procsub.sh`, `compliant-stdin-bearer-procsub-bare.sh`, `compliant-stdin-bearer-wrapper.sh`, `compliant-stdin-bearer-header-at-stdin.sh`, `compliant-all-safe-forms.sh` (Rule E fixtures; synthesized tokens only, per `cq-test-fixtures-synthesized-only`)
-- `knowledge-base/project/specs/feat-one-shot-7843-argv-bearer-to-config-stdin/census-argv-bearer.py` (the executable inventory procedure; already written at plan time) and `decision-challenges.md` (the single-PR vs split User-Challenge)
-- `knowledge-base/project/specs/feat-one-shot-7843-argv-bearer-to-config-stdin/tasks.md` (Save Tasks step)
+- `knowledge-base/project/specs/archive/20261006-171255-feat-one-shot-7843-argv-bearer-to-config-stdin/census-argv-bearer.py` (the executable inventory procedure; already written at plan time) and `decision-challenges.md` (the single-PR vs split User-Challenge)
+- `knowledge-base/project/specs/archive/20261006-171255-feat-one-shot-7843-argv-bearer-to-config-stdin/tasks.md` (Save Tasks step)
 
 ## Open Code-Review Overlap
 
@@ -446,13 +446,13 @@ discoverability_test:
 - Subsystems touched: 7 — `apps/cla-evidence`, `apps/web-platform`, `plugins/soleur`, `.claude`, `scripts`, `tests`, `knowledge-base`
 - Planned files: ~95 (53 scripts, ~17 owning tests, lint + 4 baselines + ~14 fixtures + new suite, ADR, plan/tasks) | Estimated changed lines: ~2,000
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: split. Three plan reviewers and the CTO recommended splitting; the thresholds are all exceeded. Proposed boundary: (a) Phases 0-3 (battery, Rule E + baseline, `scripts/**`, followthroughs) and (b) Phases 4-6 (`apps/**`, `plugins/**`, hooks, gate libs) + Phase 7. **Decision: single PR with the phase-ordered commits above, split boundary (a)/(b) kept as the pre-agreed fallback** — justification: the pipeline produces one PR per invocation; the edits are uniform and mechanical; and, with Rule E and baseline E landing first (Phase 1), each phase shrinks the baseline, so "one PR rewrites the baseline twice" no longer applies and a later split costs nothing structural. Recorded as a User-Challenge in `knowledge-base/project/specs/feat-one-shot-7843-argv-bearer-to-config-stdin/decision-challenges.md` for the operator.
+- Recommendation: split. Three plan reviewers and the CTO recommended splitting; the thresholds are all exceeded. Proposed boundary: (a) Phases 0-3 (battery, Rule E + baseline, `scripts/**`, followthroughs) and (b) Phases 4-6 (`apps/**`, `plugins/**`, hooks, gate libs) + Phase 7. **Decision: single PR with the phase-ordered commits above, split boundary (a)/(b) kept as the pre-agreed fallback** — justification: the pipeline produces one PR per invocation; the edits are uniform and mechanical; and, with Rule E and baseline E landing first (Phase 1), each phase shrinks the baseline, so "one PR rewrites the baseline twice" no longer applies and a later split costs nothing structural. Recorded as a User-Challenge in `knowledge-base/project/specs/archive/20261006-171255-feat-one-shot-7843-argv-bearer-to-config-stdin/decision-challenges.md` for the operator.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] `python3 knowledge-base/project/specs/feat-one-shot-7843-argv-bearer-to-config-stdin/census-argv-bearer.py` was re-run at work time before Phase 1 and matched `TOTAL sites=136 files=64`; after Phase 6 the same command lists exactly the Tier 2 set (11 files, 13 sites). After Phase 1 the lint's `--census` is the standing detector and takes precedence over the grep below.
+- [ ] `python3 knowledge-base/project/specs/archive/20261006-171255-feat-one-shot-7843-argv-bearer-to-config-stdin/census-argv-bearer.py` was re-run at work time before Phase 1 and matched `TOTAL sites=136 files=64`; after Phase 6 the same command lists exactly the Tier 2 set (11 files, 13 sites). After Phase 1 the lint's `--census` is the standing detector and takes precedence over the grep below.
 - [ ] `git grep -nE -- '(-H|--header)[[:space:]]+\\?["'"'"']?Authorization:[[:space:]]*Bearer' -- '*.sh' ':!*.test.sh' ':!tests/**' ':!**/fixtures/**' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | cut -d: -f1 | sort -u` returned 58 files at plan time (all in Tier 1 or Tier 2; comment lines excluded, which is why it reads 58 against the 59 of the unfiltered grep) and returns only Tier 2 files after Phase 6. It cannot see variable-held or array-held headers; the census can.
 - [ ] `python3 scripts/lint-shell-trace-credential-refusal.py` exits 0 and prints `OK:`; `--changed --base origin/main` exits 0 with every touched file un-baselined.
 - [ ] `python3 scripts/lint-shell-trace-credential-refusal.py --census` shows `offenders_e` equal to baseline E's line count (the Tier 2 set), with per-file site counts equal; `offenders` and `offenders_d` are strictly smaller than their end-of-Phase-1 values (50/24 at plan time before the Rule D fix and wrapper awareness re-measure them).
