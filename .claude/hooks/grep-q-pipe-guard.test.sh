@@ -54,7 +54,7 @@
 # .template .js; knowledge-base/ and this file excluded), asserted ZERO outside SWEEP_DEFERRALS. A new file under a
 # new directory is in the population without any edit. STATED LIMITS (measured 2026-10-05; re-measure before quoting): an
 # extensionless script with a shebang (5 tracked, 0 hits), fenced code in .md files that an agent executes (29 lines, mostly in
-# plugins/soleur/skills/*/SKILL.md), 2 lines in .ts, the 13 hits in 5 executable scripts under knowledge-base/, and this file.
+# plugins/soleur/skills/*/SKILL.md), 2 lines in .ts, the 13 hits in 5 scripts under knowledge-base/, and this file.
 # The named FILES_* passes below stay as they are: they pin the SUITES whose incidents made this class, and carry the
 # affected-paths wiring. The sweep is a line search, so a name in a comment is handled by the comment filter and the
 # per-line marker, never by widening a glob. To take a deferred subtree to zero: convert it and delete its row.
@@ -180,13 +180,20 @@ hits="$(git grep -nE "$PATTERN" -- '.claude/hooks/*.sh' '.claude/hooks/lib/*.sh'
 # A TRAILING comment on the line (whitespace before the `#`, and nothing but whitespace or end of line after the words), so a
 # string that merely CONTAINS the words, or a `; echo "# sigpipe-demo: intentional"` tail, does not exempt the line.
 ALLOW_MARKER='[[:space:]]#[[:space:]]*sigpipe-demo:[[:space:]]*intentional([[:space:]]|$)'
+# The comment filter every scan shares: drops `path:NN:<spaces>#...` lines. `--marker` also drops a line carrying the
+# per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out).
+_strip_comments() { # [--marker], stdin -> stdout
+  if [[ "${1:-}" == --marker ]]; then
+    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -vE "$ALLOW_MARKER" || true
+  else
+    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
+  fi
+}
 FILES_7024=(
   'tests/scripts/test-sentry-full-root-apply.sh'
   'plugins/soleur/skills/compound/test/phase-16.test.sh'
 )
-hits_7024="$(git grep -nE "$PATTERN" -- "${FILES_7024[@]}" \
-  | grep -vE ':[0-9]+:[[:space:]]*#' \
-  | grep -vE "$ALLOW_MARKER" || true)"
+hits_7024="$(git grep -nE "$PATTERN" -- "${FILES_7024[@]}" | _strip_comments --marker)"
 
 if [[ -n "$hits" ]]; then
   FAIL=1
@@ -279,15 +286,6 @@ fi
 # filter reds there even when no pinned file carries a hit.
 # A read error is NOT "no hits": it prints an UNRESOLVED line, which the caller then reports as a
 # FAIL (this runs inside $( ), so an exit here would only leave the subshell).
-# The comment filter every scan shares: drops `path:NN:<spaces>#...` lines. `--marker` also drops a line carrying the
-# per-line ALLOW_MARKER (the sweep only; the four named passes deliberately have no opt-out).
-_strip_comments() { # [--marker], stdin -> stdout
-  if [[ "${1:-}" == --marker ]]; then
-    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -vE "$ALLOW_MARKER" || true
-  else
-    grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true
-  fi
-}
 scan_scorers() { # <files...> -> the offending lines, or nothing
   local out rc=0
   out="$(grep -HnE -- "$PATTERN|$PATTERN_AWK_EXIT|$PATTERN_PIPED_SCORER" "$@")" || rc=$?
@@ -483,14 +481,14 @@ sweep_verdict() {
     path="${line%%:*}"
     owner=-1
     if [[ "$pinned" != *" $path "* ]]; then
-      for i in "${!r_glob[@]}"; do
+      for ((i = 0; i < ${#r_glob[@]}; i++)); do
         # shellcheck disable=SC2053  # the glob is the point: the row's glob is matched as a pattern
         if [[ "$path" == ${r_glob[i]} ]]; then owner=$i; break; fi
       done
     fi
     if [[ "$owner" != -1 ]]; then r_n[owner]=$(( r_n[owner] + 1 )); else undeferred+="$line"$'\n'; nund=$(( nund + 1 )); fi
   done <<<"$scan"
-  for i in "${!r_glob[@]}"; do
+  for ((i = 0; i < ${#r_glob[@]}; i++)); do
     n="${r_n[i]}"; ceil="${r_ceil[i]}"; mode="${r_mode[i]}"; slack=$(( ceil - n ))
     echo "DEFERRED: ${r_glob[i]} ($n hits, ceiling $ceil, mode $mode, slack $slack, ${r_tracker[i]})"
     if (( n == 0 )); then
@@ -507,7 +505,7 @@ sweep_verdict() {
     printf '%s' "$undeferred" | awk 'NR <= 50 { print "  " $0 } END { if (NR > 50) print "  ... " NR - 50 " more" }'
     echo "  (this scan reads untracked, non-ignored files too: a vendored tree with no ignore line is read as code)"
     echo
-    echo "  Rewrite: echo/printf \"\$V\" | grep -q P   ->  grep -q P <<<\"\$V\""
+    echo "  Rewrite: echo \"\$V\" | grep -q P         ->  grep -q P <<<\"\$V\"   (printf with a newline in its format is the same)"
     echo "           printf '%s' \"\$V\" with -v, -x/-F and a variable pattern, a pattern that can match an empty line, or a stage"
     echo "             after it that reads bytes (tail -c, wc -c)  ->  grep -q P < <(printf '%s' \"\$V\" [| stages])   (a here-string adds a newline)"
     echo "           producer | grep -q P              ->  grep -q P < <(producer)   (read-only producer, inside a condition)"
@@ -519,6 +517,8 @@ sweep_verdict() {
 
 # sweep_main <root> <floor> -> prints the verdict lines; rc 0 clean, 1 a violation, 3 unresolved. The caller folds the rc into
 # FAIL / exit 3, and the probe drives this same function on scratch roots, so the whole chain is exercised, not only its parts.
+# NOTE: callers run this as `sweep_main ... || rc=$?`, which suspends `set -e` inside it; every fallible command in the chain is
+# therefore guarded by hand, so do not rely on errexit when you add one.
 sweep_main() {
   local root="$1" floor="$2" scan n
   SWEEP_FAIL=0
@@ -536,15 +536,22 @@ sweep_main() {
   sweep_verdict "$scan"
   return "$SWEEP_FAIL"
 }
+# sweep_fold <rc from sweep_main>: 3 is UNRESOLVED and exits the suite, any other non-zero is a failure, zero prints the PASS line.
+sweep_fold() {
+  if (( $1 == 3 )); then
+    exit 3
+  elif (( $1 != 0 )); then
+    FAIL=1
+  elif [[ ! "${SWEEP_N:-}" =~ ^[1-9][0-9]*$ ]]; then
+    FAIL=1   # rc 0 with no recorded population means the sweep never ran: a pass here would assert nothing
+    echo "FAIL: the derived sweep reported success without recording a swept-file count — it did not run"
+  else
+    echo "PASS: grep-q-zero-sweep-pass ($SWEEP_N files swept; deferrals above)"
+  fi
+}
 sweep_rc=0
 sweep_main . "$SWEEP_FLOOR" || sweep_rc=$?
-if (( sweep_rc == 3 )); then
-  exit 3
-elif (( sweep_rc != 0 )); then
-  FAIL=1
-else
-  echo "PASS: grep-q-zero-sweep-pass ($SWEEP_N files swept; deferrals above)"
-fi
+sweep_fold "$sweep_rc"
 
 # Non-vacuity: the pattern must actually match the shape it forbids. Without
 # this, a typo in PATTERN would make the guard pass forever on any input.
@@ -721,6 +728,7 @@ x | egrep -q p
 x | fgrep -q p
 x | grep -iEm1 p
 x | grep -F -q p
+x | grep -F -A1 -q p
 x | builtin grep -q p
 x | /bin/grep -q p
 x | grep --color=never -q p
@@ -741,7 +749,7 @@ x | grep -oE p
 x | sed 's/a/b/'
 grep -e p -q "$f"
 EOF
-V2_BAD_LINES=28; V2_GOOD_LINES=11   # pinned literals: deleting a fixture line cannot lower both sides
+V2_BAD_LINES=29; V2_GOOD_LINES=11   # pinned literals: deleting a fixture line cannot lower both sides
 v2_bad_lines=$(wc -l < "$probe/bad-v2.sh")
 v2_good_lines=$(wc -l < "$probe/good-v2.sh")
 v2_bad_hits=$(grep -cE -- "$PATTERN_V2" "$probe/bad-v2.sh" || true)
@@ -810,11 +818,17 @@ own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2');
   || sweep_probe_fail+=("deferral-owner: first-match-wins did not give each overlapping row its own hit")
 
 # _vp itself needs a known-NEGATIVE control: a helper that always returned 0 would make every row above vacuous.
-_vp 'ZZZ-never-printed' 'a/* | = | 1 | #1' -- 'a/x.sh:1:t' && sweep_probe_fail+=("vp-negative: _vp accepted a case whose expected diagnostic cannot appear")
+_vp 'ZZZ-never-printed' 'a/* | <= | 1 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t' && sweep_probe_fail+=("vp-negative: _vp accepted a failing case whose expected diagnostic cannot appear")
 # Every FILES_* list needs its own carve-out row: the pinned set is the concatenation of four arrays.
-_vp 'outside the deferral table' 'plugins/* | <= | 9 | #1' -- "${FILES_7024[0]}:1:t" || sweep_probe_fail+=("deferral-carveout-7024: a FILES_7024 member was deferred by a broader row")
-_vp 'outside the deferral table' 'apps/* | <= | 9 | #1' -- "${FILES_8664[0]}:1:t"    || sweep_probe_fail+=("deferral-carveout-8664: a FILES_8664 member was deferred by a broader row")
-_vp 'outside the deferral table' 'apps/* | <= | 9 | #1' -- "${FILES_8855[0]}:1:t"    || sweep_probe_fail+=("deferral-carveout-8855: a FILES_8855 member was deferred by a broader row")
+# For each member: its top directory gives a row that WOULD own it (checked), and the carve-out must keep it out of that row.
+carve_bad=""
+for _m in "${FILES_7024[@]}" "${FILES_8664[@]}" "${FILES_8855[@]}" "${FILES_7376[@]}"; do
+  _g="${_m%%/*}/*"
+  # shellcheck disable=SC2053  # the glob is the point
+  [[ "$_m" == $_g ]] || { carve_bad+=" $_m(no-row)"; continue; }
+  _vp 'outside the deferral table' "$_g | <= | 9 | #1" -- "$_m:1:t" || carve_bad+=" $_m"
+done
+[[ -z "$carve_bad" ]] || sweep_probe_fail+=("deferral-carveout: pinned members deferred by a broader row (or no owning row to prove it):$carve_bad")
 
 # The canary count is a LITERAL, and the canary match is anchored: `scripts/` must not be satisfied by `apps/web-platform/scripts/`.
 [[ "${#SWEEP_CANARIES[@]}" == "$SWEEP_CANARY_COUNT" ]] || sweep_probe_fail+=("canary-count: SWEEP_CANARIES has ${#SWEEP_CANARIES[@]} roots, pinned at $SWEEP_CANARY_COUNT")
@@ -829,10 +843,14 @@ echo "$x" | grep -q "a:3:# b"
 echo "$x" | grep -q p; echo "# sigpipe-demo: intentional"
 echo "$x" | grep -q "foo # sigpipe-demo: intentional" 
 echo "$x" | grep -q p # sigpipe-demo: intentional (a real trailing marker: not reported)
+echo "$x" | grep -q "p"#sigpipe-demo: intentional
 EOF
 for _r in plugins/soleur apps/web-platform/scripts apps/cla-evidence; do echo true > "$probe/hideroot/$_r/x.sh"; done
+# The NAMED passes use the same filter: a self-hiding line in a pinned-style file must be reported there too.
+named_hide=$(scan_pipes "$probe/hideroot/scripts/x.sh" | grep -c 'a:3:# b' || true)
+[[ "$named_hide" == 1 ]] || sweep_probe_fail+=("filter-anchor-named: scan_pipes reported ${named_hide:-<err>} of 1 self-hiding line")
 hide_hits=$(scan_sweep "$probe/hideroot" | grep -c '^scripts/x.sh:[0-9]*:' || true)
-[[ "$hide_hits" == 3 ]] || sweep_probe_fail+=("filter-anchor: ${hide_hits:-<err>} of 3 self-hiding violating lines were reported (the real trailing marker line must be the only one dropped)")
+[[ "$hide_hits" == 4 ]] || sweep_probe_fail+=("filter-anchor: ${hide_hits:-<err>} of 4 self-hiding violating lines were reported (the real trailing marker line must be the only one dropped)")
 
 # The whole chain: a violating root reports rc 1, a compliant one rc 0, a short population rc 1 under a high floor, an empty one rc 3.
 okroot="$probe/okroot"; mkdir -p "$okroot/scripts" "$okroot/plugins/soleur" "$okroot/apps/web-platform/scripts" "$okroot/apps/cla-evidence"
@@ -843,8 +861,16 @@ rc_low=0;  ( SWEEP_DEFERRALS=(); sweep_main "$okroot" 100 >/dev/null ) || rc_low
 rc_none=0; ( SWEEP_DEFERRALS=(); sweep_main "$probe/emptyroot" 1 >/dev/null ) || rc_none=$?
 [[ "$rc_bad" == 1 && "$rc_ok" == 0 && "$rc_low" == 1 && "$rc_none" == 3 ]] \
   || sweep_probe_fail+=("sweep-main: rc violating/compliant/below-floor/empty = $rc_bad/$rc_ok/$rc_low/$rc_none (want 1/0/1/3)")
-# The suite's own exit is the fold of FAIL, and nothing after it may soften it.
-[[ "$(tail -n 1 "${BASH_SOURCE[0]}")" == 'exit "$FAIL"' ]] || sweep_probe_fail+=("exit-fold: the last line of this file is not exit \"\$FAIL\"")
+# The fold itself, driven the way the suite uses it: rc 1 sets FAIL, rc 3 exits 3, rc 0 prints PASS and leaves FAIL alone.
+fold_a=$( FAIL=0; sweep_fold 1 >/dev/null; echo "$FAIL" ) || true
+fold_b=0; ( FAIL=0; sweep_fold 3 >/dev/null ) || fold_b=$?
+fold_c=$( FAIL=0; SWEEP_N=7; out=$(sweep_fold 0); echo "$FAIL:$out" ) || true
+fold_d=$( FAIL=0; unset SWEEP_N; sweep_fold 0 >/dev/null; echo "$FAIL" ) || true
+[[ "$fold_a" == 1 && "$fold_b" == 3 && "$fold_c" == "0:PASS: grep-q-zero-sweep-pass (7 files swept; deferrals above)" && "$fold_d" == 1 ]] \
+  || sweep_probe_fail+=("sweep-fold: fold rc1/rc3/rc0/rc0-without-count gave ${fold_a:-<err>}/${fold_b:-<err>}/${fold_c:-<err>}/${fold_d:-<err>} (want 1/3/0:PASS.../1)")
+# The suite's own exit is the fold of FAIL, and nothing after it may soften it: the last line is exactly `exit "$FAIL"` and FAIL is assigned 0 once.
+[[ "$(tail -n 1 "${BASH_SOURCE[0]}")" == 'exit "$FAIL"' && "$(grep -c '^FAIL=0$' "${BASH_SOURCE[0]}")" == 1 ]] \
+  || sweep_probe_fail+=("exit-fold: the last line of this file is not exit \"\$FAIL\", or FAIL is reset to 0 more than once")
 
 # What a line regex deliberately does NOT match (documented residuals) and the one known false positive, pinned as literal counts so a
 # widening or a regression shows up as a changed number and a header edit rather than as silent drift.
@@ -861,10 +887,11 @@ fp_hits=$(grep -cE -- "$PATTERN_V2" "$probe/fp-v2.sh" || true)
 [[ "$res_hits" == 0 && "$fp_hits" == 1 ]] || sweep_probe_fail+=("residual-v2: documented residuals matched ${res_hits:-<err>} (want 0), the documented false positive matched ${fp_hits:-<err>} (want 1)")
 
 # A probe check that is DELETED cannot fail, so the number of checks is pinned: every check above ends in
-# `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of code lines carrying that tail is the count of checks;
-# comment lines are excluded, so rewording a comment can neither hide a deletion nor trip the pin.
-SWEEP_PROBE_CHECKS=15
-probe_checks=$(grep -cE '^[^#]*(\|\||&&) sweep_probe_fail\+=\(' "${BASH_SOURCE[0]}" || true)
+# `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
+# of checks (the pin's own line and its counting line included); comment lines are excluded, so rewording a comment can neither hide a
+# deletion nor trip the pin, and a `#` inside a check's own string does not hide it from the count.
+SWEEP_PROBE_CHECKS=28
+probe_checks=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" | grep -c 'sweep_probe_fail+=(' || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")
 if (( ${#sweep_probe_fail[@]} == 0 )); then

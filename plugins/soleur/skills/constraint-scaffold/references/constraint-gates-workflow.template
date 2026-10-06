@@ -43,7 +43,7 @@ jobs:
           # making the three-dot diff fail under `set -e` and redden every
           # non-target PR. checkout already used fetch-depth: 0 (full history).
           git fetch --no-tags origin "$BASE_REF"
-          changed_files=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          changed_files=$(git -c core.quotePath=false diff --name-only "origin/${BASE_REF}...HEAD")
           if grep -qE '^__TARGET_DIR__/' <<<"$changed_files"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
