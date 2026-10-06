@@ -14,6 +14,69 @@ lane: cross-domain
 
 # fix: safe-bash git-branch tightening + kb-search support-persona path (#9555, #9559)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Observability, Guard Contract, Fix A, Fix B,
+Files to Edit, Test Scenarios, Sharp Edges
+**Research agents used:** none — executed as a Devin subagent with no
+Task/Workflow spawn surface; every deepen-plan phase was run as inline
+orchestrator work (per-section research, skill match, learnings filter,
+verify-the-negative, post-edit self-audit, review lenses). Halts were
+executed mechanically where a mechanical check exists.
+
+### Deepen-pass gate results
+
+- **4.4 precedent-diff** — pass: the two-arm regex reuses the in-file
+  `PATH_TOKEN` + `(?!-)` precedent (`safe-bash.ts:127-134`); no
+  pattern-bound class (SQL/atomic-write/lock/RPC/cron) in scope.
+- **4.45 verify-the-negative** — pass: `grep` exclusion confirmed at
+  `safe-bash.ts:39-41`; `plugins/soleur/scripts/ensure-kb-index.sh`
+  confirmed absent; deployed plugin root has no `.git` (verified
+  `ls -d …/.git` → absent — `git grep` cannot run there anyway);
+  `support-escalation.ts:118` confirms the `deny-support-${source}`
+  decision slug cited in Observability.
+- **4.5 network-outage / 4.55 downtime** — not triggered.
+- **4.6 User-Brand Impact** — pass: section present, `none` threshold +
+  non-empty sensitive-path scope-out reason.
+- **4.7 Observability** — pass: 5/5 fields non-empty; probe verb `rg`
+  allowlisted; metachar-free command; literal `expected_output`.
+- **4.8 PAT halt** — pass: zero hits.
+- **4.9 UI wireframe** — pass-through: zero UI-surface files.
+- **4.10 encryption posture** — not triggered (no store/connection).
+- **4.11 Guard Contract** — pass: `lint-guard-contract.py` green (2
+  entries); assemblies are structural (chokepoint + glob discovery), not
+  member lists.
+- **4.12 Scope Check** — pass: one unfenced section, all subsections,
+  no unmapped rows, `Recommendation: single PR`.
+
+### Key Improvements (deepen pass)
+
+1. `discoverability_test.command` rewritten metachar-free (`-e` patterns,
+   no `|` alternation) after reading Check 10's byte-level reject in
+   `plan-sharp-edges.md`.
+2. Verification commands corrected to `./node_modules/.bin/vitest run` —
+   `bunfig.toml` `pathIgnorePatterns = ["**"]` makes `bun test` discover
+   nothing under `apps/web-platform`.
+3. Guard-2 absence assertion re-anchored from the bare word `bash`
+   (false-fails on legitimate prose) to the fenced-```bash-block form.
+4. `support-directive.test.ts:28`'s stale title (`"kb-search shells
+   out"`) added to the reality-sweep — the falsified premise lived in a
+   test name, not only comments.
+5. Rule-id citations verified against `AGENTS.md`/migrated-rule registry;
+   `cq-ref-removal-sweep` corrected to `cq-ref-removal-sweep-cleanup-
+   closures`; `#3252`/`#6121` re-classified as issues (verified live via
+   `gh`), not PRs.
+
+### New Considerations Discovered
+
+- `git branch -r <name>`: `-r` with a positional arg is denied-or-error
+  on modern git either way; retained in the flag set because bare `-r` is
+  a common read — residual risk documented as accepted.
+- `deny-support-bash` decision slug verified verbatim at
+  `support-escalation.ts:118`; `support_handoff` SSE frame name verified
+  at `support-escalation.ts:6`.
+
 ## Overview
 
 Two defects deferred from PR #9540's security review (issue #9539) ship in one
@@ -153,7 +216,8 @@ executing agent reads after parsing intent), gated on an observable cue:
 > | 3 keyword search | Tier 1: Grep `knowledge-base/INDEX.md` for the keyword, keep only links rooted at `knowledge-base/project/learnings/` (cap 8); Tier 2: Grep content under `knowledge-base/project/learnings/` excluding `archive/` (cap 12). Same dedupe-by-path merge |
 > | 4 display | unchanged |
 
-Supporting doc/comment edits (reality-sweep, per `cq-ref-removal-sweep`):
+Supporting doc/comment edits (reality-sweep, per
+`cq-ref-removal-sweep-cleanup-closures`):
 
 - `apps/web-platform/server/support-directive.ts` — add one line to
   `SUPPORT_SYSTEM_DIRECTIVE`: kb-search runs through Read/Grep/Glob — no
@@ -165,6 +229,11 @@ Supporting doc/comment edits (reality-sweep, per `cq-ref-removal-sweep`):
   pass safe-bash and engineering-shaped attempts still deny+escalate.
 - `apps/web-platform/server/cc-dispatcher.ts:~2879` — same stale "kb-search
   shells out" comment → tool-only.
+- `apps/web-platform/test/support-directive.test.ts:28` — the test TITLE
+  itself embeds the falsified premise: `"extra-disallowed pins the
+  write/fan-out surface but KEEPS Bash (kb-search shells out)"` — rename
+  the parenthetical to the tool-only framing (the `.not.toContain("Bash")`
+  assertion at :32 stays unchanged).
 - ADR-113 — Decision item 5(c) says "Bash KEPT — kb-search shells out
   behind the read-only safe-bash gate"; append an amendment noting the
   premise was falsified (#9559): the allowlist never admitted those
@@ -298,12 +367,12 @@ logs:
   where: "stdout pino (`permission` child) + permission-decision ledger"
   retention: "existing Better Stack retention"
 discoverability_test:
-  # No `|`/`;`/`&`/`<`/`>`/`$`/backtick anywhere — Check 10's shell-active
-  # reject is byte-level, so `-e` patterns instead of an alternation.
-  # `-l` prints each file that matches EITHER pattern; the markers are
-  # file-specific, so both paths in stdout iff each file carries its marker.
   command: rg -l -e GIT_BRANCH_READ_FLAG -e Support-persona apps/web-platform/server/safe-bash.ts plugins/soleur/skills/kb-search/SKILL.md
   expected_output: "safe-bash.ts SKILL.md"
+  # No `|`/`;`/`&`/`<`/`>`/`$`/backtick anywhere in command — Check 10's
+  # shell-active reject is byte-level, so `-e` patterns instead of an
+  # alternation. `-l` prints each file matching EITHER pattern; the markers
+  # are file-specific, so both paths in stdout iff each carries its marker.
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -539,7 +608,8 @@ the test's own header comment.
   `supportUser` to `view context` include.
 - `apps/web-platform/test/support-directive.test.ts` — extend directive
   assertions to pin the new tool-path sentence (e.g. matches
-  `/Read.*Grep.*Glob|no shell/i`), keep all existing assertions.
+  `/Read.*Grep.*Glob|no shell/i`), rename the stale test title at :28,
+  keep all existing assertions.
 
 ## Files to Create
 
@@ -641,7 +711,7 @@ surface in this harness; the CTO-leader lens was applied by hand)
 **Assessment:** Touches the canUseTool permission hot path and the
 safe-bash allowlist grammar — the highest-review-burden file class in the
 repo per its own header comments (ReDoS, traversal, injection history in
-PR #4868/#3252/#6121). The two-arm flag-set design follows the established
+PR #4868; issues #3252/#6121). The two-arm flag-set design follows the established
 `PATH_TOKEN` + `(?!-)` precedent; main risks are an over-broad flag
 admitted (mitigated: closed set, all list-mode) and an under-covered write
 form (mitigated: default is deny — unlisted flags fall through to the

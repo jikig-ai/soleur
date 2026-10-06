@@ -43,7 +43,9 @@ Branch: `feat-one-shot-9555-9559-safe-bash-kb-search`
   "kb-search shells out" comment (~:2879).
 - [ ] 2.4 `apps/web-platform/test/support-directive.test.ts`: extend
   directive assertions to pin the tool-only sentence (regex
-  `/Read.*Grep.*Glob|no shell/i`); existing assertions unchanged.
+  `/Read.*Grep.*Glob|no shell/i`); rename the stale test title at :28
+  (`"…KEEPS Bash (kb-search shells out)"` — premise falsified by #9559);
+  existing assertions unchanged.
 - [ ] 2.5 Verify: `cd apps/web-platform && ./node_modules/.bin/vitest run
   test/support-directive.test.ts` green; `bash
   plugins/soleur/test/kb-search-lockstep.test.sh` green.
