@@ -265,6 +265,81 @@ describe("review PR #4868 — git arg-pattern hardening", () => {
   });
 });
 
+describe("#9555 — git branch read-only arms (create/delete/rename fall through to the gate)", () => {
+  // Contract: `git branch` auto-approves iff every post-`branch` token is a
+  // member of the closed read-only flag set, or — reachable only after >=1
+  // list-mode flag — a non-dash pattern/commit-ish arg. Every create /
+  // delete / rename / copy / upstream / force / quiet / describe form must
+  // fall through to the review-gate. Litmus row (incident-derived):
+  // `git branch -d foo` auto-approved under the prior `(?:\s+PATH_TOKEN)*`
+  // tail — measured live on this branch.
+  const positives = [
+    "git branch",
+    "git branch -a",
+    "git branch -r",
+    "git branch -v",
+    "git branch -vv",
+    "git branch -av",
+    "git branch --list",
+    "git branch --list feat",
+    "git branch --show-current",
+    "git branch --merged main",
+    "git branch --contains HEAD~2",
+    "git branch --no-merged main",
+    "git branch --points-at HEAD",
+    "git branch --sort=-committerdate",
+    "git branch --ignore-case --list x",
+  ];
+  for (const cmd of positives) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === true`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+
+  const negatives = [
+    "git branch foo", // bare positional arg CREATES a branch
+    "git branch foo main", // create with explicit start point
+    "git branch -d foo", // delete
+    "git branch -D foo", // force-delete
+    "git branch --delete foo",
+    "git branch -m a b", // rename
+    "git branch -M a b", // force-rename
+    "git branch --move a b",
+    "git branch -c a b", // copy
+    "git branch -C a b", // force-copy
+    "git branch --copy a b",
+    "git branch -f foo", // force (overwrite)
+    "git branch -q foo", // -q is a write modifier — quiet create, NOT list-mode
+    "git branch -u origin/main foo", // upstream config write
+    "git branch --set-upstream-to=origin/main foo",
+    "git branch --unset-upstream foo",
+    "git branch --edit-description foo",
+    "git branch --list -d", // a write flag cannot launder in as a pattern arg
+    "git branch --list foo -D", // same, trailing position
+    "git branch --list ../x", // path-traversal denylist still wins
+    "git status && git branch -d x", // per-segment re-check across && decomposition
+  ];
+  for (const cmd of negatives) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  // Accepted conservative denials (documented in the plan): a positional arg
+  // before the first list-mode flag would be a create, so Arm 2 requires the
+  // flag FIRST; and PATH_TOKEN excludes the shell-active chars a rich
+  // --format would need. These hit the review-gate — annoying, never unsafe.
+  const conservativeDenials = [
+    "git branch --format=%(refname:short)", // parens outside PATH_TOKEN
+    "git branch foo --list", // positional arg not led by a list-mode flag
+  ];
+  for (const cmd of conservativeDenials) {
+    test(`conservative deny: isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+});
+
 describe("regression — single-command behavior unchanged", () => {
   test("pwd still safe", () => expect(isBashCommandSafe("pwd")).toBe(true));
   test("rm -rf still unsafe", () => expect(isBashCommandSafe("rm -rf /")).toBe(false));

@@ -2874,8 +2874,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         // feat-wire-concierge-support-chat (ADR-113): the support persona pins a
         // WIDER disallowed set (Edit/Write/MultiEdit/NotebookEdit/Task/Agent) so a
         // read-only help chat cannot write under cwd=getPluginPath() nor fan out
-        // into engineering subagents. Bash stays out of the list (kb-search shells
-        // out behind the read-only safe-bash gate).
+        // into engineering subagents. Bash stays out of the list — kb-search
+        // answers through Read/Grep/Glob tools only (#9559), and Bash remains
+        // the deny+escalate tripwire for engineering-shaped support attempts.
         extraDisallowedTools:
           args.persona === "support"
             ? SUPPORT_EXTRA_DISALLOWED_TOOLS

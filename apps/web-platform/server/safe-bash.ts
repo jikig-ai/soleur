@@ -89,6 +89,18 @@ const ECHO_TOKEN = String.raw`(?:"[^"\\]*"|'[^'\\]*'|[\w./~+:=@-]+)`;
 // pattern runs, so a comma is the only extra char this admits over PATH_TOKEN.
 const GH_ARG = String.raw`[\w./~+:=@,-]+`;
 
+// git branch — READ-ONLY forms only (#9555). A bare positional arg CREATES a
+// branch; -d/-D delete, -m/-M rename, -c/-C copy, -u/--set-upstream-to and
+// --unset-upstream write config, -f/--force overwrites, --edit-description
+// writes. -q/--quiet is EXCLUDED from the flag set: `git branch -q <name>`
+// still creates silently (a one-keystroke repair of a refused write —
+// cf. learning 2026-09-24-every-refusal-i-added-…). All such forms fall
+// through to the review-gate. Positional args require ≥1 list-mode flag
+// (they are pattern/commit-ish filters then) and must not start with `-`
+// (a branch name can't), so a write flag cannot launder in as a pattern
+// arg; `*` is outside PATH_TOKEN so only literal prefixes pass.
+const GIT_BRANCH_READ_FLAG = String.raw`(?:--list|--show-current|--all|--remotes|--verbose|-[arv]+|--contains|--merged|--no-merged|--points-at|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
+
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // No-arg / fixed-form commands
   /^pwd\s*$/,
@@ -128,7 +140,10 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^git\s+log(?:\s+${PATH_TOKEN})*\s*$`),
   new RegExp(String.raw`^git\s+diff(?:\s+${PATH_TOKEN})*\s*$`),
   new RegExp(String.raw`^git\s+show(?:\s+${PATH_TOKEN})*\s*$`),
-  new RegExp(String.raw`^git\s+branch(?:\s+${PATH_TOKEN})*\s*$`),
+  // Arm 1: bare `git branch` or flag-only forms (incl. --show-current).
+  new RegExp(String.raw`^git\s+branch(?:\s+${GIT_BRANCH_READ_FLAG})*\s*$`),
+  // Arm 2: ≥1 list-mode flag, then any mix of flags and non-dash args.
+  new RegExp(String.raw`^git\s+branch\s+${GIT_BRANCH_READ_FLAG}(?:\s+(?:${GIT_BRANCH_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
   new RegExp(String.raw`^git\s+rev-parse(?:\s+${PATH_TOKEN})*\s*$`),
   // git config --get only (no --set, no --unset, no --add)
   new RegExp(String.raw`^git\s+config\s+--get(?:\s+[\w.-]+)?\s*$`),

@@ -25,7 +25,11 @@ describe("support-directive constants", () => {
     expect(SUPPORT_SKILLS_OPTION).toEqual(["kb-search"]);
   });
 
-  it("extra-disallowed pins the write/fan-out surface but KEEPS Bash (kb-search shells out)", () => {
+  // Bash stays allowed as the deny+escalation tripwire: the #9559 premise
+  // ("kb-search shells out") was falsified — the safe-bash allowlist never
+  // admitted the skill's commands, so the support path is Read/Grep/Glob
+  // tool-only and a Bash call correctly denies + escalates.
+  it("extra-disallowed pins the write/fan-out surface but KEEPS Bash (kb-search support path is tool-only)", () => {
     for (const t of ["Edit", "Write", "MultiEdit", "NotebookEdit", "Task", "Agent"]) {
       expect(SUPPORT_EXTRA_DISALLOWED_TOOLS).toContain(t);
     }
@@ -36,6 +40,14 @@ describe("support-directive constants", () => {
     expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/Soleur Support/i);
     expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/kb-search/);
     expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/never (edit|touch|run)/i);
+  });
+
+  it("directive tells the support model kb-search is tool-only (Read/Grep/Glob, no shell)", () => {
+    // Pins the #9559 directive sentence so a future edit cannot silently
+    // drop the no-shell contract — the SKILL.md support section is only
+    // mid-doc guidance; the directive is the persona's highest-authority
+    // channel.
+    expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/Read.*Grep.*Glob|no shell/i);
   });
 });
 

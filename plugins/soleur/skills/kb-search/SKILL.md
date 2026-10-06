@@ -43,6 +43,32 @@ If `$ARGUMENTS` is empty, ask: "What would you like to search for in the knowled
 
 ## Execution
 
+**Support-persona path (no Bash).** If you are running as the **Soleur
+Support** persona — your system prompt identifies you as "Soleur Support"
+and `kb-search` is your only loaded skill — do NOT execute any of the
+`bash`/` ```bash ` blocks in the phases below. On the support surface
+every non-safe-bash Bash call is denied AND records a support escalation
+that renders a false "Ask an agent" handoff at turn end. The corpus is
+already on disk under the session cwd: `knowledge-base/INDEX.md`,
+`knowledge-base/kb-tags.txt`, `knowledge-base/kb-categories.txt`, and
+`knowledge-base/project/learnings/*.md` are committed inside the deployed
+plugin root (all `knowledge-base/…` paths in the support section are
+relative to the support session cwd = plugin root, i.e.
+`plugins/soleur/knowledge-base/` at repo root — not the operator KB,
+which `denyReadExtra` obscures) — there is no index generator to run
+there (the `--soft` ensure call is for operator checkouts; skip it
+silently). If a Bash call IS denied with a read-only app-help message, do
+not retry Bash — switch to this path.
+
+| Phase | Tool-path equivalent |
+|---|---|
+| 0 arg parse | unchanged — pure in-context |
+| 1 facet validation | Read `knowledge-base/kb-tags.txt` and/or `kb-categories.txt`; match the flag value case-insensitively as a WHOLE LINE (fixed-string semantics — do not reproduce the `\b` regex, see #8473); on miss emit the same `No matches. Valid values: …` output |
+| 2 facet filter | Glob `knowledge-base/project/learnings/*.md`, then Read each file's frontmatter (the corpus is ~a dozen files) or Grep `^tags:`/`^category:` lines; AND-combine flags as today |
+| 2.5 paraphrase | still runs inline (Option C is agent-inline); SKIP both `kb-search-cache.sh` calls — the cache needs a write the read-only support sandbox cannot do |
+| 3 keyword search | Tier 1: Grep `knowledge-base/INDEX.md` for the keyword, keep only links rooted at `knowledge-base/project/learnings/` (cap 8); Tier 2: Grep content under `knowledge-base/project/learnings/` excluding `archive/` (cap 12). Same dedupe-by-path merge |
+| 4 display | unchanged |
+
 ### Phase 0: Parse Arguments
 
 Parse `$ARGUMENTS` into `$TAG`, `$CATEGORY`, and `$KEYWORD`. Track whether each flag was already seen to detect duplicates. On duplicate or unknown flag, emit:

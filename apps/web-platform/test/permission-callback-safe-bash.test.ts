@@ -806,3 +806,41 @@ describe("path-traversal whitespace coverage (TS10)", () => {
     expect(isBashCommandSafe("cat  ../foo")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// TS11 — `git branch` write forms are NOT auto-approved (#9555)
+// ---------------------------------------------------------------------------
+// The full allow/deny matrix lives in safe-bash.test.ts; this block pins the
+// canUseTool fall-through for the two incident-derived shapes: a delete flag
+// and a bare positional create. `"git branch"` (bare, read-only) stays in
+// SAFE_COMMANDS above — only the write-shaped forms fall through.
+
+describe("git branch write forms fall through to the review-gate (TS11, #9555)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  for (const command of ["git branch -d x", "git branch feat-x"]) {
+    test(`isBashCommandSafe(${JSON.stringify(command)}) === false`, () => {
+      expect(isBashCommandSafe(command)).toBe(false);
+    });
+
+    test(`canUseTool Bash(${JSON.stringify(command)}) is NOT auto-approved`, async () => {
+      const { ctx, deps } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      const result = await canUseTool("Bash", { command }, sdkOptions());
+      if (result === null) throw new Error("canUseTool returned null");
+      // Same invariant as TS2: the safe-bash short-circuit did NOT fire —
+      // the command reaches the review-gate (or the blocklist).
+      const wentThroughGateOrBlocklist =
+        deps.sendToClient.mock.calls.length > 0 ||
+        result.behavior === "deny";
+      expect(wentThroughGateOrBlocklist).toBe(true);
+    });
+  }
+});
