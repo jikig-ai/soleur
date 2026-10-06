@@ -58,6 +58,72 @@ One root cause, one PR.
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** halt-gate verification pass over the full plan (no new
+sections added; evidence and precision corrections only)
+**Research agents used:** none spawned — `Reviewed-Coverage:
+sequential-fallback` (no Task/subagent tool in this harness; the halt gates,
+verify-the-negative pass, and review lenses ran inline and are disclosed as
+such, never as independent review)
+
+### Halt-gate results (all pass)
+
+- **4.6 User-Brand Impact:** heading present, `threshold: none` +
+  non-empty scope-out bullet covering the sensitive-path diff — pass.
+- **4.7 Observability:** all 5 schema fields populated;
+  `discoverability_test.command` starts with allowlisted `jq`, no SSH, no
+  shell-active metacharacters, finishes well inside the 15s cap;
+  `expected_output` is the literal `status=captured` — pass.
+- **4.8 PAT sweep:** zero hits — pass.
+- **4.9 UI wireframe:** no UI-surface files — skip (pass-through).
+- **4.10 Encryption Posture:** no store/connection triggers — skip
+  (pass-through).
+- **4.11 Guard Contract:** `lint-guard-contract.py` green — 1 guard entry,
+  5-row mutation matrix; adequacy read: the Assembly names the
+  projection/substitution CHOKEPOINTS (`norm()`, host_path census,
+  `substituteCanonicalArgv`, `hasUnsubstitutedPlaceholder`), not member
+  lists — pass.
+- **4.12 Scope Check:** exactly 1 unfenced `## Scope Check`; all three
+  subsections present; 0 `unmapped` rows; `Recommendation: single PR`;
+  no `status: BLOCKED` — pass.
+- **4.5 network-outage trigger scan** on Overview/Problem Statement: no
+  pattern matches — gate does not fire.
+- **4.55 Downtime & Cutover:** no reboot/migration/deploy-router class
+  operations in Files-to-Edit — gate does not fire.
+- **4.4 Precedent-diff:** the prescribed `norm()` arm, `prepDirs` conditional,
+  substitution mapping, and mkdtemp replay dir mirror the canonical
+  `c4StagingRoot`/`${CANARY_C4_STAGING}` shape (`sandbox-canary.mjs:683-693,
+  771-774, 787-794, 873-884`) verbatim — precedent read side-by-side at plan
+  time, not novel.
+
+### Key verification findings
+
+1. All cited issue/PR numbers resolved live via `gh` (#9614, #9618 OPEN;
+   #9570 MERGED; #9559, #8623, #5913, #4932, #5875 CLOSED; #9601, #9599 OPEN).
+2. Attribution commits resolve: `cdab1153` (revert on the #9570 branch — its
+   `-`/`+` hunk gives the verbatim replacement text) and `635b5d9a` (#9559
+   premise-correction origin).
+3. Load-bearing negative verified against installed bytes, not prose:
+   `bridge-spawn` + `ensureBridgeSpawnRootDir` strings present in the SDK-side
+   binary `node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`; the
+   dir is `join(homedir(), ".claude", "bridge-spawn")` with no env override.
+4. Cited rule IDs (`cq-write-failing-tests-before`,
+   `cq-test-fixtures-synthesized-only`) are active in `AGENTS.md`.
+5. Test-runner + collect-glob claims verified against
+   `apps/web-platform/vitest.config.ts` (`test/**/*.test.ts` collected) and
+   `package.json` (`test`/`test:ci` = vitest) — vitest invocations in the plan
+   carry the `cd apps/web-platform` prefix.
+
+### Corrections applied during deepen
+
+- vitest commands prefixed with `cd apps/web-platform &&` (the package's runner
+  is vitest; repo root has no workspaces declaration).
+- Learning citation expanded to its full repo path.
+- SDK binary citation corrected to the SDK-side binary name
+  (`claude-agent-sdk-linux-x64`, the binary the SDK actually spawns).
+
 ## Research Insights
 
 **Research agents used:** none spawned — `Reviewed-Coverage: sequential-fallback`
@@ -96,9 +162,11 @@ independent review).
   §2d exists to prevent.
 - **New finding beyond the issues:** the bridge-spawn dir is SDK-internal —
   `claude` binary computes it as `join(homedir(), ".claude", "bridge-spawn")`
-  (verified in the bundled `@anthropic-ai/claude-code-linux-x64` strings:
-  `Xzn="bridge-spawn", e5=J6(homedir→z6(), ".claude", Xzn)`; the
-  `ensureBridgeSpawnRootDir` mkdir wraps it). There is **no env override** —
+  (verified in the bundled SDK-side binary
+  `node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude` strings:
+  `bridge-spawn` + `ensureBridgeSpawnRootDir` markers; the sibling
+  `claude-code-linux-x64` binary carries the identical payload). There is
+  **no env override** —
   `CLAUDE_CONFIG_DIR` exists in the binary but the path is built from
   `homedir()` with a literal `".claude"` segment, not from the config dir.
   So the #8623 amendment's sub-rules (a) env-overridable and (b)
@@ -721,5 +789,5 @@ and the existing `ANTHROPIC_API_KEY` repo secret/Doppler entry.
 - Precedent tests: `apps/web-platform/test/sandbox-canary.test.ts` (C4
   staging describe at :532-579 is the mirror image of the new block)
 - SDK evidence: bundled
-  `node_modules/@anthropic-ai/claude-code-linux-x64/claude` —
-  `join(homedir(), ".claude", "bridge-spawn")` (`ensureBridgeSpawnRootDir`)
+  `apps/web-platform/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude`
+  — `join(homedir(), ".claude", "bridge-spawn")` (`ensureBridgeSpawnRootDir`)
