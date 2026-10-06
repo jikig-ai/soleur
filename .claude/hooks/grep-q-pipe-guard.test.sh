@@ -431,8 +431,8 @@ SWEEP_DEFERRALS=(
   'tests/* | <= | 181 | #9217'
   'plugins/soleur/test/* | <= | 140 | #9217'
   'plugins/soleur/*.test.sh | <= | 66 | #9217'
-  'apps/web-platform/*.test.sh | <= | 182 | #9217'
-  '.github/scripts/test/* | <= | 11 | #9217'
+  'apps/web-platform/*.test.sh | <= | 180 | #9217'
+  '.github/scripts/test/* | <= | 9 | #9217'
   'scripts/*.test.sh | <= | 128 | #9217'
   'scripts/test-* | <= | 6 | #9217'
   'scripts/lib/test-* | <= | 1 | #9217'
@@ -455,6 +455,12 @@ SWEEP_DEFERRALS=(
   # carrier byte-identical to that tag, so a one-token edit needs a new image AND a pin bump in cloud-init-inngest.yml (= an inngest host
   # replace). Convert it only in the PR that mints the next image tag, and delete the row there.
   'apps/web-platform/infra/inngest-luks-cutover.sh | = | 1 | #9217'
+  # A seventh and eighth, found at CI: converting these two put them in `lint-shell-trace-credential-refusal.py --changed` (ci.yml, a
+  # required check), which scans every TOUCHED file and fails on defects that predate this sweep: neither carries the xtrace refusal
+  # (#7797), and web-private-nic-guard.sh's credentialed curl lacks `--disable` / `--noproxy '*'` and an INGEST_URL pin. Those are
+  # credential-hardening changes to a host guard, not a mechanical grep rewrite, so they ride a PR that carries that review.
+  'apps/web-platform/infra/cron-egress-enforce-probe.sh | = | 2 | #9217'
+  'apps/web-platform/infra/web-private-nic-guard.sh | = | 4 | #9217'
 )
 
 # scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match
@@ -888,7 +894,7 @@ loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217
   || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
 # The loose-row check sees only `<=` rows, so a TIGHT production row would pass it. Every non-test-shaped row, in any mode, must be one of the
 # file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them. Adding a production row is then a visible two-place edit.
-GATED_PROD_ROWS=6
+GATED_PROD_ROWS=8
 prod_globs=""
 for _row in "${SWEEP_DEFERRALS[@]}"; do
   IFS='|' read -r _g _ <<<"$_row"; _g="${_g#"${_g%%[![:space:]]*}"}"; _g="${_g%"${_g##*[![:space:]]}"}"

@@ -41,13 +41,13 @@ PROBE_OK=true; [ -n "$IP_BIN" ] && [ -x "$IP_BIN" ] || PROBE_OK=false
 # trigger. -w + -F: exact word, fixed string — so 10.0.1.1 can never match inside 10.0.1.10, and
 # dots are not treated as regex wildcards.
 ip_present=false
-if [ "$PROBE_OK" = true ] && "$IP_BIN" -4 -o addr show 2>/dev/null | grep -cwF -- "$EXPECTED_IP" >/dev/null; then ip_present=true; fi
+if [ "$PROBE_OK" = true ] && "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED_IP"; then ip_present=true; fi
 # (2) Bounded wait — the attach can land AFTER boot (the registry guard's H2). Only runs when the
 # IP is already absent. ~30 x 2s.
 if [ "$ip_present" = false ] && [ "$PROBE_OK" = true ]; then
   for i in $(seq 1 30); do
     sleep 2
-    if "$IP_BIN" -4 -o addr show 2>/dev/null | grep -cwF -- "$EXPECTED_IP" >/dev/null; then ip_present=true; break; fi
+    if "$IP_BIN" -4 -o addr show 2>/dev/null | grep -qwF -- "$EXPECTED_IP"; then ip_present=true; break; fi
   done
 fi
 # (3) Facts (pure reads).
@@ -64,9 +64,9 @@ if [ "$IMDS_RC" -eq 0 ] && [ -n "$IMDS_BODY" ]; then
   # Corroborate on the EXPECTED ADDRESS, not merely "some network is attached" — a drifted
   # EXPECTED_IP would otherwise be corroborated by an unrelated attach. The `-?` is load-bearing:
   # IMDS returns a YAML LIST, so the address line is `- ip: <addr>` on the first key of each entry.
-  printf '%s\n' "$IMDS_BODY" | grep -cE "^[[:space:]]*-?[[:space:]]*ip:[[:space:]]*$EXPECTED_IP[[:space:]]*$" >/dev/null && IMDS_HAS_EXPECTED=true
+  printf '%s\n' "$IMDS_BODY" | grep -qE "^[[:space:]]*-?[[:space:]]*ip:[[:space:]]*$EXPECTED_IP[[:space:]]*$" && IMDS_HAS_EXPECTED=true
 fi
-printf '%s' "$IMDS_NETS" | grep -cE '^[0-9]+$' >/dev/null || IMDS_NETS=0
+printf '%s' "$IMDS_NETS" | grep -qE '^[0-9]+$' || IMDS_NETS=0
 # (5) Classify — NO converge action. converged_by records what the registry guard WOULD have done,
 # so the two telemetry streams stay comparable, but nic-absent terminates at `detect-only` here:
 # the web host never power-cycles the sole origin. imds_has_expected feeds the emit for H1/H2/third-
