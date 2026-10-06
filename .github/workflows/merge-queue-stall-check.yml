@@ -47,9 +47,25 @@ name: Merge queue stall check
 # the FALLBACK clock, kept byte-identical. That function's header is the single
 # authority for the timing story: detection latency, the margin against the 60
 # minute timeout (thin, and negative at the measured p90 runner wait), and why a
-# dispatch whose run is delayed on the runner pool is not detected, so the probe
+# dispatch whose run is delayed on the runner pool is detected ONE TICK LATE —
+# since #9513 the dispatcher reads the previous run's status/conclusion through
+# the `actions:write` token it already holds and reports a red or stuck run as
+# an error-status check-in, keeping the executor secretless — so the probe
 # stays BEST-EFFORT. The 60-minute timeout may count from the merge_group build
 # start rather than `enqueuedAt`, which would widen the real window (unverified).
+#
+# DRAIN (#9513): the "Drain stale stall issues" step self-closes open
+# `merge-queue-stall` issues whose filed `PR #N` is no longer OPEN (merged or
+# closed). It runs `if: always()` — an aborted detect run must not skip the
+# drain — inside the same job and grant: `gh issue view <pr>` answers
+# OPEN/CLOSED/MERGED for a PR number under the existing `issues: write`
+# permission, so no `pull-requests` scope is added. The sweep mirrors the
+# queue-health self-close conventions: a label-scoped enumeration (the search
+# index lags a just-labelled issue), a `-L 50` bound with a cap notice,
+# standalone-jq filtering (the `gh --jq` embedded jq does not forward `--arg`,
+# #9533), and fail-open behaviour — a failed enumeration or an unreadable
+# target state keeps the issue and retries next sweep; closing is the only
+# mutation and it needs a positively-read non-OPEN state.
 #
 # FALSE POSITIVES ARE POSSIBLE, BY CONSTRUCTION. The age is measured from `enqueuedAt`,
 # which is when the PR joined the queue, NOT when its own merge_group build started. An
@@ -236,3 +252,56 @@ jobs:
               --body "$body"
             echo "Filed stall issue for PR #${pr}."
           done <<<"$stalled"
+
+      - name: Drain stale stall issues
+        # always(): an aborted detect run must not skip the drain — the sweep
+        # is independent of the queue read (see DRAIN in the header).
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Self-close drain (#9513): a filed stall issue outlives its target.
+          # The probe only re-files while the entry's PR is OPEN, so an open
+          # `merge-queue-stall` issue whose target PR has left OPEN (merged or
+          # closed) is stale and self-closes here. Queue-health sweep shape:
+          # label-scoped enumeration (the search index lags), a bounded -L 50
+          # read with a cap notice, fail-open on every read (see DRAIN).
+          DRAIN_ERR="$(mktemp)"
+          if ! DRAIN_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+            --json number,title --label merge-queue-stall 2>"$DRAIN_ERR")"; then
+            echo "::error::stall-issue drain enumeration failed (gh issue list: $(LC_ALL=C tr -cd '\40-\176' <"$DRAIN_ERR" | head -c 300)) — skipping the drain this run; the next sweep retries."
+            exit 0
+          fi
+          # One `<issue>\t<pr>` pair per filed-shape title. The capture's
+          # ` pending` suffix keeps PR #1 from matching inside PR #12's title
+          # (the detect step's dedupe anchor documents the same trap). Titles
+          # without the anchor — hand-filed or renamed — yield an empty pr
+          # field and are skipped below, never closed. `gh --jq` does not
+          # forward --arg (#9533), so extraction runs in standalone jq.
+          pairs="$(printf '%s' "$DRAIN_LIST" | jq -r '.[] | [.number, (try (.title | capture("PR #(?<pr>[0-9]+) pending") | .pr) catch "")] | @tsv' 2>/dev/null || true)"
+          pair_count="$(printf '%s\n' "$pairs" | grep -c . || true)"
+          if [[ "$pair_count" -ge 50 ]]; then
+            echo "::notice::stall-issue drain hit the -L 50 enumeration cap; oldest matching issues stay open until the next sweep"
+          fi
+          while IFS=$'\t' read -r issue_no pr_no; do
+            [[ -n "$issue_no" && -n "$pr_no" ]] || continue
+            # `gh issue view` on a PR number returns its issue-projection —
+            # OPEN / CLOSED / MERGED — under this job's issues:write grant, so
+            # the drain needs no pull-requests scope widening. Only a
+            # positively-read non-OPEN state closes; anything else is kept.
+            VIEW_ERR="$(mktemp)"
+            state="$(gh issue view "$pr_no" --repo "$GH_REPO" --json state 2>"$VIEW_ERR" \
+              | jq -r '.state // empty' 2>/dev/null || true)"
+            if [[ -z "$state" ]]; then
+              echo "::warning::could not read PR #${pr_no} for stall issue #${issue_no} (gh issue view: $(LC_ALL=C tr -cd '\40-\176' <"$VIEW_ERR" | head -c 200)) — keeping the issue open."
+              continue
+            fi
+            [[ "$state" != "OPEN" ]] || continue
+            if gh issue close "$issue_no" --repo "$GH_REPO" \
+              --comment "Target PR #${pr_no} is now ${state} — the suspected stall it tracked is moot. Auto-closed by ${RUN_URL}"; then
+              echo "Drained stale stall issue #${issue_no} (PR #${pr_no} is ${state})."
+            else
+              echo "::warning::drain close failed for issue #${issue_no}; the next sweep retries."
+            fi
+          done <<<"$pairs"
