@@ -2797,7 +2797,7 @@ function pagesWithClaimKeys(entries: Entry[]): string[] {
     .map(({ rel }) => rel);
 }
 const citingInc = (entries: Entry[]): string[] =>
-  entries.filter(({ html }) => jsonLdStrings(html).some((x) => /inc\.com/i.test(x))).map(({ rel }) => rel);
+  entries.filter(({ html }) => jsonLdStrings(html).some((x) => x.toLowerCase().includes("inc.com"))).map(({ rel }) => rel);
 
 // Each phrase paired with a sentence it must catch: an emptied or mistyped pattern
 // then fails the self-test instead of reading as a clean scan.
