@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# bwrap PATH shim (#8752) — the Agent SDK spawns PATH-resolved `bwrap` (the
+# vendored argv builder's fd-passing contract is set in stone), so this shim
+# gives the agent sandbox what we control directly in the C4 chain:
+#
+#   1. inherited-fd hygiene — every fd above stderr that the argv does not
+#      reference is closed before the real bwrap runs (bwrap and libuv close
+#      nothing; a leaked socket/secret fd was measured reachable inside the
+#      sandbox).
+#   2. the shared nested-userns seccomp filter, injected as --add-seccomp-fd
+#      (repeatable, stacks with any future SDK filter; a hypothetical SDK
+#      --seccomp conflicts loudly at parse time instead of silently
+#      last-wins-overriding ours).
+#
+# Fd-contract notes:
+#   * `--args FD` carries the whole setup argv NUL-separated on a pipe. The fd
+#     is preserved (it is argv-referenced); its CONTENT is not inspected —
+#     reading a pipe would consume it. Any fd-referencing option a future SDK
+#     emits inside the payload stays invisible here; the deploy canary's
+#     replay is the load-bearing tripwire for that shape change.
+#   * The filter fd is auto-allocated (`exec {v}<`) so it cannot collide with
+#     an SDK-chosen fd number.
+#   * This script's own fd is preserved: bash reads it lazily, and the sweep
+#     would truncate the script mid-parse.
+#
+# Fail-closed: any setup anomaly exits 65 with a `bwrap-shim:` stderr marker —
+# never fall back to an unfiltered/unscrubbed spawn.
+
+set -u
+
+REAL=${SOLEUR_BWRAP_REAL:-/usr/bin/bwrap}
+BPF=${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}
+
+fail() {
+  printf 'bwrap-shim: %s\n' "$1" >&2
+  exit 65
+}
+
+# Probe passthrough: the SDK checks availability with `bwrap --version`
+# (failIfUnavailable). A lone probe builds no sandbox — exec verbatim.
+if [ "$#" -le 1 ]; then
+  case "${1:-}" in
+    --version|--help|"") [ -x "$REAL" ] || fail "real bwrap not executable: $REAL"
+                         exec "$REAL" "$@" ;;
+  esac
+fi
+
+# Preserve-set: fds the outer argv references by number (transport fd for
+# --args, plus every fd-consuming option bwrap accepts).
+preserve=""
+prev=""
+for tok in "$@"; do
+  case "$prev" in
+    --args|--seccomp|--add-seccomp-fd|--sync-fd|--info-fd|--json-status-fd|--block-fd|--userns-block-fd)
+      case "$tok" in
+        ''|*[!0-9]*) ;;  # non-numeric: let real bwrap report it; nothing to keep
+        *) preserve="$preserve $tok" ;;
+      esac
+      ;;
+  esac
+  prev=$tok
+done
+
+[ -x "$REAL" ] || fail "real bwrap not executable: $REAL"
+[ -r "$BPF" ] || fail "seccomp artifact not readable: $BPF"
+
+# Open the filter BEFORE the sweep (auto-allocated fd ≥10, no collision with a
+# preserved SDK fd).
+exec {bpf_fd}<"$BPF" || fail "cannot open seccomp artifact: $BPF"
+
+# The script's own fd must survive the sweep (bash re-reads a long script).
+self_path=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+
+for p in /proc/self/fd/*; do
+  n=${p##*/}
+  case "$n" in
+    ''|*[!0-9]*) continue ;;
+  esac
+  [ "$n" -gt 2 ] 2>/dev/null || continue
+  [ "$n" = "$bpf_fd" ] && continue
+  case " $preserve " in *" $n "*) continue ;; esac
+  target=$(readlink "$p" 2>/dev/null || true)
+  [ "$target" = "$self_path" ] && continue
+  eval "exec $n>&-" 2>/dev/null || true
+done
+
+exec "$REAL" --add-seccomp-fd "$bpf_fd" "$@"
