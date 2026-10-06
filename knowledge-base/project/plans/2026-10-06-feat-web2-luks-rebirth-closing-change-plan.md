@@ -14,6 +14,24 @@ requires_cpo_signoff: true
 
 # infra: land the closing change for the web-2 LUKS rebirth
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Scope Check (conformed to the Ask Mapping / Provenance / Split schema), Observability (literal `expected_output`), Encryption Posture (added), Guard Contract (re-checked by lint), Research Insights (live verification)
+**Inputs:** plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), CTO and CLO rulings, repo-research and learnings passes, offline scratch-copy measurements.
+
+### Key improvements
+
+1. Halt gates run mechanically: `## User-Brand Impact` valid (`single-user incident`); `## Observability` has all five fields, the probe is `bash scripts/web2-rebirth.sh flip-precondition yes` (allowlisted verb, no SSH, finishes well inside the 15 s cap) with the literal `MET`; PAT regex sweep clean; no UI surface, no network-outage trigger; `lint-guard-contract.py` green; exactly one unfenced `## Scope Check`.
+2. The Scope Check now carries a Split Assessment that exceeds two thresholds (6 subsystem roots, about 1,700 lines mostly deleted) and records why a single PR is kept (the brief requires one PR; the records assert the code state beside them).
+3. Live checks: #6897, #6931, #9372, #9377 are OPEN and #9481 is MERGED (`gh issue view`); the 17 non-`knowledge-base/project` paths naming `web-escrow-create` were re-counted; `origin/main` is `49d06d60a6`; the only rule ID cited, `cq-write-failing-tests-before`, exists in `AGENTS.md`; the parity baseline is 284 pass.
+
+### New considerations discovered
+
+- The `scheduled-followthrough-sweeper` skips a directive whose `earliest` is in the future and, at window close, only comments on an open tracker, so the real expiry enforcement stays with `lint-encryption-posture.py`; the pre-set date is advisory, not a second gate.
+- Merging fires a live push-apply (both workflows `active`); the drift run cited in AC10b is the read-only evidence that state already holds both web-class pair entries.
+- The ledger-flip blockers (linter binding regex, secret-pair co-location, shared web-1 row) were verified on a scratch copy; none required a repository change to find.
+
 ## Overview
 
 The rebirth workflow for the live web-2 standby (`web2-luks-rebirth.yml`, #9372) is merged and inert. Its first applying
@@ -115,17 +133,6 @@ all were checked and do not exist.
 | Both push-apply workflows paused (runbook item 2) | Both `active` | Merge fires a routine push-apply (no Terraform diff). Sharp Edge: the owner pauses both and waits for idle before any dispatch |
 | Step 0a "delete" (checklist item 9) | Step 0a also carries still-valid content: the R2 credential mint dependency, the live-preflight gate, the push-apply enable window, the "no creation route now" fact | Rewrite into Step 0 (CTO ruling); list what was re-homed in the PR body |
 | Issue comment: counts `create` "at those two addresses" | The filter counts six addresses for update/delete/forget | New web-class-only list for the create arm |
-
-## Scope Check
-
-| Ask item | Mapped plan items | Provenance |
-|---|---|---|
-| 1. Retire `apply-web-escrow-create.yml` and every coupled reference | Files to Delete (3); Files to Edit: parity test, vacuity floor, suite bounds and TSVs, C4, runbooks, ADR-263 | asked; list = the 2026-10-04 checklist on #9372 plus grep stragglers |
-| 2. Flip the rotation HALT `create` exemption | jq, apply-workflow HALT text, the destroy-guard rows, one real-tree flip row | asked |
-| 3. Ledger flip, floor, Article 30 / compliance-posture | Not implemented; decision-challenges.md; one tracking issue; runbook note | asked; deferred by ruling (User-Challenge) |
-| 4. Follow-through `earliest=` | Script header comment; post-merge issue-body edit | asked |
-
-No `inferred` item changes behavior. Inferred, doc-only: the runbook row-5 census wording, the ADR-263 dated markers, the rationale-runbook marker.
 
 ## Open Code-Review Overlap
 
@@ -295,7 +302,34 @@ logs:
   retention: Actions default
 discoverability_test:
   command: bash scripts/web2-rebirth.sh flip-precondition yes
-  expected_output: flip precondition: MET
+  expected_output: MET
+```
+
+## Encryption Posture
+
+This change introduces no persistent store and no connection; it is recorded because the plan names the web-2 volume and its
+passphrase. Nothing about the store changes.
+
+```yaml
+at_rest:
+  - store: hcloud_volume.workspaces["web-2"]
+    mechanism: plaintext-exception (unchanged: the live volume is ext4 and empty until the rebirth dispatch, then luks guest-side per ADR-263)
+    evidence: scripts/encryption-posture-ledger.json, the hcloud_volume.workspaces row (left byte-unchanged by this change)
+    defends_against: nothing at the volume layer today
+    does_not_defend: a seized or snapshot-imaged disk exposes any data resident on the volume (web-2 holds none); a leaked passphrase held in Doppler and Terraform state
+    disclosed_as: not-publicly-claimed
+    live_verification: unavailable:until the post-proof ledger flip (tracked in the issue filed by this change)
+in_transit:
+  - connection: none added or changed
+    tls: not applicable to this change (no connection is introduced)
+    cert_verification: on (unchanged)
+    does_not_defend: not applicable to this change
+    disclosed_as: not-publicly-claimed
+exception:
+  justification: the live web-2 volume is ext4 and empty; the existing ledger exception stands unchanged
+  tracking_issue: "#6897"
+  reevaluate_when: the rebirth completes and the post-proof ledger flip lands, or 2026-10-22 arrives first
+  expires_on: 2026-10-22
 ```
 
 ## User-Brand Impact
@@ -328,6 +362,45 @@ discoverability_test:
 **Assessment:** Three runbooks and one rationale marker change; no vendor, cost or account change. The merge fires a routine push-apply (both workflows active today); the owner pauses both and waits for idle before any dispatch.
 
 No Product/UX surface: no new user-facing file, no UI path in Files to Edit.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Retire `.github/workflows/apply-web-escrow-create.yml`: delete it plus its test (`apps/web-platform/infra/web-escrow-create-workflow.test.sh`), `scripts/web-escrow-create-names*` helper(s), and every reference the plan lists (central MAIN_ROOT_TF_WORKFLOWS list, runbooks `web-host-birth.md` / `web-host-replace.md` Step 0a, ADR-263, model.c4 edge text, tests that require the workflow to exist)" [brief] | Files to Delete (3); Files to Edit rows for the parity test, vacuity floor, suite bounds, both TSVs, `model.c4`, ADR-263, both runbooks; Phases 3 and 4 | mapped |
+| 2 | "Flip the rotation HALT `create` exemption in `tests/scripts/lib/destroy-guard-filter-web-platform.jq` so the rebirth workflow's `flip-precondition` step reads \"met\"; keep its tests and fixtures green" [brief] | Files to Edit rows for the jq, the destroy-guard suite, the apply HALT text; Phases 1 and 2; Guard 1 | mapped |
+| 3 | "Flip the `hcloud_volume.workspaces` ledger row to `luks` with `live_verification: available` and `live_coverage_floor` 2 -> 3, and update the Article 30 / compliance-posture sentences ONLY where the plan says they move with this change (do not claim the rebirth happened; it has not been dispatched)" [brief] | Not implemented; `decision-challenges.md`; tracking issue; runbook row 2 | descoped — justification: the parent plan, the runbook and the CLO place the flip after the graded reboot proof, it would assert LUKS for a volume that is still ext4, and `lint-encryption-posture.py` fails it today; recorded as a User-Challenge for the owner to overrule. Article 30 / compliance-posture: the plan says none of those sentences move with this change |
+| 4 | "Update the follow-through directive on issue #6931 (`scripts/followthroughs/web2-luks-live-6931.sh`, `earliest=`) to the plan's value for the decision date 2026-10-15 (exception expires 2026-10-22); edit the issue body only after the PR merges, and say so in the PR" [brief] | Files to Edit row for the script header; Post-merge step; AC12 | mapped |
+| 5 | "Run the relevant infra test suites (web2-luks-rebirth-workflow.test.sh, the destroy-guard filter tests, followthrough tests) and the full ship gates" [brief] | Acceptance Criteria AC3 to AC6, AC10b | mapped |
+| 6 | "do NOT dispatch `web2-luks-rebirth.yml` (plan_only or real), do NOT write Doppler secrets, do NOT mint tokens, do NOT run any Terraform apply or Hetzner write" [brief] | Overview; AC9 | mapped |
+| 7 | "Use `Ref #9372` in the PR body, not `Closes`" [brief] | AC10; Post-merge step | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Delete the workflow, its suite and `scripts/web-escrow-create-names.sh` | "delete it plus its test (`apps/web-platform/infra/web-escrow-create-workflow.test.sh`), `scripts/web-escrow-create-names*` helper(s)" | asked |
+| `terraform-target-parity.test.ts`, `guard-vacuity-floor.test.sh`, `run-registered-suites.sh`, both TSVs | "central MAIN_ROOT_TF_WORKFLOWS list ... tests that require the workflow to exist" (asks 1) | asked |
+| `model.c4` clause and regenerated `model.likec4.json` | "model.c4 edge text" | asked |
+| ADR-263 superseded blockquote | "ADR-263" | asked |
+| `web-host-birth.md` and `web-host-replace.md` Step 0a removal and Step 0 re-homing | "runbooks `web-host-birth.md` / `web-host-replace.md` Step 0a" | asked |
+| jq arm, `luks_passphrase_create_halt_addrs`, destroy-guard rows | "Flip the rotation HALT `create` exemption" | asked |
+| Apply-workflow HALT text | "keep its tests and fixtures green" (the HALT text is asserted by T60i and T64g and would otherwise be false) | inferred — justification: the old sentence ("the first create is the only legal verb") becomes false and two suite rows pin the wording; leaving it misleads whoever hits the HALT |
+| Real-tree `flip-precondition` row and renamed stale rows in `web2-rebirth.test.sh`; `web2-rebirth.sh` message strings | "so the rebirth workflow's `flip-precondition` step reads \"met\"" | inferred — justification: the existing rows stub the filter, so nothing proves the real tree reads MET; the failure text would otherwise tell a dispatcher to do what is already done |
+| `web2-luks-live-6931.sh` header comment, post-merge issue edit | "Update the follow-through directive on issue #6931 ... `earliest=`" | asked |
+| Runbook `web2-luks-rebirth-9372.md` rows (items 1 and 2, rows 2, 4, 5, 6) | the runbook's "Before the first dispatch" item 1 and "Closing checklist" (the brief's own citation of the runbook) | inferred — justification: the runbook is the dispatcher's checklist; after this change its item 1 is true, row 5's census count is wrong, and row 6's criterion cannot be met |
+| Rationale-runbook dated marker | "every reference the plan lists" | inferred — justification: it states that a `create` stays legal, which this change makes false for the web-class pair |
+| `decision-challenges.md` and the one tracking issue | "do not claim the rebirth happened; it has not been dispatched" | inferred — justification: the deferral of ask 3 must reach the owner and carry its prerequisites, per the deferral-tracking rule |
+| `tasks.md` | — | inferred — justification: pipeline contract consumed by the work phase |
+
+### Split Assessment
+
+- Subsystems touched: 6 — `.github`, `apps/web-platform`, `plugins/soleur`, `scripts`, `tests`, `knowledge-base`
+- Planned files: 26 (3 deleted, 21 edited, 2 specs created) | Estimated changed lines: about 1,700, most of them deleted lines (the retired workflow 402, its suite 819, the names reader 54)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: split — the seam would be code and guards (jq, tests, parity, registrations) versus records (ADR, C4, runbooks); declined, single PR kept: the brief requires "one PR", the records assert the code state they sit beside, and splitting would leave a window in which the parity census, the registrations or the runbooks name a deleted workflow
 
 ## Acceptance Criteria
 
