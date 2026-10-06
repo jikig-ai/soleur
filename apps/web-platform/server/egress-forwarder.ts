@@ -40,11 +40,16 @@ const log = createChildLogger("egress-forwarder");
 function egressTokenDir(): string {
   return process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens";
 }
-/** Baked into the image by PR-A (Dockerfile COPY infra/egress-forwarder.mjs).
+/** Baked into the image by PR-A (Dockerfile COPY infra/egress-forwarder.mjs
+ *  → /app/infra/egress-forwarder.mjs). The default is cwd-relative
+ *  (process.cwd() = /app in the image, apps/web-platform in dev/test) — an
+ *  absolute literal here gets statically traced by Turbopack as a module to
+ *  bundle and fails the production build ("Can't resolve '/app/infra/…'").
  *  Lazy-read for the same test-override reason. */
 function forwarderPath(): string {
   return (
-    process.env.EGRESS_FORWARDER_PATH ?? "/app/infra/egress-forwarder.mjs"
+    process.env.EGRESS_FORWARDER_PATH ??
+    join(process.cwd(), "infra", "egress-forwarder.mjs")
   );
 }
 /** How long to wait for the forwarder's `egress-forwarder-listening <port>` line. */
