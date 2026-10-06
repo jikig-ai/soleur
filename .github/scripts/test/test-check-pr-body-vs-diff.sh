@@ -120,8 +120,8 @@ fi
 # same PR when the SUT changes.
 match_in_diff() {
   local path="$1" diff_paths="$2"
-  if echo "$diff_paths" | grep -Fxq "$path" \
-     || echo "$diff_paths" | grep -Fq "/$path"; then
+  if echo "$diff_paths" | grep -Fxc "$path" >/dev/null \
+     || echo "$diff_paths" | grep -Fc "/$path" >/dev/null; then
     return 0
   fi
   return 1

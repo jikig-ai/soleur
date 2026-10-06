@@ -28,7 +28,7 @@ jobs:
         run: |
           gh label create "type/security" --description "Security vulnerability, hardening, or audit finding" --color "DC143C" 2>/dev/null || true
           TITLE=$(gh issue view "$ISSUE_NUMBER" --json title --jq '.title')
-          if echo "$TITLE" | grep -qi '^sec:'; then
+          if echo "$TITLE" | grep -ci '^sec:' >/dev/null; then
             HAS_LABEL=$(gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' | grep -c '^type/security$' || true)
             if [ "$HAS_LABEL" = "0" ]; then
               gh issue edit "$ISSUE_NUMBER" --add-label "type/security"

@@ -281,7 +281,7 @@ jobs:
             if [[ "$curl_rc" != "0" ]]; then
               fail_mode="pool_probe_unavailable"
               fail_detail="curl failed (rc=${curl_rc}) against Supabase Management API — pool probe degraded."
-            elif printf '%s' "$body" | grep -qF 'EMAXCONNSESSION'; then
+            elif printf '%s' "$body" | grep -cF 'EMAXCONNSESSION' >/dev/null; then
               # The pooler rejected a client connection — already at the cap. This
               # EMAXCONNSESSION 5xx-body check is the reliable cliff detector and is
               # independent of the count metric below.

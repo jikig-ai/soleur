@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
-# default-weight-ms=979
-# generated-at=2026-10-05T19:17:53Z
+# default-weight-ms=996
+# generated-at=2026-10-06T07:48:27Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -186,6 +186,7 @@ plugins/soleur/test/infra-validation-detect.test.sh	55	measured
 plugins/soleur/test/issue-flow-measure.test.sh	100	measured
 plugins/soleur/test/kb-caches-untracked.test.sh	64	measured
 plugins/soleur/test/kb-search-lockstep.test.sh	12	measured
+plugins/soleur/test/kb-search-support-path.test.sh	996	floor
 plugins/soleur/test/lane-frontmatter.test.sh	37	measured
 plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh	81	measured
 plugins/soleur/test/lefthook-typecheck-heap.test.sh	74	measured

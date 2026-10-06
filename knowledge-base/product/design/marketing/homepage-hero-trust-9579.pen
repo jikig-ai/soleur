@@ -1,0 +1,3505 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "jAiOI",
+      "x": 0,
+      "y": 0,
+      "name": "A - Current hero (reference, 1440)",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Y9TlCH",
+          "name": "Site header (unchanged)",
+          "width": "fill_container",
+          "height": 64,
+          "stroke": "$border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "padding": [
+            0,
+            40
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Qt0Iv",
+              "name": "Logo",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "zWQ2N",
+                  "name": "Mark",
+                  "width": 24,
+                  "height": 24,
+                  "cornerRadius": 6,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "YPUsr",
+                      "name": "S",
+                      "fill": "$accent",
+                      "content": "S",
+                      "fontFamily": "$font-display",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "wd00l",
+                  "name": "Wordmark",
+                  "fill": "$text-2",
+                  "content": "SOLEUR",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "gcSSJ",
+              "name": "Nav",
+              "fill": "$text-2",
+              "content": "nav links (unchanged)",
+              "fontFamily": "$font-body",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "LduGz",
+          "name": "Hero (.landing-hero)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            96,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "JqQMs",
+              "name": "Eyebrow",
+              "fill": "$accent",
+              "content": "COMPANY-AS-A-SERVICE",
+              "fontFamily": "$font-body",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "aHWWx",
+              "name": "H1",
+              "fill": "$text",
+              "content": "Stop hiring. Start delegating.",
+              "lineHeight": 1.05,
+              "textAlign": "center",
+              "fontFamily": "$font-display",
+              "fontSize": 72,
+              "fontWeight": "500",
+              "letterSpacing": -1.4
+            },
+            {
+              "type": "text",
+              "id": "f5qvM",
+              "name": "Tagline",
+              "fill": "$text-2",
+              "textGrowth": "fixed-width",
+              "width": 900,
+              "content": "The Company-as-a-Service platform that already knows your business. Build a billion-dollar company - alone.",
+              "lineHeight": 1.4,
+              "textAlign": "center",
+              "fontFamily": "$font-body",
+              "fontSize": 24,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "VzLdm",
+              "name": "hero-sub",
+              "fill": "$text-2",
+              "textGrowth": "fixed-width",
+              "width": 700,
+              "content": "Soleur is the source-available Company-as-a-Service platform: 60+ AI agents across 8 business departments - engineering, marketing, legal, finance, operations, product, sales, and support - giving one founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "$font-body",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "B1ElQ",
+              "name": "hero-trust",
+              "fill": "$text-2",
+              "content": "Human-in-the-loop. Your expertise, amplified.",
+              "fontFamily": "$font-body",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "ZLf5L",
+              "name": "Form (.hero-waitlist-form)",
+              "width": 560,
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "WANMF",
+                  "name": "Email input",
+                  "width": "fill_container",
+                  "height": 46,
+                  "fill": "$input-bg",
+                  "cornerRadius": 4,
+                  "stroke": "$border",
+                  "strokeWidth": 1,
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "neSXe",
+                      "name": "Placeholder",
+                      "fill": "$text-3",
+                      "content": "Enter your email address",
+                      "fontFamily": "$font-body",
+                      "fontSize": 16,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "F2HqKg",
+                  "name": "Button - Join the waitlist (btn-primary)",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 4,
+                  "padding": [
+                    12,
+                    24
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "qPNJy",
+                      "name": "Label",
+                      "fill": "$text-inverse",
+                      "content": "Join the waitlist",
+                      "fontFamily": "$font-body",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rrH48",
+              "name": "sr-only privacy (invisible today)",
+              "width": 560,
+              "cornerRadius": 4,
+              "stroke": "$accent",
+              "strokeWidth": 1,
+              "padding": [
+                8,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "IIY2M",
+                  "name": "Hidden privacy text",
+                  "fill": "$accent",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "[sr-only, not visible]  We'll only email you about your Soleur waitlist spot. Unsubscribe anytime. Privacy Policy.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "LPpYs",
+              "name": "Links (.hero-cta)",
+              "gap": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ZeukG",
+                  "name": "Link - self-host",
+                  "fill": "$accent",
+                  "content": "Or self-host it free ->",
+                  "fontFamily": "$font-body",
+                  "fontSize": 16,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "s2clBh",
+                  "name": "Link - compare",
+                  "fill": "$accent",
+                  "content": "How Soleur compares to Cursor & Copilot ->",
+                  "fontFamily": "$font-body",
+                  "fontSize": 16,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "R9yEQr",
+      "x": 0,
+      "y": 1000,
+      "name": "B - Proposed hero (1440)",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "n7aHzJ",
+          "name": "Site header (unchanged)",
+          "width": "fill_container",
+          "height": 64,
+          "stroke": "$border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "padding": [
+            0,
+            40
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "YBNcY",
+              "name": "Logo",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "u6Wt9G",
+                  "name": "Mark",
+                  "width": 24,
+                  "height": 24,
+                  "cornerRadius": 6,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "t3uiX",
+                      "name": "S",
+                      "fill": "$accent",
+                      "content": "S",
+                      "fontFamily": "$font-display",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "giKgx",
+                  "name": "Wordmark",
+                  "fill": "$text-2",
+                  "content": "SOLEUR",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "JnCMi",
+              "name": "Nav",
+              "fill": "$text-2",
+              "content": "nav links (unchanged)",
+              "fontFamily": "$font-body",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "QzaN1",
+          "name": "Hero (.landing-hero)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            96,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "DAvDC",
+              "name": "Eyebrow wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RXKj6",
+                  "name": "Eyebrow",
+                  "fill": "$accent",
+                  "content": "COMPANY-AS-A-SERVICE",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 3
+                },
+                {
+                  "type": "frame",
+                  "id": "UScYC",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": -6,
+                  "name": "Read order 1",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "qkk3l",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "1",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "IlR6i",
+              "name": "H1 wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "R5m0I0",
+                  "name": "H1",
+                  "fill": "$text",
+                  "content": "Stop hiring. Start delegating.",
+                  "lineHeight": 1.05,
+                  "textAlign": "center",
+                  "fontFamily": "$font-display",
+                  "fontSize": 72,
+                  "fontWeight": "500",
+                  "letterSpacing": -1.4
+                },
+                {
+                  "type": "frame",
+                  "id": "UB2Ey",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 24,
+                  "name": "Read order 2",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "OQSU5",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "2",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "SsBnE",
+              "name": "Tagline wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ssPJJ",
+                  "name": "Tagline",
+                  "fill": "$text-2",
+                  "textGrowth": "fixed-width",
+                  "width": 900,
+                  "content": "The Company-as-a-Service platform that already knows your business. Build a billion-dollar company - alone.",
+                  "lineHeight": 1.4,
+                  "textAlign": "center",
+                  "fontFamily": "$font-body",
+                  "fontSize": 24,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "oVDa2",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 4,
+                  "name": "Read order 3",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "qCZRX",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "3",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "nhRNQ",
+              "name": "hero-sub wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "c1yzJt",
+                  "name": "hero-sub",
+                  "fill": "$text-2",
+                  "textGrowth": "fixed-width",
+                  "width": 700,
+                  "content": "Soleur is the source-available Company-as-a-Service platform: 60+ AI agents across 8 business departments - engineering, marketing, legal, finance, operations, product, sales, and support - giving one founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.",
+                  "lineHeight": 1.6,
+                  "textAlign": "center",
+                  "fontFamily": "$font-body",
+                  "fontSize": 18,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "CXcpo",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 4,
+                  "name": "Read order 4",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "OKtQC",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "4",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "j73t6M",
+              "name": "Primary CTA group (self-hosted)",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": [
+                20,
+                0,
+                0,
+                0
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "arQE5",
+                  "name": "Link as button - Run Soleur today (btn-primary)",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 4,
+                  "padding": [
+                    18,
+                    44
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "r6LjjP",
+                      "name": "Label",
+                      "fill": "$text-inverse",
+                      "content": "Run Soleur today",
+                      "fontFamily": "$font-body",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "dpBB4",
+                  "name": "Sub-label (hero-run-sub)",
+                  "fill": "$text-2",
+                  "content": "Self-hosted, inside your own Claude Code",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "VeyXD",
+                  "layoutPosition": "absolute",
+                  "x": -66,
+                  "y": 16,
+                  "name": "Read order 5",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NseYq",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "5",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "e1juOd",
+                  "layoutPosition": "absolute",
+                  "x": -132,
+                  "y": 16,
+                  "name": "Tab stop 1",
+                  "height": 24,
+                  "fill": "$bg",
+                  "cornerRadius": 4,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "qwg4m",
+                      "name": "t",
+                      "fill": "$accent",
+                      "content": "TAB 1",
+                      "fontFamily": "$font-body",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "nk7UA",
+              "name": "spacer",
+              "width": 10,
+              "height": 4
+            },
+            {
+              "type": "frame",
+              "id": "NBoci",
+              "name": "Hosted block (coming soon)",
+              "width": 560,
+              "fill": "$bg-2",
+              "cornerRadius": 8,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 14,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "I3DlL",
+                  "name": "Group label",
+                  "fill": "$text",
+                  "content": "Hosted version (coming soon)",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "ghrap",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 22,
+                  "name": "Read order 6",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ShCJJ",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "6",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "G8GKQ",
+                  "name": "Form row (.hero-waitlist-form)",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "jdGsU",
+                      "name": "Email input",
+                      "width": "fill_container",
+                      "height": 46,
+                      "fill": "$input-bg",
+                      "cornerRadius": 4,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "F9MLbf",
+                          "name": "Placeholder",
+                          "fill": "$text-3",
+                          "content": "Enter your email address",
+                          "fontFamily": "$font-body",
+                          "fontSize": 16,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ct1FS",
+                      "name": "Button - Join the waitlist (btn-secondary)",
+                      "cornerRadius": 4,
+                      "stroke": "$border-strong",
+                      "strokeWidth": 1,
+                      "padding": [
+                        12,
+                        24
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "hRix7",
+                          "name": "Label",
+                          "fill": "$text",
+                          "content": "Join the waitlist",
+                          "fontFamily": "$font-body",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "jYlNE",
+                  "name": "Privacy line (#homepage-waitlist-privacy, now visible)",
+                  "fill": "$text-3",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "We'll email you about Soleur updates, including when waitlist access opens. Unsubscribe any time. Email handled by Buttondown, our email provider. Privacy Policy.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "I44vw4",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 62,
+                  "name": "Read order 7",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "wVpeH",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "7",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "xJqsX",
+                  "layoutPosition": "absolute",
+                  "x": -104,
+                  "y": 62,
+                  "name": "Tab stop 2",
+                  "height": 24,
+                  "fill": "$bg",
+                  "cornerRadius": 4,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "G5132",
+                      "name": "t",
+                      "fill": "$accent",
+                      "content": "TAB 2",
+                      "fontFamily": "$font-body",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "l5GjFC",
+                  "layoutPosition": "absolute",
+                  "x": 572,
+                  "y": 62,
+                  "name": "Read order 8",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "rSE5F",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "8",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "u7o46D",
+                  "layoutPosition": "absolute",
+                  "x": 604,
+                  "y": 62,
+                  "name": "Tab stop 3",
+                  "height": 24,
+                  "fill": "$bg",
+                  "cornerRadius": 4,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "s9GK6X",
+                      "name": "t",
+                      "fill": "$accent",
+                      "content": "TAB 3",
+                      "fontFamily": "$font-body",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "FBx7T",
+                  "layoutPosition": "absolute",
+                  "x": 572,
+                  "y": 118,
+                  "name": "Read order 9",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "JgLJ9",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "9",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "d1Cm0N",
+                  "layoutPosition": "absolute",
+                  "x": 604,
+                  "y": 118,
+                  "name": "Tab stop 4",
+                  "height": 24,
+                  "fill": "$bg",
+                  "cornerRadius": 4,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "e79Fke",
+                      "name": "t",
+                      "fill": "$accent",
+                      "content": "TAB 4 link",
+                      "fontFamily": "$font-body",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Qi715",
+              "name": "Plan line (two separate parts)",
+              "width": 880,
+              "gap": 32,
+              "padding": [
+                8,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "XnIm4",
+                  "name": "Plan - Self-hosted",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mu76G",
+                      "name": "Plan text - self-hosted",
+                      "fill": "$text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Self-hosted: runs inside your own Claude Code, signed in with your Claude plan or an Anthropic API key.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-body",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "YFUxu",
+                  "name": "Divider",
+                  "fill": "$border-strong",
+                  "width": 1,
+                  "height": 44
+                },
+                {
+                  "type": "frame",
+                  "id": "N3nYY7",
+                  "name": "Plan - Hosted",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "muXrN",
+                      "name": "Plan text - hosted",
+                      "fill": "$text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Hosted (waitlist): bring your own Anthropic API key, billed by Anthropic to you.",
+                      "lineHeight": 1.5,
+                      "fontFamily": "$font-body",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "LGfoE",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 8,
+                  "name": "Read order 10",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "fxD32",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "10",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "r4WQNp",
+              "name": "Compare link wrap",
+              "layout": "vertical",
+              "padding": [
+                4,
+                0,
+                0,
+                0
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hk3po",
+                  "name": "Link - compare",
+                  "fill": "$accent",
+                  "content": "How Soleur compares to Cursor ->",
+                  "fontFamily": "$font-body",
+                  "fontSize": 16,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "aA9FY",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 0,
+                  "name": "Read order 11",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "lYtPE",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "11",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Jt87E",
+                  "layoutPosition": "absolute",
+                  "x": -104,
+                  "y": 0,
+                  "name": "Tab stop 5",
+                  "height": 24,
+                  "fill": "$bg",
+                  "cornerRadius": 4,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "YJgtS",
+                      "name": "t",
+                      "fill": "$accent",
+                      "content": "TAB 5",
+                      "fontFamily": "$font-body",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "r53MvB",
+      "x": 0,
+      "y": 2250,
+      "name": "C - Proposed hero mobile (390)",
+      "clip": true,
+      "width": 390,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "TcWlU",
+          "name": "Site header (unchanged)",
+          "width": "fill_container",
+          "height": 64,
+          "stroke": "$border",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "padding": [
+            0,
+            20
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ApaRs",
+              "name": "Logo",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "F4BS0",
+                  "name": "Mark",
+                  "width": 24,
+                  "height": 24,
+                  "cornerRadius": 6,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "byq4N",
+                      "name": "S",
+                      "fill": "$accent",
+                      "content": "S",
+                      "fontFamily": "$font-display",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "dfuiX",
+                  "name": "Wordmark",
+                  "fill": "$text-2",
+                  "content": "SOLEUR",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "500",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "VHKwS",
+              "name": "Nav",
+              "fill": "$text-2",
+              "content": "menu",
+              "fontFamily": "$font-body",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "DKaxe",
+          "name": "Hero (.landing-hero)",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            48,
+            20,
+            56,
+            20
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "YVab2",
+              "name": "Eyebrow",
+              "fill": "$accent",
+              "content": "COMPANY-AS-A-SERVICE",
+              "fontFamily": "$font-body",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "LJc4L",
+              "name": "H1 (text-3xl, 36px at <=768)",
+              "fill": "$text",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Stop hiring. Start delegating.",
+              "lineHeight": 1.1,
+              "textAlign": "center",
+              "fontFamily": "$font-display",
+              "fontSize": 36,
+              "fontWeight": "500",
+              "letterSpacing": -0.7
+            },
+            {
+              "type": "text",
+              "id": "JtHt0",
+              "name": "Tagline",
+              "fill": "$text-2",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "The Company-as-a-Service platform that already knows your business. Build a billion-dollar company - alone.",
+              "lineHeight": 1.4,
+              "textAlign": "center",
+              "fontFamily": "$font-body",
+              "fontSize": 24,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "CZhf2",
+              "name": "hero-sub",
+              "fill": "$text-2",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Soleur is the source-available Company-as-a-Service platform: 60+ AI agents across 8 business departments - engineering, marketing, legal, finance, operations, product, sales, and support - giving one founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.",
+              "lineHeight": 1.6,
+              "textAlign": "center",
+              "fontFamily": "$font-body",
+              "fontSize": 18,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "U5VTOn",
+              "name": "Primary CTA group (self-hosted)",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": [
+                12,
+                0,
+                0,
+                0
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "sx7UO",
+                  "name": "Link as button - Run Soleur today (full width)",
+                  "width": "fill_container",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 180,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "cornerRadius": 4,
+                  "padding": [
+                    16,
+                    24
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "LAIFV",
+                      "name": "Label",
+                      "fill": "$text-inverse",
+                      "content": "Run Soleur today",
+                      "fontFamily": "$font-body",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "l0tOpZ",
+                  "name": "Sub-label (hero-run-sub)",
+                  "fill": "$text-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Self-hosted, inside your own Claude Code",
+                  "textAlign": "center",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "iQlnW",
+              "name": "Hosted block (coming soon)",
+              "width": "fill_container",
+              "fill": "$bg-2",
+              "cornerRadius": 8,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "x0ZnB",
+                  "name": "Group label",
+                  "fill": "$text",
+                  "content": "Hosted version (coming soon)",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "r8g1H",
+                  "name": "Form (stacked at <=768: flex 1 1 100%)",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "jJ52E",
+                      "name": "Email input",
+                      "width": "fill_container",
+                      "height": 46,
+                      "fill": "$input-bg",
+                      "cornerRadius": 4,
+                      "stroke": "$border",
+                      "strokeWidth": 1,
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "x6VOi",
+                          "name": "Placeholder",
+                          "fill": "$text-3",
+                          "content": "Enter your email address",
+                          "fontFamily": "$font-body",
+                          "fontSize": 16,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "J2ngD",
+                      "name": "Button - Join the waitlist (full width)",
+                      "width": "fill_container",
+                      "cornerRadius": 4,
+                      "stroke": "$border-strong",
+                      "strokeWidth": 1,
+                      "padding": [
+                        14,
+                        24
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "kzBVn",
+                          "name": "Label",
+                          "fill": "$text",
+                          "content": "Join the waitlist",
+                          "fontFamily": "$font-body",
+                          "fontSize": 16,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "NrG3u",
+                  "name": "Privacy line (visible)",
+                  "fill": "$text-3",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "We'll email you about Soleur updates, including when waitlist access opens. Unsubscribe any time. Email handled by Buttondown, our email provider. Privacy Policy.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "iYPNX",
+              "name": "Plan line (stacked)",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                8,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "oS2qh",
+                  "name": "Plan text - self-hosted",
+                  "fill": "$text-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Self-hosted: runs inside your own Claude Code, signed in with your Claude plan or an Anthropic API key.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "rectangle",
+                  "id": "LNsGJ",
+                  "name": "Divider",
+                  "fill": "$border-strong",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "aX4Xa",
+                  "name": "Plan text - hosted",
+                  "fill": "$text-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Hosted (waitlist): bring your own Anthropic API key, billed by Anthropic to you.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "V6T7w",
+              "name": "Link - compare",
+              "fill": "$accent",
+              "content": "How Soleur compares to Cursor ->",
+              "fontFamily": "$font-body",
+              "fontSize": 16,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "IHtP4",
+      "x": 0,
+      "y": 4200,
+      "name": "D1 - Quote + press strip CURRENT (reference, 1440)",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "UjQuo",
+          "name": "landing-quote",
+          "width": "fill_container",
+          "fill": "$bg-2",
+          "stroke": "$border",
+          "strokeWidth": {
+            "top": 1,
+            "bottom": 1
+          },
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            96,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "IJX9v",
+              "name": "blockquote (verbatim, quote marks)",
+              "fill": "$text",
+              "textGrowth": "fixed-width",
+              "width": 800,
+              "content": "“I would not be surprised if the first single-person billion-dollar company … happens in the next couple of years.”",
+              "lineHeight": 1.5,
+              "textAlign": "center",
+              "fontFamily": "$font-display",
+              "fontSize": 28,
+              "fontWeight": "normal",
+              "fontStyle": "italic"
+            },
+            {
+              "type": "text",
+              "id": "z5fukc",
+              "name": "cite",
+              "fill": "$accent",
+              "content": "— Dario Amodei, CEO of Anthropic, assigning a 70–80% probability",
+              "fontFamily": "$font-body",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "BYzSb",
+              "layoutPosition": "absolute",
+              "x": 24,
+              "y": 24,
+              "name": "Tab stop 0",
+              "height": 24,
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$accent",
+              "strokeWidth": 1,
+              "padding": [
+                0,
+                8
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "bxeSR",
+                  "name": "t",
+                  "fill": "$accent",
+                  "content": "REPLACED BY D2",
+                  "fontFamily": "$font-body",
+                  "fontSize": 11,
+                  "fontWeight": "700",
+                  "letterSpacing": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "X62TrD",
+          "name": "landing-press-strip",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": [
+            64,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "r3yDg",
+              "name": "press-strip-heading",
+              "fill": "$accent",
+              "content": "AS SEEN IN",
+              "fontFamily": "$font-body",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "frame",
+              "id": "O2y4w1",
+              "name": "press-outlet",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nKPDC",
+                  "name": "press-outlet-name",
+                  "fill": "$text",
+                  "content": "Inc.com",
+                  "fontFamily": "$font-body",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "K1NrTO",
+                  "name": "press-outlet-context",
+                  "fill": "$text-2",
+                  "content": "— The thesis behind Soleur, as reported on the billion-dollar solo founder.",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "UvwSj",
+              "layoutPosition": "absolute",
+              "x": 24,
+              "y": 24,
+              "name": "Tab stop 0",
+              "height": 24,
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$accent",
+              "strokeWidth": 1,
+              "padding": [
+                0,
+                8
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nWNze",
+                  "name": "t",
+                  "fill": "$accent",
+                  "content": "REMOVED (see D2)",
+                  "fontFamily": "$font-body",
+                  "fontSize": 11,
+                  "fontWeight": "700",
+                  "letterSpacing": 1
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "SmGht",
+      "x": 0,
+      "y": 5100,
+      "name": "D2 - Attributed paraphrase PROPOSED (1440)",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "t5eaf5",
+          "name": "landing-attribution (replaces landing-quote + landing-press-strip)",
+          "width": "fill_container",
+          "fill": "$bg-2",
+          "stroke": "$border",
+          "strokeWidth": {
+            "top": 1,
+            "bottom": 1
+          },
+          "layout": "vertical",
+          "gap": 20,
+          "padding": [
+            80,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "ua0VR",
+              "name": "Paraphrase wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "E4wf7",
+                  "name": "Paraphrase (no quotation marks)",
+                  "fill": "$text",
+                  "textGrowth": "fixed-width",
+                  "width": 800,
+                  "content": "Anthropic CEO Dario Amodei has predicted that the first billion-dollar company run by a single person could arrive within the next couple of years, and put the odds at 70–80%.",
+                  "lineHeight": 1.5,
+                  "textAlign": "center",
+                  "fontFamily": "$font-display",
+                  "fontSize": 28,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "frame",
+                  "id": "GvHL9",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": 10,
+                  "name": "Read order 1",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZVBPa",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "1",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "i1xMU",
+              "name": "Source link wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "STRrQ",
+                  "name": "Source link",
+                  "fill": "$accent",
+                  "content": "Read the Inc. report ->",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "J3jGa",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": -4,
+                  "name": "Read order 2",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "UmMo3",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "2",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "dIDOi",
+                  "layoutPosition": "absolute",
+                  "x": -104,
+                  "y": -4,
+                  "name": "Tab stop 1",
+                  "height": 24,
+                  "fill": "$bg",
+                  "cornerRadius": 4,
+                  "stroke": "$accent",
+                  "strokeWidth": 1,
+                  "padding": [
+                    0,
+                    8
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Zr3KI",
+                      "name": "t",
+                      "fill": "$accent",
+                      "content": "TAB 1",
+                      "fontFamily": "$font-body",
+                      "fontSize": 11,
+                      "fontWeight": "700",
+                      "letterSpacing": 1
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "H9OSs",
+              "name": "Non-affiliation wrap",
+              "layout": "vertical",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "wqKQ4",
+                  "name": "Non-affiliation note",
+                  "fill": "$text-3",
+                  "textGrowth": "fixed-width",
+                  "width": 640,
+                  "content": "Soleur is an independent project. It is not affiliated with, endorsed by, or sponsored by Anthropic or Inc.com.",
+                  "lineHeight": 1.5,
+                  "textAlign": "center",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "lFw2T",
+                  "layoutPosition": "absolute",
+                  "x": -38,
+                  "y": -4,
+                  "name": "Read order 3",
+                  "width": 24,
+                  "height": 24,
+                  "fill": "$accent",
+                  "cornerRadius": 12,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "euTtm",
+                      "name": "n",
+                      "fill": "$text-inverse",
+                      "content": "3",
+                      "fontFamily": "$font-body",
+                      "fontSize": 12,
+                      "fontWeight": "700"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "lk0HL",
+      "x": 0,
+      "y": 6100,
+      "name": "E - FAQ section end + community line (1440)",
+      "clip": true,
+      "width": 1440,
+      "fill": "$bg",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "J8cR9f",
+          "name": "FAQ section (landing-section) - end",
+          "width": "fill_container",
+          "layout": "vertical",
+          "padding": [
+            64,
+            40,
+            72,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "t3W7yy",
+              "name": "faq-list (max 75ch)",
+              "width": 760,
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "p2osNP",
+                  "name": "Earlier FAQ items (unchanged)",
+                  "fill": "$text-3",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "...",
+                  "fontFamily": "$font-body",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "t9tLx",
+                  "name": "faq-item - Who is Soleur for?",
+                  "width": "fill_container",
+                  "stroke": "$border",
+                  "strokeWidth": {
+                    "bottom": 1
+                  },
+                  "layout": "vertical",
+                  "padding": [
+                    16,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "HAE2P",
+                      "name": "faq-question row",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Wn2EI",
+                          "name": "marker",
+                          "fill": "$accent",
+                          "content": "+",
+                          "fontFamily": "$font-body",
+                          "fontSize": 20,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "JGNFt",
+                          "name": "question",
+                          "fill": "$text",
+                          "content": "Who is Soleur for?",
+                          "fontFamily": "$font-body",
+                          "fontSize": 20,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "K5e3cT",
+                  "name": "faq-item - How do I get started? (open)",
+                  "width": "fill_container",
+                  "stroke": "$border",
+                  "strokeWidth": {
+                    "bottom": 1
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    16,
+                    0
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ILiQm",
+                      "name": "faq-question row",
+                      "gap": 8,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "FtTt8",
+                          "name": "marker",
+                          "fill": "$accent",
+                          "content": "-",
+                          "fontFamily": "$font-body",
+                          "fontSize": 20,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "text",
+                          "id": "GMBIE",
+                          "name": "question",
+                          "fill": "$text",
+                          "content": "How do I get started?",
+                          "fontFamily": "$font-body",
+                          "fontSize": 20,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "Df6Qz",
+                      "name": "faq-answer",
+                      "fill": "$text-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Join the waitlist for the cloud platform, or install the self-hosted version and run /soleur:go to start. Describe what you need - build a feature, validate a business idea, generate legal documents, run a competitive analysis - and Soleur routes to the right workflow.",
+                      "lineHeight": 1.7,
+                      "fontFamily": "$font-body",
+                      "fontSize": 16,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uKTSw",
+                  "name": "Community line (NEW)",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "padding": [
+                    40,
+                    0,
+                    0,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ECHWS",
+                      "name": "Community line row",
+                      "gap": 6,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "XeAb4",
+                          "name": "Community text",
+                          "fill": "$text-2",
+                          "content": "Questions we didn't cover?",
+                          "fontFamily": "$font-body",
+                          "fontSize": 16,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "dTl4T",
+                          "name": "Discord link",
+                          "fill": "$accent",
+                          "content": "Ask in the Soleur Discord.",
+                          "fontFamily": "$font-body",
+                          "fontSize": 16,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "kiQW0",
+                      "layoutPosition": "absolute",
+                      "x": -38,
+                      "y": 38,
+                      "name": "Read order 1",
+                      "width": 24,
+                      "height": 24,
+                      "fill": "$accent",
+                      "cornerRadius": 12,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "hFAw9",
+                          "name": "n",
+                          "fill": "$text-inverse",
+                          "content": "1",
+                          "fontFamily": "$font-body",
+                          "fontSize": 12,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "JPOae",
+                      "layoutPosition": "absolute",
+                      "x": -104,
+                      "y": 38,
+                      "name": "Tab stop 1",
+                      "height": 24,
+                      "fill": "$bg",
+                      "cornerRadius": 4,
+                      "stroke": "$accent",
+                      "strokeWidth": 1,
+                      "padding": [
+                        0,
+                        8
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "CKEeb",
+                          "name": "t",
+                          "fill": "$accent",
+                          "content": "TAB 1",
+                          "fontFamily": "$font-body",
+                          "fontSize": 11,
+                          "fontWeight": "700",
+                          "letterSpacing": 1
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Y3ucKu",
+          "name": "Final CTA (landing-cta) - unchanged",
+          "width": "fill_container",
+          "fill": "$bg-2",
+          "stroke": "$border",
+          "strokeWidth": {
+            "top": 1
+          },
+          "layout": "vertical",
+          "gap": 14,
+          "padding": [
+            72,
+            40
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "v5kOB",
+              "name": "H2",
+              "fill": "$text-2",
+              "content": "The team you can't afford to hire is already built.",
+              "textAlign": "center",
+              "fontFamily": "$font-display",
+              "fontSize": 42,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "loruV",
+              "name": "sub",
+              "fill": "$text-3",
+              "content": "60+ agents across 8 departments. One knowledge base that remembers everything.",
+              "fontFamily": "$font-body",
+              "fontSize": 16,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "t8Xoot",
+              "name": "CTA row (unchanged)",
+              "fill": "$text-3",
+              "content": "[ See Pricing & Join Waitlist ]   Or start with the free self-hosted version ->",
+              "fontFamily": "$font-body",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "IpDSJ",
+      "x": 1520,
+      "y": 0,
+      "name": "A-notes",
+      "width": 520,
+      "fill": "$bg-2",
+      "cornerRadius": 8,
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "f4JUg",
+          "name": "Panel title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "A - CURRENT HERO (REFERENCE ONLY)",
+          "fontFamily": "$font-body",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "UTWL9",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Source",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "bfhM0",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- plugins/soleur/docs/index.njk lines 11-36; tokens from docs/css/style.css (.landing-hero, .hero-waitlist-form, .newsletter-privacy).",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "UX7xg",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "What the reference shows",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "S4o7M8",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- The privacy sentence is .sr-only: sighted visitors never see the consent copy or the email-processor disclosure (gold box, drawn for the wireframe only).",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "tDMsE",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- The sr-only copy says 'only email you about your Soleur waitlist spot'; the proposed copy names the wider use (updates) and Buttondown.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "xbkFG",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- The only prominent CTA is a waitlist for a product that is not open yet. Self-hosting, the thing a visitor can do today, is a text link to the generic /getting-started/ page.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "kUHRU",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- The two links share one row but go to unrelated places (a page vs the in-page #soleur-vs-copilots anchor) and the compare label names Copilot.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "ujLDn",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Focus order today (Tab)",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "ZxmZ6",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- 1 email input, 2 Join the waitlist, 3 Or self-host it free, 4 How Soleur compares to Cursor & Copilot. Email input already has aria-describedby=homepage-waitlist-privacy, pointing at the invisible text.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "TGNTk",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Tokens reused (no new colors)",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "YBFDH",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- bg #0A0A0A, bg-secondary #0E0E0E, input #111, border #2A2A2A, border-strong #3A3A3A, accent #C9A962, gold gradient #D4B36A to #B8923E, text #FFF / #848484 / #737373. Fonts: Cormorant Garamond (H1), Inter (body).",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "W0N8V",
+      "x": 1520,
+      "y": 1000,
+      "name": "B-notes",
+      "width": 520,
+      "fill": "$bg-2",
+      "cornerRadius": 8,
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "y6d8s",
+          "name": "Panel title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "B - PROPOSED HERO: DECISIONS + ORDER",
+          "fontFamily": "$font-body",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "f5yKN",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Layout decisions",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "x5njd",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- One dominant action: 'Run Soleur today' is the only gold gradient (btn-primary) button in the hero. Sub-label sits directly under it, centered.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "YNviT",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Hosted version lives in a separate bordered card (bg-secondary, 1px border, 8px radius, 560px wide = existing .hero-waitlist-form max-width), labelled in sentence case.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "sDMXv",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Waitlist button is demoted to the outline (btn-secondary) style so two gold buttons do not compete. See open question on the 768px selector in C.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "f6LeW",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Privacy line is visible, 12px text-tertiary, directly under the field row, 'Privacy Policy' as a gold underlined link (existing .newsletter-privacy tokens). Drop .sr-only from #homepage-waitlist-privacy.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "anjNL",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Plan line: two independent sentences in two columns (880px) with a 1px divider, left aligned, never merged into one sentence. 'Self-hosted:' and 'Hosted (waitlist):' lead-ins are <strong> in implementation.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "N59QE",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- hero-trust line is dropped from B (open question). Compare is a single link to /compare/soleur-vs-cursor/, label without 'Copilot'.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Qgdcn",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Keyboard focus order (gold TAB pills)",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "byEYw",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- TAB 1 Run Soleur today (a href=/getting-started/#self-hosted). TAB 2 email input. TAB 3 Join the waitlist. TAB 4 Privacy Policy link. TAB 5 How Soleur compares to Cursor.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "eQupM",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- DOM order equals visual order. No tabindex values. Existing :focus-visible gold 2px outline, 2px offset applies to all five.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "Is2rv",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Screen reader reading order (gold numbers 1-11)",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "zebin",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- 1 eyebrow, 2 h1, 3 tagline, 4 hero-sub, 5 primary link, 6 group label, 7 email field, 8 button, 9 privacy line, 10 plan list (2 items), 11 compare link.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "GdfzQ",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "ARIA",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "Ncpxu",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Email input: aria-describedby=homepage-waitlist-privacy, i.e. the visible sentence 'We'll email you about Soleur updates, including when waitlist access opens. Unsubscribe any time. Email handled by Buttondown, our email provider. Privacy Policy.' Keep the sr-only <label> 'Email address'.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "VNzT3",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Primary link: aria-describedby=hero-run-sub (the sub-label), so it announces as 'Run Soleur today, link, Self-hosted, inside your own Claude Code'.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "x2hNV",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Hosted card: role=group, aria-labelledby on the 'Hosted version (coming soon)' text. It is a <p>, not a heading, so the page outline keeps a single h1 in the hero.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "H26L7h",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- #homepage-waitlist-status stays aria-live=polite and is NOT in aria-describedby. Plan line is a <ul> with two <li>.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "CtQTd",
+      "x": 470,
+      "y": 2250,
+      "name": "C-notes",
+      "width": 520,
+      "fill": "$bg-2",
+      "cornerRadius": 8,
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "h5vDUC",
+          "name": "Panel title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "C - MOBILE 390: STACK ORDER",
+          "fontFamily": "$font-body",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "WFzMa",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Top-to-bottom stack (same as DOM, no CSS order)",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "oYe7Z",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- eyebrow, H1 (36px, text-3xl at <=768px), tagline, hero-sub, Run Soleur today (full width) + sub-label, hosted card [label, email field, Join the waitlist, privacy line], plan line (two parts), compare link.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "DmH3R",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Tab order on mobile = desktop Tab order (1 to 5 in B). No reordering, so focus and reading order never diverge from what is on screen.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "DKX0K",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Breakpoint 768px",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "BDg9M",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Existing rule makes '.hero-waitlist-form input[type=email]' and '.hero-waitlist-form .btn-primary' flex 1 1 100%, i.e. input and button stack full width. The proposed waitlist button is btn-secondary, so that selector must also match it or the button will not stack.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "ReEHM",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Hosted card padding 24 to 20, width 100%. Plan line divider turns horizontal and the two sentences stack.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "ZSuzr",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Sizing",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "pW4x5",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Primary CTA full width, 52px tall. Email field and waitlist button 46px+ tall (>=44px tap target). Privacy line stays 12px and wraps to 4 lines; it is not shrunk or hidden on mobile.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "H3Zo5a",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Primary CTA lands at about y=680 of 1280, inside a 390x844 first screen. Hosted card begins just below the fold line.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "iiXSB",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Tagline (24px) and hero-sub (18px) have no mobile override today, so they run 4 and 8 lines. See open questions.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "J5E4s",
+      "x": 1520,
+      "y": 4200,
+      "name": "D1-notes",
+      "width": 520,
+      "fill": "$bg-2",
+      "cornerRadius": 8,
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "MvFN6",
+          "name": "Panel title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "D1 - QUOTE + PRESS STRIP (CURRENT, REFERENCE)",
+          "fontFamily": "$font-body",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "J09nX",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Problems",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "o6OpeS",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Verbatim quotation marks around words attributed to a named person, plus a large italic display treatment that reads as an endorsement.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "zwfjD",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- 'As seen in Inc.com' strip reads as press coverage of Soleur; the linked article is about the CEO's prediction, not about Soleur.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "RfTgW",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Two stacked bands for one source; the second repeats the first link.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "xmCOc",
+      "x": 1520,
+      "y": 5100,
+      "name": "D2-notes",
+      "width": 520,
+      "fill": "$bg-2",
+      "cornerRadius": 8,
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "zF5fb",
+          "name": "Panel title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "D2 - ATTRIBUTED PARAPHRASE (PROPOSED)",
+          "fontFamily": "$font-body",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "HtzkB",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Decisions",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "RaHG4",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- One band replaces both landing-quote and landing-press-strip. Same slot, same bg-secondary band with top and bottom 1px border, same 80px vertical padding rhythm.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "rBHKv",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Paraphrase in Cormorant Garamond 28px, regular (not italic), centered, max 800px. No quotation marks, no <blockquote>/<cite> (it is not a verbatim quote); use <section aria-labelledby> or a plain <p>.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "KpTdP",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- One source link (gold, underlined, rel=noopener noreferrer) to the Inc. article. 'As seen in' label and press-outlet list are deleted.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "sHIze",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- One-line non-affiliation note, 12px text-tertiary, centered, max 640px.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "CrmHz",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Copy shown is draft for wireframe only; wording is subject to fact-check and legal review.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "BUcSW",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Order",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "ItOMG",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Tab: 1 source link only (paraphrase and note are static). Reading order: 1 paraphrase, 2 source link, 3 non-affiliation note. At <=768px the paraphrase drops to text-xl (matches current blockquote rule).",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "FKGLo",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Placement on the page (top to bottom)",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "NM9xq",
+          "name": "Page flow",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "p9uugc",
+              "name": "Hero (B)",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "po4zd",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "Hero (B)",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TGuE1",
+              "name": "Stats strip",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fVrPF",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "Stats strip",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "bikD8",
+              "name": "Problem section - 'This Is the Way'",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "DymRC",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "Problem section - 'This Is the Way'",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ZmNOr",
+              "name": "NEW: Attributed paraphrase (D2)",
+              "width": "fill_container",
+              "fill": "$surface",
+              "cornerRadius": 4,
+              "stroke": "$accent",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kyvqG",
+                  "name": "Chip",
+                  "fill": "$accent",
+                  "content": "NEW: Attributed paraphrase (D2)",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rqoTl",
+              "name": "Features",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "M4eYm",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "Features",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qOmwa",
+              "name": "Soleur vs copilots",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "tXNaQ",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "Soleur vs copilots",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "tCMkq",
+              "name": "FAQ + community line (E)",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pe70c",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "FAQ + community line (E)",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rhqOT",
+              "name": "Final CTA",
+              "width": "fill_container",
+              "fill": "$bg",
+              "cornerRadius": 4,
+              "stroke": "$border",
+              "strokeWidth": 1,
+              "padding": [
+                7,
+                12
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ZHSqw",
+                  "name": "Chip",
+                  "fill": "$text-2",
+                  "content": "Final CTA",
+                  "fontFamily": "$font-body",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "U85u9",
+      "x": 1520,
+      "y": 6100,
+      "name": "E-notes",
+      "width": 520,
+      "fill": "$bg-2",
+      "cornerRadius": 8,
+      "stroke": "$border",
+      "strokeWidth": 1,
+      "layout": "vertical",
+      "gap": 12,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "zNIrS",
+          "name": "Panel title",
+          "fill": "$accent",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "E - FAQ END + COMMUNITY LINE",
+          "fontFamily": "$font-body",
+          "fontSize": 12,
+          "fontWeight": "700",
+          "letterSpacing": 2
+        },
+        {
+          "type": "text",
+          "id": "CQ4yV",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Decisions",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "WcqLP",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- One line added inside the FAQ section, after the faq-list and before the closing of the section, so the Final CTA below is untouched.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "h4BYyk",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Centered, 16px, 40px above it. 'Questions we didn't cover?' in text-secondary; 'Ask in the Soleur Discord.' is the link: gold, underlined, href from site.discord, rel=noopener noreferrer.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "GiSjV",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Not a <details> item and not added to the FAQPage JSON-LD (it is not a Question/Answer).",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "hsIcW",
+          "name": "Subheading",
+          "fill": "$text",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Order",
+          "lineHeight": 1.4,
+          "fontFamily": "$font-body",
+          "fontSize": 14,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "s7Luei",
+          "name": "Bullet",
+          "fill": "$text-2",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "- Tab: after the last FAQ <summary> (and its open answer links) comes the Discord link (TAB 1), then the Final CTA button and link. Reading order: the line is read after the last FAQ answer and before the Final CTA h2.",
+          "lineHeight": 1.5,
+          "fontFamily": "$font-body",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "bg-2": {
+      "type": "color",
+      "value": "#0E0E0E"
+    },
+    "surface": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "input-bg": {
+      "type": "color",
+      "value": "#111111"
+    },
+    "border": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "border-strong": {
+      "type": "color",
+      "value": "#3A3A3A"
+    },
+    "accent": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "accent-hover": {
+      "type": "color",
+      "value": "#D4B36A"
+    },
+    "accent-dark": {
+      "type": "color",
+      "value": "#B8923E"
+    },
+    "text": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "text-2": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "text-3": {
+      "type": "color",
+      "value": "#737373"
+    },
+    "text-inverse": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "font-display": {
+      "type": "string",
+      "value": "Cormorant Garamond"
+    },
+    "font-body": {
+      "type": "string",
+      "value": "Inter"
+    },
+    "font-mono": {
+      "type": "string",
+      "value": "JetBrains Mono"
+    }
+  }
+}

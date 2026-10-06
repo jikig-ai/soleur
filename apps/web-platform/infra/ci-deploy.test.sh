@@ -9698,7 +9698,7 @@ gak_row 7.14 "token present, image unverified (bare tag): the signed-image gate 
 gak_row 7.14b "WARN-mode cosign FAILURE (digest ref, rc 3) is treated as verified" cosignfail ci \
   'if (( VERIFY_RC == 0 )); then' 'if (( VERIFY_RC == 0 || VERIFY_RC == 3 )); then'
 gak_row 7.14c "the digest-shape gate accepts any non-empty ref again (a matching tag ref gets the key)" tagref boot \
-  "*) if printf '%s\\n' \"\$2\" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;" "*) _gak_ref_ok=1 ;;"
+  "*) if printf '%s\\n' \"\$2\" | grep -cxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}' >/dev/null; then _gak_ref_ok=1; fi ;;" "*) _gak_ref_ok=1 ;;"
 
 # (b) the key decision's signing identity: main of jikig-ai/soleur only (verifier-side pin).
 gak_row 7.b1 "the workflow-REF pin is dropped: a branch run calling reusable-release.yml@main gets the key" sigbranch ci \
