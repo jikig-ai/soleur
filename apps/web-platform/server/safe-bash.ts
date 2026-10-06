@@ -104,7 +104,7 @@ const GH_ARG = String.raw`[\w./~+:=@,-]+`;
 // mode — `git branch -v <name>` CREATES. A positional arg must not start
 // with `-` (a branch name can't), so a write flag cannot launder in as a
 // pattern arg; `*` is outside PATH_TOKEN so only literal prefixes pass.
-const GIT_BRANCH_LIST_FORCE = String.raw`(?:--list|--show-current|--all|--remotes|--contains|--no-contains|--merged|--no-merged|--points-at|-[arv]*[ar][arv]*)`;
+const GIT_BRANCH_LIST_FORCE = String.raw`(?:--list|--show-current|--all|--remotes|--contains|--no-contains|--merged|--no-merged|--points-at|-(?=[arv]*[ar])[arv]+)`;
 const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verbose|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
 
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [

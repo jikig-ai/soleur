@@ -377,6 +377,20 @@ describe("#9555 — git branch read-only arms (create/delete/rename fall through
       expect(isBashCommandSafe(cmd)).toBe(false);
     });
   }
+
+  // ReDoS regression pin (PR #9570 fix-round, performance-oracle): a
+  // `-[arv]` bundle containing ≥1 a/r must have ONE parse — the
+  // `-[arv]*[ar][arv]*` shape gave each a/r position its own pivot parse,
+  // and the (…)* token loop multiplied them into ~2^m paths (~10 s at
+  // m≈25). The `-(?=[arv]*[ar])[arv]+` shape is maximal-munch.
+  test("multi-parse flag bundle + failing tail stays fast", () => {
+    const evil = `git branch ${"-ar ".repeat(200)}?`;
+    const start = performance.now();
+    const result = isBashCommandSafe(evil);
+    const elapsedMs = performance.now() - start;
+    expect(result).toBe(false);
+    expect(elapsedMs).toBeLessThan(100);
+  });
 });
 
 describe("regression — single-command behavior unchanged", () => {
