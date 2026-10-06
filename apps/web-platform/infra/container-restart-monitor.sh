@@ -98,6 +98,12 @@ export LC_ALL=C
 # it to the email body so the refusal rides the surviving channel.
 SENTRY_CHANNEL_NOTE=""
 
+# (#9597) Bearer-token shape guard. The Resend key rides curl's stdin config
+# channel (`--config -`), never its argv (/proc/<pid>/cmdline is world-readable),
+# so a value that could break out of the config string (quote, newline, space)
+# is refused before any byte moves. Reason token only -- never the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # --- Channel 1: Sentry error EVENT (store API; mirrors cron-egress-resolve.sh) -
 sentry_event() {
   local msg="$1" op="$2" extra="$3"
@@ -187,6 +193,13 @@ resend_email() {
     emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_FAILED channel=resend reason=jq"
     return 0
   fi
+  # (#9597) A token that cannot be carried safely in a curl config string is a
+  # deliberate skip (own marker class, like reason=unset), not a send failure.
+  if ! _bearer_ok "$RESEND_API_KEY"; then
+    log "WARN: RESEND_API_KEY failed the token-shape guard — skipping email channel"
+    emit_refusal "SOLEUR_CONTAINER_RESTART_MONITOR_SEND_SKIPPED channel=resend reason=token_shape"
+    return 0
+  fi
   local payload http rc=0
   payload="$(jq -n \
     --arg from "Soleur Ops <noreply@soleur.ai>" \
@@ -195,10 +208,10 @@ resend_email() {
     '{from: $from, to: ["ops@jikigai.com"], subject: $subject, text: $text}')"
   # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
   http="$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    -X POST "https://api.resend.com/emails" \
-    -H "Authorization: Bearer ${RESEND_API_KEY}" \
+    -X POST --config - "https://api.resend.com/emails" \
     -H "Content-Type: application/json" \
-    -d "$payload" 2>/dev/null)" || { rc=$?; http="000"; }
+    -d "$payload" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY"))" || { rc=$?; http="000"; }
   if [[ ! "$http" =~ ^2 ]]; then
     # cq-silent-fallback-must-mirror-to-sentry: the Sentry event (channel 1) is
     # already posted, so a Resend failure is loud, not silent. Log it, and ship

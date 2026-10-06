@@ -35,7 +35,7 @@ esac
 #
 # NO `curl -f`: -f makes curl exit non-zero and emit NOTHING on 4xx/5xx, collapsing every non-200
 # into an empty CODE and destroying the classification. The `-w '%{http_code}'` capture is the whole
-# point. -u presents Basic auth; -m 10 bounds the probe; -o /dev/null discards the body.
+# point. The stdin `user =` config presents Basic auth; -m 10 bounds the probe; -o /dev/null discards the body.
 #
 # CONFIG IS ENV (delivered both by the SSH provisioner to web-1 AND baked verbatim into cloud-init
 # for future hosts): ZOT_ENDPOINT + ZOT_PROBE_REPO from /etc/default/web-zot-consumer-probe;
@@ -43,7 +43,7 @@ esac
 #
 # TEST SEAM: SOLEUR_ZOT_PROBE_STATUS_OVERRIDE injects a CODE so the classification branches are
 # unit-testable without a live registry; SOLEUR_ZOT_PROBE_PING_LOG re-routes the heartbeat ping to
-# a file so a test can assert ping/no-ping. Neither is ever set in production. The -u/-f behavioral
+# a file so a test can assert ping/no-ping. Neither is ever set in production. The auth/-f behavioral
 # properties are covered by a separate mock-HTTP-server test (web-zot-consumer-probe.test.sh).
 
 ENDPOINT="${ZOT_ENDPOINT:-10.0.1.30:5000}"
@@ -120,13 +120,24 @@ if [ -z "$ZUSER" ] || [ -z "$ZTOK" ]; then
   echo "[zot-probe] FATAL: ZOT_PULL_USER/ZOT_PULL_TOKEN unset (run under 'doppler run --project soleur --config prd') — an anonymous probe gets 401 on every path and proves nothing." >&2
   exit 1
 fi
+# The credential reaches curl as a `user = "<user>:<token>"` line on stdin (`--config -`), never on argv
+# (/proc/<pid>/cmdline is readable by every local user). A value that could close the quoted string or
+# start a new config directive (a quote, a backslash, any control char incl. newline) cannot be carried
+# safely, so it takes the same FATAL exit-1 channel as an unset credential (value never printed).
+_cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*'"'*|*\\*|*[[:cntrl:]]*) return 1 ;; esac; }
+if ! _cfg_ok "$ZUSER" || ! _cfg_ok "$ZTOK"; then
+  echo "[zot-probe] FATAL: ZOT_PULL_USER/ZOT_PULL_TOKEN contains a character that cannot be sent safely (double quote, backslash or control char) — refusing to build the curl config; probe NOT run." >&2
+  exit 1
+fi
 
 if [ -n "${SOLEUR_ZOT_PROBE_STATUS_OVERRIDE:-}" ]; then
   CODE="$SOLEUR_ZOT_PROBE_STATUS_OVERRIDE"
 else
-  # NO -f (see header). -u presents Basic auth; -w captures the HTTP code; -m bounds it; a
-  # transport failure (unreachable private net) yields the curl default 000.
-  CODE=$(curl --disable --noproxy '*' -s -u "$ZUSER:$ZTOK" -o /dev/null -w '%{http_code}' -m 10 "http://${ENDPOINT}/v2/${REPO}/tags/list" 2>/dev/null || echo 000)
+  # NO -f (see header). `user = ...` on the stdin config presents Basic auth (the -u equivalent, kept off
+  # argv); -w captures the HTTP code; -m bounds it; a transport failure (unreachable private net)
+  # yields the curl default 000.
+  CODE=$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' -m 10 --config - "http://${ENDPOINT}/v2/${REPO}/tags/list" \
+    < <(printf 'user = "%s:%s"\n' "$ZUSER" "$ZTOK") 2>/dev/null || echo 000)
   [ -n "$CODE" ] || CODE=000
   # (#7262) On a transport failure curl prints `000` via -w AND exits non-zero, so the fallback
   # above appends a second one and CODE is `000000`, which misses the `000)` arm below. Normalize

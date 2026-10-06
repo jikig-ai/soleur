@@ -78,6 +78,12 @@ if printf '%s\n' "$HELPER" | grep -cF "curl --disable --noproxy '*' -fsS" >/dev/
 else
   no "S4a: helper must post to Better Stack via curl --disable --noproxy '*' -fsS (not through Vector)"
 fi
+# S4d (#9597): the bearer is on curl's stdin config, not its argument list.
+if printf '%s\n' "$HELPER" | grep -cF 'Authorization: Bearer' >/dev/null && ! printf '%s\n' "$HELPER" | grep -cF -e '-H "Authorization: Bearer' >/dev/null; then
+  ok "S4d: the Better Stack bearer is sent on curl's stdin config channel, never as a -H argv header"
+else
+  no "S4d: the helper must send the bearer via 'printf header = ... | curl --config -', not -H \"Authorization: Bearer ...\""
+fi
 # S4d: the bearer goes only to the pinned destination, and the pin equals the Terraform literal
 # the web host is rendered with (zot-registry.tf local.betterstack_logs_ingest_url).
 TF_INGEST=$(sed -n 's/^[[:space:]]*betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$DIR/zot-registry.tf" | sed -n '1p')
@@ -232,6 +238,7 @@ STUB
   cat > "$sb/bin/curl" <<'STUB'
 #!/bin/sh
 echo "curl $*" >> "$FBR_CAP"
+case " $* " in *" --config - "*) cat >> "$FBR_CAP.stdin" ;; esac
 exit "${FBR_CURL_RC:-0}"
 STUB
   cat > "$sb/bin/doppler" <<'STUB'
@@ -265,6 +272,8 @@ STUB
   R_EMITS="$(sed -n 's/^boot-emit \(.*\)$/\1/p' "$cap" | paste -sd';' -)"
   R_REFUSED="$(grep -F 'REFUSED ' "$cap" | paste -sd';' -)"
   R_CURL="$(grep -c '^curl ' "$cap" || true)"
+  R_CURL_ARGV="$(grep '^curl ' "$cap" || true)"
+  R_STDIN="$(cat "$cap.stdin" 2>/dev/null || true)"
   R_ERR="$(cat "$sb/stderr" 2>/dev/null)"
 }
 
@@ -336,8 +345,8 @@ case_bootid_silent() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUN
 case_bootid_silent
 
 # --- The Better Stack channel: success, skipped (no token / no url / unpinned), failed ---
-bs_check() { # <label> <expected-emits> <expected-curl-count> <expected-detail-regex-or-empty>
-  local label="$1" emits="$2" ncurl="$3" detre="$4" det
+bs_check() { # <label> <expected-emits> <expected-curl-count> <expected-detail-regex-or-empty> [bearer-token-on-stdin]
+  local label="$1" emits="$2" ncurl="$3" detre="$4" btok="${5:-}" det
   run_helper
   det="$(detail_of fresh_boot_ready_bs_egress)"
   if [ -n "$R_REFUSED" ]; then verdict "$label" no "a stub refused unexpected argv: $R_REFUSED"; return; fi
@@ -346,14 +355,27 @@ bs_check() { # <label> <expected-emits> <expected-curl-count> <expected-detail-r
   if [ -z "$detre" ]; then
     if [ -n "$det" ]; then verdict "$label" no "a bs_egress detail was written on a healthy channel: $det"; return; fi
   elif ! printf '%s' "$det" | grep -qE "$detre"; then verdict "$label" no "detail: expected /$detre/, got '$det'"; return; fi
+  if [ -n "$btok" ]; then
+    # (#9597) the bearer rides curl's stdin config, never its argument list.
+    case "$R_CURL_ARGV" in *"$btok"*) verdict "$label" no "the token is on curl's argv: $R_CURL_ARGV"; return ;; esac
+    local want="" n=0
+    while [ "$n" -lt "$ncurl" ]; do want="${want}${want:+
+}header = \"Authorization: Bearer $btok\""; n=$((n + 1)); done
+    if [ "$R_STDIN" != "$want" ]; then verdict "$label" no "stdin config: expected $ncurl exact bearer header line(s), got '$R_STDIN'"; return; fi
+  fi
   verdict "$label (emits '$emits', curl x$ncurl)" ok ""
 }
-case_bs_ok()      { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 bs_check "bs: pinned post succeeds -> one curl, no warning, no detail" "fresh_boot_ready info" 1 ""; }
+case_bs_ok()      { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 bs_check "bs: pinned post succeeds -> one curl, no warning, no detail" "fresh_boot_ready info" 1 "" tok-synthetic; }
 case_bs_notoken() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BS=0 bs_check "bs: no token -> skipped, WARNING stage + detail, no curl" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 0 "^reason=no_token luks_arm=formatted escrow=ok boot_id=$BID$"; }
 case_bs_nourl()   { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BS_URL='' bs_check "bs: token but no ingest url -> skipped, WARNING stage + detail, no curl" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 0 "^reason=no_url luks_arm=formatted escrow=ok boot_id=$BID$"; }
 case_bs_unpinned() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BS_URL='https://attacker.example/' bs_check "bs: unpinned url -> the bearer is NOT sent (no curl), WARNING stage + detail" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 0 "^reason=unpinned_url luks_arm=formatted escrow=ok boot_id=$BID$"; }
-case_bs_failed()  { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_CURL_RC=22 bs_check "bs: both POST attempts fail -> two curls, WARNING stage + detail" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 2 "^reason=post_failed luks_arm=formatted escrow=ok boot_id=$BID$"; }
-case_bs_ok; case_bs_notoken; case_bs_nourl; case_bs_unpinned; case_bs_failed
+case_bs_failed()  { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_CURL_RC=22 bs_check "bs: both POST attempts fail -> two curls, WARNING stage + detail" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 2 "^reason=post_failed luks_arm=formatted escrow=ok boot_id=$BID$" tok-synthetic; }
+# (#9597) A bound token that fails the shape check (space, or a newline carrying an injected config
+# directive) is NEVER sent: no curl at all, the WARNING stage names bad_token_shape (not unpinned_url),
+# and the marker still exits 0 with its Sentry emit.
+case_bs_badshape()  { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BS_TOKEN='tok with space' bs_check "bs: token fails the shape check (space) -> no curl, WARNING stage reason=bad_token_shape" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 0 "^reason=bad_token_shape luks_arm=formatted escrow=ok boot_id=$BID$"; }
+case_bs_badshape_nl() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_BS_TOKEN=$'tok\nurl = "https://attacker.example/"' bs_check "bs: token carrying an injected config line (newline) -> no curl, reason=bad_token_shape" "fresh_boot_ready_bs_egress warning;fresh_boot_ready info" 0 "^reason=bad_token_shape luks_arm=formatted escrow=ok boot_id=$BID$"; }
+case_bs_ok; case_bs_notoken; case_bs_nourl; case_bs_unpinned; case_bs_failed; case_bs_badshape; case_bs_badshape_nl
 
 # The Sentry twin carries the joinable fields itself, so a dead direct channel loses nothing.
 case_detail_ready() { FBR_TOKEN=1 FBR_VECTOR_BIN=1 FBR_VECTOR_ACTIVE=1 FBR_MOUNTED=1 FBR_LUKS=1 FBR_ARM=opened FBR_ESCROW=missing run_helper
@@ -409,7 +431,13 @@ mut_row "luks_arm vocabulary widened to .*" case_arm_vocab '^luks_arm=\(formatte
 mut_row "skipped post raises no warning stage" case_bs_notoken '  soleur-boot-emit fresh_boot_ready_bs_egress warning' '  :'
 mut_row "skipped post leaves no detail" case_bs_notoken '  detail fresh_boot_ready_bs_egress "reason=$BS_WHY luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"' '  :'
 mut_row "failed post is not recorded" case_bs_failed 'BS_WHY=post_failed; ' ''
-mut_row "bearer sent to any non-empty url" case_bs_unpinned 'if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then' 'if [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then'
+mut_row "bearer sent to any non-empty url" case_bs_unpinned 'if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ] && bearer_ok "$TOKEN"; then' 'if [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ] && bearer_ok "$TOKEN"; then'
+mut_row "token shape guard dropped (a malformed token reaches curl)" case_bs_badshape ' && bearer_ok "$TOKEN"; then
+  post()' '; then
+  post()'
+_m_from="  post() { printf 'header = \"Authorization: Bearer %s\"\\n' \"\$TOKEN\" | curl --disable --noproxy '*' -fsS -m 10 --config - -H 'Content-Type: application/json'"
+_m_to="  post() { curl --disable --noproxy '*' -fsS -m 10 -H \"Authorization: Bearer \$TOKEN\" -H 'Content-Type: application/json'"
+mut_row "bearer back on curl's argv" case_bs_ok "$_m_from" "$_m_to"
 mut_row "ready twin detail dropped" case_detail_ready '  detail fresh_boot_ready "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"' '  :'
 mut_row "not-ready detail dropped" case_detail_notready '  detail "fresh_boot_not_ready_$REASON" "token=$T vector=$V volume=$VOL luks=$LUKS luks_arm=$ARM escrow=$ESC boot_id=$BOOT_ID"' '  :'
 # HARMLESS variant: a comment-only edit must stay green (the harness is not just rejecting every change).
@@ -418,12 +446,12 @@ if FBR_HELPER="${HELPER/'READY=0; REASON=none'/'READY=0; REASON=none # harmless'
 
 # Anti-vacuity: an exact floor on the assertions of this file. Deleting a case group, the mutation
 # battery or the structural half leaves a lower count, which reds here.
-EXPECTED_ASSERTIONS=63
+EXPECTED_ASSERTIONS=68
 total=$((pass + fail))
 if [ "$total" -ne "$EXPECTED_ASSERTIONS" ]; then
   no "floor: ran $total assertions, expected exactly $EXPECTED_ASSERTIONS (a group of cases was deleted or added without moving the floor)"
 fi
-if [ "$MUTATION_ROWS" -ne 21 ]; then no "count: $MUTATION_ROWS mutation rows ran, expected exactly 21"; fi
+if [ "$MUTATION_ROWS" -ne 23 ]; then no "count: $MUTATION_ROWS mutation rows ran, expected exactly 23"; fi
 
 echo "=== fresh-boot-ready: $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
