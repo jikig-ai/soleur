@@ -4,9 +4,16 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Re-verify the next free ADR ordinal against `origin/main`
-- [ ] 0.2 Re-measure body ceilings and the description budget; record in the PR body
-- [ ] 0.3 Dogfood five realistic founder checks through Step 10.5; if more than three of five cannot be a runnable command, stop and report to the operator
+- [x] 0.1 Re-verify the next free ADR ordinal against `origin/main` — highest is ADR-273, so ADR-274 stands (provisional; ship re-verifies)
+- [x] 0.2 Re-measure body ceilings and the description budget — plan 119,864/120,000 B, brainstorm 140,875/141,000, qa 36,992/37,000, work 361,760/362,000, ship 273,995/274,000, preflight 113,570 (no row); description word budget test passes at its cap
+- [x] 0.3 Dogfood five realistic founder checks through Step 10.5 (replayed verbatim under bwrap 0.12.0, scratch harness): **4 of 5 expressible as runnable commands, so the stop threshold (more than 3 of 5 not expressible) is NOT met; proceeding to Phase 1.**
+  - grep on a page source (`grep -c Soleur plugins/soleur/docs/index.njk`): rc 0, stdout `34`. A *rendered* `_site` page is not in the repo, so a founder check on rendered output needs a built tree and is a judgement check.
+  - `curl -s -o /dev/null -w %{http_code} --max-time 10 https://soleur.ai/`: rc 0, stdout `200`; the `%{…}` does not trip the shell-active reject. Bad host gives rc 6 (INVALID path, curl-only).
+  - `jq -r .name plugins/soleur/.claude-plugin/plugin.json`: rc 0, `soleur`.
+  - new-file existence: `ls` and `test` are NOT on the verb list (`ls` is rejected). Working forms: `grep -c . <path>` (rc 2 while absent, with `creates:`) or `git ls-files <path>` (rc 0 and EMPTY stdout while absent, so it needs `expected: <path>` to baseline as a fail).
+  - "looks right": no command; `kind: judgement`.
+  - Findings that shape capture wording: `node` and `bun` return **rc 127 inside the sandbox** (PATH is `/usr/local/bin:/usr/bin:/bin`; both live under `~/.local/share/mise`, and `/home` is a tmpfs), so interpreter verbs `node`/`bun` classify INVALID on mise-installed hosts; `python3`/`bash` work. Test-runner commands (`bun test …`) are therefore a judgement check, as the plan predicted.
+  - 15 s cap and read-only repo were not hit by any of the five.
 
 ## Phase 1 — Failing tests and fixtures (RED)
 
