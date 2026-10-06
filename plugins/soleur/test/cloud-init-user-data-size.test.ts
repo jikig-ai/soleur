@@ -1636,7 +1636,7 @@ describe("baked bootstrap installer contract (AC4/AC5/AC6/AC8/AC9)", () => {
     // fail-closed presence + kernel-load asserts (run before the sentinel write)
     expect(bootstrap).toMatch(/test -f \/etc\/docker\/seccomp-profiles\/soleur-bwrap\.json/);
     expect(bootstrap).toMatch(/test -f \/etc\/apparmor\.d\/soleur-bwrap/);
-    expect(bootstrap).toMatch(/aa-status[^\n]*grep -qE '\^\[\[:space:\]\]\+soleur-bwrap\$'/);
+    expect(bootstrap).toMatch(/aa-status[^\n]*grep -cE '\^\[\[:space:\]\]\+soleur-bwrap\$' >\/dev\/null/);
   });
 });
 

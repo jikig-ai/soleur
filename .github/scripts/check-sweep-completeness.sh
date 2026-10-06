@@ -81,7 +81,7 @@ else
   fi
   # A path that still looks like an API error body is not a changeset. Belt-and-braces
   # against a future `gh` that exits 0 on a structured error.
-  if printf '%s\n' "$changed" | grep -qE '^\{"message":'; then
+  if printf '%s\n' "$changed" | grep -cE '^\{"message":' >/dev/null; then
     echo "::error::sweep-completeness: changeset derivation returned an API error body, not filenames — fail-closed"
     exit 1
   fi

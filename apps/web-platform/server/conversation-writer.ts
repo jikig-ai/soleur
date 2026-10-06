@@ -94,6 +94,9 @@ export interface ConversationPatch {
   active_workflow?: string | null;
   workflow_ended_at?: string | null;
   domain_leader?: Conversation["domain_leader"];
+  /** feat-cc-cap-raise-resume (#9565) — per-conversation USD cap
+   *  override chosen by the user via the in-chat raise prompt. */
+  cc_cost_cap_usd?: number | null;
 }
 
 export interface UpdateConversationOptions {

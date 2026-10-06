@@ -221,7 +221,7 @@
 38	apps/web-platform/infra/workspaces-luks-t2-rehearsal.test.sh
 3	apps/web-platform/infra/workspaces-luks.test.sh
 1	apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
-18	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
+19	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 1	apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 1	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 3	apps/web-platform/infra/zot-log-shipper.test.sh
@@ -430,7 +430,7 @@
 93	scripts/sweep-followthroughs.test.sh
 1	scripts/tenant-dpa-register-guard.test.sh
 1	scripts/test-affected-kb-consumers.test.sh
-9	scripts/test-all-affected.test.sh
+12	scripts/test-all-affected.test.sh
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-group-affected.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh

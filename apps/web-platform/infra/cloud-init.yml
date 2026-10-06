@@ -508,7 +508,7 @@ runcmd:
     ZEP='${registry_endpoint}'
     NIC=probe_fault; E='${private_ip}'; i=0; P=0
     command -v ip >/dev/null && [ -n "$E" ] && while [ $i -lt 75 ]; do
-      O=$(ip -4 -o addr show 2>/dev/null) && { P=1; printf '%s\n' "$O" | grep -qwF -- "$E" && { NIC=ready; break; }; }
+      O=$(ip -4 -o addr show 2>/dev/null) && { P=1; printf '%s\n' "$O" | grep -cwF -- "$E" >/dev/null && { NIC=ready; break; }; }
       i=$((i+1)); sleep 2
     done
     [ $NIC = ready ] || [ $P = 0 ] || NIC=timeout

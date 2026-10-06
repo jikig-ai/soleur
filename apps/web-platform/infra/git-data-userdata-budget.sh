@@ -132,7 +132,7 @@ raw=$(console 'local.rendered')
 # A render FAILURE still prints a warning banner and "(known after apply)" on stdout, so
 # emptiness is not the tell — look for the diagnostic explicitly. Fail-closed: an
 # unmeasurable template must never read as one that fits.
-if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -q 'known after apply'; then
+if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -c 'known after apply' >/dev/null; then
   echo "git-data-userdata-budget: RENDER FAILED" >&2
   sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
   exit 2

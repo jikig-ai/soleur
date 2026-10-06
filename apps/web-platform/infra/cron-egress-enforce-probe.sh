@@ -146,7 +146,7 @@ echo egress-probe-negative-ok
 #    otherwise dark-launch broken while every monitor stays green.
 GW_CONTAINER=soleur-egress-gw
 GW_TOKEN_DIR="${EGRESS_GW_TOKEN_DIR:-/var/lib/soleur/egress-tokens}"
-if ! docker ps --format '{{.Names}}' | grep -qx "$GW_CONTAINER"; then
+if ! grep -qx "$GW_CONTAINER" < <(docker ps --format '{{.Names}}'); then
   PROBE_RESULT=gw_absent
   echo "ASSERT-FAILED: egress-gw-absent ($GW_CONTAINER not running — gateway bootstrap did not land)"
   emit_fail

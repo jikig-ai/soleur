@@ -821,7 +821,7 @@ verify_image_freshness() {
 # stderr CONTENT passed as $1, never a file path: the caller must pass
 # `tail -c 400 "$perr"`, not "$perr", or the match silently no-ops (security/P2-E).
 _pull_result_is_auth_denied() {
-  printf '%s' "${1:-}" | grep -qiE 'unauthorized|authentication required|denied|forbidden'
+  printf '%s' "${1:-}" | grep -ciE 'unauthorized|authentication required|denied|forbidden' >/dev/null
 }
 
 # _pull_result_is_transient <stderr-content>: the SINGLE source of truth for "is this docker
@@ -840,7 +840,7 @@ _pull_result_is_auth_denied() {
 # registry-5xx unexpected-status shape, the net/http client cancel-while-waiting shape, and the
 # DNS-resolver misbehaving shape.
 _pull_result_is_transient() {
-  printf '%s' "${1:-}" | grep -qiE 'context deadline exceeded|timeout|timed out|temporary failure|no route|connection refused|connection reset|network is unreachable|no such host|server misbehaving|request canceled while waiting|received unexpected http status: 5|\bEOF\b'
+  printf '%s' "${1:-}" | grep -ciE 'context deadline exceeded|timeout|timed out|temporary failure|no route|connection refused|connection reset|network is unreachable|no such host|server misbehaving|request canceled while waiting|received unexpected http status: 5|\bEOF\b' >/dev/null
 }
 
 # pull_failure_event: loud, no-SSH page on an authenticated PRIVATE-pull denial
@@ -857,7 +857,7 @@ _pull_result_is_transient() {
 pull_failure_event() {
   local ref="$1" detail_raw="${2:-}" recovery_stage="${3:-}" pull_result
   if   _pull_result_is_auth_denied "$detail_raw"; then pull_result="auth_denied"
-  elif printf '%s' "$detail_raw" | grep -qiE 'manifest unknown|not found|no such manifest'; then pull_result="manifest_unknown"
+  elif printf '%s' "$detail_raw" | grep -ciE 'manifest unknown|not found|no such manifest' >/dev/null; then pull_result="manifest_unknown"
   elif _pull_result_is_transient "$detail_raw"; then pull_result="network"   # #6525: shared predicate (was a narrower inline regex); precedence stays auth → manifest → transient. Tag value `network` UNCHANGED (Sentry grouping / zot_mirror_fallback_rate key on it). Widens the `network` set vs pre-#6525 — see the recovery gate + reclassification-safety check.
   else pull_result="pull_failed"
   fi
@@ -1358,17 +1358,17 @@ _docker_login_capture() {
 # `_login_kw`, where being wrong is free.
 _docker_login_failure_class() {
   local e="${1:-}"
-  if printf '%s' "$e" | grep -qiE '\b401\b|unauthorized|authentication required|incorrect username or password'; then
+  if printf '%s' "$e" | grep -ciE '\b401\b|unauthorized|authentication required|incorrect username or password' >/dev/null; then
     printf 'authn_rejected'
-  elif printf '%s' "$e" | grep -qiE '\b403\b'; then
+  elif printf '%s' "$e" | grep -ciE '\b403\b' >/dev/null; then
     printf 'authz_denied'
-  elif printf '%s' "$e" | grep -qiE 'server gave HTTP response to HTTPS client|x509:|tls: failed to verify'; then
+  elif printf '%s' "$e" | grep -ciE 'server gave HTTP response to HTTPS client|x509:|tls: failed to verify' >/dev/null; then
     printf 'tls_mismatch'
-  elif printf '%s' "$e" | grep -qiE 'error saving credentials|error storing credentials|error getting credentials'; then
+  elif printf '%s' "$e" | grep -ciE 'error saving credentials|error storing credentials|error getting credentials' >/dev/null; then
     printf 'cred_store'
-  elif printf '%s' "$e" | grep -qiE '\b5[0-9]{2}\b'; then
+  elif printf '%s' "$e" | grep -ciE '\b5[0-9]{2}\b' >/dev/null; then
     printf 'server_error'
-  elif printf '%s' "$e" | grep -qiE 'connection refused|no route to host|network is unreachable|connection reset|broken pipe|: EOF|no such host|temporary failure in name resolution|context deadline exceeded|i/o timeout|timed out|timeout|permission denied'; then
+  elif printf '%s' "$e" | grep -ciE 'connection refused|no route to host|network is unreachable|connection reset|broken pipe|: EOF|no such host|temporary failure in name resolution|context deadline exceeded|i/o timeout|timed out|timeout|permission denied' >/dev/null; then
     printf 'transport'
   else
     printf 'unclassified'
@@ -2536,10 +2536,10 @@ verify_image_signature() {
   # best-effort string match on cosign stderr; never load-bearing).
   local result="verify_failed" tail
   tail="$(tail -c 400 "$err" 2>/dev/null || true)"
-  if   printf '%s' "$tail" | grep -qiE 'no matching signatures|no signatures found'; then result="unsigned"
-  elif printf '%s' "$tail" | grep -qiE 'certificate identity|none of the expected identities|subject.*mismatch|expected GitHub Workflow'; then result="wrong_identity"
-  elif printf '%s' "$tail" | grep -qiE 'rekor|tlog|transparency|tuf'; then result="rekor_unreachable"
-  elif printf '%s' "$tail" | grep -qiE 'Unable to find image|manifest unknown|pull access denied|no such image'; then result="cosign_absent"
+  if   printf '%s' "$tail" | grep -ciE 'no matching signatures|no signatures found' >/dev/null; then result="unsigned"
+  elif printf '%s' "$tail" | grep -ciE 'certificate identity|none of the expected identities|subject.*mismatch|expected GitHub Workflow' >/dev/null; then result="wrong_identity"
+  elif printf '%s' "$tail" | grep -ciE 'rekor|tlog|transparency|tuf' >/dev/null; then result="rekor_unreachable"
+  elif printf '%s' "$tail" | grep -ciE 'Unable to find image|manifest unknown|pull access denied|no such image' >/dev/null; then result="cosign_absent"
   # #8714: a daemon-side PULL failure of the verifier image (gcr.io rate limit or 5xx, DNS, TLS, reset, timeout).
   # Read from the WHOLE stderr file, not $tail: docker's pull error repeats the 64-hex digest twice
   # and runs ~420-450 bytes (measured, docker 29.7.2), so the last 400 bytes cut off its prefix.
@@ -2738,7 +2738,7 @@ overlay_github_app_key() {
   _gak_ref_ok=0
   case "${2:-}" in
     '' | *[!A-Za-z0-9@:/._-]*) ;;
-    *) if printf '%s\n' "$2" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;
+    *) if printf '%s\n' "$2" | grep -cxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}' >/dev/null; then _gak_ref_ok=1; fi ;;
   esac
   if [ "$_gak_ref_ok" -ne 1 ]; then
     GITHUB_APP_KEY_FETCH=unverified_image
@@ -4124,7 +4124,7 @@ case "$COMPONENT" in
       # the docker run below would surface a cryptic "name already in use".
       # Here we surface the ADR-027 invariant by name so an operator knows
       # which doc to read.
-      if docker ps --filter "name=^soleur-web-platform$" --format '{{.Names}}' | grep -q .; then
+      if docker ps --filter "name=^soleur-web-platform$" --format '{{.Names}}' | grep -c . >/dev/null; then
         echo "ERROR: soleur-web-platform container is still running after docker stop/rm." >&2
         echo "       Single-replica invariant (ADR-027) violated. See" >&2
         echo "       knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md" >&2

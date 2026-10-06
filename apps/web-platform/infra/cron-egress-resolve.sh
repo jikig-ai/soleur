@@ -237,7 +237,7 @@ mkdir -p "$FAILCOUNT_DIR"
 mkdir -p "$SEEN_DIR"
 
 container_running() {
-  timeout 10 docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"
+  timeout 10 docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "$CONTAINER" >/dev/null
 }
 
 # --- Gather hostnames ---------------------------------------------------------
@@ -832,7 +832,7 @@ run_egress_gw_probe() {
     log "egress_gw_probe result=skipped reason=budget"
     return 0
   fi
-  if [[ ! -d "$EGRESS_GW_TOKEN_DIR" ]] || ! docker ps --format '{{.Names}}' | grep -qx soleur-egress-gw; then
+  if [[ ! -d "$EGRESS_GW_TOKEN_DIR" ]] || ! grep -qx soleur-egress-gw < <(docker ps --format '{{.Names}}'); then
     log "egress_gw_probe result=skipped reason=gw_absent"
     return 0
   fi

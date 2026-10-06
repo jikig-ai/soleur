@@ -168,7 +168,7 @@ jobs:
           LATEST="$(gh api repos/project-zot/zot/releases/latest --jq .tag_name 2>&1)"
           API_RC=$?
           set -e
-          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ] || ! printf '%s' "$LATEST" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if [ "$API_RC" -ne 0 ] || [ -z "$LATEST" ] || ! printf '%s' "$LATEST" | grep -cE '^v[0-9]+\.[0-9]+\.[0-9]+$' >/dev/null; then
             # A dead poll must NOT discard an offline verdict we already hold. The previous
             # shape exited here, so "poll dead AND pin stale" reported only a step failure --
             # precisely the "one detector breaking silences the other" behaviour this step's
@@ -255,7 +255,7 @@ jobs:
               PROBLEMS="${PROBLEMS}- could not obtain a Docker Hub anonymous pull token (rc=$UB_TOK_RC); the \`ubuntu:24.04\` digest was NOT compared this run."$'\n'
             elif [ "$UB_RC" -ne 0 ] || [ -z "$UB_LIVE" ]; then
               PROBLEMS="${PROBLEMS}- could not resolve the live \`ubuntu:24.04\` manifest-list digest (rc=$UB_RC); this run cannot rule out base-image drift under the git-data rehearsal."$'\n'
-            elif ! printf '%s' "$UB_CT" | grep -qE 'image\.index\.v1\+json|manifest\.list\.v2\+json'; then
+            elif ! printf '%s' "$UB_CT" | grep -cE 'image\.index\.v1\+json|manifest\.list\.v2\+json' >/dev/null; then
               PROBLEMS="${PROBLEMS}- the registry served \`$UB_CT\` for \`ubuntu:24.04\`, which is not an index/manifest-list media type; a platform-specific digest would pin the git-data rehearsal to ONE architecture. Treat the comparison below as unverified."$'\n'
             elif [ "$UB_PINNED" != "$UB_LIVE" ]; then
               # DRIFT, not a PROBLEM: upstream moving is the condition this exists to report,
@@ -562,7 +562,7 @@ jobs:
           fi
           AGE_DAYS=""
           if [ -n "$PIN_DATE" ]; then
-            if ! printf '%s' "$PIN_DATE" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'; then
+            if ! printf '%s' "$PIN_DATE" | grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T' >/dev/null; then
               # Upstream-shaped string heading for the issue body — do not embed it raw.
               PROBLEMS="${PROBLEMS}- pinned release published_at is not ISO-shaped; age leg not measured."$'\n'
               PIN_DATE=""

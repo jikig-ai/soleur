@@ -141,10 +141,10 @@ verify() {
   # files or directories. A symlink/hardlink/FIFO/device member is refused here, not after extraction
   # (a FIFO hangs sha256sum; an absolute symlink would make the digest checks read the runner's files).
   got="$(tar -tf "$in" | LC_ALL=C sort)" || die 1 "not a readable tar: $in"
-  printf '%s\n' "$got" | grep -qvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' \
+  printf '%s\n' "$got" | grep -cvE '^(oci-layout|index\.json|manifest\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' >/dev/null \
     && die 1 "archive carries a member outside the OCI layout"
   [[ -z "$(printf '%s\n' "$got" | uniq -d)" ]] || die 1 "archive carries a duplicate member"
-  tar -tvf "$in" | cut -c1 | grep -qv '^[-d]$' && die 1 "archive carries a non-regular member (link, FIFO or device)"
+  tar -tvf "$in" | cut -c1 | grep -cv '^[-d]$' >/dev/null && die 1 "archive carries a non-regular member (link, FIFO or device)"
   tar -xf "$in" -C "$W/img" --no-same-owner
   [[ -z "$(find "$W/img" -mindepth 1 ! -type f ! -type d -print -quit)" ]] \
     || die 1 "archive extracted a non-regular member (link, FIFO or device)"
