@@ -19,8 +19,8 @@
 //     router is the dispatcher itself; what it routes INTO is the WorkflowName.
 //     Tests pick `"brainstorm"` as the routed workflow.
 //   - FR2.4 cost circuit-breaker — closed inline (#3774). Threaded the
-//     existing `usageData.totalCostUsd` (driven by ws-client.ts:791-806's
-//     out-of-reducer setState) into `WorkflowLifecycleBar` via a chat-
+//     existing `usageData.totalCostUsd` (driven by ws-client.ts ›
+//     `case "usage_update"` out-of-reducer setState) into `WorkflowLifecycleBar` via a chat-
 //     surface prop-merge. Added `data-lifecycle-status` attribute on the
 //     bar's ended branch so the existing `cost_ceiling` terminal status
 //     (lib/types.ts:WORKFLOW_END_STATUSES) is DOM-distinguishable from a
@@ -236,8 +236,8 @@ test.describe("cc-soleur-go routing: FR2.3 @CTO mid-workflow", () => {
 //
 // Originally scoped out as #3774; flipped inline per code-simplicity DISSENT
 // at review time. The minimal client wire added in this PR:
-//   - `usage_update` (handled out-of-reducer at `ws-client.ts:791-806` as
-//     today, via setUsageData) is now threaded into `WorkflowLifecycleBar`
+//   - `usage_update` (handled out-of-reducer at `ws-client.ts ›
+//     case "usage_update"`, via setUsageData) is now threaded into `WorkflowLifecycleBar`
 //     via a chat-surface prop-merge — when `workflow.state === "active"`,
 //     `cumulativeCostUsd` is overridden with `usageData.totalCostUsd` so
 //     the bar can render the running total without introducing a second
@@ -264,7 +264,7 @@ test.describe("cc-soleur-go routing: FR2.4 cost circuit-breaker", () => {
     await expect(page.locator('[data-lifecycle-state="active"]')).toBeVisible();
 
     // Synthesized cumulative cost — `usage_update` is handled by an out-of-
-    // reducer setState (`ws-client.ts:791-806`) and threaded into the
+    // reducer setState (`ws-client.ts › case "usage_update"`) and threaded into the
     // lifecycle bar via a chat-surface prop merge (#3774). Therefore it goes
     // through the typed `sendControl` channel, not `send`.
     injector.sendControl({
@@ -292,6 +292,11 @@ test.describe("cc-soleur-go routing: FR2.4 cost circuit-breaker", () => {
       '[data-lifecycle-state="ended"][data-lifecycle-status="cost_ceiling"]',
     );
     await expect(endedBar).toBeVisible();
+    // Rendered text carries the mapped badge copy — the raw enum token
+    // must never reach the DOM (toContainText scopes to text, so the
+    // data-lifecycle-status attribute does not trip the negative).
+    await expect(endedBar).toContainText("Cost cap reached");
+    await expect(endedBar).not.toContainText("cost_ceiling");
     // Refusal-of-further-turns proven by the ChatInput's disabled+placeholder
     // hook (same path FR2.9 exercises for `completed`).
     await expect(
@@ -474,12 +479,12 @@ test.describe("cc-soleur-go routing: FR2.8 subprocess reuse", () => {
 // ---------------------------------------------------------------------------
 // FR2.9 — Ended-state UX.
 //
-// `workflow_ended` reducer (chat-state-machine.ts:728) sets
-// `workflow.state="ended"`; WorkflowLifecycleBar then renders the
-// "Start new conversation" button (workflow-lifecycle-bar.tsx:91-97).
+// `workflow_ended` reducer (chat-state-machine.ts › case "workflow_ended")
+// sets `workflow.state="ended"`; WorkflowLifecycleBar then renders the
+// "Start new conversation" button (workflow-lifecycle-bar.tsx › ended branch).
 // ChatSurface flips `workflowEnded={true}` on ChatInput, which forces
-// `disabled = rawDisabled || workflowEnded` (chat-input.tsx:99) and swaps
-// the placeholder to "This conversation has ended" (chat-input.tsx:100-102).
+// `disabled = rawDisabled || workflowEnded` and swaps the placeholder to
+// "This conversation has ended" (chat-input.tsx › ChatInput props).
 // The placeholder is the file-documented structural test hook.
 // ---------------------------------------------------------------------------
 
