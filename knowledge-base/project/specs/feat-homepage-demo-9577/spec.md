@@ -50,3 +50,15 @@ The homepage asserts "human-in-the-loop" twice (the hero line and the FAQ) and n
 - The CLO has reviewed the final built text, after the wireframe, and recorded a verdict.
 - The ship date is recorded as a comment on #9588 and in the 2026-11-03 verdict.
 - Coordinate with #9620 before any hosted depiction is considered (none in v1).
+
+## Plan-stage amendments (2026-10-06)
+
+Recorded by `knowledge-base/project/plans/2026-10-06-feat-homepage-fanout-demo-plan.md`, decided by the operator at the plan gate after plan review:
+
+- FR1a copy: **Finance is "Waiting on you"** (`Needs your answer: set the add-on price from the sample cost figures, or hold it until costs are clearer?`) and **Engineering is "Stopped"** (`Reminders change held back. A test did not pass. You decide what happens next.`). Reason: no margin gate exists in the product, and "the margin check" implied a pre-set bar (the founder-defined check of #9578 is unbuilt). The Legal, Marketing, H2, brief and link copy are unchanged.
+- FR1a label: `How a brief reaches the departments` ("fans out" implied parallel dispatch).
+- FR2: a visible `Illustrative example · sample data` tag at the top of the figure, in addition to the two caption lines.
+- Design deviations from the approved wireframe: flat outline chips with state glyphs (Stopped not a solid white fill, Done receding), a gold left border on the two founder-action rows, the connector dropped below 768 px, content-driven wrapping instead of a 320 px breakpoint, no hover or pointer styling.
+- TR3: the bun test parses `STATUS_LABELS` keys from `apps/web-platform/lib/types.ts` as text; the Eleventy build checks a local closed constant and throws on bad rows; the validator lives in `plugins/soleur/lib/fanout-validate.js`.
+- Wireframe screenshots 13–15 are superseded for the label, the Finance and Engineering rows and the chip and connector treatment.
+- Hero-test confound: ship now; the attribution rule is pre-registered on #9588 before merge. The copy upgrade after #9578 ships is #9661.
