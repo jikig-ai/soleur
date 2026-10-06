@@ -599,7 +599,11 @@ export function renderCommunityPublication(
     "## Follow-up",
     "",
     "Counts only. Names, quotes and message text are not recorded in this digest.",
-    `Review inbound items: ${issuesUrl} and ${pullsUrl}`,
+    // No URL here: the digest is a committed markdown file and the required markdown-lint
+    // check (MD034/no-bare-urls) refuses a bare one, which holds the digest PR out of the
+    // merge queue; an autolink would widen the closed output alphabet (G1-5) for no gain, since
+    // the issue body below carries the links and is not linted.
+    "Review inbound items in the open issues and pull requests of this repository.",
     "",
   ].join("\n");
 
