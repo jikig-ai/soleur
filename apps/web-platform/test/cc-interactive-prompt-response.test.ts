@@ -375,3 +375,66 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
     expect(deliverToolResult).not.toHaveBeenCalled();
   });
 });
+
+describe("cost-cap sentinel routing (feat-cc-cap-raise-resume)", () => {
+  let registry: PendingPromptRegistry;
+  let deliverToolResult: ReturnType<
+    typeof vi.fn<(args: { conversationId: string; toolUseId: string; content: string }) => void>
+  >;
+  let deliverCostCapResponse: ReturnType<
+    typeof vi.fn<(args: { conversationId: string; response: string }) => void>
+  >;
+
+  beforeEach(() => {
+    registry = new PendingPromptRegistry({ nowFn: () => 0 });
+    deliverToolResult = vi.fn<
+      (args: { conversationId: string; toolUseId: string; content: string }) => void
+    >();
+    deliverCostCapResponse = vi.fn<
+      (args: { conversationId: string; response: string }) => void
+    >();
+  });
+
+  it("routes a cost-cap: record to deliverCostCapResponse, never deliverToolResult", () => {
+    // A runner-emitted cap prompt carries no real SDK tool_use id —
+    // delivering a tool_result with it would corrupt the stream.
+    seedPrompt(registry, { toolUseId: "cost-cap:p-1" });
+    const result = handleInteractivePromptResponse({
+      registry,
+      userId: "user-1",
+      payload: {
+        type: "interactive_prompt_response",
+        promptId: "p-1",
+        conversationId: "conv-1",
+        kind: "ask_user",
+        response: "Raise to $10",
+      },
+      deliverToolResult,
+      deliverCostCapResponse,
+    });
+    expect(result.ok).toBe(true);
+    expect(deliverCostCapResponse).toHaveBeenCalledWith({
+      conversationId: "conv-1",
+      response: "Raise to $10",
+    });
+    expect(deliverToolResult).not.toHaveBeenCalled();
+  });
+
+  it("resolves a cost-cap: record to not_found when no sink is wired", () => {
+    seedPrompt(registry, { toolUseId: "cost-cap:p-2" });
+    const result = handleInteractivePromptResponse({
+      registry,
+      userId: "user-1",
+      payload: {
+        type: "interactive_prompt_response",
+        promptId: "p-2",
+        conversationId: "conv-1",
+        kind: "ask_user",
+        response: "Raise to $10",
+      },
+      deliverToolResult,
+    });
+    expect(result).toEqual({ ok: false, error: "not_found" });
+    expect(deliverToolResult).not.toHaveBeenCalled();
+  });
+});

@@ -134,7 +134,6 @@ apps/web-platform/infra/verify-tunnel-ingress-origin-infradir.test.sh	1
 apps/web-platform/infra/web-1-host-key-local.test.sh	2
 apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh	3
 apps/web-platform/infra/web-2-host-key-local.test.sh	1
-apps/web-platform/infra/web-escrow-create-workflow.test.sh	4
 apps/web-platform/infra/web-ghcr-deny.test.sh	2
 apps/web-platform/infra/web-git-data-probe.test.sh	3
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	4
