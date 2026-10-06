@@ -256,7 +256,7 @@ describe("support persona — deny → escalation record", () => {
     );
   });
 
-  test("safe Bash on support still auto-allows (kb-search shell-out unaffected)", async () => {
+  test("safe Bash on support still auto-allows (kb-search is tool-only, unaffected)", async () => {
     const canUse = createCanUseTool(buildContext({ persona: "support" }));
     assertAllow(await canUse("Bash", { command: "git status" }, opts()));
     expect(consumeSupportEscalation("conv-1")).toBeNull();

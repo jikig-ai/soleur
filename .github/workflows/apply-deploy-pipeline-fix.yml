@@ -917,7 +917,7 @@ jobs:
           # no command substitution on the decoded bytes) so a trailing newline in the
           # rendered file is preserved — $(...) would strip it and shift the digest.
           if [[ "$console_rc" -eq 0 && -n "$b64" ]] \
-             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -q '^DOPPLER_TOKEN='; then
+             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -c '^DOPPLER_TOKEN=' >/dev/null; then
             sha="$(printf '%s' "$b64" | base64 -d 2>/dev/null | sha256sum | awk '{print $1}')"
           fi
           if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
@@ -2324,10 +2324,13 @@ jobs:
           fi
           # Per ADR-079 the faithful canary is still NON-BLOCKING dark-launch: pass /
           # canary_infra_error / fixture_uncaptured are all acceptable here; only a
-          # faithful sandbox_broken (a real bwrap EPERM against the committed profile)
+          # faithful sandbox_broken (a real bwrap EPERM against the committed profile,
+          # or — since #8752 — a broken-hardening probe verdict; reason/probe decoded below)
           # is fatal. Promotion of the canary to a blocking gate is soak-owned (#5889).
           if [[ "$FINAL_VERDICT" == "sandbox_broken" ]]; then
-            echo "::error::Faithful sandbox canary verdict=sandbox_broken after redeploy — the committed seccomp profile EPERMs the real SDK bwrap argv. Do NOT leave this profile live."
+            REASON=$(jq -r '.sandbox_canary.reason // "?"' /tmp/redeploy-terminal.json 2>/dev/null || echo "?")
+            PROBE=$(jq -r '.sandbox_canary.probe // "?"' /tmp/redeploy-terminal.json 2>/dev/null || echo "?")
+            echo "::error::Faithful sandbox canary verdict=sandbox_broken reason=${REASON} probe=${PROBE} after redeploy. #8752 reasons: userns_filter_bypass=userns filter not engaged; userns_filter_overbroad=filter denies legit spawns; fd_hygiene_bypass=fd leak past shim sweep; args_fd_closed=--args transport fd closed; bwrap_shim_refused=shim exit 65 (artifact/real-bwrap missing). Do NOT leave this profile live."
             exit 1
           fi
           echo "STATE invariant holds: host_sha256==committed (${COMMITTED_SHA}) AND loaded_matches_host=true; canary verdict=${FINAL_VERDICT} (not sandbox_broken). Profile is live."

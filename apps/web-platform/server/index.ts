@@ -42,6 +42,7 @@ import {
 } from "./readiness";
 import { isLoopbackHost } from "./loopback";
 import { verifyC4RenderSandboxOnce } from "./c4-render";
+import { verifyAgentSandboxHardening } from "./agent-runner-sandbox-config";
 import { startWatchdogDispatchClock } from "./watchdog-dispatch-clock";
 // NOTE: do NOT statically import "@/server/inngest/client" here — it throws at
 // module-load when INNGEST_SIGNING_KEY is unset (client.ts), which would crash
@@ -299,6 +300,19 @@ app.prepare().then(() => {
             feature: "c4-rerender",
             op: "sandbox-selfprobe",
             message: "c4 render sandbox self-probe threw",
+            extra: { err: String(err) },
+          }),
+        );
+      // #8752: the Agent SDK sandbox's hardening pair (bwrap PATH shim +
+      // committed nested-userns filter artifact) is measured once here —
+      // report-only like the C4 probe; it never gates a deploy.
+      void Promise.resolve()
+        .then(verifyAgentSandboxHardening)
+        .catch((err) =>
+          reportSilentFallback(null, {
+            feature: "agent-sandbox",
+            op: "sandbox-hardening-selfprobe",
+            message: "agent sandbox hardening self-probe threw",
             extra: { err: String(err) },
           }),
         );

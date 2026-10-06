@@ -257,11 +257,11 @@ jobs:
             exit 0
           fi
 
-          if echo "$PR_LABELS" | grep -q "semver:major"; then
+          if echo "$PR_LABELS" | grep -c "semver:major" >/dev/null; then
             printf 'type=%s\n' "major" >> "$GITHUB_OUTPUT"
-          elif echo "$PR_LABELS" | grep -q "semver:minor"; then
+          elif echo "$PR_LABELS" | grep -c "semver:minor" >/dev/null; then
             printf 'type=%s\n' "minor" >> "$GITHUB_OUTPUT"
-          elif echo "$PR_LABELS" | grep -q "semver:patch"; then
+          elif echo "$PR_LABELS" | grep -c "semver:patch" >/dev/null; then
             printf 'type=%s\n' "patch" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::No semver label found on PR, defaulting to patch"
@@ -284,14 +284,19 @@ jobs:
 
           # Glob is fnmatch-style (cheap pre-filter); anchored regex enforces
           # strict ${TAG_PREFIX}X.Y.Z shape so collisions like `vinngest-v1.0.0`
-          # under the bare `v` prefix are rejected (#4082). `grep -m1` over
-          # `head -1` avoids SIGPIPE if the corpus ever exceeds the kernel pipe
-          # buffer. `|| [ $? -eq 1 ]` lets the existing empty-fallback below
-          # fire on no-match (grep exit 1, bootstrap of a new prefix) WITHOUT
-          # masking grep exit 2 (regex syntax error — would surface a latent
-          # escaping bug instead of silently falling back to 0.0.0).
-          LATEST_TAG=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname \
-            | { grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" || [ $? -eq 1 ]; })
+          # under the bare `v` prefix are rejected (#4082). The tag list is read
+          # into a variable first and grep reads that value, so no producer sits
+          # on the other end of a pipe that `grep -m1` closes early (the producer
+          # is the side that takes SIGPIPE, not grep). A failing `git tag` aborts
+          # the step (errexit) rather than falling through to the 0.0.0 bootstrap
+          # arm below, which would compute a regressed version. (The old pipeline
+          # aborted or masked it depending on the step's pipefail default.)
+          # `|| [ $? -eq 1 ]` lets the existing empty-fallback below fire on
+          # no-match (grep exit 1, bootstrap of a new prefix) WITHOUT masking
+          # grep exit 2 (regex syntax error — would surface a latent escaping
+          # bug instead of silently falling back to 0.0.0).
+          tags=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname)
+          LATEST_TAG=$(grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" <<<"$tags" || [ $? -eq 1 ])
 
           if [ -z "$LATEST_TAG" ]; then
             CURRENT="0.0.0"

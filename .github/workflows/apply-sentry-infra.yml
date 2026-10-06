@@ -210,7 +210,7 @@ jobs:
           # the jq filter (anti-bypass: the gate logic lives in both, so a PR
           # editing either must run the gate against itself — the same
           # self-trigger posture ci.yml uses).
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/infra/sentry/|tests/scripts/lib/destroy-guard-filter-sentry\.jq$|scripts/sentry-alert-reference-gate\.sh$|scripts/sentry-monitor-binding-gate\.sh$|tests/scripts/lib/sentry-alert-projection\.jq$|\.github/workflows/apply-sentry-infra\.yml$)'; then
+          if printf '%s\n' "$CHANGED" | grep -cE '^(apps/web-platform/infra/sentry/|tests/scripts/lib/destroy-guard-filter-sentry\.jq$|scripts/sentry-alert-reference-gate\.sh$|scripts/sentry-monitor-binding-gate\.sh$|tests/scripts/lib/sentry-alert-projection\.jq$|\.github/workflows/apply-sentry-infra\.yml$)' >/dev/null; then
             printf 'sentry=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'sentry=false\n' >> "$GITHUB_OUTPUT"

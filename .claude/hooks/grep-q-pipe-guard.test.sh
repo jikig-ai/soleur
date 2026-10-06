@@ -12,6 +12,13 @@
 # Use instead:
 #   grep -q PATTERN <<<"$var"                              # no pipe, no SIGPIPE
 #   [ "$(producer | grep -c PATTERN || true)" -gt 0 ]      # -c reads all input
+#   producer | grep -cE PATTERN >/dev/null                 # POSIX sh, Terraform inline, cloud-init runcmd, or an input
+#                                                          # that may be empty: the exit status equals grep -q's (0 iff a line
+#                                                          # was selected, -v and empty input included), it reads the whole
+#                                                          # stream so the producer never takes EPIPE, and a here-string
+#                                                          # would add a newline (printf '' | grep -qv x is rc 1; grep -qv x
+#                                                          # <<<"" is rc 0) and is not valid in /bin/sh. It reads to EOF, so never
+#                                                          # use it on a producer that does not end (yes, tail -f).
 #
 # Scope note: this asserts ZERO, not "no growth beyond a baseline". A baseline
 # allowlist that grandfathers existing entries asserts nothing on day one. The
@@ -68,6 +75,8 @@
 #   cat FILE | grep -q P           ->  grep -q P FILE
 #   a bare pipeline under set -e, a side-effecting producer or a function that mutates state
 #                                  ->  out=$(producer); grep -q P <<<"$out"   keeps the status and waits for the producer
+#   POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input)
+#   an output-bearing  | grep -m1 P | ...  in bash, on a value that is never empty  ->  grep -m1 P <<<"$V" | ...
 #   a line that must show the shape  ->  append  # sigpipe-demo: intentional
 # A gate whose MISS skips a check must route a grep that could not run (rc above 1) to the gate, not to "clean". Note that a
 # failed here-string or process substitution returns rc 1 (a miss), not above 1, so this routing covers a bad pattern or an
@@ -418,20 +427,40 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
 SWEEP_DEFERRALS=(
-  'plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js | = | 2 | #9217'   # DATA: an LLM prompt literal, not code; leaves only if the prompt text is rewritten
   '.claude/*.test.sh | <= | 91 | #9217'
   'tests/* | <= | 181 | #9217'
   'plugins/soleur/test/* | <= | 140 | #9217'
   'plugins/soleur/*.test.sh | <= | 66 | #9217'
-  'apps/web-platform/*.test.sh | <= | 188 | #9217'
-  '.github/scripts/test/* | <= | 11 | #9217'
+  'apps/web-platform/*.test.sh | <= | 180 | #9217'
+  '.github/scripts/test/* | <= | 9 | #9217'
   'scripts/*.test.sh | <= | 128 | #9217'
   'scripts/test-* | <= | 6 | #9217'
   'scripts/lib/test-* | <= | 1 | #9217'
   '*.test.sh | <= | 2 | #9217'
-  'apps/web-platform/infra/* | = | 92 | #9217'
-  '.github/* | = | 45 | #9217'
-  'lefthook.yml | = | 1 | #9217'
+  # Wave A2 (this table's last production rows) converted .github/, lefthook.yml, the drain workflow prompt and every other
+  # apps/web-platform/infra file. These four stay, file-exact and tight (`=`), because their bytes feed `user_data` of
+  # `hcloud_server.{registry,inngest,git_data}`, which carry NO `ignore_changes = [user_data]` (ADR-100, ADR-169): any edit is a
+  # host replace at the next full apply or maintenance-window dispatch, and the per-merge apply excludes those hosts, so the drift
+  # would sit silent until then. Convert them only inside a PR already scheduled for that dispatch, and delete the row there.
+  'apps/web-platform/infra/cloud-init-registry.yml | = | 13 | #9217'
+  'apps/web-platform/infra/cloud-init-inngest.yml | = | 4 | #9217'
+  'apps/web-platform/infra/cloud-init-git-data.yml | = | 3 | #9217'
+  'apps/web-platform/infra/git-data-bootstrap.sh | = | 1 | #9217'
+  # A fifth, for a different reason: workspaces-luks.tf's public-log forensic print is sha256-pinned and its `grep -q` form is the one the
+  # forbidden-diagnostic rule allows (apps/web-platform/infra/luks-monitor-install.test.sh, G2 and G4). Converting it needs that security
+  # review, so it rides a PR that carries the review, not a lint sweep.
+  'apps/web-platform/infra/workspaces-luks.tf | = | 1 | #9217'
+  # A sixth class, found at review: a script BAKED into a digest-pinned image whose pin lives in a user_data file. The inngest bootstrap
+  # image carries inngest-luks-cutover.sh at tag vinngest-v1.1.44 and cloud-init-inngest-bootstrap.test.sh (GuardA) requires every baked
+  # carrier byte-identical to that tag, so a one-token edit needs a new image AND a pin bump in cloud-init-inngest.yml (= an inngest host
+  # replace). Convert it only in the PR that mints the next image tag, and delete the row there.
+  'apps/web-platform/infra/inngest-luks-cutover.sh | = | 1 | #9217'
+  # A seventh and eighth, found at CI: converting these two put them in `lint-shell-trace-credential-refusal.py --changed` (ci.yml, a
+  # required check), which scans every TOUCHED file and fails on defects that predate this sweep: neither carries the xtrace refusal
+  # (#7797), and web-private-nic-guard.sh's credentialed curl lacks `--disable` / `--noproxy '*'` and an INGEST_URL pin. Those are
+  # credential-hardening changes to a host guard, not a mechanical grep rewrite, so they ride a PR that carries that review.
+  'apps/web-platform/infra/cron-egress-enforce-probe.sh | = | 2 | #9217'
+  'apps/web-platform/infra/web-private-nic-guard.sh | = | 4 | #9217'
 )
 
 # scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match
@@ -511,6 +540,8 @@ sweep_verdict() {
     echo "           producer | grep -q P              ->  grep -q P < <(producer)   (read-only producer, inside a condition)"
     echo "           cat FILE | grep -q P              ->  grep -q P FILE"
     echo "           a bare pipeline under set -e      ->  out=\$(producer); grep -q P <<<\"\$out\"   (keeps the producer's status)"
+    echo "           POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input, no newline added)"
+    echo "           an output-bearing  | grep -m1 P  in bash, with a value that is never empty  ->  grep -m1 P <<<\"\$V\" | ..."
     echo "           an intentional demo of the shape  ->  append  # sigpipe-demo: intentional  to that line"
   fi
 }
@@ -748,8 +779,11 @@ x | grep -l p
 x | grep -oE p
 x | sed 's/a/b/'
 grep -e p -q "$f"
+x | grep -cE p >/dev/null
+x | grep -cvx p >/dev/null
+x | grep -cwF -- "$E" >/dev/null
 EOF
-V2_BAD_LINES=29; V2_GOOD_LINES=11   # pinned literals: deleting a fixture line cannot lower both sides
+V2_BAD_LINES=29; V2_GOOD_LINES=14   # pinned literals: deleting a fixture line cannot lower both sides
 v2_bad_lines=$(wc -l < "$probe/bad-v2.sh")
 v2_good_lines=$(wc -l < "$probe/good-v2.sh")
 v2_bad_hits=$(grep -cE -- "$PATTERN_V2" "$probe/bad-v2.sh" || true)
@@ -816,6 +850,60 @@ _vp 'outside the deferral table' 'apps/* | <= | 9 | #1' -- "${FILES_7376[0]}:1:t
 own="$( SWEEP_FAIL=0; SWEEP_DEFERRALS=('a/b/* | = | 1 | #1' 'a/* | = | 1 | #2'); sweep_verdict $'a/b/x.sh:1:t\na/y.sh:2:t'; echo "SWEEP_FAIL=$SWEEP_FAIL" )"
 [[ "$own" == *"DEFERRED: a/b/* (1 hits"* && "$own" == *"DEFERRED: a/* (1 hits"* && "$own" == *"SWEEP_FAIL=0" ]] \
   || sweep_probe_fail+=("deferral-owner: first-match-wins did not give each overlapping row its own hit")
+
+# The REAL table (Wave A2). The synthetic rows above prove the arithmetic; these prove the table this file SHIPS still owns what it
+# must and nothing it must not. The scan runs scan_sweep on a scratch root (so SWEEP_PATHSPEC and PATTERN_V2 are exercised, not
+# only the verdict) and the verdict reads the live SWEEP_DEFERRALS. Planted: one violating line under each subtree this wave took
+# to zero, plus a compliant file under each canary root so the population is not UNRESOLVED.
+_real_undeferred() { # <scan root> -> each path the CURRENT SWEEP_DEFERRALS leaves outside every row, one per line
+  local v
+  v="$( SWEEP_FAIL=0; sweep_verdict "$(scan_sweep "$1")"; echo "SWEEP_FAIL=$SWEEP_FAIL" )"
+  sed -n '/^FAIL: pipe-into-early-exit-grep outside/,$p' <<<"$v" | grep -E '^  [^ ]+:[0-9]+:' | sed 's/^  //' | cut -d: -f1 || true
+}
+rr="$probe/realroot"
+mkdir -p "$rr/.github/workflows" "$rr/plugins/soleur/skills/drain-labeled-backlog/workflows" "$rr/apps/web-platform/infra" "$rr/scripts" "$rr/apps/web-platform/scripts" "$rr/apps/cla-evidence"
+for _f in .github/workflows/zz.yml lefthook.yml plugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js apps/web-platform/infra/zz-new.sh; do
+  echo 'echo "$x" | grep -q p' > "$rr/$_f"
+done
+for _f in scripts/c.sh plugins/soleur/c.sh apps/web-platform/scripts/c.sh apps/cla-evidence/c.sh; do echo 'grep -q p <<<"$x"' > "$rr/$_f"; done
+real_want=$'.github/workflows/zz.yml\napps/web-platform/infra/zz-new.sh\nlefthook.yml\nplugins/soleur/skills/drain-labeled-backlog/workflows/drain-labeled-backlog.workflow.js'
+real_got="$(_real_undeferred "$rr" | LC_ALL=C sort)"
+[[ "$real_got" == "$real_want" ]] \
+  || sweep_probe_fail+=("real-table-owner: the shipped table left [${real_got//$'\n'/ }] outside every row (want exactly the four planted paths: a path a row now owns, or a pathspec that dropped one, changes this)")
+real_none=$( SWEEP_DEFERRALS=(); _real_undeferred "$rr" | grep -c . || true )
+real_all=$( SWEEP_DEFERRALS=('* | <= | 99 | #1'); _real_undeferred "$rr" | grep -c . || true )
+[[ "$real_none" == 4 && "$real_all" == 0 ]] \
+  || sweep_probe_fail+=("real-table-control: with no rows ${real_none:-<err>} planted paths were undeferred (want 4), with a catch-all row ${real_all:-<err>} (want 0) — the helper above does not read the table it is given")
+# A loose (<=) row's slack is where a NEW instance hides, so every loose row must be test-shaped: *.test.sh, a test/ or tests/ directory,
+# or a test-* basename. A production-shaped loose glob would turn this header's own invariant into a convention.
+_ts_re='(^|/)(tests?/\*|\*\.test\.sh)$|^scripts/(lib/)?test-\*$'
+_loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not test-shaped
+  local row g m
+  for row in "$@"; do
+    IFS='|' read -r g m _ <<<"$row"
+    g="${g#"${g%%[![:space:]]*}"}"; g="${g%"${g##*[![:space:]]}"}"; m="${m//[[:space:]]/}"
+    [[ "$m" == "<=" ]] || continue
+    [[ "$g" =~ $_ts_re ]] || echo "$g"
+  done
+}
+loose_bad="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}")"
+[[ -z "$loose_bad" ]] \
+  || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } — production code could fall into their slack; make the row tight (=) or the glob test-shaped")
+loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217' '.github/workflows/test-* | <= | 9 | #9217' 'scripts/x.test.sh | = | 1 | #9217')"
+[[ "$loose_ctl" == $'apps/web-platform/infra/*\n.github/workflows/test-*' ]] \
+  || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
+# The loose-row check sees only `<=` rows, so a TIGHT production row would pass it. Every non-test-shaped row, in any mode, must be one of the
+# file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them. Adding a production row is then a visible two-place edit.
+GATED_PROD_ROWS=8
+prod_globs=""
+for _row in "${SWEEP_DEFERRALS[@]}"; do
+  IFS='|' read -r _g _ <<<"$_row"; _g="${_g#"${_g%%[![:space:]]*}"}"; _g="${_g%"${_g##*[![:space:]]}"}"
+  [[ "$_g" =~ $_ts_re ]] || prod_globs+="$_g"$'\n'
+done
+prod_n=$(grep -c . <<<"$prod_globs" || true)
+prod_wild=$(grep -c '[*?[(!@+)]' <<<"$prod_globs" || true)
+[[ "$prod_n" == "$GATED_PROD_ROWS" && "$prod_wild" == 0 ]] \
+  || sweep_probe_fail+=("real-table-production-rows: ${prod_n:-<err>} non-test-shaped rows (want exactly $GATED_PROD_ROWS), ${prod_wild:-<err>} with a glob character (want 0) — a production row is a host-replace claim; add it here AND to GATED_PROD_ROWS")
 
 # _vp itself needs a known-NEGATIVE control: a helper that always returned 0 would make every row above vacuous.
 _vp 'ZZZ-never-printed' 'a/* | <= | 1 | #1' -- 'a/x.sh:1:t' 'a/y.sh:2:t' && sweep_probe_fail+=("vp-negative: _vp accepted a failing case whose expected diagnostic cannot appear")
@@ -890,7 +978,7 @@ fp_hits=$(grep -cE -- "$PATTERN_V2" "$probe/fp-v2.sh" || true)
 # `|| sweep_probe_fail+=(...)` (or `&& ...` for a negative control), so the count of NON-COMMENT lines carrying that tail is the count
 # of checks (the pin's own line and its counting line included); comment lines are excluded, so rewording a comment can neither hide a
 # deletion nor trip the pin, and a `#` inside a check's own string does not hide it from the count.
-SWEEP_PROBE_CHECKS=28
+SWEEP_PROBE_CHECKS=33
 probe_checks=$(grep -vE '^[[:space:]]*#' "${BASH_SOURCE[0]}" | grep -c 'sweep_probe_fail+=(' || true)
 [[ "$probe_checks" == "$SWEEP_PROBE_CHECKS" ]] \
   || sweep_probe_fail+=("probe-count: this probe carries ${probe_checks:-<err>} checks, pinned at $SWEEP_PROBE_CHECKS — a deleted check cannot fail, so restore it or, if you ADDED one, raise SWEEP_PROBE_CHECKS")

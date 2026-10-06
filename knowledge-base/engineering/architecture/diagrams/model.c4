@@ -62,6 +62,16 @@ model {
     description "Any unauthenticated reader of the public jikig-ai/soleur GitHub repository. Receives whatever automation publishes into issue bodies and comments. Not a data subject relationship — a PUBLICATION surface, and the one egress in this model that cannot be retracted once written."
   }
 
+  // External actor — the end user of the in-app support bubble (ADR-113).
+  // Modelled because the support persona is a distinct, scope-reduced
+  // dispatch surface (its own skill allowlist, read-only sandbox, curated
+  // corpus) and the actor asking app-help questions is NOT the workspace
+  // Owner — `founder` above — even when the operator dogfoods the bubble.
+  supportUser = actor "End User (Support Chat)" {
+    #external
+    description "A product end user asking app-help questions through the in-app support bubble. Reaches a scope-reduced support persona (ADR-113): cwd pinned to the deployed plugin root, read-only sandbox, `kb-search` as the only skill, and a Bash deny that records an escalation only on genuinely out-of-scope attempts. The persona answers via Read/Grep/Glob over the curated corpus — no shell (#9559)."
+  }
+
   // External actor — an involuntary third-party data subject whose conversation
   // PII the operator captures in the beta-CRM (ADR-102 / mig 126). The operator
   // is the controller; the beta tester never touches the store directly.
@@ -483,8 +493,9 @@ model {
   // Relationships — preserved 1:1 from the three Mermaid sources.
   // ======================================================================
 
-  // ---- C4 L1 (System Context) — 18 relationships -------------------------
+  // ---- C4 L1 (System Context) -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
+  supportUser -> webapp "Asks app-help questions via the support bubble — routed to the scope-reduced support persona (ADR-113)" { technology "HTTPS" }
   founder -> grokBuild "Runs /go (local plugin CLI)" { technology "Grok Build" }
   founder -> flagsmith "Production flag and segment writes via the flag-* operator scripts, gated on a TTY ack in the founder's own terminal. This is the LEGACY TTY path (ADR-249, unchanged by ADR-264): the flag scripts feed flag_flip_audit.approval_method, whose CHECK allows only 'tty-ack' or NULL" { technology "HTTPS (Flagsmith Admin API)" }
   founder -> doppler "Approves, per exact command, an agent-run staged operator script's Doppler writes (secret copy into a container, service-token mint) at the harness approval prompt; the agent runs the read stages and prints the plan, the approval hook mints a one-time receipt the script consumes before its first write (ADR-264; resists an instruction-following agent, not a hijacked one)" { technology "Harness approval prompt + agent-run staged script" }
@@ -564,7 +575,7 @@ model {
   // using the stale build's own logic and go dark exactly when it is needed.
   github -> webapp "Scheduled prod version-drift probe (*/30): reads the public unauthenticated /health for build_sha and asserts prod is missing no commit matching the release path filter, alerting only on staleness sustained past one release cycle" { technology "HTTPS (unauthenticated GET /health)" }
 
-  // ---- C4 L2 (Container) — 24 relationships ------------------------------
+  // ---- C4 L2 (Container) ------------------------------
   founder -> dashboard "Browses and converses" { technology "HTTPS" }
   dashboard -> api "Calls" { technology "HTTPS" }
   api -> claude "Spawns agent sessions" { technology "WebSocket" }
@@ -856,7 +867,7 @@ model {
   api -> gitDataStore "Art. 17 erasure of the user's bare repo over the REMOVE key's forced command (git-data-remove.sh), reached from account deletion (the API route and the agent's account tool, both via server/account-delete.ts); NOT gated on GIT_DATA_STORE_ENABLED, so a repo left by a flag-on window is still erased. Host key pinned (ADR-237); an absent or malformed pin returns `unconfigured` without dialing (#5914)" { technology "SSH over private net" }
   scheduler -> hetzner "Schedules" { technology "Nomad" }
 
-  // ---- C4 L3 (Component — Soleur Plugin) — 21 relationships --------------
+  // ---- C4 L3 (Component — Soleur Plugin) --------------
   // (the L3 `hooks -> claude` edge is identical to the L2 one above and is not
   //  re-declared; it still renders in the component view, which includes both.)
   go -> brainstorm "Routes explore/generate"

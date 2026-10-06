@@ -2825,7 +2825,13 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
   // (Doppler soleur/prd_terraform) alone and grades web-2's readiness and probe rows. NO SUBSTITUTE: those rows land only
   // in the Logs warehouse, which has no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 45;
+  // #8278 (2026-10-06): +1 (45 -> 46) for `2026-10-06-fix-zot-log-channel-span-grading-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/zot-log-channel-7440.sh`) reads BETTERSTACK_QUERY_*
+  // (Doppler soleur/prd_terraform) alone and grades verdicts against live warehouse rows on the newest
+  // boot. NO SUBSTITUTE: those rows exist only in the Logs warehouse, which has no unauthenticated read
+  // path; the fixture suite verifies the arms pre-merge but cannot finish inside the Check-10 cap. Genuine.
+  const BASELINE_DECLARED_PROBES = 46;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
