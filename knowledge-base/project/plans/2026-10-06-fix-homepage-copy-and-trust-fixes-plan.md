@@ -13,6 +13,26 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** 6 (Guard Contract, Phase 2 steps 1 to 11, Phase 3, Phase 4, Acceptance Criteria, Dependencies & Risks)
+**Agents used before this pass (all findings merged into the sections below):** repo-research-analyst, learnings-researcher, functional-discovery, fact-checker, CMO, CLO, CPO, spec-flow-analyzer, ux-design-lead, copywriter, then a plan-review panel of DHH, Kieran, code-simplicity, architecture-strategist, CPO and CMO.
+
+### Key Improvements
+
+1. Guard 1 was re-derived after Kieran measured it against a real build: the case-sensitive "hosted" matcher missed the exact pricing sentence it exists to catch. It now uses an inverted, case-insensitive rule over every sentence, with floors and a key-phrase parity check (existing parity tests compare only question names and counts, not answer text).
+2. Guard 2 now scans RAW template source (stripping template tags would have hidden the JSON-LD string concat and the page-freshness `{% set %}` strings), and its cascade mutation covers every page that includes the freshness block.
+3. Guard 3's population was corrected: the Organization JSON-LD is emitted only on `/`, and four blog posts and two distribution files still carry the same framing until #9589, so text checks are scoped to the pages this PR fixes.
+4. The critical-CSS gate chain was completed: `check-critical-css-coverage.mjs` never scans `index.njk` (added to its roots), the inline block has a 9 KB warn / 11 KB fail gzipped budget, the CSP hash must be recomputed last and `validate-csp.sh` runs in the inner loop, and the screenshot gate's single global viewport needs a second browser context for the 390px check.
+5. D5 and D7 now share one gate (Buttondown double opt-in verification), and the brand-guide amendments follow the CMO's narrower wording.
+
+### New Considerations Discovered
+
+- `marketing-content-drift.test.ts` Test 1 rejects literal stale counts (`59|61|62|63|65|66|67 agents|skills`) across `knowledge-base/marketing/**`; the brand-guide note must not quote a count.
+- Pencil CLI 0.3.8 writes a session `fileToken` UUID into `.pen` files and the commit-time gitleaks scan flags it as a generic API key (false positive); other committed `.pen` files carry no such key, so it was stripped before committing. The repo MCP adapter also silently saves empty documents against that CLI version (see Dependencies & Risks).
+- Deepen gates run: 4.6 User-Brand Impact present with a valid threshold; 4.8 no PAT-shaped tokens; 4.9 `.pen` wireframe referenced and committed (116 KB); 4.10 no store or connection (skipped); 4.11 `lint-guard-contract.py` green on 3 entries and assemblies are structural; 4.12 exactly one unfenced Scope Check, every ask mapped, no BLOCKED marker. Live checks: every cited rule id is active, every cited issue and PR resolved (#1439, #2965, #3165, #4757, #5068, #9500, #9573, #9584 all as described), all cited paths exist.
+
 ## Overview
 
 One marketing PR that lands the six homepage copy and trust items from the deferred Sutra
@@ -178,6 +198,34 @@ Checked every planned file path against open `code-review` issues. None names an
 - **Parity.** Every FAQ edit is made twice (visible `<details>` and JSON-LD) on `/`, `/pricing/` and `/getting-started/`. Tests #2707 and #3171 compare only question names and counts, not answer text, so Guard 1's forbidden-pattern scan over both copies plus its key-phrase parity assertion carry the answer-text check.
 - **Not touching:** `docs/legal/**` and its mirror (no legal-doc CI gate fires), `apps/web-platform/**`, blog posts, `vision.njk`, `about.njk`.
 - **Observability, encryption posture and architecture gates** do not apply: no server, infra, store, connection or architectural decision changes. The only new telemetry is one aggregate cookieless Plausible event (covered by Privacy Policy 4.3 per CLO pre-review).
+
+## Observability
+
+The change is a static docs-site copy edit with one new aggregate telemetry event; there is no server, job or infra surface. The section exists because deepen-plan Phase 4.7 applies to any non-docs file list.
+
+```yaml
+liveness_signal:
+  what: Plausible custom event "Hero Self-host Click" (class-tagged link) plus the unchanged "Waitlist Signup" event with location homepage-hero
+  cadence: per visitor interaction
+  alert_target: none (evaluation is a review of the Plausible dashboard figures pulled via the Stats API in the Phase 4 evaluation issue #9588)
+  configured_in: plugins/soleur/docs/index.njk (link class) and the Plausible site goal list
+error_reporting:
+  destination: build-time gates (docs build, validate-csp.sh, validate-seo.sh, check-critical-css-coverage.mjs, screenshot-gate.mjs, the three drift guards) fail the PR; no runtime error path is added
+  fail_loud: true
+failure_modes:
+  - mode: Plausible goal missing or class syntax unsupported by the site script, so clicks are never counted
+    detection: post-merge Playwright click then Stats API breakdown by event:goal shows the event; the pre-merge local check in Phase 0 step 5
+    alert_route: PR acceptance criterion, then the evaluation issue #9588
+  - mode: inline script edited without recomputing the CSP hash, so the signup form JS is blocked in production
+    detection: validate-csp.sh over the built site in CI (deploy-docs.yml and the Phase 2 inner loop)
+    alert_route: CI failure on the PR
+logs:
+  where: Plausible dashboard (aggregate, cookieless) and CI logs
+  retention: Plausible default retention; CI log retention per GitHub
+discoverability_test:
+  command: grep -c -e 'plausible-event-name=Hero+Self-host+Click' plugins/soleur/docs/index.njk
+  expected_output: "1"
+```
 
 ## Guard Contract
 
@@ -394,6 +442,7 @@ Three drift guards land in `plugins/soleur/test/seo-aeo-drift-guard.test.ts` in 
 
 ## Dependencies & Risks
 
+- **gitleaks false positive on `.pen` files:** Pencil CLI 0.3.8 writes a session `fileToken` UUID that the commit-time scan flags (generic-api-key). Strip the key before staging; unstage first, because the hook scans the index before the command runs.
 - **Pencil adapter drift** (found while producing the wireframe): `batch_design` through the repo adapter returns OK but saves an empty document with `@pencil.dev/cli` 0.3.8. Not fixed here; tracked in the Session Summary for compounding.
 - **Inc.com blocks curl and WebFetch (403).** Fact-checks need Playwright; the Playwright MCP server failed to connect late in this session, so Phase 0 step 4 must verify it is reachable first.
 - **Plausible goal creation may need an Enterprise Sites API key.** Fallback is Playwright on the dashboard; a login or 2FA gate is the only allowed hand-off.
