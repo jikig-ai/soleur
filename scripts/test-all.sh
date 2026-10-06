@@ -347,8 +347,8 @@ RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-p
   the FULL battery and prints AFFECTED_FALLBACK reason=runner-changed plus a banner that
   states the expected duration. Registering a new suite is itself such an edit, so a
   REGISTRATION-ONLY diff (nothing but new single-line run_suite registrations for NEW
-  suites, each directly below another registration, plus at most one new
-  AFFECTED_*_PATHS block or ALWAYS_ON_SUITES entry for a suite the same diff registers)
+  suites, each directly below another registration, plus, for each suite the same diff
+  registers, its own AFFECTED_*_PATHS block and ALWAYS_ON_SUITES entry)
   takes the bounded selection instead: the run prints AFFECTED_RUNNER_IN_SCOPE
   reason=registration-only and AFFECTED_SUMMARY ... fallback=none. Any other line, in
   either file, keeps the fallback.
@@ -2121,9 +2121,10 @@ _diff_edge_hit() {
 #       added suite (opener directly below another array's `)` or entry, closer a lone `)`, all in
 #       one hunk) and (b) added entries of ALWAYS_ON_SUITES, each bound (G5) to a label ADDED in this
 #       same diff. The array name must be defined exactly once, not be an AFFECTED_CONSUMED_EDGES
-#       target, not already be declared for another suite, and not be the name any OTHER live
-#       label maps to (the last two are checked post-walk against the live stream). Any other added
-#       index line is semantic.
+#       target, and not be the name any OTHER live label maps to. Checked post-walk against the
+#       live stream: no added label may map to an array this diff does not declare (it would
+#       inherit that suite's edges), and no other live label may map to a declared array. Any
+#       other added index line is semantic.
 #   G4  `bash -n` passes on both post-image files.
 # The post-walk pre-pass additionally requires every added label to occur EXACTLY ONCE in the live
 # enumerate stream and every anchor label at least once. The anchor check is by LABEL, not by line:
@@ -2156,6 +2157,15 @@ _aff_rd_diff() {
       diff --no-color --no-ext-diff --no-textconv --no-renames --no-relative \
       --src-prefix=a/ --dst-prefix=b/ -U0 "$_b" -- scripts/test-all.sh scripts/lib/test-affected-paths.sh 2>/dev/null
 }
+# The blob id of a trigger file's RAW working-tree bytes (no clean filters). The diff text shows
+# what git believes the file holds; with `skip-worktree`, `assume-unchanged` or a clean filter that
+# differs from the bytes bash will run. Comparing this id with the diff's `index <a>..<b>` line
+# closes that differential for content the diff never shows.
+_aff_rd_hash() {
+  local _r
+  _r="$(_aff_rd_root)" || return 1
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" hash-object --no-filters -- "$1" 2>/dev/null
+}
 # aff-rd-seam-end
 # The census normalisation of a registration label into its AFFECTED_<LABEL>_PATHS array name:
 # uppercased, every non-alphanumeric to `_`, ONE leading `_` dropped (byte-for-byte what
@@ -2186,6 +2196,7 @@ _aff_classify_runner_diff() {
   _aff_runner_index_arrays=()
   _aff_runner_index_entries=()
   _aff_runner_index_pairs=()
+  local _hfiles=() _hvals=() _hi _hv
   local _root _text _rc _tag _a _b _f _l _m _ok
   _root="$(_aff_rd_root)" || { _aff_runner_class=undecidable; _aff_runner_reason="no-repo-root"; return 0; }
   [[ -n "$_root" && -f "$_root/scripts/test-all.sh" ]] || { _aff_runner_class=undecidable; _aff_runner_reason="no-post-image"; return 0; }
@@ -2237,7 +2248,6 @@ _aff_classify_runner_diff() {
       path = root "/" f; k = 0
       while ((getline line < path) > 0) { k++; arr[f, k] = line }
       close(path)
-      return k
     }
     BEGIN { RUNNER = "scripts/test-all.sh"; INDEX = "scripts/lib/test-affected-paths.sh"
             file = ""; inhunk = 0; seen = 0; nadd = 0; blk = 0
@@ -2256,8 +2266,8 @@ _aff_classify_runner_diff() {
           # bytes bash never runs.
           if (body !~ /\r/ && post[file, cur] != body) viol("G2-postimage", file, cur)
           if (file == INDEX) {
-            # Index declarations (G3): ONE contiguous added AFFECTED_<MAP>_PATHS=( ... ) block, or ONE
-            # added entry of ALWAYS_ON_SUITES. Everything else in this file is semantic. Binding to a
+            # Index declarations (G3): contiguous added AFFECTED_<MAP>_PATHS=( ... ) blocks and added
+            # ALWAYS_ON_SUITES entries. Everything else in this file is semantic. Binding each to a
             # label added in the same diff, and the injectivity rules, are checked by the caller.
             if (body ~ /\r/) { viol("G2-cr", file, cur) }
             else if (blk == 1) {
@@ -2315,7 +2325,11 @@ _aff_classify_runner_diff() {
         if (file != RUNNER && file != INDEX) viol("G0-header", file, 0)
         seen++; next
       }
-      if (line ~ /^index [0-9a-f]+\.\.[0-9a-f]+ [0-7]+$/) next
+      if (line ~ /^index [0-9a-f]+\.\.[0-9a-f]+ [0-7]+$/) {
+        h = line; sub(/^index [0-9a-f]+\.\./, "", h); sub(/ .*$/, "", h)
+        printf "H\t%s\t%s\n", file, h
+        next
+      }
       if (line ~ /^--- a\// || line ~ /^\+\+\+ b\//) next
       if (line ~ /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/) {
         h = line; sub(/^@@ -/, "", h)
@@ -2340,6 +2354,7 @@ _aff_classify_runner_diff() {
       Z) _aff_runner_class=undecidable; _aff_runner_reason="$_a" ;;
       R) _aff_runner_index_arrays+=("$_a") ;;
       E) _aff_runner_index_entries+=("$_a") ;;
+      H) _hfiles+=("$_a"); _hvals+=("$_b") ;;
       N) _n_added="$_a" ;;
     esac
   done <<<"$_out"
@@ -2381,6 +2396,20 @@ _aff_classify_runner_diff() {
   # A diff that registers nothing is not a registration-only edit (a comment-only change could not
   # alter behaviour, but the claim this class makes is "adds new suites"): it keeps the full fallback.
   if (( ${#_aff_runner_added_labels[@]} == 0 )); then _aff_runner_class=undecidable; _aff_runner_reason="no-registration"; return 0; fi
+  # The post-image blob id of every changed file must be the id the diff reports: otherwise the
+  # file bash will run holds bytes the diff text did not show (skip-worktree, assume-unchanged, a
+  # clean filter). Fails closed.
+  _hi=0
+  for _a in ${_hfiles[@]+"${_hfiles[@]}"}; do
+    _hv="$(_aff_rd_hash "$_a")" || _hv=""
+    if [[ -z "$_hv" || "$_hv" != "${_hvals[$_hi]}"* ]]; then
+      _aff_runner_class=semantic
+      _aff_runner_off_n=1
+      _aff_runner_offenders=("${_a}:0 G2-postimage")
+      return 0
+    fi
+    _hi=$(( _hi + 1 ))
+  done
   # G4: both post-images must parse. `-n` only parses; the ambient environment cannot run code.
   for _f in scripts/test-all.sh scripts/lib/test-affected-paths.sh; do
     if [[ -L "$_root/$_f" || ! -f "$_root/$_f" ]] \
@@ -3464,7 +3493,6 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
   _aff_runner_offenders=()
   _aff_runner_added_labels=()
   _aff_runner_anchor_labels=()
-  _aff_runner_index_pairs=()
   if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )) \
      && [[ "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] && (( _AFF_LIB_OK == 1 )) \
      && [[ "$_diff_detect_ok" == "1" && "$_diff_head_ok" == "1" ]] && (( _PRINT_PATHS_REQ == 0 )); then
@@ -3618,11 +3646,15 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
         # Injectivity (iv): the label-to-array map is not injective, so a declared array that some
         # OTHER live label (loop- and glob-generated ones included) also maps to would overwrite or
         # alias that suite's edges. Every pair `array|label` must have no second claimant.
-        if [[ -z "$_aff_uniq_bad" ]]; then
-          for _aff_pair in ${_aff_runner_index_pairs[@]+"${_aff_runner_index_pairs[@]}"}; do
-            for _aff_x in ${_aff_label[@]+"${_aff_label[@]}"}; do
-              [[ "$_aff_x" == "${_aff_pair#*|}" ]] && continue
-              if [[ "AFFECTED_$(_aff_label_map "$_aff_x")_PATHS" == "${_aff_pair%%|*}" ]]; then
+        if [[ -z "$_aff_uniq_bad" && ${#_aff_runner_index_pairs[@]} -gt 0 ]]; then
+          _aff_lmap=()
+          for _aff_x in ${_aff_label[@]+"${_aff_label[@]}"}; do
+            _aff_lmap+=("${_aff_x}|AFFECTED_$(_aff_label_map "$_aff_x")_PATHS")
+          done
+          for _aff_pair in "${_aff_runner_index_pairs[@]}"; do
+            for _aff_x in ${_aff_lmap[@]+"${_aff_lmap[@]}"}; do
+              [[ "${_aff_x%%|*}" == "${_aff_pair#*|}" ]] && continue
+              if [[ "${_aff_x#*|}" == "${_aff_pair%%|*}" ]]; then
                 _aff_uniq_bad="INDEX-ARRAY-NAME ${_aff_pair#*|}"; break 2
               fi
             done
@@ -3631,6 +3663,8 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
       fi
       if [[ -n "$_aff_uniq_bad" ]]; then
         _aff_fallback="runner-changed"
+        # Deliberately NOT _aff_runner_offend: this REPLACES the (clean) classifier verdict with the
+        # single post-walk finding, rather than adding one to a list.
         _aff_runner_class="semantic"
         _aff_runner_off_n=1
         _aff_runner_offenders=("scripts/test-all.sh:0 ${_aff_uniq_bad%% *} ${_aff_uniq_bad#* }")

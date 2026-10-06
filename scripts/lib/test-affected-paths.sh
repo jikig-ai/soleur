@@ -50,8 +50,8 @@
 # touching either degrades the gate to full (runner-changed), so no declaration
 # here can silently shrink what it would have run. The one exception is a REGISTRATION-ONLY
 # runner diff (nothing but new single-line run_suite registrations for new suites, ADR-242
-# decision 20): it takes the bounded selection, together with at most one new AFFECTED_*_PATHS
-# block or ALWAYS_ON_SUITES entry for a suite that same diff registers. Any other hunk in THIS file
+# decision 20): it takes the bounded selection, together with, for each suite that same diff
+# registers, its own AFFECTED_*_PATHS block and ALWAYS_ON_SUITES entry. Any other hunk in THIS file
 # still degrades to full.
 
 # CLOSURE LEAVES (ADR-242 decision 18). The derive follows what a file's text NAMES (invocation

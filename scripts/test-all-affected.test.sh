@@ -208,6 +208,7 @@ assert s.count(seam_anchor) == 1, f"expected exactly one seam marker, found {s.c
 s = s.replace(seam_anchor, seam_anchor + (
     '_aff_rd_root() { printf "%s" "${SANDBOX_RD_ROOT:-}"; }\n'
     '_aff_rd_diff() { [[ -n "${SANDBOX_RD_DIFF+x}" ]] || return 1; printf "%s\\n" "$SANDBOX_RD_DIFF"; }\n'
+    '_aff_rd_hash() { printf "%s" "${SANDBOX_RD_HASH:-2222222}"; }\n'
 ), 1)
 
 # 4. Corpus trim. The arms under test exercise SELECTION — a handful of named
@@ -531,12 +532,12 @@ fi
 # H1/H2 swap in a permissive and a reject-all stub and require the table to notice.
 _rc_src="$TESTROOT/classifier.sh"
 awk '/^_aff_rd_root\(\) \{$/ { on = 1 } on { print } on && /^_aff_classify_runner_diff\(\) \{$/ { inf = 1 } inf && /^}$/ { exit }' "$RUNNER" > "$_rc_src"
-_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_label_map|_aff_runner_offend|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
+_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_rd_hash|_aff_label_map|_aff_runner_offend|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
 cases=$((cases + 1))
-if [[ "$_rc_defs" == "5" ]] && bash -n "$_rc_src"; then
-  pass "rc0: the classifier extracts as five functions and parses"
+if [[ "$_rc_defs" == "6" ]] && bash -n "$_rc_src"; then
+  pass "rc0: the classifier extracts as six functions and parses"
 else
-  fail "rc0: classifier extraction found $_rc_defs of 5 functions (or it does not parse)"
+  fail "rc0: classifier extraction found $_rc_defs of 6 functions (or it does not parse)"
 fi
 
 RC_BASE_RUNNER='#!/usr/bin/env bash
@@ -636,7 +637,7 @@ m_ok_python_m()    { rc_ins "$1" "$RC_TWO" '  run_suite "x/py" python3 -m unitte
 m_ok_bun()         { rc_ins "$1" "$RC_TWO" '  run_suite "x/bun" bun test apps/x/test/x.test.ts'; }
 m_ok_blank_comment() { rc_ins "$1" "$RC_TWO" $'\n  # a note\n  run_suite "x/new" bash x/new.test.sh'; }
 m_ok_two_in_hunk() { rc_ins "$1" "$RC_TWO" $'  run_suite "x/n1" bash x/n1.test.sh\n  run_suite "x/n2" bash x/n2.test.sh'; }
-m_ok_comment_only() { rc_ins "$1" "$RC_TWO" '  # just a note'; }
+m_u_comment_only() { rc_ins "$1" "$RC_TWO" '  # just a note'; }
 m_ok_mnemonic()    { assert_fixture_dir "$1"; rc_g -C "$1" config diff.mnemonicPrefix true; rc_g -C "$1" config diff.noprefix true; m_ok_single "$1"; }
 m_s_fallback()     { rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; }
 m_s_floor()        { rc_rep "$1" '_MIN_ALWAYS_ON_DECLARED=141' '_MIN_ALWAYS_ON_DECLARED=0'; }
@@ -702,6 +703,15 @@ m_s_py_m_other()   { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" python3 -m pip i
 # one would report a text/file differential (G2-postimage).
 m_s_crlf_autocrlf() { assert_fixture_dir "$1"; rc_g -C "$1" config core.autocrlf true; rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\r'; }
 m_s_cont_comment() { rc_ins "$1" 'x=1 \' '  # a note'; }
+# skip-worktree makes git diff read the INDEX blob while bash runs the file: extra bytes the diff
+# never shows (the blob-id check against the diff's `index <a>..<b>` line must refuse it).
+m_s_skipworktree() { assert_fixture_dir "$1"; m_ok_single "$1"; rc_g -C "$1" add scripts/test-all.sh; rc_g -C "$1" update-index --skip-worktree scripts/test-all.sh; printf '_hidden=1\n' >> "$1/scripts/test-all.sh"; }
+m_s_idx_two_blocks_first() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_A_ONE_PATHS=(\n  "a/one.test.sh"\n)'; rc_lib_append "$1" "$RC_BLOCK"; }
+m_s_idx_two_entries_first() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' $'  "a/two"\n  "x/new"'; }
+m_ok_idx_two_blocks() { rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\n  run_suite "x/new2" bash x/new2.test.sh'; rc_lib_append "$1" "$RC_BLOCK"; rc_lib_append "$1" $'AFFECTED_X_NEW2_PATHS=(\n  "x/new2.test.sh"\n)'; }
+m_s_path_dotdot_mid() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a/../b.sh'; }
+m_ok_python_pytest() { rc_ins "$1" "$RC_TWO" '  run_suite "x/pt" python3 -m pytest tests/x'; }
+m_ok_node()        { rc_ins "$1" "$RC_TWO" '  run_suite "x/nd" node scripts/x.mjs --flag=1'; }
 m_s_idx_nested()   { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two.test.sh"' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
 m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
 m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
@@ -717,7 +727,7 @@ RC_TABLE=(
   'ok_bun|m_ok_bun|registration-only:x/bun|'
   'ok_blank_comment|m_ok_blank_comment|registration-only:x/new|'
   'ok_two_in_hunk|m_ok_two_in_hunk|registration-only:x/n1,x/n2|'
-  'ok_comment_only|m_ok_comment_only|undecidable:no-registration|'
+  'u_comment_only|m_u_comment_only|undecidable:no-registration|'
   'ok_idx_block|m_ok_idx_block|registration-only:x/new|'
   'ok_idx_always|m_ok_idx_always|registration-only:x/new|'
   'ok_idx_both|m_ok_idx_both|registration-only:x/new|'
@@ -775,6 +785,13 @@ RC_TABLE=(
   's_bun_abs|m_s_bun_abs|semantic:G2-charset|'
   's_py_m_other|m_s_py_m_other|semantic:G2-charset|'
   's_cont_comment|m_s_cont_comment|semantic:G2-anchor|'
+  's_skipworktree|m_s_skipworktree|semantic:G2-postimage|'
+  's_idx_two_blocks_first|m_s_idx_two_blocks_first|semantic:INDEX-UNBOUND|'
+  's_idx_two_entries_first|m_s_idx_two_entries_first|semantic:INDEX-UNBOUND|'
+  'ok_idx_two_blocks|m_ok_idx_two_blocks|registration-only:x/new,x/new2|'
+  's_path_dotdot_mid|m_s_path_dotdot_mid|semantic:G2-charset|'
+  'ok_python_pytest|m_ok_python_pytest|registration-only:x/pt|'
+  'ok_node|m_ok_node|registration-only:x/nd|'
   's_crlf_autocrlf|m_s_crlf_autocrlf|semantic:G2-cr|'
   's_lib_delete|m_s_lib_delete|semantic:G0-header|'
   's_postimage|m_s_postimage|semantic:G2-postimage|'
@@ -828,10 +845,11 @@ rc_run_table() {
 cases=$((cases + 1))
 _rc_bad="$(RC_VERBOSE=1 rc_run_table "$_rc_src" 2>"$TESTROOT/rc-table.err")"
 # A floor on the table itself: deleting rows would otherwise read as a smaller green table.
-if [[ "$_rc_bad" == "0" ]] && (( ${#RC_TABLE[@]} >= 75 )); then
+RC_TABLE_FLOOR=82
+if [[ "$_rc_bad" == "0" ]] && (( ${#RC_TABLE[@]} >= RC_TABLE_FLOOR )); then
   pass "rc1: all ${#RC_TABLE[@]} classifier rows give the table's verdict (registration-only shapes pass, every semantic edit stays full)"
 else
-  fail "rc1: $_rc_bad classifier row(s) differ from the table (table rows: ${#RC_TABLE[@]}, floor 75): $(tr '\n' ' ' < "$TESTROOT/rc-table.err" | head -c 900)"
+  fail "rc1: $_rc_bad classifier row(s) differ from the table (table rows: ${#RC_TABLE[@]}, floor $RC_TABLE_FLOOR): $(tr '\n' ' ' < "$TESTROOT/rc-table.err" | head -c 900)"
 fi
 
 # H1: a permissive stub (everything registration-only, no labels) — EVERY table row must notice,
@@ -850,11 +868,14 @@ cases=$((cases + 1))
 cat > "$TESTROOT/clf-rejectall.sh" <<'STUB'
 _aff_classify_runner_diff() { _aff_runner_class=semantic; _aff_runner_added_labels=(); _aff_runner_offenders=("x:0 G2-shape"); _aff_runner_reason=""; }
 STUB
-RC_BADLOG="$TESTROOT/h2-bad.log"; : > "$RC_BADLOG"
-_h2_bad="$(RC_BADLOG="$RC_BADLOG" rc_run_table "$TESTROOT/clf-rejectall.sh" 2>/dev/null)"
+_h2_log="$TESTROOT/h2-bad.log"; : > "$_h2_log"
+_h2_bad="$(RC_BADLOG="$_h2_log" rc_run_table "$TESTROOT/clf-rejectall.sh" 2>/dev/null)"
 _h2_ok_rows=$(printf '%s\n' "${RC_TABLE[@]}" | grep -c '^ok_' || true)
-_h2_ok_red=$(grep -c '^ok_' "$RC_BADLOG" || true)
-if (( _h2_ok_rows >= 7 )) && (( _h2_ok_red == _h2_ok_rows )); then pass "H2: a reject-everything stub reddens all $_h2_ok_rows must-pass (ok_*) rows by name ($_h2_bad rows in total)"
+_h2_ok_red=$(grep -c '^ok_' "$_h2_log" || true)
+_h2_log_n=$(wc -l < "$_h2_log" | tr -d ' ')
+# The log must name exactly the rows the stub reddened (a log written unconditionally, or an empty one,
+# cannot satisfy the by-name check).
+if (( _h2_ok_rows >= 7 )) && (( _h2_ok_red == _h2_ok_rows )) && (( _h2_log_n == _h2_bad )); then pass "H2: a reject-everything stub reddens all $_h2_ok_rows must-pass (ok_*) rows by name ($_h2_bad rows in total)"
 else fail "H2: reject-all stub reddened $_h2_ok_red of $_h2_ok_rows ok_* rows"; fi
 
 # --- Rows re*: end to end through the sandboxed runner ------------------------------
@@ -915,6 +936,8 @@ if grep -qF 'fallback=runner-changed' <<<"$_re2_sum" \
   && grep -qF 'first: scripts/test-all.sh:4 [G2-shape]' <<<"$ARM_OUT" \
   && grep -qF '  G2-shape: an added line outside the closed registration shape' <<<"$ARM_OUT" \
   && grep -qF '1 finding(s) outside the registration grammar' <<<"$ARM_OUT" \
+  && grep -qF 'takes the bounded selection automatically' <<<"$ARM_OUT" \
+  && ! grep -qF 'to scope an edit you have judged safe' <<<"$ARM_OUT" \
   && ! grep -qF '_aff_fallback' <<<"$ARM_OUT"; then
   pass "re2: a registration plus one semantic line goes full; the banner names scripts/test-all.sh:4 [G2-shape], no source text"
 else
@@ -996,7 +1019,8 @@ fi
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm -- --print-selection --paths=scripts/test-all.sh
 _re8_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
-if grep -qF 'fallback=runner-changed' <<<"$_re8_sum" && grep -qF 'no diff content to classify under --paths' <<<"$ARM_OUT"; then
+if grep -qF 'fallback=runner-changed' <<<"$_re8_sum" && grep -qF 'no diff content to classify under --paths' <<<"$ARM_OUT" \
+   && ! grep -qF 'takes the bounded selection automatically' <<<"$ARM_OUT"; then
   pass "re8: --paths naming the runner stays full and names the reason"
 else
   fail "re8: summary='${_re8_sum}'"
@@ -1133,15 +1157,76 @@ else
   fail "re16: summary='${_re16_sum}'"
 fi
 
-# H5: the extraction under test is the runner's own text — the classifier the matrix drove is
+# re12b: the SAME label as re12, but this diff DECLARES the array it maps to: the declared-array
+# exemption is what lets a registration carry its own block, so it must keep the run bounded.
+cases=$((cases + 1))
+_re12b_block=('AFFECTED_TESTS_HOOKS_DROP_SENTINEL_PARITY_PATHS=(' '  "tests/hooks/zz.test.sh"' ')')
+_re12b_root=$(re_idx_root re12b "$RE_INH" "${RE_LIB_HEAD[@]}" "${_re12b_block[@]}")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_INH}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re12b_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$(re_diff 3 1 "$RE_INH")" "${_re12b_block[@]}")" -- --print-selection
+_re12b_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=none' <<<"$_re12b_sum" && grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=registration-only' <<<"$ARM_OUT"; then
+  pass "re12b: a registration that declares the array its label maps to stays bounded"
+else
+  fail "re12b: summary='${_re12b_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re17: a long, spaced label reaches the banner charset-restricted: spaces shown as `_`, cut at 64.
+cases=$((cases + 1))
+_re17_long="zz/not in stream $(printf 'a%.0s' $(seq 1 60))"
+RE_LONG="  run_suite \"${_re17_long}\" bash zz/x.test.sh"
+_re17_root=$(re_root re17 "$RE_DUAL" "$RE_LONG")
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re17_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_LONG")" -- --print-selection
+_re17_tok=$(grep -oE '\[LABEL-NOT-UNIQUE\] [^ ]*' <<<"$ARM_OUT" | head -1 | sed 's/^\[LABEL-NOT-UNIQUE\] //')
+if [[ "${#_re17_tok}" == "64" && "$_re17_tok" == zz/not_in_stream_a* && "$_re17_tok" != *" "* ]]; then
+  pass "re17: the banner prints a long spaced label as one 64-character token"
+else
+  fail "re17: token='${_re17_tok}' (${#_re17_tok} chars)"
+fi
+
+# re18: five findings across three offenders: the count is the REAL count (not the three shown), the
+# rest are listed after `more:`, one sentence per distinct code, and the staged hint appears for an
+# anchor finding (and only there).
+cases=$((cases + 1))
+_re18_root=$(re_root re18 "$RE_DUAL" "$RE_NEW" '_b1=1' '_b2=2' '_b3=3')
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re18_root" "SANDBOX_RD_DIFF=$(re_diff 3 4 "$RE_NEW" '_b1=1' '_b2=2' '_b3=3')" -- --print-selection
+if grep -qF '5 finding(s) outside the registration grammar' <<<"$ARM_OUT" \
+   && grep -qF '; more: ' <<<"$ARM_OUT" \
+   && grep -qF '  G2-shape: ' <<<"$ARM_OUT" && grep -qF '  G2-anchor: ' <<<"$ARM_OUT" \
+   && [[ "$(grep -c '^\[affected\]   G2-shape: ' <<<"$ARM_OUT")" == "1" ]] \
+   && grep -qF 'to scope an edit you have judged safe' <<<"$ARM_OUT"; then
+  pass "re18: the banner reports the true finding count, the tail, one sentence per code and the staged hint for an anchor finding"
+else
+  fail "re18: banner: $(grep -F '[affected]' <<<"$ARM_OUT" | head -8 | tr '\n' '|')"
+fi
+
+# k3c: a missing heavy manifest means "duration unknown" — never a silently smaller number.
+cases=$((cases + 1))
+_k3c_dir="$TESTROOT/k3c-manifests"; mkdir -p "$_k3c_dir" || { echo "FATAL: k3c fixture dir" >&2; exit 2; }
+assert_fixture_dir "$_k3c_dir"
+printf '# synthetic\nzz/a\t120000\tmeasured\n' > "$_k3c_dir/suite-durations.tsv"
+SANDBOX_MANIFEST_DIR="$_k3c_dir" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  -- --affected
+if grep -qF 'duration unknown, manifest unavailable' <<<"$ARM_OUT" && ! grep -qF 'about ' <<<"$(grep -F 'battery is running' <<<"$ARM_OUT")"; then
+  pass "k3c: a missing heavy manifest reads as duration unknown, never a smaller number"
+else
+  fail "k3c: $(grep -F 'battery is running' <<<"$ARM_OUT" | head -2)"
+fi
+
+# H3: the extraction under test is the runner's own text — the classifier the matrix drove is
 # byte-identical to the one the sandbox arms run (they are copies of the same file).
 cases=$((cases + 1))
 _h5_fn() { awk '/^_aff_classify_runner_diff\(\) \{$/ { on = 1 } on { print } on && /^}$/ { exit }' "$1"; }
 _h5_live=$(_h5_fn "$RUNNER"); _h5_sb=$(_h5_fn "$ARM_SB")
 if [[ -n "$_h5_live" && "$_h5_live" == "$_h5_sb" ]]; then
-  pass "H5: the sandbox runner carries the same classifier function the matrix drove"
+  pass "H3: the sandbox runner carries the same classifier function the matrix drove"
 else
-  fail "H5: classifier text differs between the live runner and the sandbox copy"
+  fail "H3: classifier text differs between the live runner and the sandbox copy"
 fi
 
 # --- Row l: SOLEUR_SUBAGENT refusal — affected proceeds, --full refuses -----------
@@ -2715,7 +2800,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=111
+MIN_CASES=115
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
