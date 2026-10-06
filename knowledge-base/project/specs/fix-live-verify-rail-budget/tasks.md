@@ -54,7 +54,7 @@ Issue: #9581 (Closes)
     bound is mandatory (thrown reload → `reload_err` diagnostic, keep
     polling) + Phase B poll to ~45s
   - `isVisible()` target-closed/context-destroyed → `unverifiable`
-  - one named total ceiling (`RAIL_ASSERT_TOTAL_BUDGET_MS` = 150s (raised at review: worst-case observe+probes+reload+observe = 140s))
+  - one named total ceiling (`RAIL_ASSERT_TOTAL_BUDGET_MS` = 165s (raised at review: honest worst case = observe 45 + read overrun 5 + probes 20 + lastDirect 5 + reload backstop 35 + observe 45 + overrun 5 ≈ 160s))
 - [x] 2.2 Add `railRowState` collector (error | empty | rows:n | rail-absent |
   unreadable) — never-throws, bounded, same `safe()` discipline as
   `waitFailureState`
