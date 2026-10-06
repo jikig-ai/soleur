@@ -60,6 +60,18 @@ describe("classifyReplayVerdict — exit-code classification (false-rollback pre
     expect(v.verdict).toBe("canary_infra_error");
   });
 
+  it("bwrap-shim: marker (exit 65) ⇒ sandbox_broken bwrap_shim_refused — our shim's refusal is deterministic breakage, not infra flake", () => {
+    // Without this row a deleted branch degrades every shim refusal to
+    // bwrap_exit_65 → canary_infra_error → a fleet-wide spawn outage pages
+    // nobody.
+    expect(
+      classifyReplayVerdict({
+        bwrapExitCode: 65,
+        bwrapStderr: "bwrap-shim: seccomp artifact not readable: /app/infra/bwrap-userns-clone3-deny.bpf",
+      }),
+    ).toMatchObject({ verdict: "sandbox_broken", reason: "bwrap_shim_refused" });
+  });
+
   it("ambiguous non-zero bwrap exit (no EPERM signature) ⇒ canary_infra_error, not sandbox_broken", () => {
     // Conservative: only a bwrap EPERM signature rolls back once blocking.
     // Any other non-zero (OOM, transient, unknown) must NOT be read as a
@@ -611,13 +623,27 @@ describe("classifyForkProbe — the over-broad control (fork survives)", () => {
   });
 
   it("forked child fails ⇒ sandbox_broken userns_filter_overbroad", () => {
-    // `unshare -m` cannot be this control: bwrap creates the mountns in the
-    // same unshare() call as the userns, so nested CLONE_NEWNS needs
-    // CAP_SYS_ADMIN in the INIT userns — EPERM on every kernel.
+    // `unshare -m` cannot be this control: the payload runs capability-free
+    // (bwrap zeroes the capset before exec), so nested CLONE_NEWNS needs a
+    // CAP_SYS_ADMIN it doesn't hold — EPERM on every kernel.
     expect(classifyForkProbe({ status: 1 })).toMatchObject({
       verdict: "sandbox_broken",
       reason: "userns_filter_overbroad",
       probe: "fork_survives",
+    });
+  });
+
+  it("signal-kill / setup-side failure ⇒ canary_infra_error, never a false over-broad page", () => {
+    // status null = killed (the 15s spawn timeout or a container OOM of the
+    // payload sh) — infra, not a filter regression.
+    expect(classifyForkProbe({ status: null })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fork_probe_exit_null",
+    });
+    // A `bwrap:` setup line means the sandbox never built — infra.
+    expect(classifyForkProbe({ status: 1, stderr: "bwrap: Can't create file at /tmp/x" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fork_probe_exit_1",
     });
   });
 
@@ -653,6 +679,18 @@ describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit",
       reason: "fd_census_exit_2",
     });
   });
+
+  it("a count below 3 is vacuous, not clean — stdio 0-2 always exist", () => {
+    // A masked/absent /proc makes the census read ~nothing: an empty string
+    // parses to 0 and a bare glob echo to 1 — both must be infra errors, not
+    // passes (a green that measured nothing is indistinguishable from health).
+    for (const stdout of ["", "0", "1", "2"]) {
+      expect(classifyFdCensusProbe({ status: 0, stdout }, 4)).toMatchObject({
+        verdict: "canary_infra_error",
+        reason: "fd_census_unparseable",
+      });
+    }
+  });
 });
 
 describe("countFdValuedOptions — census slack for argv-referenced fds", () => {
@@ -663,14 +701,17 @@ describe("countFdValuedOptions — census slack for argv-referenced fds", () => 
     expect(countFdValuedOptions(fx.bwrapSetupArgv)).toBe(0);
   });
 
-  it("counts every fd-consuming option in the shim's preserve vocabulary", () => {
+  it("counts every fd-valued option in the shim's preserve vocabulary (bwrap(1) — all 16)", () => {
     expect(
       countFdValuedOptions([
         "--args", "3", "--seccomp", "4", "--add-seccomp-fd", "5",
         "--sync-fd", "6", "--info-fd", "7", "--json-status-fd", "8",
         "--block-fd", "9", "--userns-block-fd", "10",
+        "--userns", "11", "--userns2", "12", "--pidns", "13",
+        "--file", "14", "--bind-data", "15", "--ro-bind-data", "16",
+        "--bind-fd", "17", "--ro-bind-fd", "18",
       ]),
-    ).toBe(8);
+    ).toBe(16);
     expect(countFdValuedOptions(["--unshare-user", "--ro-bind", "/", "/"])).toBe(0);
   });
 });

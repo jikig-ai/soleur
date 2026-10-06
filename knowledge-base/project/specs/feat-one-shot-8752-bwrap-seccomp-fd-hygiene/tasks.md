@@ -15,7 +15,7 @@ review time).
   clone/unshare `CLONE_NEWUSER`-masked→EPERM; default ALLOW) + generator
   byte-parity `--check`.
 - [x] 1.2 Write `apps/web-platform/scripts/gen-bwrap-userns-seccomp.mjs`:
-  emit serialized `sock_fprog` (x86_64 nrs: clone 56, unshare 272, clone3 435;
+  emit a raw serialized `struct sock_filter[]` array (NO sock_fprog header — bwrap derives the count from the fd length) (x86_64 nrs: clone 56, unshare 272, clone3 435;
   `CLONE_NEWUSER=0x10000000`; `__X32_SYSCALL_BIT` variants) + `--check` mode.
 - [x] 1.3 Generate `apps/web-platform/infra/bwrap-userns-clone3-deny.bpf`; suite
   GREEN (parity + semantics independent of bwrap availability).
@@ -28,7 +28,7 @@ review time).
 - [x] 2.2 Add `"--seccomp", "9"` to `buildLikeC4SandboxArgv` setup args.
 - [x] 2.3 Update `test/c4-render-sandbox.test.ts` (+ `-tenant-config` as needed):
   argv-shape assertion; real-bwrap row (`C4_BWRAP_REQUIRED=1`): render completes,
-  `unshare -U` inside fails, `unshare -m` inside succeeds — with a ran-presence
+  `unshare -U` inside fails, a forked child inside succeeds (deviation: `unshare -m` is capability-impossible inside a capless payload — see session-state) — with a ran-presence
   assertion (no silent skip-green).
 
 ## Phase 3 — Agent SDK shim (fd hygiene + filter injection)
@@ -43,7 +43,7 @@ review time).
   the real SDK argv (verified against the shipped binary strings: `bash -c
   '…shift && exec "$@"' … --args <fd> …`), so the preserve-set is load-bearing;
   `exec {fd}<` the filter; close all other fds >2 except
-  preserve-set/script-fd/bpf-fd; `exec /usr/bin/bwrap --seccomp "$fd" "$@"`;
+  preserve-set/script-fd/bpf-fd; `exec /usr/bin/bwrap --add-seccomp-fd "$fd" "$@"` (deviation: repeatable/stacking, see session-state);
   fail-closed `bwrap-shim:` marker.
 - [x] 3.3 `apps/web-platform/Dockerfile`: `COPY` shim → `/usr/local/bin/bwrap`
   (root-owned 0755), `.bpf` → `/app/infra/` (with the other `infra/` COPY block).
@@ -54,7 +54,7 @@ review time).
 
 - [x] 4.1 `apps/web-platform/scripts/sandbox-canary.mjs`: replay gains three
   derived probes — `bwrap <argv> -- unshare -U true` MUST fail (else verdict
-  `userns_filter_bypass`), `bwrap <argv> -- unshare -m true` MUST pass (else
+  `userns_filter_bypass`), a forked-child spawn inside MUST pass (else
   `userns_filter_overbroad`), and an in-sandbox fd census (`ls /proc/self/fd`
   count within `3 + #(fd-consuming argv args) + 1`, else `fd_hygiene_bypass`);
   fixture `sandbox-canary-argv.json` UNCHANGED.

@@ -1,6 +1,6 @@
 // Guard Contract for the committed nested-user-namespace seccomp filter
-// (#8752). The artifact `infra/bwrap-userns-clone3-deny.bpf` is a serialized
-// `sock_fprog` consumed by `bwrap --seccomp <fd>` at BOTH sandbox insertion
+// (#8752). The artifact `infra/bwrap-userns-clone3-deny.bpf` is a raw
+// `struct sock_filter[]` consumed by `bwrap --seccomp <fd>` at BOTH sandbox insertion
 // points (the C4 render argv and the agent-SDK PATH shim). Editing the filter
 // is only safe via `scripts/gen-bwrap-userns-seccomp.mjs` — never hand-edit the
 // committed bytes; `--check` asserts byte-parity.
@@ -11,12 +11,13 @@
 // value the filter can produce has a row that drives it, and a meta-row fails
 // when the program contains a return no row reaches.
 import { describe, it, expect } from "vitest";
-import { closeSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
-const APP_ROOT = join(fileURLToPath(import.meta.url), "../..");
+const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BPF_PATH = join(APP_ROOT, "infra/bwrap-userns-clone3-deny.bpf");
 const GEN = join(APP_ROOT, "scripts/gen-bwrap-userns-seccomp.mjs");
 
@@ -56,9 +57,9 @@ const SECCOMP_RET_KILL_PROCESS = 0x80000000;
 const AUDIT_ARCH_X86_64 = 0xc000003e;
 const AUDIT_ARCH_AARCH64 = 0x400000b7;
 
-const NR_clone = 56;
-const NR_unshare = 272;
-const NR_clone3 = 435;
+const NR_CLONE = 56;
+const NR_UNSHARE = 272;
+const NR_CLONE3 = 435;
 const X32_SYSCALL_BIT = 0x40000000;
 const CLONE_NEWUSER = 0x10000000;
 const CLONE_NEWNS = 0x00020000;
@@ -105,22 +106,22 @@ const prog = decode(readFileSync(BPF_PATH));
 
 describe("bwrap-userns-clone3-deny filter semantics", () => {
   it("kills non-x86_64 architectures outright", () => {
-    expect(run(prog, { arch: AUDIT_ARCH_AARCH64, nr: NR_clone3, arg0lo: 0 })).toBe(
+    expect(run(prog, { arch: AUDIT_ARCH_AARCH64, nr: NR_CLONE3, arg0lo: 0 })).toBe(
       SECCOMP_RET_KILL_PROCESS,
     );
   });
   it("returns ENOSYS for clone3 (flags live in a struct — uninspectable)", () => {
     for (const arg0 of [0, CLONE_NEWUSER, CLONE_NEWUSER | CLONE_NEWNET]) {
-      expect(run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_clone3, arg0lo: arg0 })).toBe(
+      expect(run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_CLONE3, arg0lo: arg0 })).toBe(
         SECCOMP_RET_ERRNO | ENOSYS,
       );
     }
     expect(
-      run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_clone3 | X32_SYSCALL_BIT, arg0lo: CLONE_NEWUSER }),
+      run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_CLONE3 | X32_SYSCALL_BIT, arg0lo: CLONE_NEWUSER }),
     ).toBe(SECCOMP_RET_ERRNO | ENOSYS);
   });
   it("denies clone/unshare carrying CLONE_NEWUSER with EPERM", () => {
-    for (const nr of [NR_clone, NR_unshare, NR_clone | X32_SYSCALL_BIT, NR_unshare | X32_SYSCALL_BIT]) {
+    for (const nr of [NR_CLONE, NR_UNSHARE, NR_CLONE | X32_SYSCALL_BIT, NR_UNSHARE | X32_SYSCALL_BIT]) {
       for (const flags of [CLONE_NEWUSER, CLONE_NEWUSER | CLONE_NEWNET, CLONE_NEWUSER | CLONE_NEWNS]) {
         expect(run(prog, { arch: AUDIT_ARCH_X86_64, nr, arg0lo: flags })).toBe(
           SECCOMP_RET_ERRNO | EPERM,
@@ -129,12 +130,12 @@ describe("bwrap-userns-clone3-deny filter semantics", () => {
     }
   });
   it("allows clone/unshare WITHOUT CLONE_NEWUSER (flag-selective, not blanket)", () => {
-    expect(run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_clone, arg0lo: 0 })).toBe(SECCOMP_RET_ALLOW);
+    expect(run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_CLONE, arg0lo: 0 })).toBe(SECCOMP_RET_ALLOW);
     expect(
-      run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_unshare, arg0lo: CLONE_NEWNS }),
+      run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_UNSHARE, arg0lo: CLONE_NEWNS }),
     ).toBe(SECCOMP_RET_ALLOW);
     expect(
-      run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_unshare, arg0lo: CLONE_NEWNET }),
+      run(prog, { arch: AUDIT_ARCH_X86_64, nr: NR_UNSHARE, arg0lo: CLONE_NEWNET }),
     ).toBe(SECCOMP_RET_ALLOW);
   });
   it("allows every other syscall by default", () => {
@@ -165,13 +166,15 @@ describe("generator byte parity", () => {
   it("--check exits non-zero on a mutated artifact (vacuity pin)", () => {
     const mutated = Buffer.from(readFileSync(BPF_PATH));
     mutated[4] ^= 0xff;
-    const tmp = join(APP_ROOT, `test/.bpf-mutated-${process.pid}.bin`);
+    const tmp = join(mkdtempSync(join(tmpdir(), "bpf-mut-")), "mutated.bpf");
     writeFileSync(tmp, mutated);
     try {
       const r = spawnSync(process.execPath, [GEN, "--check", tmp], { encoding: "utf8" });
+      // Pin the REASON, not just non-zero — an ENOENT/crash would also be 1.
       expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain("differs");
     } finally {
-      rmSync(tmp, { force: true });
+      rmSync(dirname(tmp), { recursive: true, force: true });
     }
   });
 });
@@ -219,19 +222,29 @@ function filteredRun(payload: string[]): { status: number | null; stderr: string
 
 describe.skipIf(!BWRAP_OK)("real-bwrap behavioral rows", () => {
   it("nested unshare -U inside the filtered sandbox fails with EPERM", () => {
+    // Positive control FIRST: the same argv WITHOUT the filter must permit
+    // the nested userns — else the deny below is unattributable (a host
+    // denying nested userns anyway would green a vacuous row).
+    const control = spawnSync(
+      BWRAP,
+      ["--unshare-user", "--unshare-pid", "--ro-bind", "/usr", "/usr", "--symlink", "usr/lib", "/lib", "--symlink", "usr/lib64", "/lib64", "--dev", "/dev", "--", "/usr/bin/unshare", "-U", "/usr/bin/true"],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(control.status, `unfiltered control stderr=${control.stderr}`).toBe(0);
     const r = filteredRun(["/usr/bin/unshare", "-U", "/usr/bin/true"]);
     // The denial must come from the SANDBOXED unshare (EPERM text), not from
     // bwrap's own setup failing — a `bwrap:` line would satisfy "non-zero" on
     // a filter that never installed (expected-fail inversion).
     expect(r.status, `stderr=${r.stderr}`).not.toBe(0);
     expect(r.stderr).not.toContain("bwrap:");
-    expect(r.stderr).toMatch(/unshare.*Operation not permitted|Operation not permitted/);
+    expect(r.stderr).toMatch(/Operation not permitted/);
   });
   it("a forked child inside the filtered sandbox still works (not blanket-clone-deny)", () => {
     // Over-broad control. The plan prescribed `unshare -m` here; measured on
     // kernel 7.2.5 + bwrap 0.12, EVERY nested non-userns unshare fails inside
-    // an unprivileged-userns sandbox regardless of the filter, so it cannot
-    // discriminate. A forked subprocess exercises clone() without
+    // a bwrap sandbox regardless of the filter — the payload runs
+    // capability-free (bwrap zeroes the capset before exec), so nested
+    // CLONE_NEWNS needs a CAP_SYS_ADMIN it doesn't hold. A forked subprocess exercises clone() without
     // CLONE_NEWUSER — the exact thing a blanket-deny regression would break.
     // Flag-level selectivity (CLONE_NEWNS allowed) is asserted by the
     // interpreter rows above.

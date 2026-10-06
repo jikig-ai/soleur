@@ -133,7 +133,7 @@ extended so the prod canary container proves the filter engages (a nested
   `cc-dispatcher.ts` (interception is PATH/env-based, no call-site change).
   Disposition: acknowledge — no fold-in.
 - **CLI verification (Step 6 gate):** `bwrap --seccomp` verified against local
-  `bubblewrap 0.12.0` (`bwrap --version`); flag exists since bwrap 0.4.0.
+  `bubblewrap 0.12.0` (`bwrap --version`); flag exists since at least bwrap 0.3.3 (bwrap.xml documents it there; prod's 0.8.0 carries it).
   `unshare`, `prlimit`, `choom`, `nice`, `bash` verified present in the pinned
   base image via `docker run`.
 - **Precedent-diff (deepen §4.4):** two sibling precedents adopted with named
@@ -148,7 +148,7 @@ extended so the prod canary container proves the filter engages (a nested
   and is exec-terminating (capture vs enforcement role). No SQL/atomic-write/
   mutex patterns introduced.
 - **External research (security topic → Phase 1.6 researched):**
-  moby/moby#42680 + runc commit `9f6b562`: EPERM on clone3 is treated as fatal by
+  moby/moby#42680 + moby commit `9f6b562`: EPERM on clone3 is treated as fatal by
   glibc and breaks every posix_spawn/fork consumer; **ENOSYS forces fallback to
   `clone`, where flag-based filtering applies.** This validates the issue's
   ENOSYS mandate exactly, and invalidates the Vetto commenter's blanket-`-EPERM`
@@ -244,7 +244,7 @@ extended so the prod canary container proves the filter engages (a nested
 |---|---|---|
 | "The C4 render now closes fds in a bash step before its launch chain" | `CLOSE_FDS_SCRIPT` + `sandboxLaunch` exist exactly as described (closes `>3`, keeping `--json-status-fd 3`) | Reuse the same prelude shape; extend it to open the filter fd fail-closed |
 | "the Agent SDK's bwrap spawn does not [close fds]" | SDK argv is built inside the vendored cli.js; no fd-close exists on that path | PATH shim performs the close before `exec`ing real bwrap |
-| "production's bwrap 0.8.0" | Pinned base measured: bookworm, `bubblewrap 0.8.0-2+deb12u1` | Design targets `bwrap --seccomp FD` (available since 0.4.0) — compatible |
+| "production's bwrap 0.8.0" | Pinned base measured: bookworm, `bubblewrap 0.8.0-2+deb12u1` | Design targets `bwrap --seccomp FD`/`--add-seccomp-fd` (documented since 0.3.3/0.6.x) — compatible |
 | External commenter: "Returning `-EPERM` ensures child processes cannot nest" | Correct for clone/unshare but WRONG for clone3 (moby#42680: EPERM is fatal to glibc's fallback; only ENOSYS triggers the clone fallback) | Treat comment as context: clone3 gets blanket-ENOSYS per the issue body, never EPERM |
 | "one `bwrap --seccomp` BPF filter… applied to BOTH" | The SDK argv is unreachable without interception; PATH shim is the repo's interception precedent (×2) | One committed `.bpf` artifact, two insertion points: argv flag (C4) + shim injection (SDK) |
 
@@ -838,8 +838,10 @@ change), so neither scope-out is folded in. All other planned files: None.
   a bump is a reviewed Dockerfile diff; the canary probes + test suite
   re-validate `--seccomp` semantics on any base change.
 - **R7 — `setns(2)` into a pre-existing userns NOT denied:** accepted residual —
-  no fd to a foreign userns is reachable inside the sandbox (`/proc` denied, no
-  ns fds passed in). Recorded in ADR-075 amendment; revisit if a leak path
+  no fd to a foreign userns is reachable inside the sandbox: the replayed SDK
+  argv runs the payload in a nested pidns, so no foreign-userns process (and no
+  `/proc/<pid>/ns/*` handle to one) is visible, and the fd sweep guarantees no
+  ns fd is passed in. Recorded in ADR-075 amendment; revisit if a leak path
   emerges.
 - **R8 — `apply-seccomp`/managed-settings drift:** (a) the SDK's embedded
   unix-socket helper calls `unshare(CLONE_NEWUSER)` inside the sandbox — inert
@@ -921,7 +923,7 @@ change), so neither scope-out is folded in. All other planned files: None.
 
 - [moby/moby#42680 — seccomp EPERM on clone3 breaks glibc fallback](https://github.com/moby/moby/issues/42680)
 - [moby/moby commit 9f6b562 — clone3 → ENOSYS in default policy](https://github.com/moby/moby/commit/9f6b562dd12ef7b1f9e2f8e6f2ab6477790a6594)
-- bubblewrap `--seccomp FD` (serialized sock_fprog from fd; since 0.4.0)
+- bubblewrap `--seccomp FD`/`--add-seccomp-fd FD` (raw sock_filter[] from fd; since ≤0.3.3/0.6.x)
 
 ### Related Work
 

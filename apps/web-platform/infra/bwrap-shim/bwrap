@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # bwrap PATH shim (#8752) — the Agent SDK spawns PATH-resolved `bwrap` (the
 # vendored argv builder's fd-passing contract is set in stone), so this shim
 # gives the agent sandbox what we control directly in the C4 chain:
@@ -45,33 +45,59 @@ if [ "$#" -le 1 ]; then
   esac
 fi
 
-# Preserve-set: fds the outer argv references by number (transport fd for
-# --args, plus every fd-consuming option bwrap accepts). This vocabulary is
-# kept in step with scripts/sandbox-canary.mjs › BWRAP_FD_VALUED_OPTS, which
-# drives the deploy canary's fd-census slack.
+# Preserve-set: fds the outer argv references by number. The scan is
+# ARITY-AWARE, not prev-token — a value-position token that happens to equal
+# an fd-option name (`--setenv --args 9`) must not preserve an fd, and an
+# option must not eat another option's value.
+#
+#   fd1: arg1 is an fd, nothing else consumed.
+#   fd2: arg1 is an fd, arg2 (dest/pid) also consumed.
+#   a1/a2/a3: non-fd options consuming 1/2/3 tokens — their values are SKIPPED
+#     so a flag-named value can't desync the scan.
+#
+# Known limits: `--opt=value` equals-forms are invisible to this scan
+# (getopt accepts them; a future SDK emitting `--args=5` would strand that
+# fd — fail-closed, loudly); an option this table doesn't know can still
+# desync after it (over-preserve — the leak direction, so conservative).
+# BWRAP_FD_VALUED_OPTS (scripts/sandbox-canary.mjs) mirrors the fd sets —
+# asserted byte-identical by sandbox-canary-regression.test.sh §D4.
 preserve=""
-prev=""
+expect_fd=0
+skip=0
+extra_skip=0
 for tok in "$@"; do
-  case "$prev" in
-    --args|--seccomp|--add-seccomp-fd|--sync-fd|--info-fd|--json-status-fd|--block-fd|--userns-block-fd)
-      case "$tok" in
-        ''|*[!0-9]*) ;;  # non-numeric: let real bwrap report it; nothing to keep
-        *) preserve="$preserve $tok" ;;
-      esac
-      ;;
+  # Stop at the command boundary: tokens after `--` are the sandboxed
+  # command, not options — a literal `--sync-fd 7` there must not pin an
+  # fd open (over-preserve IS the leak direction; under-preserve is loud).
+  [ "$tok" = "--" ] && break
+  if [ "$skip" -gt 0 ]; then skip=$((skip - 1)); continue; fi
+  if [ "$expect_fd" = 1 ]; then
+    case "$tok" in
+      ''|*[!0-9]*) ;;  # non-numeric: let real bwrap report it; nothing to keep
+      *) preserve="$preserve $tok" ;;
+    esac
+    expect_fd=0
+    skip=$extra_skip
+    extra_skip=0
+    continue
+  fi
+  case "$tok" in
+    --args|--seccomp|--add-seccomp-fd|--sync-fd|--info-fd|--json-status-fd|--block-fd|--userns-block-fd|--userns|--pidns) expect_fd=1 ;;
+    --file|--bind-data|--ro-bind-data|--bind-fd|--ro-bind-fd|--userns2) expect_fd=1; extra_skip=1 ;;
+    --argv0|--uid|--gid|--hostname|--chdir|--unsetenv|--lock-file|--remount-ro|--overlay-src|--tmp-overlay|--ro-overlay|--exec-label|--file-label|--proc|--dev|--tmpfs|--mqueue|--dir|--cap-add|--cap-drop|--perms|--size) skip=1 ;;
+    --setenv|--bind|--bind-try|--dev-bind|--dev-bind-try|--ro-bind|--ro-bind-try|--chmod|--symlink|--level-prefix) skip=2 ;;
+    --overlay) skip=3 ;;
   esac
-  prev=$tok
 done
 
 [ -x "$REAL" ] || fail "real bwrap not executable: $REAL"
 [ -r "$BPF" ] || fail "seccomp artifact not readable: $BPF"
 
 # Open the filter BEFORE the sweep (auto-allocated fd ≥10, no collision with a
-# preserved SDK fd).
+# preserved SDK fd). The `|| fail` arm IS live here — bash runs the fallback on
+# a failed `exec` redirection (verified bash 5.2: `exec 9</missing || echo`
+# prints) — while `set -e` is absent so the `-r` pre-check stays primary.
 exec {bpf_fd}<"$BPF" || fail "cannot open seccomp artifact: $BPF"
-
-# The script's own fd must survive the sweep (bash re-reads a long script).
-self_path=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
 
 for p in /proc/self/fd/*; do
   n=${p##*/}
@@ -81,8 +107,9 @@ for p in /proc/self/fd/*; do
   [ "$n" -gt 2 ] 2>/dev/null || continue
   [ "$n" = "$bpf_fd" ] && continue
   case " $preserve " in *" $n "*) continue ;; esac
-  target=$(readlink "$p" 2>/dev/null || true)
-  [ "$target" = "$self_path" ] && continue
+  # The script's own fd must survive the sweep (bash re-reads a long script);
+  # -ef compares inode identity in-process — no per-fd readlink fork.
+  [ "$p" -ef "$0" ] && continue
   eval "exec $n>&-" 2>/dev/null || true
 done
 

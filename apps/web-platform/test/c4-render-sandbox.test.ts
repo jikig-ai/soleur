@@ -11,7 +11,7 @@
 // produce has a row that drives it, and a meta-row fails when a code has none.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -146,7 +146,7 @@ const STAGE = async () => ({ ok: true as const, paths: ["model.c4"], sourceKey: 
 // ---------------------------------------------------------------------------
 const MiB = 1024 * 1024;
 const CLOSE_FDS =
-  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}" || exit 65; exec "$@"';
+  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; if ! exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}"; then echo "c4: seccomp artifact unreadable — set SOLEUR_BWRAP_SECCOMP_BPF to a valid filter (or C4_RENDER_SANDBOX=off)" >&2; exit 65; fi; exec "$@"';
 const RENDER_SH =
   '"$0" "$1" export json --no-use-dot -o /c4-out/model.likec4.json . >/dev/null && exec cat /c4-out/model.likec4.json';
 const LAUNCH_PREFIX = [
@@ -894,5 +894,52 @@ describe("boot self-probe", () => {
     const mod = await load();
     await expect(mod.verifyC4RenderSandboxOnce()).resolves.toBeUndefined();
     expect(obs.reportSilentFallback).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guard 1 — seccomp-engagement census (plan #8752 §Guard Contract): EVERY
+// bwrap launch path inside the replica container applies the shared filter.
+// The census is mechanical, not a grep for the two known sites:
+//   * absolute-path bwrap launches in server/ — exactly c4-render.ts, whose
+//     emitted argv the checker above pins `--seccomp 9` on;
+//   * bare-name (PATH-resolved) bwrap launches land on the baked shim —
+//     asserted by the Dockerfile rows in test/bwrap-shim.test.ts and measured
+//     per-boot by probeAgentSandboxHardening;
+//   * deploy-time proof — the canary's derived probes (regression §D).
+// Anti-vacuity floor: the census must enumerate >= 2 insertion sites — a
+// census that finds nothing is a guard bug, not a pass (matrix row 5).
+// ---------------------------------------------------------------------------
+
+const APP_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const SERVER_DIR = join(APP_DIR, "server");
+
+describe("bwrap launch census — every spawn path engages the filter (#8752 G1)", () => {
+  const serverFiles = () => readdirSync(SERVER_DIR).filter((f) => f.endsWith(".ts"));
+
+  it("every absolute-path bwrap spawn site is c4-render.ts (which carries --seccomp 9)", () => {
+    const sites = serverFiles().filter((f) =>
+      /["'`]\/usr\/bin\/bwrap["'`]/.test(readFileSync(join(SERVER_DIR, f), "utf8")),
+    );
+    expect(sites).toEqual(["c4-render.ts"]);
+  });
+
+  it("no bare-name bwrap spawn in server/ — PATH-resolved launches resolve to the baked shim", () => {
+    const bare = serverFiles().filter((f) =>
+      /\b(?:spawn|execFile|exec|spawnSync|execFileSync)\(\s*["'`]bwrap["'`]/.test(
+        readFileSync(join(SERVER_DIR, f), "utf8"),
+      ),
+    );
+    expect(bare).toEqual([]);
+  });
+
+  it("anti-vacuity floor: >= 2 distinct filter-insertion sites are enumerated", () => {
+    const c4 = readFileSync(join(SERVER_DIR, "c4-render.ts"), "utf8");
+    const shim = readFileSync(join(APP_DIR, "infra", "bwrap-shim", "bwrap"), "utf8");
+    const sites = [
+      c4.includes('"--seccomp"') && c4.includes("SOLEUR_BWRAP_SECCOMP_BPF"), // argv flag + fail-closed fd open
+      shim.includes("--add-seccomp-fd"), // PATH-shim injection
+    ].filter(Boolean);
+    expect(sites.length).toBeGreaterThanOrEqual(2);
   });
 });

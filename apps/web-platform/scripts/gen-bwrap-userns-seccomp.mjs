@@ -87,14 +87,14 @@ ret(RET_ALLOW);
 label("kill");
 ret(RET_KILL_PROCESS);
 
-const resolved = insns.map((i) => {
+const resolved = insns.map((i, at) => {
   const insn = { code: i.code, k: i.k };
   if (i.code === JA) {
     insn.jt = insn.jf = 0;
-    insn.k = labels.get(i.t) - insns.indexOf(i) - 1;
+    insn.k = labels.get(i.t) - at - 1;
   } else if (i.code === JEQ || i.code === JSET) {
-    insn.jt = labels.get(i.t) - insns.indexOf(i) - 1;
-    insn.jf = i.f == null ? 0 : labels.get(i.f) - insns.indexOf(i) - 1;
+    insn.jt = labels.get(i.t) - at - 1;
+    insn.jf = i.f == null ? 0 : labels.get(i.f) - at - 1;
   } else {
     insn.jt = i.jt;
     insn.jf = i.jf;
@@ -129,7 +129,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (argv[0] === "--check") {
     const want = emit();
     const path = argv[1] ?? DEFAULT_OUT;
-    const got = readFileSync(path);
+    let got;
+    try {
+      got = readFileSync(path);
+    } catch (e) {
+      console.error(`gen-bwrap-userns-seccomp: ${path} unreadable: ${e.code ?? e}`);
+      process.exit(1);
+    }
     if (!want.equals(got)) {
       console.error(
         `gen-bwrap-userns-seccomp: ${path} differs from the generator's output — ` +

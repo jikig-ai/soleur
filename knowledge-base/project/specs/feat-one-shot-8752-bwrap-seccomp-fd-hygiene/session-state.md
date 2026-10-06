@@ -29,7 +29,7 @@
 
 ### Deviations from plan (measured, documented in ADR-050 addendum)
 
-- `unshare -m` "must-pass" control replaced by a forked-child control: bwrap creates the mountns in the same `unshare()` call as the userns, so it is owned by the init userns and nested `CLONE_NEWNS` EPERMs on EVERY kernel — the control could never discriminate (measured kernel 7.2.5 / bwrap 0.12: all nested non-userns unshares fail inside a bwrap sandbox, `-U` alone passes).
+- `unshare -m` "must-pass" control replaced by a forked-child control: the payload runs capability-free (bwrap zeroes the capset before exec), so nested `CLONE_NEWNS` needs a `CAP_SYS_ADMIN` it never holds — EPERM on every kernel, so the control could never discriminate (measured kernel 7.2.5 / bwrap 0.12: all nested non-userns unshares fail inside a bwrap sandbox, `-U` alone passes).
 - Shim injects via `--add-seccomp-fd`, not `--seccomp`: repeatable + stacks with a future SDK filter; a hypothetical SDK `--seccomp` conflicts loudly at parse instead of last-wins silently overriding ours. `--add-seccomp-fd` exists since bwrap 0.6.x — prod's 0.8.0 has it.
 - bwrap single-fd consumption quirk recorded: `--seccomp <fd>` reads to EOF — each spawn needs a fresh open (the C4 prelude's `exec 9<` per launch and the shim's `exec {fd}<` per invocation both satisfy this).
 

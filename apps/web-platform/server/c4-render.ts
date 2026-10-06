@@ -205,7 +205,7 @@ const LAUNCHERS = [BASH_BIN, CHOOM_BIN, NICE_BIN, BWRAP_BIN, PRLIMIT_BIN, SH_BIN
  *  glob + eval-close loop is bash-shaped. A static string: the launch argv
  *  reaches it only as "$@". */
 export const CLOSE_FDS_SCRIPT =
-  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}" || exit 65; exec "$@"';
+  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; if ! exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}"; then echo "c4: seccomp artifact unreadable — set SOLEUR_BWRAP_SECCOMP_BPF to a valid filter (or C4_RENDER_SANDBOX=off)" >&2; exit 65; fi; exec "$@"';
 
 /** Size of the scratch tmpfs mounts (/tmp, /c4-home, /dev/shm). A full render
  *  of the 82-view repo model used 60 B, 160 B and 40 B of them (measured

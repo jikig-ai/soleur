@@ -91,5 +91,7 @@ Two sandbox residuals tracked under #8752 are now closed at the shared layer —
 
 The per-sibling `denyRead` residual is **unchanged**: Option C (#5862) remains the exit criterion, and
 the nested-userns/fd-hygiene closure does not affect the TOCTOU read-only window. Deploy-time
-measurement of the new pair rides the faithful canary's three derived probes (`sandbox-canary.mjs`
-`runHardeningProbes`) and the boot self-probe `op:"sandbox-hardening-selfprobe"`.
+measurement of the new pair rides the faithful canary's four derived probes (`sandbox-canary.mjs`
+`runHardeningProbes` + `runArgsFdTransportProbe` — the census carries a deliberate unreferenced fd so
+the shim's sweep is observable, and the `--args` probe replays the SDK's real fd transport) and the
+boot self-probe `op:"sandbox-hardening-selfprobe"`.

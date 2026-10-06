@@ -410,10 +410,12 @@ surface such as nf_tables" — is **closed** by the shared artifact
 - **Filter semantics:** `clone3` → `ENOSYS` (its flags live in a userspace struct seccomp cannot
   inspect; ENOSYS — not EPERM — preserves glibc `posix_spawn`'s `clone` fallback, the moby#42680
   failure shape). `clone`/`unshare` carrying `CLONE_NEWUSER` → `EPERM`; arch-gated; default ALLOW.
-- **Deploy canary:** `sandbox-canary.mjs --replay` gains three derived probes — `unshare -U` inside
-  must EPERM (`userns_filter_bypass`), a forked child must run (`userns_filter_overbroad`), and the
-  in-sandbox fd census stays at `4 + #(fd-valued argv options)` (`fd_hygiene_bypass`).
-- **Probe note:** the plan's `unshare -m` control was measured unfit — bwrap creates the mountns in
-  the same `unshare()` call as the userns, so it is owned by the *init* userns and a nested
-  `CLONE_NEWNS` needs `CAP_SYS_ADMIN` there: EPERM on every kernel (kernel 7.2.5 / bwrap 0.12). The
+- **Deploy canary:** `sandbox-canary.mjs --replay` gains four derived probes — `unshare -U` inside
+  must EPERM (`userns_filter_bypass`), a forked child must run (`userns_filter_overbroad`), the
+  in-sandbox fd census — carrying a deliberately unreferenced fd the shim must sweep — stays at
+  `4 + #(fd-valued argv options)` (`fd_hygiene_bypass`), and a real `--args <fd>` transport spawn
+  must succeed (`args_fd_closed`); a `bwrap-shim:` refusal classifies as `bwrap_shim_refused`.
+- **Probe note:** the plan's `unshare -m` control was measured unfit — the payload runs
+  capability-free (bwrap zeroes the capset before exec), so a nested `CLONE_NEWNS`
+  needs a `CAP_SYS_ADMIN` it never holds: EPERM on every kernel (kernel 7.2.5 / bwrap 0.12). The
   over-broad control is a real fork instead.
