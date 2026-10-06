@@ -354,6 +354,12 @@ export interface ClientSession {
    *  guard. `null` means "no persisted session_id"; `undefined` means
    *  "cache cold". */
   sessionId?: string | null;
+  /** feat-cc-cap-raise-resume (#9565) — cached
+   *  `conversations.cc_cost_cap_usd` override for the active
+   *  conversation. Seeded on chat-case cache miss from the SELECT and
+   *  refreshed by `persistCostCapOverride` on raise. `null` means "no
+   *  override"; `undefined` means "cache cold". */
+  costCapUsd?: number | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -1241,6 +1247,13 @@ export async function dispatchSoleurGoForConversation(
   context?: ConversationContext,
   attachments?: import("@/lib/types").AttachmentRef[],
   sessionId?: string | null,
+  /**
+   * feat-cc-cap-raise-resume (#9565) — cached
+   * `conversations.cc_cost_cap_usd` override from the caller's session
+   * cache. Seeded into the runner's ActiveQuery; takes precedence over
+   * the env-derived workflow/default cap.
+   */
+  costCapUsd?: number | null,
 ): Promise<void> {
   // feat-stream-since-disconnect (#5273) — turn boundary for the cc-soleur-go
   // path. The legacy fan-out wires resetTurn in `sendUserMessage`, but cc
@@ -1332,6 +1345,33 @@ export async function dispatchSoleurGoForConversation(
     });
   }
 
+  // feat-cc-cap-raise-resume (#9565) — write a raise tier back to
+  // `conversations.cc_cost_cap_usd` and refresh the in-process cache so
+  // the next turn reads it without a DB round-trip (same pattern as
+  // `onSessionIdPersisted` below).
+  const persistCostCapOverride = async (usd: number) => {
+    const { ok, error } = await updateConversationFor(
+      userId,
+      conversationId,
+      { cc_cost_cap_usd: usd },
+      {
+        feature: "ws-handler",
+        op: "persist-cost-cap-override",
+        extra: { usd },
+        expectMatch: false,
+      },
+    );
+    if (!ok) {
+      throw new Error(
+        `cc_cost_cap_usd update failed: ${error?.message ?? "unknown"}`,
+      );
+    }
+    const liveSession = sessions.get(userId);
+    if (liveSession && liveSession.conversationId === conversationId) {
+      liveSession.costCapUsd = usd;
+    }
+  };
+
   // 2026-05-06 Bug A1 fix — resolve workspacePath up-front when an
   // artifact directive is going to be built. `fetchUserWorkspacePath`
   // resolves the caller's ACTIVE workspace (ADR-044) — a single indexed
@@ -1392,6 +1432,10 @@ export async function dispatchSoleurGoForConversation(
     // validated context.type; appends ROUTINE_AUTHORING_DIRECTIVE in
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
+    // feat-cc-cap-raise-resume — persisted per-conversation cap override
+    // + the write-back sink used by the raise flow.
+    costCapOverrideUsd: costCapUsd ?? null,
+    persistCostCapOverride,
     routineAuthoring: context?.type === "routine-authoring",
     crmLead: context?.type === "crm-lead",
     // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
@@ -2485,6 +2529,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               pendingContext,
               msg.attachments,
               null,
+              // feat-cc-cap-raise-resume — first-turn: no cap override
+              // can exist yet (row was just inserted).
+              null,
             );
             break;
           }
@@ -2579,7 +2626,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // visibility-sweep-audit: owner-scoped via RLS (no explicit user_id filter but tenant JWT scopes to auth.uid())
           const { data: row, error: routeErr } = await tenantRoute
             .from("conversations")
-            .select("active_workflow, session_id, context_path")
+            .select("active_workflow, session_id, context_path, cc_cost_cap_usd")
             .eq("id", convId)
             .single();
           if (routeErr) {
@@ -2596,6 +2643,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             active_workflow?: string | null;
             session_id?: string | null;
             context_path?: string | null;
+            cc_cost_cap_usd?: number | null;
           } | null;
           routing = typedRow
             ? parseConversationRouting({
@@ -2606,6 +2654,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           session.routing = routing;
           session.contextPath = typedRow?.context_path ?? null;
           session.sessionId = typedRow?.session_id ?? null;
+          session.costCapUsd = typedRow?.cc_cost_cap_usd ?? null;
         }
 
         if (routing.kind !== "legacy") {
@@ -2630,6 +2679,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             chatContext,
             msg.attachments,
             session.sessionId ?? null,
+            // feat-cc-cap-raise-resume — cached per-conversation cap
+            // override from the routing SELECT above.
+            session.costCapUsd ?? null,
           );
           break;
         }

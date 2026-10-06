@@ -45,6 +45,7 @@ import { randomUUID } from "crypto";
 import path from "path";
 import { readFile } from "node:fs/promises";
 import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
+import type { PromptId } from "@/lib/branded-ids";
 // Type-only reverse-direction reference for the bidirectional cardinality
 // assert below (#3827). The runner's `WorkflowEnd["status"]` is the
 // canonical authority post-ADR-031 amendment; this import lets the assert
@@ -116,8 +117,11 @@ const log = createChildLogger("soleur-go-runner");
 import {
   PendingPromptRegistry,
   PendingPromptCapExceededError,
+  COST_CAP_TOOL_USE_ID_PREFIX,
+  makePendingPromptKey,
   type InteractivePromptKind,
 } from "./pending-prompt-registry";
+import type { AgentAuthScheme } from "./agent-env";
 import type {
   WSMessage,
   InteractivePromptPayload,
@@ -533,6 +537,19 @@ export function sanitizePromptIdentifier(v: unknown): string {
     .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
     .slice(0, 256);
 }
+
+// feat-cc-cap-raise-resume (#9565) — resumable per-conversation cost cap.
+// A cap prompt parks the conversation (`awaitingUser` skips reapIdle);
+// the park is BOUNDED — the registry's 5-min TTL reaps the prompt record
+// silently, so the park timer releases `awaitingUser` shortly after and
+// the conversation rejoins normal idle reaping.
+export const CAP_PROMPT_PARK_MS = 5 * 60 * 1000 + 30 * 1000;
+// Managed-session (credential.scheme === "oauth_token") telemetry-only
+// threshold — enforced enforcement is skipped entirely; one warn-level
+// report per ActiveQuery when spend crosses this.
+export const DEFAULT_MANAGED_WARN_CAP_USD = 50.0;
+const CAP_RAISE_TIERS_USD = [5, 10, 25];
+const KEEP_CAP_OPTION = "Keep the cap";
 
 export const DEFAULT_IDLE_REAP_MS = 10 * 60 * 1000;
 // Idle window: no assistant block (text or tool_use) within this many ms.
@@ -1077,6 +1094,29 @@ export interface DispatchArgs {
    * warm/`queryReused` path — the factory is never invoked there.
    */
   contextResetNotice?: string;
+  /**
+   * feat-cc-cap-raise-resume (#9565) — closure-capture sink for the
+   * credential provenance ("api_key" BYOK / "oauth_token" managed).
+   * `realSdkQueryFactory` calls it inside the lease body right after
+   * `lease.getAgentCredential()`; the runner captures it at ActiveQuery
+   * creation so cap enforcement can key on auth provenance instead of
+   * user-controlled input. Same bridge shape as `setDelegationContext`.
+   */
+  setAuthScheme?: (scheme: AgentAuthScheme) => void;
+  /**
+   * feat-cc-cap-raise-resume — persisted per-conversation cap override
+   * (`conversations.cc_cost_cap_usd`) seeded at cold-Query creation. The
+   * ws-handler reads the column on the chat-case cache miss and forwards
+   * it here; a raise writes it back via `persistCostCapOverride`.
+   */
+  costCapOverrideUsd?: number | null;
+  /**
+   * feat-cc-cap-raise-resume — fire-and-forget writer for the cap-raise
+   * path. The runner calls it with the new USD ceiling once the user
+   * picks a raise tier; the ws-handler impl UPDATEs
+   * `conversations.cc_cost_cap_usd` and refreshes its session cache.
+   */
+  persistCostCapOverride?: (usd: number) => Promise<void>;
 }
 
 export interface DispatchResult {
@@ -1142,6 +1182,15 @@ export interface QueryFactoryArgs {
    */
   setBashAutonomous?: (autonomous: boolean) => void;
   /**
+   * feat-cc-cap-raise-resume (#9565) — same closure-capture protocol as
+   * `setDelegationContext`/`setBashAutonomous`: `realSdkQueryFactory`
+   * publishes `credential.scheme` from inside the lease body so the
+   * runner can store credential provenance on `ActiveQuery` without a
+   * second Supabase RTT. `oauth_token` = managed (cap not enforced);
+   * `api_key` = BYOK (cap enforced, resumable).
+   */
+  setAuthScheme?: (scheme: AgentAuthScheme) => void;
+  /**
    * #2923 routing-relevant context (also surfaced to the system prompt
    * via `buildSoleurGoSystemPrompt`). Threaded from `DispatchArgs`.
    */
@@ -1184,6 +1233,13 @@ export interface SoleurGoRunnerDeps {
   wallClockTriggerMs?: number;
   maxTurnDurationMs?: number;
   defaultCostCaps?: CostCaps;
+  /**
+   * feat-cc-cap-raise-resume — managed-session soft-warn threshold (USD).
+   * Managed queries (`authScheme === "oauth_token"`) skip cap ENFORCEMENT
+   * entirely; crossing this emits one `warnSilentFallback` per ActiveQuery
+   * as runaway-spend telemetry. Default `DEFAULT_MANAGED_WARN_CAP_USD`.
+   */
+  managedWarnCapUsd?: number;
   pluginPath?: string;
   cwd?: string;
   /**
@@ -1278,6 +1334,21 @@ export interface SoleurGoRunner {
    * errorClass.
    */
   notifyAwaitingUser(conversationId: string, awaiting: boolean): void;
+  /**
+   * feat-cc-cap-raise-resume (#9565) — apply a user's response to a
+   * cost-cap `interactive_prompt` (sentinel `cost-cap:` toolUseId). The
+   * cc-dispatcher's `handleInteractivePromptResponseCase` routes here
+   * instead of `respondToToolUse` because no real SDK `tool_use` exists —
+   * a `tool_result` would corrupt the stream. A raise tier sets
+   * `state.costCapOverrideUsd`, persists via `persistCostCapOverride`,
+   * un-parks (`notifyAwaitingUser(false)`), and releases any parked user
+   * message (chapter-aware). "Keep the cap" un-parks without raising.
+   * Returns `false` for an unknown/closed conversation or an invalid tier.
+   */
+  applyCostCapRaise(args: {
+    conversationId: string;
+    response: string;
+  }): boolean;
 }
 
 /**
@@ -1714,6 +1785,30 @@ interface ActiveQuery {
   events: DispatchEvents;
   closed: boolean;
   /**
+   * feat-cc-cap-raise-resume — credential provenance captured via the
+   * `setAuthScheme` sink during cold-Query construction. `oauth_token`
+   * = managed session (per-conversation cap NOT enforced, soft-warn
+   * telemetry only); `api_key` = BYOK (cap enforced, resumable);
+   * `null` = unknown — enforcement fails toward protective.
+   */
+  authScheme: AgentAuthScheme | null;
+  /** Persisted `conversations.cc_cost_cap_usd` override; takes precedence
+   *  over `capFor(costCaps, workflow)` when set. */
+  costCapOverrideUsd: number | null;
+  /** Per-Query managed soft-warn once-flag (accrual is per-Query too). */
+  managedWarnFired: boolean;
+  /** Pending `cost-cap:` prompt id for consume+re-register on re-emit. */
+  capPromptId: PromptId | null;
+  /** Bounded park timer — releases `awaitingUser` at registry TTL +
+   *  grace so an unanswered cap prompt cannot leak a parked Query. */
+  capPromptParkTimer: NodeJS.Timeout | null;
+  /** User message held while the cap prompt is pending (dispatch-gate or
+   *  chapter-routed cap hit). `chapterRouted` selects the release path. */
+  parkedUserMessage: { text: string; chapterRouted: boolean } | null;
+  /** From the most recent DispatchArgs — the ws-handler's persisted
+   *  override writer. Refreshed every dispatch like `state.events`. */
+  persistCostCapOverride: ((usd: number) => Promise<void>) | null;
+  /**
    * #2920 — paused-runaway flag. When `true`, the runner is awaiting a
    * user response (e.g., Bash review-gate, ExitPlanMode). The runaway
    * timer is paused (`clearRunaway`) on transition to `true`.
@@ -1863,6 +1958,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   const wallClockTriggerMs = deps.wallClockTriggerMs ?? DEFAULT_WALL_CLOCK_TRIGGER_MS;
   const maxTurnDurationMs = deps.maxTurnDurationMs ?? DEFAULT_MAX_TURN_DURATION_MS;
   const defaultCostCaps = deps.defaultCostCaps ?? DEFAULT_COST_CAPS;
+  const managedWarnCapUsd =
+    deps.managedWarnCapUsd ?? DEFAULT_MANAGED_WARN_CAP_USD;
   const pluginPath = deps.pluginPath ?? "";
   const cwd = deps.cwd ?? "";
   const pendingPrompts = deps.pendingPrompts;
@@ -1934,6 +2031,167 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       return caps.perWorkflow[workflow] as number;
     }
     return caps.default;
+  }
+
+  // feat-cc-cap-raise-resume (#9565) — the persisted per-conversation
+  // override takes precedence over the env-derived workflow/default cap.
+  function effectiveCap(state: ActiveQuery): number {
+    return (
+      state.costCapOverrideUsd ??
+      capFor(state.costCaps, state.currentWorkflow)
+    );
+  }
+
+  // Managed sessions (`oauth_token` provenance captured inside the lease,
+  // never user input) are exempt from per-conversation enforcement —
+  // the user pays Soleur either way, so a hard kill is a dead-end, not a
+  // guardrail. Unknown provenance (null / never-sunk) enforces: fail
+  // toward protective.
+  function capEnforced(state: ActiveQuery): boolean {
+    return state.authScheme !== "oauth_token";
+  }
+
+  // Telemetry-only runaway-spend marker for managed sessions — one warn
+  // per ActiveQuery (accrual `state.totalCostUsd` is per-Query too).
+  function maybeWarnManagedCap(state: ActiveQuery): void {
+    if (state.authScheme !== "oauth_token" || state.managedWarnFired) return;
+    if (state.totalCostUsd < managedWarnCapUsd) return;
+    state.managedWarnFired = true;
+    warnSilentFallback(
+      new Error(
+        `managed conversation crossed soft cap ($${managedWarnCapUsd}): $${state.totalCostUsd.toFixed(2)}`,
+      ),
+      {
+        feature: "soleur-go-runner",
+        op: "managed-soft-cap",
+        extra: { conversationId: state.conversationId },
+      },
+    );
+  }
+
+  /**
+   * feat-cc-cap-raise-resume — emit an `ask_user` interactive prompt at
+   * cap breach instead of tearing the Query down. Registers a
+   * PendingPromptRecord whose `toolUseId` carries the `cost-cap:`
+   * sentinel so `handleInteractivePromptResponse` routes the answer to
+   * `applyCostCapRaise` (never `deliverToolResult`). Parks the
+   * conversation via `notifyAwaitingUser` (reapIdle skips it) under a
+   * BOUNDED park timer — `PendingPromptRegistry.reap()` has no expiry
+   * callback, so without the timer an unanswered prompt leaks the Query
+   * forever. With no prompt machinery the legacy `cost_ceiling`
+   * teardown is preserved (non-WS contexts, tests).
+   */
+  function emitCostCapPrompt(state: ActiveQuery): void {
+    if (!pendingPrompts || !emitInteractivePrompt) {
+      emitWorkflowEnded(state, {
+        status: "cost_ceiling",
+        totalCostUsd: state.totalCostUsd,
+        cap: effectiveCap(state),
+        workflow: state.currentWorkflow,
+      });
+      return;
+    }
+    // Re-emit path (dispatch-gate on repeat sends): consume the stale
+    // record before re-registering — the registry has no update op.
+    if (state.capPromptId !== null) {
+      pendingPrompts.consume(
+        makePendingPromptKey(
+          state.userId,
+          mintConversationId(state.conversationId),
+          state.capPromptId,
+        ),
+        state.userId,
+      );
+      state.capPromptId = null;
+    }
+    const cap = effectiveCap(state);
+    const tiers = CAP_RAISE_TIERS_USD.filter((t) => t > cap);
+    if (tiers.length === 0) tiers.push(Math.ceil(cap * 2));
+    const options = [
+      ...tiers.map((t) => `Raise to $${t}`),
+      KEEP_CAP_OPTION,
+    ];
+    const payload = {
+      question:
+        `This conversation hit its $${cap.toFixed(2)} cost cap ` +
+        `(spent $${state.totalCostUsd.toFixed(2)}). Raise it and keep going?`,
+      options,
+      multiSelect: false,
+    };
+    const promptId = mintPromptId(randomUUID());
+    try {
+      pendingPrompts.register({
+        promptId,
+        conversationId: mintConversationId(state.conversationId),
+        userId: state.userId,
+        kind: "ask_user",
+        toolUseId: `${COST_CAP_TOOL_USE_ID_PREFIX}${promptId}`,
+        createdAt: now(),
+        payload,
+      });
+    } catch (err) {
+      // 50-prompt cap is a real warning, not a silent drop — same
+      // handling as bridgeInteractivePromptIfApplicable; the
+      // conversation falls back to the legacy teardown so it cannot
+      // sit over-cap with no affordance.
+      if (err instanceof PendingPromptCapExceededError) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "pendingPrompts.register.cap-prompt",
+          extra: { conversationId: state.conversationId },
+        });
+        emitWorkflowEnded(state, {
+          status: "cost_ceiling",
+          totalCostUsd: state.totalCostUsd,
+          cap,
+          workflow: state.currentWorkflow,
+        });
+        return;
+      }
+      throw err;
+    }
+    const event: InteractivePromptEvent = {
+      type: "interactive_prompt",
+      promptId,
+      conversationId: mintConversationId(state.conversationId),
+      kind: "ask_user",
+      payload,
+    } as InteractivePromptEvent;
+    emitInteractivePrompt(state.userId, event);
+    state.capPromptId = promptId;
+    notifyAwaitingUser(state.conversationId, true);
+    clearCapPromptParkTimer(state);
+    state.capPromptParkTimer = setTimeout(() => {
+      state.capPromptParkTimer = null;
+      if (state.closed || !state.awaitingUser) return;
+      // Registry TTL already reaped the record; release the park so the
+      // conversation rejoins normal idle reaping — mirrors the absolute
+      // upper bound REVIEW_GATE_TIMEOUT_MS gives the review-gate park.
+      state.capPromptId = null;
+      const hadParked = state.parkedUserMessage !== null;
+      state.parkedUserMessage = null;
+      notifyAwaitingUser(state.conversationId, false);
+      try {
+        state.events.onText(
+          hadParked
+            ? "(Cost-cap prompt expired — your message wasn't sent. Send it again to raise the cap and continue.)"
+            : "(Cost-cap prompt expired — send a message to raise the cap and continue.)",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "capPromptParkTimer.onText",
+          extra: { conversationId: state.conversationId },
+        });
+      }
+    }, CAP_PROMPT_PARK_MS);
+  }
+
+  function clearCapPromptParkTimer(state: ActiveQuery): void {
+    if (state.capPromptParkTimer) {
+      clearTimeout(state.capPromptParkTimer);
+      state.capPromptParkTimer = null;
+    }
   }
 
   function clearRunaway(state: ActiveQuery): void {
@@ -2113,6 +2371,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   function closeQuery(state: ActiveQuery, reason?: CloseQueryReason): void {
     clearRunaway(state);
     clearTurnHardCap(state);
+    // feat-cc-cap-raise-resume — release the bounded park so a closed
+    // conversation cannot leak the timer or a held user message.
+    clearCapPromptParkTimer(state);
+    state.parkedUserMessage = null;
+    state.capPromptId = null;
     // #3040 Finding 4 — defense-in-depth: reset paused fields so a stale
     // closure (e.g., a pending setTimeout callback that fires after the
     // entry is deleted) cannot act on misleading paused state. The
@@ -2493,14 +2756,16 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         extra: { conversationId: state.conversationId },
       });
     }
-    const cap = capFor(state.costCaps, state.currentWorkflow);
-    if (state.totalCostUsd >= cap) {
-      emitWorkflowEnded(state, {
-        status: "cost_ceiling",
-        totalCostUsd: state.totalCostUsd,
-        cap,
-        workflow: state.currentWorkflow,
-      });
+    // feat-cc-cap-raise-resume — managed sessions skip enforcement
+    // entirely (soft-warn telemetry instead); enforced sessions get the
+    // resumable prompt path (legacy `cost_ceiling` only when the prompt
+    // machinery is absent).
+    if (capEnforced(state)) {
+      if (state.totalCostUsd >= effectiveCap(state)) {
+        emitCostCapPrompt(state);
+      }
+    } else {
+      maybeWarnManagedCap(state);
     }
   }
 
@@ -2772,6 +3037,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           : null;
       const resumeSessionId = args.sessionId ?? undefined;
       let query: Query;
+      // feat-cc-cap-raise-resume — the real-SDK factory publishes
+      // `credential.scheme` through this sink inside its lease body
+      // (the lease scope closes before consumeStream runs, so direct
+      // read is impossible). Same capture protocol as the dispatcher's
+      // `setDelegationContext` leaseDelegationCtx bridge.
+      let capturedAuthScheme: AgentAuthScheme | null = null;
       try {
         // Factory may be sync OR async (real-SDK factory does async
         // BYOK/workspace fetches). Await uniformly so KeyInvalidError +
@@ -2828,6 +3099,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // #9538 — stale-resume re-dispatch carries a reset notice for
           // the factory's system-prompt append site.
           contextResetNotice: args.contextResetNotice,
+          // feat-cc-cap-raise-resume: the runner itself captures the
+          // scheme — no dispatcher round-trip needed.
+          setAuthScheme: (scheme) => {
+            capturedAuthScheme = scheme;
+          },
         });
       } catch (err) {
         // #5394 — a RepoNotReadyError (repo cloning/error) is an expected,
@@ -2919,6 +3195,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         costCaps: defaultCostCaps,
         events,
         closed: false,
+        authScheme: capturedAuthScheme,
+        costCapOverrideUsd: args.costCapOverrideUsd ?? null,
+        managedWarnFired: false,
+        capPromptId: null,
+        capPromptParkTimer: null,
+        parkedUserMessage: null,
+        persistCostCapOverride: args.persistCostCapOverride ?? null,
         awaitingUser: false,
         // #3040 Finding 4 — paused-interval accumulators for cumulative
         // wall-clock budget across rapid status flap.
@@ -2947,6 +3230,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // runaway-fire payload if the prior turn never produced a result
       // (e.g., dropped/delayed result + immediate user follow-up).
       state.events = events;
+      // feat-cc-cap-raise-resume — the persist writer flows per-dispatch
+      // like `events`; refresh it so a raise lands on the latest wiring.
+      state.persistCostCapOverride = args.persistCostCapOverride ?? null;
+      if (args.costCapOverrideUsd !== undefined) {
+        state.costCapOverrideUsd = args.costCapOverrideUsd;
+      }
       state.lastActivityAt = now();
       clearRunaway(state);
       clearTurnHardCap(state);
@@ -3020,6 +3309,23 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // the workflow always terminates with `internal_error` + Sentry
     // mirror — the caller in cc-dispatcher.ts can map this to a
     // user-visible error envelope.
+    //
+    // feat-cc-cap-raise-resume — dispatch-time over-cap gate. An
+    // enforced session already at/over its effective cap must not push
+    // a fresh turn to the SDK (spend past cap on a dead prompt): park
+    // the message and (re-)emit the raise prompt. Managed sessions
+    // (capEnforced=false) pass through untouched.
+    if (capEnforced(state) && state.totalCostUsd >= effectiveCap(state)) {
+      state.parkedUserMessage = {
+        text: userMessage,
+        chapterRouted: state.chapterChunkedContext !== null,
+      };
+      emitCostCapPrompt(state);
+      return {
+        queryReused,
+        resumeSessionId: state.sessionId ?? undefined,
+      };
+    }
     if (state.chapterChunkedContext !== null) {
       try {
         await dispatchChapterRouted(state, userMessage);
@@ -3077,7 +3383,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       ? [ctx.documentTitle]
       : undefined;
 
-    const cap = capFor(state.costCaps, state.currentWorkflow);
+    // feat-cc-cap-raise-resume — managed sessions skip enforcement:
+    // Infinity makes `selectChapter`'s cost-cap-hit branch unreachable.
+    // Enforced sessions pass the effective (override-aware) cap.
+    const cap = capEnforced(state)
+      ? effectiveCap(state)
+      : Number.POSITIVE_INFINITY;
     const result = await selectChapter({
       question: userMessage,
       outline: ctx.outline,
@@ -3125,14 +3436,23 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       }
       case "cost-cap-hit": {
         // `selectChapter` returns the projected total; charge to
-        // state and emit `cost_ceiling`.
+        // state. feat-cc-cap-raise-resume — the routing turn already
+        // spent, so this branch fires post-dispatch-entry: the
+        // in-flight `userMessage` is parked (chapterRouted so the
+        // release re-enters `dispatchChapterRouted`) and the resumable
+        // prompt fires. Legacy teardown only when no prompt machinery.
         state.totalCostUsd = result.totalCostUsd;
-        emitWorkflowEnded(state, {
-          status: "cost_ceiling",
-          totalCostUsd: state.totalCostUsd,
-          cap: result.cap,
-          workflow: state.currentWorkflow,
-        });
+        if (pendingPrompts && emitInteractivePrompt) {
+          state.parkedUserMessage = { text: userMessage, chapterRouted: true };
+          emitCostCapPrompt(state);
+        } else {
+          emitWorkflowEnded(state, {
+            status: "cost_ceiling",
+            totalCostUsd: state.totalCostUsd,
+            cap: result.cap,
+            workflow: state.currentWorkflow,
+          });
+        }
         return;
       }
       case "ambiguous": {
@@ -3574,6 +3894,101 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     }
   }
 
+  /**
+   * feat-cc-cap-raise-resume — route a `cost-cap:` prompt response to a
+   * cap override (or keep-cap decline) on the live Query. Never feeds a
+   * `tool_result` into the SDK stream — the sentinel toolUseId is not a
+   * real tool_use.
+   *
+   * Tier validation compares against the EFFECTIVE cap at response time
+   * (not emit time): a raise→re-trip window can leave a stored option
+   * below the current cap, and accepting it would silently strand the
+   * conversation parked under a cap that still trips.
+   */
+  function applyCostCapRaise(args: {
+    conversationId: string;
+    response: string;
+  }): boolean {
+    const state = activeQueries.get(args.conversationId);
+    if (!state || state.closed) return false;
+    clearCapPromptParkTimer(state);
+    state.capPromptId = null;
+    const response = args.response.trim();
+    if (response === KEEP_CAP_OPTION) {
+      // Decline: un-park, drop any parked message with honest copy.
+      const dropped = state.parkedUserMessage !== null;
+      state.parkedUserMessage = null;
+      notifyAwaitingUser(args.conversationId, false);
+      try {
+        state.events.onText(
+          dropped
+            ? "(Cost cap unchanged — your message wasn't sent. Send it again and raise the cap to continue.)"
+            : "(Cost cap unchanged — raise it when you're ready to continue.)",
+        );
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "applyCostCapRaise.keep-cap",
+          extra: { conversationId: args.conversationId },
+        });
+      }
+      return true;
+    }
+    const match = /^Raise to \$(\d+(?:\.\d+)?)$/.exec(response);
+    const tier = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isFinite(tier) || tier <= effectiveCap(state)) {
+      return false;
+    }
+    state.costCapOverrideUsd = tier;
+    notifyAwaitingUser(args.conversationId, false);
+    const persist = state.persistCostCapOverride;
+    if (persist) {
+      void persist(tier).catch((err) => {
+        // updateConversationFor already mirrors real failures to Sentry;
+        // a throw escape still mirrors here (defense-in-depth).
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "persistCostCapOverride",
+          extra: { conversationId: args.conversationId, usd: tier },
+        });
+      });
+    }
+    try {
+      state.events.onText(
+        `(Cost cap raised to $${tier} — continuing.)`,
+      );
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "soleur-go-runner",
+        op: "applyCostCapRaise.confirm",
+        extra: { conversationId: args.conversationId },
+      });
+    }
+    // Release the parked message chapter-aware: chapter-chunked
+    // conversations bypass pushUserMessage deliberately (the release
+    // must re-enter dispatchChapterRouted).
+    const parked = state.parkedUserMessage;
+    state.parkedUserMessage = null;
+    if (parked) {
+      if (parked.chapterRouted && state.chapterChunkedContext !== null) {
+        void dispatchChapterRouted(state, parked.text).catch((err) => {
+          reportSilentFallback(err, {
+            feature: "soleur-go-runner",
+            op: "applyCostCapRaise.chapter-redispatch",
+            extra: { conversationId: args.conversationId },
+          });
+          emitWorkflowEnded(state, {
+            status: "internal_error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      } else {
+        pushUserMessage(state, parked.text);
+      }
+    }
+    return true;
+  }
+
   return {
     dispatch,
     hasActiveQuery,
@@ -3583,5 +3998,6 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeAllForShutdown,
     respondToToolUse,
     notifyAwaitingUser,
+    applyCostCapRaise,
   };
 }
