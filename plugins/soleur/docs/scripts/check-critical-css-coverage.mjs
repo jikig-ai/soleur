@@ -63,6 +63,12 @@ const ABOVE_FOLD_PREFIXES = [
   "newsletter-form",
   "hero-waitlist-form",
   "blog-post-meta",
+  // Hero controls the homepage renders before the stylesheet swaps (#9579).
+  "btn-secondary",
+  "sr-only",
+  "newsletter-privacy",
+  "newsletter-status",
+  "hero-cta",
 ];
 
 // Allowlist: classes used only inside a <noscript> or print-media context, or
@@ -96,8 +102,14 @@ function extractClassesFromTemplates() {
   const classAttrRe = /class\s*=\s*"([^"]+)"/g;
   const files = [
     ...TEMPLATE_ROOTS.flatMap((root) => listFiles(root, ".njk")),
-    ...TEMPLATE_FILES.filter((f) => existsSync(f)),
+    ...TEMPLATE_FILES,
   ];
+  for (const f of TEMPLATE_FILES) {
+    if (!existsSync(f)) {
+      console.error(`check-critical-css-coverage: listed template not found: ${f}`);
+      process.exit(2);
+    }
+  }
   for (const file of files) {
     const src = readFileSync(file, "utf8");
     let m;

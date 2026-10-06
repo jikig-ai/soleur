@@ -18,7 +18,7 @@ last_updated: 2026-10-06
           <a href="/pricing/#waitlist" class="cta-button">Join the waitlist</a>
           <a href="#self-hosted" class="cta-link">Run the self-hosted version today <span aria-hidden="true">&rarr;</span></a>
         </div>
-        <p class="cta-helper">Takes 30 seconds. We&rsquo;ll email when your spot opens.</p>
+        <p class="cta-helper">Takes 30 seconds. We&rsquo;ll email you Soleur updates, including when hosted access opens.</p>
         <p class="hero-meta"><a href="mailto:ops@jikigai.com?subject=Soleur%20founding%20cohort%20intro">Founding cohort &mdash; limited to 10. Book intro <span aria-hidden="true">&rarr;</span></a><span class="hero-meta-fallback">(or email <code>ops@jikigai.com</code>)</span></p>
         <p class="hero-meta"><a href="/changelog/">Shipping weekly <span aria-hidden="true">&rarr;</span></a></p>
       </div>
@@ -223,7 +223,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between the hosted version and self-hosted?</summary>
-            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access, your files, running inside your own Claude Code. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
+            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access to your own files. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
           </details>
         </div>
       </div>
@@ -287,7 +287,7 @@ claude plugin install soleur@soleur-marketplace</code></pre>
           "name": "What is the difference between the hosted version and self-hosted?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access, your files, running inside your own Claude Code. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
+            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access to your own files. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
           }
         }
       ]

@@ -90,25 +90,44 @@ try {
   process.exit(2);
 }
 
-async function phoneOverflowErrors() {
+// Full-stylesheet state at phone width. The inline-only pass cannot see a rule
+// in style.css that hides the privacy line or widens the form, so load the page
+// WITH its stylesheet and check the same properties again.
+async function phoneFullStyleErrors() {
   const ctx = await browser.newContext({ viewport: PHONE_VIEWPORT });
   const page = await ctx.newPage();
   const errs = [];
   try {
-    await page.route("**/*.css", (request) => request.abort());
     try {
-      await page.goto(`${BASE_URL}${HOME_PATH}`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+      await page.goto(`${BASE_URL}${HOME_PATH}`, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
     } catch (err) {
-      return [`phone-width navigation failed: ${err.message}`];
+      return [`phone-width full-stylesheet navigation failed: ${err.message}`];
     }
-    const m = await page.evaluate(() => ({
-      scrollWidth: document.documentElement.scrollWidth,
-      clientWidth: document.documentElement.clientWidth,
-    }));
+    // The stylesheet swaps in after load; wait for the swap to land.
+    await page.waitForFunction(() => document.getElementById("soleur-css-preload")?.rel === "stylesheet", null, {
+      timeout: NAV_TIMEOUT_MS,
+    });
+    const m = await page.evaluate(() => {
+      const el = document.getElementById("homepage-waitlist-privacy");
+      const cs = el ? getComputedStyle(el) : null;
+      const r = el ? el.getBoundingClientRect() : null;
+      return {
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+        found: !!el,
+        display: cs?.display,
+        visibility: cs?.visibility,
+        opacity: cs ? parseFloat(cs.opacity) : null,
+        fontPx: cs ? parseFloat(cs.fontSize) : null,
+        height: r?.height ?? 0,
+        width: r?.width ?? 0,
+      };
+    });
     if (m.scrollWidth > m.clientWidth) {
-      errs.push(
-        `homepage overflows horizontally at ${PHONE_VIEWPORT.width}px (scrollWidth=${m.scrollWidth} > clientWidth=${m.clientWidth}) in the inline-CSS-only state`,
-      );
+      errs.push(`homepage overflows horizontally at ${PHONE_VIEWPORT.width}px with the full stylesheet (scrollWidth=${m.scrollWidth} > clientWidth=${m.clientWidth})`);
+    }
+    if (!m.found || m.display === "none" || m.visibility !== "visible" || m.opacity < 1 || m.fontPx < 10 || m.height < 8 || m.width < 100) {
+      errs.push(`hero privacy line is not visibly rendered with the full stylesheet (display=${m.display} visibility=${m.visibility} opacity=${m.opacity} font=${m.fontPx}px box=${m.width}x${m.height})`);
     }
   } finally {
     await ctx.close();
@@ -170,6 +189,13 @@ async function auditRoute(route) {
         hasHomeForm: !!privacy && !!submit,
         privacyTop: privacy ? privacy.getBoundingClientRect().top : null,
         privacyPosition: privacy ? getComputedStyle(privacy).position : null,
+        privacyShown: privacy
+          ? (() => {
+              const c = getComputedStyle(privacy);
+              const r = privacy.getBoundingClientRect();
+              return c.display !== "none" && c.visibility === "visible" && parseFloat(c.opacity) === 1 && parseFloat(c.fontSize) >= 10 && r.height >= 8 && r.width >= 100;
+            })()
+          : false,
         submitBottom: submit ? submit.getBoundingClientRect().bottom : null,
         hasHoneypot: !!honeypotWrapper,
         honeypotHeight: honeypotRect ? honeypotRect.height : null,
@@ -240,8 +266,11 @@ async function auditRoute(route) {
         }
         if (result.privacyTop < result.submitBottom - 1) {
           errs.push(
-            `hero privacy line (top=${result.privacyTop.toFixed(1)}px) is not below the submit button (bottom=${result.submitBottom.toFixed(1)}px) — .newsletter-privacy flex-basis:100% missing from inline CSS`,
+            `hero privacy line (top=${result.privacyTop.toFixed(1)}px) is not below the submit button (bottom=${result.submitBottom.toFixed(1)}px) — the hero form layout rules are missing from the inline CSS`,
           );
+        }
+        if (!result.privacyShown) {
+          errs.push("hero privacy line is not visibly rendered in the inline-CSS-only state (display, visibility, opacity, font size or box size)");
         }
       }
       // The hosted card and the two-sentence plan line are styled only by inline
@@ -253,7 +282,18 @@ async function auditRoute(route) {
       if (result.planDisplay !== "grid") {
         errs.push(`.landing-hero-plan display is "${result.planDisplay}" (expected grid) — its inline rule is missing from the critical CSS`);
       }
-      errs.push(...(await phoneOverflowErrors()));
+      // Phone width, inline-CSS-only: resize the same page after the desktop reads.
+      await page.setViewportSize(PHONE_VIEWPORT);
+      const phone = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      if (phone.scrollWidth > phone.clientWidth) {
+        errs.push(
+          `homepage overflows horizontally at ${PHONE_VIEWPORT.width}px (scrollWidth=${phone.scrollWidth} > clientWidth=${phone.clientWidth}) in the inline-CSS-only state`,
+        );
+      }
+      errs.push(...(await phoneFullStyleErrors()));
     }
 
     if (errs.length) {

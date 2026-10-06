@@ -27,7 +27,7 @@
   <!-- CSP: Cloudflare Bot Fight Mode injects an inline script with per-request
        tokens. This script is intentionally blocked by script-src (its hash is
        unpredictable). The blocked script has no user-facing impact — see #1149. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-ui11TjyYFeNYI9dQpevWUVjQWg0VNdVSiUwDTtjTbA4=' 'sha256-9o2LMPU0pCC0i/83pWDPlO90JiCMiJbUjQWPhLF+W0Y='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-NVc8d3dE64qhaatnozVkVaD/+zzRSQxgfQ5MCndTYEA=' 'sha256-9o2LMPU0pCC0i/83pWDPlO90JiCMiJbUjQWPhLF+W0Y='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
   <script type="application/ld+json">
   {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
   {
@@ -94,10 +94,11 @@
           },
           {
             "@type": "Offer",
-            "name": "Solo (Cloud Platform)",
+            "name": "Solo (Hosted version, coming soon)",
             "price": "49",
             "priceCurrency": "USD",
-            "description": "Managed infrastructure, web dashboard, and priority support."
+            "availability": "https://schema.org/PreOrder",
+            "description": "Managed infrastructure, web dashboard, and priority support. Access opens by waitlist; hosted plans use your own Anthropic API key."
           }
         ],
         "author": {
@@ -356,7 +357,7 @@
 
   document.querySelectorAll('.waitlist-form').forEach(function(form) {
     handleSignupForm(form, {
-      successMessage: 'You are on the list. We will notify you when the hosted version is ready.',
+      successMessage: 'You are on the list. If a confirmation email arrives, open it to finish signing up. We will notify you when the hosted version is ready.',
       event: 'Waitlist Signup',
       props: function(f) {
         var tier = f.querySelector('input[name="metadata__tier_interest"]');
@@ -367,7 +368,7 @@
 
   document.querySelectorAll('.hero-waitlist-form').forEach(function(form) {
     handleSignupForm(form, {
-      successMessage: 'You are on the list. We will notify you when the hosted version is ready.',
+      successMessage: 'You are on the list. If a confirmation email arrives, open it to finish signing up. We will notify you when the hosted version is ready.',
       event: 'Waitlist Signup',
       props: function(f) { return { location: 'homepage-hero' }; }
     });
