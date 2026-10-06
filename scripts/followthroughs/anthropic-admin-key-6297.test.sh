@@ -347,7 +347,7 @@ SENTRY_FAKE="FAKESENTRYTOKEN.abc-123_x"
 f=$(mktmp -t ft.XXXXXXXX)
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$SENTRY_FAKE")
-if [[ -e "$d/curl.argv.0" ]] && ! tr '\0' '\n' < "$d/curl.argv.0" | grep -qF -- "$SENTRY_FAKE"; then
+if [[ -e "$d/curl.argv.0" ]] && ! tr '\0' '\n' < "$d/curl.argv.0" | grep -cF -- "$SENTRY_FAKE" >/dev/null; then
   pass "Sentry bearer is ABSENT from curl argv"
 else
   fail "Sentry bearer is ABSENT from curl argv — curl not called or token found on argv"
@@ -358,7 +358,7 @@ else
   fail "Sentry bearer arrives on curl stdin as a config header line — not found on stdin"
 fi
 if [[ -e "$d/curl.argv.0" ]] && [[ "$(tr '\0' '\n' < "$d/curl.argv.0" | head -1)" == "--disable" ]] \
-   && tr '\0' '\n' < "$d/curl.argv.0" | grep -qxF -- "--config"; then
+   && tr '\0' '\n' < "$d/curl.argv.0" | grep -cxF -- "--config" >/dev/null; then
   pass "curl keeps --disable first and reads --config -"
 else
   fail "curl keeps --disable first and reads --config - — argv shape wrong"

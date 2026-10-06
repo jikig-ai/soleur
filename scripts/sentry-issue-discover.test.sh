@@ -67,7 +67,7 @@ H=soleur-git-data-rehearsal-30649892865
 rm -f "${ARGV}.stdin"
 run 200 --host-events "$H" --stats-period 30d >/dev/null
 if [[ "$(cat "${ARGV}.stdin" 2>/dev/null)" == 'header = "Authorization: Bearer ro-fake-not-a-credential"' ]] \
-   && ! argv | grep -qF -- 'ro-fake-not-a-credential' && ! argv | grep -qiE -- 'Bearer|Authorization'; then
+   && ! argv | grep -cF -- 'ro-fake-not-a-credential' >/dev/null && ! argv | grep -ciE -- 'Bearer|Authorization' >/dev/null; then
   pass "the bearer is on curl's stdin config and ABSENT from argv"
 else
   fail "the bearer is on curl's stdin config and ABSENT from argv" "stdin=$(cat "${ARGV}.stdin" 2>/dev/null | cut -c1-60) argv=$(argv | head -1 | cut -c1-120)"; fi

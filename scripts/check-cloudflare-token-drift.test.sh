@@ -648,8 +648,8 @@ else
 fi
 # Transport pins: `--disable` is curl's FIRST argument (it only works there) and `--noproxy '*'`
 # follows. The stub records `$*`, so the shell-quoted '*' arrives bare.
-if grep -F 'user/tokens/verify' "$CURL_LOG" | grep -qE -- '^--disable --noproxy \* ' \
-   && grep -F 'user/tokens/verify' "$CURL_LOG" | grep -qF -- '--config -'; then
+if grep -F 'user/tokens/verify' "$CURL_LOG" | grep -cE -- '^--disable --noproxy \* ' >/dev/null \
+   && grep -F 'user/tokens/verify' "$CURL_LOG" | grep -cF -- '--config -' >/dev/null; then
   pass "the bearer-carrying curl BEGINS --disable --noproxy * and reads its config from stdin"
 else
   fail "the bearer-carrying curl must begin '--disable --noproxy *' and carry '--config -' (got: $(grep -F 'user/tokens/verify' "$CURL_LOG" | head -1 | cut -c1-120))"

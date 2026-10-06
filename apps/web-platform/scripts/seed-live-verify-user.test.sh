@@ -396,7 +396,7 @@ else
   echo "  FAIL: seed run under the curl shim (rc=$shim_rc): ${shim_report#FAIL:}" >&2
   fail=1
 fi
-if printf '%s' "$shim_out" | grep -qF "$SYN_KEY"; then
+if grep -qF "$SYN_KEY" <<<"$shim_out"; then
   echo "  FAIL: the service-role key appeared in the seed's output" >&2
   fail=1
 else

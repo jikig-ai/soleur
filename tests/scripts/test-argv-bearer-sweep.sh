@@ -652,8 +652,12 @@ else row "mutation 8: converted probe, 100,000-byte token, never-reading shim, p
 P_PIPE="$(make_synth pipe)"
 run_probe m8-pipe "$P_PIPE" "SYNTH_TOKEN=$BIGTOK" SHIM_MODE=noread
 rc=$RUN_RC
-if [[ "$rc" -eq 141 ]]; then row "mutation 8: pipe-form mutant (printf | curl), same inputs: rc 141" ok
-else row "mutation 8: pipe-form mutant (printf | curl), same inputs: rc 141" fail "rc=$rc"; fi
+# 141 is the writer dying of SIGPIPE. A harness that starts this suite with SIGPIPE IGNORED (CI runners do)
+# turns the same event into a write error: the builtin printf returns 1 and says "Broken pipe". Both are
+# the pipe-form failing where the process-substitution form stayed rc 0, which is the property under test;
+# any other non-zero status, or a 1 without the broken-pipe message, is not that event and stays RED.
+if [[ "$rc" -eq 141 ]] || { [[ "$rc" -eq 1 ]] && grep -aqi 'broken pipe' "$RUN_ROW/stderr" "$RUN_ROW/stdout" 2>/dev/null; }; then row "mutation 8: pipe-form mutant (printf | curl), same inputs: rc 141 (or 1 with a broken-pipe message when SIGPIPE is ignored)" ok
+else row "mutation 8: pipe-form mutant (printf | curl), same inputs: rc 141 (or 1 with a broken-pipe message when SIGPIPE is ignored)" fail "rc=$rc"; fi
 
 # 9: xtrace: SHELLOPTS=xtrace and `bash -x`, token only in env -> refuse rc 78, zero calls, no token on stderr.
 xtrace_check() { # <script> <tokvar> <rowname> <mode: env|flag>

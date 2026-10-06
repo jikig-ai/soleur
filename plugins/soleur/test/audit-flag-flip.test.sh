@@ -125,7 +125,7 @@ if SRK_VALUE="$SYNTH_SRK" run_helper '"11111111-1111-1111-1111-111111111111"' 20
     || { echo "audit-flag-flip: FAIL — Authorization header missing from curl's stdin config" >&2; fail=1; }
   [[ "$(tr '\0' '\n' < "$ARGV_LOG" | head -n1)" == "--disable" ]] \
     || { echo "audit-flag-flip: FAIL — --disable is not curl's first argument" >&2; fail=1; }
-  tr '\0' '\n' < "$ARGV_LOG" | grep -qxF -- '--config' \
+  tr '\0' '\n' < "$ARGV_LOG" | grep -cxF -- '--config' >/dev/null \
     || { echo "audit-flag-flip: FAIL — curl is not given --config -" >&2; fail=1; }
 else
   echo "audit-flag-flip: FAIL — synthetic-key append should return 0" >&2; fail=1
