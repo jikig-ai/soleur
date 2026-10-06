@@ -1341,7 +1341,7 @@ t_apply_job_luks_halt_job_scoped() {
 # password as a dependency of the web key until the swap, and always as the pair named for defense in depth).
 # A rotation leaves the LUKS header cut from the OLD value with no surviving copy. `[ack-destroy]` cannot tell
 # a passphrase replace from any other delete in the same merge, so it must not reach it. A CREATE of the
-# web-class passphrase halts too since the closing change for #9372 (its single-use create workflow is retired, so a
+# web-class passphrase halts too since the retirement change for #9372 (its single-use create workflow is retired, so a
 # planned create means state lost the entry); a create at the other five addresses, the web-class key copy included,
 # stays legal (a key-copy-alone create restores the same state-held value; CTO ruling 2026-10-06).
 WL_ADDRS=(
@@ -2042,7 +2042,7 @@ _ran=$((pass + fail))
 # + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
 # + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
 # delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64, T64b-g: 4 gates + e + 4 removal mutants + g) = 99, + 6 review-round arms (T64h-m: neighbours, widening mutant,
-# indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the closing change for #9372:
+# indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the retirement change for #9372:
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107. Exact, not a
 # ceiling: deleting a single arm invocation reports "only 106 assertions ran, floor is 107". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm

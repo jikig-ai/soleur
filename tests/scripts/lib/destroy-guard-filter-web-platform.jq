@@ -169,7 +169,7 @@ def luks_passphrase_addrs: [
   "doppler_secret.workspaces_luks_web_key"
 ];
 
-# The one address where a CREATE also halts (the closing change for #9372). Only a create of
+# The one address where a CREATE also halts (the retirement change for #9372). Only a create of
 # random_password.workspaces_luks_web can mint a new passphrase over the live header (its escrow-create workflow is
 # retired, so a planned create means state lost the entry); a create of doppler_secret.workspaces_luks_web_key alone
 # re-derives the same state-held value and stays legal, because without the password in the same plan it restores the
