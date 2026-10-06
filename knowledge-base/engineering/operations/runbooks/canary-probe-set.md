@@ -183,6 +183,20 @@ jobs" on the release run, never `apply-deploy-pipeline-fix.yml` (it redeploys th
 tag and cannot ship past the gate; see the comment in `reusable-release.yml`) and never a host
 command.
 
+## Faithful sandbox canary — #8752 hardening verdicts
+
+`sandbox_canary.verdict` in deploy-state (and its Sentry `op=sandbox-canary` event) now covers the
+sandbox-hardening pair, not only sandbox-build health. Decoding `reason` (all `sandbox_broken` reset
+the consecutive-pass soak and page; `canary_infra_error` rows hold the soak and never roll back):
+
+| `reason` | Meaning | First move |
+|---|---|---|
+| `userns_filter_bypass` | Nested `unshare -U` ran INSIDE the replayed sandbox — the shared seccomp filter is not engaged (shim absent/misrouted) | `bash apps/web-platform/scripts/bwrap-userns-seccomp-probe.sh` in the canary image; check `op=sandbox-hardening-selfprobe` |
+| `userns_filter_overbroad` | A forked child failed inside the filtered sandbox — the filter denies more than nested userns | Regenerate/verify the artifact (`gen-bwrap-userns-seccomp.mjs --check`); do NOT weaken the filter to unblock |
+| `fd_hygiene_bypass` | The in-sandbox fd census exceeded `4 + #fd-valued-argv-options` — an unreferenced fd leaked past the shim's sweep | Inspect `bwrap-shim:` lines + the shim's preserve-set arity table |
+| `args_fd_closed` | The `--args <fd>` transport probe failed — the SDK's real spawn shape broke (shim closed the argv fd) | Every agent spawn fails too; treat as deploy-blocking |
+| `bwrap_shim_refused` | The shim itself exited 65 (`bwrap-shim:` marker) — artifact or real bwrap missing in the image | `probeAgentSandboxHardening` fields (`shim`, `filter`, `bpfBytes`) say which |
+
 ## References
 
 - AGENTS.md `wg-when-fixing-a-workflow-gates-detection`

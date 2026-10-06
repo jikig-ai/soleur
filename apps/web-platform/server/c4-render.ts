@@ -197,11 +197,15 @@ const PRLIMIT_BIN = "/usr/bin/prlimit";
 const SH_BIN = "/usr/bin/sh";
 const LAUNCHERS = [BASH_BIN, CHOOM_BIN, NICE_BIN, BWRAP_BIN, PRLIMIT_BIN, SH_BIN] as const;
 
-/** Closes every fd above STATUS_FD, then execs its arguments. bash, not dash:
- *  dash redirections reach only fds 0-9. A static string: the launch argv
+/** Closes every fd above STATUS_FD, then opens the shared nested-userns
+ *  seccomp filter on fd 9 (after the sweep, so the sweep cannot close it;
+ *  fail-closed `exit 65` when the artifact is unreadable), then execs its
+ *  arguments — fd 9 survives choom/nice into bwrap's `--seccomp 9`. bash, not
+ *  dash: dash redirections reach only fds 0-9 anyway, but the >/proc/self/fd
+ *  glob + eval-close loop is bash-shaped. A static string: the launch argv
  *  reaches it only as "$@". */
 export const CLOSE_FDS_SCRIPT =
-  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec "$@"';
+  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; if ! exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}"; then echo "c4: seccomp artifact unreadable — set SOLEUR_BWRAP_SECCOMP_BPF to a valid filter (or C4_RENDER_SANDBOX=off)" >&2; exit 65; fi; exec "$@"';
 
 /** Size of the scratch tmpfs mounts (/tmp, /c4-home, /dev/shm). A full render
  *  of the 82-view repo model used 60 B, 160 B and 40 B of them (measured
@@ -422,6 +426,12 @@ export function buildLikeC4SandboxArgv(o: {
     "--unshare-ipc",
     "--unshare-uts",
     "--json-status-fd", String(STATUS_FD),
+    // #8752: fd 9 carries the shared nested-userns filter, opened by the
+    // close-fds prelude. The deny happens at the syscall layer because
+    // `--disable-userns` is measured broken on prod's bwrap 0.8.0 (RO
+    // /proc/sys). clone3 is unreachable-by-flags so the filter returns ENOSYS
+    // for it — never EPERM (glibc posix_spawn needs the clone fallback).
+    "--seccomp", "9",
     "--ro-bind", "/usr", "/usr",
     "--symlink", "usr/bin", "/bin",
     "--symlink", "usr/lib", "/lib",
@@ -852,7 +862,7 @@ function runLikeC4(
     // Inside the sandbox the child gets only the `--setenv` set.
     const env = {
       ...Object.fromEntries(
-        (["PATH", "LANG", "LC_ALL", "TMPDIR"] as const)
+        (["PATH", "LANG", "LC_ALL", "TMPDIR", "SOLEUR_BWRAP_SECCOMP_BPF"] as const)
           .map((k) => [k, process.env[k]] as const)
           .filter(([, v]) => v !== undefined),
       ),
