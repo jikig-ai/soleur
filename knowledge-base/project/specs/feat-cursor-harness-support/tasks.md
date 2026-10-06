@@ -4,22 +4,22 @@ Issue #9608. Lane `cross-domain`, carried from `spec.md`. Slice 1 uses draft PR 
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Stay on `feat-cursor-harness-support` in `.worktrees/feat-cursor-harness-support`. Do not open a second worktree. Do not mark #9598 ready.
-- [ ] 1.2 Re-run the ADR filename census over `refs/heads` and `refs/remotes/origin`. Then run `/architecture create 'Add a Cursor CLI plugin adapter'`. The title does not say supported. Status stays `adopting` until slice 2 meets the support bar. Record the census in the decision body. If the ordinal is taken, renumber this plan, the spec directory, and this tasks file in that same edit.
+- [x] 1.1 Stay on `feat-cursor-harness-support` in `.worktrees/feat-cursor-harness-support`. Do not open a second worktree. Do not mark #9598 ready.
+- [x] 1.2 Re-run the ADR filename census over `refs/heads` and `refs/remotes/origin`. Then run `/architecture create 'Add a Cursor CLI plugin adapter'`. The title does not say supported. Status stays `adopting` until slice 2 meets the support bar. Record the census in the decision body. If the ordinal is taken, renumber this plan, the spec directory, and this tasks file in that same edit.
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Slice 1 manifest and install
-  - [ ] 2.1.1 Add `plugins/soleur/.cursor-plugin/plugin.json` with `skills` `./cursor/skills`, `agents` `./cursor/agents`, `commands` `./cursor/commands`, and `hooks` `./cursor/hooks-empty.json`.
-  - [ ] 2.1.2 Add `plugins/soleur/cursor/hooks-empty.json` as `{ "hooks": {} }`.
-  - [ ] 2.1.3 Add `plugins/soleur/cursor/commands/.gitkeep`. No `.md`, `.mdc`, `.markdown`, or `.txt` file in that directory.
-  - [ ] 2.1.4 Add repo-root `.cursor-plugin/marketplace.json` named `soleur`, owner `jikig-ai`, one plugin source `plugins/soleur`.
-  - [ ] 2.1.5 Add `scripts/setup-cursor.sh`. Resolve the plugin directory with `BASH_SOURCE`. Do not call `readlink -f`, `timeout`, `sed -i`, or `date -d`. When `agent` is missing, print that and exit non-zero. Print the absolute `--plugin-dir` line and the slice-1 limit. Do not prompt for a token, open an install URL, run marketplace add, or symlink into `~/.cursor/plugins/local`.
-- [ ] 2.2 Slice 1 name map
-  - [ ] 2.2.1 Add `plugins/soleur/scripts/sync-cursor-name-map.ts`. `--check` prints `cursor-name-map ok` and exits 0 only after it reads the tree.
-  - [ ] 2.2.2 Point `go`, `sync`, and `soleur-help` at `commands/go.md`, `commands/sync.md`, and `commands/help.md`. Point every other skill at `skills/<folder>/SKILL.md`. Paths are relative to the plugin root.
-  - [ ] 2.2.3 Name each agent from its path under `agents/` with `/` replaced by `-`. `agents/engineering/cto.md` becomes `soleur-engineering-cto`. Fail `--check` when two sources share one output name.
-  - [ ] 2.2.4 Start every stub with the Cursor stop header. Copy a canonical `description` into a quoted YAML scalar. Set `disable-model-invocation: true` on the generated `plan`, `help`, and `review` stubs.
+- [x] 2.1 Slice 1 manifest and install
+  - [x] 2.1.1 Add `plugins/soleur/.cursor-plugin/plugin.json` with `skills` `./cursor/skills`, `agents` `./cursor/agents`, `commands` `./cursor/commands`, and `hooks` `./cursor/hooks-empty.json`.
+  - [x] 2.1.2 Add `plugins/soleur/cursor/hooks-empty.json` as `{ "hooks": {} }`.
+  - [x] 2.1.3 Add `plugins/soleur/cursor/commands/.gitkeep`. No `.md`, `.mdc`, `.markdown`, or `.txt` file in that directory.
+  - [x] 2.1.4 Add repo-root `.cursor-plugin/marketplace.json` named `soleur`, owner `jikig-ai`, one plugin source `plugins/soleur`.
+  - [x] 2.1.5 Add `scripts/setup-cursor.sh`. Resolve the plugin directory with `BASH_SOURCE`. Do not call `readlink -f`, `timeout`, `sed -i`, or `date -d`. When `agent` is missing, print that and exit non-zero. Print the absolute `--plugin-dir` line and the slice-1 limit. Do not prompt for a token, open an install URL, run marketplace add, or symlink into `~/.cursor/plugins/local`.
+- [x] 2.2 Slice 1 name map
+  - [x] 2.2.1 Add `plugins/soleur/scripts/sync-cursor-name-map.ts`. `--check` prints `cursor-name-map ok` and exits 0 only after it reads the tree.
+  - [x] 2.2.2 Point `go`, `sync`, and `soleur-help` at `commands/go.md`, `commands/sync.md`, and `commands/help.md`. Point every other skill at `skills/<folder>/SKILL.md`. Paths are relative to the plugin root.
+  - [x] 2.2.3 Name each agent from its path under `agents/` with `/` replaced by `-`. `agents/engineering/cto.md` becomes `soleur-engineering-cto`. Fail `--check` when two sources share one output name.
+  - [x] 2.2.4 Start every stub with the Cursor stop header. Copy a canonical `description` into a quoted YAML scalar. Set `disable-model-invocation: true` on the generated `plan`, `help`, and `review` stubs.
 - [ ] 2.3 Slice 1 instruction arms
   - [ ] 2.3.1 Add `"cursor"` to the `Harness` union. Do not change `detectHarness`.
   - [ ] 2.3.2 Arm `routingInstructions`, `pollInstructions`, `workflowFidelityInstructions`, `formatSkillRef`, and `behindSyncInstructions`. `go` and `sync` render as `/go` and `/sync`. Every other name renders as `/soleur-<name>`.
