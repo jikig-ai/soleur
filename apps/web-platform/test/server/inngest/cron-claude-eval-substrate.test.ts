@@ -923,7 +923,7 @@ process.exit(0);
     const spawnCwd = makeSpawnCwd({ hookSource: stub });
     expect(() =>
       runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS], noFileTools: true }),
-    ).toThrow(/trailing argument/);
+    ).toThrow(/hostile or altered variant/);
   });
 
   it("P2-4: the hostile probes cover discord messages and hn mentions, and do NOT run for a cron without the directive", () => {

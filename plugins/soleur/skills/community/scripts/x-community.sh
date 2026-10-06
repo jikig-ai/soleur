@@ -579,11 +579,11 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --max-results must be a numeric value, got '${mr_val}'." >&2
+          echo "Error: --max-results must be a numeric value." >&2
           exit 1
         fi
         if (( mr_val < 5 || mr_val > 100 )); then
-          echo "Error: --max-results must be between 5 and 100, got ${mr_val}." >&2
+          echo "Error: --max-results must be between 5 and 100." >&2
           exit 1
         fi
         max_results="$mr_val"
@@ -596,14 +596,14 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --since-id must be a numeric value, got '${si_val}'." >&2
+          echo "Error: --since-id must be a numeric value." >&2
           exit 1
         fi
         since_id="$si_val"
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '${1:-}'" >&2
+        echo "Error: Unknown option." >&2
         echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
         exit 1
         ;;
@@ -671,7 +671,7 @@ cmd_fetch_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -679,7 +679,7 @@ cmd_fetch_timeline() {
 
   # Validate --max is a positive integer (prevents query param injection)
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -710,7 +710,7 @@ cmd_fetch_user_timeline() {
 
   # Validate user_id is a positive integer (prevents path traversal)
   if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
-    echo "Error: user_id must be a positive integer, got '${user_id}'." >&2
+    echo "Error: user_id must be a positive integer." >&2
     exit 1
   fi
 
@@ -723,7 +723,7 @@ cmd_fetch_user_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -731,7 +731,7 @@ cmd_fetch_user_timeline() {
 
   # Validate --max is a positive integer
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -766,7 +766,7 @@ cmd_post_tweet() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -822,7 +822,7 @@ main() {
     fetch-user-timeline) cmd_fetch_user_timeline "$@" ;;
     post-tweet)          cmd_post_tweet "$@" ;;
     *)
-      echo "Error: Unknown command '${command}'" >&2
+      echo "Error: Unknown command." >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2
       exit 1
       ;;

@@ -33,15 +33,20 @@ import {
   COMMUNITY_FAILURE_CAUSES,
   COMMUNITY_FINAL_MESSAGE_MAX_BYTES,
   COMMUNITY_METRICS,
+  COMMUNITY_PERIOD_DAYS,
   COMMUNITY_PLATFORMS,
   COMMUNITY_STATUSES,
   COMMUNITY_TOPIC_CATEGORIES,
+  COMMUNITY_WINDOWS_NOTE,
+  DIGEST_FILE_LINE_PREFIX,
+  DIGEST_LIST_PAGE_SIZE,
   buildExampleDraftLine,
   parseCommunityDraft,
   readFinalMessage,
   renderCommunityPublication,
   patchIssueBody,
   upsertDigestIssue,
+  withDigestNotice,
   writeDigestFileContained,
   type CommunityDraft,
   type CommunityOctokit,
@@ -49,6 +54,7 @@ import {
 import {
   AUDIT_SELF_REPORT_BODY_PREFIX,
   SCHEDULED_DIGEST_TITLE_PREFIX,
+  digestIssueExistsForDate,
 } from "@/server/inngest/functions/_cron-shared";
 import { validDraftFinalMessage, validDraftObject } from "./helpers/community-draft";
 import { applyIssueListParams } from "./helpers/issue-list-params";
@@ -71,6 +77,8 @@ const REPO = "jikig-ai/soleur";
 const RUN_DATE = "2026-10-06";
 // The REAL run timestamp the handler passes (replay-stable runStartedAt), never midnight.
 const GENERATED_AT = "2026-10-06T08:00:12.345Z";
+// What the digest frontmatter shows: second precision (the contract is YYYY-MM-DDTHH:MM:SSZ).
+const GENERATED_AT_SECONDS = "2026-10-06T08:00:12Z";
 
 // ---------------------------------------------------------------------------
 // Leaf / object enumeration. The enumerator walks a FULL valid draft (every
@@ -690,22 +698,39 @@ describe("renderCommunityPublication", () => {
     expect(out.issueBody.length).toBeGreaterThan(0);
   });
 
-  it("digest frontmatter is derived from runDate (fixed 1-day window) and the REAL run timestamp", () => {
+  it("digest frontmatter: GitHub's window from runDate, the REAL run instant at SECOND precision; Period names each platform's own window", () => {
     const { digestMarkdown, issueBody } = renderCommunityPublication(base(), {
       runDate: "2026-03-02",
       repo: REPO,
       generatedAt: GENERATED_AT,
     });
     expect(digestMarkdown.startsWith("---\n")).toBe(true);
+    expect(COMMUNITY_PERIOD_DAYS).toBe(1);
     expect(digestMarkdown).toContain("\nperiod_start: 2026-03-01\n");
     expect(digestMarkdown).toContain("\nperiod_end: 2026-03-02\n");
-    // generated_at is the run's own timestamp, never a fabricated midnight.
-    expect(digestMarkdown).toContain(`\ngenerated_at: ${GENERATED_AT}\n`);
+    // generated_at is the run's own timestamp (never a fabricated midnight) and carries no milliseconds.
+    expect(digestMarkdown).toContain(`\ngenerated_at: ${GENERATED_AT_SECONDS}\n`);
+    expect(digestMarkdown).not.toContain(".345");
     expect(digestMarkdown).not.toContain("T00:00:00Z");
     expect(digestMarkdown).toContain("\n## Period\n");
     expect(digestMarkdown).toContain("\n## Activity Summary\n");
-    expect(digestMarkdown).toContain("Last 1 day, 2026-03-01 to 2026-03-02.");
-    expect(issueBody).toContain("(last 1 day)");
+    // The honest per-platform windows. The single "Last 1 day" claim is false for HN (7 days),
+    // Discord (latest 50 per channel) and the X / Bluesky / LinkedIn totals.
+    expect(digestMarkdown).toContain(`\nCollected 2026-03-02. ${COMMUNITY_WINDOWS_NOTE}\n`);
+    for (const text of [digestMarkdown, issueBody]) {
+      expect(text).not.toMatch(/Last 1 day|last 1 day|1-day window/);
+      expect(text).toContain("GitHub activity last 24 hours");
+      expect(text).toContain("Hacker News mentions last 7 days");
+      expect(text).toContain("Discord latest 50 messages per channel (a ceiling, not daily volume)");
+      expect(text).toContain("X, Bluesky and LinkedIn totals as of collection");
+    }
+    expect(issueBody.startsWith("Daily community digest for 2026-03-02.\n")).toBe(true);
+  });
+
+  it("the Discord messages metric is labelled as a per-channel ceiling, not a daily count", () => {
+    const { digestMarkdown } = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+    const row = digestMarkdown.split("\n").find((l) => l.startsWith("| Discord |"))!;
+    expect(row).toContain("Messages (latest 50 per channel) 3");
   });
 
   it("the window is a handler constant: periodDays is not a draft key any more (model cannot widen it)", () => {
@@ -717,10 +742,26 @@ describe("renderCommunityPublication", () => {
   });
 
   it("generatedAt must be a strict ISO UTC instant: a malformed or hostile value is refused, not interpolated", () => {
-    for (const bad of ["", "2026-10-06", "2026-10-06T08:00:00+02:00", "2026-10-06T08:00:00Z\nx: y", INJECTION, "yesterday"]) {
+    for (const bad of [
+      "",
+      "2026-10-06",
+      "2026-10-06T08:00:00+02:00",
+      "2026-10-06T08:00:00Z\nx: y",
+      INJECTION,
+      "yesterday",
+      // zone-less: parses as LOCAL time, so it names a different instant on a non-UTC host
+      "2026-10-06T08:00:00",
+      "2026-10-06T08:00:00.123",
+      // calendar-invalid: Date.parse rolls these over instead of rejecting them
+      "2026-02-30T08:00:00Z",
+      "2026-04-31T08:00:00Z",
+      "2026-13-01T08:00:00Z",
+      "2026-10-06T25:00:00Z",
+    ]) {
       expect(() => renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: bad }), bad.slice(0, 20)).toThrow(/generatedAt/);
     }
     expect(() => renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: "2026-10-06T08:00:00Z" })).not.toThrow();
+    expect(() => renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: "2028-02-29T08:00:00.1Z" })).not.toThrow();
   });
 
   it("renders every platform's status, including disabled", () => {
@@ -844,6 +885,130 @@ describe("renderCommunityPublication", () => {
     expect(() => renderCommunityPublication(base(), { runDate: "2026-10-06\n@x", repo: REPO, generatedAt: GENERATED_AT })).toThrow();
     expect(() => renderCommunityPublication(base(), { runDate: RUN_DATE, repo: "a b/c", generatedAt: GENERATED_AT })).toThrow();
     expect(() => renderCommunityPublication(base(), { runDate: "2026-13-45", repo: REPO, generatedAt: GENERATED_AT })).toThrow();
+    // calendar-invalid: shiftDate would roll 2026-02-30 over to 1 March and publish under the wrong date
+    expect(() => renderCommunityPublication(base(), { runDate: "2026-02-30", repo: REPO, generatedAt: GENERATED_AT })).toThrow();
+  });
+
+  describe("all-zero guard: a `collected` platform whose every metric is 0 is never published as measured", () => {
+    const rowOf = (md: string, label: string) => md.split("\n").find((l) => l.startsWith(`| ${label} |`))!;
+
+    it("renders `partial (unverified: all values 0)` in the Status AND Headline columns, with no numbers, in digest and issue", () => {
+      const draft = parseOk(
+        validDraftFinalMessage({
+          platforms: { discord: { metrics: { members: 0, channels: 0, messages: 0 } } },
+        }),
+      );
+      const { digestMarkdown, issueBody } = renderCommunityPublication(draft, { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      for (const text of [digestMarkdown, issueBody]) {
+        expect(rowOf(text, "Discord")).toBe("| Discord | partial | partial (unverified: all values 0) |");
+        // every other (non-zero) platform is untouched
+        expect(rowOf(text, "GitHub")).toContain("| GitHub | collected |");
+      }
+    });
+
+    it("a platform with ONE genuine non-zero value stays `collected` and shows its real zeros", () => {
+      const draft = parseOk(
+        validDraftFinalMessage({
+          platforms: { x: { metrics: { followers: 0, posts: 1 } } },
+        }),
+      );
+      const { digestMarkdown } = renderCommunityPublication(draft, { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      expect(rowOf(digestMarkdown, "X/Twitter")).toBe("| X/Twitter | collected | Followers 0, Posts 1 |");
+    });
+
+    it("applies to every MULTI-metric table-driven platform (a pct metric of 0 counts as zero); a single-metric platform (hn) reading 0 is a legitimate quiet day", () => {
+      for (const p of COMMUNITY_PLATFORMS) {
+        if (Object.keys(COMMUNITY_METRICS[p]).length < 2) continue;
+        const zeros = Object.fromEntries(Object.keys(COMMUNITY_METRICS[p]).map((k) => [k, 0]));
+        const draft = parseOk(validDraftFinalMessage({ platforms: { [p]: { metrics: zeros } } }));
+        const { digestMarkdown } = renderCommunityPublication(draft, { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+        const label = { discord: "Discord", github: "GitHub", x: "X/Twitter", bluesky: "Bluesky", linkedin: "LinkedIn", hn: "Hacker News" }[p];
+        expect(rowOf(digestMarkdown, label), p).toContain("partial (unverified: all values 0)");
+      }
+    });
+
+    it("does not rewrite a failed, disabled or already-partial platform's headline", () => {
+      const zeros = { followers: 0, posts: 0 };
+      const draft = parseOk(
+        validDraftFinalMessage({
+          platforms: {
+            x: { status: "failed", failureCause: "auth", metrics: zeros },
+            bluesky: { status: "disabled", metrics: zeros },
+            linkedin: { status: "partial", failureCause: "timeout" },
+          },
+        }),
+      );
+      const { digestMarkdown } = renderCommunityPublication(draft, { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      expect(rowOf(digestMarkdown, "X/Twitter")).toBe("| X/Twitter | failed | collection failed: auth |");
+      expect(rowOf(digestMarkdown, "Bluesky")).toBe("| Bluesky | disabled | disabled |");
+      expect(rowOf(digestMarkdown, "LinkedIn")).toContain("partial (timeout; a 0 may mean unavailable):");
+      expect(digestMarkdown).not.toContain("unverified");
+    });
+
+    it("the github override still wins over the guard (collector truth is not downgraded to an all-zero label)", () => {
+      const zeros = Object.fromEntries(Object.keys(COMMUNITY_METRICS.github).map((k) => [k, 0]));
+      const draft = parseOk(validDraftFinalMessage({ platforms: { github: { metrics: zeros } } }));
+      const { digestMarkdown } = renderCommunityPublication(draft, {
+        runDate: RUN_DATE,
+        repo: REPO,
+        generatedAt: GENERATED_AT,
+        githubOverride: { status: "failed", failureCause: "script-error" },
+      });
+      expect(rowOf(digestMarkdown, "GitHub")).toContain("| GitHub | failed |");
+      expect(digestMarkdown).not.toContain("unverified");
+    });
+
+    it("the example line the prompt embeds is all-zero by design, so it cannot be copied through as a measurement", () => {
+      const parsed = parseCommunityDraft(buildExampleDraftLine());
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      const { digestMarkdown } = renderCommunityPublication(parsed.draft, { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      for (const label of ["Discord", "GitHub", "X/Twitter", "Bluesky", "LinkedIn"]) {
+        expect(rowOf(digestMarkdown, label), label).toContain("partial (unverified: all values 0)");
+      }
+      // hn has ONE metric: a quiet day (0 mentions) is a measurement, not an unverified blank.
+      expect(rowOf(digestMarkdown, "Hacker News")).not.toContain("unverified");
+    });
+
+    it("a single-metric platform at 0 renders as collected (non-vacuity: hn really has one metric)", () => {
+      expect(Object.keys(COMMUNITY_METRICS.hn)).toHaveLength(1);
+      const draft = parseOk(validDraftFinalMessage({ platforms: { hn: { metrics: { mentions: 0 } } } }));
+      const { digestMarkdown } = renderCommunityPublication(draft, { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      expect(rowOf(digestMarkdown, "Hacker News")).toBe("| Hacker News | collected | Soleur mentions 0 |");
+    });
+  });
+
+  describe("withDigestNotice: only the `Digest file:` line changes", () => {
+    const NOTICE = "not committed - see Sentry";
+
+    it("keeps every other byte of the validated issue body (summary table, topics, links, windows) and swaps the one line", () => {
+      const { issueBody } = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      const out = withDigestNotice(issueBody, NOTICE);
+      const before = issueBody.split("\n");
+      const after = out.split("\n");
+      expect(after).toHaveLength(before.length);
+      const changed = before.map((l, i) => [l, after[i]]).filter(([a, b]) => a !== b);
+      expect(changed).toHaveLength(1);
+      expect(changed[0][0].startsWith(DIGEST_FILE_LINE_PREFIX)).toBe(true);
+      expect(changed[0][1]).toBe(`${DIGEST_FILE_LINE_PREFIX}${NOTICE}`);
+      expect(out).not.toContain("blob/main");
+      expect(out).toContain("| Discord | collected |");
+      expect(out).toContain("Inbound items: https://github.com/jikig-ai/soleur/issues");
+      expect(out.startsWith(AUDIT_SELF_REPORT_BODY_PREFIX)).toBe(false);
+    });
+
+    it("fail-safe: a body with no (or more than one) `Digest file:` line yields the bare notice line, never a body that could keep a link", () => {
+      expect(withDigestNotice("table\nno link line here", NOTICE)).toBe(`${DIGEST_FILE_LINE_PREFIX}${NOTICE}`);
+      expect(withDigestNotice(`${DIGEST_FILE_LINE_PREFIX}a\n${DIGEST_FILE_LINE_PREFIX}b`, NOTICE)).toBe(
+        `${DIGEST_FILE_LINE_PREFIX}${NOTICE}`,
+      );
+      expect(withDigestNotice("", NOTICE)).toBe(`${DIGEST_FILE_LINE_PREFIX}${NOTICE}`);
+    });
+
+    it("the renderer emits exactly ONE `Digest file:` line (the invariant withDigestNotice relies on)", () => {
+      const { issueBody } = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+      expect(issueBody.split("\n").filter((l) => l.startsWith(DIGEST_FILE_LINE_PREFIX))).toHaveLength(1);
+    });
   });
 
   function COMMUNITY_METRICS_SAMPLE(): Record<string, number> {
@@ -1104,6 +1269,18 @@ describe("upsertDigestIssue", () => {
     expect(warnSpy.mock.calls.filter((c) => c[1]?.op === "community-publication-bot-login-mismatch")).toHaveLength(1);
   });
 
+  it("the bot-login warn fires ONCE even when the read repeats on every retry attempt (flag survives the retry loop)", async () => {
+    const fake = makeFake({
+      issues: [botIssue({ user: { type: "Bot", login: "stale-slug[bot]" } })],
+      script: [{ match: /^POST /, error: { status: 502 }, times: 2 }],
+    });
+    const res = await upsert(fake);
+    expect(res.via).toBe("created");
+    // 3 POST attempts => 3 reads, each of which sees the same mismatched candidate
+    expect(fake.calls.filter((c) => c.route === "GET /repos/{owner}/{repo}/issues")).toHaveLength(3);
+    expect(warnSpy.mock.calls.filter((c) => c[1]?.op === "community-publication-bot-login-mismatch")).toHaveLength(1);
+  });
+
   it("does NOT warn for issues that were never PATCH candidates (human author, PR, audit stub, other title)", async () => {
     const fake = makeFake({
       issues: [
@@ -1167,6 +1344,26 @@ describe("upsertDigestIssue", () => {
     // state defaults to open (closed digests invisible) and labels filter applies
     expect(applyIssueListParams([{ number: 1, state: "closed" }, { number: 2, state: "open" }], {})).toEqual([{ number: 2, state: "open" }]);
     expect(applyIssueListParams(store, { state: "all", labels: "other-label" })).toHaveLength(0);
+  });
+
+  it("DIGEST_LIST_PAGE_SIZE is the page size the pre-spawn dedup read (digestIssueExistsForDate) actually sends", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const octokit = {
+      request: async (_route: string, params: Record<string, unknown>) => {
+        seen.push(params);
+        return { data: [] };
+      },
+    };
+    await digestIssueExistsForDate({
+      label: "scheduled-community-monitor",
+      date: RUN_DATE,
+      cronName: "cron-community-monitor",
+      titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX,
+      octokit: octokit as never,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ per_page: DIGEST_LIST_PAGE_SIZE, sort: "created", direction: "desc", state: "all" });
+    expect(DIGEST_LIST_PAGE_SIZE).toBe(10);
   });
 
   it("FAIL-CLOSED: a list-read error throws and nothing is created", async () => {
@@ -1291,7 +1488,7 @@ describe("patchIssueBody", () => {
     owner: "jikig-ai",
     repo: "soleur",
     issueNumber: 5,
-    body: "digest not committed - see Sentry",
+    body: "not committed - see Sentry",
     retryDelayMs: 0,
     ...over,
   });
@@ -1301,7 +1498,7 @@ describe("patchIssueBody", () => {
     await patchIssueBody(patchArgs(fake));
     expect(fake.calls).toHaveLength(1);
     expect(Object.keys(fake.calls[0].params).sort()).toEqual(["body", "headers", "issue_number", "owner", "repo"]);
-    expect(fake.store[0].body).toBe("digest not committed - see Sentry");
+    expect(fake.store[0].body).toBe("not committed - see Sentry");
     expect(fake.store[0].state).toBe("closed");
   });
 
@@ -1309,7 +1506,7 @@ describe("patchIssueBody", () => {
     const fake = makeFake({ issues: [botIssue()], script: [{ match: /^PATCH/, error: { status: 503 } }] });
     await patchIssueBody(patchArgs(fake));
     expect(fake.calls.filter((c) => c.route.startsWith("PATCH"))).toHaveLength(2);
-    expect(fake.store[0].body).toBe("digest not committed - see Sentry");
+    expect(fake.store[0].body).toBe("not committed - see Sentry");
   });
 
   it("gives up after the bounded attempts on a persistent 5xx, and does not retry a 4xx", async () => {

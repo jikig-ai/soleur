@@ -353,41 +353,48 @@ export const ISSUE_CREATOR_BASH_ALLOWLIST = [
   "gh label create",
 ];
 
-// #7122 — the ONLY Bash surface of cron-community-monitor: fourteen read-only router
-// invocations, each a full literal command. The old entry allowlisted the whole
+// #7122 — the ONLY Bash surface of cron-community-monitor: thirteen read-only router
+// invocations, each a COMPLETE LITERAL command. The old entry allowlisted the whole
 // router prefix, which also admitted `bsky post`, `linkedin post-content` and
 // `x post-tweet` (inert only because the per-platform *_ALLOW_POST env guards are
 // absent from buildSpawnEnv: an env convention, not a structural control), plus
 // `gh issue create|comment|list` and `gh label create|list` (publication verbs, and a
 // `--jq env` dump of the spawn environment into the agent's own context). The
 // handler now publishes from a validated draft, so the agent needs none of them.
-// The hook matches a prefix followed by a space or end of string, so trailing
-// arguments (`hn mentions --query soleur --limit 20`, `github activity 1`,
-// `discord messages <channel_id>`) stay allowed while a sibling verb does not. They are
-// NOT free-form: for a cron carrying the `no-file-tools` directive the hook requires
-// every token of the command to match [A-Za-z0-9._:=@/+-]+ on the raw text (no quote,
-// `$`, backtick, bracket or brace), and the platform scripts validate numeric operands
-// themselves (#7122 P1-A). `discord members` (a payload of up to 1000 member objects;
-// the member count comes from guild-info's approximate count) and `hn trending` (no
-// schema field consumes it) were removed from this list for that reason.
-// allow[0] MUST be a complete command: runHookSelfTest executes it verbatim.
-// Parity with the prompt's own invocations is asserted by
-// cron-community-monitor-allowlist.test.ts (G2-8).
+//
+// EXACT-LITERAL semantics. For a cron carrying the `no-file-tools` directive the hook
+// matches each `;`/`&&` segment against ONE of these lines token for token: same token
+// count, every token identical, no trailing argument of any kind. The single
+// variable token is the placeholder `<uint>`, which matches `^(0|[1-9][0-9]*)$` (a
+// canonical non-negative decimal; `08` would reach bash arithmetic as an octal
+// literal). The earlier prefix semantics left `hn mentions --query <any word>` open,
+// and an agent holding member content in its context could leak it word by word
+// through that query to a third-party search API. The fixed `--query soleur` /
+// `--limit 20` / `50` / `1` arguments are the ones the prompt uses; a prompt edit must
+// edit this list in the same change (cron-community-monitor-allowlist.test.ts G2-8
+// runs every prompt command through the REAL hook). The charset layer (every token in
+// [A-Za-z0-9._:=@/+-]) still runs as a second layer, and the platform scripts
+// validate numeric operands themselves (#7122 P1-A).
+//
+// `discord members` (a payload of up to 1000 member objects; the member count comes
+// from guild-info's approximate count), `hn trending` (no schema field consumes it)
+// and `linkedin fetch-activity` (feeds no schema field; the script keeps the verb)
+// are NOT in this list.
+// allow[0] MUST be a complete command that RUNS: runHookSelfTest executes it verbatim.
 export const COMMUNITY_ROUTER_READ_VERBS: readonly string[] = [
   "bash plugins/soleur/skills/community/scripts/community-router.sh platforms",
   "bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info",
   "bash plugins/soleur/skills/community/scripts/community-router.sh discord channels",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh discord messages",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <uint> 50",
   "bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics",
   "bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics",
   "bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-activity",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github activity",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github contributors",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github discussions",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20",
 ];
 
 // #7122 — crons whose allow file carries the `no-file-tools` directive: the hook then
@@ -507,7 +514,7 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "gh label list",
     "gh label create",
   ],
-  // community-monitor (cron-community-monitor.ts): the fourteen read-only router
+  // community-monitor (cron-community-monitor.ts): the thirteen read-only router
   // invocations and NOTHING else (#7122) — see COMMUNITY_ROUTER_READ_VERBS. The
   // router's child curl/gh-api are grandchild OS processes gated by the egress
   // firewall, NOT this hook. No gh verb: the handler upserts the issue.
@@ -776,7 +783,9 @@ export function runHookSelfTest(args: {
   if (allow.length > 0) {
     const allowed = run({
       tool_name: "Bash",
-      tool_input: { command: allow[0] },
+      // `<uint>` is the exact-literal placeholder (no-file-tools crons only): a real
+      // number is what the agent would send.
+      tool_input: { command: allow[0].replaceAll("<uint>", "1") },
     });
     if (!allowed.includes('"permissionDecision":"allow"')) {
       throw new Error(
@@ -853,25 +862,34 @@ export function runHookSelfTest(args: {
     }
   }
 
-  // #7122 P2-4 — the residual surface of a no-file-tools cron is the TRAILING argument
-  // of an allowlisted verb (the prefix match admits it and the quote-stripped metachar
-  // screen hides it). The hook's strict argument grammar closes it; this probe makes a
-  // regression (or a clone carrying a hook without the grammar) abort the spawn on the
-  // host, not only in CI. Probed: the first allowed command, plus the two verbs whose
-  // scripts once evaluated their operand (`discord messages`, `hn mentions`), each with
-  // a payload that is safe to RUN if it were ever allowed (`id` has no side effect).
+  // #7122 P2-4 — a no-file-tools cron's Bash surface is EXACT LITERALS. The hook's
+  // literal layer (and the charset layer under it) is what stops a trailing or altered
+  // argument of an allowlisted verb from reaching a script; this makes a regression (or
+  // a clone carrying a hook without the layer) abort the spawn on the host, not only in
+  // CI. Probes are derived from the delivered lines and are safe to RUN if they were
+  // ever allowed: an extra trailing token on the first literal, a hostile
+  // substitution payload on it, and for every `--query <word>` literal a DIFFERENT
+  // word (the word-by-word exfil channel), for every `<uint>` literal a trailing token and
+  // a leading-zero operand.
   if (noFileTools && allow.length > 0) {
-    const verbs = [...new Set([allow[0], ...allow.filter((l) => /\s(?:discord messages|hn mentions)$/.test(l))])];
-    for (const verb of verbs) {
-      for (const command of [`${verb} --query 'x$(id)'`, `${verb} 'HOME[$(id)]'`]) {
-        const out = run({ tool_name: "Bash", tool_input: { command } });
-        if (!out.includes('"permissionDecision":"deny"')) {
-          throw new Error(
-            `[${cronName}] containment hook self-test FAILED: the allowlisted verb "${verb}" ` +
-              `with a hostile trailing argument was NOT denied (the no-file-tools argument grammar ` +
-              `is missing or broken — the verb's script could evaluate the argument). Aborting cron.`,
-          );
-        }
+    const real = (l: string) => l.replaceAll("<uint>", "1");
+    const probes = new Set<string>([`${real(allow[0])} extra`, `${real(allow[0])} 'HOME[$(id)]'`]);
+    for (const l of allow) {
+      if (/ --query \S+/.test(l)) probes.add(real(l).replace(/ --query \S+/, " --query selftestprobe"));
+      if (l.includes("<uint>")) {
+        probes.add(`${l.replaceAll("<uint>", "1")} extra`);
+        probes.add(l.replace("<uint>", "08").replaceAll("<uint>", "1"));
+      }
+    }
+    for (const command of probes) {
+      const out = run({ tool_name: "Bash", tool_input: { command } });
+      if (!out.includes('"permissionDecision":"deny"')) {
+        throw new Error(
+          `[${cronName}] containment hook self-test FAILED: a hostile or altered variant of an ` +
+            `allowlisted invocation was NOT denied (the no-file-tools exact-literal grammar is ` +
+            `missing or broken — an allowlisted script could receive an agent-chosen argument). ` +
+            `Aborting cron.`,
+        );
       }
     }
   }
@@ -1553,9 +1571,16 @@ async function spawnClaudeEvalUnguarded(args: {
         resolve(r);
       };
 
+      // #7122 perf P3-1 — set by the `exit` handler below; declared BEFORE the abort
+      // listener so the listener can stand down once the child has exited. Without it a
+      // timeout firing inside the (bounded) stdio-drain window re-labelled a clean exit
+      // as abortedByTimeout (the handler then skipped publication) and SIGTERMed a
+      // process group that may already belong to another process.
+      let exitSeen = false;
       ac.signal.addEventListener(
         "abort",
         () => {
+          if (exitSeen) return;
           abortedByTimeout = true;
           if (!child.pid) return;
           const pid = child.pid;
@@ -1580,9 +1605,10 @@ async function spawnClaudeEvalUnguarded(args: {
       // and the exit verdict must win: a later `error` must not settle the spawn as -1
       // (before the drain wait, `finish` ran synchronously on `exit` and the `settled`
       // guard made a following `error` a no-op; the drain made that window async).
-      let exitSeen = false;
       child.on("exit", (exitCode, signal) => {
         exitSeen = true;
+        // Snapshot BEFORE the drain wait: the verdict belongs to the moment of exit.
+        const timedOut = abortedByTimeout;
         // #7122 P2-1 — kill the child's WHOLE process group on every exit, not only on
         // the timeout path. A grandchild left running here could outlive the run and read
         // the write token the handler mints into `.git/config` after this spawn resolves.
@@ -1609,7 +1635,7 @@ async function spawnClaudeEvalUnguarded(args: {
             ok: exitCode === 0,
             exitCode,
             signal,
-            abortedByTimeout,
+            abortedByTimeout: timedOut,
             durationMs,
             stderrTail,
             stdoutTail,
@@ -1631,6 +1657,9 @@ async function spawnClaudeEvalUnguarded(args: {
         });
       });
       child.on("error", (err) => {
+        // After `exit` the run's verdict is the exit's: an error here (a late kill or
+        // pipe failure) is not a failed spawn, and must not be reported as one.
+        if (exitSeen) return;
         const redactedMsg = redactChild(err.message ?? "");
         const redacted = new Error(redactedMsg);
         redacted.name = err.name;
@@ -1640,7 +1669,6 @@ async function spawnClaudeEvalUnguarded(args: {
           message: "claude-code spawn failed",
           extra: { fn: cronName },
         });
-        if (exitSeen) return;
         finish({
           ok: false,
           exitCode: -1,

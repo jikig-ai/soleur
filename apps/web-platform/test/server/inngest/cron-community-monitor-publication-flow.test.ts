@@ -194,8 +194,10 @@ import {
 } from "@/server/inngest/functions/cron-community-monitor";
 import { COMMUNITY_DISALLOWED_TOOLS } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import {
+  COMMUNITY_WINDOWS_NOTE,
   parseCommunityDraft,
   renderCommunityPublication,
+  withDigestNotice,
 } from "@/server/inngest/functions/_cron-community-publication";
 import {
   COMMUNITY_SPAWN_TOKEN_PERMISSIONS,
@@ -214,7 +216,9 @@ const FROZEN = new Date("2026-06-30T12:00:00.000Z");
 const TODAY = FROZEN.toISOString().slice(0, 10);
 const DIGEST_PATH = `${COMMUNITY_DIGEST_DIR}${TODAY}-digest.md`;
 const TITLE = `[Scheduled] Community Monitor - ${TODAY}`;
-const NOTICE = "digest not committed - see Sentry";
+// The notice replaces ONLY the issue body's `Digest file:` line (the validated table and
+// topics stay readable); the full expected body is derived from the same rendered text.
+const NOTICE_LINE = "Digest file: not committed - see Sentry";
 const REPO = "jikig-ai/soleur";
 
 type HandlerArg = Parameters<typeof cronCommunityMonitorHandler>[0];
@@ -287,6 +291,8 @@ const patches = () =>
 const opCall = (op: string) => reportSilentFallbackSpy.mock.calls.find((c) => c[1]?.op === op);
 const warnCall = (op: string) => warnSilentFallbackSpy.mock.calls.find((c) => c[1]?.op === op);
 
+const noticeBody = () => withDigestNotice(expectedRender().issueBody, "not committed - see Sentry");
+
 function expectedRender(
   githubOverride?: { status: "failed" | "partial"; failureCause: "script-error" | "unknown" },
   message = validDraftFinalMessage(),
@@ -318,6 +324,9 @@ beforeEach(() => {
   sidecarGreen();
 
   fakeRequest.mockClear();
+  // The marker emit runs on EVERY re-invocation of the handler (it sits outside a step), so a
+  // fault injected into it must be sticky across passes and cleared here.
+  digestFileMarkerSpy.mockReset();
   setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd });
   teardownSpy.mockResolvedValue(undefined);
   mintSpy.mockImplementation(async (opts: { permissions?: Record<string, string> }) =>
@@ -387,6 +396,13 @@ describe("publication flow — the valid draft", () => {
     );
   });
 
+  it("a clean happy path raises ZERO warnings and ZERO error reports (silence is the baseline the denial/verify warns are measured against)", async () => {
+    const { out } = await run();
+    expect(out.value).toEqual({ ok: true });
+    expect(warnSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(reportSilentFallbackSpy).not.toHaveBeenCalled();
+  });
+
   it("runs the steps in the plan's order (collector status BEFORE validation)", async () => {
     const { memo } = await run();
     const order = [...memo.keys()];
@@ -396,8 +412,9 @@ describe("publication flow — the valid draft", () => {
       "validate-publication",
       "mint-write-token",
       "publish-issue",
-      "verify-output",
       "safe-commit-pr",
+      // advisory telemetry: AFTER the commit, never between the publish and the commit
+      "verify-output",
     ];
     const at = seq.map((s) => order.indexOf(s));
     expect(at.every((i) => i >= 0), `missing step in ${order.join(",")}`).toBe(true);
@@ -729,9 +746,10 @@ describe("publication flow — a digest that does not land never leaves a dangli
       "committed with undetermined paths and no replay-resume marker (contract drift)",
       () => safeCommitAndPrSpy.mockResolvedValue({ status: "committed", prNumber: 1, branch: "b", fileCount: 0, deletionCount: 0 }),
     ],
-    ["a step between publish and commit THROWS (verify-output rejects)", () => resolveOutputAwareOkSpy.mockRejectedValue(new Error("verify blew up"))],
+    // The digest-file marker is emitted after the publish step and before the commit.
+    ["a step between publish and commit THROWS (the marker emit rejects)", () => digestFileMarkerSpy.mockImplementation(() => { throw new Error("marker blew up"); })],
   ];
-  it.each(noticeCases)("%s: the issue is PATCHed to the fixed notice (body only, still open) and the run is RED", async (_n, arrange) => {
+  it.each(noticeCases)("%s: the issue keeps its validated table and only the `Digest file:` line becomes the notice (body only, still open) and the run is RED", async (_n, arrange) => {
     arrange();
 
     const { out } = await run();
@@ -739,7 +757,12 @@ describe("publication flow — a digest that does not land never leaves a dangli
     expect(out.value).toEqual({ ok: false });
     expect(heartbeatUrls()[0]).toContain("?status=error");
     expect(issues).toHaveLength(1);
-    expect(issues[0].body).toBe(NOTICE);
+    expect(issues[0].body).toBe(noticeBody());
+    expect(issues[0].body).toContain(`\n${NOTICE_LINE}\n`);
+    expect(issues[0].body).not.toContain("blob/main");
+    // the day's validated numbers survive (the dangling link was the defect, not the table)
+    expect(issues[0].body).toContain("| Discord | collected |");
+    expect(issues[0].body).toContain("Messages (latest 50 per channel) 3");
     expect(issues[0].state).toBe("open");
     const last = patches().at(-1)!;
     expect(Object.keys(last.params).sort()).toEqual(["body", "headers", "issue_number", "owner", "repo"]);
@@ -758,7 +781,8 @@ describe("publication flow — a digest that does not land never leaves a dangli
 
   it("a committed digest (auto-merge armed) leaves the rendered issue body alone: the notice is keyed on the liveness verdict, not on the merge", async () => {
     await run();
-    expect(issues[0].body).not.toBe(NOTICE);
+    expect(issues[0].body).toBe(expectedRender().issueBody);
+    expect(issues[0].body).not.toContain(NOTICE_LINE);
     expect(patches()).toHaveLength(0);
   });
 
@@ -766,7 +790,7 @@ describe("publication flow — a digest that does not land never leaves a dangli
     safeCommitAndPrSpy.mockResolvedValue({ status: "committed", prNumber: 1, branch: "b", fileCount: 0, deletionCount: 0, resumed: true });
     const { out } = await run();
     expect(out.value).toEqual({ ok: true });
-    expect(issues[0].body).not.toBe(NOTICE);
+    expect(issues[0].body).toBe(expectedRender().issueBody);
   });
 
   it("a REJECTED draft published nothing, so there is no notice to write", async () => {
@@ -916,7 +940,13 @@ describe("publication flow — replay across a deploy (step ids)", () => {
   });
 });
 
-describe("publication flow — verify-output is advisory", () => {
+describe("publication flow — verify-output is advisory telemetry, AFTER the commit", () => {
+  const sequence = () =>
+    resolveOutputAwareOkSpy.mockImplementation(async () => {
+      events.push("verify-output");
+      return true;
+    });
+
   it("a verify-output FALSE NEGATIVE with a valid published draft still commits and is GREEN (the handler wrote the issue itself)", async () => {
     resolveOutputAwareOkSpy.mockResolvedValue(false); // list lag / closed-issue refusal / non-zero exit
 
@@ -928,18 +958,70 @@ describe("publication flow — verify-output is advisory", () => {
     expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
     expect(realDigests()).toHaveLength(1);
     expect(patches()).toHaveLength(0); // no dangling-link notice either
-    // It ran AFTER the issue write and BEFORE the commit.
-    expect(events.indexOf("post-issue")).toBeLessThan(events.indexOf("safe-commit"));
   });
 
-  it("a verify-output TRUE with a rejected draft cannot turn the run GREEN (covered by the rejection rows) and a valid run calls it exactly once", async () => {
+  it("it runs AFTER the issue write AND AFTER the commit, never between them", async () => {
+    sequence();
+    await run();
+    expect(events.indexOf("post-issue")).toBeGreaterThan(-1);
+    expect(events.indexOf("post-issue")).toBeLessThan(events.indexOf("safe-commit"));
+    expect(events.indexOf("safe-commit")).toBeLessThan(events.indexOf("verify-output"));
+  });
+
+  it("a valid run that CREATED the issue calls it exactly once", async () => {
     await run();
     expect(resolveOutputAwareOkSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("a PATCHed (pre-existing) issue is not re-read: a run-window re-read cannot credit it and would only emit a RED event", async () => {
+    issues.push({
+      number: 8300, title: TITLE, body: "stale", state: "open", user: BOT,
+      created_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    const { out } = await run();
+    expect(out.value).toEqual({ ok: true });
+    expect(patches()).toHaveLength(1);
+    expect(resolveOutputAwareOkSpy).not.toHaveBeenCalled();
+  });
+
+  it("a THROW inside it cannot change the verdict: GREEN, committed, no notice, no audit stub, and a WARN op is reported", async () => {
+    resolveOutputAwareOkSpy.mockRejectedValue(new Error(`verify blew up ${INJECT}`));
+
+    const { out, memo } = await run();
+
+    // The step itself COMPLETED (its callback swallowed the throw): a step that fails is
+    // retried by Inngest, which is exactly the critical-path latency this move removes.
+    expect(memo.get("verify-output")?.ok).toBe(true);
+    expect(out.value).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+    expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
+    expect(patches()).toHaveLength(0);
+    expect(auditIssues()).toHaveLength(0);
+    expect(opCall("handler-body-threw")).toBeUndefined();
+    const warn = warnCall("community-verify-output-threw");
+    expect(warn, "community-verify-output-threw was not reported").toBeDefined();
+    expect(warn![0]).toBeNull(); // message path (#8629)
+    expect(warn![1].extra).toEqual({ fn: "cron-community-monitor", errorName: "Error" });
+    expect(JSON.stringify(warn)).not.toContain("verify blew up"); // the message can carry anything
+  });
+
+  it("it is not consulted when the persistence step threw (the body's catch jumps past it)", async () => {
+    safeCommitAndPrSpy.mockRejectedValue(new Error("git push failed"));
+    await run();
+    expect(resolveOutputAwareOkSpy).not.toHaveBeenCalled();
+  });
+
+  it("a verify-output TRUE with a rejected draft cannot turn the run GREEN (covered by the rejection rows): it is not even consulted", async () => {
+    spawnClaudeEvalSpy.mockResolvedValue(okSpawn({ finalMessage: INJECT }));
+    resolveOutputAwareOkSpy.mockResolvedValue(true);
+    const { out } = await run();
+    expect(out.value).toEqual({ ok: false });
+    expect(resolveOutputAwareOkSpy).not.toHaveBeenCalled();
+  });
 });
 
-describe("publication flow — the digest carries the REAL run timestamp and a fixed 1-day window", () => {
-  it("generated_at is the replay-stable run start, never midnight; the period is derived from runDate", async () => {
+describe("publication flow — the digest carries the REAL run timestamp (second precision) and honest per-platform windows", () => {
+  it("generated_at is the replay-stable run start at second precision, never midnight; GitHub's window comes from runDate and the Period names every platform's own", async () => {
     let committed = "";
     safeCommitAndPrSpy.mockImplementation(async () => {
       committed = readFileSync(join(spawnCwd, DIGEST_PATH), "utf8");
@@ -948,11 +1030,13 @@ describe("publication flow — the digest carries the REAL run timestamp and a f
 
     await run();
 
-    expect(committed).toContain(`\ngenerated_at: ${FROZEN.toISOString()}\n`);
+    expect(committed).toContain("\ngenerated_at: 2026-06-30T12:00:00Z\n");
+    expect(committed).not.toContain(".000Z");
     expect(committed).not.toContain("T00:00:00Z");
     expect(committed).toContain("\nperiod_start: 2026-06-29\n");
     expect(committed).toContain("\nperiod_end: 2026-06-30\n");
-    expect(committed).toContain("Last 1 day, 2026-06-29 to 2026-06-30.");
+    expect(committed).toContain(`Collected 2026-06-30. ${COMMUNITY_WINDOWS_NOTE}`);
+    expect(committed).not.toMatch(/Last 1 day/);
   });
 
   it("hands safeCommitAndPr the exact rendered bytes to verify against the staged blob", async () => {

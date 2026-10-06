@@ -31,7 +31,7 @@ require_jq() {
 # is third-party-influenced text (#7122).
 require_uint() {
   local label="$1"
-  if [[ ! "${2:-}" =~ ^[0-9]+$ ]]; then
+  if [[ ! "${2:-}" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "Error: ${label} must be a non-negative integer." >&2
     exit 1
   fi
@@ -176,7 +176,7 @@ cmd_thread() {
   fi
 
   if ! [[ "$item_id" =~ ^[0-9]+$ ]]; then
-    echo "Error: ITEM_ID must be numeric, got '${item_id}'." >&2
+    echo "Error: ITEM_ID must be numeric." >&2
     exit 1
   fi
 
@@ -191,7 +191,7 @@ cmd_thread() {
   author=$(echo "$result" | jq -r '.author // empty' 2>/dev/null)
 
   if [[ -z "$title" && -z "$author" ]]; then
-    echo "Error: Item ${item_id} not found or has been deleted." >&2
+    echo "Error: Item not found or has been deleted." >&2
     exit 1
   fi
 
@@ -221,7 +221,7 @@ main() {
     trending)  cmd_trending "$@" ;;
     thread)    cmd_thread "$@" ;;
     *)
-      echo "Error: Unknown command '${command}'" >&2
+      echo "Error: Unknown command." >&2
       echo "Run 'hn-community.sh' without arguments for usage." >&2
       exit 1
       ;;

@@ -95,12 +95,25 @@ const TOPIC_LABELS: Record<CommunityTopicCategory, string> = {
 export const MAX_TOPICS = COMMUNITY_TOPIC_CATEGORIES.length;
 
 /**
- * The collection window, in days. A HANDLER constant, not a draft field: the
- * collectors are invoked with a fixed 1-day window (see the prompt), so period_start,
- * period_end and the "Last 1 day" wording are derived from this and the run date, and
- * the model cannot present a number measured over one day as a week's.
+ * The GITHUB collectors' window, in days. A HANDLER constant, not a draft field: the
+ * github verbs are invoked with a 1-day window (see the prompt), so the frontmatter
+ * period_start / period_end are derived from this and the run date and the model cannot
+ * present a number measured over one day as a week's.
+ *
+ * It is NOT a window shared by every platform and the rendered text never says so: the
+ * hn mentions verb looks back 7 days, Discord returns the latest 50 messages per channel
+ * (no time bound), and X / Bluesky / LinkedIn are totals as of collection. The prose a
+ * reader sees is COMMUNITY_WINDOWS_NOTE, a closed template of fixed constants.
  */
 export const COMMUNITY_PERIOD_DAYS = 1;
+
+/**
+ * Per-platform collection windows, as a reader sees them (digest `## Period` and the
+ * issue body). A fixed template: no model-chosen word or number, and it contains no
+ * date, so it cannot be bent into a claim about a different period.
+ */
+export const COMMUNITY_WINDOWS_NOTE =
+  "Collection windows differ by platform: GitHub activity last 24 hours (stars, forks and watchers are totals); Hacker News mentions last 7 days; Discord latest 50 messages per channel (a ceiling, not daily volume); X, Bluesky and LinkedIn totals as of collection.";
 
 /**
  * Final-message cap. The substrate truncates at the same figure (FINAL_MESSAGE_CAP_BYTES in
@@ -124,7 +137,8 @@ export const COMMUNITY_METRICS = {
   discord: {
     members: { kind: "int", label: "Members", max: 99_999 },
     channels: { kind: "int", label: "Channels", max: 999 },
-    messages: { kind: "int", label: "Messages", max: 99_999 },
+    // Latest 50 per channel, however old (no time bound): a sample ceiling, not a daily count.
+    messages: { kind: "int", label: "Messages (latest 50 per channel)", max: 99_999 },
   },
   github: {
     stars: { kind: "int", label: "Stars", max: 99_999 },
@@ -415,6 +429,12 @@ type EffectivePlatform = {
   metrics: Record<string, number>;
   /** The collector disagrees with (or could not confirm) the model's numbers. */
   metricsWithheld: boolean;
+  /**
+   * The draft called the platform `collected` but every one of its metrics is 0. The
+   * schema has no "absent" value, so an all-zero set is how a collector that returned
+   * nothing parseable arrives; it must not publish as a measurement.
+   */
+  unverifiedAllZero?: boolean;
 };
 
 function effectivePlatform(
@@ -431,6 +451,18 @@ function effectivePlatform(
     };
   }
   const p = draft.platforms[platform];
+  const values = Object.values(p.metrics as Record<string, number>);
+  // Only for a platform with MORE THAN ONE metric: an all-zero set across several metrics
+  // is the "nothing was collected" signature, while a single-metric platform (Hacker News
+  // mentions) legitimately reads 0 on a quiet day and must not be flagged every such day.
+  if (p.status === "collected" && values.length > 1 && values.every((v) => v === 0)) {
+    return {
+      status: "partial",
+      metrics: p.metrics as Record<string, number>,
+      metricsWithheld: false,
+      unverifiedAllZero: true,
+    };
+  }
   return {
     status: p.status,
     failureCause: p.failureCause,
@@ -443,6 +475,9 @@ function effectivePlatform(
 function headline(platform: CommunityPlatform, eff: EffectivePlatform): string {
   if (eff.status === "disabled") return "disabled";
   if (eff.status === "failed") return `collection failed: ${eff.failureCause ?? "unknown"}`;
+  // Closed template, no numbers: a genuine zero on a platform whose every metric is 0 is
+  // indistinguishable from "nothing was collected", so it is never shown as measured.
+  if (eff.unverifiedAllZero) return "partial (unverified: all values 0)";
   if (eff.metricsWithheld) {
     return `metrics withheld: collector status not verified (${eff.failureCause ?? "unknown"})`;
   }
@@ -458,26 +493,56 @@ function headline(platform: CommunityPlatform, eff: EffectivePlatform): string {
     : base;
 }
 
+/** Prefix of the issue body's one digest-file line (the only line the notice replaces). */
+export const DIGEST_FILE_LINE_PREFIX = "Digest file: ";
+
+/**
+ * Rebuild a rendered issue body for a digest that did not land on the default branch:
+ * the SAME validated summary table, topics and click-through lines, with ONLY the
+ * `Digest file:` line swapped for the fixed notice (so the day's numbers stay readable
+ * and the issue stops linking a file that will not exist). `notice` is a handler
+ * constant. Fail-safe: a body without exactly one such line yields the bare notice line
+ * rather than any body that could still carry the link.
+ */
+export function withDigestNotice(issueBody: string, notice: string): string {
+  const lines = issueBody.split("\n");
+  const idx = lines.reduce<number[]>(
+    (acc, l, i) => (l.startsWith(DIGEST_FILE_LINE_PREFIX) ? [...acc, i] : acc),
+    [],
+  );
+  if (idx.length !== 1) return `${DIGEST_FILE_LINE_PREFIX}${notice}`;
+  const out = [...lines];
+  out[idx[0]] = `${DIGEST_FILE_LINE_PREFIX}${notice}`;
+  return out.join("\n");
+}
+
 export function renderCommunityPublication(
   draft: CommunityDraft,
   opts: RenderOptions,
 ): { digestMarkdown: string; issueTitle: string; issueBody: string } {
   const { runDate, repo, githubOverride, generatedAt } = opts;
-  if (!RUN_DATE_RE.test(runDate)) {
+  if (!RUN_DATE_RE.test(runDate) || shiftDate(runDate, 0) !== runDate) {
     throw new Error("renderCommunityPublication: runDate must be YYYY-MM-DD");
   }
   if (!REPO_RE.test(repo)) {
     throw new Error("renderCommunityPublication: repo must be owner/name");
   }
-  if (typeof generatedAt !== "string" || !GENERATED_AT_RE.test(generatedAt) || Number.isNaN(Date.parse(generatedAt))) {
+  // Date.parse alone rolls a calendar-invalid day over (2026-02-30 -> 2 March), so the
+  // value must also survive a round trip through Date unchanged.
+  if (
+    typeof generatedAt !== "string" ||
+    !GENERATED_AT_RE.test(generatedAt) ||
+    Number.isNaN(Date.parse(generatedAt)) ||
+    new Date(Date.parse(generatedAt)).toISOString().slice(0, 19) !== generatedAt.slice(0, 19)
+  ) {
     throw new Error("renderCommunityPublication: generatedAt must be an ISO UTC instant");
   }
-  const periodDays = COMMUNITY_PERIOD_DAYS;
-  const periodStart = shiftDate(runDate, -periodDays);
+  const periodStart = shiftDate(runDate, -COMMUNITY_PERIOD_DAYS);
+  // Second precision: the frontmatter contract is YYYY-MM-DDTHH:MM:SSZ.
+  const generatedAtSeconds = generatedAt.replace(/\.\d{1,3}Z$/, "Z");
   const issuesUrl = `https://github.com/${repo}/issues`;
   const pullsUrl = `https://github.com/${repo}/pulls`;
   const digestUrl = `https://github.com/${repo}/blob/main/${COMMUNITY_DIGEST_DIR_PATH}${runDate}-digest.md`;
-  const dayWord = periodDays === 1 ? "day" : "days";
 
   const effective = Object.fromEntries(
     COMMUNITY_PLATFORMS.map((p) => [p, effectivePlatform(draft, p, githubOverride)]),
@@ -500,14 +565,14 @@ export function renderCommunityPublication(
     "---",
     `period_start: ${periodStart}`,
     `period_end: ${runDate}`,
-    `generated_at: ${generatedAt}`,
+    `generated_at: ${generatedAtSeconds}`,
     "---",
     "",
     `# Community Digest - ${runDate}`,
     "",
     "## Period",
     "",
-    `Last ${periodDays} ${dayWord}, ${periodStart} to ${runDate}.`,
+    `Collected ${runDate}. ${COMMUNITY_WINDOWS_NOTE}`,
     "",
     "## Activity Summary",
     "",
@@ -529,7 +594,8 @@ export function renderCommunityPublication(
   // Must never start with AUDIT_SELF_REPORT_BODY_PREFIX: the dedup predicate keys
   // on it to tell the FAILED audit stub from a real digest.
   const issueBody = [
-    `Daily community digest for ${runDate} (last ${periodDays} ${dayWord}).`,
+    `Daily community digest for ${runDate}.`,
+    COMMUNITY_WINDOWS_NOTE,
     "",
     summaryTable,
     "",
@@ -537,7 +603,7 @@ export function renderCommunityPublication(
     "",
     topicsBlock,
     "",
-    `Digest file: ${digestUrl}`,
+    `${DIGEST_FILE_LINE_PREFIX}${digestUrl}`,
     `Inbound items: ${issuesUrl} and ${pullsUrl}`,
     "",
   ].join("\n");

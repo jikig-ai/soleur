@@ -38,7 +38,7 @@
 //     LINKEDIN_PERSON_URN (the community-router.sh platform scripts need
 //     these to flip platforms from "disabled" → "enabled"), plus
 //     LINKEDIN_ORG_ACCESS_TOKEN + LINKEDIN_ORG_ID (the org READ creds the
-//     linkedin fetch-metrics/fetch-activity commands require — #4049).
+//     linkedin fetch-metrics command requires — #4049).
 //   - --max-turns 80 (was 50, orig 40 — see turn-budget rationale on
 //     MAX_TURN_DURATION_MS); --allowedTools is NARROWER than the cohort
 //     default (#7122: Bash ONLY, no file tools). (The original GHA workflow
@@ -72,7 +72,10 @@
 // scoped to [REPO_NAME] (#5199):
 //   - READ token (COMMUNITY_SPAWN_TOKEN_PERMISSIONS: contents/issues/pull_requests
 //     all "read"). Used for the clone (it lands in .git/config) and injected as
-//     GH_TOKEN, so the agent holds NO write credential during its run.
+//     GH_TOKEN, so the agent holds NO GitHub write credential during its run. (Its
+//     spawn env still carries the platform credentials the collectors read with,
+//     some of them posting-capable: that surface is closed by the hook's exact-literal
+//     allowlist, not by custody.)
 //   - WRITE token (DEFAULT_CRON_TOKEN_PERMISSIONS). Minted only AFTER the spawn
 //     has exited and the draft validated (never on the timeout path), then
 //     origin is re-pointed at it for the handler's own git steps.
@@ -125,6 +128,7 @@ import {
   renderCommunityPublication,
   upsertDigestIssue,
   writeDigestFileContained,
+  withDigestNotice,
   type CommunityOctokit,
   type GithubOverride,
 } from "./_cron-community-publication";
@@ -208,16 +212,19 @@ const CLAUDE_CODE_FLAGS = [
 // deliverable is its final message, ONE line of compact JSON that the handler
 // validates against the closed schema in _cron-community-publication.ts and then
 // renders into the digest file and the tracking issue itself. The agent has no
-// file tools, no issue/label verbs and no write credential, so nothing it writes
+// file tools, no issue/label verbs and no GitHub write credential (its spawn env
+// still carries the platform credentials it needs to read, including posting-capable
+// ones, which is why the hook admits only exact read commands), so nothing it writes
 // anywhere else is published. The example line and the enum lists below are
 // GENERATED from that module's constants, so the contract cannot drift from the
 // schema.
 //
-// Steps 1-2 keep the verbatim literal router invocations from the original GHA
-// workflow prompt (the containment hook allowlists them literally; the
-// allowlist parity test reads them out of THIS constant). Do not write a
-// backtick followed by a semicolon inside this template: that parity test finds
-// the end of the prompt by that two-character sequence.
+// Steps 1-2 carry the router invocations as backtick spans, and EVERY span that starts
+// with `bash ` must be one of the hook's exact-literal allow lines (the only variable part
+// is the numeric `<channel_id>`). cron-community-monitor-prompt-grammar.test.ts extracts
+// every such span from this constant and runs it through the real hook, so a command the
+// hook would deny cannot ship in the prompt. Do not put a bare `bash <router>` span (no
+// verb) in the prose: it is not an allowed command and the test would flag it.
 //
 // {{RUN_DATE}} stays in the prompt on purpose: injectRunDate() throws when the
 // sentinel is absent.
@@ -237,53 +244,70 @@ fixed templates, and publishes them.
 
 IMPORTANT: This is an automated workflow with no write access. Do NOT push directly to main.
 
-Today's date is {{RUN_DATE}}. The platform derives every date and the reporting
-period itself (every collector below runs over a fixed 1-day window); never put
-a date or a period in your output.
+Today's date is {{RUN_DATE}}. The platform derives every date itself and labels
+each platform's collection window itself (the collectors below do NOT share one
+window: GitHub is read over one day, Hacker News over seven, Discord returns the
+latest 50 messages per channel, and X, Bluesky and LinkedIn return totals); never
+put a date or a period in your output.
 
 ## Instructions
 
 1. **Detect platforms** using the community router:
-   Run: bash plugins/soleur/skills/community/scripts/community-router.sh platforms
+   Run: \`bash plugins/soleur/skills/community/scripts/community-router.sh platforms\`
    This shows which platforms are enabled/disabled. Report every platform the
    router prints as disabled or missing with status "disabled" and keep
    collecting from the enabled ones. The router names Bluesky \`bsky\`. In your
    draft its key is \`bluesky\`.
 
-2. **Collect data** from enabled platforms. Use ONE Bash call PER PLATFORM
-   (you have enough turns for it): never put two platforms in the same call, so
-   a large or failing output of one platform can never hide another's. Inside a
-   platform's call, chain that platform's commands with a semicolon (not a
-   double ampersand) so a failure does not halt the rest.
-   IMPORTANT: the containment hook allowlists ONLY the literal command prefix
-   \`bash plugins/soleur/skills/community/scripts/community-router.sh\`. You MUST
-   write that full literal path in every invocation — do NOT assign it to a shell
-   variable (a \`NAME=value\` prefix is denied) and do NOT abbreviate it; a
-   variable-expanded form will be denied as non-allowlisted. Run only the
-   commands listed here, with only the arguments shown (no quotes, pipes,
-   redirects or substitutions): anything else is denied.
-   - Discord (if enabled), first call: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info; bash plugins/soleur/skills/community/scripts/community-router.sh discord channels\`
-     members is the guild's approximate member count from the guild-info
-     output (\`approximate_member_count\`); channels is the number of channels
-     the channels command lists. Then make ONE more Bash call PER channel ID
-     from that output: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <channel_id> 50\`
+2. **Collect data** from enabled platforms. Rules for EVERY Bash call:
+   - Each Bash call is ONE LINE: no line breaks, no comments, no quotes, no
+     pipes, no redirects, no substitutions and no arguments other than the ones
+     shown. The containment hook compares each command, token for token, with a
+     fixed list and denies anything else, including a lookalike with one extra
+     or different argument.
+   - Use ONE Bash call PER PLATFORM (you have enough turns for it): never put
+     two platforms in the same call, so a large or failing output of one
+     platform can never hide another's. Inside a platform's call, chain that
+     platform's commands with a semicolon (not a double ampersand) so a failure
+     does not halt the rest.
+   - Write the full literal router path in every invocation, exactly as in the
+     commands below. You MUST NOT abbreviate it, and do NOT assign it to a shell
+     variable (a \`NAME=value\` prefix is denied): a variable-expanded form will
+     be denied as non-allowlisted.
+   Run only the commands listed here. The only part you substitute is
+   <channel_id>, with a numeric channel ID.
+   - Discord (if enabled), three kinds of call, each in its OWN Bash call.
+     First: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info\`
+     members is the guild's approximate member count from that output
+     (\`approximate_member_count\`).
+     Second: \`bash plugins/soleur/skills/community/scripts/community-router.sh discord channels\`
+     channels is the number of channels it lists (it lists text channels).
+     Then make ONE more Bash call PER channel ID from that list, at most the
+     FIRST 40 channels:
+     \`bash plugins/soleur/skills/community/scripts/community-router.sh discord messages <channel_id> 50\`
      (substitute the numeric channel ID; never combine channels or other
      platforms in one call). messages is the total number of messages returned
-     across all channels (each call returns at most 50).
+     across the channels you read (each call returns at most 50, the latest in
+     that channel, however old). If the list has more than 40 channels, read only
+     the first 40 and report Discord as "partial" with failureCause "timeout"
+     (the call budget ran out, not an error). A channel whose call fails (for
+     example 403, no access) is simply skipped: it does NOT make Discord
+     "partial".
    - X/Twitter (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics\`
      followers is \`followers_count\` and posts is \`tweet_count\`.
      Do NOT call fetch-mentions or fetch-timeline (403 on Free tier).
    - Bluesky (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics\`
      followers is \`followersCount\` and posts is \`postsCount\`.
-   - LinkedIn (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics\` (aggregate Company Page metrics: follower total + share statistics). Optionally also \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-activity\` for recent org post metadata, in the same call. If either fails, log the error and continue.
+   - LinkedIn (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics\` (aggregate Company Page metrics: follower total + share statistics). If it fails, log the error and continue.
      followers is \`total_followers\` (null means unavailable); impressions,
      likes, comments and shares come from \`share_statistics\`. engagementRatePct
      is the collector's \`share_statistics.engagement\`, which is a 0 to 1 RATIO:
      multiply it by 100 (a ratio of 0.0097 is engagementRatePct 0.97).
    - GitHub: \`bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats 1; bash plugins/soleur/skills/community/scripts/community-router.sh github activity 1; bash plugins/soleur/skills/community/scripts/community-router.sh github contributors 1; bash plugins/soleur/skills/community/scripts/community-router.sh github discussions 1; bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions 1\`
      stars, forks and watchers are \`stargazers_count\`, \`forks_count\` and
-     \`watchers_count\` from repo-stats; newStargazers is
-     \`new_stargazers_count\`. issuesTouched and pullsTouched are
+     \`subscribers_count\` from repo-stats (watchers is the subscriber count, NOT
+     \`watchers_count\`, which GitHub keeps only as an alias of stars);
+     newStargazers is \`new_stargazers_count\`. issuesTouched and pullsTouched are
      \`issues.count\` and \`pull_requests.count\` from activity. commits is the
      sum of the \`commits\` values in \`commit_authors\` from contributors.
    - Hacker News (if enabled): \`bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions --query soleur --limit 20\`
@@ -326,7 +350,9 @@ a date or a period in your output.
      partial or failed with a failureCause, not a guess.
    - A failed or disabled platform is rendered without any numbers, so its
      metrics are placeholders; a partial platform's numbers are shown under an
-     explicit "partial" label.
+     explicit "partial" label. A "collected" platform whose every value is 0 is
+     shown to readers as unverified, so report a platform as collected only when
+     at least one of its values was actually measured.
    - topics has at most ${MAX_TOPICS} entries, each {"category": <one of: ${COMMUNITY_TOPIC_CATEGORIES.join(", ")}>, "count": <whole number>}, and
      each category appears at most once. Use an empty list when nothing applies.
    - github externalContributors is the number of DISTINCT \`user\` values in
@@ -365,13 +391,18 @@ export const PRODUCER_CLASS = "A";
 // value instead of hardcoding a mirror.
 export const COMMUNITY_DIGEST_DIR = COMMUNITY_DIGEST_DIR_PATH;
 
-// #7122 — the fixed body the issue is PATCHed to when the digest did not land on
-// the default branch (commit threw, failed, or was not verified), so the issue
-// never keeps a link to a file that will not exist. A handler constant: no model
-// text and no variable part. EXCEPTION: a `no-changes` commit result means a
-// byte-identical file is already on main, so the link is valid and no notice is
-// written.
-const DIGEST_NOT_COMMITTED_NOTICE = "digest not committed - see Sentry";
+// #7122 — the fixed notice that replaces the issue body's `Digest file:` line (and ONLY
+// that line: the validated summary table, topics and counts stay readable) when the
+// digest did not land on the default branch (commit threw, failed, or was not verified),
+// so the issue never keeps a link to a file that will not exist. A handler constant: no
+// model text and no variable part. EXCEPTION: a `no-changes` commit result means a
+// byte-identical file is already on main, so the link is valid and no notice is written.
+// That branch is nearly dead: generated_at is the real run instant, so a re-render only
+// byte-matches main on a same-second replay. It is kept (not deleted) because writing a
+// notice over a link that IS valid would be the worse error; what remains reachable is a
+// safe-commit that reports `no-changes`, and it still leaves the run RED (livenessOk is
+// only set by an observed commit).
+const DIGEST_NOT_COMMITTED_NOTICE = "not committed - see Sentry";
 
 // --- Collector-status sidecar (#6695) ---------------------------------------
 //
@@ -507,9 +538,14 @@ export async function readCollectorStatus(
 
   let raw: string;
   try {
-    // O_NOFOLLOW closes the lstat -> open window: a link swapped in between fails
-    // with ELOOP instead of being followed.
-    const fh = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // O_NOFOLLOW closes the lstat -> open window for the LEAF only: a link swapped in as
+    // the file itself fails with ELOOP instead of being followed. It says nothing about
+    // an ANCESTOR (a link swapped in as the directory after the lstat above is followed);
+    // that residual is bounded by the size cap and the closed vocabulary, which make
+    // whatever is read inert. O_NONBLOCK is what keeps a FIFO planted at the leaf from
+    // hanging the open (and the whole run) until some writer shows up; fstat's isFile()
+    // below then refuses it before a single read.
+    const fh = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const st = await fh.stat();
       if (!st.isFile()) return unsafeSidecarReport("sidecar-unsafe");
@@ -560,7 +596,7 @@ export async function readCollectorStatus(
 // X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET — the community-router.sh platform
 // scripts need these to flip platforms from "disabled" → "enabled".
 // #4049 additions (community READ surface): LINKEDIN_ORG_ACCESS_TOKEN and
-// LINKEDIN_ORG_ID — the org read creds the linkedin fetch-metrics/fetch-activity
+// LINKEDIN_ORG_ID — the org read creds the linkedin fetch-metrics
 // commands require for aggregate Company Page insights. These are a distinct
 // axis from the LINKEDIN_ACCESS_TOKEN/LINKEDIN_PERSON_URN posting creds that
 // gate the router's platform "enabled" status.
@@ -632,6 +668,16 @@ function mirrorAgentDenials(result: SpawnResult): void {
     message: "the spawned community agent attempted tool calls the containment hook denied",
     extra: { fn: "cron-community-monitor", count, deniedTools: result.deniedTools ?? [] },
   });
+}
+
+// The closed-vocabulary view of a caught error for a Sentry extra: its NAME and numeric
+// HTTP status only, never its message (which can echo a request URL).
+function errorExtras(err: unknown): { errorName: string; status?: number } {
+  const status = (err as { status?: unknown } | null)?.status;
+  return {
+    errorName: err instanceof Error ? err.name : typeof err,
+    ...(typeof status === "number" ? { status } : {}),
+  };
 }
 
 export async function cronCommunityMonitorHandler({
@@ -775,8 +821,9 @@ export async function cronCommunityMonitorHandler({
   const { ephemeralRoot, spawnCwd } = unwrapSetupVerdict(verdict, "cron-community-monitor");
 
   try {
-    // #5728 — flag pattern. The body (claude-eval → verify-output →
-    // safe-commit-pr) runs in an inner try whose throw sets `threw`; the single
+    // #5728 — flag pattern. The body (claude-eval → verify-collector-status →
+    // validate-publication → mint-write-token → publish-issue → safe-commit-pr →
+    // advisory verify-output) runs in an inner try whose throw sets `threw`; the single
     // terminal heartbeat is posted (or skipped-for-retry) by
     // finalizeOutputAwareHeartbeat below — NOT from a second catch-site (which,
     // under retries:1 memoization, would replay a stale `ok` while posting a
@@ -790,7 +837,7 @@ export async function cronCommunityMonitorHandler({
     // honestly reports it: heartbeatOk also gates safe-commit-pr below, and an
     // operator with a red monitor and no digest has strictly less to act on.
     // So the collector gate raises this flag and it is applied to heartbeatOk
-    // AFTER the persistence step, leaving the cohort-wide issue-verified gate
+    // AFTER the persistence step, leaving the cohort-wide persistence-gate
     // shape (asserted by cron-safe-commit-parity) untouched.
     let collectorSignalRed = false;
     // #6714 — the LIVENESS signal, split from heartbeatOk by ADDITION (R20:
@@ -805,7 +852,7 @@ export async function cronCommunityMonitorHandler({
     // justified that by the retry hazard below. Review falsified both halves:
     //
     //  1. It left the bug class REACHABLE. A throw anywhere between
-    //     verify-output and the persistence gate leaves heartbeatOk true and
+    //     publish-issue and the persistence gate leaves heartbeatOk true and
     //     livenessOk never falsified → `failed = threw && !heartbeatOk` is
     //     false → NO retry → terminal GREEN with nothing committed, on the
     //     FIRST attempt. That is verbatim the shape ADR-126 forbids.
@@ -828,6 +875,9 @@ export async function cronCommunityMonitorHandler({
     // an identical file already on main. Both are read AFTER the inner try/catch (the
     // dangling-link notice), so they are hoisted out of the try.
     let published: { issueNumber: number; via: "created" | "patched" } | undefined;
+    // The body that was published (the memoized rendered text), kept so the notice can
+    // rebuild it with only the `Digest file:` line replaced.
+    let publishedBody: string | undefined;
     let commitNoChanges = false;
     try {
       spawnResult = await step.run(
@@ -1039,6 +1089,7 @@ export async function cronCommunityMonitorHandler({
             return token;
           });
           const toPublish = publication;
+          publishedBody = toPublish.issueBody;
           published = await step.run("publish-issue", async () => {
             try {
               // The App-installation client, not either spawn token. The read
@@ -1070,13 +1121,7 @@ export async function cronCommunityMonitorHandler({
                 feature: "cron-community-monitor",
                 op: "community-publication-issue-failed",
                 message: "community digest issue upsert failed: the handler could not publish the digest issue",
-                extra: {
-                  fn: "cron-community-monitor",
-                  errorName: err instanceof Error ? err.name : typeof err,
-                  ...(typeof (err as { status?: unknown } | null)?.status === "number"
-                    ? { status: (err as { status: number }).status }
-                    : {}),
-                },
+                extra: { fn: "cron-community-monitor", ...errorExtras(err) },
               });
               throw err;
             }
@@ -1089,33 +1134,17 @@ export async function cronCommunityMonitorHandler({
         //     the handler already holds, not something to re-read from GitHub. The
         //     gate is therefore `publication.ok && published !== undefined`.
         //
-        //     resolveOutputAwareOk is KEPT, but only as advisory telemetry and only
-        //     when publication.ok: re-reading the handler's own write cannot prove
-        //     anything (it cannot credit a PATCHed closed issue, and list lag turns
-        //     a healthy run into a false negative that would otherwise skip the
-        //     commit). It must NOT run on a rejected draft: its
-        //     `scheduled-output-missing` event folds the spawn's stdout/stderr tail
-        //     (up to 8 KB, which carries the rejected final message) into Sentry,
-        //     defeating the closed-vocabulary rejection report above. Its result
-        //     never feeds heartbeatOk. ---
+        //     resolveOutputAwareOk is KEPT, but only as advisory telemetry, and it
+        //     runs AFTER the persistence step (see "advisory verify-output" below):
+        //     re-reading the handler's own write cannot prove anything (it cannot
+        //     credit a PATCHed closed issue, and list lag turns a healthy run into a
+        //     false negative), and it emits RED events and adds critical-path latency,
+        //     so it must not sit between the publish and the commit. It also must NOT
+        //     run on a rejected draft: its `scheduled-output-missing` event folds the
+        //     spawn's stdout/stderr tail (up to 8 KB, which carries the rejected final
+        //     message) into Sentry, defeating the closed-vocabulary rejection report
+        //     above. Its result never feeds heartbeatOk. ---
         heartbeatOk = publication.ok && published !== undefined;
-        if (publication.ok) {
-          const verifyOutputOk = await step.run("verify-output", async () =>
-            resolveOutputAwareOk({
-              spawnOk: spawnResult!.ok,
-              label: SENTRY_MONITOR_SLUG,
-              runStartedAt,
-              cronName: "cron-community-monitor",
-              stderrTail: spawnResult!.stderrTail,
-              exitCode: spawnResult!.exitCode,
-              stdoutTail: spawnResult!.stdoutTail,
-            }),
-          );
-          logger.info(
-            { fn: "cron-community-monitor", verifyOutputOk, via: published?.via },
-            "verify-output (advisory): handler-written digest issue re-read",
-          );
-        }
       }
       const renderedDigest = publication.ok ? publication.digestMarkdown : undefined;
 
@@ -1238,6 +1267,51 @@ export async function cronCommunityMonitorHandler({
           reason: "persistence-skipped",
         });
       }
+
+      // --- advisory verify-output (ADR-272). AFTER persistence on purpose: it is
+      //     telemetry about the handler's own issue write, it emits RED events and
+      //     costs a GitHub read, and none of that may delay or gate the commit. Only
+      //     for a CREATED issue (a PATCH of an existing one is exactly what a
+      //     run-window re-read cannot credit) and only when the draft validated. It
+      //     has its OWN try/catch, inside the step and around it: a throw here (the
+      //     resolver, the step, anything) is logged and swallowed, so it can never
+      //     set `threw`, lower heartbeatOk or reach the terminal heartbeat. ---
+      if (publication.ok && published?.via === "created") {
+        try {
+          const verifyOutputOk = await step.run("verify-output", async () => {
+            try {
+              return await resolveOutputAwareOk({
+                spawnOk: spawnResult!.ok,
+                label: SENTRY_MONITOR_SLUG,
+                runStartedAt,
+                cronName: "cron-community-monitor",
+                stderrTail: spawnResult!.stderrTail,
+                exitCode: spawnResult!.exitCode,
+                stdoutTail: spawnResult!.stdoutTail,
+              });
+            } catch (verifyErr) {
+              // MESSAGE path (err = null, #8629); name and status only. WARN-level:
+              // advisory telemetry never pages.
+              warnSilentFallback(null, {
+                feature: "cron-community-monitor",
+                op: "community-verify-output-threw",
+                message: "advisory verify-output threw; the verdict is unaffected",
+                extra: { fn: "cron-community-monitor", ...errorExtras(verifyErr) },
+              });
+              return undefined;
+            }
+          });
+          logger.info(
+            { fn: "cron-community-monitor", verifyOutputOk, via: published.via },
+            "verify-output (advisory): handler-written digest issue re-read",
+          );
+        } catch (verifyStepErr) {
+          logger.warn(
+            { fn: "cron-community-monitor", ...errorExtras(verifyStepErr) },
+            "verify-output (advisory) step failed; the verdict is unaffected",
+          );
+        }
+      }
     } catch (err) {
       // #5728 — any throw here is a real failure — flag it; finalizeOutputAwareHeartbeat decides
       // error-vs-retry below. An output-PRESENT run that threw in a TRAILING step
@@ -1292,8 +1366,9 @@ export async function cronCommunityMonitorHandler({
     // commit, and a skipped persistence. It runs here, after the inner try/catch, for
     // the same reason as the two flags above. The ONE exception is `no-changes`: the
     // identical file is already on main, so the link is valid. The PATCH is body-only
-    // (never reopens), carries a handler constant (no model text), and its own
-    // failure is reported and never masks the verdict.
+    // (never reopens): it re-sends the memoized rendered body with only the `Digest
+    // file:` line swapped for a handler constant (no model text; the validated counts
+    // survive), and its own failure is reported and never masks the verdict.
     if (published !== undefined && !livenessOk && !commitNoChanges) {
       const noticeIssue = published.issueNumber;
       await step.run("patch-digest-notice", async () => {
@@ -1303,24 +1378,17 @@ export async function cronCommunityMonitorHandler({
             owner: REPO_OWNER,
             repo: REPO_NAME,
             issueNumber: noticeIssue,
-            body: DIGEST_NOT_COMMITTED_NOTICE,
+            // The published (validated, handler-rendered) body with ONLY its
+            // `Digest file:` line replaced, so the day's numbers stay readable.
+            body: withDigestNotice(publishedBody ?? "", DIGEST_NOT_COMMITTED_NOTICE),
           });
-        } catch (noticeErr) {
-          // MESSAGE path (err = null, #8629) so the `op` tag and extras survive in
-          // Sentry. Named apart from the body's catch (err): the collector-status
-          // suite anchors on the first `catch (err)` after persistence.
+        } catch (err) {
+          // MESSAGE path (err = null, #8629) so the `op` tag and extras survive in Sentry.
           reportSilentFallback(null, {
             feature: "cron-community-monitor",
             op: "community-publication-notice-failed",
             message: "community digest notice PATCH failed: the issue may still link a digest that was not committed",
-            extra: {
-              fn: "cron-community-monitor",
-              issueNumber: noticeIssue,
-              errorName: noticeErr instanceof Error ? noticeErr.name : typeof noticeErr,
-              ...(typeof (noticeErr as { status?: unknown } | null)?.status === "number"
-                ? { status: (noticeErr as { status: number }).status }
-                : {}),
-            },
+            extra: { fn: "cron-community-monitor", issueNumber: noticeIssue, ...errorExtras(err) },
           });
         }
       });
@@ -1343,13 +1411,13 @@ export async function cronCommunityMonitorHandler({
       cronName: "cron-community-monitor",
       logger,
       // #6714 — a replay CANNOT recover any failure inside the guarded body:
-      // `setup-workspace` is memoized, so attempt 1 reads back an ephemeralRoot
+      // `setup-workspace-ro` is memoized, so attempt 1 reads back an ephemeralRoot
       // the `finally` below already deleted, and safeCommitAndPr then hits its
       // `workspace-lost` guard unconditionally — which comments a misleading
       // "PR withheld" + runbook pointer onto the operator's issue. This is what
       // lets livenessOk be honestly fail-closed without buying that useless
       // replay. Scoped precisely: throws BEFORE the try (token mint,
-      // setup-workspace itself) are unaffected and still retry into a fresh
+      // setup-workspace-ro itself) are unaffected and still retry into a fresh
       // workspace.
       retryEligible: false,
       onBeforeHeartbeat: heartbeatOk

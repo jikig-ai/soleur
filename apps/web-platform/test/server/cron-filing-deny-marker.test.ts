@@ -164,10 +164,24 @@ describe("countPermissionDenials (#7122)", () => {
     expect(r.permissionDenialCount).toBe(all.length);
     // 15 vocabulary names + `other` = 16: a cap below that silently drops `other`, the one
     // class that says "a tool the hook did not know about was denied".
-    expect(MAX_DENIED_TOOLS).toBeGreaterThanOrEqual(all.length);
+    // Exactly vocabulary + `other` (pattern P3-7: `>=` alone passes any inflated cap, so the
+    // bound could never bind). The vocabulary is `all` minus the one non-member probe.
+    expect(MAX_DENIED_TOOLS).toBe(all.length);
     expect(r.deniedTools).toEqual(all.slice(0, all.length - 1).concat("other"));
     expect(r.deniedTools).toContain("other");
     expect(countPermissionDenials([d("mcp__x__y")]).deniedTools).toEqual(["other"]);
+  });
+
+  it("the output is bounded by MAX_DENIED_TOOLS however many distinct names are denied (names collapse to the closed vocabulary + `other`)", () => {
+    const flood = Array.from({ length: 500 }, (_, i) => d(`Tool${i}`)).concat(
+      ["Bash", "Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "NotebookEdit", "Task", "Agent", "Skill", "WebFetch", "WebSearch", "ToolSearch", "TodoWrite"].map((t) => d(t)),
+    );
+    const r = countPermissionDenials(flood);
+    expect(r.permissionDenialCount).toBe(515);
+    expect(r.deniedTools.length).toBeLessThanOrEqual(MAX_DENIED_TOOLS);
+    expect(r.deniedTools.length).toBe(MAX_DENIED_TOOLS); // every vocabulary name AND `other`
+    expect(new Set(r.deniedTools).size).toBe(r.deniedTools.length);
+    expect(r.deniedTools[0]).toBe("other"); // first-seen order: the flood came first
   });
 
   it("returns 0 and [] on an empty, absent or malformed array; non-object entries are not denials", () => {

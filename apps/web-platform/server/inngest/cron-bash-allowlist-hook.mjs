@@ -480,9 +480,14 @@ function dangerousMetacharReason(command) {
 }
 
 // Split a (metachar-free) compound command into segments on && ; ||.
+//
+// LINEAR: split on the bare separators and trim afterwards. The previous
+// `/\s*(?:&&|\|\||;)\s*/` re-scanned the whole whitespace run from every start
+// position and took seconds on a command padded with spaces (a 30k-space command
+// cost 3.8 s, 100k about 25 s); `String.trim` is linear.
 export function splitSegments(command) {
   return command
-    .split(/\s*(?:&&|\|\||;)\s*/)
+    .split(/&&|\|\||;/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -800,29 +805,82 @@ function browserNavigateReason(toolInput, navigateOrigin) {
 // the TRAILING arguments of an allowed verb were never inspected: a single-quoted
 // `HOME[$(cmd)]` reached a router script that evaluated it in an arithmetic context,
 // and a `--query` value was interpolated into `python3 -c` source. This is the
-// structural close: for a cron that carries the directive, every
-// whitespace-separated token of every segment must match STRICT_TOKEN_RE. The check
-// runs on the RAW command text (never the quote-stripped or tokenized form), so no
-// quoting, escaping, expansion, glob, brace, comment or non-ASCII form can hide a
-// payload. Segments are split on `;` and `&&` only; any other separator, quote or
+// structural close, in two layers that run on the RAW command text (never the
+// quote-stripped or tokenized form), so no quoting, escaping, expansion, glob, brace,
+// comment or non-ASCII form can hide a payload:
+//   1. CHARSET: every whitespace-separated token of every segment must match
+//      STRICT_TOKEN_RE;
+//   2. EXACT LITERAL (round-1 residual: `hn mentions --query <any word>` was still a
+//      free-text channel that exfiltrated in-context member content word by word):
+//      each segment must equal ONE allow line token for token — same token count,
+//      every non-placeholder token identical, `<uint>` matching UINT_RE. No trailing
+//      argument of any kind survives. The literal layer is applied to EVERY segment
+//      (first, middle, last), never to a subset.
+// Segments are split on `;` and `&&` only; any other separator, quote or
 // metacharacter is, by construction, a token outside the charset.
 const STRICT_TOKEN_RE = /^[A-Za-z0-9._:=@/+-]+$/;
 
+// A canonical non-negative decimal: no sign, no leading zero (`08` reaches bash
+// arithmetic as an octal literal), no whitespace. The same shape the platform
+// scripts' `require_uint` enforces.
+export const UINT_PLACEHOLDER = "<uint>";
+const UINT_RE = /^(0|[1-9][0-9]*)$/;
+
+// An input-size bound checked BEFORE any regex: a legitimate community collector
+// command is < 300 characters, and a padded payload must not cost the hook more
+// than a constant.
+export const MAX_NO_FILE_TOOLS_COMMAND_CHARS = 8192;
+// The same bound for every other cron (see decide(): MAX_ARG_STRLEN).
+export const MAX_BASH_COMMAND_CHARS = 131072;
+
+const GRAMMAR_REASON_PREFIX = "argument grammar (no-file-tools)";
+
+// Linear split of one segment into its space/tab-separated tokens. NOT `String.trim`
+// (it also strips U+00A0 and other Unicode spaces, which would hide a non-ASCII
+// token) and NOT a `^[ \t]+|[ \t]+$` regex trim (quadratic on a long space run).
+export function spaceTabTokens(seg) {
+  const toks = seg.split(/[ \t]+/);
+  if (toks.length && toks[0] === "") toks.shift();
+  if (toks.length && toks[toks.length - 1] === "") toks.pop();
+  return toks;
+}
+
+// Token-for-token equality of `tokens` against one allow line.
+export function tokensMatchLiteral(tokens, literalLine) {
+  const lit = literalLine.split(" ");
+  if (lit.length !== tokens.length) return false;
+  for (let i = 0; i < lit.length; i++) {
+    if (lit[i] === UINT_PLACEHOLDER ? !UINT_RE.test(tokens[i]) : lit[i] !== tokens[i]) return false;
+  }
+  return true;
+}
+
 // Returns a FIXED deny reason (never any text from the command: the reason travels
 // back into the model's context and the permission_denials channel) or null.
-export function strictArgumentGrammarReason(command) {
-  if (typeof command !== "string") return "argument grammar (no-file-tools): non-string command";
+// `literalLines` null/omitted: the charset layer only (the pure, directly-testable
+// form); an array: the charset layer AND the exact-literal layer.
+/**
+ * @param {unknown} command
+ * @param {readonly string[] | null} [literalLines]
+ * @returns {string | null}
+ */
+export function strictArgumentGrammarReason(command, literalLines = null) {
+  if (typeof command !== "string") return `${GRAMMAR_REASON_PREFIX}: non-string command`;
+  if (command.length > MAX_NO_FILE_TOOLS_COMMAND_CHARS)
+    return `${GRAMMAR_REASON_PREFIX}: command too long`;
   let segments = 0;
   for (const seg of command.split(/;|&&/)) {
-    const trimmed = seg.replace(/^[ \t]+|[ \t]+$/g, "");
-    if (!trimmed) continue;
+    const tokens = spaceTabTokens(seg);
+    if (!tokens.length) continue;
     segments++;
-    for (const token of trimmed.split(/[ \t]+/)) {
+    for (const token of tokens) {
       if (!STRICT_TOKEN_RE.test(token))
-        return "argument grammar (no-file-tools): every token must match [A-Za-z0-9._:=@/+-]+ (no quotes, expansions, brackets, braces, escapes or whitespace other than space/tab)";
+        return `${GRAMMAR_REASON_PREFIX}: every token must match [A-Za-z0-9._:=@/+-]+ (no quotes, expansions, brackets, braces, escapes or whitespace other than space/tab)`;
     }
+    if (literalLines !== null && !literalLines.some((l) => tokensMatchLiteral(tokens, l)))
+      return `${GRAMMAR_REASON_PREFIX}: every segment must be exactly one allowlisted invocation (no extra, missing or altered arguments)`;
   }
-  return segments === 0 ? "argument grammar (no-file-tools): no command segment" : null;
+  return segments === 0 ? `${GRAMMAR_REASON_PREFIX}: no command segment` : null;
 }
 
 // ---- the decision function (pure; unit-tested) -----------------------------
@@ -858,13 +916,19 @@ export function decide(input, allowPrefixes) {
   switch (tool) {
     case "Bash": {
       const command = typeof ti.command === "string" ? ti.command : "";
-      if (!command.trim()) return denyDecision("empty Bash command");
+      // Size bound, before ANY regex: Linux refuses a single exec argument over
+      // MAX_ARG_STRLEN (128 KiB), and `bash -c <command>` is one argument, so a
+      // longer command was never a runnable command; it is padding aimed at the
+      // hook's own running time.
+      if (command.length > MAX_BASH_COMMAND_CHARS) return denyDecision("command too long");
       // #7122 P1-A — evaluated FIRST and on the raw text: a payload the quote
-      // stripping below would hide never reaches the checks that depend on it.
+      // stripping below would hide never reaches the checks that depend on it. The
+      // length bound sits inside it and precedes every regex.
       if (noFileTools) {
-        const grammarReason = strictArgumentGrammarReason(command);
+        const grammarReason = strictArgumentGrammarReason(command, bashPrefixes);
         if (grammarReason) return denyDecision(grammarReason);
       }
+      if (!command.trim()) return denyDecision("empty Bash command");
       const metaReason = dangerousMetacharReason(command);
       if (metaReason) return denyDecision(`metachar: ${metaReason}`);
       const segments = splitSegments(command);
@@ -889,8 +953,14 @@ export function decide(input, allowPrefixes) {
         // Match the allowlist against the TOKENIZED (dequoted) command, not the
         // raw segment — otherwise a quoted arg like `gh api 'repos/...'` fails
         // the prefix match against `gh api repos/...` (AC4b single-quote fix).
-        if (!segmentMatchesAllowlist(tokens.join(" "), bashPrefixes))
-          return denyDecision(`not allowlisted: ${seg.slice(0, 60)}`);
+        // A `no-file-tools` cron matches EXACT literals (the grammar above already
+        // enforced it on the raw text; this is the same rule on the dequoted tokens, so
+        // a divergence between the two tokenizers cannot open a trailing-argument
+        // path). Every other cron keeps prefix semantics.
+        const allowlisted = noFileTools
+          ? bashPrefixes.some((l) => tokensMatchLiteral(tokens, l))
+          : segmentMatchesAllowlist(tokens.join(" "), bashPrefixes);
+        if (!allowlisted) return denyDecision(`not allowlisted: ${seg.slice(0, 60)}`);
         // Narrows only: an allowlisted `gh issue create` must still justify.
         // The run-report directive (exit 0) is threaded from the parsed file,
         // never from the command or the environment.

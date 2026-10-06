@@ -46,6 +46,7 @@ import {
   COMMUNITY_FAILURE_CAUSES,
   COMMUNITY_FINAL_MESSAGE_MAX_BYTES,
   COMMUNITY_METRICS,
+  COMMUNITY_PERIOD_DAYS,
   COMMUNITY_PLATFORMS,
   COMMUNITY_STATUSES,
   COMMUNITY_TOPIC_CATEGORIES,
@@ -291,8 +292,10 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       ["Only changes under knowledge-base/support/community/", "persistence path sentence"],
       ["FAILED", "retired misconfiguration-issue branch"],
       ["new stargazers in the period (username", "stargazer username directive"],
-      // The window is a handler constant now; the collectors run over a fixed day.
-      ["periodDays", "model-chosen period (the handler renders the 1-day window itself)"],
+      // The window label is a handler constant now (and per platform); the model never chooses one.
+      ["periodDays", "model-chosen period (the handler renders each platform's window itself)"],
+      ["fixed 1-day window", "false claim: the collectors do NOT share one 1-day window"],
+      ["fetch-activity", "dropped LinkedIn verb: nothing consumed it and the hook no longer admits it"],
       ["period_days", "collector period field the model used to pick a window"],
       // Allowlist narrowing: both verbs left the hook, so the prompt must not request them.
       ["discord members", "dropped verb: member count comes from guild-info"],
@@ -343,13 +346,15 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
     // runnable-literal parity concerns covered by the allowlist suite.
     const PROMPT = COMMUNITY_MONITOR_PROMPT;
 
-    it("one Bash call per platform: no call combines commands of two platforms", () => {
+    it("one Bash call per platform: no call combines commands of two platforms, and every call is ONE LINE", () => {
       expect(PROMPT).toContain("ONE Bash call PER PLATFORM");
+      expect(PROMPT).toContain("Each Bash call is ONE LINE");
       const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
       // Every backtick-delimited command group is a single platform's call.
       const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
       expect(groups.length).toBeGreaterThanOrEqual(9);
       for (const g of groups) {
+        expect(g, "a command span must not contain a line break").not.toMatch(/[\r\n]/);
         const platforms = new Set(
           g.split(";").map((seg) => seg.trim().replace(`${ROUTER} `, "").split(" ")[0]),
         );
@@ -358,6 +363,39 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       // Discord messages are fetched per channel, with a bounded limit, never chained.
       expect(PROMPT).toContain("discord messages <channel_id> 50");
       expect(PROMPT).toMatch(/ONE more Bash call PER channel ID/);
+    });
+
+    it("Discord: guild-info and channels are SEPARATE calls, at most the first 40 channels are read, a failing channel is skipped (not partial), and an over-cap server is partial/timeout", () => {
+      const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+      const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
+      expect(groups).toContain(`${ROUTER} discord guild-info`);
+      expect(groups).toContain(`${ROUTER} discord channels`);
+      // never chained together
+      expect(groups.some((g) => g.includes("guild-info") && g.includes("channels"))).toBe(false);
+      expect(PROMPT).toMatch(/guild-info[\s\S]*approximate_member_count[\s\S]*discord channels/);
+      expect(PROMPT).toContain("FIRST 40 channels");
+      expect(PROMPT).toMatch(/more than 40 channels[\s\S]*"partial" with failureCause "timeout"/);
+      expect(COMMUNITY_FAILURE_CAUSES).toContain("timeout");
+      expect(PROMPT).toMatch(/A channel whose call fails[\s\S]*is simply skipped: it does NOT make Discord\s+"partial"/);
+    });
+
+    it("GitHub watchers come from subscribers_count, never watchers_count (an alias of stars)", () => {
+      expect(PROMPT).toContain("`subscribers_count`");
+      expect(PROMPT).toMatch(/NOT\s+`watchers_count`/);
+      expect(PROMPT).not.toMatch(/watchers_count` from repo-stats/);
+    });
+
+    it("never claims one shared collection window; the GitHub day argument is the handler's COMMUNITY_PERIOD_DAYS", () => {
+      expect(PROMPT).not.toMatch(/fixed 1-day window|runs over a fixed|every collector below/);
+      expect(PROMPT).toContain("do NOT share one\nwindow");
+      // the five github verbs are the ONLY ones with a day argument, and it is the constant
+      const days = [...PROMPT.matchAll(/community-router\.sh github ([a-z-]+) (\d+)/g)];
+      expect(days.map((m) => m[1]).sort()).toEqual(["activity", "contributors", "discussions", "fetch-interactions", "repo-stats"]);
+      for (const m of days) expect(Number(m[2]), `github ${m[1]}`).toBe(COMMUNITY_PERIOD_DAYS);
+    });
+
+    it("tells the agent an all-zero 'collected' platform is shown as unverified", () => {
+      expect(PROMPT).toContain("whose every value is 0 is\n     shown to readers as unverified");
     });
 
     it("Discord members come from guild-info; the dropped verbs are not requested", () => {

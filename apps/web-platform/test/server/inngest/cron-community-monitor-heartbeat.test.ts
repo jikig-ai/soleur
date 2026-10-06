@@ -6,8 +6,8 @@
 // imports. Here we mock the substrate so the handler's control flow is driven
 // directly.
 //
-// Pre-fix, a throw inside the catch-less inner try (claude-eval → verify-output
-// → safe-commit-pr → sentry-heartbeat) propagated out of the function, so the
+// Pre-fix, a throw inside the catch-less inner try (claude-eval → validate-publication
+// → publish-issue → safe-commit-pr → sentry-heartbeat) propagated out of the function, so the
 // single end-of-run sentry-heartbeat step NEVER ran → Sentry saw NO check-in →
 // `missed` (not `error`). These tests pin the flag-pattern fix:
 //   - final-attempt no-output throw → exactly one `?status=error` check-in
@@ -141,6 +141,16 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
   };
 });
 
+// #7122 — the notice replaces ONLY the issue body's `Digest file:` line: the validated
+// summary table, topics and counts survive, and nothing links the digest file any more.
+const NOTICE_LINE = "Digest file: not committed - see Sentry";
+function expectNoticeBody(body: string) {
+  expect(body).toContain(`\n${NOTICE_LINE}\n`);
+  expect(body).not.toContain("blob/main");
+  expect(body).toContain("| Discord | collected |");
+  expect(body).toContain("Inbound items: https://github.com/");
+}
+
 // Pull the heartbeat POST URLs out of the fetch spy (the only network call).
 const heartbeatUrls = () =>
   fetchSpy.mock.calls.map((c) => String(c[0] as string));
@@ -156,7 +166,7 @@ import { validDraftFinalMessage } from "./helpers/community-draft";
 /**
  * `throwOn` makes the named step reject, which is the only seam for simulating a
  * throw at a specific point in the handler body — the steps in the window
- * between verify-output and the persistence gate call module-local functions
+ * between publish-issue and the persistence gate call module-local functions
  * (`readCollectorStatus`) that no `vi.mock` of a sibling module can intercept.
  */
 function makeStep(throwOn?: string) {
@@ -335,7 +345,7 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     // published must not keep linking a digest that never landed: it is PATCHed to
     // the fixed notice from AFTER the inner try/catch (a step of its own).
     expect(step.executed).toContain("patch-digest-notice");
-    expect((fakeIssues as FakeIssueRow[])[0].body).toBe("digest not committed - see Sentry");
+    expectNoticeBody((fakeIssues as FakeIssueRow[])[0].body);
   });
 
   // #8726 — driven through runLikeInngest, because an inline `makeStep` hands
@@ -396,7 +406,8 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     await invoke(step, 0, 2);
 
     expect(step.executed).not.toContain("patch-digest-notice");
-    expect((fakeIssues as FakeIssueRow[])[0].body).not.toBe("digest not committed - see Sentry");
+    expect((fakeIssues as FakeIssueRow[])[0].body).not.toContain("Digest file: not committed");
+    expect((fakeIssues as FakeIssueRow[])[0].body).toContain("blob/main");
   });
 
   it("#7122 — verify-output is advisory: a false negative still commits and posts GREEN", async () => {
@@ -410,15 +421,46 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     expect(step.executed).not.toContain("patch-digest-notice");
   });
 
-  it("#7122 — a throw between publish and commit (verify-output) reddens the run and PATCHes the notice; nothing is committed", async () => {
-    const step = makeStep("verify-output");
+  it("#7122 — a throw between publish and commit reddens the run and PATCHes the notice; nothing is committed", async () => {
+    // The digest-file marker is emitted after the publish step and before the commit.
+    digestFileMock.mockImplementationOnce(() => {
+      throw new Error("marker emit blew up");
+    });
+    const step = makeStep();
     const res = await invoke(step, 0, 2);
 
     expect(res).toEqual({ ok: false });
     expect(heartbeatUrls()[0]).toContain("?status=error");
     expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
     expect(step.executed).toContain("patch-digest-notice");
-    expect((fakeIssues as FakeIssueRow[])[0].body).toBe("digest not committed - see Sentry");
+    expectNoticeBody((fakeIssues as FakeIssueRow[])[0].body);
+  });
+
+  it("#7122 — verify-output runs AFTER the commit, and a throw inside it cannot affect the verdict (GREEN, committed, no notice)", async () => {
+    resolveOutputAwareOkSpy.mockRejectedValue(new Error("verify blew up"));
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+    expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
+    expect(step.executed.indexOf("safe-commit-pr")).toBeLessThan(step.executed.indexOf("verify-output"));
+    expect(step.executed).not.toContain("patch-digest-notice");
+    expect(step.executed).not.toContain("ensure-audit-issue");
+    // Reported at WARN level with its own op tag, never as the body's handler-body-threw.
+    expect(warnSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "community-verify-output-threw")).toBe(true);
+    expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(false);
+  });
+
+  it("#7122 — even the verify-output STEP itself failing (not just the resolver) cannot affect the verdict", async () => {
+    const step = makeStep("verify-output");
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+    expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
+    expect(step.executed).not.toContain("patch-digest-notice");
+    expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(false);
   });
 
   it("issue filed but persistence FAILED turns the monitor RED", async () => {
@@ -633,14 +675,15 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
 
   it("a throw BEFORE the persistence gate turns the monitor RED and does NOT retry", async () => {
     // THE EXPLOIT the fail-open default left open. The issue lands
-    // (heartbeatOk=true), the agent writes the digest, then a step between
-    // verify-output and the persistence gate throws. Under the old
+    // (heartbeatOk=true), the handler writes the digest, then a step before
+    // the persistence gate throws. Under the old
     // initialised-true default: threw=true, heartbeatOk=true, livenessOk never
     // falsified → `failed = threw && !heartbeatOk` = FALSE → no retry → terminal
     // GREEN with nothing committed, on the FIRST attempt. Verbatim the shape
     // ADR-126 forbids.
     //
-    // Simulated at the collector-status step, which sits in exactly that window.
+    // Simulated at the collector-status step: any throw inside the guarded body
+    // (this one is merely the cheapest seam) takes the same terminal path.
     const step = makeStep("verify-collector-status");
     const res = await invoke(step, 0, 2); // attempt 0 of 2 — a retry IS available
 

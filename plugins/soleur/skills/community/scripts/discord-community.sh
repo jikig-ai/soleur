@@ -281,7 +281,7 @@ discord_request() {
 # agent runtimes surface stderr, and the value is third-party-influenced text.
 require_uint() {
   local label="$1"
-  if [[ ! "${2:-}" =~ ^[0-9]+$ ]]; then
+  if [[ ! "${2:-}" =~ ^(0|[1-9][0-9]*)$ ]]; then
     echo "Error: ${label} must be a non-negative integer." >&2
     exit 1
   fi

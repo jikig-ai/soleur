@@ -3,8 +3,9 @@
 //
 // The spawned agent may collect and classify; it may not publish. Three layers
 // are asserted here, all through the REAL hook's pure `decide()`:
-//   1. the Bash surface is exactly the fourteen read invocations of the community
-//      router (no gh verb at all, no bare router prefix, no posting verb);
+//   1. the Bash surface is exactly the thirteen read invocations of the community
+//      router, each an EXACT LITERAL (`<uint>` is the only variable token): no gh verb, no
+//      bare router prefix, no posting verb, no trailing or altered argument;
 //   2. the `no-file-tools` directive removes the write primitive (an agent that can
 //      `Write` over the allowlisted router script and then run it executes
 //      model-authored shell with the whole spawn env) AND the read primitives that
@@ -54,6 +55,8 @@ const linesFor = (cron: string): string[] =>
 const verdictWith = (fn: DecideFn, lines: string[], input: unknown): string =>
   fn(input, lines).hookSpecificOutput.permissionDecision;
 const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
+// A real operand for the `<uint>` placeholder (a Discord snowflake is 17-19 digits).
+const withNumbers = (literal: string) => literal.replaceAll("<uint>", "123456789012345678");
 
 const FILE_TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "Task", "Agent", "Skill"] as const;
 
@@ -91,8 +94,17 @@ const COMMUNITY_PROBES: ReadonlyArray<[string, unknown, "allow" | "deny"]> = [
   // P1-A': verbs removed from the read surface.
   ["discord members (removed)", bash(`${ROUTER} discord members`), "deny"],
   ["hn trending (removed)", bash(`${ROUTER} hn trending --limit 30`), "deny"],
+  ["linkedin fetch-activity (removed)", bash(`${ROUTER} linkedin fetch-activity`), "deny"],
+  // Round-1 residual: exact literals. A different --query word was a free-text channel to a
+  // third-party search API; a trailing token and a leading-zero operand are the other shapes.
+  ["hn mentions: a different --query word", bash(`${ROUTER} hn mentions --query other --limit 20`), "deny"],
+  ["platforms: an extra trailing token", bash(`${ROUTER} platforms extra`), "deny"],
+  ["discord messages: an extra trailing token", bash(`${ROUTER} discord messages 1 50 extra`), "deny"],
+  ["discord messages: a leading-zero operand", bash(`${ROUTER} discord messages 08 50`), "deny"],
+  ["discord messages: a different limit", bash(`${ROUTER} discord messages 1 100`), "deny"],
   ["router platforms", bash(`${ROUTER} platforms`), "allow"],
   ["hn mentions with the prompt's own arguments", bash(`${ROUTER} hn mentions --query soleur --limit 20`), "allow"],
+  ["discord messages with the prompt's own arguments", bash(`${ROUTER} discord messages 123456789012345678 50`), "allow"],
 ];
 
 function failedProbes(fn: DecideFn, lines: string[]): string[] {
@@ -103,7 +115,7 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
   const lines = linesFor(CRON);
 
   it("G2-1: no gh verb of any kind survives in the community allowlist (create/comment/list/label)", () => {
-    expect(COMMUNITY_ROUTER_READ_VERBS.length).toBe(14);
+    expect(COMMUNITY_ROUTER_READ_VERBS.length).toBe(13);
     expect(CRON_BASH_ALLOWLISTS[CRON]).toEqual([...COMMUNITY_ROUTER_READ_VERBS]);
     expect(lines.filter((l) => /^gh\b/.test(l))).toEqual([]);
     for (const verb of ["gh issue create", "gh issue comment", "gh label create", "gh label list", "gh issue list"]) {
@@ -117,13 +129,18 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     expect(lines.some((l) => l.startsWith("run-report-label"))).toBe(false);
   });
 
-  it("G2-2: the bare router prefix is gone — every allow line is a full `<router> <platform> <verb>` literal and posting verbs are denied", () => {
+  it("G2-2: the bare router prefix is gone — every allow line is a full `<router> <platform> <verb> [fixed args]` literal and posting verbs are denied", () => {
     const bashLines = lines.filter((l) => l.startsWith("bash "));
     expect(bashLines).toEqual([...COMMUNITY_ROUTER_READ_VERBS]);
     expect(bashLines).not.toContain(ROUTER);
-    // allow[0] is executed verbatim by runHookSelfTest: it must be a whole command.
+    // allow[0] is executed verbatim by runHookSelfTest: it must be a whole command that runs.
     expect(COMMUNITY_ROUTER_READ_VERBS[0]).toBe(`${ROUTER} platforms`);
-    for (const l of COMMUNITY_ROUTER_READ_VERBS) expect(l).toMatch(/^bash plugins\/soleur\/skills\/community\/scripts\/community-router\.sh [a-z-]+( [a-z-]+)?$/);
+    expect(COMMUNITY_ROUTER_READ_VERBS[0]).not.toContain("<uint>");
+    // The grammar of a literal: the router, a platform, a verb, then fixed arguments; `<uint>` is the only placeholder.
+    for (const l of COMMUNITY_ROUTER_READ_VERBS) {
+      expect(l).toMatch(/^bash plugins\/soleur\/skills\/community\/scripts\/community-router\.sh [a-z-]+( [a-z-]+( ([A-Za-z0-9<>-]+))*)?$/);
+      expect(l.match(/<[^>]*>/g) ?? []).toEqual(l.includes("<uint>") ? ["<uint>"] : []);
+    }
     expect(verdictWith(decide, lines, bash(`${ROUTER} bsky post "hello"`))).toBe("deny");
     expect(verdictWith(decide, lines, bash(`${ROUTER} linkedin post-content --text hello`))).toBe("deny");
     expect(verdictWith(decide, lines, bash(`${ROUTER} x post-tweet hello`))).toBe("deny");
@@ -134,40 +151,60 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     expect(
       verdictWith(decide, lines, bash(`${ROUTER} platforms > plugins/soleur/skills/community/scripts/community-router.sh`)),
     ).toBe("deny");
-    // Trailing arguments on an allowlisted verb stay allowed (prefix + separator semantics).
+    // Exact-literal semantics: the arguments the prompt uses are allowed, ANY other argument is not.
     expect(verdictWith(decide, lines, bash(`${ROUTER} hn mentions --query soleur --limit 20`))).toBe("allow");
     expect(verdictWith(decide, lines, bash(`${ROUTER} github activity 1`))).toBe("allow");
-    expect(verdictWith(decide, lines, bash(`${ROUTER} discord messages 123456789012345678`))).toBe("allow");
+    expect(verdictWith(decide, lines, bash(`${ROUTER} discord messages 123456789012345678 50`))).toBe("allow");
+    expect(verdictWith(decide, lines, bash(`${ROUTER} discord messages 123456789012345678`))).toBe("deny");
+    expect(verdictWith(decide, lines, bash(`${ROUTER} github activity 7`))).toBe("deny");
+    expect(verdictWith(decide, lines, bash(`${ROUTER} hn mentions --query soleur --limit 30`))).toBe("deny");
   });
 
-  it("G2-3: EVERY member is judged — all fourteen read verbs allow and every posting or removed verb denies (a first-member-only check is the defect)", () => {
-    expect(new Set(COMMUNITY_ROUTER_READ_VERBS).size).toBe(14);
+  it("G2-3: EVERY member is judged — all thirteen read literals allow (with a real number for `<uint>`) and every posting or removed verb denies (a first-member-only check is the defect)", () => {
+    expect(new Set(COMMUNITY_ROUTER_READ_VERBS).size).toBe(13);
     // The exact membership, as data: an added or dropped verb is a deliberate edit here.
     expect([...COMMUNITY_ROUTER_READ_VERBS].map((l) => l.slice(ROUTER.length + 1))).toEqual([
       "platforms",
       "discord guild-info",
       "discord channels",
-      "discord messages",
+      "discord messages <uint> 50",
       "x fetch-metrics",
       "bsky get-metrics",
       "linkedin fetch-metrics",
-      "linkedin fetch-activity",
-      "github activity",
-      "github contributors",
-      "github discussions",
-      "github repo-stats",
-      "github fetch-interactions",
-      "hn mentions",
+      "github activity 1",
+      "github contributors 1",
+      "github discussions 1",
+      "github repo-stats 1",
+      "github fetch-interactions 1",
+      "hn mentions --query soleur --limit 20",
     ]);
-    // Removed (P1-A'): `discord members` returns up to 1000 member objects (the count comes
-    // from guild-info's approximate count) and `hn trending` feeds no schema field.
-    for (const removed of ["discord members", "hn trending"]) {
-      expect(COMMUNITY_ROUTER_READ_VERBS, removed).not.toContain(`${ROUTER} ${removed}`);
+    // Removed: `discord members` returns up to 1000 member objects (the count comes from
+    // guild-info's approximate count), `hn trending` and `linkedin fetch-activity` feed no
+    // schema field.
+    for (const removed of ["discord members", "hn trending", "linkedin fetch-activity"]) {
+      expect(COMMUNITY_ROUTER_READ_VERBS.some((l) => l.startsWith(`${ROUTER} ${removed}`)), removed).toBe(false);
       expect(verdictWith(decide, lines, bash(`${ROUTER} ${removed}`)), removed).toBe("deny");
       expect(verdictWith(decide, lines, bash(`${ROUTER} ${removed} 100`)), `${removed} 100`).toBe("deny");
     }
+    // The real hook's decide() over EVERY literal, `<uint>` replaced by a real number: a
+    // line the grammar rejects (a typo in the list, a placeholder it cannot match) would
+    // make the cron's own collector fail at runtime, every day.
     for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
-      expect(verdictWith(decide, lines, bash(verb)), verb).toBe("allow");
+      const cmd = withNumbers(verb);
+      expect(verdictWith(decide, lines, bash(cmd)), cmd).toBe("allow");
+      // ...and each is EXACT: one extra token, or a missing last token, denies.
+      expect(verdictWith(decide, lines, bash(`${cmd} extra`)), `${cmd} extra`).toBe("deny");
+      if (verb.slice(ROUTER.length + 1).split(" ").length > 2) {
+        const dropped = cmd.split(" ").slice(0, -1).join(" ");
+        expect(verdictWith(decide, lines, bash(dropped)), dropped).toBe("deny");
+      }
+    }
+    // A literal containing `<uint>` also takes the boundary values of the placeholder.
+    for (const operand of ["0", "7", "123456789012345678"]) {
+      expect(verdictWith(decide, lines, bash(`${ROUTER} discord messages ${operand} 50`)), operand).toBe("allow");
+    }
+    for (const operand of ["08", "00", "-1", "+1", "1.5", "1e3", "0x1", "", "1a"]) {
+      expect(verdictWith(decide, lines, bash(`${ROUTER} discord messages ${operand} 50`)), `operand ${JSON.stringify(operand)}`).toBe("deny");
     }
     const POSTING = ["bsky post x", "linkedin post-content --text x", "x post-tweet x"];
     for (const p of POSTING) expect(verdictWith(decide, lines, bash(`${ROUTER} ${p}`)), p).toBe("deny");
@@ -257,25 +294,31 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     expect(code).not.toContain("DISCORD_WEBHOOK_URL");
   });
 
-  it("G2-8: every community-router.sh invocation literal in COMMUNITY_MONITOR_PROMPT is in COMMUNITY_ROUTER_READ_VERBS (prompt parity)", () => {
+  it("G2-8: every community-router.sh command in COMMUNITY_MONITOR_PROMPT passes the REAL hook with the delivered lines, and the prompt uses every literal (prompt parity, arguments included)", () => {
     const start = HANDLER_SRC.indexOf("const COMMUNITY_MONITOR_PROMPT");
     expect(start, "COMMUNITY_MONITOR_PROMPT not found in the handler source").toBeGreaterThan(-1);
     const end = HANDLER_SRC.indexOf("`;", HANDLER_SRC.indexOf("`", start) + 1);
     const prompt = HANDLER_SRC.slice(start, end);
-    const literals = [
-      ...prompt.matchAll(
-        /bash plugins\/soleur\/skills\/community\/scripts\/community-router\.sh(?: ([a-z][a-z0-9-]*))?(?: ([a-z][a-z0-9-]*))?/g,
-      ),
-    ].flatMap((m) => {
-      if (!m[1]) return []; // a prose mention of the script, not an invocation
-      return [m[1] === "platforms" ? `${ROUTER} platforms` : m[2] ? `${ROUTER} ${m[1]} ${m[2]}` : []];
-    });
-    // Non-vacuity: the prompt's steps 1-2 carry at least the platform probe and
-    // the three Discord, X, Bluesky, LinkedIn, five GitHub and two HN collectors.
-    expect(literals.length).toBeGreaterThanOrEqual(10);
-    for (const l of new Set(literals)) {
-      expect(COMMUNITY_ROUTER_READ_VERBS, `prompt invokes ${l}, which the hook would deny`).toContain(l);
+    // Every backtick-quoted span that invokes the router. In the handler source the prompt's
+    // backticks are escaped (\`), and the only placeholder the prompt carries is <channel_id>.
+    const spans = [...prompt.matchAll(/\\`(bash plugins\/soleur\/skills\/community\/scripts\/community-router\.sh[^`\\]*)\\`/g)].map((m) => m[1]);
+    // Non-vacuity: the prompt's collection steps name the platform probe and the three Discord, X,
+    // Bluesky, LinkedIn, five GitHub and HN collectors (one span carries the five GitHub ones).
+    expect(spans.length).toBeGreaterThanOrEqual(9);
+    const commands = spans.flatMap((span) => span.split(/;|&&/).map((c) => c.trim()).filter(Boolean));
+    expect(commands.length).toBeGreaterThanOrEqual(13);
+    const seen = new Set<string>();
+    for (const raw of commands) {
+      expect(raw, "a prompt command with a stray quote, brace or shell metacharacter").toMatch(/^[A-Za-z0-9._:=@/+<>_ -]+$/);
+      // The prompt's placeholder is a snowflake the model reads from the channels output.
+      const asRun = raw.replaceAll("<channel_id>", "123456789012345678");
+      expect(verdictWith(decide, lines, bash(asRun)), `the prompt tells the agent to run \`${raw}\`, which the real hook denies`).toBe("allow");
+      seen.add(raw.replaceAll("<channel_id>", "<uint>"));
     }
+    // And the whole span, as the agent would send it (a `;` chain of collectors).
+    for (const span of spans) expect(verdictWith(decide, lines, bash(span.replaceAll("<channel_id>", "123456789012345678"))), span).toBe("allow");
+    // The allowlist is not wider than the prompt: a literal the prompt never runs is dead surface.
+    expect([...seen].sort()).toEqual([...COMMUNITY_ROUTER_READ_VERBS].sort());
   });
 
   it("G2-9: harness — the probe list FAILS against a hook that allows everything, and passes against the real one", () => {
@@ -294,54 +337,53 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     expect(COMMUNITY_PROBES.filter(([, , w]) => w === "allow").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("G2-11: the argument grammar is what denies a hostile trailing argument, through the REAL delivered lines — and the same payload is allowed once the directive is removed", () => {
+  it("G2-11: the argument grammar is what denies a hostile trailing argument, through the REAL delivered lines — and the same payload is allowed once the directive is removed (prefix semantics)", () => {
     const hostile = [
       `${ROUTER} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`,
       `${ROUTER} hn mentions --query "x'+str(__import__('os').system('id'))+'"`,
       `${ROUTER} github activity 1 'a b'`,
     ];
-    const noDirective = lines.filter((l) => l !== "no-file-tools");
+    // The pre-#7122 shape: the verb PREFIXES (no placeholder, no fixed arguments), no directive.
+    const prefixOnly = COMMUNITY_ROUTER_READ_VERBS.map((l) => l.split(" ").slice(0, 4).join(" "));
     for (const h of hostile) {
       expect(verdictWith(decide, lines, bash(h)), h).toBe("deny");
       // Control: the verb prefix alone admits it, which is the hole the grammar closes.
-      expect(verdictWith(decide, noDirective, bash(h)), `control ${h}`).toBe("allow");
+      expect(verdictWith(decide, prefixOnly, bash(h)), `control ${h}`).toBe("allow");
     }
-    // Every one of the fourteen verbs, invoked with the numeric / flag arguments the prompt uses.
-    const withArgs: Record<string, string> = {
-      "discord messages": "123456789012345678",
-      "github activity": "1",
-      "github contributors": "1",
-      "github discussions": "1",
-      "github repo-stats": "1",
-      "github fetch-interactions": "1",
-      "hn mentions": "--query soleur --limit 20",
-    };
+    // Every one of the thirteen literals, invoked with a real number for the placeholder.
     for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
-      const key = verb.slice(ROUTER.length + 1);
-      const cmd = withArgs[key] ? `${verb} ${withArgs[key]}` : verb;
-      expect(verdictWith(decide, lines, bash(cmd)), cmd).toBe("allow");
+      expect(verdictWith(decide, lines, bash(withNumbers(verb))), verb).toBe("allow");
     }
   });
 
-  it("G2-10 (must PASS): chained `;` read verbs allow, and a cron WITHOUT the directive is unaffected", () => {
+  it("G2-10 (must PASS): chained `;` and `&&` literals allow, every segment position is judged, and a cron WITHOUT the directive is unaffected", () => {
     expect(
-      verdictWith(
-        decide,
-        lines,
-        bash(`${ROUTER} github fetch-interactions 1; ${ROUTER} hn mentions --query soleur --limit 30`),
-      ),
+      verdictWith(decide, lines, bash(`${ROUTER} github fetch-interactions 1; ${ROUTER} hn mentions --query soleur --limit 20`)),
     ).toBe("allow");
     expect(
       verdictWith(
         decide,
         lines,
         bash(
-          `${ROUTER} discord guild-info; ${ROUTER} discord channels; ${ROUTER} x fetch-metrics; ${ROUTER} bsky get-metrics; ${ROUTER} linkedin fetch-metrics; ${ROUTER} linkedin fetch-activity`,
+          `${ROUTER} discord guild-info; ${ROUTER} discord channels; ${ROUTER} x fetch-metrics; ${ROUTER} bsky get-metrics; ${ROUTER} linkedin fetch-metrics`,
         ),
       ),
     ).toBe("allow");
-    // One bad segment in a chain poisons the whole command.
-    expect(verdictWith(decide, lines, bash(`${ROUTER} hn mentions; ${ROUTER} bsky post x`))).toBe("deny");
+    // The prompt's whole GitHub batch is one command of five literals.
+    expect(
+      verdictWith(
+        decide,
+        lines,
+        bash(["repo-stats", "activity", "contributors", "discussions", "fetch-interactions"].map((v) => `${ROUTER} github ${v} 1`).join("; ")),
+      ),
+    ).toBe("allow");
+    // One bad segment poisons the whole command, in ANY position.
+    for (const bad of [`${ROUTER} bsky post x`, `${ROUTER} hn mentions --query other --limit 20`, `${ROUTER} platforms extra`]) {
+      const ok = `${ROUTER} platforms`;
+      for (const cmd of [`${bad}; ${ok}; ${ok}`, `${ok}; ${bad}; ${ok}`, `${ok}; ${ok}; ${bad}`, `${ok} && ${bad} && ${ok}`]) {
+        expect(verdictWith(decide, lines, bash(cmd)), cmd).toBe("deny");
+      }
+    }
     // A different cron keeps its own Bash surface and its tools.
     const other = linesFor(OTHER_CRON);
     expect(
@@ -396,8 +438,10 @@ describe("community router scripts — posting verbs and secret-echo guards (sou
 // #7122 P1-A, script layer — an argument of an allowlisted verb must never be
 // EVALUATED by the platform script it reaches. Three sink classes, detected by SYNTAX on
 // comment-stripped source (never a bare token): (1) a positional/option-derived variable
-// used in a bash arithmetic context without a `^[0-9]+$` guard (`(( limit ))`, `$(( … ))`
-// evaluate `HOME[$(cmd)]` as code); (2) any `$` interpolated into the program text of
+// (bound at the top of a handler OR inside a `case` arm) used in a bash arithmetic context
+// without a numeric guard — `(( limit ))`, `$(( … ))`, a numeric `[[ "$n" -gt 1 ]]`
+// comparison, a `${s:$n}` substring offset and `let` all evaluate `HOME[$(cmd)]` as code
+// (verified with bash: each creates the marker file); (2) any `$` interpolated into the program text of
 // `python3 -c "…"` or a double-quoted jq program (pass values by sys.argv / --arg /
 // --argjson instead); (3) `eval`, `bash -c`, `sh -c` beyond the one pinned registry line.
 // The detectors are exported-by-position so the non-vacuity rows can run them on
@@ -421,7 +465,8 @@ function shellFunctions(code: string): Map<string, string> {
 /** Variables a `cmd_*` handler binds from its positional parameters (its caller-controlled operands). */
 function operandVars(body: string): Set<string> {
   const vars = new Set<string>();
-  for (const m of body.matchAll(/^\s*(?:local\s+)?([A-Za-z_]\w*)=\(?"\$\{?[0-9]/gm)) vars.add(m[1]);
+  // A binding at the start of a line, or after a `)` / `;` (a `case` arm: `--limit) limit="${2:-20}"; shift 2 ;;`).
+  for (const m of body.matchAll(/(?:^|[;)])\s*(?:local\s+)?([A-Za-z_]\w*)=\(?"\$\{?[0-9]/gm)) vars.add(m[1]);
   return vars;
 }
 
@@ -431,11 +476,27 @@ function arithmeticIdentifiers(body: string): Set<string> {
     const expr = m[1].replace(/\$\{#\w+\}/g, " ");
     for (const id of expr.matchAll(/\b[A-Za-z_]\w*\b/g)) ids.add(id[0]);
   }
+  // `[[ … -eq|-ne|-lt|-le|-gt|-ge … ]]` evaluates BOTH operands arithmetically.
+  for (const m of body.matchAll(/\[\[([^\n]*?)\]\]/g)) {
+    if (!/\s-(?:eq|ne|lt|le|gt|ge)\s/.test(m[1])) continue;
+    for (const ref of m[1].replace(/\$\{#[^}]*\}/g, " ").matchAll(/\$\{?([A-Za-z_]\w*)/g)) ids.add(ref[1]);
+  }
+  // `${s:offset:length}`: offset and length are arithmetic. `:-`, `:=`, `:+`, `:?` (no space) are NOT.
+  for (const m of body.matchAll(/\$\{\w+:([^}\n]*)\}/g)) {
+    if (/^[-=+?]/.test(m[1])) continue;
+    for (const id of m[1].matchAll(/\b[A-Za-z_]\w*\b/g)) ids.add(id[0]);
+  }
+  // `let n+=1`: the whole argument list is arithmetic.
+  for (const m of body.matchAll(/(?:^|[;&|(\s])let\s+([^\n;]*)/gm)) {
+    for (const id of m[1].matchAll(/\b[A-Za-z_]\w*\b/g)) ids.add(id[0]);
+  }
   return ids;
 }
 
+// A numeric guard: `[[ "$v" =~ ^[0-9]+$ ]]`, its canonical form `^(0|[1-9][0-9]*)$`, or a
+// `require_uint <label> "$v"` call.
 const numericGuardFor = (v: string, body: string): boolean =>
-  new RegExp(String.raw`"\$\{?${v}\}?"\s*=~\s*\^\[0-9\]\+\$`).test(body) ||
+  new RegExp(String.raw`"\$\{?${v}\}?"\s*=~\s*\^(?:\[0-9\]\+|\(0\|\[1-9\]\[0-9\]\*\))\$`).test(body) ||
   new RegExp(String.raw`\brequire_uint\s+\S+\s+"\$\{?${v}\}?"`).test(body);
 
 /** Findings for one script's comment-stripped source; empty means clean. */
@@ -477,6 +538,18 @@ describe("community router scripts — no argument is evaluated by the script it
       jqVar: 'x=$(jq -r "$prog" <<<"$m")\n',
       eval: 'eval "$user_cmd"\n',
       bashC: 'bash -c "$1"\n',
+      // Test-design P3-4: contexts that evaluate an operand WITHOUT `(( ))` (each verified with
+      // bash: `HOME[$(touch m)]` creates the marker).
+      testGt: 'cmd_x() {\n  local n="${1:-5}"\n  [[ "$n" -gt 1 ]]\n}\n',
+      testEq: 'cmd_x() {\n  local n="${1:-5}"\n  if [[ 1 -eq $n ]]; then :; fi\n}\n',
+      testLe: 'cmd_x() {\n  local n="${1:-5}"\n  [[ ${n} -le 9 && -n x ]]\n}\n',
+      substring: 'cmd_x() {\n  local n="${1:-5}"\n  local s="abcdef"\n  echo "${s:$n}"\n}\n',
+      substringSpaced: 'cmd_x() {\n  local n="${1:-5}"\n  local s="abcdef"\n  echo "${s: -$n}"\n}\n',
+      substringLength: 'cmd_x() {\n  local n="${1:-5}"\n  local s="abcdef"\n  echo "${s:0:n}"\n}\n',
+      letBuiltin: 'cmd_x() {\n  local n="${1:-5}"\n  let total=n+1\n}\n',
+      // Bound inside a `case` arm, not at the start of a line.
+      caseArm: 'cmd_x() {\n  local limit=20\n  while [[ $# -gt 0 ]]; do\n    case "$1" in\n      --limit) limit="${2:-20}"; shift 2 ;;\n    esac\n  done\n  (( limit > 1 ))\n}\n',
+      caseArmTest: 'cmd_x() {\n  local limit=20\n  case "$1" in\n    --limit)\n      limit="$2"\n      ;;\n  esac\n  [[ "$limit" -gt 1 ]]\n}\n',
     };
     for (const [name, snippet] of Object.entries(bad)) {
       expect(evaluationSinkFindings(snippet), name).not.toEqual([]);
@@ -487,6 +560,11 @@ describe("community router scripts — no argument is evaluated by the script it
       python: "x=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' \"$query\")\n",
       jq: 'x=$(echo "$m" | jq --argjson n "$limit" \'.[0:$n]\')\n',
       lengthOnly: 'cmd_post() {\n  local text="${1:?usage}"\n  if (( ${#text} > 280 )); then exit 1; fi\n}\n',
+      // No operand variable: `$#`, an array length and a default-value expansion are not sinks.
+      argCount: 'cmd_x() {\n  local n="${1:-5}"\n  while [[ $# -gt 0 ]]; do shift; done\n  [[ ${#missing[@]} -gt 0 ]]\n  echo "${n:-x}" "${n:=y}"\n}\n',
+      testGuarded: 'cmd_x() {\n  local n="${1:-5}"\n  require_uint n "$n"\n  [[ "$n" -gt 1 ]]\n  echo "${s:$n}"\n}\n',
+      caseArmGuarded: 'cmd_x() {\n  local limit=20\n  case "$1" in\n    --limit) limit="${2:-20}"; shift 2 ;;\n  esac\n  require_uint "--limit" "$limit"\n  (( limit > 1 ))\n}\n',
+      canonicalRegexGuard: 'cmd_x() {\n  local n="${1:-5}"\n  if ! [[ "$n" =~ ^(0|[1-9][0-9]*)$ ]]; then exit 1; fi\n  [[ "$n" -gt 1 ]]\n}\n',
     };
     for (const [name, snippet] of Object.entries(good)) {
       expect(evaluationSinkFindings(snippet), name).toEqual([]);
@@ -514,6 +592,38 @@ describe("community router scripts — no argument is evaluated by the script it
       expect(emitted.length, `${f}: the helper must report the rejection`).toBeGreaterThan(0);
       for (const l of emitted) expect(l, `${f}: ${l}`).not.toMatch(/\$\{?(?:2|value|val|arg)\b/);
       expect(m![1]).toMatch(/exit 1/);
+    }
+  });
+
+  it("require_uint accepts a canonical decimal only (no leading zero: `08` is an octal literal in bash arithmetic), and the two copies are identical", () => {
+    const bodies = ["discord-community.sh", "hn-community.sh"].map((f) => {
+      const m = codeOf(f).match(/^require_uint\(\)\s*\{\n([\s\S]*?)^\}/m);
+      expect(m, `${f}: require_uint helper`).not.toBeNull();
+      return m![1];
+    });
+    // One rule, two copies (the scripts are standalone): a change to one is a change to both.
+    expect(bodies[0]).toBe(bodies[1]);
+    expect(bodies[0]).toContain("=~ ^(0|[1-9][0-9]*)$");
+    expect(bodies[0]).not.toContain("^[0-9]+$");
+    // Behaviour, on the extracted helper itself.
+    const fn = `require_uint() {\n${bodies[0]}}\n`;
+    const accepts = (v: string) =>
+      spawnSync("bash", ["-c", `${fn}\nrequire_uint label "$1"`, "_", v], { encoding: "utf8" }).status === 0;
+    for (const ok of ["0", "1", "50", "123456789012345678"]) expect(accepts(ok), ok).toBe(true);
+    for (const bad of ["", "08", "00", "007", "-1", "+1", "1.5", "1e3", "0x1", " 1", "1 ", "1\n", "a", "1;id", "HOME[$(id)]"]) {
+      expect(accepts(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("error text in the hn and x scripts never echoes an operand (label-only messages: option, command, value)", () => {
+    for (const f of ["hn-community.sh", "x-community.sh"]) {
+      const echoes = codeOf(f).split("\n").filter((l) => /\becho\b[^\n]*"Error:/.test(l));
+      expect(echoes.length, `${f}: error echoes found`).toBeGreaterThan(0);
+      for (const l of echoes) {
+        expect(l, `${f}: ${l}`).not.toMatch(/\bgot\b/);
+        expect(l, `${f}: ${l}`).not.toMatch(/Unknown (?:option|command)[^"\n]*\$/);
+        expect(l, `${f}: ${l}`).not.toMatch(/\$\{?(?:1|[a-z_]*val|[a-z_]+_id|max_results|command|item_id)\b/);
+      }
     }
   });
 
@@ -547,11 +657,15 @@ describe("community router scripts — no argument is evaluated by the script it
         ["messages", hostile("MARKER")],
         ["members", hostile("MARKER")],
         ["messages", "123", "1;id"],
+        // A leading zero used to reach `(( ))` as an octal literal and exit 0 with `[]`.
+        ["messages", "123", "08"],
+        ["messages", "123", "50", "08"],
+        ["messages", "08"],
       ]) {
         const r = run("discord-community.sh", args);
         expect(r.status, args.join(" ")).not.toBe(0);
         expect(r.pwned, `${args.join(" ")}: marker created`).toBe(false);
-        expect(`${r.stdout}${r.stderr}`).not.toMatch(/HOME\[|touch|pwned|1;id/);
+        expect(`${r.stdout}${r.stderr}`).not.toMatch(/HOME\[|touch|pwned|1;id|\b08\b|value too great/);
       }
     });
 
@@ -563,6 +677,11 @@ describe("community router scripts — no argument is evaluated by the script it
         expect(lim.status).not.toBe(0);
         expect(lim.pwned).toBe(false);
         expect(`${lim.stdout}${lim.stderr}`).not.toMatch(/HOME\[|touch|pwned/);
+        // A leading-zero limit is refused by the helper, not by an arithmetic error.
+        const octal = run("hn-community.sh", ["mentions", "--query", "soleur", "--limit", "08"], bin);
+        expect(octal.status).not.toBe(0);
+        expect(`${octal.stdout}${octal.stderr}`).toMatch(/--limit must be a non-negative integer/);
+        expect(`${octal.stdout}${octal.stderr}`).not.toMatch(/\b08\b|value too great/);
         const trend = run("hn-community.sh", ["trending", "--limit", hostile("MARKER")], bin);
         expect(trend.status).not.toBe(0);
         expect(trend.pwned).toBe(false);

@@ -21,8 +21,9 @@ vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
 });
 
-import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { mkdtemp, mkdir, writeFile, rm, symlink, open } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +36,9 @@ import { STRUCTURAL_EXCLUSION_PREFIXES } from "@/server/inngest/functions/_cron-
 
 const STATUS_DIR = ".soleur-collector-status";
 const STATUS_FILE = "collector-status.jsonl";
+// The cap, as a LITERAL: a test that imported the constant as its only source would stay
+// green if the cap were silently changed to anything (or to Infinity).
+const CAP_BYTES = 65_536;
 
 const created: string[] = [];
 
@@ -150,9 +154,14 @@ describe("readCollectorStatus — hostile sidecar (#7122)", () => {
     expect(report.failed.map((r) => r.cause)).toEqual(["sidecar-unsafe"]);
   });
 
+  it("the size cap is exactly 65536 bytes (the literal, not just whatever the handler exports)", () => {
+    expect(COLLECTOR_STATUS_MAX_BYTES).toBe(CAP_BYTES);
+    expect(CAP_BYTES).toBe(64 * 1024);
+  });
+
   it("a forged OVERSIZED sidecar is present-but-failed (sidecar-oversize) and its content is not parsed", async () => {
     const big = JSON.stringify({ collector: "github", command: "activity", exit: 0, cause: "" });
-    const cwd = await makeCwd([big.padEnd(COLLECTOR_STATUS_MAX_BYTES + 10, " ")]);
+    const cwd = await makeCwd([big.padEnd(CAP_BYTES + 10, " ")]);
     const report = await readCollectorStatus(cwd);
     expect(report.present).toBe(true);
     expect(report.failed).toEqual([{ collector: "github", command: "unknown", exit: 1, cause: "sidecar-oversize" }]);
@@ -164,11 +173,62 @@ describe("readCollectorStatus — hostile sidecar (#7122)", () => {
     const cwd = await mkdtemp(join(tmpdir(), "collector-status-"));
     created.push(cwd);
     await mkdir(join(cwd, STATUS_DIR), { recursive: true });
-    await writeFile(join(cwd, STATUS_DIR, STATUS_FILE), line.padEnd(COLLECTOR_STATUS_MAX_BYTES, " "));
+    await writeFile(join(cwd, STATUS_DIR, STATUS_FILE), line.padEnd(CAP_BYTES, " "));
     const report = await readCollectorStatus(cwd);
     expect(report.failed).toEqual([]);
     expect(report.records).toHaveLength(1);
   });
+
+  it("a sidecar FILE entry that is a DIRECTORY is refused (not a regular file), never read", async () => {
+    const cwd = await makeCwd();
+    await mkdir(join(cwd, STATUS_DIR, STATUS_FILE), { recursive: true });
+    const report = await readCollectorStatus(cwd);
+    expect(report.present).toBe(true);
+    expect(report.failed).toEqual([{ collector: "github", command: "unknown", exit: 1, cause: "sidecar-unsafe" }]);
+  });
+
+  // A FIFO at the leaf: a blocking open() waits for a writer that never comes and hangs the
+  // run. O_NONBLOCK makes the open return at once and fstat's isFile() refuses it before a
+  // read. (mkfifo is POSIX; the precondition check skips the row where it is unavailable
+  // instead of passing vacuously.)
+  const mkfifoWorks = (() => {
+    try {
+      const d = mkdtempSync(join(tmpdir(), "fifo-probe-"));
+      try {
+        execFileSync("mkfifo", [join(d, "f")]);
+        return statSync(join(d, "f")).isFIFO();
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!mkfifoWorks)("a FIFO planted as the sidecar file does not hang the read: present-but-failed (sidecar-unsafe)", async () => {
+    const cwd = await makeCwd();
+    await mkdir(join(cwd, STATUS_DIR), { recursive: true });
+    const fifo = join(cwd, STATUS_DIR, STATUS_FILE);
+    execFileSync("mkfifo", [fifo]);
+    expect(statSync(fifo).isFIFO()).toBe(true); // non-vacuity: the fixture really is a FIFO
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const HUNG = Symbol("hung");
+    const raced = await Promise.race([
+      readCollectorStatus(cwd),
+      new Promise<typeof HUNG>((resolve) => {
+        timer = setTimeout(() => resolve(HUNG), 3_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (raced === HUNG) {
+      // Unblock the stuck open() so the worker can exit, then fail the row.
+      await (await open(fifo, "r+")).close().catch(() => {});
+      throw new Error("readCollectorStatus hung on a FIFO sidecar");
+    }
+    expect(raced.present).toBe(true);
+    expect(raced.failed).toEqual([{ collector: "github", command: "unknown", exit: 1, cause: "sidecar-unsafe" }]);
+  }, 15_000);
 
   it("an unknown command / collector / cause / warn string is NOT echoed: it maps to `unknown` / `other`", async () => {
     const report = await readCollectorStatus(
@@ -205,6 +265,30 @@ describe("readCollectorStatus — hostile sidecar (#7122)", () => {
       );
       expect(report.failed[0].cause, `cause ${cause} fell out of the closed set`).toBe(cause);
     }
+  });
+
+  it("every command the collector dispatches, and every warn it can record, passes the closed vocabulary unchanged (parity with github-community.sh)", async () => {
+    const script = readFileSync(
+      new URL("../../../../../plugins/soleur/skills/community/scripts/github-community.sh", import.meta.url),
+      "utf8",
+    );
+    const dispatch = [...script.matchAll(/^\s{4}([a-z][a-z-]*)\)\s+cmd_/gm)].map((m) => m[1]);
+    const warns = [...script.matchAll(/_CAP_WARN="([a-z_]+)"/g)].map((m) => m[1]);
+    // Non-vacuity: the script's five verbs and its one warn value are really found.
+    expect(dispatch.sort()).toEqual(["activity", "contributors", "discussions", "fetch-interactions", "repo-stats"]);
+    expect([...new Set(warns)]).toEqual(["truncated_at_per_page"]);
+    for (const command of dispatch) {
+      const report = await readCollectorStatus(
+        await makeCwd([JSON.stringify({ collector: "github", command, exit: 0, cause: "", warn: warns[0] })]),
+      );
+      expect(report.records[0].command, `${command} fell out of the closed command set`).toBe(command);
+      expect(report.records[0].warn, `warn ${warns[0]} fell out of the closed warn set`).toBe(warns[0]);
+    }
+    // A verb the script does not dispatch is not echoed.
+    const unknown = await readCollectorStatus(
+      await makeCwd([JSON.stringify({ collector: "github", command: "post-issue", exit: 0, cause: "" })]),
+    );
+    expect(unknown.records[0].command).toBe("unknown");
   });
 
   it("a non-numeric exit is a failure, not a success", async () => {
@@ -360,19 +444,23 @@ describe("paging must not discard the digest (separation invariant)", () => {
       at(GATE_END),
       at('step.run("mint-write-token"'),
       at('step.run("publish-issue"'),
-      at('step.run("verify-output"'),
       at("safeCommitAndPr({"),
+      // advisory telemetry runs AFTER the commit, never between the publish and the commit
+      at('step.run("verify-output"'),
     ];
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it("applies the flag after BOTH persistence and the catch, so a trailing throw cannot drop the page", () => {
     const persist = src.indexOf("safeCommitAndPr({");
-    // Anchor on the catch that CLOSES the handler body's inner try -- the first
-    // one AFTER persistence. A bare indexOf("} catch (err) {") finds an earlier
-    // catch in a different function, which makes the ordering assertion
-    // trivially true and the guard vacuous (caught by mutation).
-    const catchStart = src.indexOf("} catch (err) {", persist);
+    // Anchor on the catch that CLOSES the handler body's inner try: the one that holds
+    // `threw = true;`. Anchoring on a catch-clause text instead (a bare indexOf of
+    // "} catch (err) {") finds an earlier catch in a different function, which makes the
+    // ordering assertion trivially true and the guard vacuous (caught by mutation), and
+    // made the neighbouring catch variables pick names to dodge the anchor.
+    const threwAt = src.indexOf("threw = true;");
+    expect(threwAt, "threw = true; not found").toBeGreaterThan(-1);
+    const catchStart = src.lastIndexOf("} catch", threwAt);
     const apply = src.indexOf("if (collectorSignalRed) heartbeatOk = false;");
 
     expect(persist).toBeGreaterThan(-1);
@@ -387,7 +475,7 @@ describe("paging must not discard the digest (separation invariant)", () => {
     expect(apply).toBeGreaterThan(catchStart);
   });
 
-  it("keeps the cohort-wide issue-verified persistence gate shape", () => {
+  it("keeps the cohort-wide persistence-gate shape (heartbeatOk && not timed out)", () => {
     expect(src).toMatch(
       /if \(heartbeatOk && !spawnResult\.abortedByTimeout\) \{[\s\S]{0,800}?safeCommitAndPr\(\{/,
     );

@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -49,6 +49,7 @@ import {
   isPathAllowed,
   parsePorcelainZ,
   safeCommitAndPr,
+  __safeCommitInternals,
   type SafeCommitResult,
 } from "@/server/inngest/functions/_cron-safe-commit";
 // #7849: the fixture git environment comes from the shared helper. SEED_ENV is layered ON TOP so
@@ -57,6 +58,7 @@ import {
 // discovery ceiling and the prefix sweep: the previous `{ ...process.env, ...SEED_ENV }` spread
 // carried an inherited GIT_DIR straight through, and GIT_DIR beats both `cwd` and `git -C`.
 import { gitFixtureEnv } from "../../../../../plugins/soleur/test/lib/git-fixture-env";
+import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "@/server/inngest/functions/_git-hardening";
 
 // ---------------------------------------------------------------------------
 // Fixture harness — real git repo + local bare "origin"
@@ -921,6 +923,7 @@ describe("safeCommitAndPr — #5111 option surface", () => {
 // Guard 3 mutation matrix.
 // ---------------------------------------------------------------------------
 
+const DIGEST_BYTES = "# 2026-06-10\nrendered by the handler\n";
 const DIGEST_DIR = "knowledge-base/support/community/";
 const TODAY_DIGEST = `${DIGEST_DIR}2026-06-10-digest.md`;
 const PRIOR_DIGEST = `${DIGEST_DIR}2026-06-09-digest.md`;
@@ -934,11 +937,17 @@ async function seedPublishedDigest(f: Fixture): Promise<void> {
   await tgit(f.repo, "push", "origin", "main");
 }
 
-function exactConfig(f: Fixture, octokit: OctokitStub) {
+/**
+ * An exactPaths config. `expectedContent` is REQUIRED by the helper in this mode, so
+ * `digestContent` (the bytes the test writes to TODAY_DIGEST) defaults to the shared
+ * DIGEST_BYTES fixture; a row that writes other bytes passes them here.
+ */
+function exactConfig(f: Fixture, octokit: OctokitStub, digestContent: string = DIGEST_BYTES) {
   return {
     ...baseConfig(f, octokit),
     allowedPaths: [] as readonly string[],
     exactPaths: [TODAY_DIGEST] as readonly string[],
+    expectedContent: { [TODAY_DIGEST]: digestContent } as Readonly<Record<string, string>>,
   };
 }
 
@@ -987,7 +996,7 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
     await writeFile(join(f.repo, `${TODAY_DIGEST}.evil`), "evil\n");
 
     const octokit = makeOctokitStub();
-    const result = await safeCommitAndPr(exactConfig(f, octokit));
+    const result = await safeCommitAndPr(exactConfig(f, octokit, "# 2026-06-10\ntoday\n"));
 
     expect(result.status).toBe("committed");
     const shown = await tgit(f.repo, "show", "--name-only", "--format=", "HEAD");
@@ -1011,7 +1020,7 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
     await writeFile(join(f.repo, "www.evil.example-free-money"), "x\n");
 
     const octokit = makeOctokitStub();
-    const result = await safeCommitAndPr(exactConfig(f, octokit));
+    const result = await safeCommitAndPr(exactConfig(f, octokit, "# today\n"));
 
     expect(result.status).toBe("committed");
     const body = prBodyArg(octokit);
@@ -1034,7 +1043,7 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
     await writeFile(join(f.repo, "www.evil.example-free-money"), "x\n");
 
     const octokit = makeOctokitStub();
-    const result = await safeCommitAndPr(exactConfig(f, octokit));
+    const result = await safeCommitAndPr(exactConfig(f, octokit, "# today\n"));
 
     expect(result.status).toBe("committed");
     const body = prBodyArg(octokit);
@@ -1052,7 +1061,7 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
     await writeFile(join(f.repo, TODAY_DIGEST), "# today\n");
 
     const octokit = makeOctokitStub();
-    const result = await safeCommitAndPr(exactConfig(f, octokit));
+    const result = await safeCommitAndPr(exactConfig(f, octokit, "# today\n"));
 
     expect(result.status).toBe("committed");
     expect(result.status === "committed" ? result.fileCount : 0).toBe(1);
@@ -1074,7 +1083,7 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
     await writeFile(join(f.repo, TODAY_DIGEST), "# today\n");
 
     const octokit = makeOctokitStub();
-    await safeCommitAndPr(exactConfig(f, octokit));
+    await safeCommitAndPr(exactConfig(f, octokit, "# today\n"));
 
     const arg = prBodyArg(octokit);
     expect(arg).toBeTypeOf("string");
@@ -1111,8 +1120,6 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
 // did not render. Every row plants state AFTER the seed so the fixture's own setup
 // stays clean, and proves the effect with a marker file, never by reading config.
 // ---------------------------------------------------------------------------
-
-const DIGEST_BYTES = "# 2026-06-10\nrendered by the handler\n";
 
 function marker(f: Fixture, name: string): string {
   return join(f.root, `marker-${name}`);
@@ -1244,15 +1251,32 @@ describe("safeCommitAndPr — #7122 P1-B planted workspace state (exactPaths mod
   describe("replay-resume arm (a pre-existing branch ahead of origin/main)", () => {
     const branchFor = () => deriveBranchName("cron-test-fixture", RUN_STARTED_AT);
 
-    async function precreateBranch(f: Fixture, files: Record<string, string>): Promise<void> {
+    // The handler's own identity (what a crashed first attempt would have committed as).
+    const BOT_ENV = {
+      GIT_AUTHOR_NAME: "github-actions[bot]",
+      GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+      GIT_COMMITTER_NAME: "github-actions[bot]",
+      GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+    };
+    async function precreateBranch(
+      f: Fixture,
+      files: Record<string, string>,
+      as: { env?: Record<string, string>; message?: string } = {},
+    ): Promise<void> {
       await tgit(f.repo, "checkout", "-b", branchFor());
       for (const [rel, content] of Object.entries(files)) {
         await mkdir(dirname(join(f.repo, rel)), { recursive: true });
         await writeFile(join(f.repo, rel), content);
       }
       await tgit(f.repo, "add", "--", ...Object.keys(files));
-      await tgit(f.repo, "commit", "-m", "agent-authored");
+      await execFileP("git", ["commit", "-m", as.message ?? "agent-authored"], {
+        cwd: f.repo,
+        env: { ...gitFixtureEnv(f.repo), ...SEED_ENV, ...as.env },
+      });
     }
+    /** A commit exactly as a crashed earlier attempt of this handler would have left it. */
+    const precreateGenuine = (f: Fixture, files: Record<string, string>) =>
+      precreateBranch(f, files, { env: BOT_ENV, message: "fix(test): fixture commit" });
 
     it("B-5: a branch carrying an EXTRA file beside the digest is NOT pushed", async () => {
       const f = await makeFixture();
@@ -1281,9 +1305,9 @@ describe("safeCommitAndPr — #7122 P1-B planted workspace state (exactPaths mod
       expect(await remoteBranches(f.remote)).toEqual(["main"]);
     });
 
-    it("B-5d (control): a genuine replay — one commit, only the digest, the rendered bytes — still resumes and pushes", async () => {
+    it("B-5d (control): a genuine replay — one commit, only the digest, the rendered bytes, the handler's identity and message — still resumes and pushes", async () => {
       const f = await makeFixture();
-      await precreateBranch(f, { [TODAY_DIGEST]: DIGEST_BYTES });
+      await precreateGenuine(f, { [TODAY_DIGEST]: DIGEST_BYTES });
       const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
       expect(result.status).toBe("committed");
       expect(result.status === "committed" && result.resumed).toBe(true);
@@ -1303,5 +1327,553 @@ describe("safeCommitAndPr — #7122 P1-B git hardening applies to every caller (
     for (const h of ["pre-commit", "commit-msg", "post-commit", "pre-push", "reference-transaction"]) {
       expect(existsSync(marker(f, `hook-${h}`)), h).toBe(false);
     }
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// #7122 round-1 — exactPaths trusts NO agent-influenced git state. Every row below
+// reproduces a bypass the round-1 security review demonstrated against the previous
+// revision (E1b, E2, E8, E10, F1-F4) or a layer a mutation showed to be unpinned
+// (test-design P2-4, P3-6). Planted state is created AFTER the seed, effects are proved
+// with marker files and by reading the REMOTE, never by reading the helper's own config.
+// ---------------------------------------------------------------------------
+
+describe("safeCommitAndPr — #7122 round-1 exactPaths hardening", () => {
+  const BOT_ENV = {
+    GIT_AUTHOR_NAME: "github-actions[bot]",
+    GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+    GIT_COMMITTER_NAME: "github-actions[bot]",
+    GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com",
+  };
+  const BRANCH = () => deriveBranchName("cron-test-fixture", RUN_STARTED_AT);
+  const exactCfg = (f: Fixture, content = DIGEST_BYTES, octokit = makeOctokitStub()) => exactConfig(f, octokit, content);
+
+  async function writeDigest(f: Fixture, content = DIGEST_BYTES): Promise<void> {
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.repo, TODAY_DIGEST), content);
+  }
+  async function remoteGit(f: Fixture, ...args: string[]): Promise<string> {
+    return (await execFileP("git", ["--git-dir", f.remote, ...args], { env: gitFixtureEnv(f.remote) })).stdout.trim();
+  }
+  async function script(f: Fixture, name: string, body = ""): Promise<string> {
+    const path = join(f.root, `${name}.sh`);
+    await writeFile(path, `#!/bin/sh\ntouch '${marker(f, name)}'\n${body}\nexit 0\n`);
+    await chmod(path, 0o755);
+    return path;
+  }
+  async function bareRepo(f: Fixture, name: string): Promise<string> {
+    const dir = join(f.root, name);
+    await execFileP("git", ["init", "--bare", dir], { env: gitFixtureEnv(dir) });
+    return dir;
+  }
+  const cfgSet = (gitDirOrFile: string, k: string, v: string) =>
+    execFileP("git", ["config", "--file", gitDirOrFile, k, v], { env: { ...gitFixtureEnv(gitDirOrFile), ...SEED_ENV } });
+  /** A commit exactly as an earlier attempt of the handler would have left it. */
+  async function precreate(f: Fixture, files: Record<string, string>, bot = true, message = "fix(test): fixture commit") {
+    await tgit(f.repo, "checkout", "-b", BRANCH());
+    for (const [rel, content] of Object.entries(files)) {
+      await mkdir(dirname(join(f.repo, rel)), { recursive: true });
+      await writeFile(join(f.repo, rel), content);
+    }
+    await tgit(f.repo, "add", "--", ...Object.keys(files));
+    await execFileP("git", ["commit", "-m", message], {
+      cwd: f.repo,
+      env: { ...gitFixtureEnv(f.repo), ...SEED_ENV, ...(bot ? BOT_ENV : {}) },
+    });
+  }
+  const runExact = (f: Fixture, extra: Record<string, unknown> = {}, content = DIGEST_BYTES) =>
+    safeCommitAndPr({ ...exactCfg(f, content), ...extra } as never);
+  const failedWith = (r: SafeCommitResult) => (r.status === "failed" ? r.message : `<${r.status}>`);
+
+  // ---- (a) the base of the commit is the freshly fetched origin tip --------------------
+
+  describe("agent commits never ride along (E1b / F1)", () => {
+    it("R-1: an agent commit of a workflow file on local main is NOT in the pushed branch; its parent is the origin tip", async () => {
+      const f = await makeFixture();
+      const originTip = await remoteGit(f, "rev-parse", "main");
+      await mkdir(join(f.repo, ".github/workflows"), { recursive: true });
+      await writeFile(join(f.repo, ".github/workflows/evil.yml"), "on: push\n");
+      await tgit(f.repo, "add", "--", ".github/workflows/evil.yml");
+      await tgit(f.repo, "commit", "-m", "agent: add workflow");
+      await writeDigest(f);
+
+      const result = await runExact(f);
+
+      expect(result.status).toBe("committed");
+      const branch = result.status === "committed" ? result.branch : "";
+      expect((await remoteGit(f, "diff", "--name-only", "main", branch)).split("\n")).toEqual([TODAY_DIGEST]);
+      expect(await remoteGit(f, "rev-parse", `${branch}^`)).toBe(originTip);
+      expect(await remoteGit(f, "rev-list", "--count", `main..${branch}`)).toBe("1");
+      // The local HEAD is the handler's commit, not the agent's.
+      expect(await tgit(f.repo, "rev-parse", "HEAD")).toBe(await remoteGit(f, "rev-parse", branch));
+    });
+
+    it("R-1b: the same with `refs/remotes/origin/main` FORGED to the agent commit (the local ref is not the trust anchor)", async () => {
+      const f = await makeFixture();
+      const originTip = await remoteGit(f, "rev-parse", "main");
+      await writeFile(join(f.repo, "agent-evil.txt"), "x\n");
+      await tgit(f.repo, "add", "--", "agent-evil.txt");
+      await tgit(f.repo, "commit", "-m", "agent");
+      await tgit(f.repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+      await writeDigest(f);
+
+      const result = await runExact(f);
+
+      expect(result.status).toBe("committed");
+      const branch = result.status === "committed" ? result.branch : "";
+      expect((await remoteGit(f, "diff", "--name-only", "main", branch)).split("\n")).toEqual([TODAY_DIGEST]);
+      expect(await remoteGit(f, "rev-parse", `${branch}^`)).toBe(originTip);
+    });
+
+    it("R-1c: the base is the origin tip FETCHED NOW — when main advanced during the run the commit still sits on the new tip and carries nothing else", async () => {
+      const f = await makeFixture();
+      // Someone else merges to origin/main after this workspace was cloned.
+      const other = join(f.root, "other");
+      await execFileP("git", ["clone", "-b", "main", f.remote, other], { env: gitFixtureEnv(other) });
+      await writeFile(join(other, "later.md"), "merged later\n");
+      await tgit(other, "add", "--", "later.md");
+      await tgit(other, "commit", "-m", "later");
+      await tgit(other, "push", "origin", "main");
+      const newTip = await remoteGit(f, "rev-parse", "main");
+      await writeDigest(f);
+
+      const result = await runExact(f);
+
+      expect(result.status).toBe("committed");
+      const branch = result.status === "committed" ? result.branch : "";
+      expect(await remoteGit(f, "rev-parse", `${branch}^`)).toBe(newTip);
+      expect((await remoteGit(f, "diff", "--name-only", "main", branch)).split("\n")).toEqual([TODAY_DIGEST]);
+    });
+
+    it("R-1d: an origin that cannot be fetched is refused (closed reason), nothing is pushed", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      await tgit(f.repo, "remote", "set-url", "origin", join(f.root, "does-not-exist.git"));
+      const result = await runExact(f);
+      expect(failedWith(result)).toBe("integrity: origin-fetch-failed");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+  });
+
+  // ---- (b) replace refs, commondir, alternates: git state the agent could redirect -----
+
+  describe("redirected git state is removed before it is read (E2 / E10 / F2 / F3)", () => {
+    it("R-2 (E10): a `refs/replace` swap on the resume arm cannot make an attacker blob read as the rendered bytes", async () => {
+      const f = await makeFixture();
+      await precreate(f, { [TODAY_DIGEST]: "ATTACKER_CHOSEN_TEXT\n" });
+      const badBlob = await tgit(f.repo, "rev-parse", `${BRANCH()}:${TODAY_DIGEST}`);
+      await writeFile(join(f.root, "good.txt"), DIGEST_BYTES);
+      const goodBlob = await tgit(f.repo, "hash-object", "-w", join(f.root, "good.txt"));
+      await tgit(f.repo, "replace", badBlob, goodBlob);
+      // Harness is live: through the replace ref a plain read returns the GOOD bytes.
+      expect(await tgit(f.repo, "cat-file", "blob", `${BRANCH()}:${TODAY_DIGEST}`)).toBe(DIGEST_BYTES.trim());
+
+      const result = await runExact(f);
+
+      expect(failedWith(result)).toBe("integrity: resume-content-mismatch");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("R-2b: the hardening reads the REAL object — `--no-replace-objects` AND GIT_NO_REPLACE_OBJECTS are both pinned, and runGit returns the unreplaced blob", async () => {
+      expect(GIT_HARDENING_ARGS).toContain("--no-replace-objects");
+      expect(GIT_HARDENING_ENV.GIT_NO_REPLACE_OBJECTS).toBe("1");
+      const f = await makeFixture();
+      await precreate(f, { [TODAY_DIGEST]: "ATTACKER_CHOSEN_TEXT\n" });
+      const badBlob = await tgit(f.repo, "rev-parse", `${BRANCH()}:${TODAY_DIGEST}`);
+      await writeFile(join(f.root, "good.txt"), DIGEST_BYTES);
+      const goodBlob = await tgit(f.repo, "hash-object", "-w", join(f.root, "good.txt"));
+      await tgit(f.repo, "replace", badBlob, goodBlob);
+      const hardened = await __safeCommitInternals.runGit(f.repo, ["cat-file", "blob", `${BRANCH()}:${TODAY_DIGEST}`]);
+      expect(hardened.stdout).toBe("ATTACKER_CHOSEN_TEXT\n");
+    });
+
+    it("R-2c: replace refs are DELETED from the workspace by the sanitiser (loose and packed)", async () => {
+      const f = await makeFixture();
+      await tgit(f.repo, "replace", await tgit(f.repo, "rev-parse", "HEAD:knowledge-base/marketing/file-0.md"), await tgit(f.repo, "rev-parse", "HEAD:knowledge-base/marketing/file-1.md"));
+      await tgit(f.repo, "pack-refs", "--all");
+      await tgit(f.repo, "replace", await tgit(f.repo, "rev-parse", "HEAD:knowledge-base/marketing/file-2.md"), await tgit(f.repo, "rev-parse", "HEAD:knowledge-base/marketing/file-3.md"));
+      expect((await tgit(f.repo, "for-each-ref", "refs/replace/")).split("\n").filter(Boolean)).toHaveLength(2);
+      await writeDigest(f);
+      expect((await runExact(f)).status).toBe("committed");
+      expect(await tgit(f.repo, "for-each-ref", "refs/replace/")).toBe("");
+    });
+
+    it("R-3 (E2): a planted `.git/commondir` pointing at an attacker directory neither executes its filter/fsmonitor nor redirects the push", async () => {
+      const f = await makeFixture();
+      const evilGit = join(f.root, "evilgit");
+      await execFileP("cp", ["-r", join(f.repo, ".git"), evilGit]);
+      const evilRemote = await bareRepo(f, "evil.git");
+      const filter = await script(f, "filter", "cat >/dev/null; echo ATTACKER_CHOSEN_TEXT");
+      const fsm = await script(f, "fsmonitor");
+      for (const [k, v] of [
+        ["filter.x.clean", filter],
+        ["filter.x.required", "true"],
+        ["core.fsmonitor", fsm],
+        ["remote.origin.pushurl", evilRemote],
+      ] as const) await cfgSet(join(evilGit, "config"), k, v);
+      await mkdir(join(evilGit, "info"), { recursive: true });
+      await writeFile(join(evilGit, "info", "attributes"), "* filter=x\n");
+      await writeFile(join(f.repo, ".git", "commondir"), `${evilGit}\n`);
+      await writeDigest(f);
+
+      const result = await runExact(f);
+
+      expect(result.status).toBe("committed");
+      expect(existsSync(marker(f, "filter")), "planted clean filter ran").toBe(false);
+      expect(existsSync(marker(f, "fsmonitor")), "planted fsmonitor ran").toBe(false);
+      const branch = result.status === "committed" ? result.branch : "";
+      expect(await remoteBranches(f.remote)).toContain(branch);
+      expect(await remoteBranches(evilRemote)).toEqual([]);
+      expect(await remoteGit(f, "show", `${branch}:${TODAY_DIGEST}`)).toBe(DIGEST_BYTES.trim());
+      expect(existsSync(join(f.repo, ".git", "commondir"))).toBe(false);
+    });
+
+    it("R-3b: `objects/info/alternates`, `info/grafts`, `info/exclude` and `config.worktree` are removed, `shallow` is kept", async () => {
+      const f = await makeFixture();
+      await mkdir(join(f.repo, ".git", "info"), { recursive: true });
+      await mkdir(join(f.repo, ".git", "objects", "info"), { recursive: true });
+      await writeFile(join(f.repo, ".git", "objects", "info", "alternates"), `${join(f.root, "elsewhere")}\n`);
+      await writeFile(join(f.repo, ".git", "info", "grafts"), "");
+      await writeFile(join(f.repo, ".git", "info", "exclude"), "*.md\n");
+      await writeFile(join(f.repo, ".git", "config.worktree"), "[core]\n\tfsmonitor = /bin/true\n");
+      await writeFile(join(f.repo, ".git", "shallow"), "");
+      await writeDigest(f);
+      expect((await runExact(f)).status).toBe("committed");
+      for (const rel of ["objects/info/alternates", "info/grafts", "info/exclude", "config.worktree"]) {
+        expect(existsSync(join(f.repo, ".git", rel)), rel).toBe(false);
+      }
+      expect(existsSync(join(f.repo, ".git", "shallow"))).toBe(true);
+    });
+
+    it("R-3c: a `.git/info/exclude` that hides the digest does not hide it from the scan (the file is removed)", async () => {
+      const f = await makeFixture();
+      await mkdir(join(f.repo, ".git", "info"), { recursive: true });
+      await writeFile(join(f.repo, ".git", "info", "exclude"), "*.md\n");
+      await writeDigest(f);
+      const result = await runExact(f);
+      expect(result.status).toBe("committed");
+    });
+  });
+
+  // ---- (c) symlinked .git entries ---------------------------------------------------------
+
+  describe("a symlink at a `.git` entry git writes through is refused, never followed (E8 / F4)", () => {
+    it.each(["config", "info", "hooks", "objects"])("R-4: `.git/%s` as a symlink is refused and the link target is untouched", async (entry) => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const target = join(f.root, `victim-${entry}`);
+      if (entry === "config") {
+        await writeFile(target, "VICTIM-BYTES\n");
+        await rm(join(f.repo, ".git", "config"));
+      } else {
+        await mkdir(join(f.repo, ".git", entry), { recursive: true });
+        await rename(join(f.repo, ".git", entry), target);
+        await writeFile(join(target, "sentinel"), "VICTIM-BYTES\n");
+      }
+      await symlink(target, join(f.repo, ".git", entry));
+
+      const result = await runExact(f);
+
+      expect(failedWith(result)).toBe("integrity: git-entry-symlink");
+      expect(await readFile(entry === "config" ? target : join(target, "sentinel"), "utf-8")).toBe("VICTIM-BYTES\n");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("R-4b: the rewritten config is created exclusively and a pre-existing symlinked file is never written through", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const victim = join(f.root, "victim.txt");
+      await writeFile(victim, "VICTIM-BYTES\n");
+      // `info/attributes` is removed, not followed: a link there must not delete or write the victim.
+      await mkdir(join(f.repo, ".git", "info"), { recursive: true });
+      await symlink(victim, join(f.repo, ".git", "info", "attributes"));
+      expect((await runExact(f)).status).toBe("committed");
+      expect(await readFile(victim, "utf-8")).toBe("VICTIM-BYTES\n");
+    });
+  });
+
+  // ---- (d) the resume gate -----------------------------------------------------------------
+
+  describe("the pre-push gate on a pre-existing branch", () => {
+    it("R-5: a RENAME onto the digest path (same bytes) is refused — rename detection must not pair a delete with the add", async () => {
+      const f = await makeFixture();
+      const seeded = "seed content 0\n";
+      await tgit(f.repo, "checkout", "-b", BRANCH());
+      await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+      await tgit(f.repo, "mv", "knowledge-base/marketing/file-0.md", TODAY_DIGEST);
+      await execFileP("git", ["commit", "-m", "fix(test): fixture commit"], {
+        cwd: f.repo,
+        env: { ...gitFixtureEnv(f.repo), ...SEED_ENV, ...BOT_ENV },
+      });
+      // Harness is live: plain git sees this commit as a rename (R100), not as an add.
+      expect(await tgit(f.repo, "diff", "--name-status", "origin/main", "HEAD")).toMatch(/^R100\t/);
+
+      const result = await runExact(f, {}, seeded);
+
+      expect(failedWith(result)).toBe("integrity: resume-unexpected-path");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("R-5b: a DELETE beside the digest is refused (status A/M only)", async () => {
+      const f = await makeFixture();
+      await tgit(f.repo, "checkout", "-b", BRANCH());
+      await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+      await writeFile(join(f.repo, TODAY_DIGEST), DIGEST_BYTES);
+      await tgit(f.repo, "rm", "-q", "--", "knowledge-base/marketing/file-0.md");
+      await tgit(f.repo, "add", "--", TODAY_DIGEST);
+      await execFileP("git", ["commit", "-m", "fix(test): fixture commit"], {
+        cwd: f.repo,
+        env: { ...gitFixtureEnv(f.repo), ...SEED_ENV, ...BOT_ENV },
+      });
+      expect(failedWith(await runExact(f))).toBe("integrity: resume-unexpected-path");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("R-5c: the digest committed as an EXECUTABLE (100755) or as a SYMLINK (120000) is refused", async () => {
+      for (const kind of ["exec", "symlink"] as const) {
+        const f = await makeFixture();
+        await tgit(f.repo, "checkout", "-b", BRANCH());
+        await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+        if (kind === "exec") {
+          await writeFile(join(f.repo, TODAY_DIGEST), DIGEST_BYTES);
+          await tgit(f.repo, "add", "--", TODAY_DIGEST);
+          await tgit(f.repo, "update-index", "--chmod=+x", TODAY_DIGEST);
+        } else {
+          await symlink(DIGEST_BYTES.trim(), join(f.repo, TODAY_DIGEST)); // blob = the link text
+          await tgit(f.repo, "add", "--", TODAY_DIGEST);
+        }
+        await execFileP("git", ["commit", "-m", "fix(test): fixture commit"], {
+          cwd: f.repo,
+          env: { ...gitFixtureEnv(f.repo), ...SEED_ENV, ...BOT_ENV },
+        });
+        // For the symlink the worktree entry is a link too; the content bytes equal the link text + "\n" is not the digest,
+        // so restore a regular file on disk (the gate judges the COMMIT, not the worktree).
+        const result = await runExact(f, {}, kind === "symlink" ? DIGEST_BYTES.trim() : DIGEST_BYTES);
+        expect(failedWith(result), kind).toMatch(/^integrity: resume-(unexpected-mode|content-mismatch)$/);
+        expect(await remoteBranches(f.remote), kind).toEqual(["main"]);
+        if (kind === "exec") expect(failedWith(result)).toBe("integrity: resume-unexpected-mode");
+      }
+    });
+
+    it("R-5d: a branch commit by someone else, or with another message, is refused (bot identity and handler message required)", async () => {
+      const f = await makeFixture();
+      await precreate(f, { [TODAY_DIGEST]: DIGEST_BYTES }, false);
+      expect(failedWith(await runExact(f))).toBe("integrity: resume-unexpected-commit-metadata");
+      const g = await makeFixture();
+      await precreate(g, { [TODAY_DIGEST]: DIGEST_BYTES }, true, "agent says hello");
+      expect(failedWith(await runExact(g))).toBe("integrity: resume-unexpected-commit-metadata");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+      expect(await remoteBranches(g.remote)).toEqual(["main"]);
+    });
+
+    it("R-5e: the gate runs before EVERY push in exactPaths mode — it is not conditioned on the resume arm", async () => {
+      const src = await readFile(join(__dirname, "../../../server/inngest/functions/_cron-safe-commit.ts"), "utf-8");
+      const start = src.indexOf("-- 8.5.");
+      const end = src.indexOf('await git(["push"', start);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      const gate = src.slice(start, end);
+      expect(gate).toMatch(/if \(exactMode\) \{\s*const unsafe = await pushTipReason\(/);
+      expect(gate).not.toMatch(/resuming/);
+    });
+
+    it("R-5f (control): a genuine one-commit replay on the fetched tip still resumes and pushes", async () => {
+      const f = await makeFixture();
+      await precreate(f, { [TODAY_DIGEST]: DIGEST_BYTES });
+      const result = await runExact(f);
+      expect(result.status).toBe("committed");
+      expect(result.status === "committed" && result.resumed).toBe(true);
+      expect(await remoteBranches(f.remote)).toContain(BRANCH());
+    });
+  });
+
+  // ---- (e) expectedContent is required ------------------------------------------------------
+
+  describe("expectedContent is REQUIRED in exactPaths mode", () => {
+    it("R-6: absent, empty, or not covering a staged path: refused before any git command; nothing is pushed", async () => {
+      for (const expectedContent of [undefined, {}, { "knowledge-base/other.md": "x" }] as const) {
+        const f = await makeFixture();
+        await writeDigest(f);
+        const cfg = { ...exactCfg(f) } as Record<string, unknown>;
+        if (expectedContent === undefined) delete cfg.expectedContent;
+        else cfg.expectedContent = expectedContent;
+        const result = await safeCommitAndPr(cfg as never);
+        expect(failedWith(result), JSON.stringify(expectedContent)).toBe("integrity: expected-content-missing");
+        expect(await remoteBranches(f.remote)).toEqual(["main"]);
+      }
+    });
+  });
+
+  // ---- (f) planted config keys: the config is rewritten from nothing ------------------------
+
+  describe("planted config keys (test-design P2-4: a denylist implementation must fail here)", () => {
+    it("R-7: gpg signing, url.insteadOf, sshCommand, credential helper, include.path, aliases and a filter via include never run or redirect; the config keeps only [core] + remote.origin (+ the branch upstream)", async () => {
+      const f = await makeFixture();
+      const evilRemote = await bareRepo(f, "evil.git");
+      const gpg = await script(f, "gpg");
+      const cred = await script(f, "credential");
+      const ssh = await script(f, "ssh");
+      const aliasCmd = await script(f, "alias");
+      const includedFilter = await script(f, "included-filter", "cat >/dev/null; echo ATTACKER_CHOSEN_TEXT");
+      const included = join(f.root, "included.cfg");
+      await writeFile(included, `[filter "y"]\n\tclean = ${includedFilter}\n\trequired = true\n`);
+      const cfg = join(f.repo, ".git", "config");
+      for (const [k, v] of [
+        ["commit.gpgsign", "true"],
+        ["gpg.program", gpg],
+        ["credential.helper", `!${cred}`],
+        ["core.sshCommand", ssh],
+        ["alias.push", `!${aliasCmd}`],
+        ["include.path", included],
+        ["remote.origin.pushurl", evilRemote],
+        ["url." + evilRemote + ".insteadOf", f.remote],
+        ["core.editor", ssh],
+        ["receive.denyCurrentBranch", "ignore"],
+      ] as const) await cfgSet(cfg, k, v);
+      await mkdir(join(f.repo, ".git", "info"), { recursive: true });
+      await writeFile(join(f.repo, ".git", "info", "attributes"), "* filter=y\n");
+      await writeDigest(f);
+
+      const result = await runExact(f);
+
+      expect(result.status).toBe("committed");
+      for (const m of ["gpg", "credential", "ssh", "alias", "included-filter"]) {
+        expect(existsSync(marker(f, m)), `planted ${m} ran`).toBe(false);
+      }
+      expect(await remoteBranches(evilRemote)).toEqual([]);
+      const branch = result.status === "committed" ? result.branch : "";
+      expect(await remoteBranches(f.remote)).toContain(branch);
+      expect(await remoteGit(f, "show", `${branch}:${TODAY_DIGEST}`)).toBe(DIGEST_BYTES.trim());
+      const after = await readFile(cfg, "utf-8");
+      const sections = [...after.matchAll(/^\[([a-z]+)(?: "[^"]*")?\]/gim)].map((m) => m[1].toLowerCase());
+      expect([...new Set(sections)].sort()).toEqual(expect.arrayContaining(["core", "remote"]));
+      for (const s of new Set(sections)) expect(["core", "remote", "branch"], `unexpected config section [${s}]`).toContain(s);
+      expect(after).not.toMatch(/gpg|insteadof|sshcommand|credential|include|alias|filter|pushurl/i);
+    });
+  });
+
+  // ---- filter-free staging, each layer on its own -------------------------------------------
+
+  describe("each hardening layer on its own (the rewrite masks them through safeCommitAndPr)", () => {
+    it("R-8: staging hashes the file's own bytes with NO filter even when a filter is configured and selected by attributes", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const filter = await script(f, "filter", "cat >/dev/null; echo ATTACKER_CHOSEN_TEXT");
+      await cfgSet(join(f.repo, ".git", "config"), "filter.x.clean", filter);
+      await mkdir(join(f.repo, ".git", "info"), { recursive: true });
+      await writeFile(join(f.repo, ".git", "info", "attributes"), "* filter=x\n");
+      const git = (args: string[], env?: Record<string, string>) => __safeCommitInternals.runGit(f.repo, args, env);
+
+      // Layer 1 alone (no sanitising): the blob is the file's own bytes whatever the filter
+      // would have produced. (git's racy-clean index check can still EXECUTE a configured
+      // clean filter at index-write time and discard its output — that execution is what the
+      // sanitiser below removes, so it is asserted with the sanitiser, not without it.)
+      const refused = await __safeCommitInternals.stageExactPaths(f.repo, git, [TODAY_DIGEST]);
+      expect(refused).toBeNull();
+      expect((await git(["cat-file", "blob", `:${TODAY_DIGEST}`])).stdout).toBe(DIGEST_BYTES);
+
+      // Layers 1+2 (the production order): after sanitising, NO filter process runs at all.
+      await rm(marker(f, "filter"), { force: true });
+      expect(await __safeCommitInternals.sanitizeWorkspaceGit(f.repo, git)).toBeNull();
+      expect(await __safeCommitInternals.stageExactPaths(f.repo, git, [TODAY_DIGEST])).toBeNull();
+      expect(existsSync(marker(f, "filter")), "the clean filter ran during staging").toBe(false);
+      expect((await git(["cat-file", "blob", `:${TODAY_DIGEST}`])).stdout).toBe(DIGEST_BYTES);
+    });
+
+    it("R-8b: the staged mode is 100644 even for an executable file on disk", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      await chmod(join(f.repo, TODAY_DIGEST), 0o755);
+      const result = await runExact(f);
+      expect(result.status).toBe("committed");
+      const branch = result.status === "committed" ? result.branch : "";
+      expect(await remoteGit(f, "ls-tree", branch, "--", TODAY_DIGEST)).toMatch(/^100644 blob /);
+    });
+
+    it("R-8c: `-c core.attributesFile=/dev/null`, `core.fsmonitor=false` and `core.hooksPath=/dev/null` each hold on their own", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const attrs = join(f.root, "attrs");
+      await writeFile(attrs, "* filter=x\n");
+      const filter = await script(f, "filter", "cat >/dev/null; echo ATTACKER_CHOSEN_TEXT");
+      const fsm = await script(f, "fsmonitor");
+      const hooksDir = join(f.root, "hooks");
+      await mkdir(hooksDir);
+      for (const h of ["pre-commit", "post-commit", "commit-msg"]) {
+        await writeFile(join(hooksDir, h), `#!/bin/sh\ntouch '${marker(f, `hook-${h}`)}'\nexit 0\n`);
+        await chmod(join(hooksDir, h), 0o755);
+      }
+      const cfg = join(f.repo, ".git", "config");
+      for (const [k, v] of [
+        ["core.attributesFile", attrs],
+        ["filter.x.clean", filter],
+        ["core.fsmonitor", fsm],
+        ["core.hooksPath", hooksDir],
+      ] as const) await cfgSet(cfg, k, v);
+
+      await __safeCommitInternals.runGit(f.repo, ["hash-object", "-w", "--", TODAY_DIGEST]);
+      await __safeCommitInternals.runGit(f.repo, ["status", "--porcelain=v1"]);
+      await __safeCommitInternals.runGit(f.repo, ["commit", "--allow-empty", "-m", "x"], BOT_ENV);
+
+      expect(existsSync(marker(f, "filter")), "attributesFile layer").toBe(false);
+      expect(existsSync(marker(f, "fsmonitor")), "fsmonitor layer").toBe(false);
+      for (const h of ["pre-commit", "post-commit", "commit-msg"]) expect(existsSync(marker(f, `hook-${h}`)), h).toBe(false);
+    });
+
+    it("R-8d: a symlinked PARENT directory of the digest is refused (the final component is not the only link that can redirect the read)", async () => {
+      const f = await makeFixture();
+      const elsewhere = join(f.root, "elsewhere");
+      await mkdir(elsewhere);
+      await writeFile(join(elsewhere, "2026-06-10-digest.md"), DIGEST_BYTES);
+      await mkdir(join(f.repo, "knowledge-base", "support"), { recursive: true });
+      await symlink(elsewhere, join(f.repo, "knowledge-base", "support", "community"));
+      const result = await runExact(f);
+      // The scan sees the file through the link only as an untracked directory entry or not at all:
+      // either way nothing is committed and nothing is pushed.
+      expect(result.status === "committed").toBe(false);
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+  });
+
+  // ---- multi-key expectedContent -----------------------------------------------------------
+
+  describe("expectedContent is compared for EVERY key", () => {
+    const SECOND = `${DIGEST_DIR}2026-06-10-second.md`;
+    const twoPaths = (f: Fixture) => ({
+      ...exactCfg(f),
+      exactPaths: [TODAY_DIGEST, SECOND] as readonly string[],
+    });
+
+    it("R-9: two exact paths with both byte-correct commit together; a wrong SECOND key refuses (a first-key-only compare would pass it)", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      await writeFile(join(f.repo, SECOND), "second digest\n");
+      const ok = await safeCommitAndPr({ ...twoPaths(f), expectedContent: { [TODAY_DIGEST]: DIGEST_BYTES, [SECOND]: "second digest\n" } } as never);
+      expect(ok.status).toBe("committed");
+      expect(ok.status === "committed" && ok.fileCount).toBe(2);
+
+      const g = await makeFixture();
+      await writeDigest(g);
+      await writeFile(join(g.repo, SECOND), "second digest, tampered\n");
+      const bad = await safeCommitAndPr({ ...twoPaths(g), expectedContent: { [TODAY_DIGEST]: DIGEST_BYTES, [SECOND]: "second digest\n" } } as never);
+      expect(failedWith(bad)).toBe("integrity: index-content-mismatch");
+      expect(await remoteBranches(g.remote)).toEqual(["main"]);
+
+      // ...and a wrong FIRST key, symmetrically.
+      const h = await makeFixture();
+      await writeDigest(h, "tampered first\n");
+      await writeFile(join(h.repo, SECOND), "second digest\n");
+      const bad1 = await safeCommitAndPr({ ...twoPaths(h), expectedContent: { [TODAY_DIGEST]: DIGEST_BYTES, [SECOND]: "second digest\n" } } as never);
+      expect(failedWith(bad1)).toBe("integrity: index-content-mismatch");
+    });
+
+    it("R-9b: the same on the resume arm — a branch whose second blob is wrong is not pushed", async () => {
+      const f = await makeFixture();
+      await precreate(f, { [TODAY_DIGEST]: DIGEST_BYTES, [SECOND]: "second digest, tampered\n" });
+      const result = await safeCommitAndPr({ ...twoPaths(f), expectedContent: { [TODAY_DIGEST]: DIGEST_BYTES, [SECOND]: "second digest\n" } } as never);
+      expect(failedWith(result)).toBe("integrity: resume-content-mismatch");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
   });
 });
