@@ -1093,21 +1093,32 @@ jobs:
           marker_args=(-p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")
           # marker_args is shared by get/read-back/delete; the interactive-skip flag carried on
           # the `secrets set` argv below exists only on that verb of the installed Doppler CLI
-          # (v3.76.6) — get/delete reject it as an unknown flag, which is what produced four days
-          # of `marker_read` reds (#9429). Do not fold it back into this array.
+          # (v3.76.6) — get/delete reject it as an unknown flag, which is what kept #9429's
+          # `marker_read` reds running. Do not fold it back into this array.
           # marker_state prints `present` or `absent`; any other outcome (an auth or transport fault) is a
           # failure of THIS function, never an `absent`.
           marker_state() {
-            local out rc=0
+            local out diag rc=0
             out="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}" 2>&1)" || rc=$?
-            if [[ "$rc" -eq 0 ]]; then printf 'present'; return 0; fi
-            if grep -qiF 'Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
-            # Self-describing fault (#9429): the run log must name the CLI's own error. The
-            # literal substitution is safe — the token-shape guard above pins DOPPLER_TOKEN to
-            # [A-Za-z0-9._-]; the sed is a defensive second net for any other dp.* token shape.
+            if [[ "$rc" -eq 0 ]]; then
+              # An empty value is an unearned marker: a manual write of "" would otherwise freeze
+              # the soak at marker_kept while lb-weight-gate reads empty as absent — silently.
+              if [[ -n "$out" ]]; then printf 'present'; else printf 'absent'; fi
+              return 0
+            fi
+            # Anchored: only the CLI's own key-miss line classifies as absent — a config or
+            # project miss ("Could not find requested config|project") stays a fault.
+            if grep -qiE '^Doppler Error: Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
+            # Self-describing fault (#9429): the run log must name the CLI's own error — but the
+            # error text is REMOTE input, so it gets the same posture as show_ssh_stderr: the
+            # token-shape guard above pins DOPPLER_TOKEN to [A-Za-z0-9._-] (glob-literal, so the
+            # substitution is exact); the sed masks any other dp.* shape AND prefixes every line
+            # so a forged ::command can't smuggle into the runner; tr strips non-printables.
             # stderr, not stdout: the caller captures stdout, so this cannot corrupt the verdict.
-            sed -E 's/dp\.[a-z]+\.[A-Za-z0-9._-]+/[REDACTED-TOKEN]/g' \
-              <<<"${out//$DOPPLER_TOKEN/[REDACTED-DOPPLER-TOKEN]}" >&2
+            diag="${out//$DOPPLER_TOKEN/[REDACTED-DOPPLER-TOKEN]}"
+            printf '%s' "${diag:0:8192}" | LC_ALL=C tr -cd '\12\40-\176' \
+              | sed -E 's/dp\.[a-z]+\.[A-Za-z0-9._-]+/[REDACTED-TOKEN]/g; s/^/[doppler-stderr] /' >&2
+            printf '\n' >&2
             return 1
           }
 
@@ -1162,7 +1173,7 @@ jobs:
                   || { echo "::error::RED (${reason}) and deleting the marker FAILED."; emit red_delete_failed "$reason"; exit 1; }
                 after="$(marker_state)" || after=unknown
                 if [[ "$after" != absent ]]; then
-                  echo "::error::RED (${reason}); the delete returned success but the key still reads present. A branch config inherits prd, so a value placed in prd shows through; remove it there."
+                  echo "::error::RED (${reason}); the delete returned success but the recheck reads '${after}' — a 'present' can be a prd-level shadow (a branch config inherits prd; remove it there), an 'unknown' means the recheck itself faulted and nothing is proven."
                   emit red_delete_failed "$reason"
                   exit 1
                 fi

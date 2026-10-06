@@ -363,6 +363,30 @@ queued_count 0
 printf '{"total_count":2,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)"),$(run_row 701 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
 jobs_for 700 "$(infl x 1)"; jobs_for 701 "$(infl x 2)"
 PROBE_ENV="MAX_IP_RUNS=2" expect "full page + total_count == page length -> judged" 0 "HEALTHY:"
+
+# 19d. A non-numeric total_count on a full page is an anomaly that must not read
+#      as "not truncated" — `[ "x" -gt n ]` errors to false silently. UNKNOWN.
+mkplan team
+queued_count 0
+printf '{"total_count":"abc","workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
+jobs_for 700 "$(infl x 1)"
+PROBE_ENV="MAX_IP_RUNS=1" expect "non-numeric in_progress total_count on a full page -> UNKNOWN rc2" 2 "UNKNOWN:"
+
+# 19e. Same anomaly on the queued-count read: non-numeric QUEUED_RUNS must not
+#      silently skip the age block into a false HEALTHY.
+mkplan team
+printf '{"total_count":"abc","workflow_runs":[]}\n' > "$WORK/fix/queued-count.json"
+in_flight 0
+expect "non-numeric queued total_count -> UNKNOWN rc2" 2 "UNKNOWN:"
+
+# 19f. MAX_IP_RUNS > 100 must not disarm the truncation guard: GitHub caps
+#      per_page at 100, so the full-page conjunct is measured against 100, not
+#      the knob. 100 rows + total_count=150 with the knob at 150 -> UNKNOWN.
+mkplan team
+queued_count 0
+rows=(); for i in $(seq 700 799); do rows+=("$(run_row $i "$(iso_ago 300)")"); done
+printf '{"total_count":150,"workflow_runs":[%s]}\n' "$(IFS=,; echo "${rows[*]}")" > "$WORK/fix/inprogress.json"
+PROBE_ENV="MAX_IP_RUNS=150" expect "MAX_IP_RUNS>100 clamped to the API's 100-row page -> UNKNOWN rc2" 2 "UNKNOWN:"
 unset PROBE_ENV 2>/dev/null || true
 
 # 20. Non-numeric knob must fail UNKNOWN, not degrade the gate to a false
@@ -423,32 +447,38 @@ jobs_for 700 "$(infl x 1)" \
 queued_page $(live_rows 30 1900)
 expect "queued jobs inside an in-progress run do not count as delivered" 1 "UNDER_ASSIGNED:"
 
-# 25. Workflow hygiene (#9533): the filing steps' dedupe query must never again
-#     combine gh's one-expression --jq with a jq-style --arg — gh aborts the
-#     step with "unknown arguments" under set -euo pipefail, and the alarm the
-#     step exists to file is never filed. Count-shaped greps, never a
-#     pipe-fed grep -q reader (grep-q-pipe-guard).
+# 25. Workflow hygiene (#9533): no `gh` argv may carry `--arg` — gh rejects it
+#     as an unknown flag in ANY position, and under `set -euo pipefail` the
+#     filing step dies and the alarm is never filed. The check joins `\`
+#     continuations and drops comment lines so reordered/line-split spellings
+#     are caught too — a literal '--jq --arg' adjacency grep only catches the
+#     one historical spelling. The dedupe must ALSO stay fail-open: reverting
+#     the `if !` wrapper re-creates the silent-filing defect while passing a
+#     flag-shape pin. Count-shaped greps, never pipe-fed grep -q readers.
 QH_WF=".github/workflows/scheduled-actions-queue-health.yml"
-qh_jq_arg="$(grep -c -- '--jq --arg' "$QH_WF" 2>/dev/null || true)"
-if [ "$qh_jq_arg" -eq 0 ]; then
-  pass "workflow carries zero 'gh --jq + --arg' sites"
+[ -f "$QH_WF" ] || { echo "FAIL - $QH_WF not found (run from the repo root)" >&2; exit 1; }
+qh_jq_arg="$(sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba}' "$QH_WF" 2>/dev/null \
+  | grep -vE '^[[:space:]]*#' \
+  | grep -cE 'gh +(api|issue|pr|run|release|repo|workflow) +[^|]*--arg\b' || true)"
+qh_failopen="$(grep -c -- 'if ! ISSUE_LIST=' "$QH_WF" 2>/dev/null || true)"
+if [ "$qh_jq_arg" -eq 0 ] && [ "$qh_failopen" -eq 2 ]; then
+  pass "workflow carries zero '--arg-in-gh-argv' sites and both dedupe queries stay fail-open"
 else
-  fail "workflow re-introduced gh --jq --arg ($qh_jq_arg site(s)) — repipe through standalone jq"
+  fail "dedupe hygiene drifted (--arg-in-gh sites=$qh_jq_arg want 0, fail-open wrappers=$qh_failopen want 2)"
 fi
-qh_steps="$(grep -c -- '- name: File ' "$QH_WF" 2>/dev/null || true)"
-qh_named="$(grep -cE -- '- name: (File action-required on runner under-assignment|File probe-unavailable note on UNKNOWN)' "$QH_WF" 2>/dev/null || true)"
-if [ "$qh_named" -eq 2 ] && [ "$qh_steps" -ge 2 ]; then
+qh_named="$(grep -cE -- '^[[:space:]]*- name: (File action-required on runner under-assignment|File probe-unavailable note on UNKNOWN)[[:space:]]*$' "$QH_WF" 2>/dev/null || true)"
+if [ "$qh_named" -eq 2 ]; then
   pass "both queue-health filing steps present (under-assignment + probe-unavailable)"
 else
-  fail "queue-health filing steps drifted (File steps=$qh_steps, named=$qh_named)"
+  fail "queue-health filing steps drifted (named File steps=$qh_named want 2)"
 fi
 
 # Anti-vacuity floor: deleting every assertion must not exit 0. Reports
 # directly and exits (ADR-193): a floor routed through fail() is disarmed
 # by the same neutered machinery it exists to catch.
 total=$((passes + fails))
-if [ "$total" -lt 29 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=29" >&2
+if [ "$total" -lt 32 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=32" >&2
   exit 1
 fi
 
