@@ -134,7 +134,7 @@ jobs:
           # sweep drains dupes by label).
           if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
             --label "ci/actions-queue-health" --json number,title 2>&1)"; then
-            echo "::error::dedupe query failed (gh issue list: $(printf '%s' "$ISSUE_LIST" | LC_ALL=C tr -cd '\12\40-\176' | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
+            echo "::error::dedupe query failed (gh issue list: $(printf '%s' "$ISSUE_LIST" | LC_ALL=C tr -cd '\40-\176' | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           elif ! EXISTING="$(printf '%s' "$ISSUE_LIST" | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty' 2>/dev/null)"; then
             echo "::error::dedupe query failed (jq parse) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
@@ -189,7 +189,7 @@ jobs:
           # forward `--arg` (#9533), so the title match runs in a standalone jq.
           if ! ISSUE_LIST="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
             --label "ci/actions-queue-health" --json number,title 2>&1)"; then
-            echo "::error::dedupe query failed (gh issue list: $(printf '%s' "$ISSUE_LIST" | LC_ALL=C tr -cd '\12\40-\176' | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
+            echo "::error::dedupe query failed (gh issue list: $(printf '%s' "$ISSUE_LIST" | LC_ALL=C tr -cd '\40-\176' | head -c 300)) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           elif ! EXISTING="$(printf '%s' "$ISSUE_LIST" | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty' 2>/dev/null)"; then
             echo "::error::dedupe query failed (jq parse) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
