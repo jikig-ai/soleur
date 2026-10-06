@@ -28,9 +28,24 @@ PASS=0; FAIL=0; TOTAL=0
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
+# Fixture-directory guard. The CANONICAL copy lives in plugins/soleur/test/test-helpers.sh;
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh asserts this copy is byte-equal to it.
+# Do not reword it in one file only.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 # ONE owning tempdir with ONE trap (ADR-129); every scenario takes a subdirectory.
 TMPDIR="${TMPDIR:-/var/tmp}"; export TMPDIR
 ROOT="$(mktemp -d "${TMPDIR%/}/watch-reg-narrowing.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+assert_fixture_dir "$ROOT"
 trap 'rm -rf "$ROOT"' EXIT
 
 SENTINEL='<!-- registration-narrowing-watch:v1 threshold=3 -->'
@@ -39,12 +54,13 @@ INDEX=scripts/lib/test-affected-paths.sh
 N=0
 REPO=""; BASE=""; MOCKD=""; OUT=""; ERR=""; RC=0
 
-g() { git -C "$REPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+g() { assert_fixture_dir "$REPO"; git -C "$REPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
 
 # New fixture repo with the two runner files and one unrelated file, plus a mock dir.
 mkrepo() {
   N=$((N + 1))
   REPO="$ROOT/repo$N"; MOCKD="$ROOT/mock$N"
+  assert_fixture_dir "$REPO"; assert_fixture_dir "$MOCKD"
   mkdir -p "$REPO/scripts/lib" "$MOCKD" || { echo "FATAL: mkdir failed" >&2; exit 2; }
   git init -q -b main "$REPO" || { echo "FATAL: git init failed" >&2; exit 2; }
   printf 'a\nb\n' > "$REPO/$TEST_ALL"; printf 'x\ny\n' > "$REPO/$INDEX"; printf 'o\n' > "$REPO/other.txt"
@@ -67,7 +83,7 @@ MOCK
   chmod +x "$MOCKD/gh"
   issue OPEN '[]'
 }
-issue() { printf '{"state":"%s","comments":%s}' "$1" "$2" > "$MOCKD/issue.json"; }
+issue() { assert_fixture_dir "$MOCKD"; printf '{"state":"%s","comments":%s}' "$1" "$2" > "$MOCKD/issue.json"; }
 bot_comment()  { printf '[{"author":{"login":"github-actions"},"body":"notice\\n%s"}]' "$SENTINEL"; }
 bot_comment2() { printf '[{"author":{"login":"github-actions[bot]"},"body":"notice\\n%s"}]' "$SENTINEL"; }
 human_comment() { printf '[{"author":{"login":"someone"},"body":"%s"}]' "$SENTINEL"; }
@@ -75,23 +91,27 @@ human_comment() { printf '[{"author":{"login":"someone"},"body":"%s"}]' "$SENTIN
 # Commit helpers. `q` adds one additive commit on a runner file (qualifying);
 # `qs` does the same with a chosen subject. SHAS accumulates their short hashes.
 SHAS=""
-qs() { echo "line-$RANDOM-$RANDOM" >> "$REPO/$TEST_ALL"; g add -A; g commit -q -m "$1"; SHAS="$SHAS $(g log -1 --format=%h)"; }
+qs() { assert_fixture_dir "$REPO"; echo "line-$RANDOM-$RANDOM" >> "$REPO/$TEST_ALL"; g add -A; g commit -q -m "$1"; SHAS="$SHAS $(g log -1 --format=%h)"; }
 q() { qs "add suite $1"; }
-other_only() { echo "o2-$RANDOM" >> "$REPO/other.txt"; g add -A; g commit -q -m "docs only"; }
-deleting() { tail -n +2 "$REPO/$TEST_ALL" > "$REPO/$TEST_ALL.new" && mv "$REPO/$TEST_ALL.new" "$REPO/$TEST_ALL"; g add -A; g commit -q -m "rewrite runner (deletes a line)"; }
+other_only() { assert_fixture_dir "$REPO"; echo "o2-$RANDOM" >> "$REPO/other.txt"; g add -A; g commit -q -m "docs only"; }
+deleting() { assert_fixture_dir "$REPO"; tail -n +2 "$REPO/$TEST_ALL" > "$REPO/$TEST_ALL.new" && mv "$REPO/$TEST_ALL.new" "$REPO/$TEST_ALL"; g add -A; g commit -q -m "rewrite runner (deletes a line)"; }
 merge_commit() {
   g checkout -q -b side && other_only && g checkout -q main && g merge -q --no-ff side -m "merge side" || { echo "FATAL: merge fixture failed" >&2; exit 2; }
 }
 
 run() {
   OUT=""; ERR=""; RC=0
+  assert_fixture_dir "$MOCKD"; assert_fixture_dir "$REPO"
   local o="$MOCKD/stdout" e="$MOCKD/stderr"
+  assert_fixture_dir "$o"; assert_fixture_dir "$e"
   ( cd "$REPO" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" GH_REPO=jikig-ai/soleur "WATCH_BASE_SHA=${WATCH_BASE_SHA_OVERRIDE:-$BASE}" bash "$SUT" "$@" ) > "$o" 2> "$e"
   RC=$?
   OUT="$(cat "$o")"; ERR="$(cat "$e")"
 }
 comments_posted() { grep -c '^issue comment ' "$MOCKD/calls" || true; }
 WATCH_BASE_SHA_OVERRIDE=""
+reset_calls() { assert_fixture_dir "$MOCKD"; : > "$MOCKD/calls"; }
+flag() { assert_fixture_dir "$MOCKD"; : > "$MOCKD/$1"; }
 
 # ---- S1: two qualifying commits -> silent green ----
 mkrepo; q 1; q 2; run
@@ -110,7 +130,7 @@ for s in $SHAS; do [[ "$body" == *"$s"* ]] || ok=0; done
 # ---- S3: three + bot-authored sentinel (both author spellings) -> no comment ----
 mkrepo; q 1; q 2; q 3; issue OPEN "$(bot_comment)"; run
 a="$(comments_posted)"
-issue OPEN "$(bot_comment2)"; : > "$MOCKD/calls"; run
+issue OPEN "$(bot_comment2)"; reset_calls; run
 [[ "$a" -eq 0 && "$(comments_posted)" -eq 0 && "$RC" -eq 0 ]] && pass "S3 bot sentinel (github-actions and github-actions[bot]) suppresses the comment" || fail "S3 (first=$a second=$(comments_posted) rc=$RC)"
 
 # ---- S3c: the bot sentinel is the SECOND comment (a human spoke first) -> still suppressed ----
@@ -131,13 +151,13 @@ mkrepo; q 1; q 2; q 3; issue CLOSED '[]'; WATCH_BASE_SHA_OVERRIDE=00000000000000
 [[ "$RC" -eq 0 && "$(comments_posted)" -eq 0 && "$ERR" != *"::error::"* ]] && pass "S6 closed tracker: exit 0, no comment, no base-commit error" || fail "S6 (rc=$RC err=$ERR)"
 
 # ---- S7: issue/comments read fails -> exit 3 and nothing posted ----
-mkrepo; q 1; q 2; q 3; : > "$MOCKD/view_fail"; run
+mkrepo; q 1; q 2; q 3; flag view_fail; run
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 ]] && pass "S7 failed read: exit 3, no comment (never risks a duplicate)" || fail "S7 (rc=$RC posted=$(comments_posted))"
 
 # ---- S8: absent base on an OPEN tracker -> exit 3 with ::error::; failed post -> exit 1 ----
 mkrepo; q 1; q 2; q 3; WATCH_BASE_SHA_OVERRIDE=0000000000000000000000000000000000000000; run; WATCH_BASE_SHA_OVERRIDE=""
 [[ "$RC" -eq 3 && "$(comments_posted)" -eq 0 && "$ERR" == *"::error::"* ]] && pass "S8a absent base on an OPEN tracker: exit 3, ::error::, no comment" || fail "S8a (rc=$RC err=$ERR)"
-mkrepo; q 1; q 2; q 3; : > "$MOCKD/comment_fail"; run
+mkrepo; q 1; q 2; q 3; flag comment_fail; run
 [[ "$RC" -eq 1 && "$(comments_posted)" -eq 1 ]] && pass "S8b failed comment post: exit 1 (sentinel only ever lands with the comment)" || fail "S8b (rc=$RC posted=$(comments_posted))"
 
 # ---- S10: other-path, merge and deleting commits are not counted; the exclusion is reported ----
