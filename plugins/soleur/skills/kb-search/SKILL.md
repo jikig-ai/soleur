@@ -65,9 +65,10 @@ not retry Bash — switch to this path.
 | 0 arg parse | unchanged — pure in-context |
 | 1 facet validation | Read `knowledge-base/kb-tags.txt` and/or `kb-categories.txt`; match the flag value case-insensitively as a WHOLE LINE (fixed-string semantics — do not reproduce the `\b` regex, see #8473); on miss emit the same `No matches. Valid values: …` output |
 | 2 facet filter | Glob `knowledge-base/project/learnings/*.md`, then Read each file's frontmatter (the corpus is ~a dozen files) or Grep `^tags:`/`^category:` lines; AND-combine flags as today |
-| 2.5 paraphrase | still runs inline (Option C is agent-inline); SKIP both `kb-search-cache.sh` calls — the cache needs a write the read-only support sandbox cannot do |
-| 3 keyword search | Tier 1: Grep `knowledge-base/INDEX.md` for the keyword, keep only links rooted at `knowledge-base/project/learnings/` (cap 8); Tier 2: Grep content under `knowledge-base/project/learnings/` excluding `archive/` (cap 12). Same dedupe-by-path merge |
-| 4 display | unchanged |
+| 2.5 paraphrase | still runs inline (Option C is agent-inline); SKIP both `kb-search-cache.sh` calls — every Bash call on this surface denies AND records a support escalation (the cache write would fail in the read-only sandbox anyway) |
+| 3 keyword search | Tier 1: Grep `knowledge-base/INDEX.md` for the keyword, keep only links rooted at `knowledge-base/project/learnings/` (cap 8); Tier 2: Grep content under `knowledge-base/project/learnings/` excluding `archive/` (cap 12). When facet flags were given, restrict BOTH tiers to the Phase-2 surviving file list (same AND semantics as the bash path). Same dedupe-by-path merge |
+| 4 display | unchanged, EXCEPT the zero-result remediation: drop the `bash scripts/ensure-kb-index.sh` suggestion (it denies + escalates on this surface) — offer the spelling/keyword/tag-file suggestions only |
+| `--clear-cache` | unavailable on the support path (it needs a delete — there is no tool for it); say so instead of attempting it |
 
 ### Phase 0: Parse Arguments
 

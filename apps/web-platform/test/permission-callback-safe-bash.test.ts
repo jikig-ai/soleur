@@ -811,9 +811,11 @@ describe("path-traversal whitespace coverage (TS10)", () => {
 // TS11 — `git branch` write forms are NOT auto-approved (#9555)
 // ---------------------------------------------------------------------------
 // The full allow/deny matrix lives in safe-bash.test.ts; this block pins the
-// canUseTool fall-through for the two incident-derived shapes: a delete flag
-// and a bare positional create. `"git branch"` (bare, read-only) stays in
-// SAFE_COMMANDS above — only the write-shaped forms fall through.
+// canUseTool fall-through for three incident-derived shapes: a delete flag,
+// a bare positional create, and a display-modifier flag + positional create
+// (`-v` does not force list mode — `git branch -v x` creates). `"git
+// branch"` (bare, read-only) stays in SAFE_COMMANDS above — only the
+// write-shaped forms fall through.
 
 describe("git branch write forms fall through to the review-gate (TS11, #9555)", () => {
   beforeEach(() => {
@@ -825,7 +827,7 @@ describe("git branch write forms fall through to the review-gate (TS11, #9555)",
     mockGetToolTier.mockReturnValue("auto-approve");
   });
 
-  for (const command of ["git branch -d x", "git branch feat-x"]) {
+  for (const command of ["git branch -d x", "git branch feat-x", "git branch -v x"]) {
     test(`isBashCommandSafe(${JSON.stringify(command)}) === false`, () => {
       expect(isBashCommandSafe(command)).toBe(false);
     });

@@ -47,7 +47,10 @@ describe("support-directive constants", () => {
     // drop the no-shell contract — the SKILL.md support section is only
     // mid-doc guidance; the directive is the persona's highest-authority
     // channel.
-    expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/Read.*Grep.*Glob|no shell/i);
+    // Two separate pins — an OR'd regex would survive dropping the
+    // Read/Grep/Glob enumeration while "no shell" still matched.
+    expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/Read.*Grep.*Glob/);
+    expect(SUPPORT_SYSTEM_DIRECTIVE).toMatch(/no shell/i);
   });
 });
 

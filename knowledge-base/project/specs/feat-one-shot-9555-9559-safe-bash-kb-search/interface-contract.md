@@ -18,11 +18,20 @@ Lead (neither agent — written after integration): `knowledge-base/engineering/
 The single existing entry `^git\s+branch(?:\s+PATH_TOKEN)*$` at `safe-bash.ts:131` is REPLACED by a closed flag set plus two arms (verbatim from the plan's Fix A):
 
 ```ts
-const GIT_BRANCH_READ_FLAG = String.raw`(?:--list|--show-current|--all|--remotes|--verbose|-[arv]+|--contains|--merged|--no-merged|--points-at|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
-// Arm 1: bare `git branch` or flag-only forms (incl. --show-current).
+// (Review correction, PR #9570 panel: the plan's single "read-only flag"
+// set conflated list-FORCING flags with display modifiers — `-v`,
+// `--sort=`, `--format=`, `--color`, `--column`, `--ignore-case`,
+// `--abbrev` do NOT put git branch into list mode, so `git branch -v
+// <name>` would still have auto-approved a CREATE. Verified against git
+// 2.55; the shipped Arm 2 requires a forcing flag in the leading flag
+// run.)
+const GIT_BRANCH_LIST_FORCE = String.raw`(?:--list|--show-current|--all|--remotes|--contains|--no-contains|--merged|--no-merged|--points-at|-[arv]*[ar][arv]*)`;
+const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verbose|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
+// Arm 1: bare `git branch` or flag-only forms (incl. --show-current, -v).
 new RegExp(String.raw`^git\s+branch(?:\s+${GIT_BRANCH_READ_FLAG})*\s*$`),
-// Arm 2: ≥1 list-mode flag, then any mix of flags and non-dash args.
-new RegExp(String.raw`^git\s+branch\s+${GIT_BRANCH_READ_FLAG}(?:\s+(?:${GIT_BRANCH_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
+// Arm 2: leading flag run must contain ≥1 list-FORCING flag before any
+// positional arg, then flags and non-dash args mix freely.
+new RegExp(String.raw`^git\s+branch(?=\s+(?:${GIT_BRANCH_READ_FLAG}\s+)*?${GIT_BRANCH_LIST_FORCE}(?=\s|$))\s+${GIT_BRANCH_READ_FLAG}(?:\s+(?:${GIT_BRANCH_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
 ```
 
 (Agent 1 keeps the plan's full comment block above the declaration; `-q` is deliberately absent from the flag set — quiet-create is a write modifier.)
@@ -30,7 +39,7 @@ new RegExp(String.raw`^git\s+branch\s+${GIT_BRANCH_READ_FLAG}(?:\s+(?:${GIT_BRAN
 `isBashCommandSafe(...)` must return:
 
 - **true (allow):** `git branch`, `git branch -a`, `git branch -r`, `git branch -v`, `git branch -vv`, `git branch -av`, `git branch --list`, `git branch --list feat`, `git branch --show-current`, `git branch --merged main`, `git branch --contains HEAD~2`, `git branch --no-merged main`, `git branch --points-at HEAD`, `git branch --sort=-committerdate`, `git branch --ignore-case --list x`
-- **false (deny → review-gate):** `git branch foo`, `git branch foo main`, `git branch -d foo`, `git branch -D foo`, `git branch --delete foo`, `git branch -m a b`, `git branch -M a b`, `git branch --move a b`, `git branch -c a b`, `git branch -C a b`, `git branch --copy a b`, `git branch -f foo`, `git branch -q foo`, `git branch -u origin/main foo`, `git branch --set-upstream-to=origin/main foo`, `git branch --unset-upstream foo`, `git branch --edit-description foo`, `git branch --list -d`, `git branch --list foo -D`, `git branch --list ../x`, `git status && git branch -d x` (whole command denied)
+- **false (deny → review-gate):** `git branch foo`, `git branch foo main`, `git branch -d foo`, `git branch -D foo`, `git branch --delete foo`, `git branch -m a b`, `git branch -M a b`, `git branch --move a b`, `git branch -c a b`, `git branch -C a b`, `git branch --copy a b`, `git branch -f foo`, `git branch -q foo`, `git branch -u origin/main foo`, `git branch --set-upstream-to=origin/main foo`, `git branch --unset-upstream foo`, `git branch --edit-description foo`, `git branch --list -d`, `git branch --list foo -D`, `git branch --list ../x`, `git status && git branch -d x` (whole command denied), and — review-added — every display-modifier + positional create (`git branch -v foo`, `-vv`, `--verbose`, `--sort=…`, `--format=…`, `--abbrev[=n]`, `--column`, `--no-column`, `--color[=w]`, `--no-color`, `--ignore-case`, `-v foo HEAD~0`, `-i`, `-t`, `foo --list`, `-l foo`)
 
 `permission-callback-safe-bash.test.ts`: `git branch -d x` and `git branch feat-x` join the not-auto-approved list; `"git branch"` stays in SAFE_COMMANDS.
 

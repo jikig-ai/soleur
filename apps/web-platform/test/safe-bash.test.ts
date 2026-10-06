@@ -267,12 +267,18 @@ describe("review PR #4868 — git arg-pattern hardening", () => {
 
 describe("#9555 — git branch read-only arms (create/delete/rename fall through to the gate)", () => {
   // Contract: `git branch` auto-approves iff every post-`branch` token is a
-  // member of the closed read-only flag set, or — reachable only after >=1
-  // list-mode flag — a non-dash pattern/commit-ish arg. Every create /
-  // delete / rename / copy / upstream / force / quiet / describe form must
-  // fall through to the review-gate. Litmus row (incident-derived):
-  // `git branch -d foo` auto-approved under the prior `(?:\s+PATH_TOKEN)*`
-  // tail — measured live on this branch.
+  // member of the closed read-only flag set, or — reachable only after a
+  // list-FORCING flag in the leading flag run — a non-dash
+  // pattern/commit-ish arg. Verified against git 2.55 (PR #9570 review):
+  // only --list, --show-current, --contains/--no-contains, --merged/
+  // --no-merged, --points-at force list mode (and -a/-r fatal on a
+  // positional); the display modifiers (-v/--verbose, --sort=, --format=,
+  // --color, --column, --ignore-case, --abbrev) do NOT — `git branch -v
+  // <name>` silently CREATES. Every create / delete / rename / copy /
+  // upstream / force / quiet / describe form must fall through to the
+  // review-gate. Litmus row (incident-derived): `git branch -d foo`
+  // auto-approved under the prior `(?:\s+PATH_TOKEN)*` tail — measured live
+  // on this branch.
   const positives = [
     "git branch",
     "git branch -a",
@@ -286,9 +292,19 @@ describe("#9555 — git branch read-only arms (create/delete/rename fall through
     "git branch --merged main",
     "git branch --contains HEAD~2",
     "git branch --no-merged main",
+    "git branch --no-contains HEAD",
     "git branch --points-at HEAD",
     "git branch --sort=-committerdate",
     "git branch --ignore-case --list x",
+    // forcing flag after display modifiers — order flexibility is safe
+    "git branch -v --list x",
+    "git branch --color=always --list x",
+    "git branch --list -v x",
+    "git branch --list --sort=-date x",
+    // forcing flag + positional: -a/-r fatal in git ("do not take a branch
+    // name"), --show-current ignores the arg — admitted, cannot create
+    "git branch -a x",
+    "git branch --show-current x",
   ];
   for (const cmd of positives) {
     test(`isBashCommandSafe(${JSON.stringify(cmd)}) === true`, () => {
@@ -318,6 +334,26 @@ describe("#9555 — git branch read-only arms (create/delete/rename fall through
     "git branch --list foo -D", // same, trailing position
     "git branch --list ../x", // path-traversal denylist still wins
     "git status && git branch -d x", // per-segment re-check across && decomposition
+    // Display-modifier flag + positional = CREATE (git 2.55 verified — these
+    // flags do not force list mode; the exact hole the Arm-2 forcing-flag
+    // requirement exists to close):
+    "git branch -v foo",
+    "git branch -vv foo",
+    "git branch --verbose foo",
+    "git branch --sort=-committerdate foo",
+    "git branch --format=x foo",
+    "git branch --abbrev foo",
+    "git branch --abbrev=4 foo",
+    "git branch --column foo",
+    "git branch --no-column foo",
+    "git branch --color foo",
+    "git branch --color=always foo",
+    "git branch --no-color foo",
+    "git branch --ignore-case foo",
+    "git branch -v foo HEAD~0", // modifier + create at chosen start-point
+    "git status && git branch -v x", // same, in an && segment
+    "git branch -i foo", // -i is not a read flag and does not force list mode
+    "git branch -t x", // --track is a create-time flag
   ];
   for (const cmd of negatives) {
     test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {

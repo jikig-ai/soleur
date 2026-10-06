@@ -73,11 +73,15 @@ support_section() { # $1 = file → prints the section body
 
 # A shell FENCE, not the word "bash": the section legitimately names Bash in
 # prose, so an absence grep on the bare word would false-fail. The anchored
-# form matches an opening fence line only — ```bash / ```sh / ```shell,
-# optionally indented or blockquote-prefixed (`> `). A fence whose info string
-# starts with a shell name IS a shell fence, so the language token is
-# prefix-matched conservatively.
-SHELL_FENCE_RE='^[[:space:]>]*```(bash|sh|shell)'
+# form matches an opening fence line only — case-insensitive (```Bash IS a
+# bash fence), backtick OR tilde fences of 3+ chars, optionally indented,
+# blockquote-prefixed (`> `), or list-marker-prefixed (`- `/`* `). A fence
+# whose info string starts with a shell name IS a shell fence, so the
+# language token is prefix-matched conservatively (bash/sh/shell/zsh/fish/
+# console/terminal). Known boundary: a bare ``` fence containing shell
+# commands carries no info string to detect — the marker-line contract is
+# the backstop for that form.
+SHELL_FENCE_RE='^[[:space:]>*-]*(`{3,}|~{3,})[[:space:]]*(bash|sh|shell|zsh|fish|console|terminal)'
 
 echo "=== kb-search support-persona path drift guard (#9559) ==="
 echo ""
@@ -112,9 +116,9 @@ else
 fi
 
 # --- (ii) no fenced shell block inside the section ---------------------------
-if grep -qE "$SHELL_FENCE_RE" <<<"$SECTION"; then
+if grep -qiE "$SHELL_FENCE_RE" <<<"$SECTION"; then
   echo "  FAIL: a fenced shell block sits inside the support-persona section:"
-  grep -nE "$SHELL_FENCE_RE" <<<"$SECTION" | sed 's/^/        /' >&2 || true
+  grep -niE "$SHELL_FENCE_RE" <<<"$SECTION" | sed 's/^/        /' >&2 || true
   FAIL=$((FAIL + 1))
 else
   echo "  PASS: no fenced \`\`\`bash/\`\`\`sh/\`\`\`shell block inside the support section"
@@ -125,11 +129,23 @@ fi
 # extracted section and require the detector to fire. Without this, a neutered
 # regex would report the negative row green while detecting nothing.
 CONTROL="$(printf '%s\n```bash\ngit grep -ilE needle\n```\n' "$SECTION")"
-if grep -qE "$SHELL_FENCE_RE" <<<"$CONTROL"; then
+if grep -qiE "$SHELL_FENCE_RE" <<<"$CONTROL"; then
   echo "  PASS: control — the fence detector flags a bash block on the same input"
   PASS=$((PASS + 1))
 else
   echo "  FAIL: control — the fence detector MISSED a bash block appended to the extracted section"
+  FAIL=$((FAIL + 1))
+fi
+
+# Second control on the SAME input: a widened-form fence (tilde fence,
+# capitalized info string, list-marker prefix) must also fire — regression
+# pin for the fence-shape coverage the first control can't reach.
+CONTROL2="$(printf '%s\n- ~~~Bash\ngit grep -ilE needle\n~~~\n' "$SECTION")"
+if grep -qiE "$SHELL_FENCE_RE" <<<"$CONTROL2"; then
+  echo "  PASS: control — the fence detector flags a widened-form shell fence"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: control — the fence detector MISSED a tilde/case/list-marker shell fence"
   FAIL=$((FAIL + 1))
 fi
 
@@ -151,7 +167,7 @@ git grep -ilE needle
 ### Phase 0: Parse Arguments
 FIXEOF
 FIX_SECTION="$(support_section "$FIX_FENCED")"
-if grep -qE "$SHELL_FENCE_RE" <<<"$FIX_SECTION"; then
+if grep -qiE "$SHELL_FENCE_RE" <<<"$FIX_SECTION"; then
   echo "  PASS: control — extractor + detector flag a fenced block inside a synthetic section"
   PASS=$((PASS + 1))
 else
@@ -197,7 +213,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# Floor = the green-run assertion count (11): exists + marker + non-empty
-# section + no-fence + 3 controls + 3 corpus files + learnings. Re-derive
+# Floor = the green-run assertion count (12): exists + marker + non-empty
+# section + no-fence + 4 controls + 3 corpus files + learnings. Re-derive
 # from a green run rather than lowering by feel.
-print_results 11
+print_results 12

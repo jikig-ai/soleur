@@ -133,6 +133,15 @@ instructs Bash.
 
 ### Fix A — `git branch` read-only arms (#9555)
 
+> **Review correction (PR #9570 panel, post-plan):** the regex below is the
+> PLANNED form and is wrong — the flag set below conflates list-FORCING
+> flags with display modifiers (`-v`, `--sort=`, `--format=`, `--color`,
+> `--column`, `--ignore-case`, `--abbrev` do not force git's list mode;
+> `git branch -v <name>` creates, verified on git 2.55). The SHIPPED form
+> splits `GIT_BRANCH_LIST_FORCE` out of `GIT_BRANCH_READ_FLAG` and Arm 2
+> requires a forcing flag in the leading flag run via lookahead — see
+> `safe-bash.ts` and the corrected block in `specs/…/interface-contract.md`.
+
 Replace the single `git branch` entry at `safe-bash.ts:131` with a closed
 read-only flag set, split into two patterns so positional args require a
 list-mode flag:
