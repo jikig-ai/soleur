@@ -423,6 +423,9 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.contextPath = undefined;
   // Same for the session_id cache (#3266).
   session.sessionId = undefined;
+  // Same for the cost-cap override cache (#9565) — a raise on the prior
+  // conversation must not bleed into the next one.
+  session.costCapUsd = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -2301,13 +2304,14 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         session.conversationId = msg.conversationId;
         // Resuming a different conversation — invalidate the routing,
-        // KB context, and session_id caches so the first chat-turn
-        // re-reads `active_workflow`, `context_path`, and `session_id`.
-        // The three caches share the same lifecycle invariant: invalidate
-        // together.
+        // KB context, session_id, and cost-cap (#9565) caches so the
+        // first chat-turn re-reads `active_workflow`, `context_path`,
+        // `session_id`, and `cc_cost_cap_usd`. The four caches share
+        // the same lifecycle invariant: invalidate together.
         session.routing = undefined;
         session.contextPath = undefined;
         session.sessionId = undefined;
+        session.costCapUsd = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
@@ -2365,6 +2369,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         session.routing = undefined;
         session.contextPath = undefined;
         session.sessionId = undefined;
+        session.costCapUsd = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -2502,6 +2507,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // ConversationContext. For crm-lead this is the mode sentinel,
           // not a KB path and not null.
           session.contextPath = insertedContextPath ?? null;
+          // feat-cc-cap-raise-resume — the materialized row cannot carry
+          // an override yet (createConversation inserts NULL; the
+          // (user_id, context_path) pre-existing-row race could carry one,
+          // in which case a `null` seed is the safe direction: the next
+          // turn's cache-miss SELECT re-reads the real value).
+          session.costCapUsd = null;
 
           log.info(
             {

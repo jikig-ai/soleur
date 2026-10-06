@@ -551,6 +551,18 @@ export const DEFAULT_MANAGED_WARN_CAP_USD = 50.0;
 const CAP_RAISE_TIERS_USD = [5, 10, 25];
 const KEEP_CAP_OPTION = "Keep the cap";
 
+// feat-cc-cap-raise-resume — offered raise tiers for a given cap:
+// fixed presets above it, or a 2x tier when the cap already exceeds
+// every preset. Shared by emitCostCapPrompt (options list) and
+// applyCostCapRaise (whitelist check — a crafted response must not set
+// an arbitrary ceiling like $999999 that silently disables the
+// guardrail permanently).
+export function capRaiseTiersFor(cap: number): number[] {
+  const tiers = CAP_RAISE_TIERS_USD.filter((t) => t > cap);
+  if (tiers.length === 0) tiers.push(Math.ceil(cap * 2));
+  return tiers;
+}
+
 export const DEFAULT_IDLE_REAP_MS = 10 * 60 * 1000;
 // Idle window: no assistant block (text or tool_use) within this many ms.
 // Resets on every block — "agent is alive" signal. PDF Read+summarize
@@ -2082,7 +2094,16 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
    * teardown is preserved (non-WS contexts, tests).
    */
   function emitCostCapPrompt(state: ActiveQuery): void {
-    if (!pendingPrompts || !emitInteractivePrompt) {
+    // The support persona runs on SSE with no interactive-prompt
+    // surface (mirror bridgeInteractivePromptIfApplicable's persona
+    // skip) — a prompt there is unanswerable, so fall straight to the
+    // honest cost_ceiling teardown. Non-WS contexts get the same
+    // fallback when the prompt machinery is absent.
+    if (
+      !pendingPrompts ||
+      !emitInteractivePrompt ||
+      state.persona === "support"
+    ) {
       emitWorkflowEnded(state, {
         status: "cost_ceiling",
         totalCostUsd: state.totalCostUsd,
@@ -2105,10 +2126,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       state.capPromptId = null;
     }
     const cap = effectiveCap(state);
-    const tiers = CAP_RAISE_TIERS_USD.filter((t) => t > cap);
-    if (tiers.length === 0) tiers.push(Math.ceil(cap * 2));
     const options = [
-      ...tiers.map((t) => `Raise to $${t}`),
+      ...capRaiseTiersFor(cap).map((t) => `Raise to $${t}`),
       KEEP_CAP_OPTION,
     ];
     const payload = {
@@ -2157,17 +2176,55 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       kind: "ask_user",
       payload,
     } as InteractivePromptEvent;
-    emitInteractivePrompt(state.userId, event);
+    try {
+      emitInteractivePrompt(state.userId, event);
+    } catch (err) {
+      // A throwing send (closing socket) must not strand a registered
+      // record against an un-parked Query — unwind the record and fall
+      // back to the honest teardown.
+      reportSilentFallback(err, {
+        feature: "soleur-go-runner",
+        op: "emitCostCapPrompt.emit",
+        extra: { conversationId: state.conversationId },
+      });
+      pendingPrompts.consume(
+        makePendingPromptKey(
+          state.userId,
+          mintConversationId(state.conversationId),
+          promptId,
+        ),
+        state.userId,
+      );
+      emitWorkflowEnded(state, {
+        status: "cost_ceiling",
+        totalCostUsd: state.totalCostUsd,
+        cap,
+        workflow: state.currentWorkflow,
+      });
+      return;
+    }
     state.capPromptId = promptId;
     notifyAwaitingUser(state.conversationId, true);
     clearCapPromptParkTimer(state);
     state.capPromptParkTimer = setTimeout(() => {
       state.capPromptParkTimer = null;
       if (state.closed || !state.awaitingUser) return;
-      // Registry TTL already reaped the record; release the park so the
-      // conversation rejoins normal idle reaping — mirrors the absolute
-      // upper bound REVIEW_GATE_TIMEOUT_MS gives the review-gate park.
-      state.capPromptId = null;
+      // The registry reaper runs on its own cadence (5-min TTL against
+      // a 5-min sweep) — the record may still be live here, so consume
+      // it explicitly; an answer landing after this point gets the
+      // honest "re-send" copy below instead of applying a raise the
+      // user was told had expired.
+      if (state.capPromptId !== null) {
+        pendingPrompts.consume(
+          makePendingPromptKey(
+            state.userId,
+            mintConversationId(state.conversationId),
+            state.capPromptId,
+          ),
+          state.userId,
+        );
+        state.capPromptId = null;
+      }
       const hadParked = state.parkedUserMessage !== null;
       state.parkedUserMessage = null;
       notifyAwaitingUser(state.conversationId, false);
@@ -3233,7 +3290,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       // feat-cc-cap-raise-resume — the persist writer flows per-dispatch
       // like `events`; refresh it so a raise lands on the latest wiring.
       state.persistCostCapOverride = args.persistCostCapOverride ?? null;
-      if (args.costCapOverrideUsd !== undefined) {
+      // Seed is monotonic: a raise applied in-memory (and mid-flight to
+      // the DB) must never be clobbered by a stale session cache
+      // reading an older value. Raises only ever increase the cap.
+      if (
+        args.costCapOverrideUsd != null &&
+        (state.costCapOverrideUsd === null ||
+          args.costCapOverrideUsd > state.costCapOverrideUsd)
+      ) {
         state.costCapOverrideUsd = args.costCapOverrideUsd;
       }
       state.lastActivityAt = now();
@@ -3316,6 +3380,21 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     // the message and (re-)emit the raise prompt. Managed sessions
     // (capEnforced=false) pass through untouched.
     if (capEnforced(state) && state.totalCostUsd >= effectiveCap(state)) {
+      // A second send while a parked message is still held replaces it —
+      // say so honestly instead of silently dropping the first.
+      if (state.parkedUserMessage !== null) {
+        try {
+          state.events.onText(
+            "(Your previous unsent message was replaced by this one.)",
+          );
+        } catch (err) {
+          reportSilentFallback(err, {
+            feature: "soleur-go-runner",
+            op: "dispatch.parked-replace",
+            extra: { conversationId: state.conversationId },
+          });
+        }
+      }
       state.parkedUserMessage = {
         text: userMessage,
         chapterRouted: state.chapterChunkedContext !== null,
@@ -3923,7 +4002,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         state.events.onText(
           dropped
             ? "(Cost cap unchanged — your message wasn't sent. Send it again and raise the cap to continue.)"
-            : "(Cost cap unchanged — raise it when you're ready to continue.)",
+            : "(Cost cap unchanged — send a message to raise it and continue.)",
         );
       } catch (err) {
         reportSilentFallback(err, {
@@ -3936,7 +4015,18 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     }
     const match = /^Raise to \$(\d+(?:\.\d+)?)$/.exec(response);
     const tier = match ? Number(match[1]) : Number.NaN;
-    if (!Number.isFinite(tier) || tier <= effectiveCap(state)) {
+    // Whitelist: only the tiers the user was actually offered, computed
+    // against the EFFECTIVE cap at response time (a raise→re-trip window
+    // can leave a stored option below the new cap). An invalid response
+    // re-emits a fresh prompt instead of stranding the conversation in a
+    // timerless park — the consumed record can't be answered again.
+    if (
+      !Number.isFinite(tier) ||
+      !capRaiseTiersFor(effectiveCap(state)).includes(tier)
+    ) {
+      // Re-emit a fresh prompt (the consumed record can't be re-answered);
+      // the parked message stays held for the next valid tier.
+      emitCostCapPrompt(state);
       return false;
     }
     state.costCapOverrideUsd = tier;
