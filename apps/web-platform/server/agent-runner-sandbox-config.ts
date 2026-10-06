@@ -1,5 +1,6 @@
 import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
+import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, delimiter, join } from "path";
 import * as Sentry from "@sentry/nextjs";
 
@@ -25,9 +26,12 @@ const log = createChildLogger("agent-sandbox");
 //     `feature: "agent-sandbox"` (the cc path mirrors the same precedent
 //     — see `cc-dispatcher.ts realSdkQueryFactory` body).
 //   - `enableWeakerNestedSandbox: true` — Docker containers cannot mount
-//     /proc inside user namespaces; this skips `--proc /proc` in bwrap.
-//     `/proc` is already in `denyRead`, so the weaker mode is acceptable
-//     (#1557).
+//     /proc inside user namespaces; this skips `--proc /proc` in bwrap
+//     (#1557). `denyRead` is NOT what keeps the CLI parent's environment out
+//     of reach. Measured (ADR-272): no process environment readable from
+//     inside the sandbox carries the key. Which bubblewrap flag does that work
+//     is not established, so a change to the sandbox flags needs re-measuring
+//     (`sandbox-credential-deny-runtime.test.ts` repeats it).
 //   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
@@ -154,6 +158,12 @@ export type AgentSandboxConfig = {
   filesystem: {
     allowWrite: string[];
     denyRead: string[];
+  };
+  // W1 (#9601, ADR-272): unset the owner's Anthropic credential for every
+  // sandboxed Bash command. Typed (not left to the index signature) so a test
+  // reads the entries as data, not `unknown`.
+  credentials: {
+    envVars: { name: (typeof AGENT_AUTH_ENV_VARS)[number]; mode: "deny" }[];
   };
 } & { [x: string]: unknown };
 
@@ -369,8 +379,10 @@ export function buildAgentSandboxConfig(
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
     // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap,
-    // which is acceptable because /proc is already in denyRead (#1557).
+    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
+    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // the outcome (no readable environ carries the key) is measured in ADR-272
+    // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,
     network: {
       allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
@@ -392,6 +404,21 @@ export function buildAgentSandboxConfig(
       // Per-sibling deny (NOT the broad "/workspaces" parent) so the own
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
+    },
+    // W1 (#9601, ADR-272): a prompt-injected session cannot read the owner's
+    // Anthropic key out of its shell. `deny` unsets the variable for
+    // every sandboxed command; the CLI process keeps it for its own API calls.
+    // Deliberately NOT denied: connected-service tokens (the agent is told they
+    // are available — `## Connected Services`), GH_TOKEN and
+    // GIT_INSTALLATION_TOKEN (`gh`/`git` need the short-lived App token). Those
+    // stay readable until the credential broker (#9543). Measured on SDK
+    // 0.3.284: the API key reaches Bash by default; the OAuth token is already
+    // withheld by the CLI, so its entry is defense in depth.
+    credentials: {
+      envVars: AGENT_AUTH_ENV_VARS.map((name) => ({
+        name,
+        mode: "deny" as const,
+      })),
     },
   };
 }

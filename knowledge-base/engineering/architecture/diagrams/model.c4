@@ -513,7 +513,7 @@ model {
   webapp -> stripe "Checkout and billing" { technology "HTTPS" }
   webapp -> plausible "Page view events" { technology "JS snippet" }
   webapp -> github "Reads release notes for the in-app Releases page" { technology "HTTPS (GitHub REST API)" }
-  engine -> anthropic "LLM calls with BYOK keys" { technology "HTTPS" }
+  engine -> anthropic "LLM calls with BYOK keys (the CLI process holds the key; sandboxed Bash does not, ADR-272)" { technology "HTTPS" }
   engine -> github "Git operations and CI" { technology "HTTPS/SSH" }
   engine -> supabase "Sessions and encrypted keys" { technology "HTTPS" }
   engine -> discord "Notifications" { technology "Webhook" }
