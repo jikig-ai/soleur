@@ -381,6 +381,56 @@ function scrubLine(v: string): string {
 }
 
 /**
+ * Race a probe against a timeout, returning `fallback` on throw or expiry.
+ * Shared by waitFailureState's `safe()` and the rail-assert diagnostics —
+ * a diagnostic probe must never throw AND never stall the verdict
+ * (BOUNDED, not merely guarded — see the comment inside waitFailureState).
+ */
+const bounded = async <T>(
+  fn: () => Promise<T>,
+  fallback: T,
+  timeoutMs: number = FIELD_TIMEOUT_MS,
+): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+};
+
+/**
+ * The name field of a captured error — the only part safe to emit
+ * (`.message` can embed origin URLs). Same extraction waitFailureState
+ * performs inline on `cause`.
+ */
+function errorName(err: unknown): string {
+  return err && typeof err === "object" && "name" in err
+    ? scrubLine(String((err as { name: unknown }).name)).slice(0, 40)
+    : "<none>";
+}
+
+/** The page-death classes: the page can no longer reach a verdict at all. */
+const CLOSED_TARGET_RE =
+  /target.{0,30}closed|has been closed|execution context was destroyed|browser has crashed/i;
+
+function isClosedTargetError(err: unknown): boolean {
+  const name =
+    err && typeof err === "object" && "name" in err
+      ? String((err as { name: unknown }).name)
+      : "";
+  const message = err instanceof Error ? err.message : "";
+  return CLOSED_TARGET_RE.test(`${name} ${message}`);
+}
+
+/**
  * Failure-time page state for a visibility wait that timed out (#7969).
  * Background and the three hypotheses it separates: issue #7969, PR #8092.
  *
@@ -409,21 +459,8 @@ export async function waitFailureState(
   // turning a non-blocking CANT-RUN into a blocking release failure carrying
   // LESS information than the timeout it replaced. So: never throws AND always
   // returns.
-  const safe = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        fn(),
-        new Promise<T>((resolve) => {
-          timer = setTimeout(() => resolve(fallback), FIELD_TIMEOUT_MS);
-        }),
-      ]);
-    } catch {
-      return fallback;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-  };
+  const safe = <T>(fn: () => Promise<T>, fallback: T): Promise<T> =>
+    bounded(fn, fallback, FIELD_TIMEOUT_MS);
   // ALLOWLIST, not raw emit (#8092 review). Cutting the URL to its pathname
   // strips the query and the fragment — where Supabase PKCE puts `?code=` and
   // the implicit flow puts `#access_token=` — but a pathname can ITSELF be a
@@ -527,6 +564,389 @@ export async function awaitVisibleOrDiagnose(
       kind: "CANT-RUN",
       reason: await waitFailureState(page, nav, what, err),
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rail verdict seam (#9581): observe -> scope probe -> one reload -> observe
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-window observe budget. The app's own delivery arms have a designed
+ * bound of ~9.6s (the CONVERSATION_CREATED_EVENT retry ladder) plus refetch
+ * latency, so ~45s gives them ~4x headroom before any recovery draw — enough
+ * that a miss means the arms failed, not that the window was tight.
+ */
+const RAIL_OBSERVE_MS = 45_000;
+
+/** Poll cadence for `railRow.isVisible()` inside each observe window. */
+const RAIL_POLL_MS = 1_500;
+
+/**
+ * ONE named total ceiling enclosing both observe windows plus the scope
+ * probes and the reload. It preserves the role the old 20s `waitFor` timeout
+ * played — bounding FAIL-detection latency and job time — at the higher
+ * value the observe+recover shape needs, inside the job's 15-minute budget.
+ */
+export const RAIL_ASSERT_TOTAL_BUDGET_MS = 100_000;
+
+/**
+ * Per-probe ceiling for the active-repo + RPC scope probes, under the same
+ * bounded() discipline as waitFailureState: a diagnostic must never stall
+ * the verdict or outlive the total ceiling.
+ */
+const RAIL_SCOPE_PROBE_MS = 10_000;
+
+/**
+ * `page.reload`'s timeout is MANDATORY, not optional: the installed .d.ts
+ * documents a default of `0` — NO timeout — so an unpinned reload can
+ * outwait RAIL_ASSERT_TOTAL_BUDGET_MS. A thrown reload (e.g. nav timeout)
+ * is captured as `reload_err`, never a verdict.
+ */
+const RAIL_RELOAD_TIMEOUT_MS = 30_000;
+
+/**
+ * The rail check's three verdicts. `railVerdictToResult` maps them onto the
+ * Result union — keeping the wire prefixes (`RESULT: PASS —` /
+ * `RESULT: FAIL —` / `RESULT: CANT-RUN:`) the workflow classifier parses.
+ */
+export type RailVerdict =
+  | {
+      kind: "appeared";
+      via: "direct" | "reload";
+      elapsedMs: number;
+      checks: number;
+    }
+  | {
+      kind: "absent";
+      checks: number;
+      reloads: number;
+      railState: string;
+      rpcRow: string;
+      activeRepo: string;
+      reloadErr?: string;
+      budgetMs: number;
+    }
+  | { kind: "unverifiable"; reason: string };
+
+/**
+ * Which of the rail's three mutually exclusive render branches was showing
+ * (conversations-rail.tsx): the error branch, the empty-state branch, or the
+ * rows map — plus `rail-absent` when the wrapper testid itself is gone and
+ * `unreadable` when the reads could not be taken. NEVER THROWS: every count
+ * goes through bounded() and degrades to a sentinel, the same discipline
+ * waitFailureState holds.
+ */
+export async function railRowState(page: Page): Promise<string> {
+  const errCount = await bounded(
+    () => page.locator('[data-testid="conversations-rail-error"]').count(),
+    -1,
+  );
+  if (errCount > 0) return "error";
+  const emptyCount = await bounded(
+    () => page.locator('[data-testid="conversations-rail-empty"]').count(),
+    -1,
+  );
+  if (emptyCount > 0) return "empty";
+  const railCount = await bounded(() => page.locator(RAIL).count(), -1);
+  if (railCount === 0) return "rail-absent";
+  const rows = await bounded(
+    () => page.locator(`${RAIL} a[href^="/dashboard/chat/"]`).count(),
+    -1,
+  );
+  if (railCount === -1 || rows === -1) return "unreadable";
+  return `rows:${rows}`;
+}
+
+/** A PostgREST error's most useful compact tag: `code` when present, else name. */
+function rpcErrorTag(error: unknown): string {
+  const e = error as { code?: unknown; name?: unknown } | null;
+  const tag =
+    typeof e?.code === "string" && e.code
+      ? e.code
+      : typeof e?.name === "string" && e.name
+        ? e.name
+        : "error";
+  return scrubLine(tag).slice(0, 40);
+}
+
+/**
+ * Probe whether the fresh row is in the rail's OWN scoped data source —
+ * `list_conversations_enriched` called with the same inputs the rail's SWR
+ * fetch resolves (`{workspaceId, repoUrl}` from
+ * `GET /api/workspace/active-repo`, read through the injected cookie jar).
+ * This is the data-vs-render discriminator: `rpc_row=no` means the row is
+ * committed but OUT of the rail's scope (a real regression — fail fast, no
+ * reload); `rpc_row=yes` + DOM-absent means the render path is broken.
+ * Every read is bounded; a failed read degrades to `unreadable:<reason>`,
+ * never a throw.
+ */
+async function probeRailScope(
+  page: Page,
+  supabase: ReturnType<typeof createServerClient>,
+  convId: string,
+  productionUrl: string,
+  probeMs: number,
+): Promise<{ activeRepo: string; repoUrlNull: boolean; rpcRow: string }> {
+  const scope = await bounded(
+    async (): Promise<
+      | { ok: true; workspaceId: string | null; repoUrl: string | null }
+      | { ok: false }
+    > => {
+      const res = await page.request.get(
+        `${productionUrl}/api/workspace/active-repo`,
+      );
+      if (!res.ok()) return { ok: false };
+      const body = (await res.json()) as {
+        workspaceId?: unknown;
+        repoUrl?: unknown;
+      } | null;
+      return {
+        ok: true,
+        workspaceId: typeof body?.workspaceId === "string" ? body.workspaceId : null,
+        repoUrl: typeof body?.repoUrl === "string" ? body.repoUrl : null,
+      };
+    },
+    { ok: false },
+    probeMs,
+  );
+  if (!scope.ok) {
+    return {
+      activeRepo: "unreadable",
+      repoUrlNull: false,
+      rpcRow: "unreadable:active-repo",
+    };
+  }
+  // A repo-less rail scope cannot list the row no matter how many times we
+  // reload — report it and let the caller fail fast.
+  if (scope.repoUrl === null) {
+    return { activeRepo: "resolved", repoUrlNull: true, rpcRow: "unreadable:repo-null" };
+  }
+  const rpcRow = await bounded(
+    async () => {
+      const { data, error } = await supabase.rpc("list_conversations_enriched", {
+        p_repo_url: scope.repoUrl,
+        p_workspace_id: scope.workspaceId,
+        p_archive: "active",
+        p_status: null,
+        p_domain: null,
+        p_limit: 15,
+      });
+      if (error) return `unreadable:${rpcErrorTag(error)}`;
+      const rows = Array.isArray(data) ? data : [];
+      return rows.some(
+        (r) =>
+          r !== null &&
+          typeof r === "object" &&
+          (r as { id?: unknown }).id === convId,
+      )
+        ? "yes"
+        : "no";
+    },
+    "unreadable:timeout",
+    probeMs,
+  );
+  return { activeRepo: "resolved", repoUrlNull: false, rpcRow };
+}
+
+export interface RailAssertDeps {
+  railRow: { isVisible(): Promise<boolean> };
+  page: Page;
+  nav: { status(): number; url?(): string } | null;
+  supabase: ReturnType<typeof createServerClient>;
+  convId: string;
+  productionUrl: string;
+  /** Test-only budget overrides; prod reads the named constants. */
+  budget?: {
+    observeMs?: number;
+    pollMs?: number;
+    totalMs?: number;
+    probeMs?: number;
+    reloadMs?: number;
+  };
+}
+
+/**
+ * THE rail assertion (#9581). Replaces the single-shot
+ * `railRow.waitFor({timeout: 20_000})` — which read any rail-listing lag
+ * over 20s as a release-blocking FAIL — with a bounded observe -> scope
+ * probe -> one reload -> observe loop under ONE total ceiling:
+ *
+ *   Phase A OBSERVE: poll `railRow.isVisible()` (point-in-time, lazy
+ *     locator — survives the reload; deliberately NOT waitFor, which would
+ *     re-enter the no-bare-visibility-wait territory and can throw across
+ *     navigation) every ~1.5s for ~45s.
+ *   SCOPE PROBE: is the row in `list_conversations_enriched` under the
+ *     rail's own scope inputs? `no` (or a null repoUrl) FAILs fast —
+ *     scope-broken is a regression, not lag, and must not burn the reload.
+ *   Phase B RECOVER: exactly one `page.reload` (which re-runs the mount-time
+ *     fetch — a real path, not a cooperative event re-dispatch), then a
+ *     second observe window to the total ceiling.
+ *
+ * Verdict honesty: an isVisible() throw on a live page is a missed tick;
+ * the target-closed class (page death) is `unverifiable` -> CANT-RUN —
+ * consistent with awaitVisibleOrDiagnose, and honest about what was
+ * verified (nothing). A row that never appears still yields `absent` ->
+ * FAIL -> BLOCK=1; recovery is measured via `via=`/`elapsed=`, never silent.
+ */
+export async function assertRailRowVisible(
+  deps: RailAssertDeps,
+): Promise<RailVerdict> {
+  const observeMs = deps.budget?.observeMs ?? RAIL_OBSERVE_MS;
+  const pollMs = deps.budget?.pollMs ?? RAIL_POLL_MS;
+  const totalMs = deps.budget?.totalMs ?? RAIL_ASSERT_TOTAL_BUDGET_MS;
+  const probeMs = deps.budget?.probeMs ?? RAIL_SCOPE_PROBE_MS;
+  const reloadMs = deps.budget?.reloadMs ?? RAIL_RELOAD_TIMEOUT_MS;
+
+  const started = Date.now();
+  const totalDeadline = started + totalMs;
+  let checks = 0;
+  let reloads = 0;
+  let reloadErr: string | undefined;
+  let sawCleanRead = false;
+  let unreadableCause: unknown;
+
+  const sleep = (ms: number) =>
+    new Promise<void>((r) => setTimeout(r, Math.max(0, ms)));
+
+  const readOnce = async (): Promise<"visible" | "hidden" | "dead"> => {
+    checks++;
+    try {
+      const v = await deps.railRow.isVisible();
+      sawCleanRead = true;
+      return v ? "visible" : "hidden";
+    } catch (err) {
+      if (isClosedTargetError(err)) {
+        unreadableCause = err;
+        return "dead";
+      }
+      // A non-fatal throw is a missed tick, not a verdict — keep polling.
+      // If we NEVER achieve a clean read the verdict degrades to
+      // unverifiable below rather than a false rail-regression FAIL.
+      unreadableCause ??= err;
+      return "hidden";
+    }
+  };
+
+  const unverifiable = async (): Promise<RailVerdict> => ({
+    kind: "unverifiable",
+    reason: `rail-check:${await waitFailureState(deps.page, deps.nav, "rail", unreadableCause)}`,
+  });
+
+  const pollWindow = async (
+    deadlineMs: number,
+    via: "direct" | "reload",
+  ): Promise<RailVerdict | null> => {
+    while (Date.now() < deadlineMs) {
+      const r = await readOnce();
+      if (r === "visible") {
+        return { kind: "appeared", via, elapsedMs: Date.now() - started, checks };
+      }
+      if (r === "dead") return unverifiable();
+      await sleep(Math.min(pollMs, deadlineMs - Date.now()));
+    }
+    return null;
+  };
+
+  // Phase A — OBSERVE.
+  const phaseA = await pollWindow(
+    Math.min(started + observeMs, totalDeadline),
+    "direct",
+  );
+  if (phaseA) return phaseA;
+
+  // The scope probe runs BEFORE the reload draw: `rpc_row=no` (row committed
+  // but outside the rail's scoped list) or a null repoUrl is a genuine
+  // regression a reload cannot repair — fail fast, do not burn the draw.
+  const scope = await probeRailScope(
+    deps.page,
+    deps.supabase,
+    deps.convId,
+    deps.productionUrl,
+    probeMs,
+  );
+  if (scope.repoUrlNull || scope.rpcRow === "no") {
+    return {
+      kind: "absent",
+      checks,
+      reloads,
+      railState: await railRowState(deps.page),
+      rpcRow: scope.rpcRow,
+      activeRepo: scope.activeRepo,
+      budgetMs: totalMs,
+    };
+  }
+
+  // Phase B — RECOVER: exactly one reload (the mount-time fetch is a real
+  // path no event wiring can fake; a second reload would repeat the same
+  // draw), then observe to the total ceiling.
+  if (Date.now() < totalDeadline) {
+    try {
+      await deps.page.reload({ waitUntil: "domcontentloaded", timeout: reloadMs });
+      reloads++;
+    } catch (err) {
+      if (isClosedTargetError(err)) {
+        unreadableCause = err;
+        return unverifiable();
+      }
+      reloadErr = errorName(err);
+      reloads++;
+    }
+  }
+
+  const phaseB = await pollWindow(totalDeadline, "reload");
+  if (phaseB) return phaseB;
+
+  if (!sawCleanRead) {
+    // isVisible() never once evaluated — the page is wedged in a way the
+    // closed-target classifier does not recognise. CANT-RUN is the honest
+    // verdict; a rail-regression FAIL would assert something we never saw.
+    return unverifiable();
+  }
+
+  return {
+    kind: "absent",
+    checks,
+    reloads,
+    railState: await railRowState(deps.page),
+    rpcRow: scope.rpcRow,
+    activeRepo: scope.activeRepo,
+    reloadErr,
+    budgetMs: totalMs,
+  };
+}
+
+/**
+ * Map a rail verdict onto the Result union. Pure — the wire prefixes are
+ * authored here and here alone, so the workflow's `case "${RESULT_LINE}"`
+ * classifier (`RESULT: PASS*` -> info, `RESULT: FAIL*` -> BLOCK=1,
+ * `RESULT: CANT-RUN*` -> warning) needs zero YAML changes.
+ */
+export function railVerdictToResult(verdict: RailVerdict, convId: string): Result {
+  switch (verdict.kind) {
+    case "appeared":
+      return {
+        kind: "PASS",
+        detail:
+          `fresh conversation persisted and appeared in the rail ` +
+          `(via=${verdict.via} elapsed=${Math.round(verdict.elapsedMs / 1000)}s ` +
+          `checks=${verdict.checks})`,
+      };
+    case "unverifiable":
+      return { kind: "CANT-RUN", reason: verdict.reason };
+    case "absent": {
+      const reloadNote = verdict.reloadErr ? ` reload_err=${verdict.reloadErr}` : "";
+      return {
+        kind: "FAIL",
+        detail:
+          `conversation ${convId} persisted but did NOT appear in the rail ` +
+          `within ${Math.round(verdict.budgetMs / 1000)}s budget ` +
+          `(checks=${verdict.checks} reloads=${verdict.reloads} ` +
+          `rail_state=${verdict.railState} rpc_row=${verdict.rpcRow} ` +
+          `active_repo=${verdict.activeRepo}${reloadNote}) ` +
+          `(the #5391/#5436 class, #9581)`,
+      };
+    }
   }
 }
 
@@ -735,24 +1155,21 @@ async function driveAndVerify(
 
     // Materialization signal #2 — THE assertion (#5391/#5436): the freshly
     // persisted conversation appears in the Recent Conversations rail.
+    // #9581: bounded observe -> scope probe -> one reload -> observe under
+    // RAIL_ASSERT_TOTAL_BUDGET_MS, never the single-shot 20s waitFor that
+    // read ordinary rail-listing lag as a blocking FAIL. FAIL stays loud: a
+    // row absent from the rail's own scoped data (rpc_row=no) or absent
+    // after the recovery draw still FAILs -> BLOCK=1.
     const railRow = page.locator(`${RAIL} a[href$="/dashboard/chat/${convId}"]`);
-    let railOk = false;
-    try {
-      await railRow.waitFor({ state: "visible", timeout: 20_000 });
-      railOk = true;
-    } catch {
-      railOk = false;
-    }
-
-    const result: Result = railOk
-      ? {
-          kind: "PASS",
-          detail: "fresh conversation persisted and appeared in the rail",
-        }
-      : {
-          kind: "FAIL",
-          detail: `conversation ${convId} persisted but did NOT appear in the rail within budget (the #5391/#5436 class)`,
-        };
+    const verdict = await assertRailRowVisible({
+      railRow,
+      page,
+      nav,
+      supabase,
+      convId,
+      productionUrl: cfg.productionUrl,
+    });
+    const result: Result = railVerdictToResult(verdict, convId);
 
     // Teardown as the synthetic user's own session (RLS), regardless of result.
     const teardown = await teardownConversation(supabase, cfg, verified, convId);

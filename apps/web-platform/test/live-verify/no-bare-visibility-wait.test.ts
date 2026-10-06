@@ -19,6 +19,7 @@ import { stripComments } from "../helpers/strip-comments";
  */
 const SRC = join(__dirname, "../../scripts/live-verify/run.ts");
 const SUITE = join(__dirname, "wait-failure-state.test.ts");
+const RAIL_SUITE = join(__dirname, "rail-assert-verdict.test.ts");
 
 
 describe("no bare visibility wait outside the diagnosing seam", () => {
@@ -53,6 +54,40 @@ describe("no bare visibility wait outside the diagnosing seam", () => {
     // compile, pass every unit test, and silently drop the diagnosis.
     expect(code).toMatch(/if\s*\(\s*composerFailed\s*\)\s*return\s+composerFailed/);
     expect(code).toMatch(/if\s*\(\s*railFailed\s*\)\s*return\s+railFailed/);
+  });
+});
+
+describe("rail assert seam (#9581) — the wire, not the endpoints", () => {
+  const code = stripComments(readFileSync(SRC, "utf8"));
+
+  it("routes the rail verdict through assertRailRowVisible and railVerdictToResult", () => {
+    // One definition + at least one call site each. A seam that is exported
+    // and unit-tested but never wired is the #8092 class all over again.
+    const seamCalls = code.match(/assertRailRowVisible\s*\(/g) ?? [];
+    const mapCalls = code.match(/railVerdictToResult\s*\(/g) ?? [];
+    expect(seamCalls.length).toBeGreaterThanOrEqual(2);
+    expect(mapCalls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("never reintroduces a bare railRow.waitFor (the single-shot wait this removed)", () => {
+    expect(code.match(/railRow\.waitFor\s*\(/g) ?? []).toHaveLength(0);
+    expect(code.match(/await\s+input\.waitFor\s*\(/g) ?? []).toHaveLength(0);
+    expect(code.match(/await\s+page\.waitForSelector\s*\(/g) ?? []).toHaveLength(0);
+  });
+});
+
+describe("anti-vacuity floor for the #9581 suite", () => {
+  const suite = readFileSync(RAIL_SUITE, "utf8");
+
+  it("declares at least the cases the seam's review established", () => {
+    const cases = suite.match(/^\s*it(?:\.each\([^)]*\))?\s*\(/gm) ?? [];
+    expect(cases.length).toBeGreaterThanOrEqual(14);
+  });
+
+  it("is not switched off wholesale", () => {
+    expect(suite).not.toMatch(/\bdescribe\.skip\b/);
+    expect(suite).not.toMatch(/\bit\.skip\b/);
+    expect(suite).not.toMatch(/\bdescribe\.only\b/);
   });
 });
 
