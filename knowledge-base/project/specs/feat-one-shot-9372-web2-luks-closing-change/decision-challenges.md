@@ -35,3 +35,15 @@ Appended by plan on 2026-10-06 (headless pipeline: not asked, persisted for the 
 3. **`earliest=2026-10-18T00:00:00Z` for the #6931 directive.** The plan states a formula (rebirth + 3 days), not a literal; the value
    chosen is decision date 2026-10-15 + 3 days so the window closes 2026-10-22, the exception expiry. A later dispatch re-sets it from
    the actual rebirth time (runbook row 4). The directive lives in the issue body, so it is edited after merge.
+
+## Review-phase decisions (2026-10-06)
+
+4. **Taste, revised: the create arm counts the passphrase alone, not both addresses.** The CTO re-ruled on new evidence from the review
+   panel: a create of `doppler_secret.workspaces_luks_web_key` alone restores the same state-held value and was a legal, safe repair; the
+   HALT would have blocked it with no route that applies it (hosts read the key from Doppler at boot). Counting the password create
+   covers the dangerous event (a new passphrase minted over the live header). This supersedes decision 2 above and the "those two
+   addresses" wording of the issue. Default taken: password only; the flip precondition now requires exactly 1 over a password-only
+   fixture. Re-evaluate if a plan shape is found where a key-copy create alone is dangerous.
+5. **Mechanical, but owner-visible: the "reviewed import" recovery was retracted.** Two review seats measured that importing the live value
+   of `random_password.workspaces_luks_web` plans a forced replacement. The HALT text, ADR-263 marker and runbooks now say there is no
+   documented or verified recovery and the owner decides; the follow-up measurement is a checkbox on #9572.

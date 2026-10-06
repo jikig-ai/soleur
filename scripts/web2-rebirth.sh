@@ -11,7 +11,7 @@
 #   ready-poll        wait for a SOLEUR_FRESH_BOOT_READY row newer than web-2's Hetzner creation time:
 #                     luks=1 luks_arm=formatted escrow=ok (read-only; scripts/web2-rebirth-ready-poll.sh)
 #   reboot            re-resolve web-2 BY NAME, refuse web-1's id, require the post-apply state id, POST reboot
-#   flip-precondition the rotation HALT counts a create of the web-class pair and apply-web-escrow-create.yml stays retired
+#   flip-precondition the rotation HALT counts a create of the web-class passphrase and apply-web-escrow-create.yml stays retired
 #   summary           the dispatch summary (names, ids and booleans only; no secret value)
 #
 # Reads Hetzner with `-w`, never `-f` (a 404 is an ANSWER), the token on stdin (`--config -`), never in argv. The state is only
@@ -292,15 +292,15 @@ cmd_reboot() {
 }
 
 cmd_flip_precondition() { # apply=yes|no
-  local apply="${1:-no}" fx="${_ROOT}/tests/scripts/fixtures/web-host-rebirth/passphrase-create.json" jqf="${_ROOT}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" n absent=yes ok=yes
+  local apply="${1:-no}" fx="${_ROOT}/tests/scripts/fixtures/web-host-rebirth/passphrase-create-password-only.json" jqf="${_ROOT}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" n absent=yes ok=yes
   n="$(jq -f "$jqf" < "$fx" 2>/dev/null | jq -r '.luks_passphrase_rotations' 2>/dev/null)" || n=""
   [[ "$n" =~ ^[0-9]+$ ]] || fail "flip precondition: the destroy-guard filter could not be evaluated over the fixture"
-  [[ "$n" -eq 2 ]] || ok=no
+  [[ "$n" -eq 1 ]] || ok=no
   [[ ! -e "${_ROOT}/.github/workflows/apply-web-escrow-create.yml" ]] || absent=no
-  echo "flip precondition: luks_passphrase_rotations over a create of the web-class pair = ${n} (needs 2); apply-web-escrow-create.yml absent = ${absent}"
+  echo "flip precondition: luks_passphrase_rotations over a create of the web-class passphrase = ${n} (needs exactly 1); apply-web-escrow-create.yml absent = ${absent}"
   if [[ "$ok" == yes && "$absent" == yes ]]; then echo "flip precondition: MET"; out met met; return 0; fi
   if [[ "$apply" == yes ]]; then
-    fail "flip precondition NOT met: the escrow-create workflow file is present again, or the rotation HALT no longer counts a create of the web-class pair (the closing change for #9372 retired the one and flipped the other, so this is a regression to revert, not a step to perform); this dispatch will not format web-2"
+    fail "flip precondition NOT met: the escrow-create workflow file is present again, or the rotation HALT no longer counts a create of the web-class passphrase (the closing change for #9372 retired the one and flipped the other, so this is a regression to revert, not a step to perform); this dispatch will not format web-2"
   fi
   echo "flip precondition: PENDING (a plan_only run reports it; an apply run refuses)"
 }

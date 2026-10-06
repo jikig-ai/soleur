@@ -282,21 +282,21 @@ All in this PR. The ADR records the target state with the rebirth pending.
 liveness_signal:
   what: the per-merge apply job's LUKS HALT annotation (`::error::terraform plan would UPDATE, DELETE or FORGET ... CREATE`) on a plan that creates a web-class passphrase address; and the `flip precondition:` line of every rebirth dispatch
   cadence: every push-apply run (per merge to main touching apps/web-platform/infra/**) and every rebirth dispatch
-  alert_target: workflow run RED to the merge author and the dispatcher (existing `apply-web-platform-infra` failure routing)
+  alert_target: layer 6 (workflow run log `::error::` annotation) and the `notify-apply-failure` ops email from the existing `apply-web-platform-infra` failure routing; there is no Sentry event or issue for a HALT
   configured_in: .github/workflows/apply-web-platform-infra.yml (apply job HALT) and scripts/web2-rebirth.sh (flip-precondition)
 error_reporting:
-  destination: GitHub Actions run annotations and log; the existing apply-failure Sentry/issue routing of the push-apply
+  destination: GitHub Actions run annotations and workflow run log (layer 6) plus the `notify-apply-failure` ops email; the standing signal after a skipped merge is the `scheduled-terraform-drift` Sentry monitor check-in and its action-required issue
   fail_loud: yes, `exit 1` before the destroy_count sum, not reachable by `[ack-destroy]`
 failure_modes:
   - mode: a create of the web-class pair is planned after the flip (state lost an entry)
-    detection: HALT annotation with luks_passphrase_rotations >= 1 in the apply run log
-    alert_route: apply run RED; the unwedge line `[skip-web-platform-apply]` is printed
+    detection: `::error::terraform plan would CREATE ...` annotation in the apply workflow run log (layer 6), luks_passphrase_rotations >= 1
+    alert_route: layer 6 `::error::` plus the `notify-apply-failure` ops email on the first red merge; `[skip-web-platform-apply]` makes later merges skip silently, so the persistence detector is the `scheduled-terraform-drift` Sentry monitor and its action-required issue
   - mode: the flip is reverted or neutered
-    detection: `flip precondition ... NOT met` on any dispatch, and the destroy-guard suite and real-tree row RED in CI
-    alert_route: CI RED on the PR; dispatch refuses before any write
+    detection: `::error::flip precondition NOT met` in the workflow run log (layer 6) on an apply dispatch (a plan_only dispatch prints a `PENDING` line at rc 0), and the destroy-guard suite and real-tree row RED in CI
+    alert_route: CI RED on the PR (the required check); an apply dispatch refuses before any write
   - mode: the arm over-counts and wedges routine merges
-    detection: HALT fires on a plan with no web-class create; the suite's must-PASS rows RED first
-    alert_route: apply run RED; `[skip-web-platform-apply]` unwedge
+    detection: `::error::terraform plan would CREATE ...` fires on a plan with no web-class passphrase create (workflow run log, layer 6); the suite's must-PASS rows RED first
+    alert_route: layer 6 `::error::` plus the `notify-apply-failure` ops email; `[skip-web-platform-apply]` unwedge
 logs:
   where: GitHub Actions run log and step summary
   retention: Actions default
@@ -455,3 +455,19 @@ No Product/UX surface: no new user-facing file, no UI path in Files to Edit.
 - Edit the #6931 issue body only after the PR merges (hard instruction). Do it as a read-modify-write that asserts one directive and one match; never paste the whole body from memory.
 - `apply-deploy-pipeline-fix.yml` runs the same jq filter but reads only other counters (`host_creates`, `reboot_updates`, `non_terraform_data_deletes`), so the new arm cannot affect it; say so in the PR body.
 - Run `lint-infra-no-human-steps.py` on this plan and on every runbook edit: do not pair a human actor with an infrastructure verb in new prose.
+
+## Review-Phase Amendments (2026-10-06)
+
+Recorded by the review phase; the sections above stay as the dated plan. Where they conflict, this section wins.
+
+1. **Create arm narrowed to the passphrase alone** (CTO re-ruling, new evidence). Only a create of `random_password.workspaces_luks_web`
+   counts; a create of `doppler_secret.workspaces_luks_web_key` alone restores the same state-held value and stays legal (a missing
+   copy is itself an incident, and the HALT left no route that applies the repair). AC2 therefore reads `1`, not `2`; the flip
+   precondition runs over `passphrase-create-password-only.json` and requires exactly 1; the must-stay-legal rows cover five addresses.
+2. **Recovery wording retracted.** "A reviewed import of the existing entry" is not a verified route: two review seats measured in a
+   local-state sandbox (random provider 3.9.0/3.9.1) that the import plans `special = true -> false`, a forced replacement. The HALT text,
+   ADR-263 marker and runbooks now say there is no documented or verified automated recovery and the owner decides. The follow-up
+   measurement is a checkbox on #9572.
+3. **Scope of "no workflow creates them"** is the passphrase pair only; the push-apply still creates the escrow config, bucket and name
+   secrets, and a create there is not halted.
+4. **Floors** are exact: destroy-guard 107, `web2-rebirth.test.sh` 123 scenarios.

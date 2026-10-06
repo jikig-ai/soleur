@@ -397,11 +397,16 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 `[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
 
 > **Superseded 2026-10-06 (#9372), in part, from the merge of the closing change:** the sentence "A first `create` stays
-> legal" is no longer true for the web-class pair (`random_password.workspaces_luks_web` and
-> `doppler_secret.workspaces_luks_web_key`). The HALT now counts a `create` at those two addresses and refuses it, with no
-> acknowledgement path. A first `create` stays legal at the other four addresses. The single-use escrow-create workflow is
-> retired, so a lost pair entry is recovered by a reviewed import of the existing entry into state, merged with the
-> kill-switch line, never by a re-create. The text above is kept as the dated record.
+> legal" is no longer true for the web-class passphrase (`random_password.workspaces_luks_web`). The HALT now counts a
+> `create` of it and refuses it, with no acknowledgement path. A first `create` stays legal at the other five addresses,
+> the web-class key copy (`doppler_secret.workspaces_luks_web_key`) included: a create of the copy alone restores the same
+> state-held value, and a missing copy is itself an incident. The single-use escrow-create workflow is retired, and there
+> is no documented or verified automated recovery for a lost passphrase entry: importing the existing value is not a
+> supported route (measured in a sandbox with the lock-pinned random provider, the import plans `special = true -> false`,
+> a forced replacement that `prevent_destroy` refuses and that, forced, would mint a new passphrase). The live value is
+> unharmed while its Doppler copy exists; merge with the kill-switch line and escalate to the owner, who decides the repair
+> (the state backend has no versioning, ADR-006). Whether an import plus a state-attribute fix yields a clean plan is
+> unmeasured and tracked on #9572. The text above is kept as the dated record.
 
 ## registry_luks_recut
 

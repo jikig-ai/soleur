@@ -92,7 +92,7 @@ single copy. Take the verdict only from the log line that starts with `Verdict:`
 substring (the log echoes the step's script, which contains both).
 
 When a replace aborts at this step, the cause is in its annotations and its own log: the checker prints one
-`escrow-split-contract:CAUSE` line per family of missing name (a Terraform-managed name not created yet, none was missing on 2026-10-04 and no workflow creates them now; or the R2 pair, the live
+`escrow-split-contract:CAUSE` line per family of missing name (a Terraform-managed name not created yet, none was missing on 2026-10-04 and the escrow-create workflow is retired, so only the push-apply can create them now; or the R2 pair, the live
 mint, the only gap on that date). **If `prd_workspaces_luks_web` does not exist at all**, the checker exits 3 and prints a `NOTE` instead of a
 `CAUSE` line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
 That says what the failed read is consistent with; it is not a diagnosis. (Read the push-apply's current state before relying on it. The single-use workflow that once created the three names is retired, and the apply HALT now refuses a create of the web-class passphrase pair.)
@@ -115,9 +115,9 @@ automated: repair the named cause and dispatch again.
 3. `web_host_replace` is a job of `apply-web-platform-infra.yml`. When that workflow is disabled at the time, the push-apply
    enable window applies: enable it for the dispatch, dispatch, then disable it again, and note that a merge to main inside
    the enabled window triggers its push-apply.
-4. Losing the passphrase pair or the escrow bucket has no automated creation route: the apply HALT refuses a `create` of
-   the web-class pair and no workflow creates it. The recovery is a reviewed change that imports the existing state entry,
-   merged with the push-apply kill-switch line, never a re-create.
+4. Losing the web-class passphrase entry has no documented or verified recovery: the apply HALT refuses a `create` of
+   `random_password.workspaces_luks_web` and importing the existing value is not a supported route; do not apply, merge with the
+   push-apply kill-switch line and escalate to the owner (see the same item in `web-host-birth.md`).
 
 **If `escrow=missing` pages anyway** (alert `web-host-luks-boot-fatal`, stage `workspaces_luks_provision_escrow`;
 the boot continued, the volume is formatted, the header has no off-host copy): escrow is attempted **once, at

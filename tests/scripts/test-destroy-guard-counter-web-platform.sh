@@ -1341,8 +1341,9 @@ t_apply_job_luks_halt_job_scoped() {
 # password as a dependency of the web key until the swap, and always as the pair named for defense in depth).
 # A rotation leaves the LUKS header cut from the OLD value with no surviving copy. `[ack-destroy]` cannot tell
 # a passphrase replace from any other delete in the same merge, so it must not reach it. A CREATE of the
-# web-class pair halts too since the closing change for #9372 (the single-use create workflow is retired, so a
-# planned create means state lost an entry); a create at the other four addresses stays legal.
+# web-class passphrase halts too since the closing change for #9372 (its single-use create workflow is retired, so a
+# planned create means state lost the entry); a create at the other five addresses, the web-class key copy included,
+# stays legal (a key-copy-alone create restores the same state-held value; CTO ruling 2026-10-06).
 WL_ADDRS=(
   random_password.workspaces_luks
   random_password.workspaces_luks_web
@@ -1350,11 +1351,10 @@ WL_ADDRS=(
   doppler_secret.workspaces_luks_web_key
 )
 
-# TEST-SIDE literal: the two addresses whose CREATE must halt. Never derived from the filter, or emptying the
+# TEST-SIDE literal: the one address whose CREATE must halt. Never derived from the filter, or emptying the
 # filter's own list would shrink the expectation with it and every row below would stay green.
 WL_CREATE_HALT=(
   random_password.workspaces_luks_web
-  doppler_secret.workspaces_luks_web_key
 )
 _wl_create_want() { # <bare address> -> 1 when a CREATE there must count, else 0
   local x
@@ -1393,14 +1393,16 @@ t_workspaces_passphrase_forget_halts() {
   fi
 }
 
-# MUST-HALT: a CREATE of the web-class pair. The single-use workflow that created it is retired, so a planned create
-# means state lost an entry, and applying it would overwrite the live passphrase. Both entries count, rc=1.
-t_workspaces_passphrase_first_create_passes() {
+# MUST-HALT: a CREATE of the web-class passphrase. Its single-use create workflow is retired, so a planned create
+# means state lost the entry, and applying it would mint a new passphrase over the live header. The fixture holds the
+# password create AND the key-copy create; only the password counts, so it reads 1, rc=1.
+_t64d_holds() { [[ "$1" == "1:1" ]]; } # the must-HALT predicate, shared with the T64n harness row so that row cannot restate it
+t_workspaces_passphrase_create_halts() {
   local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json")
-  if [[ "$out" == "2:1" ]]; then
-    _report "T64d a CREATE of the web-class passphrase pair HALTs (both entries counted, rc=1)" ok
+  if _t64d_holds "$out"; then
+    _report "T64d a CREATE of the web-class passphrase HALTs (the password create counted, the key-copy create beside it not, rc=1)" ok
   else
-    _report "T64d a CREATE of the web-class passphrase pair HALTs" fail "got '$out' want '2:1'"
+    _report "T64d a CREATE of the web-class passphrase HALTs" fail "got '$out' want '1:1'"
   fi
 }
 
@@ -1408,17 +1410,18 @@ t_workspaces_passphrase_first_create_passes() {
 #  (1) a create at the OTHER four addresses reads 0 (inngest recut route, web-1 pair), and a no-op at all six reads 0:
 #      widening the arm to all six, or counting no-op, reds this row.
 #  (2) the T64d expectation is not satisfiable by a plan that does nothing: with the first-create fixture's actions
-#      changed from ["create"] to ["no-op"] the T64d predicate ("2:1") must NOT hold, so a must-HALT row that passes
+#      changed from ["create"] to ["no-op"] the T64d predicate ("1:1") must NOT hold, so a must-HALT row that passes
 #      on a no-op is caught here.
 t_workspaces_passphrase_create_scope_and_harness() {
   local tmp detail='' a got
   tmp="$(mktemp)"
-  for a in random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key random_password.workspaces_luks doppler_secret.workspaces_luks_key; do
+  # the key copy of the web-class pair is in this list ON PURPOSE: a create of it alone restores the same state-held value
+  for a in random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key random_password.workspaces_luks doppler_secret.workspaces_luks_key doppler_secret.workspaces_luks_web_key; do
     printf '{"resource_changes":[{"address":"%s","type":"x","change":{"actions":["create"],"before":null,"after":{"id":"x"}}}]}' "$a" > "$tmp"
     got="$(jq -f "$FILTER" "$tmp" | jq -r '.luks_passphrase_rotations')"
     [[ "$got" == "0" ]] || detail="${detail} create@${a}=${got}(want 0);"
   done
-  for a in "${WL_CREATE_HALT[@]}" random_password.workspaces_luks doppler_secret.workspaces_luks_key random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key; do
+  for a in "${WL_CREATE_HALT[@]}" doppler_secret.workspaces_luks_web_key random_password.workspaces_luks doppler_secret.workspaces_luks_key random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key; do
     printf '{"resource_changes":[{"address":"%s","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' "$a" > "$tmp"
     got="$(jq -f "$FILTER" "$tmp" | jq -r '.luks_passphrase_rotations')"
     [[ "$got" == "0" ]] || detail="${detail} no-op@${a}=${got}(want 0);"
@@ -1426,12 +1429,12 @@ t_workspaces_passphrase_create_scope_and_harness() {
   # harness row: the T64d predicate against a no-op copy of its own fixture must NOT hold
   jq '.resource_changes |= map(.change.actions = ["no-op"])' "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json" > "$tmp"
   got="$(_run_luks_rotation_gate "$tmp")"
-  [[ "$got" != "2:1" ]] || detail="${detail} T64d-predicate-holds-on-a-no-op-plan(${got});"
+  ! _t64d_holds "$got" || detail="${detail} T64d-predicate-holds-on-a-no-op-plan(${got});"
   rm -f "$tmp"
   if [[ -z "$detail" ]]; then
-    _report "T64n a create at the other four addresses and a no-op at all six read 0, and the must-HALT predicate does not hold on a no-op plan" ok
+    _report "T64n a create at the other five addresses (the web-class key copy included) and a no-op at all six read 0, and the must-HALT predicate does not hold on a no-op plan" ok
   else
-    _report "T64n create scope (web-class pair only) and the must-HALT harness row" fail "$detail"
+    _report "T64n create scope (the web-class passphrase only) and the must-HALT harness row" fail "$detail"
   fi
 }
 
@@ -1455,7 +1458,8 @@ t_workspaces_passphrase_create_arm_mutants_caught() {
 }
 
 # One entry at ONE address, every verb shape: each of the four addresses must score on update/delete/forget/
-# unreadable and must NOT score on create/no-op. Removing any one address from the filter reds its row.
+# unreadable, on create only at the WL_CREATE_HALT address, and never on no-op. Removing any one address from the
+# filter reds its row.
 _wl_shape_check() { # <filter file> <address> [create-want 0|1] -> prints a detail string of mismatches (empty = all as wanted)
   local filter="$1" addr="$2" cw="${3:-0}" shape want got detail='' tmp; tmp="$(mktemp)"
   for shape in '[]:1' '["delete"]:1' '["delete","create"]:1' '["create","delete"]:1' '["create","update"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' "[\"create\"]:${cw}"; do
@@ -1561,7 +1565,8 @@ t_workspaces_passphrase_widening_mutant_caught() {
 
 # INDEXED / MODULE-PREFIXED addresses of a listed resource are the same secret (a for_each/count rebirth, #9372, plans
 # `random_password.workspaces_luks_web["web-2"]`). Each form of each of the four addresses must score on a replace and
-# must NOT score on create, exactly like the bare address; the inngest pair is covered by the same normalization.
+# score on create only where the bare address does (the WL_CREATE_HALT address); the inngest pair is covered by the
+# same normalization.
 t_workspaces_passphrase_indexed_forms_counted() {
   local a f detail='' d
   for a in "${WL_ADDRS[@]}" random_password.inngest_redis_luks doppler_secret.inngest_redis_luks_key; do
@@ -1714,13 +1719,14 @@ t_apply_job_luks_halt_names_workspaces() {
   code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
   # Emissions only (comment-stripped, `echo "::error::` lines): the operator reads these during the incident.
   local emitted; emitted="$(grep -F 'echo "::error::' <<<"$code" || true)"
-  for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'escrow-create workflow is retired' 'reviewed import' '[skip-web-platform-apply]'; do
+  for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'escrow-create workflow is retired' 'no documented or verified automated recovery' 'NOT a supported route' '[skip-web-platform-apply]'; do
     grep -qF "$v" <<<"$emitted" || { ok=0; missing="${missing} ${v};"; }
   done
   # CREATE is required in the FIRST emission of the HALT body only: the uppercase verb also occurs in other emissions
   # of the job, so a job-wide grep would stay green with the HALT's own opening line reverted to its three-verb text.
   local first_emit; first_emit="$(_luks_halt_body "$code" | grep -F 'echo "::error::' | head -1 || true)"
   grep -qF 'CREATE' <<<"$first_emit" || { ok=0; missing="${missing} CREATE-in-first-emission;"; }
+  grep -qF 'a CREATE counts only at the web-class passphrase' <<<"$first_emit" || { ok=0; missing="${missing} create-scope-in-first-emission;"; }
   # The offending-lines grep must name EVERY address of the counted set explicitly, derived from the filter's own
   # luks_passphrase_addrs (a generic `_luks` pattern matches 42 resource names, and the earlier anchor-free regex was
   # satisfied by the pre-change `inngest_redis_luks` pattern). Boundary-matched, so `random_password.workspaces_luks`
@@ -1733,7 +1739,7 @@ t_apply_job_luks_halt_names_workspaces() {
     grep -qE "(^|[^A-Za-z0-9_])${a//./\\.}([^A-Za-z0-9_]|\$)" <<<"$gline" || { ok=0; missing="${missing} grep-lacks:${a};"; }
   done < <(_luks_addrs)
   if [[ "$ok" -eq 1 ]]; then
-    _report "T64g the apply job's LUKS HALT names the workspaces pair, the re-key remediation, the CREATE halt with the retired route and the import recovery, and widens the plan-line grep" ok
+    _report "T64g the apply job's LUKS HALT names the workspaces pair, the re-key remediation, the CREATE halt with the retired route and the no-supported-recovery statement, and widens the plan-line grep" ok
   else
     _report "T64g the apply job's LUKS HALT names the workspaces pair and its remediation" fail "missing:${missing}"
   fi
@@ -1997,7 +2003,7 @@ t_apply_job_luks_halt_job_scoped
 t_workspaces_passphrase_replace_halts
 t_workspaces_passphrase_no_ack_bypass
 t_workspaces_passphrase_forget_halts
-t_workspaces_passphrase_first_create_passes
+t_workspaces_passphrase_create_halts
 t_workspaces_passphrase_create_scope_and_harness
 t_workspaces_passphrase_create_arm_mutants_caught
 t_workspaces_passphrase_every_address_counted
@@ -2031,16 +2037,16 @@ _ran=$((pass + fail))
 # + 9 added by that branch, + 15 added by main (PR4b/AC72) = 73, then + 2 from later arms and
 # + 2 cloudflare_list arms (#8364, T61/T62) = 77, + 10 deploy-pipeline-fix non-terraform_data
 # delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64, T64b-g: 4 gates + e + 4 removal mutants + g) = 99, + 6 review-round arms (T64h-m: neighbours, widening mutant,
-# indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 3 create-arm rows (the closing change for #9372:
-# T64n create scope plus the must-HALT harness row, T64o x 2 create-list removal mutants) = 108. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 107 assertions ran, floor is 108". The floor sits at the
+# indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the closing change for #9372:
+# T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 106 assertions ran, floor is 107". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 108 ]]; then
+if [[ "$_ran" -lt 107 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 108. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 107. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 108)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 107)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

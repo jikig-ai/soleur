@@ -16,15 +16,15 @@ the authorization. Do not dispatch from a menu answer or a "continue".
    `flip-precondition` step prints `NOT met`; a `plan_only` run prints `PENDING`).
 
    **Landed from the merge of the closing change (#9372).** That change deletes the escrow-create workflow and makes the
-   rotation HALT count a `create` of the web-class pair, so the flip precondition can read met. Verify it against the merged
+   rotation HALT count a `create` of the web-class passphrase, so the flip precondition can read met. Verify it against the merged
    tree before the first dispatch (run it with `GITHUB_OUTPUT` unset); the output must contain `flip precondition: MET`:
 
    ```bash
    bash scripts/web2-rebirth.sh flip-precondition yes
    ```
 
-2. Both push-apply workflows are paused and idle. Both were `active` (not paused) on 2026-10-06, and the merge of the closing
-   change fires a routine push-apply (no Terraform diff is expected). Order:
+2. Pause both push-apply workflows and confirm they are idle. Both were `active` (not paused) on 2026-10-06, and the merge of the
+   closing change fires a routine push-apply (no Terraform diff is expected). Order:
 
    1. Wait for the push-apply run on the merge SHA to finish green with a plan of "No changes". A different plan is a
       finding to read, not noise.
@@ -141,7 +141,7 @@ for the window, not a fault.
 | 3 | Re-capture web-2's SSH host-key pin (`scripts/capture-web-2-host-key.sh`, which needs the new IP printed in the summary); `apply-deploy-pipeline-fix` fails closed until then. Re-enable the push-apply workflows only after that | the engineer, then the owner re-enables |
 | 4 | UPDATE the existing follow-through directive on #6931 (`earliest=` to rebirth + 3 days, printed in the summary); do not add a second. The closing change pre-sets `earliest=2026-10-18T00:00:00Z` (decision date 2026-10-15 plus 3 days) after its merge. **Go/no-go:** dispatch by 2026-10-15, so the 3-day soak fits the window that closes 2026-10-22. A later dispatch re-sets `earliest` from the actual rebirth time as a mandatory step of that dispatch; otherwise the exception on `hcloud_volume.workspaces` is extended citing #6931 | the engineer |
 | 5 | Delete `web2-luks-rebirth.yml`, `scripts/web2-rebirth*.sh` and their tests, `tests/scripts/lib/web-host-rebirth-gate.sh`, `tests/scripts/lib/web2-rebirth-classify.sh`, the fixtures, the suite registrations and the `MAIN_ROOT_TF_WORKFLOWS` entry (census 4 to 3; it was 5 before the closing change, 4 after), and record the use in ADR-263. The `scripts/web2-rebirth.test.sh` rows the closing change adds go with it: a real-tree `flip-precondition yes` row that reads `MET`, and a sandbox `real absent` flip case. Also correct two comments the closing change leaves stale, in that later change: the CONSUMERS comment on `DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER` in `workspaces-luks-fresh-boot.tf` (it names only the verify workflow and the sweeper), and the comment in `apps/web-platform/infra/workspaces-luks-header-web.tf` that says the rotation HALT "lets a first create through" | the engineer |
-| 6 | Decision date **2026-10-15**: the dispatch has run and the web-2 host is provisioned with the proof pending, or the encryption-posture exception on `hcloud_volume.workspaces` (expires 2026-10-22) is extended citing #6931. The ledger flip cannot be in review by then: it follows the graded reboot proof, which cannot pass before about 2026-10-18. The engineer prepares the extension by 2026-10-14, so the owner can decide on the day | the owner decides; the engineer prepares the extension |
+| 6 | Decision date **2026-10-15**: the dispatch has run and the web-2 host is provisioned with the proof pending, or the encryption-posture exception on `hcloud_volume.workspaces` (expires 2026-10-22) is extended citing #6931. The ledger flip cannot be in review by then: it follows the graded reboot proof, which cannot pass before about 2026-10-18. The engineer prepares the extension by 2026-10-14, so the owner can decide on the day; if the exception is extended instead, re-set `earliest` on the #6931 directive in the same step, or the follow-through reports FAIL when its window closes on 2026-10-22 | the owner decides; the engineer prepares the extension |
 
 ## References
 
