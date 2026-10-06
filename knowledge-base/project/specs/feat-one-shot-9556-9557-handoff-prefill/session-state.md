@@ -51,3 +51,11 @@ Clean lenses (no findings filed): security-sentinel, performance-oracle, semgrep
 ### Fix round 1 (fd4a137b..13451984d3, seats=10)
 
 Round-1 seats found **1 P1 + 1 P2 + several P3s**, all fixed in `b7a7564603` + follow-up: stale `current-repo-url` mocks in `cc-dispatcher-warm-presandbox-mkdir.test.ts` and `cc-dispatcher-prefill-guard.test.ts` (suite-wide breaks from the `readCurrentRepoUrlResult` swap); "concrete boolean" overstatement contradicted by the same commit's degraded arm; `denySupport` JSDoc/source misquote; `undefined`-source enumeration gaps in support-escalation.ts + ADR-113; unsound "earlier-ordered effect" rationale in the strip comment; latch test needed a distinct third prefill to discriminate under `[prefill]` deps.
+
+### Fix round 2 + verification pass
+
+Round-2 seats (4 agents covering 8 resolved seat-roles over `13451984d3..HEAD`): all findings CLOSED; residual P3s fixed in `41ef0dfa2c` (quote case, shared mock impl, `undefined`-producer enumeration at lib/route siblings, ledger severity). Fresh-eyes verification pass: per-commit closure table all CLOSED, no fix-introduced defects, 79 tests green. Trailers: `Reviewed-Coverage: full 10/10` (201cd26ff1) + `Reviewed-Fix-Round: fd4a137b..` (484808046a).
+
+### QA + Compound
+
+QA: 8/8 Given/When/Then scenarios pinned by unit suite (auto-skip executable steps — no Browser:/API verify: steps in plan); nav-states gate skipped (no structural-UI paths). Compound: learning `2026-10-06-a-module-export-swap-is-a-module-contract-change-sweep-vi-mock-factories-too.md`; constitution principle added (Testing/Always); work-SKILL blast-radius bullet routed; session errors inventoried (9 items + 3 forwarded).
