@@ -672,32 +672,32 @@ the test's own header comment.
 
 ## Acceptance Criteria
 
-- [ ] AC1: `isBashCommandSafe` returns `false` for `git branch <name>`,
+- [x] AC1: `isBashCommandSafe` returns `false` for `git branch <name>`,
   `git branch -d <name>`, `-D`, `-m`, `-M`, `-c`, `-C`, `-f`, `-q`,
   `-u`/`--set-upstream-to`, `--unset-upstream`, and `--edit-description`
   forms, including as an `&&` segment.
-- [ ] AC2: `isBashCommandSafe` returns `true` for `git branch`,
+- [x] AC2: `isBashCommandSafe` returns `true` for `git branch`,
   `git branch --show-current`, `git branch --list`, `git branch -a`,
   `-r`, `-v`, `-vv`, `--merged main`, `--contains HEAD~2`,
   `--sort=-committerdate`.
-- [ ] AC3: `kb-search` SKILL.md documents a support-persona execution path
+- [x] AC3: `kb-search` SKILL.md documents a support-persona execution path
   covering all four phases' tool equivalents, placed before Phase 0, that
   instructs NO Bash calls and names the committed corpus paths.
-- [ ] AC4: `plugins/soleur/test/kb-search-support-path.test.sh` exists,
+- [x] AC4: `plugins/soleur/test/kb-search-support-path.test.sh` exists,
   is discovered by `scripts/test-all.sh`, asserts the support section +
   corpus presence + no-bash-in-section, and carries a ≥3 pass-count floor.
-- [ ] AC5: `kb-search-lockstep.test.sh` stays green (sensitive-regex byte
+- [x] AC5: `kb-search-lockstep.test.sh` stays green (sensitive-regex byte
   equality preserved).
-- [ ] AC6: `SUPPORT_SYSTEM_DIRECTIVE` tells the support model kb-search is
+- [x] AC6: `SUPPORT_SYSTEM_DIRECTIVE` tells the support model kb-search is
   tool-only (Read/Grep/Glob); stale "shells out via safe-bash" comments in
   `support-directive.ts` and `cc-dispatcher.ts` are corrected.
-- [ ] AC7: ADR-113 carries the premise-correction amendment; `model.c4` +
+- [x] AC7: ADR-113 carries the premise-correction amendment; `model.c4` +
   `views.c4` include `supportUser` and `c4-code-syntax.test.ts` /
   `c4-render.test.ts` pass.
-- [ ] AC8: `safe-bash.test.ts`, `permission-callback-safe-bash.test.ts`,
+- [x] AC8: `safe-bash.test.ts`, `permission-callback-safe-bash.test.ts`,
   `support-directive.test.ts` all green; no other suite regresses
   (`git branch` bare stays in SAFE_COMMANDS).
-- [ ] AC9: PR body carries `Closes #9555` and `Closes #9559` plus a
+- [x] AC9: PR body carries `Closes #9555` and `Closes #9559` plus a
   `## Changelog` section (semver: patch — bug fix).
 
 ## Domain Review
