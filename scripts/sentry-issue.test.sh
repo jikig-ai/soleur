@@ -29,6 +29,9 @@ run_sut() {
   cat > "$mock_dir/curl" <<MOCK
 #!/bin/bash
 echo "\$*" >> "$mock_dir/curl_args"
+# stdin carries the curl config (the bearer header); record it so the suite can assert the token
+# travels THERE and is absent from argv. \`cat\` only when stdin is not a terminal.
+[ -t 0 ] || cat >> "$mock_dir/curl_stdin"
 echo "\${MOCK_BODY:-{\\"id\\":\\"12345\\",\\"title\\":\\"boom\\"}}"
 echo "\${MOCK_HTTP_CODE:-200}"
 exit 0
@@ -38,6 +41,8 @@ MOCK
   ( export PATH="$mock_dir:$PATH"
     export SENTRY_API_HOST="jikigai-eu.sentry.io"
     export SENTRY_ORG="jikigai-eu"
+    [[ "${HOSTILE_HOST:-}" != "1" ]] || export SENTRY_API_HOST="evil.example.com"
+    [[ "${HOSTILE_ORG:-}" != "1" ]] || export SENTRY_ORG="attacker-org"
     if [[ "${NO_TOKEN:-}" != "1" ]]; then
       [[ "${USE_RW_ONLY:-}" == "1" ]] || export SENTRY_ISSUE_RO_TOKEN="$RO_TOKEN"
       export SENTRY_ISSUE_RW_TOKEN="$RW_TOKEN"
@@ -48,6 +53,7 @@ MOCK
   LAST_OUT="$(cat "$mock_dir/out" 2>/dev/null)"
   LAST_ERR="$(cat "$mock_dir/err" 2>/dev/null)"
   LAST_CURL="$(cat "$mock_dir/curl_args" 2>/dev/null || true)"
+  LAST_STDIN="$(cat "$mock_dir/curl_stdin" 2>/dev/null || true)"
   LAST_RC="$(sed 's/rc=//' "$mock_dir/rc" 2>/dev/null || echo 1)"
   rm -rf "$mock_dir"
 }
@@ -96,6 +102,32 @@ check "403 non-zero exit" "$([[ "$LAST_RC" != "0" ]] && echo 0 || echo 1)"
 # 8. token never echoed to the script's own stderr (on a normal + error run)
 MOCK_HTTP_CODE=500 run_sut 12345
 check "stderr never echoes token" "$([[ "$LAST_ERR" != *"$RO_TOKEN"* && "$LAST_ERR" != *"$RW_TOKEN"* ]] && echo 0 || echo 1)"
+
+# 8b. the bearer rides curl's STDIN config channel and is ABSENT from argv (both halves asserted;
+#     argv is world-readable via /proc/<pid>/cmdline and `ps`), in both issue-mode curl shapes.
+run_sut 12345
+check "bearer on stdin (RO token)" "$([[ "$LAST_STDIN" == "header = \"Authorization: Bearer ${RO_TOKEN}\"" ]] && echo 0 || echo 1)"
+check "token absent from argv" "$([[ "$LAST_CURL" != *"$RO_TOKEN"* && "$LAST_CURL" != *"$RW_TOKEN"* && "$LAST_CURL" != *'Bearer'* && "$LAST_CURL" != *'Authorization'* ]] && echo 0 || echo 1)"
+check "curl reads its config from stdin and starts --disable --noproxy" "$([[ "$LAST_CURL" == '--disable --noproxy * '* && "$LAST_CURL" == *'--config -'* ]] && echo 0 || echo 1)"
+USE_RW_ONLY=1 run_sut 12345
+check "bearer on stdin (RW fallback token)" "$([[ "$LAST_STDIN" == "header = \"Authorization: Bearer ${RW_TOKEN}\"" && "$LAST_CURL" != *"$RW_TOKEN"* ]] && echo 0 || echo 1)"
+
+# 8c. an unusable token (a newline would inject a curl config directive on stdin) => zero curl
+#     calls, non-zero exit, and the value is never echoed.
+BAD_RO=$'ro_bad\nurl = "https://attacker.example/"'
+RO_TOKEN_SAVE="$RO_TOKEN"; RO_TOKEN="$BAD_RO"
+run_sut 12345
+RO_TOKEN="$RO_TOKEN_SAVE"
+check "newline token non-zero exit" "$([[ "$LAST_RC" != "0" ]] && echo 0 || echo 1)"
+check "newline token fired no curl" "$([[ -z "$LAST_CURL" && -z "$LAST_STDIN" ]] && echo 0 || echo 1)"
+check "newline token value never echoed" "$([[ "$LAST_ERR" != *'attacker.example'* ]] && echo 0 || echo 1)"
+
+# 8d. issue / latest-event modes pin SENTRY_API_HOST and SENTRY_ORG to the live literals: an env
+#     override is refused before any curl (it would otherwise carry the bearer off-host).
+HOSTILE_HOST=1 run_sut 12345
+check "off-pin SENTRY_API_HOST refused, no curl" "$([[ "$LAST_RC" == "64" && -z "$LAST_CURL" ]] && echo 0 || echo 1)"
+HOSTILE_ORG=1 run_sut --latest-event 12345
+check "off-pin SENTRY_ORG refused, no curl" "$([[ "$LAST_RC" == "64" && -z "$LAST_CURL" ]] && echo 0 || echo 1)"
 
 # 9. source never ACTIVATES `set -x` (anchored to line start so the doc comment
 #    that mentions `set -x` is not a false positive).

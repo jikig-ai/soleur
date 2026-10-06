@@ -14,6 +14,11 @@
 #   1 - API error or missing dependency
 
 set -euo pipefail
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797),
+# and this script holds a live API key. Placed before the credential is read.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,6 +53,21 @@ if [[ ! "$PLAUSIBLE_BASE_URL" =~ ^https:// ]]; then
   exit 1
 fi
 
+# Destination pin: the API key is sent to this host, so an env override must not redirect it.
+# The only deployed caller (cron-plausible-goals.ts) hardcodes the same host.
+if [[ "$PLAUSIBLE_BASE_URL" != "https://plausible.io" ]]; then
+  echo "Error: PLAUSIBLE_BASE_URL must be https://plausible.io" >&2
+  exit 1
+fi
+
+# Token-shape guard: a newline in the key would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$PLAUSIBLE_API_KEY"; then
+  echo "Error: PLAUSIBLE_API_KEY has an unexpected shape" >&2
+  exit 1
+fi
+
 if [[ ! "$PLAUSIBLE_SITE_ID" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   echo "Error: PLAUSIBLE_SITE_ID contains invalid characters" >&2
   exit 1
@@ -66,14 +86,14 @@ api_request() {
   trap 'rm -f "$response_file"' RETURN
 
   local curl_args=(-s -o "$response_file" -w "%{http_code}")
-  curl_args+=(-H "Authorization: Bearer ${PLAUSIBLE_API_KEY}")
 
   if [[ "$method" == "PUT" ]]; then
     curl_args+=(-X PUT -H "Content-Type: application/json" -d "$payload")
   fi
 
-  # Suppress stderr to prevent Bearer token leakage
-  if ! http_code=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
+  # The bearer rides curl's stdin config channel, never its argument list. Stderr stays suppressed.
+  if ! http_code=$(curl --disable --noproxy '*' "${curl_args[@]}" --config - "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$PLAUSIBLE_API_KEY")); then
     echo "Error: Failed to connect to ${url}" >&2
     exit 1
   fi
@@ -136,9 +156,9 @@ provision_goal() {
 # api_request is called inside $() (subshell) where exit only exits the subshell,
 # so plan-limitation checks must happen here before any $() calls.
 
-_preflight_code=$(curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${PLAUSIBLE_API_KEY}" \
-  "${PLAUSIBLE_BASE_URL}/api/v1/sites/goals?site_id=${PLAUSIBLE_SITE_ID}" 2>/dev/null)
+_preflight_code=$(curl --disable --noproxy '*' -s -o /dev/null -w "%{http_code}" --config - \
+  "${PLAUSIBLE_BASE_URL}/api/v1/sites/goals?site_id=${PLAUSIBLE_SITE_ID}" 2>/dev/null \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$PLAUSIBLE_API_KEY"))
 if [[ "$_preflight_code" == "401" || "$_preflight_code" == "402" ]]; then
   echo "Plausible API returned ${_preflight_code} -- Sites/Goals API requires a higher plan."
   echo "Skipping goal provisioning. Goals can be configured manually in the dashboard."

