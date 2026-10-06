@@ -14,3 +14,15 @@ None. Collision check for #9510: OPEN, no linked/body-probe collision (merged #9
 
 ### Components Invoked
 soleur:one-shot (steps 0–0d), soleur:plan (inline), soleur:deepen-plan (inline), plan-review standing checks (inline).
+
+## Compound Phase
+- Learning: knowledge-base/project/learnings/2026-10-06-terraform-show-json-configuration-is-declaration-not-state.md
+- Session error inventory: 10 items (all carried into the learning with Prevention lines). Triage: recurring items are either already hook-enforced (git-stash deny) or now test-pinned (T29/T32 call-shape + call-site enumeration, configuration-only regression).
+- Deviation Analyst: no violations — the git-stash deny is enforcement working, not a deviation; inline review is the sanctioned no-subagent-surface fallback; QA auto-skip is the documented prose-only Test Scenarios case.
+- Rule budget: `[OK] B_ALWAYS=42994`. Rule-metrics aggregator ran; 81 rules recorded no enforcement event in 8w (informational, not a retirement shortlist). Token-efficiency report: skipped (small diff).
+- Route-to-definition: satisfied as already-enforced — the lib documents the sourced-global subshell caveat (lines 107-109) and the `.values` scoping (lines 592-596); T29/T32 + the regression fixture pin both mechanically. No bounded edit applied; no constitution promotion (domain-scoped insights, not cross-cutting).
+- Step E archival DEFERRED deliberately: ship Phase 6 step 2.5 reads `specs/<branch>/decision-challenges.md` at its live path for `## Model Dissents`; archiving now would silently drop the recorded Item-A dissent from the PR body (#7490 ordering caveat). Archive in a follow-up after merge.
+
+## Review/QA Phase
+- Review: inline 4-dimension pass (no subagent surface); 1 finding (configuration-vs-values state scope) fixed in c4a6aca414 + regression; trailer `Reviewed-Coverage: inline-fallback 0/10 agents` on 836e9ed325.
+- QA: skipped per soleur:qa documented case — plan's Test Scenarios are Given/When/Then prose with no Browser:/API verify:/Cleanup: steps; coverage is the 369-assertion hermetic suite + mutation battery.
