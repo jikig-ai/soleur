@@ -13,10 +13,15 @@ created: 2026-10-05
 
 The cc runner's per-conversation cost cap is a **conversation-killer**. When
 `state.totalCostUsd >= capFor(...)` in `soleur-go-runner.ts`, the runner emits
-`WorkflowEnd{status:"cost_ceiling"}` → `cc-dispatcher.ts` routes it through
-`TERMINAL_WORKFLOW_END_STATUSES` → a terminal `session_ended` frame → the client
-disables input with *"This conversation reached the per-workflow cost cap. Start a
-new conversation to continue."*
+`WorkflowEnd{status:"cost_ceiling"}` → `emitWorkflowEnded` sets `state.closed` and
+`closeQuery` destroys the SDK Query and deletes the ActiveQuery (in-memory cost,
+workflow, and chapter context all reset) → `cc-dispatcher.ts` routes the status to
+a non-terminal `{type:"error"}` frame with *"This conversation reached the
+per-workflow cost cap. Start a new conversation to continue."* (Corrected 2026-10-05
+at plan time: `cost_ceiling` is NOT in `TERMINAL_WORKFLOW_END_STATUSES` — the kill
+is the Query teardown, not a `session_ended` frame, and the client composer stays
+enabled. The cap is also effectively per-Query-lifetime, not per-conversation:
+`state.totalCostUsd` resets on every cold Query.)
 
 Two distinct defects:
 
