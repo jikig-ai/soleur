@@ -1,6 +1,7 @@
-import { mkdirSync, readdirSync, realpathSync } from "fs";
+import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
-import { basename, join } from "path";
+import { basename, delimiter, join } from "path";
+import * as Sentry from "@sentry/nextjs";
 
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
@@ -49,6 +50,16 @@ const log = createChildLogger("agent-sandbox");
 //     and its `allowWrite --bind` survives), computed at dispatch by
 //     `enumerateSiblingDenyPaths`. ADR-075; durable TOCTOU closer is
 //     the vendored SDK bwrap-arg reorder (tracked follow-up).
+//
+// #8752 — the two hardening layers this config cannot express through the SDK
+// (the vendored builder owns the whole bwrap argv, transported on `--args
+// <fd>`) live OUTSIDE this object, at the spawn layer: the PATH shim
+// `infra/bwrap-shim/bwrap` (installed at /usr/local/bin/bwrap) closes
+// inherited fds not referenced by the argv and injects the shared
+// nested-userns filter via --add-seccomp-fd before exec'ing the real
+// /usr/bin/bwrap. `probeAgentSandboxHardening` below is the boot-time
+// measurement of that pair; the deploy-time measurement is the canary's
+// `runHardeningProbes`.
 
 const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
@@ -383,4 +394,111 @@ export function buildAgentSandboxConfig(
       denyRead,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// #8752 — boot self-check for the Agent SDK sandbox hardening pair.
+// ---------------------------------------------------------------------------
+
+/** Default path of the committed nested-userns filter artifact inside the
+ *  runner image (Dockerfile COPY) — the same default the C4 close-fds prelude
+ *  and the bwrap PATH shim resolve via `SOLEUR_BWRAP_SECCOMP_BPF`. */
+const BWRAP_SECCOMP_BPF_DEFAULT = "/app/infra/bwrap-userns-clone3-deny.bpf";
+
+/** PATH resolution for `name`; returns the first executable hit or null. */
+function resolveOnPath(name: string, env: Record<string, string | undefined>): string | null {
+  for (const dir of (env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const p = join(dir, name);
+    try {
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch {
+      // not here / not executable — keep looking
+    }
+  }
+  return null;
+}
+
+export interface AgentSandboxHardeningProbe {
+  /** Resolved PATH location of `bwrap` (null when absent). */
+  bwrapPath: string | null;
+  /** The resolved binary carries the shim's `bwrap-shim:` marker. */
+  shim: boolean;
+  bpfPath: string;
+  bpfBytes: number;
+  /** Readable, non-empty, raw-sock_filter-sized (multiple of 8 bytes). */
+  filter: boolean;
+  ok: boolean;
+}
+
+/**
+ * Measure — never throw — whether the agent-sandbox hardening pair is live in
+ * this image: PATH-resolved `bwrap` is our shim (closes inherited fds +
+ * injects the filter) and the committed seccomp artifact is present and
+ * `sock_filter`-shaped. Shim identity is a CONTENT marker (`bwrap-shim:`), not
+ * the path — a PATH-order or binary-swap drift cannot satisfy it.
+ */
+export function probeAgentSandboxHardening(
+  env: Record<string, string | undefined> = process.env,
+): AgentSandboxHardeningProbe {
+  const bwrapPath = resolveOnPath("bwrap", env);
+  let shim = false;
+  if (bwrapPath) {
+    try {
+      shim = readFileSync(bwrapPath, "utf8").includes("bwrap-shim:");
+    } catch {
+      shim = false;
+    }
+  }
+  const bpfPath = env.SOLEUR_BWRAP_SECCOMP_BPF || BWRAP_SECCOMP_BPF_DEFAULT;
+  let bpfBytes = 0;
+  try {
+    bpfBytes = statSync(bpfPath).size;
+  } catch {
+    // artifact absent
+  }
+  const filter = bpfBytes > 0 && bpfBytes % 8 === 0;
+  return { bwrapPath, shim, bpfPath, bpfBytes, filter, ok: shim && filter };
+}
+
+/**
+ * Emit the #8752 self-probe result once at boot: `log.info` + Sentry info on
+ * success (the success signal — Vector ships WARN+ to Better Stack, so info
+ * goes to Sentry like `c4 render sandbox probe ok`), `warnSilentFallback`
+ * otherwise (Sentry warn + Better Stack). Never throws; called un-awaited
+ * from the server `listen` callback in production.
+ */
+export function verifyAgentSandboxHardening(): void {
+  try {
+    const p = probeAgentSandboxHardening();
+    if (p.ok) {
+      log.info(
+        { feature: "agent-sandbox", op: "sandbox-hardening-selfprobe", ...p },
+        "agent-sandbox: hardening self-probe ok (shim on PATH + filter artifact present)",
+      );
+      try {
+        Sentry.captureMessage("agent sandbox hardening probe ok", {
+          level: "info",
+          tags: { event_type: "agent-sandbox-hardening-probe" },
+          extra: { ...p },
+        });
+      } catch {
+        // Sentry must never break the probe.
+      }
+      return;
+    }
+    warnSilentFallback(null, {
+      feature: "agent-sandbox",
+      op: "sandbox-hardening-selfprobe",
+      message: "agent sandbox hardening self-probe: shim or filter artifact missing",
+      extra: { ...p },
+    });
+  } catch (err) {
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "sandbox-hardening-selfprobe",
+      message: "agent sandbox hardening self-probe threw",
+    });
+  }
 }

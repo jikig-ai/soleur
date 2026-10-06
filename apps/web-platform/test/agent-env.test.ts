@@ -44,6 +44,7 @@ const EXPECTED_ALLOWLIST = [
   "http_proxy",
   "https_proxy",
   "no_proxy",
+  "SOLEUR_BWRAP_SECCOMP_BPF",
 ] as const;
 
 const EXPECTED_OVERRIDES: Record<string, string> = {

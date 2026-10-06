@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=979
-# generated-at=2026-10-05T19:17:53Z
+# default-weight-ms=996
+# generated-at=2026-10-06T07:48:27Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -189,6 +189,7 @@ plugins/soleur/test/infra-validation-detect.test.sh	1
 plugins/soleur/test/issue-flow-measure.test.sh	7
 plugins/soleur/test/kb-caches-untracked.test.sh	4
 plugins/soleur/test/kb-search-lockstep.test.sh	4
+plugins/soleur/test/kb-search-support-path.test.sh	3
 plugins/soleur/test/lane-frontmatter.test.sh	2
 plugins/soleur/test/lefthook-bun-test-merge-skip.test.sh	8
 plugins/soleur/test/lefthook-typecheck-heap.test.sh	4

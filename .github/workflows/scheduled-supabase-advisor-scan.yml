@@ -119,11 +119,11 @@ jobs:
             # for it. Without these guards that fallback was unreachable, the remaining refs
             # (including production) went unscanned, and the honest `not_scanned` rendering
             # never reached the issue body.
-            mode="$(printf '%s' "$out" | grep -m1 '^fail_mode=' | cut -d= -f2- || true)"
-            detail="$(printf '%s' "$out" | grep -m1 '^fail_detail=' | cut -d= -f2- || true)"
+            mode="$(grep -m1 '^fail_mode=' <<<"$out" | cut -d= -f2- || true)"
+            detail="$(grep -m1 '^fail_detail=' <<<"$out" | cut -d= -f2- || true)"
 
             if [[ "$rc" -eq 0 ]]; then
-              if printf '%s' "$out" | grep -qF 'warn=stale_advisor'; then
+              if printf '%s' "$out" | grep -cF 'warn=stale_advisor' >/dev/null; then
                 STATUS["$name"]="clean (advisor lag warning)"
               else
                 STATUS["$name"]="clean"

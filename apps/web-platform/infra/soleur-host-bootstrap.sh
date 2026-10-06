@@ -196,7 +196,7 @@ FAILED_FILE=journald-soleur.conf; test -f /etc/systemd/journald.conf.d/00-soleur
 # if the profile is not loaded, so assert the load here to fail with a NAMED stage instead.
 FAILED_FILE=seccomp-bwrap.json; test -f /etc/docker/seccomp-profiles/soleur-bwrap.json
 FAILED_FILE=apparmor-soleur-bwrap.profile; test -f /etc/apparmor.d/soleur-bwrap
-FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -qE '^[[:space:]]+soleur-bwrap$'
+FAILED_FILE=apparmor-loaded; aa-status 2>/dev/null | grep -cE '^[[:space:]]+soleur-bwrap$' >/dev/null
 
 STAGE=reload
 systemctl daemon-reload
@@ -324,7 +324,7 @@ KIND="$1"; NAME="$2"; STAGE="$3"; n=0
 while :; do
   case "$KIND" in
     service) systemctl is-active --quiet "$NAME" && break ;;
-    port) { ss -ltn 2>/dev/null | grep -q ":$NAME" || curl -s -o /dev/null --max-time 3 "http://localhost:$NAME/" 2>/dev/null; } && break ;;
+    port) { ss -ltn 2>/dev/null | grep -c ":$NAME" >/dev/null || curl -s -o /dev/null --max-time 3 "http://localhost:$NAME/" 2>/dev/null; } && break ;;
   esac
   n=$((n+1)); [ "$n" -ge 30 ] && { soleur-boot-emit "$STAGE" fatal; exit 1; }; sleep 2
 done
@@ -451,7 +451,7 @@ overlay_github_app_key() {
   _gak_ref_ok=0
   case "${2:-}" in
     '' | *[!A-Za-z0-9@:/._-]*) ;;
-    *) if printf '%s\n' "$2" | grep -qxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}'; then _gak_ref_ok=1; fi ;;
+    *) if printf '%s\n' "$2" | grep -cxE '([A-Za-z0-9._:/-]+@)?sha256:[0-9a-f]{64}' >/dev/null; then _gak_ref_ok=1; fi ;;
   esac
   if [ "$_gak_ref_ok" -ne 1 ]; then
     GITHUB_APP_KEY_FETCH=unverified_image
@@ -744,7 +744,7 @@ cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
 # boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
 # indistinguishable from a gate that never shipped.
 EXPECTED="$1"
-# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -qwF -- ""` matches
+# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -cwF -- ""` matches
 # EVERY line, so an empty argument would make the first probe succeed and emit
 # private_nic_ready: positive evidence that a check passed which was never performed. That is
 # strictly worse than the fail-open this helper is designed for, and it inverts the #6415
@@ -770,7 +770,7 @@ if [ "$PROBE_OK" != true ]; then
   exit 0
 fi
 # (2) Probe. The probe's EXIT is captured separately from the match result, because a pipeline
-# reports only grep's status: `ip … 2>/dev/null | grep -qwF` makes an `ip` that RUNS AND FAILS
+# reports only grep's status: `ip … 2>/dev/null | grep -cwF` makes an `ip` that RUNS AND FAILS
 # (netlink denied, truncated image) indistinguishable from one that ran and found nothing —
 # reporting "could not measure" as "absent", the #6415 mislabel arriving through a second door.
 # probe_ran records whether the instrument EVER worked; the fault arm fires only if it never did
@@ -782,7 +782,7 @@ nic_ok=false
 probe_ran=false
 if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
   probe_ran=true
-  printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && nic_ok=true
+  printf '%s\n' "$OUT" | grep -cwF -- "$EXPECTED" >/dev/null && nic_ok=true
 fi
 # (3) Bounded wait — 30 x 2 s = 60 s. Spent BEFORE `cloudflared service install`, so this budget
 # is SEQUENTIAL with the downstream cloudflared_ready gate's own ~60 s budget rather than nested
@@ -797,7 +797,7 @@ if [ "$nic_ok" = false ]; then
     sleep 2
     if OUT=$("$IP_BIN" -4 -o addr show 2>/dev/null); then
       probe_ran=true
-      printf '%s\n' "$OUT" | grep -qwF -- "$EXPECTED" && { nic_ok=true; break; }
+      printf '%s\n' "$OUT" | grep -cwF -- "$EXPECTED" >/dev/null && { nic_ok=true; break; }
     fi
   done
 fi

@@ -871,7 +871,7 @@ EOS
   }
   hk_mutant no-probe-verdict '/^host_key_verdict "\$probe_rc" "\$probe_log"$/d' m-hkw2 PRC=255 PLOG="$PLOG_HK"
   hk_mutant no-first-verdict '0,/^host_key_verdict "\$ssh_rc" "\$ssh_err"$/{/^host_key_verdict "\$ssh_rc" "\$ssh_err"$/d}' m-hkw1 HKFAIL=1 PRC=0 PLOG="$READYZ_OK"
-  hk_mutant unanchored 's/grep -qE .\^\(Host key/grep -qE '"'"'(Host key/' m-hkw3 PRC=255 PLOG="banner: Host key verification failed."
+  hk_mutant unanchored 's/grep -cE .\^\(Host key/grep -cE '"'"'(Host key/' m-hkw3 PRC=255 PLOG="banner: Host key verification failed."
   hk_mutant no-rc-gate '/^  \[\[ "\$1" -eq 255 \]\] \|\| return 0$/d' m-hkw4 PRC=1 PLOG="$PLOG_HK"
 
   c_silent=$(PRC=0 PLOG='[luks-monitor] nothing useful here' HEALTH=200 drive)

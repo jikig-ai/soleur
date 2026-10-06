@@ -28,7 +28,7 @@ Run the Concierge under a **required `persona` discriminant** (`"command_center"
 
 4. **`cwd` + sandbox write-set derived from `mode`.** `cwd = getPluginPath()` for support (the boot-validated read-only platform docs root, ADR-093); `allowWrite = []` for support (**P1 fix** — otherwise `cwd = getPluginPath()` with the default `allowWrite:[workspacePath]` would grant WRITE to the shared platform plugin root, a supply-chain read-only-escape).
 
-5. **Skill/tool scope (three layers).** (a) SDK-native `Options.skills = ["kb-search"]` (PRIMARY — hides every other skill from the model's context); (b) `createCanUseTool` default-deny for `persona:"support"` — a `Skill` ∉ `{kb-search}` (bare↔`soleur:`-FQN normalized) denies with a user-relayable message; (c) `disallowedTools ⊇ {Edit,Write,MultiEdit,NotebookEdit,Task,Agent}` (Bash KEPT — kb-search shells out behind the read-only safe-bash gate).
+5. **Skill/tool scope (three layers).** (a) SDK-native `Options.skills = ["kb-search"]` (PRIMARY — hides every other skill from the model's context); (b) `createCanUseTool` default-deny for `persona:"support"` — a `Skill` ∉ `{kb-search}` (bare↔`soleur:`-FQN normalized) denies with a user-relayable message; (c) `disallowedTools ⊇ {Edit,Write,MultiEdit,NotebookEdit,Task,Agent}` (Bash KEPT — kb-search shells out behind the read-only safe-bash gate). *[Premise falsified 2026-10-06 — the allowlist never admitted those commands; see the premise correction under `## ADR-070 reconciliation`. Bash stays kept, now as the deny+escalate tripwire only.]*
 
 6. **Support prompt.** `buildSoleurGoSystemPrompt` short-circuits to the Soleur Support prompt when `persona:"support"` — it does NOT emit the Command Center `/soleur:go` routing line (a downstream append cannot un-say it) and ignores artifact/sticky-workflow scoping.
 
@@ -37,6 +37,8 @@ Run the Concierge under a **required `persona` discriminant** (`"command_center"
 ## ADR-070 reconciliation
 
 The support scope uses two mechanisms ADR-070 governs: (a) the `createCanUseTool` default-deny returns a **graceful `{behavior:"deny", message}` the model relays** — NOT the silent phase-scope deny ADR-070 forbids; (b) the `disallowedTools` removal of Edit/Write/MultiEdit/NotebookEdit/Task/Agent is a silent removal, but is acceptable — and NOT the additive-hint-only violation ADR-070 forbids — because those are tools a support user NEVER legitimately needs, so their removal breaks no valid flow. A one-paragraph amendment to ADR-070 records this carve-out.
+
+**Premise correction (2026-10-06, #9559).** Decision item 5(c) recorded "Bash KEPT — kb-search shells out behind the read-only safe-bash gate". The premise was false: the safe-bash allowlist never admitted kb-search's documented commands (`git grep`, `grep -Fxq`, `bash <script>` — `git grep` is not an allowlisted git verb, `grep`/arg-bearing `bash` are deliberately excluded, and `$`/quoting trips the metachar denylist before any pattern runs), and the deployed plugin root is not a git worktree so `git grep` cannot run there regardless. The support kb-search path is therefore Read/Grep/Glob-only over the committed corpus (`plugins/soleur/knowledge-base/`), auto-approved read tools under `cwd = getPluginPath()`. Bash stays OUT of `SUPPORT_EXTRA_DISALLOWED_TOOLS` — unchanged — but its role is now only the deny+escalation tripwire for engineering-shaped attempts, not a kb-search transport.
 
 ## Rejected alternatives
 
@@ -171,14 +173,15 @@ Mechanism:
   `lib/types.ts` / `ws-zod-schemas.ts` are untouched; the CC dispatch path is
   byte-neutral.
 
-Known residuals (tracked, not silently accepted): `kb-search`'s documented
-`git grep`/`grep`/script shell-outs hit the Bash deny and record a spurious
-handoff on a pure help question (#9559); `git branch <name>` and other
-write-shaped safe-allowlisted commands auto-approve with no deny and no
-handoff (#9555); the GH-token mint/askpass/egress surface is not persona-gated
-(#9558); a zombie turn recording a deny *during* a successor turn's window is
-the remaining flag-attribution edge after the busy guard (a per-dispatch key
-cannot reach the per-Query `canUseTool` ctx without new plumbing).
+Known residuals (tracked, not silently accepted): the GH-token
+mint/askpass/egress surface is not persona-gated (#9558); a zombie turn
+recording a deny *during* a successor turn's window is the remaining
+flag-attribution edge after the busy guard (a per-dispatch key cannot reach
+the per-Query `canUseTool` ctx without new plumbing). Resolved by this
+addendum's follow-up PR: the `git branch` write-forms auto-approve hole
+(#9555 — allowlist tightened to read-only arms) and the kb-search shell-out
+false-positive handoff (#9559 — support path is Read/Grep/Glob-only; see the
+premise correction under `## ADR-070 reconciliation`).
 
 ## Alternatives Considered (this addendum)
 
