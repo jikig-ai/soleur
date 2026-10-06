@@ -11,7 +11,7 @@
 // produce has a row that drives it, and a meta-row fails when a code has none.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -146,7 +146,7 @@ const STAGE = async () => ({ ok: true as const, paths: ["model.c4"], sourceKey: 
 // ---------------------------------------------------------------------------
 const MiB = 1024 * 1024;
 const CLOSE_FDS =
-  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec "$@"';
+  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; if ! exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}"; then echo "c4: seccomp artifact unreadable — set SOLEUR_BWRAP_SECCOMP_BPF to a valid filter (or C4_RENDER_SANDBOX=off)" >&2; exit 65; fi; exec "$@"';
 const RENDER_SH =
   '"$0" "$1" export json --no-use-dot -o /c4-out/model.likec4.json . >/dev/null && exec cat /c4-out/model.likec4.json';
 const LAUNCH_PREFIX = [
@@ -173,6 +173,7 @@ const ARITY: Record<string, number> = {
   "--unshare-ipc": 0,
   "--unshare-uts": 0,
   "--json-status-fd": 1,
+  "--seccomp": 1,
 };
 type Kind = "ro" | "symlink" | "tmpfs" | "dev";
 const BASE: Record<string, { kind: Kind; src?: string; size?: number }> = {
@@ -217,6 +218,7 @@ function checkSandboxArgv(cmd: string, args: string[], ctx: Ctx): Check {
   const flags = new Set<string>();
   let chdir: string | undefined;
   let statusFd: string | undefined;
+  let seccompFd: string | undefined;
   let i = 0;
   while (i < argv.length) {
     const opt = argv[i];
@@ -267,6 +269,9 @@ function checkSandboxArgv(cmd: string, args: string[], ctx: Ctx): Check {
       case "--json-status-fd":
         statusFd = a[0];
         break;
+      case "--seccomp":
+        seccompFd = a[0];
+        break;
       default:
         if (opt.startsWith("--unshare-")) unshare.add(opt);
         else flags.add(opt);
@@ -305,6 +310,9 @@ function checkSandboxArgv(cmd: string, args: string[], ctx: Ctx): Check {
   if (!flags.has("--die-with-parent") || !flags.has("--new-session")) return r("missing-flag");
   if (chdir !== "/c4-sources") return r("chdir");
   if (statusFd !== "3") return r("status-fd");
+  // #8752: the shared nested-userns filter arrives on fd 9 — opened by the
+  // close-fds prelude AFTER the sweep so it survives choom/nice into bwrap.
+  if (seccompFd !== "9") return r("seccomp-fd");
   const tail = argv.slice(dashdash + 1);
   if (tail.join("\0") !== (ctx.tail ?? renderTail()).join("\0")) return r("tail");
   return r("ok");
@@ -404,6 +412,12 @@ const ROWS: Array<[string, (a: string[], sd: string) => string[], string]> = [
   ["--die-with-parent removed", (a) => a.filter((x) => x !== "--die-with-parent"), "missing-flag"],
   ["--chdir /", (a) => a.map((x, j) => (a[j - 1] === "--chdir" ? "/" : x)), "chdir"],
   ["--json-status-fd 4", (a) => a.map((x, j) => (a[j - 1] === "--json-status-fd" ? "4" : x)), "status-fd"],
+  ["--seccomp dropped", (a) => {
+    const o = [...a];
+    o.splice(optIdx(o, "--seccomp"), 2);
+    return o;
+  }, "seccomp-fd"],
+  ["--seccomp 3 (status-fd collision)", (a) => a.map((x, j) => (a[j - 1] === "--seccomp" ? "3" : x)), "seccomp-fd"],
   ["no `--`", (a) => a.slice(0, a.indexOf("--", BW)), "no-dashdash"],
 ];
 
@@ -417,7 +431,7 @@ describe("Guard 1 — likec4 child launch, mount, env and namespace closure", ()
     // Exact options: no shell, no detached, cwd = stage, bwrap's own env is the
     // allow-list with HOME = stage (it never sees a server secret).
     const env: Record<string, string> = { HOME: stageDir };
-    for (const k of ["PATH", "LANG", "LC_ALL", "TMPDIR"]) if (process.env[k] !== undefined) env[k] = process.env[k]!;
+    for (const k of ["PATH", "LANG", "LC_ALL", "TMPDIR", "SOLEUR_BWRAP_SECCOMP_BPF"]) if (process.env[k] !== undefined) env[k] = process.env[k]!;
     expect(opts).toEqual({ cwd: stageDir, env, stdio: ["ignore", "pipe", "pipe", "pipe"] });
     expect(stageDir.startsWith(`${ROOT}/c4-render-`)).toBe(true);
   });
@@ -880,5 +894,52 @@ describe("boot self-probe", () => {
     const mod = await load();
     await expect(mod.verifyC4RenderSandboxOnce()).resolves.toBeUndefined();
     expect(obs.reportSilentFallback).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guard 1 — seccomp-engagement census (plan #8752 §Guard Contract): EVERY
+// bwrap launch path inside the replica container applies the shared filter.
+// The census is mechanical, not a grep for the two known sites:
+//   * absolute-path bwrap launches in server/ — exactly c4-render.ts, whose
+//     emitted argv the checker above pins `--seccomp 9` on;
+//   * bare-name (PATH-resolved) bwrap launches land on the baked shim —
+//     asserted by the Dockerfile rows in test/bwrap-shim.test.ts and measured
+//     per-boot by probeAgentSandboxHardening;
+//   * deploy-time proof — the canary's derived probes (regression §D).
+// Anti-vacuity floor: the census must enumerate >= 2 insertion sites — a
+// census that finds nothing is a guard bug, not a pass (matrix row 5).
+// ---------------------------------------------------------------------------
+
+const APP_DIR = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const SERVER_DIR = join(APP_DIR, "server");
+
+describe("bwrap launch census — every spawn path engages the filter (#8752 G1)", () => {
+  const serverFiles = () => readdirSync(SERVER_DIR).filter((f) => f.endsWith(".ts"));
+
+  it("every absolute-path bwrap spawn site is c4-render.ts (which carries --seccomp 9)", () => {
+    const sites = serverFiles().filter((f) =>
+      /["'`]\/usr\/bin\/bwrap["'`]/.test(readFileSync(join(SERVER_DIR, f), "utf8")),
+    );
+    expect(sites).toEqual(["c4-render.ts"]);
+  });
+
+  it("no bare-name bwrap spawn in server/ — PATH-resolved launches resolve to the baked shim", () => {
+    const bare = serverFiles().filter((f) =>
+      /\b(?:spawn|execFile|exec|spawnSync|execFileSync)\(\s*["'`]bwrap["'`]/.test(
+        readFileSync(join(SERVER_DIR, f), "utf8"),
+      ),
+    );
+    expect(bare).toEqual([]);
+  });
+
+  it("anti-vacuity floor: >= 2 distinct filter-insertion sites are enumerated", () => {
+    const c4 = readFileSync(join(SERVER_DIR, "c4-render.ts"), "utf8");
+    const shim = readFileSync(join(APP_DIR, "infra", "bwrap-shim", "bwrap"), "utf8");
+    const sites = [
+      c4.includes('"--seccomp"') && c4.includes("SOLEUR_BWRAP_SECCOMP_BPF"), // argv flag + fail-closed fd open
+      shim.includes("--add-seccomp-fd"), // PATH-shim injection
+    ].filter(Boolean);
+    expect(sites.length).toBeGreaterThanOrEqual(2);
   });
 });

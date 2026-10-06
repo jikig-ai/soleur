@@ -126,7 +126,7 @@
 
   .catalog-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
     gap: var(--space-5);
   }
 
@@ -686,63 +686,30 @@
     padding: var(--space-10) var(--space-5);
     text-align: center;
   }
-  .landing-quote blockquote {
+  .landing-quote-text {
     font-family: var(--font-display);
     font-size: 1.75rem;
-    font-style: italic;
     line-height: 1.5;
     max-width: 800px;
     margin-inline: auto;
     margin-bottom: var(--space-5);
   }
-  .landing-quote cite {
-    font-family: var(--font-body);
-    font-style: normal;
+  .landing-quote-source {
     font-size: var(--text-sm);
-    color: var(--color-accent);
+    margin-bottom: var(--space-3);
+  }
+  .landing-quote-source a { color: var(--color-accent); }
+  .landing-quote-note {
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    max-width: 640px;
+    margin-inline: auto;
   }
 
   /* Landing page: Mid-page CTA */
   .landing-cta-mid {
     text-align: center;
     padding: var(--space-6) var(--space-5);
-  }
-
-  /* Landing page: "As seen in" press strip */
-  .landing-press-strip {
-    padding: var(--space-8) var(--space-5);
-    text-align: center;
-  }
-  .press-outlet-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: center;
-    gap: var(--space-4) var(--space-6);
-  }
-  .press-outlet a {
-    color: var(--color-text-primary);
-    text-decoration: none;
-    display: inline-flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    font-size: var(--text-sm);
-  }
-  .press-outlet a:hover,
-  .press-outlet a:focus-visible {
-    text-decoration: underline;
-  }
-  .press-outlet-name {
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    font-weight: 500;
-    letter-spacing: -0.01em;
-  }
-  .press-outlet-context {
-    color: var(--color-text-secondary);
   }
 
   /* Community page: Stats strip */
@@ -1070,6 +1037,9 @@
   }
 
   /* Prose reading width and vertical rhythm */
+  /* A long identifier or URL wraps instead of widening the page (the legal pages scrolled to 556px
+     on a 320px phone). Inherited, and it does not change min-content sizing, so tables are unaffected. */
+  main { overflow-wrap: break-word; }
   .prose {
     max-width: 85ch;
     margin: 0 auto;
@@ -1095,6 +1065,12 @@
     border-collapse: collapse;
     margin-bottom: var(--space-4);
     font-size: var(--text-sm);
+  }
+  /* A wide table scrolls inside the column on a phone or tablet instead of widening the page
+     (the data-protection table is 1009px wide). Narrow only: display:block would shrink-wrap the
+     table on desktop. */
+  @media (max-width: 768px) {
+    .prose table { display: block; max-width: 100%; overflow-x: auto; }
   }
   .prose th,
   .prose td {
@@ -1179,12 +1155,13 @@
   }
   .command-item {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     background: var(--color-bg-secondary);
     border-radius: 8px;
   }
-  .command-item code { font-weight: 600; white-space: nowrap; color: var(--color-accent); }
+  .command-item code { font-weight: 600; white-space: nowrap; color: var(--color-accent); max-width: 100%; }
   .learn-more-links {
     list-style: none;
     display: grid;
@@ -1229,12 +1206,11 @@
     .landing-hero h1 { font-size: var(--text-3xl); }
     .landing-stats { flex-direction: column; gap: var(--space-6); }
     .community-stats .container { flex-direction: column; gap: var(--space-5); }
-    .press-outlet-list { flex-direction: column; gap: var(--space-3); }
     .problem-cards { grid-template-columns: 1fr; }
     .feature-grid-departments,
     .feature-grid-workflow { grid-template-columns: repeat(2, 1fr); }
     .feature-grid-sublabel { font-size: var(--text-xs); margin-bottom: var(--space-3); }
-    .landing-quote blockquote { font-size: var(--text-xl); }
+    .landing-quote-text { font-size: var(--text-xl); }
     .section-title { font-size: var(--text-2xl); }
     .footer-top { grid-template-columns: 1fr; gap: var(--space-6); text-align: center; }
     .footer-brand { align-items: center; }
@@ -1249,6 +1225,14 @@
   @media (min-width: 769px) and (max-width: 1024px) {
     .feature-grid-departments,
     .feature-grid-workflow { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* On a 320px phone two columns of department cards are wider than the page (scrollWidth 344),
+     and a 3rem heading breaks "Organization:" mid-word (agents catalog). */
+  @media (max-width: 360px) {
+    .feature-grid-departments,
+    .feature-grid-workflow { grid-template-columns: 1fr; }
+    .page-hero h1 { font-size: var(--text-3xl); }
   }
 
   /* FAQ */
@@ -1669,21 +1653,76 @@
   .hero-waitlist-form input[type="email"] {
     background: #111;
   }
-  .hero-waitlist-form .btn-primary {
+  .hero-waitlist-form button[type="submit"].btn-secondary {
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
     flex-shrink: 0;
     padding: var(--space-3) var(--space-6);
+  }
+  .hero-waitlist-form button[type="submit"].btn-secondary:hover {
+    border-color: var(--color-accent);
+  }
+  .hero-waitlist-form .newsletter-privacy {
+    /* The line is load-bearing now (it sits at the point of entering an email),
+       so it moves off --color-text-tertiary (about 4.2:1) to the secondary text
+       colour. Scoped to the hero so /pricing/ is unchanged. */
+    color: var(--color-text-secondary);
+    text-align: left;
   }
   .hero-waitlist-form .newsletter-status {
     text-align: center;
   }
+  /* #9579 hero: install CTA, hosted card, plan lines (mirrored in base.njk critical CSS) */
+  .landing-hero-install { margin-top: var(--space-6); }
+  .landing-hero-install-note {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    margin-top: var(--space-3);
+  }
+  .hero-waitlist-form-card {
+    max-width: 560px;
+    margin: var(--space-6) auto 0;
+    padding: var(--space-5);
+    border: 1px solid var(--color-border);
+    border-radius: 0;
+    background: var(--color-bg-secondary);
+    text-align: left;
+  }
+  .hero-waitlist-form-label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: var(--space-3);
+  }
+  .hero-waitlist-form-card .hero-waitlist-form { max-width: none; margin: 0; }
+  .landing-hero-plan {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-6);
+    max-width: 760px;
+    margin: var(--space-6) auto 0;
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    text-align: left;
+  }
+  .landing-hero .hero-cta { margin-top: var(--space-5); }
+  .faq-community {
+    text-align: center;
+    margin-top: var(--space-6);
+    color: var(--color-text-secondary);
+  }
+  .faq-community a { color: var(--color-accent); }
   @media (max-width: 768px) {
     .hero-waitlist-form {
       max-width: 100%;
     }
     .hero-waitlist-form input[type="email"],
-    .hero-waitlist-form .btn-primary {
+    .hero-waitlist-form .btn-secondary {
       flex: 1 1 100%;
     }
+    .landing-hero-plan { grid-template-columns: 1fr; }
+    .hero-waitlist-form-card { padding: var(--space-4); }
   }
 
 }

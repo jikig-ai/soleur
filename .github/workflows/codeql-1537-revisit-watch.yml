@@ -90,7 +90,7 @@ jobs:
 
           # Idempotency: only comment once per closure.
           if gh issue view "$track_num" --repo "$GH_REPO" --json comments \
-              --jq '.comments[].body' 2>/dev/null | grep -qF "$SENTINEL"; then
+              --jq '.comments[].body' 2>/dev/null | grep -cF "$SENTINEL" >/dev/null; then
             echo "Tracking issue #${track_num} already pinged for this closure; nothing to do."
             exit 0
           fi

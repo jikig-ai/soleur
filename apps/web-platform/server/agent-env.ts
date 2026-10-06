@@ -48,6 +48,12 @@ const AGENT_ENV_ALLOWLIST = Object.freeze([
   "http_proxy",
   "https_proxy",
   "no_proxy",
+  // #8752 — the bwrap shim's artifact override. Forwarded so an incident-time
+  // override reaches the Agent SDK spawn path symmetrically with the C4
+  // prelude (which reads the same var); without it the shim would always
+  // resolve the baked default while `probeAgentSandboxHardening` certified a
+  // different file. Not secret — a path.
+  "SOLEUR_BWRAP_SECCOMP_BPF",
 ] as const);
 
 const AGENT_ENV_OVERRIDES = Object.freeze({

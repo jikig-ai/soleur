@@ -9,16 +9,19 @@
 // `.feature-grid`, `.testimonial-row`, `.product-spec-card`).
 //
 // This static check enumerates every class used in `pages/**` and `_includes/**`
-// that matches an above-fold prefix pattern, then asserts each class has at
-// least one CSS rule in the inline `<style>` block of any built page (the inline
-// block is identical across pages).
+// that matches an above-fold prefix pattern, PLUS every class inside the homepage
+// hero that the full stylesheet styles (derived from the hero section, not listed),
+// then asserts each class has at least one CSS rule in the inline `<style>` block of
+// any built page (the inline block is identical across pages).
 //
 // Run AFTER `npx @11ty/eleventy` (needs _site/) and before the screenshot gate.
 //
 // Exit codes:
 //   0  every above-fold class has a corresponding rule in the inline block
 //   1  one or more classes have no inline rule — FOUC class regression risk
-//   2  bootstrap error (no _site/ build, missing base.njk)
+//   2  bootstrap error (no _site/ build, missing base.njk, a listed template
+//      or the hero section missing, an ABOVE_FOLD_PREFIXES entry that matches
+//      no class in any template)
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -31,6 +34,10 @@ const TEMPLATE_ROOTS = [
   resolve(REPO_ROOT, "plugins/soleur/docs/pages"),
   resolve(REPO_ROOT, "plugins/soleur/docs/_includes"),
 ];
+// Standalone templates outside the two roots. The homepage (index.njk) renders
+// the first screen of the site yet was never scanned, so a new above-fold class
+// added there could ship without an inline rule (#9579).
+const TEMPLATE_FILES = [resolve(REPO_ROOT, "plugins/soleur/docs/index.njk")];
 const SITE_ROOT = resolve(REPO_ROOT, "_site");
 // Any built page contains the same inline <style> block from base.njk.
 // /pricing/index.html is a deterministic choice (always built, always uses the layout).
@@ -59,6 +66,12 @@ const ABOVE_FOLD_PREFIXES = [
   "newsletter-form",
   "hero-waitlist-form",
   "blog-post-meta",
+  // Hero controls the homepage renders before the stylesheet swaps (#9579).
+  "btn-secondary",
+  "sr-only",
+  "newsletter-privacy",
+  "newsletter-status",
+  "hero-cta",
 ];
 
 // Allowlist: classes used only inside a <noscript> or print-media context, or
@@ -87,22 +100,32 @@ function listFiles(root, ext) {
   return out;
 }
 
+// class="a b", class='a b' or class=a: the value, in whichever form it is written.
+const CLASS_ATTR_RE = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+const classValue = (m) => m[1] ?? m[2] ?? m[3] ?? "";
+
 function extractClassesFromTemplates() {
   const used = new Map(); // class -> Set<file>
-  const classAttrRe = /class\s*=\s*"([^"]+)"/g;
-  for (const root of TEMPLATE_ROOTS) {
-    for (const file of listFiles(root, ".njk")) {
-      const src = readFileSync(file, "utf8");
-      let m;
-      while ((m = classAttrRe.exec(src)) !== null) {
-        for (const cls of m[1].split(/\s+/).filter(Boolean)) {
-          // Skip Nunjucks expressions like {{ foo }} that may appear inside class=""
-          if (cls.includes("{") || cls.includes("}")) continue;
-          // Skip anything that doesn't look like a single CSS class token
-          if (!/^[A-Za-z][\w-]*$/.test(cls)) continue;
-          if (!used.has(cls)) used.set(cls, new Set());
-          used.get(cls).add(file);
-        }
+  const files = [
+    ...TEMPLATE_ROOTS.flatMap((root) => listFiles(root, ".njk")),
+    ...TEMPLATE_FILES,
+  ];
+  for (const f of TEMPLATE_FILES) {
+    if (!existsSync(f)) {
+      console.error(`check-critical-css-coverage: listed template not found: ${f}`);
+      process.exit(2);
+    }
+  }
+  for (const file of files) {
+    const src = readFileSync(file, "utf8");
+    for (const m of src.matchAll(CLASS_ATTR_RE)) {
+      for (const cls of classValue(m).split(/\s+/).filter(Boolean)) {
+        // Skip Nunjucks expressions like {{ foo }} that may appear inside class=""
+        if (cls.includes("{") || cls.includes("}")) continue;
+        // Skip anything that doesn't look like a single CSS class token
+        if (!/^[A-Za-z][\w-]*$/.test(cls)) continue;
+        if (!used.has(cls)) used.set(cls, new Set());
+        used.get(cls).add(file);
       }
     }
   }
@@ -132,7 +155,75 @@ function extractInlineStyleBlock(htmlPath) {
 }
 
 const usedClasses = extractClassesFromTemplates();
-const aboveFoldClasses = [...usedClasses.keys()].filter(isAboveFold).sort();
+
+// A prefix that matches no class anywhere is dead configuration (a typo, or a
+// component that was removed): it would read as coverage while guarding nothing.
+const deadPrefixes = ABOVE_FOLD_PREFIXES.filter(
+  (prefix) => ![...usedClasses.keys()].some((c) => c === prefix || c.startsWith(prefix + "-")),
+);
+if (deadPrefixes.length) {
+  console.error(
+    `check-critical-css-coverage: ABOVE_FOLD_PREFIXES entries matching no class in any template: ${deadPrefixes.join(", ")}`,
+  );
+  process.exit(2);
+}
+
+// The hero is derived, not listed: every class used inside the homepage hero
+// that the full stylesheet styles must also be styled in the inline block, or it
+// flashes unstyled until style.css swaps in. A hero class with no rule anywhere
+// (a pure hook) is not a flash risk and is not required.
+function stripCssComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+function heroClassesStyledByStylesheet() {
+  const src = readFileSync(TEMPLATE_FILES[0], "utf8");
+  // The hero ends at ITS closing tag: a nested <section> must not cut the class set short.
+  const open = src.match(/<section\b[^>]*\bclass\s*=\s*["']?landing-hero["'\s>][^>]*>/);
+  if (!open) {
+    console.error("check-critical-css-coverage: the landing-hero <section> was not found in index.njk");
+    process.exit(2);
+  }
+  let depth = 1;
+  let end = -1;
+  const tags = /<(\/?)section\b/g;
+  tags.lastIndex = open.index + open[0].length;
+  for (let t = tags.exec(src); t !== null; t = tags.exec(src)) {
+    depth += t[1] ? -1 : 1;
+    if (depth === 0) {
+      end = t.index;
+      break;
+    }
+  }
+  if (end === -1) {
+    console.error("check-critical-css-coverage: the landing-hero <section> is never closed in index.njk");
+    process.exit(2);
+  }
+  const hero = [null, src.slice(open.index + open[0].length, end)];
+  const fullCssPath = resolve(REPO_ROOT, "plugins/soleur/docs/css/style.css");
+  if (!existsSync(fullCssPath)) {
+    console.error(`check-critical-css-coverage: stylesheet not found: ${fullCssPath}`);
+    process.exit(2);
+  }
+  const fullCss = stripCssComments(readFileSync(fullCssPath, "utf8"));
+  const classes = new Set();
+  for (const m of hero[1].matchAll(CLASS_ATTR_RE)) {
+    for (const cls of classValue(m).split(/\s+/).filter(Boolean)) {
+      if (/^[A-Za-z][\w-]*$/.test(cls)) classes.add(cls);
+    }
+  }
+  if (classes.size === 0) {
+    console.error("check-critical-css-coverage: no classes found in the homepage hero");
+    process.exit(2);
+  }
+  return [...classes].filter((cls) =>
+    new RegExp(`\\.${cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(fullCss),
+  );
+}
+const heroStyled = heroClassesStyledByStylesheet();
+for (const cls of heroStyled) {
+  if (!usedClasses.has(cls)) usedClasses.set(cls, new Set([TEMPLATE_FILES[0]]));
+}
+const aboveFoldClasses = [...new Set([...[...usedClasses.keys()].filter(isAboveFold), ...heroStyled])].sort();
 
 if (aboveFoldClasses.length === 0) {
   console.error(
