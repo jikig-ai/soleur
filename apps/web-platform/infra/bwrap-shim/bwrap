@@ -99,6 +99,11 @@ done
 # prints) — while `set -e` is absent so the `-r` pre-check stays primary.
 exec {bpf_fd}<"$BPF" || fail "cannot open seccomp artifact: $BPF"
 
+# A glob that matches nothing iterates once on the literal `*` and sweeps
+# ZERO fds — every inherited fd would leak into the sandbox unfiltered.
+# Fail closed rather than silently degrading to no fd hygiene.
+[ -d /proc/self/fd ] || fail "cannot enumerate /proc/self/fd"
+
 for p in /proc/self/fd/*; do
   n=${p##*/}
   case "$n" in
