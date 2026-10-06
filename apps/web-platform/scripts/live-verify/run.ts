@@ -417,9 +417,14 @@ function errorName(err: unknown): string {
     : "<none>";
 }
 
-/** The page-death classes: the page can no longer reach a verdict at all. */
+/** The page-death classes: the page can no longer reach a verdict at all.
+ * `execution context was destroyed` is deliberately ABSENT — it is the
+ * RETRIABLE navigation race (documented below in waitFailureState's catch),
+ * not death: a stray navigation during a poll tick would otherwise convert
+ * a reachable verdict into CANT-RUN. A truly dead page throws `closed`/
+ * `crashed` on the next tick anyway. */
 const CLOSED_TARGET_RE =
-  /target.{0,30}closed|has been closed|execution context was destroyed|browser has crashed/i;
+  /target.{0,30}closed|has been closed|browser has crashed/i;
 
 function isClosedTargetError(err: unknown): boolean {
   const name =
@@ -525,10 +530,7 @@ export async function waitFailureState(
   // `.name` ONLY — `.message` embeds the origin URL. This separates a genuine
   // timeout from TargetClosedError / "Execution context was destroyed", which
   // the bare catch previously discarded entirely.
-  const errName =
-    cause && typeof cause === "object" && "name" in cause
-      ? scrubLine(String((cause as { name: unknown }).name)).slice(0, 40)
-      : "<none>";
+  const errName = cause !== undefined ? errorName(cause) : "<none>";
   return (
     `${what}-not-visible path=${path} http=${status} nav=${navPath} ` +
     `err=${errName} textboxes=${textboxes} visible=${visible} rail=${rail} ` +
@@ -583,12 +585,17 @@ const RAIL_OBSERVE_MS = 45_000;
 const RAIL_POLL_MS = 1_500;
 
 /**
- * ONE named total ceiling enclosing both observe windows plus the scope
- * probes and the reload. It preserves the role the old 20s `waitFor` timeout
- * played — bounding FAIL-detection latency and job time — at the higher
- * value the observe+recover shape needs, inside the job's 15-minute budget.
+ * ONE named total ceiling enclosing the verdict path — both observe windows,
+ * the scope probes, and the reload. It preserves the role the old 20s
+ * `waitFor` timeout played — bounding FAIL-detection latency and job time —
+ * at the value the observe+recover shape needs: worst case is
+ * observe 45s + probes 2×10s + reload 30s + observe 45s = 140s, so the
+ * ceiling also guarantees phase B a full observe window. Diagnostics that
+ * run after the verdict (railRowState, waitFailureState) sit outside it,
+ * each under their own bounded() per-field timeouts. Far inside the job's
+ * 15-minute budget either way.
  */
-export const RAIL_ASSERT_TOTAL_BUDGET_MS = 100_000;
+export const RAIL_ASSERT_TOTAL_BUDGET_MS = 150_000;
 
 /**
  * Per-probe ceiling for the active-repo + RPC scope probes, under the same
@@ -606,6 +613,18 @@ const RAIL_SCOPE_PROBE_MS = 10_000;
 const RAIL_RELOAD_TIMEOUT_MS = 30_000;
 
 /**
+ * Per-tick ceiling on `railRow.isVisible()`. The call accepts no timeout and
+ * still requires a renderer round-trip — on a wedged-but-not-closed renderer
+ * (the very hypothesis bounded() exists for) an unbounded read would stall
+ * the poll loop past the deadline, emit NO `RESULT:` line at all, and let
+ * the workflow escalate that absence to `BLOCK=1` with zero diagnostics —
+ * worse than the FAIL it replaced. A timed-out read is a missed tick, not a
+ * verdict; `!sawCleanRead` still lands an honest CANT-RUN when the wedge
+ * never releases a single read.
+ */
+const RAIL_READ_TIMEOUT_MS = 5_000;
+
+/**
  * The rail check's three verdicts. `railVerdictToResult` maps them onto the
  * Result union — keeping the wire prefixes (`RESULT: PASS —` /
  * `RESULT: FAIL —` / `RESULT: CANT-RUN:`) the workflow classifier parses.
@@ -616,11 +635,14 @@ export type RailVerdict =
       via: "direct" | "reload";
       elapsedMs: number;
       checks: number;
+      reloadErr?: string;
     }
   | {
       kind: "absent";
       checks: number;
+      readErrs: number;
       reloads: number;
+      elapsedMs: number;
       railState: string;
       rpcRow: string;
       activeRepo: string;
@@ -655,6 +677,10 @@ export async function railRowState(page: Page): Promise<string> {
     -1,
   );
   if (railCount === -1 || rows === -1) return "unreadable";
+  // `rows:0` cannot distinguish "rendered list missing the row" from
+  // "loading never settled" (the rail's ternary renders the rows-map branch
+  // with zero anchors while `loading` stays true) — a DOM-only read cannot
+  // tell them apart; `rpc_row=`/`active_repo=` disambiguate one level down.
   return `rows:${rows}`;
 }
 
@@ -733,8 +759,10 @@ async function probeRailScope(
         p_limit: 15,
       });
       if (error) return `unreadable:${rpcErrorTag(error)}`;
-      const rows = Array.isArray(data) ? data : [];
-      return rows.some(
+      // A successful-but-non-array payload is a malformed read, not an empty
+      // set — `no` would fail-fast on a misparse.
+      if (!Array.isArray(data)) return "unreadable:shape";
+      return data.some(
         (r) =>
           r !== null &&
           typeof r === "object" &&
@@ -760,6 +788,7 @@ export interface RailAssertDeps {
   budget?: {
     observeMs?: number;
     pollMs?: number;
+    readMs?: number;
     totalMs?: number;
     probeMs?: number;
     reloadMs?: number;
@@ -794,6 +823,7 @@ export async function assertRailRowVisible(
 ): Promise<RailVerdict> {
   const observeMs = deps.budget?.observeMs ?? RAIL_OBSERVE_MS;
   const pollMs = deps.budget?.pollMs ?? RAIL_POLL_MS;
+  const readMs = deps.budget?.readMs ?? RAIL_READ_TIMEOUT_MS;
   const totalMs = deps.budget?.totalMs ?? RAIL_ASSERT_TOTAL_BUDGET_MS;
   const probeMs = deps.budget?.probeMs ?? RAIL_SCOPE_PROBE_MS;
   const reloadMs = deps.budget?.reloadMs ?? RAIL_RELOAD_TIMEOUT_MS;
@@ -801,6 +831,7 @@ export async function assertRailRowVisible(
   const started = Date.now();
   const totalDeadline = started + totalMs;
   let checks = 0;
+  let readErrs = 0;
   let reloads = 0;
   let reloadErr: string | undefined;
   let sawCleanRead = false;
@@ -812,7 +843,18 @@ export async function assertRailRowVisible(
   const readOnce = async (): Promise<"visible" | "hidden" | "dead"> => {
     checks++;
     try {
-      const v = await deps.railRow.isVisible();
+      // bounded(): isVisible() accepts no timeout and still needs a renderer
+      // round-trip — a wedged renderer must yield a missed tick, not a stall
+      // that swallows the deadline and the RESULT line with it.
+      const v = await bounded(
+        () => deps.railRow.isVisible(),
+        null,
+        readMs,
+      );
+      if (v === null) {
+        readErrs++;
+        return "hidden";
+      }
       sawCleanRead = true;
       return v ? "visible" : "hidden";
     } catch (err) {
@@ -823,6 +865,7 @@ export async function assertRailRowVisible(
       // A non-fatal throw is a missed tick, not a verdict — keep polling.
       // If we NEVER achieve a clean read the verdict degrades to
       // unverifiable below rather than a false rail-regression FAIL.
+      readErrs++;
       unreadableCause ??= err;
       return "hidden";
     }
@@ -869,7 +912,9 @@ export async function assertRailRowVisible(
     return {
       kind: "absent",
       checks,
+      readErrs,
       reloads,
+      elapsedMs: Date.now() - started,
       railState: await railRowState(deps.page),
       rpcRow: scope.rpcRow,
       activeRepo: scope.activeRepo,
@@ -889,7 +934,10 @@ export async function assertRailRowVisible(
 
   // Phase B — RECOVER: exactly one reload (the mount-time fetch is a real
   // path no event wiring can fake; a second reload would repeat the same
-  // draw), then observe to the total ceiling.
+  // draw), then a SECOND full observe window. Phase B gets its own deadline
+  // (start + observeMs, capped at the ceiling), not the ceiling itself —
+  // otherwise probe/reload latency could starve the recovery window to a
+  // few seconds and reintroduce the flake this fixes.
   if (Date.now() < totalDeadline) {
     try {
       await deps.page.reload({ waitUntil: "domcontentloaded", timeout: reloadMs });
@@ -904,8 +952,18 @@ export async function assertRailRowVisible(
     }
   }
 
-  const phaseB = await pollWindow(totalDeadline, "reload");
-  if (phaseB) return phaseB;
+  const phaseB = await pollWindow(
+    Math.min(Date.now() + observeMs, totalDeadline),
+    "reload",
+  );
+  if (phaseB) {
+    // A reload that threw but was followed by the row appearing is still a
+    // reload-arm PASS — annotate it rather than reporting a clean draw.
+    if (phaseB.kind === "appeared" && reloadErr !== undefined) {
+      phaseB.reloadErr = reloadErr;
+    }
+    return phaseB;
+  }
 
   if (!sawCleanRead) {
     // isVisible() never once evaluated — the page is wedged in a way the
@@ -917,7 +975,9 @@ export async function assertRailRowVisible(
   return {
     kind: "absent",
     checks,
+    readErrs,
     reloads,
+    elapsedMs: Date.now() - started,
     railState: await railRowState(deps.page),
     rpcRow: scope.rpcRow,
     activeRepo: scope.activeRepo,
@@ -934,14 +994,18 @@ export async function assertRailRowVisible(
  */
 export function railVerdictToResult(verdict: RailVerdict, convId: string): Result {
   switch (verdict.kind) {
-    case "appeared":
+    case "appeared": {
+      const reloadNote = verdict.reloadErr
+        ? ` reload_err=${verdict.reloadErr}`
+        : "";
       return {
         kind: "PASS",
         detail:
           `fresh conversation persisted and appeared in the rail ` +
           `(via=${verdict.via} elapsed=${Math.round(verdict.elapsedMs / 1000)}s ` +
-          `checks=${verdict.checks})`,
+          `checks=${verdict.checks}${reloadNote})`,
       };
+    }
     case "unverifiable":
       return { kind: "CANT-RUN", reason: verdict.reason };
     case "absent": {
@@ -950,9 +1014,11 @@ export function railVerdictToResult(verdict: RailVerdict, convId: string): Resul
         kind: "FAIL",
         detail:
           `conversation ${convId} persisted but did NOT appear in the rail ` +
-          `within ${Math.round(verdict.budgetMs / 1000)}s budget ` +
-          `(checks=${verdict.checks} reloads=${verdict.reloads} ` +
-          `rail_state=${verdict.railState} rpc_row=${verdict.rpcRow} ` +
+          `(elapsed=${Math.round(verdict.elapsedMs / 1000)}s ` +
+          `budget=${Math.round(verdict.budgetMs / 1000)}s ` +
+          `checks=${verdict.checks} read_errors=${verdict.readErrs} ` +
+          `reloads=${verdict.reloads} rail_state=${verdict.railState} ` +
+          `rpc_row=${verdict.rpcRow} ` +
           `active_repo=${verdict.activeRepo}${reloadNote}) ` +
           `(the #5391/#5436 class, #9581)`,
       };

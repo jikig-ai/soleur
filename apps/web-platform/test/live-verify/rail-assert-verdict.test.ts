@@ -25,6 +25,7 @@ const WS_ID = "66666666-7777-4888-8999-000000000000";
 const FAST = {
   observeMs: 60,
   pollMs: 2,
+  readMs: 10,
   totalMs: 400,
   probeMs: 50,
   reloadMs: 30,
@@ -33,15 +34,22 @@ const FAST = {
 /** Minimal railRow locator: only isVisible(), scripted per call. */
 function fakeRailRow(opts: {
   seq?: boolean[];
-  err?: Error;
+  err?: Error | Error[];
   visibleWhen?: () => boolean;
+  hang?: boolean;
 }) {
   let i = 0;
   let calls = 0;
+  const errs = Array.isArray(opts.err) ? opts.err : opts.err ? [opts.err] : null;
   const railRow = {
-    isVisible: async () => {
+    isVisible: async (): Promise<boolean> => {
       calls++;
-      if (opts.err) throw opts.err;
+      if (opts.hang) return new Promise<boolean>(() => {});
+      if (errs && i < errs.length) {
+        i++;
+        throw errs[i - 1];
+      }
+      if (errs && !Array.isArray(opts.err)) throw errs[0];
       if (opts.visibleWhen) return opts.visibleWhen();
       const seq = opts.seq ?? [false];
       const v = seq[Math.min(i, seq.length - 1)];
@@ -106,7 +114,7 @@ function fakePage(opts: {
 
 /** Fake supabase whose .rpc resolves PostgREST's {data, error} shape. */
 function fakeSupabase(behavior: {
-  data?: unknown[];
+  data?: unknown;
   error?: { message?: string; code?: string; name?: string };
   throws?: Error;
   calls?: { n: number };
@@ -125,8 +133,9 @@ const nav = () => ({ status: () => 200 });
 
 function deps(over: {
   seq?: boolean[];
-  railRowErr?: Error;
+  railRowErr?: Error | Error[];
   visibleWhen?: () => boolean;
+  hang?: boolean;
   page?: ReturnType<typeof fakePage>;
   supabase?: ReturnType<typeof fakeSupabase>;
 }) {
@@ -134,6 +143,7 @@ function deps(over: {
     seq: over.seq,
     err: over.railRowErr,
     visibleWhen: over.visibleWhen,
+    hang: over.hang,
   });
   return {
     seam: {
@@ -303,6 +313,47 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     expect(line).toMatch(/^RESULT: CANT-RUN:/);
     expect(line).toContain("rail-check:");
   });
+
+  it("treats `execution context was destroyed` as a missed tick, not page death — it is the retriable navigation race", async () => {
+    const navRace = new Error(
+      "Execution context was destroyed, most likely because of a navigation",
+    );
+    // Two nav-race throws, then the locator resolves visible — the verdict
+    // must be appeared, not unverifiable.
+    const { seam } = deps({
+      railRowErr: [navRace, navRace],
+      visibleWhen: () => true,
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v).toMatchObject({ kind: "appeared", via: "direct" });
+  });
+
+  it("a wedged renderer (isVisible never settles) cannot out-wait the budget — the read is bounded, the verdict unverifiable", async () => {
+    // Fixture the HANG, not only the rejection: an unbounded isVisible()
+    // would stall past every deadline and emit NO RESULT line at all —
+    // the workflow then escalates the absence to BLOCK=1 with zero
+    // diagnostics, worse than the FAIL the seam replaced.
+    const started = Date.now();
+    const { seam } = deps({ hang: true });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
+    expect(Date.now() - started).toBeLessThan(FAST.totalMs + 500);
+    const line = emitLine(railVerdictToResult(v, CONV_ID));
+    expect(line).toMatch(/^RESULT: CANT-RUN:/);
+  });
+
+  it("a malformed RPC payload (non-array data) reads unreadable:shape — never a false rpc_row=no fail-fast", async () => {
+    const reloadCalls = { n: 0 };
+    const { seam } = deps({
+      seq: [false],
+      page: fakePage({ reloadCalls }),
+      supabase: fakeSupabase({ data: { bogus: true } }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("absent");
+    expect(v).toMatchObject({ rpcRow: "unreadable:shape" });
+    expect(reloadCalls.n).toBe(1);
+  });
 });
 
 describe("railVerdictToResult (#9581) — the wire shape", () => {
@@ -318,7 +369,9 @@ describe("railVerdictToResult (#9581) — the wire shape", () => {
         {
           kind: "absent",
           checks: 90,
+          readErrs: 0,
           reloads: 1,
+          elapsedMs: 95_000,
           railState: "empty",
           rpcRow: "yes",
           activeRepo: "resolved",
