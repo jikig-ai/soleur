@@ -148,6 +148,8 @@ itself commits nothing.
 
 Invoked by `soleur:plan` at capture, after the founder approves the exact text and before the
 freeze commit. Checks 1–12 are **skipped explicitly**; only Check 13 runs, in baseline polarity.
+Run only the `PREFLIGHT_TMP` assignment from Step 0.1 first: the wrapper reads and writes files
+under it, and nothing else in Phase 0 applies.
 
 1. `verify --candidate` (section 1). A block with no freeze commit is expected here. The static
    rules still apply: verb gate, pinned scripts, `creates:` paths absent.
