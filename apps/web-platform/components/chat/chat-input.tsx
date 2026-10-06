@@ -53,6 +53,13 @@ interface ChatInputProps {
    *  and rehydrated on mount. Used by the KB sidebar to preserve drafts
    *  per-document across navigation. */
   draftKey?: string;
+  /** #9557 — optional composer prefill (the command palette's `?q=` param,
+   *  threaded by `<ChatSurface>`). Applied at most once via a latched effect:
+   *  only when `prefill` is non-empty (an empty `?q=` is a no-op, not a latch
+   *  burn) AND the current value is empty — a hydrated `draftKey` draft or
+   *  typed text is never clobbered. Seeds the draft; it NEVER auto-sends
+   *  (auto-send is `?msg=`'s contract). */
+  prefill?: string;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
   /** Stage 4 (#2886): when true, force-disable the input and show the
@@ -93,6 +100,7 @@ export function ChatInput({
   quoteRef,
   focusRef,
   draftKey,
+  prefill,
   atMentionVisible = false,
   workflowEnded = false,
   streamState = "idle",
@@ -204,6 +212,25 @@ export function ChatInput({
     };
   }, []);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // #9557 — `?q=` composer prefill. Latched (applied at most once) and keyed
+  // on the prop rather than run mount-only: `useSearchParams` may populate
+  // after mount, so a useState initializer or a []-effect could miss a late
+  // param. An empty prefill is a no-op that does NOT burn the latch — a late
+  // non-empty value can still apply. The latch IS burned on first sight of a
+  // non-empty prefill even when the composer holds text — "consumed"
+  // semantics (FR-8): a hydrated draftKey draft / typed text wins and is
+  // never clobbered, and clearing it later does not resurrect the param. The
+  // functional updater reads the post-queue value so a draftKey rehydrate
+  // committed in the same batch still wins.
+  const prefillAppliedRef = useRef(false);
+  useEffect(() => {
+    if (prefillAppliedRef.current || !prefill) return;
+    prefillAppliedRef.current = true;
+    setValue((prev) => (prev === "" ? prefill : prev));
+    if (value === "") textareaRef.current?.focus();
+  }, [prefill, value]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
   // Timer owned by the insertQuote callback. Tracked via ref so each
