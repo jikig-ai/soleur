@@ -126,7 +126,7 @@
 
   .catalog-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
     gap: var(--space-5);
   }
 
@@ -1037,6 +1037,9 @@
   }
 
   /* Prose reading width and vertical rhythm */
+  /* A long identifier or URL wraps instead of widening the page (the legal pages scrolled to 556px
+     on a 320px phone). Inherited, and it does not change min-content sizing, so tables are unaffected. */
+  main { overflow-wrap: break-word; }
   .prose {
     max-width: 85ch;
     margin: 0 auto;
@@ -1062,6 +1065,12 @@
     border-collapse: collapse;
     margin-bottom: var(--space-4);
     font-size: var(--text-sm);
+  }
+  /* A wide table scrolls inside the column on a phone or tablet instead of widening the page
+     (the data-protection table is 1009px wide). Narrow only: display:block would shrink-wrap the
+     table on desktop. */
+  @media (max-width: 768px) {
+    .prose table { display: block; max-width: 100%; overflow-x: auto; }
   }
   .prose th,
   .prose td {
@@ -1146,12 +1155,13 @@
   }
   .command-item {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     background: var(--color-bg-secondary);
     border-radius: 8px;
   }
-  .command-item code { font-weight: 600; white-space: nowrap; color: var(--color-accent); }
+  .command-item code { font-weight: 600; white-space: nowrap; color: var(--color-accent); max-width: 100%; }
   .learn-more-links {
     list-style: none;
     display: grid;
@@ -1215,6 +1225,14 @@
   @media (min-width: 769px) and (max-width: 1024px) {
     .feature-grid-departments,
     .feature-grid-workflow { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  /* On a 320px phone two columns of department cards are wider than the page (scrollWidth 344),
+     and a 3rem heading breaks "Organization:" mid-word (agents catalog). */
+  @media (max-width: 360px) {
+    .feature-grid-departments,
+    .feature-grid-workflow { grid-template-columns: 1fr; }
+    .page-hero h1 { font-size: var(--text-3xl); }
   }
 
   /* FAQ */

@@ -50,6 +50,10 @@ const H1_MIN_FONT_PX = 40;
 // checks (phone and route viewport) each open their own browser context.
 const HOME_PATH = "/";
 const PHONE_VIEWPORT = { width: 390, height: 844 };
+// The narrowest phone the plan verifies. Every gated route is read at this width with its
+// stylesheet applied: the homepage department cards, the getting-started command rows, the
+// agents heading and the legal pages' long identifiers each once widened the page here.
+const NARROW_VIEWPORT = { width: 320, height: 700 };
 
 // Worker pool size: each route opens a `BrowserContext` (~30MB resident).
 // 4 in parallel keeps memory under ~150MB on GitHub runners (7GB) while
@@ -215,6 +219,58 @@ function readPrivacyVisibility() {
   };
 }
 
+// The stylesheet swaps in after load: wait until the preload link has become a stylesheet AND
+// style.css is in document.styleSheets with rules. A link whose `rel` flipped but whose sheet
+// never applied would otherwise read the inline-only state as the full-stylesheet one.
+async function waitForStylesheet(page) {
+  await page.waitForFunction(
+    () => {
+      if (document.getElementById("soleur-css-preload")?.rel !== "stylesheet") return false;
+      try {
+        return [...document.styleSheets].some((sh) => /\/css\/style\.css/.test(sh.href || "") && sh.cssRules.length > 0);
+      } catch {
+        return false;
+      }
+    },
+    null,
+    { timeout: NAV_TIMEOUT_MS },
+  );
+}
+
+// Horizontal overflow of one route at the narrowest phone width, stylesheet applied. Never throws.
+async function narrowOverflowErrors(path) {
+  let ctx;
+  try {
+    ctx = await browser.newContext({ viewport: NARROW_VIEWPORT });
+    const page = await ctx.newPage();
+    try {
+      await page.goto(`${BASE_URL}${path}`, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+      await waitForStylesheet(page);
+    } catch (err) {
+      return [`narrow-phone full-stylesheet state not reached for ${path}: ${err.message.split("\n")[0]}`];
+    }
+    const m = await page.evaluate(() => {
+      // A heading with a word wider than its column is held in by the page-level overflow-wrap
+      // and breaks mid-word ("Organizatio / n:"). Read it with that fallback off.
+      const h1 = document.querySelector("main h1");
+      let headingBreaks = false;
+      if (h1) {
+        h1.style.overflowWrap = "normal";
+        headingBreaks = h1.scrollWidth > h1.clientWidth + 1;
+      }
+      return { sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, headingBreaks };
+    });
+    const errs = [];
+    if (m.sw > m.cw) errs.push(`${path} overflows horizontally at ${NARROW_VIEWPORT.width}px with the full stylesheet (scrollWidth=${m.sw} > clientWidth=${m.cw})`);
+    if (m.headingBreaks) errs.push(`${path} heading has a word wider than its column at ${NARROW_VIEWPORT.width}px (it would break mid-word)`);
+    return errs;
+  } catch (err) {
+    return [`narrow-phone overflow pass failed for ${path}: ${err.message.split("\n")[0]}`];
+  } finally {
+    if (ctx) await ctx.close().catch(() => {});
+  }
+}
+
 // Full-stylesheet state of the homepage at one viewport. The inline-only pass cannot
 // see a rule in style.css that hides the privacy line or widens the form, and a rule
 // can be scoped to a width, so this runs at the phone AND the route viewport. Never
@@ -231,23 +287,9 @@ async function fullStyleErrors(vp, label) {
     } catch (err) {
       return [`${label} full-stylesheet navigation failed: ${err.message.split("\n")[0]}`];
     }
-    // The stylesheet swaps in after load: wait until the preload link has become a
-    // stylesheet AND style.css is in document.styleSheets with rules. A link whose
-    // `rel` flipped but whose sheet never applied would otherwise read the
-    // inline-only state as the full-stylesheet one.
+    // The stylesheet swaps in after load; wait for it to be APPLIED (see waitForStylesheet).
     try {
-      await page.waitForFunction(
-        () => {
-          if (document.getElementById("soleur-css-preload")?.rel !== "stylesheet") return false;
-          try {
-            return [...document.styleSheets].some((sh) => /\/css\/style\.css/.test(sh.href || "") && sh.cssRules.length > 0);
-          } catch {
-            return false;
-          }
-        },
-        null,
-        { timeout: NAV_TIMEOUT_MS },
-      );
+      await waitForStylesheet(page);
     } catch (err) {
       return [`${label} full-stylesheet state not reached: style.css did not apply within ${NAV_TIMEOUT_MS}ms (${err.message.split("\n")[0]})`];
     }
@@ -390,6 +432,8 @@ async function auditRoute(route) {
         `.landing-cta h2 uses "${result.landingCtaH2Font}" (expected display font: cormorant/garamond) — .landing-cta h2 font-family missing from inline CSS`,
       );
     }
+
+    errs.push(...(await narrowOverflowErrors(route.path)));
 
     if (route.path === HOME_PATH) {
       if (!result.hasHomeForm) {
