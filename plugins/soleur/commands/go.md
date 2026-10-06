@@ -434,30 +434,38 @@ if [ "$DO_RESTORE" = true ]; then
   # rc 0. On a customer machine that file is their MCP server registry, commonly holding
   # per-server tokens, and it is usually untracked there — so the loss is unrecoverable.
   #
-  # `main:./.mcp.json`, not `main:.mcp.json`: the path is relative to the CWD like every other path in this
-  # block, so a run from a subdirectory reads sub/.mcp.json instead of writing the root file's bytes there.
+  # `main:./.mcp.json`, not `main:.mcp.json`: inside a work tree the path is relative to the CWD like every
+  # other path in this block, so a run from a subdirectory reads sub/.mcp.json instead of writing the root
+  # file's bytes there. A bare repo refuses the `./` form, and the documented bare-root refresh must keep
+  # working there, so it keeps the root-relative spelling.
+  IN_WT="$(git rev-parse --is-inside-work-tree 2>/dev/null)"
+  MAIN_MCP="main:.mcp.json"
+  if [ "$IN_WT" = true ]; then MAIN_MCP="main:./.mcp.json"; fi
   #
   # In this repo .mcp.json is TRACKED, and an uncommitted edit to it is the operator's work, not
   # stale state (#9622).
   # KEEP when: the path is a symlink (mv would replace the link itself); or it is tracked and either
-  # not a plain cached entry (skip-worktree `S` / assume-unchanged `h` hide edits from git diff) or
-  # differs from HEAD. Compared to HEAD, not the index: `git diff --quiet` without HEAD reads a
-  # staged-only change as clean. ANY probe failure (an unreadable index, a diff status above 1 such as
-  # an unborn branch) keeps the file: an error probing it must fail toward keeping it, so the status
-  # of every probe is read, never folded into "untracked". An untracked regular file, or a
-  # tracked-plain one equal to HEAD, falls through to the restore below. `cause=` names the measured
-  # reason, like the sibling markers' verdict=/source=/rc= fields.
+  # not a plain cached entry (skip-worktree `S` / assume-unchanged `h` hide edits from git diff, and an
+  # unmerged entry is tagged `M`) or differs from HEAD. Compared to HEAD, not the index: `git diff --quiet`
+  # without HEAD reads a staged-only change as clean. ANY probe failure (an unreadable index, a diff status
+  # above 1 such as an unborn branch) keeps the file: an error probing it must fail toward keeping it, so
+  # the status of every probe is read, never folded into "untracked". A bare repo has no index, so nothing
+  # in it is tracked. An untracked regular file, or a tracked-plain one equal to HEAD, falls through to the
+  # restore below. `cause=` names the measured reason, like the sibling markers' verdict=/source=/rc= fields.
   KEEP=false
   KEEP_CAUSE=""
+  KEEP_RC=""
   if [ -L .mcp.json ]; then
     KEEP=true; KEEP_CAUSE=symlink
+  elif [ "$IN_WT" != true ]; then
+    :
   else
     # ONE probe answers tracked-or-not AND the index tag; its status separates "untracked" (empty
     # output, rc 0) from "could not read the index" (rc != 0), which must keep the file.
     LS_RC=0
     LS_TAG="$(git ls-files -v -- .mcp.json 2>/dev/null)" || LS_RC=$?
     if [ "$LS_RC" -ne 0 ]; then
-      KEEP=true; KEEP_CAUSE=probe-failed
+      KEEP=true; KEEP_CAUSE=probe-failed; KEEP_RC=$LS_RC
     else
       case "$LS_TAG" in
         "") ;;
@@ -467,7 +475,7 @@ if [ "$DO_RESTORE" = true ]; then
           if [ "$DIFF_RC" -eq 1 ]; then
             KEEP=true; KEEP_CAUSE=differs-from-head
           elif [ "$DIFF_RC" -ne 0 ]; then
-            KEEP=true; KEEP_CAUSE=probe-failed
+            KEEP=true; KEEP_CAUSE=probe-failed; KEEP_RC=$DIFF_RC
           fi ;;
         *) KEEP=true; KEEP_CAUSE=index-flag ;;
       esac
@@ -475,15 +483,15 @@ if [ "$DO_RESTORE" = true ]; then
   fi
   if [ "$KEEP" = true ]; then
     # Already main's bytes: nothing to protect and nothing to restore, so say nothing. Without this a
-    # file the gate itself refreshed reads as "dirty" on every later session start. A symlink is
-    # never compared: opening its target would follow a link the repository chose.
-    if [ "$KEEP_CAUSE" != symlink ] && [ -f .mcp.json ] && git show main:./.mcp.json 2>/dev/null | cmp -s - .mcp.json; then
+    # file the gate itself refreshed reads as "dirty" on every later session start. A symlink is the
+    # operator's own wiring and is always reported: it is never compared, since opening its target
+    # would follow a link the repository chose.
+    if [ "$KEEP_CAUSE" != symlink ] && git show "$MAIN_MCP" 2>/dev/null | cmp -s - .mcp.json 2>/dev/null; then
       :
     else
-      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=${KEEP_CAUSE}"
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=${KEEP_CAUSE}${KEEP_RC:+ rc=${KEEP_RC}}"
     fi
-  # `rm -f` first: a symlink pre-planted at the temp name would otherwise be written THROUGH by the redirect.
-  elif { rm -f .mcp.json.soleur-tmp 2>/dev/null; git show main:./.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; }; then
+  elif { rm -f .mcp.json.soleur-tmp 2>/dev/null; git show "$MAIN_MCP" > .mcp.json.soleur-tmp 2>/dev/null; }; then
     if mv .mcp.json.soleur-tmp .mcp.json; then
       :
     else
@@ -494,15 +502,16 @@ if [ "$DO_RESTORE" = true ]; then
     fi
   else
     # MEASURE the cause; do not name one (AP-021 — the rule this file's other markers enforce).
-    # `git show main:./.mcp.json` fails for at least three distinct reasons and the previous
+    # `git show main:.mcp.json` fails for at least three distinct reasons and the previous
     # single `reason=mcp-json-absent-on-main` asserted the first of them for all three, which
     # is the same defect as `reason=cloud-session` before it learned to print its verdict.
-    # $? here is the `if` condition's status, so it is captured before `rm` overwrites it.
+    # $? here is the `elif` group's status (its last command, `git show`), so it is captured before `rm`
+    # overwrites it.
     SHOW_RC=$?
     rm -f .mcp.json.soleur-tmp
     if ! git rev-parse --verify -q main >/dev/null 2>&1; then
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main"
-    elif ! git cat-file -e main:./.mcp.json 2>/dev/null; then
+    elif ! git cat-file -e "$MAIN_MCP" 2>/dev/null; then
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main"
     else
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-read-failed rc=${SHOW_RC}"
@@ -511,7 +520,7 @@ if [ "$DO_RESTORE" = true ]; then
 fi
 ```
 
-The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree for a clean or untracked file (it is overwritten on next session-start from the new CWD). A tracked `.mcp.json` that differs from HEAD, is a symlink, or is pinned with `skip-worktree`/`assume-unchanged` is left alone and reported as `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=<symlink|index-flag|differs-from-head|probe-failed>`; a file already equal to `main` stays silent. That includes a stale tracked copy the gate refreshed on an earlier session once `main` has moved on: it is not refreshed again, and the marker prints until the branch catches up with `main` or the file is committed. An agent must NOT run `git checkout -- .mcp.json` or `git update-index` in response: show the operator `git diff HEAD -- .mcp.json` and keep routing. Operator remedies: commit it, drop it with `git checkout -- .mcp.json` (a stale tracked copy is refreshed again next session), or pin an intentional local variant with `git update-index --skip-worktree .mcp.json` (the marker still prints for it). Skip silently on first error — do not block routing on session-start hygiene.
+The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree for a clean or untracked file (it is overwritten on next session-start from the new CWD). A `.mcp.json` that is a symlink, or is tracked and differs from HEAD or carries a non-plain index entry (`skip-worktree`, `assume-unchanged`, unmerged), is left alone and reported as `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=<symlink|index-flag|differs-from-head|probe-failed>`; a kept file already equal to `main` stays silent. A stale tracked copy the gate refreshed on an earlier session is not refreshed again once `main` has moved on: the marker prints until the file is dropped or committed. An agent must NOT run `git checkout -- .mcp.json` or `git update-index` in response. For `differs-from-head` show the operator `git diff HEAD -- .mcp.json`; for `index-flag` (where that diff is unreliable) and `symlink`, report the cause and show `git ls-files -v -- .mcp.json` or `ls -l .mcp.json`; for `probe-failed` (the index or the HEAD diff could not be read, with the git exit status as `rc=`), report that the file could not be inspected. In every case keep routing. Operator remedies: commit the file, drop it with `git checkout -- .mcp.json` (a stale tracked copy is refreshed again next session), or pin an intentional local variant with `git update-index --skip-worktree .mcp.json` (the marker still prints for it unless its bytes equal `main`'s). The restore reads `main:./.mcp.json` relative to the current directory inside a work tree, so a run from a subdirectory never writes the root file's bytes; a bare repo keeps the root-relative form. Skip silently on first error — do not block routing on session-start hygiene.
 
 See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Session Errors #1-#2 for the gap this closes.
 

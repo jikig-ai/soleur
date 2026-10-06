@@ -849,7 +849,7 @@ ws="$(fresh_ws r12b)"
 ) || { echo "FATAL: R12b fixture setup failed" >&2; exit 2; }
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12b: a staged-only edit keeps its bytes"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty" "R12b: and is reported"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=differs-from-head" "R12b: and is reported as differing from HEAD"
 
 echo "R12c. the guard holds on the capability-refusal arm"
 # That arm sets DO_RESTORE too (FR8d), so it reaches the same restore block.
@@ -877,7 +877,7 @@ want_eq "$(cat "$ws/.mcp.json")" "$(git -C "$ws" show main:.mcp.json)" "R12e: an
 
 echo "R12f. an unborn HEAD keeps a staged file; an untracked file there is not called dirty"
 # `git diff HEAD` exits 128 with no commit, so this pins that ANY non-zero probe status keeps the
-# file. The second repo pins the `ls-files` conjunct, which no born-repo row can see.
+# file. The second repo pins that an UNTRACKED file on an unborn HEAD is not called dirty.
 ws="$TMP_ROOT/ws-r12f-staged"
 assert_fixture_dir "$ws"; rm -rf "$ws"; mkdir -p "$ws"
 (
@@ -887,7 +887,7 @@ assert_fixture_dir "$ws"; rm -rf "$ws"; mkdir -p "$ws"
   git -C "$ws" add .mcp.json
 ) || { echo "FATAL: R12f staged fixture setup failed" >&2; exit 2; }
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed" "R12f: a staged file on an unborn HEAD is kept, and the cause is the failed probe"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed rc=" "R12f: a staged file on an unborn HEAD is kept, and the cause is the failed probe"
 want_eq "$(cat "$ws/.mcp.json")" '{"local":"staged-unborn"}' "R12f: and its bytes survive"
 ws="$TMP_ROOT/ws-r12f-untracked"
 assert_fixture_dir "$ws"; rm -rf "$ws"; mkdir -p "$ws"
@@ -975,12 +975,12 @@ echo "R12m. an unreadable index keeps a tracked, dirty file (a probe error is no
 # ls-files fails while git show still reads the object store, so a probe that folded the failure
 # into "untracked" restored main's bytes over the edit.
 ws="$(fresh_ws r12m)"
-: "${ws:?fresh_ws r12m produced no workspace path; refusing to touch the caller repo}"
+: "${ws:?fresh_ws r12m produced no workspace path; refusing to run git against the caller repo}"
 assert_fixture_dir "$ws"
 printf '%s' 'not a git index' > "$ws/.git/index"
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12m: an unreadable index keeps the file's bytes"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed" "R12m: and the cause is the failed probe"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed rc=" "R12m: and the cause is the failed probe, with its status"
 want_not_in "$out" "reason=mcp-json-rename-failed" "R12m: and nothing tried to replace it"
 
 echo "R12n. a symlink pre-planted at the temp name is not written through"
@@ -998,12 +998,60 @@ echo "R12o. run from a SUBDIRECTORY the restore never writes the root file's byt
 # `git show main:.mcp.json` is root-relative while the block's other paths are cwd-relative, so a
 # subdirectory run created sub/.mcp.json from the root's copy (review: structural seat).
 ws="$(fresh_ws r12o stale)"
-: "${ws:?fresh_ws r12o produced no workspace path; refusing to touch the caller repo}"
+: "${ws:?fresh_ws r12o produced no workspace path; refusing to run git against the caller repo}"
 mkdir "$ws/sub"
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws/sub" "$SCRATCH_HOME")"
 ck; if [ -e "$ws/sub/.mcp.json" ]; then fail "R12o: a subdirectory run created sub/.mcp.json"; else pass "R12o: a subdirectory run creates no sub/.mcp.json"; fi
 want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"head-stale"}' "R12o: and the root file is untouched by a subdirectory run"
 want_in "$out" "reason=mcp-json-absent-on-main" "R12o: the miss is reported against the path actually read"
+
+echo "R12p. a symlink whose target equals main's bytes is still reported"
+# The compare is skipped for a symlink, so it never goes silent; R12j's target differs from main and cannot see that.
+ws="$(fresh_ws r12p stale)"
+: "${ws:?fresh_ws r12p produced no workspace path; refusing to run git against the caller repo}"
+(
+  git_fixture_env "$ws" || { echo "FATAL: git_fixture_env refused an environment for $ws" >&2; exit 2; }
+  git -C "$ws" rm -q --cached .mcp.json
+  git -C "$ws" commit -q -m "feature branch carries no .mcp.json"
+) || { echo "FATAL: R12p fixture setup failed" >&2; exit 2; }
+R12P_TARGET="$TMP_ROOT/r12p-link-target.json"
+git -C "$ws" show main:.mcp.json > "$R12P_TARGET"
+rm -f "$ws/.mcp.json"
+ln -s "$R12P_TARGET" "$ws/.mcp.json"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=symlink" "R12p: a symlink to main-equal bytes is reported, never silent"
+
+echo "R12q. a BARE repo keeps the documented root-relative refresh"
+# `main:./.mcp.json` is refused outside a work tree and `ls-files` has no index there; the bare-root refresh
+# (wg-at-session-start-after-cleanup-merged) must still land and must not be called dirty.
+ws="$(fresh_ws r12q stale)"
+: "${ws:?fresh_ws r12q produced no workspace path; refusing to run git against the caller repo}"
+BARE="$TMP_ROOT/r12q-bare.git"
+assert_fixture_dir "$BARE"; rm -rf "$BARE"; mkdir -p "$BARE"
+(
+  git_fixture_env "$BARE" || { echo "FATAL: git_fixture_env refused an environment for $BARE" >&2; exit 2; }
+  git clone -q --bare "$ws" "$BARE"
+) || { echo "FATAL: R12q fixture setup failed" >&2; exit 2; }
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$BARE" "$SCRATCH_HOME")"
+want_eq "$(cat "$BARE/.mcp.json")" "$(git -C "$BARE" show main:.mcp.json)" "R12q: the bare-root refresh lands from main"
+want_not_in "$out" "reason=mcp-json-dirty" "R12q: and a bare repo is never called dirty"
+
+echo "R12r. from a subdirectory the keep decision reads the SUBDIRECTORY file, not the root one"
+# The root copy is clean and stale; sub/.mcp.json is tracked and dirty. A probe anchored at the repo root
+# would read the clean root file, miss the edit and restore (or report absent-on-main).
+ws="$(fresh_ws r12r stale)"
+: "${ws:?fresh_ws r12r produced no workspace path; refusing to run git against the caller repo}"
+(
+  git_fixture_env "$ws" || { echo "FATAL: git_fixture_env refused an environment for $ws" >&2; exit 2; }
+  mkdir "$ws/sub"
+  printf '%s' '{"sub":"committed"}' > "$ws/sub/.mcp.json"
+  git -C "$ws" add sub/.mcp.json
+  git -C "$ws" commit -q -m "feature branch tracks sub/.mcp.json"
+) || { echo "FATAL: R12r fixture setup failed" >&2; exit 2; }
+printf '%s' '{"sub":"uncommitted"}' > "$ws/sub/.mcp.json"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws/sub" "$SCRATCH_HOME")"
+want_eq "$(cat "$ws/sub/.mcp.json")" '{"sub":"uncommitted"}' "R12r: a tracked, dirty sub/.mcp.json keeps its bytes"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=differs-from-head" "R12r: and the keep is decided on that file"
 
 echo "R6/R6b/R6c. identity preflight and the payload-absent state"
 for i in "${!GATE_ANCHORS[@]}"; do
@@ -1287,13 +1335,13 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 234 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (236), so the
+# 239 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (241), so the
 # floor holds on both paths. MEASURE IT WITH `SOLEUR_GO_GATES_SKIP_H3=1`, never from a local run
 # where the harness is present: #8418 raised it four times from local counts and CI reddened on
 # `194 < 196` — the same floor this comment already said to derive from the skipped path.
-# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155, R12-R12o and the R3c/R6 byte rows (#9622) 194 -> 234.
+# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155, R12-R12r and the R3c/R6 byte rows (#9622) 194 -> 239.
 # Re-measure it after any rebase; never hand-merge the number.
-MIN_ASSERTIONS=234
+MIN_ASSERTIONS=239
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
