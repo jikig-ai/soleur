@@ -79,6 +79,13 @@ if [[ -n "${STUB_ARGV:-}" ]]; then
   printf '%s\n' '--CALL--' >> "$STUB_ARGV"
   for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
 fi
+# A bearer fed on stdin (`--config -`) never reaches argv; record what arrives there so the suite can
+# prove the header is delivered, not merely absent from argv.
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "--config" && "$a" == "-" && -n "${STUB_STDIN:-}" ]]; then cat >> "$STUB_STDIN"; fi
+  prev="$a"
+done
 for a in "$@"; do
   case "$a" in
     *private-networks*) printf '%s' "${STUB_IMDS_BODY:-}"; exit "${STUB_IMDS_RC:-0}";;
@@ -156,6 +163,8 @@ run_guard() {
   export STUB_TRACE="$root/trace"; : > "$STUB_TRACE"
   export STUB_ARGV="$root/argv"; : > "$STUB_ARGV"
   ARGV_FILE="$STUB_ARGV"
+  export STUB_STDIN="$root/stdin"; : > "$STUB_STDIN"
+  STDIN_FILE="$STUB_STDIN"
 
   # hide_ip models the probe-fault class: `ip` unresolvable (lives in /usr/sbin, off cron's
   # default PATH) while curl still resolves. The stripped PATH is used ALONE so the real
@@ -421,6 +430,16 @@ assert "X3c the readonly literal equals zot-registry.tf betterstack_logs_ingest_
   "[[ -n \"\$PIN_LITERAL\" && \"\$PIN_LITERAL\" == \"\$PINNED_URL\" ]]"
 assert "X3c the literal carries no \$ and no backtick (nothing the environment can expand)" \
   "[[ -n \"\$PIN_LITERAL\" && \"\$PIN_LITERAL\" != *'\$'* && \"\$PIN_LITERAL\" != *'\`'* ]]"
+
+# --- X5: the bearer travels on stdin config, never on argv (Rule E, sweep #7843) -------------
+echo "--- X5: bearer on stdin config, not argv ---"
+EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN")
+run_guard true 0 true; transport_audit
+assert "X5 a pinned POST happened (the argv scan below is not vacuous)" "[[ \"\$TA_POST\" -ge 1 ]]"
+assert "X5 the token is in NO recorded argv (not readable from /proc/<pid>/cmdline)" \
+  "[[ \"\$(grep -c -- \"\$SYNTH_TOKEN\" \"\$ARGV_FILE\")\" -eq 0 ]]"
+assert "X5 the bearer header arrives on the stdin config of the POST" \
+  "[[ \"\$(grep -cxF -- \"header = \\\"Authorization: Bearer \$SYNTH_TOKEN\\\"\" \"\$STDIN_FILE\")\" -ge 1 ]]"
 
 # --- X4: drawdown — the grandfathering entries are gone --------------------------------------
 echo "--- X4: not baselined (the repo-wide lint run now guards this file from regrowth) ---"

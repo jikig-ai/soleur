@@ -46,8 +46,11 @@ case "$-" in
     ;;
 esac
 
-if [[ -z "${BETTERSTACK_API_TOKEN:-}" ]]; then
-  echo "TRANSIENT: BETTERSTACK_API_TOKEN is unset or empty — cannot query the Better Stack heartbeats API (declare it in the directive's secrets= clause and wire it into the sweeper env)." >&2
+# Token-shape guard: a newline in the token would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${BETTERSTACK_API_TOKEN:-}"; then
+  echo "TRANSIENT: BETTERSTACK_API_TOKEN is unset, empty or malformed — cannot query the Better Stack heartbeats API (declare it in the directive's secrets= clause and wire it into the sweeper env)." >&2
   exit 2
 fi
 
@@ -66,9 +69,10 @@ TARGETS=(
 # Pull the full heartbeats page once. A non-200 / unexpected shape is a probe fault, never a
 # verdict — do NOT default a missing .data to empty (a defaulted 0 reads as "monitor absent" on
 # what is really an auth/transport failure, the same false-DARK trap the probes it guards avoid).
-RESP="$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN}" -H "Accept: application/json" \
-  "$API" 2>/dev/null)"
+RESP="$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+  -H "Accept: application/json" --config - \
+  "$API" 2>/dev/null \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN"))"
 STATUS="$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')"
 BODY="$(printf '%s' "$RESP" | sed '$d')"
 

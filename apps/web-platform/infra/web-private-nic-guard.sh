@@ -111,7 +111,9 @@ readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
 if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
   # --disable first (skip ~/.curlrc) and --noproxy '*' (ignore proxy env vars): the bearer must not
   # leave through a config file or a proxy the environment names.
-  post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+  # The bearer rides a stdin config (`--config -`), never the argument list: argv is readable by every
+  # local user in /proc/<pid>/cmdline and `ps` (lint Rule E, sweep #7843).
+  post() { curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1; }
   post || post || echo "[nic] SOLEUR_PRIVATE_NIC egress to Better Stack Logs FAILED: $LINE" >&2
 elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
   echo "[nic] unpinned_url: refusing to send the Better Stack token to an unpinned destination — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2

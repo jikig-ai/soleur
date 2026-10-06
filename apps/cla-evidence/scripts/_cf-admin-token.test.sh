@@ -34,21 +34,31 @@ mk_curl_stub() {
 #!/usr/bin/env bash
 queue="$work/curl.queue"
 log="$work/curl.log"
+argvlog="$work/curl.argv"
+stdinlog="$work/curl.stdin"
 method=GET
+first="\${1:-}"
+cfg=""
+noproxy=0
+printf '%s\n' "\$@" >> "\$argvlog"
 while [[ \$# -gt 0 ]]; do
   case "\$1" in
     -X)         method="\$2"; shift 2 ;;
     -H)         shift 2 ;;
+    --config)   cfg="\$2"; shift 2 ;;
+    --noproxy)  noproxy=1; shift 2 ;;
     --max-time) shift 2 ;;
     -fsS|-fS|-s|-S|-f) shift ;;
     *)          shift ;;
   esac
 done
+# The bearer must arrive as a curl config on stdin (--config -); record it.
+if [[ "\$cfg" == "-" ]]; then cat >> "\$stdinlog"; fi
 read -r line < "\$queue" || { echo "curl stub: queue empty" >&2; exit 99; }
 sed -i '1d' "\$queue"
 status="\${line%% *}"
 body="\${line#* }"
-printf 'method=%s\n' "\$method" >> "\$log"
+printf 'method=%s first=%s noproxy=%s cfg=%s\n' "\$method" "\$first" "\$noproxy" "\$cfg" >> "\$log"
 printf '%s' "\$body"
 case "\$status" in 2*) exit 0 ;; *) exit 22 ;; esac
 EOF
@@ -56,7 +66,7 @@ EOF
 }
 
 prime_queue() {
-  : > "$work/curl.log"
+  : > "$work/curl.log"; : > "$work/curl.argv"; : > "$work/curl.stdin"
   printf '%s\n' "$@" > "$work/curl.queue"
 }
 
@@ -117,6 +127,56 @@ if [[ "$rc" -eq 0 ]] \
   green "PASS: (e) cf_token_self_revoke empty id → warn, exit 0, no curl call"
 else
   red "FAIL: (e) expected exit 0 + 'no admin-token id' warn + 0 curl calls; got rc=$rc curl_calls=$(wc -l < "$work/curl.log" 2>/dev/null || echo NA)"; fail=1
+fi
+
+# ── (f) bearer travels on stdin, never argv; --disable first, --noproxy '*' ──
+# A distinctive bearer so a leak into argv cannot hide behind a common substring.
+mk_curl_stub
+prime_queue '200 {"result":{"status":"active","id":"tok-abc"}}'
+bearer_f="Zq9-synthetic_BEARER.f1"
+if id=$(cf_token_verify "$bearer_f" 2>/dev/null) \
+   && grep -qxF "header = \"Authorization: Bearer $bearer_f\"" "$work/curl.stdin" \
+   && ! grep -qF "$bearer_f" "$work/curl.argv" \
+   && ! grep -qiF 'Authorization' "$work/curl.argv" \
+   && grep -q 'first=--disable noproxy=1 cfg=-' "$work/curl.log"; then
+  green "PASS: (f) verify: bearer on stdin config, absent from argv; --disable first; --noproxy"
+else
+  red "FAIL: (f) verify bearer channel; log=$(cat "$work/curl.log")"; fail=1
+fi
+
+mk_curl_stub
+prime_queue '200 {}'
+if cf_token_self_revoke "$bearer_f" "tok-abc" >/dev/null 2>&1 \
+   && grep -qxF "header = \"Authorization: Bearer $bearer_f\"" "$work/curl.stdin" \
+   && ! grep -qF "$bearer_f" "$work/curl.argv" \
+   && grep -q 'method=DELETE first=--disable noproxy=1 cfg=-' "$work/curl.log"; then
+  green "PASS: (f2) self-revoke: bearer on stdin config, absent from argv; --disable first"
+else
+  red "FAIL: (f2) self-revoke bearer channel; log=$(cat "$work/curl.log")"; fail=1
+fi
+
+# ── (g) unusable bearer (newline / empty / space) → failure, ZERO curl calls ─
+mk_curl_stub
+for bad in $'abc\nurl = "http://evil.example/"' '' 'has space'; do
+  prime_queue '200 {"result":{"status":"active","id":"tok-abc"}}'
+  if id=$(cf_token_verify "$bad" 2>/dev/null); then
+    red "FAIL: (g) expected non-zero for unusable bearer (got id=$id)"; fail=1
+  elif [[ -s "$work/curl.log" ]]; then
+    red "FAIL: (g) curl was invoked for an unusable bearer"; fail=1
+  else
+    green "PASS: (g) unusable bearer → non-zero, zero curl calls"
+  fi
+done
+
+# ── (h) CF_API override off the pinned Cloudflare base → refused, zero calls ─
+mk_curl_stub
+prime_queue '200 {"result":{"status":"active","id":"tok-abc"}}'
+if id=$(CF_API="https://evil.example/client/v4" cf_token_verify "$bearer_f" 2>/dev/null); then
+  red "FAIL: (h) expected non-zero for CF_API off the pinned base (got id=$id)"; fail=1
+elif [[ -s "$work/curl.log" ]]; then
+  red "FAIL: (h) curl was invoked for an unpinned CF_API"; fail=1
+else
+  green "PASS: (h) CF_API off the Cloudflare base → non-zero, zero curl calls"
 fi
 
 if [[ "$fail" -eq 0 ]]; then

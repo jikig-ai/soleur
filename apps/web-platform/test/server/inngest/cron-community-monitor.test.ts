@@ -8,8 +8,11 @@
 //   2. Prompt-canary anchors (## Instructions, community-router.sh path,
 //      Hacker News / Discord / Bluesky verbs, digest output path) — original
 //      anchors from the GHA prompt that must survive silent paraphrasing.
-//   3. Safety-guard anchors (MILESTONE RULE, platform-persistence
-//      directive, "Do NOT push directly to main"). NOTE: the prompt-level
+//   3. Safety-guard anchors (platform-persistence directive, "Do NOT push
+//      directly to main"). #7122: the agent no longer files the issue or writes
+//      the digest, so the MILESTONE RULE, brand-guide, issue-creation,
+//      CLONE DEPTH and quotes/contributor/interaction directives are asserted
+//      ABSENT below. NOTE: the prompt-level
 //      DEDUP RULE was removed in #6143 (same-day dedup is now code-side via
 //      digestIssueExistsForDate before the eval spawns) — a regression guard
 //      below asserts those three strings stay absent.
@@ -30,10 +33,27 @@ vi.hoisted(() => {
 });
 
 import {
+  COMMUNITY_MONITOR_PROMPT,
   cronCommunityMonitor,
   KILL_ESCALATION_MS,
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-community-monitor";
+import {
+  COMMUNITY_DISALLOWED_TOOLS,
+  FINAL_MESSAGE_CAP_BYTES,
+} from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import {
+  COMMUNITY_FAILURE_CAUSES,
+  COMMUNITY_FINAL_MESSAGE_MAX_BYTES,
+  COMMUNITY_METRICS,
+  COMMUNITY_PERIOD_DAYS,
+  COMMUNITY_PLATFORMS,
+  COMMUNITY_STATUSES,
+  COMMUNITY_TOPIC_CATEGORIES,
+  buildExampleDraftLine,
+  parseCommunityDraft,
+} from "@/server/inngest/functions/_cron-community-publication";
+import { injectRunDate } from "@/server/inngest/functions/_cron-shared";
 
 describe("cronCommunityMonitor — registration shape (import-time smoke)", () => {
   it("loads without throwing (handler + client startup pass)", () => {
@@ -69,6 +89,18 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
+// The handler's code with whole-line `//` comments removed. A source anchor that
+// matches inside a COMMENT proves nothing about the code (cq-assert-anchor-not-bare-token):
+// wrapping the flag lines in a comment must turn the anchors below red. Only whole
+// lines are dropped: a block-comment stripper would mangle the prompt template.
+function stripLineComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//"))
+    .join("\n");
+}
+const SUT_CODE = stripLineComments(SUT_SOURCE);
+
 describe("cron-community-monitor — turn budget (max-turns exhaustion fix)", () => {
   it("spawns claude with --max-turns 80 (daily-triage parity; was 50)", () => {
     // Root cause of Sentry WEB-PLATFORM-1Z (2026-06-03 08:06 UTC): the spawn
@@ -82,6 +114,82 @@ describe("cron-community-monitor — turn budget (max-turns exhaustion fix)", ()
     // 2026-06-03-fix-cron-community-monitor-max-turns-exhaustion-plan.md.
     expect(SUT_SOURCE).toMatch(/"--max-turns",\s*"80"/);
     expect(SUT_SOURCE).not.toMatch(/"--max-turns",\s*"50"/);
+  });
+});
+
+describe("#7122 — spawn flags and credential custody (source anchors)", () => {
+  it("the agent holds Bash only, and the file tools are also removed from its pool", () => {
+    // Comment-stripped: the BEHAVIOURAL proof (the flags handed to spawnClaudeEval)
+    // is in cron-community-monitor-publication-flow.test.ts; this is the cheap guard.
+    expect(SUT_CODE).toMatch(/"--allowedTools",\s*"Bash",/);
+    expect(SUT_CODE).not.toMatch(/"--allowedTools",\s*"Bash,/);
+    expect(SUT_CODE).toMatch(/"--disallowedTools",\s*COMMUNITY_DISALLOWED_TOOLS/);
+    // Non-vacuity: the same anchor, commented out, no longer matches.
+    expect(stripLineComments('  // "--disallowedTools", COMMUNITY_DISALLOWED_TOOLS,\n')).not.toMatch(
+      /"--disallowedTools",\s*COMMUNITY_DISALLOWED_TOOLS/,
+    );
+  });
+
+  it("opts in to the capped final-message capture (the default is off for every other cron)", () => {
+    expect(SUT_CODE).toMatch(/captureFinalMessage: true,/);
+  });
+
+  it("clones and spawns with the READ token; the WRITE token is minted by a separate post-spawn step", () => {
+    expect(SUT_SOURCE).toMatch(/permissions: COMMUNITY_SPAWN_TOKEN_PERMISSIONS,\s*repositories: \[REPO_NAME\]/);
+    expect(SUT_SOURCE).toMatch(/permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,\s*repositories: \[REPO_NAME\]/);
+    expect(SUT_SOURCE).toContain('step.run("mint-write-token"');
+    // The write token reaches safeCommitAndPr only with the rendered bytes it must equal.
+    expect(SUT_CODE).toMatch(/expectedContent: \{ \[digestPath\]: renderedDigest \},/);
+    expect(SUT_SOURCE).toContain("setOriginToken(spawnCwd, token)");
+    expect(SUT_SOURCE).toContain("installationToken: readToken");
+    expect(SUT_SOURCE).not.toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+  });
+
+  it("persists by exact path: no directory-prefix allowlist constant remains", () => {
+    expect(SUT_SOURCE).not.toContain("COMMUNITY_MONITOR_ALLOWED_PATHS");
+    expect(SUT_SOURCE).toMatch(/exactPaths: \[digestPath\]/);
+  });
+});
+
+// #7122 — replay across a deploy. Memoized step ids are the replay contract: a run
+// started under the OLD code (write-scoped mint, old allowlist clone) and re-driven by
+// the NEW code would read both back from its memo and run the new prompt under old
+// containment. The two steps whose meaning changed therefore carry NEW ids.
+describe("#7122 — step ids that changed meaning are new (stale memo is never reused)", () => {
+  it("mints and clones under the new ids; the old ids are gone from the handler code", () => {
+    expect(SUT_CODE).toContain('"mint-read-token"');
+    expect(SUT_CODE).toContain('"setup-workspace-ro"');
+    expect(SUT_CODE).not.toContain('"mint-installation-token"');
+    expect(SUT_CODE).not.toMatch(/step\.run\(\s*"setup-workspace"/);
+  });
+
+  it("the id contract is documented where the ids are defined", () => {
+    expect(SUT_SOURCE).toContain("STEP IDS (#7122)");
+  });
+});
+
+// #7122 — constants mirrored across a module boundary, pinned equal (a drift in either
+// direction would be silent: oversize is rejected twice, the tool lists fail safe).
+describe("#7122 — mirrored constants stay equal", () => {
+  it("the substrate's final-message cap equals the publication module's", () => {
+    expect(FINAL_MESSAGE_CAP_BYTES).toBe(COMMUNITY_FINAL_MESSAGE_MAX_BYTES);
+    expect(COMMUNITY_FINAL_MESSAGE_MAX_BYTES).toBe(16 * 1024);
+  });
+
+  it("--disallowedTools equals the hook's no-file-tools deny set plus NotebookEdit (equality, not subset)", () => {
+    const hook = readFileSync(
+      resolve(__dirname, "../../../server/inngest/cron-bash-allowlist-hook.mjs"),
+      "utf-8",
+    );
+    const m = /const NO_FILE_TOOL_NAMES = new Set\(\[([\s\S]*?)\]\);/.exec(hook);
+    expect(m, "NO_FILE_TOOL_NAMES not found in the hook source").not.toBeNull();
+    const hookTools = [...m![1].matchAll(/"([A-Za-z]+)"/g)].map((x) => x[1]);
+    expect(hookTools.length).toBeGreaterThanOrEqual(9);
+    // NotebookEdit is not a recognised class in the hook (its catch-all denies it), so
+    // the CLI layer adds it; every other member must match in BOTH directions.
+    const cli = COMMUNITY_DISALLOWED_TOOLS.split(",");
+    expect([...cli].filter((t) => t !== "NotebookEdit").sort()).toEqual([...hookTools].sort());
+    expect(cli).toContain("NotebookEdit");
   });
 });
 
@@ -123,18 +231,17 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "literal-path containment instruction (no shell-var)",
       ],
       [
-        "knowledge-base/support/community/",
-        "digest output directory",
+        "COMMUNITY_DIGEST_DIR_PATH",
+        "digest output directory (re-exported from the publication module, defined once)",
       ],
-      ["YYYY-MM-DD-digest.md", "digest filename pattern"],
-      ["[Scheduled] Community Monitor", "issue title prefix"],
+      // #7122: the dated digest filename, the `## Period` / `## Activity Summary`
+      // headings and the issue body are rendered handler-side from fixed templates
+      // (asserted in cron-community-publication.test.ts), so they are no longer
+      // prompt text. The title prefix is the shared constant the dedup read and the
+      // audit fallback use.
+      ["titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX", "issue title prefix (shared constant)"],
       ["scheduled-community-monitor", "label name"],
-      ['--milestone "Post-MVP / Later"', "MILESTONE RULE target"],
-      ["## Period", "digest section marker"],
-      ["## Activity Summary", "digest section marker"],
-      ["## Top Contributors", "digest section marker"],
-      ["Repository Stats", "GitHub Activity sub-section marker"],
-      ["Community Interactions", "GitHub Activity sub-section marker"],
+      ["discord messages <channel_id>", "Discord messages invocation (literal verb, prompt-parity)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh discord", "Discord platform invocation (literal path)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh github activity", "GitHub activity invocation (literal path)"],
       ["bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions", "Hacker News invocation (literal path)"],
@@ -147,7 +254,6 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
 
   describe("safety-guard anchors (cohort discipline)", () => {
     it.each([
-      ["MILESTONE RULE:", "rule keyword"],
       [
         "Do NOT push directly to main",
         "no direct main writes (handler-side PR persistence)",
@@ -157,15 +263,175 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "platform-persistence directive (#5111)",
       ],
       [
-        "opens a PR for your changes",
-        "handler-side persistence note (#5111)",
-      ],
-      [
-        "CLONE DEPTH RULE:",
-        "stale git-log misuse on --depth=1 clone",
+        "publishes everything itself from your final message",
+        "handler-side persistence note (#5111, #7122)",
       ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
+    });
+  });
+
+  // #7122 — the agent can no longer publish: these directives were retired with
+  // the verbs/tools they drove. Asserting them ABSENT keeps a revert of the
+  // prompt rewrite from silently re-arming an instruction the hook now denies
+  // (which would only provoke denied filings and a RED monitor).
+  describe("#7122 — retired publication directives are absent from the prompt", () => {
+    it.each([
+      ["## Top Contributors", "contributor section directive (R3)"],
+      ["Community Interactions", "interaction table directive (R3)"],
+      ["| User | Issue/PR | Comment |", "commenter table"],
+      ["--milestone", "gh issue create flag"],
+      ["MILESTONE RULE", "issue-creation rule"],
+      ["gh issue", "any issue verb (create/list/comment)"],
+      ["gh label", "any label verb"],
+      ["Create GitHub Issue", "issue-creation step"],
+      ["brand-guide", "brand-guide read step"],
+      ["Brief contextual", "quote allowance (R3)"],
+      ["CLONE DEPTH RULE", "gh issue list dedup paragraph (env-dump verb)"],
+      ["Creating the monitor issue above is REQUIRED", "persistence gate sentence"],
+      ["Only changes under knowledge-base/support/community/", "persistence path sentence"],
+      ["FAILED", "retired misconfiguration-issue branch"],
+      ["new stargazers in the period (username", "stargazer username directive"],
+      // The window label is a handler constant now (and per platform); the model never chooses one.
+      ["periodDays", "model-chosen period (the handler renders each platform's window itself)"],
+      ["fixed 1-day window", "false claim: the collectors do NOT share one 1-day window"],
+      ["fetch-activity", "dropped LinkedIn verb: nothing consumed it and the hook no longer admits it"],
+      ["period_days", "collector period field the model used to pick a window"],
+      // Allowlist narrowing: both verbs left the hook, so the prompt must not request them.
+      ["discord members", "dropped verb: member count comes from guild-info"],
+      ["hn trending", "dropped verb: nothing consumed it"],
+      ["AGENTS.md rule", "garbled rule line"],
+    ])("prompt does NOT contain %s (%s)", (removed) => {
+      expect(COMMUNITY_MONITOR_PROMPT).not.toContain(removed);
+    });
+  });
+
+  describe("#7122 — final-message draft contract (generated from the module's constants)", () => {
+    it("embeds the generated one-line example verbatim, and the example passes the schema", () => {
+      const line = buildExampleDraftLine();
+      expect(COMMUNITY_MONITOR_PROMPT).toContain(line);
+      expect(line).not.toMatch(/[\r\n]/);
+      expect(parseCommunityDraft(line).ok).toBe(true);
+    });
+
+    it("names every draft key and closed-enum member the schema defines", () => {
+      for (const key of ["platforms", "topics", "status", "failureCause", "metrics", "category", "count"]) {
+        expect(COMMUNITY_MONITOR_PROMPT, key).toContain(key);
+      }
+      for (const platform of COMMUNITY_PLATFORMS) {
+        expect(COMMUNITY_MONITOR_PROMPT, platform).toContain(`"${platform}":`);
+        for (const metric of Object.keys(COMMUNITY_METRICS[platform])) {
+          expect(COMMUNITY_MONITOR_PROMPT, `${platform}.${metric}`).toContain(`"${metric}"`);
+        }
+      }
+      for (const member of [...COMMUNITY_STATUSES, ...COMMUNITY_FAILURE_CAUSES, ...COMMUNITY_TOPIC_CATEGORIES]) {
+        expect(COMMUNITY_MONITOR_PROMPT, member).toContain(member);
+      }
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("ONE line of compact JSON");
+    });
+
+    it("keeps the {{RUN_DATE}} sentinel (injectRunDate throws without it)", () => {
+      expect(() => injectRunDate(COMMUNITY_MONITOR_PROMPT, "2026-10-06T08:00:00.000Z")).not.toThrow();
+      expect(injectRunDate(COMMUNITY_MONITOR_PROMPT, "2026-10-06T08:00:00.000Z")).toContain("2026-10-06");
+    });
+
+    it("tells the agent a truncated collector output is partial/output-too-large, not guessed (it has no file tools to read a spill)", () => {
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("truncated or exceeds the inline limit");
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("you have no file tools");
+      expect(COMMUNITY_MONITOR_PROMPT).toContain('failureCause "output-too-large"');
+      expect(COMMUNITY_FAILURE_CAUSES).toContain("output-too-large");
+    });
+
+    // The prompt text AFTER string interpolation (what the agent reads), minus the
+    // runnable-literal parity concerns covered by the allowlist suite.
+    const PROMPT = COMMUNITY_MONITOR_PROMPT;
+
+    it("one Bash call per platform: no call combines commands of two platforms, and every call is ONE LINE", () => {
+      expect(PROMPT).toContain("ONE Bash call PER PLATFORM");
+      expect(PROMPT).toContain("Each Bash call is ONE LINE");
+      const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+      // Every backtick-delimited command group is a single platform's call.
+      const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
+      expect(groups.length).toBeGreaterThanOrEqual(9);
+      for (const g of groups) {
+        expect(g, "a command span must not contain a line break").not.toMatch(/[\r\n]/);
+        const platforms = new Set(
+          g.split(";").map((seg) => seg.trim().replace(`${ROUTER} `, "").split(" ")[0]),
+        );
+        expect(platforms.size, g).toBe(1);
+      }
+      // Discord messages are fetched per channel, with a bounded limit, never chained.
+      expect(PROMPT).toContain("discord messages <channel_id> 50");
+      expect(PROMPT).toMatch(/ONE more Bash call PER channel ID/);
+    });
+
+    it("Discord: guild-info and channels are SEPARATE calls, at most the first 40 channels are read, a failing channel is skipped (not partial), and an over-cap server is partial/timeout", () => {
+      const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+      const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
+      expect(groups).toContain(`${ROUTER} discord guild-info`);
+      expect(groups).toContain(`${ROUTER} discord channels`);
+      // never chained together
+      expect(groups.some((g) => g.includes("guild-info") && g.includes("channels"))).toBe(false);
+      expect(PROMPT).toMatch(/guild-info[\s\S]*approximate_member_count[\s\S]*discord channels/);
+      expect(PROMPT).toContain("FIRST 40 channels");
+      expect(PROMPT).toMatch(/more than 40 channels[\s\S]*"partial" with failureCause "timeout"/);
+      expect(COMMUNITY_FAILURE_CAUSES).toContain("timeout");
+      expect(PROMPT).toMatch(/A channel whose call fails[\s\S]*is simply skipped: it does NOT make Discord\s+"partial"/);
+    });
+
+    it("GitHub watchers come from subscribers_count, never watchers_count (an alias of stars)", () => {
+      expect(PROMPT).toContain("`subscribers_count`");
+      expect(PROMPT).toMatch(/NOT\s+`watchers_count`/);
+      expect(PROMPT).not.toMatch(/watchers_count` from repo-stats/);
+    });
+
+    it("never claims one shared collection window; the GitHub day argument is the handler's COMMUNITY_PERIOD_DAYS", () => {
+      expect(PROMPT).not.toMatch(/fixed 1-day window|runs over a fixed|every collector below/);
+      expect(PROMPT).toContain("do NOT share one\nwindow");
+      // the five github verbs are the ONLY ones with a day argument, and it is the constant
+      const days = [...PROMPT.matchAll(/community-router\.sh github ([a-z-]+) (\d+)/g)];
+      expect(days.map((m) => m[1]).sort()).toEqual(["activity", "contributors", "discussions", "fetch-interactions", "repo-stats"]);
+      for (const m of days) expect(Number(m[2]), `github ${m[1]}`).toBe(COMMUNITY_PERIOD_DAYS);
+    });
+
+    it("tells the agent an all-zero 'collected' platform is shown as unverified", () => {
+      expect(PROMPT).toContain("whose every value is 0 is\n     shown to readers as unverified");
+    });
+
+    it("Discord members come from guild-info; the dropped verbs are not requested", () => {
+      expect(PROMPT).toContain("approximate_member_count");
+      expect(PROMPT).not.toContain("discord members");
+      expect(PROMPT).not.toContain("hn trending");
+    });
+
+    it("defines the GitHub external counts from the collector's own output, not a maintainer guess", () => {
+      expect(PROMPT).toContain("DISTINCT `user` values");
+      expect(PROMPT).toContain("fetch-interactions");
+      expect(PROMPT).toContain("length of");
+      expect(PROMPT).toContain("`interactions` list");
+      expect(PROMPT).not.toContain("other than the maintainers");
+    });
+
+    it("tells the agent the LinkedIn engagement figure is a 0-1 ratio to multiply by 100", () => {
+      expect(PROMPT).toContain("0 to 1 RATIO");
+      expect(PROMPT).toContain("multiply it by 100");
+    });
+
+    it("states the router's `bsky` is the draft's `bluesky`, and reconciles failureCause with the closed example", () => {
+      expect(PROMPT).toContain("The router names Bluesky `bsky`");
+      expect(PROMPT).toContain("its key is `bluesky`");
+      expect(PROMPT).toContain("the only extra key you may add is failureCause");
+    });
+
+    it("an unavailable metric makes the platform partial/failed with a cause, never a measured 0", () => {
+      expect(PROMPT).toContain("must never\n   be presented as a measured 0");
+      expect(PROMPT).toContain("AND mark that platform");
+      expect(PROMPT).not.toContain("keep 0 only when the value is unavailable");
+    });
+
+    it("tells the agent it has no file or issue tools and must not add a text field", () => {
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("You cannot write files, create issues or post anywhere");
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("no field for names, usernames, quotes or message text");
     });
   });
 
@@ -188,10 +454,11 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       expect(SUT_SOURCE).not.toContain(removed);
     });
 
-    it("still creates the dated digest issue unconditionally (prefix anchor present)", () => {
-      // The unconditional-create contract survives: step 5 files the issue on
-      // every run; the code-level dedup skip happens before the eval spawns.
-      expect(SUT_SOURCE).toContain("[Scheduled] Community Monitor");
+    it("still publishes the dated digest issue unconditionally (prefix constant wired)", () => {
+      // The unconditional-publish contract survives, now handler-side (#7122): the
+      // code-level dedup skip happens before the eval spawns and both the dedup read
+      // and the audit fallback key on the shared title prefix.
+      expect(SUT_SOURCE).toContain("titlePrefix: SCHEDULED_DIGEST_TITLE_PREFIX");
     });
   });
 });
@@ -211,7 +478,6 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
 
   describe("positive class — community vars MUST be allowlisted", () => {
     it.each([
-      "DISCORD_WEBHOOK_URL",
       "DISCORD_BOT_TOKEN",
       "DISCORD_GUILD_ID",
       "BSKY_HANDLE",
@@ -238,6 +504,10 @@ describe("buildSpawnEnv allowlist (PR-11 bucket-ii security surface)", () => {
       [
         "GITHUB_APP_PRIVATE_KEY",
         "GitHub App PEM; full repo write across installations",
+      ],
+      [
+        "DISCORD_WEBHOOK_URL",
+        "Discord POSTING credential; no read-path verb consumes it (#7122)",
       ],
       [
         "SENTRY_AUTH_TOKEN",

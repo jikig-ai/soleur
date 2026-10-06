@@ -2831,7 +2831,14 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform) alone and grades verdicts against live warehouse rows on the newest
   // boot. NO SUBSTITUTE: those rows exist only in the Logs warehouse, which has no unauthenticated read
   // path; the fixture suite verifies the arms pre-merge but cannot finish inside the Check-10 cap. Genuine.
-  const BASELINE_DECLARED_PROBES = 46;
+  // #9372 (2026-10-06): +1 (46 -> 47) for `2026-10-06-fix-web2-rebirth-emptiness-gate-field-paths-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/web2-rebirth-emptiness.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is that the STORED host_metrics rows have
+  // the shape the gate's SQL reads, which the fixture suite can model but not observe, and the warehouse
+  // has no unauthenticated read path. Genuine. The waiver's own hazard applies: Check 10 skips this
+  // command without executing it, so the live read was run by hand during the PR (PASS) instead.
+  const BASELINE_DECLARED_PROBES = 47;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -16,6 +16,18 @@
 
 set -euo pipefail
 
+# REFUSE TO RUN UNDER XTRACE WITH A LIVE CREDENTIAL BOUND (#7797). Tracing echoes commands AFTER
+# expansion, so the Plausible API key would be printed the moment it is used. `${VAR:+x}` tests
+# non-emptiness WITHOUT expanding the value.
+case "$-" in
+  *x*)
+    if [ -n "${PLAUSIBLE_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="$REPO_ROOT/knowledge-base/marketing/analytics"
@@ -203,7 +215,35 @@ main() {
     exit 0
   fi
 
+  # Token-shape guard (any char outside the allowlist, e.g. a newline that would inject a curl
+  # config directive on the stdin channel below). Never echoes the value. An UNSET key stays the
+  # documented graceful skip above; a SET-but-unusable key is a failure (exit 1), never a skip or a
+  # snapshot, and makes zero curl calls.
+  _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+  if ! _bearer_ok "${PLAUSIBLE_API_KEY:-}"; then
+    echo "PLAUSIBLE_API_KEY is set but unusable (contains a character outside [A-Za-z0-9._~+/=-]); refusing to send a request" >&2
+    exit 1
+  fi
+
+  # PLAUSIBLE_BASE_URL is env-overridable and every request below carries the bearer, so the
+  # destination is pinned to the live literal before any curl runs (same pin as
+  # scripts/provision-plausible-goals.sh). A redirected base URL would forward the credential.
+  if [[ "$PLAUSIBLE_BASE_URL" != "https://plausible.io" ]]; then
+    echo "Error: PLAUSIBLE_BASE_URL must be https://plausible.io" >&2
+    exit 1
+  fi
+
   # --- Helper Functions ---
+
+  # One wrapper owns the transport flags and the credential channel: `--disable` first and
+  # `--noproxy '*'` (no ~/.curlrc / proxy redirection of a bearer-carrying request), and the bearer
+  # rides curl's stdin config channel, never its argument list. Prints the HTTP status.
+  _plausible_get() {
+    local out_file="$1" url="$2"
+    curl --disable --noproxy '*' -s -o "$out_file" -w "%{http_code}" \
+      --config - "$url" \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$PLAUSIBLE_API_KEY")
+  }
 
   api_get() {
     local endpoint="$1"
@@ -212,9 +252,7 @@ main() {
     local response_file
     response_file=$(mktemp)
 
-    http_code=$(curl -s -o "$response_file" -w "%{http_code}" \
-      -H "Authorization: Bearer ${PLAUSIBLE_API_KEY}" \
-      "$url")
+    http_code=$(_plausible_get "$response_file" "$url")
 
     if [[ "$http_code" == "401" ]]; then
       echo "Plausible API authentication failed (HTTP 401). Check PLAUSIBLE_API_KEY." >&2
@@ -268,8 +306,7 @@ main() {
 
   _preflight_file=$(mktemp)
   trap 'rm -f "$_preflight_file"' EXIT
-  _preflight_code=$(curl -s -o "$_preflight_file" -w "%{http_code}" \
-    -H "Authorization: Bearer ${PLAUSIBLE_API_KEY}" \
+  _preflight_code=$(_plausible_get "$_preflight_file" \
     "${PLAUSIBLE_BASE_URL}/api/v1/stats/aggregate?site_id=${PLAUSIBLE_SITE_ID}&period=7d&metrics=visitors,pageviews&compare=previous_period")
   if [[ "$_preflight_code" == "401" ]]; then
     echo "Plausible API authentication failed (HTTP 401). Check PLAUSIBLE_API_KEY." >&2

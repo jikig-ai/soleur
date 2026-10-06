@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=996
-# generated-at=2026-10-06T07:48:27Z
+# generated-at=2026-10-06T14:11:14Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -486,6 +486,7 @@ tests/hooks/drop-sentinel-parity	8
 tests/hooks/emissions	1
 tests/hooks/incidents	1
 tests/scripts/apply-github-infra-mint-shape	2
+tests/scripts/argv-bearer-sweep	3
 tests/scripts/audit-bot-codeql-coverage	8
 tests/scripts/audit-ruleset-bypass	1
 tests/scripts/betterstack-absence-classifier	8
