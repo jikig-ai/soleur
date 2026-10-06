@@ -44,7 +44,7 @@
 #       OR doppler_secret.workspaces_luks_key: a re-mint opens a NEW header, stranding at-rest data
 #       (the C19/F4 catastrophe). A FIRST create is legal; a later re-mint is not. PLUS (#9377) ANY
 #       positive action, create included, on the web host class's pair random_password.workspaces_luks_web
-#       and doppler_secret.workspaces_luks_web_key: this job never creates them (the push-apply does), so
+#       and doppler_secret.workspaces_luks_web_key: this job never creates them (the push-apply did, and it now refuses a create of the password), so
 #       a touch here is a touch on that class passphrase.
 #   - resource_deletes       — a delete OR forget of ANYTHING: a pure `+create` provision has no
 #       deletes, so any delete/forget is by definition out of shape.
