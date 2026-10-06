@@ -241,7 +241,15 @@ class Repo {
   /** verify, writing its decision record to a file outside the repo (so it cannot dirty the tree). */
   verifyFile(extra: string[] = [], name = "vj.json"): { file: string; run: Run } {
     const file = join(this.scratch, name);
-    return { file, run: this.verify(["--out", file, ...extra]) };
+    return { file, run: this.verify(["--out", file, "--command-out", this.cmdFile, ...extra]) };
+  }
+  /** The command file `verifyFile` writes: what the wrapper reads and `classify --command-file` compares. */
+  get cmdFile(): string {
+    return join(this.scratch, "cmd.txt");
+  }
+  /** classify as the wrapper drives it: the ran-command file defaults to the one verify wrote. */
+  classify(args: string[]): Run {
+    return this.py(["classify", ...(args.includes("--command-file") ? [] : ["--command-file", this.cmdFile]), ...args]);
   }
 }
 
@@ -935,7 +943,7 @@ describe("classify: the CLI reads the verify record and measured inputs only", (
     expect(run.json?.outcome).toBe("OK");
     return { r, file };
   };
-  const cls = (r: Repo, args: string[]) => r.py(["classify", ...args]);
+  const cls = (r: Repo, args: string[]) => r.classify(args);
 
   test("acceptance: --stdout-file carries the output the expected text is matched against", () => {
     const { r, file } = frozenFile();
@@ -1065,6 +1073,53 @@ describe("log: the only writer of outcomes", () => {
     r.commit("code");
     return r;
   };
+  /** A frozen command check with a verify record and its command file. */
+  const FROZEN_V = () => {
+    const r = FROZEN();
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe("OK");
+    return { r, file };
+  };
+  /** A frozen judgement check: the cheapest verify record `log` can honestly write a row from. */
+  const JUDGED = () => {
+    const r = new Repo();
+    r.freeze({ ...BASE, kind: "judgement", command: "" });
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe("OK");
+    return { r, file };
+  };
+  /** Classify the frozen command at `rc`; returns the classify record's path. */
+  const classified = (r: Repo, file: string, rc: number, out = "cl.json") => {
+    const cl = join(r.scratch, out);
+    const c = r.classify(["--verify-json", file, "--polarity", "acceptance", "--rc", String(rc), "--control-rc", "0", "--out", cl]);
+    expect(c.status).toBe(0);
+    return cl;
+  };
+  /** One real record set per stopped outcome: what the wrapper would hand `log`. */
+  const scenario = (o: string): { r: Repo; file: string; extra: string[] } => {
+    if (o === "NEEDS-YOUR-EYES") return { ...JUDGED(), extra: [] };
+    let r = FROZEN();
+    if (o === "UNTRUSTED") {
+      r = new Repo();
+      r.freeze(BASE, "p.md", STRANGER);
+      r.write("src/a.txt", "a\n");
+      r.commit("code");
+    } else if (o === "CHANGED-SINCE-APPROVAL") {
+      r.freeze({ ...BASE, expected: "9" });
+    } else if (o === "BLOCK-REJECTED") {
+      r = new Repo();
+      r.freeze({ ...BASE, command: "echo a; echo b" });
+      r.write("src/a.txt", "a\n");
+      r.commit("code");
+    }
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe({ UNTRUSTED: "UNTRUSTED", "CHANGED-SINCE-APPROVAL": "CHANGED-SINCE-APPROVAL", "BLOCK-REJECTED": "FAIL" }[o] ?? "OK");
+    if (o === "FAILED") return { r, file, extra: ["--classify-json", classified(r, file, 1)] };
+    if (o === "INVALID") return { r, file, extra: ["--classify-json", classified(r, file, 127)] };
+    return { r, file, extra: [] };
+  };
   const LOGDIR = "knowledge-base/project/specs/feat-x";
   const logPath = (r: Repo) => join(r.dir, LOGDIR, "founder-check-log.md");
   const log = (r: Repo, vj: string, extra: string[], input?: string, env: Record<string, string> = {}) =>
@@ -1083,7 +1138,7 @@ describe("log: the only writer of outcomes", () => {
     const cl = join(r.scratch, "cl.json");
     const out = join(r.scratch, "out.txt");
     writeFileSync(out, "SECRET-OUTPUT-TEXT 1\n");
-    r.py(["classify", "--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--stdout-file", out, "--out", cl]);
+    r.classify(["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--stdout-file", out, "--out", cl]);
     const l = log(r, file, ["--mode", "interactive", "--outcome", "PASSED", "--classify-json", cl, "--attempt-n", "2"]);
     expect(l.status).toBe(0);
     expect(l.stdout.trim()).toBe(`SOLEUR_FOUNDER_CHECK_RESULT outcome=PASSED hash=${canonicalHash(BASE)} tested_sha=${r.git(["rev-parse", "HEAD"]).trim().slice(0, 12)}`);
@@ -1104,18 +1159,18 @@ describe("log: the only writer of outcomes", () => {
   });
 
   test("a dirty tree is recorded as +uncommitted in tested_sha", () => {
-    const r = FROZEN();
+    const { r, file: f0 } = JUDGED();
     r.write("src/dirty.txt", "x\n");
     const { file } = r.verifyFile();
+    expect(f0).toBeTruthy();
     log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
     expect(cells(r)[0][COLS.indexOf("tested_sha")]).toMatch(/^[0-9a-f]{12}\+uncommitted$/);
   });
 
   for (const outcome of ["FAILED", "INVALID", "CHANGED-SINCE-APPROVAL", "UNTRUSTED", "NEEDS-YOUR-EYES", "BLOCK-REJECTED"]) {
     test(`headless: ${outcome} is recorded as STOPPED-AWAITING-FOUNDER with the cause kept`, () => {
-      const r = FROZEN();
-      const { file } = r.verifyFile();
-      const l = log(r, file, ["--mode", "headless", "--outcome", outcome]);
+      const { r, file, extra } = scenario(outcome);
+      const l = log(r, file, ["--mode", "headless", "--outcome", outcome, ...extra]);
       expect(l.status).toBe(0);
       expect(l.stdout).toContain("outcome=STOPPED-AWAITING-FOUNDER");
       const row = cells(r)[0];
@@ -1157,25 +1212,23 @@ describe("log: the only writer of outcomes", () => {
   });
 
   test("an override needs a reason and names what it overrides; a blank reason is refused", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
-    const base = ["--mode", "interactive", "--outcome", "OVERRIDDEN"];
+    const { r, file, extra } = scenario("FAILED");
+    const base = ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra];
     expect(log(r, file, [...base, "--underlying", "FAILED"]).status).toBe(3); // no reason
     expect(log(r, file, [...base, "--underlying", "FAILED", "--reason-stdin"], "   \n").status).toBe(3); // whitespace only
     expect(log(r, file, [...base, "--reason-stdin"], "shipping the typo fix\n").status).toBe(3); // no cause named
     expect(log(r, file, [...base, "--underlying", "NOPE", "--reason-stdin"], "x\n").status).toBe(2);
-    const ok = log(r, file, [...base, "--underlying", "CHANGED-SINCE-APPROVAL", "--reason-stdin"], "shipping the typo fix\n");
+    const ok = log(r, file, [...base, "--underlying", "FAILED", "--reason-stdin"], "shipping the typo fix\n");
     expect(ok.status).toBe(0);
     const row = cells(r)[0];
     expect(row[COLS.indexOf("outcome")]).toBe("OVERRIDDEN");
-    expect(row[COLS.indexOf("underlying")]).toBe("CHANGED-SINCE-APPROVAL");
+    expect(row[COLS.indexOf("underlying")]).toBe("FAILED");
     expect(row[COLS.indexOf("reason")]).toBe("shipping the typo fix");
   });
 
   test("injection through the reason cannot forge a row or smuggle escapes", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
-    log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"], "ok\n| x | INJECTED |\u001b[2J\u007f done\u2028x\n");
+    const { r, file, extra } = scenario("FAILED");
+    log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "FAILED", "--reason-stdin"], "ok\n| x | INJECTED |\u001b[2J\u007f done\u2028x\n");
     const text = readFileSync(logPath(r), "utf8");
     expect(text.split("\n").filter((l) => l.startsWith("|")).length).toBe(3); // header, separator, ONE row
     expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f\u2028\u2029]/);
@@ -1183,15 +1236,13 @@ describe("log: the only writer of outcomes", () => {
   });
 
   test("a reason that looks like a secret is refused (the log is committed and may be public)", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
-    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"], "token=abcdef123456\n");
+    const { r, file, extra } = scenario("FAILED");
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "FAILED", "--reason-stdin"], "token=abcdef123456\n");
     expect(l.status).toBe(3);
   });
 
   test("a verify record with a non-hex hash or sha is refused, including a valid hex prefix with junk after it", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
+    const { r, file } = JUDGED();
     for (const patch of [
       { hash: "e".repeat(64) + "SECRET-TEXT" },
       { hash: "not-hex" },
@@ -1201,7 +1252,8 @@ describe("log: the only writer of outcomes", () => {
       const doc = { ...JSON.parse(readFileSync(file, "utf8")), ...patch };
       const f = join(r.scratch, "tampered.json");
       writeFileSync(f, JSON.stringify(doc));
-      expect(log(r, f, ["--mode", "interactive", "--outcome", "PASSED"]).status).toBe(3);
+      const l = log(r, f, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+      expect([l.status, l.stderr]).toEqual([3, expect.stringContaining("not hex")]);
     }
     expect(existsSync(logPath(r))).toBe(false);
   });
@@ -1217,8 +1269,7 @@ describe("log: the only writer of outcomes", () => {
   });
 
   test("a command containing | is escaped and stays in its cell", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
+    const { r, file } = JUDGED();
     const doc = JSON.parse(readFileSync(file, "utf8"));
     doc.block.command = "grep a|b f";
     const f = join(r.scratch, "pipe.json");
@@ -1228,26 +1279,23 @@ describe("log: the only writer of outcomes", () => {
   });
 
   test("the log path follows an ARCHIVED spec directory (compound moves it)", () => {
-    const r = FROZEN();
+    const { r, file } = JUDGED();
     const arch = join(r.dir, "knowledge-base/project/specs/archive/20261006-120000-feat-x");
     mkdirSync(arch, { recursive: true });
-    const { file } = r.verifyFile();
     log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
     expect(existsSync(join(arch, "founder-check-log.md"))).toBe(true);
     expect(existsSync(logPath(r))).toBe(false);
   });
 
   test("an unsafe branch name or a detached HEAD writes nothing (no path is invented)", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
+    const { r, file } = JUDGED();
     r.git(["checkout", "-q", "--detach"]);
     const l = log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
     expect(l.status).toBe(3);
   });
 
   test("commit-log commits ONLY the log, in one commit, and is a no-op the second time", () => {
-    const r = FROZEN();
-    const { file } = r.verifyFile();
+    const { r, file } = JUDGED();
     log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
     r.write("src/other.txt", "staged elsewhere\n");
     r.git(["add", "src/other.txt"]);
@@ -1261,6 +1309,114 @@ describe("log: the only writer of outcomes", () => {
     const again = r.py(["commit-log"]);
     expect(again.stdout).toContain("already committed");
     expect(r.git(["rev-list", "--count", `${before}..HEAD`]).trim()).toBe("1");
+  });
+
+  // -- the records are bound: log records a measurement, it does not choose one ---------------
+  test("classify refuses a ran-command file that is not the approved command, or is empty or absent", () => {
+    const { r, file } = FROZEN_V();
+    const args = ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"];
+    const other = join(r.scratch, "other.txt");
+    writeFileSync(other, "true");
+    expect(r.classify([...args, "--command-file", other]).status).toBe(2);
+    writeFileSync(other, "");
+    const empty = r.classify([...args, "--command-file", other]);
+    expect([empty.status, empty.stderr]).toEqual([2, expect.stringContaining("not the approved command")]);
+    writeFileSync(other, BASE.command + "\n"); // a byte more is still a different command
+    expect(r.classify([...args, "--command-file", other]).status).toBe(2);
+    expect(r.classify([...args, "--command-file", join(r.scratch, "absent.txt")]).status).toBe(2);
+    expect(r.py(["classify", ...args]).status).toBe(2); // --command-file is required
+    expect(r.classify(args).status).toBe(0); // the approved command is accepted (no stdout, so FAILED, not refused)
+  });
+
+  test("classify embeds the verify record's hash, head sha and own digest", () => {
+    const { r, file } = FROZEN_V();
+    const c = r.classify(["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]);
+    expect(c.json?.hash).toBe(canonicalHash(BASE));
+    expect(c.json?.head_sha).toBe(r.git(["rev-parse", "HEAD"]).trim());
+    expect(c.json?.verify_sha256).toBe(createHash("sha256").update(readFileSync(file)).digest("hex"));
+  });
+
+  test("log refuses an outcome the records do not support (PASSED over a FAILED classification)", () => {
+    const { r, file } = FROZEN_V();
+    const cl = classified(r, file, 1);
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "PASSED", "--classify-json", cl]);
+    expect([l.status, l.stderr]).toEqual([3, expect.stringContaining("do not support")]);
+    expect(existsSync(logPath(r))).toBe(false);
+    expect(log(r, file, ["--mode", "interactive", "--outcome", "FAILED", "--classify-json", cl]).status).toBe(0);
+  });
+
+  test("log refuses PASSED and FOUNDER-CONFIRMED with no classification of a command check", () => {
+    const { r, file } = FROZEN_V();
+    for (const o of ["PASSED", "FOUNDER-CONFIRMED", "FAILED-AS-EXPECTED", "VACUOUS"]) {
+      expect([o, log(r, file, ["--mode", "interactive", "--outcome", o]).status]).toEqual([o, 3]);
+    }
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("log refuses an override that names a cause the records do not show", () => {
+    const { r, file, extra } = scenario("FAILED");
+    for (const u of ["CHANGED-SINCE-APPROVAL", "BLOCK-REJECTED", "INVALID"]) {
+      const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", u, "--reason-stdin"], "x\n");
+      expect([u, l.status]).toEqual([u, 3]);
+    }
+    const t = scenario("UNTRUSTED"); // an untrusted check can never be overridden
+    for (const u of ["FAILED", "CHANGED-SINCE-APPROVAL", "BLOCK-REJECTED"]) {
+      expect([u, log(t.r, t.file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", u, "--reason-stdin"], "x\n").status]).toEqual([u, 3]);
+    }
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("log refuses a classify record that belongs to another verify record or polarity", () => {
+    const { r, file } = FROZEN_V();
+    const cl = classified(r, file, 1);
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    const rewritten = join(r.scratch, "vj2.json"); // same content shape, different bytes
+    writeFileSync(rewritten, JSON.stringify({ ...doc, detail: "edited" }));
+    const l = log(r, rewritten, ["--mode", "interactive", "--outcome", "FAILED", "--classify-json", cl]);
+    expect([l.status, l.stderr]).toEqual([3, expect.stringContaining("does not belong")]);
+    const c = JSON.parse(readFileSync(cl, "utf8"));
+    for (const patch of [{ polarity: "baseline" }, { hash: HEX64 }, { head_sha: SHA40 }, { outcome: "NOPE" }]) {
+      const f = join(r.scratch, "cl2.json");
+      writeFileSync(f, JSON.stringify({ ...c, ...patch }));
+      expect([JSON.stringify(patch), log(r, file, ["--mode", "interactive", "--outcome", "FAILED", "--classify-json", f]).status]).toEqual([JSON.stringify(patch), 3]);
+    }
+    expect(existsSync(logPath(r))).toBe(false);
+  });
+
+  test("log refuses a candidate record at acceptance polarity and a frozen record at baseline", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, kind: "judgement", command: "" }) }));
+    const cand = r.verifyFile(["--candidate"], "cand.json");
+    expect(cand.run.json?.reason).toBe("candidate");
+    expect(log(r, cand.file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]).status).toBe(3);
+    const base = runPy(["log", "--verify-json", cand.file, "--polarity", "baseline", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"], { cwd: r.dir, env: r.env() });
+    expect(base.status).toBe(0);
+  });
+
+  test("a stale --out or --command-out does not survive a run that dies on a usage error", () => {
+    const { r } = FROZEN_V();
+    for (const [sub, flag] of [["verify", "--out"], ["verify", "--command-out"], ["classify", "--out"]] as const) {
+      const f = join(r.scratch, `stale-${sub}${flag}.txt`);
+      writeFileSync(f, '{"outcome":"OK","stale":true}\n');
+      const run = r.py([sub, "--no-such-flag", flag, f]);
+      expect([sub, flag, run.status, existsSync(f)]).toEqual([sub, flag, 2, false]);
+      const eq = join(r.scratch, `stale-eq-${sub}${flag}.txt`);
+      writeFileSync(eq, "stale");
+      r.py([sub, "--no-such-flag", `${flag}=${eq}`]);
+      expect(existsSync(eq)).toBe(false);
+    }
+  });
+
+  test("an internal error writes a FAIL record to --out, and nothing can be recorded or classified from it", () => {
+    const { r } = FROZEN_V();
+    const f = join(r.scratch, "crash.json");
+    writeFileSync(f, '{"outcome":"OK"}\n');
+    const v = runPy(["verify", "--repo", join(TMP, "fc-does-not-exist-" + process.pid), "--out", f], { cwd: TMP, env: gitFixtureEnv(TMP) });
+    expect(v.status).toBe(4);
+    const rec = JSON.parse(readFileSync(f, "utf8"));
+    expect([rec.outcome, rec.reason]).toEqual(["FAIL", "internal-error"]);
+    expect(r.classify(["--verify-json", f, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+    expect(log(r, f, ["--mode", "interactive", "--outcome", "PASSED"]).status).toBe(3);
   });
 
   test("commit-log with no log is a no-op", () => {
@@ -1277,7 +1433,7 @@ describe("summary", () => {
     expect(r.py(["summary"]).stdout.trim()).toBe("founder-check: no log");
     const miss = r.py(["summary", "--log", join(r.scratch, "typo.md")]);
     expect(miss.status).toBe(1);
-    r.freeze();
+    r.freeze({ ...BASE, kind: "judgement", command: "" });
     const { file } = r.verifyFile();
     r.py(["log", "--verify-json", file, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
     r.py(["log", "--verify-json", file, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
@@ -1561,7 +1717,9 @@ describe("harness rows (the suite goes RED when the subject is gutted)", () => {
     r.write("src/a.txt", "a\n");
     r.commit("code");
     const { file } = r.verifyFile();
-    const args = ["log", "--verify-json", file, "--polarity", "acceptance", "--mode", "headless", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"];
+    const cl = join(r.scratch, "cl.json");
+    expect(r.classify(["--verify-json", file, "--polarity", "acceptance", "--rc", "1", "--control-rc", "0", "--out", cl]).json?.outcome).toBe("FAILED");
+    const args = ["log", "--verify-json", file, "--classify-json", cl, "--polarity", "acceptance", "--mode", "headless", "--outcome", "OVERRIDDEN", "--underlying", "FAILED", "--reason-stdin"];
     expect(runPy(args, { cwd: r.dir, env: r.env(), input: "x\n" }).status).toBe(3);
     const m = runPy(args, { cwd: r.dir, env: r.env(), input: "x\n", script: mutant });
     expect(m.status).toBe(0);

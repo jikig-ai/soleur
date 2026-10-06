@@ -896,20 +896,25 @@ def _read_capped(path):
     return data.decode("utf-8", errors="replace")
 
 
-def _load_json(path, what):
+def _load_json(path, what, digest=None):
+    """Read a record file. `digest`, a list, receives the sha256 of exactly the text that was parsed."""
     try:
-        doc = json.loads(_read_capped(path))
+        text = _read_capped(path)
+        doc = json.loads(text)
     except (OSError, ValueError) as e:
         print(f"refused: cannot read {what} {path}: {e}", file=sys.stderr)
         return None
     if not isinstance(doc, dict):
         print(f"refused: {what} {path} is not a JSON object", file=sys.stderr)
         return None
+    if digest is not None:
+        digest.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
     return doc
 
 
 def cmd_classify(a):
-    v = _load_json(a.verify_json, "the verify record")
+    dg = []
+    v = _load_json(a.verify_json, "the verify record", dg)
     if v is None:
         return 2
     block = v.get("block") if isinstance(v.get("block"), dict) else {}
@@ -920,6 +925,18 @@ def cmd_classify(a):
     if (a.polarity == "baseline") != candidate:
         print("refused: baseline polarity needs a --candidate verify record, acceptance needs a frozen one", file=sys.stderr)
         return 2
+    approved = block.get("command", "")
+    if not approved:
+        print("refused: the verify record carries no command to classify a run of", file=sys.stderr)
+        return 2
+    try:
+        ran = _read_capped(a.command_file)
+    except (OSError, ValueError) as e:
+        print(f"refused: cannot read --command-file: {e}", file=sys.stderr)
+        return 2
+    if ran != approved:
+        print("refused: the command that ran is not the approved command in the verify record", file=sys.stderr)
+        return 2
     stdout = ""
     if a.stdout_file:
         try:
@@ -929,7 +946,8 @@ def cmd_classify(a):
             return 2
     r = classify(a.rc, stdout, block.get("expected", ""), a.polarity, str(v.get("first_token", "")), a.control_rc == 0)
     doc = {"outcome": r.outcome, "expected_matched": r.expected_matched, "reason": r.reason,
-           "rc": a.rc, "polarity": a.polarity}
+           "rc": a.rc, "polarity": a.polarity, "hash": str(v.get("hash", "")),
+           "head_sha": str(v.get("head_sha", "")), "verify_sha256": dg[0]}
     line = json.dumps(doc, sort_keys=True)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:
@@ -953,8 +971,35 @@ def _resolve_log(a):
     return _log_path(top, _branch(top)) if top else None
 
 
+CLASSIFY_OUTCOMES = frozenset({"PASSED", "FAILED", "INVALID", "FAILED-AS-EXPECTED", "VACUOUS"})
+
+
+def _derivable(v, cl, polarity):
+    """The outcomes the records allow a row to carry. `log` records a measurement, it does not
+    choose one: an outcome no record supports is refused, whoever asks for it."""
+    block = v.get("block") if isinstance(v.get("block"), dict) else {}
+    vo = v.get("outcome")
+    if vo == "UNTRUSTED":
+        return {"UNTRUSTED"}
+    if vo == "CHANGED-SINCE-APPROVAL":
+        return {"CHANGED-SINCE-APPROVAL"}
+    if vo == "FAIL":
+        return {"BLOCK-REJECTED"}
+    if vo != "OK":
+        return set()
+    if (polarity == "baseline") != (v.get("reason") == "candidate"):
+        return set()
+    if cl:
+        return {cl["outcome"]}
+    if block.get("kind") == "judgement":
+        return {"NEEDS-YOUR-EYES", "FOUNDER-CONFIRMED", "FAILED"} if polarity == "acceptance" else {"NEEDS-YOUR-EYES"}
+    # a command that never produced an rc: no sandbox, a refused token, or an unreadable wrapper result
+    return {"SKIP-NOSANDBOX", "INVALID", "BLOCK-REJECTED"}
+
+
 def cmd_log(a):
-    v = _load_json(a.verify_json, "the verify record")
+    dg = []
+    v = _load_json(a.verify_json, "the verify record", dg)
     if v is None:
         return 2
     cl = {}
@@ -962,6 +1007,11 @@ def cmd_log(a):
         cl = _load_json(a.classify_json, "the classify record")
         if cl is None:
             return 2
+        if (cl.get("outcome") not in CLASSIFY_OUTCOMES or cl.get("polarity") != a.polarity
+                or cl.get("verify_sha256") != dg[0] or cl.get("hash") != str(v.get("hash", ""))
+                or cl.get("head_sha") != str(v.get("head_sha", ""))):
+            print("refused: the classify record does not belong to this verify record and polarity", file=sys.stderr)
+            return 3
     block = v.get("block") if isinstance(v.get("block"), dict) else {}
     h = str(v.get("hash", ""))
     sha = str(v.get("head_sha", ""))
@@ -978,6 +1028,11 @@ def cmd_log(a):
             return 3
         if outcome in HEADLESS_STOPS or (outcome == "SKIP-NOSANDBOX" and block):
             underlying, outcome = outcome, "STOPPED-AWAITING-FOUNDER"
+    allowed = _derivable(v, cl, a.polarity)
+    measured = underlying if outcome in ("OVERRIDDEN", "STOPPED-AWAITING-FOUNDER") else outcome
+    if measured not in allowed:
+        print(f"refused: the records do not support recording {measured or 'this outcome'} here", file=sys.stderr)
+        return 3
     if outcome == "OVERRIDDEN":
         if not reason:
             print("refused: an override needs a one-line reason", file=sys.stderr)
@@ -1105,6 +1160,7 @@ def build_parser():
     c.add_argument("--polarity", choices=("baseline", "acceptance"), required=True)
     c.add_argument("--rc", type=int, required=True)
     c.add_argument("--control-rc", type=int, required=True, help="rc of the `true` health-control run through the same wrapper")
+    c.add_argument("--command-file", required=True, help="the command text the wrapper actually ran; it must equal the approved command")
     c.add_argument("--stdout-file")
     c.add_argument("--out")
     c.set_defaults(fn=cmd_classify)
@@ -1140,12 +1196,46 @@ def build_parser():
     return p
 
 
+_OUTPUT_FLAGS = ("--out", "--command-out")
+
+
+def _clear_outputs(argv):
+    """Remove the files a run is about to write, BEFORE argument parsing. A stale decision record or
+    command file from an earlier run must never survive a run that dies early (a usage error, a
+    crash): an absent file is a refusal downstream, a stale one is somebody else's verdict."""
+    if not argv or argv[0] not in ("verify", "classify"):
+        return
+    paths = []
+    for i, tok in enumerate(argv[1:], 1):
+        for flag in _OUTPUT_FLAGS:
+            if tok == flag and i + 1 < len(argv):
+                paths.append(argv[i + 1])
+            elif tok.startswith(flag + "="):
+                paths.append(tok[len(flag) + 1:])
+    for p in paths:
+        try:
+            if os.path.islink(p) or os.path.isfile(p):
+                os.unlink(p)
+        except OSError:
+            pass
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    _clear_outputs(argv)
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)
     except Exception as e:  # a traceback is an unreadable verdict: print a one-line FAIL and a distinct rc
-        print(json.dumps({"outcome": "FAIL", "reason": "internal-error", "detail": f"{type(e).__name__}: {str(e)[:120]}"}))
+        line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "detail": f"{type(e).__name__}: {str(e)[:120]}"})
+        out = getattr(args, "out", None)
+        if out:
+            try:
+                with open(out, "w", encoding="utf-8") as fh:
+                    fh.write(line + "\n")
+            except OSError:
+                pass
+        print(line)
         return 4
 
 

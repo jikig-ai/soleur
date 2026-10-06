@@ -61,22 +61,28 @@ Step 10.5 is a fenced block an agent follows, not a callable, so reuse is by wra
 adds three things and changes nothing inside the fence. This file carries no sandbox arguments and
 the script holds none: a second copy of the fence would drift from the first.
 
-Run as one Bash call. `<Step 10.5 …>` stands for the fence copied exactly as written:
+Run as one Bash call. `<Step 10.5 …>` stands for the fence copied exactly as written. The wrapper
+writes the two files `classify` reads (what it ran, and what it printed) itself, so the agent never
+transcribes either:
 
 ```text
 : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # 1. Step 10.5 calls sanitize before it defines it on its failure branches, so define it first.
 sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
-# 2. The approved command, read from the file verify wrote. It is never typed into a shell word.
+# 2. A file left by an earlier run must never be read as this run's.
+rm -f "$PREFLIGHT_TMP/founder-check-ran.txt" "$PREFLIGHT_TMP/founder-check-stdout.txt"
+# 3. The approved command, read from the file verify wrote. It is never typed into a shell word.
 CMD="$(cat "$PREFLIGHT_TMP/founder-check-cmd.txt")"
-# 3. The fence runs inside a command substitution, so its `exit` branches end only the subshell.
+# 4. The fence runs inside a command substitution, so its `exit` branches end only the subshell.
 OUT=$(
   <Step 10.5 exactly as written: from the shell-active-token reject through DT_STDOUT_SAFE>
+  printf '%s' "$CMD" > "$PREFLIGHT_TMP/founder-check-ran.txt"
+  printf '%s' "$DT_STDOUT_SAFE" > "$PREFLIGHT_TMP/founder-check-stdout.txt"
   printf '\nFC_RC:%s\n' "$DT_RC"
   printf 'FC_STDOUT:%s\n' "$DT_STDOUT_SAFE"
 )
-# 4. Check 10's fleet marker must not count Check 13's dark runs as Check 10's.
+# 5. Check 10's fleet marker must not count Check 13's dark runs as Check 10's.
 printf '%s\n' "$OUT" | sed 's/SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX/SOLEUR_FOUNDER_CHECK_NOSANDBOX/g'
 ```
 
@@ -89,21 +95,24 @@ Map what comes back. Check 10's labelled lines are dropped for the same reason a
 | `FAIL: … shell-active token` | the approved command carries a token Step 10.5 refuses | **BLOCK-REJECTED**, never run |
 | anything else | the wrapper printed a shape this table does not know | **INVALID**. Print the output. A run that produced no `FC_RC:` line is never a pass |
 
-Run the wrapper once with `CMD` set to `true` first (the **sandbox-health control**). It must
-return `FC_RC:0`; keep its rc as `<control rc>`. bwrap's own runtime errors surface as an ordinary
-rc 1, and without this control a broken sandbox would read as "the check failed, as expected".
-`classify` takes the control's rc and answers `INVALID` at both polarities when it is not 0.
+Run the wrapper once as the **sandbox-health control** first: the same text with the two lines
+from step 2 and step 3 replaced by the single line `CMD=true`, so it reads no file and writes none.
+It must return `FC_RC:0`; keep its rc as `<control rc>`. bwrap's own runtime errors surface as an
+ordinary rc 1, and without this control a broken sandbox would read as "the check failed, as
+expected". `classify` takes the control's rc and answers `INVALID` at both polarities when it is
+not 0. The control is never typed anywhere but inside the wrapper text.
 
 ## 3. Classify and log
 
-Write the sanitized `FC_STDOUT` text to `$PREFLIGHT_TMP/founder-check-stdout.txt`, then hand rc and
-the file to the one chokepoint. Expected text, command and first word all come from the verify
-record, never from this call:
+The wrapper has already written `founder-check-ran.txt` (the command it ran) and
+`founder-check-stdout.txt` (the sanitized output). Hand `classify` the rc and both files. Expected
+text and first word come from the verify record, and `classify` refuses a ran-command file that is
+not byte-for-byte the approved command, so a run of anything else cannot be classified:
 
 ```bash
 : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" classify --verify-json "$PREFLIGHT_TMP/founder-check-verify.json" --polarity acceptance --rc <rc> --control-rc <control rc> --stdout-file "$PREFLIGHT_TMP/founder-check-stdout.txt" --out "$PREFLIGHT_TMP/founder-check-classify.json"
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" classify --verify-json "$PREFLIGHT_TMP/founder-check-verify.json" --polarity acceptance --rc <rc> --control-rc <control rc> --command-file "$PREFLIGHT_TMP/founder-check-ran.txt" --stdout-file "$PREFLIGHT_TMP/founder-check-stdout.txt" --out "$PREFLIGHT_TMP/founder-check-classify.json"
 ```
 
 `outcome` is `PASSED`, `FAILED` or `INVALID`. Record it (section 6), then print:
@@ -168,7 +177,10 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" log --
 FC_REASON_7f3a
 ```
 
-Leave out `--classify-json` when no classification ran, `--underlying` and `--reason-stdin` (with its
+`log` records what the records support and nothing else: it refuses an outcome that the verify and
+classify records do not show (a PASSED over a FAILED classification, a FAILED override of a changed
+check, any row from a classify record made against another verify record). Leave out
+`--classify-json` when no classification ran, `--underlying` and `--reason-stdin` (with its
 heredoc) unless the outcome is `OVERRIDDEN`. The log path is derived from the branch and follows
 the spec directory when compound archives it. The row holds the command, rc, outcome, the commit
 tested, the block hash and the reason, and **never any output text**: a scrubber for secret shapes
