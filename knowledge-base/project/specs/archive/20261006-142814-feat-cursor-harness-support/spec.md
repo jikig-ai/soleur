@@ -6,7 +6,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 status: spec
 date: 2026-10-06
-brainstorm: knowledge-base/project/brainstorms/2026-10-06-cursor-harness-support-brainstorm.md
+brainstorm: knowledge-base/project/brainstorms/archive/20261006-142814-2026-10-06-cursor-harness-support-brainstorm.md
 ---
 
 # Feature: Cursor CLI harness support
