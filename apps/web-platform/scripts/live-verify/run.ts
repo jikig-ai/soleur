@@ -877,6 +877,16 @@ export async function assertRailRowVisible(
     };
   }
 
+  // One last direct-arm read before spending the reload: the app's own
+  // delivery arms may have landed the row DURING the scope probe. Crediting
+  // that arrival to `via=reload` would over-count the very signal
+  // (own-arms-miss) the measurement exists to track.
+  const lastDirect = await readOnce();
+  if (lastDirect === "visible") {
+    return { kind: "appeared", via: "direct", elapsedMs: Date.now() - started, checks };
+  }
+  if (lastDirect === "dead") return unverifiable();
+
   // Phase B — RECOVER: exactly one reload (the mount-time fetch is a real
   // path no event wiring can fake; a second reload would repeat the same
   // draw), then observe to the total ceiling.

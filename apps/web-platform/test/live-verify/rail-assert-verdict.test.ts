@@ -31,13 +31,18 @@ const FAST = {
 } as const;
 
 /** Minimal railRow locator: only isVisible(), scripted per call. */
-function fakeRailRow(opts: { seq?: boolean[]; err?: Error }) {
+function fakeRailRow(opts: {
+  seq?: boolean[];
+  err?: Error;
+  visibleWhen?: () => boolean;
+}) {
   let i = 0;
   let calls = 0;
   const railRow = {
     isVisible: async () => {
       calls++;
       if (opts.err) throw opts.err;
+      if (opts.visibleWhen) return opts.visibleWhen();
       const seq = opts.seq ?? [false];
       const v = seq[Math.min(i, seq.length - 1)];
       i++;
@@ -121,10 +126,15 @@ const nav = () => ({ status: () => 200 });
 function deps(over: {
   seq?: boolean[];
   railRowErr?: Error;
+  visibleWhen?: () => boolean;
   page?: ReturnType<typeof fakePage>;
   supabase?: ReturnType<typeof fakeSupabase>;
 }) {
-  const row = fakeRailRow({ seq: over.seq, err: over.railRowErr });
+  const row = fakeRailRow({
+    seq: over.seq,
+    err: over.railRowErr,
+    visibleWhen: over.visibleWhen,
+  });
   return {
     seam: {
       railRow: row.railRow,
@@ -165,14 +175,10 @@ describe("assertRailRowVisible (#9581) — the observe arm", () => {
 
   it("returns appeared via=reload when the row lands only after the reload draw", async () => {
     const reloadCalls = { n: 0 };
-    // false for the whole observe window, then true only post-reload. With
-    // pollMs=2 / observeMs=60 the observe phase consumes ~30 reads, so a long
-    // false prefix covers it without timing arithmetic in the fixture.
+    // Deterministic: isVisible() flips true only once page.reload() ran —
+    // no timing arithmetic in the fixture.
     const { seam } = deps({
-      seq: [
-        ...Array.from({ length: 40 }, () => false),
-        true,
-      ],
+      visibleWhen: () => reloadCalls.n > 0,
       page: fakePage({ reloadCalls }),
     });
     const v = await assertRailRowVisible(seam);
@@ -183,6 +189,21 @@ describe("assertRailRowVisible (#9581) — the observe arm", () => {
     const line = emitLine(railVerdictToResult(v, CONV_ID));
     expect(line).toContain("via=reload");
     expect(line).toContain("elapsed=");
+  });
+
+  it("attributes a row that lands during the scope probe to via=direct — not to the reload it never needed", async () => {
+    const reloadCalls = { n: 0 };
+    const rpcCalls = { n: 0 };
+    const { seam } = deps({
+      // The row appears only once the RPC probe has run — modeling the app's
+      // own delivery arms landing it during the probe window.
+      visibleWhen: () => rpcCalls.n > 0,
+      page: fakePage({ reloadCalls }),
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }], calls: rpcCalls }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v).toMatchObject({ kind: "appeared", via: "direct" });
+    expect(reloadCalls.n).toBe(0);
   });
 });
 
