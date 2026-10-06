@@ -1,0 +1,52 @@
+name: registration-narrowing re-evaluation watch
+
+# Weekly watcher for the re-evaluation trigger on the deferred registration-only
+# narrowing tracker (#9564). NOTIFY-ONLY: it posts ONE comment on that tracker when
+# part (a) of the trigger first holds (see scripts/watch-registration-narrowing-9564.sh
+# for the exact measurement) and never closes, reopens, relabels or edits it.
+#
+# WHY a dedicated workflow and not a follow-through sweeper tracker: the sweeper
+# comments on every non-pass verdict with no per-verdict dedup, so a notify-only
+# probe would comment on every sweep; the follow-through convention directs that
+# shape to a dedicated scheduled workflow plus a back-reference. Placement follows
+# ADR-033 (repo-scoped GitHub Actions, default token only: a `git log` count and one
+# issue comment, no app context, no app secret).
+#
+# SELF-DISABLE: once the tracker is not OPEN, every run is a cheap no-op.
+#
+# RETIREMENT: when #9564 is built or abandoned, delete every site below in one PR:
+#   - .github/workflows/registration-narrowing-watch.yml (this file)
+#   - scripts/watch-registration-narrowing-9564.sh and scripts/watch-registration-narrowing-9564.test.sh
+#   - the run_suite line for that suite in scripts/test-all.sh
+#   - its rows in scripts/suite-durations.tsv and scripts/suite-shard-legs.tsv
+#   - the pointer comment on the tracker
+#
+# To test manually: gh workflow run registration-narrowing-watch.yml
+
+on:
+  schedule:
+    - cron: '17 9 * * 1' # Mondays 09:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: registration-narrowing-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Count registration-shaped runner commits and notify once at the threshold
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/watch-registration-narrowing-9564.sh

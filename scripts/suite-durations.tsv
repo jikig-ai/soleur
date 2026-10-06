@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-06T14:11:14Z
+# generated-at=2026-10-06T18:39:25Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -460,6 +460,7 @@ scripts/tunnel-connector-census	134	measured
 scripts/verify-lockfile-guards	104	measured
 scripts/verify-marketplace-ruleset	1400	measured
 scripts/watch-live-verify-pass	204	measured
+scripts/watch-registration-narrowing-9564	996	floor
 scripts/watchdog-arm-soak-9237	2235	measured
 scripts/web-fresh-boot-zot-8651	447	measured
 scripts/web-host-escrow-preflight	979	floor

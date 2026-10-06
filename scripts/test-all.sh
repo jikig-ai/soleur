@@ -4962,6 +4962,7 @@ if want_scripts; then
   # exits 0 on any readable register and 2 on one it cannot parse, which is the code property.
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
+  run_suite "scripts/watch-registration-narrowing-9564" bash scripts/watch-registration-narrowing-9564.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   # Guard 2 (#7500): the sink-side credential scrub before PUBLIC publication. Registered
