@@ -277,7 +277,7 @@ fi
 
 # Install stub `gh` / `curl` into the sandbox and run with tokens set,
 # capturing stdout. Passing a token here is what selects the live arm.
-run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body>
+run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body> [sentry-token]
   local dir="$1" gh_body="$2" curl_body="$3"
   mkdir -p "$dir/bin"
   printf '#!/usr/bin/env bash\n%s\n' "$gh_body" > "$dir/bin/gh"
@@ -288,7 +288,7 @@ run_probe_out() { # run_probe_out <dir> <gh-stub-body> <curl-stub-body>
       BETTERSTACK_QUERY_HOST=h \
       BETTERSTACK_QUERY_USERNAME=u \
       BETTERSTACK_QUERY_PASSWORD=p \
-      GH_TOKEN=t SENTRY_ACTIONS_RO_TOKEN=s \
+      GH_TOKEN=t SENTRY_ACTIONS_RO_TOKEN="${4:-s}" \
       bash scripts/followthroughs/anthropic-admin-key-6297.sh 2>&1 )
 }
 
@@ -334,6 +334,45 @@ d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_401")
 check_out "$out" "Sentry cross-check inconclusive" "Sentry 401 → inconclusive, not a substantive zero"
 check_no_out "$out" "NOT decisive" "a 401 does not render the zero-events verdict"
+
+# 10b — the Sentry bearer must reach curl on STDIN (--config -), never on argv (#7797: argv is
+#       world-readable via /proc/<pid>/cmdline). The recording stub captures argv NUL-delimited
+#       and stdin; the assertions are that the token is ABSENT from argv and PRESENT on stdin as
+#       a config-file header line. Never loosen this to accept either channel.
+CURL_REC='n=$(ls curl.argv.* 2>/dev/null | wc -l)
+printf "%s\0" "$@" > "curl.argv.$n"
+cat > "curl.stdin.$n"
+echo "{\"data\":[{\"count()\":0}]}"'
+SENTRY_FAKE="FAKESENTRYTOKEN.abc-123_x"
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$SENTRY_FAKE")
+if [[ -e "$d/curl.argv.0" ]] && ! tr '\0' '\n' < "$d/curl.argv.0" | grep -qF -- "$SENTRY_FAKE"; then
+  pass "Sentry bearer is ABSENT from curl argv"
+else
+  fail "Sentry bearer is ABSENT from curl argv — curl not called or token found on argv"
+fi
+if [[ -e "$d/curl.stdin.0" ]] && grep -qxF -- "header = \"Authorization: Bearer ${SENTRY_FAKE}\"" "$d/curl.stdin.0"; then
+  pass "Sentry bearer arrives on curl stdin as a config header line"
+else
+  fail "Sentry bearer arrives on curl stdin as a config header line — not found on stdin"
+fi
+if [[ -e "$d/curl.argv.0" ]] && [[ "$(tr '\0' '\n' < "$d/curl.argv.0" | head -1)" == "--disable" ]] \
+   && tr '\0' '\n' < "$d/curl.argv.0" | grep -qxF -- "--config"; then
+  pass "curl keeps --disable first and reads --config -"
+else
+  fail "curl keeps --disable first and reads --config - — argv shape wrong"
+fi
+
+# 10c — a token with a newline (curl config-directive injection) or an unset token yields ZERO curl
+#       calls and the cross-check is skipped; the verdict stays TRANSIENT (exit 2), never PASS.
+BAD_TOK=$(printf 'FAKE\nurl = evil')
+f=$(mktmp -t ft.XXXXXXXX); : > "$f"
+d=$(make_sandbox "$f")
+out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$BAD_TOK")
+if [[ ! -e "$d/curl.argv.0" ]]; then pass "newline-bearing Sentry token → zero curl calls"; else fail "newline-bearing Sentry token → zero curl calls — curl was called"; fi
+check_out "$out" "Sentry cross-check skipped" "newline-bearing Sentry token → cross-check skipped"
+check_no_out "$out" "PASS:" "newline-bearing Sentry token never yields PASS"
 
 # 11 — the stall bound actually fires. A probe that shrugs identically forever
 #      is the decayed-dark-state defect #6297 exists to remove.

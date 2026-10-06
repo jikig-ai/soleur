@@ -24,9 +24,9 @@ Per-file recipe (every conversion phase): (a) if the file fails `python3 scripts
 
 ## Phase 2: scripts/followthroughs (20 files)
 
-- [ ] 2.1 Prerequisites: `autovacuum-thrash-6168`, `concurrency-slot-wal-backoff`, `l3-probe-armed-6438`, `web2-standby-soak-6459` (re-run battery 401 row)
-- [ ] 2.2 Convert all 20 probes (curl invocation + token-shape guard in place of the `-z` guard)
-- [ ] 2.3 Gates: battery, `lint-followthrough-varq-ban.sh`, `followthrough-exec-bit.test.sh`, `sweep-followthroughs.test.sh`, probe-owned tests
+- [x] 2.1 Prerequisites: `autovacuum-thrash-6168`, `concurrency-slot-wal-backoff`, `l3-probe-armed-6438`, `web2-standby-soak-6459` (re-run battery 401 row)
+- [x] 2.2 Convert all 20 probes (curl invocation + token-shape guard in place of the `-z` guard)
+- [x] 2.3 Gates: battery, `lint-followthrough-varq-ban.sh`, `followthrough-exec-bit.test.sh`, `sweep-followthroughs.test.sh`, probe-owned tests
 
 ## Phase 3: scripts/*.sh (6 files after pilots)
 
