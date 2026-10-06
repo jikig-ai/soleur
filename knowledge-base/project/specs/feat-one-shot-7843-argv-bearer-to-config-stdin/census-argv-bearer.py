@@ -32,7 +32,8 @@ def tracked():
 BEARER = re.compile(r"Authorization:\s*Bearer")
 HFLAG = re.compile(r"(?:-H|--header)\s+\\?[\"']?")
 STDIN_FORM = re.compile(r"(?:-H|--header)\s+@")
-CFG_LINE = re.compile(r"header\s*=\s*\"Authorization:\s*Bearer")
+# An optional backslash: printed or generated command text escapes the quote (header = \"Authorization: ...).
+CFG_LINE = re.compile(r"header\s*=\s*\\?\"Authorization:\s*Bearer")
 
 def logical(lines):
     i = 0
