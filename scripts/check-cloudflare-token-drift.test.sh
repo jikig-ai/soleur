@@ -42,7 +42,7 @@ FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-TMP=$(mktemp -d) || { echo "FATAL: could not create sandbox"; exit 2; }
+TMP=$(mktemp -d /var/tmp/ctd.XXXXXXXX) || { echo "FATAL: could not create sandbox"; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 STUB_DIR="$TMP/bin"
 mkdir -p "$STUB_DIR" || { echo "FATAL: could not create stub dir"; exit 2; }
@@ -388,7 +388,7 @@ MASK_SNAPSHOT=""
 run_sut() {
   local label="$1" http_code="$2" secrets_body="$3" configs_body="${4:-prd}" only_arg="${5:-}"
   local cfgs="$TMP/$label.configs" secs="$TMP/$label.secrets"
-  OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"; DOPPLER_LOG="$TMP/$label.doppler"
+  OUT="$TMP/$label.out"; CURL_LOG="$TMP/$label.curl"; DOPPLER_LOG="$TMP/$label.doppler"; CURL_STDIN_LOG="$TMP/$label.curlstdin"
   DOPPLER_ENV_LOG="$TMP/$label.dopplerenv"; CURL_ENV_LOG="$TMP/$label.curlenv"
   GH_OUTPUT="$TMP/$label.ghoutput"; MASK_SNAPSHOT="$TMP/$label.masksnap"
   MASK_SNAPSHOT_DOPPLER="$TMP/$label.masksnapdop"
@@ -400,7 +400,7 @@ run_sut() {
   printf '%s\n' "$configs_body" > "$cfgs" || { echo "FATAL: fixture write failed"; exit 2; }
   printf '%s\n' "$secrets_body" > "$secs" || { echo "FATAL: fixture write failed"; exit 2; }
   : > "$CURL_LOG"
-  CURL_STDIN_LOG="$TMP/$label.curlstdin"; : > "$CURL_STDIN_LOG"
+  : > "$CURL_STDIN_LOG"
   # THE CREDENTIAL, declared per case rather than inherited. `unset` and `empty` are
   # DIFFERENT states to a shell and the same state to the Doppler CLI (which treats an
   # empty value as absent and rebinds to the ambient credential), so both are expressible.

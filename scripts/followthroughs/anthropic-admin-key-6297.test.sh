@@ -344,7 +344,7 @@ printf "%s\0" "$@" > "curl.argv.$n"
 cat > "curl.stdin.$n"
 echo "{\"data\":[{\"count()\":0}]}"'
 SENTRY_FAKE="FAKESENTRYTOKEN.abc-123_x"
-f=$(mktmp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX)
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$SENTRY_FAKE")
 if [[ -e "$d/curl.argv.0" ]] && ! tr '\0' '\n' < "$d/curl.argv.0" | grep -qF -- "$SENTRY_FAKE"; then
@@ -367,7 +367,7 @@ fi
 # 10c — a token with a newline (curl config-directive injection) or an unset token yields ZERO curl
 #       calls and the cross-check is skipped; the verdict stays TRANSIENT (exit 2), never PASS.
 BAD_TOK=$(printf 'FAKE\nurl = evil')
-f=$(mktmp -t ft.XXXXXXXX); : > "$f"
+f=$(mktmp -t ft.XXXXXXXX)
 d=$(make_sandbox "$f")
 out=$(run_probe_out "$d" "$GH_ZERO" "$CURL_REC" "$BAD_TOK")
 if [[ ! -e "$d/curl.argv.0" ]]; then pass "newline-bearing Sentry token → zero curl calls"; else fail "newline-bearing Sentry token → zero curl calls — curl was called"; fi
