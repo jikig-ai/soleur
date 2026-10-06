@@ -44,7 +44,7 @@ From the merge of #7122, for `cron-community-monitor` only (technical record: AD
    reference. The digest no longer carries Top Contributors, Community Interactions, stargazer usernames, quoted excerpts or free-text
    prose.
 3. **The agent has no write or publication capability and no GitHub write credential during its run.** No file tools, no `gh`
-   publication verb, fourteen read-only collector invocations, a strict argument grammar on every command, a READ-scoped
+   publication verb, thirteen exact-literal read-only collector invocations (no agent-chosen argument of any kind), a READ-scoped
    installation token for the clone and the spawn; the GitHub write token is minted only after the spawn. The Discord, Bluesky, X
    and LinkedIn credentials that the read collectors need, several of them posting credentials, **remain in the spawn
    environment** (ADR-272 residual (g)); the agent cannot use them to publish because it has no posting verb, file tool or
@@ -119,13 +119,14 @@ first draft's `discord members` verb also placed up to 1000 member objects in th
 The ADR's first draft recorded these arguments as accepted residual (e) on the premise that the agent "holds no secret in
 context"; that premise was false.
 
-Fixed before merge, in two independent controls: (i) for a cron carrying the `no-file-tools` directive the hook requires every
+Fixed before merge, in independent controls: (0) in a second review round the hook was tightened further so each command segment must equal an allowlist line token-for-token (only a numeric Discord channel id varies), which also pins the HN query word; (i) for a cron carrying the `no-file-tools` directive the hook requires every
 token of every command segment to match `[A-Za-z0-9._:=@/+-]+` on the raw text; (ii) the platform scripts validate their numeric
-operands and pass the HN query through `sys.argv`. `discord members` and `hn trending` were removed from the allowlist (fourteen
+operands and pass the HN query through `sys.argv`. `discord members`, `hn trending` and `linkedin fetch-activity` were removed from the allowlist (thirteen
 verbs remain). A related finding (agent-planted `.git` state reaching the handler's git steps) is closed by sanitising `.git`,
 disabling hooks, fsmonitor and attributes, staging filter-free and requiring the staged bytes to equal the handler's rendered
-bytes. Residual (e) is rewritten in ADR-272: narrowed, not closed, because a grammar-conforming `--query` token can still reach
-`hn.algolia.com`. This is recorded here as a review event, not as a determination.
+bytes (the second round also made the handler refuse to push anything but one commit on the fetched origin tip, and removed replace refs, commondir and alternates
+the agent could plant). Residual (e) is rewritten in ADR-272: with the HN query pinned to a literal, no agent-chosen string can reach `hn.algolia.com` through an
+argument. This is recorded here as a review event, not as a determination.
 
 ## 7. Re-evaluation triggers
 

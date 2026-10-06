@@ -235,6 +235,8 @@ counsel assesses the absence of a human gate as unacceptable at any volume.
 >   withdrawn: the exposure R4 described is **narrowed** for future output, and whether that substitutes for R4 is for
 >   counsel at #7119. This PR closes issue #7122; `cron-daily-triage` stays OPEN under #9606.
 
+> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-272 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
+
 **(c) The already-published corpus cannot be erased.** 80 digests, 45 with the commenter
 table, 65 naming stargazers, on a public repository with two forks, with zero deletions ever.
 No remediation reaches this: R1–R4 govern future runs only. *There is no recovery path.* The

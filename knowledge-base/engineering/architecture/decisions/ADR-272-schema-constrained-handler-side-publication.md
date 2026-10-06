@@ -72,30 +72,29 @@ the absence of the credential. For `cron-community-monitor` this means:
    there is no free-text field. The renderer turns a validated draft into the digest file and the issue body from fixed
    templates, so the set of publishable strings is a finite template family and model output selects values within it. The
    schema carries no direct identifier; counts can still single a person out (see residual (a) and the attestation).
-   Two rendering rules came out of review. **The period is handler-owned:** `COMMUNITY_PERIOD_DAYS = 1` is a constant, there is
-   no `periodDays` field, and `period_start`/`period_end` are derived from the run date, so the model cannot present a number
-   measured over one day as a week's. **Metrics are not rendered for a failed or disabled platform** (a 0 there is not a
+   Three rendering rules came out of review. **(4a) The period is handler-owned and honest:** there is no `periodDays` field. The collectors do NOT share a window: the five GitHub verbs take a 1-day argument (`COMMUNITY_PERIOD_DAYS`, GitHub only), Hacker News mentions look back 7 days, Discord returns the latest 50 messages per channel (a ceiling, not a daily volume), and X, Bluesky and LinkedIn are totals as of collection. The render states exactly that in a fixed constant (`COMMUNITY_WINDOWS_NOTE`) instead of one "Last 1 day" label, and `generated_at` is the run's own start instant at second precision. **An all-zero guard:** a `collected` platform with more than one metric whose every value is 0 renders as `partial (unverified: all values 0)`; a single-metric platform (Hacker News) at 0 is a legitimate quiet day and renders as measured. **Metrics are not rendered for a failed or disabled platform** (a 0 there is not a
    measurement); a `partial` platform renders its numbers under an explicit label saying a 0 may mean unavailable.
 2. **No write primitive, no publication verb, no code-execution path.** A per-cron hook directive `no-file-tools` (the ADR-058
    file-driven pattern, produced by the substrate from `CRON_NO_FILE_TOOLS`) makes the containment hook deny `Read`, `Glob`,
    `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent` and `Skill`; `NotebookEdit` is already denied by the hook's catch-all.
-   The Bash allowlist becomes `COMMUNITY_ROUTER_READ_VERBS`, **fourteen** literal read invocations; `gh issue create|comment|list`,
+   The Bash allowlist becomes `COMMUNITY_ROUTER_READ_VERBS`, **thirteen** exact-literal read invocations (round-1 review also dropped `linkedin fetch-activity`, which feeds no schema field); `gh issue create|comment|list`,
    `gh label create|list` and the bare router prefix are gone. The three router posting verbs (`bsky post`,
    `linkedin post-content`, `x post-tweet`) therefore stop being inert only by an env convention and become hook-denied.
    `runHookSelfTest` probes the deny before each spawn. Review removed two verbs from the sixteen the first draft carried:
    `discord members` (a payload of up to 1000 member objects, and the member count is already available from `guild-info`) and
    `hn trending` (no schema field consumes it).
-   **Trailing arguments are not inert data, so the grammar is strict and the scripts validate (review finding, P1).** The
+   **Trailing arguments are not inert data, so commands are exact literals and the scripts validate (review finding, P1; tightened in round 1).** The
    allowlist matches a verb prefix and the hook's metacharacter screen strips single-quoted spans, so the arguments after an
    allowed verb were never inspected. They reached live interpreters: a single-quoted `HOME[$(cmd)]` was evaluated by bash
    arithmetic in the Discord script (`(( limit ))`, `$(( limit ))`), and an HN `--query` value was interpolated into
-   `python3 -c` source. Either ran with the full spawn environment. Two controls close it. **(i)** For a cron carrying
+   `python3 -c` source. Either ran with the full spawn environment. Three controls close it. **(0)** (round 1) For a cron carrying `no-file-tools` each `;`/`&&` segment must equal one allowlist line token-for-token, with a single placeholder `<uint>` (`^(0|[1-9][0-9]*)$`) for the Discord channel id; no trailing argument of any kind is accepted, so `hn mentions --query soleur --limit 20` is the only HN command and the query word is pinned. **(i)** The token charset check stays as a second layer: for a cron carrying
    `no-file-tools`, `strictArgumentGrammarReason` requires every whitespace-separated token of every `;`/`&&` segment to match
    `[A-Za-z0-9._:=@/+-]+`, checked on the RAW command text before quote-stripping or tokenizing, with a fixed deny reason that
    echoes nothing from the command. **(ii)** The platform scripts validate their own operands (`require_uint` for
-   `discord messages` channel, limit and after_id and for the `hn` `--limit`; the `hn` query now reaches python through
-   `sys.argv`, never program text; error messages name the operand label and never its value). Either control alone would leave a
-   path if the other regressed, so both stay.
+   `discord messages` channel, limit and after_id (leading zeros rejected: `08` was an octal arithmetic error that exited 0 with `[]`) and for the `hn` `--limit`; the `hn` query now reaches python through
+   `sys.argv`, never program text; error messages name the operand label and never its value). Each control alone would leave a
+   path if the others regressed, so all three stay. The hook also caps the command at 8 KiB before any regex and trims by splitting, because a
+   whitespace-trim regex was quadratic (100k spaces = 25 s).
 3. **`--disallowedTools` is a second layer, and the hook is the load-bearing one.** `CLAUDE_CODE_FLAGS` adds `--disallowedTools`
    (`COMMUNITY_DISALLOWED_TOOLS`) for the same tools and `--allowedTools` becomes `Bash`. No other cron spawn passes
    `--disallowedTools`, and how it composes with a hook `allow` cannot be proved offline; the hook tests exercise only the hook,
@@ -126,15 +125,16 @@ the absence of the credential. For `cron-community-monitor` this means:
    dropped-path PR-body marker renders a count only; the other 14 callers keep prefix semantics and their marker byte for byte.
    Review found the pipeline ran git in a directory the agent had written to, so exact mode also: **(i)** passes
    `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null` on every git invocation the module
-   makes (`GIT_HARDENING_ARGS`); **(ii)** sanitises `.git` before the first git command (`sanitizeWorkspaceGit`): the config is
+   makes (`GIT_HARDENING_ARGS`), with replace refs disabled (`--no-replace-objects`); **(ii)** sanitises `.git` before the first git command (`sanitizeWorkspaceGit`): the config is
    rewritten from nothing and only `remote.origin.url` (written by `setOriginToken` after the child exited) carries over,
-   `.git/hooks` and `.git/info/attributes` are removed, and a `.git` that is a symlink or a file is refused; **(iii)** stages
+   `.git/hooks`, `.git/info/attributes`, `refs/replace/*`, `commondir`, `objects/info/alternates` and `info/grafts` are removed (round 1: git also reads these from the common dir and object store), and a `.git`, `.git/config`, `.git/info`, `.git/hooks` or `.git/objects` that is a symlink or a file is refused; **(iii)** stages
    each path as a filter-free blob (`hash-object --no-filters` + `update-index`, never `git add`) and refuses anything but a
    regular file; **(iv)** takes `expectedContent` (path to the handler's rendered bytes) and, after staging and before the
    commit, reads the index blob back and requires a byte-for-byte match, so a file planted at the exact path cannot ride the
-   commit; the refusal is stage `integrity` with a closed-vocabulary reason and no bytes in any message; **(v)** on the
-   replay-resume arm pushes a pre-existing branch only if it is exactly one commit touching only `exactPaths` whose blob equals
-   `expectedContent` (a planted branch is refused). This backs up the `no-file-tools` control and was reachable in practice only
+   commit; the refusal is stage `integrity` with a closed-vocabulary reason and no bytes in any message; **(v)** before EVERY push (the fresh commit and a replay-resume of a pre-existing branch alike) requires HEAD to be exactly one commit
+   on the freshly fetched origin tip, whose diff (renames NOT detected, so a rename pairing fails) is only added or modified regular
+   files at `exactPaths` with blobs equal to `expectedContent`, authored and committed by the bot (a planted branch or an agent
+   commit riding along is refused). `expectedContent` is REQUIRED in exact mode. This backs up the `no-file-tools` control and was reachable in practice only
    through the argument path of item 2.
 6. **Failure path publishes no model output.** `ensureScheduledAuditIssue` takes `withholdModelOutput`; community passes true, so
    both tail rows render a fixed notice and Sentry keeps the redacted tail. The rejection report
@@ -148,10 +148,11 @@ the absence of the credential. For `cron-community-monitor` this means:
    `patch-digest-notice` step keyed on the OUTCOME (`published !== undefined && !livenessOk && !commitNoChanges`) PATCHes the
    issue body to a handler constant (`digest not committed - see Sentry`). It covers a throw out of `safe-commit-pr`, a failed or
    unverified commit, a throw between publish and commit, and a skipped persistence; the one exception is `no-changes`, where the
-   identical file is already on main and the link is valid. The PATCH is body-only, never reopens, and its own failure is
-   reported (`community-publication-notice-failed`) and never masks the verdict.
+   identical file is already on main and the link is valid. The PATCH is body-only, never reopens, and replaces ONLY the `Digest file:` line (the validated counts survive); its own failure is
+   reported (`community-publication-notice-failed`) and never masks the verdict. `verify-output` runs after persistence, only for a
+   created issue, in its own try/catch: it is telemetry and can neither gate nor fail the run.
 9. **Bot identity is resolved, not defaulted.** The PATCH-target author gate uses the App's `<slug>[bot]` login obtained from
-   `getAppSlug()` (GET /app), not a build-time env default. A bot-authored canonical digest for today under a *different* login
+   `getAppSlug()` (GET /app, 5 s timeout). Only a slug validated from a 2xx response is cached for the process; a fallback to the env value is returned but never cached, so one transient failure cannot pin a wrong login until restart. A bot-authored canonical digest for today under a *different* login
    is not overwritten: the run warns (`community-publication-bot-login-mismatch`) and creates, producing a visible duplicate
    rather than a silent overwrite of an unexpected issue.
 
@@ -205,8 +206,8 @@ below for that reason.
   context are narrowed (residual (g) states what remains). **Counts can single a person out.** The fields that can do so are not
   limited to `externalContributors`, `externalInteractions` and the per-topic counts: `discord.members` and `discord.messages`
   for a private guild (a small, enumerable membership) and `github.newStargazers` can each identify an individual or an event
-  when the population is small. Because the period is fixed at one day and the digest is daily, the published series is a
-  **daily time series**, so day-over-day differences point at a specific day's actor. Mitigations are the #6695 collector-status
+  when the population is small. Because the digest is daily and several of these fields are snapshots or short windows (the collection windows differ by platform, see item 4a), the published series is
+  a **daily series**, so day-over-day differences can point at a specific day's actor. Mitigations are the #6695 collector-status
   sidecar and #7124, not this ADR.
 - **(b) The interactive `/soleur:community digest` skill** is operator-attended, not an unattended publisher, and is outside this
   threat model. It writes the same `YYYY-MM-DD-digest.md` filename, so an interactive run on a day the cron also publishes can
@@ -224,12 +225,11 @@ below for that reason.
   steered agent could execute code with the spawn environment (which includes the non-GitHub posting credentials, residual (g)).
   **Second,** in-context content was reachable by the argument path: the first draft's `discord members` verb placed up to 1000
   member objects in the agent's context, and `hn mentions --query` is an egress path to a third party (`hn.algolia.com`), so
-  members' data could have left through an argument. **Now closed on the code-execution leg** by the strict token grammar
-  (decision item 2(i)) and script-side operand validation (item 2(ii)), and `discord members` is removed. **What remains,
-  narrowed and not closed:** a `--query` token that fits the grammar charset (no spaces, no quotes) can still carry a short
-  alphanumeric string from the agent's context to Algolia in a request the egress firewall allows by host; the verbs that put
-  third-party text into context (`discord messages`, `github fetch-interactions`, `hn mentions`) are unchanged. This is the
-  same class as the integer channel in (a): bounded, covert, and dependent on an injection having steered the agent.
+  members' data could have left through an argument. **Now closed** on both legs: the code-execution leg by exact-literal commands, the token
+  grammar and script-side operand validation (decision item 2), and the egress-by-argument leg because the HN query word is a pinned
+  literal (no agent-chosen string can reach `hn.algolia.com`), `discord members` is removed, and a Discord channel id must be a number.
+  **What remains:** the verbs that put third-party text into context (`discord messages`, `github fetch-interactions`, `hn mentions`)
+  are unchanged, and the integer channel in (a) is bounded, covert and dependent on an injection having steered the agent.
 - **(f) The redacted spawn tail still reaches Sentry and alert emails.** A phishing vector aimed at the operator; it predates this
   change and is shared by every claude-eval cron. Recorded on #9606, not fixed here. The redacted final message (up to 16 KiB)
   is additionally memoized in the `claude-eval` step output for this cron (`captureFinalMessage`), which is Inngest run state,

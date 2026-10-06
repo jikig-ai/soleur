@@ -526,8 +526,8 @@ row's 9-day window) and the measurement mirror (`scripts/issue-flow-measure.sh`,
 eight crons that call `resolveOutputAwareOk` are unchanged, including the exit-0 route. The #8059 first-live-contact failure
 (an agent relabelling a digest `meta/machinery` to pass the gate) cannot recur for this cron, because the agent files nothing.
 
-**Two consequences to read with the sweeper.** The sweeper keys on title and author, not on body, so the handler's
-`digest not committed - see Sentry` notice body (the dangling-link repair in ADR-272) does not exempt that issue: it is closed
+**Two consequences to read with the sweeper.** The sweeper keys on the title, the author and an audit-stub body prefix, so the handler's
+`not committed - see Sentry` notice line (the dangling-link repair in ADR-272, which replaces only the `Digest file:` line) does not exempt that issue: it is closed
 at 9 days like any report, and the closing comment's wording ("the digest file it links is committed") does not describe a
 notice issue. The `FAILED`-title and audit-self-report-body exemptions still protect the handler-authored failure issue.
 `resolveOutputAwareOk` also changes role for this cron: it is advisory telemetry after a handler write and no longer a gate

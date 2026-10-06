@@ -893,13 +893,13 @@ per-platform Sentry field to query for an accepted partial day. A platform shown
   The monitor goes RED and the digest is not committed for that run.
 - `community-publication-notice-failed`: the issue was published, the digest did not land
   (a failed or refused commit, or a throw between the two), and the follow-up PATCH that
-  replaces the issue body with `digest not committed - see Sentry` itself failed. The public
+  replaces the issue's `Digest file:` line with the fixed `not committed - see Sentry` notice itself failed. The public
   issue may still link a digest file that does not exist. Extras: `issueNumber`, `errorName`,
   `status`. Edit that one issue by hand if you want the link gone; find why the digest did not
   land from the `safe-commit-*` ops and `handler-body-threw` for the same run. When the notice
-  PATCH **succeeds** the issue body reads `digest not committed - see Sentry`, and the 9-day
-  run-report sweeper closes that issue like any other report (it keys on title and author, not
-  body), so its closing comment's "digest file it links is committed" does not apply to it.
+  PATCH **succeeds** only that line changes (the validated counts stay in the body), and the 9-day
+  run-report sweeper closes that issue like any other report (it keys on the title, the author and an audit-stub body prefix,
+  none of which the notice changes), so its closing comment's "digest file it links is committed" does not apply to it.
 - `community-publication-milestone-lookup-failed` (warn): the milestone list read failed, so
   the digest issue was created **without** a milestone. Extra `milestoneTitle`.
 - `community-publication-milestone-missing` (warn): the open milestone `Post-MVP / Later` was
