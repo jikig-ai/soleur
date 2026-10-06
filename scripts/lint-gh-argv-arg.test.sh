@@ -352,16 +352,21 @@ else
 fi
 
 # --- verdict ----------------------------------------------------------------
-TOTAL=$((PASS + FAIL))
 echo ""
-echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
+echo "Total: $((PASS + FAIL))  Pass: $PASS  Fail: $FAIL"
 
 if [[ "$FAIL" -gt 0 ]]; then
-  echo "FAILED: $FAIL assertion(s)"
+  echo "FAILED: $FAIL assertion(s)" >&2
   exit 1
 fi
+
+# Anti-vacuity floor — both operands bound on the contiguous assignment lines
+# directly above the `if` so guard-vacuity-floor's mutant slice carries them
+# (an unbound var in the slice scores CONSTRUCTION, not FIRES).
+TOTAL=$((PASS + FAIL))
+MIN_ASSERTIONS="${GH_ARGV_LINT_MIN_ASSERTIONS:-29}"
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
-  echo "FAILED: assertion count $TOTAL regressed below MIN_ASSERTIONS=$MIN_ASSERTIONS — a fixture block was deleted"
+  echo "FAILED: assertion count $TOTAL regressed below MIN_ASSERTIONS=$MIN_ASSERTIONS — a fixture block was deleted" >&2
   exit 1
 fi
 echo "All tests passed"

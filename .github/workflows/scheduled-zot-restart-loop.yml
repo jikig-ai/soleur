@@ -237,10 +237,7 @@ jobs:
             # closes.
             printf '### If the decoded cause is NON-OOM: the store is measured before anything is destroyed\n\nOn a new non-OOM tracker this alarm dispatches the read-only inventory lever (`registry-zot-inventory.yml`) itself and records the outcome in a comment below (#7377). The lever runs entirely from GitHub Actions, uses GET/HEAD with pull-only credentials, changes nothing on the host and touches no Terraform. It walks the OCI API over the existing CF-Access-gated `registry.` ingress, emits `SOLEUR_ZOT_INVENTORY` to Better Stack, reads it back before going green, and comments the line back onto this issue. Only if the comment below says the dispatch FAILED does it need re-dispatching:\n\n```\ngh workflow run registry-zot-inventory.yml -f action=inventory\n```\n\nThere is no in-place `restart` / `push-config` / `reclaim` lever, by decision (ADR-172, amendment 2026-09-28): a registry config change ships as a merge to `main` that fires a volume-preserving `registry-host-replace`. A replace reopens the LUKS store, so it is a lever for a boot problem, but it reclaims no disk.\n\n**Reading the result:** require `enumeration_complete=true` — an incomplete sweep produces a large `delta_gb` indistinguishable from the finding, and licenses no conclusion. `delta_gb` is an **upper bound on unreferenced bytes**, never a measurement of them (candidates with different remedies: zot dedupe cache DB, orphaned `.uploads/` staging) — **assert no cause from it**. A `delta_gb` under ~3 GB is not distinguishable from zero (ext4 root reserve, ~2.95 GB on 59 GB). `reason=restart_during_sweep` means zot restarted or the host was replaced while the sweep ran, so the enumeration crossed two store states; during an active crash loop that is the EXPECTED outcome (the run reads red, the marker is still recorded), so read `enumeration_complete` and treat `delta_gb` as crossing a restart. A restart-only remedy is refuted on the evidence: zot has already restarted 15,640 times into the same full volume. See `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` and ADR-172.\n'
           } > "$BODY_FILE"
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')"; then
-            echo "::error::zot-restart-loop: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
-            EXISTING=""
-          fi
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-restart-loop: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still looping at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
           else
@@ -293,10 +290,7 @@ jobs:
             printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_ZOT_DISK` rows in the last 24h, but NONE in the recent 3h window. The token-gated reporter stopped while the token-free disk heartbeat (`soleur-registry-disk-prd`) AND this alarm'\''s Sentry monitor both stay GREEN — the exact GREEN-while-broken blind spot this alarm exists to kill, resurfacing one layer up. The restart-loop signal is now UNOBSERVABLE until the reporter is restored.\n\n'
             printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_ZOT_DISK --limit 5\n```\n2. Most likely: `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotation/revocation or a Better Stack ingest outage. The reporter cron is wrapped in `doppler run --project soleur-registry --config prd` (cloud-init-registry.yml); a re-`registry-host-replace` re-injects the token. See `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
           } > "$BODY_FILE"
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')"; then
-            echo "::error::zot-telemetry-silent: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
-            EXISTING=""
-          fi
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::zot-telemetry-silent: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Reporter still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
           else
@@ -435,10 +429,7 @@ jobs:
             printf '### Reproduce (no SSH)\n\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_PRIVATE_NIC --limit 50\ndoppler run -p soleur -c prd_terraform -- bash scripts/zot-restart-loop-alarm.sh\n```\n\n'
             printf '### Remediation (no SSH)\n\nThe host is ForceNew and has no SSH provisioner, so there is no in-place fix — re-dispatch. **Check the whole pull path FIRST.** The stake is higher since #8036 1c (2026-09-23), not lower: the host-side GHCR fallback is DELETED, so zot is the sole pull path and a replace fired blind takes production'"'"'s only registry offline for the gap. The `ghcr-fallback` signal this step used to grep is permanently empty — not clean, GONE — so a check that still greps it reads as healthy by construction. `local-cache` is the live degradation signal: a host silently reusing its running image (`registry=local-cache`) is one that could not be served by zot, which is exactly the state in which a replace is most dangerous.\n\n```\n# 1. Is the pull path healthy? (local-cache reuse = zot did not serve; sustained hits = degraded => do NOT fire yet)\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep local-cache --grep image_pull_failed --limit 20\n\n# 2. Only if step 1 is clean, re-provision (reason is a REQUIRED dispatch input):\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private NIC absent (this issue)\"\n```\n\nSee ADR-115.\n'
           } > "$BODY_FILE"
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')"; then
-            echo "::error::registry-private-nic: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
-            EXISTING=""
-          fi
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::registry-private-nic: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Private NIC still absent at ${NOW} — ${CAUSE}. Run: ${RUN_URL}"
           else
@@ -486,10 +477,7 @@ jobs:
           # Lifecycle: opens once per host instance that self-heals; the NIC-GREEN auto-close
           # closes it when a replace gives the host a fresh root disk (=> reboot_count=0). That is
           # the correct span for "this instance experienced the race".
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')"; then
-            echo "::error::registry-private-nic-advisory: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
-            EXISTING=""
-          fi
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::registry-private-nic-advisory: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             echo "::notice::private-NIC self-heal advisory already open as #${EXISTING} — not commenting (create-only; the open issue IS the standing signal)."
           else
@@ -525,10 +513,7 @@ jobs:
             printf '### Why this pages\n\nBetter Stack is reachable and had `SOLEUR_PRIVATE_NIC` rows in the last 24h, but NONE in the recent 3h window. The private-NIC signal is now UNOBSERVABLE — the exact GREEN-while-broken blind spot #6415 exists to kill, resurfacing one layer up.\n\nThis is a DEDICATED absence probe. The `SOLEUR_ZOT_DISK` producer-silence branch cannot cover it: if the NIC guard dies while the disk heartbeat keeps emitting, that branch never even evaluates and the run reads GREEN.\n\n'
             printf '### Remediation (no SSH)\n\n1. Confirm the gap:\n```\ndoppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep SOLEUR_PRIVATE_NIC --limit 5\n```\n2. Most likely: the guard was never deployed (the host predates #6415), or its install failed, or the `BETTERSTACK_LOGS_TOKEN` (isolated `soleur-registry/prd`) rotated. A re-dispatch re-injects the token and reinstalls the guard (`reason` is a REQUIRED input):\n```\ngh workflow run apply-web-platform-infra.yml -f apply_target=registry-host-replace -f reason=\"private-NIC guard silent (this issue)\"\n```\nSee `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`.\n'
           } > "$BODY_FILE"
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty')"; then
-            echo "::error::registry-private-nic-silent: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
-            EXISTING=""
-          fi
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "$(sed -E 's/^\[([^]]+)\].*/\1/' <<<"$ISSUE_TITLE")" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::registry-private-nic-silent: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Guard still dark at ${NOW} — ${DETAIL}. Run: ${RUN_URL}"
           else
