@@ -234,12 +234,12 @@ and a lint arm landed first.
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
-- [ ] `python3 scripts/lint-shell-trace-credential-refusal.py` (repo-wide) exits 0 and baseline E contains exactly one non-comment line (`web-private-nic-guard.sh`).
-- [ ] `bash tests/scripts/test-argv-bearer-sweep.sh` exits 0 with one row per converted site (row count recorded in the PR body) and the three live-in-apply scripts each have a row that fails when the old argv form is restored.
-- [ ] For each converted script: token absent from argv; stdin body exact; newline/quote/space token → curl not invoked and the skip/refusal marker emitted (rows named in the battery).
-- [ ] `git grep -nE -- '(-H|--header)[ =]+"?(Authorization: (Bearer|Api-Key)|CF-Access-Client)' -- <converted files>` returns no hit.
-- [ ] `bash scripts/lint-shell-trace-credential-refusal.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh`, `bash scripts/lint-supabase-deprecated-endpoints.sh`, `python3 scripts/lint-trap-tempfile-ownership.py` and `--check-highwater`, `bash plugins/soleur/test/fixture-relative-assert.test.sh`, `bash plugins/soleur/test/fixture-dir-operand-assert.test.sh`, `bash scripts/guard-vacuity-floor.test.sh` all exit 0.
-- [ ] `gitleaks git --redact --no-banner --exit-code 1 --log-opts="--no-merges origin/main..HEAD"` exits 0.
+- [x] `python3 scripts/lint-shell-trace-credential-refusal.py` (repo-wide) exits 0 and baseline E contains exactly one non-comment line (`web-private-nic-guard.sh`).
+- [x] `bash tests/scripts/test-argv-bearer-sweep.sh` exits 0 with one row per converted site (row count recorded in the PR body) and the three live-in-apply scripts each have a row that fails when the old argv form is restored.
+- [x] For each converted script: token absent from argv; stdin body exact; newline/quote/space token → curl not invoked and the skip/refusal marker emitted (rows named in the battery).
+- [x] `git grep -nE -- '(-H|--header)[ =]+"?(Authorization: (Bearer|Api-Key)|CF-Access-Client)' -- <converted files>` returns no hit.
+- [x] `bash scripts/lint-shell-trace-credential-refusal.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh`, `bash scripts/lint-supabase-deprecated-endpoints.sh`, `python3 scripts/lint-trap-tempfile-ownership.py` and `--check-highwater`, `bash plugins/soleur/test/fixture-relative-assert.test.sh`, `bash plugins/soleur/test/fixture-dir-operand-assert.test.sh`, `bash scripts/guard-vacuity-floor.test.sh` all exit 0.
+- [x] `gitleaks git --redact --no-banner --exit-code 1 --log-opts="--no-merges origin/main..HEAD"` exits 0.
 - [ ] PR body: `Ref #7797`, `Ref #9597` (no `Closes`), review coverage stated honestly, and the web-2 note for the monitors and bootstrap.
 
 ### Post-merge (verified by outcome, not by "apply succeeded")
