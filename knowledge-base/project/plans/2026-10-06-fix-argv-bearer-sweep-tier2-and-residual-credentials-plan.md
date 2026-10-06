@@ -10,6 +10,21 @@ lane: single-domain
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Gates run:** User-Brand Impact (4.6), Observability (4.7), PAT-shape (4.8), Guard Contract (4.11, lint green), Scope Check (4.12, rewritten to the canonical schema). UI wireframe (4.9), Encryption Posture (4.10), Downtime (4.55), network-outage (4.5) not triggered: no UI, no new store or connection, no `.tf` edit, no serving-surface downtime (provisioners re-install monitors in place).
+**Verification done in this pass:** curl config semantics run against a local server with fake credentials (below); `server.tf` resource-to-script mapping; `zot-entry-gate.sh` deployment route; Tier 3 census recounted; apply-workflow size measured.
+
+### Key Improvements
+1. Phase 3 no longer claims the bootstrap lacks an `else` (it is already `if/elif/elif/else`); the real defect is a malformed token misreported as `unpinned_url`.
+2. `zot-entry-gate.sh` moved to Phase 1 (release gate, not host-deployed); `verify-tunnel-ingress-origin.sh` second call also carries `X-Signature-256`.
+3. `configure-auth.sh` uses `--data-binary @file` (`-d @file` strips CR/LF); the CF drift test mock must move with its conversion.
+
+### New Considerations Discovered
+- Charset guards must differ by value class (`_bearer_ok` for tokens, `_cfg_ok`/`_cfg_q` otherwise) or valid credentials are silently refused.
+- The shim cannot model `-u`, `data-urlencode`, `-I`, `--proto-redir` or non-Bearer credentials today, so shim extension is a prerequisite and ships as its own commit.
+
 ## Overview
 
 Continue moving curl credentials off the process argument list (readable by every local user via
@@ -48,6 +63,19 @@ merged. #9632 (draft, updated 2026-10-06) overlaps `web-private-nic-guard.sh` an
 Phase 2 must not edit that test; new coverage goes in `tests/scripts/test-argv-bearer-sweep.sh`.
 No ADR rejects the mechanism (stdin config is the established ADR-backed form from the prior sweep).
 
+**Deepen-pass verification (curl 8.22.0, local server, fake credentials).** Config on stdin
+(`--config -` fed by process substitution) was confirmed to deliver, byte-exact at the server:
+an OAuth1-shaped header containing `"` through `\"` escaping (`v=${v//\\/\\\\}; v=${v//\"/\\\"}`);
+`user = "u:p"` as a Basic credential on both GET and `-I`; `data-urlencode = "name=value"` lines
+URL-encoded into a form body; and `--data-binary @file` preserving the body's trailing CR/LF while
+the Bearer arrives from the stdin config. Remaining check at work time: the same on the oldest curl
+among the hosts (config-string escapes and `data-urlencode` are long-standing options, but record
+the host curl version in the battery's header).
+
+**Census recount.** Tier 3: 21 files / 55 sites (`git grep -nE 'Authorization: Bearer' -- '.github/**/*.yml' 'apps/**/cloud-init*.yml'`), apply-web-platform-infra.yml 12; the issue's 14/32/8 is stale. `apply-web-platform-infra.yml` = 485,630 bytes (`wc -c`).
+
+**Cited numbers.** #9632 (draft, nic-guard, baseline E), #9348 (held draft, drift test), #8073 (the Resend-five drawdown, merged, verified by outcome per the #7898 thread) were read live; #7797, #9597, #7898 are open.
+
 **Property List.**
 - P1. No credential (Bearer, `Api-Key`, CF-Access, OAuth1 header, `-u`, `--data-urlencode` secret,
   secret-bearing body) appears on the argv of a curl in a converted script.
@@ -68,26 +96,6 @@ No ADR rejects the mechanism (stdin config is the established ADR-backed form fr
   without any new workflow (a dispatched workflow also cannot run from a branch).
 - A new shared shell library for `_bearer_ok` → P2 → cut; the prior sweep inlines the 1-line guard per
   script, and host scripts cannot source repo files at runtime.
-
-## Scope Check
-
-| Ask item | Disposition | Provenance |
-|---|---|---|
-| 1. Tier 2 host-deployed (7 + bootstrap) | In: 6 monitors/inngest scripts + bootstrap; **nic-guard out** (#9632) | asked |
-| 1. Live-in-apply three | In, with pre-merge shim rows | asked |
-| 2. Residual non-Bearer (flip, linkedin, CF drift, configure-auth, x-*, `-u`) | In | asked |
-| 2. Flagsmith siblings create/delete/list | In (identical helper; leaving them makes "Flagsmith converted" false) | inferred, justified: same defect, same one-line helper |
-| 2. CF-Access in verify-tunnel | In (file already edited in Phase 1) | inferred, justified: no extra file |
-| 3. Tier 3 YAML / cloud-init / `env -i` / lint arm | **Split out**; decision recorded on #9597 | asked ("decide") |
-| 4. SENTRY_PROJECT | In, by outcome | asked |
-| 5. Close/restate #7797 | Restate (Tier 3 split out), keep open | asked |
-| track.sh, push-infra-config.sh, infra-config-verify.sh CF-Access | Deferred to Tier 3 follow-up, tracked on #9597 | measured, not asked |
-
-Split rationale: `apply-web-platform-infra.yml` is 485,630 bytes against a 490,000-byte gate and
-GitHub's ~512 KB ceiling, and a prior sibling merge crossed that line with comment prose alone
-(learning `2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so`).
-Converting its 12 sites adds bytes and can only be exercised by CI, so it needs its own byte budget
-and a lint arm landed first.
 
 ## User-Brand Impact
 
@@ -165,6 +173,63 @@ push at the end (a push resets a ~35 minute CI cycle).
 ## Open Code-Review Overlap
 
 None. (`code-review`-labelled open issues were searched for every planned path; no body names any of them.)
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Tier 2, 11 files / 13 sites, listed in baseline E ... Host-deployed under apps/web-platform/infra/: container-restart-monitor, cron-egress-alarm, disk-monitor, resource-monitor, inngest-rearm-reminders, inngest-wiped-volume-verify, ... and soleur-host-bootstrap.sh" [brief] | Phase 3 | mapped |
+| 2 | "web-private-nic-guard" (in the same host-deployed list) [brief] | — | descoped — justification: the operator answered "Skip nic-guard" at the collision gate because open draft #9632 already converts it and edits baseline E |
+| 3 | "Run live in the push-triggered infra apply: scripts/fresh-host-boot-trail.sh (2 sites), scripts/verify-tunnel-ingress-origin.sh (1), zot-image-oci-archive.sh (2)" [brief] | Phase 1 | mapped |
+| 4 | "The three live-in-apply ones need a pre-merge test that exercises the changed transport (follow the shim battery in tests/scripts/test-argv-bearer-sweep.sh)" [brief] | Phase 0 (shim rows) | mapped |
+| 5 | "Each conversion shrinks baseline E by deletion only." [brief] | Phase 4 | mapped |
+| 6 | "plugins/soleur/skills/flag-set-role/scripts/flip.sh (Flagsmith `Api-Key`, around line 207)" [brief] | Phase 2 | mapped |
+| 7 | "plugins/soleur/skills/community/scripts/linkedin-setup.sh (`--data-urlencode token=`)" [brief] | Phase 2 | mapped |
+| 8 | "scripts/check-cloudflare-token-drift.sh (CF-Access client id/secret as -H)" [brief] | Phase 2 | mapped |
+| 9 | "apps/web-platform/supabase/scripts/configure-auth.sh (PATCH body carries RESEND_API_KEY and the OAuth client secrets; stdin is taken by the config channel, so use `--data @file` with a 0600 file)" [brief] | Phase 2 | mapped |
+| 10 | "x-community.sh / x-setup.sh (OAuth1 Authorization)" [brief] | Phase 2 | mapped |
+| 11 | "`-u user:token` in web-zot-consumer-probe.sh and zot-entry-gate.sh" [brief] | Phase 3 (probe), Phase 1 (gate) | mapped |
+| 12 | "Tier 3: `-H \"Authorization: Bearer ...\"` in .github/workflows/*.yml and composite actions ... Decide per #9597 whether the lint gets a YAML arm first." [brief] | Decision: split out, tracked on #9597 (Phase 4) | mapped |
+| 13 | "Not verified: the GitHub repository secret SENTRY_PROJECT against the pin" [brief] | Phase 4 (PR-body outcome line) | mapped |
+| 14 | "Close #7797 when #9597 is done, or restate its scope if Tier 3 is split out." [brief] | Phase 4 (comment, stays open) | mapped |
+| 15 | "Before pushing, run locally ... python3 scripts/lint-shell-trace-credential-refusal.py (repo-wide)" and the other listed gates [brief] | Acceptance Criteria (Pre-merge) | mapped |
+| 16 | "use `Ref #7797` and keep it open; put `Closes #9597` only on the PR that finishes it" [brief] | Acceptance Criteria (PR body) | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Phase 0 battery rows and RED-first ordering | asks 4, 15 | asked |
+| Shim extensions (decode, user/data-urlencode record, `--data-binary`, `-I`/`--proto-redir`, per-row matcher) | ask 4 ("exercises the changed transport (follow the shim battery ...)") | inferred — justification: the current shim models only `header = "…"` Bearer lines, so rows for `-u`, `data-urlencode`, OAuth1 and CF-Access cannot exist without it |
+| Phase 1 (fresh-host-boot-trail, verify-tunnel-ingress-origin, zot-image-oci-archive) | ask 3 | asked |
+| `zot-entry-gate.sh` placed in Phase 1 | ask 11 ("`-u user:token` in web-zot-consumer-probe.sh and zot-entry-gate.sh") | asked |
+| verify-tunnel second call (CF-Access pair + `X-Signature-256`) | ask 8 ("CF-Access client id/secret as -H") | inferred — justification: same file as the asked Bearer site; leaving a credential header on argv in a converted file makes the conversion claim false |
+| Phase 2 flip.sh, linkedin-setup.sh, check-cloudflare-token-drift.sh, configure-auth.sh, x-community.sh, x-setup.sh | asks 6-10 | asked |
+| Flagsmith `create.sh`, `delete.sh`, `list.sh` | ask 6 | inferred — justification: they carry the identical `fs_api` `Authorization: Api-Key` argv form; converting only `flip.sh` leaves the Flagsmith token on argv |
+| Minimal mock edit in `check-cloudflare-token-drift.test.sh` | ask 8 | inferred — justification: its curl mock parses `-H CF-Access-Client-Id:*`, so the conversion breaks the suite unless the mock moves with it |
+| `_cfg_ok` / `_cfg_q` helpers | asks 7, 10 | inferred — justification: LinkedIn secrets and the OAuth1 header contain characters the `_bearer_ok` charset rejects, which would silently refuse valid credentials |
+| Phase 3 (six monitors/inngest scripts, bootstrap, web-zot-consumer-probe) | ask 1, ask 11 | asked |
+| Guards on `inngest-wiped-volume-verify.sh` before the wipe; `bad_token_shape` branch in the bootstrap | ask 1 | inferred — justification: the converted guard must not strand a destructive sequence or misreport a malformed token as `unpinned_url` |
+| Phase 4 baseline E deletions | ask 5 | asked |
+| #9597 body restate, #7797 comment | asks 12, 14 | asked |
+| SENTRY_PROJECT outcome line | ask 13 | asked |
+| Guard Contract section | ask 4 | inferred — justification: plan Phase 2.12 requires it for any plan whose deliverable includes a guard (the battery rows and ratchet) |
+| decision-challenges.md | — | inferred — justification: plan-review taste findings are persisted there for `ship` to render (ADR-084) |
+
+### Split Assessment
+
+- Subsystems touched: 5 — apps/web-platform, plugins/soleur, scripts, tests, knowledge-base
+- Planned files: ~38 | Estimated changed lines: ~1,100
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — all three thresholds are exceeded, and a split was considered and declined: the brief lists every item as one "continue the sweep" pass, Phases 1 and 3 share one CI cycle and one provisioner window, and each phase is its own commit group so Phase 2 (plugin/user-run scripts, no prod effect) can be cherry-picked into a second PR if review asks for it. The Tier 3 split is already decided (below).
+
+Split rationale: `apply-web-platform-infra.yml` is 485,630 bytes against a 490,000-byte gate and
+GitHub's ~512 KB ceiling, and a prior sibling merge crossed that line with comment prose alone
+(learning `2026-09-19-a-sibling-merge-took-the-apply-workflow-over-githubs-byte-limit-and-nothing-in-repo-said-so`).
+Converting its 12 sites adds bytes and can only be exercised by CI, so it needs its own byte budget
+and a lint arm landed first.
 
 ## Acceptance Criteria
 
