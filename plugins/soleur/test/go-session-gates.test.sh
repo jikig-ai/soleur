@@ -669,6 +669,9 @@ ws="$(fresh_ws r3c)"
 out="$(run_gate "$(delivered_fence 2 "$CLOUD_ROOT" cloud)" "$ws" "$SCRATCH_HOME")"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=cloud-session verdict=not-local:sentinel-absent" "R3c: cloud session skips session-start, naming the verdict"
 want_not_in "$out" "STUB_WORKTREE_MANAGER" "R3c: cleanup-merged never dispatched on a cloud session"
+# A cloud session skips ALL maintenance, so a second .mcp.json writer here would overwrite the
+# default fixture's uncommitted edit (#9622 review: no row watched these arms).
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R3c: and the cloud arm never touches .mcp.json"
 
 echo "R4. undelivered fence, environment unset -> source=none, honest skip"
 for i in "${!GATE_ANCHORS[@]}"; do
@@ -833,7 +836,8 @@ out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12: a tracked, dirty .mcp.json keeps its bytes"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty" "R12: and the skip is reported, not swallowed"
 ck; if [ -e "$ws/.mcp.json.soleur-tmp" ]; then fail "R12: the temp file was left behind"; else pass "R12: no temp file left behind"; fi
-want_in "$out" "STUB_WORKTREE_MANAGER argv=cleanup-merged" "R12: the skip is non-fatal and takes only the restore, not the reaper"
+want_in "$out" "cause=differs-from-head" "R12: the marker names its measured cause"
+want_in "$out" "STUB_WORKTREE_MANAGER argv=cleanup-merged" "R12: the skip is non-fatal: the reaper still dispatches"
 
 echo "R12b. a STAGED-only edit is dirty too"
 # `git diff --quiet` without HEAD compares the worktree to the INDEX, so a staged edit reads clean.
@@ -883,7 +887,7 @@ assert_fixture_dir "$ws"; rm -rf "$ws"; mkdir -p "$ws"
   git -C "$ws" add .mcp.json
 ) || { echo "FATAL: R12f staged fixture setup failed" >&2; exit 2; }
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty" "R12f: a staged file on an unborn HEAD is kept and reported"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed" "R12f: a staged file on an unborn HEAD is kept, and the cause is the failed probe"
 want_eq "$(cat "$ws/.mcp.json")" '{"local":"staged-unborn"}' "R12f: and its bytes survive"
 ws="$TMP_ROOT/ws-r12f-untracked"
 assert_fixture_dir "$ws"; rm -rf "$ws"; mkdir -p "$ws"
@@ -896,11 +900,11 @@ out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_not_in "$out" "reason=mcp-json-dirty" "R12f: an UNTRACKED file is not called dirty"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main" "R12f: it takes the existing no-main arm instead"
 
-echo "R12g. a git show failure still reports its own status (SHOW_RC survives the restructure)"
+echo "R12g. a git show failure still reports its own measured status"
 # A DIRECTORY at the temp path makes the redirect fail with rc 1 before git runs; the clean-stale
 # fixture means the dirty guard cannot be the one that fires.
 ws="$(fresh_ws r12g stale)"
-: "${ws:?fresh_ws r12g produced no workspace path; refusing to touch the caller repo}"
+: "${ws:?fresh_ws r12g produced no workspace path; refusing to run git against the caller repo}"
 mkdir "$ws/.mcp.json.soleur-tmp"
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-read-failed rc=1" "R12g: the read failure names its measured status"
@@ -927,7 +931,7 @@ ws="$(fresh_ws r12i)"
 ) || { echo "FATAL: R12i fixture setup failed" >&2; exit 2; }
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12i: a skip-worktree .mcp.json keeps its bytes"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty" "R12i: and is reported"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=index-flag" "R12i: and is reported as an index-flag keep"
 
 echo "R12j. a symlinked .mcp.json is kept (mv would replace the link itself)"
 ws="$(fresh_ws r12j stale)"
@@ -944,7 +948,40 @@ ln -s "$R12J_TARGET" "$ws/.mcp.json"
 out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
 ck; if [ -L "$ws/.mcp.json" ]; then pass "R12j: the symlink is still a symlink"; else fail "R12j: the symlink was replaced by a regular file"; fi
 want_eq "$(cat "$R12J_TARGET")" '{"local":"link-target"}' "R12j: and its target is unchanged"
-want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty" "R12j: and the keep is reported"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=symlink" "R12j: and the keep is reported as a symlink keep"
+
+echo "R12k. an assume-unchanged .mcp.json is kept (the other plain-entry tag)"
+# R12i pins skip-worktree (tag S); dropping the fallback to `"S "*)` alone would leave h unpinned.
+ws="$(fresh_ws r12k)"
+: "${ws:?fresh_ws r12k produced no workspace path; refusing to run git against the caller repo}"
+(
+  git_fixture_env "$ws" || { echo "FATAL: git_fixture_env refused an environment for $ws" >&2; exit 2; }
+  git -C "$ws" update-index --assume-unchanged .mcp.json
+) || { echo "FATAL: R12k fixture setup failed" >&2; exit 2; }
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12k: an assume-unchanged .mcp.json keeps its bytes"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=index-flag" "R12k: and is reported as an index-flag keep"
+
+echo "R12l. the incident shape: a feature branch whose HEAD copy differs from main, plus an uncommitted edit"
+# The default fixture has HEAD == main, so it cannot tell "differs from HEAD" from "differs from main".
+ws="$(fresh_ws r12l stale)"
+: "${ws:?fresh_ws r12l produced no workspace path; refusing to run git against the caller repo}"
+printf '%s' '{"local":"uncommitted-on-a-feature-branch"}' > "$ws/.mcp.json"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_eq "$(cat "$ws/.mcp.json")" '{"local":"uncommitted-on-a-feature-branch"}' "R12l: an edit on top of a stale HEAD copy keeps its bytes"
+want_in "$out" "cause=differs-from-head" "R12l: and is reported as differing from HEAD"
+
+echo "R12m. an unreadable index keeps a tracked, dirty file (a probe error is not 'untracked')"
+# ls-files fails while git show still reads the object store, so a probe that folded the failure
+# into "untracked" restored main's bytes over the edit.
+ws="$(fresh_ws r12m)"
+: "${ws:?fresh_ws r12m produced no workspace path; refusing to touch the caller repo}"
+assert_fixture_dir "$ws"
+printf '%s' 'not a git index' > "$ws/.git/index"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12m: an unreadable index keeps the file's bytes"
+want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed" "R12m: and the cause is the failed probe"
+want_not_in "$out" "reason=mcp-json-rename-failed" "R12m: and nothing tried to replace it"
 
 echo "R6/R6b/R6c. identity preflight and the payload-absent state"
 for i in "${!GATE_ANCHORS[@]}"; do
@@ -953,6 +990,9 @@ for i in "${!GATE_ANCHORS[@]}"; do
   want_in "$out" "gate=${GATE_NAMES[$i]} source=plugin-root-token verified=false" "R6: ${GATE_NAMES[$i]} refuses a non-Soleur manifest"
   want_in "$out" "${GATE_UNVERIFIED_MARKERS[$i]}" "R6: ${GATE_NAMES[$i]} emits its skip marker on the decoy"
   want_eq "$(decoy_ran)" "none" "R6: ${GATE_NAMES[$i]} executed nothing under the decoy root"
+  if [ "$i" = 2 ]; then
+    want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R6: the unverified-root arm never touches .mcp.json"
+  fi
 
   # MUST-PASS, and it documents a LIMITATION: the preflight is a shape check, not
   # authentication (ADR-179 A11, which rejected the stronger root-outside-worktree assertion).
@@ -1225,13 +1265,13 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 219 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (221), so the
+# 229 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (231), so the
 # floor holds on both paths. MEASURE IT WITH `SOLEUR_GO_GATES_SKIP_H3=1`, never from a local run
 # where the harness is present: #8418 raised it four times from local counts and CI reddened on
 # `194 < 196` — the same floor this comment already said to derive from the skipped path.
-# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155, R12-R12j (#9622) 194 -> 219.
+# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155, R12-R12m and the R3c/R6 byte rows (#9622) 194 -> 229.
 # Re-measure it after any rebase; never hand-merge the number.
-MIN_ASSERTIONS=219
+MIN_ASSERTIONS=229
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
