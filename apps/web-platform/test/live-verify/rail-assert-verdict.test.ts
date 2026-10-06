@@ -36,8 +36,10 @@ function fakeRailRow(opts: {
   seq?: boolean[];
   err?: Error | Error[];
   throwAfter?: { at: number; err: Error };
+  throwWhen?: () => Error | null;
   visibleWhen?: (calls: number) => boolean;
   hang?: boolean;
+  hangWhen?: () => boolean;
 }) {
   let i = 0;
   let calls = 0;
@@ -45,7 +47,9 @@ function fakeRailRow(opts: {
   const railRow = {
     isVisible: async (): Promise<boolean> => {
       calls++;
-      if (opts.hang) return new Promise<boolean>(() => {});
+      if (opts.hang || opts.hangWhen?.()) return new Promise<boolean>(() => {});
+      const te = opts.throwWhen?.();
+      if (te) throw te;
       if (opts.throwAfter && calls > opts.throwAfter.at) throw opts.throwAfter.err;
       if (errs && i < errs.length) {
         i++;
@@ -68,8 +72,11 @@ function fakeRailRow(opts: {
 /** Minimal Page stand-in: every surface the seam + its diagnostics touch. */
 function fakePage(opts: {
   railCounts?: { error?: number; empty?: number; rail?: number; rows?: number };
+  countsThrow?: boolean;
   reloadCalls?: { n: number };
   reloadErr?: Error;
+  reloadHang?: boolean;
+  reloadNav?: { status(): number; url(): string };
   activeRepo?:
     | { ok: true; body: unknown }
     | { ok: false; status: number }
@@ -81,6 +88,7 @@ function fakePage(opts: {
   // the wrapper selector verbatim, so a substring scan would misattribute —
   // disambiguate on the trailing `a[href` instead.
   const counts = (sel: string): number => {
+    if (opts.countsThrow) throw new Error("renderer wedged");
     const rc = opts.railCounts ?? {};
     if (sel.includes("conversations-rail-error")) return rc.error ?? 0;
     if (sel.includes("conversations-rail-empty")) return rc.empty ?? 0;
@@ -101,8 +109,9 @@ function fakePage(opts: {
     reload: async (arg?: { waitUntil?: string; timeout?: number }) => {
       counters.n++;
       reloadArgs.push(arg);
+      if (opts.reloadHang) return new Promise<never>(() => {});
       if (opts.reloadErr) throw opts.reloadErr;
-      return null;
+      return opts.reloadNav ?? null;
     },
     recordedGetUrls,
     reloadArgs,
@@ -155,8 +164,10 @@ function deps(over: {
   seq?: boolean[];
   railRowErr?: Error | Error[];
   throwAfter?: { at: number; err: Error };
+  throwWhen?: () => Error | null;
   visibleWhen?: (calls: number) => boolean;
   hang?: boolean;
+  hangWhen?: () => boolean;
   page?: ReturnType<typeof fakePage>;
   supabase?: ReturnType<typeof fakeSupabase>;
   budget?: { [K in keyof typeof FAST]: number };
@@ -165,8 +176,10 @@ function deps(over: {
     seq: over.seq,
     err: over.railRowErr,
     throwAfter: over.throwAfter,
+    throwWhen: over.throwWhen,
     visibleWhen: over.visibleWhen,
     hang: over.hang,
+    hangWhen: over.hangWhen,
   });
   return {
     seam: {
@@ -242,8 +255,7 @@ describe("assertRailRowVisible (#9581) — the observe arm", () => {
     expect(v.kind).toBe("absent");
     expect(page.reloadArgs).toHaveLength(1);
     expect(page.reloadArgs[0]).toMatchObject({ waitUntil: "domcontentloaded" });
-    expect(typeof page.reloadArgs[0]?.timeout).toBe("number");
-    expect(page.reloadArgs[0]?.timeout).toBeGreaterThan(0);
+    expect(page.reloadArgs[0]?.timeout).toBe(FAST.reloadMs);
   });
 
   it("attributes a row that lands during the scope probe to via=direct — not to the reload it never needed", async () => {
@@ -381,6 +393,23 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     expect(reloadCalls.n).toBe(1);
   });
 
+  it("tags an unreadable active-repo probe with the HTTP status, or bare on transport failure", async () => {
+    for (const [fixture, tag] of [
+      [{ ok: false, status: 503 } as const, "unreadable:active-repo:503"],
+      [{ throws: new Error("socket reset") } as const, "unreadable:active-repo"],
+    ] as const) {
+      const reloadCalls = { n: 0 };
+      const { seam } = deps({
+        seq: [false],
+        page: fakePage({ reloadCalls, activeRepo: fixture }),
+      });
+      const v = await assertRailRowVisible(seam);
+      expect(v.kind).toBe("absent");
+      expect(v).toMatchObject({ rpcRow: tag, activeRepo: "unreadable" });
+      expect(reloadCalls.n).toBe(1);
+    }
+  });
+
   it("treats an unreadable probe as a diagnostic, not a verdict — the reload still runs", async () => {
     const reloadCalls = { n: 0 };
     const { seam } = deps({
@@ -412,6 +441,17 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     expect(v).toMatchObject({ reloads: 1 });
     const line = emitLine(railVerdictToResult(v, CONV_ID));
     expect(line).toContain("reload_err=TimeoutError");
+  });
+
+  it("maps the name-only arm (TargetClosedError name, unrelated message) to CANT-RUN", async () => {
+    // Arm 1 of CLOSED_TARGET_RE (target.{0,30}closed) must work ALONE — the
+    // other tests' messages all contain "has been closed" and would mask a
+    // deleted arm 1.
+    const closed = new Error("socket hangup");
+    closed.name = "TargetClosedError";
+    const { seam } = deps({ railRowErr: closed });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
   });
 
   it("maps a dead page (target-closed) to CANT-RUN — never to a rail-regression FAIL", async () => {
@@ -522,6 +562,64 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     const v = await pending;
     expect(v.kind).toBe("absent");
   });
+
+  it("a reload wedged at the driver level (past its own timeout) yields the __wedge__ draw — then absent on settled reads", async () => {
+    // page.reload's `timeout` bounds the navigation; a wedged CDP transport
+    // cannot even fire it. The manual race's backstop (reloadMs + 5s —
+    // 5035ms under FAST) records `reload-unbounded-wedge` and keeps polling:
+    // with a ceiling that still leaves phase B headroom, the settled reads
+    // keep the absent verdict honest.
+    const reloadCalls = { n: 0 };
+    const { seam } = deps({
+      seq: [false],
+      page: fakePage({ reloadCalls, reloadHang: true }),
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }] }),
+      // ~5s of wedge backstop + observe windows still inside the ceiling.
+      budget: { ...FAST, totalMs: 6_000 },
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v).toMatchObject({
+      kind: "absent",
+      reloadErr: "reload-unbounded-wedge",
+    });
+    const line = emitLine(railVerdictToResult(v, CONV_ID));
+    expect(line).toContain("reload_err=reload-unbounded-wedge");
+  });
+
+  it("a wedged post-reload read stream — reload ran but NO post-reload read settled — is CANT-RUN, not FAIL", async () => {
+    // `absent` would assert "did not appear" on reads that never executed
+    // in the window that counted. Phase A produced clean reads, so the
+    // `!sawCleanRead` net alone cannot catch this — the post-reload
+    // clean-read requirement does.
+    const reloadCalls = { n: 0 };
+    const { seam } = deps({
+      hangWhen: () => reloadCalls.n > 0,
+      page: fakePage({ reloadCalls }),
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }] }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
+    const line = emitLine(railVerdictToResult(v, CONV_ID));
+    expect(line).toMatch(/^RESULT: CANT-RUN:/);
+    expect(line).toContain("read_errors=");
+  });
+
+  it("a post-reload CANT-RUN reports the RELOAD's navigation, not the stale pre-send one", async () => {
+    const reloadCalls = { n: 0 };
+    const reNav = {
+      status: () => 503,
+      url: () => "https://app.example.com/dashboard/chat/new",
+    };
+    const closed = new Error("Target page, context or browser has been closed");
+    const { seam } = deps({
+      throwWhen: () => (reloadCalls.n > 0 ? closed : null),
+      page: fakePage({ reloadCalls, reloadNav: reNav }),
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }] }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
+    if (v.kind === "unverifiable") expect(v.reason).toContain("http=503");
+  });
 });
 
 describe("railVerdictToResult (#9581) — the wire shape", () => {
@@ -532,6 +630,21 @@ describe("railVerdictToResult (#9581) — the wire shape", () => {
         CONV_ID,
       ),
     );
+    // A thrown-but-recovered reload annotates the PASS — the anomaly rides
+    // the wire, it isn't dropped as a "clean" draw.
+    const appearedWithWedge = emitLine(
+      railVerdictToResult(
+        {
+          kind: "appeared",
+          via: "reload",
+          elapsedMs: 55_000,
+          checks: 40,
+          reloadErr: "TimeoutError",
+        },
+        CONV_ID,
+      ),
+    );
+    expect(appearedWithWedge).toContain("reload_err=TimeoutError");
     const absent = emitLine(
       railVerdictToResult(
         {
@@ -600,6 +713,11 @@ describe("railRowState (#9581) — which branch the rail was showing", () => {
   it("reports rail-absent when the wrapper testid is gone", async () => {
     const page = fakePage({ railCounts: {} });
     expect(await railRowState(page)).toBe("rail-absent");
+  });
+
+  it("reports unreadable when a count probe throws — never a misleading rows:K", async () => {
+    const page = fakePage({ countsThrow: true });
+    expect(await railRowState(page)).toBe("unreadable");
   });
 });
 

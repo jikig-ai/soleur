@@ -42,11 +42,12 @@ describe("no bare visibility wait outside the diagnosing seam", () => {
     // not handed to awaitVisibleOrDiagnose as a `() =>` callback". Strip
     // the sanctioned arrow-arg form, then NOTHING may waitFor at all.
     const unsanctioned = code.replace(
-      /=>\s*[A-Za-z0-9_$.[\]()'"`]*\.waitFor\s*\(/g,
+      /=>\s*[A-Za-z0-9_$.[\]()'"`]*\.waitFor[A-Za-z]*\s*\(/g,
       "",
     );
-    expect(unsanctioned.match(/\.waitFor\s*\(/g) ?? []).toHaveLength(0);
-    expect(unsanctioned.match(/await\s+page\.waitForSelector\s*\(/g) ?? []).toHaveLength(0);
+    // The whole waitFor* family — waitFor, waitForSelector, waitForURL,
+    // waitForTimeout, waitForEvent, waitForFunction — not just one spelling.
+    expect(unsanctioned.match(/\.waitFor[A-Za-z]*\s*\(/g) ?? []).toHaveLength(0);
   });
 
   it("calls the seam from both sites, with the labels the report distinguishes", () => {
@@ -103,7 +104,15 @@ describe("rail assert seam (#9581) — the wire, not the endpoints", () => {
     // carrying it could shrink the check to instant-FAIL or an unbounded
     // observe while every suite stays green.
     const callBlock = code.match(/assertRailRowVisible\(\{[\s\S]*?\}\);/)?.[0] ?? "";
+    // A vacuous non-match must FAIL, not pass — a call-site reshape (or an
+    // arg object hoisted to a const, the exact shape a budget smuggle
+    // takes) would otherwise empty `callBlock` and satisfy the assertion.
+    expect(callBlock).toContain("productionUrl");
     expect(callBlock).not.toContain("budget");
+  });
+
+  it("scopes the rail-row locator to this conversation's id — a wider anchor would PASS on a stale row", () => {
+    expect(code).toContain('a[href$="/dashboard/chat/${convId}"]');
   });
 
   it("keeps the probe's p_limit at rail parity — a RAIL_LIMIT change must drift red", () => {
@@ -127,8 +136,11 @@ describe("anti-vacuity floor for the #9581 suite", () => {
     expect(suite).not.toMatch(/\bit\.skip\b/);
     expect(suite).not.toMatch(/\bdescribe\.only\b/);
     expect(suite).not.toMatch(/\bxdescribe\b/);
+    expect(suite).not.toMatch(/\bxit\b/);
     expect(suite).not.toMatch(/\bdescribe\.todo\b/);
-    expect(suite).not.toMatch(/\bdescribe\.skipIf\s*\(\s*true\b/);
+    expect(suite).not.toMatch(/\bit\.todo\b/);
+    expect(suite).not.toMatch(/\b(?:it|describe)\.skipIf\b/);
+    expect(suite).not.toMatch(/\btest\.skip\b/);
   });
 });
 

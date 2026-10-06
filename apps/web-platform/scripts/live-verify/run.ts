@@ -591,13 +591,14 @@ const RAIL_POLL_MS = 1_500;
  * the scope probes, and the reload. It preserves the role the old 20s
  * `waitFor` timeout played — bounding FAIL-detection latency and job time —
  * at the value the observe+recover shape needs: worst case is
- * observe 45s + probes 2×10s + reload 30s + observe 45s = 140s, so the
- * ceiling also guarantees phase B a full observe window. Diagnostics that
- * run after the verdict (railRowState, waitFailureState) sit outside it,
- * each under their own bounded() per-field timeouts. Far inside the job's
- * 15-minute budget either way.
+ * observe 45s + one in-flight read overrun 5s + probes 2×10s + the
+ * lastDirect read 5s + reload backstop 35s + observe 45s + a final
+ * overrun 5s ≈ 160s, so the ceiling also guarantees phase B a full
+ * observe window. Diagnostics that run after the verdict (railRowState,
+ * waitFailureState) sit outside it, each under their own bounded()
+ * per-field timeouts. Far inside the job's 15-minute budget either way.
  */
-export const RAIL_ASSERT_TOTAL_BUDGET_MS = 150_000;
+export const RAIL_ASSERT_TOTAL_BUDGET_MS = 165_000;
 
 /**
  * Per-probe ceiling for the active-repo + RPC scope probes, under the same
@@ -860,6 +861,7 @@ export async function assertRailRowVisible(
   let reloads = 0;
   let reloadErr: string | undefined;
   let sawCleanRead = false;
+  let cleanReadPostReload = false;
   let unreadableCause: unknown;
 
   const sleep = (ms: number) =>
@@ -885,6 +887,7 @@ export async function assertRailRowVisible(
         return "hidden";
       }
       sawCleanRead = true;
+      if (reloads > 0) cleanReadPostReload = true;
       return v ? "visible" : "hidden";
     } catch (err) {
       if (isClosedTargetError(err)) {
@@ -909,7 +912,10 @@ export async function assertRailRowVisible(
 
   const unverifiable = async (): Promise<RailVerdict> => ({
     kind: "unverifiable",
-    reason: `rail-check:${await waitFailureState(deps.page, navAfter, "rail", unreadableCause)}`,
+    reason:
+      `rail-check:${await waitFailureState(deps.page, navAfter, "rail", unreadableCause)}` +
+      ` reads=${checks} read_errors=${readErrs}` +
+      (reloadErr !== undefined ? ` reload_err=${reloadErr}` : ""),
   });
 
   const pollWindow = async (
@@ -1025,6 +1031,14 @@ export async function assertRailRowVisible(
     // isVisible() never once evaluated — the page is wedged in a way the
     // closed-target classifier does not recognise. CANT-RUN is the honest
     // verdict; a rail-regression FAIL would assert something we never saw.
+    return unverifiable();
+  }
+
+  if (reloads > 0 && !cleanReadPostReload) {
+    // The recovery draw ran but NOT ONE post-reload read settled — the
+    // transport wedged or died (in ways the dead-classifier did not match)
+    // after the reload. `absent` would assert "did not appear" on reads
+    // that never executed, in the window that counted; CANT-RUN is honest.
     return unverifiable();
   }
 
@@ -1299,12 +1313,15 @@ async function driveAndVerify(
       // A rail FAIL must not be downgraded to non-blocking CANT-RUN — the
       // regression signal outranks the teardown breach, so the teardown
       // reason rides inside the FAIL detail instead (#9581 review). For
-      // PASS the breach IS the result (nothing blocked, operator alerted).
+      // PASS the breach IS the result (nothing blocked, operator alerted);
+      // for a rail CANT-RUN the two diagnostics compose rather than the
+      // rail one being dropped.
+      const teardownTag = `teardown=${scrubLine(teardown.reason).slice(0, 120)}`;
       if (result.kind === "FAIL") {
-        return {
-          kind: "FAIL",
-          detail: `${result.detail} teardown=${teardown.reason.slice(0, 120)}`,
-        };
+        return { kind: "FAIL", detail: `${result.detail} ${teardownTag}` };
+      }
+      if (result.kind === "CANT-RUN") {
+        return { kind: "CANT-RUN", reason: `${result.reason} ${teardownTag}` };
       }
       return teardown;
     }
