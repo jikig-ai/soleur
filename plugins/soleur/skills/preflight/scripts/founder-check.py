@@ -349,9 +349,18 @@ def static_problem(block):
 # ---------------------------------------------------------------------------------------------
 # verify
 # ---------------------------------------------------------------------------------------------
+_COMMAND_OUT = None
+
+
 def _emit(outcome, **kw):
     doc = {"outcome": outcome}
     doc.update(kw)
+    if _COMMAND_OUT and isinstance(doc.get("block"), dict):
+        # The raw command goes to a FILE so the Check 13 wrapper never has to quote it into a shell
+        # word. Written for every outcome that parsed a block: an UNTRUSTED or CHANGED block must be
+        # SHOWN to the founder before anyone decides, and showing needs the exact text.
+        with open(_COMMAND_OUT, "w", encoding="utf-8") as fh:
+            fh.write(doc["block"].get("command", ""))
     print(json.dumps(doc, sort_keys=True))
     return 0 if outcome in ("OK", "NO-BLOCK") else 1
 
@@ -367,7 +376,39 @@ def _operator_email(repo):
     return m.group(1).strip().lower() if m else ""
 
 
+def _verify_candidate(repo, path, lines):
+    """Baseline mode: the block is not frozen yet, so there is no freeze to compare with.
+
+    Everything that can be decided from the block and the CURRENT tree still is: parse, the static
+    rules, every pin against HEAD's blob, every creates path absent. The freeze commit follows a
+    valid baseline run, never precedes it.
+    """
+    try:
+        block = parse_block(lines)
+    except ParseError as e:
+        return _emit("FAIL", reason="unparseable", plan=path, detail=str(e))
+    canon = canonical(block)
+    info = {"plan": path, "freeze_sha": "", "freeze_source": "candidate", "hash": canonical_hash(canon),
+            "block": {**canon, "approved_by": block.get("approved_by", ""), "approved_at": block.get("approved_at", "")}}
+    problem = static_problem(block)
+    if problem:
+        return _emit("FAIL", reason=problem, **info, detail="the candidate block is not acceptable as written")
+    declared = block.get("hash")
+    if declared and declared != info["hash"]:
+        return _emit("FAIL", reason="hash-mismatch", **info, detail="hash: does not match the block's own fields")
+    for pth, sha in canon["pins"].items():
+        pth = pth[2:] if pth.startswith("./") else pth
+        if (_out(["rev-parse", f"HEAD:{pth}"], repo) or "").strip() != sha:
+            return _emit("FAIL", reason="pin-not-at-freeze", **info, detail=f"{pth} is not pinned to its blob in HEAD")
+    for pth in canon["creates"]:
+        if _git(["cat-file", "-e", f"HEAD:{pth}"], repo)[0] == 0 or os.path.lexists(os.path.join(repo, pth)):
+            return _emit("FAIL", reason="creates-exists-at-freeze", **info, detail=f"{pth} already exists, so the check could pass on a stub")
+    return _emit("OK", reason="candidate", **info, changed_fields=[], reasons=[], flags=[])
+
+
 def cmd_verify(a):
+    global _COMMAND_OUT
+    _COMMAND_OUT = a.command_out
     repo = a.repo or os.getcwd()
     top = (_out(["rev-parse", "--show-toplevel"], repo) or "").strip()
     if not top:
@@ -436,6 +477,8 @@ def cmd_verify(a):
         return _emit("NO-BLOCK", reason="no-block")
 
     (path, lines), = heads.items()
+    if a.candidate:
+        return _verify_candidate(repo, path, lines)
     stale = sorted(p for p in freeze_of if p != path)
     if stale:
         return _emit("FAIL", reason="freeze-without-block", plan=path, detail="a block was frozen at " + ", ".join(stale) + " and is not there at HEAD")
@@ -659,6 +702,8 @@ def build_parser():
     v.add_argument("--plan", action="append")
     v.add_argument("--pr-author")
     v.add_argument("--operator-login")
+    v.add_argument("--command-out", help="write the block's raw command text to this file")
+    v.add_argument("--candidate", action="store_true", help="baseline mode: validate a block that has no freeze commit yet")
     v.set_defaults(fn=cmd_verify)
 
     c = sub.add_parser("classify", allow_abbrev=False)

@@ -37,6 +37,7 @@ SUITES=(
   plugins/soleur/test/preflight-discoverability-test.test.ts
   plugins/soleur/test/observability-schema-parity.test.ts
   plugins/soleur/test/fullsuite-merge-gate.test.ts
+  plugins/soleur/test/preflight-founder-check.test.ts
 )
 
 # QUANTITY floors are a secondary tripwire only. On their own they were defeated
@@ -554,6 +555,41 @@ else
       pass "all $n_manifest manifest tests still declared"
     fi
   fi
+fi
+
+# --- 1c. Check 13 declares no sandbox of its own (Guard 4, #9578) ------------
+# Check 13 runs a founder-approved command, and the ONLY place a command may run is the Step 10.5
+# fence. A second sandbox-argument array inside the Check 13 section would fork that boundary: the
+# `BWRAP_ARGS=(` single-occurrence pin in preflight-discoverability-test.test.ts would catch a
+# duplicate array in the file, but not one that REPLACES the Step 10.5 fence in the wrapper, so the
+# section itself is asserted. The anchor is the ASSIGNMENT syntax (`NAME=(`) and the `bash -c` call
+# form, never a bare word: a section that mentions bwrap in prose is fine and must stay fine
+# (cq-assert-anchor-not-bare-token).
+PREFLIGHT_SKILL="plugins/soleur/skills/preflight/SKILL.md"
+SEC13="$(awk '/^### Check 13: /{f=1; next} f && /^(## |### )/{exit} f' "$PREFLIGHT_SKILL" 2>/dev/null)"
+cases=$((cases + 1))
+if [[ -n "$SEC13" ]]; then
+  pass "preflight/SKILL.md has a Check 13 section"
+else
+  fail "preflight/SKILL.md has no Check 13 section — the assertions below would run over nothing"
+fi
+cases=$((cases + 1))
+if [[ "$SEC13" == *"Step 10.5"* ]]; then
+  pass "Check 13 runs the approved command through Step 10.5"
+else
+  fail "Check 13 does not name Step 10.5 as the place the command runs"
+fi
+cases=$((cases + 1))
+if [[ "$SEC13" =~ (BWRAP_ARGS|BWRAP_PROC|GIT_BIND)[[:space:]]*=\( ]]; then
+  fail "Check 13 declares a sandbox-argument array of its own — the sandbox is Step 10.5's alone"
+else
+  pass "Check 13 declares no sandbox-argument array"
+fi
+cases=$((cases + 1))
+if [[ "$SEC13" =~ bash[[:space:]]+-c ]]; then
+  fail "Check 13 runs a command with a direct shell invocation — it must go through the Step 10.5 fence"
+else
+  pass "Check 13 has no direct shell invocation of the command"
 fi
 
 # --- 2. The suites actually execute, and clear the floor --------------------

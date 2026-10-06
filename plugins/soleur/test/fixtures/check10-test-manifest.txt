@@ -1,5 +1,8 @@
 ${id} parses to the space-joined line, not the literal indicator
 ${surface} restates the cap, and states the runtime's number
+'${name}' matches the plan's text exactly
+'pass' matches the plan's sentence with the sha filled in
+--command-out writes the exact command text, with no trailing newline
 04-dns-fail.md contains the typo'd hostname (regression-snapshot invariant)
 8-state decision matrix exists with exactly one PASS terminal
 A1 every allowlisted verb is accepted
@@ -67,6 +70,9 @@ Form B — bold-wrapped `**Expected output:**` line
 Form B — fenced code block following prose key
 Form B — prose `Expected output:` line
 G1 the number of plans declaring credentials_required equals the baseline
+Guard 1: a verify that skips the freeze comparison lets an edited command through
+Guard 2: a classify that returns FAILED-AS-EXPECTED unconditionally makes the VACUOUS case disappear
+Guard 3: deleting the headless refusal lets a headless OVERRIDDEN through
 I1 inline command is unchanged
 Locale the Step 10.4 parse is C-locale pinned, so a UTF-8 caller gets the same bytes
 N1 stops at a sibling key; parseExpected still reads it
@@ -108,18 +114,86 @@ Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B
 Step 10.4 resolves both Check 10 operands through the loader token, never the git root
 Step 10.5 reject set includes newline
 TRAIL-WS the fixture's raw command line still ends in whitespace
+a PR author equal to the authenticated login is trusted
+a PR author who is not the authenticated login is UNTRUSTED
+a YAML reformat with equal canonical fields still passes (must-PASS)
+a baseline with a non-zero rc is FAILED-AS-EXPECTED
+a baseline with rc 0 but expected absent is FAILED-AS-EXPECTED (a real fail)
+a block frozen before any code is OK and reports its identity
+a block quoted under a non-Acceptance-Criteria heading is ignored (Guard 1 row 7)
+a block with no freeze commit (uncommitted working tree) is FAIL
+a code commit that precedes the freeze is an ordering violation
+a command with pipes and newlines cannot break the row apart
+a creates path that already exists is FAIL
+a creates path that is PRESENT does not exempt rc 127
+a freeze authored by another identity is UNTRUSTED, exit 1
+a freeze authored by the local identity is trusted (must-PASS)
+a freeze committed together with code is an ordering violation: stop-and-ask, not FAIL
+a headless failing check is recorded as STOPPED-AWAITING-FOUNDER, with the underlying outcome kept
+a judgement check carries no command and passes
+a learnings-only commit before the freeze does not fail it (must-PASS)
+a listed creates path that is absent makes any non-zero baseline rc a valid fail
+a merge-base freeze (reviewed on main) is trusted whoever wrote it
+a non-hex output hash is refused
+a pass after failures says so
+a pin that is not HEAD's blob is FAIL
+a pin whose sha is not the blob at the freeze is FAIL
+a pinned script that does not exist at the freeze is FAIL
+a plan already on main is frozen at the merge-base copy (must-PASS)
+a plan already on main that the branch then edits is CHANGED
+a plan with no founder_check block and no history is NO-BLOCK
+a quoted copy does not disturb a real block elsewhere (must-PASS)
+a rebased branch with new SHAs still passes (must-PASS)
+a removed hash line is tolerated and the recomputed identity is reported
+a row carries rc, attempt, sha, hash and output hash but no output text
+a symlinked plan is FAIL, never followed
+a timeout is never exempted by creates
+a verb off the probe allowlist is FAIL
+a verify that always exits 0 does NOT report a changed command
+acceptance: a non-zero rc is FAILED even when expected is present
+acceptance: rc 0 with an empty expected is PASSED
+acceptance: rc 0 with expected absent is FAILED
+acceptance: rc 0 with expected present in stdout is PASSED
+an edited expected after the freeze is CHANGED-SINCE-APPROVAL
+an edited field with a STALE hash is FAIL (the block disagrees with itself)
+an interpreter verb with every script pinned by blob sha passes
+an uncommitted block validates and reports the identity to write into hash:
+an unknown name is a usage error
+an unknown polarity is a usage error, exit 2
+an unparseable block is FAIL, never SKIP
 awk interpreter is a known implementation (mawk or gawk)
+candidate mode does not accept a stale hash
 classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')
+creates naming a path that already exists at the freeze (a stub) is FAIL
+creates with a non-interpreter verb passes when the path is absent at the freeze
+credentials_required is FAIL (a check needing credentials is a judgement check)
 each rung of the detection ladder ends in an action
 empty Form A block scalar (`command: |` with no continuation) returns empty
 every battery-running invocation in Phase 4 carries an explicit mode flag (#8322)
 every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
+exactly two subprocess call sites: git and the verb gate
+headless refuses FOUNDER-CONFIRMED and writes nothing
+headless refuses OVERRIDDEN and writes nothing
+headless with an approved block and no sandbox is STOPPED-AWAITING-FOUNDER; without a block it stays SKIP-NOSANDBOX
+interactive OVERRIDDEN with a reason is recorded as an override, never as a pass
+interactive OVERRIDDEN without a reason is refused
+it declares no sandbox of its own
+kind must be command or judgement
 list match (comma-joined)
 list match (or-joined)
 modeFlagsOn sees the mode flags, not the query flags
+no block is still NO-BLOCK
+no plan change on the branch is NO-BLOCK, exit 0 (the SKIP banner case)
+no shell-out primitives
+no string claims 'verified', 'proven' or 'safe' (the pass sentence's one negation is the exemption)
 normalizes trailing newline before comparing
 parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)
 preflight/SKILL.md declares the cap as a `timeout Ns` exec (the runtime of record)
+prints founder-check: no log before any run
+prints the row count over a populated log
+rc ${rc} is INVALID in both polarities (tooling, not a result)
+rc ${rc} is INVALID when the first token is curl
+rc ${rc} is an ordinary result when the first token is not curl
 rejects command-substitution as FAIL
 rejects empty stdout against non-empty expected
 rejects parameter-expansion ($VAR, ${VAR}) as FAIL
@@ -128,6 +202,18 @@ rejects ssh commands as FAIL
 returns empty string when block absent
 returns empty string when command field absent
 returns the block when present
+row 1: a baseline that already passes is VACUOUS
+row 1: an edited command after the freeze is CHANGED-SINCE-APPROVAL
+row 2: a plan deleted after the freeze is FAIL, never SKIP
+row 2: a plan renamed after the freeze is FAIL
+row 2: a plan stripped of its block while a freeze exists is FAIL
+row 3: a second differing block added after a compliant first is FAIL
+row 3: an unhealthy sandbox is INVALID, never a baseline fail
+row 4: edit expected AND recompute hash in one commit is still CHANGED
+row 4: rc 127 for a target NOT listed in creates is INVALID
+row 5: editing a pinned script after the freeze is CHANGED-SINCE-APPROVAL
+row 6: an interpreter verb naming a script that is not pinned is FAIL
+row 6: creates combined with an interpreter verb is FAIL
 shardTokensOn sees a *_SHARD= selector, not only TEST_GROUP and positional (#7936)
 shipped block, root set but empty: the test -r guard fails closed at /skills/
 shipped block, root unset: aborts before any parser runs, decoy ledger stays empty
@@ -139,14 +225,23 @@ surface 2 (plan-issue-templates.md) — exactly 3 blocks, each set-equal to cano
 surface 2b — discoverability_test sub-fields agree across canonical + all 3 template blocks
 surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
+the aggregate row says ran, returned success against the sha — never a bare PASS
 the default under uncertainty is the full battery, and covers ENFORCEMENT not just existence
 the extracted block is the real one (non-empty, carries the fail-closed test)
 the gate and rejectReason agree on verdict and reason for every shape
 the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
+the log is append-only: a second row leaves the first byte-identical
+the mutants themselves are driven: the anchors exist in the production script
 the parity table is non-vacuous — it contains both accepts and rejects
 the skip predicate is pinned — widening it cannot silently shrink coverage
+the static rules still apply: a verb off the allowlist is FAIL
+the stdout marker is metadata only: outcome, hash, tested_sha
+there is no way to hand the log the command's output
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)
 twin control: the pre-migration git-root block DOES execute the decoy
+two blocks in one Acceptance Criteria section is FAIL
+two plans each carrying a block is FAIL
+with no --log it reads the current branch's spec directory
 work/SKILL.md defines the fallback once, with the conditional stated
 §9 prescribes NO unsharded battery run — every invocation carries a mode flag or is a query
 §9 prescribes the affected gate

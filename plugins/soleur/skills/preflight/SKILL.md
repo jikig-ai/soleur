@@ -30,6 +30,10 @@ When `HEADLESS_MODE=true`:
 - On any FAIL: abort with error details, no prompt
 - On all PASS/SKIP: continue silently. **Two exceptions, both Check 10 only, both always emitted:** **SKIP-DECLARED** — continue, but emit one line naming the declared credential scope (a verification waiver exists to be reviewable, so silencing it defeats it); and **SKIP-NOSANDBOX** — continue, but emit one line stating that Check 10 did not run at all on this host. The second is the more important of the two: it means a security-relevant gate is dark, and folded into the silent set it is indistinguishable from the gate having nothing to do.
 
+**Check 13 headless contract.** Check 13 never prompts in headless mode. A founder-stated check that FAILED, is INVALID, CHANGED-SINCE-APPROVAL, UNTRUSTED or `needs-your-eyes`, or that cannot run for want of a sandbox, is a FAIL recorded as `STOPPED-AWAITING-FOUNDER`; an agent never accepts, overrides or confirms on the founder's behalf. Always emitted, like Check 10's: the no-block banner and the no-sandbox line (`founder-check.py text no-block` / `text no-sandbox`).
+
+**`--founder-check-baseline`.** If `$ARGUMENTS` contains `--founder-check-baseline`, strip it like `--headless`, **skip Checks 1–12 explicitly**, and run only Check 13 in baseline polarity (reference section 7). Invoked by `soleur:plan` at capture, before the freeze commit.
+
 ## Phase 0: Context Detection
 
 Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
@@ -67,6 +71,7 @@ If the command fails (e.g., offline, no remote), every path-gated check falls ba
 | 10 (Discoverability test) | Zero matches for the canonical sensitive-path regex (re-use Check 6 SSOT). |
 | 11 (Register drift) | Zero matches for `(^\|/)apps/web-platform/supabase/migrations/.*\.sql$`, `(^\|/)apps/web-platform/server/workspace-resolver\.ts$`, or `(^\|/)knowledge-base/engineering/architecture/domain-model\.md$` (empty/missing cache → run, never SKIP). |
 | 12 (Encryption posture) | Zero matches for `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, `docker-compose.*\.ya?ml$` (empty/missing cache → run, never SKIP). |
+| 13 (Founder check) | Never SKIPs on an empty cache: runs whenever a plan for this branch carries a `founder_check` block or freeze evidence (the resolver, not the diff cache, decides), else prints the no-block banner. |
 | Not-Bare-Repo | Always runs. |
 
 For PR #3488-class diffs (lockfile bumps + orphan-cleanup deletions), Checks 1, 2, 5, 6, 7, 8 fast-skip → Checks 3 (lockfile fires), 4 (env isolation always), 9 (always), Not-Bare-Repo (always) execute. Of those four, only Check 3 and Check 9 do "real work" against the diff; Check 4 and Not-Bare-Repo are constant-cost.
@@ -1463,6 +1468,17 @@ python3 scripts/lint-encryption-posture.py --repo-sweep > "$PREFLIGHT_TMP/encryp
   of truth for the pass/fail decision.
 - **SKIP** — the cached path-set contains zero `.tf` / store-class / connection-class paths.
 
+### Check 13: Founder-Stated Check
+
+Runs the check a founder wrote in their own words, approved as an exact command, and froze before work started (ADR-274). The decisions live in [founder-check.py](./scripts/founder-check.py); this check relays them and never re-derives a verdict in prose. The wrapper, the outcome tables and the prompts are in [check-13-founder-check.md](./references/check-13-founder-check.md).
+
+1. **Resolve.** Run `founder-check.py verify` (reference section 1). `NO-BLOCK` is SKIP with the pinned banner; a missing block with freeze evidence is FAIL, never SKIP; `UNTRUSTED` and `CHANGED-SINCE-APPROVAL` stop and are decided in Phase 2.
+2. **Run only through Step 10.5.** The approved command runs in the Step 10.5 sandbox via the reference's wrapper, with `CMD` set to the command. Check 13 declares no sandbox of its own and never executes the command any other way. First run `true` through the same wrapper: it must return rc 0 (sandbox-health control).
+3. **Classify and record.** `founder-check.py classify` is the one chokepoint; `founder-check.py log` is the only writer of outcomes and prints the metadata-only `SOLEUR_FOUNDER_CHECK_RESULT` marker.
+4. **Say only what is true.** A pass reads "ran, returned success against `<sha>`", from `founder-check.py text`. It never claims the work is verified.
+
+`SKIP-NOSANDBOX` here is stated as "your check did not run on this host"; with an approved block present it stops the run (a gate that went dark must not read as green).
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -1483,9 +1499,12 @@ After all checks complete, aggregate results into a structured report:
 | SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
 | Node-Only Encodings Banned in Client-Bundle | PASS/FAIL | <details> |
 | Discoverability Test Execution | PASS/FAIL/SKIP/SKIP-DECLARED/SKIP-NOSANDBOX | <details> — on SKIP-DECLARED, quote the declared `credentials_required` scope verbatim so the waiver is visible in the aggregate; on SKIP-NOSANDBOX, state plainly that Check 10 did not execute on this host and why |
+| Founder-Stated Check | ran-returned-success/FAIL/SKIP/SKIP-NOSANDBOX/OVERRIDDEN | `Founder check: ran, returned success against <sha>` (never a bare PASS), the exact command and expected string beside it; roll-up per reference section 4 |
 
 **Overall: PASS / FAIL**
 ```
+
+On OVERRIDDEN add one closing line, `Founder check OVERRIDDEN: <reason>`; on SKIP-NOSANDBOX add `your check did not run; ship continues`.
 
 ### If any FAIL
 
@@ -1498,6 +1517,8 @@ After all checks complete, aggregate results into a structured report:
   1. "Fix and retry" -- fix the issues, then re-run preflight from Phase 1
   2. "Abort" -- stop the pipeline
 
+**Founder check (Check 13) prompts run here**, after the parallel checks finish: retry, restore or change the check, or accept anyway (recorded as `OVERRIDDEN`, with a reason) — reference section 5.
+
 ### If all PASS or SKIP
 
 Print the summary table and continue.
@@ -1508,6 +1529,7 @@ Preflight validation passed. Return control to the calling orchestrator.
 
 ## Sharp Edges
 
+- **Check 13 reuses Step 10.5 by wrapper, never by copy.** Step 10.5 is a fence an agent follows, so reuse means running it inside a command substitution with `CMD` set. A second `BWRAP_ARGS` array would fork the sandbox; `preflight-check10-suite-integrity.test.sh` asserts the Check 13 section declares none. Check 13 is not path-gated like Check 10, so it widens what runs on a checked-out PR head: the authorship anchor in `founder-check.py verify` (`UNTRUSTED`) is what keeps a contributor's self-consistent plan from executing on the operator's machine without a prompt. It makes an override legible and attributable; it does not authenticate the founder.
 - **Quad-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2, AND `plugins/soleur/skills/review/scripts/fix-round-seats.sh` (ADR-267). All four MUST stay byte-identical — `plugins/soleur/test/review-tier-parity.test.ts` pins the script copy against this file. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
 - **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across every fixture in `plugins/soleur/test/fixtures/preflight-check-10/`.

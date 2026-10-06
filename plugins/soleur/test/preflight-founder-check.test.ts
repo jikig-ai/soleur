@@ -628,6 +628,62 @@ describe("verify: block rules", () => {
   });
 });
 
+describe("verify --candidate (baseline mode: a block with no freeze yet)", () => {
+  const candidate = (r: Repo) => r.verify(["--candidate"]);
+
+  test("an uncommitted block validates and reports the identity to write into hash:", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE, { hash: null }) }));
+    const v = candidate(r);
+    expect(v.json?.outcome).toBe("OK");
+    expect(v.json?.freeze_source).toBe("candidate");
+    expect(v.json?.hash).toBe(canonicalHash(BASE));
+  });
+
+  test("--command-out writes the exact command text, with no trailing newline", () => {
+    const r = new Repo();
+    const cmd = "grep -c 'it''s' site/index.html";
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: cmd }) }));
+    const out = join(r.dir, "cmd.txt");
+    const v = r.verify(["--candidate", "--command-out", out]);
+    expect(v.json?.outcome).toBe("OK");
+    expect(readFileSync(out, "utf8")).toBe(cmd);
+  });
+
+  test("no block is still NO-BLOCK", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-no-block.md", {}));
+    expect(candidate(r).json?.outcome).toBe("NO-BLOCK");
+  });
+
+  test("the static rules still apply: a verb off the allowlist is FAIL", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "ls site" }) }));
+    expect(candidate(r).json?.reason).toBe("verb-gate");
+  });
+
+  test("a creates path that already exists is FAIL", () => {
+    const r = new Repo();
+    r.write("site/new.html", "stub\n");
+    r.commit("stub");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, creates: ["site/new.html"], command: "grep -c a site/new.html" }) }));
+    expect(candidate(r).json?.reason).toBe("creates-exists-at-freeze");
+  });
+
+  test("a pin that is not HEAD's blob is FAIL", () => {
+    const r = new Repo();
+    r.mainFile("scripts/check.sh", "echo ok\n");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "bash scripts/check.sh", pins: { "scripts/check.sh": "2".repeat(40) } }) }));
+    expect(candidate(r).json?.reason).toBe("pin-not-at-freeze");
+  });
+
+  test("candidate mode does not accept a stale hash", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "" }, { hash: canonicalHash(BASE) }) }));
+    expect(candidate(r).json?.reason).toBe("hash-mismatch");
+  });
+});
+
 describe("verify: authorship (Guard 3)", () => {
   test("a freeze authored by another identity is UNTRUSTED, exit 1", () => {
     const r = new Repo();
