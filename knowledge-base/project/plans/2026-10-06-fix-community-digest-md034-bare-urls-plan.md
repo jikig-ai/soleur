@@ -10,6 +10,35 @@ lane: cross-domain
 
 # fix: Render community digest URLs as markdown links (MD034 no-bare-urls)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Research Insights (precedent diff, verify-the-negative), Observability
+(affected-surface note), Context (stale digest-PR reaping)
+**Mechanical halt gates run and passed:** 4.6 User-Brand Impact (section + `none` scope-out for
+the `apps/web-platform/server/` sensitive path), 4.7 Observability (all 5 fields, allowlisted
+`grep` verb, literal `expected_output`), 4.8 PAT sweep (no hits), 4.9 UI (no UI-surface files),
+4.10 Encryption (no store/connection), 4.11 Guard Contract (`lint-guard-contract.py` rc 0),
+4.12 Scope Check (one unfenced section, all rows mapped/justified).
+**Sub-agent fan-outs (Phases 2/3/4/5):** not spawned — this deepen pass ran inside a planning
+subagent with no Task tool. The equivalent work was executed inline at plan time: premise
+validation against live GitHub state, real pinned-binary MD034 probes, the pin-sweep, the
+precedent diff, and the Sharp Edges catalogue pass. Review coverage that only sub-agents
+provide (domain leaders, spec-flow, multi-seat review) is deferred to the pipeline's review
+stage; flag for the reviewer that this plan was deepened without agent fan-out.
+
+### Key Findings of the Deepen Pass
+
+1. The URL-injection surface is closed: `repo` is `REPO_RE`-validated (`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`),
+   `failureCause` is `z.enum(COMMUNITY_FAILURE_CAUSES)`, topics/headlines are closed-vocabulary
+   labels plus numbers — the three URL consts are the only way `https://` reaches the render, so
+   the negative pin over the full rendered string is a complete census, not a sampling.
+2. Stale digest PRs #9586/#9647 need no plan task: `cron-bot-pr-reaper` reaps stale `ci/*` bot
+   PRs after 48h (armed-auto-merge bot PRs by `soleur-ai[bot]`).
+3. The discoverability probe was hardened twice: `grep -F` (no regex backslashes that YAML
+   double-quote decoding could mangle) and a distinguishing expected token whose presence proves
+   the fix, not merely the file.
+
 ## Overview
 
 `renderCommunityPublication` in
@@ -104,6 +133,27 @@ no new gate, lint, or CI machinery is needed or proposed.
 **Research decision (Phase 1.6).** No external research — a closed template edit verified against
 the pinned linter binary locally; codebase context fully determines the fix.
 
+**Precedent diff (deepen Phase 4.4).** The adopted form is NOT novel — it reuses the codebase's
+own precedent verbatim: prior committed digests rendered GitHub links as `[#N](https://github.com/…)`
+(`knowledge-base/support/community/2026-04-03-digest.md:47-53`), sibling crons emit runbook URLs
+in link form (`event-cf-token-expiry-check.ts:188`, `cron-ruleset-bypass-audit.ts:420`,
+`cron-cloud-task-heartbeat.ts:325`), and the linted corpus carries 3,237 `](https` occurrences
+vs 710 `<https` autolinks. The rejected alternative (angle-bracket autolinks) is equally
+lint-compliant but the minority idiom and renders as a raw URL in the digest.
+
+**Verify-the-negative (deepen Phase 4.45).** The plan's negative claims were each probed, not
+asserted: (a) "no bare URL in either string" is pinned by the new assertions, and the injection
+surface was enumerated — `repo` passes `REPO_RE`, `failureCause` is a closed `z.enum`, topics and
+headlines are label/number templates, so `issuesUrl`/`pullsUrl`/`digestUrl` are the only
+`https://` producers in the render; (b) "no markdownlint fixture/golden exists" — verified by
+`find` + `grep` over the repo, untruncated; (c) "issue bodies are not linted" — the swept set is
+tracked `*.md` only, and the CI log on #9647 flags exactly one file, the committed digest;
+(d) "no other committed-markdown emitter carries the defect" — other `safeCommitAndPr` crons
+write issue bodies (unlinted) or into `knowledge-base/project/`/`marketing/distribution-content/`
+(ignored) or already-clean files (the corpus is green on main — the CI log listed only the new
+digest's two errors). Post-edit self-audit: no symbols are dropped or renamed, so no stale
+references can dangle.
+
 **Community discovery / functional overlap (Phases 1.5/1.5b).** TypeScript stack is covered by
 built-in agents (skip). Functional-overlap agent could not be spawned in this headless subagent
 context; assessed inline — this is a lint-compliance fix on existing code, no new capability a
@@ -163,6 +213,13 @@ discoverability_test:
   command:         grep -Fn 'Review inbound items: [issues](' apps/web-platform/server/inngest/functions/_cron-community-publication.ts
   expected_output: "issues]("
 ```
+
+**Affected-surface note (Phase 2.9.2).** The emitting surface is a cron worker the operator cannot
+watch live, but the defect is not blind: the emitted artifact itself is the discriminating probe —
+a committed digest file either does or does not carry a bare URL, and the required `markdown-lint`
+check on the digest PR reads exactly that property (it proved itself on #9586 and #9647). The
+renderer-side negative pin in `cron-community-publication.test.ts` is the pre-merge in-surface
+complement: it fires on the string the handler produces, before any commit reaches the corpus.
 
 ## Guard Contract
 
@@ -326,6 +383,10 @@ no `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx` in Files to 
   duplicate digest PRs (#9586 + #9647 on 2026-10-06).
 - `cq-write-failing-tests-before`: the new negative pin is RED against `origin/main`'s renderer
   (bare URLs present) before the fix is applied — verify by running the updated tests pre-edit.
+- Stale digest PRs #9586/#9647 need no cleanup task: `cron-bot-pr-reaper` already reaps stale
+  `ci/*` bot PRs (48h, armed-auto-merge bot PRs by `soleur-ai[bot]`).
+- Post-merge signal to watch (not an AC of this PR): the next daily digest PR's `markdown-lint`
+  job going green is the end-to-end confirmation the whole chain unblocked.
 
 ## References
 
