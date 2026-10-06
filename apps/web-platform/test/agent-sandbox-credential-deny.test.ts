@@ -7,12 +7,15 @@
 // The injected set is DERIVED from `buildAgentEnv`'s output by value flow: the
 // credential is a unique sentinel, and an auth variable is any key whose value
 // carries it. That makes the guard independent of the constant it checks — a
-// third variable set from the credential, in one scheme or in every scheme, in
-// any option shape, changes the derived set and fails here. The wire from the
-// builder to the real `query()` options is pinned in
+// third variable set verbatim from the credential, in one scheme or in every
+// scheme, with or without the sampled options, changes the derived set and fails
+// here. Value flow cannot see a TRANSFORMED copy (a hash, an encoding), a branch
+// gated on an option the shapes below do not set, or a production-only branch,
+// so a source fence below pins where `credential.value` may be used at all. The
+// wire from the builder to the real `query()` options is pinned in
 // agent-runner-query-options.test.ts.
 
-import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -22,6 +25,7 @@ import { buildAgentEnv, type AgentCredential } from "@/server/agent-env";
 import { API_KEY_ENV_VAR, AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 import { PROVIDER_CONFIG } from "@/server/providers";
+import { stripComments } from "./helpers/strip-comments";
 
 // Every auth scheme. A Record keyed on the union makes a NEW scheme a compile
 // error here, so it cannot be added to the injector without being sampled.
@@ -93,6 +97,29 @@ describe("buildAgentSandboxConfig — Anthropic credential deny (W1)", () => {
     for (const e of entries) expect(e.mode).toBe("deny");
   });
 
+  // The source fence: the owner's credential value may be used in exactly the two
+  // auth assignments in agent-env.ts, and the identifier may not be aliased or
+  // destructured. Covers the shapes value-flow derivation cannot (transformed
+  // copy, option-gated or production-only branch, a new option).
+  it("agent-env.ts uses the credential value only in the two auth assignments", () => {
+    const code = stripComments(
+      readFileSync(join(__dirname, "..", "server", "agent-env.ts"), "utf8"),
+      "agent-env.ts",
+    );
+    const allowed = [
+      /^\s*credential: AgentCredential,\s*$/,
+      /^\s*switch \(credential\.scheme\) \{\s*$/,
+      /^\s*env\[API_KEY_ENV_VAR\] = credential\.value;\s*$/,
+      /^\s*env\[OAUTH_ENV_VAR\] = credential\.value;\s*$/,
+      /^\s*const _exhaustive: never = credential\.scheme;\s*$/,
+    ];
+    const uses = code.split("\n").filter((line) => /\bcredential\b/.test(line));
+    const offenders = uses.filter((line) => !allowed.some((re) => re.test(line)));
+    expect(offenders).toEqual([]);
+    // The instrument is not empty: both auth assignments really are there.
+    expect(uses.filter((l) => /= credential\.value;/.test(l))).toHaveLength(2);
+  });
+
   it("is anchored to the shared constant, and the instrument is not empty", () => {
     expect(SCHEMES.length).toBeGreaterThanOrEqual(2);
     expect(injectedAuthVars()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
@@ -120,6 +147,16 @@ describe("buildAgentSandboxConfig — Anthropic credential deny (W1)", () => {
     for (const opts of [{ readOnly: true }, { allowGithubEgress: true }]) {
       const entries = buildAgentSandboxConfig(own, opts).credentials.envVars;
       expect(entries.map((e) => e.name).sort(), JSON.stringify(opts)).toEqual(injectedAuthVars());
+    }
+  });
+
+  // A command the SDK runs OUTSIDE the sandbox sees the full environment, so the
+  // deny is only as strong as the unsandboxed-command surface is closed.
+  it("leaves no unsandboxed-command escape in any config shape", () => {
+    for (const opts of [undefined, { readOnly: true }, { allowGithubEgress: true }]) {
+      const cfg = buildAgentSandboxConfig(own, opts);
+      expect(cfg.allowUnsandboxedCommands, JSON.stringify(opts)).toBe(false);
+      expect(cfg.excludedCommands, JSON.stringify(opts)).toBeUndefined();
     }
   });
 });

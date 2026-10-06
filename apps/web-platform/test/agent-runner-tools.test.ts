@@ -125,6 +125,7 @@ vi.mock("../server/observability", () => ({
 
 import { startAgentSession } from "../server/agent-runner";
 import { CREDENTIALS_PROMPT_DIRECTIVE } from "../server/soleur-go-runner";
+import { AGENT_AUTH_ENV_VARS } from "../server/agent-auth-env-vars";
 import {
   DEFAULT_API_KEY_ROW,
   createSupabaseMockImpl,
@@ -603,6 +604,29 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.systemPrompt).toContain(CREDENTIALS_PROMPT_DIRECTIVE);
     // Heading collision guard: this block must not masquerade as Connected Services.
     expect(options.systemPrompt).not.toContain("## Connected Services");
+  });
+
+  // The call site, not only the builder: what startAgentSession hands query()
+  // must carry the credential deny (an override between the two would not be
+  // seen by the builder-level tests).
+  test("the sandbox startAgentSession hands query() carries the credential deny", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
+
+    const sandbox = mockQuery.mock.calls[0][0].options.sandbox as {
+      credentials?: { envVars: { name: string; mode: string }[] };
+    };
+    expect((sandbox.credentials?.envVars ?? []).map((e) => e.name).sort()).toEqual(
+      [...AGENT_AUTH_ENV_VARS].sort(),
+    );
+    for (const e of sandbox.credentials?.envVars ?? []) expect(e.mode).toBe("deny");
   });
 
   test("system prompt carries the Credentials directive alongside Connected Services", async () => {

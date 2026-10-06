@@ -38,35 +38,69 @@ Both runs then fail in the canary's projection step (`host_path token '/root/.cl
 
 ## 1.3 — can sandboxed Bash reach the CLI parent's environment through `/proc`? (review follow-up)
 
-Raised by the security seat of the PR 1 review: the argv carries `--tmpfs /proc` early and `--bind /proc /proc` last, and the config comment said `/proc` is "already in `denyRead`". Measured with the real SDK 0.3.284 and the production `buildAgentSandboxConfig` (so `enableWeakerNestedSandbox: true`), on the dev host (not the production container), decoy API key in the CLI environment; the probe prints counts only:
+Raised by the security seat of the PR 1 review: the shipped argv carries `--tmpfs /proc` early and `--bind /proc /proc` last, and a code comment said `/proc` is "already in `denyRead`". Measured through the real SDK 0.3.284 with the production `buildAgentSandboxConfig` (so `enableWeakerNestedSandbox: true`), on the dev host, decoy key in the CLI environment; the probe prints pids, process names and 0/1 flags only. A first run had no positive control (it could not show it could see a decoy at all); this is the corrected measurement, with a control arm.
 
-| Probe inside sandboxed Bash | Result |
-|---|---|
-| pids visible in `/proc` | 6 (the sandbox's own PID namespace; the CLI parent is not among them) |
-| `/proc/<pid>/environ` files readable | 2 |
-| readable environ files containing the decoy key | **0** |
-| `ps eww` lines containing the decoy key | **0** |
-| `cat /proc/$PPID/environ` | readable, but `$PPID` is the sandbox's own parent, not the CLI |
-| `$ANTHROPIC_API_KEY` | absent |
+| Arm | pids visible | readable `environ` files carrying the decoy | `$ANTHROPIC_API_KEY` in the shell |
+|---|---|---|---|
+| CONTROL (deny entries emptied) | 3 (bubblewrap init, `bash`, `sh`) | **2** (`bash` and `sh`) | PRESENT |
+| TREATMENT (production config) | 3 (same) | **0** (pid 1 unreadable; `bash` and `sh` readable, carrying nothing) | ABSENT |
 
-Conclusion: the PID namespace (`--unshare-pid`), not `denyRead`, keeps the CLI parent's environment out of reach, on this host. The comments in `agent-runner-sandbox-config.ts` were corrected. Not re-measured inside the production container image, which has its own seccomp and AppArmor profiles; the argv shape is the same.
+`ps eww` carried no decoy in the treatment arm. Conclusion: no process environment readable from inside the sandbox carries the key, and the probe demonstrably can find the decoy when it is there.
+
+What this does NOT establish is why. A security-seat repro and a code-quality-seat repro, both hand-built bubblewrap runs using the shipped argv shape without the SDK, saw 700+ host pids; one found bubblewrap's init environ readable and carrying the original bytes after `--unsetenv`, the other found no readable environ at all. They disagree with each other and with the SDK-launched run on the mechanism. So the ADR and the code comments no longer attribute the result to the PID namespace (an earlier draft did); they claim the outcome only, and `sandbox-credential-deny-runtime.test.ts` repeats it, control arm included, on every CI run with real bubblewrap. Not measured inside the production container image.
+
+## 1.5 — what does the SDK do with a malformed `credentials` block? (review follow-up)
+
+The ADR said the SDK "strips unknown keys". Measured on SDK 0.3.284 (same harness, decoy key, deny intended for `ANTHROPIC_API_KEY`):
+
+| Block handed to the SDK | Session | `$ANTHROPIC_API_KEY` in the shell |
+|---|---|---|
+| key renamed (`credentialz`) | starts, turn completes, no error | PRESENT |
+| `envVars` renamed (`vars`) | starts, turn completes, no error | PRESENT |
+| `envVars` a string, not an array | starts, turn completes, no error | PRESENT |
+| `mode` an unknown value | starts, turn completes, no error | PRESENT |
+
+Every malformed variant fails open and silently. There is no runtime signal for a block the SDK ignores, which is why the argv and real-sandbox tests are the detectors and why "sessions start normally" is not an acceptance criterion.
 
 ## 1.4 — mutation proof of the W1 guards (review follow-up)
 
-An 8-row battery run in an allocated sandbox copy, after a green unmutated control (6 files, 69 tests); every mutation was confirmed to have landed, and each reddened the named guard:
+Two batteries, each run in an allocated sandbox copy after an unmutated control, each row confirmed to have landed (`cmp` against the pristine file) and restored from the live tree before the next.
+
+**Battery 1** (control green: 6 files, 70 tests). Each mutation reddened the named guard:
 
 | Mutation | Guard that reddened |
 |---|---|
-| production factory overrides `credentials` with an empty list (the wire) | `agent-runner-query-options.test.ts` (3 cases) |
-| a third auth variable set from the credential in BOTH schemes | `agent-sandbox-credential-deny.test.ts` (4 cases) |
+| production factory overrides `credentials` with an empty list (the wire) | `agent-runner-query-options.test.ts` |
+| a third auth variable set from the credential in BOTH schemes | `agent-sandbox-credential-deny.test.ts` |
 | directive removed from the Concierge baseline prompt | `credentials-prompt-directive.test.ts` |
-| directive removed from the legacy prompt builder | `agent-runner-tools.test.ts` (2 cases) |
-| OAuth name dropped from the shared constant | `agent-sandbox-credential-deny.test.ts` (3 cases) |
+| directive removed from the legacy prompt builder | `agent-runner-tools.test.ts` |
+| OAuth name dropped from the shared constant | `agent-sandbox-credential-deny.test.ts` |
 | the names module imports `env` | `oauth-token-injection-site.test.ts` |
 | `mode: "deny"` changed to `"mask"` | query-options, unit and argv tests |
 | `credentials` block removed from the config | query-options, unit and argv tests |
 
-The first two rows were survivors of the earlier self-run battery: it mutated the config builder and the constant, never the wire to the consumer and never a variable common to every scheme.
+The first two rows survived the earlier self-run battery, which mutated the config builder and the constant but never the wire to the consumer and never a variable common to every scheme.
+
+**Battery 2** (after the second review round; control green except one test of mine that was wrong, see below). Each row reddened the named guard:
+
+| Mutation | Guard that reddened |
+|---|---|
+| deny dropped when `serviceTokens` is non-empty (a shape no hand-picked case had) | wire test, the cases carrying service tokens |
+| the options factory adds an auth key to `env` | wire test (`env` equals what `buildAgentEnv` built) |
+| a transformed (base64) copy of the credential in `buildAgentEnv` | source fence on `credential.value` |
+| a production-only (`NODE_ENV`) copy of the credential | source fence on `credential.value` |
+| legacy call site overrides `credentials` after the builder | `agent-runner-tools.test.ts` |
+| dispatcher call site rebuilds the sandbox object | `cc-dispatcher-real-factory.test.ts` (identity) |
+| a sentence appended to the directive | `credentials-prompt-directive.test.ts` (exact wording) |
+| support persona / CRM lead prompt loses the directive | `credentials-prompt-directive.test.ts` (each, exactly once) |
+| `pdf-chapter-router` drops `settingSources` / `tools` | `pdf-chapter-router.test.ts`; `tools` also the census anchor |
+| `excludedCommands` added to the config | unit test (no unsandboxed-command escape) |
+| `credentials` key renamed in the config | wire, unit, argv and runtime tests |
+| the names module reads `process.env` after a string containing `//` | `oauth-token-injection-site.test.ts` (parser-based comment stripping) |
+| a new SDK `query()` import appears under `server/` | `sdk-query-sites.test.ts` |
+| `doCapture` ignores its timeout option | `sandbox-credential-deny-argv.test.ts` (never-answering stand-in; test times out) |
+
+**A battery row that was a false kill.** The first version of the `doCapture`-options test used a 1 ms bound, and it was red in the unmutated control: a normal capture simply finishes before a 1 ms abort matters, so the test asserted something false. The mutation row for it was therefore not a kill, and it was caught only because the control was run and read before the rows. It was replaced by a stand-in that never answers, with a 3 s bound. Measured: the abort fires and `doCapture` returns `ok: false` ("Claude Code process aborted by user") in about 5.7 s, bounded by the option and not by the 120 s default. The row above was then re-proven: green control, red when the option is ignored.
 
 ## 1.2 — customer hook-decision matrix for W2
 

@@ -76,21 +76,46 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
 // W1 (#9601, ADR-272): the credential deny is only real if the sandbox object
 // the REAL factories hand to `query()` carries it. `agent-sandbox-credential-deny`
 // pins `buildAgentSandboxConfig`; this pins the wire from that builder to the
-// consumer — an override, spread or hand-written `sandbox:` literal here
-// removes the deny while every builder-level test stays green.
+// consumer. It drives EVERY combination of the inputs production varies (the cc
+// dispatch passes ghToken + askpass, connected services add serviceTokens, the
+// support persona is read-only, some callers add disallowed tools): a branch that
+// drops the deny for one shape passes any single hand-picked case.
 describe("buildAgentQueryOptions — Anthropic credential deny reaches opts.sandbox (W1)", () => {
-  const cases: [string, Partial<typeof minArgs> & Record<string, unknown>][] = [
-    ["legacy shape (no GitHub egress)", {}],
-    ["entitled GitHub egress (ghToken)", { ghToken: "ghs_install_tok" }],
-    ["read-only support persona", { mode: resolveWorkspaceMode("support") }],
+  const TOGGLES: [string, Record<string, unknown>][] = [
+    ["ghToken", { ghToken: "ghs_install_tok" }],
+    ["askpass", { gitAskpassScriptPath: "/tmp/test-workspace/.askpass-xyz.sh" }],
+    ["serviceTokens", { serviceTokens: { PLAUSIBLE_API_KEY: "svc-token" } }],
+    ["extraDisallowedTools", { extraDisallowedTools: ["mcp__example__tool"] }],
   ];
+  const MODES = ["command_center", "support"] as const;
+
+  const cases: [string, Record<string, unknown>][] = [];
+  for (const mode of MODES) {
+    for (let mask = 0; mask < 1 << TOGGLES.length; mask += 1) {
+      const picked = TOGGLES.filter((_, i) => mask & (1 << i));
+      cases.push([
+        `${mode} + [${picked.map(([n]) => n).join(", ") || "nothing"}]`,
+        { mode: resolveWorkspaceMode(mode), ...Object.assign({}, ...picked.map(([, v]) => v)) },
+      ]);
+    }
+  }
+
+  it("covers every combination (the instrument is not empty)", () => {
+    expect(cases).toHaveLength(MODES.length * (1 << TOGGLES.length));
+  });
+
   it.each(cases)("%s", (_label, extra) => {
+    vi.mocked(buildAgentEnv).mockClear();
     const opts = buildAgentQueryOptions({ ...minArgs, ...extra });
     const entries = (opts.sandbox as { credentials?: { envVars: { name: string; mode: string }[] } })
       .credentials?.envVars;
     expect(entries).toBeDefined();
     expect((entries ?? []).map((e) => e.name).sort()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
     for (const e of entries ?? []) expect(e.mode).toBe("deny");
+    // The factory hands the CLI exactly what buildAgentEnv built: it adds no
+    // key (an auth variable set from the credential here would bypass the
+    // derived-set test, which reads buildAgentEnv's return).
+    expect(opts.env).toEqual(vi.mocked(buildAgentEnv).mock.results.at(-1)?.value);
   });
 });
 

@@ -157,11 +157,14 @@ export async function selectChapter(
       options: {
         model: ROUTING_MODEL,
         systemPrompt,
-        // `tools: []` disables every built-in tool (SDK Options.tools). This
-        // call passes no `env` or `sandbox`, so the CLI inherits the server
-        // environment; a single-request routing turn has no use for Bash or
-        // Read, and `allowedTools: []` alone only means "nothing auto-approved".
+        // This call passes no `env` or `sandbox`, so the CLI inherits the server
+        // environment (W1, ADR-272). A single-request routing turn needs no tool:
+        // `tools: []` disables every built-in (SDK Options.tools; `allowedTools: []`
+        // alone only means "nothing auto-approved"), and `settingSources: []`
+        // keeps user/project settings, hooks and settings-declared MCP servers
+        // out of it, as in the production factory (`agent-runner-query-options`).
         tools: [],
+        settingSources: [],
         allowedTools: [],
         maxTurns: 1,
       },

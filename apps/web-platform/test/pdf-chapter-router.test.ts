@@ -212,10 +212,12 @@ describe("selectChapter", () => {
     });
 
     const callArgs = mockQuery.mock.calls[0]?.[0] as
-      | { options?: { tools?: unknown; allowedTools?: unknown } }
+      | { options?: { tools?: unknown; allowedTools?: unknown; settingSources?: unknown } }
       | undefined;
     expect(callArgs?.options?.tools).toEqual([]);
     expect(callArgs?.options?.allowedTools).toEqual([]);
+    // No user/project settings, hooks or settings-declared MCP servers either.
+    expect(callArgs?.options?.settingSources).toEqual([]);
   });
 
   it("returns kind:'router-error' when the SDK throws and mirrors to Sentry", async () => {

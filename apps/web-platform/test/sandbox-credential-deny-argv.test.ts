@@ -17,30 +17,16 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
 import { startAnthropicStub, type AnthropicStub } from "./helpers/anthropic-stub";
+import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
 import { doCapture } from "../scripts/sandbox-canary.mjs";
-
-// Variables that would route the CLI somewhere other than the local stand-in,
-// or authenticate it with something other than the decoy. A developer's shell
-// can export any of them.
-const AMBIENT_ROUTING_VARS = [
-  "ANTHROPIC_AUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-];
 
 describe.skipIf(process.platform !== "linux")(
   "real SDK bwrap argv carries the Anthropic credential deny (W1)",
@@ -59,17 +45,12 @@ describe.skipIf(process.platform !== "linux")(
         }
       }
       stub = await startAnthropicStub("true");
-      // An isolated HOME keeps the CLI from touching the developer's real ~/.claude.
+      // An isolated HOME, and every ambient CLI/provider/proxy variable cleared
+      // (including CLAUDE_CONFIG_DIR, which would otherwise re-point the CLI at
+      // the developer's real settings), so nothing but the local stand-in is reachable.
       home = mkdtempSync(join(tmpdir(), "sbx-deny-argv-home-"));
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("ANTHROPIC_BASE_URL", `http://127.0.0.1:${stub.port}`);
-      vi.stubEnv("ANTHROPIC_API_KEY", "decoy-key-not-a-secret");
-      for (const name of AMBIENT_ROUTING_VARS) vi.stubEnv(name, undefined);
-      vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
-      vi.stubEnv("no_proxy", "127.0.0.1,localhost");
-      vi.stubEnv("DISABLE_TELEMETRY", "1");
-      vi.stubEnv("DISABLE_AUTOUPDATER", "1");
-      vi.stubEnv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+      scrubAmbientCliEnv();
+      pointCliAtStub(stub.port, home, "decoy-key-not-a-secret");
     });
 
     afterAll(async () => {
@@ -90,12 +71,10 @@ describe.skipIf(process.platform !== "linux")(
       expect(argv.length).toBeGreaterThan(20);
       expect(stub?.requests()).toBeGreaterThan(0);
 
-      const unsetAt: number[] = [];
       const unset: string[] = [];
       argv.forEach((tok, i) => {
         if (tok === "--unsetenv" && typeof argv[i + 1] === "string") {
           unset.push(argv[i + 1]);
-          unsetAt.push(i);
         }
       });
       for (const name of AGENT_AUTH_ENV_VARS) {
@@ -112,6 +91,28 @@ describe.skipIf(process.platform !== "linux")(
           : [],
       );
       expect(reSet).toEqual([]);
+    }, 90_000);
+
+    it("honours the capture options: a CLI that never answers is aborted at the bound, not the module default", async () => {
+      // The test above leans on `attempts: 1` and `attemptTimeoutMs`. If they were
+      // ignored, a CLI that never reaches the API would burn 3 x 120 s and outlive
+      // the test. A server that accepts and never replies is that CLI.
+      const hang = http.createServer(() => {
+        /* accept, never respond */
+      });
+      await new Promise<void>((resolve) => hang.listen(0, "127.0.0.1", () => resolve()));
+      vi.stubEnv("ANTHROPIC_BASE_URL", `http://127.0.0.1:${(hang.address() as AddressInfo).port}`);
+      try {
+        const started = Date.now();
+        const result = await doCapture({ attempts: 1, attemptTimeoutMs: 3_000 });
+        expect(result.ok).toBe(false);
+        // Bound + the SDK's SIGTERM grace, far under the 120 s module default.
+        expect(Date.now() - started).toBeLessThan(40_000);
+      } finally {
+        vi.stubEnv("ANTHROPIC_BASE_URL", `http://127.0.0.1:${stub?.port}`);
+        hang.closeAllConnections?.();
+        await new Promise<void>((resolve) => hang.close(() => resolve()));
+      }
     }, 90_000);
   },
 );

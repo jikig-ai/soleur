@@ -95,3 +95,5 @@ Umbrella epic, quick wins first: slice 1 needs no new infrastructure and closes 
 
 - The repo-research agent asserted BYOK keys are "not stored in the agent process"; `agent-env.ts` refutes it. The learnings agent asserted no approval-gate learnings exist; `prod-write-defer-gate.sh` and `hr-menu-option-ack-not-prod-write-auth` refute it. Both corrected here.
 - The CTO report tripped the harness injection-pattern flag (it cites `.claude/settings.json` as a path); content was treated as data.
+
+> **Correction (2026-10-06, measured):** this brainstorm said the OAuth token reaches sandboxed Bash. Measured on SDK 0.3.284 it does not (the CLI withholds it); the live exposure was `ANTHROPIC_API_KEY`. See ADR-272 and `knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md`.

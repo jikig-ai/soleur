@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+import { stripComments } from "./helpers/strip-comments";
+
 // feat-operator-cc-oauth FR6 — CWE-526 single-injection-site guard.
 //
 // `CLAUDE_CODE_OAUTH_TOKEN` is a subprocess auth env var. It must be SET in
@@ -35,11 +37,6 @@ const NAME_IDENTIFIER_USERS: Record<string, Set<string>> = {
     AUTH_NAMES_MODULE,
   ]),
 };
-
-// Identifier uses are judged on code, not prose: a comment that mentions a name
-// is not a reference. (The literal check below stays on raw text on purpose.)
-const stripComments = (text: string): string =>
-  text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 
 function* walkTsFiles(dir: string): Generator<string> {
   let entries: import("node:fs").Dirent[];
@@ -80,9 +77,16 @@ describe("CLAUDE_CODE_OAUTH_TOKEN single injection site (CWE-526)", () => {
     for (const base of SCAN_DIRS) {
       for (const file of walkTsFiles(path.join(ROOT, base))) {
         const rel = path.relative(ROOT, file);
-        const text = stripComments(readFileSync(file, "utf8"));
-        for (const [ident, allowed] of Object.entries(NAME_IDENTIFIER_USERS)) {
-          if (allowed.has(rel)) continue;
+        const raw = readFileSync(file, "utf8");
+        // Cheap prefilter: stripping only removes text, so a file whose raw text
+        // never names an identifier cannot use it. The parser-based stripper is
+        // exact but slow, so it runs only on the few files that mention one.
+        const candidates = Object.entries(NAME_IDENTIFIER_USERS).filter(
+          ([ident, allowed]) => !allowed.has(rel) && raw.includes(ident),
+        );
+        if (candidates.length === 0) continue;
+        const text = stripComments(raw, rel);
+        for (const [ident] of candidates) {
           if (new RegExp(`\\b${ident}\\b`).test(text)) offenders.push(`${rel} -> ${ident}`);
         }
       }
@@ -109,7 +113,7 @@ describe("CLAUDE_CODE_OAUTH_TOKEN single injection site (CWE-526)", () => {
     const raw = readFileSync(path.join(ROOT, AUTH_NAMES_MODULE), "utf8");
     // The instrument is not empty: the module really defines the names.
     expect(raw).toContain(LITERAL);
-    const code = stripComments(raw);
+    const code = stripComments(raw, AUTH_NAMES_MODULE);
     // Any import (`import { env } from "node:process"`), `process`/`globalThis`
     // access in any spelling (`process["env"]`), require/eval, or an env word.
     expect(code).not.toMatch(/\b(import|require|process|globalThis|eval|Function|env)\b/);

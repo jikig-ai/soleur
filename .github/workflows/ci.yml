@@ -709,7 +709,7 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
+          if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-auth-env-vars\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)'; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"

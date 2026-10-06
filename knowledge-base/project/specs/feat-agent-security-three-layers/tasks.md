@@ -15,15 +15,15 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-agent-security-hardening-sli
 ### 2. Implementation
 
 - 2.1 Export `AGENT_AUTH_ENV_VARS` (frozen `as const` tuple) from the dependency-free `apps/web-platform/server/agent-auth-env-vars.ts`; `agent-env.ts` imports the two names. (Shipped there, not in `agent-env.ts`, so the sandbox config does not pull `agent-env`'s graph.)
-- 2.2 Add the typed `credentials` field to `AgentSandboxConfig` and the deny block to `buildAgentSandboxConfig` in `agent-runner-sandbox-config.ts`, with the comment naming P1 and why service tokens and `GH_TOKEN` are not denied.
+- 2.2 Add the typed `credentials` field to `AgentSandboxConfig` and the deny block to `buildAgentSandboxConfig` in `agent-runner-sandbox-config.ts`, with the comment naming why service tokens and `GH_TOKEN` are not denied.
 - 2.3 Add a separate `## Credentials` directive (`CREDENTIALS_PROMPT_DIRECTIVE`, exported from `soleur-go-runner.ts`) to BOTH hosted prompt builders (legacy `agent-runner.ts` and the Concierge baseline): the agent must not ask the user for the session credential. Behavioural only; it names no mechanism.
 - 2.4 Tests (write first, per `cq-write-failing-tests-before`):
   - 2.4.1 `apps/web-platform/test/agent-sandbox-credential-deny.test.ts`: both names `deny`; the injected set DERIVED from `buildAgentEnv`'s output by value flow (sentinel credential, every scheme and option shape) equals the denied set; service tokens and `GH_TOKEN` not denied. Plus the production wire in `agent-runner-query-options.test.ts` (the sandbox object `query()` receives carries the deny).
-  - 2.4.2 `apps/web-platform/test/agent-runner-helpers.test.ts` drift guard and `test/server/agent-env-allowlist.test.ts` assertions.
-  - 2.4.3 Cases: BYOK missing, both schemes set, neither set, service token absent.
+  - 2.4.2 Superseded: the drift guard shipped as the derived-set test (2.4.1) plus the wire test in `agent-runner-query-options.test.ts` (every combination of the inputs production varies) and the two call-site assertions; `agent-env-allowlist` was not touched.
+  - 2.4.3 Superseded: the scheme cases are the exhaustive `SCHEME_REGISTRY` in 2.4.1; BYOK-missing and neither-set belong to `buildAgentEnv`'s own suites, unchanged here.
 - 2.5 Canary fixture: NOT re-captured. It is stale (SDK 0.3.197 against the 0.3.284 pin) and cannot be re-captured while the canary projection refuses `--tmpfs <HOME>/.claude/bridge-spawn` (#9614). The deny is guarded at the argv level by `test/sandbox-credential-deny-argv.test.ts` instead (task 2.5.1).
-  - 2.5.1 If task 1.1.2 shows the deny in the argv, assert it in `sandbox-canary-regression.test.sh`.
-  - 2.5.2 Otherwise add the live probe to the creds-gated `sdk-bump-sandbox-gate.sh` path, with a CI log line stating it ran.
+  - 2.5.1 Task 1.1.2 showed the deny in the argv; it is asserted in `test/sandbox-credential-deny-argv.test.ts` (real SDK, bwrap shim) and, for behaviour, in `test/sandbox-credential-deny-runtime.test.ts` (real bubblewrap, decoy key, control arm). `agent-auth-env-vars.ts` joined the capture-gate triggers (`ci.yml`, `sdk-bump-sandbox-gate.sh`, T13c).
+  - 2.5.2 Not done: no live probe was added to the creds-gated `sdk-bump-sandbox-gate.sh` path, because that path cannot give a verdict while the fixture is stale (#9614).
 - 2.6 Create `scripts/verify-agent-security-slice1.sh` with the W1 check only; it prints `slice1-security: ok`, compares with `grep -c`, and has no shell-active characters in its command line.
 
 ### 3. Architecture, legal, docs
@@ -32,11 +32,11 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-agent-security-hardening-sli
 - 3.2 Add the pointer to ADR-272 as an addendum in ADR-075 (shipped as an addendum, not an Alternatives-table row).
 - 3.3 C4: read `model.c4`, `views.c4`, `spec.c4` in full; edit the `engine -> anthropic` edge description; run `c4-code-syntax.test.ts`, `c4-render.test.ts`, `c4-count-parity.test.sh`.
 - 3.4 Add the measured-control TOM entry to `knowledge-base/legal/article-30-register.md`; add no public claim.
-- 3.5 Comment on #9543 with the `mask` finding and its constraints.
+- 3.5 Done: comment posted on #9543 with the `mask` finding and its constraints.
 
 ### 4. PR 1 close-out
 
-- 4.1 Run the plan's own lints, `markdownlint`, and the orphan-suite census; confirm the PR 1 CI run shows the live-probe line.
+- 4.1 Run the plan's own lints, `markdownlint`, and the orphan-suite census. (The planned "live-probe line" in the creds-gated CI path was dropped with 2.5.2; the real-sandbox test runs in `test-webplat` instead.)
 - 4.2 PR body: first line states whether merging alone mutates production (it ships a sandbox config change to all hosted tenants); `Ref #9601`.
 
 ## PR 2 — W2 destructive-command guard (customer plugin)
