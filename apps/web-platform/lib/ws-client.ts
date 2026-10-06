@@ -1119,6 +1119,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // the timer intent out of the pure reducer for the useEffect above. See #2217.
           // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
           // are inert pass-throughs in the reducer; Stage 4 wires rendering.
+          // Unlike `session_ended.reason` (free-form z.string(), warned on
+          // in its own arm), `workflow_ended.status` is a closed
+          // z.enum(WORKFLOW_END_STATUSES) — an unmapped status is rejected
+          // upstream at parseWSMessage and reports via the
+          // `ws-zod-parse-failure` Sentry event, so no unmapped-status warn
+          // is needed inside this parse-gated arm (it could never fire).
+          // Render-side copy coverage lives in lib/workflow-ended-copy.ts.
           dispatch({ type: "stream_event", msg });
           // #5282 — a genuinely-rendered post-reattach frame CONFIRMS the resume
           // succeeded (replayed gap frame or resumed live frame). Promote to the

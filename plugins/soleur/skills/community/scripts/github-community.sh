@@ -76,7 +76,7 @@ date_n_days_ago() {
 
 check_rate_limit() {
   local response="$1"
-  if echo "$response" | jq -e '.message // empty' 2>/dev/null | grep -qi "rate limit"; then
+  if grep -qi "rate limit" < <(jq -e '.message // empty' 2>/dev/null <<<"$response"); then
     _CAUSE="rate-limit"
     echo "Error: GitHub API rate limit exceeded." >&2
     echo "" >&2
@@ -344,7 +344,7 @@ cmd_discussions() {
   local result
   result=$(gh api graphql -f query="$query" -f owner="$owner" -f repo="$repo_name" 2>&1) || {
     # Discussions not enabled -- return empty
-    if echo "$result" | grep -qi "not found\|not accessible\|discussions are not enabled"; then
+    if grep -qi "not found\|not accessible\|discussions are not enabled" <<<"$result"; then
       echo '{"discussions": [], "note": "Discussions not enabled for this repository"}'
       return 0
     fi
