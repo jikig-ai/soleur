@@ -214,7 +214,7 @@ for f in "$MJS" "$CI_DEPLOY" "$REPLAY_FIXTURE"; do
 done
 
 # C1 — the replay path emits the version under the camelCase key `sdkVersion`.
-if grep -qE 'emitVerdict\(\{ \.\.\.verdict, sdkVersion:' "$MJS"; then
+if grep -qE 'emitVerdict\(\{ \.\.\.(verdict|final), sdkVersion:' "$MJS"; then
   pass "C1 mjs runReplay emits key sdkVersion"
 else
   fail "C1 mjs runReplay no longer emits 'sdkVersion' in its verdict — update the ci-deploy.sh reader key in lockstep"
@@ -239,6 +239,30 @@ else
   else
     skip "C3 fixture is uncaptured — sdkVersion not required yet"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# D. #8752 — the replay MUST run the three derived hardening probes when the
+# main replay passes (structural probe-presence assertions; the classifiers are
+# unit-tested in test/sandbox-canary.test.ts).
+# ---------------------------------------------------------------------------
+echo "D: #8752 hardening-probe wiring in --replay"
+if grep -qE 'verdict\.verdict === "pass"' "$MJS" && grep -q 'runHardeningProbes(' "$MJS"; then
+  pass "D1 runReplay gates probes on main verdict pass"
+else
+  fail "D1 runReplay does not call runHardeningProbes on pass — probes never run"
+fi
+for reason in userns_filter_bypass userns_filter_overbroad fd_hygiene_bypass; do
+  if grep -q "$reason" "$MJS"; then
+    pass "D2 mjs emits verdict reason $reason"
+  else
+    fail "D2 mjs missing verdict reason $reason"
+  fi
+done
+if grep -q '/proc/self/fd' "$MJS" && grep -q 'unshare", "-U"' "$MJS"; then
+  pass "D3 probe payloads present (fd census glob + unshare -U)"
+else
+  fail "D3 probe payloads missing from sandbox-canary.mjs"
 fi
 
 echo ""

@@ -13,7 +13,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
-  mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
@@ -64,7 +63,8 @@ function mkRoot() {
     stub,
     out,
     env(over: Record<string, string | undefined> = {}) {
-      const env: Record<string, string> = {
+      const env: NodeJS.ProcessEnv = {
+        NODE_ENV: "test",
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         SOLEUR_BWRAP_REAL: stub,
         SOLEUR_BWRAP_SECCOMP_BPF: BPF,
@@ -273,6 +273,64 @@ describe("runner-image wiring (#8752)", () => {
   });
 });
 
+// The boot self-probe (server/agent-runner-sandbox-config.ts ›
+// probeAgentSandboxHardening) is a pure env-driven measurement — assert its
+// verdict logic against real files, no module mocks.
+describe("probeAgentSandboxHardening — boot self-check verdicts", () => {
+  let mod: typeof import("@/server/agent-runner-sandbox-config");
+  const load = async () => {
+    mod ??= await import("@/server/agent-runner-sandbox-config");
+    return mod;
+  };
+
+  function fakePathDir(kind: "shim" | "plain" | "none") {
+    const dir = mkdtempSync(join(tmpdir(), "bwrap-probe-path-"));
+    if (kind !== "none") {
+      const p = join(dir, "bwrap");
+      writeFileSync(
+        p,
+        kind === "shim"
+          ? '#!/usr/bin/env bash\nfail() { printf \'bwrap-shim: %s\\n\' "$1" >&2; exit 65; }\n'
+          : "#!/usr/bin/env bash\nexec /usr/bin/true\n",
+        { mode: 0o700 },
+      );
+    }
+    return dir;
+  }
+
+  it("shim on PATH + shaped artifact ⇒ ok", async () => {
+    const { probeAgentSandboxHardening } = await load();
+    const dir = fakePathDir("shim");
+    const p = probeAgentSandboxHardening({ PATH: dir, SOLEUR_BWRAP_SECCOMP_BPF: BPF });
+    expect(p).toMatchObject({ shim: true, filter: true, ok: true, bpfBytes: 128 });
+    expect(p.bwrapPath).toBe(join(dir, "bwrap"));
+  });
+
+  it("a non-shim bwrap first on PATH ⇒ shim:false, ok:false", async () => {
+    const { probeAgentSandboxHardening } = await load();
+    const p = probeAgentSandboxHardening({ PATH: fakePathDir("plain"), SOLEUR_BWRAP_SECCOMP_BPF: BPF });
+    expect(p).toMatchObject({ shim: false, ok: false });
+  });
+
+  it("no bwrap on PATH ⇒ bwrapPath:null, ok:false", async () => {
+    const { probeAgentSandboxHardening } = await load();
+    const p = probeAgentSandboxHardening({ PATH: fakePathDir("none"), SOLEUR_BWRAP_SECCOMP_BPF: BPF });
+    expect(p.bwrapPath).toBeNull();
+    expect(p.ok).toBe(false);
+  });
+
+  it("missing or mis-shaped artifact ⇒ filter:false", async () => {
+    const { probeAgentSandboxHardening } = await load();
+    const dir = fakePathDir("shim");
+    const missing = probeAgentSandboxHardening({ PATH: dir, SOLEUR_BWRAP_SECCOMP_BPF: join(dir, "absent.bpf") });
+    expect(missing).toMatchObject({ filter: false, ok: false, bpfBytes: 0 });
+    const bad = join(dir, "bad.bpf");
+    writeFileSync(bad, Buffer.alloc(7)); // not a multiple of 8
+    const misshapen = probeAgentSandboxHardening({ PATH: dir, SOLEUR_BWRAP_SECCOMP_BPF: bad });
+    expect(misshapen).toMatchObject({ filter: false, ok: false });
+  });
+});
+
 // End-to-end through REAL bwrap (same ran-presence convention as
 // test/c4-render-tenant-config.test.ts): skips locally without bwrap, fails
 // the suite when C4_BWRAP_REQUIRED is set but a sandbox cannot be built.
@@ -293,7 +351,8 @@ if (!BWRAP_OK && process.env.C4_BWRAP_REQUIRED) {
 
 describe.skipIf(!BWRAP_OK)("bwrap shim end-to-end with the real binary", () => {
   it("unshare -U inside is denied by the injected filter; a forked child still works", () => {
-    const env = {
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: "test",
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       SOLEUR_BWRAP_REAL: "/usr/bin/bwrap",
       SOLEUR_BWRAP_SECCOMP_BPF: BPF,

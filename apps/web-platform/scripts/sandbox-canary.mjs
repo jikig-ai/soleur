@@ -172,6 +172,171 @@ export function buildBwrapInvocation(fixture) {
   return { cmd: "bwrap", args: [...argv, "--", "true"] };
 }
 
+// ---------------------------------------------------------------------------
+// #8752 — derived hardening probes (deploy-time).
+//
+// The replayed spawn resolves `bwrap` via PATH — inside the runner image that
+// is infra/bwrap-shim/bwrap, the same interception the Agent SDK's spawn
+// takes. A `pass` on the main replay only proves the sandbox BUILDS; these
+// three probes measure the hardening inside it, failing with distinct
+// `sandbox_broken` reasons (soak reset + Sentry page, like the main verdict):
+//
+//   nested_userns_deny — `unshare -U` inside MUST EPERM (the filter denies
+//     clone/unshare carrying CLONE_NEWUSER). Exit 0 = the filter never
+//     installed → `userns_filter_bypass`.
+//   fork_survives — a forked child inside MUST run; the over-broad control.
+//     (`unshare -m` CANNOT discriminate here — bwrap creates the mountns in
+//     the same unshare() call as the userns, so it is owned by the init
+//     userns and a nested CLONE_NEWNS needs CAP_SYS_ADMIN there: EPERM on
+//     every kernel, measured 2026-10-06 / bwrap 0.12. A real fork is the
+//     blanket-clone-deny tripwire.)
+//   fd_census — `set -- /proc/self/fd/*; echo $#` inside MUST stay within
+//     `4 + #(fd-valued argv options)` — stdio 0-2, the glob's transient dir
+//     fd, plus any fd the SETUP argv itself references (none today; the
+//     vocabulary below stays in step with the shim's preserve-set). Larger =
+//     an inherited fd leaked into the sandbox → `fd_hygiene_bypass`.
+// ---------------------------------------------------------------------------
+
+// bwrap options whose argument is an fd NUMBER — keep in step with the
+// shim's preserve-set (infra/bwrap-shim/bwrap).
+const BWRAP_FD_VALUED_OPTS = new Set([
+  "--args",
+  "--seccomp",
+  "--add-seccomp-fd",
+  "--sync-fd",
+  "--info-fd",
+  "--json-status-fd",
+  "--block-fd",
+  "--userns-block-fd",
+]);
+
+/** Count fd-valued options in a setup argv (the census' argv-driven slack). */
+export function countFdValuedOptions(setupArgv) {
+  return setupArgv.filter((t) => BWRAP_FD_VALUED_OPTS.has(t)).length;
+}
+
+/**
+ * Classify the `unshare -U` inside-the-sandbox probe. Returns a verdict or
+ * null (probe passed — the filter denied the nested namespace).
+ *
+ * @param {{ status?: number | null, stderr?: string, errorCode?: string }} res
+ */
+export function classifyUsernsDenyProbe({ status, stderr = "", errorCode } = {}) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `userns_probe_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "nested_userns_deny",
+    };
+  }
+  if (status === 0) {
+    return { verdict: "sandbox_broken", reason: "userns_filter_bypass", probe: "nested_userns_deny" };
+  }
+  // The denial must surface as the payload's own EPERM — anything else means
+  // the probe never exercised the filter (expected-fail inversion).
+  if (!/operation not permitted/i.test(stderr)) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `userns_probe_exit_${status ?? "null"}`,
+      probe: "nested_userns_deny",
+    };
+  }
+  return null;
+}
+
+/**
+ * Classify the fork-survival over-broad control. Returns a verdict or null.
+ *
+ * @param {{ status?: number | null, errorCode?: string }} res
+ */
+export function classifyForkProbe({ status, errorCode } = {}) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fork_probe_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "fork_survives",
+    };
+  }
+  if (status !== 0) {
+    return { verdict: "sandbox_broken", reason: "userns_filter_overbroad", probe: "fork_survives" };
+  }
+  return null;
+}
+
+/**
+ * Classify the in-sandbox fd census against `fdLimit`. Returns a verdict or
+ * null.
+ *
+ * @param {{ status?: number | null, stdout?: string, errorCode?: string }} res
+ * @param {number} fdLimit
+ */
+export function classifyFdCensusProbe({ status, stdout = "", errorCode } = {}, fdLimit) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fd_census_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "fd_census",
+    };
+  }
+  if (status !== 0) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fd_census_exit_${status ?? "null"}`,
+      probe: "fd_census",
+    };
+  }
+  const n = Number(stdout.trim());
+  if (!Number.isInteger(n)) {
+    return { verdict: "canary_infra_error", reason: "fd_census_unparseable", probe: "fd_census" };
+  }
+  if (n > fdLimit) {
+    return { verdict: "sandbox_broken", reason: "fd_hygiene_bypass", probe: "fd_census" };
+  }
+  return null;
+}
+
+/** The three probes, in order; `classify` returns a verdict or null (ok). */
+const HARDENING_PROBES = [
+  {
+    argv: ["/usr/bin/unshare", "-U", "/usr/bin/true"],
+    classify: (res) => classifyUsernsDenyProbe(res),
+  },
+  {
+    argv: ["/bin/sh", "-c", "/bin/true; /bin/true"],
+    classify: (res) => classifyForkProbe(res),
+  },
+  {
+    argv: ["/bin/sh", "-c", 'set -- /proc/self/fd/*; echo "$#"'],
+    classify: (res, fdLimit) => classifyFdCensusProbe(res, fdLimit),
+  },
+];
+
+/**
+ * Run the derived hardening probes inside the replayed sandbox argv.
+ * Returns the first failing verdict, or null when all probes pass.
+ *
+ * @param {string[]} setupArgv - placeholder-substituted bwrap SETUP argv.
+ */
+function runHardeningProbes(setupArgv) {
+  const fdLimit = 4 + countFdValuedOptions(setupArgv);
+  for (const probe of HARDENING_PROBES) {
+    const res = spawnSync("bwrap", [...setupArgv, "--", ...probe.argv], {
+      encoding: "utf8",
+    });
+    const verdict = probe.classify(
+      {
+        status: res.status,
+        stderr: `${res.stderr ?? ""}`,
+        stdout: `${res.stdout ?? ""}`,
+        errorCode: res.error?.code,
+      },
+      fdLimit,
+    );
+    if (verdict) return verdict;
+  }
+  return null;
+}
+
 /**
  * Deterministic sort for capture normalization. `enumerateSiblingDenyPaths`
  * returns readdir order, which is not stable across runners; sorting makes the
@@ -625,7 +790,15 @@ function runReplay(fixtureUrl) {
     bwrapStderr: `${res.stderr ?? ""}`,
     spawnErrorCode: res.error?.code,
   });
-  emitVerdict({ ...verdict, sdkVersion: fixture.sdkVersion });
+  // #8752: a `pass` proves only that the sandbox BUILDS. The derived probes
+  // then measure the deployed hardening inside it — through PATH-resolved
+  // `bwrap`, which in the runner image is the same shim the Agent SDK's spawn
+  // lands on.
+  const final =
+    verdict.verdict === "pass"
+      ? (runHardeningProbes(replayFixture.bwrapSetupArgv) ?? verdict)
+      : verdict;
+  emitVerdict({ ...final, sdkVersion: fixture.sdkVersion });
   // Always exit 0: the verdict is the payload (read from stdout). A non-zero
   // exit here is reserved for the host to read as `canary_infra_error` when the
   // `docker exec` itself fails (125/126/127) — see ci-deploy.sh.

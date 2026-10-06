@@ -46,7 +46,9 @@ if [ "$#" -le 1 ]; then
 fi
 
 # Preserve-set: fds the outer argv references by number (transport fd for
-# --args, plus every fd-consuming option bwrap accepts).
+# --args, plus every fd-consuming option bwrap accepts). This vocabulary is
+# kept in step with scripts/sandbox-canary.mjs › BWRAP_FD_VALUED_OPTS, which
+# drives the deploy canary's fd-census slack.
 preserve=""
 prev=""
 for tok in "$@"; do

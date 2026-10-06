@@ -75,3 +75,21 @@ The **exit criterion** for this residual is Option C.
 - Residual TOCTOU remains until Option C (#5862) lands; this ADR is accepted with C as the exit
   criterion, and the residual read-only window is currently **undetectable** (no telemetry fires if
   it is ever exploited). Option B (#5863) is the longer-term end-state.
+
+## Addendum — 2026-10-06 (#8752): shared seccomp filter + inherited-fd hygiene landed
+
+Two sandbox residuals tracked under #8752 are now closed at the shared layer — one artifact
+(`apps/web-platform/infra/bwrap-userns-clone3-deny.bpf`, generated + parity-tested) serves both paths:
+
+- The C4 render chain carries `--seccomp 9` (fd opened by its close-fds prelude).
+- The Agent SDK spawn is wrapped by the `infra/bwrap-shim/bwrap` PATH shim (`/usr/local/bin/bwrap` in
+  the runner image), which sweeps fds not referenced by the SDK's argv (the measured libuv/bwrap leak
+  — `sandbox-selfprobe-fds` telemetry stays as the countermeasure witness) and injects the filter via
+  `--add-seccomp-fd` before exec'ing the real `/usr/bin/bwrap`.
+- The deny surface: `clone3` → `ENOSYS` (struct-hidden flags; preserves the `clone` fallback),
+  `clone`/`unshare` with `CLONE_NEWUSER` → `EPERM`.
+
+The per-sibling `denyRead` residual is **unchanged**: Option C (#5862) remains the exit criterion, and
+the nested-userns/fd-hygiene closure does not affect the TOCTOU read-only window. Deploy-time
+measurement of the new pair rides the faithful canary's three derived probes (`sandbox-canary.mjs`
+`runHardeningProbes`) and the boot self-probe `op:"sandbox-hardening-selfprobe"`.

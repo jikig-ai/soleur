@@ -16,8 +16,12 @@ import {
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
   hasUnsubstitutedPlaceholder,
+  classifyFdCensusProbe,
+  classifyForkProbe,
   classifyReplayVerdict,
+  classifyUsernsDenyProbe,
   computeCanaryPaths,
+  countFdValuedOptions,
   normalizeCapturedArgv,
   parseShimSetupArgv,
   selectSandboxSetupArgv,
@@ -562,3 +566,111 @@ describe("C4 staging root placeholder (#8623)", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// #8752 — derived hardening probes: verdict contract. Probe failures are
+// `sandbox_broken` (they signal a deployed-hardening regression → the soak
+// resets and the Sentry page fires); infra-shape failures stay
+// `canary_infra_error` (hold the soak — never a false rollback).
+// ---------------------------------------------------------------------------
+describe("classifyUsernsDenyProbe — nested-userns deny must EPERM", () => {
+  it("unshare -U exits 0 inside ⇒ sandbox_broken userns_filter_bypass (filter never installed)", () => {
+    expect(classifyUsernsDenyProbe({ status: 0 })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "userns_filter_bypass",
+      probe: "nested_userns_deny",
+    });
+  });
+
+  it("EPERM signature ⇒ null (the filter denied it)", () => {
+    expect(
+      classifyUsernsDenyProbe({ status: 1, stderr: "unshare: unshare failed: Operation not permitted" }),
+    ).toBeNull();
+  });
+
+  it("non-zero WITHOUT the EPERM signature ⇒ canary_infra_error (expected-fail inversion guard)", () => {
+    // A bwrap setup failure or a missing unshare binary cannot prove the
+    // filter denied anything — infra, not a hardening pass.
+    expect(classifyUsernsDenyProbe({ status: 1, stderr: "bwrap: execvp /usr/bin/unshare: No such file" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "userns_probe_exit_1",
+    });
+  });
+
+  it("spawn error ⇒ canary_infra_error", () => {
+    expect(classifyUsernsDenyProbe({ status: null, errorCode: "ENOENT" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "userns_probe_spawn_enoent",
+    });
+  });
+});
+
+describe("classifyForkProbe — the over-broad control (fork survives)", () => {
+  it("forked child exits 0 ⇒ null", () => {
+    expect(classifyForkProbe({ status: 0 })).toBeNull();
+  });
+
+  it("forked child fails ⇒ sandbox_broken userns_filter_overbroad", () => {
+    // `unshare -m` cannot be this control: bwrap creates the mountns in the
+    // same unshare() call as the userns, so nested CLONE_NEWNS needs
+    // CAP_SYS_ADMIN in the INIT userns — EPERM on every kernel.
+    expect(classifyForkProbe({ status: 1 })).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "userns_filter_overbroad",
+      probe: "fork_survives",
+    });
+  });
+
+  it("spawn error ⇒ canary_infra_error", () => {
+    expect(classifyForkProbe({ status: null, errorCode: "EACCES" })).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fork_probe_spawn_eacces",
+    });
+  });
+});
+
+describe("classifyFdCensusProbe — in-sandbox fd count stays within the limit", () => {
+  it("count ≤ limit ⇒ null", () => {
+    expect(classifyFdCensusProbe({ status: 0, stdout: "4\n" }, 4)).toBeNull();
+    expect(classifyFdCensusProbe({ status: 0, stdout: "3" }, 4)).toBeNull();
+  });
+
+  it("count > limit ⇒ sandbox_broken fd_hygiene_bypass", () => {
+    expect(classifyFdCensusProbe({ status: 0, stdout: "9\n" }, 4)).toMatchObject({
+      verdict: "sandbox_broken",
+      reason: "fd_hygiene_bypass",
+      probe: "fd_census",
+    });
+  });
+
+  it("unparseable/non-zero census ⇒ canary_infra_error, never a false bypass", () => {
+    expect(classifyFdCensusProbe({ status: 0, stdout: "not-a-number" }, 4)).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fd_census_unparseable",
+    });
+    expect(classifyFdCensusProbe({ status: 2, stdout: "" }, 4)).toMatchObject({
+      verdict: "canary_infra_error",
+      reason: "fd_census_exit_2",
+    });
+  });
+});
+
+describe("countFdValuedOptions — census slack for argv-referenced fds", () => {
+  it("the committed fixture argv carries no fd-valued options → limit stays 4", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[] };
+    expect(countFdValuedOptions(fx.bwrapSetupArgv)).toBe(0);
+  });
+
+  it("counts every fd-consuming option in the shim's preserve vocabulary", () => {
+    expect(
+      countFdValuedOptions([
+        "--args", "3", "--seccomp", "4", "--add-seccomp-fd", "5",
+        "--sync-fd", "6", "--info-fd", "7", "--json-status-fd", "8",
+        "--block-fd", "9", "--userns-block-fd", "10",
+      ]),
+    ).toBe(8);
+    expect(countFdValuedOptions(["--unshare-user", "--ro-bind", "/", "/"])).toBe(0);
+  });
+});
