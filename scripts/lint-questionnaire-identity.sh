@@ -115,12 +115,12 @@ check_file() { # <path>
 
   # A telephone number in long form. Bounded so an ISO date, an issue number and a money figure do not
   # match: requires a leading +, or a parenthesised area code, or 3+ separator-joined groups.
-  if printf '%s' "$body" | grep -qE '(\+[0-9][0-9 ().-]{8,}[0-9])|(\([0-9]{2,4}\)[0-9 .-]{6,})|([0-9]{3,4}[ .-][0-9]{3,4}[ .-][0-9]{3,4})'; then
+  if grep -qE '(\+[0-9][0-9 ().-]{8,}[0-9])|(\([0-9]{2,4}\)[0-9 .-]{6,})|([0-9]{3,4}[ .-][0-9]{3,4}[ .-][0-9]{3,4})' <<<"$body"; then
     report "$f" "third-party-phone" "a telephone number reaches a PUBLIC repository. The founder already has the recipient's contact details in their own mail client; this file does not need them"
   fi
 
   # A signature-block salutation is the tell that a reply was pasted rather than transcribed.
-  if printf '%s' "$body" | grep -qiE '^[[:space:]]*(kind regards|best regards|yours (sincerely|faithfully)|sent from my)'; then
+  if grep -qiE '^[[:space:]]*(kind regards|best regards|yours (sincerely|faithfully)|sent from my)' <<<"$body"; then
     report "$f" "pasted-reply" "a signature-block salutation means an inbound message was pasted whole. Transcribe each answer under its question and drop the greeting, the sign-off and the signature block — see knowledge-base/project/questionnaires/README.md"
   fi
   return 0

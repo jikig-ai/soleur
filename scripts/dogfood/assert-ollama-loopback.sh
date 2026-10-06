@@ -25,13 +25,13 @@ assert_ollama_loopback_listen() {
   # Allowlist: every listen line for this port must bind 127.0.0.1 or [::1] only.
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if echo "$line" | grep -qE "0\\.0\\.0\\.0:${port}|\\*:${port}|\\[::\\]:${port}"; then
+    if grep -qE "0\\.0\\.0\\.0:${port}|\\*:${port}|\\[::\\]:${port}" <<<"$line"; then
       printf 'ERROR: Ollama appears bound to a public interface on :%s — Approach A requires loopback only\n%s\n' "$port" "$line" >&2
       return 1
     fi
     # Host-specific non-loopback: Local Address column typically ends with :port
-    if echo "$line" | grep -qE "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:${port}" \
-      && ! echo "$line" | grep -qE "127\\.0\\.0\\.1:${port}"; then
+    if grep -qE "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:${port}" <<<"$line" \
+      && ! grep -qE "127\\.0\\.0\\.1:${port}" <<<"$line"; then
       printf 'ERROR: Ollama listen is not loopback-only on :%s\n%s\n' "$port" "$line" >&2
       return 1
     fi

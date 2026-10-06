@@ -42,7 +42,7 @@ done
 # --- Arm 1: the rule that pages on this failure exists, keyed on the emitted op.
 RULE_BLOCK=$(awk '/resource "sentry_alert" "ops_email_delivery_failure"/{i=1} i{print} i&&/^}/{exit}' "$TF")
 [[ -n "$RULE_BLOCK" ]] || fail "sentry_alert.ops_email_delivery_failure absent from issue-alerts.tf"
-printf '%s' "$RULE_BLOCK" | grep -q 'key = "op".*value = "notify-ops-email"' \
+grep -q 'key = "op".*value = "notify-ops-email"' <<<"$RULE_BLOCK" \
   || fail "the rule does not filter on op eq notify-ops-email"
 
 # --- Arm 2: every feature the RULE names actually emits that op.
