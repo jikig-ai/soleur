@@ -1132,7 +1132,7 @@ if (( detectors_evaluated == 1 )); then
       echo "::warning::cron detector binding '$(warn_sanitize "$ref")' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
       continue
     fi
-    if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
+    if ! grep -qFx -- "$ref" <<<"$monitor_slug_set"; then
       orphan_alerts+=("$ref")
     fi
   done <<<"$cron_detector_names"
@@ -1315,14 +1315,14 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   class_d_candidates=()
   while IFS= read -r slug; do
     [[ -z "$slug" ]] && continue
-    printf '%s\n' "$declared_slugs" | grep -qFx -- "$slug" && continue
+    grep -qFx -- "$slug" <<<"$declared_slugs" && continue
     class_d_candidates+=("$slug")
   done <<<"$monitor_slugs"
 
   if (( state_known == 1 )); then
     for slug in ${class_d_candidates[@]+"${class_d_candidates[@]}"}; do
       # In state => Terraform WILL reclaim it on the next apply => not Class D.
-      printf '%s\n' "$state_slugs" | grep -qFx -- "$slug" && continue
+      grep -qFx -- "$slug" <<<"$state_slugs" && continue
       orphan_live_monitors+=("$slug")
     done
   else

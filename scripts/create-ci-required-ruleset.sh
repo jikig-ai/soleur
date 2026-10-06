@@ -69,7 +69,7 @@ done
 
 # Pre-flight: verify bot workflows on main already have synthetic test status
 main_content=$(gh api "repos/${REPO}/contents/.github/workflows/scheduled-weekly-analytics.yml" --jq '.content' 2>/dev/null || true)
-if [[ -n "$main_content" ]] && ! echo "$main_content" | base64 -d 2>/dev/null | grep -q 'context=test'; then
+if [[ -n "$main_content" ]] && ! grep -q 'context=test' < <(base64 -d 2>/dev/null <<<"$main_content"); then
   echo "ERROR: Bot workflows on main do not yet have the synthetic test status."
   echo "Merge the workflow update PR first, then run this script."
   exit 1

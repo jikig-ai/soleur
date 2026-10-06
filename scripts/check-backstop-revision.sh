@@ -92,8 +92,7 @@ git diff "${mb}...HEAD" -- "$HOOK_PATH" > "$DIFF_TMP"
 # line cannot satisfy this gate while failing the resolver. Comparing VALUES,
 # not line presence, is what makes a same-value re-set RED.
 rev_at() { # <rev>:<path> -> first BACKSTOP_REVISION value; empty when absent
-  git show "$1" 2>/dev/null \
-    | grep -oEm1 '^[[:space:]]*(readonly[[:space:]]+)?BACKSTOP_REVISION=[0-9]+' \
+  grep -oEm1 '^[[:space:]]*(readonly[[:space:]]+)?BACKSTOP_REVISION=[0-9]+' < <(git show "$1" 2>/dev/null) \
     | cut -d= -f2 || true
 }
 old_rev=$(rev_at "${mb}:${HOOK_PATH}")

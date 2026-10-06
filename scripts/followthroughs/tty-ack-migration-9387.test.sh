@@ -224,7 +224,7 @@ LOC_BAD=0
 locale_check() {
   local probe=$1 mode=$2
   LOC_BAD=0
-  if ! locale -a 2>/dev/null | grep -qiE '^en_US\.utf-?8$'; then
+  if ! grep -qiE '^en_US\.utf-?8$' < <(locale -a 2>/dev/null); then
     if [ "$mode" = report ]; then ok "locale-nonascii-digit (skipped: en_US.utf8 is not installed here)"; fi
     return 0
   fi
@@ -254,14 +254,14 @@ pins() {
   if [ "$n" -lt 3 ]; then echo "only $n exit sites (floor 3)"; return 1; fi
   bad=$(exit_ops "$f" | grep -vxE '2|3|5' | head -n 1)
   if [ -n "$bad" ] || [ "$(exit_ops "$f" | wc -l)" -ne "$n" ]; then echo "exit operand outside {2,3,5}: '${bad:-count mismatch}'"; return 1; fi
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '(^|[[:space:];])set[[:space:]]+(-[a-zA-Z]*[eu]|-o[[:space:]]+(errexit|nounset))'; then
+  if grep -qE '(^|[[:space:];])set[[:space:]]+(-[a-zA-Z]*[eu]|-o[[:space:]]+(errexit|nounset))' < <(grep -vE '^[[:space:]]*#' "$f"); then
     echo "set -e / set -u present"; return 1
   fi
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\btrap\b'; then echo "trap present"; return 1; fi
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\b(exec|eval|source|kill)\b|^[[:space:]]*\.[[:space:]]'; then
+  if grep -qE '\btrap\b' < <(grep -vE '^[[:space:]]*#' "$f"); then echo "trap present"; return 1; fi
+  if grep -qE '\b(exec|eval|source|kill)\b|^[[:space:]]*\.[[:space:]]' < <(grep -vE '^[[:space:]]*#' "$f"); then
     echo "exec/eval/source/kill on an executable line"; return 1
   fi
-  if grep -vE '^[[:space:]]*#' "$f" | grep -qE '\b(gh|curl|wget|ssh|nc|ncat|python3?|perl|node|git|openssl)\b|/dev/(tcp|udp)'; then
+  if grep -qE '\b(gh|curl|wget|ssh|nc|ncat|python3?|perl|node|git|openssl)\b|/dev/(tcp|udp)' < <(grep -vE '^[[:space:]]*#' "$f"); then
     echo "network client or git on an executable line"; return 1
   fi
   return 0
