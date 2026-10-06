@@ -471,7 +471,7 @@ applied here to this channel, so no new ADR was written.
 (`SOLEUR_ZOT_LOG`, `SOLEUR_ZOT_DISK`) decode to `(dt, tag, message)` TSVs — `dt` is the boundary
 key because it is ingest-assigned, the one field the producer cannot set — merge, sort ascending,
 and feed ONE awk pass. The pass derives `NEWEST_BOOT` from the newest **host-scoped stamped** row
-(control rows read on the trusted head before ` zot_last_err=`; `SOLEUR_ZOT_LOG_BOOT` markers via
+(control rows read on the trusted head before ` zot_last_err=`; `SOLEUR_ZOT_LOG_BOOT` markers via <!-- markdownlint-disable-line MD038 -->
 their own `host=`; `SOLEUR_ZOT_LOG_DROPPED` rows carry `boot_id` but no `host=`, so they
 corroborate and count on a boot already derived but can never select one), takes `B0` as the
 earliest stamped dt on that boot — an in-window marker tightens it to ~provision time — and emits
@@ -499,7 +499,7 @@ since a probe enrolled while unscoped would grade the next real straddle over mi
 
 **Review-round hardening (PR #9607 panel).** The ten-seat review found the classification
 predicate triplicated — and already drifted: boot selection and boundary derivation admitted any
-control-channel row, while counting required the offset-0 `SOLEUR_ZOT_DISK ` anchor. A row that
+control-channel row, while counting required the offset-0 `SOLEUR_ZOT_DISK ` anchor. A row that <!-- markdownlint-disable-line MD038 -->
 merely *mentions* the marker (the control grep is a substring LIKE) could therefore pick the
 evidence base. The rewrite hoists classification into the main awk rule (`Rcls`/`Risctl`/`Rhost`/
 `Rboot`), so selection, bounding, and counting read one computed classification. The same round
