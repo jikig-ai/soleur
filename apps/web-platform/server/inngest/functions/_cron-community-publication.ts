@@ -386,6 +386,12 @@ export function buildExampleDraftLine(): string {
 export type GithubOverride = {
   status: "failed" | "partial";
   failureCause: CommunityFailureCause;
+  /**
+   * Keep the draft's own numbers under the overridden (partial) status instead of withholding
+   * them. Only for a collector fact that makes ONE metric unavailable (stargazers) while the
+   * rest are measured; every other override replaces the model's github metrics entirely.
+   */
+  keepMetrics?: boolean;
 };
 
 export type RenderOptions = {
@@ -442,6 +448,14 @@ function effectivePlatform(
   platform: CommunityPlatform,
   githubOverride: GithubOverride | undefined,
 ): EffectivePlatform {
+  if (platform === "github" && githubOverride?.keepMetrics) {
+    return {
+      status: githubOverride.status,
+      failureCause: githubOverride.failureCause,
+      metrics: draft.platforms.github.metrics as Record<string, number>,
+      metricsWithheld: false,
+    };
+  }
   if (platform === "github" && githubOverride) {
     return {
       status: githubOverride.status,
