@@ -17,7 +17,7 @@
 # uses the repo secrets BETTERSTACK_QUERY_*, so the first plan-only dispatch is the credential-parity check; and its newest row
 # (169 s) is younger than the ~40-minute hot window, so the hot arm carries the same shape (inference, not a separate probe).
 # Running this script under the Doppler config soleur/prd_terraform re-runs the control: on PASS it prints the used series' hours,
-# newest age, min, max and spread (not n or the total series), on RED only the reason (runbook web2-luks-rebirth-9372.md).
+# newest age, min, max and spread (not n or the total series), on RED the reason and the figure that failed it (runbook web2-luks-rebirth-9372.md).
 # `tags.host` is Vector's OS hostname, where the old host_name was a Terraform-rendered constant: equal forgery resistance (any
 # holder of the shared ingest token can write either) and weaker against hostname drift on a re-imaged host. Evidence is keyed by
 # hostname plus mountpoint, NOT by the pinned volume id: anything mounted at /mnt/data on a host with that hostname that reports

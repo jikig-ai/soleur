@@ -175,7 +175,7 @@ battery() {
   chk_cmd "control: not() inverts true and false" test "$(not true; echo $?)$(not false; echo $?)" = "10"
   chk_cmd "control: chk_cmd prints a FAILED line for a failing command" test "$(chk_cmd ctl false)" = "FAILED ctl"
   sql="$(w2r_sql_emptiness)"
-  [[ -n "$sql" ]] || printf 'CRASH w2r_sql_emptiness produced no SQL\n'
+  [[ "$sql" == SELECT* ]] || printf 'CRASH w2r_sql_emptiness did not produce a SELECT statement\n'
   paths="$(w2r_sql_paths "$sql")"; prc=$?
   chk_cmd "SQL paths parse under the strict grammar (rc ${prc}; ${paths//$'\n'/ | })" test "$prc" -eq 0
   conds="$(grep -E $'^COND\t' <<<"$paths" | sort || true)"
@@ -268,7 +268,9 @@ done
 exp_sql="$(source "$SCRIPT"; w2r_sql_emptiness)"
 for nm in pass red; do
   got_sql="$(sed -E 's/remote\([^)]*\)/remote($BS_TABLE)/; s/s3Cluster\(primary, [^)]*\)/s3Cluster(primary, $BS_TABLE_S3)/' "$TMP/curl.${nm}.sql" 2>/dev/null)"
-  if [[ -n "$got_sql" && "$got_sql" == "$exp_sql" ]]; then echo "  ok   main sends exactly the pinned SQL (${nm} run)"; else echo "  FAIL main did not send exactly w2r_sql_emptiness' SQL on the ${nm} run"; fails=$((fails + 1)); fi
+  hot_arm="$(grep -oE 'remote\([^)]*\)' "$TMP/curl.${nm}.sql" 2>/dev/null | head -n1)"; s3_arm="$(grep -oE 's3Cluster\(primary, [^)]*\)' "$TMP/curl.${nm}.sql" 2>/dev/null | head -n1)"
+  # the two arms must still name DIFFERENT tables (the token mapping above would hide a swap of the two)
+  if [[ -n "$got_sql" && "$got_sql" == "$exp_sql" && -n "$hot_arm" && -n "$s3_arm" && "${hot_arm#remote(}" != "${s3_arm#s3Cluster(primary, }" ]]; then echo "  ok   main sends exactly the pinned SQL (${nm} run)"; else echo "  FAIL main did not send exactly w2r_sql_emptiness' SQL on the ${nm} run"; fails=$((fails + 1)); fi
 done
 
 # A red BASELINE makes every mutation look killed, so the kill-counting only runs against a green one.
