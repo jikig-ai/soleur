@@ -620,7 +620,10 @@ describe("community router scripts — no argument is evaluated by the script it
     // Behaviour, on the extracted helper itself.
     const fn = `require_uint() {\n${bodies[0]}}\n`;
     const accepts = (v: string) =>
-      spawnSync("bash", ["-c", `${fn}\nrequire_uint label "$1"`, "_", v], { encoding: "utf8" }).status === 0;
+      spawnSync("bash", ["-c", `${fn}\nrequire_uint label "$1"`, "_", v], {
+        env: { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv,
+        encoding: "utf8",
+      }).status === 0;
     for (const ok of ["0", "1", "50", "123456789012345678"]) expect(accepts(ok), ok).toBe(true);
     for (const bad of ["", "08", "00", "007", "-1", "+1", "1.5", "1e3", "0x1", " 1", "1 ", "1\n", "a", "1;id", "HOME[$(id)]"]) {
       expect(accepts(bad), JSON.stringify(bad)).toBe(false);
@@ -737,7 +740,7 @@ describe("setOriginToken — re-pointing origin after the spawn (#7122 G2-6)", (
     }
   }
   const git = (dir: string, args: string[]) =>
-    execFileSync("git", args, { cwd: dir, env: gitFixtureEnv(dir), encoding: "utf8" }).trim();
+    execFileSync("git", [...args], { cwd: dir, env: gitFixtureEnv(dir), encoding: "utf8" }).trim();
 
   function makeClone(token: string): string {
     const dir = mkdtempSync(join(tmpdir(), "soleur-origin-"));
