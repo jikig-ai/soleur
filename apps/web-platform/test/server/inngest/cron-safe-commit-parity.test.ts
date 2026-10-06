@@ -129,7 +129,8 @@ const READ_ONLY_PROBES = [
 // git, no PR, covered by invariant 1's directory walk.
 // `cron-merge-queue-stall-dispatch` (#9482) is the same dispatch-hybrid
 // class: a token narrowed to `actions:write` + repositories:[soleur], one
-// `workflow_dispatch` POST to merge-queue-stall-check.yml, no git, no PR,
+// `workflow_dispatch` POST to merge-queue-stall-check.yml plus a read-only
+// runs-list GET for the executor-visibility check (#9513), no git, no PR,
 // covered by invariant 1's directory walk.
 // `cron-bot-pr-reaper` (#9274) is the `cron-action-required-sla` class: it
 // mutates PR/issue state through the GitHub API (update-branch, dedup issue
