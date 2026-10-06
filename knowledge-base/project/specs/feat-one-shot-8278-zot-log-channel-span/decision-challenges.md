@@ -22,7 +22,7 @@ the literal reading requires adding it to the envelope in
 **Why the plan deviates from the literal reading:** (a) the template diff would
 fire `registry-host-replace-dispatch.yml` on merge — a destructive replace of the
 fleet's sole image-pull path for a p3 latent defect; (b) a head-inserted field
-breaks the **enrolled** `zot-upload-ceiling-7556.sh` (live tracker #7556), and
+breaks the **enrolled** `zot-upload-ceiling-7556.sh` (closed tracker #7556), and
 even the suffix form forces the same replace plus a transition window where no
 envelope row can be graded; (c) the properties the issue names — one pass, one
 boot, producer-keyed delivery — are all satisfied without it.

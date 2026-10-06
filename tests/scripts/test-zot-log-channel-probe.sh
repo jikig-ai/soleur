@@ -732,6 +732,16 @@ run_probe "$S12_LOG" "$S12_CTL"
 assert "S12 a window whose newest row is >600s stale -> exit 3 reason=producer_silent, never PASS" \
   "[[ '$CASE_RC' -eq 3 ]] && grep -q 'producer_silent' <<<\"\$CASE_OUT\""
 
+# S12b: THE MASKING CASE. NEWEST_DT is scoped to producer-attributable rows — a FRESH row that
+# merely mentions the marker (grep noise, a webhook quote on this shared source) must not defeat
+# producer_silent. Same stale window as S12 + one fresh "other"-class row at 09:55 (300s, inside
+# the gate threshold): unscoped freshness would see a live source and PASS the corpse.
+S12B_LOG="$TMP/s12b.log"; cp "$S12_LOG" "$S12B_LOG"
+row "ci-runner log quoting a shipped row: SOLEUR_ZOT_LOG shipper=zot-log-shipper seen upstream" "$DT_0955" >> "$S12B_LOG"
+run_probe "$S12B_LOG" "$S12_CTL"
+assert "S12b a fresh non-producer row cannot mask producer silence -> still exit 3" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'producer_silent' <<<\"\$CASE_OUT\""
+
 # S13: A DECOY MASK MUST NOT CANCEL A REAL VALUE. authleak is per-occurrence: a row carrying
 # both `Authorization:[******]` and `Authorization:[Basic …]` still flags.
 S13_LOG="$TMP/s13.log"; : > "$S13_LOG"
@@ -750,6 +760,37 @@ row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP 
 run_probe "$S14_LOG" "$S1_CTL"
 assert "S14 dot padding after a dp.<kind>. prefix is not token-shaped -> still PASS" \
   "[[ '$CASE_RC' -eq 0 ]]"
+
+# S14b: A DECOY PREFIX FIRST OCCURRENCE MUST NOT MASK A LATER TOKEN. shapeleak walks every
+# dp.<kind>. occurrence — `dp.st.x dp.st.<substantive>` still flags.
+S14B_LOG="$TMP/s14b.log"; : > "$S14B_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S14B_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:dp.st.x then dp.st.abcdxyz0123456789token,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "$DT_0956" >> "$S14B_LOG"
+run_probe "$S14B_LOG" "$S1_CTL"
+assert "S14b a decoy dp.st.x before a real token still fails -> exit 1" \
+  "[[ '$CASE_RC' -eq 1 ]] && grep -q 'token_or_hash_shaped_rows=1' <<<\"\$CASE_OUT\""
+
+# S15: AN EMPTY-dt STAMPED ROW CANNOT SET THE BOUNDARY — and must not corrupt the verdict. The
+# boundary skip (Rdt=="") means the next stamped row binds; with ONLY an empty-dt stamped row
+# the boot derives but B0 can't, which is CANNOT ESTABLISH, not a silently-misgraded span.
+# (row() defaults an empty dt to DT0, so these rows are written with jq directly.)
+S15_CTL="$TMP/s15.ctl"
+jq -cn --arg m "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$DRIFTED_BOOT log_shipper_post_fail=0 host=$HOSTV" '{dt:"", raw:({message:$m}|tostring)}' > "$S15_CTL"
+run_probe "$S13_LOG" "$S15_CTL"
+assert "S15 empty-dt stamped row + leak-shaped envelope -> exit 3 (boundary unmeasurable)" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'ungraded_credential_rows=1' <<<\"\$CASE_OUT\""
+S15_CTL2="$TMP/s15b.ctl"
+cat "$S15_CTL" > "$S15_CTL2"
+control_row "$DRIFTED_BOOT" 0 "$DT_0950" >> "$S15_CTL2"
+S15_LOG2="$TMP/s15b.log"; : > "$S15_LOG2"; for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S15_LOG2"; done
+run_probe "$S15_LOG2" "$S15_CTL2"
+assert "S15b a readable stamped row still supplies B0 when an empty-dt sibling precedes it" \
+  "[[ '$CASE_RC' -eq 0 ]]"
+# S15c: the sentinel arm itself — boot derived, every stamped row dt-less, no leak to name ->
+# the boundary-measurability arm, never a silent misgrade nor a false delivery verdict.
+run_probe "$S15_LOG2" "$S15_CTL"
+assert "S15c a boot whose only stamped row has empty dt -> exit 3 boundary unmeasurable" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'boundary timestamp is' <<<\"\$CASE_OUT\""
 
 # --- C12: structural contract assertions on the probe as a FILE --------------------------
 # AC14: anchored on the executable form, because the prose above legitimately contains 'exit 1'.

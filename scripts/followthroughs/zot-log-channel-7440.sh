@@ -41,11 +41,11 @@
 #                  channel dark, or ANY auth/query/decode failure. Each prints a DISTINCT reason —
 #                  an unprovisioned credential must never read as "not yet delivered".
 #   3 = CANNOT ESTABLISH   the newest boot cannot be derived, the pass emitted nothing usable, a
-#                  credential-shaped row exists OUTSIDE the gradable span, the boundary/newest
-#                  timestamps cannot be parsed, or the producer has gone silent mid-window.
-#                  Added 2026-10 (#8278): a branch that refuses to assert a delivery or leak state
-#                  must not ship under a heading that asserts one. Same disposition as 2 (issue
-#                  stays open).
+#                  credential-shaped row exists OUTSIDE the gradable span, a boundary/newest
+#                  timestamp is missing or unparseable, the now-seam env is malformed, or the
+#                  producer has gone silent mid-window. Added 2026-10 (#8278): a branch that
+#                  refuses to assert a delivery or leak state must not ship under a heading that
+#                  asserts one. Same disposition as 2 (issue stays open).
 #   1 = FAIL       emitted ONLY when a credential shape is found in the channel's GRADED span.
 #                  This is the one carve-out and it is intentional: a leak is a REGRESSION, not a
 #                  not-yet, and at this plan's `single-user incident` brand-survival threshold it
@@ -143,6 +143,13 @@ CONTROL_MARKER="SOLEUR_ZOT_DISK"
 # Encoding-safe: no quote, no colon, so it survives the double-encoded `raw` as a LIKE.
 ZOT_ONLY_SUBSTR="zotregistry.dev/zot/v2/pkg/api"
 EXPECTED_HOST="${ZOT_LOG_7440_HOST:-soleur-registry}"
+# The host token is interpolated into an ERE (hostok) — a metachar would weaken host isolation.
+# Reject anything outside the hostname alphabet rather than trusting the caller's value.
+if [[ ! "$EXPECTED_HOST" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "TRANSIENT: reason=config_invalid — ZOT_LOG_7440_HOST ('$EXPECTED_HOST') is not a" >&2
+  echo "           hostname-alphabet value; refusing to interpolate it into the isolation regex." >&2
+  exit 2
+fi
 # Two missed */5 heartbeats. A host that was emitting and stopped reads "dark residue", not
 # "current state" — the freshness gate below refuses to grade a corpse.
 PRODUCER_SILENT_SECS=600
@@ -198,7 +205,7 @@ done
 decode_tsv() { # $1 = one-letter channel tag
   jq -R -r --arg tag "$1" \
     'fromjson? | objects | select(.raw != null) |
-     [ (((.dt? // "") | tostring) | if test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:") then . else "" end),
+     [ (((.dt? // "") | tostring) | if test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?$") then . else "" end),
        $tag,
        ((((.raw? // "") | fromjson?) // {} | objects | .message? // "") | tostring) ] | @tsv' \
     2>/dev/null
@@ -313,7 +320,7 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
       # /proc-unreadable DEFAULT sentinel (u, n, k, w are absent from [0-9a-fA-F]) — and it
       # also keeps a degenerate "-" fragment from aliasing the no-boot sentinel.
       if (!match(h, / boot_id=[0-9a-fA-F][0-9a-fA-F-]*/)) return ""
-      return substr(h, RSTART + 9, RLENGTH - 9)
+      return substr(h, RSTART + 9, RLENGTH - 9 > 40 ? 40 : RLENGTH - 9)
     }
     function authleak(m,   s, rest, i, v) {
       # Per-OCCURRENCE, not per-message: walk every `Authorization:[…` header on the row and flag
@@ -327,24 +334,31 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
         i = index(rest, "]")
         v = (i > 0) ? substr(rest, 1, i - 1) : rest
         sub(/ .*/, "", v)
-        if (v !~ /^(\*+|REDACTED)/) return 1
+        # The mask is three-or-more asterisks (the zot redact emits ******) — a 1-2 asterisk
+        # prefix is NOT a mask and must still flag. An EMPTY value (`Authorization:[]`) is a
+        # malformed header, not a credential — skip it, never flag it.
+        if (v != "" && v !~ /^(\*\*\*|REDACTED)/) return 1
         if (i == 0) return 0
         s = substr(rest, i)
       }
       return 0
     }
-    function shapeleak(m,   rest, run) {
+    function shapeleak(m,   s, rest, run, t) {
       if (m ~ /\$2[aby]\$[0-9][0-9]\$/) return 1
-      if (match(m, /dp\.(pt|st|sa|ct)\./)) {
-        # No interval expressions in POSIX awk: measure the run after the prefix — but
-        # SUBSTANCE, not length: `.` is in the token charset, so 20+ dots of padding would
-        # otherwise read as a token and a crafted request path could post a public FAIL on
-        # demand. Require >=16 non-separator chars in the run.
-        rest = substr(m, RSTART + RLENGTH)
+      # Per-OCCURRENCE like authleak: a leading short/decoy `dp.st.x` must not mask a real token
+      # later in the row. No interval expressions in POSIX awk: measure the run after each
+      # prefix — but SUBSTANCE, not length: `.` is in the token charset, so 20+ dots of padding
+      # would otherwise read as a token and a crafted request path could post a public FAIL on
+      # demand. Require >=16 non-separator chars in SOME occurrence run.
+      s = m
+      while (match(s, /dp\.(pt|st|sa|ct)\./)) {
+        rest = substr(s, RSTART + RLENGTH)
         run = rest
         sub(/[^A-Za-z0-9._-].*$/, "", run)
-        gsub(/[._-]/, "", run)
-        return (length(run) >= 16)
+        t = run
+        gsub(/[._-]/, "", t)
+        if (length(t) >= 16) return 1
+        s = substr(s, RSTART + RLENGTH)
       }
       return 0
     }
@@ -426,12 +440,16 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
           continue
         }
         if (Rcls[i] == "drop") {
-          # Stamped but NOT host-verifiable: counts only on a boot already derived.
+          # Stamped but NOT host-verifiable: counts only on a boot already derived. A drop row
+          # that cannot be attributed (no boot derived, or a foreign boot) is still evidence the
+          # read path answered — count it as unclassifiable, never silently drop it.
           if (nb != "" && Rboot[i] == nb) n_drop++
+          else n_other++
           continue
         }
         if (Rcls[i] == "boot") {
           if (nb != "" && Rhost[i] && Rboot[i] == nb) n_boot_marker++
+          else n_other++
           continue
         }
         if (Rcls[i] == "env") {
@@ -455,13 +473,28 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
         }
         n_other++
       }
+      # (4) PRODUCER FRESHNESS KEY — the newest row a producer on THIS host could have emitted:
+      # envelope rows (the prefix carries host=), host-scoped ctl/boot rows, and _DROPPED rows
+      # attributed to the derived boot. Noise — "other" rows, foreign-host reporters — must not
+      # feed it: a fresh marker-quoting row would otherwise keep producer_silent permanently
+      # masked on a dead host (the LIKE grep is not host-scoped; the source is multi-tenant).
+      pdt = ""
+      for (i = 1; i <= nr; i++) {
+        if (Rdt[i] == "") continue
+        if (Rcls[i] == "env" \
+            || (Rcls[i] == "ctl"  && Risctl[i] && Rhost[i]) \
+            || (Rcls[i] == "boot" && Rhost[i]) \
+            || (Rcls[i] == "drop" && nb != "" && Rboot[i] == nb))
+          pdt = Rdt[i]
+      }
       # The summary is k=v pairs, not positionals: a 21-field whitespace read silently
-      # reorders on any insertion, while a keyed line is order-insensitive and a missing or
-      # unknown key fails the completeness guard below instead of shifting fields.
+      # reorders on any insertion, while a keyed line is order-insensitive and a missing key
+      # fails the completeness guard below instead of shifting fields. (An unrecognised extra
+      # key is ignored — additive forward-compat; the dangerous direction is the missing key.)
       # dt carries a space ("YYYY-MM-DD HH:MM:SS.ffffff"); emit timestamps in T-form so no
       # value ever contains a space.
       sub(/ /, "T", b0)
-      ndt = (nr > 0) ? Rdt[nr] : "-"
+      ndt = (pdt != "") ? pdt : "-"
       sub(/ /, "T", ndt)
       print "n_ctl=" n_ctl, "n_env=" n_env, "n_env_pre=" n_env_pre, "n_drop=" n_drop, \
             "n_boot_marker=" n_boot_marker, "n_zot=" n_zot, "n_gcs=" n_gcs, "n_gcd=" n_gcd, \
@@ -554,9 +587,9 @@ fi
 if [[ "$N_LEAK_OUT" -gt 0 ]]; then
   if [[ "$B0_DT" == "-" ]]; then
     echo "CANNOT ESTABLISH: ungraded_credential_rows=${N_LEAK_OUT} — credential-shaped envelope" >&2
-    echo "           row(s) exist, but NO boot boundary could be derived (no usable boot_id on any" >&2
-    echo "           host-scoped stamped row — see the producer-regression note below). Nothing can" >&2
-    echo "           be attributed to any generation." >&2
+    echo "           row(s) exist, but NO gradable boundary could be derived (no usable boot_id," >&2
+    echo "           or no readable dt on the stamped rows). Nothing can be attributed to any" >&2
+    echo "           generation — this is a producer-side regression in the boot_id/dt fields." >&2
   else
     echo "CANNOT ESTABLISH: ungraded_credential_rows=${N_LEAK_OUT} — credential-shaped envelope" >&2
     echo "           row(s) sit OUTSIDE the newest boot's graded span (dt < ${B0_DT}). A leak" >&2
@@ -574,16 +607,57 @@ fi
 # --- zero rows on the newest boot -----------------------------------------------------------
 if [[ "$N_ENV" -eq 0 && "$N_ENV_PRE" -eq 0 && "$N_CTL" -eq 0 && "$N_BOOT_MARKER" -eq 0 && "$N_DROP" -eq 0 ]]; then
   echo "TRANSIENT: reason=channel_dark — zero envelope rows AND zero ${CONTROL_MARKER} control" >&2
-  echo "           rows in the last ${WINDOW}. The control lands on this source every 5 min, so an" >&2
-  echo "           empty control means the READ PATH is not answering. This probe has measured" >&2
-  echo "           NOTHING about the channel — do NOT read it as 'the shipper is absent'." >&2
+  echo "           rows in the last ${WINDOW}. The control lands on this source every 5 min." >&2
   if [[ "$N_OTHER" -gt 0 ]]; then
-    echo "           (${N_OTHER} row(s) matched the greps but fit no producer shape — the read path" >&2
-    echo "           DID answer, so check host= drift and forwarder noise before credentials.)" >&2
+    echo "           ${N_OTHER} row(s) matched the greps but fit no producer shape (a marker" >&2
+    echo "           mention, a foreign host, an unattributable _DROPPED/_BOOT row) — the read path" >&2
+    echo "           DID answer; check host= drift and forwarder noise before credentials." >&2
+  else
+    echo "           An empty control means the READ PATH is not answering. This probe has measured" >&2
+    echo "           NOTHING about the channel — do NOT read it as 'the shipper is absent'." >&2
   fi
   echo "           Next: check the Better Stack query credentials and the hot-window bound" >&2
   echo "           before concluding anything about the host." >&2
   exit 2
+fi
+
+# --- PRODUCER FRESHNESS — before ANY verdict on window content --------------------------------
+# NEWEST_DT is scoped to producer-attributable rows (envelope rows carry host= in the prefix;
+# stamped rows must host-match; _DROPPED must sit on the derived boot) precisely so a fresh
+# marker-quoting NOISE row cannot refresh the gate while the producer is dead — if the newest
+# producer row is older than two */5 heartbeat ticks, every liveness-asserting verdict below
+# (control_missing, delivered_but_silent, PASS) would be a misdiagnosis posted as fact. Same
+# gate shape as registry-luks-live-8386.sh's producer_silent. ZOT_LOG_7440_NOW is the test seam
+# — the fixture suite runs fixed dts; the sweeper's env -i never sets it. The "-" sentinel must
+# never reach date(1): GNU date parses "-" as today 00:00 UTC and EXITS 0. An in-span credential
+# leak still exits 1 ABOVE this gate deliberately: a leak is content evidence, not a liveness
+# claim, and a stale-window leak is still a live credential. Runs before no-boot/control_missing
+# so a stale window never dresses up as a live diagnosis.
+if [[ "$NEWEST_DT" == "-" ]]; then
+  echo "CANNOT ESTABLISH: no producer-attributable row carries a readable dt — classified rows" >&2
+  echo "           with empty/malformed dt, or only unclassifiable noise, were returned. Freshness" >&2
+  echo "           and span are unmeasurable." >&2
+  exit 3
+fi
+NDT_EPOCH="$(date -u -d "$NEWEST_DT" +%s 2>/dev/null)" || NDT_EPOCH=""
+if [[ -z "$NDT_EPOCH" ]]; then
+  echo "CANNOT ESTABLISH: the newest producer row's ingest time (${NEWEST_DT}) could not be" >&2
+  echo "           parsed — the bounded span is unmeasurable." >&2
+  exit 3
+fi
+NOW_EPOCH="${ZOT_LOG_7440_NOW:-$(date -u +%s)}"
+if [[ ! "$NOW_EPOCH" =~ ^[0-9]+$ ]]; then
+  echo "CANNOT ESTABLISH: ZOT_LOG_7440_NOW is set but not an epoch (${NOW_EPOCH}) — a probe-env" >&2
+  echo "           defect, not evidence. Under the sweeper's env -i this arm is unreachable." >&2
+  exit 3
+fi
+ROW_AGE_SECS=$(( NOW_EPOCH - NDT_EPOCH ))
+if (( ROW_AGE_SECS > PRODUCER_SILENT_SECS )); then
+  echo "CANNOT ESTABLISH: reason=producer_silent boot=${NEWEST_BOOT} — the newest producer row is" >&2
+  echo "           ${ROW_AGE_SECS}s old (threshold ${PRODUCER_SILENT_SECS}s, two missed */5 ticks)." >&2
+  echo "           The residue in this window describes a host that has stopped emitting, not its" >&2
+  echo "           current state — no verdict is graded on a corpse." >&2
+  exit 3
 fi
 
 # Envelope content exists but the heartbeat does not — preserved AHEAD of boot derivation: the
@@ -609,6 +683,18 @@ if [[ "$NEWEST_BOOT" == "-" ]]; then
   echo "           scoped." >&2
   echo "           ACTION: rows present with no real boot_id is a PRODUCER regression — check the" >&2
   echo "           \`boot_id=\` field in cloud-init-registry.yml's LINE= emitter." >&2
+  exit 3
+fi
+
+# --- BOUNDARY MEASURABILITY (a derived boot whose stamped rows carry no readable dt) ----------
+# The "-" sentinel must never reach date(1): GNU date parses "-" as today 00:00 UTC and EXITS 0,
+# which would silently fabricate a span instead of refusing one. nb != "" here means a stamped
+# row exists, so a missing B0 means its rows carry no readable dt — every envelope row then sits
+# unbounded in n_env_pre, and no liveness claim below is honest.
+if [[ "$B0_DT" == "-" ]]; then
+  echo "CANNOT ESTABLISH: a boot was derived (${NEWEST_BOOT}) but its boundary timestamp is" >&2
+  echo "           missing — the stamped rows on it carry no readable dt, so the graded span" >&2
+  echo "           cannot be measured and no count is trustworthy." >&2
   exit 3
 fi
 
@@ -638,7 +724,7 @@ if [[ "$N_ENV" -eq 0 ]]; then
     echo "TRANSIENT: reason=delivered_but_silent boot=${NEWEST_BOOT} — the host HAS been provisioned" >&2
     echo "           since this change was authored (${delivery_evidence}), yet zero envelope rows" >&2
     echo "           arrived in the last ${WINDOW} on the newest boot while the read path is" >&2
-    echo "           alive (${N_CTL} control row(s)${N_CTL:+; evidence: ${delivery_evidence}})." >&2
+    echo "           alive (${N_CTL} control row(s), ${N_ENV_PRE} pre-boundary excluded)." >&2
     # FIRST-TICK SOFTENING, GATED ON THE LITERAL -1 (#7456). The shipper is a 4-59/5 cron one-shot,
     # so between a host's birth and its first tick this arm was firing "ACT, NOT WAIT" at a host
     # that had simply never run one. Measured 2026-08-12: replaced 20:54:12Z, this arm at 20:56:32Z,
@@ -736,34 +822,13 @@ fi
 # now measured over the BOUNDED span — the minutes from B0 to the newest row — not the full
 # window: a boundary inside the window would otherwise post a systematic false
 # below_expected_floor for ~30 minutes after every replace.
-# The "-" sentinel must never reach date(1): GNU date parses "-" as today 00:00 UTC and EXITS 0,
-# which would silently fabricate a span instead of refusing one. Check the sentinels first.
-if [[ "$B0_DT" == "-" || "$NEWEST_DT" == "-" ]]; then
-  echo "CANNOT ESTABLISH: a boot was derived (${NEWEST_BOOT}) but its boundary timestamp is" >&2
-  echo "           missing — the stamped rows on it carry no readable dt, so the graded span" >&2
-  echo "           cannot be measured and no count is trustworthy." >&2
-  exit 3
-fi
+# (The "-" sentinel, the newest-dt parse, and the producer-freshness gate all ran above — before
+# the delivery arms — because a stale or boundary-less window must never reach a liveness
+# verdict. Only B0 still needs epoch conversion here.)
 B0_EPOCH="$(date -u -d "$B0_DT" +%s 2>/dev/null)" || B0_EPOCH=""
-NDT_EPOCH="$(date -u -d "$NEWEST_DT" +%s 2>/dev/null)" || NDT_EPOCH=""
-if [[ -z "$B0_EPOCH" || -z "$NDT_EPOCH" ]]; then
-  echo "CANNOT ESTABLISH: the boundary (${B0_DT}) or the newest row's ingest time (${NEWEST_DT})" >&2
-  echo "           could not be parsed — the bounded span is unmeasurable, so the row-count" >&2
-  echo "           floor cannot be graded honestly." >&2
-  exit 3
-fi
-# PRODUCER FRESHNESS — the one wall-clock read, same gate as registry-luks-live-8386.sh's
-# producer_silent. dt is ingest-assigned; if the newest row of EITHER channel is older than two
-# */5 heartbeat ticks, every count above describes a corpse: a host that stopped emitting
-# mid-window leaves residue rows that would otherwise satisfy the floor and print PASS on data
-# ~30 minutes stale. ZOT_LOG_7440_NOW is the test seam — the fixture suite runs fixed dts.
-NOW_EPOCH="${ZOT_LOG_7440_NOW:-$(date -u +%s)}"
-ROW_AGE_SECS=$(( NOW_EPOCH - NDT_EPOCH ))
-if (( ROW_AGE_SECS > PRODUCER_SILENT_SECS )); then
-  echo "CANNOT ESTABLISH: reason=producer_silent boot=${NEWEST_BOOT} — the newest stamped or" >&2
-  echo "           envelope row is ${ROW_AGE_SECS}s old (threshold ${PRODUCER_SILENT_SECS}s, two" >&2
-  echo "           missed */5 ticks). The residue in this window describes a host that has" >&2
-  echo "           stopped emitting, not its current state — no verdict is graded on a corpse." >&2
+if [[ -z "$B0_EPOCH" ]]; then
+  echo "CANNOT ESTABLISH: the boundary (${B0_DT}) could not be parsed — the bounded span is" >&2
+  echo "           unmeasurable, so the row-count floor cannot be graded honestly." >&2
   exit 3
 fi
 SPAN_MIN=$(( (NDT_EPOCH - B0_EPOCH) / 60 ))

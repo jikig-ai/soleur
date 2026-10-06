@@ -35,3 +35,11 @@ None blocking. Awk-in-single-quote apostrophe collision (two possessives in awk 
 - Producer suite `apps/web-platform/infra/zot-log-shipper.test.sh`: **174 passed, 0 failed**, unchanged.
 - `bash -n`: clean. `shellcheck`: clean. `lint-shell-trace-credential-refusal.py`: clean (0 violations).
 - Mode 100755 preserved; `git diff origin/main --name-only` touches none of the four protected files.
+
+## Review Phase
+- Status: fix round landed; targeted fix-round review running on delta 274acd4080..7c317469ed
+- Panel: 10 seats (security, pattern, architecture, git-history, data-integrity, performance, code-quality, structural-enumeration, test-design, user-impact) on PANEL_SHA 274acd4080 — all returned.
+- Findings: 1 P1 + 7 P2 + ~20 P3 (dedup'd). P1/P2s: unanchored C-tag rows could select NEWEST_BOOT/B0 (found independently by 5 seats, demonstrated both harm directions); C13 sentinel anchored on deleted var names; jq decode filter non-total (stream halt on jq<=1.7); no producer-freshness gate (stale-residue false-PASS); 21-field positional summary drift hazard; authleak decoy dodge; C14 pinned spellings not cardinality; stale lint baseline entry exempted the file.
+- Fix commit: 7c317469ed — classification hoisted to one computed pass (Rcls/Risctl/Rhost/Rboot); keyed k=v summary + completeness guard; total jq filter; producer_silent gate (ZOT_LOG_7440_NOW seam); per-occurrence authleak; substance-checked shapeleak; fval clamp; n_other bucket; LC_ALL=C sort; tool preflight; `-` sentinel guard before date(1); baseline entry removed; lockfiles restored to origin/main. Fixtures S11–S14 + C14 cardinality + S6/S8 pins added.
+- Lockfile commit: 898641da94 (restore to origin/main — branch predated Dependabot bumps).
+- Suite after fixes: 109 passed, 0 failed. shellcheck/lint clean.

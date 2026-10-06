@@ -62,7 +62,7 @@ mechanically and pass.
 ### New Considerations Discovered
 
 - **Sibling collision surface mapped:** `zot-upload-ceiling-7556.sh` (enrolled,
-  live tracker #7556) and `zot-fill-rate-7341.sh` strip the envelope prefix and
+  closed tracker #7556) and `zot-fill-rate-7341.sh` strip the envelope prefix and
   parse the payload from `^\{time:` — any `boot_id=` inserted into the envelope
   head breaks the enrolled probe. The chosen design makes no producer change,
   so no collision; Alternative A records the constraint verbatim for any future
