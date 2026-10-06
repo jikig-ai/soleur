@@ -228,6 +228,19 @@ COPY --from=builder /app/scripts/sandbox-canary.mjs ./scripts/sandbox-canary.mjs
 COPY --from=builder /app/scripts/github-app-key-probe.mjs ./scripts/github-app-key-probe.mjs
 COPY --from=builder /app/infra/sandbox-canary-argv.json ./infra/sandbox-canary-argv.json
 
+# Shared nested-userns seccomp filter + bwrap PATH shim (#8752). The Agent SDK
+# resolves `bwrap` via PATH and owns its argv (fd-passing contract is set in
+# stone in the vendored binary), so the shim at /usr/local/bin — which precedes
+# /usr/bin in the Debian default PATH — wraps every SDK spawn: it closes
+# inherited fds not referenced by the argv, injects the committed filter via
+# --add-seccomp-fd, then execs the real /usr/bin/bwrap. The C4 render path
+# spawns /usr/bin/bwrap by absolute path (bypassing the shim) and opens this
+# same artifact itself on fd 9. SOLEUR_BWRAP_SECCOMP_BPF (consumed by both
+# wrappers) defaults to the /app/infra path baked here; overriding it to a
+# stale/wrong artifact is a deliberate escape hatch for diagnosis only.
+COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf ./infra/bwrap-userns-clone3-deny.bpf
+COPY --from=builder --chmod=0755 /app/infra/bwrap-shim/bwrap /usr/local/bin/bwrap
+
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 

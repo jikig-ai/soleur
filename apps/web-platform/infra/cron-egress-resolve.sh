@@ -237,7 +237,7 @@ mkdir -p "$FAILCOUNT_DIR"
 mkdir -p "$SEEN_DIR"
 
 container_running() {
-  timeout 10 docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"
+  timeout 10 docker ps --format '{{.Names}}' 2>/dev/null | grep -cx "$CONTAINER" >/dev/null
 }
 
 # --- Gather hostnames ---------------------------------------------------------

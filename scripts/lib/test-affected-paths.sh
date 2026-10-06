@@ -48,7 +48,11 @@
 # is the dangerous edit, and it must select the suites it could blind. And this
 # file itself, like scripts/test-all.sh, is a runner/index self-edge: a diff
 # touching either degrades the gate to full (runner-changed), so no declaration
-# here can silently shrink what it would have run.
+# here can silently shrink what it would have run. The one exception is a REGISTRATION-ONLY
+# runner diff (nothing but new single-line run_suite registrations for new suites, ADR-242
+# decision 20): it takes the bounded selection, together with, for each suite that same diff
+# registers, its own AFFECTED_*_PATHS block and ALWAYS_ON_SUITES entry. Any other hunk in THIS file
+# still degrades to full.
 
 # CLOSURE LEAVES (ADR-242 decision 18). The derive follows what a file's text NAMES (invocation
 # and $VAR/path tokens) as well as what it sources; for these two files the names are the whole
