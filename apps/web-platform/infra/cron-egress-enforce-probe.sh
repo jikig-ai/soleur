@@ -27,6 +27,17 @@
 # explicitly (`|| rc=$?`) so errexit does not abort before the exit-code discrimination.
 set -e
 
+# Refuse to run under xtrace (#7797): emit_fail ACQUIRES a live Sentry DSN at runtime (doppler secrets
+# get) and binds it, so tracing would print it into whatever captures stderr. Unconditional on purpose:
+# a `${VAR:+x}` escape hatch would be open by construction, since the credential is not in the
+# environment at launch. It tests the STATE (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV
+# `set -x` are all caught. Placed BEFORE `trap emit_fail EXIT` so the refusal is neither traced nor
+# re-emitted. The caller (cloud-init.yml) powers the host off on any non-zero exit, so a traced
+# fresh-host boot fails closed, which is the intended outcome.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 CONTAINER=soleur-web-platform
 STAGE=egress-enforce
 PROBE_RESULT=unknown
