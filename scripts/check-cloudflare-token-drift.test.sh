@@ -237,6 +237,12 @@ chmod +x "$STUB_DIR/doppler"
 cat > "$STUB_DIR/curl" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${MOCK_CURL_LOG:-}" ]] && printf '%s\n' "$*" >> "$MOCK_CURL_LOG"
+# A bearer credential must arrive on curl's STDIN config channel (`--config -`), never in argv.
+# The config is recorded to its OWN file so $MOCK_CURL_LOG keeps one line per invocation. Read stdin
+# ONLY when `--config -` is present: a curl given no config would otherwise block on the SUT's stdin.
+if [[ -n "${MOCK_CURL_STDIN_LOG:-}" && " $* " == *" --config - "* ]]; then
+  cat >> "$MOCK_CURL_STDIN_LOG"
+fi
 # curl is given NO env prefix by the SUT, so it sees whatever the SUT's own environment
 # still holds. That makes it the instrument for "the credential was snapshotted and both
 # Doppler variables were then unset": if the SUT had kept relying on an ambient
@@ -373,6 +379,7 @@ chmod +x "$STUB_DIR/mktemp"
 RC=""
 OUT=""
 CURL_LOG=""
+CURL_STDIN_LOG=""
 DOPPLER_LOG=""
 DOPPLER_ENV_LOG=""
 CURL_ENV_LOG=""
@@ -393,6 +400,7 @@ run_sut() {
   printf '%s\n' "$configs_body" > "$cfgs" || { echo "FATAL: fixture write failed"; exit 2; }
   printf '%s\n' "$secrets_body" > "$secs" || { echo "FATAL: fixture write failed"; exit 2; }
   : > "$CURL_LOG"
+  CURL_STDIN_LOG="$TMP/$label.curlstdin"; : > "$CURL_STDIN_LOG"
   # THE CREDENTIAL, declared per case rather than inherited. `unset` and `empty` are
   # DIFFERENT states to a shell and the same state to the Doppler CLI (which treats an
   # empty value as absent and rebinds to the ambient credential), so both are expressible.
@@ -420,7 +428,7 @@ run_sut() {
   env -u DOPPLER_TOKEN -u DOPPLER_CONFIG -u DOPPLER_TOKEN_MAP \
   ${_cred[@]+"${_cred[@]}"} ${_ambient[@]+"${_ambient[@]}"} \
   MOCK_CONFIGS="$cfgs" MOCK_SECRETS="$secs" \
-  MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" \
+  MOCK_HTTP_CODE="$http_code" MOCK_CURL_LOG="$CURL_LOG" MOCK_CURL_STDIN_LOG="$CURL_STDIN_LOG" \
   MOCK_HTTP_BODY="${MOCK_HTTP_BODY:-}" \
   MOCK_CONTROL_CODE="${MOCK_CONTROL_CODE:-403}" \
   MOCK_CONTROL_STAMPED="${MOCK_CONTROL_STAMPED:-1}" \
@@ -628,10 +636,45 @@ fi
 # change that fixed one family by breaking the other would be a net loss.
 echo "T8: the CF_API_TOKEN* family is unaffected (Bearer verify still used for it)"
 run_sut t8 200 "prd|CF_API_TOKEN_DNS_EDIT|synthetic-api-token-value-not-real"
-if grep -qF 'user/tokens/verify' "$CURL_LOG" && grep -qF 'Authorization: Bearer' "$CURL_LOG"; then
-  pass "API tokens still verified as Bearer against /user/tokens/verify"
+# The Bearer header travels on curl's STDIN config channel and is ABSENT from argv: argv is
+# world-readable via /proc/<pid>/cmdline and `ps`. Both halves are asserted, never either-or.
+if grep -qF 'user/tokens/verify' "$CURL_LOG" \
+   && grep -qxF 'header = "Authorization: Bearer synthetic-api-token-value-not-real"' "$CURL_STDIN_LOG" \
+   && ! grep -qF 'synthetic-api-token-value-not-real' "$CURL_LOG" \
+   && ! grep -qiE 'Bearer|Authorization' "$CURL_LOG"; then
+  pass "API tokens still verified as Bearer against /user/tokens/verify, header on stdin and token absent from argv"
 else
-  fail "the CF_API_TOKEN* arm must still use the Bearer /user/tokens/verify endpoint"
+  fail "the CF_API_TOKEN* arm must verify via /user/tokens/verify with the Bearer header on curl's stdin (--config -) and the token in NO argv line"
+fi
+# Transport pins: `--disable` is curl's FIRST argument (it only works there) and `--noproxy '*'`
+# follows. The stub records `$*`, so the shell-quoted '*' arrives bare.
+if grep -F 'user/tokens/verify' "$CURL_LOG" | grep -qE -- '^--disable --noproxy \* ' \
+   && grep -F 'user/tokens/verify' "$CURL_LOG" | grep -qF -- '--config -'; then
+  pass "the bearer-carrying curl BEGINS --disable --noproxy * and reads its config from stdin"
+else
+  fail "the bearer-carrying curl must begin '--disable --noproxy *' and carry '--config -' (got: $(grep -F 'user/tokens/verify' "$CURL_LOG" | head -1 | cut -c1-120))"
+fi
+
+# T8b — a token VALUE outside the allowlist (a newline would inject a curl config directive on
+# the stdin channel) makes ZERO curl calls and is graded DEAD (exit 1), never LIVE. Doppler hands
+# the value back on one line, so the shape is exercised with a character outside the allowlist.
+echo "T8b: an unusable API-token value makes no verify call and is never LIVE"
+MOCK_HTTP_BODY='{"success":true}' run_sut t8b 200 "prd|CF_API_TOKEN_DNS_EDIT|bad token\"quote"
+if ! grep -qF 'user/tokens/verify' "$CURL_LOG" && [[ ! -s "$CURL_STDIN_LOG" ]] \
+   && [[ "$RC" == "1" ]] && grep -qE 'dead entries: 1' "$OUT" && ! grep -qE 'live entries: [1-9]' "$OUT"; then
+  pass "an unusable token value -> zero curl calls, DEAD, exit 1"
+else
+  fail "an unusable token value must make no curl call and grade DEAD with exit 1 (rc=$RC, curl calls: $(wc -l < "$CURL_LOG"))"
+fi
+
+# T8c — the xtrace self-refusal: running the detector under `bash -x` exits 78 before any
+# command touches a credential, and writes nothing from the credential to the trace.
+echo "T8c: the detector refuses to run under xtrace"
+_t8c_out=$(env -u DOPPLER_TOKEN -u DOPPLER_TOKEN_MAP DOPPLER_TOKEN="$FIX_CRED" PATH="$STUB_DIR:$PATH" bash -x "$SUT" 2>&1); _t8c_rc=$?
+if [[ "$_t8c_rc" == "78" ]] && ! grep -qF "$FIX_CRED" <<<"$_t8c_out"; then
+  pass "bash -x exits 78 and the credential never reaches the trace"
+else
+  fail "bash -x must exit 78 before any credential expansion (rc=$_t8c_rc)"
 fi
 
 # T13 — the API-token family's VERDICT, not just its request shape. T8 asserts the Bearer
