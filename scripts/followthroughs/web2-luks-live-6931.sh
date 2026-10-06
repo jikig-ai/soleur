@@ -34,7 +34,7 @@
 #
 # Enrollment (the tracker body carries the directive; the tracker carries the `follow-through` label):
 #   <!-- soleur:followthrough script=scripts/followthroughs/web2-luks-live-6931.sh earliest=<web-2 rebirth+3d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
-# The post-merge step of the #9372 closing change sets the directive on #6931 to `earliest=2026-10-18T00:00:00Z` (the
+# The post-merge step of the #9372 retirement change sets the directive on #6931 to `earliest=2026-10-18T00:00:00Z` (the
 # 2026-10-15 decision date + 3 days, so the window closes 2026-10-22, the date the encryption-posture exception on
 # hcloud_volume.workspaces expires). The #9372
 # rebirth dispatch re-sets it from the actual rebirth time (runbook web2-luks-rebirth-9372.md, closing row 4); the

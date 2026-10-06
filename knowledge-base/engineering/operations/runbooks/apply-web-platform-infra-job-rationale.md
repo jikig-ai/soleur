@@ -396,7 +396,7 @@ workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_
 create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
 `[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
 
-> **Superseded 2026-10-06 (#9372), in part, from the merge of the closing change:** the sentence "A first `create` stays
+> **Superseded 2026-10-06 (#9372), in part, from the merge of the retirement change:** the sentence "A first `create` stays
 > legal" is no longer true for the web-class passphrase (`random_password.workspaces_luks_web`). The HALT now counts a
 > `create` of it and refuses it, with no acknowledgement path. A first `create` stays legal at the other five addresses,
 > the web-class key copy (`doppler_secret.workspaces_luks_web_key`) included: a create of the copy alone restores the same
