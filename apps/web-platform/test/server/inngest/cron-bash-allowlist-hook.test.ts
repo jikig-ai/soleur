@@ -1007,3 +1007,69 @@ describe("Bash — wrapped filings stay denied under a gh issue create grant (#9
     expect(reason(bash('bash -c "gh issue create --title x"'))).toContain("not allowlisted");
   });
 });
+
+// #7122 — the `no-file-tools` directive (ADR-058 file-driven per-cron pattern). A
+// cron whose allow file carries the exact line `no-file-tools` loses every tool
+// that can read, write or delegate: the agent holds Bash and nothing else. The
+// directive is per-cron (a file without it keeps today's behaviour), parsed only
+// as a whole-line match, and never enters the bash prefix list.
+describe("no-file-tools — per-cron removal of file and sub-agent tools (#7122)", () => {
+  const BASH_ONLY = ["gh issue list"];
+  const WITH = [...BASH_ONLY, "no-file-tools"];
+  const v = (input: unknown, lines: string[]) =>
+    decide(input, lines).hookSpecificOutput.permissionDecision;
+  const TOOLS = ["Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "Task", "Agent", "Skill"];
+  const call = (tool_name: string) => ({
+    tool_name,
+    tool_input: { file_path: "knowledge-base/x.md", path: "knowledge-base", pattern: "x" },
+  });
+
+  it("parseAllowlist reads the directive into noFileTools and keeps it out of bash", async () => {
+    const { parseAllowlist } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    const parsed = parseAllowlist(WITH) as { bash: string[]; noFileTools: boolean };
+    expect(parsed.noFileTools).toBe(true);
+    expect(parsed.bash).toEqual(BASH_ONLY);
+    expect((parseAllowlist(BASH_ONLY) as { noFileTools: boolean }).noFileTools).toBe(false);
+    // Only the whole-line spelling is a directive; anything else is an ordinary bash prefix.
+    const near = parseAllowlist(["no-file-tools extra", "no-file-toolsx"]) as { bash: string[]; noFileTools: boolean };
+    expect(near.noFileTools).toBe(false);
+    expect(near.bash).toEqual(["no-file-tools extra", "no-file-toolsx"]);
+  });
+
+  it("denies all nine tools when the directive is present", () => {
+    for (const t of TOOLS) expect(v(call(t), WITH), t).toBe("deny");
+  });
+
+  it("the deny reason names the directive (diagnosable from the permission_denials channel)", () => {
+    const r = decide(call("Write"), WITH).hookSpecificOutput as { permissionDecisionReason?: string };
+    expect(r.permissionDecisionReason).toContain("no-file-tools");
+  });
+
+  it("keeps today's behaviour without the directive (per-cron, not global)", () => {
+    for (const t of TOOLS) expect(v(call(t), BASH_ONLY), t).toBe("allow");
+  });
+
+  it("NotebookEdit is denied with AND without the directive (the catch-all already covers it)", () => {
+    const nb = { tool_name: "NotebookEdit", tool_input: { notebook_path: "x.ipynb" } };
+    expect(v(nb, WITH)).toBe("deny");
+    expect(v(nb, BASH_ONLY)).toBe("deny");
+  });
+
+  it("denies the bypass shapes a path deny-list cannot see", () => {
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/", glob: "proc/*/environ" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Glob", tool_input: { pattern: "**/.git/config", path: "/tmp" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/pro*" } }, WITH)).toBe("deny");
+    expect(v({ tool_name: "Grep", tool_input: { pattern: "K", path: "/" } }, BASH_ONLY)).toBe("allow");
+  });
+
+  it("does not touch Bash, and keeps the inert internal tools usable", () => {
+    expect(v(bash("gh issue list --limit 5"), WITH)).toBe("allow");
+    expect(v(bash("gh issue close 1"), WITH)).toBe("deny");
+    expect(v({ tool_name: "ToolSearch", tool_input: { query: "select:Bash" } }, WITH)).toBe("allow");
+    expect(v({ tool_name: "TodoWrite", tool_input: { todos: [] } }, WITH)).toBe("allow");
+  });
+
+  it("the directive line is not a bash allow prefix", () => {
+    expect(v(bash("no-file-tools"), WITH)).toBe("deny");
+  });
+});

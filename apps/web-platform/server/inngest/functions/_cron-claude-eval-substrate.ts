@@ -1,6 +1,7 @@
 import { RUN_REPORT_CRONS } from "./_cron-run-reports";
 import {
   countFilingDenials,
+  countPermissionDenials,
   emitCronFilingDenyMarker,
 } from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
@@ -71,6 +72,21 @@ export interface SpawnResult {
   isError?: boolean;
   subtype?: string;
   numTurns?: number;
+  // #7122 — the run's final assistant message (the `result` event's text), for a
+  // cron whose handler validates and publishes it (community-monitor's JSON draft).
+  // Redacted with the child redactor, capped at FINAL_MESSAGE_CAP_BYTES CUT FROM THE
+  // HEAD (never tail-sliced: a cut tail is not parseable and cannot signal oversize),
+  // with `finalMessageTruncated` saying whether the cap bit. Both are `undefined` for a
+  // run that produced no `result` event or whose event carried no string `result`
+  // (e.g. `error_max_turns`), so "absent" is distinguishable from an empty string.
+  // makeThrewSpawnResult carries neither.
+  finalMessage?: string;
+  finalMessageTruncated?: boolean;
+  // #7122 — EVERY permission denial in the result event (not only filings, which
+  // `filingDenials` counts) and the denied tool classes from a closed vocabulary
+  // (tool names only; see countPermissionDenials). `undefined` without a result event.
+  permissionDenialCount?: number;
+  deniedTools?: string[];
 }
 
 // #5728 — synthetic SpawnResult for the silence-hole audit issue (#4960) when an
@@ -119,6 +135,12 @@ export interface ParsedEvalResult {
   // `permission_denials[]` (a hook deny lands there with the full command —
   // measured 2026-09-11). Command HEADS only; see cron-filing-deny-marker.ts.
   filingDenials: { count: number; commands: string[]; fieldPresent: boolean };
+  // #7122 — all denials, by closed tool class (see SpawnResult.permissionDenialCount).
+  allDenials: { permissionDenialCount: number; deniedTools: string[] };
+  // #7122 — the `result` text ONLY when the event carried a string; `resultText`
+  // above stands in `""` (two characters) for an absent one, which a strict consumer
+  // must not mistake for a message.
+  finalMessage: string | undefined;
 }
 
 /**
@@ -163,6 +185,8 @@ export function parseClaudeResultLine(line: string): ParsedEvalResult | null {
       ...countFilingDenials(r.permission_denials),
       fieldPresent: Array.isArray(r.permission_denials),
     },
+    allDenials: countPermissionDenials(r.permission_denials),
+    finalMessage: typeof r.result === "string" ? r.result : undefined,
     cost: {
       costUsd:
         typeof r.total_cost_usd === "number" ? r.total_cost_usd : undefined,
@@ -222,6 +246,11 @@ export const STDERR_CAP_BYTES = 8192;
 // bytes; the cap is a pathological-OOM ceiling (a runaway --print could stream
 // unbounded stdout), same rationale and value as STDERR_CAP_BYTES.
 export const STDOUT_TAIL_CAP_BYTES = 8192;
+
+// #7122 — ceiling on SpawnResult.finalMessage. The community draft is one line of
+// compact JSON (well under 4 KiB); 16 KiB leaves headroom for drift while still
+// bounding what a runaway or injected message can push into step output.
+export const FINAL_MESSAGE_CAP_BYTES = 16 * 1024;
 
 export function resolveClaudeBin(): string {
   const override = process.env.CLAUDE_BIN;
@@ -317,6 +346,57 @@ export const ISSUE_CREATOR_BASH_ALLOWLIST = [
   "gh label list",
   "gh label create",
 ];
+
+// #7122 — the ONLY Bash surface of cron-community-monitor: sixteen read-only router
+// invocations, each a full literal command. The old entry allowlisted the whole
+// router prefix, which also admitted `bsky post`, `linkedin post-content` and
+// `x post-tweet` (inert only because the per-platform *_ALLOW_POST env guards are
+// absent from buildSpawnEnv: an env convention, not a structural control), plus
+// `gh issue create|comment|list` and `gh label create|list` (publication verbs, and a
+// `--jq env` dump of the spawn environment into the agent's own context). The
+// handler now publishes from a validated draft, so the agent needs none of them.
+// The hook matches a prefix followed by a space or end of string, so trailing
+// arguments (`hn mentions --query soleur --limit 20`, `github activity 1`,
+// `discord messages <channel_id>`) stay allowed while a sibling verb does not.
+// allow[0] MUST be a complete command: runHookSelfTest executes it verbatim.
+// Parity with the prompt's own invocations is asserted by
+// cron-community-monitor-allowlist.test.ts (G2-8).
+export const COMMUNITY_ROUTER_READ_VERBS: readonly string[] = [
+  "bash plugins/soleur/skills/community/scripts/community-router.sh platforms",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord members",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord channels",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh discord messages",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh bsky get-metrics",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-metrics",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh linkedin fetch-activity",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github activity",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github contributors",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github discussions",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions",
+  "bash plugins/soleur/skills/community/scripts/community-router.sh hn trending",
+];
+
+// #7122 — crons whose allow file carries the `no-file-tools` directive: the hook then
+// denies Read, Glob, Grep, Write, Edit, MultiEdit, Task, Agent and Skill (NotebookEdit
+// hits the hook's catch-all deny regardless). The agent holds Bash and nothing else:
+// it cannot overwrite an allowlisted script and then run it with the whole spawn env,
+// and it cannot read a secret path a deny-list failed to anticipate (a recursive
+// `Grep{path:"/",glob:"proc/*/environ"}` and `Glob{pattern:"**/.git/config",path:"/tmp"}`
+// both pass the path deny-list). Per-cron, never global: every other cron keeps its
+// tools. `buildAllowlistLines` is the directive's only producer.
+export const CRON_NO_FILE_TOOLS: readonly string[] = ["cron-community-monitor"];
+
+// #7122 — the CLI-level second layer for the same cron: removes the nine tools (and
+// NotebookEdit) from the model's pool, including the sub-agent route that otherwise
+// rests on hook inheritance. The hook directive above is the LOAD-BEARING layer: no
+// cron spawn passed `--disallowedTools` before this one, and how the flag composes
+// with a hook `allow` cannot be proved offline. Consumed by cron-community-monitor.ts.
+export const COMMUNITY_DISALLOWED_TOOLS =
+  "Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill";
 
 export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
   "cron-roadmap-review": [
@@ -417,19 +497,11 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "gh label list",
     "gh label create",
   ],
-  // community-monitor (cron-community-monitor.ts): `bash …community-router.sh`
-  // (the router's child curl/gh-api are grandchild OS processes gated by the
-  // egress firewall, NOT this hook), DEDUP `gh issue list`, `gh issue create`,
-  // `gh issue comment`. Prompt-level `gh api` is REWRITTEN to
-  // `gh issue list --json updatedAt,number` (F4a). Bespoke.
-  "cron-community-monitor": [
-    "bash plugins/soleur/skills/community/scripts/community-router.sh",
-    "gh issue list",
-    "gh issue create",
-    "gh issue comment",
-    "gh label list",
-    "gh label create",
-  ],
+  // community-monitor (cron-community-monitor.ts): the sixteen read-only router
+  // invocations and NOTHING else (#7122) — see COMMUNITY_ROUTER_READ_VERBS. The
+  // router's child curl/gh-api are grandchild OS processes gated by the egress
+  // firewall, NOT this hook. No gh verb: the handler upserts the issue.
+  "cron-community-monitor": [...COMMUNITY_ROUTER_READ_VERBS],
   // #5199 (final) — cron-bug-fixer, the LAST Tier-2-deferred cron and the widest
   // bash surface. UNLIKE the 7 auto-crons above, bug-fixer's commit lives in the
   // fix-issue SKILL (NOT safeCommitAndPr), so this entry legitimately INCLUDES
@@ -514,14 +586,24 @@ export const CRON_MCP_ALLOWLISTS: Record<
 // DERIVED from the leaf, never hand-copied: `_cron-run-reports.ts` is the
 // single source and `cron-run-report-labels-parity.test.ts` binds it to the
 // `resolveOutputAwareOk` call sites. Absent for every other cron.
+//
+// #7122: AGENT-filed rows only. A handler-filed row (`filer: "handler"`, community-
+// monitor) never gets the directive: its agent holds no `gh` verb, and
+// `runHookSelfTest` would otherwise abort every spawn probing a filing the agent
+// must not be able to make. The row stays in the leaf for the sweeper and the
+// measurement mirror.
 export const CRON_RUN_REPORT_LABELS: Readonly<Record<string, string>> =
-  Object.freeze(Object.fromEntries(RUN_REPORT_CRONS.map((r) => [r.fn, r.label])));
+  Object.freeze(
+    Object.fromEntries(
+      RUN_REPORT_CRONS.filter((r) => r.filer === "agent").map((r) => [r.fn, r.label]),
+    ),
+  );
 
 /**
  * The exact lines the substrate writes into `.claude/cron-allow.txt` for a
  * cron: bash prefixes first, then the directive lines the hook's
  * `parseAllowlist` understands (`mcp-allow`, `navigate-origin`,
- * `run-report-label`). Pure, so the delivery contract is unit-testable without
+ * `run-report-label`, `no-file-tools`). Pure, so the delivery contract is unit-testable without
  * a clone. Throws when an mcp cron's navigate origin cannot be resolved — the
  * unguarded form is the exfil vector the origin pin exists to close.
  */
@@ -529,7 +611,12 @@ export function buildAllowlistLines(
   cronName: string,
   allow: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
-): { lines: string[]; navigateOrigin: string | null; runReportLabel: string | null } {
+): {
+  lines: string[];
+  navigateOrigin: string | null;
+  runReportLabel: string | null;
+  noFileTools: boolean;
+} {
   const mcpEntry = CRON_MCP_ALLOWLISTS[cronName];
   let navigateOrigin: string | null = null;
   const lines = [...allow];
@@ -556,7 +643,10 @@ export function buildAllowlistLines(
   }
   const runReportLabel = CRON_RUN_REPORT_LABELS[cronName] ?? null;
   if (runReportLabel) lines.push(`run-report-label ${runReportLabel}`);
-  return { lines, navigateOrigin, runReportLabel };
+  // #7122 — a bare flag line (the hook's NO_FILE_TOOLS_DIRECTIVE). Written only here.
+  const noFileTools = CRON_NO_FILE_TOOLS.includes(cronName);
+  if (noFileTools) lines.push("no-file-tools");
+  return { lines, navigateOrigin, runReportLabel, noFileTools };
 }
 
 // Inert base overlay. `sandbox.enabled:false` = the host-independence fix;
@@ -632,6 +722,11 @@ export function runHookSelfTest(args: {
   // parsed from the file) so probe (a) cross-checks that the file ACTUALLY
   // delivered it, exactly like the bash allow[0] probe verifies bash delivery.
   runReportLabel?: string | null;
+  // #7122 — the `no-file-tools` directive, passed explicitly (from the map, not
+  // parsed from the file) for the same delivery cross-check: when set, Write, Grep,
+  // Task and Skill must all DENY. A file that failed to deliver the directive, or a
+  // hook that does not honour it, makes the real hook ALLOW one of them → throw.
+  noFileTools?: boolean;
 }): void {
   const {
     spawnCwd,
@@ -640,6 +735,7 @@ export function runHookSelfTest(args: {
     mcpAllow = [],
     navigateOrigin = null,
     runReportLabel = null,
+    noFileTools = false,
   } = args;
   const nodeBin = resolveNodeBin();
   const hookAbs = join(spawnCwd, HOOK_REL_PATH);
@@ -725,6 +821,28 @@ export function runHookSelfTest(args: {
     }
   }
 
+  // #7122 — the no-file-tools directive: one probe per switch-case the directive
+  // gates (Write/Edit/MultiEdit, Read/Glob/Grep, Task/Agent/Skill; Task and Skill are
+  // probed separately for the reason the Tier-2 loop below gives). The Tier-2 relax
+  // probes that follow EXPECT Task and Skill to allow, which is exactly what this
+  // directive reverses, so they are skipped for a cron that carries it.
+  if (noFileTools) {
+    for (const tool of ["Write", "Grep", "Task", "Skill"]) {
+      const out = run({
+        tool_name: tool,
+        tool_input: { file_path: "knowledge-base/x.md", path: "knowledge-base", pattern: "x" },
+      });
+      if (!out.includes('"permissionDecision":"deny"')) {
+        throw new Error(
+          `[${cronName}] containment hook self-test FAILED: the no-file-tools directive ` +
+            `did not take effect — ${tool} was NOT denied (directive not delivered, or ` +
+            `the hook does not honour it; the agent could overwrite an allowlisted script). ` +
+            `Aborting cron.`,
+        );
+      }
+    }
+  }
+
   // Tier-2 relax gate (#5046 PR-2, AC-P2.2). The hook's catch-all now allows
   // Task/Skill ONLY because sub-agents inherit this same hook — their interior
   // Bash hits the SAME containment the canonical-exfil probe above just proved.
@@ -742,7 +860,7 @@ export function runHookSelfTest(args: {
   // Probe Task AND Skill separately: today they share one switch case, but a
   // future hook edit could split them — and a clone carrying a Task-only
   // intermediate would silently fail-close every Skill-invoking cron.
-  for (const relaxedTool of ["Task", "Skill"]) {
+  for (const relaxedTool of noFileTools ? [] : ["Task", "Skill"]) {
     const allowed = run({ tool_name: relaxedTool, tool_input: {} });
     if (!allowed.includes('"permissionDecision":"allow"')) {
       throw new Error(
@@ -936,6 +1054,7 @@ export async function setupEphemeralWorkspace(args: {
     lines: allowlistLines,
     navigateOrigin,
     runReportLabel,
+    noFileTools,
   } = buildAllowlistLines(cronName, allow, process.env);
   await writeFile(
     join(claudeDir, "cron-allow.txt"),
@@ -966,9 +1085,31 @@ export async function setupEphemeralWorkspace(args: {
     mcpAllow: mcpEntry?.tools ?? [],
     navigateOrigin,
     runReportLabel,
+    noFileTools,
   });
 
   return { ephemeralRoot, spawnCwd };
+}
+
+// #7122 — credential custody. The clone embeds its token in `.git/config` through
+// buildAuthenticatedCloneUrl, so a cron that must not hold a write credential while
+// its agent runs clones with a READ token. After the child has exited the handler
+// mints the write token and re-points `origin` here, so its own git steps (the
+// digest commit and push) authenticate with it. Never logs the URL; the token is
+// redacted out of any thrown git stderr (git echoes the remote on some failures).
+export async function setOriginToken(spawnCwd: string, token: string): Promise<void> {
+  const res = await spawnSimple(
+    "git",
+    ["remote", "set-url", "origin", buildAuthenticatedCloneUrl(token)],
+    { cwd: spawnCwd },
+  );
+  if (res.exitCode !== 0) {
+    const reason = redactToken(res.stderr, token);
+    throw new Error(
+      `git remote set-url origin failed (exit ${res.exitCode}, signal ${res.signal})` +
+        (reason ? `: ${reason}` : ""),
+    );
+  }
 }
 
 export async function teardownEphemeralWorkspace(
@@ -1158,6 +1299,11 @@ async function spawnClaudeEvalUnguarded(args: {
   let evalCost: ParsedEvalResult["cost"] | null = null;
   // #8076 — filing-gate denials seen in the result event (0 until parsed).
   let evalFilingDenials: ParsedEvalResult["filingDenials"] = { count: 0, commands: [], fieldPresent: false };
+  // #7122 — all denials (not only filings) and the run's final message, from the same
+  // result event. Both stay undefined until a `result` event parses.
+  let evalAllDenials: ParsedEvalResult["allDenials"] | undefined;
+  let evalFinalMessage: string | undefined;
+  let evalFinalMessageTruncated: boolean | undefined;
   // #cost-attribution (plan Phase 2, obs P1): distinguishes "capture broke" from
   // "genuinely no result". Set when a JSON-object-shaped stdout line (`{…}` under
   // `--output-format json`) did NOT yield a usable `result` event — a truncated/
@@ -1235,6 +1381,25 @@ async function spawnClaudeEvalUnguarded(args: {
           if (parsedResult) {
             evalCost = parsedResult.cost;
             evalFilingDenials = parsedResult.filingDenials;
+            evalAllDenials = parsedResult.allDenials;
+            // #7122 — redact FIRST, then cap from the HEAD: a token straddling the cut
+            // must not survive as a partial prefix, and a front-cut tail is not parseable.
+            if (parsedResult.finalMessage === undefined) {
+              evalFinalMessage = undefined;
+              evalFinalMessageTruncated = undefined;
+            } else {
+              const bytes = Buffer.from(redactChild(parsedResult.finalMessage), "utf8");
+              if (bytes.length > FINAL_MESSAGE_CAP_BYTES) {
+                // Back up to a UTF-8 character boundary so the cut never leaves a lone continuation byte.
+                let end = FINAL_MESSAGE_CAP_BYTES;
+                while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+                evalFinalMessage = bytes.subarray(0, end).toString("utf8");
+                evalFinalMessageTruncated = true;
+              } else {
+                evalFinalMessage = bytes.toString("utf8");
+                evalFinalMessageTruncated = false;
+              }
+            }
             const tailText = redactChild(parsedResult.resultText);
             stdoutTail = (stdoutTail + tailText + "\n").slice(
               -STDOUT_TAIL_CAP_BYTES,
@@ -1381,6 +1546,10 @@ async function spawnClaudeEvalUnguarded(args: {
           isError: evalCost?.isError ?? undefined,
           subtype: evalCost?.subtype ?? undefined,
           numTurns: evalCost?.numTurns ?? undefined,
+          finalMessage: evalFinalMessage,
+          finalMessageTruncated: evalFinalMessageTruncated,
+          permissionDenialCount: evalAllDenials?.permissionDenialCount,
+          deniedTools: evalAllDenials?.deniedTools,
         });
       });
       child.on("error", (err) => {

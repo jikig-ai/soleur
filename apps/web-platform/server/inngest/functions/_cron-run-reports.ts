@@ -45,24 +45,40 @@ export interface RunReportCron {
   fn: string;
   /** The cron's `SENTRY_MONITOR_SLUG`, which is also its scheduled-issue label. */
   label: string;
+  /**
+   * Who files the run-report issue. `"agent"` (every row but one): the spawned
+   * model runs `gh issue create`, so the substrate delivers the `run-report-label`
+   * directive and `runHookSelfTest` probes the filing. `"handler"` (#7122,
+   * community-monitor): the handler upserts the issue from a validated draft and
+   * the agent holds no `gh` verb at all, so NO directive is emitted for the row —
+   * the self-test would otherwise abort every spawn probing a filing the agent
+   * must not be able to make. The sweeper and the measurement mirror keep the row:
+   * the handler-created issue carries the same App author and `[Scheduled]` title.
+   */
+  filer: "agent" | "handler";
   /** Sweep window for SUCCESS reports, or `null` for never swept. */
   closeAfterDays: number | null;
 }
 
 export const RUN_REPORT_CRONS: ReadonlyArray<RunReportCron> = [
-  { fn: "cron-architecture-diagram-sync", label: "scheduled-architecture-diagram-sync", closeAfterDays: 27 },
-  { fn: "cron-campaign-calendar", label: "scheduled-campaign-calendar", closeAfterDays: null },
-  { fn: "cron-community-monitor", label: "scheduled-community-monitor", closeAfterDays: 9 },
-  { fn: "cron-competitive-analysis", label: "scheduled-competitive-analysis", closeAfterDays: 120 },
-  { fn: "cron-content-generator", label: "scheduled-content-generator", closeAfterDays: 27 },
-  { fn: "cron-growth-audit", label: "scheduled-growth-audit", closeAfterDays: 27 },
-  { fn: "cron-growth-execution", label: "scheduled-growth-execution", closeAfterDays: 51 },
-  { fn: "cron-legal-audit", label: "scheduled-legal-audit", closeAfterDays: null },
-  { fn: "cron-roadmap-review", label: "scheduled-roadmap-review", closeAfterDays: 27 },
-  { fn: "cron-seo-aeo-audit", label: "scheduled-seo-aeo-audit", closeAfterDays: 27 },
+  { fn: "cron-architecture-diagram-sync", label: "scheduled-architecture-diagram-sync", filer: "agent", closeAfterDays: 27 },
+  { fn: "cron-campaign-calendar", label: "scheduled-campaign-calendar", filer: "agent", closeAfterDays: null },
+  { fn: "cron-community-monitor", label: "scheduled-community-monitor", filer: "handler", closeAfterDays: 9 },
+  { fn: "cron-competitive-analysis", label: "scheduled-competitive-analysis", filer: "agent", closeAfterDays: 120 },
+  { fn: "cron-content-generator", label: "scheduled-content-generator", filer: "agent", closeAfterDays: 27 },
+  { fn: "cron-growth-audit", label: "scheduled-growth-audit", filer: "agent", closeAfterDays: 27 },
+  { fn: "cron-growth-execution", label: "scheduled-growth-execution", filer: "agent", closeAfterDays: 51 },
+  { fn: "cron-legal-audit", label: "scheduled-legal-audit", filer: "agent", closeAfterDays: null },
+  { fn: "cron-roadmap-review", label: "scheduled-roadmap-review", filer: "agent", closeAfterDays: 27 },
+  { fn: "cron-seo-aeo-audit", label: "scheduled-seo-aeo-audit", filer: "agent", closeAfterDays: 27 },
 ];
 
-/** The directive label for a cron, or `null` when the cron is not a run-reporter. */
+/**
+ * A cron's run-report label, or `null` when the cron is not a run-reporter. It
+ * answers "which scheduled issue verifies this cron's run", for EVERY row: whether
+ * the substrate also delivers the `run-report-label` directive depends on `filer`
+ * and is decided in `CRON_RUN_REPORT_LABELS` (agent rows only).
+ */
 export function runReportLabelFor(cronName: string): string | null {
   return RUN_REPORT_CRONS.find((r) => r.fn === cronName)?.label ?? null;
 }

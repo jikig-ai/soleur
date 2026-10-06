@@ -682,6 +682,25 @@ function segmentMatchesAllowlist(segment, allowPrefixes) {
 // an empty mcpAllow set + null navigateOrigin → every mcp__* stays catch-all
 // denied (the cross-cron negative test asserts this). Directives are NOT bash
 // prefixes — they never enter the bash allowlist.
+export const NO_FILE_TOOLS_DIRECTIVE = "no-file-tools";
+
+// The tools the `no-file-tools` directive removes: everything that can read,
+// search, write or edit a file, plus the two classes (sub-agents, skills) that
+// would otherwise reach those tools through delegation. NotebookEdit is absent on
+// purpose: it is not a recognised class here, so the catch-all below already
+// denies it with or without the directive.
+const NO_FILE_TOOL_NAMES = new Set([
+  "Read",
+  "Glob",
+  "Grep",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "Task",
+  "Agent",
+  "Skill",
+]);
+
 export function parseAllowlist(lines) {
   const bash = [];
   const mcpAllow = new Set();
@@ -692,7 +711,17 @@ export function parseAllowlist(lines) {
   // wins, like navigate-origin. Absent for every other cron, so the run-report
   // exit below is unreachable there.
   let runReportLabel = null;
+  // #7122 — the fourth directive shape, a bare flag line. Written by the substrate
+  // ONLY for the crons in CRON_NO_FILE_TOOLS (the agent can neither read nor write
+  // the file). Present => decide() denies every file and sub-agent tool, so a
+  // Bash-only agent cannot overwrite an allowlisted script or read a secret path
+  // a deny-list failed to anticipate. Absent for every other cron.
+  let noFileTools = false;
   for (const line of lines) {
+    if (line === NO_FILE_TOOLS_DIRECTIVE) {
+      noFileTools = true;
+      continue;
+    }
     const mcpMatch = /^mcp-allow\s+(\S+)$/.exec(line);
     if (mcpMatch) {
       mcpAllow.add(mcpMatch[1]);
@@ -710,7 +739,7 @@ export function parseAllowlist(lines) {
     }
     bash.push(line);
   }
-  return { bash, mcpAllow, navigateOrigin, runReportLabel };
+  return { bash, mcpAllow, navigateOrigin, runReportLabel, noFileTools };
 }
 
 // PREFIX-SHAPED token secrets that must never ride a same-origin URL to the
@@ -786,8 +815,15 @@ export function decide(input, allowPrefixes) {
 
   // Split the file into bash prefixes + the per-cron mcp policy (#5199). A file
   // with no directive lines yields an empty mcpAllow set → mcp__* stays denied.
-  const { bash: bashPrefixes, mcpAllow, navigateOrigin, runReportLabel } =
+  const { bash: bashPrefixes, mcpAllow, navigateOrigin, runReportLabel, noFileTools } =
     parseAllowlist(allowPrefixes);
+
+  // #7122 — the per-cron `no-file-tools` directive: deny by ABSENCE of the tool,
+  // before any per-tool path check, so no argument shape (`Grep{path:"/",
+  // glob:"proc/*/environ"}`, a recursive Glob rooted outside the repo) can reach a
+  // deny-list that was never meant to be the control.
+  if (noFileTools && NO_FILE_TOOL_NAMES.has(tool))
+    return denyDecision(`tool not permitted for this cron (no-file-tools): ${tool}`);
 
   switch (tool) {
     case "Bash": {
