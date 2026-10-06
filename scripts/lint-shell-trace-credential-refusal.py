@@ -864,8 +864,17 @@ def _adjudicated(var: str, body: str) -> bool:
     return False
 
 
+_SUBST_OPEN = ("$(", "<(", ">(")
+# A redirection operator token (`<`, `<<<`, `>`, `>>`, `2>`, `&>`): the word
+# AFTER it is a file / here-string / process substitution, not a curl operand.
+_REDIR_OP = re.compile(r"^(?:\d*|&)(?:<<<|<<|<|>>|>)$")
+
+
 def _mask_cmdsubs(cmd: str) -> tuple[str, dict[str, list[str]]]:
-    """Replace every `$( ... )` span with an opaque placeholder token.
+    """Replace every `$( ... )`, `<( ... )` and `>( ... )` span with an opaque placeholder.
+
+    Process substitution (`< <(printf ... "$TOK")`) is masked the same way: its
+    body is data on a file descriptor, one shell word, never a curl operand.
 
     A command substitution is ONE curl argument, but `shlex` splits inside it,
     so its internals surface as free-standing tokens. Measured: `--data "$(jq -nc
@@ -882,10 +891,10 @@ def _mask_cmdsubs(cmd: str) -> tuple[str, dict[str, list[str]]]:
     out: list[str] = []
     i, n = 0, len(cmd)
     while i < n:
-        if cmd.startswith("$(", i):
+        if cmd.startswith(_SUBST_OPEN, i):
             depth, j = 1, i + 2
             while j < n and depth:
-                if cmd.startswith("$(", j):
+                if cmd.startswith(_SUBST_OPEN, j):
                     depth += 1
                     j += 2
                     continue
@@ -975,8 +984,11 @@ def _destination_vars(cmd: str) -> set[str]:
         found = _tok_vars(tok, subs)
         if not found:
             continue
-        if toks[i - 1].startswith("-"):
+        # A bare `-` is stdin (`--config - "$URL"`), not a flag: what follows IS an operand.
+        if toks[i - 1].startswith("-") and toks[i - 1] != "-":
             continue  # the argument of some flag, not an operand
+        if _REDIR_OP.match(toks[i - 1]):
+            continue  # the target of a redirection, not an operand
         dest.update(found)
     return dest
 

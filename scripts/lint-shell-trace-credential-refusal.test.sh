@@ -188,6 +188,24 @@ rc="$(rc_of "$LINT" "$FIX/compliant-ruled-array.sh")"
 [ "$rc" = "0" ] && pass "Rule D: array-built curl with the flags first PASSES (no false positive)" \
   || fail "Rule D array-built compliant should pass, got rc=$rc"
 
+# Process-substitution token feed (`--config - "$URL" < <(printf ... "$TOK")`).
+# The token inside <(...) is data on curl's stdin, never an operand. It used to be
+# read as the destination, so a correctly pinned call site failed on "$TOK".
+rc="$(rc_of "$LINT" "$FIX/compliant-stdin-bearer-procsub-bare.sh")"
+[ "$rc" = "0" ] && pass "Rule D: bare process-substitution stdin-bearer curl with a pinned destination PASSES" \
+  || fail "Rule D procsub-bare compliant should pass, got rc=$rc"
+
+# ...and the same feed must NOT launder a genuinely unpinned destination.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-procsub-unpinned.sh")"
+[ "$rc" = "1" ] && pass "Rule D: procsub still flags a genuinely unpinned destination (rc=1)" \
+  || fail "Rule D procsub-unpinned should report rc=1, got rc=$rc"
+grep -q 'sends to \$SINK_URL,' "$WORK/out" "$WORK/err" \
+  && pass "Rule D: procsub-unpinned message names the destination \$SINK_URL" \
+  || fail "Rule D procsub-unpinned must name \$SINK_URL as the destination"
+grep -q 'sends to \$SENTRY_AUTH_TOKEN' "$WORK/out" "$WORK/err" \
+  && fail "Rule D procsub-unpinned must NOT name the token feed as the destination" \
+  || pass "Rule D: procsub-unpinned does not name the token feed as the destination"
+
 # --- SECRET_SIGNALS: one fixture per class, ALONE ----------------------------
 for c in doppler-get capture gh-auth; do
   rc="$(rc_of "$LINT" "$FIX/violation-signal-$c.sh")"
@@ -529,6 +547,18 @@ mutate_row 'D4 Rule D: credential classifier narrowed (stdin-header channel drop
   's/CURL_STDIN_HEADER = re\.compile\(r"[^"]*"\)/CURL_STDIN_HEADER = re.compile(r"(?!x)x")/' \
   "$FIX/violation-ruled-stdin-header.sh" 1 0
 
+# D10/D11 mutate the two operand-scan edits that make the procsub rows hold.
+# D10: the redirection target is an operand again -> the compliant fixture reds.
+mutate_row 'D10 Rule D: redirection target read as a curl operand again' \
+  's/^(\s*)if _REDIR_OP\.match\(toks\[i - 1\]\):$/${1}if False:/m' \
+  "$FIX/compliant-stdin-bearer-procsub-bare.sh" 0 1
+
+# D11: a bare `-` (stdin) read as a flag whose argument is skipped -> the unpinned
+# destination after `--config -` goes invisible and the violation fixture greens.
+mutate_row 'D11 Rule D: bare `-` treated as a flag, hiding the operand after it' \
+  's/ and toks\[i - 1\] != "-":/:/' \
+  "$FIX/violation-ruled-procsub-unpinned.sh" 1 0
+
 # --- Guard 2 (#7946): Rule C empty-predicate hardening ------------------------
 # A single-credential file whose only `${VAR:+x}` limb was deleted leaves `[ -n "" ]`,
 # which Rule C's `":+" not in window` branch used to read as an UNCONDITIONAL refusal --
@@ -673,7 +703,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-MIN_ASSERTIONS=77
+MIN_ASSERTIONS=83
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

@@ -15,7 +15,7 @@ Per-file recipe (every conversion phase): (a) if the file fails `python3 scripts
 
 ## Phase 1: Lint first, battery, pilot
 
-- [ ] 1.1 Rule D fix: `_destination_vars` skips tokens after a redirection operator and masks `<(...)`; fixture `compliant-stdin-bearer-procsub-bare.sh` first
+- [x] 1.1 Rule D fix: `_destination_vars` skips tokens after a redirection operator and masks `<(...)`; fixture `compliant-stdin-bearer-procsub-bare.sh` first
 - [ ] 1.2 Wrapper awareness for Rules D and E (file-wide names, transitive closure, command position, argument splicing); `--census` before/after; resolve new offenders in the same commit
 - [ ] 1.3 Guard 1 fixtures and rows first, then `check_rule_e()` + `main()` plumbing (`"e"` map entry, `load_baseline_e`, `--write-baseline-e`, `offenders_e`, equality on path and count in full-tree mode), own scope function, invocation-segment scan, file-wide variable-held headers, config-hazard sub-checks
 - [ ] 1.4 Generate baseline E (path TAB count) from the unconverted tree; diff vs census; resolve differences
