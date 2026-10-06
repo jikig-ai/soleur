@@ -19,6 +19,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -34,11 +35,15 @@ import { gitFixtureEnv } from "./lib/git-fixture-env";
 
 setDefaultTimeout(30_000);
 
-// FOUNDER_CHECK_SCRIPT is a seam for the mutation battery only: it points the whole suite at a
-// MUTATED COPY of the script (with probe-verb-gate.sh beside it) so a surviving mutant is a measured
-// result. Unset, the suite drives the production script.
+// FOUNDER_CHECK_SCRIPT (with FOUNDER_CHECK_MUTATION_RUN=1) is a seam for the mutation battery only:
+// it points the whole suite at a MUTATED COPY of the script (with probe-verb-gate.sh beside it) so a
+// surviving mutant is a measured result. Otherwise the suite drives the production script.
 const SKILL_DIR = join(import.meta.dir, "..", "skills", "preflight");
-const SCRIPT = process.env.FOUNDER_CHECK_SCRIPT ?? join(SKILL_DIR, "scripts", "founder-check.py");
+// The seam is honoured ONLY with FOUNDER_CHECK_MUTATION_RUN=1: an ambient FOUNDER_CHECK_SCRIPT must not
+// silently retarget the suite (Guard 4 included) away from production.
+const MUTATION_RUN = process.env.FOUNDER_CHECK_MUTATION_RUN === "1" && !!process.env.FOUNDER_CHECK_SCRIPT;
+const SCRIPT = MUTATION_RUN ? (process.env.FOUNDER_CHECK_SCRIPT as string) : join(SKILL_DIR, "scripts", "founder-check.py");
+if (MUTATION_RUN) console.warn(`[founder-check suite] MUTATION RUN against ${SCRIPT}`);
 const GATE = join(SKILL_DIR, "scripts", "probe-verb-gate.sh");
 const FIXTURES = join(import.meta.dir, "fixtures", "founder-check");
 const PLANS = "knowledge-base/project/plans";
@@ -269,6 +274,32 @@ function harness(code: string, data: unknown, script = SCRIPT): any {
   const r = spawnSync("python3", ["-I", "-c", prog, script], { input: JSON.stringify(data), encoding: "utf8", timeout: 60_000 });
   if (r.status !== 0) throw new Error(`harness failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
+}
+
+/** A frozen `bash scripts/ok.sh` check whose script touches a marker file if anything ever runs it. */
+function canaryRepo(): { r: Repo; marker: string } {
+  const r = new Repo();
+  const marker = join(r.scratch, "canary-ran");
+  r.mainFile("scripts/ok.sh", `#!/bin/bash\ntouch ${marker}\n`);
+  r.freeze({ ...BASE, command: "bash scripts/ok.sh", expected: "", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } });
+  r.write("src/a.txt", "a\n");
+  r.commit("code");
+  return { r, marker };
+}
+
+/** A mutated COPY of the production script (never the file itself), proven to compile. */
+function mutate(anchor: string, replacement: string): string {
+  const text = readFileSync(SCRIPT, "utf8");
+  const n = text.split(anchor).length - 1;
+  if (n !== 1) throw new Error(`mutation anchor must occur exactly once in founder-check.py (found ${n}): ${anchor}`);
+  const dir = mkdtempSync(join(TMP, "fcm-"));
+  made.push(dir);
+  const p = join(dir, "founder-check.py");
+  writeFileSync(p, text.replace(anchor, replacement));
+  writeFileSync(join(dir, "probe-verb-gate.sh"), readFileSync(GATE, "utf8"), { mode: 0o755 });
+  const c = spawnSync("python3", ["-I", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", p], { encoding: "utf8" });
+  if (c.status !== 0) throw new Error(`the mutant does not compile (a crash is not a kill): ${c.stderr}`);
+  return p;
 }
 
 const cmdBlock = (over: Partial<Fields & { creates: string[] }> = {}): Record<string, unknown> => ({
@@ -787,6 +818,53 @@ describe("verify: the pinned-script and pin rules", () => {
     r.freeze({ ...BASE, command: "bash scripts/link.sh", pins: { "scripts/link.sh": r.blob("scripts/link.sh") } });
     expect(r.verify().json?.reason).toBe("pin-not-at-freeze");
   });
+
+  test("a pinned EXECUTABLE script (mode 100755) is accepted, frozen and as a candidate", () => {
+    const r = new Repo();
+    r.git(["checkout", "-q", "main"]);
+    r.write("scripts/ok.sh", SCRIPT_SRC);
+    chmodSync(join(r.dir, "scripts/ok.sh"), 0o755);
+    r.commit("main: an executable script");
+    r.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    r.git(["checkout", "-q", "feat-x"]);
+    r.git(["rebase", "-q", "main"]);
+    expect(r.git(["ls-tree", "HEAD", "scripts/ok.sh"]).startsWith("100755")).toBe(true);
+    const block = { ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } };
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(block) }));
+    const cand = r.verify(["--candidate"]);
+    expect([cand.json?.outcome, cand.json?.reason]).toEqual(["OK", "candidate"]);
+    r.commit("plan: freeze");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    expect(r.verify().json?.outcome).toBe("OK");
+  });
+
+  test("candidate mode checks every pin against HEAD: a wrong blob, a missing file and a link are each FAIL", () => {
+    const r = withScript();
+    const plan = (pins: Record<string, string>) => r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "bash scripts/ok.sh", pins }) }));
+    plan({ "scripts/ok.sh": r.blob("scripts/ok.sh") });
+    expect(r.verify(["--candidate"]).json?.outcome).toBe("OK");
+    plan({ "scripts/ok.sh": SHA40 });
+    expect(r.verify(["--candidate"]).json?.reason).toBe("pin-not-at-freeze");
+    plan({ "scripts/ok.sh": r.blob("scripts/ok.sh"), "scripts/missing.sh": r.blob("scripts/ok.sh") });
+    expect(r.verify(["--candidate"]).json?.reason).toBe("pin-not-at-freeze");
+    symlinkSync("ok.sh", join(r.dir, "scripts", "link.sh"));
+    r.git(["add", "scripts/link.sh"]);
+    r.git(["commit", "-q", "-m", "a link"]); // only the link: the candidate plan must stay uncommitted
+    plan({ "scripts/ok.sh": r.blob("scripts/ok.sh"), "scripts/link.sh": r.blob("scripts/link.sh") });
+    expect(r.verify(["--candidate"]).json?.reason).toBe("pin-not-at-freeze");
+  });
+
+  test("replacing the pinned script with a LINK to identical bytes after the freeze is caught (pinned-script-changed)", () => {
+    const r = withScript();
+    r.freeze({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") } });
+    r.write("scripts/real.sh", SCRIPT_SRC); // the same bytes, so hash-object of the link still equals the pin
+    rmSync(join(r.dir, "scripts/ok.sh"));
+    symlinkSync("real.sh", join(r.dir, "scripts/ok.sh"));
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
+    expect(v.json?.reasons).toContain("pinned-script-changed");
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -845,6 +923,45 @@ describe("verify: the static rules (in-process table)", () => {
     ["a secret in approved_by on a judgement check", cmdBlock({ kind: "judgement", command: "", approved_by: "ghp_" + "a".repeat(30) }), "secret-shape"],
     ["a pin that is not a sha", cmdBlock({ command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": "nope" } }), "unparseable"],
     ["a pin path that traverses", cmdBlock({ command: "bash scripts/ok.sh", pins: { "../x.sh": SHA40 } }), "unparseable"],
+    // One row per guard, not per spelling: each alternative of a rule is its own row, so deleting
+    // one alternative (not just the whole rule) reds the suite.
+    ["a pinned script named with ./ and pinned with ./", cmdBlock({ command: "bash ./scripts/ok.sh", pins: { "./scripts/ok.sh": SHA40 } }), null],
+    ["a pinned script named with ./ and pinned without it", cmdBlock({ command: "bash ./scripts/ok.sh", pins: { "scripts/ok.sh": SHA40 } }), null],
+    ["a pinned script named without ./ and pinned with it", cmdBlock({ command: "bash scripts/ok.sh", pins: { "./scripts/ok.sh": SHA40 } }), null],
+    ["a pin that is a 64-hex (sha256) blob", cmdBlock({ command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": "e".repeat(64) } }), null],
+    ["a pin that is 41 hex", cmdBlock({ command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": "e".repeat(41) } }), "unparseable"],
+    ["a pin with an absolute key", cmdBlock({ command: "bash scripts/ok.sh", pins: { "/etc/x.sh": SHA40 } }), "unparseable"],
+    ["a pin with an empty key", cmdBlock({ command: "bash scripts/ok.sh", pins: { "": SHA40 } }), "unparseable"],
+    ["a pin with a bare ./ key", cmdBlock({ command: "bash scripts/ok.sh", pins: { "./": SHA40 } }), "unparseable"],
+    ["pins that are not a mapping", cmdBlock({ pins: ["a"] }), "unparseable"],
+    ["a text that is not a string", cmdBlock({ text: 5 }), "unparseable"],
+    ["a command that is not a string", cmdBlock({ command: ["grep"] }), "unparseable"],
+    ["an expected that is not a string", cmdBlock({ expected: 1 }), "unparseable"],
+    ["an approved_by that is not a string", cmdBlock({ approved_by: 1 }), "unparseable"],
+    ["git --config-env", cmdBlock({ command: "git --config-env=alias.t=X t" }), "dangerous-option"],
+    ["git --exec-path", cmdBlock({ command: "git --exec-path=/tmp t" }), "dangerous-option"],
+    ["curl --config", cmdBlock({ command: "curl --config cfg http://x" }), "dangerous-option"],
+    ["curl --config=", cmdBlock({ command: "curl --config=cfg http://x" }), "dangerous-option"],
+    ["rg --pre=", cmdBlock({ command: "rg --pre=./x foo f" }), "dangerous-option"],
+    ["an output redirect", cmdBlock({ command: "grep a f > out" }), "shell-active-token"],
+    ["an input redirect", cmdBlock({ command: "grep a < f" }), "shell-active-token"],
+    ["a process substitution <(", cmdBlock({ command: "grep a <(id)" }), "shell-active-token"],
+    ["a process substitution >(", cmdBlock({ command: "grep a >(id)" }), "shell-active-token"],
+    ["a || chain", cmdBlock({ command: "grep a f || id" }), "shell-active-token"],
+    ["a ${ expansion in expected", cmdBlock({ expected: "${HOME}" }), "shell-active-token"],
+    ["a <( in expected", cmdBlock({ expected: "<(id)" }), "shell-active-token"],
+    ["a >( in expected", cmdBlock({ expected: ">(id)" }), "shell-active-token"],
+    ["a control character in the founder's words", cmdBlock({ text: "a\u0001b" }), "control-character"],
+    ["a tab in the founder's words is kept", cmdBlock({ text: "a\tb" }), null],
+    ["a control character in approved_by", cmdBlock({ approved_by: "yes\u001b[2J" }), "control-character"],
+    ["a U+2028 in the founder's words", cmdBlock({ text: "a\u2028b" }), "control-character"],
+    ["a Bearer token with no Authorization header", cmdBlock({ text: "send Bearer abcdefgh12345 along" }), "secret-shape"],
+    ["an Authorization header with no Bearer", cmdBlock({ command: 'curl -H "Authorization: x" http://x' }), "secret-shape"],
+    ["an AWS access key id", cmdBlock({ text: "key AKIAABCDEFGHIJKLMNOP" }), "secret-shape"],
+    ["a private key header", cmdBlock({ text: "-----BEGIN RSA PRIVATE KEY-----" }), "secret-shape"],
+    ["curl -u user:pass", cmdBlock({ command: "curl -u me:hunter2 http://x" }), "secret-shape"],
+    ["an api_key assignment", cmdBlock({ text: "api_key=abcdef123456" }), "secret-shape"],
+    ["a plain word 'token' with no value is not a secret", cmdBlock({ text: "the token page loads" }), null],
   ];
 
   test("every row yields exactly the expected reason", () => {
@@ -975,6 +1092,65 @@ describe("verify: outputs and failure modes", () => {
     writeFileSync(lone, readFileSync(SCRIPT, "utf8"));
     expect(harness("out = fc.static_problem(data)", cmdBlock())).toBeNull();
     expect(harness("out = fc.static_problem(data)", cmdBlock(), lone)).toBe("verb-gate-unavailable");
+  });
+
+  test("a freeze commit that ALSO carries code is an ordering failure (the commonest one)", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.write("src/a.txt", "a\n");
+    r.commit("plan: freeze and code together");
+    const v = r.verify();
+    expect([v.json?.outcome, v.json?.reasons]).toEqual(["CHANGED-SINCE-APPROVAL", ["ordering"]]);
+  });
+
+  test("a block moved from one plan to another is FAIL freeze-without-block, not an accept", () => {
+    const r = new Repo();
+    r.freeze(BASE, "a.md");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.plan("a.md", scaffold("plan-no-block.md", {}));
+    r.freeze(BASE, "b.md");
+    const v = r.verify();
+    expect(v.json?.outcome).toBe("FAIL");
+    expect(v.json?.reason).toBe("freeze-without-block");
+  });
+
+  test("the founder-check log in the tree does not make the next verify read as dirty (the Retry flow)", () => {
+    const r = new Repo();
+    r.freeze({ ...BASE, kind: "judgement", command: "" });
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const first = r.verifyFile();
+    expect(first.run.json?.dirty).toBe(false);
+    expect(r.py(["log", "--verify-json", first.file, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]).status).toBe(0);
+    expect(r.git(["status", "--porcelain", "--untracked-files=all"]).includes("founder-check-log.md")).toBe(true); // the row is really there, untracked
+    expect(r.verify().json?.dirty).toBe(false);
+    r.write("src/other.txt", "x\n");
+    expect(r.verify().json?.dirty).toBe(true);
+  });
+
+  test("a default branch other than main or master anchors a freeze only through origin/HEAD", () => {
+    const r = new Repo();
+    r.git(["update-ref", "refs/remotes/origin/trunk", "main"]);
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const run = (base: string) => r.py(["verify", "--base", base, "--no-pr"]);
+    expect(run("origin/trunk").json?.reason).toBe("base-not-default-branch");
+    r.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"]);
+    expect(run("origin/trunk").json?.outcome).toBe("OK");
+    expect(run("origin/feature").json?.reason).toBe("base-not-default-branch");
+  });
+
+  test("a re-freeze with the PR login unmeasured is UNTRUSTED, like any freeze that was not reviewed on main", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "2" }) }));
+    r.commit("plan: re-freeze founder-stated check");
+    const v = r.py(["verify", "--base", "origin/main", "--mode", "interactive"]);
+    expect([v.json?.outcome, v.json?.flags]).toEqual(["UNTRUSTED", ["pr-author-unmeasurable"]]);
   });
 
   test("an internal error is one JSON FAIL line and exit 4, never a traceback", () => {
@@ -1753,22 +1929,37 @@ const AST_WALK = `
 import ast, json, sys
 src = open(sys.argv[1], encoding="utf-8").read()
 tree = ast.parse(src)
-BAD_OS = ("system", "popen", "execv", "execve", "execl", "execlp", "execvp", "spawnv", "spawnl", "spawnvp", "posix_spawn", "fork", "forkpty")
+BAD_OS_PREFIX = ("system", "popen", "exec", "spawn", "posix_spawn", "fork", "startfile")
+BAD_MODULES = ("ctypes", "pty", "pexpect", "importlib", "runpy", "multiprocessing", "asyncio", "code", "pdb")
 funcs, bad = set(), []
 def walk(node, fn):
     for ch in ast.iter_child_nodes(node):
         f = ch.name if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
         if isinstance(ch, ast.Name) and ch.id == "subprocess":
             funcs.add(fn or "<module>")
-        if isinstance(ch, ast.Attribute) and isinstance(ch.value, ast.Name) and ch.value.id == "os" and ch.attr in BAD_OS:
+        if isinstance(ch, ast.Attribute) and isinstance(ch.value, ast.Name) and ch.value.id == "os" and ch.attr.startswith(BAD_OS_PREFIX):
             bad.append("os." + ch.attr)
-        if isinstance(ch, ast.Name) and ch.id in ("eval", "exec", "compile", "__import__", "ctypes", "pty"):
+        if isinstance(ch, ast.Name) and ch.id in ("eval", "exec", "compile", "__import__", "ctypes", "pty", "importlib"):
             bad.append(ch.id)
-        if isinstance(ch, (ast.Import, ast.ImportFrom)):
-            names = [a.name for a in ch.names] + ([ch.module] if isinstance(ch, ast.ImportFrom) and ch.module else [])
-            for n in names:
-                if n.split(".")[0] in ("ctypes", "pty", "pexpect", "shlex_run"):
-                    bad.append("import " + n)
+        if isinstance(ch, ast.Call):
+            if isinstance(ch.func, ast.Name) and ch.func.id == "getattr" and ch.args and isinstance(ch.args[0], ast.Name) and ch.args[0].id in ("os", "subprocess", "sys", "builtins"):
+                # only a literal constant name (os.O_NOFOLLOW) is a read; a computed name can reach system()
+                a1 = ch.args[1] if len(ch.args) > 1 else None
+                if not (isinstance(a1, ast.Constant) and isinstance(a1.value, str) and a1.value.startswith(("O_", "S_"))):
+                    bad.append("getattr(" + ch.args[0].id + ")")
+            for kw in ch.keywords:
+                if kw.arg == "shell":
+                    bad.append("shell=")
+        if isinstance(ch, ast.Import):
+            for a in ch.names:
+                if a.name.split(".")[0] in BAD_MODULES:
+                    bad.append("import " + a.name)
+                if a.name in ("os", "subprocess") and a.asname:
+                    bad.append("import " + a.name + " as " + a.asname)
+        if isinstance(ch, ast.ImportFrom):
+            m = (ch.module or "").split(".")[0]
+            if m in BAD_MODULES or m in ("subprocess", "os", "sys", "builtins"):
+                bad.append("from " + (ch.module or "") + " import " + ",".join(a.name for a in ch.names))
         walk(ch, f)
 walk(tree, None)
 print(json.dumps({"funcs": sorted(funcs), "bad": bad}))
@@ -1796,6 +1987,55 @@ describe("Guard 4: the script holds no sandbox and never executes the founder co
     expect(w.bad).toEqual(["os.system"]);
   });
 
+  // Each spelling a reviewer's mutants used to start a process without the Name `subprocess`.
+  const SPELLINGS: [string, string, string][] = [
+    ["from-import", "from subprocess import run\ndef x(): run(['id'])\n", "from subprocess import run"],
+    ["aliased import", "import subprocess as sp\ndef x(): sp.run(['id'])\n", "import subprocess as sp"],
+    ["getattr(os, computed)", "import os\ndef x(): getattr(os, 'sys' + 'tem')('id')\n", "getattr(os)"],
+    ["shell=True", "import subprocess\ndef _git(): subprocess.run('id', shell=True)\n", "shell="],
+    ["os.execv", "import os\ndef x(): os.execv('/bin/sh', ['sh'])\n", "os.execv"],
+    ["os.spawnl", "import os\ndef x(): os.spawnl(0, '/bin/sh', 'sh')\n", "os.spawnl"],
+    ["importlib", "import importlib\ndef x(): importlib.import_module('subprocess')\n", "import importlib"],
+    ["__import__", "def x(): __import__('subprocess').run(['id'])\n", "__import__"],
+    ["from os import system", "from os import system\ndef x(): system('id')\n", "from os import system"],
+  ];
+  for (const [name, code, flagged] of SPELLINGS) {
+    test(`instrument: the walker flags ${name}`, () => {
+      const dir = mkdtempSync(join(TMP, "fcast-"));
+      made.push(dir);
+      const f = join(dir, "x.py");
+      writeFileSync(f, code);
+      expect(astWalk(f).bad).toContain(flagged);
+    });
+  }
+
+  test("behavioural canary: no subcommand starts the script a check names (a marker file stays absent)", () => {
+    const { r, marker } = canaryRepo();
+    const { file, run } = r.verifyFile();
+    expect(run.json?.outcome).toBe("OK");
+    const cl = join(r.scratch, "cl.json");
+    expect(r.classify(["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--out", cl]).json?.outcome).toBe("PASSED");
+    expect(r.py(["log", "--verify-json", file, "--classify-json", cl, "--polarity", "acceptance", "--mode", "interactive", "--outcome", "PASSED"]).status).toBe(0);
+    r.py(["text", "pass", "--verify-json", file]);
+    r.py(["summary"]);
+    r.py(["commit-log"]);
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": r.blob("scripts/ok.sh") }, expected: "2" }) }));
+    expect(r.verify(["--candidate", "--refreeze"]).json?.outcome).toBe("OK");
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("instrument: the canary fires when the verb gate is made to execute the command", () => {
+    const mutant = mutate(
+      '    r = subprocess.run(["bash", gate, command], capture_output=True, text=True, errors="replace")',
+      '    subprocess.run(command, shell=True, capture_output=True)\n    r = subprocess.run(["bash", gate, command], capture_output=True, text=True, errors="replace")',
+    );
+    const { r, marker } = canaryRepo();
+    expect(r.verify([], mutant).json?.outcome).toBe("OK");
+    expect(existsSync(marker)).toBe(true); // the mutant ran the pinned script, so absence above means something
+    // and the structural walk sees nothing wrong with this mutant: only the canary can tell
+    expect(astWalk(mutant).funcs).toEqual(["_git", "_verb_gate"]);
+  });
+
   test("it declares no sandbox of its own", () => {
     const src = readFileSync(SCRIPT, "utf8").replace(/#.*$/gm, "");
     expect(/BWRAP_ARGS\s*=\s*\(/i.test(src)).toBe(false);
@@ -1809,19 +2049,6 @@ describe("Guard 4: the script holds no sandbox and never executes the founder co
 // must compile, and each row asserts the mutated behaviour, not just a difference.
 // ---------------------------------------------------------------------------------------------
 describe("harness rows (the suite goes RED when the subject is gutted)", () => {
-  const mutate = (anchor: string, replacement: string): string => {
-    const text = readFileSync(SCRIPT, "utf8");
-    const n = text.split(anchor).length - 1;
-    if (n !== 1) throw new Error(`mutation anchor must occur exactly once in founder-check.py (found ${n}): ${anchor}`);
-    const dir = mkdtempSync(join(TMP, "fcm-"));
-    made.push(dir);
-    const p = join(dir, "founder-check.py");
-    writeFileSync(p, text.replace(anchor, replacement));
-    writeFileSync(join(dir, "probe-verb-gate.sh"), readFileSync(GATE, "utf8"), { mode: 0o755 });
-    const c = spawnSync("python3", ["-I", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", p], { encoding: "utf8" });
-    if (c.status !== 0) throw new Error(`the mutant does not compile (a crash is not a kill): ${c.stderr}`);
-    return p;
-  };
   const changedRepo = () => {
     const r = new Repo();
     r.freeze();

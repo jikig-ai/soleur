@@ -722,7 +722,7 @@ def _pin_blob(repo, rev, path):
 
 
 def _head_dirty(repo):
-    out = _out(["status", "--porcelain", "--untracked-files=normal"], repo) or ""
+    out = _out(["status", "--porcelain", "--untracked-files=all"], repo) or ""  # "normal" collapses a new directory, hiding the log inside it
     return any(not ln[3:].strip('"').endswith(LOG_NAME) for ln in out.splitlines() if ln.strip())
 
 
