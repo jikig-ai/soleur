@@ -42,6 +42,14 @@ basename-derived census found two of the five carrier classes; the architecture 
 running suites the diff never named. `cloud-init.yml` is rendered only by the web hosts, which carry
 `ignore_changes = [user_data]`, so the same edit is inert there and a replace on the three hosts above.
 
+## Session Errors
+
+- **Pin census derived from basenames.** The plan's census grepped the edited files' basenames and found the `ci-deploy.test.sh` mutation row; it missed `web-ghcr-deny.test.sh` (anchors on the old `server.tf` line), `cloud-init-user-data-size.test.ts` (pins the old aa-status grep) and `workspaces-luks-verify-workflow.test.sh` (a sed mutation anchored on the old `grep -qE` fragment). Recovery: found by running the owning suite, then by the architecture and pattern review seats. **Prevention:** after a mechanical rewrite, grep the OLD line text (and its fragments) across every `*.test.*`, not the file's name, and run the suites that match; `bash scripts/test-all.sh --affected` does this and was skipped on the operator's instruction to rely on CI.
+- **Two converted files were carriers by routes the plan did not check.** `workspaces-luks.tf` (sha256-pinned forensic print) and `inngest-luks-cutover.sh` (baked into a digest-pinned image, GuardA byte-identity) were converted, then reverted and given deferral rows. **Prevention:** the carrier checklist above (resource lifecycle, `triggers_replace`/`filesha256`, image-pin tests).
+- **A batch edit aborted midway on a line-wrapped anchor** (a phrase wrapped across two lines in the source), leaving three of six edits applied. Recovery: re-read state, re-ran with shorter anchors. **Prevention:** anchor on text that cannot wrap, and `git diff` the batch's targets before assuming it landed.
+- **Unmeasured claims in my own prose**: the first learning draft cited the raw file size for the comment-stripped stream and used `cloud-init.yml` as a "replace on another host" example (it is inert on every host that renders it), and the `reusable-release.yml` comment asserted a pipefail default nobody measured. Recovery: caught by code-quality, security and pattern seats and corrected. **Prevention:** name the falsifying command for every causal sentence a diff adds.
+- **Environment friction (one-off):** a process-kill by command-line pattern was blocked by the self-match hook (used `proc.sh` instead); mutation copies must live in the repo's hooks directory behind `.git/info/exclude` because the guard sources `lib/` relative to itself.
+
 ## Tags
 
 category: test-failures
