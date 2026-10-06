@@ -604,6 +604,27 @@ def _history(repo, merge_base):
     return commits
 
 
+def _plans_at(repo, rev):
+    """Every plan path at `rev`, grouped by plan identity: an archived plan and its live name are one plan."""
+    out = _out(["-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", rev, "--", PLANS_DIR], repo) or ""
+    by_key = {}
+    for pth in out.splitlines():
+        if pth.endswith(".md"):
+            by_key.setdefault(_plan_key(pth), []).append(pth)
+    return by_key
+
+
+def _canon_at(repo, sha, path):
+    """The canonical block a commit holds for `path`, or None when it holds none or cannot parse."""
+    blocks = _blocks_at(repo, sha, path)
+    if not blocks:
+        return None
+    try:
+        return canonical(parse_block(blocks[0]))
+    except ParseError:
+        return None
+
+
 def _pin_blob(repo, rev, path):
     """(mode, blob) of `path` at `rev`, or ("", "") when absent."""
     out = _out(["ls-tree", rev, "--", path], repo) or ""
@@ -679,7 +700,7 @@ def cmd_verify(a):
     if tp:
         cands.add(tp)
 
-    commits, evidence, refreeze, back = [], {}, {}, {}
+    commits, evidence, refreeze, back, prior, refrozen_from = [], {}, {}, {}, {}, {}
     operator = _operator_email(repo)
     if merge_base:
         for args in (
@@ -707,8 +728,17 @@ def cmd_verify(a):
                 ident = resolve(p)
                 if ident not in evidence and _blocks_at(repo, c["sha"], p):
                     evidence[ident] = {"sha": c["sha"], "path": p}
-                if c["subject"].startswith(REFREEZE_PREFIX) and c["email"] == operator and _blocks_at(repo, c["sha"], p):
-                    refreeze[resolve(p)] = {"sha": c["sha"], "path": p}
+                    prior[ident] = _canon_at(repo, c["sha"], p)
+                # A re-freeze is a deliberate CHANGE of a check that was already frozen earlier on
+                # this branch. A commit that restates the same block changes nothing and must not
+                # launder the earlier freeze's authorship; a first freeze is just a freeze.
+                elif (c["subject"].startswith(REFREEZE_PREFIX) and c["email"] == operator and ident in evidence
+                        and evidence[ident]["sha"] != c["sha"]):
+                    cur = _canon_at(repo, c["sha"], p)
+                    if cur is not None and cur != prior.get(ident):
+                        refrozen_from[ident] = prior.get(ident)
+                        refreeze[ident] = {"sha": c["sha"], "path": p}
+                        prior[ident] = cur
         cands.update(v["path"] for v in evidence.values() if os.path.lexists(os.path.join(repo, v["path"])))
     else:
         resolve = _plan_key  # noqa: F811 -- no history to follow
@@ -719,10 +749,15 @@ def cmd_verify(a):
             cands.update(p for p in (_out(args, repo) or "").splitlines() if p.endswith(".md"))
 
     freeze_of = {}
+    on_main = _plans_at(repo, merge_base) if merge_base else {}
     for p in cands:
         ident = resolve(p)
-        if merge_base and _blocks_at(repo, merge_base, ident):
-            freeze_of[ident] = {"sha": merge_base, "path": ident, "source": "merge-base"}
+        # Look the plan up at the merge base under EVERY name it had there: an unrelated edit to a
+        # plan that main already archived must compare against main's frozen block, not become
+        # its own freeze.
+        main_path = next((q for q in sorted(on_main.get(ident, [])) if _blocks_at(repo, merge_base, q)), None)
+        if main_path:
+            freeze_of[ident] = {"sha": merge_base, "path": main_path, "source": "merge-base"}
         elif ident in refreeze:
             freeze_of[ident] = {**refreeze[ident], "source": "refreeze"}
         elif ident in evidence:
@@ -800,7 +835,9 @@ def cmd_verify(a):
     freeze_author = (_out(["log", "-1", "--format=%ae", freeze_sha], repo) or "").strip().lower()
     base_info = {"plan": path, "freeze_sha": freeze_sha, "freeze_source": source, "hash": head_hash,
                  "block": head_c, "frozen": {k: frozen_c[k] for k in ("kind", "text", "command", "expected", "approved_by", "approved_at")},
-                 "freeze_author": freeze_author, "refreeze": source == "refreeze"}
+                 "freeze_author": freeze_author, "refreeze": source == "refreeze",
+                 "refrozen_from": ({k: refrozen_from[ident][k] for k in ("kind", "text", "command", "expected", "approved_by", "approved_at")}
+                                   if source == "refreeze" and refrozen_from.get(ident) else None)}
 
     problem = static_problem(frozen_block)
     if problem:
@@ -858,6 +895,11 @@ def cmd_verify(a):
         return emit("UNTRUSTED", reason="authorship", **info, detail="the freeze does not anchor to the local operator; the command is shown, never run")
     if reasons:
         return emit("CHANGED-SINCE-APPROVAL", reason=reasons[0], **info, detail="the approved text, a pinned script or the freeze ordering changed")
+    if source == "refreeze" and a.mode != "interactive":
+        # A re-freeze replaces what the founder first approved. Only a present founder can say yes
+        # to that, so an unattended run stops on it instead of running the replacement.
+        return emit("CHANGED-SINCE-APPROVAL", reason="refreeze-needs-founder", **info,
+                    detail="the approved check was replaced by a re-freeze; an unattended run does not decide that")
     return emit("OK", reason="ok", **info)
 
 
@@ -870,7 +912,7 @@ class Result(NamedTuple):
     reason: str
 
 
-def classify(rc, stdout, expected, polarity, first="", sandbox_healthy=True):
+def classify(rc, stdout, expected, polarity, first="", sandbox_healthy=True, refreeze=False):
     """The one decision chokepoint, shared by baseline and acceptance polarity."""
     matched = (expected == "") or (expected in stdout)
     if not sandbox_healthy:
@@ -879,6 +921,12 @@ def classify(rc, stdout, expected, polarity, first="", sandbox_healthy=True):
         return Result("INVALID", matched, f"tooling-rc-{rc}")
     if first == "curl" and rc in (6, 7, 28):
         return Result("INVALID", matched, f"curl-rc-{rc}")
+    if polarity == "baseline" and refreeze:
+        # A deliberate change made after the work exists: a pass is the normal case, not a vacuous
+        # check, so this run reports what happened and the founder decides.
+        if rc == 0 and matched:
+            return Result("PASSED", matched, "refreeze-baseline-passes")
+        return Result("FAILED", matched, "refreeze-baseline-fails")
     if polarity == "baseline":
         if rc == 0 and matched:
             return Result("VACUOUS", matched, "baseline-passes")
@@ -944,7 +992,7 @@ def cmd_classify(a):
         except (OSError, ValueError) as e:
             print(f"refused: cannot read --stdout-file: {e}", file=sys.stderr)
             return 2
-    r = classify(a.rc, stdout, block.get("expected", ""), a.polarity, str(v.get("first_token", "")), a.control_rc == 0)
+    r = classify(a.rc, stdout, block.get("expected", ""), a.polarity, str(v.get("first_token", "")), a.control_rc == 0, bool(v.get("refreeze")))
     doc = {"outcome": r.outcome, "expected_matched": r.expected_matched, "reason": r.reason,
            "rc": a.rc, "polarity": a.polarity, "hash": str(v.get("hash", "")),
            "head_sha": str(v.get("head_sha", "")), "verify_sha256": dg[0]}
@@ -1151,6 +1199,8 @@ def build_parser():
     v.add_argument("--no-pr", action="store_true", help="no pull request exists yet, so there is no PR author to compare")
     v.add_argument("--out", help="write the decision record (one JSON line) to this file")
     v.add_argument("--command-out", help="write the block's raw command text to this file")
+    v.add_argument("--mode", choices=("interactive", "headless"), default="headless",
+                   help="only an interactive run may run a re-frozen check; the default is headless")
     v.add_argument("--candidate", action="store_true", help="baseline mode: validate a block that has no freeze commit yet")
     v.add_argument("--refreeze", action="store_true", help="with --candidate: baseline a deliberately changed check")
     v.set_defaults(fn=cmd_verify)

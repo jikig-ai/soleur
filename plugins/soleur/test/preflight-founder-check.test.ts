@@ -602,6 +602,21 @@ describe("verify: freeze comparison (Guard 1)", () => {
     expect(v.json?.plan).toBe(`${PLANS}/archive/20261006-120000-p.md`);
   });
 
+  test("an unrelated edit to a plan that MAIN already archived compares against main's freeze (it does not self-freeze)", () => {
+    const r = new Repo();
+    const arch = `${PLANS}/archive/20260101-000000-p.md`;
+    r.mainFile(arch, scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.write(arch, scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }) + "\nswept: a link fixed by a docs sweep\n");
+    r.commit("docs: sweep archived plans");
+    const same = r.verify();
+    expect([same.json?.outcome, same.json?.freeze_source, same.json?.plan]).toEqual(["OK", "merge-base", arch]);
+    // the same sweep that also rewrites the block is a change to what main froze, not a new freeze
+    r.write(arch, scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, expected: "9" }) }));
+    r.commit("docs: sweep that touched the block");
+    const changed = r.verify();
+    expect([changed.json?.outcome, changed.json?.freeze_source]).toEqual(["CHANGED-SINCE-APPROVAL", "merge-base"]);
+  });
+
   test("an archived plan whose block was edited afterwards is still CHANGED-SINCE-APPROVAL", () => {
     const r = new Repo();
     r.freeze();
@@ -629,11 +644,74 @@ describe("verify: re-freeze (a deliberate change is a real act)", () => {
     const r = setup();
     r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
     const sha = r.commit("plan: re-freeze founder-stated check");
-    const v = r.verify();
+    const v = r.verify(["--mode", "interactive"]);
     expect(v.json?.outcome).toBe("OK");
     expect(v.json?.refreeze).toBe(true);
     expect(v.json?.freeze_sha).toBe(sha);
     expect(v.json?.block?.expected).toBe("2");
+    // loud: the record carries what the check said before, beside what it says now
+    expect(v.json?.refrozen_from?.expected).toBe("1");
+    expect(v.json?.refrozen_from?.command).toBe(BASE.command);
+  });
+
+  test("an unattended run (the default mode) stops on a re-freeze instead of running the replacement", () => {
+    const r = setup();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    r.commit("plan: re-freeze founder-stated check");
+    for (const extra of [[], ["--mode", "headless"]]) {
+      const v = r.verify(extra);
+      expect([v.json?.outcome, v.json?.reason, v.json?.refreeze]).toEqual(["CHANGED-SINCE-APPROVAL", "refreeze-needs-founder", true]);
+    }
+  });
+
+  test("a re-freeze with no earlier freeze on the branch is an ordinary freeze, not a re-freeze", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("plan: re-freeze founder-stated check");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    const v = r.verify();
+    expect([v.json?.outcome, v.json?.refreeze, v.json?.freeze_source]).toEqual(["OK", false, "branch"]);
+  });
+
+  test("a forged-author freeze stays UNTRUSTED after an operator 're-freeze' that restates the same block", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", STRANGER);
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }) + "\nan unrelated edit\n");
+    r.commit("plan: re-freeze founder-stated check");
+    for (const mode of ["interactive", "headless"]) {
+      const v = r.verify(["--mode", mode]);
+      expect([mode, v.json?.outcome, v.json?.refreeze]).toEqual([mode, "UNTRUSTED", false]);
+    }
+  });
+
+  test("an operator re-freeze that CHANGES a stranger's freeze is the operator's own act, and is flagged as a re-freeze", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", STRANGER);
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    r.commit("plan: re-freeze founder-stated check");
+    const v = r.verify(["--mode", "interactive"]);
+    expect([v.json?.outcome, v.json?.refreeze, v.json?.refrozen_from?.expected]).toEqual(["OK", true, "1"]);
+  });
+
+  test("the baseline of a re-freeze never reads VACUOUS: a pass is reported as PASSED, a fail as FAILED", () => {
+    const r = setup();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(V2) }));
+    const cand = r.verifyFile(["--candidate", "--refreeze"], "cand.json");
+    expect([cand.run.json?.outcome, cand.run.json?.refreeze]).toEqual(["OK", true]);
+    const args = ["--verify-json", cand.file, "--polarity", "baseline", "--control-rc", "0"];
+    const pass = r.classify([...args, "--rc", "0"]);
+    expect([pass.json?.outcome, pass.json?.reason]).toEqual(["FAILED", "refreeze-baseline-fails"]); // expected "2" is absent from empty stdout
+    const out = join(r.scratch, "out.txt");
+    writeFileSync(out, "2\n");
+    const ok = r.classify([...args, "--rc", "0", "--stdout-file", out]);
+    expect([ok.json?.outcome, ok.json?.reason]).toEqual(["PASSED", "refreeze-baseline-passes"]);
+    expect(r.classify([...args, "--rc", "1"]).json?.outcome).toBe("FAILED");
+    expect(r.classify([...args, "--rc", "127"]).json?.outcome).toBe("INVALID");
   });
 
   test("the same edit without the re-freeze subject stays CHANGED-SINCE-APPROVAL", () => {

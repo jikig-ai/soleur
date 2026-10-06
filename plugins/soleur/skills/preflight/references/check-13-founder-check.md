@@ -38,6 +38,10 @@ its own call. Without both logins, or `--no-pr`, a freeze that was not reviewed 
 `UNTRUSTED`: the operator's email in a commit is a name anyone can type. Add `--plan <path>` only
 to name a plan the script cannot find itself (it also reads the `Plan:` line of
 `knowledge-base/project/specs/<branch>/tasks.md`). `--candidate` is the baseline mode of section 7.
+Pass `--mode interactive` under the same condition as `log` (the founder is present in this session);
+the default is headless, and a headless run stops on a re-frozen check (section 8) instead of
+running it. `verify` and `classify` delete the files named by `--out` and `--command-out` before they
+do anything else, so a record on disk is always from the run that just made it.
 
 Read the JSON line. `outcome` is one of:
 
@@ -232,11 +236,25 @@ else in Phase 0.
 ## 8. Changing the check mid-work
 
 Changing the approved text is a deliberate act, never a silent edit: it is the declared
-`work → plan` back-edge. Show the old and the new text, ask the founder to confirm
-(`founder-check.py text approval-ask`), run the baseline for the new text with `verify --candidate
---refreeze`, and commit the plan with a subject that starts `plan: re-freeze founder-stated check`,
-authored by the operator. `verify` accepts that commit as the new freeze only when the plan was not
-already frozen on main. Until then Check 13 reports CHANGED-SINCE-APPROVAL.
+`work → plan` back-edge. Show the old and the new text and ask the founder to confirm
+(`founder-check.py text approval-ask`), run `verify --candidate --refreeze` for the new text, run it
+once (section 2, then `classify --polarity baseline`), and commit the plan with a subject that
+starts `plan: re-freeze founder-stated check`, authored by the operator.
+
+- **The baseline of a re-freeze is a report, never a must-fail test.** The work usually exists by
+  now, so the new check passing is the normal case. `classify` answers `PASSED` or `FAILED` for it
+  (reasons `refreeze-baseline-passes` and `refreeze-baseline-fails`), never `VACUOUS`, and `baseline-ok`
+  is not printed for it: show the result and `approval-ask` instead.
+- **`verify` accepts that commit as the new freeze only when** the plan was frozen earlier on this
+  branch (a first freeze is just a freeze), the commit changes the block (restating the same block
+  changes nothing, so it cannot launder who wrote the earlier freeze), it was authored by the
+  operator, and the plan was not already frozen on main.
+- **It is loud.** The record carries `refreeze: true` and `refrozen_from`, the check as it stood
+  before. Interactive: show `refrozen_from` beside `block` and print `founder-check.py text
+  approval-ask`; yes runs the check, anything else is the CHANGED-SINCE-APPROVAL row. Headless: the
+  record is already `CHANGED-SINCE-APPROVAL` (reason `refreeze-needs-founder`), recorded as a stop.
+
+Until a valid re-freeze exists, Check 13 reports CHANGED-SINCE-APPROVAL.
 
 ## What a pin does not cover
 
