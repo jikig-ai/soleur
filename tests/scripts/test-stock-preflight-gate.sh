@@ -817,16 +817,23 @@ w=$(HCLOUD_API='h.example/v1?next=http://SYNTHSECRET' _stock_warn_if_endpoint_ov
 grep -q "host=h.example)" <<<"$w" && pass || fail "T27: a scheme-less value must not have its query read as the authority. out=$w"
 grep -q "SYNTHSECRET" <<<"$w" && fail "T27: a :// inside a query must never reach the log. out=$w" || pass
 # the header carries the literal read-only probe the abort messages point at
-grep -qF 'curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN_READONLY"' "$GATE" && pass || fail "T27: the lib header must carry the literal probe command the abort text points at"
+# The probe is the stdin-config form: the token must never be on a copy-pasted command's argv.
+grep -qF "curl --disable --noproxy '*' -sS --config - \"https://api.hetzner.cloud/v1/server_types?name=<type>\"" "$GATE" \
+  && grep -qF "printf 'header = \"Authorization: Bearer %s\"\\n' \"\$HCLOUD_TOKEN_READONLY\"" "$GATE" \
+  && pass || fail "T27: the lib header must carry the literal stdin-config probe command the abort text points at"
+grep -qF -- '-H "Authorization: Bearer' "$GATE" && fail "T27: the lib must not carry a bearer header on a curl argv, printed or run" || pass
 w=$(HCLOUD_API=$'https://a.example\nb.example/v1' _stock_warn_if_endpoint_overridden 2>&1)
 [[ "$(wc -l <<<"$w")" -eq 1 ]] && pass || fail "T27: a newline in the value must not split the warning line. out=$w"
 
 # ---------------------------------------------------------------------------
 # T20 — WIRE LEVEL: the real _stock_fetch against a loopback HTTP server (python3 stdlib). The seam-level cases
 # above cannot observe an HTTP status, the request path, the Authorization header, or --fail-with-body; this is the only
-# case that can. The lib is re-sourced in a SUBSHELL so the real _stock_fetch replaces the seam there; HCLOUD_API is
-# set BEFORE the source (the lib reads it at source time; HCLOUD_TOKEN is read per call). Named failure, never a skip,
-# if it cannot run.
+# case that can. The lib is re-sourced in a SUBSHELL so the real _stock_fetch replaces the seam there. HCLOUD_API is
+# PINNED to the production base (#7797: the bearer is sent nowhere else), so the destination cannot be redirected by
+# the environment; instead a `curl` shim on PATH rewrites the production host to the loopback server and execs the REAL
+# curl, so the status, the request path, the Authorization header (now arriving via `--config -`) and --fail-with-body are
+# all still observed over a real connection. The shim also records its argv, so the same case proves the bearer is NOT on
+# the argument list. HCLOUD_TOKEN is read per call. Named failure, never a skip, if it cannot run.
 # Non-goals, stated: no wire-level timeout case (--max-time 20) and no 3xx case.
 # ---------------------------------------------------------------------------
 if ! command -v python3 >/dev/null 2>&1; then
@@ -875,11 +882,21 @@ PY
   if [[ -z "$PORT" ]]; then
     fail "T20: the loopback server did not publish a port within 5s"
   else
-    loop_call() { # <mode> <type> <loc>
-      printf '%s' "$1" > "$TMP/mode"; : > "$TMP/req.log"
+    REAL_CURL="$(command -v curl)"
+    mkdir -p "$TMP/shim"
+    cat > "$TMP/shim/curl" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$TMP/argv.log"
+args=()
+for a in "\$@"; do args+=("\${a/https:\/\/api.hetzner.cloud/http:\/\/127.0.0.1:${PORT}}"); done
+exec "$REAL_CURL" "\${args[@]}"
+SHIM
+    chmod +x "$TMP/shim/curl"
+    loop_call() { # <mode> <type> <loc> [token]
+      printf '%s' "$1" > "$TMP/mode"; : > "$TMP/req.log"; : > "$TMP/argv.log"
       (
-        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
-        export HCLOUD_API="http://127.0.0.1:${PORT}/v1" HCLOUD_TOKEN="synthetic-token-123" NO_PROXY=127.0.0.1 no_proxy=127.0.0.1
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy HCLOUD_API
+        export HCLOUD_TOKEN="${4-synthetic-token-123}" PATH="$TMP/shim:$PATH"
         # shellcheck source=/dev/null
         source "$GATE"
         stock_preflight "$2" "$3"
@@ -892,7 +909,11 @@ PY
     # bug this PR fixes) and the header is exact (a doubled or suffixed credential must not pass a substring match)
     want_req=$(printf '/v1/server_types?name=beta22\tBearer synthetic-token-123')
     [[ "$(cat "$TMP/req.log")" == "$want_req" ]] && pass || fail "T20a: the request line must be exactly the single /server_types?name= call with the bearer; got: $(cat "$TMP/req.log")"
-    grep -q "HCLOUD_API is overridden (host=127.0.0.1:" <<<"$out" && pass || fail "T20a: a non-default HCLOUD_API must be announced. out=$out"
+    # the bearer reached the server via the stdin config (the header above), and is NOT on the argument list
+    [[ "$(sed -n '1p' "$TMP/argv.log")" == "--disable" ]] && pass || fail "T20a: --disable must be curl's FIRST argument; argv: $(tr '\n' ' ' < "$TMP/argv.log")"
+    grep -qxF -- "--noproxy" "$TMP/argv.log" && grep -qxF -- "--config" "$TMP/argv.log" && pass || fail "T20a: --noproxy and --config - must be on the call; argv: $(tr '\n' ' ' < "$TMP/argv.log")"
+    grep -qF -- "synthetic-token-123" "$TMP/argv.log" && fail "T20a: the bearer must NOT be on curl's argv" || pass
+    grep -qiF -- "Authorization" "$TMP/argv.log" && fail "T20a: no Authorization header may be spelled on curl's argv" || pass
     out=$(loop_call 410 beta22 eu-b); rc=$?
     [[ "$rc" -eq 1 ]] && pass || fail "T20b: an HTTP 410 must abort, got $rc"
     grep -q "with a 2xx: curl exit 22" <<<"$out" && pass || fail "T20b: an HTTP error must surface as curl exit 22 (--fail-with-body). out=$out"
@@ -905,6 +926,28 @@ PY
     out=$(loop_call 401 beta22 eu-b); rc=$?
     [[ "$rc" -eq 1 ]] && pass || fail "T20d: an HTTP 401 must abort, got $rc"
     grep -q "api_error=unauthorized" <<<"$out" && pass || fail "T20d: a 401 must be distinguishable from a 410 over the wire. out=$out"
+    # T20e — the destination is PINNED: an overridden HCLOUD_API aborts as NOT-transient with ZERO requests, and the
+    # override is still announced. The server log is the observer: a request to it would mean the bearer was sent.
+    printf '%s' ok > "$TMP/mode"; : > "$TMP/req.log"; : > "$TMP/argv.log"
+    out=$(
+      unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+      export HCLOUD_API="http://127.0.0.1:${PORT}/v1" HCLOUD_TOKEN="synthetic-token-123" PATH="$TMP/shim:$PATH"
+      # shellcheck source=/dev/null
+      source "$GATE"
+      stock_preflight beta22 eu-b 2>&1
+    ); rc=$?
+    [[ "$rc" -eq 1 ]] && pass || fail "T20e: an overridden HCLOUD_API must abort, got $rc"
+    grep -q "api_error=endpoint_not_pinned" <<<"$out" && pass || fail "T20e: the abort must name endpoint_not_pinned. out=$out"
+    [[ ! -s "$TMP/req.log" && ! -s "$TMP/argv.log" ]] && pass || fail "T20e: an unpinned destination must make ZERO requests; log: $(cat "$TMP/req.log")"
+    grep -q "HCLOUD_API is overridden (host=127.0.0.1:" <<<"$out" && pass || fail "T20e: a non-default HCLOUD_API must still be announced. out=$out"
+    # T20f — an unusable token (empty, or a shape that could inject a curl config line) makes ZERO requests and is never echoed
+    for bad_tok in "" $'badfp123\nurl = "http://127.0.0.1/"' "bad fp 123"; do
+      out=$(loop_call ok beta22 eu-b "$bad_tok"); rc=$?
+      [[ "$rc" -eq 1 ]] && pass || fail "T20f: an unusable token must abort, got $rc"
+      grep -q "api_error=token_unusable" <<<"$out" && pass || fail "T20f: the abort must name token_unusable (NOT transient). out=$out"
+      [[ ! -s "$TMP/req.log" && ! -s "$TMP/argv.log" ]] && pass || fail "T20f: an unusable token must make ZERO requests; log: $(cat "$TMP/req.log")"
+      grep -qF "badfp123" <<<"$out" && fail "T20f: the token value must never be echoed" || pass
+    done
   fi
   kill "$SRV_PID" 2>/dev/null; SRV_PID=""
 fi
@@ -919,7 +962,7 @@ SUITE_DONE=1
 # cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=319
+MIN_ASSERTIONS=339
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2

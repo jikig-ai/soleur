@@ -11,4 +11,4 @@ case "$-" in
 esac
 
 # Rule D: --noproxy present, --disable ABSENT. ~/.curlrc can still redirect this.
-curl --noproxy '*' -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true
+curl --noproxy '*' -sS --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true

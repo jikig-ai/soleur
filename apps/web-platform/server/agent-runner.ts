@@ -100,6 +100,7 @@ import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
+  CREDENTIALS_PROMPT_DIRECTIVE,
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
   buildPdfGatedDirective,
   buildPdfUnreadableDirective,
@@ -1502,6 +1503,12 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
         .join("\n");
       systemPrompt += `\n\n## Connected Services\n${serviceList}`;
     }
+
+    // W1 (#9601, ADR-272): shared with the Concierge baseline prompt, since the
+    // deny applies on both paths. Unconditional (with or without connected
+    // services); its own heading keeps the Connected Services absence
+    // assertions true.
+    systemPrompt += `\n\n${CREDENTIALS_PROMPT_DIRECTIVE}`;
 
     // Announce KB share capability (closes #2315). Without this block the
     // agent cannot discover kb_share_* from natural-language requests like

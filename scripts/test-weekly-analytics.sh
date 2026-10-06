@@ -7,6 +7,16 @@
 
 set -euo pipefail
 
+# The bearer-transport section below binds a synthetic key; refuse to trace when a real one is set (see #7797).
+case "$-" in
+  *x*)
+    if [ -n "${BT_TOKEN:+x}${PLAUSIBLE_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source production functions (main body is guarded by BASH_SOURCE check)
@@ -275,6 +285,62 @@ else
 fi
 
 rm -rf "$VJR_DIR"
+
+# ============================================================
+# Test Suite: the bearer rides curl's stdin config channel, never argv
+# ============================================================
+# Runs the real script against a PATH shim that records argv (NUL-delimited) and stdin. The shim
+# answers HTTP 402 on the preflight, which the script treats as a graceful skip (exit 0) BEFORE it
+# writes any snapshot, so this never touches knowledge-base/. Synthetic token only.
+
+echo "--- bearer transport tests ---"
+
+BT_DIR=$(mktemp -d -t wa-bt.XXXXXXXX) || exit 2
+trap 'rm -rf "$BT_DIR"' EXIT
+mkdir -p "$BT_DIR/bin"
+cat > "$BT_DIR/bin/curl" <<'SHIM'
+#!/usr/bin/env bash
+d="${CURL_SHIM_DIR:?}"
+n=$(cat "$d/n" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" > "$d/n"
+printf '%s\0' "$@" > "$d/argv.$n"
+cat > "$d/stdin.$n"
+prev=""; for a in "$@"; do [[ "$prev" == "-o" ]] && printf '{}' > "$a"; prev="$a"; done
+printf '402'
+SHIM
+chmod +x "$BT_DIR/bin/curl"
+
+bt_run() {  # $1 = api key; runs in a subshell, never inherits the test's own set -e
+  rm -rf "$BT_DIR/rec"; mkdir -p "$BT_DIR/rec"
+  ( PATH="$BT_DIR/bin:$PATH" CURL_SHIM_DIR="$BT_DIR/rec" PLAUSIBLE_API_KEY="$1" \
+      PLAUSIBLE_SITE_ID="example.test" bash "$SCRIPT_DIR/weekly-analytics.sh" ) >/dev/null 2>&1
+}
+
+BT_TOKEN="plausible-fixture"
+bt_rc=0; bt_run "$BT_TOKEN" || bt_rc=$?
+bt_argv="$(cat "$BT_DIR"/rec/argv.* 2>/dev/null | tr '\0' ' ')"
+assert_eq "bearer-transport: preflight exits 0 on 402 skip" "0" "$bt_rc"
+assert_eq "bearer-transport: header on stdin" 'header = "Authorization: Bearer '"$BT_TOKEN"'"' "$(cat "$BT_DIR/rec/stdin.1" 2>/dev/null)"
+assert_eq "bearer-transport: token absent from argv" "true" \
+  "$([[ -n "$bt_argv" && "$bt_argv" != *"$BT_TOKEN"* && "$bt_argv" != *Bearer* && "$bt_argv" != *Authorization* ]] && echo true || echo false)"
+assert_eq "bearer-transport: --disable first, --noproxy '*', --config -" "true" \
+  "$([[ "$(tr '\0' ' ' < "$BT_DIR/rec/argv.1")" == "--disable --noproxy * "* && "$bt_argv" == *"--config -"* ]] && echo true || echo false)"
+
+# A set-but-unusable key (a newline would inject a curl config directive) => zero curl calls and a
+# non-success exit; an unset key stays the documented graceful skip with zero curl calls.
+bt_rc=0; bt_run $'bad\nurl = "https://attacker.example/"' || bt_rc=$?
+assert_eq "bearer-transport: newline key exits non-zero" "true" "$([[ "$bt_rc" -ne 0 ]] && echo true || echo false)"
+assert_eq "bearer-transport: newline key makes zero curl calls" "true" "$([[ ! -e "$BT_DIR/rec/n" ]] && echo true || echo false)"
+bt_rc=0; bt_run "" || bt_rc=$?
+assert_eq "bearer-transport: unset key is a graceful skip (rc 0)" "0" "$bt_rc"
+assert_eq "bearer-transport: unset key makes zero curl calls" "true" "$([[ ! -e "$BT_DIR/rec/n" ]] && echo true || echo false)"
+# A redirected base URL must be refused before any request carries the bearer.
+bt_rc=0
+( rm -rf "$BT_DIR/rec"; mkdir -p "$BT_DIR/rec"
+  PATH="$BT_DIR/bin:$PATH" CURL_SHIM_DIR="$BT_DIR/rec" PLAUSIBLE_API_KEY="$BT_TOKEN" PLAUSIBLE_SITE_ID="example.test" \
+    PLAUSIBLE_BASE_URL="https://attacker.example" bash "$SCRIPT_DIR/weekly-analytics.sh" ) >/dev/null 2>&1 || bt_rc=$?
+assert_eq "bearer-transport: off-pin PLAUSIBLE_BASE_URL refused, zero curl calls" "true" \
+  "$([[ "$bt_rc" -ne 0 && ! -e "$BT_DIR/rec/n" ]] && echo true || echo false)"
+rm -rf "$BT_DIR"
 
 # ============================================================
 # Results
