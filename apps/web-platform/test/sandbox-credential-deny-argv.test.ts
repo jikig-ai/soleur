@@ -56,9 +56,17 @@ describe.skipIf(process.platform !== "linux")(
     afterAll(async () => {
       vi.unstubAllEnvs();
       await stub?.close();
-      // The CLI of the aborted capture can still be in its SIGTERM grace and writing
-      // under HOME, so a single rmSync races it (ENOTEMPTY in CI); retry.
-      if (home) rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+      // Best-effort. `doCapture` stops at the first setup argv, so the CLI it started can
+      // still be writing under HOME here, and removal then races it (ENOTEMPTY in CI, even
+      // with retries). The directory is scratch space under the OS temp dir, not something
+      // the test asserts on, so a leftover directory must not fail a green test.
+      if (home) {
+        try {
+          rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+        } catch {
+          /* a draining CLI child; the runner's temp dir is ephemeral */
+        }
+      }
     });
 
     it("emits --unsetenv for every auth variable, in the real captured setup argv", async () => {

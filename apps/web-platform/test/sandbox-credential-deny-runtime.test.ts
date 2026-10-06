@@ -89,10 +89,15 @@ describe.skipIf(!SANDBOX_OK)("the credential deny, observed from inside the real
   afterAll(async () => {
     vi.unstubAllEnvs();
     await stub?.close();
-    if (root) {
-      for (const dir of [root, `${root}-c4-staging`]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    // Best-effort (see the argv test): a CLI child still draining must not fail a green test.
+    for (const dir of [root, root && `${root}-c4-staging`, home]) {
+      if (!dir) continue;
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+      } catch {
+        /* scratch space; the runner's temp dir is ephemeral */
+      }
     }
-    if (home) rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   });
 
   async function observe(denyEntries: boolean): Promise<Observation> {
