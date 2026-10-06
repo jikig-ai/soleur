@@ -69,6 +69,17 @@ if [ -z "$ZOT_URL" ] || [ -z "$ZOT_USER" ] || [ -z "$ZOT_TOKEN" ]; then
   exit 2
 fi
 
+# The pull credential reaches curl as a `user = "<user>:<token>"` line on stdin (`--config -`), never on
+# argv (/proc/<pid>/cmdline is readable by every local user). A value that could close the quoted string
+# or start a new directive (a quote, a backslash, any control char incl. newline) is refused here as
+# "cannot decide" (exit 2), the same channel as a missing credential — never as a MISS (exit 1), which
+# would read as a real registry verdict.
+_cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*'"'*|*\\*|*[[:cntrl:]]*) return 1 ;; esac; }
+if ! _cfg_ok "$ZOT_USER" || ! _cfg_ok "$ZOT_TOKEN"; then
+  echo "zot-entry-gate: ZOT_PULL_USER/PULL_TOKEN has an unsupported character (quote, backslash or control char) — cannot decide (TRANSIENT)" >&2
+  exit 2
+fi
+
 # Reachability probe first, so a down registry is a TRANSIENT (exit 2), distinct from a
 # reachable registry that is simply MISSING the tag (a real FAIL / exit 1). A live OCI
 # registry answers /v2/ with 200 (open) or 401 (auth); an unreachable host yields non-zero.
@@ -82,8 +93,9 @@ _ACCEPT='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribu
 # manifest_resolves <repo> <tag> → true iff a manifest HEAD returns HTTP 200.
 manifest_resolves() {
   local repo="$1" tag="$2" code
-  code="$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 10 -u "$ZOT_USER:$ZOT_TOKEN" \
-    -H "Accept: $_ACCEPT" -I "http://$ZOT_URL/v2/$repo/manifests/$tag" 2>/dev/null || echo 000)"
+  code="$(curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H "Accept: $_ACCEPT" --config - -I "http://$ZOT_URL/v2/$repo/manifests/$tag" \
+    < <(printf 'user = "%s:%s"\n' "$ZOT_USER" "$ZOT_TOKEN") 2>/dev/null || echo 000)"
   [ "$code" = "200" ]
 }
 
