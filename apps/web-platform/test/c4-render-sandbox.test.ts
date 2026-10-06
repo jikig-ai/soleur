@@ -146,7 +146,7 @@ const STAGE = async () => ({ ok: true as const, paths: ["model.c4"], sourceKey: 
 // ---------------------------------------------------------------------------
 const MiB = 1024 * 1024;
 const CLOSE_FDS =
-  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec "$@"';
+  'for p in /proc/self/fd/*; do n=${p##*/}; if [ "$n" -gt 3 ] 2>/dev/null; then eval "exec $n>&-"; fi; done; exec 9<"${SOLEUR_BWRAP_SECCOMP_BPF:-/app/infra/bwrap-userns-clone3-deny.bpf}" || exit 65; exec "$@"';
 const RENDER_SH =
   '"$0" "$1" export json --no-use-dot -o /c4-out/model.likec4.json . >/dev/null && exec cat /c4-out/model.likec4.json';
 const LAUNCH_PREFIX = [
@@ -173,6 +173,7 @@ const ARITY: Record<string, number> = {
   "--unshare-ipc": 0,
   "--unshare-uts": 0,
   "--json-status-fd": 1,
+  "--seccomp": 1,
 };
 type Kind = "ro" | "symlink" | "tmpfs" | "dev";
 const BASE: Record<string, { kind: Kind; src?: string; size?: number }> = {
@@ -217,6 +218,7 @@ function checkSandboxArgv(cmd: string, args: string[], ctx: Ctx): Check {
   const flags = new Set<string>();
   let chdir: string | undefined;
   let statusFd: string | undefined;
+  let seccompFd: string | undefined;
   let i = 0;
   while (i < argv.length) {
     const opt = argv[i];
@@ -267,6 +269,9 @@ function checkSandboxArgv(cmd: string, args: string[], ctx: Ctx): Check {
       case "--json-status-fd":
         statusFd = a[0];
         break;
+      case "--seccomp":
+        seccompFd = a[0];
+        break;
       default:
         if (opt.startsWith("--unshare-")) unshare.add(opt);
         else flags.add(opt);
@@ -305,6 +310,9 @@ function checkSandboxArgv(cmd: string, args: string[], ctx: Ctx): Check {
   if (!flags.has("--die-with-parent") || !flags.has("--new-session")) return r("missing-flag");
   if (chdir !== "/c4-sources") return r("chdir");
   if (statusFd !== "3") return r("status-fd");
+  // #8752: the shared nested-userns filter arrives on fd 9 — opened by the
+  // close-fds prelude AFTER the sweep so it survives choom/nice into bwrap.
+  if (seccompFd !== "9") return r("seccomp-fd");
   const tail = argv.slice(dashdash + 1);
   if (tail.join("\0") !== (ctx.tail ?? renderTail()).join("\0")) return r("tail");
   return r("ok");
@@ -404,6 +412,12 @@ const ROWS: Array<[string, (a: string[], sd: string) => string[], string]> = [
   ["--die-with-parent removed", (a) => a.filter((x) => x !== "--die-with-parent"), "missing-flag"],
   ["--chdir /", (a) => a.map((x, j) => (a[j - 1] === "--chdir" ? "/" : x)), "chdir"],
   ["--json-status-fd 4", (a) => a.map((x, j) => (a[j - 1] === "--json-status-fd" ? "4" : x)), "status-fd"],
+  ["--seccomp dropped", (a) => {
+    const o = [...a];
+    o.splice(optIdx(o, "--seccomp"), 2);
+    return o;
+  }, "seccomp-fd"],
+  ["--seccomp 3 (status-fd collision)", (a) => a.map((x, j) => (a[j - 1] === "--seccomp" ? "3" : x)), "seccomp-fd"],
   ["no `--`", (a) => a.slice(0, a.indexOf("--", BW)), "no-dashdash"],
 ];
 
@@ -417,7 +431,7 @@ describe("Guard 1 — likec4 child launch, mount, env and namespace closure", ()
     // Exact options: no shell, no detached, cwd = stage, bwrap's own env is the
     // allow-list with HOME = stage (it never sees a server secret).
     const env: Record<string, string> = { HOME: stageDir };
-    for (const k of ["PATH", "LANG", "LC_ALL", "TMPDIR"]) if (process.env[k] !== undefined) env[k] = process.env[k]!;
+    for (const k of ["PATH", "LANG", "LC_ALL", "TMPDIR", "SOLEUR_BWRAP_SECCOMP_BPF"]) if (process.env[k] !== undefined) env[k] = process.env[k]!;
     expect(opts).toEqual({ cwd: stageDir, env, stdio: ["ignore", "pipe", "pipe", "pipe"] });
     expect(stageDir.startsWith(`${ROOT}/c4-render-`)).toBe(true);
   });
