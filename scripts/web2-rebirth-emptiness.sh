@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 # Emptiness evidence for the single-use web-2 volume rebirth (#9372): is the plaintext /mnt/data volume of
 # soleur-web-2 provably EMPTY before anything deletes it? Read from Better Stack host_metrics (Vector's
-# `filesystem` collector, mountpoint /mnt/data, tagged host_name; apps/web-platform/infra/vector.toml
-# [sources.host_metrics.filesystem]) over the last 7 days. No SSH: the volume's own byte counters are the evidence.
+# `filesystem` collector, mountpoint /mnt/data; apps/web-platform/infra/vector.toml [sources.host_metrics.filesystem])
+# over the last 7 days. No SSH: the volume's own byte counters are the evidence.
+#
+# ROW SHAPE (CONFIRMED 2026-10-06). Better Stack stores the bare Vector metric in `raw`, NOT the flat host_name /
+# source_kind / metric.name / metric.value record that [transforms.tag_metrics] is written to produce:
+#   {"name":"filesystem_used_bytes","namespace":"host","tags":{"collector":"filesystem","device":"/dev/sdb",
+#    "filesystem":"ext4","host":"soleur-web-2","mountpoint":"/mnt/data"},"timestamp":...,"gauge":{"value":...}}
+# so the query reads tags.host, namespace, tags.mountpoint, name and gauge.value. The first live plan-only run (2026-10-06)
+# read the flat paths, matched zero rows and went RED used_bytes_absent_or_host_dark: that is the defect this shape note closes.
+# Read-only control against the stored rows, same day (soleur-web-2, /mnt/data, one device /dev/sdb ext4, 7 days):
+#   filesystem_used_bytes  n=2019 hours=169 newest_age_s=169 min=15556608 max=16027648 (spread 471040)
+#   filesystem_total_bytes n=2019 hours=169 min=max=20957446144
+# which satisfies every threshold below. RED used_bytes_absent_or_host_dark therefore also means "the stored row shape
+# changed" (if the shipper ever starts flattening, tags.host moves to a top-level host) or "more than one device reports
+# /mnt/data" (the HAVING below turns a multi-device group into zero rows); the SQL and the test fixtures must change together.
 #
 # PASS needs ALL of, from one aggregate over 7 days (hot AND archive arm):
 #   - filesystem_used_bytes: at least 160 of 168 distinct hours covered (a gappy series is not evidence),
@@ -10,8 +23,10 @@
 #     reads as 0 in ClickHouse, so zero is "field absent", never "empty"), a maximum at most 1 GiB (a COARSE ceiling:
 #     an empty ext4 volume holds only its own metadata, a populated one holds user data, and 1 GiB is deliberately far
 #     above the unmeasured empty baseline), and a spread (maximum minus minimum) of at most 64 MiB: a volume that took
-#     writes during the 7 days moves, an idle empty one does not. The printed min/max are what the owner reads before
-#     approving the dispatch; the first live run is also the first measurement of the real empty baseline.
+#     writes during the 7 days moves, an idle empty one does not. The printed min/max are read from a PLAN-ONLY run: the
+#     `web-platform-infra-apply` environment approval is a job-level gate, so it comes BEFORE this step runs, and an apply
+#     dispatch's PASS flows into the delete in the same approved job with no human reading the numbers first. The measured
+#     empty baseline is about 16 MB (see ROW SHAPE above), far below the 1 GiB ceiling.
 #   - W2R_DETACHED=1 (heal:detach_done only: the volume was detached by an earlier run of this workflow that had already
 #     proven it empty, and a detached device stops reporting): freshness is not required and coverage drops to 24 hours;
 #     the zero floor, the ceiling, the spread and the volume-size window still apply.
@@ -19,10 +34,9 @@
 #     root disk, so a mis-mounted /mnt/data cannot pass as "small".
 # Zero rows is a named RED ("field absent or web-2 dark"), never a pass. A transport failure is rc 2 (no verdict).
 #
-# UNCONFIRMED UNTIL THE FIRST LIVE QUERY: no repo consumer reads these JSON paths (metric.name, metric.value,
-# tags.mountpoint). The first live run is the positive control, and an absent field fails closed. The vector.toml
-# `devices.excludes = ["loop*", "dm-*"]` is matched against the device NAME; whether a LUKS mapper device
-# (/dev/mapper/workspaces) matches `dm-*` is unverified, so this evidence is NOT claimed to vanish after LUKS.
+# STILL UNCONFIRMED: the vector.toml `devices.excludes = ["loop*", "dm-*"]` is matched against the device NAME; whether a
+# LUKS mapper device (/dev/mapper/workspaces) matches `dm-*` is unverified, so this evidence is NOT claimed to vanish after LUKS.
+# An absent field still fails closed (zero rows, or a value that reads as 0, is RED and never PASS).
 #
 # Exit: 0 PASS, 1 RED (a verdict), 2 the read did not answer (not a verdict), 3 the shared helper could not load.
 set -uo pipefail
@@ -53,14 +67,15 @@ W2R_TOTAL_MAX_BYTES=21500000000
 # reuses a source column name (`dt`, `raw`). The host predicate is an explicit AND in the OUTER WHERE so it binds
 # both the hot arm and the archive arm.
 w2r_sql_emptiness() {
-  printf '%s' "SELECT JSONExtractString(raw,'metric','name') AS metric_name, count() AS n, countDistinct(toStartOfHour(dt)) AS hours, min(JSONExtractFloat(raw,'metric','value')) AS vmin, max(JSONExtractFloat(raw,'metric','value')) AS vmax, min(dateDiff('second', dt, now())) AS newest_age_s
+  printf '%s' "SELECT JSONExtractString(raw,'name') AS metric_name, count() AS n, countDistinct(toStartOfHour(dt)) AS hours, min(JSONExtractFloat(raw,'gauge','value')) AS vmin, max(JSONExtractFloat(raw,'gauge','value')) AS vmax, min(dateDiff('second', dt, now())) AS newest_age_s
 FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
 WHERE dt > now() - INTERVAL ${W2R_LOOKBACK_DAYS} DAY
-  AND JSONExtractString(raw,'host_name') = '${W2L_HOST_NAME}'
-  AND JSONExtractString(raw,'source_kind') = 'host_metrics'
+  AND JSONExtractString(raw,'tags','host') = '${W2L_HOST_NAME}'
+  AND JSONExtractString(raw,'namespace') = 'host'
   AND JSONExtractString(raw,'tags','mountpoint') = '/mnt/data'
-  AND JSONExtractString(raw,'metric','name') IN ('filesystem_used_bytes','filesystem_total_bytes')
+  AND JSONExtractString(raw,'name') IN ('filesystem_used_bytes','filesystem_total_bytes')
 GROUP BY metric_name
+HAVING uniqExact(JSONExtractString(raw,'tags','device')) = 1
 FORMAT JSONEachRow"
 }
 

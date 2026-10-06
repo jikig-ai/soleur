@@ -776,3 +776,15 @@ rotation HALT's `create` exemption, which the apply path of this workflow requir
 > `apply-web-escrow-create.yml` and the flip of the HALT's `create` arm merge together as PR #9569. The deletion of the rebirth
 > workflow, its scripts, gate and fixtures is a later change made after use (runbook `web2-luks-rebirth-9372.md`, closing
 > row 5).
+
+> **Superseded 2026-10-06 (#9372), in part — the emptiness evidence's paths and who reads its numbers.** Two sentences above no longer
+> hold. (1) "the first live query is the first measurement of the real empty baseline" and "unverified until the first live query": the
+> first live plan-only run (run 37463995633) read the flat paths `host_name`, `source_kind`, `metric.name` and `metric.value`, which no
+> stored row carries, matched zero rows and went RED `used_bytes_absent_or_host_dark`. A read-only control against the stored rows then
+> confirmed the native shape (`tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value`) and measured the baseline for
+> soleur-web-2 `/mnt/data` (one device, `/dev/sdb` ext4, 7 days): 169 hours, used 15,556,608 to 16,027,648 bytes (spread 471,040),
+> total 20,957,446,144. The query now reads those paths and requires a single device per group; whether `dm-*` drops the LUKS mapper
+> device in `vector.toml` remains unconfirmed. (2) "the printed used-bytes values are what the owner approves on": the environment
+> approval is a job-level gate, so it comes before the evidence step. The numbers are readable in a plan-only run, and an apply
+> dispatch's PASS flows into `delete-volume` in the same approved job. The thresholds, the verdict function and the `heal:detach_done`
+> arm are unchanged; the 1 GiB ceiling is about 60 times the measured baseline, and tightening it is an owner decision.
