@@ -415,6 +415,13 @@ export type WSMessage =
   // Persisted as a `messages` row (message_kind='turn_summary', mig 105) AND
   // buffered (carries `seq`) so it survives reconnect + history refetch.
   | { type: "turn_summary"; summary: string; /** seq (#5273): server-stamped monotonic replay cursor; optional on the wire for rolling-deploy back-compat. ADR-059. */ seq?: number }
+  // feat-session-completion-inline — server→client per-request completion
+  // card, emitted from the shared `notifyTaskCompleted` seam (both turn-boundary
+  // lineages). The client renders it inline in the viewed conversation and
+  // marks the durable inbox_item row read on render. Buffered (carries `seq`)
+  // so a within-grace reconnect replays the card — ADR-059. `title` is
+  // server-generated, never agent output (ADR-085 content-minimization).
+  | { type: "task_completed"; conversationId: string; inboxItemId: string; title: string; seq?: number }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   // feat-bash-autonomous-default-on — first-run consent soft-gate disclosure
   // (server→client). A held Bash command awaiting the owner's one-time ack.

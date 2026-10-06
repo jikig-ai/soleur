@@ -1,0 +1,489 @@
+# #9372 — convert the live web-2 standby to LUKS-at-boot by REBIRTHING its volume (ADR-263 addendum). SINGLE-USE.
+#
+# web-2 holds no user data and takes no traffic (weight 0, no soak marker). Its volume was created ext4, so the guest-side
+# provisioner correctly refuses to format it; it is EMPTY and replaceable, but `prevent_destroy` forbids a Terraform
+# destroy. So the volume is deleted through the Hetzner API, forgotten from state, and the server is replaced so a RAW
+# volume is created and formatted LUKS at first boot.
+#
+# DISPATCH-ONLY, plan_only DEFAULT TRUE, behind the `web-platform-infra-apply` reviewer approval. The merge of this file is inert.
+# Every dispatch needs the owner's explicit go-ahead (hr-menu-option-ack-not-prod-write-auth): the reviewer approval and the
+# typed confirm below are typo and authorization guards, never a substitute for it.
+#
+# WHY A NEW FILE. apply-web-platform-infra.yml sits at its byte cap (ADR-231). It serializes on the SAME literal as every
+# apply of this root (`terraform-apply-web-platform-host`, the lockless R2 state's only serializer) and on `web-1-swap` (the
+# fleet firewall attachment singleton is in the -target set).
+#
+# THE ORDER, each step idempotent and re-asserting the pins (scripts/web2-rebirth.sh, tested against a fake world):
+#   validate -> credentials -> ESCROW PREFLIGHT (before any terraform command or Hetzner call) -> init -> image pin and
+#   coherence -> classify (heal or refuse) -> emptiness + never-pooled evidence -> flip precondition -> `pre` plan graded ->
+#   [apply only] delete volume by API -> state rm -> `post` plan graded -> apply -> readiness row -> recovery check -> reboot.
+# The classifier makes every re-dispatch heal the window a crash left, or refuse BEFORE writing.
+#
+# WHAT THIS WORKFLOW NEVER CLAIMS: that the volume reopens after a reboot (the reboot is ISSUED here; the graded proof is a later
+# luks-monitor probe row on a new boot_id, via the follow-through on #6931), that recovery was tested, or that web-2 may take
+# data or weight. The soak marker, and with it any weight, waits for that reboot proof (scripts/lib/web2-luks-rows.sh).
+#
+# THE LIVE WEB-1 IS NEVER REACHABLE: its key is refused by name in the plan gate, every destroy is pinned to a physical id
+# captured from Hetzner, and the reboot re-resolves web-2 by name and refuses web-1's id.
+#
+# RETIREMENT: the closing change deletes this file with its tests (ADR-263 addendum, "Closing checklist").
+
+name: web-2 LUKS rebirth (#9372, single-use)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type REBIRTH-web-2-LUKS (typo guard, not the authorization: the environment reviewer and the owner's go-ahead are)."
+        required: true
+        type: string
+      expected_volume_id:
+        description: "The plaintext volume's Hetzner id. Must equal the constant pin in this file (106466179)."
+        required: true
+        type: string
+      image_tag:
+        description: "REQUIRED release tag (e.g. v3.123.0) of an image that carries the fresh-boot LUKS provisioner. The running version does not."
+        required: true
+        type: string
+      plan_only:
+        description: "Plan and prove only; no write of any kind (default true)."
+        required: false
+        type: boolean
+        default: true
+      reason:
+        description: "Why this dispatch (recorded in the run summary)."
+        required: true
+        type: string
+
+concurrency:
+  # The SOLE serializer of the lockless web-platform state — the same literal as every apply of this root.
+  group: terraform-apply-web-platform-host
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # The push-apply pause assertion lists workflows and runs through the Actions API; without this it refuses on every run.
+  actions: read
+  # GHCR is a PRIVATE package; the digest resolve authenticates with GITHUB_TOKEN + this scope.
+  packages: read
+
+env:
+  TERRAFORM_VERSION: "1.10.5"
+  # Equal to TERRAFORM_VERSION in every main-root workflow, or web_1_host_key_probe's trigger differs per workflow.
+  TF_VAR_terraform_version: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+  IMAGE_REPO: "ghcr.io/jikig-ai/soleur-web-platform"
+  # The physical-id pin: a CONSTANT. scripts/web2-rebirth.sh holds the same value; the suite pins that they agree.
+  PINNED_VOLUME_ID: "106466179"
+
+jobs:
+  rebirth:
+    # Default branch only: a dispatch from any other ref never runs with these credentials.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    # The sole HUMAN authorization on this path. Reused, never re-declared: infra/web-host-birth-environment.tf covers its
+    # reviewer set with the DP-11 F8 non-empty-reviewers guard (an untracked environment emptied in the UI auto-approves).
+    environment: web-platform-infra-apply
+    concurrency:
+      # Shared cross-pipeline mutex, byte-identical to web_host_create / web_host_replace. DO NOT RENAME: GitHub does not
+      # error on divergent group strings, they simply fail to serialize.
+      group: web-1-swap
+      cancel-in-progress: false
+    timeout-minutes: 60
+    outputs:
+      verdict: ${{ steps.classify.outputs.verdict }}
+    steps:
+      - name: Validate dispatch inputs (typed confirm, constant pin, image tag shape)
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          VOLUME_RAW: ${{ inputs.expected_volume_id }}
+          IMAGE_TAG_RAW: ${{ inputs.image_tag }}
+          PLAN_ONLY_RAW: ${{ inputs.plan_only }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          [[ "$CONFIRM_RAW" == "REBIRTH-web-2-LUKS" ]] || { echo "::error::confirm must be exactly REBIRTH-web-2-LUKS"; exit 1; }
+          [[ "$VOLUME_RAW" == "$PINNED_VOLUME_ID" ]] || { echo "::error::expected_volume_id must equal the constant pin ${PINNED_VOLUME_ID}"; exit 1; }
+          [[ "$IMAGE_TAG_RAW" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::image_tag must be a bare release version (^v?[0-9]+\.[0-9]+\.[0-9]+\$)"; exit 1; }
+          [[ -n "$REASON_RAW" ]] || { echo "::error::reason is required"; exit 1; }
+          if [[ "$PLAN_ONLY_RAW" == "false" ]]; then APPLY=yes; else APPLY=no; fi
+          printf 'APPLY=%s\n' "$APPLY" >> "$GITHUB_ENV"
+          printf 'STARTED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "dispatch validated: apply=${APPLY} (plan_only=${PLAN_ONLY_RAW}); web-2 only; pinned volume ${PINNED_VOLUME_ID}"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Verify required secrets present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          [[ -n "$DOPPLER_TOKEN_CHECK" ]] || { echo "::error::DOPPLER_TOKEN secret is not configured."; exit 1; }
+
+      # ADR-128 R1 — MANDATORY. A reborn host's pre-extraction boot stages emit through the baked SENTRY_DSN and nothing else:
+      # an empty DSN means the replacement boots dark (#6969) with the original already destroyed. Unreadable is distinct from
+      # empty and both fail closed. The GITHUB_ENV write uses the heredoc-delimiter form: a value carrying a newline would
+      # otherwise write a second variable that every later step honours.
+      - name: Extract backend credentials + assert SENTRY_DSN non-empty (ADR-128 R1)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          d1="SOLEUR_EOF_$(openssl rand -hex 12)"; d2="SOLEUR_EOF_$(openssl rand -hex 12)"
+          printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$d1" "$KEY_ID" "$d1" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$d2" "$SECRET" "$d2" >> "$GITHUB_ENV"
+          dsn_rc=0
+          DSN=$(doppler secrets get SENTRY_DSN --plain 2>/dev/null) || dsn_rc=$?
+          if [[ "$dsn_rc" -ne 0 ]]; then
+            echo "::error::could not READ SENTRY_DSN from Doppler prd_terraform (rc=${dsn_rc}); fail-closed."
+            exit 1
+          fi
+          if [[ -z "$DSN" ]]; then
+            echo "::error::SENTRY_DSN is empty in Doppler prd_terraform; the reborn host's pre-extraction stages would be dark."
+            exit 1
+          fi
+          echo "ADR-128 R1 satisfied: SENTRY_DSN present and non-empty (value not printed)."
+
+      # Escrow readiness (#9377, ADR-263): fail-closed before ANY Terraform command or Hetzner call. The step text is pinned
+      # exactly by plugins/soleur/test/web-host-escrow-preflight-census.test.ts.
+      - name: Escrow readiness preflight
+        timeout-minutes: 2
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: bash scripts/web-host-escrow-preflight.sh
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan time regardless of -target filtering; a throwaway key satisfies the variable.
+        # hcloud_server.web carries ignore_changes = [ssh_keys], so it is never consumed by the replace.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Assert runner is amd64 (multi-arch digest equivalence)
+        # The coherence preflight `docker create`s the multi-arch index ON THE RUNNER to recompute the baked host-scripts hash;
+        # a non-amd64 runner would compare the wrong platform manifest.
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          [[ "$ARCH" == "x86_64" ]] || { echo "::error::runner arch is ${ARCH}, expected x86_64 (amd64)."; exit 1; }
+          echo "runner arch ${ARCH} - multi-arch digest equivalence holds."
+
+      - name: Resolve the image digest off-host from the explicit image_tag (freeze $PINNED)
+        id: pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          IMAGE_TAG_INPUT: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # The resolver takes the BARE version (it prepends the v itself): a `v3.1.2` input would resolve to `vv3.1.2` and fail
+          # AFTER the approval, burning a single-use dispatch. The validate step accepts either spelling; strip the v here.
+          TAG=$(bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/resolve-web1-known-good-tag.sh" "${IMAGE_TAG_INPUT#v}")
+          echo "operator-supplied image_tag=${IMAGE_TAG_INPUT} -> tag ${TAG}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GH_ACTOR" --password-stdin
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE_REPO}:${TAG}" --format '{{.Manifest.Digest}}' || true)
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::tag->digest resolution returned '${DIGEST}' (want ^sha256:[0-9a-f]{64}\$) for ${IMAGE_REPO}:${TAG}. Aborting BEFORE any write."
+            exit 1
+          fi
+          PINNED="${IMAGE_REPO}@${DIGEST}"
+          echo "resolved ${IMAGE_REPO}:${TAG} -> ${PINNED}"
+          printf 'PINNED=%s\n' "$PINNED" >> "$GITHUB_ENV"
+          echo "pinned=${PINNED}" >> "$GITHUB_OUTPUT"
+
+      - name: Coherence preflight (LOAD-BEARING - abort before any write on mismatch)
+        id: coherence
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          WANT=$(doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform console -input=false <<<'local.host_scripts_content_hash' | tr -d '"')
+          if [[ -z "$WANT" ]]; then
+            echo "::error::terraform console returned an empty local.host_scripts_content_hash; an unknown WANT hash is not a match."
+            exit 1
+          fi
+          HOST_SCRIPTS_WANT_HASH="$WANT" PINNED="$PINNED" INFRA_DIR="$PWD" \
+            bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/scripts/host-image-coherence-preflight.sh"
+          printf 'equal=yes\n' >> "$GITHUB_OUTPUT"
+
+      - name: Classify state (heal the window a crash left, or refuse before any write)
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/web2-rebirth.sh classify "$APPLY"
+
+      - name: Emptiness evidence (7 days of Better Stack host_metrics, fail-closed)
+        id: emptiness
+        if: ${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # heal:detach_done: the volume was detached by an earlier run that had already proven it empty, and a detached device
+          # stops reporting, so freshness cannot be demanded (coverage, the zero floor, ceiling and spread still apply).
+          W2R_DETACHED: ${{ steps.classify.outputs.verdict == 'heal:detach_done' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/emptiness.out"; rc=0
+          bash scripts/web2-rebirth-emptiness.sh > "$out" || rc=$?
+          cat "$out"
+          printf 'verdict=%s\n' "$(head -n 1 "$out" | head -c 200)" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Never-pooled evidence (the soak marker is absent; names only; every verdict, because the reboot needs it too)
+        id: pooled
+        env:
+          # READ/WRITE today (a read-only token is a prerequisite on #9358); bound to THIS step only and used by one allow-listed,
+          # names-only reader that the census in workspaces-luks-verify-workflow.test.sh holds to that.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
+        run: |
+          set -euo pipefail
+          bash scripts/web2-rebirth-never-pooled.sh
+          printf 'verdict=absent\n' >> "$GITHUB_OUTPUT"
+
+      - name: Flip precondition (the rotation HALT's create exemption is flipped and the escrow-create workflow retired)
+        id: flip
+        run: bash scripts/web2-rebirth.sh flip-precondition "$APPLY"
+
+      - name: Terraform plan `pre` (scoped rebirth, graded before anything is touched) + stock preflight
+        id: preplan
+        if: ${{ steps.classify.outputs.verdict == 'proceed' || steps.classify.outputs.verdict == 'heal:detach_done' }}
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WEB2_SID: ${{ steps.classify.outputs.web2_sid }}
+        run: |
+          set +e
+          set -uo pipefail
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan-pre \
+              -replace='hcloud_server.web["web-2"]' \
+              -target='hcloud_server.web["web-2"]' \
+              -target='hcloud_server_network.web["web-2"]' \
+              -target='hcloud_volume.workspaces["web-2"]' \
+              -target='hcloud_volume_attachment.workspaces["web-2"]' \
+              -target='hcloud_firewall_attachment.web' \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -var="image_name=${PINNED}"
+          rc=$?
+          [[ $rc -eq 0 ]] || { echo "::error::terraform plan (pre) failed (exit $rc). Nothing has been touched."; exit $rc; }
+          set -e
+          terraform show -json tfplan-pre > tfplan-pre.json
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/web-host-rebirth-gate.sh"
+          if ! web_host_rebirth_gate pre tfplan-pre.json web-2 "$WEB2_SID" "$PINNED_VOLUME_ID"; then
+            echo "::error::the rebirth gate REFUSED the pre plan. The gate's own lines above name the arm. Nothing has been touched."
+            exit 1
+          fi
+          HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"
+          [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+          [[ -n "$HCLOUD_TOKEN" ]] || { echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN; an unreadable token is not evidence of availability."; exit 1; }
+          export HCLOUD_TOKEN
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+          if ! stock_preflight_gate tfplan-pre.json; then
+            echo "::error::stock preflight ABORTED: the planned server_type is not orderable in its target location."
+            exit 1
+          fi
+          echo "pre plan graded and stock preflight passed"
+          # The literal below is what scripts/web2-rebirth.sh delete-volume requires of PRE_PLAN (a suite pins both sides).
+          printf 'graded=graded\n' >> "$GITHUB_OUTPUT"
+
+      - name: Install cryptsetup (read-only header check)
+        if: ${{ env.APPLY == 'yes' }}
+        # Installed BEFORE the destructive steps: a transient apt failure must not strand a run after the volume is already gone.
+        run: |
+          set -euo pipefail
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 cryptsetup-bin
+
+      - name: Delete the empty plaintext volume through the Hetzner API (detach first; pinned id re-asserted)
+        id: delete
+        if: ${{ env.APPLY == 'yes' }}
+        env:
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+          # The script REFUSES unless each proof below is present: a skipped or failed evidence step leaves its output empty.
+          EMPTINESS: ${{ steps.emptiness.outputs.verdict }}
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+          PRE_PLAN: ${{ steps.preplan.outputs.graded }}
+          FLIP: ${{ steps.flip.outputs.met }}
+        run: bash scripts/web2-rebirth.sh delete-volume
+
+      - name: Forget the volume and its attachment from Terraform state (serial +1, lineage unchanged)
+        id: staterm
+        if: ${{ env.APPLY == 'yes' }}
+        env:
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+        run: bash scripts/web2-rebirth.sh state-rm
+
+      - name: Terraform plan `post` (graded; the raw volume is created, or on resume only missing siblings are added) + stock preflight
+        if: ${{ env.APPLY == 'yes' }}
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          WEB2_SID: ${{ steps.classify.outputs.web2_sid }}
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+        run: |
+          # shellcheck disable=SC2153
+          set +e
+          set -uo pipefail
+          MODE=post; REPLACE=(-replace='hcloud_server.web["web-2"]')
+          [[ "$VERDICT" == "heal:volume_created" ]] && MODE=post-heal
+          # resume:post_apply plans WITHOUT -replace and with the resume mode: the gate then allows only ADDING what a partly failed
+          # apply left missing (the NIC, the attachment, the firewall update); a replace or a volume create is refused.
+          if [[ "$VERDICT" == "resume:post_apply" ]]; then MODE=resume; REPLACE=(); fi
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan-post \
+              ${REPLACE[@]+"${REPLACE[@]}"} \
+              -target='hcloud_server.web["web-2"]' \
+              -target='hcloud_server_network.web["web-2"]' \
+              -target='hcloud_volume.workspaces["web-2"]' \
+              -target='hcloud_volume_attachment.workspaces["web-2"]' \
+              -target='hcloud_firewall_attachment.web' \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -var="image_name=${PINNED}"
+          rc=$?
+          [[ $rc -eq 0 ]] || { echo "::error::terraform plan (post) failed (exit $rc). The volume is already deleted and forgotten; re-dispatch heals this window."; exit $rc; }
+          set -e
+          terraform show -json tfplan-post > tfplan-post.json
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/web-host-rebirth-gate.sh"
+          if ! web_host_rebirth_gate "$MODE" tfplan-post.json web-2 "$WEB2_SID" "$PINNED_VOLUME_ID"; then
+            echo "::error::the rebirth gate REFUSED the ${MODE} plan. Nothing was applied; the volume is already gone, so a re-dispatch re-plans this window."
+            exit 1
+          fi
+          if [[ "$MODE" != resume ]]; then
+            HCLOUD_TOKEN="${HCLOUD_TOKEN:-}"
+            [[ -n "$HCLOUD_TOKEN" ]] && printf '::add-mask::%s\n' "$HCLOUD_TOKEN"
+            [[ -n "$HCLOUD_TOKEN" ]] || { echo "::error::stock-preflight ABORT: cannot read HCLOUD_TOKEN."; exit 1; }
+            export HCLOUD_TOKEN
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            if ! stock_preflight_gate tfplan-post.json; then
+              echo "::error::stock preflight ABORTED on the post plan."
+              exit 1
+            fi
+          fi
+          echo "post plan graded (${MODE}) and stock preflight passed"
+
+      - name: Terraform apply (exactly the graded post plan)
+        if: ${{ env.APPLY == 'yes' }}
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan-post; then
+            echo "::error::terraform apply (rebirth of web-2) failed. The empty volume is already gone; web-2 is dark and standby-only. Re-dispatch with the same inputs: the classifier names the window and heals it."
+            exit 1
+          fi
+          echo "rebirth applied: web-2 (server, NIC, raw volume, attachment, firewall re-attachment)."
+
+      - name: Wait for the fresh-boot readiness row (luks=1 luks_arm=formatted escrow=ok, newer than web-2's own creation)
+        if: ${{ env.APPLY == 'yes' }}
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        id: ready
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/ready.out"; rc=0
+          bash scripts/web2-rebirth.sh ready-poll > "$out" || rc=$?
+          cat "$out"
+          printf 'line=%s\n' "$(grep -E '^ready:' "$out" | tail -n 1 | head -c 400)" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Birth-time recovery check (consistency of the escrowed header and the two passphrase copies; restore NOT exercised)
+        id: recovery
+        if: ${{ env.APPLY == 'yes' }}
+        run: |
+          set -euo pipefail
+          [[ -n "${TF_VAR_doppler_token_tf:-}" ]] || { echo "::error::the loader exported no workplace-scope provider token (TF_VAR_doppler_token_tf); the recovery check cannot read the web-class config."; exit 1; }
+          # The script's stdout carries ::add-mask:: lines for the passphrase and the R2 credentials: it must reach the runner and
+          # NEVER a file. The non-secret facts come back through a dedicated file the script writes itself.
+          facts="${RUNNER_TEMP}/recovery-facts.txt"; rc=0
+          DOPPLER_TOKEN="$TF_VAR_doppler_token_tf" W2_FACTS_FILE="$facts" bash scripts/web2-rebirth-recovery-check.sh || rc=$?
+          if [[ -s "$facts" ]]; then printf 'facts=%s\n' "$(head -c 600 "$facts" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"; fi
+          exit "$rc"
+
+      - name: Issue the hcloud reboot (the reopen is graded later, never claimed here)
+        if: ${{ env.APPLY == 'yes' }}
+        env:
+          # The script REFUSES to reboot without the never-pooled proof: with the soak marker present web-2 may already hold data.
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+        run: bash scripts/web2-rebirth.sh reboot
+
+      # Plan files hold the passphrase in prior_state: they are never uploaded, and a stray local copy is removed.
+      - name: Remove plan files and any local state backup
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          rm -f tfplan-pre tfplan-post tfplan-pre.json tfplan-post.json terraform.tfstate.backup ./*.tfstate.backup ./terraform.tfstate.*.backup 2>/dev/null || true
+          rm -f "${RUNNER_TEMP}/emptiness.out" "${RUNNER_TEMP}/ready.out" "${RUNNER_TEMP}/recovery-facts.txt" 2>/dev/null || true
+
+      - name: Name the heal window on failure
+        if: failure()
+        env:
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+        run: |
+          {
+            echo "## The rebirth did not complete"
+            echo ""
+            echo "Classifier verdict at the start of this run: \`${VERDICT:-not reached}\`."
+            echo "Re-dispatch with the SAME inputs: the classifier names the window a crash left (detach done, delete done, state rm done, apply midway, volume created) and heals it; after a completed apply it returns resume:post_apply, which runs ONLY the read-only readiness poll, the recovery check and the reboot (nothing is replaced, and only within 72 h of the rebirth); otherwise it REFUSES before writing. web-2 holds no user data and takes no traffic, so a dark web-2 is the safe state. A failed boot is not healed here: use web_host_replace for web-2, which carries the new volume forward."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch summary
+        if: always()
+        env:
+          VERDICT: ${{ steps.classify.outputs.verdict }}
+          PIN_DESC: ${{ steps.classify.outputs.pin_desc }}
+          EMPTINESS: ${{ steps.emptiness.outputs.verdict }}
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+          PINNED_IMAGE: ${{ steps.pin.outputs.pinned }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          COHERENCE: ${{ steps.coherence.outputs.equal }}
+          DELETED: ${{ steps.delete.outputs.volume_deleted }}
+          FORGOT: ${{ steps.staterm.outputs.state_forgotten }}
+          READY: ${{ steps.ready.outputs.line }}
+          RECOVERY: ${{ steps.recovery.outputs.facts }}
+          MODE: ${{ env.APPLY == 'yes' && 'apply' || 'plan_only' }}
+          JOB_STATUS: ${{ job.status }}
+          REASON: ${{ inputs.reason }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: bash scripts/web2-rebirth.sh summary

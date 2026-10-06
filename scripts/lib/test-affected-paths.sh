@@ -527,6 +527,13 @@ AFFECTED_SCRIPTS_WEB2_LUKS_LIVE_6931_PATHS=(
   "scripts/betterstack-query.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #9372: the rebirth recovery-check suite drives shims against the script and asserts no secret file is left in its own temp
+# directory; its verdict is scoped to the script, not to corpus drift.
+AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
+  "scripts/web2-rebirth-recovery-check.sh"
+  "scripts/web2-rebirth-recovery-check.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"
@@ -1196,6 +1203,15 @@ AFFECTED_PLUGINS_SOLEUR_TEST_MACHINERY_DRAIN_FLOOR_TEST_SH_PATHS=(
   ".github/workflows/scheduled-machinery-drain.yml"
   "plugins/soleur/skills/drain-labeled-backlog/SKILL.md"
   "plugins/soleur/test/machinery-drain-floor.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# plugins/soleur/test/claude-code-action-auth.test.sh — a census over every workflow file; any
+# new or edited workflow under .github/workflows/ can add a consumer (or strip a token path), so
+# the directory prefix is the edge. Derived edges reach none of the workflow subjects.
+AFFECTED_PLUGINS_SOLEUR_TEST_CLAUDE_CODE_ACTION_AUTH_TEST_SH_PATHS=(
+  ".github/workflows/"
+  "plugins/soleur/test/claude-code-action-auth.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

@@ -1,4 +1,5 @@
 import { KeyInvalidError } from "../lib/types";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 import {
   ERR_WORKSPACE_NOT_PROVISIONED,
   ERR_NO_ACTIVE_SESSION,
@@ -67,7 +68,7 @@ export function sanitizeErrorForClient(err: unknown): string {
     const safe = KNOWN_SAFE_MESSAGES[err.message];
     if (safe) return safe;
 
-    if (err.message.includes("No conversation found with session ID")) {
+    if (err.message.includes(SDK_STALE_RESUME_SESSION_ID)) {
       return "Session resume failed. Falling back to conversation history.";
     }
 

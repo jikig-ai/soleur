@@ -58,7 +58,8 @@ describe("WorkflowLifecycleBar", () => {
     const bar = container.querySelector('[data-lifecycle-state="ended"]');
     expect(bar).not.toBeNull();
     expect(container.textContent).toContain("brainstorm");
-    expect(container.textContent).toContain("completed");
+    // Mapped badge label — the raw `completed` token never renders.
+    expect(container.textContent).toContain("Completed");
     fireEvent.click(screen.getByRole("button", { name: /start new conversation/i }));
     expect(onStart).toHaveBeenCalledTimes(1);
   });

@@ -10,7 +10,7 @@ import { LeaderAvatar } from "@/components/leader-avatar";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import type { AttachmentRef, MessageState } from "@/lib/types";
 import type { ActivityEntry } from "@/lib/chat-state-machine";
-import { ActivityTrail } from "@/components/chat/activity-trail";
+import { ActivityTrail, LiveStep } from "@/components/chat/activity-trail";
 import { formatAssistantText } from "@/lib/format-assistant-text";
 import { reportSilentFallback } from "@/lib/client-observability";
 
@@ -194,6 +194,21 @@ export const MessageBubble = memo(function MessageBubble({
     role === "assistant" &&
     (isActive || (interrupted && !isDone && !isError));
 
+  // #9515 follow-up — the CURRENT step is the meaningful text in the box.
+  // When no streamed content occupies the body yet, the live step renders
+  // there (prominent, ticking) and the trail's tail carries the in-progress
+  // dots; once content streams, the live step sits in the trail as before.
+  const liveStep =
+    suppressLive || interrupted || retrying
+      ? null
+      : liveNarration
+        ? { label: liveNarration, startedAt: liveNarrationStartedAt }
+        : toolLabel
+          ? { label: toolLabel, startedAt: currentActivityStartedAt }
+          : null;
+  const currentInBody =
+    liveStep !== null && isActive && (content ?? "") === "";
+
   const borderStyle = isError
     ? "border-2 border-red-900/60"
     : isActive
@@ -267,6 +282,7 @@ export const MessageBubble = memo(function MessageBubble({
                 retrying,
                 isDone,
                 variant,
+                liveStep: currentInBody ? liveStep : null,
                 // #9515 — the trail's live line owns the CURRENT step;
                 // body's ToolStatusChip is suppressed so the label can
                 // never double. When the live line is itself suppressed
@@ -283,15 +299,8 @@ export const MessageBubble = memo(function MessageBubble({
             <ActivityTrail
               activity={activity}
               interrupted={interrupted}
-              current={
-                suppressLive || interrupted || retrying
-                  ? null
-                  : liveNarration
-                    ? { label: liveNarration, startedAt: liveNarrationStartedAt }
-                    : toolLabel
-                      ? { label: toolLabel, startedAt: currentActivityStartedAt }
-                      : null
-              }
+              current={liveStep}
+              currentInBody={currentInBody}
             />
           )}
 
@@ -334,6 +343,7 @@ function renderBubbleContent({
   retrying,
   isDone,
   variant,
+  liveStep = null,
   suppressToolStatus = false,
 }: {
   isUser: boolean;
@@ -344,6 +354,9 @@ function renderBubbleContent({
   retrying: boolean;
   isDone: boolean;
   variant: "full" | "sidebar";
+  /** #9515 follow-up — live step promoted to the body slot (replaces the
+   *  generic dots) when no streamed content exists yet. */
+  liveStep?: { label: string; startedAt: number | null | undefined } | null;
   /** #9515 — when the ActivityTrail live line carries the current step,
    *  the body's ToolStatusChip is dropped (one label, one surface). */
   suppressToolStatus?: boolean;
@@ -379,13 +392,22 @@ function renderBubbleContent({
 
   switch (messageState) {
     case "thinking":
+      // The live step (narration or tool label) IS the meaningful text —
+      // show it in the prominent slot; the dots fallback only when no step
+      // has been reported yet.
+      if (liveStep) return <LiveStep label={liveStep.label} startedAt={liveStep.startedAt} />;
       return <ThinkingDots />;
     case "tool_use":
       if (retrying)
         return <RetryingChip label={toolLabel ? formatAssistantText(toolLabel) : toolLabel} />;
-      if (suppressToolStatus) return <ThinkingDots />;
+      if (suppressToolStatus)
+        return liveStep
+          ? <LiveStep label={liveStep.label} startedAt={liveStep.startedAt} />
+          : <ThinkingDots />;
       return toolLabel ? <ToolStatusChip label={formatAssistantText(toolLabel)} /> : <ThinkingDots />;
     case "streaming":
+      if (scrubbedContent === "" && liveStep)
+        return <LiveStep label={liveStep.label} startedAt={liveStep.startedAt} />;
       return (
         <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
           {scrubbedContent}

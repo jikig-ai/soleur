@@ -34,6 +34,7 @@ import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
 import { CohortMissingReplyMarker } from "@/components/chat/cohort-missing-reply-marker";
 import { DebugStreamPanel } from "@/components/chat/debug-stream-panel";
 import { TurnSummaryBubble } from "@/components/chat/turn-summary-bubble";
+import { TaskCompletedCard } from "@/components/chat/task-completed-card";
 import { ActivityTrail } from "@/components/chat/activity-trail";
 import { useOptionalFeatureFlag } from "@/components/feature-flags/provider";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
@@ -47,6 +48,7 @@ import type {
 } from "@/lib/chat-state-machine";
 import { deriveReconnectView } from "@/lib/chat-state-machine";
 import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
+import { workflowEndedCopy } from "@/lib/workflow-ended-copy";
 import { Button } from "@/components/ui/button";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
@@ -1119,12 +1121,10 @@ export function ChatSurface({
                         Workflow{" "}
                         <span className="font-semibold">{msg.workflow}</span>{" "}
                         ended:{" "}
-                        {/* Dormant raw-enum render — no server→client
-                            `workflow_ended` emitter exists yet (cc-dispatcher
-                            routes terminal statuses to session_ended until
-                            Stage 3). When one ships, map status through
-                            lib/session-ended-copy.ts › SESSION_ENDED_COPY
-                            before it can leak like internal_error did. */}
+                        {/* Status renders through lib/workflow-ended-copy.ts ›
+                            workflowEndedCopy — the raw enum token never reaches
+                            the transcript. Styling still keys on the raw
+                            status (completed=emerald, rest=red). */}
                         <span
                           className={
                             msg.status === "completed"
@@ -1132,7 +1132,7 @@ export function ChatSurface({
                               : "text-red-400"
                           }
                         >
-                          {msg.status}
+                          {workflowEndedCopy(msg.status).copy}
                         </span>
                       </p>
                       {msg.summary ? (
@@ -1179,6 +1179,17 @@ export function ChatSurface({
                   // box, rendered INLINE in the main conversation (plain-text;
                   // never MarkdownRenderer — see TurnSummaryBubble security note).
                   body = <TurnSummaryBubble content={msg.content} />;
+                  break;
+                case "task_completed":
+                  // feat-session-completion-inline — the inline completion
+                  // card (sanitized plain-text title; mounting it fires the
+                  // inbox read-mark, so "read" implies the card painted).
+                  body = (
+                    <TaskCompletedCard
+                      title={msg.content}
+                      inboxItemId={msg.inboxItemId}
+                    />
+                  );
                   break;
                 default: {
                   const _exhaustive: never = msg;

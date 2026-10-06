@@ -289,6 +289,19 @@ export interface ChatTurnSummaryMessage extends ChatMessageBase {
   type: "turn_summary";
 }
 
+/** feat-session-completion-inline — the inline per-request completion card.
+ *  Renders INLINE in the viewed conversation when the server emits the
+ *  `task_completed` frame; the matching inbox_item row stays the durable
+ *  record and is marked read when the card MOUNTS (TaskCompletedCard's mount
+ *  effect — "read" implies painted). Render MUST be plain-text — the title is
+ *  server-generated (never agent output, ADR-085) but the InboxItemRow
+ *  plain-text invariant still applies. `content` carries the title;
+ *  `inboxItemId` links the card to its durable row (the read-mark target). */
+export interface ChatTaskCompletedMessage extends ChatMessageBase {
+  type: "task_completed";
+  inboxItemId: string;
+}
+
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
@@ -299,7 +312,8 @@ export type ChatMessage =
   | ChatToolUseChipMessage
   | ChatContextResetMessage
   | ChatDebugEventMessage
-  | ChatTurnSummaryMessage;
+  | ChatTurnSummaryMessage
+  | ChatTaskCompletedMessage;
 
 /** Stage 4 (#2886): ambient lifecycle-bar slice. The bar is sticky context;
  *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card.
@@ -673,6 +687,8 @@ export type StreamEvent = Extract<
   | { type: "debug_event" }
   // feat-reasoning-chat-boxes (#5370) — durable per-turn summary (main list).
   | { type: "turn_summary" }
+  // feat-session-completion-inline — inline completion card (main list).
+  | { type: "task_completed" }
   | { type: "review_gate" }
   | { type: "autonomous_disclosure" }
   | { type: "subagent_spawn" }
@@ -2085,6 +2101,28 @@ export function applyStreamEvent(
       };
       return {
         messages: [...prev, summaryMsg],
+        activeStreams,
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+      };
+    }
+
+    case "task_completed": {
+      // feat-session-completion-inline — APPEND the inline completion card to
+      // the main message list. Emitted by the shared `notifyTaskCompleted`
+      // seam at every turn boundary (both lineages), so unlike turn_summary
+      // it arrives on EVERY completed request. Ephemeral — the inbox_item row
+      // (id in `inboxItemId`) is the durable record; a reload rehydrates from
+      // history without it, which is honest (the completion already showed).
+      const completedMsg: ChatTaskCompletedMessage = {
+        id: `task-completed-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: event.title,
+        type: "task_completed",
+        inboxItemId: event.inboxItemId,
+      };
+      return {
+        messages: [...prev, completedMsg],
         activeStreams,
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,
