@@ -1503,6 +1503,14 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
       systemPrompt += `\n\n## Connected Services\n${serviceList}`;
     }
 
+    // W1 (#9601, ADR-272): the Anthropic credential that funds this session is
+    // withheld from sandboxed Bash. An agent that finds it empty must not ask
+    // the user to paste it into the chat. Unconditional: it applies whether or
+    // not any service is connected. Distinct heading so the Connected Services
+    // absence assertions stay true.
+    systemPrompt +=
+      "\n\n## Credentials\nThe Anthropic credential that runs this session is withheld from shell commands by design. Never ask the user for it or to paste it into the chat. Connected services listed above are the only credentials available to shell commands.";
+
     // Announce KB share capability (closes #2315). Without this block the
     // agent cannot discover kb_share_* from natural-language requests like
     // "share the Q1 report."

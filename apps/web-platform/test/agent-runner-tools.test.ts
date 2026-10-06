@@ -582,6 +582,28 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.systemPrompt).not.toContain("## Connected Services");
   });
 
+  // W1 (#9601): the Anthropic credential is withheld from sandboxed Bash, so an
+  // agent that finds it empty must not ask the user to paste it into the chat.
+  // The line rides EVERY hosted session, with or without connected services.
+  test("system prompt says the Anthropic credential is withheld and must never be requested", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("## Credentials");
+    expect(options.systemPrompt).toContain("withheld from shell commands by design");
+    expect(options.systemPrompt).toContain("Never ask the user for it");
+    // Heading collision guard: this block must not masquerade as Connected Services.
+    expect(options.systemPrompt).not.toContain("## Connected Services");
+  });
+
   test("system prompt omits Plausible from Connected Services when no Plausible token", async () => {
     const cloudflareRow = {
       ...DEFAULT_API_KEY_ROW,
