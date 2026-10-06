@@ -11,7 +11,7 @@
 #   ready-poll        wait for a SOLEUR_FRESH_BOOT_READY row newer than web-2's Hetzner creation time:
 #                     luks=1 luks_arm=formatted escrow=ok (read-only; scripts/web2-rebirth-ready-poll.sh)
 #   reboot            re-resolve web-2 BY NAME, refuse web-1's id, require the post-apply state id, POST reboot
-#   flip-precondition the rotation HALT's create exemption is flipped and apply-web-escrow-create.yml is retired
+#   flip-precondition the rotation HALT counts a create of the web-class pair and apply-web-escrow-create.yml stays retired
 #   summary           the dispatch summary (names, ids and booleans only; no secret value)
 #
 # Reads Hetzner with `-w`, never `-f` (a 404 is an ANSWER), the token on stdin (`--config -`), never in argv. The state is only
@@ -300,7 +300,7 @@ cmd_flip_precondition() { # apply=yes|no
   echo "flip precondition: luks_passphrase_rotations over a create of the web-class pair = ${n} (needs 2); apply-web-escrow-create.yml absent = ${absent}"
   if [[ "$ok" == yes && "$absent" == yes ]]; then echo "flip precondition: MET"; out met met; return 0; fi
   if [[ "$apply" == yes ]]; then
-    fail "flip precondition NOT met: the retirement change (delete apply-web-escrow-create.yml and flip the rotation HALT's create exemption) must merge before this dispatch formats web-2"
+    fail "flip precondition NOT met: the escrow-create workflow file is present again, or the rotation HALT no longer counts a create of the web-class pair (the closing change for #9372 retired the one and flipped the other, so this is a regression to revert, not a step to perform); this dispatch will not format web-2"
   fi
   echo "flip precondition: PENDING (a plan_only run reports it; an apply run refuses)"
 }

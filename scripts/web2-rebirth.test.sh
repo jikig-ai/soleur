@@ -292,13 +292,17 @@ battery() {
     world; SCRIPT_UNDER_TEST="$sb/scripts/web2-rebirth.sh" run "$1" "$2" "$3" flip-precondition "$4"
     SCRIPT_UNDER_TEST="$saved"
   }
-  flip_case "flip: the real filter (create exempt today) and the escrow workflow present: plan_only reports PENDING, rc 0" 0 "PENDING" no real present
-  flip_case "flip: the real filter: an apply run refuses" 1 "NOT met" yes real present
-  flip_case "flip: exemption flipped (rotations 2) and the escrow workflow RETIRED: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes two absent
-  flip_case "flip: exemption flipped but the escrow workflow still present: an apply run refuses" 1 "NOT met" yes two present
-  flip_case "flip: workflow retired but the exemption not flipped (rotations 0): an apply run refuses" 1 "NOT met" yes zero absent
+  flip_case "flip: the real filter (reads 2: a create of the web-class pair counts) and the escrow workflow present: plan_only reports PENDING, rc 0" 0 "PENDING" no real present
+  flip_case "flip: the real filter and the escrow workflow present again: an apply run refuses (a regression, not a step)" 1 "NOT met" yes real present
+  flip_case "flip: the real filter and the escrow workflow absent: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes real absent
+  flip_case "flip: create counted (rotations 2) and the escrow workflow RETIRED: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes two absent
+  flip_case "flip: create counted but the escrow workflow still present: an apply run refuses" 1 "NOT met" yes two present
+  flip_case "flip: workflow retired but a create not counted (rotations 0): an apply run refuses" 1 "NOT met" yes zero absent
   flip_case "flip: plan_only with only one condition met reports PENDING, rc 0" 0 "PENDING" no two present
   flip_case "flip: an unevaluable filter is a refusal, never a pass" 1 "could not be evaluated" yes garbage absent
+  # The REAL repository tree, not a sandbox: the real script, the real jq filter, the real fixture and the real file system. Every other
+  # row stubs one of the four, so none of them proves the shipped tree reads MET. Pre-merge this reads MET once the closing change is in.
+  world; run "flip: the REAL repository tree reads MET on an apply run (real filter over the tracked fixture, real workflow directory)" 0 "flip precondition: MET" flip-precondition yes
   # ---- ready-poll (the anchor is web-2's own Hetzner creation time) ----
   rdy_row() { jq -cn --arg age "$1" --arg arm "$2" --arg esc "$3" --arg boot "$4" '{ts:"2026-10-06 04:00:00",age_s:$age,message:("SOLEUR_FRESH_BOOT_READY ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=" + $arm + " escrow=" + $esc + " boot_id=" + $boot + " host=soleur-web-2 reason=none boot_window_s=900")}'; }
   world server_age=600; rdy_row 60 formatted ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
