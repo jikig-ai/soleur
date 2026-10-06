@@ -29,8 +29,10 @@ import {
 } from "./lib/bulk-redirect-pairs";
 import {
   decodeEntities,
+  openAncestors,
   plainText,
   sentencesOf,
+  tagsOf,
   visibleText,
   withoutInert,
 } from "./lib/visible-text";
@@ -1945,15 +1947,19 @@ function hasKey(v: unknown, keys: string[]): boolean {
 
 // Text a crawler or share card reads that no visible-text scan sees: meta
 // description / og / twitter content and alt, aria-label, title, placeholder.
+// Tags come from the quote-aware scanner (a `>` inside a quoted value does not
+// end the tag); values may be double-quoted, single-quoted or unquoted.
 function attributeTexts(html: string): string[] {
   const out: string[] = [];
-  for (const m of html.matchAll(/<[A-Za-z][^>]*>/g)) {
-    const tag = m[0];
-    const isMeta = /^<meta\b/i.test(tag);
-    const metaOk = /(?:name|property)="(?:description|og:[^"]*|twitter:[^"]*)"/i.test(tag);
-    for (const a of tag.matchAll(/\b(alt|aria-label|title|content|placeholder)="([^"]*)"/gi)) {
+  for (const { raw } of tagsOf(html)) {
+    if (raw.startsWith("</")) continue;
+    const isMeta = /^<meta\b/i.test(raw);
+    const metaOk = /\b(?:name|property)\s*=\s*["'](?:description|og:[^"']*|twitter:[^"']*)["']/i.test(raw);
+    for (const a of raw.matchAll(
+      /\b(alt|aria-label|title|content|placeholder)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+    )) {
       if (a[1].toLowerCase() === "content" && !(isMeta && metaOk)) continue;
-      out.push(decodeEntities(a[2]));
+      out.push(decodeEntities(a[2] ?? a[3] ?? a[4] ?? ""));
     }
   }
   return out;
@@ -2003,13 +2009,25 @@ function faqLdAnswer(html: string, question: string): string {
   throw new Error(`FAQPage JSON-LD question not found: ${question}`);
 }
 
-// Claude-plan / login wording is only true of the self-hosted version.
+// Claude-plan / login wording is only true of the self-hosted version. The
+// vocabulary follows CLO audit section 6 (Pro / Max / Team / Enterprise, login,
+// seat, subscription limits), not just the spellings found on the site today.
 const PLAN_WORDING_RE =
-  /Claude(?: Code)?(?:\.ai)? (?:plan|Pro|Max|subscription|account|login|log-in|sign-?in)\b|Claude\.ai\b|\b(?:Pro|Max|Team) (?:plan|subscription)\b|\bPro,? (?:or|and) Max\b|\bMax (?:or|and) Pro\b|\b(?:Anthropic|Claude) subscription\b|subscription limits|setup-token|\boauth\b/i;
+  /Claude(?: Code)?(?:\.ai)? (?:plan|Pro|Max|Team|Enterprise|subscription|account|login|log-in|sign-?in|seat)\b|Claude\.ai\b|\b(?:Pro|Max|Team|Enterprise) (?:plan|subscription|seat)\b|\bPro\/Max\b|\bPro,? (?:or|and) Max\b|\bMax (?:or|and) Pro\b|\b(?:Anthropic|Claude) (?:subscription|account|login|plan)\b|\b(?:sign|log)(?:s|ged)? ?in (?:to |with )?(?:Claude|Anthropic)\b|usage limits|subscription limits|setup-token|\boauth\b/i;
 const HOSTED_RE =
-  /(?<!self-)\b(?:hosted|cloud platform|managed|Soleur Cloud|SaaS|web platform)\b/i;
+  /(?<!self-)\b(?:hosted|cloud platform|managed|Soleur Cloud|SaaS|web platform|cloud (?:version|tier|plan|edition)|web app|web dashboard|app\.soleur\.ai)\b/i;
 const PRIVACY_OVERCLAIM_RE =
-  /\bprivate(?:ly)?\b|\bconfidential\b|zero-knowledge|end-to-end encrypt|never (?:see|sees|leaves?|reads?|shares?|stores?)|(?:do not|don't|cannot|can't) (?:see|read|access|store)\b/i;
+  /\bprivate(?:ly)?\b|\bconfidential\b|zero-knowledge|\bencrypt\w*|\bnever (?:see|sees|leaves?|reads?|shares?|stores?|touch(?:es)?|access(?:es)?|views?)\b|(?:do not|don['’]t|cannot|can['’]t|won['’]t|will not) (?:see|read|access|store|view|touch)\b|stays? (?:on|in) your (?:machine|device|laptop)|keeps? your (?:data|code|files) (?:safe|secure|private)/i;
+// Soleur paying for, bundling or reselling Claude usage (CLO 6.1.3); a sentence
+// that negates it ("plans don't include Claude usage") is the permitted wording.
+const COVERS_CLAUDE_RE =
+  /\b(?:bundl|includ|resell|cover)\w* (?:your |the )?Claude (?:usage|costs?)\b|\bClaude (?:usage|costs?) (?:is|are) (?:included|covered|bundled)\b/i;
+const NEGATION_RE = /\b(?:not|no|never)\b|n['’]t\b/i;
+// A hosted sentence that states a price or a way to buy must also say it is not
+// available yet: there is a waitlist, no checkout.
+const AVAILABILITY_RE =
+  /\$\s?\d|\b\d+ dollars\b|per month|\/month|\bplans? (?:start|from)\b|choose a paid|upgrade to|sign up for|subscribe/i;
+const NOT_YET_RE = /coming soon|waitlist|opens\b|when (?:it|hosted)|not yet|pre-?launch/i;
 const FOOTER_HOSTED_LABEL = "Hosted version (coming soon)";
 
 type Corpus = "marketing" | "blog";
@@ -2018,7 +2036,8 @@ type Corpus = "marketing" | "blog";
 // ALONE (a sentence that also names the hosted tier is flagged). Blog posts
 // legitimately quote other products' Claude plans, so there the wording is only
 // flagged when the same sentence names the hosted tier. Privacy over-claims are
-// flagged wherever a sentence names the hosted tier.
+// flagged wherever a sentence names the hosted tier; availability wording is
+// checked on marketing pages only (blog posts quote other products' prices).
 function violationsIn(sentences: string[], corpus: Corpus, where = ""): string[] {
   const out: string[] = [];
   for (const s of sentences) {
@@ -2030,45 +2049,81 @@ function violationsIn(sentences: string[], corpus: Corpus, where = ""): string[]
     if (hosted && PRIVACY_OVERCLAIM_RE.test(s)) {
       out.push(`${where}hosted sentence over-claims privacy: "${s}"`);
     }
+    if (hosted && COVERS_CLAUDE_RE.test(s) && !NEGATION_RE.test(s)) {
+      out.push(`${where}hosted sentence says Soleur covers Claude usage: "${s}"`);
+    }
+    if (corpus === "marketing" && hosted && AVAILABILITY_RE.test(s) && !NOT_YET_RE.test(s)) {
+      out.push(`${where}hosted availability stated without "coming soon": "${s}"`);
+    }
   }
   return out;
 }
 
-describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted, no 'private')", () => {
-  test("no marketing or blog sentence applies Claude plan/login wording to hosted or over-claims hosted privacy", () => {
-    const marketing = marketingPages();
-    const blog = blogPages();
-    const violations: string[] = [];
-    let textHosted = 0;
-    let ldHosted = 0;
-    for (const { rel, html } of marketing) {
-      const parts = pageParts(html);
-      violations.push(...violationsIn([...parts.text, ...parts.ld, ...parts.attr], "marketing", `${rel}: `));
-      textHosted += parts.text.filter((s) => HOSTED_RE.test(s) && s !== FOOTER_HOSTED_LABEL).length;
-      ldHosted += parts.ld.filter((s) => HOSTED_RE.test(s)).length;
+// One function per corpus arm, so the self-tests below can drive each arm with a
+// synthetic page: an arm that is dropped, or fed nothing, then fails a test
+// instead of reading as a clean scan.
+type Scan = { violations: string[]; hostedText: Map<string, number>; hostedLd: number; hostedAttr: number };
+
+function scanPages(entries: { rel: string; html: string }[], corpus: Corpus): Scan {
+  const scan: Scan = { violations: [], hostedText: new Map(), hostedLd: 0, hostedAttr: 0 };
+  for (const { rel, html } of entries) {
+    const parts = pageParts(html);
+    scan.violations.push(...violationsIn([...parts.text, ...parts.ld, ...parts.attr], corpus, `${rel}: `));
+    scan.hostedText.set(rel, parts.text.filter((s) => HOSTED_RE.test(s) && s !== FOOTER_HOSTED_LABEL).length);
+    scan.hostedLd += parts.ld.filter((s) => HOSTED_RE.test(s)).length;
+    scan.hostedAttr += parts.attr.filter((s) => HOSTED_RE.test(s)).length;
+  }
+  return scan;
+}
+
+// llms.txt is Markdown: every line is its own unit, then split into sentences.
+function scanLlms(raw: string): { violations: string[]; hosted: number } {
+  const sentences = raw.split("\n").flatMap(sentencesOf);
+  return {
+    violations: violationsIn(sentences, "marketing", "llms.txt: "),
+    hosted: sentences.filter((s) => HOSTED_RE.test(s)).length,
+  };
+}
+
+const synthetic = (head: string, body: string) => ({
+  rel: "x/index.html",
+  html: `<html><head>${head}</head><body>${body}</body></html>`,
+});
+const LD = (obj: string) => `<script type="application/ld+json">${obj}</script>`;
+
+describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted, no 'private', no orderable hosted offer)", () => {
+  // Known gap, tracked in #9589: blog posts that state the hosted privacy posture
+  // without naming the hosted tier ("No code is stored on Soleur servers") carry no
+  // hosted token, so the sentence-local privacy rule cannot see them.
+  test("no marketing or blog sentence applies Claude plan/login wording to hosted, over-claims hosted privacy, or sells an unavailable hosted tier", () => {
+    const marketing = scanPages(marketingPages(), "marketing");
+    const blog = scanPages(blogPages(), "blog");
+    const llmsPath = join(SITE, "llms.txt");
+    expect(existsSync(llmsPath), "llms.txt is built").toBe(true);
+    const llms = scanLlms(readFileSync(llmsPath, "utf8"));
+    const violations = [...marketing.violations, ...blog.violations, ...llms.violations];
+    // Floors, calibrated to the current corpus: an empty page glob, or a scanner
+    // that reads only part of a page, must not read as clean.
+    expect(marketing.hostedText.size, "marketing pages scanned").toBeGreaterThanOrEqual(20);
+    expect(blog.hostedText.size, "blog pages scanned").toBeGreaterThanOrEqual(25);
+    const total = [...marketing.hostedText.values()].reduce((a, b) => a + b, 0);
+    expect(total, "hosted sentences in marketing visible text (footer label excluded)").toBeGreaterThanOrEqual(35);
+    expect(marketing.hostedLd, "hosted sentences in marketing JSON-LD").toBeGreaterThanOrEqual(15);
+    expect(marketing.hostedAttr, "hosted sentences in marketing attributes").toBeGreaterThanOrEqual(10);
+    // Per page: the pages the CLO audit binds each carry hosted wording, so blinding
+    // one of them (while the aggregate stays above its floor) cannot read as clean.
+    const perPage: [string, number][] = [
+      ["index.html", 5], ["pricing/index.html", 5], ["getting-started/index.html", 7],
+      ["about/index.html", 2], ["company-as-a-service/index.html", 7],
+    ];
+    for (const [rel, min] of perPage) {
+      expect(marketing.hostedText.get(rel) ?? 0, `${rel} hosted sentences`).toBeGreaterThanOrEqual(min);
     }
-    for (const { rel, html } of blog) {
-      const parts = pageParts(html);
-      violations.push(...violationsIn([...parts.text, ...parts.ld], "blog", `${rel}: `));
-    }
-    const llms = join(SITE, "llms.txt");
-    expect(existsSync(llms), "llms.txt is built").toBe(true);
-    const llmsSentences = sentencesOf(readFileSync(llms, "utf8"));
-    violations.push(...violationsIn(llmsSentences, "marketing", "llms.txt: "));
-    // Floors, calibrated to the current corpus (21 marketing pages, 32 blog pages):
-    // an empty page glob, or a scanner that reads only part of a page, must not read as clean.
-    expect(marketing.length, "marketing pages scanned").toBeGreaterThanOrEqual(20);
-    expect(blog.length, "blog pages scanned").toBeGreaterThanOrEqual(25);
-    expect(textHosted, "hosted sentences in visible text (footer label excluded)").toBeGreaterThanOrEqual(35);
-    expect(ldHosted, "hosted sentences in JSON-LD").toBeGreaterThanOrEqual(15);
-    expect(
-      llmsSentences.filter((s) => HOSTED_RE.test(s)).length,
-      "hosted sentences in llms.txt",
-    ).toBeGreaterThanOrEqual(1);
+    expect(llms.hosted, "hosted sentences in llms.txt").toBeGreaterThanOrEqual(2);
     expect(violations, violations.join("\n")).toEqual([]);
   });
 
-  test("rule self-test: one known-bad sentence per arm is flagged, known-good wording is not", () => {
+  test("rule self-test: one known-bad sentence per arm and per alternation member is flagged, known-good wording is not", () => {
     const bad: [string, Corpus][] = [
       ["You choose the Claude plan that fits your usage.", "marketing"],
       ["Hosted plan users pay their own Claude Pro, Max, or API costs.", "marketing"],
@@ -2076,28 +2131,129 @@ describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted
       ["Hosted uses your Claude.ai login.", "marketing"],
       ["Your Anthropic subscription covers the hosted version.", "marketing"],
       ["Hosted plans run on your Max plan.", "marketing"],
+      ["Hosted runs on your Claude Enterprise plan.", "marketing"],
+      ["Hosted Soleur uses your Claude Team seat.", "marketing"],
+      ["Hosted runs on your Pro/Max login.", "marketing"],
+      ["Use your Anthropic account on the hosted version.", "marketing"],
+      ["Hosted Soleur lets you sign in with Claude.", "marketing"],
+      ["Hosted runs on your Claude usage limits.", "marketing"],
       ["Self-hosted is free; hosted usage draws on your Claude Pro plan.", "marketing"],
       ["Hosted Soleur runs on your Claude Pro plan.", "blog"],
+      ["Hosted Soleur: your Claude usage is included.", "marketing"],
+      ["Hosted plans bundle Claude usage.", "marketing"],
       ["Soleur Cloud keeps your data private.", "marketing"],
+      ["The cloud version keeps your data private.", "marketing"],
+      ["Your workspace data stays private on app.soleur.ai.", "marketing"],
       ["The hosted version never sees your code.", "marketing"],
+      ["The hosted version never leaves your control.", "marketing"],
+      ["The hosted version never reads your files.", "marketing"],
+      ["The hosted version never shares your code.", "marketing"],
+      ["The hosted version never stores your code.", "marketing"],
+      ["The hosted version never touches your code.", "marketing"],
+      ["Hosted workspaces are handled privately.", "marketing"],
       ["Hosted workspaces are confidential.", "marketing"],
       ["The web platform is zero-knowledge.", "marketing"],
       ["Hosted data is end-to-end encrypted.", "marketing"],
+      ["Hosted data is encrypted at rest.", "marketing"],
       ["We do not read your hosted files.", "marketing"],
+      ["We don't read your hosted files.", "marketing"],
+      ["We don’t read your hosted files.", "marketing"],
+      ["We cannot view your hosted files.", "marketing"],
+      ["Hosted data stays on your machine.", "marketing"],
+      ["The hosted version keeps your data safe.", "marketing"],
+      ["Hosted plans start at $49 per month.", "marketing"],
+      ["Choose a paid tier for managed infrastructure.", "marketing"],
+      ["Upgrade to the hosted version whenever you are ready.", "marketing"],
     ];
     const good: [string, Corpus][] = [
       ["Self-hosted runs with your Claude plan or an Anthropic API key.", "marketing"],
       ["Hosted plans use your own Anthropic API key, billed by Anthropic to you.", "marketing"],
       ["Soleur plans don’t include Claude usage.", "marketing"],
+      ["Hosted plans don’t include Claude usage.", "marketing"],
       ["It runs inside your own Claude Code, so you pay for your own Claude usage.", "marketing"],
+      ["The hosted version is coming soon, from $49 per month.", "marketing"],
+      ["Join the waitlist for the hosted version.", "marketing"],
       ["Cowork is bundled with every Claude subscription.", "blog"],
       ["Claude Pro runs $20/month.", "blog"],
+      ["SaaS tools work in isolation.", "marketing"],
     ];
     for (const [s, corpus] of bad) {
       expect(violationsIn([s], corpus).length, `flagged: ${s}`).toBeGreaterThan(0);
     }
     for (const [s, corpus] of good) {
       expect(violationsIn([s], corpus), `not flagged: ${s}`).toEqual([]);
+    }
+  });
+
+  test("arm wiring: a bad sentence that appears in only ONE input arm is still flagged", () => {
+    const bad = "Hosted Soleur is private.";
+    const arms: [string, { rel: string; html: string }, Corpus][] = [
+      ["marketing visible text", synthetic("", `<p>${bad}</p>`), "marketing"],
+      ["marketing JSON-LD", synthetic(LD(`{"@type":"Thing","description":"${bad}"}`), ""), "marketing"],
+      ["marketing alt", synthetic("", `<img alt="${bad}">`), "marketing"],
+      ["marketing meta description (single-quoted)", synthetic(`<meta name='description' content='${bad}'>`, ""), "marketing"],
+      ["marketing og:description", synthetic(`<meta property="og:description" content="${bad}">`, ""), "marketing"],
+      ["marketing title after a quoted >", synthetic("", `<img alt="x > y" title="${bad}">`), "marketing"],
+      ["marketing aria-label with spaces around =", synthetic("", `<a aria-label = "${bad}">x</a>`), "marketing"],
+      ["marketing unquoted placeholder", synthetic("", `<input placeholder=Hosted-is-private-${"x"}>`), "marketing"],
+      ["blog visible text", synthetic("", `<p>${bad}</p>`), "blog"],
+      ["blog JSON-LD", synthetic(LD(`{"@type":"Thing","description":"${bad}"}`), ""), "blog"],
+      ["blog meta description", synthetic(`<meta name="description" content="${bad}">`, ""), "blog"],
+    ];
+    for (const [arm, page, corpus] of arms) {
+      if (arm === "marketing unquoted placeholder") continue; // asserted below, with its own sentence
+      expect(scanPages([page], corpus).violations.length, `${arm} arm is wired`).toBeGreaterThan(0);
+    }
+    expect(
+      scanPages([synthetic("", "<input placeholder=hosted-private>")], "marketing").violations.length,
+      "unquoted attribute value is read",
+    ).toBeGreaterThan(0);
+    expect(scanLlms(`- [x](u): ${bad}\n`).violations.length, "llms.txt arm is wired").toBeGreaterThan(0);
+    // The same arms stay quiet on clean content (the control for the assertions above).
+    const clean = synthetic(
+      `<meta name="description" content="Hosted Soleur is coming soon."> ${LD('{"@type":"Thing","description":"Hosted is coming soon."}')}`,
+      '<p>Hosted is coming soon.</p><img alt="Hosted is coming soon.">',
+    );
+    expect(scanPages([clean], "marketing").violations).toEqual([]);
+    expect(scanPages([clean], "blog").violations).toEqual([]);
+    expect(scanLlms("- [x](u): Hosted is coming soon.\n").violations).toEqual([]);
+    // Markdown list items carry no final period, so only the per-line split keeps a
+    // self-hosted-scoped entry from merging with a hosted one into a flagged "sentence".
+    expect(
+      scanLlms("- [A](u): Self-hosted runs with your Claude plan\n- [B](u): The hosted version is coming soon\n").violations,
+      "llms.txt entries are scanned line by line",
+    ).toEqual([]);
+    // Markdown list items carry no final period, so only the per-line split keeps a
+    // self-hosted-scoped entry from merging with a hosted one into a flagged "sentence".
+    expect(
+      scanLlms("- [A](u): Self-hosted runs with your Claude plan\n- [B](u): The hosted version is coming soon\n").violations,
+      "llms.txt entries are scanned line by line",
+    ).toEqual([]);
+    // A non-content meta tag and a non-meta `content` attribute are not claims.
+    expect(attributeTexts('<meta name="viewport" content="Hosted is private."><div content="Hosted is private.">')).toEqual([]);
+  });
+
+  test("the hosted JSON-LD offer and the llms.txt entries say coming soon and sell nothing orderable", () => {
+    const offers: Record<string, unknown>[] = [];
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === "object") {
+        if ((v as Record<string, unknown>)["@type"] === "Offer") offers.push(v as Record<string, unknown>);
+        Object.values(v).forEach(walk);
+      }
+    };
+    for (const body of ldBodies(readSite("index.html"))) walk(JSON.parse(body));
+    const hosted = offers.filter((o) => HOSTED_RE.test(String(o.name)));
+    expect(hosted.length, "exactly one hosted offer in the homepage JSON-LD").toBe(1);
+    expect(String(hosted[0].name), "hosted offer name").toMatch(/coming soon/i);
+    expect(hosted[0].availability, "no orderable availability while only a waitlist exists").toBeUndefined();
+    expect(String(hosted[0].description), "hosted offer description names the waitlist").toMatch(/waitlist/i);
+    expect(String(hosted[0].description), "hosted offer support wording matches the pricing card").toMatch(/email support/i);
+    const llms = readFileSync(join(SITE, "llms.txt"), "utf8").split("\n");
+    for (const label of ["Getting Started", "Pricing"]) {
+      const line = llms.find((l) => l.startsWith(`- [${label}]`));
+      expect(line, `llms.txt ${label} entry present`).toBeDefined();
+      expect(line!, `llms.txt ${label} entry says coming soon`).toMatch(/coming soon/i);
     }
   });
 
@@ -2108,7 +2264,7 @@ describe("#9579 Guard 1 — hosted-claims copy (no Claude-plan wording on hosted
       { page: "index.html", question: "Is Soleur free?", phrase: "billed by Anthropic to you" },
       { page: "index.html", question: "How do I get started?", phrase: "Anthropic API key" },
       { page: "index.html", question: "What is Soleur?" },
-      { page: "getting-started/index.html", question: "What is the difference between the hosted version and self-hosted?" },
+      { page: "getting-started/index.html", question: "What is the difference between the hosted version and self-hosted?", phrase: "(coming soon)" },
     ];
     for (const { page, question, phrase } of rows) {
       const html = readSite(page);
@@ -2137,18 +2293,17 @@ describe("#9579 Guard 2 — computed counts on the homepage (re-pin of #3165)", 
     const hits: string[] = [];
     for (const { rel, floorOk, minLines } of sources) {
       const src = readFileSync(resolve(REPO_ROOT, "plugins/soleur/docs", rel), "utf8");
-      const lines = src.split("\n");
       // Floor per file: a scan that examined nothing must not read as clean.
-      expect(lines.length, `${rel} lines scanned`).toBeGreaterThanOrEqual(minLines);
-      lines.forEach((line, n) => {
-        for (const re of LITERAL_COUNT_RES) {
-          for (const m of line.matchAll(re)) {
-            // pricing/about/vision keep the 60+ soft floor via the default branches.
-            if (floorOk && m[0].startsWith("60+")) continue;
-            hits.push(`${rel}:${n + 1}: ${m[0]}`);
-          }
+      expect(src.split("\n").length, `${rel} lines scanned`).toBeGreaterThanOrEqual(minLines);
+      // Whole-source scan (not per line): a count hard-wrapped across two source
+      // lines ("67\n agents") is still one count to a reader.
+      for (const re of LITERAL_COUNT_RES) {
+        for (const m of src.matchAll(re)) {
+          // page-freshness.njk keeps the 60+ soft floor for every page without the flag.
+          if (floorOk && m[0].startsWith("60+")) continue;
+          hits.push(`${rel}:${src.slice(0, m.index).split("\n").length}: ${m[0].replace(/\s+/g, " ")}`);
         }
-      });
+      }
     }
     expect(hits, hits.join("\n")).toEqual([]);
   });
@@ -2156,7 +2311,7 @@ describe("#9579 Guard 2 — computed counts on the homepage (re-pin of #3165)", 
   test("counting-pattern self-test: the spellings the scan exists to catch are caught", () => {
     const caught = [
       "67 AI agents", "<strong>67</strong> agents", "67&nbsp;agents", "67 fully autonomous AI agents",
-      "a 67-agent team", "Sixty AI agents", "103 workflow skills",
+      "a 67-agent team", "Sixty AI agents", "103 workflow skills", "67\n    AI agents",
     ];
     for (const s of caught) {
       expect(LITERAL_COUNT_RES.some((re) => [...s.matchAll(re)].length > 0), `caught: ${s}`).toBe(true);
@@ -2225,19 +2380,37 @@ describe("#9579 Guard 2 — computed counts on the homepage (re-pin of #3165)", 
   });
 });
 
-// Scope: the homepage and /company-as-a-service/ text, plus structured data on
-// every page. Blog posts, /vision/ and /about/ carry the same Inc. sources and
-// are tracked separately; the Guard 1 corpus covers their hosted claims.
+// Scope: the Inc./Amodei/Krieger attribution on every marketing page (visible text,
+// attributes and structured data) plus structured data on every page. Blog posts
+// carry the same Inc. sources and are tracked in #9589.
 describe("#9579 Guard 3 — attribution (no false Inc.com subject claim, no unverified quotation)", () => {
   const CLAIM_KEYS = ["subjectOf", "citation", "isBasedOn"];
+  const INC_SOURCE = /<a\s[^>]*href="https:\/\/www\.inc\.com\/ben-sherry\/[^"]+"[^>]*>/i;
 
   function pagesWithClaimKeys(entries: { rel: string; html: string }[]): string[] {
     return entries
       .filter(({ html }) => ldBodies(html).some((b) => hasKey(JSON.parse(b), CLAIM_KEYS)))
       .map(({ rel }) => rel);
   }
+  const citingInc = (entries: { rel: string; html: string }[]): string[] =>
+    entries
+      .filter(({ html }) => jsonLdStrings(html).some((x) => /inc\.com/i.test(x)))
+      .map(({ rel }) => rel);
 
-  test("loop self-test: a non-root page carrying subjectOf is flagged", () => {
+  // Each phrase paired with a sentence it must catch: an emptied or mistyped
+  // pattern then fails here instead of reading as a clean scan.
+  const BANNED: [RegExp, string][] = [
+    [/as seen in/i, "As seen in Inc."],
+    [/featured in inc/i, "Featured in Inc. magazine"],
+    [/next couple of years/i, "he said in the next couple of years"],
+    [/i would not be surprised/i, "I would not be surprised if"],
+    [/predicted in an interview with inc/i, "predicted in an interview with Inc.com"],
+    [/\btold inc\b/i, "He told Inc.com that"],
+    [/\bassigns?\b[^.]{0,30}\bprobabilit/i, "Anthropic's CEO assigns 70-80% probability"],
+    [/\bpredict(?:s|ed)\b[^.]{0,30}\b70.{0,3}80/i, "he predicted a 70-80% chance"],
+  ];
+
+  test("loop self-test: every claim key is flagged, at the top level and nested, and an Inc.com string anywhere in JSON-LD is flagged", () => {
     const ld = (extra: string) =>
       `<script type="application/ld+json" nonce="x">{"@type":"Organization"${extra}}</script>`;
     const flagged = pagesWithClaimKeys([
@@ -2245,45 +2418,69 @@ describe("#9579 Guard 3 — attribution (no false Inc.com subject claim, no unve
       { rel: "x/index.html", html: ld(',"subjectOf":{"@type":"NewsArticle"}') },
     ]);
     expect(flagged).toEqual(["x/index.html"]);
+    for (const key of CLAIM_KEYS) {
+      expect(pagesWithClaimKeys([{ rel: "top", html: ld(`,"${key}":"x"`) }]), `${key} at the top level`).toEqual(["top"]);
+      expect(pagesWithClaimKeys([{ rel: "deep", html: ld(`,"a":[{"b":{"${key}":"x"}}]`) }]), `${key} nested`).toEqual(["deep"]);
+    }
+    expect(citingInc([{ rel: "n", html: ld(',"a":[{"b":["see https://www.inc.com/x"]}]') }]), "nested Inc.com string").toEqual(["n"]);
+    expect(citingInc([{ rel: "ok", html: ld(',"a":"https://example.com"') }])).toEqual([]);
   });
 
   test("no built page declares a subjectOf/citation claim or cites Inc.com in structured data", () => {
     const all = allPages();
     expect(all.length, "pages scanned").toBeGreaterThanOrEqual(60);
     expect(pagesWithClaimKeys(all)).toEqual([]);
-    const citing = all
-      .filter(({ html }) => jsonLdStrings(html).some((s) => /inc\.com/i.test(s)))
-      .map(({ rel }) => rel);
-    expect(citing, "pages whose JSON-LD names Inc.com").toEqual([]);
+    expect(citingInc(all), "pages whose JSON-LD names Inc.com").toEqual([]);
   });
 
-  test("homepage and /company-as-a-service/ carry no 'As seen in', no unverified quotation, no 'told Inc.' framing", () => {
-    const banned = [
-      /as seen in/i,
-      /featured in inc/i,
-      /next couple of years/i,
-      /i would not be surprised/i,
-      /predicted in an interview with inc/i,
-      /\btold inc\b/i,
-    ];
-    for (const rel of ["index.html", "company-as-a-service/index.html"]) {
-      const text = visibleText(readSite(rel));
-      for (const re of banned) {
-        expect(re.test(text), `${rel} must not match ${re}`).toBe(false);
+  test("banned-phrase self-test: every pattern catches its own sample", () => {
+    for (const [re, sample] of BANNED) expect(re.test(sample), `${re} catches "${sample}"`).toBe(true);
+  });
+
+  test("no marketing page carries 'As seen in', the old paraphrase, or a 'told Inc.' framing; the Inc. source stays a real link", () => {
+    const pages = marketingPages();
+    expect(pages.length, "marketing pages scanned").toBeGreaterThanOrEqual(20);
+    const offenders: string[] = [];
+    for (const { rel, html } of pages) {
+      const live = [
+        ...sentencesOf(visibleText(html)),
+        ...attributeTexts(html),
+        ...jsonLdStrings(html),
+      ];
+      for (const [re] of BANNED) {
+        for (const t of live) if (re.test(t)) offenders.push(`${rel} matches ${re}: "${t.slice(0, 100)}"`);
       }
     }
-    const home = readSite("index.html");
-    expect(home.includes("inc.com/ben-sherry/"), "Inc. source link remains (must-PASS)").toBe(true);
+    expect(offenders, offenders.join("\n")).toEqual([]);
+    // The attribution is still present and is a real anchor (not text inside a comment).
+    for (const rel of ["index.html", "about/index.html", "vision/index.html", "company-as-a-service/index.html"]) {
+      expect(INC_SOURCE.test(withoutInert(readSite(rel))), `${rel} links the Inc. source`).toBe(true);
+    }
+    for (const rel of ["about/index.html", "vision/index.html"]) {
+      expect(plainText(readSite(rel)), `${rel} says "as Inc. reported"`).toContain("as Inc. reported");
+    }
+    expect(plainText(readSite("company-as-a-service/index.html")), "CaaS dates the Krieger title").toContain(
+      "then Anthropic’s chief product officer",
+    );
+  });
+
+  test("the homepage quote section carries no quotation marks and keeps the non-affiliation line", () => {
+    const home = withoutInert(readSite("index.html"));
     const quote = home.match(/<section class="landing-quote">([\s\S]*?)<\/section>/);
     expect(quote, "quote section present").not.toBeNull();
     expect(/<(?:blockquote|q)[\s>]/i.test(quote![1]), "no quotation element in the quote section").toBe(false);
-    expect(plainText(quote![1]).includes("not affiliated with"), "non-affiliation line sits in the quote section").toBe(true);
+    const text = plainText(quote![1]);
+    const quoteMarks = String.fromCharCode(0x22, 0x201c, 0x201d, 0xab, 0xbb);
+    expect([...text].filter((c) => quoteMarks.includes(c)), "no quotation marks around the attribution").toEqual([]);
+    expect(text.includes("not affiliated with"), "non-affiliation line sits in the quote section").toBe(true);
   });
 
-  test("the site-wide non-affiliation line is in the footer", () => {
+  test("the site-wide non-affiliation line is in the footer element itself", () => {
     for (const rel of ["index.html", "pricing/index.html", "about/index.html"]) {
+      const footer = withoutInert(readSite(rel)).match(/<footer[\s\S]*?<\/footer>/);
+      expect(footer, `${rel} has a footer`).not.toBeNull();
       expect(
-        plainText(readSite(rel)).includes("is an independent product, not affiliated with, sponsored by, or endorsed by Anthropic."),
+        plainText(footer![0]).includes("is an independent product, not affiliated with, sponsored by, or endorsed by Anthropic."),
         `${rel} footer line`,
       ).toBe(true);
     }
@@ -2310,6 +2507,15 @@ describe("#9579 hero structure — privacy line visible, one install CTA, hosted
       expect(tokens.includes(hiding), `privacy line is not class ${hiding}`).toBe(false);
     }
     expect(/\bhidden\b|\bstyle=/.test(privOpen![1].replace(/\bclass="[^"]*"/, "")), "privacy line has no hidden/style attribute").toBe(false);
+    // Nor does any element that contains it: `hidden` on the form, display:none on the card.
+    const hidingTokens = ["sr-only", "visually-hidden", "hidden", "d-none"];
+    const ancestors = openAncestors(h, h.indexOf(privOpen![0]));
+    expect(ancestors.length, "privacy line sits inside the hero's markup").toBeGreaterThan(0);
+    for (const tag of ancestors) {
+      expect(/\s(?:hidden|aria-hidden="true")(?=[\s>])/.test(tag), `ancestor ${tag} is not hidden`).toBe(false);
+      expect(/\bstyle="[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?![.\d]))/i.test(tag), `ancestor ${tag} has no hiding style`).toBe(false);
+      for (const t of classTokens(tag)) expect(hidingTokens.includes(t), `ancestor ${tag} has no hiding class ${t}`).toBe(false);
+    }
     expect(h.includes('aria-describedby="homepage-waitlist-privacy"'), "input described by the privacy line").toBe(true);
     const pricing = withoutInert(readSite("pricing/index.html"));
     const pPriv = pricing.match(/<p[^>]*\bid="newsletter-privacy-pricing-waitlist"[^>]*>([\s\S]*?)<\/p>/);
@@ -2353,7 +2559,8 @@ describe("#9579 hero structure — privacy line visible, one install CTA, hosted
   });
 
   test("a Discord line follows the FAQ list inside the FAQ section and uses site.discord", () => {
-    const html = readSite("index.html");
+    // Live markup only: a link moved into a comment is not a link.
+    const html = withoutInert(readSite("index.html"));
     const discord = JSON.parse(readFileSync(SITE_JSON, "utf8")).discord as string;
     const faqStart = html.indexOf('class="faq-list"');
     expect(faqStart, "FAQ list located").toBeGreaterThan(-1);

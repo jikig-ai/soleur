@@ -18,7 +18,9 @@
 // Exit codes:
 //   0  every above-fold class has a corresponding rule in the inline block
 //   1  one or more classes have no inline rule — FOUC class regression risk
-//   2  bootstrap error (no _site/ build, missing base.njk)
+//   2  bootstrap error (no _site/ build, missing base.njk, a listed template
+//      or the hero section missing, an ABOVE_FOLD_PREFIXES entry that matches
+//      no class in any template)
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -150,7 +152,58 @@ function extractInlineStyleBlock(htmlPath) {
 }
 
 const usedClasses = extractClassesFromTemplates();
-const aboveFoldClasses = [...usedClasses.keys()].filter(isAboveFold).sort();
+
+// A prefix that matches no class anywhere is dead configuration (a typo, or a
+// component that was removed): it would read as coverage while guarding nothing.
+const deadPrefixes = ABOVE_FOLD_PREFIXES.filter(
+  (prefix) => ![...usedClasses.keys()].some((c) => c === prefix || c.startsWith(prefix + "-")),
+);
+if (deadPrefixes.length) {
+  console.error(
+    `check-critical-css-coverage: ABOVE_FOLD_PREFIXES entries matching no class in any template: ${deadPrefixes.join(", ")}`,
+  );
+  process.exit(2);
+}
+
+// The hero is derived, not listed: every class used inside the homepage hero
+// that the full stylesheet styles must also be styled in the inline block, or it
+// flashes unstyled until style.css swaps in. A hero class with no rule anywhere
+// (a pure hook) is not a flash risk and is not required.
+function stripCssComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+function heroClassesStyledByStylesheet() {
+  const src = readFileSync(TEMPLATE_FILES[0], "utf8");
+  const hero = src.match(/<section class="landing-hero">([\s\S]*?)<\/section>/);
+  if (!hero) {
+    console.error("check-critical-css-coverage: <section class=\"landing-hero\"> not found in index.njk");
+    process.exit(2);
+  }
+  const fullCssPath = resolve(REPO_ROOT, "plugins/soleur/docs/css/style.css");
+  if (!existsSync(fullCssPath)) {
+    console.error(`check-critical-css-coverage: stylesheet not found: ${fullCssPath}`);
+    process.exit(2);
+  }
+  const fullCss = stripCssComments(readFileSync(fullCssPath, "utf8"));
+  const classes = new Set();
+  for (const m of hero[1].matchAll(/class\s*=\s*"([^"]+)"/g)) {
+    for (const cls of m[1].split(/\s+/).filter(Boolean)) {
+      if (/^[A-Za-z][\w-]*$/.test(cls)) classes.add(cls);
+    }
+  }
+  if (classes.size === 0) {
+    console.error("check-critical-css-coverage: no classes found in the homepage hero");
+    process.exit(2);
+  }
+  return [...classes].filter((cls) =>
+    new RegExp(`\\.${cls.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`).test(fullCss),
+  );
+}
+const heroStyled = heroClassesStyledByStylesheet();
+for (const cls of heroStyled) {
+  if (!usedClasses.has(cls)) usedClasses.set(cls, new Set([TEMPLATE_FILES[0]]));
+}
+const aboveFoldClasses = [...new Set([...[...usedClasses.keys()].filter(isAboveFold), ...heroStyled])].sort();
 
 if (aboveFoldClasses.length === 0) {
   console.error(

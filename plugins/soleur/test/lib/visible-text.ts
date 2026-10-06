@@ -5,7 +5,8 @@
 // replace is the js/incomplete-multi-character-sanitization pattern CodeQL
 // flags in this repo, so tags are removed by a character scan instead.
 //
-// Boundaries: every block-level tag emits BOUNDARY, so a heading without a
+// Boundaries: every block-level tag (inline ones such as <cite>, <button> and
+// <label> are NOT boundaries) emits BOUNDARY, so a heading without a
 // final period never merges with the paragraph below it. Source newlines are
 // ordinary whitespace (hard-wrapped prose is one sentence), never a boundary.
 //
@@ -15,9 +16,9 @@
 export const BOUNDARY = "\u0001";
 
 const BLOCK_TAGS = new Set([
-  "address", "article", "aside", "blockquote", "br", "button", "cite", "dd",
+  "address", "article", "aside", "blockquote", "br", "dd",
   "details", "div", "dl", "dt", "figcaption", "figure", "footer", "form",
-  "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "label", "li", "main",
+  "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main",
   "nav", "ol", "p", "section", "summary", "table", "td", "th", "tr", "ul",
 ]);
 
@@ -25,11 +26,20 @@ const ENTITIES: Record<string, string> = {
   amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
   rsquo: "’", lsquo: "‘", ldquo: "“", rdquo: "”", mdash: "—",
   ndash: "–", hellip: "…", rarr: "→",
+  ensp: " ", emsp: " ", thinsp: " ", shy: "", zwj: "", zwnj: "",
 };
+
+// Characters a browser renders as nothing: soft hyphen, zero-width space and
+// joiners, word joiner, BOM. Built from char codes so the source stays ASCII.
+const INVISIBLE_RE = new RegExp(
+  "[" + [0xad, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff].map((c) => String.fromCharCode(c)).join("") + "]",
+  "g",
+);
 
 // One pass: `&amp;lt;` becomes the literal text `&lt;`, never `<`.
 export function decodeEntities(s: string): string {
-  return s.replace(
+  return s
+    .replace(
     /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z]+));/g,
     (whole, dec?: string, hex?: string, name?: string) => {
       if (name !== undefined) return ENTITIES[name] ?? whole;
@@ -38,7 +48,8 @@ export function decodeEntities(s: string): string {
         ? String.fromCodePoint(code)
         : whole;
     },
-  );
+    )
+    .replace(INVISIBLE_RE, "");
 }
 
 // End index (exclusive) of the tag that starts at `start` (a `<`), or -1.
@@ -102,7 +113,7 @@ export function visibleText(html: string): string {
 
 export function sentencesOf(text: string): string[] {
   return text
-    .split(new RegExp(`${BOUNDARY}+|(?<=[.!?])\\s+`))
+    .split(new RegExp(`${BOUNDARY}+|(?<!\\b(?:e\\.g|i\\.e|vs|etc)\\.)(?<=[.!?])\\s+`, "i"))
     .map((s) => s.replace(/\s+/g, " ").trim())
     .filter((s) => s.length > 0);
 }
@@ -139,4 +150,67 @@ export function withoutInert(html: string): string {
     }
   }
   return out;
+}
+
+// Every tag of the document in source order with its start index, comments and
+// <script>/<style> bodies skipped, quoted attribute values honoured (a `>` inside
+// one does not end the tag). Attribute scans and ancestor walks read this.
+export function tagsOf(html: string): { raw: string; index: number }[] {
+  const out: { raw: string; index: number }[] = [];
+  let i = 0;
+  while (i < html.length) {
+    if (html[i] !== "<") {
+      i++;
+      continue;
+    }
+    if (html.startsWith("<!--", i)) {
+      const end = html.indexOf("-->", i + 4);
+      i = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    if (!/[A-Za-z/]/.test(html[i + 1] ?? "")) {
+      i++;
+      continue;
+    }
+    const end = tagEnd(html, i);
+    if (end === -1) {
+      i++;
+      continue;
+    }
+    const raw = html.slice(i, end);
+    out.push({ raw, index: i });
+    const name = (raw.match(/^<\/?\s*([a-zA-Z][a-zA-Z0-9]*)/)?.[1] ?? "").toLowerCase();
+    if (!raw.startsWith("</") && (name === "script" || name === "style")) {
+      const close = new RegExp(`</${name}[^>]*>`, "gi");
+      close.lastIndex = end;
+      const m = close.exec(html);
+      if (m) out.push({ raw: m[0], index: m.index });
+      i = m ? m.index + m[0].length : html.length;
+      continue;
+    }
+    i = end;
+  }
+  return out;
+}
+
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+  "source", "track", "wbr",
+]);
+
+// The opening tags still open at `target` (an index into `html`), outermost
+// first: what a stylesheet or `hidden` attribute on an ancestor can hide.
+export function openAncestors(html: string, target: number): string[] {
+  const stack: { name: string; raw: string }[] = [];
+  for (const { raw, index } of tagsOf(html)) {
+    if (index >= target) break;
+    const name = (raw.match(/^<\/?\s*([a-zA-Z][a-zA-Z0-9]*)/)?.[1] ?? "").toLowerCase();
+    if (raw.startsWith("</")) {
+      const at = stack.map((t) => t.name).lastIndexOf(name);
+      if (at !== -1) stack.length = at;
+    } else if (!VOID_TAGS.has(name) && !raw.endsWith("/>")) {
+      stack.push({ name, raw });
+    }
+  }
+  return stack.map((t) => t.raw);
 }

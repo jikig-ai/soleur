@@ -7,9 +7,11 @@
 //
 // Strategy:
 //   1. Block ALL external stylesheets at the network layer (`page.route("**/*.css", abort)`).
-//      This pins the page in its inline-CSS-only state for the entire test, so
+//      This pins the page in its inline-CSS-only state for every route's audit, so
 //      assertions are deterministic regardless of `waitUntil` timing or which
-//      additional stylesheets a future template might add.
+//      additional stylesheets a future template might add. The one exception is the
+//      homepage's separate full-stylesheet phone pass (`phoneFullStyleErrors`), which
+//      opens its own context WITH the stylesheet.
 //   2. Navigate to each route and assert layout invariants that only hold when the
 //      relevant selectors (`.page-hero`, `.honeypot-trap`, `.landing-cta`, ...) are
 //      present in the inline `<style>` block.
@@ -17,7 +19,8 @@
 // Exit codes:
 //   0  all routes pass
 //   1  one or more assertion failures (screenshots written to screenshot-gate-failures/)
-//   2  bootstrap error (missing routes file, browser launch failed, server unreachable)
+//   2  bootstrap error (missing routes file, the routes file not listing the homepage,
+//      browser launch failed, server unreachable)
 
 import { chromium } from "playwright";
 import { readFileSync, mkdirSync, existsSync } from "node:fs";
@@ -43,7 +46,8 @@ const H1_MIN_FONT_PX = 40;
 // above the fold, so the inline-CSS-only state must keep it BELOW the submit
 // button (its flex-basis:100% lives in the inline block) and the page must not
 // overflow horizontally on a phone. The routes file has one global viewport, so
-// the 390px check opens a second browser context.
+// the inline-only phone check resizes the same page, and the full-stylesheet
+// phone check opens a second browser context.
 const HOME_PATH = "/";
 const PHONE_VIEWPORT = { width: 390, height: 844 };
 
@@ -65,6 +69,13 @@ if (!existsSync(ROUTES_FILE)) {
 const config = JSON.parse(readFileSync(ROUTES_FILE, "utf8"));
 const routes = config.routes;
 const viewport = config.viewport;
+
+// The homepage block below is the gate for the hero privacy line. Without "/" in
+// the routes file it would be skipped and the gate would exit 0 having checked nothing.
+if (!routes.some((r) => r.path === HOME_PATH)) {
+  console.error(`screenshot-gate: ${ROUTES_FILE} does not list the homepage route "${HOME_PATH}"`);
+  process.exit(2);
+}
 
 mkdirSync(FAILURE_DIR, { recursive: true });
 
@@ -90,9 +101,75 @@ try {
   process.exit(2);
 }
 
+// In-page reader for the hero privacy line (serialised by page.evaluate, so it
+// must stay self-contained). Reports every way the line can be on the page yet
+// not readable: hidden by itself or an ancestor, faded by the product of the
+// ancestors' opacity, clipped by an ancestor, off the viewport, positioned out of
+// flow, clipped by clip/clip-path, transparent or the same colour as its
+// background, or too small to read. Also checks the submit button is there.
+function readPrivacyVisibility() {
+  const el = document.getElementById("homepage-waitlist-privacy");
+  const submit = document.querySelector("#homepage-waitlist-form button[type='submit']");
+  const why = [];
+  const rgba = (str) => {
+    const m = str.match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const p = m[1].split(/[,\s/]+/).filter(Boolean).map(parseFloat);
+    return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+  };
+  if (!el) return { found: false, why: ["privacy line not found"] };
+  const cs = getComputedStyle(el);
+  const r = el.getBoundingClientRect();
+  let opacity = 1;
+  let bg = null;
+  for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+    const c = getComputedStyle(n);
+    const tag = n === el ? "line" : n.tagName.toLowerCase();
+    opacity *= parseFloat(c.opacity);
+    if (c.display === "none") why.push(`${tag} display:none`);
+    if (c.clipPath && c.clipPath !== "none") why.push(`${tag} clip-path:${c.clipPath}`);
+    if (n !== el && (c.overflowX !== "visible" || c.overflowY !== "visible")) {
+      const ar = n.getBoundingClientRect();
+      const overlaps = r.right > ar.left && r.left < ar.right && r.bottom > ar.top && r.top < ar.bottom;
+      if (ar.height < 1 || ar.width < 1 || !overlaps) why.push(`${tag} clips the line (overflow)`);
+    }
+    if (!bg) {
+      const b = rgba(c.backgroundColor);
+      if (b && b.a > 0) bg = b;
+    }
+  }
+  if (cs.visibility !== "visible") why.push(`visibility:${cs.visibility}`);
+  if (opacity < 1) why.push(`effective opacity ${opacity}`);
+  if (cs.position === "absolute" || cs.position === "fixed") why.push(`position:${cs.position}`);
+  if (cs.clip && cs.clip !== "auto") why.push(`clip:${cs.clip}`);
+  const fontPx = parseFloat(cs.fontSize);
+  if (fontPx < 10) why.push(`font ${fontPx}px`);
+  if (r.height < 8 || r.width < 100) why.push(`box ${r.width}x${r.height}`);
+  if (r.right <= 0 || r.left >= window.innerWidth || r.bottom <= 0) why.push("outside the viewport");
+  const fg = rgba(cs.color);
+  if (fg && fg.a === 0) why.push("transparent text");
+  const page = bg ?? { r: 255, g: 255, b: 255, a: 1 };
+  if (fg && fg.a > 0 && fg.r === page.r && fg.g === page.g && fg.b === page.b) why.push("text colour equals its background");
+  if (!submit) why.push("submit button missing");
+  else {
+    const sr = submit.getBoundingClientRect();
+    if (getComputedStyle(submit).display === "none" || sr.height < 8 || sr.width < 8) why.push("submit button not rendered");
+  }
+  return {
+    found: true,
+    why,
+    top: r.top,
+    submitBottom: submit ? submit.getBoundingClientRect().bottom : null,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  };
+}
+
 // Full-stylesheet state at phone width. The inline-only pass cannot see a rule
 // in style.css that hides the privacy line or widens the form, so load the page
-// WITH its stylesheet and check the same properties again.
+// WITH its stylesheet and check the same properties again. Never throws: a
+// failure to reach that state is reported as an error string, with the other
+// routes' results kept.
 async function phoneFullStyleErrors() {
   const ctx = await browser.newContext({ viewport: PHONE_VIEWPORT });
   const page = await ctx.newPage();
@@ -103,32 +180,44 @@ async function phoneFullStyleErrors() {
     } catch (err) {
       return [`phone-width full-stylesheet navigation failed: ${err.message}`];
     }
-    // The stylesheet swaps in after load; wait for the swap to land.
-    await page.waitForFunction(() => document.getElementById("soleur-css-preload")?.rel === "stylesheet", null, {
-      timeout: NAV_TIMEOUT_MS,
-    });
-    const m = await page.evaluate(() => {
-      const el = document.getElementById("homepage-waitlist-privacy");
-      const cs = el ? getComputedStyle(el) : null;
-      const r = el ? el.getBoundingClientRect() : null;
-      return {
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-        found: !!el,
-        display: cs?.display,
-        visibility: cs?.visibility,
-        opacity: cs ? parseFloat(cs.opacity) : null,
-        fontPx: cs ? parseFloat(cs.fontSize) : null,
-        height: r?.height ?? 0,
-        width: r?.width ?? 0,
-      };
-    });
+    // The stylesheet swaps in after load: wait until the preload link has become a
+    // stylesheet AND style.css is in document.styleSheets with rules. A link whose
+    // `rel` flipped but whose sheet never applied would otherwise read the
+    // inline-only state as the full-stylesheet one.
+    try {
+      await page.waitForFunction(
+        () => {
+          if (document.getElementById("soleur-css-preload")?.rel !== "stylesheet") return false;
+          try {
+            return [...document.styleSheets].some((sh) => /\/css\/style\.css/.test(sh.href || "") && sh.cssRules.length > 0);
+          } catch {
+            return false;
+          }
+        },
+        null,
+        { timeout: NAV_TIMEOUT_MS },
+      );
+    } catch (err) {
+      return [`phone-width full-stylesheet state not reached: style.css did not apply within ${NAV_TIMEOUT_MS}ms (${err.message.split("\n")[0]})`];
+    }
+    const m = await page.evaluate(readPrivacyVisibility);
     if (m.scrollWidth > m.clientWidth) {
       errs.push(`homepage overflows horizontally at ${PHONE_VIEWPORT.width}px with the full stylesheet (scrollWidth=${m.scrollWidth} > clientWidth=${m.clientWidth})`);
     }
-    if (!m.found || m.display === "none" || m.visibility !== "visible" || m.opacity < 1 || m.fontPx < 10 || m.height < 8 || m.width < 100) {
-      errs.push(`hero privacy line is not visibly rendered with the full stylesheet (display=${m.display} visibility=${m.visibility} opacity=${m.opacity} font=${m.fontPx}px box=${m.width}x${m.height})`);
+    if (m.why.length) {
+      errs.push(`hero privacy line is not readable with the full stylesheet: ${m.why.join("; ")}`);
     }
+    if (errs.length) {
+      const shot = resolve(FAILURE_DIR, "home-phone-full-stylesheet.png");
+      try {
+        await page.screenshot({ path: shot, fullPage: true });
+        errs.push(`screenshot of the full-stylesheet state: ${shot}`);
+      } catch (err) {
+        console.error(`screenshot-gate: full-stylesheet screenshot failed: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    errs.push(`phone-width full-stylesheet pass failed: ${err.message.split("\n")[0]}`);
   } finally {
     await ctx.close();
   }
@@ -188,14 +277,6 @@ async function auditRoute(route) {
         planDisplay: plan ? getComputedStyle(plan).display : null,
         hasHomeForm: !!privacy && !!submit,
         privacyTop: privacy ? privacy.getBoundingClientRect().top : null,
-        privacyPosition: privacy ? getComputedStyle(privacy).position : null,
-        privacyShown: privacy
-          ? (() => {
-              const c = getComputedStyle(privacy);
-              const r = privacy.getBoundingClientRect();
-              return c.display !== "none" && c.visibility === "visible" && parseFloat(c.opacity) === 1 && parseFloat(c.fontSize) >= 10 && r.height >= 8 && r.width >= 100;
-            })()
-          : false,
         submitBottom: submit ? submit.getBoundingClientRect().bottom : null,
         hasHoneypot: !!honeypotWrapper,
         honeypotHeight: honeypotRect ? honeypotRect.height : null,
@@ -261,16 +342,14 @@ async function auditRoute(route) {
       if (!result.hasHomeForm) {
         errs.push("homepage hero waitlist form missing its privacy line or submit button");
       } else {
-        if (result.privacyPosition === "absolute") {
-          errs.push("hero privacy line is position:absolute — still hidden like .sr-only");
-        }
         if (result.privacyTop < result.submitBottom - 1) {
           errs.push(
             `hero privacy line (top=${result.privacyTop.toFixed(1)}px) is not below the submit button (bottom=${result.submitBottom.toFixed(1)}px) — the hero form layout rules are missing from the inline CSS`,
           );
         }
-        if (!result.privacyShown) {
-          errs.push("hero privacy line is not visibly rendered in the inline-CSS-only state (display, visibility, opacity, font size or box size)");
+        const visible = await page.evaluate(readPrivacyVisibility);
+        if (visible.why.length) {
+          errs.push(`hero privacy line is not readable in the inline-CSS-only state: ${visible.why.join("; ")}`);
         }
       }
       // The hosted card and the two-sentence plan line are styled only by inline
