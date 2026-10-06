@@ -9,13 +9,13 @@ tags: [harness, cursor, plugin]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-273: Add a Cursor CLI plugin adapter
+# ADR-274: Add a Cursor CLI plugin adapter
 
 ## Status
 
 **Adopting — 2026-10-06 (#9608).** Flips to `accepted` when slice 2's committed shape note quotes the support bar below. In this record, **harness** means the `Harness` union in `plugins/soleur/lib/harness.ts`. The word is not in `knowledge-base/project/glossary.md`.
 
-Ordinal census on 2026-10-06, after `git fetch origin --prune`, over `refs/heads` and `refs/remotes/origin`: ADR-273 was unused. ADR-272 is the filename on three local heads and on `origin/feat-one-shot-7122-community-monitor-output-allowlist` and `origin/feat-open-web-egress`. `origin/main` stops at ADR-271. Re-run that census immediately before merge. A collision renumbers this file, the plan, the spec directory, and the tasks file in the same edit, and leaves the colliding ADR's own citations alone.
+Ordinal census on 2026-10-06, after `git fetch origin --prune`, over `refs/heads` and `refs/remotes/origin`: ADR-274 was unused. `origin/main` holds `ADR-273-schema-constrained-handler-side-publication.md`. This record moved off the provisional ordinal 273 in the merge edit. The spec directory and tasks file contain no ordinal 273 citation. The colliding record's own citations stay on 273.
 
 ## Context
 
@@ -46,7 +46,7 @@ The plugin is supported only when slice 2's committed shape note quotes all four
 
 A local install and a git install can register one `/go` and one `/sync`. Slice 1 states that it does not classify the session as `cursor`, does not run hooks, and does not block a commit. Public README, getting-started, comparison, blog, and battlecard pages stay unchanged until the support bar is met. When this status flips to `accepted`, grep `knowledge-base/legal` for future-tense sentences about Cursor or the harness list and route hits to the CLO. Do not edit those pages in the flip commit without that review.
 
-A sibling branch can take 273 before merge. The renumber is part of the merge edit, not a result an unmerged sibling can flip on an unchanged diff.
+`origin/main` took 273 before this merge. This file is ADR-274. The colliding record's citations were not edited.
 
 ## Cost Impacts
 

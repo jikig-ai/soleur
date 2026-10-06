@@ -6,7 +6,7 @@ The Cursor CLI adapter plan first treated `hooks` as a directory that would repl
 
 ## Solution
 
-Slice 1 sets the manifest `hooks` field to `./cursor/hooks-empty.json` whose body is `{ "hooks": {} }`. The provisional ordinal is ADR-273. The pre-merge census reads `refs/heads` and `refs/remotes/origin`, and a collision renames the plan, the spec directory, and the tasks file in the same edit.
+Slice 1 sets the manifest `hooks` field to `./cursor/hooks-empty.json` whose body is `{ "hooks": {} }`. The provisional ordinal was ADR-273. The merge-edit census found `origin/main` holding `ADR-273-schema-constrained-handler-side-publication.md`, so the Cursor record landed as ADR-274. The spec directory and tasks file had no ordinal 273 citation to rename.
 
 ## Key Insight
 

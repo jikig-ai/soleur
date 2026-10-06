@@ -91,7 +91,7 @@
 "external"
 ],
 "description": {
-"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-273)."
+"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
 },
 "title": "Cursor CLI",
 "kind": "system",
@@ -3627,7 +3627,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-273)."
+"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
 },
 "tags": [
 "external"
@@ -9512,7 +9512,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-273)."
+"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
 },
 "tags": [
 "external"
@@ -15334,7 +15334,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-273)."
+"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
 },
 "tags": [
 "external"
@@ -28966,7 +28966,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-273)."
+"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
 },
 "tags": [
 "external"
@@ -29420,7 +29420,7 @@
 "size": "md"
 },
 "description": {
-"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-273)."
+"txt": "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
 },
 "tags": [
 "external"

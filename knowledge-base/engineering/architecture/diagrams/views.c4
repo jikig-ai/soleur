@@ -25,7 +25,7 @@ views {
       // endpoints (founder, platform.plugin) are already in this view so the
       // edges render rather than leaving a disconnected box.
       devin,
-      // ADR-273: cursorCli is the local Cursor CLI. founder and platform.plugin
+      // ADR-274: cursorCli is the local Cursor CLI. founder and platform.plugin
       // are already in this view, so both edges render (#7332).
       cursorCli,
       anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, inngestReleases, zotRegistry, betterstack, sentry, flagsmith, sigstore, letsencrypt, publicResolvers, systemdUser,
@@ -66,7 +66,7 @@ views {
       // #8205: devin -> platform.plugin delivery edge needs both endpoints in
       // the view (#7332 rule — same mechanism as playwrightMcp below).
       devin,
-      // ADR-273: cursorCli -> platform.plugin needs both endpoints here too.
+      // ADR-274: cursorCli -> platform.plugin needs both endpoints here too.
       cursorCli,
       // #7980: playwrightMcp is an L1 external and belongs here like every other one. BUT
       // `platform.plugin` is a COMPOUND node in this view (skills/agents/kb are included),

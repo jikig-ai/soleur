@@ -193,7 +193,7 @@ The git-repository install is a separate step: `agent plugin marketplace add <gi
 
 #### Phase 1: Name map and instruction arms
 
-The first task is `/architecture create 'Add a Cursor CLI plugin adapter'` (provisional ADR-273). The title does not say supported. No product code lands before that ADR file exists. The decision body says the support bar is the end of slice 2.
+The first task is `/architecture create 'Add a Cursor CLI plugin adapter'` (ADR-274). The title does not say supported. No product code lands before that ADR file exists. The decision body says the support bar is the end of slice 2.
 
 Then the manifest, the empty hooks file, the repo-root marketplace file, the generator, `--check`, the instructions file, and the `Harness` arms that already take a harness argument, including `behindSyncInstructions`. `detectHarness` is unchanged. `plugins/soleur/cursor/INSTRUCTIONS.md` is the per-surface matrix: this plugin file registers no hook events, slice 1 does not classify the session as `cursor`, and every unmeasured surface stays marked unmeasured. Whether the CLI also loads `.claude/settings.json` is one of those surfaces. The file does not say other hook sources are off, and it does not say the plugin is supported. `commands/go.md` puts the Cursor spellings inside the three existing `harness-forms` regions. Those regions say Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins, the Soleur names are `/go`, `/sync`, `/soleur-plan`, `/soleur-help`, and `/soleur-review`, and a Cursor session does not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. The same region says slice 1 does not run hooks and does not classify the session as `cursor`. `commands/help.md` gains a Cursor column with those same names, and it names the four built-ins as names not to type. A git install does not run the setup script, so that limit is in `commands/go.md`, the stub header, and `INSTRUCTIONS.md`, not only on setup stdout.
 
@@ -249,7 +249,7 @@ Slice 1:
 - `plugins/soleur/cursor/hooks-empty.json` — `{ "hooks": {} }`
 - `scripts/setup-cursor.sh`
 - `.cursor-plugin/marketplace.json` at the repository root — marketplace `soleur`, owner `jikig-ai`, one plugin source `plugins/soleur`. Not a cursor.com submission.
-- `knowledge-base/engineering/architecture/decisions/ADR-273-cursor-cli-harness.md` — ordinal provisional. The filename the architecture skill writes is the one that lands. This path is the planned placeholder.
+- `knowledge-base/engineering/architecture/decisions/ADR-274-add-a-cursor-cli-plugin-adapter.md` — landed ordinal. The provisional number was 273 until `origin/main` took it.
 - Generated `plugins/soleur/cursor/skills/<name>/SKILL.md` and `plugins/soleur/cursor/agents/soleur-<stem>.md`. Stem is the agent path with `/` replaced by `-`. The live census this plan measured is 103 skill folders and 67 agent files (c4-count-parity C8, 2026-10-06). The generator's output count is that census, not a hardcoded list. Pointers are relative to the plugin root.
 
 Slice 2:
@@ -327,7 +327,7 @@ Read on 2026-10-06: `knowledge-base/engineering/architecture/diagrams/model.c4`,
 
 ### ADR
 
-Create, before product code, via `/architecture create 'Add a Cursor CLI plugin adapter'`. Provisional ordinal ADR-273. A 2026-10-06 census found ADR-272 on `origin/feat-one-shot-7122-community-monitor-output-allowlist` and `origin/feat-open-web-egress`. The same filename is on local `feat-agent-security-three-layers` and is not on `origin/feat-agent-security-three-layers`. `origin/main` stops at ADR-271. ADR-273 was the next free ordinal on origin heads that day. The pre-merge census reads `refs/heads` and `refs/remotes/origin`. It does not reserve 273. Decision: the Cursor CLI is a host runtime, with its own manifest, generated name map, and, after the capture, its own hook events in the empty plugin config. Status is `adopting` until slice 2 meets the support bar, then `accepted`. When that status flips, grep `knowledge-base/legal` for future-tense sentences about Cursor or the harness list and route hits to the CLO. Do not auto-edit legal pages. The title does not say supported. A sibling PR can take 273. On renumber, sweep this plan, `knowledge-base/project/specs/archive/20261006-142814-feat-cursor-harness-support/`, and the tasks file for the old ordinal in the same edit.
+Create, before product code, via `/architecture create 'Add a Cursor CLI plugin adapter'`. Provisional ordinal was ADR-273. Landed ordinal is ADR-274. A 2026-10-06 census found ADR-272 on `origin/feat-one-shot-7122-community-monitor-output-allowlist` and `origin/feat-open-web-egress`. The same filename is on local `feat-agent-security-three-layers` and is not on `origin/feat-agent-security-three-layers`. `origin/main` stops at ADR-271. ADR-273 was the next free ordinal on origin heads that day. The pre-merge census reads `refs/heads` and `refs/remotes/origin`. It does not reserve 273. Decision: the Cursor CLI is a host runtime, with its own manifest, generated name map, and, after the capture, its own hook events in the empty plugin config. Status is `adopting` until slice 2 meets the support bar, then `accepted`. When that status flips, grep `knowledge-base/legal` for future-tense sentences about Cursor or the harness list and route hits to the CLO. Do not auto-edit legal pages. The title does not say supported. `origin/main` took 273 for schema-constrained handler-side publication. This record is ADR-274. The spec directory and tasks file had no ordinal 273 citation.
 
 Checked actors and systems: the founder is already modeled. Codex, Devin, and Grok Build are external systems that load `platform.plugin`. Cursor CLI is not. No new data store. No new vendor account. The public marketplace is not an edge.
 
@@ -444,7 +444,7 @@ Slice 2's hook parity guard is the same shape as `devin-matcher-parity.test.sh`:
 | `behindSyncInstructions("cursor")` refusal | "Instructions for that session do not name the Skill tool, the Task tool, `run_subagent`, or AwaitShell." | inferred — justification: the function takes a `Harness` and its default arm runs `bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync-pr-behind.sh"`. A `cursor` member with no case hits that arm. |
 | Phase 2 support bar | "The plugin is called supported only when `/go` classifies, one pipeline skill finishes its gates, one agent spawn runs or is explicitly refused, and the full guard set fires on the Cursor CLI protocol." | asked |
 | Public-doc exclusion | "README, getting-started, comparison FAQ, blog, and battlecard are unchanged by both slices." | asked |
-| ADR-273 and the C4 `cursorCli` element | The spec requires an architecture decision before product code. The create title is "Add a Cursor CLI plugin adapter" so the record does not say supported before slice 2. | inferred — justification: ADR-245 and the plan architecture gate require a Harness member to be recorded in an ADR and in the C4 model in the same change. The three existing CLI hosts are already elements. |
+| ADR-274 and the C4 `cursorCli` element | The spec requires an architecture decision before product code. The create title is "Add a Cursor CLI plugin adapter" so the record does not say supported before slice 2. | inferred — justification: ADR-245 and the plan architecture gate require a Harness member to be recorded in an ADR and in the C4 model in the same change. The three existing CLI hosts are already elements. |
 | `sync-cursor-name-map.ts --check` and the four guards | "the full guard set fires on the Cursor CLI protocol" | inferred — justification: a guard that cannot be driven red does not enforce the support bar. The drift pin rots without `--check`. |
 | Leaving `TIER_MAPS` without a Cursor row | "The canonical skill tree stays the source." | inferred — justification: Codex and Devin already inherit by absence. Adding a model id would invent a Cursor catalog slug the ask does not name. |
 | `commands` directory with no markdown | "`/go` and `/sync` resolve once" | inferred — justification: omitting `commands` loads `plugins/soleur/commands/`, which registers `/help` and a second `/go`. |
@@ -485,7 +485,7 @@ The 194 count is 24 hand-written paths plus 103 skill stubs plus 67 agent stubs.
 
 - [ ] Guard Contract tests follow RED then GREEN.
 - [ ] `plugins/soleur/test/c4-count-parity.test.sh` stays green after the `cursorCli` element.
-- [ ] The ADR filename added in slice 1 does not reuse an ordinal already present under `knowledge-base/engineering/architecture/decisions` on `origin/main` at add time. The 2026-10-06 probe found ADR-273 free on origin heads. A later collision is a renumber of this plan, the spec directory, and the tasks file in the merge edit. That renumber is risk mitigation, not a result an unmerged sibling can flip on an unchanged diff.
+- [ ] The ADR filename added in slice 1 does not reuse an ordinal already present under `knowledge-base/engineering/architecture/decisions` on `origin/main` at add time. The merge-edit census found `origin/main` holding `ADR-273-schema-constrained-handler-side-publication.md`. This record is ADR-274. The spec directory and tasks file had no ordinal 273 citation.
 
 ## Domain Review
 
@@ -562,7 +562,7 @@ Slice 2's CLI session is the integration check. Slice 1 has no live CLI proof an
 - Default discovery loading `hooks/hooks.json`. Mitigation: Guard 3.
 - Pointing `go` and `sync` stubs at the Devin shim skills. Mitigation: those two stubs point at `commands/go.md` and `commands/sync.md`.
 - Calling the plugin supported at the end of slice 1. Mitigation: the instructions file and both PR bodies keep the support bar on slice 2.
-- A sibling ADR taking ordinal 273. Mitigation: re-run the origin-head filename census immediately before merge, and sweep this plan, the spec directory, and the tasks file in the same edit.
+- A sibling ADR taking ordinal 273. That happened: `origin/main` holds `ADR-273-schema-constrained-handler-side-publication.md`, and this record is ADR-274. The spec directory and tasks file had no ordinal 273 citation.
 
 ## Resource Requirements
 
