@@ -1032,7 +1032,10 @@ function readCapturedInvocations(captureFile) {
  * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, sdkVersion: string, sdkPackage: string }
  *                  | { ok: false, reason: string }>}
  */
-export async function doCapture() {
+export async function doCapture({
+  attempts = CAPTURE_ATTEMPTS,
+  attemptTimeoutMs = ATTEMPT_TIMEOUT_MS,
+} = {}) {
   const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
   // Lazy import so the config's heavy static graph never loads on the creds-free
   // replay path (unit test sandbox-canary.test.ts asserts this stays lazy).
@@ -1088,13 +1091,13 @@ export async function doCapture() {
     const sandbox = buildAgentSandboxConfig(resolvedOwn);
 
     let lastReason = "capture_no_bwrap:no_tool_call";
-    for (let attempt = 1; attempt <= CAPTURE_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const controller = new AbortController();
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, ATTEMPT_TIMEOUT_MS);
+      }, attemptTimeoutMs);
       try {
         const q = query({
           prompt: CAPTURE_PROMPT,

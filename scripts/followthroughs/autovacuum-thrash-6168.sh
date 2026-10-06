@@ -26,13 +26,21 @@
 # Required env: SUPABASE_ACCESS_TOKEN (declared via the directive's secrets=).
 
 set -uo pipefail
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797),
+# and this script holds a live credential. Placed before the credential is read.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 # Explicit check (NOT `${VAR:?}`): under a non-interactive shell the `:?`
 # expansion aborts with status 1, which the sweeper contract maps to FAIL —
 # the opposite of the intended TRANSIENT. An unprovisioned GitHub secret
 # resolves to "" in the sweeper env, so guard empty as well as unset.
-if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
-  echo "TRANSIENT: SUPABASE_ACCESS_TOKEN not set" >&2
+# Token-shape guard: also rejects any char outside the allowlist (a newline would inject a curl
+# config directive on the stdin channel below). Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${SUPABASE_ACCESS_TOKEN:-}"; then
+  echo "TRANSIENT: SUPABASE_ACCESS_TOKEN unusable" >&2
   exit 2
 fi
 
@@ -62,11 +70,13 @@ AND t.relname IN ('user_concurrency_slots','mint_rate_window','runtime_mint_inte
 
 PAYLOAD=$(jq -n --arg q "$QUERY" '{query: $q}')
 
-RESP=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
-  -X POST "$API" \
-  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+# The bearer rides curl's stdin config channel, never its argument list.
+RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
+  -X POST \
   -H "Content-Type: application/json" \
-  -d "$PAYLOAD")
+  -d "$PAYLOAD" \
+  --config - "$API" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$SUPABASE_ACCESS_TOKEN"))
 
 HTTP_STATUS=$(printf '%s' "$RESP" | sed -n 's/^HTTP_STATUS://p' | tr -d '[:space:]')
 BODY=$(printf '%s' "$RESP" | sed '$d')

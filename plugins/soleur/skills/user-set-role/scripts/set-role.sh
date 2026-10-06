@@ -104,12 +104,22 @@ FLAGSMITH_TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c 
 [[ -z "$SUPA_URL" || -z "$SUPA_KEY" ]] && { echo "missing Supabase secrets in soleur/prd" >&2; exit 2; }
 [[ -z "$FLAGSMITH_TOKEN" ]] && { echo "missing FLAGSMITH_MANAGEMENT_API_KEY in soleur/cli_ops" >&2; exit 2; }
 
+# Token-shape guard: a newline in the key would inject a curl config directive on the stdin
+# channel below. Never echoes the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+_bearer_ok "$SUPA_KEY" || { echo "SUPABASE_SERVICE_ROLE_KEY has an unexpected shape" >&2; exit 2; }
+
+# The service-role key travels on curl's stdin config channel (both headers), never on argv.
 supa() {
-  curl --disable --noproxy '*' -sS -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPA_KEY" "$SUPA_KEY")
 }
 
+# The Flagsmith management key travels the same way: a stdin config header, never argv.
+_bearer_ok "$FLAGSMITH_TOKEN" || { echo "FLAGSMITH_MANAGEMENT_API_KEY has an unexpected shape" >&2; exit 2; }
 fs_api() {
-  curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $FLAGSMITH_TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "Authorization: Api-Key %s"\n' "$FLAGSMITH_TOKEN")
 }
 
 # --- resolve user ----------------------------------------------------------
@@ -126,6 +136,9 @@ else
   [[ "$COUNT" -gt "1" ]] && { echo "MULTIPLE users with email '$IDENT' — abort." >&2; echo "$ROWS" >&2; exit 3; }
   USER_ID=$(echo "$ROWS" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
 fi
+
+# USER_ID is interpolated into the request URL: only a literal-anchored UUID may reach it.
+[[ "$USER_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || { echo "refusing: resolved user id is not a UUID" >&2; exit 3; }
 
 # Read current role.
 CUR_ROWS=$(supa "${SUPA_URL}/rest/v1/users?id=eq.${USER_ID}&select=id,email,role")

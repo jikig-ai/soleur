@@ -79,6 +79,55 @@ describe("getAppSlug", () => {
   });
 });
 
+describe("getAppSlug never caches a failure-time fallback (#7122)", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    _resetSlugCacheForTesting();
+  });
+
+  test("a non-2xx response returns the fallback WITHOUT caching it: the next call re-fetches and gets the real slug", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+    expect(await getAppSlug()).toBe("fallback-slug");
+
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ slug: "real-app" }) });
+    expect(await getAppSlug()).toBe("real-app");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // the validated 2xx slug IS cached
+    expect(await getAppSlug()).toBe("real-app");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test.each([
+    ["path traversal", "../evil"],
+    ["uppercase", "Evil"],
+    ["leading hyphen", "-evil"],
+    ["trailing hyphen", "evil-"],
+    ["empty", ""],
+    ["non-string", 42],
+    ["missing", undefined],
+  ])("a malformed slug (%s) in a 2xx response returns the fallback and is not cached", async (_label, bad) => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ slug: bad }) });
+    expect(await getAppSlug()).toBe("fallback-slug");
+
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ slug: "real-app" }) });
+    expect(await getAppSlug()).toBe("real-app");
+  });
+
+  test("the GET /app call carries an AbortSignal (5 s timeout) so a hung GitHub cannot stall the caller", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ slug: "real-app" }) });
+    await getAppSlug();
+    const [, options] = mockFetch.mock.calls[0];
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("a rejected fetch (timeout/network) propagates and caches nothing", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("The operation was aborted due to timeout"));
+    await expect(getAppSlug()).rejects.toThrow(/timeout/);
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ slug: "real-app" }) });
+    expect(await getAppSlug()).toBe("real-app");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // getAppSlug fallback — separate describe with different env
 // ---------------------------------------------------------------------------
@@ -88,6 +137,7 @@ describe("getAppSlug fallback when GITHUB_APP_ID is not set", () => {
   let savedPrivateKey: string | undefined;
 
   beforeEach(() => {
+    mockFetch.mockReset();
     savedAppId = process.env.GITHUB_APP_ID;
     savedPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
   });

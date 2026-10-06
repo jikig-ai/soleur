@@ -1691,7 +1691,7 @@ assert "#6552 delete runs in the unconditional Half-B tail (after inner esac) �
 # formatting — it would go RED on a `terraform fmt`-style rewrap of correct code, and it proved
 # exactly that during authoring.
 assert "#7228 rollback PAUSEs the consumer heartbeat (else a deliberate rollback pages the operator)" \
-  "grep -qE '^[[:space:]]*(elif )?curl .*-X PATCH' '$ROLLBACK_FILE' && grep -qF 'api/v2/heartbeats/' '$ROLLBACK_FILE' && grep -qF '\"paused\":true' '$ROLLBACK_FILE'"
+  "grep -qE '^[[:space:]]*(elif )?_bearer_curl BS_API .*-X PATCH' '$ROLLBACK_FILE' && grep -qF 'api/v2/heartbeats/' '$ROLLBACK_FILE' && grep -qF '\"paused\":true' '$ROLLBACK_FILE'"
 assert "#7228 the pause targets the consumer monitor BY NAME (survives a terraform recreate that changes the id)" \
   "grep -qF 'soleur-inngest-consumer-prd' '$ROLLBACK_FILE'"
 assert "#7228 pause is UNCONDITIONAL — NOT nested in the armed|flipping|flushed|done) case arm" \

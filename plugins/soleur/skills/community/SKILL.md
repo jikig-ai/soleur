@@ -80,6 +80,12 @@ Generate a multi-platform community digest. Spawns the `soleur:support:community
 2. Spawn agent: `soleur:support:community-manager` with prompt: "Generate a community digest covering the last 7 days. Enabled platforms: [list]. Collect data from each enabled platform and produce a unified digest."
 3. The agent writes the digest to `knowledge-base/support/community/YYYY-MM-DD-digest.md`
 
+**Filename collision with the unattended cron.** The scheduled `cron-community-monitor` writes the same
+`knowledge-base/support/community/YYYY-MM-DD-digest.md` name, rendered by its handler from a closed schema (counts and statuses only:
+no Top Contributors, Community Interactions or stargazer usernames; #7122). This interactive digest keeps the full contract in the
+agent's "Digest File Contract", but running it on a day the cron also publishes **overwrites** the cron's file. Check for today's
+file first and confirm the overwrite with the operator when it exists.
+
 If `--headless` is set, skip the Discord posting approval gate (the agent handles this).
 
 ### `health`

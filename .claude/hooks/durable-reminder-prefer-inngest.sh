@@ -107,7 +107,8 @@ CronCreate fires ONLY while a Claude Code session is alive and idle — a remind
 
   SECRET=\$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)
   curl --disable --noproxy '*' -fsS -X POST https://app.soleur.ai/api/internal/schedule-reminder \\
-    -H \"Authorization: Bearer \$SECRET\" -H 'Content-Type: application/json' \\
+    --config - -H 'Content-Type: application/json' \\
+    < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"\$SECRET\") \\
     -d '{\"reminder_id\":\"<slug>\",\"fire_at\":\"<ISO8601 UTC>\",\"actor\":\"platform\",
          \"action\":{\"type\":\"issue-comment\",\"issue\":<N>,\"body\":\"<text>\"}}'
 
