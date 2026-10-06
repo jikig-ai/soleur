@@ -4609,6 +4609,13 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # #9612. Same both-halves shape as the pair above: `gh --jq` takes ONE jq expression and does not
+  # forward jq CLI flags (--arg/--argjson/--argfile/--slurpfile/--rawfile), so `gh ... --arg` lands in
+  # GH argv where it fails or silently misbehaves. The unit suite proves the rule on fixtures (and
+  # carries the live-tree clean scan + planted-defect verify-the-verifier); the live scan proves the
+  # tree.
+  run_suite "scripts/lint-gh-argv-arg" bash scripts/lint-gh-argv-arg.test.sh
+  run_suite "scripts/lint-gh-argv-arg-live" python3 scripts/lint-gh-argv-arg.py
   # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
   # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
   run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
