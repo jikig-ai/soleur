@@ -1764,6 +1764,8 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+  /* Site-wide (the skip link also smooth-scrolls): in-page jumps are instant under reduced motion. Unlayered, so it beats html { scroll-behavior: smooth } in the base layer. */
+  html { scroll-behavior: auto; }
 }
 
 @media print {
@@ -1926,4 +1928,135 @@
 .pillar-series__current {
   color: var(--color-text-tertiary);
   font-style: italic;
+}
+
+/* --- Homepage: one brief reaching the departments (#9577) ------------------ */
+/* Static illustration. Every class here is fanout-*: the frame, label and title reuse
+   .landing-section, .section-label and .section-title (already in the critical block).
+   Secondary text uses --color-text-secondary; --color-text-tertiary is never used here.
+   Rows and chips carry no hover or pointer styling on purpose: nothing in the section acts. */
+@layer components {
+  #departments { scroll-margin-top: calc(var(--header-h) + var(--space-4)); }
+
+  .fanout-figure { max-width: 760px; margin: var(--space-6) auto 0; }
+  .fanout-tag {
+    font-size: var(--text-sm);
+    letter-spacing: 0.04em;
+    color: var(--color-text-secondary);
+    text-align: center;
+    margin-bottom: var(--space-4);
+  }
+  .fanout-brief {
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-bg-tertiary);
+    border-radius: 8px;
+    padding: var(--space-4) var(--space-5);
+  }
+  .fanout-brief-label {
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--color-accent);
+    margin-bottom: var(--space-2);
+  }
+  .fanout-brief-text { font-size: 1.0625rem; line-height: 1.6; }
+
+  .fanout-rows {
+    --fanout-gap: var(--space-3);
+    list-style: none;
+    display: grid;
+    gap: var(--fanout-gap);
+    margin-top: var(--space-5);
+  }
+  .fanout-row {
+    position: relative;
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-secondary);
+    border-radius: 8px;
+    padding: var(--space-3) var(--space-4);
+  }
+  /* The two rows that wait on the founder carry a 2px gold left border. */
+  .fanout-row[data-status="waiting_for_user"],
+  .fanout-row[data-status="failed"] { border-left: 2px solid var(--color-accent); }
+
+  .fanout-row-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+  .fanout-dept { font-weight: 600; }
+  .fanout-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 999px;
+    padding: 0.125rem 0.625rem;
+    font-size: var(--text-sm);
+    line-height: 1.4;
+    color: var(--color-text-secondary);
+  }
+  .fanout-glyph::before { font-size: 0.8em; }
+  .fanout-row[data-status="completed"] .fanout-glyph::before { content: "\2713"; }
+  .fanout-row[data-status="waiting_for_user"] .fanout-glyph::before { content: "?"; }
+  .fanout-row[data-status="failed"] .fanout-glyph::before { content: "\25A0"; }
+  .fanout-row[data-status="waiting_for_user"] .fanout-chip { color: var(--color-accent); border-color: var(--color-accent); }
+  .fanout-row[data-status="failed"] .fanout-chip { color: var(--color-text); border-color: var(--color-text); }
+  .fanout-line { margin-top: var(--space-2); line-height: 1.55; }
+
+  .fanout-caption {
+    margin-top: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    text-align: center;
+  }
+  .fanout-link-wrap { text-align: center; margin-top: var(--space-5); }
+  .fanout-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    min-height: 44px;
+    text-decoration: underline;
+  }
+
+  /* Connector: desktop only, drawn per row (the row's own midpoint), aria-hidden by nature. */
+  @media (min-width: 768px) {
+    .fanout-rows { padding-left: var(--space-6); }
+    .fanout-row::before,
+    .fanout-row::after {
+      content: "";
+      position: absolute;
+      background: var(--color-border-strong);
+      pointer-events: none;
+    }
+    .fanout-row::before {
+      left: calc(-1 * var(--space-5));
+      width: 1px;
+      top: calc(-1 * var(--fanout-gap));
+      bottom: 0;
+    }
+    .fanout-row:first-child::before { top: calc(-1 * var(--space-5)); }
+    .fanout-row:last-child::before { bottom: 50%; }
+    .fanout-row::after {
+      left: calc(-1 * var(--space-5));
+      width: var(--space-5);
+      height: 1px;
+      top: 50%;
+    }
+  }
+}
+
+@media (forced-colors: active) {
+  .fanout-chip { border: 1px solid CanvasText; }
+  .fanout-row[data-status="waiting_for_user"],
+  .fanout-row[data-status="failed"] { border-left: 2px solid Highlight; }
+}
+
+@media print {
+  .fanout-figure, .fanout-brief, .fanout-row { break-inside: avoid; }
+  .fanout-section, .fanout-section * { color: #000 !important; background: transparent !important; }
+  .fanout-brief, .fanout-row, .fanout-chip { border-color: #444 !important; }
+  .fanout-link-wrap { display: none; }
 }
