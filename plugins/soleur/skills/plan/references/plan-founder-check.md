@@ -21,7 +21,7 @@ check more strongly than the pinned sentences do.
 - **Never twice.** Before asking, run:
 
   ```bash
-  : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
+  : "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
   PREFLIGHT_TMP="$(git rev-parse --git-dir)"
   python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" verify --base origin/main --no-pr --out "$PREFLIGHT_TMP/founder-check-verify.json"
   ```
@@ -51,7 +51,7 @@ and record the founder's answer exactly as given in `approved_by`, with today's 
 `approved_at`. Tell the founder up front what the check can and cannot do, so nothing surprises
 them at ship:
 
-- the check runs on this computer in a limited environment that can still use the network, so read the command before approving; a limited environment does not make a command harmless;
+- the check runs on this computer in a limited environment that can still use the network and read every file and the history in this project, so a command could send what it reads to any address; read the command before approving; a limited environment does not make a command harmless;
 - the first word must be one of `curl bash grep rg jq python3 node bun printf git`;
 - pipes, `&&`, `;`, `$VAR`, backticks and `$( )` are rejected; there is no shell state, and the
   command is read from a file, so quoting a rejected word does not get it past the check;
@@ -102,7 +102,9 @@ then add the `hash` that `verify --candidate` prints. One block per plan.
    `INVALID` (tooling failed) or no sandbox. A judgement check is not run and is logged as
    needs-your-eyes.
 2. `VACUOUS`: offer **strengthen the check**, **mark it needs-your-eyes**, or **record it as
-   already true and drop it**. A dropped check never reappears as a pass.
+   already true and drop it**. A dropped check never reappears as a pass. Print
+   `founder-check.py text first-use` again before the founder types replacement text: it is
+   committed to the repository too.
 3. On a valid baseline, **immediately** make the freeze commit, before any later plan phase and
    before any commit outside `knowledge-base/`:
 

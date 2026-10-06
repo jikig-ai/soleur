@@ -26,7 +26,7 @@ Rules that apply to every call below:
 Run as its own Bash call, from the repository root:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
+: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" verify --base origin/main --out "$PREFLIGHT_TMP/founder-check-verify.json" --command-out "$PREFLIGHT_TMP/founder-check-cmd.txt"
 ```
@@ -48,9 +48,9 @@ Read the JSON line. `outcome` is one of:
 | `outcome` | Meaning | Check 13 result |
 | --- | --- | --- |
 | `NO-BLOCK` | No block and no freeze evidence | **SKIP**; print `founder-check.py text no-block` |
-| `FAIL` | No freeze, a freeze with no block, two blocks or plans, a symlinked or unreadable plan, an unparseable or rejected block, a stale `hash:`, a base that is not the default branch or cannot be resolved | **BLOCK-REJECTED**; section 5 |
-| `UNTRUSTED` | The freeze was not authored by the local operator, or the PR author is not the authenticated login, or neither could be measured | **UNTRUSTED**: a FAIL, never run; section 5 |
-| `CHANGED-SINCE-APPROVAL` | A canonical field, a pinned script or the freeze ordering changed | **CHANGED-SINCE-APPROVAL**; section 5 |
+| `FAIL` | No freeze, a freeze with no block, two blocks or plans, a symlinked or unreadable plan, an unparseable or rejected block, a stale `hash:`, a base that is not the default branch or cannot be resolved. `environmental: true` marks the ones that say nothing about the check (the computer or repository is the problem) | **BLOCK-REJECTED**; section 5 |
+| `UNTRUSTED` | The freeze commit's name does not match the local operator, or the PR author is not the authenticated login, or the PR author could not be measured (`flags` names which) | **UNTRUSTED**: a FAIL, never run; section 5 |
+| `CHANGED-SINCE-APPROVAL` | A canonical field, a pinned script or the freeze ordering changed (`reasons` names which), or a re-freeze met a headless run (section 8) | **CHANGED-SINCE-APPROVAL**; section 5 |
 | `OK` | The block equals its freeze copy | section 2, or **NEEDS-YOUR-EYES** for `kind: judgement` |
 
 `FAIL` is never downgraded to SKIP. A missing block with freeze evidence is a FAIL because that is
@@ -70,7 +70,7 @@ writes the two files `classify` reads (what it ran, and what it printed) itself,
 transcribes either:
 
 ```text
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
+: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # 1. Step 10.5 calls sanitize before it defines it on its failure branches, so define it first.
 sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
@@ -95,7 +95,7 @@ Map what comes back. Check 10's labelled lines are dropped for the same reason a
 | Output | Meaning | Outcome |
 | --- | --- | --- |
 | a `FC_RC:` line | the command ran | classify (section 3) |
-| a `SKIP-NOSANDBOX:` line | bwrap absent, or establishment failed | **SKIP-NOSANDBOX**. Print `founder-check.py text no-sandbox` and, from the same output, the measured reason. Do not print Check 10's sentence |
+| a `SKIP-NOSANDBOX:` line | bwrap absent, or establishment failed | **SKIP-NOSANDBOX**. Print `founder-check.py text no-sandbox`, then the measured reason from the same output, then `founder-check.py text no-sandbox-stop`. Do not print Check 10's sentence |
 | `FAIL: … shell-active token` | the approved command carries a token Step 10.5 refuses | **BLOCK-REJECTED**, never run |
 | anything else | the wrapper printed a shape this table does not know | **INVALID**. Print the output. A run that produced no `FC_RC:` line is never a pass |
 
@@ -114,7 +114,7 @@ text and first word come from the verify record, and `classify` refuses a ran-co
 not byte-for-byte the approved command, so a run of anything else cannot be classified:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
+: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" classify --verify-json "$PREFLIGHT_TMP/founder-check-verify.json" --polarity acceptance --rc <rc> --control-rc <control rc> --command-file "$PREFLIGHT_TMP/founder-check-ran.txt" --stdout-file "$PREFLIGHT_TMP/founder-check-stdout.txt" --out "$PREFLIGHT_TMP/founder-check-classify.json"
 ```
@@ -137,7 +137,7 @@ SKIP continues), with these classes:
 | --- | --- |
 | PASSED | PASS. Row: `founder-check.py text aggregate-pass --verify-json …` |
 | FOUNDER-CONFIRMED | PASS. Row: `founder-check.py text aggregate-judgement`, never the aggregate-pass row |
-| OVERRIDDEN | PASS-with-flag. Print the row and the closing line matching `--underlying`: `founder-check.py text overridden-failed`, `founder-check.py text overridden-invalid`, `founder-check.py text overridden-changed` or `founder-check.py text overridden-rejected`, replacing `<reason>` in the printed line with the founder's reason |
+| OVERRIDDEN | PASS-with-flag. Print the row **and** the closing line matching `--underlying`, never the row alone and never a bare "Overall: PASS": `founder-check.py text overridden-failed`, `founder-check.py text overridden-invalid`, `founder-check.py text overridden-changed` or `founder-check.py text overridden-rejected`, replacing `<reason>` in the printed line with the founder's reason |
 | no block (`founder-check.py text no-block`) | SKIP |
 | FAILED, INVALID, CHANGED-SINCE-APPROVAL, UNTRUSTED, BLOCK-REJECTED, NEEDS-YOUR-EYES, SKIP-NOSANDBOX with a block, any headless stop | FAIL |
 
@@ -148,25 +148,33 @@ can describe a tree that has since moved. The log row names the same commit.
 ## 5. Prompts (interactive only; run in Phase 2's "If any FAIL" branch)
 
 A prompt cannot run inside a parallel check, so Phase 1 only classifies. After the parallel checks
-finish, handle each stopped outcome with **AskUserQuestion**, one at a time. **Headless mode never
-reaches this section:** every stopped outcome there is a FAIL recorded as `STOPPED-AWAITING-FOUNDER`
-(its cause kept in `underlying`), and on the abort print `founder-check.py text headless-stop
---underlying <cause>`. An agent never decides for the founder.
+finish, handle each stopped outcome with **AskUserQuestion**, one at a time. Each answer's
+description is printed from the matching `founder-check.py text opt-…` key (never typed), so the
+consequence of a choice is on screen where it is made. **Headless mode never reaches this
+section:** every stopped outcome there is a FAIL recorded as `STOPPED-AWAITING-FOUNDER` (its cause
+kept in `underlying`), and on the abort print `founder-check.py text headless-stop --underlying
+<cause>`. For `BLOCK-REJECTED` also print the `Reason:` line of `founder-check.py text rejected-ask
+--verify-json …`, because a headless run asks nothing and would otherwise show no reason. An agent
+never decides for the founder.
 
 | Outcome | Ask | Answers |
 | --- | --- | --- |
-| FAILED | `founder-check.py text failed-ask` | **Retry** (back to section 2, `attempt_n` + 1) · **Change the check** (section 8) · **Continue anyway** (below) |
+| FAILED | `founder-check.py text failed-ask` | **Retry** (`text opt-retry`; back to section 2, `attempt_n` + 1) · **Change the check** (`text opt-change`; section 8) · **Continue anyway** (`text opt-continue`) |
 | INVALID | `founder-check.py text invalid-ask` | the same three answers |
-| CHANGED-SINCE-APPROVAL | `founder-check.py text changed-ask`, with the approved text and command (`frozen` in the record), the current ones and `changed_fields` / `reasons` | **Restore the approved check** · **Change the check** (section 8) · **Continue anyway** |
-| BLOCK-REJECTED | `founder-check.py text rejected-ask --verify-json …` | **Change the check** (section 8) · **Continue anyway** |
-| UNTRUSTED | No question. Show the exact command and `freeze_author`, then `founder-check.py text untrusted-fail` | FAIL. Nothing runs. The founder states their own check or runs this one by hand |
-| NEEDS-YOUR-EYES (`kind: judgement`) | Show the founder's `text` and the evidence the work produced: the diff summary (`git diff --stat origin/main...HEAD`), the acceptance criteria and any test result already printed this session. Then `founder-check.py text eyes-ask` | **Yes** → `FOUNDER-CONFIRMED`, print `founder-check.py text judgement` · **No** → the FAILED row |
-| SKIP-NOSANDBOX with a block | none | FAIL: `founder-check.py text no-sandbox`. A check that did not run is never a pass, interactive or not |
+| CHANGED-SINCE-APPROVAL | `founder-check.py text changed-ask`, with the approved text and command (`frozen` in the record), the current ones, `changed_fields` and `reasons`. Say which it was: a field, a pinned script, or the freeze ordering (the check was saved after work had begun) | **Restore the approved check** (`text opt-restore`; leave it out when `reasons` is exactly `ordering`, because nothing changed and there is nothing to restore) · **Change the check** (`text opt-change`) · **Continue anyway** (`text opt-continue`) |
+| BLOCK-REJECTED | `founder-check.py text rejected-ask --verify-json …` | `environmental: false`: **Change the check** · **Continue anyway**. `environmental: true` (the computer or repository is the problem, not the check): **Retry** · **Continue anyway**, because changing the check would not help |
+| UNTRUSTED | No question. Show the exact command, `freeze_author`, the operator's email (`git config user.email`) and `flags`. When `flags` is exactly `pr-author-unmeasurable`, print `founder-check.py text untrusted-unmeasured`; otherwise `founder-check.py text untrusted-fail` | FAIL. Nothing runs. The founder states their own check (section 8), or signs in to GitHub and re-runs when the author could not be measured. There is no continue-anyway for a check nobody could match to the founder |
+| NEEDS-YOUR-EYES (`kind: judgement`) | Show the founder's `text` and the evidence the work produced: the diff summary (`git diff --stat origin/main...HEAD`), the acceptance criteria and any test result already printed this session. Then `founder-check.py text eyes-ask` | **Yes** → `FOUNDER-CONFIRMED`, print `founder-check.py text judgement` · **No** → the FAILED row, then `failed-ask` |
+| SKIP-NOSANDBOX with a block | none | FAIL: `founder-check.py text no-sandbox`, then `founder-check.py text no-sandbox-stop`. A check that did not run is never a pass, interactive or not |
 
 **Continue anyway.** Print `founder-check.py text reason-prompt`, take the one-line answer, then
 call `log` with `--outcome OVERRIDDEN --underlying <FAILED|INVALID|CHANGED-SINCE-APPROVAL|BLOCK-REJECTED>`
 and the reason on stdin (section 6). The log refuses an override with no reason or no named cause,
-and a reason shaped like a secret. It is recorded as `OVERRIDDEN`, never as passed.
+a cause the records do not show, and a reason shaped like a secret. **When `log` exits 3, say why
+(its stderr) and ask for the reason again with `reason-prompt`: with no row written the run stays a
+FAIL, and the check is never continued unlogged.** It is recorded as `OVERRIDDEN`, never as passed;
+the row also carries the verify record's `reasons`, so a changed field, a changed script and a late
+freeze stay distinguishable.
 
 ## 6. Recording (the only writer of outcomes)
 
@@ -174,7 +182,7 @@ One call per attempt. The reason, when there is one, comes through a heredoc wit
 delimiter, so nothing in it is expanded:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
+: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" log --verify-json "$PREFLIGHT_TMP/founder-check-verify.json" --classify-json "$PREFLIGHT_TMP/founder-check-classify.json" --polarity acceptance --mode <interactive|headless> --outcome <OUTCOME> --attempt-n <n> --underlying <cause> --reason-stdin <<'FC_REASON_7f3a'
 <the founder's one-line reason>
@@ -197,7 +205,7 @@ outcome into `STOPPED-AWAITING-FOUNDER`.
 After the last row of a run, commit the log, which stages and commits that one file:
 
 ```bash
-: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; resolve the plugin root before running Check 13}"
+: "${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT is unset; export it as the installed soleur plugin root, never a path inside this repository}"
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" commit-log
 ```
 
@@ -226,7 +234,8 @@ else in Phase 0.
      baseline` and return success so the plan skill makes the freeze commit.
    - `VACUOUS` (the check already passes): print `founder-check.py text baseline-vacuous`. Refuse.
      Offer **strengthen the check**, **mark it needs-your-eyes**, or **record it as already true and
-     drop it**. A dropped check never reappears as a pass.
+     drop it**. A dropped check never reappears as a pass. Before the founder types replacement
+     text, print `founder-check.py text first-use` again: new text is committed to the repository.
    - `INVALID`: refuse. Tooling failed, so this is no evidence the check can fail or pass. On a mise
      or asdf install `node` and `bun` return rc 127 inside the sandbox (its PATH is
      `/usr/local/bin:/usr/bin:/bin`); use `python3` or `bash`, or a judgement check.
@@ -236,7 +245,8 @@ else in Phase 0.
 ## 8. Changing the check mid-work
 
 Changing the approved text is a deliberate act, never a silent edit: it is the declared
-`work → plan` back-edge. Show the old and the new text and ask the founder to confirm
+`work → plan` back-edge. Print `founder-check.py text first-use` again before the founder types the
+replacement text, since it is committed to the repository. Show the old and the new text and ask the founder to confirm
 (`founder-check.py text approval-ask`), run `verify --candidate --refreeze` for the new text, run it
 once (section 2, then `classify --polarity baseline`), and commit the plan with a subject that
 starts `plan: re-freeze founder-stated check`, authored by the operator.

@@ -284,7 +284,7 @@ describe("verify: resolution", () => {
     r.commit("code only");
     const v = r.verify();
     expect(v.json?.outcome).toBe("NO-BLOCK");
-    expect(v.json?.banner).toBe("No founder-stated check guarded this ship. Nothing was run on your behalf.");
+    expect(v.json?.banner).toBe("No founder-stated check was found for this ship, so none was run.");
     expect(v.status).toBe(0);
   });
 
@@ -838,6 +838,11 @@ describe("verify: the static rules (in-process table)", () => {
     ["an invalid kind", cmdBlock({ kind: "maybe" }), "invalid-kind"],
     ["an empty text", cmdBlock({ text: "  " }), "missing-field"],
     ["an empty command", cmdBlock({ command: "  " }), "missing-field"],
+    ["an empty approved_by", cmdBlock({ approved_by: " " }), "missing-field"],
+    ["an empty approved_at", cmdBlock({ approved_at: "" }), "missing-field"],
+    ["an empty approved_by on a judgement check", cmdBlock({ kind: "judgement", command: "", approved_by: "" }), "missing-field"],
+    ["a secret in approved_by (the founder's answer is committed too)", cmdBlock({ approved_by: "yes, token=abcdef123456" }), "secret-shape"],
+    ["a secret in approved_by on a judgement check", cmdBlock({ kind: "judgement", command: "", approved_by: "ghp_" + "a".repeat(30) }), "secret-shape"],
     ["a pin that is not a sha", cmdBlock({ command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": "nope" } }), "unparseable"],
     ["a pin path that traverses", cmdBlock({ command: "bash scripts/ok.sh", pins: { "../x.sh": SHA40 } }), "unparseable"],
   ];
@@ -1304,6 +1309,15 @@ describe("log: the only writer of outcomes", () => {
     expect(row[COLS.indexOf("reason")]).toBe("shipping the typo fix");
   });
 
+  test("an override of a changed check records WHICH change in the row (reasons from the verify record)", () => {
+    const { r, file, extra } = scenario("CHANGED-SINCE-APPROVAL");
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "CHANGED-SINCE-APPROVAL", "--reason-stdin"], "the new expected text is right\n");
+    expect(l.status).toBe(0);
+    const reason = cells(r)[0][COLS.indexOf("reason")];
+    expect(reason).toContain("the new expected text is right");
+    expect(reason).toContain("reasons: field-changed");
+  });
+
   test("injection through the reason cannot forge a row or smuggle escapes", () => {
     const { r, file, extra } = scenario("FAILED");
     log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "FAILED", "--reason-stdin"], "ok\n| x | INJECTED |\u001b[2J\u007f done\u2028x\n");
@@ -1537,25 +1551,31 @@ describe("wording constants", () => {
   const EXACT: Record<string, string> = {
     judgement: "You confirmed this by looking. No command ran for it.",
     "first-use":
-      "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what will run before it runs. The check runs on this computer in a limited environment that can still use your network connection, reach this computer's own services and read every file in this project folder, including files you have not committed. One check does not cover everything. The text and command you approve are committed to this repository, which may be public, so do not put passwords or keys in them.",
+      "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what will run before it runs. The check runs on this computer in a limited environment that can still use your network connection, reach this computer's own services, read every file in this project folder and its history, including files you have not committed, and send what it reads to any address on the internet. One check does not cover everything. The text and command you approve are committed to this repository, which may be public, so do not put passwords, keys or other people's personal details in them.",
     "capture-question": "What would you check to know this is done?",
-    "approval-ask": "Approve exactly this check as written? Say yes to approve it, or tell me what to change.",
-    "no-block": "No founder-stated check guarded this ship. Nothing was run on your behalf.",
+    "approval-ask": "Approve exactly this check as written? What will run is the command shown, not the description beside it. If you say yes, the check is saved in this repository, which may be public, and runs once now against the project as it stands, where it should fail. It runs again before you ship. Say yes to approve it, or tell me what to change (no passwords or keys).",
+    "no-block": "No founder-stated check was found for this ship, so none was run.",
     "no-sandbox": "Your check did not run on this computer, so nothing was checked.",
     "failed-ask": "Your check did not pass. How should this proceed?",
     "invalid-ask": "Your check could not run properly, so it says nothing about your work. How should this proceed?",
-    "changed-ask": "The check you approved has changed since you approved it. How should this proceed?",
-    "rejected-ask": "Your check could not be used as written: {detail} How should this proceed?",
-    "untrusted-fail": "This check was not written by you, so it was not run. The command and who wrote it are shown above. To use a check, state your own, or run this one by hand.",
-    "eyes-ask": "Does this meet what you stated?",
-    "reason-prompt": "In one line, why are you continuing? This is saved in the repository log, which may be public, so do not put passwords or keys in it.",
+    "changed-ask": "The check that would run now does not match the one you approved, or it was not approved before the work began. The reason is shown above. How should this proceed?",
+    "rejected-ask": "Your check could not be used as written.\nReason: {detail}\nHow should this proceed?",
+    "untrusted-fail": "This check could not be matched to you as its author, so it was not run. The command and the name on the commit that saved it are shown above. To use a check here, state your own. Do not run the one above yourself unless you know and trust who wrote it.",
+    "eyes-ask": "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded as your own confirmation, and no command ran for it. No: this counts as a failed check, and you will be asked how to proceed.",
+    "reason-prompt": "In one line, why are you continuing? Your answer is saved in the repository log, marked as an override. The log may be public, so do not put passwords, keys or other people's personal details in it.",
     "overridden-failed": "Founder check did not pass and you chose to continue: <reason>",
     "overridden-invalid": "Founder check could not run properly, so it checked nothing, and you chose to continue: <reason>",
-    "overridden-changed": "Founder check changed after you approved it, so it was not run, and you chose to continue: <reason>",
+    "overridden-changed": "Founder check did not match what you approved, or was not approved before the work began, so it was not run, and you chose to continue: <reason>",
     "overridden-rejected": "Founder check could not be used as written, so it was not run, and you chose to continue: <reason>",
-    "headless-stop": "Your check was stopped because it could not be used, and an unattended run cannot decide that for you. Run this step again with you present to retry, change the check or continue anyway.",
-    "baseline-ok": "Your check fails today, as it should before the work. This shows only that the check can fail. It does not show that it checks what you care about.",
-    "baseline-vacuous": "Your check already passes before any work is done, so it cannot tell you whether the work is done.",
+    "headless-stop": "Your check was stopped because it could not be used, and an unattended run cannot decide that for you. Run this step again with you present.",
+    "baseline-ok": "Your check fails today, as it should before the work. This shows only that the check can fail. It does not show that it can pass, or that it checks what you care about.",
+    "baseline-vacuous": "Your check already passes before any work is done, so it cannot tell you whether the new work is done.",
+    "untrusted-unmeasured": "We could not read the GitHub account details needed to confirm who wrote this check, so it was not run. Sign in to GitHub on this computer and run this step again, or state your own check.",
+    "no-sandbox-stop": "Because your check could not run, this stops the ship. Fix the cause shown above, or change the check to one you confirm by looking, then run this step again.",
+    "opt-retry": "Run the check again.",
+    "opt-restore": "Put the approved check back as it was. This undoes later edits to the check or to a script it runs.",
+    "opt-change": "Approve a different check. It must fail on the work as it stands today, or be one you confirm by looking.",
+    "opt-continue": "Let the ship go ahead anyway. This is recorded in the repository log as an override, with your reason. The check is not marked as passed.",
     "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
     pass: "Your check passed. This shows only that the check you wrote ran against <sha>, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it.",
     "aggregate-pass": "Founder check: ran, returned success against <sha>",
@@ -1589,21 +1609,56 @@ describe("wording constants", () => {
     expect(text("overridden-failed", ["--reason", "shipping the typo fix"]).stdout.trim()).toBe(
       "Founder check did not pass and you chose to continue: shipping the typo fix",
     );
-    for (const [cause, phrase] of [
-      ["FAILED", "it did not pass"],
-      ["INVALID", "it could not run properly"],
-      ["CHANGED-SINCE-APPROVAL", "it changed after you approved it"],
-      ["UNTRUSTED", "you did not write it"],
-      ["NEEDS-YOUR-EYES", "it needs your own eyes on the result"],
-      ["BLOCK-REJECTED", "it could not be used as written"],
-      ["SKIP-NOSANDBOX", "it could not run on this computer"],
+    const RETRY = "Run this step again with you present to retry, change the check or continue anyway.";
+    for (const [cause, phrase, next] of [
+      ["FAILED", "it did not pass", RETRY],
+      ["INVALID", "it could not run properly", RETRY],
+      ["CHANGED-SINCE-APPROVAL", "it does not match what you approved, or was not approved before the work began", "Run this step again with you present to restore or change the check, or continue anyway."],
+      ["UNTRUSTED", "it could not be matched to you as its author", "Run this step again with you present and state your own check."],
+      ["NEEDS-YOUR-EYES", "it needs your own eyes on the result", "Run this step again with you present so you can look and answer."],
+      ["BLOCK-REJECTED", "it could not be used as written", "Run this step again with you present to change the check or continue anyway."],
+      ["SKIP-NOSANDBOX", "it could not run on this computer", "This check cannot run on this computer. Fix the cause shown, or change the check to one you confirm by looking, then run this step again."],
     ]) {
-      expect(text("headless-stop", ["--underlying", cause]).stdout).toContain(`stopped because ${phrase},`);
+      // each cause promises only the answers the interactive path really offers for it
+      expect(text("headless-stop", ["--underlying", cause]).stdout.trimEnd()).toBe(
+        `Your check was stopped because ${phrase}, and an unattended run cannot decide that for you. ${next}`,
+      );
     }
     const r = new Repo();
     r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "rm -rf x" }) }));
     const { file } = r.verifyFile(["--candidate"]);
-    expect(runPy(["text", "rejected-ask", "--verify-json", file]).stdout).toContain("could not be used as written: the candidate block is not acceptable as written");
+    expect(runPy(["text", "rejected-ask", "--verify-json", file]).stdout.trimEnd()).toBe(
+      "Your check could not be used as written.\nReason: the command starts with a program that is not on the allowed list\nHow should this proceed?",
+    );
+  });
+
+  test("every reason a FAIL can carry has a plain-language line, and an unknown one falls back to the detail", () => {
+    // The codes are read from the script's own source, so a new refusal without a sentence is RED.
+    const src = readFileSync(SCRIPT, "utf8");
+    const emitted = new Set([...src.matchAll(/reason="([a-z-]+)"/g), ...src.matchAll(/return "([a-z-]+)"/g)].map((m) => m[1]));
+    // not FAIL reasons: other outcomes, or _read_plan's statuses (mapped to the plan-* codes below)
+    for (const n of ["ok", "candidate", "authorship", "no-block", "refreeze-needs-founder", "missing", "not-regular", "outside", "too-large", "symlink", "unreadable"]) emitted.delete(n);
+    for (const n of ["symlinked-plan", "plan-not-regular", "plan-outside-plans-dir", "plan-unreadable", "internal-error"]) emitted.add(n);
+    expect(emitted.size).toBeGreaterThan(25);
+    const have: string[] = harness("out = sorted(fc.REJECT_REASONS)", null);
+    expect([...emitted].filter((c) => !have.includes(c)).sort()).toEqual([]);
+    const doc = join(TMP, `fc-rej-${process.pid}.json`);
+    made.push(doc);
+    writeFileSync(doc, JSON.stringify({ outcome: "FAIL", reason: "a-future-reason", detail: "the fallback detail" }));
+    expect(runPy(["text", "rejected-ask", "--verify-json", doc]).stdout).toContain("Reason: the fallback detail\n");
+    for (const [c, line] of Object.entries(harness("out = fc.REJECT_REASONS", null) as Record<string, string>)) {
+      expect([c, line.length > 20, /verified|proven|safe/i.test(line)]).toEqual([c, true, false]);
+    }
+  });
+
+  test("a FAIL carries `environmental` for reasons that say nothing about the check itself", () => {
+    const env: string[] = harness("out = sorted(fc.ENVIRONMENTAL_REASONS)", null);
+    expect(env).toEqual(["base-not-default-branch", "base-unresolvable", "internal-error", "not-a-repository", "plan-unreadable", "verb-gate-unavailable"]);
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock({ ...BASE, command: "rm -rf x" }) }));
+    expect(r.verify(["--candidate"]).json?.environmental).toBe(false);
+    const crash = runPy(["verify", "--repo", join(TMP, "fc-does-not-exist-" + process.pid)], { cwd: TMP, env: gitFixtureEnv(TMP) });
+    expect(crash.json?.environmental).toBe(true);
   });
 
   test("no string contains 'verified', 'proven' or 'safe' (no exemption: the CLO ruled the negation out)", () => {

@@ -70,14 +70,72 @@ OUTCOMES = (
     "BLOCK-REJECTED", "STOPPED-AWAITING-FOUNDER",
 )
 STOP_CAUSES = {
-    "FAILED": "it did not pass",
-    "INVALID": "it could not run properly",
-    "CHANGED-SINCE-APPROVAL": "it changed after you approved it",
-    "UNTRUSTED": "you did not write it",
-    "NEEDS-YOUR-EYES": "it needs your own eyes on the result",
-    "BLOCK-REJECTED": "it could not be used as written",
-    "SKIP-NOSANDBOX": "it could not run on this computer",
+    "FAILED": ("it did not pass", "Run this step again with you present to retry, change the check or continue anyway."),
+    "INVALID": ("it could not run properly", "Run this step again with you present to retry, change the check or continue anyway."),
+    "CHANGED-SINCE-APPROVAL": (
+        "it does not match what you approved, or was not approved before the work began",
+        "Run this step again with you present to restore or change the check, or continue anyway.",
+    ),
+    "UNTRUSTED": (
+        "it could not be matched to you as its author",
+        "Run this step again with you present and state your own check.",
+    ),
+    "NEEDS-YOUR-EYES": (
+        "it needs your own eyes on the result",
+        "Run this step again with you present so you can look and answer.",
+    ),
+    "BLOCK-REJECTED": (
+        "it could not be used as written",
+        "Run this step again with you present to change the check or continue anyway.",
+    ),
+    "SKIP-NOSANDBOX": (
+        "it could not run on this computer",
+        "This check cannot run on this computer. Fix the cause shown, or change the check to one you "
+        "confirm by looking, then run this step again.",
+    ),
 }
+STOP_DEFAULT = ("it could not be used", "Run this step again with you present.")
+# What a verify FAIL says in plain words. Anything missing falls back to the record's own detail.
+REJECT_REASONS = {
+    "secret-shape": "it looks like it holds a password, key or token, which would be saved in this repository",
+    "shell-active-token": "the command uses a pipe, redirect, variable or substitution, which is not allowed",
+    "verb-gate": "the command starts with a program that is not on the allowed list",
+    "unpinned-script": "the command runs a script that was not recorded with the check",
+    "no-freeze": "the check was not saved as approved before the work began",
+    "freeze-without-block": "the check you approved is no longer in the plan",
+    "credentials-required": "the check needs a password or key, so it cannot run on its own",
+    "unknown-field": "the check has a field that is not part of the check format",
+    "invalid-kind": "the check must be either a command or something you confirm by looking",
+    "unparseable": "the check could not be read as written",
+    "missing-field": "a required part of the check is empty",
+    "control-character": "the check contains a hidden control character",
+    "verb-gate-unavailable": "the tool that checks the command is not available on this computer",
+    "script-operand-required": "the command must name a script file in this project",
+    "interpreter-option": "the command passes an option to its interpreter, which is not allowed",
+    "absolute-script-path": "the command names a script outside this project",
+    "script-path-traversal": "the command names a script outside this project",
+    "dangerous-option": "the command uses an option that makes a program run other programs",
+    "hash-mismatch": "the saved fingerprint does not match the check as written",
+    "pin-not-at-freeze": "a script the check runs was not recorded with it as approved",
+    "multiple-blocks": "more than one founder check was found in the plan",
+    "multiple-plans": "more than one plan carries a founder check",
+    "no-block-candidate": "no founder check was found in the plan",
+    "candidate-refused-frozen": "this check was already approved, so changing it needs a re-freeze",
+    "base-not-default-branch": "the branch it is compared with is not this repository's main branch",
+    "base-unresolvable": "this repository's main branch could not be found",
+    "not-a-repository": "this is not a git repository",
+    "symlinked-plan": "the plan file is a link, so it was not read",
+    "plan-not-regular": "the plan file is not an ordinary file, so it was not read",
+    "plan-outside-plans-dir": "the plan file is outside the plans folder, so it was not read",
+    "plan-unreadable": "the plan file could not be read",
+    "internal-error": "the check could not be examined because of an internal error",
+}
+# A FAIL that says nothing about the check itself: the computer or the repository is the problem,
+# so "change the check" is not an answer and the founder is offered a retry instead.
+ENVIRONMENTAL_REASONS = frozenset(
+    {"verb-gate-unavailable", "base-not-default-branch", "base-unresolvable", "not-a-repository",
+     "plan-unreadable", "internal-error"}
+)
 
 # Wording is a contract (CLO-reviewed, pinned by tests). Never claim more than "ran against the
 # sha, finished without an error and printed the expected text". No string uses the words
@@ -92,59 +150,88 @@ WORDING = {
     ),
     "judgement": "You confirmed this by looking. No command ran for it.",
     "first-use": (
-        "A vague, wrong or risky check can pass broken work or run actions you did not intend. "
-        "Read what will run before it runs. The check runs on this computer in a limited "
-        "environment that can still use your network connection, reach this computer's own "
-        "services and read every file in this project folder, including files you have not "
-        "committed. One check does not cover everything. The text and command you approve are "
-        "committed to this repository, which may be public, so do not put passwords or keys in "
-        "them."
+        "A vague, wrong or risky check can pass broken work or run actions you did not intend. Read what "
+        "will run before it runs. The check runs on this computer in a limited environment that can still"
+        " use your network connection, reach this computer's own services, read every file in this "
+        "project folder and its history, including files you have not committed, and send what it reads "
+        "to any address on the internet. One check does not cover everything. The text and command you "
+        "approve are committed to this repository, which may be public, so do not put passwords, keys or "
+        "other people's personal details in them."
     ),
     "capture-question": "What would you check to know this is done?",
     "approval-ask": (
-        "Approve exactly this check as written? Say yes to approve it, or tell me what to change."
+        "Approve exactly this check as written? What will run is the command shown, not the description "
+        "beside it. If you say yes, the check is saved in this repository, which may be public, and runs "
+        "once now against the project as it stands, where it should fail. It runs again before you ship. "
+        "Say yes to approve it, or tell me what to change (no passwords or keys)."
     ),
-    "no-block": (
-        "No founder-stated check guarded this ship. Nothing was run on your behalf."
-    ),
+    "no-block": "No founder-stated check was found for this ship, so none was run.",
     "no-sandbox": "Your check did not run on this computer, so nothing was checked.",
     "failed-ask": "Your check did not pass. How should this proceed?",
     "invalid-ask": (
         "Your check could not run properly, so it says nothing about your work. How should this "
         "proceed?"
     ),
-    "changed-ask": "The check you approved has changed since you approved it. How should this proceed?",
-    "rejected-ask": "Your check could not be used as written: {detail} How should this proceed?",
-    "untrusted-fail": (
-        "This check was not written by you, so it was not run. The command and who wrote it are "
-        "shown above. To use a check, state your own, or run this one by hand."
+    "changed-ask": (
+        "The check that would run now does not match the one you approved, or it was not approved before "
+        "the work began. The reason is shown above. How should this proceed?"
     ),
-    "eyes-ask": "Does this meet what you stated?",
+    "rejected-ask": "Your check could not be used as written.\nReason: {detail}\nHow should this proceed?",
+    "untrusted-fail": (
+        "This check could not be matched to you as its author, so it was not run. The command and the "
+        "name on the commit that saved it are shown above. To use a check here, state your own. Do not "
+        "run the one above yourself unless you know and trust who wrote it."
+    ),
+    "eyes-ask": (
+        "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded as "
+        "your own confirmation, and no command ran for it. No: this counts as a failed check, and you "
+        "will be asked how to proceed."
+    ),
     "reason-prompt": (
-        "In one line, why are you continuing? This is saved in the repository log, which may be "
-        "public, so do not put passwords or keys in it."
+        "In one line, why are you continuing? Your answer is saved in the repository log, marked as an "
+        "override. The log may be public, so do not put passwords, keys or other people's personal "
+        "details in it."
     ),
     "overridden-failed": "Founder check did not pass and you chose to continue: {reason}",
     "overridden-invalid": (
         "Founder check could not run properly, so it checked nothing, and you chose to continue: {reason}"
     ),
     "overridden-changed": (
-        "Founder check changed after you approved it, so it was not run, and you chose to continue: {reason}"
+        "Founder check did not match what you approved, or was not approved before the work began, so it "
+        "was not run, and you chose to continue: {reason}"
     ),
     "overridden-rejected": (
         "Founder check could not be used as written, so it was not run, and you chose to continue: {reason}"
     ),
-    "headless-stop": (
-        "Your check was stopped because {cause}, and an unattended run cannot decide that for "
-        "you. Run this step again with you present to retry, change the check or continue anyway."
-    ),
+    "headless-stop": "Your check was stopped because {cause}, and an unattended run cannot decide that for you. {next}",
     "baseline-ok": (
-        "Your check fails today, as it should before the work. This shows only that the check can "
-        "fail. It does not show that it checks what you care about."
+        "Your check fails today, as it should before the work. This shows only that the check can fail. "
+        "It does not show that it can pass, or that it checks what you care about."
     ),
     "baseline-vacuous": (
-        "Your check already passes before any work is done, so it cannot tell you whether the "
-        "work is done."
+        "Your check already passes before any work is done, so it cannot tell you whether the new work is"
+        " done."
+    ),
+    "untrusted-unmeasured": (
+        "We could not read the GitHub account details needed to confirm who wrote this check, so it "
+        "was not run. Sign in to GitHub on this computer and run this step again, or state your own "
+        "check."
+    ),
+    "no-sandbox-stop": (
+        "Because your check could not run, this stops the ship. Fix the cause shown above, or change "
+        "the check to one you confirm by looking, then run this step again."
+    ),
+    "opt-retry": "Run the check again.",
+    "opt-restore": (
+        "Put the approved check back as it was. This undoes later edits to the check or to a script it runs."
+    ),
+    "opt-change": (
+        "Approve a different check. It must fail on the work as it stands today, or be one you "
+        "confirm by looking."
+    ),
+    "opt-continue": (
+        "Let the ship go ahead anyway. This is recorded in the repository log as an override, with "
+        "your reason. The check is not marked as passed."
     ),
     "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
     "aggregate-pass": "Founder check: ran, returned success against {sha}",
@@ -394,11 +481,11 @@ def static_problem(block):
         if key.startswith("/") or ".." in key.split("/") or not key:
             return "unparseable"
     text, cmd, expected = block.get("text", ""), block.get("command", ""), block.get("expected", "")
-    if not text.strip():
+    if not text.strip() or not block.get("approved_by", "").strip() or not block.get("approved_at", "").strip():
         return "missing-field"
     if _HARD_CONTROL.search(text) or _CONTROL.search(expected) or _CONTROL.search(block.get("approved_by", "")):
         return "control-character"
-    if _secret_shaped(text, cmd, expected):
+    if _secret_shaped(text, cmd, expected, block.get("approved_by", "")):
         return "secret-shape"
     if kind == "judgement":
         return None
@@ -457,6 +544,8 @@ class _Emitter:
         doc.update(kw)
         if outcome == "NO-BLOCK":
             doc["banner"] = WORDING["no-block"]
+        if outcome == "FAIL":
+            doc["environmental"] = doc.get("reason") in ENVIRONMENTAL_REASONS
         block = doc.get("block")
         if isinstance(block, dict):
             doc["kind"] = block.get("kind", "")
@@ -1095,6 +1184,10 @@ def cmd_log(a):
     cmd = str(block.get("command", ""))
     if frozen.get("command") and frozen.get("command") != cmd:
         reason = (reason + " | frozen command: " + str(frozen["command"])).strip(" |")
+    if isinstance(v.get("reasons"), list) and v["reasons"]:
+        # CHANGED-SINCE-APPROVAL is three different things (a field, a pinned script, the ordering);
+        # the row names which, so an override is never read as one cause when it was another.
+        reason = (reason + " | reasons: " + ",".join(str(x)[:40] for x in v["reasons"][:5])).strip(" |")
     tested = sha[:12] + ("+uncommitted" if v.get("dirty") else "") if sha else ""
     row = {
         "kind": block.get("kind", ""), "polarity": a.polarity, "command": cmd,
@@ -1179,9 +1272,9 @@ def cmd_text(a):
     sha = a.sha
     if v.get("head_sha"):
         sha = str(v["head_sha"])[:12] + (" plus uncommitted changes" if v.get("dirty") else "")
-    detail = _CONTROL.sub(" ", str(v.get("detail", "")))
-    cause = STOP_CAUSES.get(a.underlying, "it could not be used")
-    print(WORDING[a.name].format(sha=sha, reason=a.reason, cause=cause, detail=detail))
+    detail = REJECT_REASONS.get(str(v.get("reason", ""))) or _CONTROL.sub(" ", str(v.get("detail", "")))
+    cause, nxt = STOP_CAUSES.get(a.underlying, STOP_DEFAULT)
+    print(WORDING[a.name].format(sha=sha, reason=a.reason, cause=cause, detail=detail, next=nxt))
     return 0
 
 
@@ -1277,7 +1370,8 @@ def main(argv=None):
     try:
         return args.fn(args)
     except Exception as e:  # a traceback is an unreadable verdict: print a one-line FAIL and a distinct rc
-        line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "detail": f"{type(e).__name__}: {str(e)[:120]}"})
+        line = json.dumps({"outcome": "FAIL", "reason": "internal-error", "environmental": True,
+                           "detail": f"{type(e).__name__}: {str(e)[:120]}"})
         out = getattr(args, "out", None)
         if out:
             try:
