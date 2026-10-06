@@ -37,17 +37,44 @@ the `AFFECTED_*_PATHS` block or `ALWAYS_ON_SUITES` entry for a suite the same di
    number, a fixed rule code and, for label findings, the charset-restricted label (spaces shown as `_`, cut at 64 characters); a row feeds it an offending line carrying a forged `AFFECTED_SUMMARY` record, an ANSI escape and instruction
    prose and asserts none of it reaches the output.
 
+6. **A classifier that reads `git diff` judges what git believes, not what the shell will run.** Pair every diff-side rule with a
+   byte-side check: the `index <a>..<b>` blob id of each diffed file must equal the hash of the RAW working-tree file, and a trigger file the
+   diff does not mention must equal its merge-base blob. `skip-worktree`, `assume-unchanged` and clean filters all make the diff and the
+   file disagree, and a file hidden that way is missing from the diff altogether.
+7. **Say what the verdict does not cover.** It judges the two trigger files only; a registration that rides along with an edit to another
+   runner-sourced file gets that file's ordinary edge-based selection, exactly as editing it alone does. That is documented in ADR-242
+   decision 20 rather than left implicit.
+
 ## Session Errors
+
+- **New suite code moved a repo-global ratchet and only a review seat saw it.** `build_sandbox` gained a `cp` under a `mktemp` root, taking
+  `fixture-relative-assert`'s baseline for `scripts/test-all-affected.test.sh` from 9 to 10 sites; the implementation ran the targeted suites
+  and the new rows but not the sibling fixture ratchets. Recovery: `--write-baseline` in the same commit. **Prevention:** run the fixture
+  ratchets (`fixture-relative-assert`, `fixture-dir-operand-assert`, `git-fixture-containment`, `fixture-cd-containment`,
+  `fixture-env-adoption`) and `guard-vacuity-floor` before the FIRST commit of any change that adds test fixtures (work §6.6 already says
+  so; it was skipped, not missing).
+- **A completion monitor keyed on "the seat's output file is non-empty" fired immediately.** An agent's transcript file exists from its first
+  tool call, so the condition was true while the seat was still working. Recovery: wait for the real completion notification.
+  **Prevention:** the notification is the only completion signal; a monitor must key on a terminal marker, never on file existence.
+- **Equivalent mutants authored by the author.** `break` placed after an offence that had already been recorded, and `${_u##_}` in place of
+  `${_u#_}` (the pattern `_` matches one character, so both strip one), each scored "survived" and read as a coverage gap until the mutant
+  was shown to be a no-op. **Prevention:** before crediting a survivor, state the input on which the mutant and the original differ, and
+  run it; a mutant with no such input is equivalent and needs no row.
+- **A diff-reading classifier judged what git believed, not what bash would run.** A review seat found that `skip-worktree`,
+  `assume-unchanged` or a clean filter let a working-tree file carry bytes the diff never shows; the verification seat then found the same
+  hole for the OTHER trigger file, which is absent from the diff entirely. **Prevention:** see Key Insight 6.
+
 
 - A table-driven battery rebuilt its scratch repos in a directory name derived only from the row name, so the second and third runs (the
   permissive and reject-all stubs that prove the table can see a broken classifier) inherited the first run's edits. Their "reddened N
   rows" counts were inflated by stale state until each call began from a freshly removed directory. A stub-based discrimination check is
-  only evidence if every run starts from the same state.
+  only evidence if every run starts from the same state. **Prevention:** build each scratch repo in a freshly removed directory per call.
 - A first mutation battery over the classifier scored every mutant as caught for that same reason. The control row (the unmutated
-  classifier must score 0) was what exposed it: read the control before reading any mutant.
+  classifier must score 0) was what exposed it: read the control before reading any mutant. **Prevention:** run the unmutated control first and
+  require 0 bad rows before reading any mutant.
 - One mutant (`bun x` allowed) survived the first table because the later path-charset check happened to reject the one row's operand. It was
   not equivalent: `bun x cowsay` passes that charset. A survivor needs a row that removes the second line of defence's coverage, not a
-  decision that the mutant is harmless.
+  decision that the mutant is harmless. **Prevention:** for each survivor name an input on which it differs from the original.
 
 ## Prevention
 
