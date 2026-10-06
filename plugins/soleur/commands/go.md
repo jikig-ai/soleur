@@ -450,7 +450,8 @@ if [ "$DO_RESTORE" = true ]; then
   # without HEAD reads a staged-only change as clean. ANY probe failure (an unreadable index, a diff status
   # above 1 such as an unborn branch) keeps the file: an error probing it must fail toward keeping it, so
   # the status of every probe is read, never folded into "untracked". A bare repo has no index, so nothing
-  # in it is tracked. An untracked regular file, or a tracked-plain one equal to HEAD, falls through to the
+  # in it is tracked (git 2.55 answers ls-files there with rc 0 and no output, but older versions refuse, and a
+  # refusal would read as probe-failed and block the bare-root refresh, so the work-tree check stays). An untracked regular file, or a tracked-plain one equal to HEAD, falls through to the
   # restore below. `cause=` names the measured reason, like the sibling markers' verdict=/source=/rc= fields.
   KEEP=false
   KEEP_CAUSE=""
