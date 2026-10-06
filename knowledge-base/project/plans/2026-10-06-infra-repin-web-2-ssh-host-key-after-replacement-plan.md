@@ -217,9 +217,11 @@ host once that workflow is re-enabled.
 
 `apply-deploy-pipeline-fix.yml` lists this file in its push paths, but the workflow was disabled
 when this was written and stays disabled after this PR merges (re-check its state at merge time),
-so that workflow does not run. `apply-web-platform-infra.yml` DOES fire on the merge, because it
-triggers on any `apps/web-platform/infra/**` push. It is inert for web-2: its allow-list does not
-include `deploy_pipeline_fix_web2`, the only resource that hashes this file. Re-enabling
+so that workflow does not run. `apply-web-platform-infra.yml` triggers on any
+`apps/web-platform/infra/**` push, so once it is enabled this file's path fires it; it was also
+disabled at QA time (paused for the rebirth), so it does not run on this merge either (re-check
+both states at merge time). It is inert for web-2 either way: its allow-list does not include
+`deploy_pipeline_fix_web2`, the only resource that hashes this file. Re-enabling
 `apply-deploy-pipeline-fix.yml` is a separate owner go-ahead and is not part of this PR; a wrong
 pin or a dark web-2 would make that workflow abort before its plan and hold back web-1's
 pipeline delivery. This PR does not dispatch, enable, or disable any workflow, write to Doppler,
@@ -258,7 +260,7 @@ Ref #9372
 - [ ] The three pin-referencing suites listed in Implementation step 3 pass.
 - [ ] PR body contains the fingerprint, the capture vantage, the weak-cross-check statement, and
       the paragraph that `apply-deploy-pipeline-fix.yml` stays disabled after merge, that
-      `apply-web-platform-infra.yml` fires but is inert for web-2, and that re-enabling is a
+      `apply-web-platform-infra.yml` triggers on this path but is inert for web-2, and that re-enabling is a
       separate owner go-ahead.
 - [ ] PR body uses `Ref #9372` and contains no `Closes`/`Fixes`/`Resolves` keyword for it
       (`gh pr view --json body --jq .body | grep -iE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #9372'`
