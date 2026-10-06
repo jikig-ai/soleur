@@ -7,15 +7,16 @@ Run tests from `apps/web-platform` with `./node_modules/.bin/vitest run <file>`.
 ## Phase 0: RED tests and spikes
 
 - 0.1 Write `test/server/inngest/cron-community-publication.test.ts` (leaf-injection over leaves derived from the metrics table with a count floor; unknown-key rows on every object; must-PASS non-canonical draft; rendered-grammar fuzz; constructor-allowlist source test; codes exclude `unrecognized_keys` names).
-- 0.2 Write `test/server/inngest/cron-community-monitor-allowlist.test.ts` (real hook ALLOW/DENY probes; posting verbs `bsky post`, `linkedin post-content`, `x post-tweet` denied; the three subcommands still exist in the scripts; prompt-parity over every router literal; `no-write` per-cron).
-- 0.3 Write `test/server/inngest/cron-community-monitor-publication-flow.test.ts` (valid, replay, issue-exists-digest-absent recovery, invalid/missing/oversized, timeout, non-zero exit with valid message, sidecar red override, list-read throws, 5xx retry, milestone failure, token custody, `.git/config` fixture holds no write token, both tokens redacted).
-- 0.4 Add `no-write` rows to `test/server/inngest/cron-bash-allowlist-hook.test.ts`; extend `exactPaths`/`isPathAllowed`/count-marker rows in `cron-safe-commit.test.ts`.
+- 0.2 Write `test/server/inngest/cron-community-monitor-allowlist.test.ts` (`decide()` over the lines `buildAllowlistLines` produces; `no-file-tools` denies Read/Glob/Grep/Write/Edit/MultiEdit/Task/Agent/Skill and is per-cron; the reproduced bypass probes and `gh issue list --jq env` denied; posting verbs `bsky post`, `linkedin post-content`, `x post-tweet` denied and still present in the scripts; prompt-parity over every router literal; one spawned-hook row through `runHookSelfTest`).
+- 0.3 Write `test/server/inngest/cron-community-monitor-publication-flow.test.ts` (valid, replay, issue-exists-digest-absent recovery via PATCH on a closed issue, invalid/missing/oversized, timeout, non-zero exit with valid message, sidecar red/missing override, list-read throws, 5xx retry, milestone failure, PATCH-target checks, commit failure PATCHes the notice, token custody by permissions, both tokens redacted, audit fallback uses the installation client).
+- 0.4 Add `no-file-tools` rows to `test/server/inngest/cron-bash-allowlist-hook.test.ts`; extend `exactPaths`/`isPathAllowed`/count-marker rows in `cron-safe-commit.test.ts`; add `finalMessage` rows to the substrate suite and `withholdModelOutput` rows to `cron-shared.test.ts`.
+- 0.5a Spike S3: confirm no prompt step needs a file-reading tool (evidence: the 2026-10-05 digest note "output exceeded inline limit"); if one does, switch to the `read-root` allow-list fallback in the plan and record it in ADR-272.
 - 0.5 Spike S2: confirm the read-permission set against `apps/web-platform/infra/github-app-manifest.json` and GitHub's per-endpoint table; confirm `mintInstallationToken` accepts it.
 - 0.6 Run the new suites; confirm each fails for the expected reason.
 
 ## Phase 1: publication module
 
-- 1.1 Create `server/inngest/functions/_cron-community-publication.ts`: metrics table, strict schema (constructor allowlist), `parseCommunityDraft`, `readDraftFromStdout`, `renderCommunityPublication` (with github override), contained digest write (lazy `node:fs`), `upsertDigestIssue` (fail-closed read, bounded retry, milestone lookup).
+- 1.1 Create `server/inngest/functions/_cron-community-publication.ts`: metrics table with realistic caps, strict schema (constructor allowlist, safe-integer bounds, topic uniqueness), `parseCommunityDraft`, `readFinalMessage`, `renderCommunityPublication` (with github override), contained digest write (lazy `node:fs`), `upsertDigestIssue` (fail-closed read, bounded retry, milestone lookup).
 - 1.2 Make 0.1 green.
 
 ## Phase 2: safe-commit hardening
@@ -25,23 +26,24 @@ Run tests from `apps/web-platform` with `./node_modules/.bin/vitest run <file>`.
 
 ## Phase 3: containment closure
 
-- 3.1 Replace the community allowlist with `COMMUNITY_ROUTER_READ_VERBS` + `gh issue list`; `allow[0]` is a full literal command.
-- 3.2 Add the `no-write` directive: producer (`CRON_NO_WRITE`), hook consumer, `runHookSelfTest` probe, parity-test directive regex.
-- 3.3 Add `--disallowedTools` and narrow `--allowedTools` in `CLAUDE_CODE_FLAGS`.
+- 3.1 Replace the community allowlist with `COMMUNITY_ROUTER_READ_VERBS` only (no `gh` verbs at all); `allow[0]` is a full literal command.
+- 3.2 Add the `no-file-tools` directive: producer (`CRON_NO_FILE_TOOLS`), hook consumer, `runHookSelfTest` probe, parity-test directive regex; add `SpawnResult.finalMessage`/`finalMessageTruncated` in the substrate.
+- 3.3 Add `--disallowedTools Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill` and set `--allowedTools Bash` in `CLAUDE_CODE_FLAGS`.
 - 3.4 Add `filer: "agent" | "handler"` to `_cron-run-reports.ts`; derive `CRON_RUN_REPORT_LABELS` from agent rows only; split parity row (ii); fix the counts and fixtures in `cron-claude-eval-substrate.test.ts`; remove community from the `RESTORED` loop.
 - 3.5 Register the allowlist suite in `test/repo-wide-suites.ts`.
 
 ## Phase 4: handler flow and prompt
 
-- 4.1 Rewrite the prompt (final-message contract with generated example, `discord messages` literal, PERSISTENCE anchor line only, remove brand-guide/issue/milestone/quotes/contributor text).
-- 4.2 Wire the steps in order: claude-eval, verify-collector-status (moved up), validate-publication, mint-write-token and re-point origin, publish-issue (upsert), verify-output, `heartbeatOk && publication.ok`, the unchanged persistence gate, safe-commit-pr with `exactPaths`.
+- 4.1 Rewrite the prompt (one-line compact-JSON final-message contract with generated example, `discord messages` literal, PERSISTENCE anchor line only, remove brand-guide/issue/milestone/quotes/contributor/`gh issue list` text).
+- 4.2 Wire the steps in order: claude-eval, verify-collector-status (moved up), skip all below on timeout, validate-publication (parse, render, contained write), mint-write-token and re-point origin, publish-issue (upsert; PATCH never reopens), verify-output, `heartbeatOk = (verifyOutputOk || via==="patched") && publication.ok`, the unchanged persistence gate, safe-commit-pr with `exactPaths` (idempotent digest re-write first; on non-committed, PATCH the issue to the fixed notice). Audit fallback takes the `createProbeOctokit()` client.
 - 4.3 Drop `DISCORD_WEBHOOK_URL` from `buildSpawnEnv`; update anchors in `cron-community-monitor.test.ts`.
 - 4.4 Rework the heartbeat/dedup/collector-status fixtures (shared `validDraftFinalMessage()`, fake-store routes, publish seam).
 
 ## Phase 5: failure path and credential custody
 
 - 5.1 `withholdModelOutput` in `ensureScheduledAuditIssue`; community passes true.
-- 5.2 Read token for clone and spawn (`COMMUNITY_SPAWN_TOKEN_PERMISSIONS`), post-spawn write token, `setOriginToken` helper, redact both tokens in every `catch`.
+- 5.3 Observability: all-tools `permissionDenialCount`/`deniedTools`, warn op `community-agent-denied-verb`, extras on `community-publication-rejected`, marker 3 `verdict`/`writer`.
+- 5.2 Read token (keep `repositories`) for clone and spawn (`COMMUNITY_SPAWN_TOKEN_PERMISSIONS`), post-spawn write token, `setOriginToken` helper, redact both tokens in every `catch`.
 
 ## Phase 6: records
 

@@ -13,6 +13,26 @@ requires_cpo_signoff: true
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Research Insights, Attack Surface, Proposed Solution, Phases 0-5, Observability, Guard Contract, Acceptance Criteria, Risks
+**Research agents used:** security-sentinel, observability-coverage-reviewer, user-impact-reviewer, test-design-reviewer, a repo claim-verification pass (the earlier plan-review panel: DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO, CLO, CPO)
+
+### Key Improvements
+
+1. Two reproduced exfiltration paths closed: `gh issue list --jq env` (hook allows it) and a bypassable file-read deny-list. The agent now has no file tools at all (`no-file-tools` directive) and `gh issue list` is gone.
+2. The draft rides a new `SpawnResult.finalMessage` instead of the front-cut 8 KiB `stdoutTail` (a cut tail is not parseable and cannot signal oversize).
+3. The upsert path no longer relies on `verify-output` for a closed issue; PATCH targets are author-, type- and title-checked; the audit-issue fallback uses the App-installation client because the write token does not exist when setup or the spawn fails.
+4. Observability over-claim fixed: `countFilingDenials` counts only `gh issue create`-shaped filings, so an all-tools denial count and a warn op were added; the rejected-event extras now separate every competing hypothesis.
+5. Test plan made real: fixture mechanics for the three heartbeat/dedup/collector-status suites, the `decide()`-over-`buildAllowlistLines` approach, and source-slice anchors that the sidecar reorder breaks.
+
+### New Considerations Discovered
+
+- `--disallowedTools` has no precedent in any cron spawn and its composition with a hook `allow` cannot be proved offline, so the hook directive is the load-bearing layer.
+- A recursive `Grep`/`Glob` could reach `.git/config`; moot once file tools are removed, and the on-disk credential is READ-scoped anyway.
+- The integer fields remain a covert encoding channel for any secret that reaches context; caps are lowered and a bit budget asserted, and the two paths that put secrets into context are closed.
+
 # fix: schema-constrained publication path for cron-community-monitor
 
 ## Overview
@@ -21,13 +41,13 @@ The daily community-monitor cron feeds text written by outsiders (chat messages,
 comments) into a model run whose output reaches two public surfaces under the bot identity: a
 committed digest file (auto-merged to the public repository) and a public tracking issue. Nothing
 between the model and those surfaces constrains what text is published, and the spawned agent holds
-file-writing tools, an allowlisted shell script it can overwrite, and a write-capable repository
-token. A redaction pass would constrain content, not structure, so it does not close the finding (the
+file tools, an allowlisted shell script it can overwrite, a `gh issue list --jq env` form that dumps its
+environment into its own context, and a write-capable repository token. A redaction pass would constrain content, not structure, so it does not close the finding (the
 issue says so explicitly).
 
 This plan takes publication out of the model's hands. The agent only **collects and classifies**; its
-single deliverable is its final message, a small JSON draft. It has no file-writing tools at all (a
-per-spawn `no-write` hook directive plus `--disallowedTools`), no publication verbs, and no write
+single deliverable is its final message, a small JSON draft. It has no file tools at all — no read, write, edit, glob or grep, no sub-agents (a
+per-spawn `no-file-tools` hook directive plus `--disallowedTools`), no publication verbs, and no write
 credential. The handler validates the draft against a closed schema (integers, closed enums — no
 free-text field exists anywhere in it), renders the digest file and the issue body from fixed templates,
 and publishes them itself. After this change the set of publishable strings is a finite template
@@ -78,7 +98,7 @@ schema-constrained publication path"); the properties underneath it are:
 | `schemaVersion` field | none | Cut — one version exists |
 | `topics[].refs` (issue-number pointers) | operator click-through | Cut — three reviewers: it is the only leaf that points outside the digest (cross-reference events); replaced by two integer counts (see schema). Alternative recorded as a Taste challenge |
 | C4 `communitySources` external system | C4 completeness | Cut — collection sources are an existing modeling gap this change neither creates nor changes; only the `api -> kb` edge text is amended |
-| sidecar draft file + Write tool | draft delivery | Cut — the draft is the final message (`stdoutTail`); removes the sidecar, symlink/TOCTOU surface and the dot-directory spike |
+| sidecar draft file + Write tool | draft delivery | Cut — the draft is the final message (`SpawnResult.finalMessage`); removes the sidecar, symlink/TOCTOU surface and the dot-directory spike |
 
 **Repo evidence the design rests on** (verified by reading, content anchors):
 
@@ -105,8 +125,10 @@ schema-constrained publication path"); the properties underneath it are:
   (the dropped-path marker, `safeMd`-escaped only); `ensureScheduledAuditIssue` (`_cron-shared.ts`)
   publishes 500 chars of the agent's `stdoutTail` (the final message under `--print`) into a public issue
   body when the run goes RED.
-- The substrate already spawns with `--output-format json` and folds the final `result` text into
-  `stdoutTail` (cap `STDOUT_TAIL_CAP_BYTES` = 8192), memoized in Inngest state — the draft channel exists.
+- The substrate already spawns with `--output-format json` and `parseClaudeResultLine` returns the final
+  `result` text, which is folded into `stdoutTail` (a UTF-16 character tail of `STDOUT_TAIL_CAP_BYTES` =
+  8192, cut from the FRONT, with earlier raw non-result lines possible). The plan adds a dedicated
+  `finalMessage` field rather than parsing that tail.
 - **Run-report leaf.** `cron-community-monitor` is a `RUN_REPORT_CRONS` row; `buildAllowlistLines` emits a
   `run-report-label` directive for every row and `runHookSelfTest` then probes
   `gh issue create --label <label>`, aborting the spawn if it is not allowed. Removing `gh issue create`
@@ -140,7 +162,8 @@ Every path by which model-influenced bytes or capabilities can reach a public su
 | 4 | Router posting verbs (`bsky post`, `linkedin post-content`, `x post-tweet`) | prefix-allowlisted; inert only by env guards | allowlist lists the 16 read invocations explicitly |
 | 5 | `gh label create` | agent | verb removed |
 | 6 | Edits to previously published digests | agent (dir-wide `allowedPaths`) | no write tool; `exactPaths` backs it up (other edits dropped + loud) |
-| 7 | **Overwriting the allowlisted router script, then running it with the spawn env** | agent `Write`/`Edit` | `no-write` directive denies Write/Edit/MultiEdit/NotebookEdit in the hook; `--disallowedTools` removes them from the pool; spawn-time self-test probes the deny |
+| 7 | **Overwriting the allowlisted router script, then running it with the spawn env** | agent `Write`/`Edit` | `no-file-tools` directive denies Read/Glob/Grep/Write/Edit/MultiEdit/Task/Agent/Skill in the hook (NotebookEdit already hits the catch-all deny); `--disallowedTools` removes them from the pool; spawn-time self-test probes the deny |
+| 7b | **Secrets into the agent's own context** (then re-emitted through the free integers): `gh issue list --jq env` passes the hook (the single-quoted `env` carries no `$`), and the file-read deny-list is bypassable (`Grep{path:"/", glob:"proc/*/environ"}`, `Glob{pattern:"**/.git/config", path:"/tmp"}`, `Grep{path:"/pro*"}`) | agent `gh issue list`, `Read`/`Glob`/`Grep` | `gh issue list` removed from the allowlist (the handler upserts the issue, so the prompt's dedup step is dead); no file-reading tools at all (replaces a deny-list with absence) |
 | 8 | Dropped-path names in the PR body | agent-chosen file names | `exactPaths` mode renders a COUNT only |
 | 9 | Audit-issue `stdoutTail`/`stderrTail` on RED | model final message | withheld for this cron (`withholdModelOutput`); Sentry keeps the redacted tail |
 | 10 | Write credential in env and in `.git/config` | `contents/issues/pull_requests: write` | READ token for clone + spawn env; write token minted after the spawn; `origin` re-pointed for handler git |
@@ -153,14 +176,16 @@ Residual (explicitly accepted, tracked): (a) numeric *truth* — an injection ca
 and ~35 free integers are a covert encoding channel; mitigations are the #6695 sidecar (now bound into
 the render, below) and #7124, not this plan; (b) the interactive `/soleur:community digest` skill path is
 operator-attended, not an unattended publisher; (c) sibling claude-eval crons share the class (see
-Deferral Tracking); (d) the platform secrets in the spawn env remain for the read collectors.
+Deferral Tracking); (d) the hook tests only the literal `path`/`pattern` of `Grep`/`Glob`, so a recursive `Grep` rooted at `.`
+may or may not descend into `.git/config` (undecided by the repo) — accepted because the on-disk credential is
+now READ-scoped, and recorded for the sibling issue; (e) allowlisted verbs accept trailing arguments (`hn mentions --query <text>`, `discord messages <id>`), a path for in-context data to reach third parties — accepted because with no file tools and no env-dump verb the agent holds no secret in context; (f) the redacted spawn tail still reaches Sentry and alert emails (a phishing vector aimed at the operator, pre-existing, shared by every claude-eval cron) — recorded on #9606, not fixed here; (g) the spawn env still carries non-GitHub credentials for the read collectors (`DISCORD_BOT_TOKEN`, `BSKY_APP_PASSWORD`, `X_ACCESS_TOKEN`/`X_ACCESS_TOKEN_SECRET`, the LinkedIn tokens, `ANTHROPIC_API_KEY`); with no write primitive, no posting verb and no network egress verb they cannot be used to publish, but a covert encoding of a secret into the free integers would be a permanent public leak — containment rests on the hook's `/proc`/secret-read denies and on router verbs not echoing env (a source test asserts the router scripts contain no `printenv`, bare `env`, `set -x` or `declare -p`).
 
 ## Proposed Solution
 
 ```mermaid
 flowchart LR
-  D[Discord / HN / GitHub comments<br/>untrusted] --> C[spawned claude: collect + classify<br/>READ token, 16 read verbs, no write tools]
-  C -->|final message = JSON draft| S[(stdoutTail, memoized)]
+  D[Discord / HN / GitHub comments<br/>untrusted] --> C[spawned claude: collect + classify<br/>READ token, 16 read verbs, no file tools]
+  C -->|final message = JSON draft| S[(SpawnResult.finalMessage, memoized)]
   K[(collector-status sidecar)] --> V
   S --> V{handler: strict parse + render<br/>closed enums / bounded ints}
   V -- invalid --> R[RED + Sentry op, NO publication]
@@ -171,7 +196,10 @@ flowchart LR
 ```
 
 **Draft contract** (`z.strictObject` everywhere; unknown keys rejected). The agent's final message must be
-exactly one JSON object (one optional leading code fence is tolerated; anything else is rejected). All six
+exactly ONE LINE of compact JSON (one object; no code fence, no narration — anything else is rejected). The
+handler parses `SpawnResult.finalMessage`, a NEW field the substrate fills from the `result` event's text
+(redacted with the existing child redactor, capped at 16 KiB, with a `finalMessageTruncated` boolean; no
+tail slicing), not the 8 KiB front-cut `stdoutTail`. All six
 platform keys are required; each carries `status` (`collected|partial|failed|disabled`), `failureCause`
 (closed enum `auth|rate-limit|timeout|output-too-large|script-error|not-configured|unknown`, required iff
 status is `partial`/`failed`, forbidden otherwise) and `metrics`, an object of per-platform closed key sets
@@ -180,16 +208,21 @@ include `externalContributors` and `externalInteractions` (integers) so a first 
 visible without any name. `periodDays` is an integer `1..31` (the handler derives both dates from the run
 date — the model never supplies a date string). `topics` is at most 9 entries of
 `{ category: <closed 9-member enum>, count: int }`, unique categories. **There is no string field except
-enum members.** The raw final message is size-checked (`<= 8 KiB`, the tail cap) before parse.
+enum members.** `oversized` is `finalMessageTruncated` or a `Buffer.byteLength` over the cap; an absent field (a
+result-less run, which the substrate renders as the two-character empty-string stand-in in the tail) is
+`missing`. Every integer is `.int().min(0).max(<per-key realistic cap>)` with safe-integer bounds;
+`engagementRatePct` renders with `toFixed(1)` so `1e-7`/`1e+21` forms cannot appear; `topics` carries a
+uniqueness refinement. The metric caps are deliberately realistic (not 1e9) and a test asserts the total
+encodable bits across all integers stays under a stated budget, to bound the covert-channel residual.
 
 **Collector truth is bound into the render.** `verify-collector-status` moves BEFORE validation. If the
 sidecar reports a failed github record the handler overrides github to `failed` (cause `script-error`) and
-drops the model's github metrics before rendering; a missing sidecar keeps today's non-paging behaviour.
+drops the model's github metrics before rendering; a missing sidecar keeps today's non-paging behaviour but the handler renders github as `partial` (cause `unknown`) so the digest never presents unverified github numbers as `collected`.
 The model cannot publish github numbers over a collector that reported failure.
 
 **Render.** One pure function turns a validated draft (plus the override) into `{ digestMarkdown,
 issueBody }`; issue title and label are existing constants. The issue body never starts with
-`AUDIT_SELF_REPORT_BODY_PREFIX` (dedup keys on it). The rendered text is closed-domain and is the
+`AUDIT_SELF_REPORT_BODY_PREFIX` (dedup keys on it). Both outputs carry handler-constant click-through lines (`https://github.com/jikig-ai/soleur/issues` and `.../pulls`) so a count never leaves the founder without a handle on inbound items; the alphabet regex admits them. The rendered text is closed-domain and is the
 memoized step output (never the raw draft). The digest drops Top Contributors, Community Interactions,
 stargazer usernames, quotes and free-text Trending prose: those need a free-text field, which the closure
 forbids (Decision Challenge below). A test asserts the rendered grammar (the alphabet regex
@@ -204,21 +237,35 @@ digest file with unlink + `wx`; returns the verdict and rendered text) -> `mint-
 `origin` -> `publish-issue` -> `verify-output` (unchanged call) -> the unchanged `heartbeatOk &&
 !spawnResult.abortedByTimeout` gate -> `safe-commit-pr` with `exactPaths`.
 
-- `publish-issue` is an **upsert**: if a real digest issue for today exists (a replay, or the #6714
-  recovery case where the digest never landed) it PATCHes that issue's body with the rendered text, which
-  also bumps `updated_at` so `verify-output` sees it; otherwise it POSTs. The existence read FAILS CLOSED
-  (a read error throws; it does not fall open to a duplicate). Bounded in-step retry (3 attempts, backoff)
+- `publish-issue` is an **upsert** returning `{ issueNumber, via: "created" | "patched" }`: if a real
+  digest issue for today exists (a replay, or the #6714 recovery case where the digest never landed) it
+  PATCHes that issue's body with the rendered text; otherwise it POSTs. `verifyScheduledIssueCreated`
+  credits an `updated_at` bump only on a NON-closed issue and the monitor issues are closed shortly after
+  filing, so the handler does not rely on `verify-output` for the patched path: it is satisfied by
+  `via === "patched"` (the handler's own write is the proof), and by `verify-output` for `created`. The
+  PATCH does not reopen the issue. The existence read FAILS CLOSED
+  (a read error throws; it does not fall open to a duplicate) and a PATCH target must satisfy ALL of:
+  `!issue.pull_request`, `user.type === "Bot"` with the app's `[bot]` login, `isRealScheduledDigest` (which
+  excludes the audit-prefix body), and the exact canonical title; the PATCH sends `body` only (never state,
+  title, labels or assignees). The milestone lookup is `GET /milestones` with `state=open`, exact title
+  match, `per_page=100`. Bounded in-step retry (3 attempts, backoff)
   on 5xx/429; a 422 is a failure. The milestone is resolved by a `GET /milestones` title lookup; a missing
   milestone creates the issue without one and mirrors a Sentry warn.
 - `verify-output` is now tautological as a proof the agent produced anything; the real gate is the
-  validation verdict, so `heartbeatOk = heartbeatOk && publication.ok` is applied immediately after it and
-  before the (verbatim) persistence gate. A human comment bumping `updated_at` therefore cannot let
+  validation verdict, so `heartbeatOk = (verifyOutputOk || via === "patched") && publication.ok` is applied
+  immediately after it and before the (verbatim) persistence gate. A human comment bumping `updated_at` therefore cannot let
   persistence run without a render.
-- The issue is published before the commit and links the digest path (as today); a commit failure leaves a
-  link to a not-yet-existing file until the next run — accepted and recorded in the runbook.
+- The issue is published before the commit (the persistence gate keys on it) and links the digest path. If
+  `safe-commit-pr` ends anything but `committed`, the handler PATCHes the issue body to a fixed notice
+  ("digest not committed - see Sentry") so the issue never points at a file that will not exist; the PATCH
+  is a handler constant.
 - Dropped-path events stay loud (Sentry + PR-body count) and do not flip `heartbeatOk` (today's behaviour).
-- Marker 3 (`emitCommunityDigestFile`) keeps its position; `present` now means "the handler wrote the
-  digest" because the write moved into `validate-publication`.
+- Marker 3 (`emitCommunityDigestFile`) keeps its position and gains `verdict: "ok" | "rejected" |
+  "skipped-timeout"` and `writer: "handler"` (update `cron-liveness-marker.ts` and
+  `test/server/cron-liveness-marker.test.ts`): `present` alone no longer distinguishes "the agent never
+  wrote" from "validation failed". The digest is written in `validate-publication` AND re-written
+  idempotently from the memoized rendered text immediately before `safeCommitAndPr` (a throw in
+  `publish-issue` followed by a retry would otherwise find the memoized step skipped and the file gone).
 - Pre-existing, unchanged, non-goal: two same-day runs while the first PR sits in the merge queue can open
   two PRs on the same file.
 
@@ -235,10 +282,53 @@ Run commands from `apps/web-platform` with `./node_modules/.bin/vitest run <file
 ### Phase 0 — RED tests and one spike
 
 - Write all new tests first; confirm they fail for the right reason (module/option/directive absent).
-- Spike S1 (hook directive): in `cron-bash-allowlist-hook.test.ts`, assert that with a `no-write` line in
-  the allowlist the real hook DENIES `Write`, `Edit`, `MultiEdit`, `NotebookEdit` and still ALLOWS them for a
-  cron without the line; and that the real hook DENIES `gh issue create|comment`, `gh label create` and
-  `bash <router> bsky post` for the narrowed community allowlist.
+- Spike S1 (hook directive), following the precedent in `cron-claude-eval-substrate.test.ts`: call the
+  pure `decide(input, lines)` in-process, where `lines` is ALWAYS the output of
+  `buildAllowlistLines("cron-community-monitor", …)` (never the raw allowlist array — feeding the raw array
+  would stay green with `CRON_NO_FILE_TOOLS` emptied). Assert `Read`, `Glob`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent`, `Skill` are DENIED with the
+  directive and ALLOWED for a cron without it (plus the bypass probes the security review reproduced:
+  `Grep{path:"/",glob:"proc/*/environ"}`, `Glob{pattern:"**/.git/config",path:"/tmp"}`, `Grep{path:"/pro*"}`,
+  `gh issue list --json number --jq env` — all DENIED under the directive because the verbs/tools are
+  absent, not because a deny-list matched); assert `NotebookEdit` is DENIED both with and without it (the
+  hook's catch-all already denies that class — `--disallowedTools` is the only layer that distinguishes it,
+  stated plainly in the test); assert `gh issue create|comment`, `gh label create`, `bash <router> bsky post`
+  and a redirection `bash <router> platforms > <router>` are DENIED. Keep ONE spawned-hook row through
+  `runHookSelfTest` with a stub that allows `Write`, proving the self-test throws. Every mutation row in the
+  Guard Contract names its red test by id (`G1-4`, `G2-4`, …) in the test file's `it()` titles; run the suite
+  on the pristine tree first and grade only rc=1 mutants as caught; scope each source-edit mutation to its
+  block (the allowlist maps and `community-router.sh` carry near-identical lines).
+- Fixture mechanics (from the deepen-plan test review):
+  - The heartbeat and dedup suites replace the whole substrate module with a factory of named exports — add
+    `setOriginToken` (and `COMMUNITY_ROUTER_READ_VERBS` if imported) or the import throws; their `step.run`
+    mock is an inline pass-through that memoizes nothing, so replay and step-order rows use the suites'
+    `runLikeInngest` helper.
+  - `mintInstallationToken` is mocked to a constant today; mock it by `permissions` (read -> `READ_TOK`,
+    write -> `WRITE_TOK`) and assert the argument to the `setupEphemeralWorkspace` spy, the
+    `spawnClaudeEval` spy and `setOriginToken`. The `.git/config` claim is proved in the SUBSTRATE test with
+    a real `git init` fixture (`buildAuthenticatedCloneUrl(readToken)` lands in `remote.origin.url`), not in
+    a handler test where setup is mocked.
+  - The dedup fake store throws on any route but `GET issues`/`GET contents`: add `POST /issues`,
+    `PATCH /issues/{n}` and `GET /milestones` writing to the store; the spawn mock stops writing to the store
+    (the publish step is the writer, which keeps `realDigestCount()` meaningful). Do not `vi.mock` the publish
+    function (that makes the store invariant a proxy again) — inject a fake octokit into `upsertDigestIssue`.
+  - The existing "fails OPEN on LIST read error" dedup test stays for the PRE-spawn dedup read; add its
+    counterpart for the fail-closed publish read.
+  - `okSpawn` carries no `finalMessage` today: every happy-path case needs `validDraftFinalMessage()` on the new field (and `stdoutTail` stays `""`-compatible).
+  - `cron-community-monitor-collector-status.test.ts` slices the handler SOURCE between
+    `"verify-collector-status"` and `"Step 4.5: deterministic persistence"` and asserts source order plus the
+    `heartbeatOk && !spawnResult.abortedByTimeout` regex; moving the sidecar read up changes those anchors —
+    rework them, keep them as secondary guards and add a behavioural row (sidecar red -> page RED, digest
+    still committed, github rendered `failed`).
+  - Final message: add `finalMessage` and `finalMessageTruncated` to `SpawnResult` (the substrate fills
+    them from `parsedResult.resultText`, redacted, capped at 16 KiB) and test them in the substrate suite for
+    a normal result, a result-less run (the empty-string stand-in) and an oversized result; the publication
+    tests then cover a one-line draft -> parsed, a fenced or pretty-printed draft -> rejected, a truncated
+    message -> `oversized`, an absent field -> `missing`, and `{"__proto__":…}` / duplicate keys fed as RAW
+    JSON text (a JS literal sets the prototype instead of an own key).
+  - Guard 1 row 2's leaf-count floor derives from `Object.keys(<metrics table>)` independently of the
+    enumerator under test; Guard 3 row 6 asserts `expect(prBodyArg).toBeTypeOf("string")`; the
+    posting-verb source test asserts a non-empty match count (no `skipIf`).
+- Spike S3 (no file tools needed): confirm from the prompt, the router scripts and recent digests that no step needs `Read`/`Glob`/`Grep` (large router outputs are truncated inline by the Bash tool, not spilled to a file the agent must read; the 2026-10-05 digest note "output exceeded inline limit" is the evidence to check). If a spill-read IS required, fall back to a `read-root <ephemeralRoot>` allow-list directive (resolve every path-bearing field of `Read`/`Glob`/`Grep` — `file_path`, `path`, `pattern`, `glob` — under that root, deny `..`, a leading `/`, `.git`, `.claude`; set `HOME` to `ephemeralRoot`) instead of removing the tools; record the choice in ADR-272.
 - Spike S2 (token): confirm against the GitHub App manifest (`apps/web-platform/infra/github-app-manifest.json`)
   and GitHub's per-endpoint permission table that `{contents, issues, pull_requests}: read` covers every
   `github-community.sh` call (table in Phase 5); confirm `mintInstallationToken` accepts the narrowed
@@ -250,7 +340,7 @@ One table of platform metric keys, labels and caps drives schema, renderer and t
 (no drift). Exports: `parseCommunityDraft(finalMessage) -> { ok: true, draft } | { ok: false, reason,
 codes }` — `codes` are built from zod `code` plus schema-known path segments only (never `unrecognized_keys`
 key names or `message`); `renderCommunityPublication(draft, { runDate, repo, githubOverride })`;
-`readDraftFromStdout(stdoutTail)`; `writeDigestFileContained(spawnCwd, relPath, text)` (lstat each ancestor,
+`readFinalMessage(spawnResult)`; `writeDigestFileContained(spawnCwd, relPath, text)` (lstat each ancestor,
 unlink existing, write with `wx`; `node:fs` imported lazily like `readCollectorStatus`); `upsertDigestIssue`
 (octokit injected, fail-closed read, bounded retry, milestone lookup). The module imports no zod
 constructor outside an allowlist (`strictObject|enum|literal|int|number|boolean|array`) — a source test
@@ -272,17 +362,23 @@ fails on any other `z.` call (`z.string`, `z.email`, `z.record`, `z.any`, `z.cus
 - Community allowlist becomes `COMMUNITY_ROUTER_READ_VERBS` (16 literal invocations: `platforms`;
   `discord guild-info|members|channels|messages`; `x fetch-metrics`; `bsky get-metrics`;
   `linkedin fetch-metrics|fetch-activity`; `github activity|contributors|discussions|repo-stats|fetch-interactions`;
-  `hn mentions|trending`), each prefixed with the literal router path, plus `gh issue list`. Removed:
-  `gh issue create`, `gh issue comment`, `gh label create`, `gh label list`, and the bare router prefix.
+  `hn mentions|trending`), each prefixed with the literal router path and nothing else. Removed:
+  `gh issue create`, `gh issue comment`, `gh label create`, `gh label list`, `gh issue list` (a
+  `--jq env` dump; the prompt's `CLONE DEPTH RULE` dedup paragraph is deleted) and the bare router prefix.
   `allow[0]` is a full literal command (`… platforms`) because `runHookSelfTest` executes it. The prompt
   gains the literal `discord messages <channel_id>` so the prompt-parity test covers every verb.
-- New hook directive `no-write` (file-driven per cron, ADR-058 pattern): the substrate is its only
-  producer (set `CRON_NO_WRITE = ["cron-community-monitor"]`), the hook denies `Write`, `Edit`,
-  `MultiEdit` and `NotebookEdit` when it is present, `runHookSelfTest` probes the deny, and the
-  parity test's directive-spelling regex gains `no-write`.
-- `CLAUDE_CODE_FLAGS` adds `--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill` (second
-  layer; removes the tools from the model's pool, and removes the sub-agent route that otherwise rests on
-  hook inheritance) and `--allowedTools` becomes `Bash,Read,Glob,Grep`.
+- New hook directive `no-file-tools` (file-driven per cron, ADR-058 pattern): the substrate is its only
+  producer (set `CRON_NO_FILE_TOOLS = ["cron-community-monitor"]`), the hook denies `Read`, `Glob`, `Grep`,
+  `Write`, `Edit`, `MultiEdit`, `Task`, `Agent` and `Skill` when it is present (`NotebookEdit` already hits the
+  catch-all deny, with or without the directive), `runHookSelfTest` probes the deny, and the
+  parity test's directive-spelling regex gains `no-file-tools`.
+- `CLAUDE_CODE_FLAGS` adds `--disallowedTools Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill` (a second
+  layer; removes the tools from the model's pool and the sub-agent route that otherwise rests on hook
+  inheritance) and `--allowedTools` becomes `Bash`. **The hook `no-file-tools` directive is the
+  LOAD-BEARING layer**: no cron spawn passes `--disallowedTools` today, the repo cannot prove offline how it
+  composes with a hook `allow`, and `S1` exercises only the hook. ADR-272 says so; the flag assertion is an
+  argv test only, and the first post-merge run is the live evidence (a `Write` attempt must appear as a hook
+  denial, not a write).
 - Run-report leaf: `RunReportCron` gains a closed union `filer: "agent" | "handler"` (default `"agent"`;
   community is `"handler"`). `CRON_RUN_REPORT_LABELS` (the directive source) skips handler rows; the
   sweeper (`closeAfterDays: 9`), the `issue-flow-measure.sh` label mirror and parity row (i) keep the row.
@@ -317,10 +413,16 @@ fails on any other `z.` call (`z.string`, `z.email`, `z.record`, `z.any`, `z.cus
   (`COMMUNITY_SPAWN_TOKEN_PERMISSIONS = { contents, issues, pull_requests: "read" }`, beside
   `ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS`) used for the clone (`setupEphemeralWorkspace` and
   `spawnClaudeEval` keep their single-token signatures — they simply receive the read token). After the
-  spawn, a `mint-write-token` step mints `DEFAULT_CRON_TOKEN_PERMISSIONS` (also keeps the write token's
-  1-hour life clear of the ~50-minute spawn) and `setOriginToken(spawnCwd, writeToken)` (a small exported
+  spawn (the child has exited and, on a timeout, the run is skipped, so no write token is ever minted on the
+  timeout path), a `mint-write-token` step mints `DEFAULT_CRON_TOKEN_PERMISSIONS` (both mints keep
+  `repositories: [REPO_NAME]`; minting after the spawn also keeps the write token's 1-hour life clear of the
+  ~50-minute run) and `setOriginToken(spawnCwd, writeToken)` (a small exported
   helper using `buildAuthenticatedCloneUrl`) re-points `origin` before `publish-issue`/`safe-commit-pr`.
-  The audit-issue fallback uses the write token (minted unconditionally after the spawn).
+  The audit-issue fallback must work when the run died before the write token exists (setup or
+  `claude-eval` threw): `ensureScheduledAuditIssue` already accepts an injected `octokit`, so the community
+  call passes the App-installation client from `createProbeOctokit()` instead of the (now read-only)
+  `installationToken`; `cron-producer-output-wiring.test.ts` anchors (`ensureScheduledAuditIssue(`,
+  `stdoutTail: spawnResult!?.stdoutTail`, `onBeforeHeartbeat:\s*heartbeatOk\s*\?\s*undefined`) are kept.
 - Permission derivation (per call, from `github-community.sh`; confirmed in S2):
 
   | `github-community.sh` call | Needs |
@@ -349,7 +451,7 @@ the Acceptance Criteria.
 - `apps/web-platform/server/inngest/functions/_cron-community-publication.ts` — closed schema, parse, render, contained write, issue upsert.
 - `apps/web-platform/test/server/inngest/cron-community-publication.test.ts` — schema leaf-injection, render grammar fuzz, constructor-allowlist source test.
 - `apps/web-platform/test/server/inngest/cron-community-monitor-publication-flow.test.ts` — handler flow (valid/invalid/timeout/replay/recovery/sidecar-red/token custody).
-- `apps/web-platform/test/server/inngest/cron-community-monitor-allowlist.test.ts` — allowlist closure + real-hook probes + `no-write` probes.
+- `apps/web-platform/test/server/inngest/cron-community-monitor-allowlist.test.ts` — allowlist closure + real-hook probes + `no-file-tools` probes.
 - `knowledge-base/engineering/architecture/decisions/ADR-272-schema-constrained-handler-side-publication.md` — ordinal verified free across all `origin/*` refs at plan time; re-verify at ship.
 - `knowledge-base/project/specs/feat-one-shot-7122-community-monitor-output-allowlist/decision-challenges.md` — Taste challenge (written).
 - `knowledge-base/legal/audits/2026-10-clo-attestation-7122.md` — counsel-ready attestation draft with re-evaluation triggers (see Domain Review).
@@ -357,18 +459,20 @@ the Acceptance Criteria.
 ## Files to Edit
 
 - `apps/web-platform/server/inngest/functions/cron-community-monitor.ts` — prompt, flow, token custody, flags, env, comments.
-- `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts` — community allowlist + `COMMUNITY_ROUTER_READ_VERBS`; `CRON_NO_WRITE` directive producer; self-test probe; run-report derivation skips handler rows; `setOriginToken`.
-- `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` — parse the `no-write` directive; deny the four write-class tools when present.
+- `apps/web-platform/server/inngest/functions/_cron-claude-eval-substrate.ts` — community allowlist + `COMMUNITY_ROUTER_READ_VERBS`; `CRON_NO_FILE_TOOLS` directive producer; `SpawnResult.finalMessage`/`finalMessageTruncated` filled from the `result` event; self-test probe; run-report derivation skips handler rows; `setOriginToken`.
+- `apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs` — parse the `no-file-tools` directive; deny `Read`, `Glob`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent`, `Skill` when present.
 - `apps/web-platform/server/inngest/functions/_cron-run-reports.ts` — `filer` union on every row.
 - `apps/web-platform/server/inngest/functions/_cron-safe-commit.ts` — `exactPaths`, shared `isPathAllowed`, count-only marker in exact mode, `.soleur-digest-draft/` NOT added (no sidecar).
 - `apps/web-platform/server/inngest/functions/_cron-shared.ts` — `withholdModelOutput`, `COMMUNITY_SPAWN_TOKEN_PERMISSIONS`.
-- `apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts` — `no-write` rows (S1).
-- `apps/web-platform/test/server/inngest/cron-run-report-labels-parity.test.ts` — row (ii) split; directive-spelling regex gains `no-write`; non-vacuity: at least one handler row.
+- `apps/web-platform/server/cron-filing-deny-marker.ts` and the substrate's result parse — an all-tools `permissionDenialCount` plus a bounded closed `deniedTools` list on `SpawnResult` (sibling of `countFilingDenials`, which only counts `gh issue create`-shaped Bash filings); `apps/web-platform/server/cron-liveness-marker.ts` — `verdict` and `writer` on `CommunityDigestFileMarker`; tests `test/server/cron-filing-deny-marker.test.ts`, `test/server/cron-liveness-marker.test.ts`.
+- `apps/web-platform/test/server/inngest/cron-bash-allowlist-hook.test.ts` — `no-file-tools` rows (S1).
+- `apps/web-platform/test/server/inngest/cron-run-report-labels-parity.test.ts` — row (ii) split; directive-spelling regex gains `no-file-tools`; non-vacuity: at least one handler row.
 - `apps/web-platform/test/server/inngest/cron-claude-eval-substrate.test.ts` — community allowlist rows (router-batch ALLOW stays; posting-verb DENY rows), run-report block (counts 9/10, fixture swap), `RESTORED` loop.
 - `apps/web-platform/test/server/inngest/cron-community-monitor.test.ts` — prompt anchors (removed: `## Top Contributors`, `Community Interactions`, `--milestone`; added: draft contract keys, `discord messages`); `buildSpawnEnv` anchor list without the webhook; flags assertions.
 - `apps/web-platform/test/server/inngest/cron-community-monitor-heartbeat.test.ts`, `-dedup.test.ts`, `-collector-status.test.ts` — fixture rework: a shared `validDraftFinalMessage()` helper for the spawn mock's `stdoutTail`, a `POST`/`PATCH /issues` route in the dedup fake, a `vi.mock` seam on the publish function, ordering expectations (sidecar before validate).
 - `apps/web-platform/test/server/inngest/cron-safe-commit.test.ts` — `exactPaths`, `isPathAllowed`, count-only marker, unchanged marker for the other callers.
 - `apps/web-platform/test/server/inngest/cron-safe-commit-parity.test.ts` — community stays in the cohort; assert `allowedPaths` is not the directory.
+- `apps/web-platform/test/server/inngest/cron-producer-output-wiring.test.ts` — keep every source anchor it asserts for `cron-community-monitor.ts` (`resolveOutputAwareOk(`, `"run-started-at"`, `ok: heartbeatOk`, `finalizeOutputAwareHeartbeat(`, the audit-issue call shape); `apps/web-platform/test/server/inngest/cron-shared.test.ts` — rows for `ensureScheduledAuditIssue` `withholdModelOutput`.
 - `apps/web-platform/test/repo-wide-suites.ts` — register `test/server/inngest/cron-community-monitor-allowlist.test.ts` (reads `plugins/soleur/skills/community/scripts/*.sh`; `repo-wide-containment.test.ts` names the file to add).
 - `knowledge-base/engineering/architecture/diagrams/model.c4`, `knowledge-base/engineering/architecture/diagrams/model.likec4.json` (regenerated), and the web-platform canonical mirror checked by `apps/web-platform/test/c4-canonical-mirror.test.ts` — `api -> kb` edge text only.
 - `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, `knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md`, `knowledge-base/legal/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md` — CLO wording list below (append-only supersede markers; no edits to `docs/legal/`).
@@ -386,7 +490,7 @@ None. (Queried the 200 most recent open `code-review` issues for every planned c
 |---|---------------------|-----------|--------|
 | 1 | "An output allowlist or schema-constrained publication path, so model output cannot determine arbitrary published text." [issue #7122] | Phase 1 (closed schema + render), Phase 4 (handler publishes) | mapped |
 | 2 | "A redaction-only pass does not close this (redaction constrains content, not structure)." [brief] | Cut List (redaction not built); Alternatives table | mapped |
-| 3 | "committed to a public repository and posted to public GitHub issues under a bot identity with write access" [issue #7122] | Phase 2 (exact-path commit), Phase 3 (issue and write verbs removed, no-write directive), Phase 4 (handler issue), Phase 5 (credential custody) | mapped |
+| 3 | "committed to a public repository and posted to public GitHub issues under a bot identity with write access" [issue #7122] | Phase 2 (exact-path commit), Phase 3 (issue and write verbs removed, no-file-tools directive), Phase 4 (handler issue), Phase 5 (credential custody) | mapped |
 | 4 | "no output allowlist between the model and the publication tool" [issue #7122] | Phase 3 (allowlist closure) | mapped |
 | 5 | "Note: an unrelated third-party comment on the issue recommending an ingestion-side vendor filter is out of scope and must not be acted on." [brief] | Non-Goals | mapped |
 | 6 | "Use \"Closes #7122\" in the PR body." [brief] | PR-body reminder in Acceptance Criteria | mapped |
@@ -397,7 +501,7 @@ None. (Queried the 200 most recent open `code-review` issues for every planned c
 |-----------|-----------------------------------|---------|
 | `_cron-community-publication.ts` + its tests | "schema-constrained publication path" | asked |
 | Phase 3 allowlist closure + hook tests | "no output allowlist between the model and the publication tool" | asked |
-| Phase 3 `no-write` directive and `--disallowedTools` | "model output cannot determine arbitrary published text" | asked |
+| Phase 3 `no-file-tools` directive and `--disallowedTools` | "model output cannot determine arbitrary published text" | asked |
 | Phase 2 `exactPaths` | "committed to a public repository" | asked |
 | Phase 4 handler-side issue + prompt rewrite | "posted to public GitHub issues" | asked |
 | Phase 5 `withholdModelOutput` | "model output cannot determine arbitrary published text" | asked |
@@ -423,7 +527,7 @@ None. (Queried the 200 most recent open `code-review` issues for every planned c
 ### Engineering (CTO)
 
 **Status:** reviewed
-**Assessment:** two P0s folded in: (1) the allowlisted router script was agent-writable, so verb narrowing alone did not make posting unreachable — fixed by removing the write primitive (`no-write` directive + `--disallowedTools`) and the draft moving to the final message; (2) PR-body names were an open channel — now a count. Also folded: heartbeat gating on the validation verdict, marker-3 semantics, constructor-allowlist tripwire, `unrecognized_keys` codes excluded, `DISCORD_WEBHOOK_URL` dropped, `topics.refs` cut.
+**Assessment:** two P0s folded in: (1) the allowlisted router script was agent-writable, so verb narrowing alone did not make posting unreachable — fixed by removing the write primitive (`no-file-tools` directive + `--disallowedTools`) and the draft moving to the final message; (2) PR-body names were an open channel — now a count. Also folded: heartbeat gating on the validation verdict, marker-3 semantics, constructor-allowlist tripwire, `unrecognized_keys` codes excluded, `DISCORD_WEBHOOK_URL` dropped, `topics.refs` cut.
 
 ### Legal (CLO)
 
@@ -440,7 +544,7 @@ None. (Queried the 200 most recent open `code-review` issues for every planned c
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** the daily community digest and its tracking issue stop appearing (monitor goes RED with a Sentry op naming the reason; that day's digest is not retried), or a digest renders with wrong numbers; no product UI is touched.
-- **If this leaks, the user's data / workflow is exposed via:** attacker-chosen text published under Jikigai's bot identity into a public repository's git history and its forks (permanent), including a defamatory or scam sentence about a named third party, and third-party commenter/stargazer usernames continuing to be republished (the PA-32 limb, which this change does not retroactively fix).
+- **If this leaks, the user's data / workflow is exposed via:** attacker-chosen text published under Jikigai's bot identity into a public repository's git history and its forks (permanent) — for example a Discord member's message turned into a false public claim about the project, or a defamatory or scam sentence about a named third party; and, because the closed schema still lets an injection choose enum values and in-range integers, a false "github: failed" status or inflated counts published under the company's name. The 80+ digests already published keep naming commenters and stargazers; this change does not touch them (#7119).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one injected publication is irreversible (git history, forks), carries the company's name and can name a real person, so a single event is brand-material; `aggregate pattern` would mean tolerating the first occurrence.
 
@@ -456,7 +560,7 @@ liveness_signal:
   configured_in: apps/web-platform/server/inngest/functions/cron-community-monitor.ts (SENTRY_MONITOR_SLUG) and apps/web-platform/infra/sentry/cron-monitors.tf
 error_reporting:
   destination: Sentry web-platform project via reportSilentFallback (SENTRY_DSN)
-  fail_loud: ops community-publication-rejected (extra.reason, extra.codes, draftBytes, abortedByTimeout, spawnExit) and community-publication-issue-failed; monitor RED
+  fail_loud: ops community-publication-rejected (extra.reason, codes, draftBytes, abortedByTimeout, spawnExit, resultSubtype, numTurns, denialCount, sidecarPresent, startsWithBrace) and community-publication-issue-failed; community-agent-denied-verb (warn) when the spawn recorded any denied tool call; monitor RED on the first two
 failure_modes:
   - mode: the agent's final message is missing, oversized, unparseable or schema-invalid (injection attempt or model drift)
     detection: Sentry op community-publication-rejected with a closed reason (missing, oversized, parse, schema) and zod issue codes plus leaf paths, never values (layer 1 sentry-correlation middleware tags inngest.fn_id and run id; Sentry monitor RED)
@@ -464,9 +568,9 @@ failure_modes:
   - mode: handler could not upsert the issue or write the digest (GitHub 5xx after bounded retry, containment refusal)
     detection: Sentry op community-publication-issue-failed or safe-commit-failed (layer 1), plus the existing digest-liveness marker 6 in Better Stack (layer 3 Vector journald shipper)
     alert_route: Sentry monitor alert
-  - mode: an injected agent reaches for a denied publication or write verb (gh issue create/comment, a router posting verb, Write/Edit)
-    detection: the substrate's existing SOLEUR_CRON_FILING_DENY marker (pino WARN shipped by the Vector journald shipper, layer 3) counts denied filings from permission_denials; the prompt never instructs a filing now, so any non-zero count is anomalous
-    alert_route: Better Stack Logs query on the marker; the run itself stays GREEN because nothing was published
+  - mode: an injected agent reaches for a denied publication or write verb (gh issue comment, a router posting verb, Write/Edit, a denied gh issue create)
+    detection: the handler counts ALL permission_denials from the spawn result (a sibling of countFilingDenials, which counts only gh issue create and gh api issues creates from Bash and would miss the other verbs) and mirrors a warn-level Sentry event community-agent-denied-verb carrying only a closed tool-name list and the count (layer 1 sentry-correlation middleware); the prompt never instructs any of these verbs, so a non-zero count is anomalous; SOLEUR_CRON_FILING_DENY (layer 3 Vector journald shipper) remains for denied filings; neither survives a run killed at the timeout
+    alert_route: records only and pages no one by design (the run stays GREEN because nothing was published); queried via the Sentry op
   - mode: read-only spawn token insufficient for a collector (regression from Phase 5)
     detection: existing collector-status sidecar - Sentry op collector-status-failed (layer 1); the handler override renders github as failed in the digest
     alert_route: Sentry monitor alert
@@ -475,14 +579,18 @@ logs:
   retention: Sentry project retention (90 days); Better Stack Logs source retention
 discoverability_test:
   command: curl -s https://api.github.com/search/issues?q=label:scheduled-community-monitor+repo:jikig-ai/soleur
-  expected_output: Community Monitor
+  expected_output: scheduled-community-monitor
 ```
 
 **Affected-surface note (Phase 2.9.2).** The affected surface is the cron worker plus the agent spawn; the
 handler cannot see inside the agent, so the one `community-publication-rejected` event carries the
 discriminating fields in a single emission: `reason`, `codes`, `draftBytes`, `abortedByTimeout`,
-`spawnExit` — enough to separate "agent never answered", "agent wrote junk", "schema drift" and a
-timeout without a second blind fix. The `discoverability_test` was executed once at plan time (it printed
+`spawnExit`, `resultSubtype`, `numTurns` (from the already-parsed result event), `denialCount`,
+`sidecarPresent`, `startsWithBrace` — enough to separate "hit max turns or errored", "refused or narrated",
+"collectors never ran", "schema drift", "an in-flight old-prompt run" and a timeout without a second blind
+fix. All fields are closed vocabulary or numeric; none carries text. The new ops need no tag-filtered Sentry
+alert rule: the RED monitor (`failure_issue_threshold = 1`) covers them, and no existing rule filters on
+the ops this change touches (checked under `apps/web-platform/infra/sentry/`). The `discoverability_test` is a weak liveness read (any historical issue satisfies it); the freshness check is the post-merge acceptance criterion. It was executed once at plan time (it printed
 37 matching lines against the live repo; the issues-list endpoint was rejected because it returns open issues only and the monitor issues are closed shortly after filing).
 
 ## Architecture Decision (ADR/C4)
@@ -494,7 +602,7 @@ crons that publish to a public surface do so handler-side from a closed-schema d
 write or publication capability and no write credential during its run.** It cites
 `ADR-033-inngest-cron-functions-invoke-claude-code-via-child-process-spawn` (not the other two ADR-033
 files), extends ADR-054 (persistence is a platform responsibility; now authorship of the committed bytes
-is too) and ADR-058 (file-driven per-cron directive: `no-write`), records the clone/push token custody
+is too) and ADR-058 (file-driven per-cron directive: `no-file-tools`), records the clone/push token custody
 split, the ADR-126 interaction (the issue is handler-made, so `verify-output` observes a deterministic
 artifact and the validation verdict is the gate) and the global `exactPaths`/`isPathAllowed` addition.
 Status `accepted`; the sibling rollout is tracked in an issue, not an `adopting` status. The ADR states
@@ -553,10 +661,10 @@ expected count derives from), the constructor-allowlist source test and the ADR-
 ### Guard 2 — Containment closure (verbs, write primitive, credential)
 
 **Property.** The spawned agent can invoke no verb that publishes to GitHub or a community platform,
-cannot write or edit any file (including the allowlisted router script), and holds no write credential.
+cannot write or edit any file (including the allowlisted router script), and holds no GitHub write credential.
 
 **Assembly.** `CRON_BASH_ALLOWLISTS["cron-community-monitor"]` entries; `COMMUNITY_ROUTER_READ_VERBS`;
-every `community-router.sh <platform> <verb>` literal in `COMMUNITY_MONITOR_PROMPT`; the `no-write`
+every `community-router.sh <platform> <verb>` literal in `COMMUNITY_MONITOR_PROMPT`; the `no-file-tools`
 directive line in the file `buildAllowlistLines` produces; the real hook run against that file;
 `CLAUDE_CODE_FLAGS` (`--allowedTools`, `--disallowedTools`); `buildSpawnEnv`'s output; the token passed
 to `setupEphemeralWorkspace` and `spawnClaudeEval`. Chokepoints: the substrate's allowlist file and the
@@ -569,13 +677,15 @@ spawn's argv/env, both produced in one module.
 | 1 | Re-add `gh issue create` to the community entry | RED |
 | 2 | Re-add the bare router prefix `bash plugins/soleur/skills/community/scripts/community-router.sh` | RED (the real hook allows `bsky post`; the test expects deny) |
 | 3 | Add a second router verb `linkedin post-content` after the compliant verbs | RED (a check that stops at the first member is itself the defect) |
-| 4 | Drop `community` from `CRON_NO_WRITE` | RED (the real hook allows `Write` to the router script; the test and the spawn-time self-test expect deny) |
+| 4 | Drop `community` from `CRON_NO_FILE_TOOLS` | RED (the real hook allows `Write` to the router script and `Grep` over `/proc`; the test and the spawn-time self-test expect deny) |
+| 4b | Re-add `gh issue list` to the community allowlist | RED (`gh issue list --json number --jq env` is allowed by the hook; the probe expects the verb absent) |
+| 4c | Re-add `Read`/`Grep` to `--allowedTools` and drop them from the directive | RED (bypass probes `Grep{path:"/",glob:"proc/*/environ"}`, `Glob{pattern:"**/.git/config",path:"/tmp"}`) |
 | 5 | Remove `--disallowedTools` from the flags | RED (flags assertion) |
 | 6 | Pass the write token to `setupEphemeralWorkspace` (clone) | RED (custody test: the token that reaches setup equals the READ token; `.git/config` fixture holds no write token) |
 | 7 | Add `DISCORD_WEBHOOK_URL` back to `buildSpawnEnv` | RED (env anchor list) |
 | 8 | Prompt gains a router invocation whose verb is not in the list | RED (prompt-parity) |
 | 9 | Harness row: run the suite against a hook stub that allows everything | RED (the suite asserts deny on the probes) |
-| 10 | Must-PASS non-canonical: `bash <router> github fetch-interactions 1; bash <router> hn trending --limit 30` chained with `;`, and the same cron-allow file without the `no-write` line for a different cron | ALLOW (the directive is per-cron, not global) |
+| 10 | Must-PASS non-canonical: `bash <router> github fetch-interactions 1; bash <router> hn trending --limit 30` chained with `;`, and the same cron-allow file without the `no-file-tools` line for a different cron | ALLOW (the directive is per-cron, not global) |
 
 **Anchor.** The posting verbs and `*_ALLOW_POST` guards live in `plugins/soleur/skills/community/scripts/*.sh`,
 outside the files this PR edits; the posting-verb DENY rows name `bsky post`, `linkedin post-content` and
@@ -621,9 +731,9 @@ TLS-verified Octokit path. The plan introduces neither a `.tf` file, a migration
 - [ ] `parseCommunityDraft` rejects every programmatically generated single-leaf injection (Guard 1 rows 1-4) and accepts the must-PASS non-canonical draft (row 7); leaf count equals the table-derived count; rendered output of a fuzz of valid drafts matches the alphabet regex; issue title equals `[Scheduled] Community Monitor - <date>` exactly.
 - [ ] Handler flow tests: valid draft -> one issue upserted and `safeCommitAndPr` called with `exactPaths: [digestPath]`, `allowedPaths: []`; replay -> still one issue; **issue pre-exists but digest absent from main -> the issue body is PATCHed, `verify-output` sees it, `safeCommitAndPr` is called, run GREEN** (the #6714 recovery case); invalid/missing/oversized draft -> no issue, no commit, `heartbeatOk` false, op `community-publication-rejected` with codes only; `abortedByTimeout` -> no validation and no publication; non-zero exit with a valid final message -> published; collector sidecar red while the draft says github `collected` -> the rendered digest and issue show github `failed` with no github metrics; issue-list read throws -> step throws (no duplicate); 5xx then success -> one issue; milestone lookup failure -> issue created without milestone plus a Sentry warn; `heartbeatOk` is `false` whenever the verdict is not ok even if `verify-output` is satisfied by a bumped `updated_at`.
 - [ ] Credential custody: the token passed to `setupEphemeralWorkspace` and `spawnClaudeEval` is the read-permission token (`{contents, issues, pull_requests: "read"}`); a workspace fixture's `.git/config` holds no write token; `setOriginToken` is called after the spawn and before `publish-issue`; both tokens are redacted in every `catch`.
-- [ ] Containment tests (Guard 2) green through the real hook: `Write`/`Edit`/`MultiEdit`/`NotebookEdit` denied for community and allowed for a cron without `no-write`; `runHookSelfTest` aborts the spawn when the deny probe fails; allowlist contains none of `gh issue create`, `gh issue comment`, `gh label create` and no bare router prefix; spawn argv contains `--disallowedTools`.
+- [ ] Containment tests (Guard 2) green through `decide()` over the lines `buildAllowlistLines` produces: `Read`/`Glob`/`Grep`/`Write`/`Edit`/`MultiEdit`/`Task`/`Agent`/`Skill` denied for community and allowed for a cron without `no-file-tools`; `NotebookEdit` denied either way; the three reproduced bypass probes and `gh issue list --jq env` denied; `runHookSelfTest` aborts the spawn when the deny probe fails; allowlist contains none of `gh issue create`, `gh issue comment`, `gh label create` and no bare router prefix; spawn argv contains `--disallowedTools`.
 - [ ] `cron-safe-commit.test.ts`: `exactPaths`, `isPathAllowed`, count-only marker in exact mode, marker unchanged for the other 14 callers.
-- [ ] `cron-safe-commit-parity.test.ts`, `cron-run-report-labels-parity.test.ts` (rows i, ii split, ii′ with `no-write`), `cron-claude-eval-substrate.test.ts`, `cron-community-monitor*.test.ts` and `cron-bash-allowlist-hook.test.ts` green; `heartbeatOk && !spawnResult.abortedByTimeout` and `PERSISTENCE: Do NOT run git add` anchors unchanged; `bash plugins/soleur/test/issue-flow-measure.test.sh` still passes.
+- [ ] `cron-safe-commit-parity.test.ts`, `cron-run-report-labels-parity.test.ts` (rows i, ii split, ii′ with `no-file-tools`), `cron-claude-eval-substrate.test.ts`, `cron-community-monitor*.test.ts` and `cron-bash-allowlist-hook.test.ts` green; `heartbeatOk && !spawnResult.abortedByTimeout` and `PERSISTENCE: Do NOT run git add` anchors unchanged; `bash plugins/soleur/test/issue-flow-measure.test.sh` still passes.
 - [ ] `ensureScheduledAuditIssue` with `withholdModelOutput: true` renders neither tail; default behavior for the other callers is byte-identical (existing tests unchanged).
 - [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` clean; `./node_modules/.bin/vitest run test/server/inngest/cron-community-publication.test.ts test/server/inngest/cron-community-monitor-publication-flow.test.ts test/server/inngest/cron-community-monitor-allowlist.test.ts test/server/inngest/cron-safe-commit.test.ts test/server/inngest/cron-safe-commit-parity.test.ts test/server/inngest/cron-run-report-labels-parity.test.ts test/server/inngest/cron-claude-eval-substrate.test.ts test/server/inngest/cron-bash-allowlist-hook.test.ts test/server/inngest/cron-community-monitor.test.ts test/repo-wide-containment.test.ts test/c4-code-syntax.test.ts test/c4-render.test.ts test/c4-canonical-mirror.test.ts` passes; `bash plugins/soleur/test/c4-model-freshness.test.sh` and `bash plugins/soleur/test/c4-count-parity.test.sh` pass.
 - [ ] `python3 scripts/lint-guard-contract.py` passes on this plan; ADR-272 exists and states the forward-path-only claim; register, posture, DPIA and LIA carry append-only supersede markers per the CLO list; `soleur:gdpr-gate` run on the diff at the work-phase exit.
@@ -632,7 +742,7 @@ TLS-verified Octokit path. The plan introduces neither a `.tf` file, a migration
 
 ### Post-merge (verified by an agent, not the founder)
 
-- [ ] Fire `cron/community-monitor.manual-trigger` via `soleur:trigger-cron`; then poll with a bounded loop (merge-queue latency): the Sentry check-in is OK, exactly one `[Scheduled] Community Monitor - <date>` issue exists (the `discoverability_test` command prints `Community Monitor`, and `gh issue list --label scheduled-community-monitor --state all --limit 1` shows today's title — closed issues count), and `gh api repos/jikig-ai/soleur/contents/knowledge-base/support/community/<date>-digest.md` returns 200.
+- [ ] Fire `cron/community-monitor.manual-trigger` via `soleur:trigger-cron`; then poll with a bounded loop (merge-queue latency): the Sentry check-in is OK, exactly one `[Scheduled] Community Monitor - <date>` issue exists (the `discoverability_test` command prints `scheduled-community-monitor`, and `gh issue list --label scheduled-community-monitor --state all --limit 1` shows today's title — closed issues count), and `gh api repos/jikig-ai/soleur/contents/knowledge-base/support/community/<date>-digest.md` returns 200.
 - [ ] No Sentry `collector-status-failed` event for the run (proves the read token suffices); if present, apply Phase 5's fallback and amend ADR-272.
 - [ ] Update register §(f)'s live-state note only after this first run (the first publication since 2026-06-08).
 
@@ -676,13 +786,13 @@ TLS-verified Octokit path. The plan introduces neither a `.tf` file, a migration
 
 - **Does merging this alone mutate production?** Yes. The web-platform release redeploys on merge and the next 08:00 UTC fire (or a manual trigger) runs the new path; there is no feature flag. Rollback is a revert of the PR. The PR body's first line states this.
 - **In-flight run across the deploy.** A run that memoized `claude-eval` under the old prompt (agent filed the issue itself, final message is not a draft) and resumes on the new code reaches `validate-publication`, rejects, and goes RED for that day. The deploy drain (ADR-078) waits for a live child and the window is one ~50-minute slot a day; accepted, recorded so the first RED after merge is not misread. No existing step's id or return shape changes (steps are added), so no old memo is mis-read.
+- **An attacker can force rejections.** A persistent hostile message in the collection window (a pinned message, a long-lived comment) can make the agent's final message fail the strict parse every day and keep the monitor RED. The audit-issue fallback still files a visible handler-authored FAILED issue each day. Runbook: two consecutive `parse` rejections are treated as possible abuse — inspect the ingested sources — not as drift; the RED-streak coercion (unknown enum members only) does not cover a non-JSON message.
 - **Model drift makes the digest flaky.** Strict rejection loses the day on one stray field. Mitigation: the prompt embeds a schema-generated example; the alert names the leaf path; the RED-streak trigger is written into the runbook entry.
-- **Final-message contract.** The draft rides `stdoutTail` (8 KiB cap, redacted); a model that prefixes narration fails the strict parse by design. The substrate's `result` extraction is the dependency; the flow test asserts it end to end.
+- **Final-message contract.** The draft rides the new `SpawnResult.finalMessage` (16 KiB cap, redacted, truncation flagged); a model that prefixes narration or pretty-prints fails the strict parse by design. The substrate's `result` extraction is the dependency; a substrate test asserts the field for a result, a result-less run and an oversized result, and the flow test asserts it end to end.
 - **Loss of digest richness** is a product trade-off, surfaced as the Decision Challenge; a visible format discontinuity at the cutover date is noted in the runbook.
 - **Read token may under-serve a collector** (Phase 5): detected by the sidecar; fallback documented; independently revertable.
 - **`exactPaths` is additive**: the other 14 `safeCommitAndPr` callers keep prefix semantics and their marker byte-for-byte.
 - **Test-fixture blast radius:** the heartbeat/dedup/collector-status suites model the agent filing the issue; budget for the shared `validDraftFinalMessage()` helper and the fake-store routes.
-- Marker 3 (`present`) now means "the handler wrote the digest" because the write moved into `validate-publication`.
 - The `## User-Brand Impact` section is complete and carries `requires_cpo_signoff: true`, so `deepen-plan` Phase 4.6 can proceed.
 
 ## Plan Review Revisions
@@ -692,7 +802,7 @@ CLO, CPO). Mechanical findings were auto-applied; Taste items are in `decision-c
 
 | Source | Finding | Disposition |
 |---|---|---|
-| CTO P0 | router script overwritable -> posting verbs reachable | Applied: `no-write` directive + `--disallowedTools` + final-message draft |
+| CTO P0 | router script overwritable -> posting verbs reachable | Applied: `no-file-tools` directive + `--disallowedTools` + final-message draft |
 | CTO P0, DHH P1 | PR-body names an open channel | Applied: count only |
 | Architecture P0, Kieran P1, spec-flow P0 | write token in `.git/config` | Applied: read token for clone/spawn, post-spawn write token, `setOriginToken` |
 | Architecture P0 | compiled C4 model not regenerated | Applied: `model.likec4.json` + mirror in Files and ACs |
@@ -702,4 +812,8 @@ CLO, CPO). Mechanical findings were auto-applied; Taste items are in `decision-c
 | Simplicity / DHH | cut runtime alphabet guard, `publicPathLabel`, `platformMisconfigured`, `schemaVersion`, `refs`, C4 `communitySources`, sidecar | Applied (Cut List); `refs` kept as an alternative in the Taste challenge |
 | Kieran | prompt PERSISTENCE paragraph contradicts the flow; fixture blast radius; milestone lookup; memoization contradiction; constructor allowlist; lazy fs; bounded poll; non-zero exit | Applied |
 | Architecture | `filer` union; `isPathAllowed`; ADR-033 citation; shared leaf | Applied except the shared leaf (YAGNI, Alternatives) |
-| DHH #1 vs simplicity | drop `exactPaths` as redundant once Write is removed | Not applied: it backs up the `no-write` control if the directive or flag regresses, at ~6 lines |
+| Deepen: security P0 x2 | `gh issue list --jq env`; bypassable Read/Glob/Grep deny-list | Applied: verb removed; `no-file-tools` directive; Spike S3 with a `read-root` fallback |
+| Deepen: security P1 | finalMessage field; token `repositories`; Task/Agent/Skill; upsert checks; integer channel | Applied |
+| Deepen: verification | oversize detection impossible on the front-cut tail; audit fallback with read token; PATCH on closed issue; `--disallowedTools` unproven; extra suites (`cron-producer-output-wiring`, `cron-shared`) | Applied |
+| Deepen: observability / test / user-impact | filing-deny over-claim; extras; marker 3 fields; fixture mechanics; PATCH-on-commit-failure; click-through links; abuse-forced rejections; wording | Applied |
+| DHH #1 vs simplicity | drop `exactPaths` as redundant once Write is removed | Not applied: it backs up the `no-file-tools` control if the directive or flag regresses, at ~6 lines |

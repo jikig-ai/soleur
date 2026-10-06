@@ -23,11 +23,15 @@
   is met by a different mechanism; whether that substitutes for R1-R4 is for counsel at #7119.
 - **Operator action.** None required to merge. Say so in the PR if a richer digest is wanted back.
 
-## 2026-10-06 — Taste: Write tool removed from the agent; draft rides the final message
+## 2026-10-06 — Taste: the agent loses ALL file tools; the draft rides the final message
 
-- **Decision.** The agent has no file-writing tools (hook `no-write` directive plus `--disallowedTools`);
-  its final message is the draft. Rationale: with Write available the agent could overwrite the
-  allowlisted router script and run it with the spawn environment (CTO P0), and a sidecar file needs
-  symlink and TOCTOU hardening. Cost: a strict final-message contract (one JSON object, 8 KiB tail cap).
-- **Alternative.** Keep Write for a sidecar file plus a per-cron `write-allow <path>` hook directive.
-  Larger hook change and a larger surface; reversible later.
+- **Decision.** The agent has no file tools (hook `no-file-tools` directive plus `--disallowedTools`:
+  Read, Glob, Grep, Write, Edit, MultiEdit, Task, Agent, Skill) and no `gh` verbs; its final message is the
+  draft, carried by a new `SpawnResult.finalMessage`. Rationale: with Write the agent could overwrite the
+  allowlisted router script and run it with the spawn environment; with the read tools its deny-list was
+  bypassable (`Grep{path:"/",glob:"proc/*/environ"}`) and `gh issue list --jq env` dumps the environment
+  into its context. Cost: a strict one-line-JSON final-message contract; the prompt can no longer read the
+  brand guide (it writes no prose anyway).
+- **Alternative.** Keep Read/Glob/Grep behind a `read-root` allow-list directive (resolve every path-bearing
+  field under the ephemeral root, deny `..`/`.git`/`.claude`, `HOME` = ephemeral root) — only if Spike S3
+  finds a prompt step that genuinely needs a file read. Larger hook change; reversible later.
