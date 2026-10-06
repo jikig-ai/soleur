@@ -237,6 +237,18 @@ export interface CanUseToolDeps {
    * not-autonomous) rather than being shown an ack button they cannot use.
    */
   isOwner?: boolean;
+  /**
+   * #9556 — whether the dispatching workspace had a connected repo when the
+   * dispatch resolved it (`repoUrl !== null` in cc-dispatcher — the SAME read
+   * every dispatch already performs, so zero added DB reads). The closure-local
+   * `deny()` wrapper below stamps it onto every support escalation record so
+   * the route's `support_handoff` frame carries it and the rendered copy can
+   * degrade honestly for repo-less users. Optional: the legacy runner and
+   * dep-less contexts leave it unwired — the record stores `undefined`, the
+   * emitted frame omits the field, and the copy falls back to the legacy
+   * caveat arm.
+   */
+  repoConnected?: boolean;
 }
 
 export interface CanUseToolContext {
@@ -267,6 +279,18 @@ export interface CanUseToolContext {
 
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
+  // #9556 — one injection point for the deny→handoff flag: every support deny
+  // path calls `deny(`, which stamps the dispatch-resolved repo-connected state
+  // onto the escalation record. This mirrors denySupport's own contract ("every
+  // present and future support deny path gets record + telemetry for free") one
+  // level up — a future deny site that calls `deny(` cannot forget the field.
+  // The spread order makes deps.repoConnected authoritative even if a call site
+  // passed its own; an unwired dep records `undefined` (the frame then omits
+  // the field → legacy copy arm).
+  const deny = (
+    opts: Parameters<typeof denySupport>[0],
+  ): ReturnType<typeof denySupport> =>
+    denySupport({ ...opts, repoConnected: deps.repoConnected });
   return async (toolName, toolInput, options): Promise<PermissionResult> => {
     const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : "";
 
@@ -279,7 +303,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // reject the write AFTER a `diff`/`notebook_edit` frame already went to
       // the WS sink. Read-class file tools flow through containment below.
       if (ctx.persona === "support" && SUPPORT_WRITE_FILE_TOOLS.has(toolName)) {
-        return denySupport({
+        return deny({
           conversationId: ctx.conversationId,
           toolName,
           source: "tool",
@@ -289,7 +313,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       const filePath = extractToolPath(toolInput);
       if (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) {
         if (ctx.persona === "support") {
-          return denySupport({
+          return deny({
             conversationId: ctx.conversationId,
             toolName,
             source: "tool",
@@ -490,7 +514,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         // turn ends with the "Ask an agent" affordance rather than a bare
         // pattern-mismatch dead-end.
         if (ctx.persona === "support") {
-          return denySupport({
+          return deny({
             conversationId: ctx.conversationId,
             toolName,
             source: "bash",
@@ -590,7 +614,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // record the escalation, and let the route render the handoff
       // affordance at turn end.
       if (ctx.persona === "support") {
-        return denySupport({
+        return deny({
           conversationId: ctx.conversationId,
           toolName,
           source: "bash",
@@ -1028,7 +1052,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // emitted-despite-removal call is engineering fan-out on a read-only
       // turn — deny + record.
       if (ctx.persona === "support") {
-        return denySupport({
+        return deny({
           conversationId: ctx.conversationId,
           toolName,
           source: "tool",
@@ -1062,7 +1086,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         logPermissionDecision("canUseTool-support-skill", toolName, "allow", requested);
         return allow(toolInput);
       }
-      return denySupport({
+      return deny({
         conversationId: ctx.conversationId,
         toolName,
         source: "skill",
@@ -1087,7 +1111,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // dispatches `platformToolNames` is empty — this belt is for a future
       // tool added to the list without a persona check.
       if (ctx.persona === "support") {
-        return denySupport({
+        return deny({
           conversationId: ctx.conversationId,
           toolName,
           source: "tool",
@@ -1224,7 +1248,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
     // Deny-by-default: block unrecognized tools
     if (ctx.persona === "support") {
-      return denySupport({
+      return deny({
         conversationId: ctx.conversationId,
         toolName,
         source: "tool",

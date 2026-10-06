@@ -20,7 +20,19 @@ import { buildSupportHandoffMarkdown } from "./support-handoff";
  */
 export type SupportSseMessage =
   | WSMessage
-  | { type: "support_handoff"; task: string; conversationId: string };
+  | {
+      type: "support_handoff";
+      task: string;
+      conversationId: string;
+      /**
+       * #9556 — whether the dispatching workspace had a connected repo at deny
+       * time (recorded, not re-resolved — zero extra DB reads). OPTIONAL so the
+       * field stays additive-safe across the JSON parse boundary: frames from
+       * dep-unwired emitters omit it and the copy builder falls back to the
+       * legacy caveat arm.
+       */
+      repoConnected?: boolean;
+    };
 
 /**
  * Frame types that mean "the turn is over" — the signal to close the SSE
@@ -146,7 +158,13 @@ export function reduceSupportFrame(
     case "stream":
       return { ...state, text: msg.content, status: "streaming" };
     case "support_handoff":
-      return { ...state, handoffMarkdown: buildSupportHandoffMarkdown(msg.task) };
+      return {
+        ...state,
+        handoffMarkdown: buildSupportHandoffMarkdown(
+          msg.task,
+          msg.repoConnected,
+        ),
+      };
     case "stream_end":
     case "session_ended":
       // Preserve an already-surfaced error; otherwise the turn completed.

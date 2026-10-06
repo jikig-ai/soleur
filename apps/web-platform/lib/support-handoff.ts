@@ -13,6 +13,13 @@
 export const SUPPORT_AGENT_SESSION_HREF = "/dashboard/chat/new";
 
 /**
+ * The canonical connect-a-repo flow (#9556) — the handoff's honest destination
+ * for a repo-less user, whose `?msg=` deep link would dead-end on the Command
+ * Center's repo gate. Matches `use-reconnect.ts`'s redirect target.
+ */
+export const SUPPORT_CONNECT_REPO_HREF = "/connect-repo";
+
+/**
  * Canonical surface name — matches the product's own verb for the Command
  * Center (`help-overlay.tsx`, `command-palette.tsx`) so the affordance, the
  * model's prose, and the UI vocabulary converge.
@@ -49,16 +56,36 @@ export function truncateSupportHandoffTask(
 }
 
 /**
- * Fully-encoded `?msg=` deep-link markdown. `encodeURIComponent` deliberately
- * leaves `!~*'()` literal — an unbalanced `)` inside the task would close a
- * bare markdown destination early and truncate the carried text, so the
- * destination uses the angle-bracket form (`<url>`) AND the leftover set is
- * percent-encoded for belt.
+ * Fully-encoded `?msg=` deep-link markdown — tri-state on `repoConnected`
+ * (#9556):
+ *
+ * - `false` → a link to the connect-repo flow ("Connect a repository to hand
+ *   this task to an agent →"). A repo-less user's `?msg=` link would dead-end
+ *   on the Command Center's repo gate; `?return_to=` is deliberately NOT added
+ *   (the connect flow's own resume handles it, and the task text stays in the
+ *   support bubble).
+ * - `true` → the `?msg=` link WITHOUT the "(needs a connected repo)" caveat —
+ *   the precondition was verified at deny time.
+ * - `undefined` → the legacy copy byte-identical (dep-unwired emitters and
+ *   pre-resolution denies carry no flag; additive-safe backward compat).
+ *
+ * `encodeURIComponent` deliberately leaves `!~*'()` literal — an unbalanced `)`
+ * inside the task would close a bare markdown destination early and truncate
+ * the carried text, so the destination uses the angle-bracket form (`<url>`)
+ * AND the leftover set is percent-encoded for belt.
  */
-export function buildSupportHandoffMarkdown(task: string): string {
+export function buildSupportHandoffMarkdown(
+  task: string,
+  repoConnected?: boolean,
+): string {
+  if (repoConnected === false) {
+    return `[Connect a repository to hand this task to an agent →](<${SUPPORT_CONNECT_REPO_HREF}>)`;
+  }
   const encoded = encodeURIComponent(task).replace(
     /[!'()*~]/g,
     (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
   );
-  return `[${SUPPORT_AGENT_SESSION_LABEL} to do this (needs a connected repo) →](<${SUPPORT_AGENT_SESSION_HREF}?msg=${encoded}>)`;
+  return repoConnected === true
+    ? `[${SUPPORT_AGENT_SESSION_LABEL} to do this →](<${SUPPORT_AGENT_SESSION_HREF}?msg=${encoded}>)`
+    : `[${SUPPORT_AGENT_SESSION_LABEL} to do this (needs a connected repo) →](<${SUPPORT_AGENT_SESSION_HREF}?msg=${encoded}>)`;
 }

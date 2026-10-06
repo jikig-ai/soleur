@@ -2693,6 +2693,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // auto-running.
     autonomousAckAt: autonomousAckAtMs,
     isOwner: isWorkspaceOwner,
+    // #9556 — support deny→handoff flag. `repoUrl` was already resolved in the
+    // unconditional Promise.all fan-out above (every dispatch, support persona
+    // included), so recording it on the escalation costs ZERO extra DB reads.
+    // Deliberately `repoUrl !== null`, not repoStatus: `cloning`/`error` still
+    // means a repo IS connected — the destination surface explains its own
+    // state. The deny() wrapper in permission-callback.ts stamps this onto the
+    // escalation record; the route emits it on the `support_handoff` frame.
+    repoConnected: repoUrl !== null,
     // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.
