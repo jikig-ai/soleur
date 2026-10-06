@@ -18,3 +18,14 @@ None blocking. Planning subagent had no nested-spawn capability in this harness,
 - soleur:plan (read in-process, run to completion)
 - soleur:deepen-plan (read in-process, run to completion)
 - Deliverables: plan file + tasks.md, committed and pushed (4 commits)
+
+## Status update (ship phase)
+
+- Review complete: 2-seat design pass + 7-seat panel + 9-seat fix round + fresh-eyes verifier (SHIP). Trailers committed: `Reviewed-Coverage: full 9/9` (cf770e3d08), `Reviewed-Fix-Round: 10/10` (f5f7551be4).
+- Two review rounds produced 1 P1 (catch-all `bounded()` swallowing verdict-bearing throws → dead classification unreachable) + ~33 P2-P4 findings, all fixed inline.
+- Preflight: PASS/SKIP (env isolation verified: dev `mlwiodleouzwniehynfz` ≠ prd `ifsccnjhymdmidffkzhl`; node-encoding scan clean; all path-gated checks SKIP).
+- Net-issue-flow PASS (Net 0); review-findings gate clean (0 unresolved).
+- PR #9576 marked ready, `semver:patch`, auto-merge armed; Phase-7 poll running (`/tmp/phase7-poll-9576.log`).
+- Local `--affected` battery still queued behind sibling lock contention at ship time; operator authorized relying on CI's required `test` context (`/tmp/testall-affected-9581.log`).
+- Ceiling shipped at `RAIL_ASSERT_TOTAL_BUDGET_MS = 165_000` (honest worst case ≈160s).
+- Remaining: merge → postmerge deploy arm → release-verification watch.
