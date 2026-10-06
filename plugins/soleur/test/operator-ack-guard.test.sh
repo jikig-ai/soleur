@@ -512,7 +512,7 @@ g2_run() {
     STUB_LOG="$G2_LOG" STUB_LOGGING="$logging" STUB_ABSENT_FLAG=probe-new-flag
     STUB_MEMBER_ORG=70a70ab0-0000-4000-8000-000000000001
     SOLEUR_BOOTSTRAP_LEDGER="$scratch/ledger.jsonl"
-    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=stub-org SENTRY_PROJECT=stub-project
+    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=jikigai-eu SENTRY_PROJECT=web-platform
     EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=1
   )
   local line
@@ -696,7 +696,7 @@ g2_run_cmd() { # <root-for-hostile-env-rel> <rel> <answer> <cmd> -> G2_OUT, G2_R
     STUB_LOG="$G2_LOG" STUB_LOGGING=1 STUB_ABSENT_FLAG=probe-new-flag
     STUB_MEMBER_ORG=70a70ab0-0000-4000-8000-000000000001
     SOLEUR_BOOTSTRAP_LEDGER="$scratch/ledger.jsonl"
-    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=stub-org SENTRY_PROJECT=stub-project
+    SENTRY_AUTH_TOKEN=stub-token SENTRY_ORG=jikigai-eu SENTRY_PROJECT=web-platform
     EVAL_POLL_SLEEP=0 EVAL_POLL_TRIES=1
   )
   while IFS= read -r line; do envv+=("$line"); done < <(g2_hostile_env "$root/$rel" "$root/plugins/soleur/scripts/lib/operator-script.sh")

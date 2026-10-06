@@ -15,7 +15,38 @@
 #     stream/format conventions; the helper does not hard-code colors).
 #   - `curl` and `jq` are on PATH.
 # Optional: CF_API may be set to override the API base; defaults to the
-# canonical Cloudflare v4 base.
+# canonical Cloudflare v4 base. Any other value is refused (the bearer is sent to
+# that base, so an env override must not redirect it).
+#
+# The bearer rides curl's stdin config channel (`--config -`), never its argv:
+# argv is world-readable via /proc/<pid>/cmdline for the life of the process.
+# This file is sourced, so it carries no xtrace self-refusal of its own (a
+# sourced `exit` would kill the caller); the caller's prologue is the trace
+# defense. `printf` below is the shell builtin, so the value never reaches an
+# exec argv.
+
+# Token-shape guard: refuses an empty value or any byte outside the Cloudflare
+# token alphabet (alphanumeric plus `_-`; `.~+/=` tolerated). A newline in the
+# value would otherwise inject a curl config directive on the stdin channel.
+# Never echoes the value.
+_cf_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# _cf_admin_curl <bearer> <url> [curl args...]
+#   The ONE curl wrapper: owns --disable (first argument; skips ~/.curlrc),
+#   --noproxy '*', the token-shape guard, the destination pin and the stdin
+#   header. Returns 2 (zero curl calls) when the token is unusable or the URL is
+#   not under the pinned Cloudflare API base.
+_cf_admin_curl() {
+  local bearer="$1" url="$2"
+  shift 2
+  _cf_bearer_ok "$bearer" || return 2
+  case "$url" in
+    https://api.cloudflare.com/client/v4/*) ;;
+    *) return 2 ;;
+  esac
+  curl --disable --noproxy '*' "$@" --config - "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$bearer")
+}
 
 # cf_token_verify <bearer>
 #   Verifies the bearer is an active CF token and echoes its token id to stdout.
@@ -27,9 +58,7 @@ cf_token_verify() {
   local bearer="$1"
   local cf_api="${CF_API:-https://api.cloudflare.com/client/v4}"
   local verify status id
-  if ! verify=$(curl --max-time 30 -fsS \
-      -H "Authorization: Bearer $bearer" \
-      "$cf_api/user/tokens/verify" 2>/dev/null); then
+  if ! verify=$(_cf_admin_curl "$bearer" "$cf_api/user/tokens/verify" --max-time 30 -fsS); then
     red "::error::admin token verify failed; rotate and retry"
     return 1
   fi
@@ -57,9 +86,7 @@ cf_token_self_revoke() {
     yellow "  WARN: no admin-token id captured; revoke manually in CF dashboard."
     return 0
   fi
-  if curl --max-time 30 -fsS -X DELETE \
-      -H "Authorization: Bearer $bearer" \
-      "$cf_api/user/tokens/$id" >/dev/null 2>&1; then
+  if _cf_admin_curl "$bearer" "$cf_api/user/tokens/$id" --max-time 30 -fsS -X DELETE >/dev/null 2>&1; then
     green "  admin token self-revoked"
   else
     yellow "  WARN: self-revoke failed; revoke $id manually in CF dashboard."

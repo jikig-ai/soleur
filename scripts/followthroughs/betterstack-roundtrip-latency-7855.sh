@@ -185,8 +185,11 @@ rt_redact() {
 # NOT `: "${VAR:?msg}"`. That word-expansion aborts with status 1, which this contract reads as
 # FAIL -- so an unprovisioned secret would report "the warehouse did not store our row" rather
 # than "we could not run". `scripts/lint-followthrough-varq-ban.sh` enforces this mechanically.
-if [[ -z "${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-}" ]]; then
-  emit "ROUNDTRIP_UNKNOWN" "GIT_DATA_BETTERSTACK_LOGS_TOKEN is not set in this environment; no write was attempted and nothing is known about storage"
+# Token-shape guard: rejects empty AND any char outside the allowlist (a newline would inject a curl
+# config directive on the stdin channel below). Never echoes the value; the verdict stays UNKNOWN.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-}"; then
+  emit "ROUNDTRIP_UNKNOWN" "GIT_DATA_BETTERSTACK_LOGS_TOKEN is not set or unusable in this environment; no write was attempted and nothing is known about storage"
   exit 3
 fi
 for _v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
@@ -250,11 +253,12 @@ RT_PAYLOAD="$(printf '[{"message":"%s","source":"betterstack-roundtrip-latency-7
 
 _t0="$(date -u +%s)"
 rc=0
+# The bearer rides curl's stdin config channel, never its argument list.
 http="$(curl --disable --noproxy '*' -sS -m 20 --proto '=https' -o /dev/null -w '%{http_code}' \
-  -H "Authorization: Bearer ${GIT_DATA_BETTERSTACK_LOGS_TOKEN}" \
   -H 'Content-Type: application/json' \
-  "$RT_INGEST_URL" \
-  --data-raw "$RT_PAYLOAD")" || rc=$?
+  --config - "$RT_INGEST_URL" \
+  --data-raw "$RT_PAYLOAD" \
+  < <(printf 'header = "Authorization: Bearer %s"\n' "$GIT_DATA_BETTERSTACK_LOGS_TOKEN"))" || rc=$?
 
 if [[ "$rc" -ne 0 ]]; then
   emit "ROUNDTRIP_UNKNOWN" "curl exited ${rc} before an HTTP status was observed; no write is known to have been attempted"

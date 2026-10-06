@@ -2790,12 +2790,14 @@ fi
 _n1_call="$(awk '/_resp="\$\(curl /,/GIT_DATA_RUNG2_API_BASE/' "$GATE" | sed 's/^[[:space:]]*#.*$//')"
 _n1_fail=""
 [[ -n "$_n1_call" ]] || _n1_fail+="EXTRACTION-EMPTY "
-for _need in '--disable' "--noproxy '*'" '--max-time' "${GIT_DATA_RUNG2_API_BASE_EXPECT:-GIT_DATA_RUNG2_API_BASE}"; do
+for _need in '--disable' "--noproxy '*'" '--max-time' '--config -' "${GIT_DATA_RUNG2_API_BASE_EXPECT:-GIT_DATA_RUNG2_API_BASE}"; do
   grep -qF -- "$_need" <<<"$_n1_call" || _n1_fail+="missing:${_need} "
 done
 # The forbid set covers SYNONYMS, not just the spelling that was on my mind: `-k` is
 # `--insecure`, and `--proxy`/`--proxy-insecure` re-open what `--noproxy '*'` closed.
-for _forbid in '--insecure' ' -k ' '--proxy' '-D -' '-v '; do
+# `Authorization` is forbidden on the ARGV lines: the bearer rides curl's stdin config channel
+# (`--config -`), so a header spelled into the argument list is the leak this arm now guards.
+for _forbid in '--insecure' ' -k ' '--proxy' '-D -' '-v ' 'Authorization' '"${_auth['; do
   grep -qF -- "$_forbid" <<<"$_n1_call" && _n1_fail+="present:${_forbid} "
 done
 if [[ -z "$_n1_fail" ]]; then
@@ -2837,6 +2839,53 @@ if [[ "$_n2" != *"ghp_FAKE_TOKEN_FOR_XTRACE_ARM"* ]]; then
   pass "N2: a caller running set -x does not leak the bearer through the gate's trace"
 else
   fail "N2: the bearer appeared in the xtrace of a set -x caller" "n/a" "<redacted: the arm's own needle was found>"
+fi
+
+# N3 — THE BEARER RIDES CURL'S STDIN, NEVER ITS ARGV (#7797). Under the seam the real fetch never
+# runs, and N1 only reads the source, so this drives the REAL transport against a PATH-shimmed
+# `curl` that records what it was handed: its argument list and its stdin. Synthesized token.
+_n3_dir="$TMP/n3"; mkdir -p "$_n3_dir/bin"
+cat > "$_n3_dir/bin/curl" <<'N3EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$N3_DIR/argv"
+cfg=""; prev=""
+for a in "$@"; do [[ "$prev" == "--config" ]] && cfg="$a"; prev="$a"; done
+if [[ "$cfg" == "-" ]]; then cat > "$N3_DIR/stdin"; else : > "$N3_DIR/stdin"; fi
+printf 'x\n' >> "$N3_DIR/calls"
+printf '{"ok":true}\n200'
+N3EOF
+chmod +x "$_n3_dir/bin/curl"
+_n3_run() {  # <token-or-empty> -> rc on stdout line 1 is not needed; files are inspected
+  : > "$_n3_dir/calls"; : > "$_n3_dir/argv"; : > "$_n3_dir/stdin"
+  # The suite exports the fetch seam for every other arm; the REAL transport is the subject here.
+  env -u SOLEUR_RUNG2_RUN_FETCH -u SOLEUR_TEST_MODE -u SOLEUR_RUNG2_STUB_BEARER \
+    N3_DIR="$_n3_dir" PATH="$_n3_dir/bin:$PATH" GH_TOKEN="$1" GITHUB_TOKEN="" \
+    bash -c "source '$GATE'; _git_data_rung2_fetch runs/1" 2>&1
+}
+_n3_tok="ghp_N3SynthTokenNotReal0123456789"
+_n3_out="$(_n3_run "$_n3_tok")"; _n3_rc=$?
+if [[ "$_n3_rc" -eq 0 ]] \
+   && [[ "$(sed -n '1p' "$_n3_dir/argv")" == "--disable" ]] \
+   && grep -qxF -- '--config' "$_n3_dir/argv" \
+   && ! grep -qF -- "$_n3_tok" "$_n3_dir/argv" \
+   && ! grep -qiF -- 'Authorization' "$_n3_dir/argv" \
+   && [[ "$(cat "$_n3_dir/stdin")" == "header = \"Authorization: Bearer ${_n3_tok}\"" ]]; then
+  pass "N3: the bearer reaches curl on stdin (--config -), is absent from argv, and --disable is the first argument"
+else
+  fail "N3: bearer channel wrong — argv=[$(tr '\n' ' ' < "$_n3_dir/argv" | sed "s/${_n3_tok}/<TOKEN>/g")] stdin_shape=[$(sed "s/${_n3_tok}/<TOKEN>/g" "$_n3_dir/stdin")]" "$_n3_rc" "$_n3_out"
+fi
+_n3_out="$(_n3_run "")"; _n3_rc=$?
+if [[ "$_n3_rc" -eq 0 && ! -s "$_n3_dir/stdin" ]] && ! grep -qiF -- 'Authorization' "$_n3_dir/argv"; then
+  pass "N3b: with no bearer in play the read is anonymous — empty stdin config, no Authorization anywhere"
+else
+  fail "N3b: an anonymous read carried a credential or failed" "$_n3_rc" "$_n3_out"
+fi
+_n3_bad=$'N3BADFP\nurl = "https://evil.example/"'
+_n3_out="$(_n3_run "$_n3_bad")"; _n3_rc=$?
+if [[ "$_n3_rc" -eq 8 && ! -s "$_n3_dir/calls" && "$_n3_out" != *"N3BADFP"* ]]; then
+  pass "N3c: a token whose shape could inject a curl config line makes ZERO requests, exits 8, and is never echoed"
+else
+  fail "N3c: an unusable-shape token was sent or echoed (calls=$(grep -c '' "$_n3_dir/calls"))" "$_n3_rc" "<redacted>"
 fi
 
 # W1 — NO WORKFLOW AND NO DOPPLER CONFIG MAY CARRY THE SEAM. The announcement above is the
@@ -3185,7 +3234,11 @@ mutate_suite "M0c: an evidence writer that ignores the Sentry verdict argument r
 #                 the file/herestring/||-idiom forms
 #   ----
 #     4
-_FLOOR=256
+# RAISED 256 -> 259 (#7797 stdin-bearer conversion), ITEMISED:
+#     1  N3       the REAL transport (PATH-shimmed curl): bearer on stdin, absent from argv, --disable first
+#     1  N3b      no bearer in play: anonymous read, empty stdin config
+#     1  N3c      an injection-shaped token makes zero requests, exits 8, is never echoed
+_FLOOR=259
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

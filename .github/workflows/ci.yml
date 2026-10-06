@@ -654,7 +654,7 @@ jobs:
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
-          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' >/dev/null; then
+          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -709,7 +709,7 @@ jobs:
           # so a query-options `pluginPath`-threading regression is invisible to it
           # (covered by agent-runner-query-options.test.ts instead) — including it
           # would burn a paid Haiku turn on a probe that cannot detect the change.
-          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)' >/dev/null; then
+          if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|server/agent-env\.ts|server/agent-auth-env-vars\.ts|server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/plugin-root-sandbox-propagation-probe\.mjs)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
             echo "hit=0" >> "$GITHUB_OUTPUT"
@@ -996,11 +996,11 @@ jobs:
       # ubuntu-latest ships a newer bwrap than prod's 0.8.0; every option the
       # argv uses exists in 0.8.0 (measured, ADR-050 amendment).
       # C4_BWRAP_REQUIRED on the run step makes an unusable bwrap FAIL.
-      - name: Install bubblewrap (C4 render sandbox)
+      - name: Install bubblewrap (C4 render sandbox) and socat (SDK sandbox startup check)
         run: |
           set -euo pipefail
           sudo -n apt-get update
-          sudo -n apt-get install -y --no-install-recommends bubblewrap
+          sudo -n apt-get install -y --no-install-recommends bubblewrap socat
           sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --version
 
