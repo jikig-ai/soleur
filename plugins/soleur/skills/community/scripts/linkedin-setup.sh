@@ -164,6 +164,14 @@ readonly LINKEDIN_OAUTH="https://www.linkedin.com/oauth/v2"
 readonly LINKEDIN_API="https://api.linkedin.com"
 LINKEDIN_DEFAULT_REDIRECT_URI="https://localhost:8080/callback"
 
+# (#7843) The access token is parsed out of an API reply, so it is RESPONSE-DERIVED:
+# untrusted bytes. It rides curl's STDIN config channel (`--config -`), never its
+# argument list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote and a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside the
+# token alphabet BEFORE the value is formatted into the stream, and never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -315,7 +323,7 @@ cmd_generate_token() {
   # rotated in and the Phase-6 test post hit this). The app must have the
   # Community Management API product approved for LinkedIn to grant it.
   local scopes="openid%20profile%20w_member_social%20w_organization_social"
-  local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${redirect_uri}', safe=''))" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
+  local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${redirect_uri}" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
 
   echo "=== LinkedIn OAuth Token Generation ===" >&2
   echo "" >&2
@@ -381,13 +389,19 @@ cmd_generate_token() {
     exit 1
   fi
 
+  if ! _bearer_ok "$access_token"; then
+    echo "Error: access_token in the response has an unexpected shape; refusing to use it." >&2
+    exit 1
+  fi
+
   # Resolve person URN
   echo "Resolving person URN..." >&2
   local userinfo_response userinfo_code userinfo_body
   local __curl_rc=0
-  userinfo_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bearer ${access_token}" \
-    "${LINKEDIN_API}/v2/userinfo" 2>/dev/null) || __curl_rc=$?
+  # The bearer rides curl's stdin config channel, never its argument list.
+  userinfo_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "${LINKEDIN_API}/v2/userinfo" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$access_token")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to resolve person URN."
     exit 1

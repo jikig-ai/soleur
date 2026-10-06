@@ -34,8 +34,10 @@
 # unexpressible: `-f` (without it curl exits 0 on a 5xx, so a rollback that got HTTP 500 read as
 # success and the id left the sweep's books), the `Authorization` header, and `--max-time`. The
 # stub now:
-#   * REQUIRES `--max-time` and a non-empty `Authorization: Bearer …`, and `exit 64`s / answers 401
-#     without them, so deleting either from the SUT reds this suite;
+#   * REQUIRES `--max-time` and a non-empty `Authorization: Bearer …` — which now arrives as a curl
+#     config on STDIN (`--config -`), never on argv — and `exit 64`s / answers 401 without them, so
+#     deleting either from the SUT reds this suite. It also refuses (rc 65/66) a bearer on argv, a
+#     call whose first argument is not `--disable`, and one with no `--noproxy '*'`;
 #   * carries a per-id, per-method HTTP STATUS fixture, so a 500 on the rollback is expressible;
 #   * honours `-f` (fail on >= 400) and `-o /dev/null -w '%{http_code}'` (print the code, not the
 #     body), so both curl calling conventions in the SUT are modelled rather than assumed.
@@ -116,18 +118,31 @@ cat > "$BIN/curl" <<'EOS'
 # testable rather than assumed (#7656 C4).
 args=("$@")
 url=""; method="GET"; data=""; auth=""; maxtime=""; failflag=0; writeout=""; outfile=""
+cfg=""; noproxy=""; argv_bearer=0
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[i]}" in
     -X)          method="${args[i+1]:-}" ;;
     --data-raw)  data="${args[i+1]:-}" ;;
-    -H)          [[ "${args[i+1]:-}" == Authorization:* ]] && auth="${args[i+1]:-}" ;;
+    # The bearer is NOT read from argv any more: it travels on stdin as a curl config (`--config -`).
+    # An Authorization header (or the token itself) on argv is a harness-fidelity refusal below.
+    --config)    cfg="${args[i+1]:-}" ;;
+    --noproxy)   noproxy="${args[i+1]:-}" ;;
     --max-time)  maxtime="${args[i+1]:-}" ;;
     -w)          writeout="${args[i+1]:-}" ;;
     -o)          outfile="${args[i+1]:-}" ;;
     -f|-fsS|-sSf) failflag=1 ;;
     https://*)   url="${args[i]}" ;;
   esac
+  case "${args[i]}" in
+    *Authorization*|*Bearer*|*"${BS_TOKEN:-@@none@@}"*) argv_bearer=1 ;;
+  esac
 done
+# The bearer header arrives as a curl config on stdin; read it ONLY when asked to (`--config -`),
+# so a stub invoked without it can never block on the harness's own stdin.
+if [[ "$cfg" == "-" ]]; then
+  cfg_in="$(cat)"
+  if [[ "$cfg_in" =~ ^header\ =\ \"(Authorization:\ Bearer\ ?[^\"]*)\"$ ]]; then auth="${BASH_REMATCH[1]}"; fi
+fi
 # HARNESS-FIDELITY REFUSALS. These are not vendor behaviours — they are the stub asserting that the
 # SUT still calls it the way the contract says. A round-trip with no ceiling is exactly what the
 # wall-clock ladder cannot survive, and an unauthenticated call is not a call this API answers.
@@ -138,6 +153,20 @@ fi
 if [[ -z "$maxtime" ]]; then
   echo "fake curl: invoked with no --max-time — every round-trip must carry a ceiling" >&2
   exit 64
+fi
+# Transport-confinement fidelity (#7797/#7873): the SUT must call curl with `--disable` as its FIRST
+# argument, `--noproxy '*'`, and the bearer off argv. Deleting any of them reds this suite.
+if [[ "$argv_bearer" -eq 1 ]]; then
+  echo "fake curl: a bearer / Authorization value is on ARGV — it must ride stdin (--config -)" >&2
+  exit 65
+fi
+if [[ "${args[0]:-}" != "--disable" ]]; then
+  echo "fake curl: --disable is not the FIRST argument" >&2
+  exit 66
+fi
+if [[ "$noproxy" != "*" ]]; then
+  echo "fake curl: no --noproxy '*'" >&2
+  exit 66
 fi
 id="${url##*/}"
 
@@ -233,23 +262,39 @@ FAKE_BAD_JSON="$WORK/badjson-selftest"; : > "$FAKE_BAD_JSON"
 FAKE_STATE="$WORK/state-selftest"; mkdir -p "$FAKE_STATE"
 FAKE_HTTP="$WORK/http-selftest"; mkdir -p "$FAKE_HTTP"
 export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
-PATH="$BIN:$PATH" bash -c 'curl -fsS --max-time 15 -H "Authorization: Bearer x"' >/dev/null 2>&1
+# The SUT hands the bearer to curl as a stdin config (`--config -`), so the self-tests do too.
+ST_HDR='header = "Authorization: Bearer x"'
+ST_FLAGS="--disable --noproxy '*'"
+st_curl() {  # <curl args...> — runs the stub with the SUT's transport flags and the bearer on stdin
+  PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS \"\$@\"" _ "$@" <<< "$ST_HDR"
+}
+st_curl -fsS --max-time 15 --config - >/dev/null 2>&1
 assert_eq "the fake curl exits 64 when handed no URL (argv fidelity, not a fixture echo)" "64" "$?"
-PATH="$BIN:$PATH" bash -c 'curl -fsS -H "Authorization: Bearer x" https://x.test/heartbeats/1' >/dev/null 2>&1
+st_curl -fsS --config - https://x.test/heartbeats/1 >/dev/null 2>&1
 assert_eq "the fake curl exits 64 when the call carries no --max-time" "64" "$?"
-PATH="$BIN:$PATH" bash -c 'curl -fsS --max-time 15 -X PATCH -H "Authorization: Bearer x" https://x.test/heartbeats/1 --data-raw "{}"' >/dev/null 2>&1
+st_curl -fsS --max-time 15 -X PATCH --config - https://x.test/heartbeats/1 --data-raw "{}" >/dev/null 2>&1
 assert_eq "the fake curl exits 64 on a PATCH body it does not recognise" "64" "$?"
 printf 'up' > "$FAKE_STATE/1.status"
-PATH="$BIN:$PATH" bash -c 'curl -fsS --max-time 15 https://x.test/heartbeats/1' >/dev/null 2>&1
+st_curl -fsS --max-time 15 https://x.test/heartbeats/1 >/dev/null 2>&1
 assert_eq "the fake curl answers 401 (and -f turns that into rc 22) with no Authorization header" "22" "$?"
+printf '%s\n' 'header = "Authorization: Bearer "' | PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS -fsS --max-time 15 --config - https://x.test/heartbeats/1" >/dev/null 2>&1
+assert_eq "the fake curl answers 401 for an EMPTY bearer on stdin" "22" "$?"
+st_curl -fsS --max-time 15 --config - https://x.test/heartbeats/1 >/dev/null 2>&1
+assert_eq "the fake curl accepts a non-empty bearer arriving on stdin (200)" "0" "$?"
+printf '%s\n' "$ST_HDR" | PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS -fsS --max-time 15 -H 'Authorization: Bearer x' --config - https://x.test/heartbeats/1" >/dev/null 2>&1
+assert_eq "the fake curl REFUSES (rc 65) a bearer on argv, even with a valid stdin config" "65" "$?"
+printf '%s\n' "$ST_HDR" | PATH="$BIN:$PATH" bash -c "curl -fsS --noproxy '*' --max-time 15 --disable --config - https://x.test/heartbeats/1" >/dev/null 2>&1
+assert_eq "the fake curl REFUSES (rc 66) a call whose FIRST argument is not --disable" "66" "$?"
+printf '%s\n' "$ST_HDR" | PATH="$BIN:$PATH" bash -c "curl --disable -fsS --max-time 15 --config - https://x.test/heartbeats/1" >/dev/null 2>&1
+assert_eq "the fake curl REFUSES (rc 66) a call with no --noproxy '*'" "66" "$?"
 printf '500' > "$FAKE_HTTP/1.get"
-PATH="$BIN:$PATH" bash -c 'curl -fsS --max-time 15 -H "Authorization: Bearer x" https://x.test/heartbeats/1' >/dev/null 2>&1
+st_curl -fsS --max-time 15 --config - https://x.test/heartbeats/1 >/dev/null 2>&1
 assert_eq "the fake curl honours -f: a 500 is rc 22" "22" "$?"
 # shellcheck disable=SC2034  # consumed by `assert` through eval
-out_nf="$(PATH="$BIN:$PATH" bash -c 'curl -sS --max-time 15 -H "Authorization: Bearer x" https://x.test/heartbeats/1' 2>/dev/null; echo "rc=$?")"
+out_nf="$(st_curl -sS --max-time 15 --config - https://x.test/heartbeats/1 2>/dev/null; echo "rc=$?")"
 assert "the fake curl WITHOUT -f exits 0 on a 500 and prints the error body (the C4 door)" \
   "[[ \"\$out_nf\" == *'rc=0'* ]]"
-code_out="$(PATH="$BIN:$PATH" bash -c "curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -H 'Authorization: Bearer x' https://x.test/heartbeats/1" 2>/dev/null)"
+code_out="$(st_curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --config - https://x.test/heartbeats/1 2>/dev/null)"
 assert_eq "the fake curl honours -o/-w and prints the STATUS CODE, not the body" "500" "$code_out"
 rm -f "$FAKE_HTTP/1.get"
 # The probes above legitimately advanced the clock, so re-zero it rather than asserting against a
@@ -336,7 +381,6 @@ run_sut() {  # [sut-path] -> sets OUT and RC
         BS_TOKEN=fake-token \
         TFSTATE_JSON="$TFSTATE" \
         ARMED_UNCONFIRMED="$STATEFILE" \
-        BS_API_BASE="https://uptime.betterstack.test/api/v2" \
         ARM_POLL_INTERVAL_S=10 \
         bash "$sut" --arm 2>&1)"
   RC=$?
@@ -355,7 +399,6 @@ run_sweep() {  # [sut-path] -> sets OUT and RC; SWEEP_TOKEN may be set to "" by 
   OUT="$(PATH="$BIN:$PATH" \
         BS_TOKEN="${SWEEP_TOKEN-fake-token}" \
         ARMED_UNCONFIRMED="$STATEFILE" \
-        BS_API_BASE="https://uptime.betterstack.test/api/v2" \
         GITHUB_STEP_SUMMARY="$SUMMARY" \
         bash "$sut" --sweep 2>&1)"
   RC=$?
@@ -568,7 +611,7 @@ printf '%s\n%s\n' "$ID_ZOT2" "$ID_NIC2" > "$STATEFILE"
 chmod 000 "$STATEFILE"
 # shellcheck disable=SC2034  # consumed by `assert` through eval
 sr_out="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token TFSTATE_JSON="$TFSTATE" \
-  ARMED_UNCONFIRMED="$STATEFILE" BS_API_BASE="https://uptime.betterstack.test/api/v2" \
+  ARMED_UNCONFIRMED="$STATEFILE" \
   bash -c 'source /dev/stdin <<< "$(sed -n "/^state_remove()/,/^}/p" "$1")"; state_remove 999; echo "rc=$?"' _ "$SUT" 2>&1)"
 chmod 644 "$STATEFILE"
 assert "T6b state_remove REFUSES rather than returning 0 on an unreadable source" \
@@ -663,7 +706,6 @@ case_setup t9
 for missing in BS_TOKEN TFSTATE_JSON ARMED_UNCONFIRMED; do
   out="$(PATH="$BIN:$PATH" \
         BS_TOKEN=fake-token TFSTATE_JSON="$TFSTATE" ARMED_UNCONFIRMED="$STATEFILE" \
-        BS_API_BASE="https://uptime.betterstack.test/api/v2" \
         env -u "$missing" bash "$SUT" --arm 2>&1)"
   rc=$?
   assert_eq "T9 refuses with rc=1 when $missing is unset" "1" "$rc"
@@ -688,6 +730,44 @@ assert_eq "T10 the DEFAULT poll interval is 10s: a 30s deadline costs exactly 3 
 assert_eq "T10 the default interval costs exactly 9 GETs, not one per second" "9" "$(get_urls | grep -c '')"
 assert "T10 the DEFAULT BS_API_BASE is the production Better Stack API" \
   "grep -q 'https://uptime.betterstack.com/api/v2/heartbeats/' <<< \"\$(grep -o 'BS_API_BASE:-[^}]*' '$SUT')/heartbeats/\""
+
+# --- T12: the bearer's destination and shape are guarded BEFORE any request (#7797/#7873) ------
+# The token rides curl's stdin config channel. Two things must hold before a single request: it is
+# sent only to the production API root (BS_API_BASE is env-settable, so it is pinned against that
+# literal — a test needing another destination shims curl instead), and a token whose shape could
+# smuggle a config directive onto that channel (a newline, a quote, a space) is never sent at all.
+echo "--- T12 off-pin BS_API_BASE, unusable token and xtrace all refuse with ZERO requests"
+case_setup t12a
+out="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token TFSTATE_JSON="$TFSTATE" ARMED_UNCONFIRMED="$STATEFILE" \
+      BS_API_BASE="https://evil.example/api/v2" bash "$SUT" --arm 2>&1)"; rc=$?
+assert_eq "T12 --arm refuses an off-pin BS_API_BASE with rc=1" "1" "$rc"
+assert "T12 and names BS_API_BASE in the refusal" "[[ \"\$out\" == *'BS_API_BASE must be https://uptime.betterstack.com/api/v2'* ]]"
+assert_eq "T12 and made ZERO requests" "0" "$(grep -c '' "$FAKE_CALLS")"
+printf '%s\n' "$ID_ZOT1" > "$STATEFILE"
+out="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token ARMED_UNCONFIRMED="$STATEFILE" \
+      BS_API_BASE="https://evil.example/api/v2" bash "$SUT" --sweep 2>&1)"; rc=$?
+assert_eq "T12 --sweep refuses an off-pin BS_API_BASE with rc=1" "1" "$rc"
+assert_eq "T12 and the sweep made ZERO requests" "0" "$(grep -c '' "$FAKE_CALLS")"
+case_setup t12b
+for bad_tok in $'tok\nurl = "https://evil.example/"' 'tok en' 'tok"en'; do
+  out="$(PATH="$BIN:$PATH" BS_TOKEN="$bad_tok" TFSTATE_JSON="$TFSTATE" ARMED_UNCONFIRMED="$STATEFILE" \
+        bash "$SUT" --arm 2>&1)"; rc=$?
+  assert_eq "T12 --arm refuses an unusable-shape token with rc=1" "1" "$rc"
+  assert_eq "T12 and made ZERO requests" "0" "$(grep -c '' "$FAKE_CALLS")"
+done
+printf '%s\n' "$ID_ZOT1" > "$STATEFILE"
+out="$(PATH="$BIN:$PATH" BS_TOKEN=$'tok\nurl = "https://evil.example/"' ARMED_UNCONFIRMED="$STATEFILE" \
+      GITHUB_STEP_SUMMARY="$SUMMARY" bash "$SUT" --sweep 2>&1)"; rc=$?
+assert_eq "T12 --sweep with an unusable-shape token fails (rc=1)" "1" "$rc"
+assert "T12 and reports outcome=mint-unreadable naming the id it could not re-pause" \
+  "[[ \"\$out\" == *'outcome=mint-unreadable'* && \"\$out\" == *'cannot re-pause them: $ID_ZOT1'* ]]"
+assert_eq "T12 and the sweep made ZERO requests" "0" "$(grep -c '' "$FAKE_CALLS")"
+case_setup t12c
+out="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token-fp-xtrace TFSTATE_JSON="$TFSTATE" ARMED_UNCONFIRMED="$STATEFILE" \
+      bash -x "$SUT" --arm 2>&1)"; rc=$?
+assert_eq "T12 refuses to run under xtrace with rc=78" "78" "$rc"
+assert "T12 and no fingerprint of the token reaches the trace" "[[ \"\$out\" != *'fake-token-fp-xtrace'* ]]"
+assert_eq "T12 and made ZERO requests under xtrace" "0" "$(grep -c '' "$FAKE_CALLS")"
 
 # --- T11: THE EXTERNAL CUT — the window the sweep exists for (plan scenario 8) ----------------
 # The premise every S-case takes as given: that when the apply job is ended at its budget while an
@@ -898,9 +978,10 @@ if mutate deadline-230 1 's|^ARM_INNGEST_DEADLINE=30$|ARM_INNGEST_DEADLINE=230|'
   assert "M5 and burns it: the observed clock passes 230s" "[[ \$(observed_clock) -ge 230 ]]"
 fi
 
-# M6 — strip the Authorization header. Ignored by the old stub, so deletable with both suites green.
+# M6 — strip the Authorization header from the stdin config the bearer travels on. Ignored by the old
+# stub, so deletable with both suites green.
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate no-auth-header 2 's|-H "Authorization: Bearer \${BS_TOKEN}" ||g'; then
+if mutate no-auth-header 1 's|header = "Authorization: Bearer %s"|header = "X-Stripped: %s"|'; then
   case_setup m6
   run_sut "$MUTANT"
   assert_eq "M6 RED: an unauthenticated gate cannot verify a single arm" "1" "$RC"
@@ -1028,6 +1109,33 @@ if mutate late-state-add 1 '/^  state_add "\$id"$/d; s|^  if ! hb_rollback "\$id
   assert_eq "M18 RED: a cut mid-poll leaves the monitor LIVE and OFF the sweep's books" "0" "$(state_lines)"
 fi
 
+# M19 — drop `--disable` (curl would then read the ambient ~/.curlrc with the bearer in scope).
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-disable 1 "s|curl --disable --noproxy '\\*' |curl --noproxy '*' |"; then
+  case_setup m19
+  run_sut "$MUTANT"
+  assert_eq "M19 RED: a call whose first argument is not --disable cannot verify a single arm" "1" "$RC"
+fi
+
+# M20 — drop `--noproxy '*'` (an inherited ALL_PROXY/HTTPS_PROXY would carry the bearer elsewhere).
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-noproxy 1 "s|curl --disable --noproxy '\\*' |curl --disable |"; then
+  case_setup m20
+  run_sut "$MUTANT"
+  assert_eq "M20 RED: a call with no --noproxy '*' cannot verify a single arm" "1" "$RC"
+fi
+
+# M21 — delete the BS_API_BASE pin: an env override then redirects the bearer. The positive control
+# is that the unmutated copy (M15) never reaches this destination.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-destination-pin 1 's|^  https://uptime.betterstack.com/api/v2) ;;$|  *) ;;|'; then
+  case_setup m21
+  OUT="$(PATH="$BIN:$PATH" BS_TOKEN=fake-token TFSTATE_JSON="$TFSTATE" ARMED_UNCONFIRMED="$STATEFILE" \
+        BS_API_BASE="https://evil.example/api/v2" bash "$MUTANT" --arm 2>&1)"; RC=$?
+  assert "M21 RED: without the pin the bearer is sent to the overridden destination" \
+    "[[ \$(get_urls | grep -c '') -gt 0 ]]"
+fi
+
 # M15 — the anti-vacuity control. An UNMUTATED copy, run through the same harness, must still be
 # GREEN; without it a red baseline is indistinguishable from a caught mutation.
 cp "$SUT" "$WORK/mutant-control.sh" || { echo "FATAL: control copy failed"; exit 2; }
@@ -1049,8 +1157,10 @@ echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertion
 # left room to delete a whole ten-assertion case without tripping it). Exact, not "shipped minus a
 # margin": a margin is precisely the room a silent narrowing hides in, and removing an assertion on
 # purpose should cost one deliberate edit here. Ratcheted 190 → 206 for T11 (the external cut),
-# T4's self-clearing sequence, S4's annotation, and mutation row M18.
-ASSERT_FLOOR=206
+# T4's self-clearing sequence, S4's annotation, and mutation row M18. Ratcheted 206 → 234 for the
+# stdin-bearer conversion (#7797): the stub's argv/--disable/--noproxy refusals and their self-tests,
+# T12 (destination pin, token shape, xtrace) and mutation rows M19-M21.
+ASSERT_FLOOR=234
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1

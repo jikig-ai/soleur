@@ -79,6 +79,8 @@ cfg="$(dirname "$0")/.."
 printf '%s\n' "$*" >> "$cfg/calls.log"
 out=""; url=""; want_code=0
 args=("$@")
+# The bearer rides the stdin config channel (#7797): record what curl would read from stdin.
+for a in "${args[@]}"; do [[ "$a" == "-" ]] && { cat >> "$cfg/stdin.log"; break; }; done
 for (( i = 0; i < ${#args[@]}; i++ )); do
   case "${args[$i]}" in
     -o) out="${args[$((i+1))]}"; i=$((i+1)) ;;
@@ -147,7 +149,7 @@ set_fixtures() { # <alert-paused> <control-n> <readback-rows> <incidents-mode> <
   printf '%s' "$3" > "$WORK/readback.json"
   incidents_json "$4" "$INCIDENT_AT" > "$WORK/incidents.json"
   printf '{"n":"%s"}\n' "$5" > "$WORK/nonsynthetic.json"
-  : > "$CALLS"; rm -f "$WORK/curl.rc" "$WORK/bq.rc" "$WORK/bq.errbody" "$WORK/alerts.code" "$WORK"/incidents.p*.json
+  : > "$CALLS"; : > "$WORK/stdin.log"; rm -f "$WORK/curl.rc" "$WORK/bq.rc" "$WORK/bq.errbody" "$WORK/alerts.code" "$WORK"/incidents.p*.json
   write_tf 1
 }
 
@@ -187,6 +189,9 @@ expect_calls "control SQL is web-1 SCOPED" "JSONExtractString(raw, 'host') = 'so
 expect_calls "readback SQL carries PRIORITY 2 + the marker" "JSONExtractString(raw, 'PRIORITY') = '2' AND JSONExtractString(raw, 'message') LIKE '%synthetic=1 probe_rev=1%'"
 expect_calls "readback SQL reads hot ∪ archive" "s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1"
 expect_calls "nonsynthetic SQL excludes the synthetic class" "NOT LIKE '%synthetic=1%'"
+# The bearer is on curl's STDIN config channel and ABSENT from every recorded argv (#7797).
+if grep -qF -- 'header = "Authorization: Bearer dummy-token"' "$WORK/stdin.log"; then pass "the bearer header arrives on curl stdin"; else fail "the bearer header arrives on curl stdin :: stdin.log lacks it"; fi
+expect_no_calls "the token is absent from every curl argv" "dummy-token"
 
 # 1b/1c. Each incident key ALONE must match (a fixture satisfying both pins neither arm).
 set_fixtures false 731 "$(row_json soleur-web-platform "$ROW_DT")" name 0
@@ -344,6 +349,11 @@ set_fixtures false 731 "$(row_json soleur-web-platform "$ROW_DT")" both 0
 rc=0; out="$(env -i PATH="$WORK/bin:/usr/bin:/bin" HOME="$WORK" SEND_FAILED_PROBE_BQ="$MOCK" SEND_FAILED_PROBE_TF="$TF" "$SUT" 2>&1)" || rc=$?
 if [[ "$rc" -eq 3 ]]; then pass "no secrets -> CANNOT ESTABLISH (exit=3, never 1)"; else fail "no secrets -- expected 3 got $rc :: ${out:0:200}"; fi
 
+# 13b. a token whose shape could inject a curl config directive (newline) -> 3, and curl is never run.
+set_fixtures false 731 "$(row_json soleur-web-platform "$ROW_DT")" both 0
+run_case "newline-bearing token -> CANNOT ESTABLISH (3), never a verdict" 3 BETTERSTACK_API_TOKEN=$'dummy\nheader = "X-Injected: 1"'
+expect_no_calls "malformed token: curl is never invoked" "api/v2"
+
 # 14. probe_rev not greppable / identity not readable from the checkout → 3.
 printf 'locals {\n  monitor_send_failed_probe_rev = "1a"\n}\n' > "$WORK/bad.tf"
 run_case "non-digit probe_rev in the checkout -> CANNOT ESTABLISH (3)" 3 SEND_FAILED_PROBE_TF="$WORK/bad.tf"
@@ -363,7 +373,7 @@ run_case "missing BQ path -> CANNOT ESTABLISH (3), not 1" 3 SEND_FAILED_PROBE_BQ
 # first and on its own block so `guard-vacuity-floor.test.sh` can slice it into a mutant (it
 # recognises -lt/-le/-ge, not -ne) and measure that it FIRES under a neutered verdict helper;
 # the `-ne` pin below is the exact-count backstop.
-MIN_CASES=75
+MIN_CASES=79
 if [[ "$total" -lt "$MIN_CASES" ]]; then
   printf 'FATAL: only %s assertions ran, floor is %s (assertion floor)\n' "$total" "$MIN_CASES" >&2
   exit 1

@@ -843,7 +843,59 @@ t_audit_live_stub() {
   fi
 }
 
+# TR1: the REAL transport (_default_curl), driven against a PATH-shimmed `curl` that records its
+#      argument list and its stdin (#7797). The bearer must ride curl's stdin config channel
+#      (`--config -`), never argv; `--disable` must be the first argument; `--noproxy '*'` present.
+#      A token whose shape could inject a curl config line makes ZERO requests and fails closed.
+t_default_curl_bearer_on_stdin() {
+  local d tok="SynthCfTokenNotReal0123456789_-ab" out rc=0
+  d="$(mktemp -d -t preapply-tr1.XXXXXXXX)"
+  cat > "$d/curl" <<'SHIM_EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$TR1_DIR/argv"
+cfg=""; prev=""; url=""
+for a in "$@"; do
+  [[ "$prev" == "--config" ]] && cfg="$a"
+  case "$a" in https://*) url="$a" ;; esac
+  prev="$a"
+done
+if [[ "$cfg" == "-" ]]; then cat >> "$TR1_DIR/stdin"; fi
+printf 'x\n' >> "$TR1_DIR/calls"
+if [[ "$url" == *phases/http_request_dynamic_redirect/entrypoint ]]; then
+  printf '{"result":{"id":"ctrl","rules":[{"ref":"c"}]}}\n200'
+else
+  printf '\n404'
+fi
+SHIM_EOF
+  chmod +x "$d/curl"; : > "$d/argv"; : > "$d/stdin"; : > "$d/calls"
+  out="$(
+    PATH="$d:$PATH" TR1_DIR="$d" PREAPPLY_CF_TOKEN="$tok" PREAPPLY_CF_ZONE_ID="test-zone" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create.json" 2>&1
+  )" || rc=$?
+  local first; first="$(sed -n '1p' "$d/argv")"
+  if [[ "$rc" -eq 0 && -s "$d/calls" && "$first" == "--disable" ]] \
+     && grep -qxF -- '--noproxy' "$d/argv" && grep -qxF -- '--config' "$d/argv" \
+     && ! grep -qF -- "$tok" "$d/argv" && ! grep -qiF -- 'Authorization' "$d/argv" \
+     && [[ "$(sort -u "$d/stdin")" == "header = \"Authorization: Bearer ${tok}\"" ]]; then
+    _report "TR1 the bearer reaches curl on stdin (--config -), is absent from argv, --disable is first, --noproxy set" ok
+  else
+    _report "TR1 bearer channel" fail "rc=$rc first=$first calls=$(grep -c '' "$d/calls") out=$(tr '\n' '|' <<<"$out")"
+  fi
+  : > "$d/argv"; : > "$d/stdin"; : > "$d/calls"; rc=0
+  out="$(
+    PATH="$d:$PATH" TR1_DIR="$d" PREAPPLY_CF_TOKEN=$'TR1BADFP\nurl = "https://evil.example/"' PREAPPLY_CF_ZONE_ID="test-zone" \
+    bash "$GATE" --gate "$FIXTURES/tfplan-ruleset-create.json" 2>&1
+  )" || rc=$?
+  if [[ "$rc" -ne 0 && ! -s "$d/calls" ]] && grep -Eq 'unexpected shape' <<<"$out" && ! grep -qF 'TR1BADFP' <<<"$out"; then
+    _report "TR1b an unusable-shape token fails closed with ZERO requests and is never echoed" ok
+  else
+    _report "TR1b unusable-shape token" fail "rc=$rc calls=$(grep -c '' "$d/calls") out=<redacted>"
+  fi
+  rm -rf "$d"
+}
+
 # --- Run all -----------------------------------------------------------------
+t_default_curl_bearer_on_stdin
 t_clobber_blocks
 t_empty_404_passes
 t_empty_200_passes

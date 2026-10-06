@@ -75,6 +75,7 @@ run_probe() {
   cat > "$WORK/bin/curl" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "$WORK/last-argv"
+cat > "$WORK/last-stdin"
 case "\${CURL_STUB_MODE:-200}" in
   200) cat "$fixture"; printf '\nHTTP_STATUS:200\n' ;;
   401) printf '{"detail":"Invalid token"}\nHTTP_STATUS:401\n' ;;
@@ -161,7 +162,19 @@ expect "unparseable body -> TRANSIENT" 2 "TRANSIENT: could not grade"
 #    gate would abort with status 1 = FAIL = a false public alarm on a
 #    provisioning gap.
 run_probe "$WORK/f1" SENTRY_ACTIONS_RO_TOKEN= > "$WORK/rc"
-expect "SENTRY_ACTIONS_RO_TOKEN empty -> TRANSIENT" 2 "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN not set"
+expect "SENTRY_ACTIONS_RO_TOKEN empty -> TRANSIENT" 2 "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable"
+
+# 9b — a token with a newline would inject a curl config directive on the stdin channel. It must
+#     degrade to the same TRANSIENT with ZERO curl calls (the stub rewrites last-argv on every
+#     call, so its absence proves none), and never a verdict.
+rm -f "$WORK/last-argv"
+run_probe "$WORK/f1" SENTRY_ACTIONS_RO_TOKEN="$(printf 'stub\nurl = evil')" > "$WORK/rc"
+expect "newline-bearing token -> TRANSIENT" 2 "TRANSIENT: SENTRY_ACTIONS_RO_TOKEN unusable"
+if [[ ! -e "$WORK/last-argv" ]]; then
+  pass "newline-bearing token -> zero curl calls"
+else
+  fail "newline-bearing token -> curl was called :: $(cat "$WORK/last-argv")"
+fi
 
 # 10 — CANNOT ESTABLISH: no start pin at all. SOLEUR_FT_EARLIEST empty and no
 #     CWV_RUM_START override -> refusing to grade an unbounded window is exit 3.
@@ -203,6 +216,27 @@ if grep -qF 'pageload' "$WORK/last-argv" && grep -qF 'navigation' "$WORK/last-ar
   pass "query carries op scoping, vital fields and end="
 else
   fail "query construction drifted :: $(cat "$WORK/last-argv")"
+fi
+
+# 14b — the bearer reaches curl on STDIN (--config -), never on argv (#7797: argv is world-readable
+#     via /proc/<pid>/cmdline). ABSENT from argv AND present on stdin as a config header line;
+#     never loosen this to accept either channel.
+run_probe "$WORK/f1" SENTRY_ACTIONS_RO_TOKEN="stub-token-xyz" > "$WORK/rc"
+expect "stdin-bearer run -> PASS" 0 "PASS: 1 vital-bearing"
+if ! grep -qF 'stub-token-xyz' "$WORK/last-argv" && ! grep -qF 'Authorization' "$WORK/last-argv"; then
+  pass "bearer token and Authorization header are ABSENT from curl argv"
+else
+  fail "bearer leaked onto curl argv :: $(cat "$WORK/last-argv")"
+fi
+if grep -qxF 'header = "Authorization: Bearer stub-token-xyz"' "$WORK/last-stdin"; then
+  pass "bearer arrives on curl stdin as a config header line"
+else
+  fail "bearer missing from curl stdin :: $(cat "$WORK/last-stdin")"
+fi
+if grep -qE '^--disable( |$)' "$WORK/last-argv" && grep -qF -- '--config -' "$WORK/last-argv"; then
+  pass "curl argv keeps --disable first and reads --config -"
+else
+  fail "curl argv shape wrong :: $(cat "$WORK/last-argv")"
 fi
 
 # 15 — XTRACE REFUSAL: live credential + tracing -> exit 78, never a run.

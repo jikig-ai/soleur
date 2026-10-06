@@ -67,7 +67,7 @@ detect_repo() {
 date_n_days_ago() {
   local days="${1:-7}"
   if ! [[ "$days" =~ ^[0-9]+$ ]]; then
-    echo "Error: days must be a positive integer, got '${days}'" >&2
+    echo "Error: days must be a positive integer." >&2
     exit 1
   fi
   date -u -d "${days} days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || \
