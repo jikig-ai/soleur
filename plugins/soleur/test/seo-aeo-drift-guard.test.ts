@@ -2115,10 +2115,15 @@ describe("#9579 Guard 2 — computed counts on the homepage (re-pin of #3165)", 
       { rel: "_includes/page-freshness.njk", floorOk: true },
     ];
     const hits: string[] = [];
+    let linesScanned = 0;
+    let linesExpected = 0;
     for (const { rel, floorOk } of sources) {
       const src = readFileSync(resolve(REPO_ROOT, "plugins/soleur/docs", rel), "utf8");
       expect(src.length, `${rel} read`).toBeGreaterThan(500);
-      src.split("\n").forEach((line, n) => {
+      const lines = src.split("\n");
+      linesExpected += lines.length;
+      lines.forEach((line, n) => {
+        linesScanned++;
         for (const m of line.matchAll(LITERAL_COUNT_RE)) {
           // pricing/about/vision keep the 60+ soft floor via the default branches.
           if (floorOk && m[0].startsWith("60+")) continue;
@@ -2126,6 +2131,9 @@ describe("#9579 Guard 2 — computed counts on the homepage (re-pin of #3165)", 
         }
       });
     }
+    // Floor: a scan that examined nothing must not read as clean.
+    expect(linesScanned, "template lines scanned equals template lines read").toBe(linesExpected);
+    expect(linesScanned, "template lines scanned").toBeGreaterThan(200);
     expect(hits, hits.join("\n")).toEqual([]);
   });
 
