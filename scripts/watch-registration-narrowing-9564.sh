@@ -19,6 +19,9 @@
 # and add at least one `run_suite` line to the runner (a registration-only edit is
 # purely additive and registers a suite). (b) has no recorded data source, so the
 # notice hands it to a human. The workflow job runs only on the default branch.
+# Baseline at merge: count=2 (this watcher's own registration commit and #9594's, both
+# legitimately registration-shaped), so the first notice is expected with the next
+# suite-adding PR after merge.
 #
 # SELF-DISABLE: once the tracker is not OPEN every run is a cheap no-op.
 #
@@ -30,8 +33,9 @@
 #
 # Exit: 0 ok / below threshold / already notified / tracker not open
 #         (--print-count always exits 0, even when it prints count=unknown);
-#       1 comment post failed; 2 usage; 3 cannot establish (read failed, base or a
-#       runner path missing); 78 refusing to run under xtrace.
+#       1 comment post failed; 2 usage; 3 cannot establish (the issue or its comments
+#       could not be read, the base is missing or off-branch, a runner path is gone);
+#       78 refusing to run under xtrace.
 # A red run is the only failure signal (Actions tab + GitHub's default failure
 # email): exit 3 is deliberately loud, a silently broken watcher is the worse state.
 set -uo pipefail
@@ -64,9 +68,12 @@ count_registration_shaped() {
   # A renamed/split runner would make the pathspec match nothing and the count read
   # 0 forever with a green run: refuse instead.
   for p in "${PATHS[@]}"; do git cat-file -e "HEAD:${p}" 2>/dev/null || return 1; done
-  # --no-merges is defence in depth: a merge commit has no numstat and its combined
-  # diff can never carry a `+run_suite` line, so it could not be counted either way.
-  out="$(git log --no-merges --numstat --format='C %h %cs %s' "${BASE_SHA}..HEAD" -- "${PATHS[@]}" 2>/dev/null)" || return 1
+  # --no-merges is LOAD-BEARING: a merge has no numstat, so the awk below reads it as
+  # "deletes nothing", and the combined diff of a hand-resolved merge CAN carry a
+  # `+ run_suite` line that matches the regex. S10c is the test that pins the flag.
+  # %H is what `git show` receives (a branch or tag named like an abbreviated hash
+  # would shadow %h); %h is only what the notice displays.
+  out="$(git log --no-merges --numstat --format='C %H %h %cs %s' "${BASE_SHA}..HEAD" -- "${PATHS[@]}" 2>/dev/null)" || return 1
   # ONE pass over the numstat: `Q<TAB><line>` for a touching commit that deletes
   # nothing, `X` for one that deletes a line (a `-` binary field counts as a deletion,
   # so a commit this cannot read is excluded, never counted).
@@ -83,7 +90,11 @@ count_registration_shaped() {
         added="$(grep -cE '^\+[[:space:]]*run_suite[[:space:]]' <<<"$patch" || true)"
         if [[ "${added:-0}" -gt 0 ]]; then
           COUNT=$((COUNT + 1))
-          line="$(printf '%s' "$line" | tr '`@<>' '    ')"
+          # Display `<short> <date> <subject>`: drop control bytes (a lone CR would break
+          # the markdown line), neutralise @ < > backtick and & (so `&#64;user` cannot
+          # decode to a mention), then cut in bash (characters, not mawk's bytes).
+          line="${line#* }"
+          line="$(printf '%s' "$line" | tr -d '\000-\037\177' | tr '`@<>&' '     ')"
           LIST+="${line:0:100}"$'\n'
         else
           EXCLUDED=$((EXCLUDED + 1))

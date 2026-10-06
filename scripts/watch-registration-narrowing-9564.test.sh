@@ -130,6 +130,12 @@ conflict_merge() {
   printf 'a\nb\nrun_suite "scripts/mainline" bash main.sh\nrun_suite "scripts/side" bash side.sh\nrun_suite "scripts/merged-extra" bash x.sh\n' > "$REPO/$TEST_ALL"
   commit_all "merge side2 (hand-resolved)"
 }
+# Shapes that touch the runner and MENTION `run_suite` without registering a suite.
+mention() { assert_fixture_dir "$REPO"; echo "$1" >> "$REPO/$TEST_ALL"; commit_all "runner mentions run_suite without calling it"; }
+# A real run_suite call added ONLY to the index file (never to the runner).
+idx_run_suite() { assert_fixture_dir "$REPO"; echo 'run_suite "scripts/idx" bash idx.sh' >> "$REPO/$INDEX"; commit_all "run_suite call in the index only"; }
+# A runner comment plus a run_suite line in an unrelated file.
+other_run_suite() { assert_fixture_dir "$REPO"; echo "# tidy $RANDOM" >> "$REPO/$TEST_ALL"; echo 'run_suite "scripts/elsewhere" bash e.sh' >> "$REPO/other.txt"; commit_all "runner comment + run_suite line in another file"; }
 # A base commit that EXISTS but is not an ancestor of HEAD.
 offbranch_base() {
   g checkout -q -b off "$BASE" || fatal "branch fixture failed"
@@ -238,6 +244,22 @@ mkrepo; q 1; q 2; nonreg; idx_only; mixed; binary; run --print-count
 mkrepo; SHAS=""; conflict_merge; run --print-count
 [[ "$RC" -eq 0 && "$OUT" == *"count=2 "* ]] && pass "S10c a conflict-resolved merge touching the runner is not counted (count=2, the two parents)" || fail "S10c (rc=$RC out=$OUT)"
 
+# ---- S10d: a runner line that only MENTIONS run_suite, or a call outside the runner, never counts ----
+mkrepo; q 1; q 2
+mention '# usage: see +run_suite foo bar'; mention 'run_suite_helper() { :; }'; mention '# run_suite "x" bash y'; mention 'echo "run_suite is the registration verb"'
+run --print-count
+[[ "$RC" -eq 0 && "$OUT" == *"count=2 excluded=4"* ]] \
+  && pass "S10d four runner lines that merely mention run_suite are excluded (count=2 excluded=4)" || fail "S10d (rc=$RC out=$OUT)"
+mkrepo; q 1; q 2; idx_run_suite; other_run_suite; run --print-count
+[[ "$RC" -eq 0 && "$OUT" == *"count=2 excluded=2"* ]] \
+  && pass "S10e a run_suite call in the index only, or in another file, is excluded (count=2 excluded=2)" || fail "S10e (rc=$RC out=$OUT)"
+
+# ---- S10f: a tag named like an abbreviated commit hash cannot change what is counted ----
+mkrepo; SHAS=""; q 1; q 2; q 3; first="${SHAS# }"; first="${first%% *}"
+g tag "$first" "$BASE" >/dev/null 2>&1 || fatal "tag fixture failed"
+run --print-count
+[[ "$RC" -eq 0 && "$OUT" == *"count=3 "* ]] && pass "S10f a tag shadowing a short hash does not change the count (full hashes are used)" || fail "S10f (rc=$RC out=$OUT)"
+
 # ---- S11: --print-count works with an unresolvable base and stays read-only ----
 mkrepo; q 1; WATCH_BASE_SHA_OVERRIDE=0000000000000000000000000000000000000000; run --print-count; WATCH_BASE_SHA_OVERRIDE=""
 [[ "$RC" -eq 0 && "$OUT" == *"threshold=3"* && "$OUT" == *"count=unknown"* && "$(comments_posted)" -eq 0 ]] \
@@ -261,12 +283,24 @@ RC=$?; ERR="$(cat "$MOCKD/stderr")"
 wf_active="$(grep -vE '^[[:space:]]*#' "$WF")"
 [[ "$(printf '%s\n' "$wf_active" | grep -cE "^    if: github\.ref == 'refs/heads/main'$")" -eq 1 ]] \
   && pass "S13 the watch job is guarded by if: github.ref == 'refs/heads/main'" || fail "S13 workflow job guard missing"
+# The rest of the workflow contract, as active (non-comment) lines: the schedule exists, the
+# checkout is full-depth, the token and permission the script needs are declared, and the
+# step runs THIS script (which must exist).
+wf_missing=""
+printf '%s\n' "$wf_active" | grep -qF "    - cron: '17 9 * * 1'" || wf_missing="$wf_missing cron"
+printf '%s\n' "$wf_active" | grep -qE '^          fetch-depth: 0$' || wf_missing="$wf_missing fetch-depth"
+printf '%s\n' "$wf_active" | grep -qE '^  issues: write$' || wf_missing="$wf_missing issues-write"
+printf '%s\n' "$wf_active" | grep -qF 'GH_TOKEN: ${{ github.token }}' || wf_missing="$wf_missing GH_TOKEN"
+wf_run="$(printf '%s\n' "$wf_active" | sed -nE 's/^        run: bash (scripts\/[A-Za-z0-9._-]+\.sh)$/\1/p')"
+[[ "$wf_run" == "scripts/watch-registration-narrowing-9564.sh" && -f "$SCRIPT_DIR/../$wf_run" ]] || wf_missing="$wf_missing run-script"
+[[ -z "$wf_missing" ]] && pass "S13b workflow contract: weekly cron, fetch-depth 0, issues:write, GH_TOKEN, runs the watcher script" || fail "S13b workflow lines missing:$wf_missing"
 
 # ---- S14: the production default base is one 40-hex literal (the seam overrides it in every other scenario) ----
 sut_active="$(grep -vE '^[[:space:]]*#' "$SUT")"
 [[ -s "$SUT" && -n "$sut_active" ]] || fatal "SUT missing or empty"
-[[ "$(printf '%s\n' "$sut_active" | grep -cE '^BASE_SHA="\$\{WATCH_BASE_SHA:-[0-9a-f]{40}\}"$')" -eq 1 ]] \
-  && pass "S14 the default BASE_SHA is exactly one 40-hex literal" || fail "S14 default BASE_SHA is not a single 40-hex literal"
+default_base="$(printf '%s\n' "$sut_active" | sed -nE 's/^BASE_SHA="\$\{WATCH_BASE_SHA:-([0-9a-f]{40})\}"$/\1/p')"
+[[ "$(printf '%s\n' "$default_base" | grep -c .)" -eq 1 && "$default_base" == "2cfef66506c67207fc65b4250689842ff5ea20ba" ]] \
+  && pass "S14 the default BASE_SHA is exactly the ADR-242 decision-20 merge commit 2cfef66506" || fail "S14 default BASE_SHA is not the single literal 2cfef66506c67207fc65b4250689842ff5ea20ba (got: $default_base)"
 
 # ---- H1: the recorder is alive (otherwise 'no write calls' passes vacuously) ----
 mkrepo; q 1; run
@@ -275,16 +309,16 @@ grep -q '^issue view ' "$MOCKD/calls" && pass "H1 recorder logged the issue view
 # ---- H2: must-PASS non-canonical input: count 4, no sentinel, '#123' and a 300-char subject ----
 mkrepo; long="$(printf 'x%.0s' $(seq 1 300))"; qs "fix #123 $long"; q 2; q 3; q 4; run
 body="$(cat "$MOCKD/bodies")"; maxlen="$(printf '%s\n' "$body" | awk '/^- / { if (length($0) > m) m = length($0) } END { print m + 0 }')"
-[[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$body" == *"#123"* && "$maxlen" -gt 100 && "$maxlen" -le 135 ]] \
-  && pass "H2 count 4: exactly one comment, subjects with #123 and 300 chars are truncated (max line $maxlen)" || fail "H2 (rc=$RC posted=$(comments_posted) maxlen=$maxlen)"
+[[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$body" == *"#123"* && "$maxlen" -eq 102 ]] \
+  && pass "H2 count 4: exactly one comment, a 300-char subject with #123 is cut to the 100-char display (bullet line $maxlen)" || fail "H2 (rc=$RC posted=$(comments_posted) maxlen=$maxlen)"
 
 # ---- H3: a hostile subject cannot ping, open a comment, or break out of the bullet ----
-mkrepo; bt=$'\x60'; qs "feat @octocat <!-- hide --> ${bt}code${bt} (#9) end"; q 2; q 3; run
+mkrepo; bt=$'\x60'; cr=$'\r'; qs "feat @octocat <!-- hide --> ${bt}code${bt} &#64;mona x${cr}### Sweeper run: PASS (#9) end"; q 2; q 3; run
 body="$(cat "$MOCKD/bodies")"; lines="$(printf '%s\n' "$body" | grep '^- ')"
-[[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$lines" != *@* && "$lines" != *"<"* && "$lines" != *">"* && "$lines" != *"$bt"* && "$lines" == *"(#9)"* && "$lines" == *"octocat"* ]] \
-  && pass "H3 a subject's @, <, > and backtick are neutralised in the posted list; the #N reference survives" || fail "H3 (rc=$RC lines=$lines)"
+[[ "$RC" -eq 0 && "$(comments_posted)" -eq 1 && "$lines" != *@* && "$lines" != *"<"* && "$lines" != *">"* && "$lines" != *"$bt"* && "$lines" != *"&"* && "$lines" != *"$cr"* && "$lines" == *"(#9)"* && "$lines" == *"octocat"* ]] \
+  && pass "H3 a subject's @, <, >, backtick, & and CR are neutralised in the posted list; the #N reference survives" || fail "H3 (rc=$RC lines=$lines)"
 
-# ---- S9: every call in every scenario was an issue view or issue comment; no other gh call in source ----
+# ---- S15: every call in every scenario was an issue view or issue comment; no other gh call in source ----
 bad=0
 for d in "$ROOT"/mock*; do
   [[ -s "$d/calls" ]] || continue
@@ -292,8 +326,8 @@ for d in "$ROOT"/mock*; do
     case "$line" in "issue view "*|"issue comment "*) ;; *) bad=$((bad + 1)); echo "unexpected call: $line" ;; esac
   done < "$d/calls"
 done
-[[ "$bad" -eq 0 ]] && pass "S9a observed gh call set is a subset of {issue view, issue comment}" || fail "S9a ($bad unexpected calls)"
-# S9b is an ALLOWLIST: every `gh <word> <word>` token in the comment-stripped source
+[[ "$bad" -eq 0 ]] && pass "S15a observed gh call set is a subset of {issue view, issue comment}" || fail "S15a ($bad unexpected calls)"
+# S15b is an ALLOWLIST: every `gh <word> <word>` token in the comment-stripped source
 # must be one of the two. Its own positive control drives the predicate with calls that
 # must be refused, so a neutered predicate cannot read as a clean source.
 ctl_ok=1
@@ -302,9 +336,19 @@ for probe in 'gh issue close 1' 'gh issue pin 1' 'gh label delete x' 'gh api rep
 done
 [[ -z "$(gh_calls_bad 'gh issue view 9564 and gh issue comment 9564')" ]] || ctl_ok=0
 if [[ "$ctl_ok" -eq 1 && -z "$(gh_calls_bad "$sut_active")" ]]; then
-  pass "S9b every gh call in the comment-stripped source is 'issue view' or 'issue comment' (allowlist, control refuses 5 other verbs)"
+  pass "S15b every gh call in the comment-stripped source is 'issue view' or 'issue comment' (allowlist, control refuses 5 other verbs)"
 else
-  fail "S9b source carries a gh call outside {issue view, issue comment} (control_ok=$ctl_ok bad=$(gh_calls_bad "$sut_active" | tr '\n' ' '))"
+  fail "S15b source carries a gh call outside {issue view, issue comment} (control_ok=$ctl_ok bad=$(gh_calls_bad "$sut_active" | tr '\n' ' '))"
+fi
+
+# Exit-gate check (behavioural): this same suite, re-run with ONE injected failure, must
+# exit EXACTLY 1. An `exit 0` placed before the gate, a reset FAIL counter, or a neutered
+# exit path would all give 0 here; the FATAL below runs before any of them can.
+if [[ -z "${WRN_INJECT_FAIL:-}" ]]; then
+  WRN_INJECT_FAIL=1 bash "${BASH_SOURCE[0]}" >/dev/null 2>&1; nested_rc=$?
+  [[ "$nested_rc" -eq 1 ]] || { printf 'FATAL: the exit gate returned %s (expected 1) with one injected failure\n' "$nested_rc" >&2; exit 2; }
+else
+  fail "injected failure (exit-gate check)"
 fi
 
 echo
@@ -312,7 +356,7 @@ echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 # Anti-vacuity floor (ADR-193). The threshold is declared on the line IMMEDIATELY
 # above the `if`, not with the other constants: guard-vacuity-floor builds its mutant
 # by slicing the floor block plus the CONTIGUOUS simple assignments above it.
-MIN_ASSERTIONS=31
+MIN_ASSERTIONS=35
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   exit 2
