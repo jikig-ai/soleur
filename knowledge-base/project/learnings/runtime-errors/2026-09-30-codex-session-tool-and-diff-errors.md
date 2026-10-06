@@ -547,3 +547,25 @@ is not a completed lint check of those files.
   recovery evidence. A guessed root GDPR-script path also failed; the actual
   hook command in `lefthook.yml` points into the installed skill's `scripts/`
   directory. Docker metadata reads required an approved socket-access retry.
+
+## Continuation probe errors — 2026-10-06
+
+- Large combined skill/source reads exceeded both command and orchestration
+  output budgets. Split long prose reads and budget the sum of batched outputs;
+  do not infer coverage from truncated output. A completed process result was
+  hidden in an omitted output item, and polling its closed session then returned
+  an unknown-process error. Track each returned session and its terminal result
+  before resuming it; do not relaunch a command merely because its output was lost.
+- GitHub transport, workflow-tally locks and Docker metadata/build socket access
+  were denied by the sandbox. Use the specific approved escalation, inspect its
+  real result, and preserve the distinction between a denied probe and a finding.
+- Public OpenAI Markdown URLs returned unsupported-content errors in the web
+  tool. Fetch the corresponding HTML pages and their relevant content anchors;
+  the failed Markdown fetch did not establish missing documentation.
+- Discovery guessed a transport filename and a standalone build-workflow name;
+  both were absent. Resolve filenames with `rg --files` before reading. Broad
+  temporary-directory discovery also encountered protected directories; inspect
+  known task-owned paths instead of treating a partial listing as exhaustive.
+- The repository Markdown invoker explicitly excludes `knowledge-base/project/` and
+  reported no files in scope for the evidence guide, even after staging. This is
+  a lint-scope result, not a Markdown lint pass for that guide.
