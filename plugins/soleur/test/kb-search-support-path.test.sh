@@ -216,17 +216,36 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# kb-tags.txt freshness: every tag used in corpus frontmatter must appear in
-# the artifact — a stale kb-tags.txt makes `kb-search --tag <real>` emit
-# "No matches" on the support path (ship-advisor finding, PR #9570). INDEX.md
-# is hand-curated (not generator output) so it is NOT freshness-checked here.
+# kb-tags.txt / kb-categories.txt freshness: every facet used in corpus
+# frontmatter must appear in the artifact — a stale artifact makes
+# `kb-search --tag/--category <real>` emit "No matches" on the support path
+# (ship-advisor finding, PR #9570). Extraction is frontmatter-BOUND (the
+# c==1 idiom — only between the first and second `---`) and lowercase-
+# normalized on both sides, matching the canonical parser's semantics.
+# INDEX.md is hand-curated (not generator output) so it is NOT
+# freshness-checked here.
+# frontmatter_values <key> — sorted-unique, lowercase, whitespace/quote/
+# bracket-normalized values of a frontmatter key across the corpus. FNR==1
+# resets the delimiter counter PER FILE — without it the c==1 window only
+# ever covers the first file's frontmatter (proved by the freshness
+# control below).
+frontmatter_values() {
+  awk -v key="$1" '
+    FNR==1                 { c = 0 }
+    /^---[[:space:]]*$/    { c++; next }
+    c==1 && $0 ~ "^" key ":" { sub("^" key ":[[:space:]]*", ""); print }
+  ' "${learnings[@]}" \
+    | sed 's/[][]//g; s/"//g' | tr ',' '\n' \
+    | tr -d ' \t' | tr '[:upper:]' '[:lower:]' | sed '/^$/d' | sort -u
+}
 if (( ${#learnings[@]} >= 1 )); then
-  STALE_TAGS=$(grep -h '^tags:' "${learnings[@]}" 2>/dev/null \
-    | sed 's/^tags:[[:space:]]*//; s/[][]//g' | tr ',' '\n' | tr -d ' ' \
-    | sort -u | grep -vFxf "$KB_DIR/kb-tags.txt" || true)
+  STALE_TAGS=$(frontmatter_values tags \
+    | grep -vFxf <(tr '[:upper:]' '[:lower:]' < "$KB_DIR/kb-tags.txt") || true)
+  STALE_CATS=$(frontmatter_values category \
+    | grep -vFxf <(tr '[:upper:]' '[:lower:]' < "$KB_DIR/kb-categories.txt") || true)
 else
-  # empty corpus already failed above; an unset grep would read stdin and hang
-  STALE_TAGS=""
+  # empty corpus already failed above; a zero-file-arg grep would read stdin and hang
+  STALE_TAGS=""; STALE_CATS=""
 fi
 if [[ -z "$STALE_TAGS" ]]; then
   echo "  PASS: kb-tags.txt covers every tag used in corpus frontmatter"
@@ -235,8 +254,31 @@ else
   echo "  FAIL: kb-tags.txt is stale — tags used in corpus frontmatter but absent: $(echo "$STALE_TAGS" | tr '\n' ' ')"
   FAIL=$((FAIL + 1))
 fi
+if [[ -z "$STALE_CATS" ]]; then
+  echo "  PASS: kb-categories.txt covers every category used in corpus frontmatter"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: kb-categories.txt is stale — categories used in corpus frontmatter but absent: $(echo "$STALE_CATS" | tr '\n' ' ')"
+  FAIL=$((FAIL + 1))
+fi
 
-# Floor = the green-run assertion count (13): exists + marker + non-empty
-# section + no-fence + 4 controls + 3 corpus files + learnings + tag
-# freshness. Re-derive from a green run rather than lowering by feel.
-print_results 13
+# Freshness control on the SAME inputs: dropping the artifact's first line
+# must make at least one used facet read as stale — proves the diff actually
+# discriminates (an always-empty extraction would report green vacuously).
+if (( ${#learnings[@]} >= 1 )); then
+  CTRL_STALE=$(frontmatter_values tags \
+    | grep -vFxf <(tr '[:upper:]' '[:lower:]' < "$KB_DIR/kb-tags.txt" | tail -n +2) || true)
+  if [[ -n "$CTRL_STALE" ]]; then
+    echo "  PASS: control — freshness check fires when an artifact line is removed"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: control — freshness check did NOT fire on a truncated artifact"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
+# Floor = the green-run assertion count (15): exists + marker + non-empty
+# section + no-fence + 4 controls + 3 corpus files + learnings + tag &
+# category freshness + freshness control. Re-derive from a green run
+# rather than lowering by feel.
+print_results 15
