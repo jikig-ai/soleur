@@ -577,3 +577,18 @@ is not a completed lint check of those files.
   `rg --files` discovery corrected that read. GitHub's push-time dependency
   advisory was verified against 11 existing open Dependabot alerts on main;
   it is tracked upstream state, not a new evidence-document finding.
+
+## Recovery-readiness continuation errors — 2026-10-06
+
+- The first session-state read again guessed the rollout directory and failed;
+  the live-path session record is under `feat-one-shot-codex-web-live-paths`.
+  Inventory the explicitly named feature directory before reading artifacts.
+- Whole-script and broad session-file reads exceeded output budgets. Dense
+  skill prose also exceeded budgets within short line ranges. Bound reads by
+  content size as well as line count, and budget the combined orchestration
+  output; truncated text is not evidence of complete instruction coverage.
+- The guessed app-root Lefthook binary was absent and returned 127. The
+  installed hook's cached native-binary fallback was verified executable before
+  use. Resolve the active hook's runner rather than assuming dependency hydration
+  supplies it. The effective hook path is `/dev/null` in this tool environment,
+  so invoke applicable checks explicitly and retain test-runner exclusions.

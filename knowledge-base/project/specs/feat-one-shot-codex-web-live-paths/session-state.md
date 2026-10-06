@@ -395,3 +395,24 @@
 - The [resynced exact-base compilation record](node22-pinned-build-9304505d.md) owns the fresh successful Node v22.22.1 Next/Webpack/TypeScript/routes, server and config compilation at `9304505d`. All four steps exited zero with the same network-disabled, synthetic-config controls. Compiler containers were removed. Exact base parity does not qualify production runner/dependency/tool parity, retained-schema recovery or authenticated preview.
 - At the latest source-head probe, [CI 37426126628](https://github.com/jikig-ai/soleur/actions/runs/37426126628), [tenant integration 37426126611](https://github.com/jikig-ai/soleur/actions/runs/37426126611) and other checks were still running, while CLA, secret scan and quality guards had passed. The monitor reported 70 passes, six skips and 12 pending, with no fail/cancel at that probe; this is not a complete CI verdict. Fresh exact-head checks are required after this evidence/documentation merge commit. The GitHub push advisory was traced to 11 already-open default-branch Dependabot alerts, separately from this scoped review.
 - Published OpenAI discovery/account guidance is complete at the documentary level. API-key remains PENDING and existing managed hosted auth BLOCKED; no live permission, key or deadline was established. Keep draft/default-off/customer content blocked. The recovery → authenticated screenshots → eligible routine consumer → separate permitted Web matrices → attributable mode-specific CLO disposition chain, full-branch review and promotion remain incomplete under the existing execution limits.
+
+## Continuation update — 2026-10-06 recovery readiness
+
+- Supplied head `8ad1754705e76153fd6f8a91698157305f89581c` was reverified OPEN,
+  draft and CLEAN, with local/remote agreement and a clean worktree. Exact-head
+  [CI 37427018802](https://github.com/jikig-ai/soleur/actions/runs/37427018802),
+  [tenant integration 37427018889](https://github.com/jikig-ai/soleur/actions/runs/37427018889),
+  CLA, secret scan and quality guards passed: 84 passing checks, six skips,
+  no unresolved checks. These observations precede this documentation update.
+- The [recovery readiness record](recovery-readiness-2026-10-06.md) names the
+  current-source forward-recovery candidate, verifies its five retained hashes,
+  records current cached dependency drift and scoped static invariant coverage,
+  and prepares the exact isolated rehearsal scope. No runner parity or dynamic
+  recovery is qualified. The existing non-CI migration fixture targets shared
+  local Supabase and cannot be reused unchanged for this isolated rehearsal.
+- Local suites and dynamic rehearsal remain held pending clarification of the
+  local-verification scope. No credential-value inspection, provider/auth call,
+  runtime/database startup, shared database/production write, flag/cohort change,
+  browser-authentication copying or verification retry occurred. All subsequent
+  qualification, full-branch review and promotion gates remain open; keep draft,
+  default-off and customer content blocked.
