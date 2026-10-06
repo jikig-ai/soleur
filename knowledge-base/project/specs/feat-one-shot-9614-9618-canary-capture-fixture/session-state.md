@@ -19,3 +19,8 @@ None. (Non-blocking notes: the `soleur:deepen-plan` Post-Enhancement AskUserQues
 - `soleur:plan` (completed: plan authored with all mandatory sections — User-Brand Impact, Observability, Scope Check, Domain Review, ADR-079 amendment design, Guard Contract, AC, Test Scenarios; tasks.md generated at `knowledge-base/project/specs/feat-one-shot-9614-9618-canary-capture-fixture/tasks.md`)
 - `soleur:deepen-plan` (completed: halt gates 4.4–4.12 executed mechanically, verify-the-negative + citation-verification passes run inline, Enhancement Summary appended)
 - Commits `9f5dc67991` (plan + tasks) and `f72e701b3f` (deepen pass), both pushed to `feat-one-shot-9614-9618-canary-capture-fixture`
+
+## Review Phase
+- Coverage: `Reviewed-Coverage: inline-fallback 0/8` — all 8 panel seats failed at spawn on the free-model rate limit (reset ~16:01 UTC); inline review covered security/architecture/performance/simplicity + test-design + data-integrity + git-history, 0 findings.
+- Optional resume: re-run `soleur:review` with the real panel after the limit resets — the diff is small and already proven end-to-end (in-image capture `captured` + `verify_ok` at 0.3.284), so this is belt-and-suspenders, not a gap.
+- Trailer commit: 736cd33553.
