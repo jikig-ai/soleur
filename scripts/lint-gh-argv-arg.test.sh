@@ -23,6 +23,24 @@ LINTER="${GH_ARGV_LINT_SCRIPT:-$SCRIPT_DIR/lint-gh-argv-arg.py}"
 TMP="$(mktemp -d -t gh-argv-lint.XXXXXXXX)" || { echo "FATAL: mktemp failed"; exit 2; }
 trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 
+# Canonical copy of the fixture-dir guard from plugins/soleur/test/test-helpers.sh
+# (byte-identical per fixture-dir-operand-assert.test.sh). Sourcing the helper
+# file is not an option here — it sets -e, and this suite deliberately runs
+# `set -uo pipefail` so a fixture lint failure lands in FAIL, not an abort.
+# The single top-level call below is what fixture-scan.py --rule relative
+# recognises: every fixture write under $TMP chains to it as endvar.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$TMP"
+
 PASS=0
 FAIL=0
 # Anti-vacuity floor. Raise deliberately when adding fixtures.
@@ -46,6 +64,9 @@ fi
 mkfix() {
   local name="$1"
   local root="$TMP/fx-$name"
+  # In-function re-assert: the relative-rule guard window stops at this
+  # function head, so the top-level $TMP guard cannot reach writes below.
+  assert_fixture_dir "$root"
   rm -rf "$root" || { echo "FATAL: rm -rf $root failed"; exit 2; }
   mkdir -p "$root/.github/workflows" "$root/scripts" \
     || { echo "FATAL: mkdir $root failed"; exit 2; }
@@ -105,6 +126,10 @@ echo "=== lint-gh-argv-arg fixtures ==="
 
 # F1 -- the canonical defect: `--arg` inside gh's argv in a workflow run body.
 r="$(mkfix canonical)"
+# fixture-scan --rule relative chains "$r/..." sites to a call it cannot
+# resolve (mkfix). The guard names the USE var: assert once here — every later
+# rebinding is still "$TMP/fx-*", and the guard window runs to file start.
+assert_fixture_dir "$r"
 cat > "$r/.github/workflows/fx.yml" <<'YAML'
 name: fx
 on: workflow_dispatch
