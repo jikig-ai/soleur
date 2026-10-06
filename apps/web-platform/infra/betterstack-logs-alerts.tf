@@ -1179,7 +1179,7 @@ resource "logtail_exploration" "egress_gw_deny_spike" {
   query {
     query_type      = "sql_expression"
     source_variable = "source"
-    sql_query = replace(trimspace(local.egress_gw_deny_spike_sql), "/\\s+/", " ")
+    sql_query       = replace(trimspace(local.egress_gw_deny_spike_sql), "/\\s+/", " ")
   }
 
   variable {
@@ -1235,7 +1235,7 @@ resource "logtail_exploration" "egress_gw_probe_silent" {
   query {
     query_type      = "sql_expression"
     source_variable = "source"
-    sql_query = replace(trimspace(local.egress_gw_probe_silent_sql), "/\\s+/", " ")
+    sql_query       = replace(trimspace(local.egress_gw_probe_silent_sql), "/\\s+/", " ")
   }
 
   variable {

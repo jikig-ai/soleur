@@ -288,7 +288,7 @@ assert_grep() {
 assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
 assert_grep "warn filter reads the app_container source" '^inputs = \["app_container_journald"\]'
 assert_grep "app container routed THROUGH pii_scrub (redaction path, not sink-direct)" \
-  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald"\]'
+  '^inputs = \["inngest_journald", "system_journald", "app_container_warn_filter", "host_scripts_journald", "egress_gw_journald"\]'
 assert_grep "tag_journald tags app-container lines source_kind=app_container" 'source_kind = "app_container"'
 
 # (b) Redaction parity: a cron pino WARN+ line carrying a userId + an Art-9
@@ -456,7 +456,28 @@ EXPECTED_TAGS=$(
     #      the guard, not caught drift.
     # All three ship to the journal under SYSLOG_IDENTIFIER.
     grep -qE '(^|\|)[[:space:]]*logger -t|:-logger\}" -t|\\n[[:space:]]*logger -t' "$f" || continue
-    grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
+    # A file's LOG_TAG= feeds EXPECTED only when a `-t` call actually passes
+    # it (#9534) — cron-egress-resolve.sh is the counterexample: its LOG_TAG is
+    # the textual prefix log() echoes to stdout (which ships under the unit's
+    # ExecStart basename, never as a SYSLOG_IDENTIFIER the journald source
+    # allowlist would match), while the file's sole `logger -t` call uses the
+    # literal dedicated `egress-gw-probe` tag so only the probe heartbeat
+    # (~288 rows/day) ships, not the resolver's ~2k rows/day of routine lines.
+    # Deriving `cron-egress-resolve` here would demand a vector.toml entry for
+    # a tag that is never emitted — a fake drift the guard would then read as
+    # licence to ship the very volume the dedicated tag exists to avoid.
+    grep -qE -- '-t[[:space:]]+"?\$?\{?LOG_TAG\}?"?' "$f" \
+      && grep -hoP '^\s*(readonly\s+)?LOG_TAG="\K[^"]+' "$f"
+    # Channel B/4 (#9534) — a literal `logger -t <tag>` call site, the emission
+    # shape the LOG_TAG indirection cannot see. Same hole class as the
+    # sed-replacement form (Channel B/3) and the cloud-init literal (Channel
+    # D): the call ships under SYSLOG_IDENTIFIER=<literal> whether or not the
+    # file carries a LOG_TAG. Anchored to the same call forms as the gate so
+    # a comment mention (e.g. ci-deploy.sh's `# … logger -t …` doc comment)
+    # still cannot enter the set.
+    grep -hoP '(^|\|)[[:space:]]*logger -t[[:space:]]+\K[a-z0-9-]+' "$f"
+    grep -hoP ':-logger\}" -t[[:space:]]+\K[a-z0-9-]+' "$f"
+    grep -hoP '\\n[[:space:]]*logger -t[[:space:]]+\K[a-z0-9-]+' "$f"
   done
   # #6556 Part 1 coverage extension — explicit SyslogIdentifier= in STANDALONE unit files
   # (*.service) and cloud-init write_files unit bodies (*.yml). These are NOT .sh heredocs and

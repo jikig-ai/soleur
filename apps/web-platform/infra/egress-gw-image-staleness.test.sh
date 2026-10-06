@@ -39,7 +39,7 @@ if grep -qE "EGRESS_GW_IMAGE:-ubuntu/squid@sha256:[0-9a-f]{64}" "$BOOTSTRAP"; th
 else
   fail "bootstrap EGRESS_GW_IMAGE is not a digest-pinned ubuntu/squid reference"
 fi
-PINNED="$(grep -oE 'ubuntu/squid@sha256:[0-9a-f]{64}' "$BOOTSTRAP" | head -1)"
+PINNED="$(grep -oE 'ubuntu/squid@sha256:[0-9a-f]{64}' "$BOOTSTRAP" | head -1 || true)"
 [[ -n "$PINNED" ]] || { echo "FATAL: could not extract pinned reference" >&2; exit 2; }
 
 # 2. Sidecar records the SAME digest — a re-pin that updates one and not the
@@ -53,7 +53,7 @@ fi
 # 3. Sidecar capture date — age gate (a fresh-looking pin analysis that has
 #    never been re-verified reads as current forever otherwise).
 CAP_DATE="$(grep -oE 'Capture date \(UTC\).{0,40}[0-9]{4}-[0-9]{2}-[0-9]{2}' "$PROV" \
-  | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
+  | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1 || true)"
 if [[ -z "$CAP_DATE" ]]; then
   fail "provenance sidecar has no parseable Capture date"
 else

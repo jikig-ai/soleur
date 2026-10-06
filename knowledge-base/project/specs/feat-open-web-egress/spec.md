@@ -107,7 +107,7 @@ denied-destination classes; per-session entitlement decision logged
   default-drop remains for everything else; gateway failure must fail closed
   per-session (proxy unreachable = no egress, same as today).
 - TR4: `hr-all-infrastructure-provisioning-servers` — gateway via Terraform,
-  reachable from `terraform apply` on a fresh host, zero operator actions.
+  converged by the apply workflow on a fresh host, zero manual steps.
 - TR5: `hr-gdpr-gate-on-regulated-data-surfaces` at plan Phase 2.7 and work
   Phase 2 exit — regulated surface (auth flows + egress of workspace data).
 - TR6: Drift-guard updates: `agent-runner-helpers.test.ts`,

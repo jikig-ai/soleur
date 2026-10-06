@@ -146,9 +146,10 @@
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
 11	apps/web-platform/infra/container-restart-monitor.test.sh
+1	apps/web-platform/infra/cron-egress-enforce-probe.sh
 5	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-nftables.test.sh
-5	apps/web-platform/infra/cron-egress-resolve.sh
+7	apps/web-platform/infra/cron-egress-resolve.sh
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
 10	apps/web-platform/infra/disk-monitor.test.sh

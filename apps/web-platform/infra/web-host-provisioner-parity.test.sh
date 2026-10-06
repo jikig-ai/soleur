@@ -270,7 +270,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
         ssh_resources[name] = body
 
-FLOOR_RESOURCES = 19  # +1 #9151: terraform_data.deploy_pipeline_fix_web2
+FLOOR_RESOURCES = 20  # +1 #9151: terraform_data.deploy_pipeline_fix_web2; +1 #9534: terraform_data.egress_gateway
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -726,7 +726,7 @@ for dest in sorted(all_dests):
 # extractor is fail-closed by over-extraction by design, and the path is genuinely installed
 # on the fresh-boot path by soleur-host-bootstrap.sh, so it clears §2 truthfully rather than
 # needing an exception. Measured, not assumed: origin/main sweeps 57, this tree sweeps 59.
-FLOOR_DESTS = 75  # +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero)
+FLOOR_DESTS = 79  # +16 #9151: the web-2 sibling's destinations not already swept via the web-1 bridge (7 FILE_MAP scripts, 4 drop-in confs, 5 others — measured, margin-zero); +4 #9534: egress_gateway writes (squid.conf, auth helper, deny CIDRs, bootstrap script)
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "
