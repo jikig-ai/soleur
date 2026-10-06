@@ -60,6 +60,8 @@ Verified against Soleur's own source by repo research and the CMO (`plugins/sole
 | 9 | **Hero link to the dedicated `/compare/` page** instead of the in-page anchor, and reframe as company vs coding tool. | `index.njk` | CMO |
 | 10 | **Generated toggle ledger** of rules, hooks, skills and flags with their off-switches. Check against `flag-list` first to avoid duplication. | Sutra `CATALOG.md` Toggle column | CTO (small effort) |
 
+Filed issues: #9577 (items 1, demo), #9578 (item 2, acceptance check), #9579 (items 3 to 6, 8, 9, homepage copy and trust fixes), #9580 (Anthropic terms check). Items 7 (how-it-works page) and 10 (toggle ledger) stay in this backlog until the CPO and CTO want them filed.
+
 Parked for later: a hard-gate Stop hook for the few rules agents routinely violate (CTO, medium value; precedents ADR-157 and ADR-162); a parallel-department live view in the web platform (CPO: check what the Command Center already shows before filing).
 
 Do not copy: Sutra's near-zero social proof (Soleur's quote and Inc.com strip are its trust assets), single-CTA purity (Soleur has two tiers), an unqualified "Free" (hosted plans start at $49/month), its paper palette (Soleur's dark gold identity is deliberate), per-turn routing hooks, the six-layer "OS" framing, `bypassPermissions` as a default, `npx -y` at spawn, and "nothing leaves your computer" as a blanket claim.
