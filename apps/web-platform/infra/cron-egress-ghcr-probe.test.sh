@@ -792,7 +792,7 @@ n_lo="$(grep -cF 'GHCR_PROBE_PORT_LO' "$RESOLVER")"
 [[ "$n_lo" -ge 3 ]]; okc "GHCR_PROBE_PORT_LO referenced at definition, curl flag and sampler ($n_lo)" $?
 grep -qF -- '--local-port "${GHCR_PROBE_PORT_LO}-${GHCR_PROBE_PORT_HI}"' "$RESOLVER"; okc "curl --local-port derives from the constants" $?
 grep -qF -- '-v plo="$GHCR_PROBE_PORT_LO" -v phi="$GHCR_PROBE_PORT_HI"' "$RESOLVER"; okc "sampler awk derives from the constants" $?
-grep -qE "egress-\(blocked\|dns-exfil\): " "$RESOLVER"; okc "both drop prefixes (trailing space) still counted" $?
+grep -qE "egress-\(blocked\|dns-exfil\|gw-deny\): " "$RESOLVER"; okc "all three drop prefixes (trailing space) still counted (#9534 adds gw-deny)" $?
 
 # --- end of run: accounting identity, then the outer floor ---------------------------------
 echo

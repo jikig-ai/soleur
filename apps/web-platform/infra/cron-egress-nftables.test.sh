@@ -33,7 +33,7 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
 MUT_ROWS_EXPECTED=37 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=58 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+INNER_ASSERTIONS=59 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -98,7 +98,10 @@ case "$1" in
     nm="$6"; el=""
     while IFS= read -r x; do [ -z "$x" ] || el="${el:+$el,}\"$x\""; done < "$st/set.$nm" 2>/dev/null
     printf '{"nftables":[{"set":{"family":"ip","name":"%s","elem":[%s]}}]}\n' "$nm" "$el" ;;
-  insert) case "$*" in *"jump SOLEUR-EGRESS"*) printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' >> "$st/chain.DOCKER-USER" ;; esac ;;
+  insert|add) case "$*" in
+      *"established,related"*) printf 'iifname "soleur-egress0" oifname "docker0" ct state established,related accept comment "soleur-egress: gw reply traffic (#9534)"\n' >> "$st/chain.DOCKER-USER" ;;
+      *"jump SOLEUR-EGRESS-GW"*) printf 'iifname "soleur-egress0" counter jump SOLEUR-EGRESS-GW comment "soleur-egress: egress0 jump"\n' >> "$st/chain.DOCKER-USER" ;;
+      *"jump SOLEUR-EGRESS"*) printf 'iifname "docker0" counter jump SOLEUR-EGRESS\n' >> "$st/chain.DOCKER-USER" ;; esac ;;
   list) if [ "$5" = DOCKER-USER ] && [ -f "$st/listfail" ] && [ "$(cat "$st/listfail")" -gt 0 ]; then
           echo $(( $(cat "$st/listfail") - 1 )) > "$st/listfail"; echo "netlink: Resource busy" >&2; exit 1
         fi
@@ -149,17 +152,18 @@ new_fx() { # builds a fixture; sets FX (a scratch PATH: the stubs plus grep and 
   cp "$STUBS/nft" "$STUBS/ip" "$STUBS/docker" "$STUBS/getent" "$STUBS/curl" "$STUBS/journalctl" "$FX/bin/"; cp "$STUBS/resolve.sh" "$FX/resolve.sh"
   ln -s "$(command -v grep)" "$FX/bin/grep"; ln -s "$(command -v cat)" "$FX/bin/cat"; ln -s "$(command -v sleep)" "$FX/bin/sleep"
   : > "$FX/cidr.txt"
+  printf '# test fixture\n10.0.0.0/8\n' > "$FX/deny.txt"
 }
 run_loader() { # runs the loader in $FX; sets RC
   RC=0
   env -i PATH="$FX/bin" FX="$FX" CEN_STUB_NOLOG="${CEN_STUB_NOLOG:-}" NFT_RETRY_SLEEP="${NFT_RETRY_SLEEP:-1}" CEN_V6="${CEN_V6:-false}" CEN_RESOLVE_RC="${CEN_RESOLVE_RC:-0}" \
-    CIDR_FILE="$FX/cidr.txt" RESOLVE_SCRIPT="$FX/resolve.sh" "$BASH" "${1:-$SUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
+    CIDR_FILE="$FX/cidr.txt" DENY_CIDR_FILE="$FX/deny.txt" RESOLVE_SCRIPT="$FX/resolve.sh" "$BASH" "${1:-$SUT}" > "$FX/out" 2>&1 < /dev/null || RC=$?
 }
 
 # ── handles on what the loader rendered ───────────────────────────────────────────────────────
 LL_DROP_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 counter drop( comment "[^"]*")?$'
 LL_LOG_RE='^add rule ip filter SOLEUR-EGRESS ip daddr 169\.254\.0\.0/16 limit rate [0-9]+/minute( burst [0-9]+ packets)? log prefix "egress-blocked: "( level notice)?( comment "[^"]*")?$'
-rules_txn() { grep -l '^flush chain ip filter SOLEUR-EGRESS' "$1"/txn.* 2>/dev/null | head -1; } # the Phase 3 transaction of fixture dir $1
+rules_txn() { grep -l '^flush chain ip filter SOLEUR-EGRESS$' "$1"/txn.* 2>/dev/null | head -1; } # the Phase 3 transaction of fixture dir $1 — the $ anchor keeps SOLEUR-EGRESS-GW's flush (#9534 Phase 3.5) out
 chain() { cat "$FX/st/chain.SOLEUR-EGRESS" 2>/dev/null; } # the SOLEUR-EGRESS chain as the stub holds it
 ridx() { chain | grep -nE -- "$1" | head -1 | cut -d: -f1; } # 1-based index of the first rule matching an ERE
 calls() { grep -c -E -- "$1" "$FX/log" || true; }
@@ -189,7 +193,7 @@ HAPPY="$FX"
 r_llog=$(ridx '^ip daddr 169\.254\.0\.0/16 limit rate .* log prefix "egress-blocked: "'); r_ll=$(ridx '^ip daddr 169\.254\.0\.0/16 counter drop')
 r_ret=$(ridx 'ct state established,related accept'); r_dns=$(ridx '@soleur_egress_dns accept')
 r_log=$(ridx 'log prefix "egress-blocked: " level notice comment "soleur-egress: default drop log"'); r_last=$(chain | grep -c .)
-expect "happy: rc 0 and the stub recorded the run (a loader that never ran must not pass vacuously)" all 'test "$RC" -eq 0' 'test -s "$FX/log"' 'test "$(calls "^nft -f -$")" -eq 3'
+expect "happy: rc 0 and the stub recorded the run (a loader that never ran must not pass vacuously)" all 'test "$RC" -eq 0' 'test -s "$FX/log"' 'test "$(calls "^nft -f -$")" -eq 5'
 expect "happy: transaction order: the CIDR elements, then the resolver, then the Phase 3 rules, then the DOCKER-USER probe" all 'test "$(grep -n "add element" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^resolver " "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)"' 'test "$(grep -n "^flush chain ip filter SOLEUR-EGRESS" "$FX/log" | head -1 | cut -d: -f1)" -lt "$(grep -n "^nft list chain ip filter DOCKER-USER" "$FX/log" | head -1 | cut -d: -f1)"'
 expect "happy: the resolver ran under the loader guard (CRON_EGRESS_FROM_LOADER=1), so loader -> resolver -> loader cannot recurse" grep -qx 'resolver from_loader=1' "$FX/log"
 expect "happy: the Phase 3 chain starts with the link-local log then the link-local drop, then return traffic, then the pinned DNS accept" all 'test "$r_llog" = 1' 'test "$r_ll" = 2' 'test "$r_ret" = 3' 'test -n "$r_dns" -a "$r_dns" -gt "$r_ret"'
@@ -199,7 +203,8 @@ expect "happy: census: exactly one DROP names 169.254 (before every accept) and 
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
 # exactly one DOCKER-USER jump insert across TWO loader runs (the stub's list chain keeps the first run's jump)
 run_loader
-expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS" "$FX/st/chain.DOCKER-USER")" -eq 1'
+expect "happy: a second loader run on the same state re-asserts the chain but inserts NO second jump (exactly one in total)" all 'test "$RC" -eq 0' 'test "$(calls "^nft insert rule ip filter DOCKER-USER")" -eq 1' 'test "$(chain | grep -c "^counter drop comment \"soleur-egress: default drop\"$")" -eq 1' 'test "$(grep -cE "jump SOLEUR-EGRESS([[:space:]]|\$)" "$FX/st/chain.DOCKER-USER")" -eq 1'
+expect "happy: the gw reply accept and the egress0 jump are likewise idempotent across a re-run" all 'test "$(grep -c "established,related accept" "$FX/st/chain.DOCKER-USER")" -eq 1' 'test "$(grep -c "jump SOLEUR-EGRESS-GW" "$FX/st/chain.DOCKER-USER")" -eq 1'
 # #9392: a failed DOCKER-USER read must never read as "no jump" (that inserted a DUPLICATE jump on every self-heal)
 echo 1 > "$FX/st/listfail"; NFT_RETRY_SLEEP=0
 run_loader
