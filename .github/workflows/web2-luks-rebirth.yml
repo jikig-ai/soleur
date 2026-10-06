@@ -312,7 +312,7 @@ jobs:
           export HCLOUD_TOKEN
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan-pre.json; then
-            echo "::error::stock preflight ABORTED: the planned server_type is not orderable in its target location."
+            stock_abort_closing web2-luks-rebirth-pre "the PRE plan."
             exit 1
           fi
           echo "pre plan graded and stock preflight passed"
@@ -388,7 +388,7 @@ jobs:
             export HCLOUD_TOKEN
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
             if ! stock_preflight_gate tfplan-post.json; then
-              echo "::error::stock preflight ABORTED on the post plan."
+              stock_abort_closing web2-luks-rebirth-post "the POST plan."
               exit 1
             fi
           fi
@@ -403,6 +403,9 @@ jobs:
           set -euo pipefail
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan-post; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report web2-luks-rebirth tfplan-post.json --probe-state || true
             echo "::error::terraform apply (rebirth of web-2) failed. The empty volume is already gone; web-2 is dark and standby-only. Re-dispatch with the same inputs: the classifier names the window and heals it."
             exit 1
           fi

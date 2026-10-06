@@ -369,6 +369,8 @@ installed. Never dispatch the apply workflow to validate.
 - `tests/scripts/test-stock-preflight-gate.sh` — new cases, parity assertions, floor re-measure.
 - `.github/workflows/apply-web-platform-infra.yml` — eight closing lines, advisory probe, six
   apply-failure branches.
+- `.github/workflows/web2-luks-rebirth.yml` — two same-class closing lines (pre/post gate) plus
+  its apply failure branch; found by the `stock_preflight_gate` propagation sweep, same defect.
 - `knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md` — the row.
 - `knowledge-base/engineering/operations/runbooks/web-host-replace.md` — recovery section.
 - `knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md` — failure notes.
