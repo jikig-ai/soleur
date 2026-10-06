@@ -21,7 +21,7 @@ Hard limits: code PR only. No dispatch (plan-only or real) of `web2-luks-rebirth
 
 ## Phase 3: Docs
 
-- 3.1 ADR-263: amend both "unverified until the first live query" sentences (paths confirmed 2026-10-06; `dm-*` still unconfirmed).
+- 3.1 ADR-263: amend the pass-condition prose (approval precedes evidence; first live query done) and the "Known limits" sentence (paths confirmed 2026-10-06; `dm-*` still unconfirmed).
 - 3.2 `web2-luks-rebirth-9372.md`: the unconfirmed sentence and approval-before-evidence wording.
 - 3.3 `betterstack-log-query.md`: one sentence, root cause replaces "tracked in #6944 separately"; the gate reads the native shape.
 - 3.4 `model.c4`: one clause on the `hetzner -> betterstack` edge (host_metrics rows carry `tags.host`, not `host_name`).

@@ -14,6 +14,23 @@ requires_cpo_signoff: true
 
 # fix: point the web-2 rebirth emptiness gate at the field paths Better Stack actually stores
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** halt gates 4.6 to 4.12 verified mechanically; citations re-checked live
+**Research agents used:** learnings-researcher (plan), plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CTO devex, CPO advisory)
+
+### Key Improvements
+1. Root cause established by reproduction (Vector 0.43.1 `tag_metrics` is a silent no-op on metric events) and the fix scoped to the query, not the shipper.
+2. Live read-only positive control recorded: the new SQL returns the two aggregate rows that PASS every threshold today; a `HAVING uniqExact(device) = 1` closes a series-pooling hole.
+3. Test design cut to a strict path-and-value check (no jq SQL interpreter); canary, collector predicate and decoy fleet cut; one guard instead of two.
+4. Brief-vs-repo mismatches reconciled: the tested suite is `web2-rebirth-emptiness.test.sh`, and approval precedes evidence (job-level environment gate).
+
+### New Considerations Discovered
+- The 1 GiB ceiling is about 60 times the measured 16 MB baseline (owner decision, not changed here).
+- An apply dispatch's PASS flows to the delete in the same approved job; only a plan-only run shows the numbers first.
+- Deepen verification: the `2026-07-12-dry-run-fixture-...` learning cited at plan time does not exist and is no longer relied on; rule ids and PR/issue numbers cited in the plan were verified live (#9372 open, #6944 open, #9532 merged, #9628 open draft).
+
 Ref #9372 (never `Closes`: the issue closes only after rebirth evidence lands). Draft PR: #9628. Code PR only.
 
 ## Overview
@@ -44,8 +61,9 @@ workflow, or claim web-2 is LUKS-backed or reborn.
   steps against a fake Hetzner/Terraform world and only consumes `EMPTINESS=` as a string; it never evaluates the emptiness SQL.
   The SQL and verdict are tested by `scripts/web2-rebirth-emptiness.test.sh` (floor 29, suite `scripts/web2-rebirth-emptiness` in
   `scripts/test-all.sh`). Scenarios and fixtures change THERE; `web2-rebirth.test.sh` runs unchanged as a regression gate.
-- ADR corpus: no ADR proposes a shipper fix for this. ADR-263 carries two "unverified until the first live query" sentences
-  (the pass-condition prose and "Known limits") that this change must amend: stale-claim edits, not a decision change.
+- ADR corpus: no ADR proposes a shipper fix for this. ADR-263 carries two passages to amend: the pass-condition prose ("the printed
+  used-bytes values are what the owner approves on, and the first live query is the first measurement", which also assumes the owner
+  reads them before approving) and the "Known limits" sentence on unverified paths. Stale-claim edits, not a decision change.
 - Flow fact verified in the workflow: `environment: web-platform-infra-apply` is a JOB-level gate, so approval happens BEFORE the
   `Emptiness evidence` step runs. The header's "the owner reads the printed min/max before approving the dispatch" is therefore
   wrong for a dispatch; the min/max are readable only after approval (in the plan-only run, which writes nothing). The header,
@@ -104,7 +122,7 @@ here) proves those read the same table.
 ### Institutional learnings applied
 
 `2026-08-11-my-fixture-shared-the-bug-so-the-test-could-not-see-it.md` and
-`2026-07-12-dry-run-fixture-must-derive-from-producer-source-not-fabricated-format.md` (the existing fixtures are aggregate rows the
+a producer-derived-fixture learning (`2026-08-11-...` above; the dry-run-fixture sibling cited at plan time was not found by that name, so it is not relied on) (the existing fixtures are aggregate rows the
 code is already shaped to read, so no test could see a wrong SQL path; the new fixture is the producer's real raw row and the paths
 come from the SQL text); `2026-07-18-betterstack-followthrough-probe-must-field-isolate-syslog-identifier.md` (field-isolate on
 decoded paths); `2026-07-24-guest-luks-store-must-gate-consumer-on-mount-and-guard-suite-must-pin-fail-loud-semantics.md` (scope
@@ -119,7 +137,7 @@ skip); `cq-test-fixtures-synthesized-only` (byte values invented; hostnames and 
 | Header: paths "UNCONFIRMED ... no repo consumer reads these JSON paths" | The runbook (#6944) documents them | Header cites it and the 2026-10-06 live control |
 | Header: "the owner reads the printed min/max before approving the dispatch" | Approval is a job-level gate, so it precedes the evidence step | Reword header, runbook, Observability |
 | `vector.toml`: `tag_metrics` "flattens the metric event" | Measured no-op on metric events (Vector 0.43.1) | Not edited here; recorded in the runbook and on #6944 |
-| ADR-263: JSON paths unverified until the first live query (two sentences) | Confirmed 2026-10-06; `dm-*` exclusion still unverified | Amend both |
+| ADR-263: pass-condition prose (owner approves on the printed values; first live query is the first measurement) and "Known limits" (paths unverified) | Paths confirmed 2026-10-06 and approval precedes evidence; `dm-*` exclusion still unverified | Amend both passages |
 | `model.c4` `hetzner -> betterstack`: host telemetry told apart by a per-host `host_name` discriminator | True for log rows; `host_metrics` rows carry `tags.host` and no `host_name` | One clause added to that edge description |
 
 ## Open Code-Review Overlap
@@ -132,7 +150,7 @@ None. (`gh issue list --label code-review --state open` bodies checked against t
 - `scripts/web2-rebirth-emptiness.test.sh` (real-shape rows, strict path-and-value check, mutations, tightened floor)
 - `knowledge-base/engineering/operations/runbooks/web2-luks-rebirth-9372.md` (the "unconfirmed until the first live query" sentence; approval-before-evidence wording)
 - `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` (one sentence: root cause replaces "tracked in #6944 separately"; the gate reads the native shape)
-- `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md` (both "unverified until the first live query" sentences)
+- `knowledge-base/engineering/architecture/decisions/ADR-263-guest-side-fresh-boot-luks-for-web-hosts.md` (the pass-condition prose and the "Known limits" sentence)
 - `knowledge-base/engineering/architecture/diagrams/model.c4` (one clause on the `hetzner -> betterstack` edge; re-run the C4 gates)
 
 Not edited: `apps/web-platform/infra/vector.toml`, `scripts/web2-rebirth.test.sh`, the workflow, `scripts/lib/web2-luks-rows.sh`.
