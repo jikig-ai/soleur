@@ -149,7 +149,10 @@ expect_green_added() {
 # `logger -t`, user.notice), which adds one census row.
 # 59 -> 62 and 6 -> 7 guard cases at #8706: workspaces-luks-emit.sh joins the paging population
 # (its no_dsn / send_failed exits emit SOLEUR_WORKSPACES_LUKS_SEND_FAILED through a crit emit_refusal).
-BASELINE_PASSES=62
+# 62 -> 65 at #9597: disk-monitor, resource-monitor and the token-shape refusal each gain a
+# SEND_SKIPPED never-page marker (reason=token_shape), which adds one census row apiece; the guard
+# classifies them as never-page (they match no needle), so no mutation row changes.
+BASELINE_PASSES=65
 BASELINE_CASES=7
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
