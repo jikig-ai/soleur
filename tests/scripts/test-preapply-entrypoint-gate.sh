@@ -849,7 +849,7 @@ t_audit_live_stub() {
 #      A token whose shape could inject a curl config line makes ZERO requests and fails closed.
 t_default_curl_bearer_on_stdin() {
   local d tok="SynthCfTokenNotReal0123456789_-ab" out rc=0
-  d="$(mktemp -d /var/tmp/preapply-tr1.XXXXXXXX)"
+  d="$(mktemp -d -t preapply-tr1.XXXXXXXX)"
   cat > "$d/curl" <<'SHIM_EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "$TR1_DIR/argv"

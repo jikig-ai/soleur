@@ -42,7 +42,7 @@ FAIL=0
 pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-TMP=$(mktemp -d /var/tmp/ctd.XXXXXXXX) || { echo "FATAL: could not create sandbox"; exit 2; }
+TMP=$(mktemp -d -t ctd.XXXXXXXX) || { echo "FATAL: could not create sandbox"; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 STUB_DIR="$TMP/bin"
 mkdir -p "$STUB_DIR" || { echo "FATAL: could not create stub dir"; exit 2; }

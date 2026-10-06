@@ -349,6 +349,7 @@ else
 fi
 
 shim_dir="$(mktemp -d)" || exit 2
+trap 'rm -rf "$shim_dir"' EXIT
 mkdir -p "$shim_dir/bin" "$shim_dir/rec"
 cat > "$shim_dir/bin/curl" <<'SHIMEOF'
 #!/usr/bin/env bash

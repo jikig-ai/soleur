@@ -295,7 +295,8 @@ rm -rf "$VJR_DIR"
 
 echo "--- bearer transport tests ---"
 
-BT_DIR=$(mktemp -d /var/tmp/wa-bt.XXXXXXXX) || exit 2
+BT_DIR=$(mktemp -d -t wa-bt.XXXXXXXX) || exit 2
+trap 'rm -rf "$BT_DIR"' EXIT
 mkdir -p "$BT_DIR/bin"
 cat > "$BT_DIR/bin/curl" <<'SHIM'
 #!/usr/bin/env bash

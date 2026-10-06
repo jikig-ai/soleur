@@ -46,7 +46,7 @@ cd "$REPO_ROOT" || { echo "FATAL: cannot cd to $REPO_ROOT" >&2; exit 2; }
 pass=0; fail=0; CASES=0
 
 # ONE scratch root, ONE EXIT trap, installed before anything is written under it.
-TMPD="$(mktemp -d /var/tmp/argv-bearer-sweep.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+TMPD="$(mktemp -d -t argv-bearer-sweep.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 trap 'rm -rf "$TMPD"' EXIT
 
 # Canonical assert_fixture_dir — byte-identical copy (fixture-scan.py requires
