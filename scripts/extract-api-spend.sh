@@ -80,7 +80,7 @@ fi
 # token is not matched here — a generic long-run pattern would false-positive on
 # the 40-hex git SHA, and `model` (the only free-form value) is sourced from the
 # action's own --model config, not model output. Residual risk: negligible.
-if printf '%s' "$record" | grep -qiE 'sk-ant|sk_(live|test)|ghp_|ghs_|github_pat_|org_|AKIA[0-9A-Z]{16}|xoxb-|sbp_|-----BEGIN'; then
+if grep -qiE 'sk-ant|sk_(live|test)|ghp_|ghs_|github_pat_|org_|AKIA[0-9A-Z]{16}|xoxb-|sbp_|-----BEGIN' <<<"$record"; then
   echo "extract-api-spend: secret-shaped substring in record; refusing to emit" >&2
   exit 1
 fi

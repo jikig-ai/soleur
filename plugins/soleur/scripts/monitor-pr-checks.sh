@@ -150,7 +150,7 @@ annotate_red_on_main() {
     else
       out="$("$probe" "$name" --run-id "$runid" "${REPO_ARG[@]}" 2>"$ERRTMP")"; rc=$?
     fi
-    marker="$(printf '%s\n' "$out" | grep -m1 '^SOLEUR_RED_ON_MAIN ' || true)"
+    marker="$(grep -m1 '^SOLEUR_RED_ON_MAIN ' <<<"$out" || true)"
     if [[ -n "$marker" ]]; then
       printf '    %s\n' "$marker"
     else

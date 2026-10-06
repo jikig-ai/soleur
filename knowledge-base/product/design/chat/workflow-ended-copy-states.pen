@@ -1,0 +1,226 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "KUtCH",
+      "x": 0,
+      "y": 0,
+      "name": "workflow_ended mapped copy",
+      "clip": true,
+      "width": 760,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 24,
+      "padding": 28,
+      "children": [
+        {
+          "type": "text",
+          "id": "k9IcQP",
+          "name": "title",
+          "fill": "#C9A962",
+          "content": "WORKFLOW_ENDED — MAPPED FOUNDER COPY (RAW ENUM NEVER RENDERED)",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "afdiy",
+          "name": "ended · completed",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "R6ooW",
+              "name": "bar",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "#141414",
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "EZOAv",
+                  "name": "left",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "dd83m",
+                      "name": "dot",
+                      "fill": "#34D399",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "PUcc6",
+                      "name": "wf",
+                      "fill": "#E5E5E5",
+                      "content": "brainstorm",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "izCqD",
+                  "name": "badge",
+                  "fill": "#064E3B",
+                  "padding": [
+                    3,
+                    10
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ug2Yn",
+                      "name": "badge-label",
+                      "fill": "#6EE7B7",
+                      "content": "Finished",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "W0cnLP",
+          "name": "ended · error status",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "frame",
+              "id": "DkRhj",
+              "name": "bar",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "#141414",
+              "padding": [
+                0,
+                14
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ymYtO",
+                  "name": "left",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "Qjtap",
+                      "name": "dot",
+                      "fill": "#F87171",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "text",
+                      "id": "wUv0q",
+                      "name": "wf",
+                      "fill": "#E5E5E5",
+                      "content": "brainstorm",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "o0lBp",
+                  "name": "badge",
+                  "fill": "#7F1D1D",
+                  "padding": [
+                    3,
+                    10
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ze9HI",
+                      "name": "badge-label",
+                      "fill": "#FCA5A5",
+                      "content": "Cost cap reached",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "SHnpt",
+          "name": "workflow_ended transcript card",
+          "width": "fill_container",
+          "fill": "#141414",
+          "layout": "vertical",
+          "gap": 6,
+          "padding": [
+            14,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "fnrFb",
+              "name": "head",
+              "fill": "#E5E5E5",
+              "content": "Workflow plan ended: Something went wrong",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "m4LsW",
+              "name": "sum",
+              "fill": "#848484",
+              "content": "Per-conversation cost ceiling reached",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "n8xpIg",
+              "name": "note",
+              "fill": "#6B7280",
+              "content": "status maps through WORKFLOW_ENDED_STATUS_COPY — internal_error never reaches the DOM; completed stays emerald, all others red",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

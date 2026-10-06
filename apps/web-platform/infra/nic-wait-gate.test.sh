@@ -461,8 +461,17 @@ for wf in "$WF_DIR"/*.yml; do
   # DOUBLE-quoted with escaped inner quotes (-target="hcloud_server.web[\"${WEB_HOST_KEY}\"]")
   # so they can interpolate the key. With a single-quote-only class this extractor returned
   # ZERO and the assertion below passed while reporting "<none>" — blind, not clean.
-  grep -hoE -- "-target=[\"']?hcloud_server\.web[^ ]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/targets.txt" || true
+  # The single-use web-2 rebirth (#9372) is the ONE other direct target, named explicitly below: its `-target`s are
+  # key-literal web-2 and its plans are graded by the sourced rebirth gate (pre and post), so it is counted
+  # separately instead of being folded into the dispatch-job count.
+  case "$wf" in
+    */web2-luks-rebirth.yml)
+      grep -hoE -- "-target=[\"']?hcloud_server\.web[^ ]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/rebirth-targets.txt" || true ;;
+    *)
+      grep -hoE -- "-target=[\"']?hcloud_server\.web[^ ]*" "$wf" 2>/dev/null | tr -d "'" >> "$WORK/targets.txt" || true ;;
+  esac
 done
+touch "$WORK/rebirth-targets.txt"
 # CARVE-OUT REMOVED (#6575, 2026-07-20) — this is the cleanup its own control demanded. The
 # carve-out excluded hcloud_server.web["web-2"] from this scan, because the web-2-recreate job was
 # the ONE legitimate direct target (it ran the coherence preflight, so a create there was checked).
@@ -493,6 +502,14 @@ assert "the -target extractor is not blind (found ${WEB1_DIRECT}: ${DIRECT_LIST:
   "[[ '$WEB1_DIRECT' -ge 2 ]]"
 assert "every direct hcloud_server.web -target is a gated dispatch job's keyed target (${UNGATED} ungated)" \
   "[[ '$UNGATED' == '0' ]]"
+# The rebirth workflow's direct targets: exactly its two plan steps (pre, post), both the literal web-2 key (never web-1,
+# never an unindexed address), and both plans are graded by the sourced rebirth gate whose first statement refuses web-1.
+REBIRTH_WF="$WF_DIR/web2-luks-rebirth.yml"
+REBIRTH_TARGETS=$(sort "$WORK/rebirth-targets.txt" | paste -sd' ' -)
+assert "the web-2 rebirth's direct hcloud_server.web targets are exactly its pre and post plans, key-literal web-2 (${REBIRTH_TARGETS:-<none>})" \
+  "[[ '$REBIRTH_TARGETS' == '-target=hcloud_server.web[\"web-2\"] -target=hcloud_server.web[\"web-2\"]' ]]"
+assert "the web-2 rebirth grades both plans with the sourced rebirth gate (web-1 refused by name first)" \
+  "[[ \$(grep -c 'web_host_rebirth_gate ' '$REBIRTH_WF') -ge 2 ]] && grep -qF 'tests/scripts/lib/web-host-rebirth-gate.sh' '$REBIRTH_WF'"
 # Positive control on the EXTRACTOR, not on a retired host's spelling. An earlier draft
 # controlled on the web-2 needle — but web-2 is retired (var.web_hosts holds only web-1), so a
 # future cleanup deleting that dead workflow arm would have RED-ed this suite while the failure

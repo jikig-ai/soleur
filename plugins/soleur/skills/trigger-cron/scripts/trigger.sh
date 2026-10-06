@@ -128,7 +128,7 @@ esac
 # Validate the event against the manifest-derived allowlist (fail fast before
 # minting a Doppler read or hitting the route). The `--` stops grep from
 # interpreting an event string that begins with `-` as an option.
-if ! list_events "$MANIFEST" | grep -qxF -- "$EVENT"; then
+if ! grep -qxF -- "$EVENT" < <(list_events "$MANIFEST"); then
   echo "trigger.sh: '$EVENT' is not an allowlisted manual-trigger event." >&2
   echo "Run 'trigger.sh --list' to see valid events." >&2
   exit 2

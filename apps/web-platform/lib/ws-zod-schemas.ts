@@ -352,6 +352,17 @@ const turnSummarySchema = z.strictObject({
   summary: z.string().max(20000),
   seq: replaySeqSchema,
 });
+// feat-session-completion-inline — inline completion card frame. Buffered
+// family (carries seq). `conversationId` is required (not optional like
+// narration's) — the client drops any frame not bound to its mounted
+// conversation, so the server must always stamp it.
+const taskCompletedSchema = z.strictObject({
+  type: z.literal("task_completed"),
+  conversationId: z.string(),
+  inboxItemId: z.uuid(),
+  title: z.string().max(20000),
+  seq: replaySeqSchema,
+});
 const reviewGateSchema = z.strictObject({
   type: z.literal("review_gate"),
   gateId: z.string(),
@@ -637,6 +648,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   debugEventSchema,
   reasoningNarrationSchema,
   turnSummarySchema,
+  taskCompletedSchema,
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,

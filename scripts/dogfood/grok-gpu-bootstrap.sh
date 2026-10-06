@@ -21,7 +21,7 @@ else
   assert_ollama_loopback_listen() {
     local port=11434
     command -v ss >/dev/null 2>&1 || die "ss (iproute2) required for loopback exclusivity assert"
-    if ss -lnt 2>/dev/null | grep -E "[:.]${port}\\b" | grep -qE "0\\.0\\.0\\.0:${port}|\\*:${port}|\\[::\\]:${port}"; then
+    if grep -qE "0\\.0\\.0\\.0:${port}|\\*:${port}|\\[::\\]:${port}" < <(ss -lnt 2>/dev/null | grep -E "[:.]${port}\\b"); then
       die "Ollama appears bound to a public interface (0.0.0.0/:: on :${port}) — Approach A requires loopback only"
     fi
   }

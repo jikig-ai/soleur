@@ -5100,6 +5100,12 @@ if want_scripts; then
   # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
   # mutants are replayed against the arms, each from a sandbox tree.
   run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
+  # #9372 — the single-use web-2 volume rebirth: the stateful steps against a fake Hetzner/Terraform world, the 7-day emptiness
+  # evidence, the names-only never-pooled reader and the birth-time recovery check. Each carries its own mutation battery.
+  run_suite "scripts/web2-rebirth" bash scripts/web2-rebirth.test.sh
+  run_suite "scripts/web2-rebirth-emptiness" bash scripts/web2-rebirth-emptiness.test.sh
+  run_suite "scripts/web2-rebirth-never-pooled" bash scripts/web2-rebirth-never-pooled.test.sh
+  run_suite "scripts/web2-rebirth-recovery-check" bash scripts/web2-rebirth-recovery-check.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -5588,6 +5594,10 @@ if want_scripts; then
   # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
   # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
+  # web-2 volume REBIRTH gate (#9372) — the third sibling (birth requires zero destroys, replace requires the volume to survive;
+  # this one grades the pre and post plans of the single-use rebirth). Registered HERE: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/web-host-rebirth-gate" bash tests/scripts/test-web-host-rebirth-gate.sh
+  run_suite "tests/scripts/web2-rebirth-classify" bash tests/scripts/test-web2-rebirth-classify.sh
   # web-host REPLACE gate (#6969) — the SIBLING of the birth gate above and its opposite by
   # contract: exactly one delete+create of the dispatched host, both volume families and the
   # LUKS passphrase preserved by omission, plus positive requirements on the NIC, the volume

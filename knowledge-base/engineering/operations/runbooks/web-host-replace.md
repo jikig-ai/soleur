@@ -518,3 +518,4 @@ landed:
 - `tests/scripts/lib/web-host-replace-gate.sh` — the gate, with its full arm-by-arm rationale
 - `tests/scripts/test-web-host-replace-gate.sh` — the mutation battery proving no arm is vacuous, including the key-conditional web-1 arms (#9356, arms-only)
 - [Runbook — birthing a web host](./web-host-birth.md)
+- [Runbook — the web-2 LUKS rebirth (#9372, single-use)](./web2-luks-rebirth-9372.md) — converts web-2's empty plaintext volume; until it runs a plain replace of web-2 re-attaches the ext4 volume

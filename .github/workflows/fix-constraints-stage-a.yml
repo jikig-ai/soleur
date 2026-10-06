@@ -12,7 +12,12 @@ name: fix-constraints-stage-a
 # scope here.
 #
 # SECURITY: `permissions: contents: read` ONLY. The write capability lives exclusively in
-# Stage B, which never executes this untrusted tree (Git Data API, no checkout/no apply). The
+# Stage B, which never executes this untrusted tree (Git Data API, no checkout/no apply).
+# `id-token: write` is withheld just as deliberately: on this untrusted pull_request
+# context, PR-head code could mint an OIDC token that the Anthropic app-token exchange
+# upgrades to repo-write app credentials — the split's invariant would be gone. The agent
+# step authenticates via the `github_token:` input (the job's own contents:read token)
+# instead; see its step comment. The
 # name: field above is load-bearing — Stage B's `on: workflow_run: workflows:` matches it by
 # NAME, not by filename; a rename here silently stops recovery. Manual retry: re-run this
 # workflow (workflow_dispatch) or push a commit to the PR.
@@ -92,6 +97,13 @@ jobs:
         uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The job's own contents:read GITHUB_TOKEN, passed explicitly so the
+          # action's setupGitHubToken early-returns BEFORE getOidcToken()
+          # (verified at pin 20f0b248). `id-token: write` is DELIBERATELY
+          # withheld in this untrusted pull_request context: PR-head code could
+          # mint an OIDC token that Anthropic's app-token exchange upgrades to
+          # contents:write/pull-requests:write/issues:write — breaking ADR-074.
+          github_token: ${{ github.token }}
           # Model pin + action SHA mirror claude-code-review.yml verbatim (CI-validated).
           # Pin freshness is model-launch-review's job — do NOT substitute a model id from memory.
           claude_args: '--model claude-sonnet-5-5 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'

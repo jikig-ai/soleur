@@ -341,6 +341,19 @@ describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
     expect(opts.resume).toBe("s");
   });
 
+  // #9538 — the cc caller opts into `dropResumeOnEmptyHistory`: `[]` for a
+  // known resumeSessionId is the deleted/rotated-file shape and the cc path
+  // has no `messages`-replay primitive, so a crash-and-retry cycle is
+  // strictly worse than a clean cold start with the reset notice.
+  it("passes dropResumeOnEmptyHistory: true on the cc call site", async () => {
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    expect(mockApplyPrefillGuard).toHaveBeenCalledOnce();
+    expect(
+      mockApplyPrefillGuard.mock.calls[0][0].dropResumeOnEmptyHistory,
+    ).toBe(true);
+  });
+
   it("invokes the helper even when resumeSessionId is undefined (helper short-circuits)", async () => {
     await realSdkQueryFactory(makeArgs());
 
@@ -472,6 +485,24 @@ describe("realSdkQueryFactory — context_reset signal (#3269)", () => {
       (call) => call[1]?.type === "context_reset",
     );
     expect(contextResetCalls).toHaveLength(0);
+  });
+
+  // #9538 — the stale-resume retry's own notice channel: the guard's
+  // `contextResetNotice` field only covers the guard-fired case; the
+  // dispatcher-driven re-dispatch carries its notice via
+  // `QueryFactoryArgs.contextResetNotice`, appended at the same site.
+  it("appends args.contextResetNotice to systemPrompt (stale-resume retry notice hop)", async () => {
+    await realSdkQueryFactory(
+      makeArgs({
+        systemPrompt: "BASE",
+        // biome-ignore lint/suspicious/noExplicitAny: QueryFactoryArgs field under test
+        contextResetNotice: "RETRY-RESET-NOTICE",
+      } as any),
+    );
+
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(opts.systemPrompt).toContain("BASE");
+    expect(opts.systemPrompt).toContain("RETRY-RESET-NOTICE");
   });
 
   it("does NOT carry the notice forward across calls when the guard does not fire on the second call (multi-turn non-accumulation, AC6b)", async () => {

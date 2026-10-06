@@ -1,0 +1,224 @@
+{
+ "format_version": "1.2",
+ "resource_changes": [
+  {
+   "address": "hcloud_server.web[\"web-2\"]",
+   "change": {
+    "actions": [
+     "delete",
+     "create"
+    ],
+    "after": {
+     "name": "soleur-web-2",
+     "placement_group_id": 7,
+     "server_type": "cx32"
+    },
+    "after_unknown": {
+     "id": true
+    },
+    "before": {
+     "id": "1001",
+     "name": "soleur-web-2",
+     "placement_group_id": 7,
+     "server_type": "cx32"
+    }
+   },
+   "type": "hcloud_server"
+  },
+  {
+   "address": "hcloud_server_network.web[\"web-2\"]",
+   "change": {
+    "actions": [
+     "delete",
+     "create"
+    ],
+    "after": {
+     "ip": "10.0.0.3"
+    },
+    "after_unknown": {
+     "server_id": true
+    },
+    "before": {
+     "ip": "10.0.0.3",
+     "server_id": 1001
+    }
+   },
+   "type": "hcloud_server_network"
+  },
+  {
+   "address": "hcloud_volume_attachment.workspaces[\"web-2\"]",
+   "change": {
+    "actions": [
+     "delete",
+     "create"
+    ],
+    "after": {
+     "volume_id": 106466179
+    },
+    "after_unknown": {
+     "server_id": true
+    },
+    "before": {
+     "server_id": 1001,
+     "volume_id": 106466179
+    }
+   },
+   "type": "hcloud_volume_attachment"
+  },
+  {
+   "address": "hcloud_volume.workspaces[\"web-2\"]",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "after": {
+     "format": "ext4",
+     "id": "106466179",
+     "labels": {
+      "app": "soleur-web-platform"
+     },
+     "name": "soleur-web-platform-data-web-2",
+     "size": 20
+    },
+    "after_unknown": {},
+    "before": {
+     "format": "ext4",
+     "id": "106466179",
+     "labels": {
+      "app": "soleur-web-platform"
+     },
+     "name": "soleur-web-platform-data-web-2",
+     "size": 20
+    }
+   },
+   "type": "hcloud_volume"
+  },
+  {
+   "address": "hcloud_firewall_attachment.web",
+   "change": {
+    "actions": [
+     "update"
+    ],
+    "after": {
+     "server_ids": [
+      123931471
+     ]
+    },
+    "after_unknown": {
+     "server_ids": true
+    },
+    "before": {
+     "server_ids": [
+      123931471,
+      1001
+     ]
+    }
+   },
+   "type": "hcloud_firewall_attachment"
+  },
+  {
+   "address": "hcloud_server.web[\"web-1\"]",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "after": {
+     "id": "123931471",
+     "name": "soleur-web-1",
+     "placement_group_id": 7,
+     "server_type": "cx32"
+    },
+    "after_unknown": {},
+    "before": {
+     "id": "123931471",
+     "name": "soleur-web-1",
+     "placement_group_id": 7,
+     "server_type": "cx32"
+    }
+   },
+   "type": "hcloud_server"
+  },
+  {
+   "address": "hcloud_volume.workspaces[\"web-1\"]",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "after": {
+     "format": "ext4",
+     "id": "5",
+     "name": "soleur-web-platform-data"
+    },
+    "after_unknown": {},
+    "before": {
+     "format": "ext4",
+     "id": "5",
+     "name": "soleur-web-platform-data"
+    }
+   },
+   "type": "hcloud_volume"
+  },
+  {
+   "address": "hcloud_volume_attachment.workspaces_luks",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "after": {
+     "server_id": 123931471,
+     "volume_id": 106443278
+    },
+    "after_unknown": {},
+    "before": {
+     "server_id": 123931471,
+     "volume_id": 106443278
+    }
+   },
+   "type": "hcloud_volume_attachment"
+  },
+  {
+   "address": "random_password.workspaces_luks_web",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "after": {
+     "id": "none"
+    },
+    "after_unknown": {},
+    "before": {
+     "id": "none"
+    }
+   },
+   "type": "random_password"
+  },
+  {
+   "address": "doppler_secret.workspaces_luks_web_key",
+   "change": {
+    "actions": [
+     "no-op"
+    ],
+    "after": {
+     "name": "WORKSPACES_LUKS_KEY"
+    },
+    "after_unknown": {},
+    "before": {
+     "name": "WORKSPACES_LUKS_KEY"
+    }
+   },
+   "type": "doppler_secret"
+  },
+  {
+   "address": "data.hcloud_ssh_key.x",
+   "change": {
+    "actions": [
+     "read"
+    ],
+    "after": {},
+    "after_unknown": {},
+    "before": null
+   },
+   "type": "hcloud_ssh_key"
+  }
+ ]
+}

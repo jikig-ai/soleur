@@ -35,7 +35,7 @@ if [[ -z "$body" ]]; then
 fi
 # Strip whole-line comments first: the existing prose already says "func" in places.
 code="$(printf '%s\n' "$body" | sed -E 's/^[[:space:]]*#.*$//')"
-if printf '%s\n' "$code" | grep -qE '\bfunc\b'; then
+if grep -qE '\bfunc\b' <<<"$code"; then
   echo "zot-shipper-exempt-func[#9353]: PASS is_cap_exempt classifies on the func field (merged; confirm the registry host was replaced)"
   exit 0
 fi
