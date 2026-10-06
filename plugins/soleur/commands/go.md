@@ -434,6 +434,9 @@ if [ "$DO_RESTORE" = true ]; then
   # rc 0. On a customer machine that file is their MCP server registry, commonly holding
   # per-server tokens, and it is usually untracked there — so the loss is unrecoverable.
   #
+  # `main:./.mcp.json`, not `main:.mcp.json`: the path is relative to the CWD like every other path in this
+  # block, so a run from a subdirectory reads sub/.mcp.json instead of writing the root file's bytes there.
+  #
   # In this repo .mcp.json is TRACKED, and an uncommitted edit to it is the operator's work, not
   # stale state (#9622).
   # KEEP when: the path is a symlink (mv would replace the link itself); or it is tracked and either
@@ -474,12 +477,13 @@ if [ "$DO_RESTORE" = true ]; then
     # Already main's bytes: nothing to protect and nothing to restore, so say nothing. Without this a
     # file the gate itself refreshed reads as "dirty" on every later session start. A symlink is
     # never compared: opening its target would follow a link the repository chose.
-    if [ "$KEEP_CAUSE" != symlink ] && [ -f .mcp.json ] && git show main:.mcp.json 2>/dev/null | cmp -s - .mcp.json; then
+    if [ "$KEEP_CAUSE" != symlink ] && [ -f .mcp.json ] && git show main:./.mcp.json 2>/dev/null | cmp -s - .mcp.json; then
       :
     else
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=${KEEP_CAUSE}"
     fi
-  elif git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
+  # `rm -f` first: a symlink pre-planted at the temp name would otherwise be written THROUGH by the redirect.
+  elif { rm -f .mcp.json.soleur-tmp 2>/dev/null; git show main:./.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; }; then
     if mv .mcp.json.soleur-tmp .mcp.json; then
       :
     else
@@ -490,7 +494,7 @@ if [ "$DO_RESTORE" = true ]; then
     fi
   else
     # MEASURE the cause; do not name one (AP-021 — the rule this file's other markers enforce).
-    # `git show main:.mcp.json` fails for at least three distinct reasons and the previous
+    # `git show main:./.mcp.json` fails for at least three distinct reasons and the previous
     # single `reason=mcp-json-absent-on-main` asserted the first of them for all three, which
     # is the same defect as `reason=cloud-session` before it learned to print its verdict.
     # $? here is the `if` condition's status, so it is captured before `rm` overwrites it.
@@ -498,7 +502,7 @@ if [ "$DO_RESTORE" = true ]; then
     rm -f .mcp.json.soleur-tmp
     if ! git rev-parse --verify -q main >/dev/null 2>&1; then
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-no-local-main"
-    elif ! git cat-file -e main:.mcp.json 2>/dev/null; then
+    elif ! git cat-file -e main:./.mcp.json 2>/dev/null; then
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-absent-on-main"
     else
       echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-read-failed rc=${SHOW_RC}"

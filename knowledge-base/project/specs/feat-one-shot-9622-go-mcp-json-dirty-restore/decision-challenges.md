@@ -41,3 +41,17 @@ Mechanical findings were applied to the plan.
 10. **Byte-compare guard alternative** (security-sentinel): decide dirtiness by `git cat-file blob HEAD:.mcp.json | cmp -s - .mcp.json`
     instead of index state. It would also cover clean filters and a staged deletion, at the cost of a `cmp` dependency and a different
     failure shape. The applied fix covers `skip-worktree`/`assume-unchanged` and symlinks through `ls-files -v` and `[ -L ]` instead.
+
+## Review-phase additions (2026-10-06)
+
+11. **Steady state after the gate's own refresh (accepted trade-off).** Architecture, code-quality and test-design all observed that a
+    refreshed stale tracked file differs from HEAD, so once `main` moves on it is KEPT, never refreshed again, and the marker prints
+    every session although nobody edited it. Fixing it needs state (a recorded hash of the gate's own write) or option 7 above, both
+    rejected at plan time. Applied instead: the marker carries `cause=differs-from-head`, and the prose after the fence says plainly
+    that this includes a stale copy the gate refreshed earlier and that an agent must not run `git checkout`/`update-index` on it.
+12. **#8 applied.** The temp-path symlink write is inside the restore block and a one-line `rm -f`; the security seat re-confirmed it
+    and it now has a row (R12n).
+13. **Writers outside the restore block (not applied: outside the operator's stated scope).** `worktree-manager.sh cleanup-merged`'s
+    non-bare tail (`reset --hard HEAD`, `sync_bare_files` `checkout-index -f`) and `AGENTS.rules.md` rule
+    `wg-at-session-start-after-cleanup-merged` (prescribes the unguarded `git show main:.mcp.json > .mcp.json`) can still overwrite a
+    tracked, dirty `.mcp.json`; a cwd-relative `.mcp.json` also writes `sub/.mcp.json` from a subdirectory. Tracked in a follow-up issue.

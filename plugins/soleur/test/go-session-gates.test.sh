@@ -983,6 +983,28 @@ want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"working-copy-differs"}' "R12m: an 
 want_in "$out" "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty cause=probe-failed" "R12m: and the cause is the failed probe"
 want_not_in "$out" "reason=mcp-json-rename-failed" "R12m: and nothing tried to replace it"
 
+echo "R12n. a symlink pre-planted at the temp name is not written through"
+# The redirect would follow it and overwrite the link target with main's bytes (review: security seat).
+ws="$(fresh_ws r12n stale)"
+: "${ws:?fresh_ws r12n produced no workspace path; refusing to run git against the caller repo}"
+R12N_VICTIM="$TMP_ROOT/r12n-victim.txt"
+printf '%s' 'victim-untouched' > "$R12N_VICTIM"
+ln -s "$R12N_VICTIM" "$ws/.mcp.json.soleur-tmp"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws" "$SCRATCH_HOME")"
+want_eq "$(cat "$R12N_VICTIM")" 'victim-untouched' "R12n: the file behind a planted temp symlink is unchanged"
+want_eq "$(cat "$ws/.mcp.json")" "$(git -C "$ws" show main:.mcp.json)" "R12n: and the restore still lands from main"
+
+echo "R12o. run from a SUBDIRECTORY the restore never writes the root file's bytes into it"
+# `git show main:.mcp.json` is root-relative while the block's other paths are cwd-relative, so a
+# subdirectory run created sub/.mcp.json from the root's copy (review: structural seat).
+ws="$(fresh_ws r12o stale)"
+: "${ws:?fresh_ws r12o produced no workspace path; refusing to touch the caller repo}"
+mkdir "$ws/sub"
+out="$(run_gate "$(delivered_fence 2 "$FIX_ROOT" ok)" "$ws/sub" "$SCRATCH_HOME")"
+ck; if [ -e "$ws/sub/.mcp.json" ]; then fail "R12o: a subdirectory run created sub/.mcp.json"; else pass "R12o: a subdirectory run creates no sub/.mcp.json"; fi
+want_eq "$(cat "$ws/.mcp.json")" '{"fixture":"head-stale"}' "R12o: and the root file is untouched by a subdirectory run"
+want_in "$out" "reason=mcp-json-absent-on-main" "R12o: the miss is reported against the path actually read"
+
 echo "R6/R6b/R6c. identity preflight and the payload-absent state"
 for i in "${!GATE_ANCHORS[@]}"; do
   ws="$(fresh_ws "r6$i")"
@@ -1265,13 +1287,13 @@ fi
 
 # Pinned to the row table's full contribution, not a slack figure: floor SLACK is attack budget,
 # and a floor 26 below the real total lets 26 assertions be deleted with the suite still green.
-# 229 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (231), so the
+# 234 is the H3-SKIPPED total (CI, no `claude` binary); H3 running adds two more (236), so the
 # floor holds on both paths. MEASURE IT WITH `SOLEUR_GO_GATES_SKIP_H3=1`, never from a local run
 # where the harness is present: #8418 raised it four times from local counts and CI reddened on
 # `194 < 196` — the same floor this comment already said to derive from the skipped path.
-# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155, R12-R12m and the R3c/R6 byte rows (#9622) 194 -> 229.
+# Raising it is part of adding a row — R3f, R3g and R3h took it 147 -> 155, R12-R12o and the R3c/R6 byte rows (#9622) 194 -> 234.
 # Re-measure it after any rebase; never hand-merge the number.
-MIN_ASSERTIONS=229
+MIN_ASSERTIONS=234
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- rows were removed" >&2
   exit 2
