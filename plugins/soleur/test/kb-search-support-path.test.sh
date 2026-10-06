@@ -63,25 +63,28 @@ MARKER="Support-persona path (no Bash)"
 # fixed-string match — the marker's parens are data, not regex. The
 # `!index($0, m)` guard keeps the range open even if a heading ever carries
 # the marker text.
+# The marker must LEAD the line (index==1 on the bolded form): an earlier
+# TOC entry or cross-reference quoting the marker (e.g. a `- [` link) must
+# not open a wrong window and leave the real section unscanned.
 support_section() { # $1 = file → prints the section body
-  awk -v m="$MARKER" '
-    index($0, m)                              { in_sec = 1 }
+  awk -v m="$MARKER" -v ml="**$MARKER" '
+    index($0, ml) == 1                        { in_sec = 1 }
     in_sec && /^#{2,3}[[:space:]]/ && !index($0, m) { exit }
     in_sec                                    { print }
   ' "$1"
 }
 
-# A shell FENCE, not the word "bash": the section legitimately names Bash in
-# prose, so an absence grep on the bare word would false-fail. The anchored
-# form matches an opening fence line only — case-insensitive (```Bash IS a
-# bash fence), backtick OR tilde fences of 3+ chars, optionally indented,
-# blockquote-prefixed (`> `), or list-marker-prefixed (`- `/`* `). A fence
-# whose info string starts with a shell name IS a shell fence, so the
-# language token is prefix-matched conservatively (bash/sh/shell/zsh/fish/
-# console/terminal). Known boundary: a bare ``` fence containing shell
-# commands carries no info string to detect — the marker-line contract is
-# the backstop for that form.
-SHELL_FENCE_RE='^[[:space:]>*-]*(`{3,}|~{3,})[[:space:]]*(bash|sh|shell|zsh|fish|console|terminal)'
+# Any fenced block, not the word "bash": the support section is prose+table
+# and legitimately contains ZERO fences, so "no fence at all" is the honest
+# property — it subsumes every info-string variant (```bash, ```Bash,
+# ```text hiding shell, bare ```, ~~~sh, 4+-char fences) without a language
+# allowlist to maintain. Prefix classes cover indentation, blockquote
+# (`> `), and list markers (`- `, `* `, `1. `). Owned boundaries: a
+# `##`/`###` heading inside the section truncates the window (awk range
+# above), HTML <pre>/<code> blocks are not fences, and indirection into a
+# second file is outside a text guard's reach — the marker-anchored window
+# plus the deny+escalate tripwire on Bash itself are the layered contract.
+SHELL_FENCE_RE='^[[:space:]>*-]*([0-9]+[.)][[:space:]]*)?(`{3,}|~{3,})'
 
 echo "=== kb-search support-persona path drift guard (#9559) ==="
 echo ""
@@ -121,7 +124,7 @@ if grep -qiE "$SHELL_FENCE_RE" <<<"$SECTION"; then
   grep -niE "$SHELL_FENCE_RE" <<<"$SECTION" | sed 's/^/        /' >&2 || true
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: no fenced \`\`\`bash/\`\`\`sh/\`\`\`shell block inside the support section"
+  echo "  PASS: no fenced code block of any kind inside the support section"
   PASS=$((PASS + 1))
 fi
 
