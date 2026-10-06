@@ -6,7 +6,7 @@ slug: sec-bwrap-userns-seccomp-fd-hygiene
 branch: feat-one-shot-8752-bwrap-seccomp-fd-hygiene
 issue: 8752
 closes: [8752]
-refs: [5862, 5941, 5873, 5849, 5733, 8695, 8696, 8732]
+refs: [5862, 5941, 5873, 5849, 5733, 8623, 8696, 8732]
 priority: p2
 domain: engineering
 brand_survival_threshold: single-user incident
@@ -15,6 +15,24 @@ lane: cross-domain
 ---
 
 # security: shared bwrap seccomp filter denying nested user namespaces + close inherited fds in the agent sandbox
+
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** 6 (Research Insights, Proposed Solution, Phases 3–4, Edge Cases, Risks, References)
+**Research agents used:** none spawned — `Reviewed-Coverage: sequential-fallback` (this harness exposes no Task/subagent tool; deepen halts, quality-check verifications, and the reviewer lenses below were executed inline by the orchestrator and are disclosed as such, never as independent review)
+
+### Key Improvements (deepen pass)
+
+1. **Interception verified against the SHIPPED artifact, not a stale bundle:** `@anthropic-ai/claude-code` 2.1.284 (which `@anthropic-ai/claude-agent-sdk` 0.3.284 spawns) is a bun-compiled native ELF binary, not a readable `cli.js`. Binary strings confirm `"bwrap" via PATH` resolution and the argv shape `bash -c '…shift && exec "$@"' … bwrap --args <fd> …` — the PATH shim intercepts, and `--args <fd>` in the real argv makes the shim's fd preserve-set load-bearing rather than hypothetical.
+2. **New edge case found:** the binary embeds an `apply-seccomp` unix-socket-block helper that itself calls `unshare(CLONE_NEWUSER)` inside the sandbox — inert today (our config sets no `allowUnixSockets`) but a recorded constraint on enabling that knob later.
+3. **Third canary probe added:** an in-sandbox fd-count assertion proves fd-hygiene (P2) at deploy time, not only the userns property.
+4. **`bwrapPath` documented as a managed-settings-only knob** — not usable as our interception point and only a bypass vector if a managed settings file ever lands (none does on the replica).
+
+### New Considerations Discovered
+
+- `enableWeakerNestedSandbox` semantics clarified (it only skips `--proc /proc` in the SDK argv for container nesting — no conflict with the filter).
+- The deferral criterion "SDK has its own seccomp filter" is now partially TRUE at the binary level (embedded `apply-seccomp` machinery + a `seccomp filter:` dep-check item) but remains the wrong layer and is inert for our config — recorded in Premise Validation.
 
 ## Overview
 
@@ -62,14 +80,17 @@ extended so the prod canary container proves the filter engages (a nested
     Dockerfile stages) is Debian 12 bookworm; `apt-cache policy bubblewrap`
     inside it reports candidate `0.8.0-2+deb12u1`. `--disable-userns` remains
     unusable; `--seccomp` is the only syscall-layer path.
-  - *"the agent sandbox gets its own seccomp filter"* — **partially moved.**
-    SDK 0.3.284's bundled cli.js exposes `sandbox.seccomp.{bpfPath,applyPath}`
-    — but that is the INNER unix-socket-block filter applied by a vendored
-    `apply-seccomp` binary to the in-sandbox command, and the binaries are NOT
-    in the package's `vendor/` dir (ripgrep + audio-capture only) so the knob is
-    inert today. It is also the wrong layer for this property (inner-command
-    filter, not a `bwrap --seccomp` on the sandbox argv) and cannot fix the fd
-    gap. The bwrap-layer filter this plan builds remains required.
+  - *"the agent sandbox gets its own seccomp filter"* — **moved further than
+    the issue anticipated, still not sufficient.** The shipped
+    `@anthropic-ai/claude-code` 2.1.284 native binary (spawned by
+    `@anthropic-ai/claude-agent-sdk` 0.3.284) embeds `apply-seccomp` machinery
+    and its dep-check UI lists a `seccomp filter:` line item. That facility is
+    the INNER unix-socket-block filter applied to the sandboxed *command* —
+    the wrong layer for this property (it is not a `bwrap --seccomp` on the
+    sandbox argv), it fixes nothing about inherited fds, it self-disables when
+    its helper is unavailable (`"apply-seccomp binary not available - unix
+    socket blocking disab…"`), and our config does not even engage it
+    (`allowUnixSockets` is unset). The bwrap-layer filter remains required.
   - *"`op=sandbox-selfprobe-fds` reports a non-zero count in production"* —
     telemetry exists (`reportInheritableFds`, `c4-render.ts` — warnSilentFallback,
     emits only when count > 0, count+kinds only never paths). The operator's
@@ -84,11 +105,17 @@ extended so the prod canary container proves the filter engages (a nested
 - **How the repo already wraps SDK argv:** PATH shim, twice. `sandbox-canary.mjs`
   `--capture` puts a bwrap-intercepting Node shim on PATH to record the real SDK
   SETUP argv; `apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs`
-  uses the same trick. The SDK resolves `bwrap` by bare name (`Zn("bwrap")` PATH
-  lookup, argv emitted as `shell-quote(["bwrap",…])`). Container PATH order verified
+  uses the same trick. The SDK resolves `bwrap` by bare name — verified against
+  the SHIPPED artifact (deepen pass): `@anthropic-ai/claude-code` 2.1.284 ships
+  a bun-compiled native ELF binary (`node_modules/@anthropic-ai/
+  claude-code-linux-x64/claude`), and its strings contain the literal
+  `resolving "bwrap" via PATH` plus the argv shape
+  `bash -c '…shift && exec "$@"' … --args <fd> …`. Container PATH order verified
   on the pinned digest: `/usr/local/bin` precedes `/usr/bin` — a baked
   `/usr/local/bin/bwrap` intercepts every PATH-resolved bwrap in the image with
-  zero env surgery.
+  zero env surgery. (`SandboxSettings.bwrapPath` exists but is documented
+  "only honored from admin-controlled managed settings" — not a usable
+  interception point from our programmatic config.)
 - **Sibling issues:** #5862 (vendored SDK bwrap-arg reorder, ADR-075 TOCTOU exit
   criterion) is a DIFFERENT residual — this plan does not touch it. #5941
   (deploy-time nested-unshare probe in prod canary) overlaps with the new canary
@@ -109,6 +136,17 @@ extended so the prod canary container proves the filter engages (a nested
   `bubblewrap 0.12.0` (`bwrap --version`); flag exists since bwrap 0.4.0.
   `unshare`, `prlimit`, `choom`, `nice`, `bash` verified present in the pinned
   base image via `docker run`.
+- **Precedent-diff (deepen §4.4):** two sibling precedents adopted with named
+  divergences. (a) fd-close loop — precedent `CLOSE_FDS_SCRIPT` (fixed `n -gt
+  3` threshold); divergence: the shim replaces the fixed threshold with an
+  argv-derived keep-set because the SDK argv legitimately references fds >3
+  (`--args <fd>` verified in the shipped binary) — closing fd 3+ unconditionally
+  would break the SDK spawn. (b) PATH shim — precedent `SHIM_SOURCE` in
+  `sandbox-canary.mjs` (Node capture shim with `--version` pass-through);
+  divergence: ours is dependency-free bash (runs per sandboxed Bash call — node
+  startup ~50 ms vs bash ~2 ms, and bash is guaranteed present in the image)
+  and is exec-terminating (capture vs enforcement role). No SQL/atomic-write/
+  mutex patterns introduced.
 - **External research (security topic → Phase 1.6 researched):**
   moby/moby#42680 + runc commit `9f6b562`: EPERM on clone3 is treated as fatal by
   glibc and breaks every posix_spawn/fork consumer; **ENOSYS forces fallback to
@@ -318,16 +356,20 @@ Three artifacts, two insertion points, one shared filter:
 
 #### Phase 4 — Deploy canary + boot self-check (ADR-079 contract)
 
-- `scripts/sandbox-canary.mjs`: extend the replay leg with two derived probes
-  sharing the captured setup argv — `bwrap <argv> -- unshare -U true` MUST exit
-  non-zero (EPERM; else verdict `userns_filter_bypass`) and
+- `scripts/sandbox-canary.mjs`: extend the replay leg with three derived probes
+  sharing the captured setup argv — (a) `bwrap <argv> -- unshare -U true` MUST
+  exit non-zero (EPERM; else verdict `userns_filter_bypass`); (b)
   `bwrap <argv> -- unshare -m true` MUST exit 0 (else verdict
-  `userns_filter_overbroad`). Probes are derived constants, not fixture fields —
-  `sandbox-canary-argv.json` unchanged; `--verify`/byte-diff unaffected.
-  `classifyReplayVerdict`/`emitVerdict` carry the new verdicts; `ci-deploy.sh`
-  already surfaces any non-PASS verdict to deploy-state + Sentry.
+  `userns_filter_overbroad`); (c) an in-sandbox fd census —
+  `bwrap <argv> -- sh -c 'ls /proc/self/fd | wc -l'` MUST stay within the
+  derived bound `3 (stdio) + #(fd-consuming args in the captured argv) + 1
+  (the /proc dirfd itself)` (else verdict `fd_hygiene_bypass`) — deepened to
+  prove P2 at deploy time, not only P1. Probes are derived constants, not
+  fixture fields — `sandbox-canary-argv.json` unchanged; `--verify`/byte-diff
+  unaffected. `classifyReplayVerdict`/`emitVerdict` carry the new verdicts;
+  `ci-deploy.sh` already surfaces any non-PASS verdict to deploy-state + Sentry.
 - `test/sandbox-canary.test.ts` + `scripts/sandbox-canary-regression.test.sh`:
-  verdict-contract rows for the two probes; a regression layer asserting the
+  verdict-contract rows for the three probes; a regression layer asserting the
   probe invocations exist in the replay code path.
 - `server/c4-render.ts` (`verifyC4RenderSandboxOnce` — or a sibling emitted from
   the same `server/index.ts` call site): boot self-check asserts
@@ -424,9 +466,9 @@ failure_modes:
   - mode: "filter over-broad (denies more than CLONE_NEWUSER — e.g. blanket unshare/clone deny)"
     detection: "in-sandbox behavioral probe: unshare -m inside the same argv MUST succeed"
     alert_route: "canary verdict userns_filter_overbroad → deploy-state + Sentry"
-  - mode: "server holds a new non-cloexec fd source (the leak the shim now closes at the boundary)"
-    detection: "existing op=sandbox-selfprobe-fds warn event — count+kinds only, never paths"
-    alert_route: "warnSilentFallback → Sentry (existing)"
+  - mode: "server holds a new non-cloexec fd source (the leak the shim now closes at the boundary), or the shim's close loop regresses"
+    detection: "existing op=sandbox-selfprobe-fds warn event — count+kinds only, never paths — PLUS the in-sandbox canary fd-census probe (behavioral backstop inside the surface itself)"
+    alert_route: "warnSilentFallback → Sentry (existing); canary verdict fd_hygiene_bypass → deploy-state + Sentry"
   - mode: "legitimate spawn broken by ENOSYS mishandling (posix_spawn/posix consumer)"
     detection: "sandbox-startup-classifier op=sdk-startup Sentry event carrying sandboxKind + stderr; C4 boot selfprobe failure for the render side"
     alert_route: "existing ADR-079 emit sites (agent-runner / cc-dispatcher mirrors)"
@@ -478,7 +520,7 @@ are checked (a guard reporting "0 checked" is vacuous).
 |---|---|---|
 | 1 | Delete `--seccomp` from `buildLikeC4SandboxArgv`'s output | RED — argv-builder census row fails |
 | 2 | Delete the shim's `--seccomp` injection but keep `exec /usr/bin/bwrap` (shim becomes a passthrough) | RED — shim-content assertion fails |
-| 3 | Remove the canary's `unshare -U` probe while keeping the main replay | RED — probe-contract assertion fails (the deploy-time safety net is itself guarded) |
+| 3 | Remove any of the canary's three probes (`unshare -U`, `unshare -m`, fd census) while keeping the main replay | RED — probe-contract assertion fails (the deploy-time safety net is itself guarded) |
 | 4 | Add a second argv-builder/spawn site that reaches bwrap without the filter (e.g. a new `BWRAP_BIN` caller) | RED — census requires EVERY enumerated site to carry engagement evidence |
 | 5 | (harness) Make the census count zero sites (stub the grep) | RED — floor assertion `sites >= 2` fails, not green |
 | 6 | (must-pass) Reorder `--seccomp` to a different position among setup args | PASS — the guard asserts engagement, not byte-position |
@@ -669,8 +711,9 @@ change), so neither scope-out is folded in. All other planned files: None.
 - [ ] FR-5: In the deployed image, a server-held non-cloexec fd is NOT readable
   inside the SDK sandbox (the measured leak shape is closed), verified by the
   canary/deploy path, and `op=sandbox-selfprobe-fds` telemetry is retained.
-- [ ] FR-6: Canary replay adds the two-probe contract (`unshare -U` expected-fail,
-  `unshare -m` expected-pass) with the new verdict classes surfaced through
+- [ ] FR-6: Canary replay adds the three-probe contract (`unshare -U`
+  expected-fail, `unshare -m` expected-pass, in-sandbox fd-count within the
+  argv-derived bound) with the new verdict classes surfaced through
   deploy-state + Sentry via the existing emit path.
 - [ ] FR-7: Boot self-check emits `feature:"agent-sandbox", op:"sandbox-hardening-selfprobe"`
   (info on pass / warn on any check failing) covering shim PATH-resolution +
@@ -723,6 +766,9 @@ change), so neither scope-out is folded in. All other planned files: None.
   fallback; a blanket-EPERM regression would break this row.
 - Given `--json-status-fd 3` and the new filter fd, when the C4 launch runs,
   then status classification still works (fd-numbering regression).
+- Given the SDK's `--args <fd>` spawn shape (verified in the shipped binary:
+  `bash -c '…shift && exec "$@"' … --args <fd> …`), when the shim runs, then
+  that fd survives and bwrap still parses its args file.
 
 ### Edge Cases
 
@@ -739,6 +785,17 @@ change), so neither scope-out is folded in. All other planned files: None.
   is visible before tenants hit it.
 - Given `bwrap` absent on a dev host, when the probe script runs, then it
   prints `USNS_SECCOMP_SKIP_NO_BWRAP` (Check-10-safe) instead of failing.
+- Given a future config that sets `allowUnixSockets` (engaging the SDK's
+  embedded `apply-seccomp` unix-socket helper — which calls
+  `unshare(CLONE_NEWUSER)` INSIDE the sandbox to drop caps), when the filter is
+  active, then the helper is denied → its unix-socket blocking degrades while
+  the namespace boundary holds. CONSTRAINT recorded: enabling `allowUnixSockets`
+  later must either accept the degradation or carve a clone/CLONE_NEWUSER
+  exception for that helper's signature — a deliberate decision, never silent.
+- Given `enableWeakerNestedSandbox: true` (set in `buildAgentSandboxConfig`),
+  when the filter is active, then nothing changes — the flag only drops
+  `--proc /proc` from the SDK argv for container nesting; it is not a
+  nested-bwrap mechanism and does not conflict.
 
 ## Success Metrics
 
@@ -784,6 +841,13 @@ change), so neither scope-out is folded in. All other planned files: None.
   no fd to a foreign userns is reachable inside the sandbox (`/proc` denied, no
   ns fds passed in). Recorded in ADR-075 amendment; revisit if a leak path
   emerges.
+- **R8 — `apply-seccomp`/managed-settings drift:** (a) the SDK's embedded
+  unix-socket helper calls `unshare(CLONE_NEWUSER)` inside the sandbox — inert
+  for our config (no `allowUnixSockets`), recorded as an Edge-Case constraint;
+  (b) `bwrapPath` is a managed-settings-only knob that bypasses PATH resolution
+  — if a managed settings file ever lands pointing elsewhere, the shim is
+  bypassed → covered by the boot self-check + canary probes (which exercise the
+  real PATH-resolved and argv-replayed paths).
 
 ## Non-Goals
 
@@ -864,6 +928,6 @@ change), so neither scope-out is folded in. All other planned files: None.
 - Issue: #8752 (this), #5862 (sibling vendored-reorder, NOT folded), #5941
   (prod-canary nested-unshare probe — partially overlapped, acknowledged),
   #5873/#5849 (the seccomp/userns outage lineage), #5733 (blind-surface lineage),
-  #8695/#8696/#8732 (the C4 bwrap work that filed this deferral)
+  #8623/#8696/#8732 (the C4 bwrap work that filed this deferral)
 - Brainstorm context: `knowledge-base/project/brainstorms/2026-09-26-c4-hardening-residuals-brainstorm.md`
   (C4-hardening family; threshold precedent `single-user incident`)

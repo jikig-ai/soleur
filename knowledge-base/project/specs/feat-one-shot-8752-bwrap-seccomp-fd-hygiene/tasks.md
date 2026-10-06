@@ -39,9 +39,12 @@ review time).
 - [ ] 3.2 Write `infra/bwrap-shim/bwrap` (bash): `--version`/`--help`
   pass-through; parse fd-consuming options (`--args`, `--seccomp`,
   `--add-seccomp-fd`, `--sync-fd`, `--info-fd`, `--json-status-fd`,
-  `--block-fd`, `--userns-block-fd`) into a preserve-set; `exec {fd}<` the
-  filter; close all other fds >2 except preserve-set/script-fd/bpf-fd;
-  `exec /usr/bin/bwrap --seccomp "$fd" "$@"`; fail-closed `bwrap-shim:` marker.
+  `--block-fd`, `--userns-block-fd`) into a preserve-set — `--args <fd>` IS in
+  the real SDK argv (verified against the shipped binary strings: `bash -c
+  '…shift && exec "$@"' … --args <fd> …`), so the preserve-set is load-bearing;
+  `exec {fd}<` the filter; close all other fds >2 except
+  preserve-set/script-fd/bpf-fd; `exec /usr/bin/bwrap --seccomp "$fd" "$@"`;
+  fail-closed `bwrap-shim:` marker.
 - [ ] 3.3 `apps/web-platform/Dockerfile`: `COPY` shim → `/usr/local/bin/bwrap`
   (root-owned 0755), `.bpf` → `/app/infra/` (with the other `infra/` COPY block).
 - [ ] 3.4 Comment cross-reference: preserve-set ↔ `sandbox-canary.mjs`
@@ -49,10 +52,12 @@ review time).
 
 ## Phase 4 — Deploy canary + boot self-check
 
-- [ ] 4.1 `apps/web-platform/scripts/sandbox-canary.mjs`: replay gains two
+- [ ] 4.1 `apps/web-platform/scripts/sandbox-canary.mjs`: replay gains three
   derived probes — `bwrap <argv> -- unshare -U true` MUST fail (else verdict
   `userns_filter_bypass`), `bwrap <argv> -- unshare -m true` MUST pass (else
-  `userns_filter_overbroad`); fixture `sandbox-canary-argv.json` UNCHANGED.
+  `userns_filter_overbroad`), and an in-sandbox fd census (`ls /proc/self/fd`
+  count within `3 + #(fd-consuming argv args) + 1`, else `fd_hygiene_bypass`);
+  fixture `sandbox-canary-argv.json` UNCHANGED.
 - [ ] 4.2 Update `test/sandbox-canary.test.ts` +
   `scripts/sandbox-canary-regression.test.sh` for the verdict contract +
   probe-presence assertions.
