@@ -1,5 +1,6 @@
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
+import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -85,15 +86,13 @@ export const ALLOWED_SERVICE_ENV_VARS = new Set(
   Object.values(PROVIDER_CONFIG).map((c) => c.envVar),
 );
 
-// The two mutually-exclusive auth env vars. The CLI subprocess authenticates
-// with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR `ANTHROPIC_API_KEY` (per-
-// token API). Injecting BOTH is the silent-API-billing trap (FR2): the SDK
-// prefers one but the operator believes they are on the subscription.
-const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY";
-// Exported: the #9534 web-egress deny census (agent-runner-sandbox-config.ts)
-// references the name through this binding — the CWE-526 sentinel scans for
-// the literal, which must stay single-site (this file).
-export const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
+// The two auth variables are mutually exclusive: the CLI subprocess
+// authenticates with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR
+// `ANTHROPIC_API_KEY` (per-token API). Injecting BOTH is the silent-API-billing
+// trap (FR2): the SDK prefers one but the operator believes they are on the
+// subscription. Their names (`OAUTH_ENV_VAR`, `API_KEY_ENV_VAR`) live in
+// `agent-auth-env-vars.ts`, which the sandbox config reads to deny the same set
+// to sandboxed Bash (W1, ADR-272).
 
 /**
  * Optional env extras that are NOT service tokens and NOT auth vars.

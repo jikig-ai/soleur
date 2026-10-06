@@ -102,7 +102,10 @@
 #                       Better Stack API token, already ::add-mask::ed by the caller.
 #   TFSTATE_JSON        (required for --arm) path to `terraform show -json` for this root.
 #   ARMED_UNCONFIRMED   (required) path to the state file `--sweep` reads.
-#   BS_API_BASE         (optional) Better Stack API root; overridden only by the test harness.
+#   BS_API_BASE         (optional) Better Stack API root. PINNED: anything other than the production
+#                       root https://uptime.betterstack.com/api/v2 is refused (rc=1) before any
+#                       request, because the bearer is sent to this host. A test that needs another
+#                       destination shims `curl` on PATH rather than redirecting this variable.
 #   ARM_POLL_INTERVAL_S (optional) poll period, default 10; lowered only by the test harness.
 #
 # EXIT CODES.
@@ -126,6 +129,11 @@
 
 set -uo pipefail
 set +e   # explicit, not inherited — see ERREXIT above.
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797),
+# and this script holds a live API token. Placed before the credential is read.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 BS_TOKEN="${BS_TOKEN:-}"
 TFSTATE_JSON="${TFSTATE_JSON:-}"
@@ -149,6 +157,28 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   *) echo "::error::arm-heartbeats.sh: unknown argument '$1' (expected --arm, --sweep or --help)."; exit 1 ;;
 esac
+
+# Destination pin: the bearer is sent to this host, so an env override must not redirect it.
+# Placed after argument parsing so `--help` still works, and before any request in either mode.
+case "$BS_API_BASE" in
+  https://uptime.betterstack.com/api/v2) ;;
+  *) echo "::error::arm-heartbeats.sh: BS_API_BASE must be https://uptime.betterstack.com/api/v2 — refusing to send the Better Stack token anywhere else."; exit 1 ;;
+esac
+
+# Token-shape guard: a newline or quote in the token would inject a curl config directive on the
+# stdin channel below. Never echoes the value. Better Stack tokens are alphanumeric.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# The ONE credentialed curl. It owns the transport flags (`--disable` first so ~/.curlrc is
+# skipped, `--noproxy '*'`), the token-shape guard and the bearer header. The header rides curl's
+# stdin config channel (`--config -`) fed by a process substitution whose `printf` is the shell
+# builtin, so the token is never in any process's argument list (/proc/<pid>/cmdline, `ps`). An
+# unusable token makes zero curl calls and returns non-zero (callers read that as a failed call).
+bs_api() {  # <transport args...> <url>
+  _bearer_ok "$BS_TOKEN" || return 2
+  curl --disable --noproxy '*' "$@" --config - 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$BS_TOKEN")
+}
 
 now_s() { date +%s; }
 
@@ -206,8 +236,7 @@ HB_PATCH_CODE=""
 # check that decides is `[[ -n "$HB_STATUS" ]]`, and deleting THAT reds the suite (row M10).
 hb_fetch() {  # <id> -> 0 and sets HB_STATUS/HB_UPDATED_AT; non-zero when the lookup failed
   local body
-  body=$(curl -fsS --max-time "$ARM_CURL_MAX_TIME_S" -H "Authorization: Bearer ${BS_TOKEN}" \
-    "${BS_API_BASE}/heartbeats/$1" 2>/dev/null)
+  body=$(bs_api -fsS --max-time "$ARM_CURL_MAX_TIME_S" "${BS_API_BASE}/heartbeats/$1")
   # There is deliberately no separate `[[ -n "$body" ]] || return 1` here. It was in the extracted
   # original and it is unobservable: an empty or non-JSON body makes `jq` yield nothing, so the
   # `[[ -n "$HB_STATUS" ]]` guard below already fails closed on exactly the same inputs. A second
@@ -226,9 +255,9 @@ hb_fetch() {  # <id> -> 0 and sets HB_STATUS/HB_UPDATED_AT; non-zero when the lo
 # code makes "2xx" a fact rather than a paraphrase, and it makes a 5xx impossible to mistake for
 # a successful rollback.
 hb_patch_paused() {  # <id> <true|false> -> 0 on a 2xx; sets HB_PATCH_CODE
-  HB_PATCH_CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$ARM_CURL_MAX_TIME_S" \
-    -X PATCH -H "Authorization: Bearer ${BS_TOKEN}" -H 'Content-Type: application/json' \
-    "${BS_API_BASE}/heartbeats/$1" --data-raw "{\"paused\":$2}" 2>/dev/null)
+  HB_PATCH_CODE=$(bs_api -sS -o /dev/null -w '%{http_code}' --max-time "$ARM_CURL_MAX_TIME_S" \
+    -X PATCH -H 'Content-Type: application/json' \
+    "${BS_API_BASE}/heartbeats/$1" --data-raw "{\"paused\":$2}")
   HB_PATCH_CODE="${HB_PATCH_CODE//[^0-9]/}"
   # curl printed nothing at all — a transport failure or a `--max-time` kill. `000` is curl's own
   # spelling for that, and naming it keeps the retry classifier below total over the status space.
@@ -290,7 +319,9 @@ sweep_main() {
   ids=$(tr '\n' ' ' < "$ARMED_UNCONFIRMED" 2>/dev/null | sed 's/ *$//')
   echo "::warning::Heartbeat re-pause sweep FIRED: ${armed} monitor(s) were left unpaused-and-unconfirmed by the ARM gate (${ids}). Production uptime alerting for them was live with nothing feeding it."
 
-  if [[ -z "$BS_TOKEN" ]]; then
+  # An EMPTY token and a token of an unusable shape are the same outcome: no request can be made
+  # with it (`bs_api` would refuse), so no id can even be attempted.
+  if ! _bearer_ok "$BS_TOKEN"; then
     # The ids, not just the count (#7655 B3). They are the only thing that lets an operator
     # re-pause by hand, and this branch exits before the loop that would otherwise echo them.
     echo "::error::Re-pause sweep: no Better Stack API token — ${armed} monitor(s) are LIVE AND UNFED and this step cannot re-pause them: ${ids}. Re-pause each by hand: Better Stack → Heartbeats → the id → Pause. They will page when their grace window expires."
@@ -369,6 +400,10 @@ for _required in BS_TOKEN TFSTATE_JSON ARMED_UNCONFIRMED; do
     exit 1
   fi
 done
+if ! _bearer_ok "$BS_TOKEN"; then
+  echo "::error::arm-heartbeats.sh: BS_TOKEN has an unexpected shape — refusing to run an arming pass that could not authenticate."
+  exit 1
+fi
 if [[ ! -r "$TFSTATE_JSON" ]]; then
   echo "::error::arm-heartbeats.sh: TFSTATE_JSON=${TFSTATE_JSON} is not readable — cannot resolve any monitor id."
   exit 1

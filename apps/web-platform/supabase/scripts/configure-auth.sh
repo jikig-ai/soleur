@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Refuse to run under xtrace (#7797): -x prints a command after expansion, so a credential would be
+# printed the moment it is used. `${VAR:+x}` tests non-emptiness without expanding the value; every
+# credential this file binds is covered. Tracing stays available with them unset.
+case "$-" in
+  *x*)
+    if [ -n "${APPLE_CLIENT_SECRET:+x}${AZURE_CLIENT_SECRET:+x}${GITHUB_CLIENT_SECRET:+x}${GOOGLE_CLIENT_SECRET:+x}${RESEND_API_KEY:+x}${SUPABASE_ACCESS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Configure Supabase Auth: Site URL, redirect URLs, SMTP via Resend, and branded email template.
 #
 # Required environment variables:
@@ -11,6 +23,31 @@ set -euo pipefail
 SUPABASE_ACCESS_TOKEN="${SUPABASE_ACCESS_TOKEN:?Missing SUPABASE_ACCESS_TOKEN}"
 PROJECT_REF="${PROJECT_REF:?Missing PROJECT_REF}"
 RESEND_API_KEY="${RESEND_API_KEY:?Missing RESEND_API_KEY}"
+
+# Destination pin: the Management API bearer travels to .../projects/$PROJECT_REF/..., and
+# PROJECT_REF is env-derived, so an override must not steer the account-level token at a project the
+# operator did not intend. Refuse anything but the two live Supabase projects (prd and dev are
+# distinct projects, hr-dev-prd-distinct-supabase-projects; this script is run against both).
+case "$PROJECT_REF" in
+  ifsccnjhymdmidffkzhl|mlwiodleouzwniehynfz) ;;
+  *) echo "ERROR: refusing PROJECT_REF (expected the live prd or dev Supabase project ref)" >&2; exit 1 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and the bearer header, so the
+# account-level token travels on curl's stdin config channel and never on its argument list
+# (/proc/<pid>/cmdline, ps, a traced parent). A newline in the token would inject a curl config
+# directive and an empty one would send the request unauthenticated, so it is refused before curl
+# runs; the value is never echoed. Supabase access tokens (sbp_ + hex) are inside the allowlist.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SUPABASE_ACCESS_TOKEN"; then
+  echo "ERROR: SUPABASE_ACCESS_TOKEN has an unexpected shape" >&2
+  exit 1
+fi
+mgmt_curl() {
+  _bearer_ok "${SUPABASE_ACCESS_TOKEN:-}" || { echo "mgmt_curl: SUPABASE_ACCESS_TOKEN unusable" >&2; return 1; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SUPABASE_ACCESS_TOKEN")
+}
 
 if ! command -v jq &>/dev/null; then
   echo "ERROR: jq is required but not installed" >&2
@@ -36,9 +73,8 @@ CONFIRMATION_TEMPLATE=$(cat "$CONFIRMATION_TEMPLATE_FILE")
 
 echo "Configuring Supabase Auth for project $PROJECT_REF..."
 
-RESPONSE=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
+RESPONSE=$(mgmt_curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
   "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
-  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d "$(jq -n \
     --arg template "$MAGIC_LINK_TEMPLATE" \
@@ -123,9 +159,8 @@ configure_provider() {
   )
 
   local resp
-  resp=$(curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
+  resp=$(mgmt_curl -s --connect-timeout 10 --max-time 30 -w "\n%{http_code}" -X PATCH \
     "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
-    -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
     -H "Content-Type: application/json" \
     -d "$payload")
 

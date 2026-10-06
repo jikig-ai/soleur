@@ -177,6 +177,26 @@ readonly LINKEDIN_API="https://api.linkedin.com"
 LINKEDIN_API_VERSION="202602"
 LINKEDIN_POST_MAX_LENGTH=3000
 
+# --- Bearer transport (#7843) ---
+# The access token is written into curl's STDIN config channel (`--config -`), never its
+# argument list, where every local user would read it from /proc/<pid>/cmdline. That
+# channel is line-oriented, so a token holding a quote and a newline could append a
+# `url = "..."` directive and make curl issue a second request. The guard refuses
+# anything outside the token alphabet BEFORE the value is formatted into the stream, and
+# never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# Every authenticated request goes through here: ONE place owns the transport flags
+# (`--disable` first, `--noproxy '*'`), the token-shape guard and the header. Returns 120
+# with zero curl calls when the token is unusable; callers map that to a refusal. The
+# token is read as LINKEDIN_ACCESS_TOKEN at call time, so the function-local org-token
+# rebinding in cmd_fetch_metrics / cmd_fetch_activity keeps working.
+linkedin_authed_curl() {
+  _bearer_ok "${LINKEDIN_ACCESS_TOKEN:-}" || return 120
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$LINKEDIN_ACCESS_TOKEN")
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -317,12 +337,15 @@ get_request() {
 
   local response http_code body
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bearer ${LINKEDIN_ACCESS_TOKEN}" \
+  response=$(linkedin_authed_curl -s -w "\n%{http_code}" \
     -H "X-Restli-Protocol-Version: 2.0.0" \
     -H "LinkedIn-Version: ${LINKEDIN_API_VERSION}" \
     "${header_args[@]}" \
     "$url" 2>/dev/null) || __curl_rc=$?
+  if (( __curl_rc == 120 )); then
+    echo "Error: LinkedIn access token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to LinkedIn API."
     exit 1
@@ -355,14 +378,18 @@ post_request() {
 
   local response http_code body
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
+  response=$(linkedin_authed_curl -s -w "\n%{http_code}" \
     -D "$header_file" \
-    -H "Authorization: Bearer ${LINKEDIN_ACCESS_TOKEN}" \
     -H "X-Restli-Protocol-Version: 2.0.0" \
     -H "LinkedIn-Version: ${LINKEDIN_API_VERSION}" \
     -H "Content-Type: application/json" \
     -X POST -d "$json_body" \
     "$url" 2>/dev/null) || __curl_rc=$?
+  if (( __curl_rc == 120 )); then
+    rm -f "$header_file"
+    echo "Error: LinkedIn access token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   if (( __curl_rc != 0 )); then
     rm -f "$header_file"
     report_transport_failure "$__curl_rc" "Failed to connect to LinkedIn API."

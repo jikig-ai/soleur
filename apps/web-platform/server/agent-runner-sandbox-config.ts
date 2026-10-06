@@ -1,9 +1,10 @@
 import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
+import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, delimiter, join } from "path";
 import * as Sentry from "@sentry/nextjs";
 
-import { ALLOWED_SERVICE_ENV_VARS, OAUTH_ENV_VAR } from "./agent-env";
+import { ALLOWED_SERVICE_ENV_VARS } from "./agent-env";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -26,9 +27,12 @@ const log = createChildLogger("agent-sandbox");
 //     `feature: "agent-sandbox"` (the cc path mirrors the same precedent
 //     — see `cc-dispatcher.ts realSdkQueryFactory` body).
 //   - `enableWeakerNestedSandbox: true` — Docker containers cannot mount
-//     /proc inside user namespaces; this skips `--proc /proc` in bwrap.
-//     `/proc` is already in `denyRead`, so the weaker mode is acceptable
-//     (#1557).
+//     /proc inside user namespaces; this skips `--proc /proc` in bwrap
+//     (#1557). `denyRead` is NOT what keeps the CLI parent's environment out
+//     of reach. Measured (ADR-272): no process environment readable from
+//     inside the sandbox carries the key. Which bubblewrap flag does that work
+//     is not established, so a change to the sandbox flags needs re-measuring
+//     (`sandbox-credential-deny-runtime.test.ts` repeats it).
 //   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
@@ -155,6 +159,12 @@ export type AgentSandboxConfig = {
   filesystem: {
     allowWrite: string[];
     denyRead: string[];
+  };
+  // W1 (#9601, ADR-272): unset the owner's Anthropic credential for every
+  // sandboxed Bash command. Typed (not left to the index signature) so a test
+  // reads the entries as data, not `unknown`.
+  credentials: {
+    envVars: { name: string; mode: "deny" }[];
   };
 } & { [x: string]: unknown };
 
@@ -313,9 +323,10 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
 //     readable") rather than a per-name judgment call. The `0` value only
 //     suppresses credential prompts — irrelevant once the credential set
 //     itself is denied.
-//   - `ANTHROPIC_API_KEY`, `OAUTH_ENV_VAR` — the CLI auth vars (the OAuth
-//     name stays a binding: the CWE-526 sentinel pins its literal to
-//     agent-env.ts).
+//   - the two CLI auth vars — denied for EVERY session by the W1 baseline
+//     (#9601); the census omits them because the CWE-526 sentinel pins even
+//     the identifiers to agent-env.ts and denies-reference right is reserved
+//     to AGENT_AUTH_ENV_VARS below.
 //     `deny` unsets for SANDBOXED COMMANDS ONLY (the CLI process keeps
 //     them; model calls unaffected — see plan §corrections).
 //   - every ALLOWED_SERVICE_ENV_VARS name — the full BYOK service-token
@@ -323,8 +334,10 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
 // `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` are deliberately ABSENT: they
 // are `/dev/null` neutralizations, and denying them would undo the
 // neutralization (plan review correction (a)).
-// Deduped: ANTHROPIC_API_KEY and GITHUB_TOKEN appear in BOTH the fixed list
-// and ALLOWED_SERVICE_ENV_VARS (plan review correction (b)).
+// Deduped: GITHUB_TOKEN appears in BOTH the fixed list and
+// ALLOWED_SERVICE_ENV_VARS (plan review correction (b)). The two Anthropic
+// auth vars are absent on purpose — the W1 baseline denies them for every
+// session and the credentials block unions both lists.
 const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
   Array.from(
     new Set([
@@ -333,8 +346,6 @@ const WEB_EGRESS_ENV_DENY_CENSUS = Object.freeze(
       "GIT_INSTALLATION_TOKEN",
       "GIT_USERNAME",
       "GIT_TERMINAL_PROMPT",
-      "ANTHROPIC_API_KEY",
-      OAUTH_ENV_VAR,
       ...ALLOWED_SERVICE_ENV_VARS,
     ]),
   ),
@@ -465,8 +476,10 @@ export function buildAgentSandboxConfig(
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
     // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap,
-    // which is acceptable because /proc is already in denyRead (#1557).
+    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
+    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // the outcome (no readable environ carries the key) is measured in ADR-272
+    // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,
     network: {
       allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
@@ -489,23 +502,23 @@ export function buildAgentSandboxConfig(
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
     },
-    // feat-open-web-egress (#9534) — Phase-A credential quarantine. Present
-    // ONLY for the web-egress-entitled session: every secret-bearing env
-    // var is `deny`ed for sandboxed commands (the CLI process keeps them —
-    // in-process tools unaffected). No `mask` entries: masking would
-    // re-inject the real value at the SRT proxy for allowedDomains hosts,
-    // and under open egress the whole point is that NOTHING credential-
-    // shaped leaves the box through the agent's channel.
-    ...(opts?.allowWebEgress
-      ? {
-          credentials: {
-            envVars: WEB_EGRESS_ENV_DENY_CENSUS.map((name) => ({
-              name,
-              mode: "deny" as const,
-            })),
-          },
-        }
-      : {}),
+    // feat-open-web-egress (#9534) — Phase-A credential quarantine. The W1
+    // baseline denies the two Anthropic auth vars to sandboxed Bash for EVERY
+    // session (#9601, ADR-272). For a web-egress-entitled session the deny
+    // widens to the full secret census: service tokens, GH_* auth vars, the
+    // GIT_* auth surface — the CLI process keeps them all (in-process tools
+    // unaffected). No `mask` entries: masking would re-inject the real value
+    // at the SRT proxy for allowedDomains hosts, and under open egress the
+    // whole point is that NOTHING credential-shaped leaves the box through
+    // the agent's channel.
+    credentials: {
+      envVars: Array.from(
+        new Set([
+          ...AGENT_AUTH_ENV_VARS,
+          ...(opts?.allowWebEgress ? WEB_EGRESS_ENV_DENY_CENSUS : []),
+        ]),
+      ).map((name) => ({ name, mode: "deny" as const })),
+    },
   };
 }
 

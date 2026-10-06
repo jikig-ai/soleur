@@ -139,9 +139,17 @@ describe("buildAgentSandboxConfig — allowWebEgress (#9534)", () => {
     expect(denyRead).toContain(join(home, ".claude", ".credentials.json"));
   });
 
-  it("non-entitled session: no credentials block, token dir NOT denied", () => {
+  it("non-entitled session: credentials carries ONLY the W1 auth-var baseline, token dir NOT denied", () => {
     const cfg = buildAgentSandboxConfig(own);
-    expect((cfg as { credentials?: unknown }).credentials).toBeUndefined();
+    // W1 (#9601): every session denies the two Anthropic auth vars to
+    // sandboxed Bash — the block is always present. The egress census (service
+    // tokens, GH_*/GIT_* auth vars) is the entitlement-scoped widening.
+    const names = (
+      cfg as { credentials: { envVars: { name: string }[] } }
+    ).credentials.envVars.map((e) => e.name);
+    expect(new Set(names)).toEqual(
+      new Set(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
+    );
     expect(cfg.filesystem!.denyRead).not.toContain(`${root}-tokens`);
   });
 });

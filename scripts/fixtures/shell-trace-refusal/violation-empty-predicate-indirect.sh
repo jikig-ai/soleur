@@ -13,4 +13,4 @@ case "$-" in
 esac
 
 hdr="$(doppler secrets get SOME_NAME -p soleur -c prd --plain)"
-curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${hdr}" https://example.invalid/ || true
+curl --disable --noproxy '*' -sS --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$hdr") || true

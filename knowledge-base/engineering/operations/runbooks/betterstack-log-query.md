@@ -1028,7 +1028,11 @@ in NATIVE Vector shape, NOT the `tag_metrics`-flattened log shape.** So:
 - **`source_kind` is unset** on these rows — a filter `source_kind='host_metrics'`
   returns ZERO and looks like "metrics don't ship." They do; you filtered wrong.
   (The repo's `tag_metrics` remap that would add those fields is not reflected in
-  shipped data — tracked in #6944 separately; query by `tags.host` + `name` and it just works.)
+  shipped data — tracked in #6944 separately; query by `tags.host` + `name` and it just works.
+  Measured 2026-10-06 (#9372): with the pinned Vector 0.43.1 the remap is a silent no-op on metric events, so the
+  stored row is the bare metric. The web-2 emptiness gate `scripts/web2-rebirth-emptiness.sh` reads exactly this native
+  shape — `tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value` — and its suite resolves those paths against
+  a real-shape row.)
 
 Memory utilisation distribution for one host over 30 days (min available =
 worst-case peak usage; subtract from total for GB used):

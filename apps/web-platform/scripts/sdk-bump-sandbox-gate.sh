@@ -183,7 +183,7 @@ capture_trigger=0
 # grep exits 0 on a match, 1 on none, above 1 when it could not run (a bad pattern): only a CLEAN miss may skip the gate. A
 # failed here-string redirect also returns 1, so this routing does not cover a redirect failure.
 ct_rc=0
-grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' <<<"$CHANGED" || ct_rc=$?
+grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' <<<"$CHANGED" || ct_rc=$?
 if (( ct_rc != 1 )); then
   capture_trigger=1
 fi
