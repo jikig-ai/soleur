@@ -43,7 +43,7 @@ readonly COMMENT_MARKER="<!-- allowlist-diff-comment -->"
 
 # Skip cheaply if .gitleaks.toml didn't change. -Fxq is fixed-string + whole-line
 # (regex `.` would also match e.g. `agitleaks.toml`).
-if ! git diff --name-only "${BASE_SHA}..${HEAD_SHA}" | grep -Fxq '.gitleaks.toml'; then
+if ! grep -Fxq '.gitleaks.toml' < <(git diff --name-only "${BASE_SHA}..${HEAD_SHA}"); then
   echo "allowlist-diff: .gitleaks.toml unchanged; skipping."
   exit 0
 fi

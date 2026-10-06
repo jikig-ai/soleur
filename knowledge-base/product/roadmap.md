@@ -345,6 +345,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | 4.10 | Stripe live mode activation | P1 | 4 of 5 pricing gates pass | [#1444](https://github.com/jikig-ai/soleur/issues/1444) Done |
 | 4.11 | Skill security scan (LOW-RISK\|REVIEW\|HIGH-RISK advisory gate for skill-creator + agent-finder; brand-survival precondition for external skill-install UX) | P1 | Before guided onboarding (4.3) exposes third-party skill-install surface | [#2719](https://github.com/jikig-ai/soleur/issues/2719) Brainstormed |
 | 4.12 | Alpha-tester terms + controller/processor posture (Art. 28(3) instrument for operator-assisted runs; LIA + Art. 30 records for repo observation) | P1 | Before tester #2 is onboarded — the determination is a **precondition** of the next onboarding, not a reaction to it | [#7331](https://github.com/jikig-ai/soleur/issues/7331) Determined 2026-08-06 |
+| 4.13 | Evaluate the homepage hero CTA rollout (self-hosted install as the primary button, hosted waitlist kept visible; metrics and decision rule in the issue) | P2 | 14 to 28 days after the #9579 hero change ships (review date 2026-11-03) | [#9588](https://github.com/jikig-ai/soleur/issues/9588) Not started |
 
 **Recruitment channels:** Claude Code Discord, GitHub (developers with business-operations repos), IndieHackers, X/Twitter solopreneur network, direct network.
 

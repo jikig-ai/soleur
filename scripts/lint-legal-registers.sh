@@ -305,7 +305,7 @@ done <<< "$cited_paths"
 # same path -- so deleting the determination ROW left this assertion green and the guard reported
 # 6 assertions, 0 failed over a register missing the one row (c)'s producer cannot see. That is
 # cq-assert-anchor-not-bare-token, five lines below where this file cites it. Measured at review.
-if printf '%s' "$cited_paths" | grep -qxF "$OUT_OF_SCOPE_ROW"; then
+if grep -qxF "$OUT_OF_SCOPE_ROW" < <(printf '%s' "$cited_paths"); then
   pass "(b) the out-of-producer-scope determination row is present"
 else
   fail "(b) the out-of-producer-scope determination row is missing: $OUT_OF_SCOPE_ROW
@@ -388,7 +388,7 @@ for entry in "${NOT_TRANSCRIBED[@]}"; do
   [[ -n "$wpath" ]] || die2 "NOT_TRANSCRIBED entry has no path: $entry"
   [[ -f "$REPO_ROOT/$wpath" ]] || die2 "NOT_TRANSCRIBED waives a path that does not exist: $wpath"
   # Fail-closed on an uncited waiver -- the same contract EXCLUSIONS already uses.
-  echo "$wreason" | grep -qE '#[0-9]+' \
+  grep -qE '#[0-9]+' <<<"$wreason" \
     || die2 "NOT_TRANSCRIBED entry for $wpath has no citing issue (#NNNN): $wreason"
   waived_paths+="$wpath"$'\n'
 done
@@ -403,10 +403,10 @@ while IFS= read -r f; do
   # table and by the `related:` frontmatter, so a file listed as EXCLUDED counted as INDEXED
   # and its waiver became unfalsifiable -- deleting a waiver left the gate green. Caught by
   # mutation 7b (cq-assert-anchor-not-bare-token).
-  if printf '%s' "$cited_paths" | grep -qxF "$rel"; then
+  if grep -qxF "$rel" < <(printf '%s' "$cited_paths"); then
     continue
   fi
-  if printf '%s' "$waived_paths" | grep -qxF "$rel"; then
+  if grep -qxF "$rel" < <(printf '%s' "$waived_paths"); then
     continue
   fi
   uncovered=$((uncovered + 1))

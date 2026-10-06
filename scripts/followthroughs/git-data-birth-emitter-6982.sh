@@ -97,7 +97,7 @@ if [ "$rc" -ne 0 ]; then
   exit 2
 fi
 
-if ! printf '%s' "$out" | grep -q 'boot_complete'; then
+if ! grep -q 'boot_complete' <<<"$out"; then
   echo "TRANSIENT: no stage:boot_complete from soleur-git-data in the last 30 days."
   echo "The host is presumably still unborn — #6982 shipped the hardening, NOT the birth."
   echo "This flips to PASS on the first birth whose boot emits its completion signal."
@@ -116,7 +116,7 @@ fi
 # plaintext_journal (dirty|clean|absent) are deliberately NOT projected: neither is a yes/no assertion, a non-zero served_repos is already a bootstrap
 # FATAL (luks_residue), and pulling them into a whole-row word match would only add ways for
 # this arm to fire on a value that is not a refusal.
-if printf '%s' "$out" | grep -qE '\bno\b'; then
+if grep -qE '\bno\b' <<<"$out"; then
   echo "FAIL: a boot_complete event carries a FALSE assertion — the host booted with an"
   echo "unmet invariant (LUKS mount, repo root, hooksPath, provision wrapper, the boot-time"
   echo "reopen unit, the fence on the mapper, the erasure probe or the plaintext check)."

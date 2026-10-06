@@ -162,7 +162,7 @@ jobs:
               if [[ "$code" == 2?? ]]; then
                 echo "Lockdown applied on attempt ${attempt}/3 (HTTP ${code})."
                 applied="yes"; break
-              elif printf '%s' "$body" | grep -qF '55P03'; then
+              elif printf '%s' "$body" | grep -cF '55P03' >/dev/null; then
                 echo "Attempt ${attempt}/3: lock_timeout (55P03) — backing off and retrying…"
                 [[ "$attempt" -lt 3 ]] && sleep $((attempt * 5))
               else
@@ -227,7 +227,7 @@ jobs:
           # SET LOCAL ROLE anon is the correct simulation of the client path).
           if [[ -z "$fail_mode" ]]; then
             anon="$(query "begin; set local role anon; select count(*) from public.events; rollback")"
-            if printf '%s' "$anon" | grep -qF '42501'; then
+            if printf '%s' "$anon" | grep -cF '42501' >/dev/null; then
               echo "anon read-test PASS: permission denied for public.events as anon."
             else
               record_failure "anon_still_reads" "anon read-test did NOT return permission-denied (42501). body=$(sanitize "$(printf '%s' "$anon" | head -c 300)")"

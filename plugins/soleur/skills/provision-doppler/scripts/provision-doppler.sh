@@ -104,7 +104,7 @@ awk -F'|' -v slug="$SLUG" '/^\|/ { gsub(/^ +| +$/, "", $2); if ($2 == slug) foun
 
 # --- Idempotency check ---
 
-if doppler projects 2>/dev/null | grep -q "$SLUG"; then
+if grep -q "$SLUG" < <(doppler projects 2>/dev/null); then
   echo "WARNING: Doppler project '$SLUG' already exists."
   echo "  Continuing will regenerate TF config. Existing project is unchanged until 'terraform apply'."
   echo ""
@@ -290,7 +290,7 @@ echo ""
       -d "$TRUST_PAYLOAD"
   )
 
-  if echo "$TRUST_RESPONSE" | grep -q '"success"'; then
+  if grep -q '"success"' <<<"$TRUST_RESPONSE"; then
     echo "Configured OIDC trust: repository=${TENANT_ORG}/${TENANT_REPO}, environment=production"
   else
     echo "Warning: OIDC trust binding response:" >&2
@@ -309,7 +309,7 @@ echo ""
       -d "$GRANT_PAYLOAD"
   )
 
-  if echo "$GRANT_RESPONSE" | grep -q '"success"'; then
+  if grep -q '"success"' <<<"$GRANT_RESPONSE"; then
     echo "Granted service account access to project '${SLUG}'"
   else
     echo "Warning: Project grant response:" >&2

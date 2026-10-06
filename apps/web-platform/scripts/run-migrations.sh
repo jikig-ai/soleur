@@ -138,7 +138,7 @@ if [[ "$verify_mode" == "true" ]]; then
       # Only files at or before the high watermark must be tracked.
       # Files beyond it are pending and their absence is expected.
       [[ "$fname" > "$high_watermark" ]] && break
-      if ! printf '%s\n' "$tracked_list" | grep -qxF "$fname"; then
+      if ! grep -qxF "$fname" <<<"$tracked_list"; then
         echo "::error::verify: $fname is on disk below high watermark ($high_watermark) but absent from _schema_migrations — likely applied out-of-band without tracking."
         drift=1
       fi

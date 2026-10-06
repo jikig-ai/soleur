@@ -1918,7 +1918,7 @@ case "$OP" in
     if [[ "$POOL_RC" != "0" ]]; then
       echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): curl(rc=$POOL_RC) against the Management API — pool unverifiable, refusing to flip."; exit 1
     fi
-    if printf '%s' "$POOL_BODY" | grep -qF 'EMAXCONNSESSION'; then
+    if grep -qF 'EMAXCONNSESSION' <<<"$POOL_BODY"; then
       echo "::error::2.-1 POOL PRE-CHECK FAIL-CLOSED (#6258): pool ALREADY at the cap (EMAXCONNSESSION in body). Restart web-host inngest (restart-inngest-server.yml) to drop the pinned pool, re-run op=inventory clean, THEN re-run op=execute. body=${POOL_BODY_SAFE}"; exit 1
     fi
     if [[ "$POOL_HTTP" != 2?? ]]; then

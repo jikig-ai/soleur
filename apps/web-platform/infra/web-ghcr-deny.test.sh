@@ -437,7 +437,7 @@ sub ci-deploy.sh "unset _ghcr_blocked" $'unset _ghcr_blocked\nfor h in ghcr.io; 
 row "13 a drifted 127.0.0.1 deny in a host script (ci-deploy.sh)" census ci-deploy.sh
 sub server.tf '      a=$(timeout 10 getent ahosts "$h" | awk' '      a=$(timeout 10 getent ahosts pkg-containers.githubusercontent.com | awk'
 row "14 the assertion stops probing ghcr.io itself" agree server.tf
-sub server.tf "grep -qvxE '0\\.0\\.0\\.0|::'; then" "grep -qvxE '0\\.0\\.0\\.0|::|127\\.0\\.0\\.1'; then"
+sub server.tf "grep -cvxE '0\\.0\\.0\\.0|::' >/dev/null; then" "grep -cvxE '0\\.0\\.0\\.0|::|127\\.0\\.0\\.1' >/dev/null; then"
 row "15 the assertion accepts 127.0.0.1 as the sinkhole" agree server.tf
 sub server.tf $'resource "terraform_data" "zot_consumer_probe_install" {\n' $'resource "terraform_data" "zot_consumer_probe_install" {\n  count = 0\n'
 row "16 count = 0 on web-1's deny route" wiring server.tf
