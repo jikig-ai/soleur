@@ -19,13 +19,13 @@ const ROWS = [
     department: "legal",
     status: "completed",
     label: "Done",
-    line: "Draft terms and privacy notice changes ready for your review.",
+    line: "Draft terms and privacy notice changes, for review by you and a qualified lawyer.",
   },
   {
     department: "marketing",
     status: "completed",
     label: "Done",
-    line: "Launch post and customer email drafted.",
+    line: "Launch post and customer email drafted for your approval.",
   },
   {
     department: "finance",
@@ -52,15 +52,15 @@ export default function () {
   return {
     label: "How a brief reaches the departments",
     tag: "Illustrative example · sample data",
-    heading: "One brief reaches the departments it concerns. You keep the final say.",
+    heading: "Example: one brief reaches the departments it concerns, and you keep the final say.",
     figureName:
-      "Illustrative example: one founder brief and the status each of four departments reports back",
+      "Illustrative example with sample data: one founder brief and the status each of four departments reports back",
     briefEyebrow: "Founder brief",
     briefText:
-      "Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.",
+      "A small software company is adding shared reminders to its app. Launch it to current customers as a paid add-on.",
     captionLines: [
-      "Illustrative example with sample data. Not a live run or a customer result.",
-      "Soleur pauses for your approval; it does not guarantee any check will pass.",
+      "Illustrative example with sample data. Not a live run, a product screenshot or a customer result.",
+      "Agent output is a draft for you to review and approve. Soleur does not guarantee that any test or review will catch every problem.",
     ],
     linkText: "See every department below",
     rows: ROWS.map((r) => ({ ...r, name: nameByKey.get(r.department) })),

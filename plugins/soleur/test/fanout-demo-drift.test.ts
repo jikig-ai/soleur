@@ -292,17 +292,17 @@ describe("built homepage: the section", () => {
     const section = fanoutSection(HOME);
     const text = collapse(plainText(section));
     expect(text.toLowerCase()).toContain("how a brief reaches the departments");
-    expect(text).toContain("One brief reaches the departments it concerns. You keep the final say.");
+    expect(text).toContain("Example: one brief reaches the departments it concerns, and you keep the final say.");
     expect(text).toContain("Founder brief");
     expect(text).toContain(
-      "Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.",
+      "A small software company is adding shared reminders to its app. Launch it to current customers as a paid add-on.",
     );
     expect(text).toContain("See every department below");
     const figure = figureOf(section);
     expect(collapse(plainText(figure))).toContain("Illustrative example · sample data");
     const cap = figure.match(/<figcaption[\s\S]*?<\/figcaption>/)?.[0] ?? "";
     expect(collapse(plainText(cap))).toContain(
-      "Illustrative example with sample data. Not a live run or a customer result. Soleur pauses for your approval; it does not guarantee any check will pass.",
+      "Illustrative example with sample data. Not a live run, a product screenshot or a customer result. Agent output is a draft for you to review and approve. Soleur does not guarantee that any test or review will catch every problem.",
     );
   });
 
