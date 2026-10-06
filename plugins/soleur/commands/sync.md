@@ -949,6 +949,16 @@ soleur:sync debt
 soleur:sync project
 ```
 
+## Cursor name map
+
+When a canonical skill or agent file in this repository changes, regenerate the Cursor stubs from the repository root:
+
+```bash
+bun plugins/soleur/scripts/sync-cursor-name-map.ts
+```
+
+`bun plugins/soleur/scripts/sync-cursor-name-map.ts --check` prints `cursor-name-map ok` when the committed stubs match that walk. This command does not run as part of `all`.
+
 ## Limitations
 
 - No PR analysis (requires GitHub token - deferred)
