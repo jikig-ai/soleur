@@ -795,7 +795,7 @@ describe("renderCommunityPublication", () => {
   });
 
   it("carries the handler-constant click-through lines derived from repo", () => {
-    const { digestMarkdown, issueBody } = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+    const { issueBody } = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
     // The issue body carries the links; the committed digest carries none (MD034, see below).
     expect(issueBody).toContain("https://github.com/jikig-ai/soleur/issues");
     expect(issueBody).toContain("https://github.com/jikig-ai/soleur/pulls");
