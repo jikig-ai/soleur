@@ -51,6 +51,16 @@ model {
     description "Any unauthenticated reader of the public jikig-ai/soleur GitHub repository. Receives whatever automation publishes into issue bodies and comments. Not a data subject relationship — a PUBLICATION surface, and the one egress in this model that cannot be retracted once written."
   }
 
+  // External actor — the end user of the in-app support bubble (ADR-113).
+  // Modelled because the support persona is a distinct, scope-reduced
+  // dispatch surface (its own skill allowlist, read-only sandbox, curated
+  // corpus) and the actor asking app-help questions is NOT the workspace
+  // Owner — `founder` above — even when the operator dogfoods the bubble.
+  supportUser = actor "End User (Support Chat)" {
+    #external
+    description "A product end user asking app-help questions through the in-app support bubble. Reaches a scope-reduced support persona (ADR-113): cwd pinned to the deployed plugin root, read-only sandbox, `kb-search` as the only skill, and a Bash deny that records an escalation only on genuinely out-of-scope attempts. The persona answers via Read/Grep/Glob over the curated corpus — no shell (#9559)."
+  }
+
   // External actor — an involuntary third-party data subject whose conversation
   // PII the operator captures in the beta-CRM (ADR-102 / mig 126). The operator
   // is the controller; the beta tester never touches the store directly.
@@ -474,6 +484,7 @@ model {
 
   // ---- C4 L1 (System Context) — 18 relationships -------------------------
   founder -> webapp "Interacts via browser" { technology "HTTPS" }
+  supportUser -> webapp "Asks app-help questions via the support bubble — routed to the scope-reduced support persona (ADR-113)" { technology "HTTPS" }
   founder -> grokBuild "Runs /go (local plugin CLI)" { technology "Grok Build" }
   founder -> flagsmith "Production flag and segment writes via the flag-* operator scripts, gated on a TTY ack in the founder's own terminal. This is the LEGACY TTY path (ADR-249, unchanged by ADR-264): the flag scripts feed flag_flip_audit.approval_method, whose CHECK allows only 'tty-ack' or NULL" { technology "HTTPS (Flagsmith Admin API)" }
   founder -> doppler "Approves, per exact command, an agent-run staged operator script's Doppler writes (secret copy into a container, service-token mint) at the harness approval prompt; the agent runs the read stages and prints the plan, the approval hook mints a one-time receipt the script consumes before its first write (ADR-264; resists an instruction-following agent, not a hijacked one)" { technology "Harness approval prompt + agent-run staged script" }
