@@ -15,7 +15,7 @@ Lead (neither agent — written after integration): `knowledge-base/engineering/
 
 ### 1. `isBashCommandSafe` — `git branch` contract (module `apps/web-platform/server/safe-bash.ts`)
 
-The single existing entry `^git\s+branch(?:\s+PATH_TOKEN)*$` at `safe-bash.ts:131` is REPLACED by a closed flag set plus two arms (verbatim from the plan's Fix A):
+The single existing entry `^git\s+branch(?:\s+PATH_TOKEN)*$` at `safe-bash.ts:131` is REPLACED by a closed flag set plus two arms (corrected from the plan's Fix A per PR #9570 review — shown as shipped):
 
 ```ts
 // (Review correction, PR #9570 panel: the plan's single "read-only flag"
@@ -34,12 +34,12 @@ new RegExp(String.raw`^git\s+branch(?:\s+${GIT_BRANCH_READ_FLAG})*\s*$`),
 new RegExp(String.raw`^git\s+branch(?=\s+(?:${GIT_BRANCH_READ_FLAG}\s+)*?${GIT_BRANCH_LIST_FORCE}(?=\s|$))\s+${GIT_BRANCH_READ_FLAG}(?:\s+(?:${GIT_BRANCH_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
 ```
 
-(Agent 1 keeps the plan's full comment block above the declaration; `-q` is deliberately absent from the flag set — quiet-create is a write modifier.)
+(The shipped comment block was rewritten in the fix round to record the forcing/modifier verification; `-q` remains deliberately absent from the flag set — quiet-create is a write modifier.)
 
 `isBashCommandSafe(...)` must return:
 
 - **true (allow):** `git branch`, `git branch -a`, `git branch -r`, `git branch -v`, `git branch -vv`, `git branch -av`, `git branch --list`, `git branch --list feat`, `git branch --show-current`, `git branch --merged main`, `git branch --contains HEAD~2`, `git branch --no-merged main`, `git branch --points-at HEAD`, `git branch --sort=-committerdate`, `git branch --ignore-case --list x`
-- **false (deny → review-gate):** `git branch foo`, `git branch foo main`, `git branch -d foo`, `git branch -D foo`, `git branch --delete foo`, `git branch -m a b`, `git branch -M a b`, `git branch --move a b`, `git branch -c a b`, `git branch -C a b`, `git branch --copy a b`, `git branch -f foo`, `git branch -q foo`, `git branch -u origin/main foo`, `git branch --set-upstream-to=origin/main foo`, `git branch --unset-upstream foo`, `git branch --edit-description foo`, `git branch --list -d`, `git branch --list foo -D`, `git branch --list ../x`, `git status && git branch -d x` (whole command denied), and — review-added — every display-modifier + positional create (`git branch -v foo`, `-vv`, `--verbose`, `--sort=…`, `--format=…`, `--abbrev[=n]`, `--column`, `--no-column`, `--color[=w]`, `--no-color`, `--ignore-case`, `-v foo HEAD~0`, `-i`, `-t`, `foo --list`, `-l foo`)
+- **false (deny → review-gate):** `git branch foo`, `git branch foo main`, `git branch -d foo`, `git branch -D foo`, `git branch --delete foo`, `git branch -m a b`, `git branch -M a b`, `git branch --move a b`, `git branch -c a b`, `git branch -C a b`, `git branch --copy a b`, `git branch -f foo`, `git branch -q foo`, `git branch -u origin/main foo`, `git branch --set-upstream-to=origin/main foo`, `git branch --unset-upstream foo`, `git branch --edit-description foo`, `git branch --list -d`, `git branch --list foo -D`, `git branch --list ../x`, `git status && git branch -d x` (whole command denied), and — review-added — every display-modifier + positional create (`git branch -v foo`, `-vv`, `--verbose`, `--sort=…`, `--format=…`, `--abbrev[=n]`, `--column`, `--no-column`, `--color[=w]`, `--no-color`, `--ignore-case`, `-v foo HEAD~0`, `-i`, `-t`) plus the auto-negation lookalikes (`--no-list foo`, `--no-all foo`); also denied conservatively: `foo --list` (positional before the flag run), `-l foo` (un-admitted `-l` short flag)
 
 `permission-callback-safe-bash.test.ts`: `git branch -d x` and `git branch feat-x` join the not-auto-approved list; `"git branch"` stays in SAFE_COMMANDS.
 

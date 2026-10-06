@@ -300,7 +300,7 @@ describe("#9555 — git branch read-only arms (create/delete/rename fall through
     "git branch -v --list x",
     "git branch --color=always --list x",
     "git branch --list -v x",
-    "git branch --list --sort=-date x",
+    "git branch --list --sort=-committerdate x",
     // forcing flag + positional: -a/-r fatal in git ("do not take a branch
     // name"), --show-current ignores the arg — admitted, cannot create
     "git branch -a x",
@@ -352,8 +352,10 @@ describe("#9555 — git branch read-only arms (create/delete/rename fall through
     "git branch --ignore-case foo",
     "git branch -v foo HEAD~0", // modifier + create at chosen start-point
     "git status && git branch -v x", // same, in an && segment
-    "git branch -i foo", // -i is not a read flag and does not force list mode
+    "git branch -i foo", // -i creates (it does not force list mode)
     "git branch -t x", // --track is a create-time flag
+    "git branch --no-list foo", // parse-options auto-negation of --list CREATES
+    "git branch --no-all foo", // same class — reads read-only, creates
   ];
   for (const cmd of negatives) {
     test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
@@ -367,7 +369,8 @@ describe("#9555 — git branch read-only arms (create/delete/rename fall through
   // --format would need. These hit the review-gate — annoying, never unsafe.
   const conservativeDenials = [
     "git branch --format=%(refname:short)", // parens outside PATH_TOKEN
-    "git branch foo --list", // positional arg not led by a list-mode flag
+    "git branch foo --list", // positional arg before any forcing flag
+    "git branch -l foo", // real read-only short flag, un-admitted — safe deny
   ];
   for (const cmd of conservativeDenials) {
     test(`conservative deny: isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
