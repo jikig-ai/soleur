@@ -21,6 +21,25 @@ Two confirmed live defects in scheduled cron monitors, fixed in one sweep PR:
 
 Scope note: `lane:` defaulted to `cross-domain` — no `spec.md` exists for this branch to carry a lane forward from (TR2 fail-closed default).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Acceptance Criteria, Implementation Phases (1.2, 2.3, 4.2, 4.4), Risks / Sharp Edges
+**Research agents used:** none — no Task/subagent spawn tool exists in this harness; all deepen passes (halt gates 4.6–4.12, precedent-diff, verify-the-negative, rule-id verification, quality checks) were executed inline and mechanically.
+
+### Key Improvements
+
+1. **Self-refuting AC caught:** the original AC1 (`grep -n 'no-interactive'` == 1 line) would have failed on healthy code the moment the prescribed explanatory comment spelled the flag literal — the file-wide count becomes 2. Fixed by prescribing comment phrasing that avoids the literal (the `doppler secrets set` argv is then the file's only occurrence, making the count itself an assertion) AND adding the call-site-scoped `get|delete … no-interactive` → empty check. Same fix applied to the `discoverability_test` probe and Phase 4.2.
+2. **Dead rule-id citation corrected:** `wg-use-closes-n-in-pr-body-not-title` → `wg-use-closes-n-in-pr-body-not-title-to` (verified against `AGENTS.md` index).
+3. **Literal-token hygiene generalized:** the queue-health workflow's new comments must not carry the contiguous `--jq --arg` pair, or the hygiene-block zero-count is meaningless (added to 2.3 and Sharp Edges).
+
+### New Considerations Discovered
+
+- The luks test file path (`apps/web-platform/infra/…`) matches the Phase 4.6 sensitive-path regex → the `threshold: none` scope-out bullet is REQUIRED, and is present.
+- Guard Contract lint run mechanically: `python3 scripts/lint-guard-contract.py` → green, 2 guard entries, matrices ≥3 rows each.
+- Halt gates 4.6/4.7/4.8/4.9/4.10/4.11/4.12 all pass (Scope Check: 1 unfenced section, all subsections, no unmapped/unjustified rows; PAT sweep clean; no UI surface; no new store/connection; observability 5-field schema valid with allowlisted `grep` probe verb).
+- Phase 4.45 verify-the-negative: the three load-bearing negatives in this plan were re-verified against code — stdout-vs-stderr capture in `marker_state` (:1105), token-shape guard ordering before `marker_state` (:1078 precedes :1093), zero `--jq --arg` sites outside the two in scope (repo-wide grep).
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -131,7 +150,7 @@ None — `gh issue list --label code-review --state open` bodies checked against
 
 1.1 **Update the doppler stub** (`apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh`, ~:1670). Split the `for need` loop: `-p soleur` and `-c prd_workspaces_luks_marker` stay required on every call; `--no-interactive` becomes verb-conditional — REQUIRED on `"secrets set"` (exit 64 `set missing --no-interactive` if absent) and REFUSED on `get`/`delete` (exit 64 `doppler stub: --no-interactive is a set-only flag (#9429)`). Run the suite: it must RED against the unmodified workflow (failing test first).
 
-1.2 **Edit `.github/workflows/workspaces-luks-verify.yml`** (~:1093): `marker_args=(-p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")` with a comment that `--no-interactive` is a set-only flag on the installed Doppler CLI (v3.76.6) — applied at the `set` call site only so it cannot be "uniformed" back into the shared array. Change the set call to `doppler secrets set "$W2L_MARKER_NAME" --no-interactive "${marker_args[@]}"`. `get`, the read-back `get`, and `delete --yes` keep `"${marker_args[@]}"` unchanged (preserves g3_mut anchors 3/17a/17d byte-for-byte).
+1.2 **Edit `.github/workflows/workspaces-luks-verify.yml`** (~:1093): `marker_args=(-p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")` with a comment that names the invariant WITHOUT spelling the flag literal — e.g. `# the interactive-skip flag passed on the set line below is a set-only flag on the installed Doppler CLI (v3.76.6): secrets get/delete reject it; do not fold it back into marker_args`. The literal `--no-interactive` must appear on exactly ONE line of this file — the `doppler secrets set` argv — so a whole-file `grep -c` is itself an assertion (same "deliberately absent from this file, comments included" convention the file already uses for the issue-search flag at :889-892). Change the set call to `doppler secrets set "$W2L_MARKER_NAME" --no-interactive "${marker_args[@]}"`. `get`, the read-back `get`, and `delete --yes` keep `"${marker_args[@]}"` unchanged (preserves g3_mut anchors 3/17a/17d byte-for-byte).
 
 1.3 **Diagnosability** — inside `marker_state()`, on the fault arm (after the `Could not find requested secret` check, before `return 1`), print a sanitized copy of `out` to stderr:
 
@@ -168,7 +187,7 @@ fi
 
 2.2 Re-grep the file: zero `--jq --arg` must remain; the self-close `--jq '.[].number'` (single expression, no `--arg`) is correct and stays.
 
-2.3 **Static pin** in `scripts/actions-queue-health.test.sh`: a "workflow hygiene" block asserting `grep -c -- '--jq --arg' .github/workflows/scheduled-actions-queue-health.yml` == 0 (herestring/`grep -c`, never `| grep -q` — the grep-q-pipe-guard battery arms on edited test files) and that both `File action-required` / `File probe-unavailable` step names still exist. Red row: reverting either site reds the count assertion.
+2.3 **Static pin** in `scripts/actions-queue-health.test.sh`: a "workflow hygiene" block asserting `grep -c -- '--jq --arg' .github/workflows/scheduled-actions-queue-health.yml` == 0 (herestring/`grep -c`, never `| grep -q` — the grep-q-pipe-guard battery arms on edited test files) and that both `File action-required` / `File probe-unavailable` step names still exist. Red row: reverting either site reds the count assertion. **Literal-token hygiene:** for this zero-count to be meaningful, no comment in the workflow may carry the contiguous `--jq --arg` pair either — phrase explanations as "`--jq` does not forward `--arg`" (separated tokens), matching the comment prescribed in 2.1.
 
 ### Phase 3 — #9533b: genuine-truncation predicate (test first)
 
@@ -194,9 +213,9 @@ fi
 ### Phase 4 — verify
 
 4.1 `bash scripts/actions-queue-health.test.sh` and `bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` exit 0.
-4.2 `grep -n 'no-interactive' .github/workflows/workspaces-luks-verify.yml` → exactly one hit, the `secrets set` line. `grep -c -- '--jq --arg' .github/workflows/scheduled-actions-queue-health.yml` → `0`.
+4.2 `grep -n 'no-interactive' .github/workflows/workspaces-luks-verify.yml` → exactly one hit, the `secrets set` line; `grep -nE 'doppler secrets (get|delete)[^\n]*no-interactive'` → empty. `grep -c -- '--jq --arg' .github/workflows/scheduled-actions-queue-health.yml` → `0`.
 4.3 `bash -n` on the two edited workflow `run:` bodies (the luks suite already extracts/bashes Guard 3's `marker.sh`; run the queue-health step bodies through `bash -n` after extraction, or rely on the workflow's YAML+shell review in CI).
-4.4 PR body: `Closes #9429` and `Closes #9533` in the body (not title, per `wg-use-closes-n-in-pr-body-not-title`) + `## Changelog` section; note the #9554 sibling (different files, no conflict) and that #9513/#9510/#9475 stay open.
+4.4 PR body: `Closes #9429` and `Closes #9533` in the body (not title, per `wg-use-closes-n-in-pr-body-not-title-to`) + `## Changelog` section; note the #9554 sibling (different files, no conflict) and that #9513/#9510/#9475 stay open.
 
 ## Files to Edit
 
@@ -243,7 +262,7 @@ None.
 
 ## Acceptance Criteria
 
-- [ ] AC1: `grep -n 'no-interactive' .github/workflows/workspaces-luks-verify.yml` returns exactly one line, and it is the `doppler secrets set` call; `get`/`delete` call sites carry zero occurrences.
+- [ ] AC1: `grep -n 'no-interactive' .github/workflows/workspaces-luks-verify.yml` returns exactly one line — the `doppler secrets set` argv (comments do not carry the flag literal); `grep -nE 'doppler secrets (get|delete)[^\n]*no-interactive'` returns empty.
 - [ ] AC2: `marker_state()` prints the sanitized CLI error on the fault arm; scenario S55 asserts `unable to reach the API` reaches the run log, and the suite's token-leak check (`dp.st.fixture0token`) stays green on that scenario.
 - [ ] AC3: `grep -c -- '--jq --arg' .github/workflows/scheduled-actions-queue-health.yml` prints `0`; both filing steps use `--json number,title` piped to standalone `jq --arg`.
 - [ ] AC4: `scripts/actions-queue-health.sh` UNKNOWNs only when `IP_RUN_COUNT >= MAX_IP_RUNS && IP_TOTAL > IP_RUN_COUNT`; test 19 (genuine truncation) expects UNKNOWN rc2 and 19b (7-of-8 race) expects a non-UNKNOWN verdict.
@@ -343,6 +362,7 @@ discoverability_test:
 - **`bash -n` is not a runtime check:** the stub refusal is what pins the argv shape; syntax-check alone would pass the old bug.
 - **Pipefail discipline:** no `| grep -q` readers in new code (AC7); the self-close step's existing `grep -c` style is the template.
 - **Collision bookkeeping:** no content overlap with PR #9554 (verified) and PR #9569 (docs-only today); if #9569 lands workflow edits first, expect a routine rebase — the hunks are in different steps of the same file.
+- **Literal-token hygiene (deepen-pass catch):** every count-assertion in this plan (`--no-interactive` == 1, `--jq --arg` == 0) is only meaningful if comments stay clean of the literal. The luks workflow already practices this for the issue-search flag (:889-892). A comment naming either literal inflates the count and either fails the AC on healthy code or hides a regression — phase items 1.2 and 2.3 prescribe the phrasing.
 
 ### Gate evaluations that resolved to not-applicable
 
