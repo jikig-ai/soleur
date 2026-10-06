@@ -43,7 +43,7 @@ byte-for-byte. It references #9372 (`Ref #9372`) and never closes it. The captur
 `scripts/capture-web-2-host-key.sh` on 2026-10-06T19:37:27Z; it is not re-run here.
 
 Source file (read-only input, outside the repo):
-`/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/2bc60a9e-7ca0-414d-bbcd-15a8e4f8b7c9/scratchpad/web-2-ssh-host-key.captured.pub`
+`/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/2bc60a9e-7ca0-414d-bbcd-15a8e4f8b7c9/scratchpad/web-2-ssh-host-key.captured.pub` (a session-local file outside the repo that readers cannot reproduce; the committed pin is the artifact of record)
 
 ## Research Insights
 
@@ -60,7 +60,7 @@ key agree. Nothing else in the repo hardcodes the old fingerprint or key body (g
 
 1. `web-2-ssh-host-key.pub` on main holds exactly the key captured from the replacement host.
 2. The file still parses as a valid pin at both consumer sites (HCL `local.web_2_ssh_host_key`
-   and the bash twin `write-known-hosts.sh`), and its `# fingerprint:` header equals
+   and the bash twin `.github/actions/cf-tunnel-ssh-bridge/write-known-hosts.sh`), and its `# fingerprint:` header equals
    `ssh-keygen -lf` of its key line.
 3. The PR body records the fingerprint, the capture vantage, and the weakness of the cross-check,
    so a reviewer can judge the pin without re-deriving it.
@@ -87,18 +87,35 @@ replace does NOT restore" lists the re-pin); PR #9305 (same operation, 2026-09-3
 
 - **If this lands broken, the user experiences:** nothing user-facing. A wrong or malformed pin
   makes the next web-2 deploy-pipeline apply fail closed (the HCL local errors, or the SSH
-  handshake rejects the host); web-2 keeps serving whatever it already runs.
+  handshake rejects the host). The blocked artifact is the deploy-pipeline delivery, not web-2's
+  service: `apply-deploy-pipeline-fix.yml` opens the web-2 forward and runs its end-to-end probe
+  BEFORE `terraform plan` and fails the whole job closed (its own header, and `[skip-deploy-fix-apply]`
+  skips web-1 remediation too), so a wrong pin or a dark web-2 also holds back delivery of the
+  deploy script, seccomp/apparmor profiles and webhook unit to web-1, the host that serves users.
+  web-2 itself serves nothing (weight 0).
 - **If this leaks, the user's workflow is exposed via:** no secret is in the file (it is a
   public host key). The residual risk is a pin captured from the wrong party: this capture was a
   first-sight, trust-on-first-use read of a brand-new host with no prior `known_hosts` entry, so
   it proves "this is what 204.168.189.200 presented at 19:37:27Z", not independent identity. If
-  that read had been intercepted, a later apply would run its remote-exec against the interceptor.
+  that read had been intercepted, a later apply would run its remote-exec against the interceptor
+  as root, and that same pinned connection (`terraform_data.deploy_pipeline_fix_web2`,
+  `server.tf`) delivers `/etc/webhook/hooks.json` rendered from `var.webhook_deploy_secret`, the
+  Doppler token drop-ins, the deploy scripts and sudoers. So the exposure is the deploy webhook
+  secret and root-level provisioning, not only "holds no user data". Whether web-1 shares that
+  secret is not established here and is not assumed away. The CI private key is not exposed (pubkey
+  auth signs over the session id, so a man-in-the-middle cannot replay it).
 - **Brand-survival threshold:** `aggregate pattern`
 - **Threshold decision (challengeable):** not `single-user incident` because the capture was a
   direct connection from an ADMIN_IPS egress to the public port of a server created five minutes
   earlier (no Cloudflare hop, minimal interception window), the pin fails closed on mismatch, and
-  the owner-gated re-enable of the apply workflow is where the end-to-end probe re-verifies the
-  key against the live host before anything trusts it in production.
+  Terraform's `host_key` is strict, so a mismatch is a red apply and never a trust-on-first-use
+  bypass. That control holds because the capture path (admin egress, direct) and the CI path
+  (web-1 bastion forward) differ: an interceptor on the capture path alone yields a mismatched pin
+  and a red apply. An interceptor persistent on the CI route would NOT be caught. No web-2 analogue
+  of `terraform_data.web_1_host_key_probe` exists, so the live-host check is only the paused
+  workflow's probe. Before re-enabling, the owner should take one more independent read of the
+  key (a second `ssh-keyscan` from a different egress, or the Hetzner console), which this PR does
+  not do.
 
 ## Observability
 
@@ -118,7 +135,7 @@ error_reporting:
 failure_modes:
   - mode: pin does not match the live host's key
     detection: the apply workflow's SSH handshake and end-to-end probe fail closed once the workflow is re-enabled
-    alert_route: red workflow run, owner-visible; web-2 keeps serving what it already runs
+    alert_route: red workflow run, owner-visible; web-1 pipeline and security-profile delivery is held back until it is fixed (web-2 itself serves nothing)
   - mode: pin file malformed or header disagrees with the key line
     detection: web-2-host-key-local.test.sh (shape rows and H1) fails on the PR
     alert_route: blocking CI check on the PR
@@ -198,10 +215,15 @@ host once that workflow is re-enabled.
 
 ## apply-deploy-pipeline-fix.yml stays paused
 
-`apply-deploy-pipeline-fix.yml` lists this file in its push paths, but the workflow is disabled
-and stays disabled when this PR merges, so merging does not run an apply. Re-enabling it is a
-separate owner go-ahead and is not part of this PR. This PR does not dispatch, enable, or
-disable any workflow, write to Doppler, mint a token, run Terraform, or reboot anything.
+`apply-deploy-pipeline-fix.yml` lists this file in its push paths, but the workflow was disabled
+when this was written and stays disabled after this PR merges (re-check its state at merge time),
+so that workflow does not run. `apply-web-platform-infra.yml` DOES fire on the merge, because it
+triggers on any `apps/web-platform/infra/**` push. It is inert for web-2: its allow-list does not
+include `deploy_pipeline_fix_web2`, the only resource that hashes this file. Re-enabling
+`apply-deploy-pipeline-fix.yml` is a separate owner go-ahead and is not part of this PR; a wrong
+pin or a dark web-2 would make that workflow abort before its plan and hold back web-1's
+pipeline delivery. This PR does not dispatch, enable, or disable any workflow, write to Doppler,
+mint a token, run Terraform, or reboot anything.
 
 ## Scope
 
@@ -235,14 +257,16 @@ Ref #9372
       including row `H1`.
 - [ ] The three pin-referencing suites listed in Implementation step 3 pass.
 - [ ] PR body contains the fingerprint, the capture vantage, the weak-cross-check statement, and
-      the paragraph that `apply-deploy-pipeline-fix.yml` stays paused until merge and that
-      re-enabling it is a separate owner go-ahead.
+      the paragraph that `apply-deploy-pipeline-fix.yml` stays disabled after merge, that
+      `apply-web-platform-infra.yml` fires but is inert for web-2, and that re-enabling is a
+      separate owner go-ahead.
 - [ ] PR body uses `Ref #9372` and contains no `Closes`/`Fixes`/`Resolves` keyword for it
       (`gh pr view --json body --jq .body | grep -iE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #9372'`
       returns nothing).
 - [ ] Neither the PR body, the commit message, nor any changed file says web-2 is LUKS-backed,
-      reborn, or encrypted (`grep -inE 'luks|reborn|encrypt'` over the diff and PR body finds
-      only the explicit "makes no claim" sentence).
+      reborn, or encrypted (`grep -inE 'luks|reborn|encrypt'` over the pin file, the commit
+      message and the PR body finds only the explicit "makes no claim" sentence; the plan and
+      specs files legitimately name the gate and the negations).
 - [ ] No workflow dispatch/enable/disable, Doppler write, token mint, Terraform apply or reboot
       was performed in this session.
 
