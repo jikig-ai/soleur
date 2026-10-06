@@ -1972,13 +1972,15 @@
   .fanout-row {
     position: relative;
     border: 1px solid var(--color-border);
+    border-left: 2px solid var(--color-border);
     background: var(--color-bg-secondary);
     border-radius: 8px;
     padding: var(--space-3) var(--space-4);
   }
-  /* The two rows that wait on the founder carry a 2px gold left border. */
+  /* The two rows that wait on the founder carry a 2px gold left border (every row has a 2px
+     left border, so the connector lands on the same x for all four). */
   .fanout-row[data-status="waiting_for_user"],
-  .fanout-row[data-status="failed"] { border-left: 2px solid var(--color-accent); }
+  .fanout-row[data-status="failed"] { border-left-color: var(--color-accent); }
 
   .fanout-row-head {
     display: flex;
@@ -2031,16 +2033,17 @@
       background: var(--color-border-strong);
       pointer-events: none;
     }
+    /* Offsets are from the padding edge, so they add the 2px left and 1px top/bottom borders. */
     .fanout-row::before {
-      left: calc(-1 * var(--space-5));
+      left: calc(-1 * var(--space-5) - 2px);
       width: 1px;
-      top: calc(-1 * var(--fanout-gap));
-      bottom: 0;
+      top: calc(-1 * var(--fanout-gap) - 1px);
+      bottom: -1px;
     }
-    .fanout-row:first-child::before { top: calc(-1 * var(--space-5)); }
+    .fanout-row:first-child::before { top: calc(-1 * var(--space-5) - 1px); }
     .fanout-row:last-child::before { bottom: 50%; }
     .fanout-row::after {
-      left: calc(-1 * var(--space-5));
+      left: calc(-1 * var(--space-5) - 2px);
       width: var(--space-5);
       height: 1px;
       top: 50%;
@@ -2051,7 +2054,7 @@
 @media (forced-colors: active) {
   .fanout-chip { border: 1px solid CanvasText; }
   .fanout-row[data-status="waiting_for_user"],
-  .fanout-row[data-status="failed"] { border-left: 2px solid Highlight; }
+  .fanout-row[data-status="failed"] { border-left-color: Highlight; }
 }
 
 @media print {
