@@ -18,9 +18,11 @@ Operator request: "in light of our EU sovereignty play: Mistral just released th
 | Stage | Piece | Gate to start | Deliverable |
 |---|---|---|---|
 | 0 | **Hedge content** | none (now) | Honest "harness-neutral, evaluating Large 4 + Vibe" post inside the news window. No "runs on Mistral", no "EU-sovereign". |
-| 1 | **A. Vibe as 5th harness (skills-only)** | none | `Harness` union member + detector + `inherit` tier map + `plugins/soleur/vibe/INSTRUCTIONS.md`; operator dogfood + eval table before any public claim. |
-| 2 | **B. BYOK `mistral` provider spike** | Stage 1 not required; legal train required before flag-on | Provider + priced `MODEL_PRICING` row for ONE non-agentic path, behind a default-off flag. |
-| 3 | **C. Self-host open weights** | weights + licence + hardware published (~Oct 27) | Tracking issue only; re-evaluate then, fold into #6546 open-weight dogfood. |
+| 1 | **A0. Model dogfood on existing vehicles** *(added in second session)* | Mistral Studio API access | Run ML4/Devstral through Soleur on paths needing no new harness: Codex custom `model_providers` (OpenAI-compatible) and/or the #1215 Ollama+proxy BYOM path, measured with the `grok-measure.sh` classes. Produces the quality signal that gates A and B spend — inside the Oct 6→27 preview window. |
+| 2 | **A. Vibe as 5th harness (skills-only)** | none; sequencing prefers after #9608 slice-1 lands *(amended in second session)* | `Harness` union member + detector + `inherit` tier map + `plugins/soleur/vibe/INSTRUCTIONS.md`; consume the #9609 adapter checklist once Cursor's measurements stabilize it. Operator dogfood + eval table before any public claim. |
+| 3 | **B. BYOK `mistral` provider spike** | A0 not required; legal train required before flag-on | Provider + priced `MODEL_PRICING` row for ONE non-agentic path, behind a default-off flag. A bundled Soleur-paid Mistral option is a follow-up decision gated on usage data *(session 2)*. |
+| 4 | **C1. Small-class self-host dogfood** *(added in second session)* | GPU host spend ack (ADR-120 gate) | Devstral Small 2 (24B, weights already released, Apache-2.0) or Mistral Small 4 (119B MoE) on a single GPU — GEX44-class runbook shape; NOT gated on the ML4 drop. |
+| 5 | **C2. ML4 frontier self-host** | weights + licence + hardware published (~Oct 27) | Tracking issue only (#9649); re-evaluate then, fold into #6546 open-weight dogfood. 1T params = multi-GPU; beyond the GEX44 class. |
 
 ## Verified facts (2026-10-06)
 
@@ -44,10 +46,11 @@ Tagged user-brand-critical (auto, #5175). CPO + CLO + CTO mandatory; CMO added (
 
 Staged by gate, not one big PR. Each stage has a different blocker (none / legal / upstream weights), so coupling them would let the slowest gate hold the fastest value, and the news window decays within days.
 
+- **A0 before the adapter** *(second-session reorder, operator-chosen)*: the model can be dogfooded today through vehicles Soleur already has — Codex's custom `model_providers` (OpenAI-compatible) or the #1215 Ollama+proxy BYOM path — so the first quality signal lands inside the preview window without waiting on a fifth-harness build. The adapter then gets built against real eval data instead of a guess.
 - **A skills-only first** because Vibe reads `SKILL.md` and `AGENTS.md` natively (no copied tree, so ADR-245's generator rule is not tripped). It mirrors Codex's first version (ADR-215). Agents (~70) are NOT ported in v1: skills that fan out to agents run each role sequentially inline with a disclosed `sequential-fallback` (Devin cloud precedent). Hooks/guardrails are unsupported on Vibe and the harness README must say so.
 - **B behind a default-off flag** so code and the `MODEL_PRICING` row can land while the CLO's lockstep legal train (DPA, privacy policy, DPD, GDPR policy, T&C §3a.5, Art. 30 PA-22/PA-23 + vendor row, compliance-posture row, attestation) lands in the same PR train; flag flips only after those merge.
 - **Hedge content decoupled from the build** (decouple-from-news-window pattern): ship the honest "evaluating" post now; the "runs on Mistral" claim waits for A's eval table.
-- **C is a tracking issue only:** 1T params means multi-GPU H100-class nodes; the 20 GB GEX44 from #6546 cannot host it; licence and hardware are unpublished.
+- **C splits in two** *(amended in second session)*: C1 small-class self-host (Devstral Small 2 / Mistral Small 4 — single GPU, GEX44-class runbook shape, operator-spend gate) is a live dogfood stage since those weights already exist; C2 is the ML4 tracking issue only — 1T params means multi-GPU H100-class nodes, and licence + hardware are unpublished.
 
 ## Key Decisions
 
@@ -60,6 +63,11 @@ Staged by gate, not one big PR. Each stage has a different blocker (none / legal
 | Tier map | Vibe ships `inherit` for all tiers | Mistral SKUs/tier semantics unmeasured; add real map after eval |
 | Public claims | None beyond "evaluating" until A's eval + B's legal train | CMO/CLO: "EU-sovereign" contradicts today's legal docs (Stripe, Resend, Doppler, GitHub, Anthropic are US) |
 | Staging order | Not asked of the operator — dependency-forced | Technical fork resolved by gates |
+| Dogfood ordering *(session 2)* | Model before harness | Operator chose: cheapest quality signal inside the Oct 6→27 preview window via existing vehicles; the adapter is then built against eval data |
+| Self-host scope *(session 2)* | Small-class only | Devstral Small 2 / Mistral Small 4 single-GPU dogfood is in scope (weights already released); ML4 (1T) self-host stays a tracking issue |
+| Customer shape *(session 2)* | BYOK first; bundled later | Soleur stays out of the contract path until post-dogfood usage data exists; bundled keys = follow-up decision |
+| Harness sequencing *(session 2)* | Vibe consumes the #9609 checklist | #9609 defers the adapter checklist until #9608 (Cursor) slice-1 measures which rows are stable — Vibe is its second consumer |
+| Productize Candidate | `model-dogfood` eval skill | Two new-adapter/provider evaluations in one day (Cursor AM, Mistral PM); the grok-measure.sh classes want a vendor-neutral wrapper — follow-up issue |
 
 ## Non-Goals
 
@@ -72,7 +80,7 @@ Staged by gate, not one big PR. Each stage has a different blocker (none / legal
 ## Open Questions
 
 - ML4 weights **licence** and **hardware requirements** (blocks C; read the LICENSE/AUP live before any pull — Medium 3.5's "modified MIT" reportedly has a revenue cap, unverified).
-- Is the ML4 API OpenAI- or Anthropic-compatible? (Decides whether B can reuse an existing seam or needs a new client.)
+- Is the ML4 API OpenAI- or Anthropic-compatible? (Decides whether B can reuse an existing seam or needs a new client; also gates A0's Codex `model_providers` path — session 2.)
 - Vibe detection env markers: repo-research guessed `VIBE_HOME`/`VIBE_ROOT` — **unmeasured**; must be measured on a real Vibe install before the detector ships.
 - Does Vibe `pre_tool` hook support blocking a call? (Decides whether any guardrail is portable.)
 - Do Soleur skills run unmodified in Vibe (frontmatter fields such as `allowed-tools`)? Measure.
@@ -115,6 +123,7 @@ Staged by gate, not one big PR. Each stage has a different blocker (none / legal
 ## Session Errors
 
 - repo-research reported a `cursor` member in the `Harness` union and invented `VIBE_*` env markers and "TOML skills"; all three were wrong (union read directly; Vibe skills are `SKILL.md`). File counts 51/44 were re-derived as 49/42. Orchestrator re-derived before writing this doc.
+- **Session 2 (same day, ~17:50Z):** a parallel `/soleur:go` → brainstorm session on the same free-prose input did not see this worktree's artifacts — the Phase 1.1 prior-art `find` only scans the current tree, so a same-topic brainstorm in a sibling worktree was invisible until `worktree-manager.sh feature` collided on the remote namespace. That session's domain-leader + research fan-out was also refused by a free-model rate limit; the session-2 assessments above are orchestrator-synthesized. Operator-chosen outcome: amend this doc rather than keep a parallel `feat-mistral-support` worktree (removed).
 
 ## Tracking
 

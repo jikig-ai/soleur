@@ -14,24 +14,29 @@ Soleur has no Mistral support. The operator wants Soleur users to be able to use
 
 ## Goals
 
-- G1: Soleur plugin runs in Mistral Vibe as a fifth harness (skills-only v1), proven by a measured eval table.
-- G2: A BYOK `mistral` provider exists on one non-agentic path behind a default-off flag, priced so BYOK caps cannot bill $0.
+- G0 *(added in second session)*: Mistral models (ML4 preview API and/or Devstral) are dogfooded through vehicles that need no new harness — Codex custom `model_providers` (OpenAI-compatible) and/or the #1215 Ollama+proxy BYOM path — measured with the `grok-measure.sh` classes inside the Oct 6→27 preview window.
+- G1: Soleur plugin runs in Mistral Vibe as a fifth harness (skills-only v1), proven by a measured eval table; sequencing prefers after #9608's slice-1 lands so the #9609 adapter checklist is stable.
+- G2: A BYOK `mistral` provider exists on one non-agentic path behind a default-off flag, priced so BYOK caps cannot bill $0. A bundled Soleur-paid option is a follow-up decision gated on usage data.
 - G3: An honest "harness-neutral, evaluating Mistral" content piece ships inside the news window.
-- G4: Self-hosting open weights is tracked with explicit re-evaluation criteria.
+- G4 *(amended in second session)*: Small-class self-host (Devstral Small 2 / Mistral Small 4, single GPU, GEX44-class runbook shape, operator-spend gate) is a live dogfood stage; ML4 frontier self-host stays a tracked re-evaluation item.
 
 ## Non-Goals
 
 - Hosted Concierge on Mistral (replacing the Claude Agent SDK) — parked with #6547's criteria.
-- Self-hosting ML4 now.
+- Self-hosting ML4 now (small-class models — Devstral Small 2, Mistral Small 4 — are IN scope per G4).
 - "EU-sovereign", "data never leaves the EU", "GDPR-compliant Mistral", or Claude-parity claims.
 - Porting Claude hook guardrails to Vibe in v1.
 - Generating Vibe TOML agents in v1 (follow-up).
 
 ## Functional Requirements
 
+### FR0 *(added in second session)*: Model dogfood via existing vehicles
+
+Before any adapter work, run Mistral models through Soleur on paths needing no new harness: (a) Codex custom `model_providers` pointing at the Mistral API (verify its OpenAI-compatibility first — Open Questions), and/or (b) the #1215 Ollama+`claude-code-proxy` BYOM path. Measure with the `grok-measure.sh` dogfood classes; publish the eval table on #9648. This signal gates FR1/FR3 spend.
+
 ### FR1: Vibe harness (skills-only)
 
-Add `vibe` to the `Harness` union with a detector, `harness.ts` adapter functions, `plugins/soleur/vibe/INSTRUCTIONS.md`, and an `inherit` tier map. Skills load via Vibe's native `.agents/skills`/`SKILL.md`; no hand-copied tree (ADR-245). Skills that fan out to agents run sequentially inline with a disclosed `Reviewed-Coverage: sequential-fallback`. The harness README states hooks/guardrails are unsupported.
+Add `vibe` to the `Harness` union with a detector, `harness.ts` adapter functions, `plugins/soleur/vibe/INSTRUCTIONS.md`, and an `inherit` tier map. Skills load via Vibe's native `.agents/skills`/`SKILL.md`; no hand-copied tree (ADR-245). Skills that fan out to agents run sequentially inline with a disclosed `Reviewed-Coverage: sequential-fallback`. The harness README states hooks/guardrails are unsupported. The adapter consumes the #9609 new-harness checklist once #9608 (Cursor) slice-1 measures which rows are stable — Vibe is its second consumer *(second session)*.
 
 ### FR2: Vibe eval and dogfood
 
@@ -51,7 +56,7 @@ CMO-owned post/thread: harness-neutral, evaluating Large 4 + Vibe, sovereignty f
 
 ### FR6: Deferred tracking
 
-Issues for: C self-host (re-evaluate when weights + licence + hardware publish; fold into #6546), Vibe TOML agent generator, Vibe hook portability, `sovereignty` demand validation (business-validator + 4.2 interviews).
+Issues for: C2 ML4 self-host (re-evaluate when weights + licence + hardware publish; fold into #6546; #9649), Vibe TOML agent generator + hook portability (#9650), `sovereignty` demand validation (business-validator + 4.2 interviews; #9651), bundled Soleur-paid Mistral keys (post-usage-data decision — session 2), `model-dogfood` vendor-neutral eval skill (productize candidate — session 2). C1 small-class self-host is a LIVE stage, not deferred.
 
 ## Technical Requirements
 
