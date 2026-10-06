@@ -473,6 +473,11 @@ never appears still FAILs loudly: `BLOCK=1` unchanged.
   list (harness-only diffs exercising themselves would make every
   release pay the ~10min Playwright install for a machinery change).
 - **NFR:** no nfr-register impact — CI machinery only.
+- **Encryption posture (deepen §4.10 evaluation):** introduces NO new
+  persistent store and NO new cross-component connection — the
+  `supabase.rpc` probe and `page.request.get` both ride pre-existing
+  authenticated surfaces (the minted synthetic-user session and the
+  injected browser context respectively). Section not required.
 
 ## User-Brand Impact
 
