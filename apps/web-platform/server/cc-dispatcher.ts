@@ -62,7 +62,7 @@ import {
   type DispatchEvents,
   type WorkflowEnd,
 } from "./soleur-go-runner";
-import { readCcCostCaps } from "./cc-cost-caps";
+import { readCcCostCaps, readCcManagedWarnCap } from "./cc-cost-caps";
 import { checkpointInflightWorkForConversation } from "./inflight-checkpoint";
 import {
   WORKFLOW_END_USER_MESSAGES,
@@ -1757,6 +1757,14 @@ export const realSdkQueryFactory: QueryFactory = async (
     // when enabled+permitted; otherwise the api_key (feat-operator-cc-oauth).
     const credential = await lease.getAgentCredential();
 
+    // feat-cc-cap-raise-resume (#9565) closure-capture: publish the
+    // credential provenance to the runner BEFORE the lease scope closes —
+    // same bridge shape as setDelegationContext above. `oauth_token` =
+    // managed session (per-conversation cap not enforced); `api_key` =
+    // BYOK (cap enforced, resumable). Keys on lease provenance only,
+    // never user-controlled input.
+    args.setAuthScheme?.(credential.scheme);
+
     // ADR-113 — resolve the execution mode ONCE from the required persona. Drives
     // the repo-lifecycle skip (below), the cwd, and the sandbox write-set. A
     // garbage/cast persona throws here (never silently falls through to the repo
@@ -3134,6 +3142,9 @@ export function getSoleurGoRunner(
     // `activeQueries.delete`. See `handleCcCloseQuery`.
     onCloseQuery: handleCcCloseQuery,
     defaultCostCaps: readCcCostCaps(),
+    // feat-cc-cap-raise-resume — telemetry-only soft-warn for managed
+    // (oauth_token) sessions; enforcement is skipped for them entirely.
+    managedWarnCapUsd: readCcManagedWarnCap(),
   });
   return _runner;
 }
@@ -3239,6 +3250,20 @@ export interface DispatchSoleurGoArgs {
    * on the stale-clear path.
    */
   onSessionIdPersisted?: (sessionId: string | null) => void;
+  /**
+   * feat-cc-cap-raise-resume (#9565) — persisted per-conversation cap
+   * override read from `conversations.cc_cost_cap_usd` by the ws-handler's
+   * chat-case SELECT. Seeded into `ActiveQuery.costCapOverrideUsd`; takes
+   * precedence over the env-derived workflow/default cap.
+   */
+  costCapOverrideUsd?: number | null;
+  /**
+   * feat-cc-cap-raise-resume — writer for the raise path. The ws-handler
+   * impl UPDATEs `conversations.cc_cost_cap_usd` and refreshes its
+   * session cache so the next turn reads the new value without a
+   * DB round-trip.
+   */
+  persistCostCapOverride?: (usd: number) => Promise<void>;
 }
 
 /**
@@ -4408,13 +4433,16 @@ export async function dispatchSoleurGo(
         }
       }
       // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
-      // (clears streams, disables input). Emitting it for RECOVERABLE
-      // runner states (cost_ceiling, runner_runaway) would break
-      // "user retries on next turn" UX. Stage 3 adds a dedicated
-      // `workflow_ended` event; until then, route terminal statuses
-      // to `session_ended` and recoverable statuses to a structured
-      // error the client can surface without tearing down the
-      // conversation.
+      // (clears streams, disables input). Recoverable runner states
+      // (cost_ceiling, runner_runaway) route to a structured error the
+      // client can surface without tearing down the conversation.
+      // feat-cc-cap-raise-resume (#9565): on the interactive-prompt
+      // path, `cost_ceiling` no longer reaches this switch at all —
+      // the runner emits an `ask_user` raise prompt and keeps the
+      // Query open instead. This branch remains the fallback when the
+      // prompt machinery is absent (non-WS contexts, registry full).
+      // Stage 3 adds a dedicated `workflow_ended` event; until then,
+      // terminal statuses → `session_ended`, recoverable → error frame.
       if (TERMINAL_WORKFLOW_END_STATUSES.has(end.status)) {
         sendToClient(userId, {
           type: "session_ended",
@@ -4704,6 +4732,11 @@ export async function dispatchSoleurGo(
     // command_stream emit gate (onToolUse/onToolResult) knows whether the
     // workspace is autonomous.
     setBashAutonomous,
+    // feat-cc-cap-raise-resume — persisted per-conversation cap
+    // override + its write-back sink (the ws-handler reads the column
+    // and writes raises; both land on ActiveQuery).
+    costCapOverrideUsd: args.costCapOverrideUsd,
+    persistCostCapOverride: args.persistCostCapOverride,
     // 2026-05-06 Bug A1 fix — thread workspacePath through so the
     // runner builds the system prompt with workspace-absolute Read
     // instructions. Falls back to the locally-resolved value (set by
@@ -4747,6 +4780,22 @@ export function handleInteractivePromptResponseCase(args: {
     payload,
     deliverToolResult: ({ conversationId, toolUseId, content }) => {
       runner.respondToToolUse({ conversationId, toolUseId, content });
+    },
+    // feat-cc-cap-raise-resume (#9565) — sentinel `cost-cap:` records
+    // route to the runner's raise/decline path (no SDK tool_use exists).
+    // A false return = stale option / unknown conversation; the record
+    // was already consumed, so tell the user honestly rather than
+    // silently succeeding.
+    deliverCostCapResponse: ({ conversationId, response }) => {
+      const ok = runner.applyCostCapRaise({ conversationId, response });
+      if (!ok) {
+        sendToClient(userId, {
+          type: "error",
+          message:
+            "That cap option is no longer valid — send a message to re-check the current cap.",
+          errorCode: "interactive_prompt_rejected",
+        });
+      }
     },
   });
 
