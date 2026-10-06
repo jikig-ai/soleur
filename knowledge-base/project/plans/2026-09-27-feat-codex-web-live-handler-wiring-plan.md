@@ -67,6 +67,17 @@ The resumed fix also covers these concrete failure modes:
   reducer updates. The cross-tab narration case in `ws-boundary.test.tsx`
   pins this boundary. These are preserved source controls and inspected test
   definitions, not live qualification.
+- An authenticated member views one conversation while another emits a
+  `task_completed` frame. Advancing the mounted chat's replay cursor with the
+  foreign sequence could silently drop its later answer text; mounting the
+  foreign completion card could mark another conversation's `inbox_item.read_at`
+  read. `ws-client.ts` rejects a foreign conversation before cursor advancement
+  and again before reducer/card dispatch. `TaskCompletedCard` marks read only
+  after mounting, and the foreign-frame regressions in
+  `task-completed-inline.test.tsx` pin the boundary. Codex's terminal dispatch
+  does not invoke `notifyTaskCompleted`; completion-card/inbox parity for Codex
+  remains an unqualified Web integration boundary, with Codex default-off until
+  qualification. Upstream's two-Claude-lineage coverage is not Codex evidence.
 - An authenticated member stops a turn or loses the socket while
   `liveNarration` and `activity[]` are populated. Stale activity could claim
   work continues after it ends. `ws-client.ts`'s reducer clears narration on

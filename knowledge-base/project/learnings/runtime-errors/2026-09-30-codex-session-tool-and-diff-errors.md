@@ -569,3 +569,11 @@ is not a completed lint check of those files.
 - The repository Markdown invoker explicitly excludes `knowledge-base/project/` and
   reported no files in scope for the evidence guide, even after staging. This is
   a lint-scope result, not a Markdown lint pass for that guide.
+- Commit and CI-monitor probes also needed the specific worktree-index/network
+  escalation. Stop the task's denied monitor before keeping the permitted one;
+  locate its PID with an anchored process command pattern. An unanchored process
+  search matched the sandbox wrapper's long command and truncated output. The
+  scoped impact agent also guessed a nonexistent conversation-engine filename;
+  `rg --files` discovery corrected that read. GitHub's push-time dependency
+  advisory was verified against 11 existing open Dependabot alerts on main;
+  it is tracked upstream state, not a new evidence-document finding.
