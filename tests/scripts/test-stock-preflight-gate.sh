@@ -1056,7 +1056,7 @@ SUITE_DONE=1
 # cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=367
+MIN_ASSERTIONS=369
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2
