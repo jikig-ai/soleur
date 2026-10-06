@@ -126,7 +126,7 @@ the absence of the credential. For `cron-community-monitor` this means:
    Review found the pipeline ran git in a directory the agent had written to, so exact mode also: **(i)** passes
    `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null` on every git invocation the module
    makes (`GIT_HARDENING_ARGS`), with replace refs disabled (`--no-replace-objects`); **(ii)** sanitises `.git` before the first git command (`sanitizeWorkspaceGit`): the config is
-   rewritten from nothing and only `remote.origin.url` (written by `setOriginToken` after the child exited) carries over,
+   rewritten from nothing and only `remote.origin.url` (written by `setOriginToken` after the child exited, which itself refuses a symlinked `.git`/`.git/config`) carries over, and only if the key has EXACTLY one value (a planted second `url` line, which `--get` would read as the last value, is refused),
    `.git/hooks`, `.git/info/attributes`, `refs/replace/*`, `commondir`, `objects/info/alternates` and `info/grafts` are removed (round 1: git also reads these from the common dir and object store), and a `.git`, `.git/config`, `.git/info`, `.git/hooks` or `.git/objects` that is a symlink or a file is refused; **(iii)** stages
    each path as a filter-free blob (`hash-object --no-filters` + `update-index`, never `git add`) and refuses anything but a
    regular file; **(iv)** takes `expectedContent` (path to the handler's rendered bytes) and, after staging and before the

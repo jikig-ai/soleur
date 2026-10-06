@@ -6,7 +6,7 @@ import {
 } from "@/server/cron-filing-deny-marker";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -1149,6 +1149,17 @@ export async function setupEphemeralWorkspace(args: {
 // digest commit and push) authenticate with it. Never logs the URL; the token is
 // redacted out of any thrown git stderr (git echoes the remote on some failures).
 export async function setOriginToken(spawnCwd: string, token: string): Promise<void> {
+  // Refuse to write the WRITE token through a symlink the agent planted (security
+  // round-2 F4): `git remote set-url` follows a symlinked `.git/config`.
+  for (const rel of [".git", ".git/config"]) {
+    let linked = false;
+    try {
+      linked = (await lstat(join(spawnCwd, rel))).isSymbolicLink();
+    } catch {
+      linked = false; // absent: git will report it
+    }
+    if (linked) throw new Error("git remote set-url origin refused: a symlinked git entry");
+  }
   const res = await spawnSimple(
     "git",
     ["remote", "set-url", "origin", buildAuthenticatedCloneUrl(token)],

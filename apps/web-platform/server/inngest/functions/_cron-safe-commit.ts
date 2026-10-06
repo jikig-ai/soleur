@@ -461,8 +461,12 @@ async function sanitizeWorkspaceGit(spawnCwd: string, git: Git): Promise<string 
   } catch {
     return "config-rewrite-failed";
   }
-  const url = await git(["config", "--local", "--get", "remote.origin.url"]);
-  const originUrl = url.ok ? url.stdout.trim() : "";
+  // `--get-all`, and EXACTLY one value: `--get` returns the LAST of a multi-valued key
+  // while `set-url` replaces only the first, so a planted second `url` line could
+  // redirect the fetch and the push (security round-2 N1).
+  const url = await git(["config", "--local", "--get-all", "remote.origin.url"]);
+  const urlLines = url.ok ? url.stdout.split("\n").filter((l) => l.trim() !== "") : [];
+  const originUrl = urlLines.length === 1 ? urlLines[0].trim() : "";
   if (!originUrl || /[\r\n]/.test(originUrl)) return "config-rewrite-failed";
   try {
     await rm(join(gitDir, "hooks"), { recursive: true, force: true });

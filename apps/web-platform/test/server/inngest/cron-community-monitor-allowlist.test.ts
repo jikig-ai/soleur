@@ -18,7 +18,7 @@
 // the builder. This file reads plugins/soleur/skills/community/scripts/*.sh, so it
 // is registered in test/repo-wide-suites.ts.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -354,6 +354,18 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
       expect(verdictWith(decide, lines, bash(withNumbers(verb))), verb).toBe("allow");
     }
+  });
+
+  it("G2-12: literal matching is CASE-SENSITIVE — an upper-cased verb, platform or router path is not the allowlisted literal", () => {
+    for (const cmd of [
+      `${ROUTER} PLATFORMS`,
+      `${ROUTER} Discord guild-info`,
+      `${ROUTER} hn mentions --query SOLEUR --limit 20`,
+      ROUTER.toUpperCase() + " platforms",
+    ]) {
+      expect(verdictWith(decide, lines, bash(cmd)), cmd).toBe("deny");
+    }
+    expect(verdictWith(decide, lines, bash(`${ROUTER} platforms`))).toBe("allow");
   });
 
   it("G2-10 (must PASS): chained `;` and `&&` literals allow, every segment position is judged, and a cron WITHOUT the directive is unaffected", () => {
@@ -772,6 +784,28 @@ describe("setOriginToken — re-pointing origin after the spawn (#7122 G2-6)", (
       expect((err as Error).message).not.toContain(WRITE_TOK);
       expect((err as Error).message).not.toContain("x-access-token");
       expect((err as Error).message).toMatch(/set-url|origin/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a symlinked .git/config (planted by the agent) is refused: the WRITE token is never written through it", async () => {
+    const dir = makeClone(READ_TOK);
+    const victim = join(dir, "victim.txt");
+    try {
+      writeFileSync(victim, "VICTIM\n");
+      rmSync(join(dir, ".git", "config"));
+      symlinkSync(victim, join(dir, ".git", "config"));
+      let err: unknown;
+      await withFixtureEnv(dir, () => setOriginToken(dir, WRITE_TOK)).catch((e) => {
+        err = e;
+      });
+      expect(err).toBeInstanceOf(Error);
+      // The refusal itself (not merely a git failure): without the guard git replaces the
+      // symlink via a lock-file rename and the call SUCCEEDS, so this message is the proof.
+      expect((err as Error).message).toMatch(/refused: a symlinked git entry/);
+      expect((err as Error).message).not.toContain(WRITE_TOK);
+      expect(readFileSync(victim, "utf-8")).toBe("VICTIM\n");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

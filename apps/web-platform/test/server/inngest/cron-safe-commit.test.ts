@@ -1838,6 +1838,66 @@ describe("safeCommitAndPr — #7122 round-1 exactPaths hardening", () => {
 
   // ---- multi-key expectedContent -----------------------------------------------------------
 
+  // ---- round-2 verification: single origin URL, required expectedContent, every symlinked entry ----
+
+  describe("round-2 verification gaps", () => {
+    it("R-10 (N1): a planted SECOND remote.origin.url is refused — neither the fetch nor the push goes there", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const evil = await bareRepo(f, "evil-remote.git");
+      await tgit(f.repo, "config", "--add", "remote.origin.url", evil);
+      const result = await runExact(f);
+      expect(failedWith(result)).toBe("integrity: config-rewrite-failed");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+      expect((await execFileP("git", ["--git-dir", evil, "for-each-ref"], { env: gitFixtureEnv(evil) })).stdout.trim()).toBe("");
+    });
+
+    it("R-11: an exactPaths run WITHOUT expectedContent is refused before anything is pushed (it has nothing to prove the commit is ours)", async () => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const none = await runExact(f, { expectedContent: undefined });
+      expect(failedWith(none)).toBe("integrity: expected-content-missing");
+      const empty = await runExact(f, { expectedContent: {} });
+      expect(failedWith(empty)).toBe("integrity: expected-content-missing");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("R-12: a resume branch whose commit RENAMES a tracked file onto the digest path is refused (rename pairing is a delete + add)", async () => {
+      const f = await makeFixture();
+      const seed = Object.keys(SEED_FILES)[0];
+      await tgit(f.repo, "checkout", "-b", BRANCH());
+      await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+      await tgit(f.repo, "mv", seed, TODAY_DIGEST);
+      await writeFile(join(f.repo, TODAY_DIGEST), DIGEST_BYTES);
+      await tgit(f.repo, "add", "--", TODAY_DIGEST);
+      await execFileP("git", ["commit", "-m", "fix(test): fixture commit"], {
+        cwd: f.repo,
+        env: { ...gitFixtureEnv(f.repo), ...SEED_ENV, ...BOT_ENV },
+      });
+      const result = await runExact(f);
+      expect(result.status).toBe("failed");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    const SYMLINK_ENTRIES: readonly string[] = [
+      "config", "info", "hooks", "objects", "objects/info", "refs", "refs/replace", "HEAD", "index", "packed-refs", "shallow",
+    ];
+    it.each(SYMLINK_ENTRIES)("R-4b: `.git/%s` as a symlink is refused and the link target is untouched", async (entry) => {
+      const f = await makeFixture();
+      await writeDigest(f);
+      const victim = join(f.root, `victim-${entry.replace(/\//g, "_")}`);
+      await writeFile(victim, "VICTIM\n");
+      const at = join(f.repo, ".git", entry);
+      await mkdir(dirname(at), { recursive: true });
+      await rm(at, { recursive: true, force: true });
+      await symlink(victim, at);
+      const result = await runExact(f);
+      expect(failedWith(result)).toBe("integrity: git-entry-symlink");
+      expect(await readFile(victim, "utf-8")).toBe("VICTIM\n");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+  });
+
   describe("expectedContent is compared for EVERY key", () => {
     const SECOND = `${DIGEST_DIR}2026-06-10-second.md`;
     const twoPaths = (f: Fixture) => ({
