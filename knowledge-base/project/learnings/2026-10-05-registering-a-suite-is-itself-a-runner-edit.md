@@ -23,7 +23,7 @@ the `AFFECTED_*_PATHS` block or `ALWAYS_ON_SUITES` entry for a suite the same di
    registrations; the trigger was the common case, not the exception.
 2. **Do not model the language; allow whole-line shapes and default to the full battery.** The tempting design is to parse the runner. The
    closed grammar models none of bash's syntax: one line shape, a closed charset (no quote, substitution, redirect, `;`, `&`, `|`), no
-   option-shaped first argument, no leading `/` or `..` in a path, `python3 -m` only `unittest|pytest`, zero removed lines, and an anchor rule (the nearest preceding non-blank, non-comment post-image line must
+   option-shaped first argument, no leading `/` and no `..` segment in a path, `python3 -m` only `unittest|pytest`, zero removed lines, and an anchor rule (the nearest preceding non-blank, non-comment post-image line must
    itself be a registration) that keeps added lines out of backslash continuations, heredocs and multi-line strings. Every miss falls toward
    the full battery, which is why the 2026-09-29 rejection ("fragile diff-content inspection") did not apply to this shape.
 3. **Text cannot see what loops and globs generate.** About half of the live registrations come from loops and `SUITE_GLOBS`, so a label

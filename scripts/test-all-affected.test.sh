@@ -209,6 +209,7 @@ s = s.replace(seam_anchor, seam_anchor + (
     '_aff_rd_root() { printf "%s" "${SANDBOX_RD_ROOT:-}"; }\n'
     '_aff_rd_diff() { [[ -n "${SANDBOX_RD_DIFF+x}" ]] || return 1; printf "%s\\n" "$SANDBOX_RD_DIFF"; }\n'
     '_aff_rd_hash() { printf "%s" "${SANDBOX_RD_HASH:-2222222}"; }\n'
+    '_aff_rd_base_hash() { printf "%s" "${SANDBOX_RD_HASH:-2222222}"; }\n'
 ), 1)
 
 # 4. Corpus trim. The arms under test exercise SELECTION — a handful of named
@@ -532,12 +533,12 @@ fi
 # H1/H2 swap in a permissive and a reject-all stub and require the table to notice.
 _rc_src="$TESTROOT/classifier.sh"
 awk '/^_aff_rd_root\(\) \{$/ { on = 1 } on { print } on && /^_aff_classify_runner_diff\(\) \{$/ { inf = 1 } inf && /^}$/ { exit }' "$RUNNER" > "$_rc_src"
-_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_rd_hash|_aff_label_map|_aff_runner_offend|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
+_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_rd_hash|_aff_rd_base_hash|_aff_label_map|_aff_runner_offend|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
 cases=$((cases + 1))
-if [[ "$_rc_defs" == "6" ]] && bash -n "$_rc_src"; then
-  pass "rc0: the classifier extracts as six functions and parses"
+if [[ "$_rc_defs" == "7" ]] && bash -n "$_rc_src"; then
+  pass "rc0: the classifier extracts as seven functions and parses"
 else
-  fail "rc0: classifier extraction found $_rc_defs of 6 functions (or it does not parse)"
+  fail "rc0: classifier extraction found $_rc_defs of 7 functions (or it does not parse)"
 fi
 
 RC_BASE_RUNNER='#!/usr/bin/env bash
@@ -706,6 +707,9 @@ m_s_cont_comment() { rc_ins "$1" 'x=1 \' '  # a note'; }
 # skip-worktree makes git diff read the INDEX blob while bash runs the file: extra bytes the diff
 # never shows (the blob-id check against the diff's `index <a>..<b>` line must refuse it).
 m_s_skipworktree() { assert_fixture_dir "$1"; m_ok_single "$1"; rc_g -C "$1" add scripts/test-all.sh; rc_g -C "$1" update-index --skip-worktree scripts/test-all.sh; printf '_hidden=1\n' >> "$1/scripts/test-all.sh"; }
+# The OTHER trigger file hidden from git (skip-worktree) never appears in the diff: its bytes must
+# still equal the merge-base blob.
+m_s_skipworktree_other() { assert_fixture_dir "$1"; m_ok_single "$1"; rc_g -C "$1" update-index --skip-worktree scripts/lib/test-affected-paths.sh; printf '_evil=1\n' >> "$1/scripts/lib/test-affected-paths.sh"; }
 m_s_idx_two_blocks_first() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_A_ONE_PATHS=(\n  "a/one.test.sh"\n)'; rc_lib_append "$1" "$RC_BLOCK"; }
 m_s_idx_two_entries_first() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' $'  "a/two"\n  "x/new"'; }
 m_ok_idx_two_blocks() { rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\n  run_suite "x/new2" bash x/new2.test.sh'; rc_lib_append "$1" "$RC_BLOCK"; rc_lib_append "$1" $'AFFECTED_X_NEW2_PATHS=(\n  "x/new2.test.sh"\n)'; }
@@ -786,6 +790,7 @@ RC_TABLE=(
   's_py_m_other|m_s_py_m_other|semantic:G2-charset|'
   's_cont_comment|m_s_cont_comment|semantic:G2-anchor|'
   's_skipworktree|m_s_skipworktree|semantic:G2-postimage|'
+  's_skipworktree_other|m_s_skipworktree_other|semantic:G2-postimage|'
   's_idx_two_blocks_first|m_s_idx_two_blocks_first|semantic:INDEX-UNBOUND|'
   's_idx_two_entries_first|m_s_idx_two_entries_first|semantic:INDEX-UNBOUND|'
   'ok_idx_two_blocks|m_ok_idx_two_blocks|registration-only:x/new,x/new2|'
@@ -845,7 +850,7 @@ rc_run_table() {
 cases=$((cases + 1))
 _rc_bad="$(RC_VERBOSE=1 rc_run_table "$_rc_src" 2>"$TESTROOT/rc-table.err")"
 # A floor on the table itself: deleting rows would otherwise read as a smaller green table.
-RC_TABLE_FLOOR=82
+RC_TABLE_FLOOR=83
 if [[ "$_rc_bad" == "0" ]] && (( ${#RC_TABLE[@]} >= RC_TABLE_FLOOR )); then
   pass "rc1: all ${#RC_TABLE[@]} classifier rows give the table's verdict (registration-only shapes pass, every semantic edit stays full)"
 else
@@ -873,8 +878,8 @@ _h2_bad="$(RC_BADLOG="$_h2_log" rc_run_table "$TESTROOT/clf-rejectall.sh" 2>/dev
 _h2_ok_rows=$(printf '%s\n' "${RC_TABLE[@]}" | grep -c '^ok_' || true)
 _h2_ok_red=$(grep -c '^ok_' "$_h2_log" || true)
 _h2_log_n=$(wc -l < "$_h2_log" | tr -d ' ')
-# The log must name exactly the rows the stub reddened (a log written unconditionally, or an empty one,
-# cannot satisfy the by-name check).
+# The log must hold one line per red row (a logger that writes nothing fails this; the by-name check
+# above is what proves WHICH rows were red).
 if (( _h2_ok_rows >= 7 )) && (( _h2_ok_red == _h2_ok_rows )) && (( _h2_log_n == _h2_bad )); then pass "H2: a reject-everything stub reddens all $_h2_ok_rows must-pass (ok_*) rows by name ($_h2_bad rows in total)"
 else fail "H2: reject-all stub reddened $_h2_ok_red of $_h2_ok_rows ok_* rows"; fi
 

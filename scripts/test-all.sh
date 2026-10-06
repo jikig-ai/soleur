@@ -2157,14 +2157,21 @@ _aff_rd_diff() {
       diff --no-color --no-ext-diff --no-textconv --no-renames --no-relative \
       --src-prefix=a/ --dst-prefix=b/ -U0 "$_b" -- scripts/test-all.sh scripts/lib/test-affected-paths.sh 2>/dev/null
 }
-# The blob id of a trigger file's RAW working-tree bytes (no clean filters). The diff text shows
-# what git believes the file holds; with `skip-worktree`, `assume-unchanged` or a clean filter that
-# differs from the bytes bash will run. Comparing this id with the diff's `index <a>..<b>` line
-# closes that differential for content the diff never shows.
+# The blob id of a trigger file's RAW working-tree bytes (no clean filters). The diff text shows what
+# git BELIEVES the file holds; with `skip-worktree`, `assume-unchanged` or a clean filter, the bytes
+# bash will run can differ from it. A file the diff shows must hash to the `index <a>..<b>` id; a
+# trigger file the diff does NOT show must hash to its merge-base blob (_aff_rd_base_hash).
 _aff_rd_hash() {
   local _r
   _r="$(_aff_rd_root)" || return 1
   env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" hash-object --no-filters -- "$1" 2>/dev/null
+}
+_aff_rd_base_hash() {
+  local _r _b
+  _r="$(_aff_rd_root)" || return 1
+  _b="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" merge-base origin/main HEAD 2>/dev/null)" || return 1
+  [[ -n "$_b" ]] || return 1
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" rev-parse "${_b}:$1" 2>/dev/null
 }
 # aff-rd-seam-end
 # The census normalisation of a registration label into its AFFECTED_<LABEL>_PATHS array name:
@@ -2196,7 +2203,7 @@ _aff_classify_runner_diff() {
   _aff_runner_index_arrays=()
   _aff_runner_index_entries=()
   _aff_runner_index_pairs=()
-  local _hfiles=() _hvals=() _hi _hv
+  local _hfiles=() _hvals=() _hi _hv _bh
   local _root _text _rc _tag _a _b _f _l _m _ok
   _root="$(_aff_rd_root)" || { _aff_runner_class=undecidable; _aff_runner_reason="no-repo-root"; return 0; }
   [[ -n "$_root" && -f "$_root/scripts/test-all.sh" ]] || { _aff_runner_class=undecidable; _aff_runner_reason="no-post-image"; return 0; }
@@ -2409,6 +2416,23 @@ _aff_classify_runner_diff() {
       return 0
     fi
     _hi=$(( _hi + 1 ))
+  done
+  # A trigger file the diff does not show must be byte-identical to its merge-base blob: a file hidden
+  # from git (skip-worktree / assume-unchanged) never appears in the diff at all.
+  for _f in scripts/test-all.sh scripts/lib/test-affected-paths.sh; do
+    _ok=0
+    for _a in ${_hfiles[@]+"${_hfiles[@]}"}; do
+      if [[ "$_a" == "$_f" ]]; then _ok=1; fi
+    done
+    if (( _ok == 1 )); then continue; fi
+    _hv="$(_aff_rd_hash "$_f")" || _hv=""
+    _bh="$(_aff_rd_base_hash "$_f")" || _bh=""
+    if [[ -z "$_hv" || "$_hv" != "$_bh" ]]; then
+      _aff_runner_class=semantic
+      _aff_runner_off_n=1
+      _aff_runner_offenders=("${_f}:0 G2-postimage")
+      return 0
+    fi
   done
   # G4: both post-images must parse. `-n` only parses; the ambient environment cannot run code.
   for _f in scripts/test-all.sh scripts/lib/test-affected-paths.sh; do
@@ -3653,8 +3677,8 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
           done
           for _aff_pair in "${_aff_runner_index_pairs[@]}"; do
             for _aff_x in ${_aff_lmap[@]+"${_aff_lmap[@]}"}; do
-              [[ "${_aff_x%%|*}" == "${_aff_pair#*|}" ]] && continue
-              if [[ "${_aff_x#*|}" == "${_aff_pair%%|*}" ]]; then
+              [[ "${_aff_x%|*}" == "${_aff_pair#*|}" ]] && continue
+              if [[ "${_aff_x##*|}" == "${_aff_pair%%|*}" ]]; then
                 _aff_uniq_bad="INDEX-ARRAY-NAME ${_aff_pair#*|}"; break 2
               fi
             done
