@@ -103,7 +103,7 @@ jobs:
             # ambiguity fails open to true. workflow_dispatch stays tenant=true
             # because the manual event has no PR merge to prove against.
             if [[ "$EVENT_NAME" == "push" ]] && \
-               bash scripts/main-push-duplicate-skip.sh tenant-integration.yml "${MERGE_SHA}" tenant-integration | grep -qx 'duplicate=true'; then
+               bash scripts/main-push-duplicate-skip.sh tenant-integration.yml "${MERGE_SHA}" tenant-integration | grep -cx 'duplicate=true' >/dev/null; then
               echo "::notice::push run is a proven duplicate of the merged PR's green run; suite skipped"
               printf 'tenant=false\n' >> "$GITHUB_OUTPUT"
             else
@@ -132,7 +132,7 @@ jobs:
           # PRs, defeating the rate-budget purpose that is the reason for #5585.
           # Route-level isolation relies on the anchored lib/supabase/ clients +
           # DB RLS policies (migrations, anchored). See ADR-032 amendment.
-          if printf '%s\n' "$CHANGED" | grep -qE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/|apps/web-platform/scripts/lint-migration-immutability|apps/web-platform/scripts/dev-ledger-parity)'; then
+          if printf '%s\n' "$CHANGED" | grep -cE '^(apps/web-platform/test/server/.*\.tenant-isolation\.test\.ts$|apps/web-platform/test/helpers/|apps/web-platform/server/|apps/web-platform/lib/supabase/|apps/web-platform/middleware\.ts$|apps/web-platform/supabase/migrations/|\.github/workflows/tenant-integration\.yml$|scripts/tenant-integration-gate-verdict\.sh$|scripts/dev-suite-mutex\.sh$|\.github/actions/dev-migration-drift-probe/|apps/web-platform/scripts/lint-migration-immutability|apps/web-platform/scripts/dev-ledger-parity)' >/dev/null; then
             printf 'tenant=true\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -588,7 +588,7 @@ jobs:
           guard_out=$(doppler run -p soleur -c dev_scheduled -- \
             bash "$GUARD_COPY" check --base "origin/$base_ref" --repo "$GITHUB_WORKSPACE" --head-branch "$HEAD_BRANCH") || guard_rc=$?
           printf '%s\n' "$guard_out"
-          if ! printf '%s\n' "$guard_out" | grep -qE '^ledger-parity: (clean|RED) \('; then
+          if ! printf '%s\n' "$guard_out" | grep -cE '^ledger-parity: (clean|RED) \(' >/dev/null; then
             echo "::error::the dev-ledger-parity guard printed no ledger-parity summary line (rc=$guard_rc) — it did not complete a measurement"
             exit 1
           fi

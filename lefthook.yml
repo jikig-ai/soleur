@@ -446,7 +446,7 @@ pre-commit:
       run: |
         bash scripts/regenerate-c4-model.sh || exit 1
         git add knowledge-base/engineering/architecture/diagrams/model.likec4.json || exit 1
-        git diff --cached --name-only | grep -qx 'knowledge-base/engineering/architecture/diagrams/c4-model.md' \
+        git diff --cached --name-only | grep -cx 'knowledge-base/engineering/architecture/diagrams/c4-model.md' >/dev/null \
           || echo "NOTE: .c4 model changed but c4-model.md was not staged — review its ## Notes prose for staleness (advisory; commit not blocked)." >&2
         exit 0
     # priority 11: runs after the priority-10 regenerators above so the linter

@@ -917,7 +917,7 @@ jobs:
           # no command substitution on the decoded bytes) so a trailing newline in the
           # rendered file is preserved — $(...) would strip it and shift the digest.
           if [[ "$console_rc" -eq 0 && -n "$b64" ]] \
-             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -q '^DOPPLER_TOKEN='; then
+             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -c '^DOPPLER_TOKEN=' >/dev/null; then
             sha="$(printf '%s' "$b64" | base64 -d 2>/dev/null | sha256sum | awk '{print $1}')"
           fi
           if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then

@@ -1131,8 +1131,8 @@ jobs:
             for i in "${!verified_names[@]}"; do
               name="${verified_names[$i]}"
               stem="${verified_stems[$i]}"
-              if printf '%s' "$body" | grep -qF -- "$name" \
-                 || printf '%s' "$body" | grep -qF -- "$stem"; then
+              if printf '%s' "$body" | grep -cF -- "$name" >/dev/null \
+                 || printf '%s' "$body" | grep -cF -- "$stem" >/dev/null; then
                 matched="$name"
                 break
               fi
@@ -1841,7 +1841,7 @@ jobs:
           fi
           patterns=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
             apps/web-platform/scripts/live-verify/trigger-paths.txt)
-          if printf '%s\n' "$files" | grep -qE -f <(printf '%s\n' "$patterns"); then
+          if printf '%s\n' "$files" | grep -cE -f <(printf '%s\n' "$patterns") >/dev/null; then
             triggered=1
           else
             triggered=0
