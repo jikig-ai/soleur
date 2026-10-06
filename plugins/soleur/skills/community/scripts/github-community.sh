@@ -7,6 +7,8 @@
 #   contributors [days]        - Active contributors in period
 #   discussions [days]         - Recent discussions (if enabled)
 #   repo-stats [days]          - Stars, forks, watchers, new stargazers
+#                                (new_stargazers_count is null when the token cannot list
+#                                 stargazers: a read-only token gets 403; see stargazers_unavailable)
 #   fetch-interactions [days]  - External user comments on issues/PRs
 #
 # Prerequisites: gh CLI authenticated
@@ -422,8 +424,14 @@ cmd_repo_stats() {
   if ! gh api "repos/${repo}/stargazers?per_page=${PER_PAGE}" \
     -H "Accept: application/vnd.github.star+json" \
     --paginate >"$star_f" 2>"$star_err"; then
-    if grep -qi 'Resource not accessible by integration' "$star_err"; then
+    # Both conjuncts: the message alone also appears behind other statuses, and a bare 403
+    # is also what a rate limit or SSO block prints. gh prints
+    # `gh: Resource not accessible by integration (HTTP 403)` on stderr (measured).
+    if grep -qi 'Resource not accessible by integration' "$star_err" && grep -q 'HTTP 403' "$star_err"; then
       star_unavailable=1
+      # Recorded in the sidecar so the HANDLER knows without trusting the model: it forces
+      # the github row to partial/auth while this warn is present (cron-community-monitor.ts).
+      _CAP_WARN="stargazers_unavailable"
       echo '[]' >"$star_f"
       echo "WARN: stargazers are not readable with this token; new_stargazers_count is null" >&2
     else
@@ -452,7 +460,7 @@ cmd_repo_stats() {
       forks_count: $repo_data.forks_count,
       watchers_count: $repo_data.watchers_count,
       subscribers_count: $repo_data.subscribers_count,
-      new_stargazers: $new,
+      new_stargazers: (if $unavailable == 1 then null else $new end),
       new_stargazers_count: (if $unavailable == 1 then null else ($new | length) end),
       stargazers_unavailable: ($unavailable == 1),
       period_days: $days

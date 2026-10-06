@@ -269,10 +269,6 @@ drops Top Contributors, Community Interactions, stargazer usernames, quotes and 
 - **Reversible.** The richer-digest options in the Decision Challenge are schema edits; Phase 5 (custody) is independently
   revertable.
 
-### Addendum 2026-10-06 (first production run)
-
-The first run on the read-only spawn token showed `github` as failed: GitHub answers `403 Resource not accessible by integration` for the stargazers list (REST and GraphQL) unless the installation token carries `contents: write`; no read-level permission unlocks it (probed one permission at a time and all together). Granting write to the spawn token would undo the point of this ADR, so `repo-stats` now treats that one response as an unavailable count (`new_stargazers_count: null`, `stargazers_unavailable: true`, exit 0) and the prompt reports `newStargazers` as 0 with github `partial` / `auth`. Any other stargazers failure is still a hard failure. Consequence: the digest's `New stargazers` value is not a measured count while the spawn token stays read-only.
-
 ## Cost Impacts
 
 None. No new vendor, tier or service; one extra installation-token mint per run.
@@ -304,3 +300,11 @@ flowchart LR
   I -. digest not landed .-> N[patch-digest-notice]
   P -. digest not landed .-> N
 ```
+
+## Addendum (2026-10-06): first production run
+
+The first run on the read-only spawn token showed `github` as failed. GitHub answers `403 Resource not accessible by integration` for the stargazers list (REST and GraphQL) unless the installation token carries `contents: write`; no read-level permission unlocks it (probed one permission at a time and all together against the live app installation). This is the contingency the Consequences section anticipated ("if the read token under-serves a collector ... narrow the claim"), realised for one metric. The narrow-the-claim fallback was not taken: custody is intact (the spawn token is still read-only, and widening it to write would defeat this ADR), only one metric is affected, and the other eight GitHub numbers are measured.
+
+Resolution: `repo-stats` treats exactly that response (the message and `HTTP 403` together; any other stargazers failure is still a hard failure) as an unavailable count: `new_stargazers_count: null`, `stargazers_unavailable: true`, exit 0, and a closed `stargazers_unavailable` warn in the collector-status sidecar. The handler, not the model, acts on that warn: a draft that reports github `collected` is forced to `partial` / `auth` with its other numbers kept, so an unmeasured `New stargazers 0` is never published as a measurement. The prompt also tells the model to do this, as a second layer. The warn is not reported to Sentry (it is a standing fact about the token, and a daily event for it would stop the signal being read).
+
+Consequence: the digest's `New stargazers` value is not a measured count while the spawn token stays read-only, and the github row carries the `partial (auth; a 0 may mean unavailable)` label on every run. Options for a later change: derive new stars from the delta in `stargazers_count` against the previous digest (no extra permission), or drop the metric from the schema.

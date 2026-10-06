@@ -274,15 +274,17 @@ describe("readCollectorStatus — hostile sidecar (#7122)", () => {
     );
     const dispatch = [...script.matchAll(/^\s{4}([a-z][a-z-]*)\)\s+cmd_/gm)].map((m) => m[1]);
     const warns = [...script.matchAll(/_CAP_WARN="([a-z_]+)"/g)].map((m) => m[1]);
-    // Non-vacuity: the script's five verbs and its one warn value are really found.
+    // Non-vacuity: the script's five verbs and its two warn values are really found.
     expect(dispatch.sort()).toEqual(["activity", "contributors", "discussions", "fetch-interactions", "repo-stats"]);
-    expect([...new Set(warns)]).toEqual(["truncated_at_per_page"]);
+    expect([...new Set(warns)].sort()).toEqual(["stargazers_unavailable", "truncated_at_per_page"]);
     for (const command of dispatch) {
-      const report = await readCollectorStatus(
-        await makeCwd([JSON.stringify({ collector: "github", command, exit: 0, cause: "", warn: warns[0] })]),
-      );
-      expect(report.records[0].command, `${command} fell out of the closed command set`).toBe(command);
-      expect(report.records[0].warn, `warn ${warns[0]} fell out of the closed warn set`).toBe(warns[0]);
+      for (const warn of new Set(warns)) {
+        const report = await readCollectorStatus(
+          await makeCwd([JSON.stringify({ collector: "github", command, exit: 0, cause: "", warn })]),
+        );
+        expect(report.records[0].command, `${command} fell out of the closed command set`).toBe(command);
+        expect(report.records[0].warn, `warn ${warn} fell out of the closed warn set`).toBe(warn);
+      }
     }
     // A verb the script does not dispatch is not echoed.
     const unknown = await readCollectorStatus(
@@ -484,16 +486,19 @@ describe("paging must not discard the digest (separation invariant)", () => {
 
 describe("repo-stats under a read-scoped installation token (#7122 postmerge)", () => {
   // GitHub answers 403 "Resource not accessible by integration" for the stargazers
-  // list unless the token carries contents:write (measured 2026-10-06). The cron
-  // deliberately spawns the collector with a read-only token, so that one response
-  // must degrade to a null count, never fail the whole repo-stats command; every other
-  // stargazers failure must still be a hard failure.
+  // list unless the token carries contents:write (measured 2026-10-06 against REST and
+  // GraphQL). The cron deliberately spawns the collector with a read-only token, so that
+  // one response must degrade to a null count, never fail the whole repo-stats command;
+  // every other stargazers failure must still be a hard failure.
   const SCRIPT = new URL(
     "../../../../../plugins/soleur/skills/community/scripts/github-community.sh",
     import.meta.url,
   ).pathname;
+  // What `gh api` really prints for the scoped-token 403 (captured 2026-10-06): the message
+  // and status on STDERR, the JSON body on stdout.
+  const REAL_GH_403 = "gh: Resource not accessible by integration (HTTP 403)";
 
-  function runRepoStats(stargazersStderr: string) {
+  function runRepoStats(stargazersStderr: string | null) {
     const dir = mkdtempSync(join(tmpdir(), "soleur-fake-gh-"));
     const statusDir = join(dir, "status");
     const gh = join(dir, "gh");
@@ -502,13 +507,19 @@ describe("repo-stats under a read-scoped installation token (#7122 postmerge)", 
       [
         "#!/usr/bin/env bash",
         'if [[ "$*" == *"/stargazers"* ]]; then',
-        `  echo '${stargazersStderr}' >&2`,
-        "  exit 1",
+        '  echo "$*" >>"$FAKE_GH_CALLS"',
+        '  if [[ -n "${FAKE_STARGAZERS_STDERR:-}" ]]; then',
+        '    echo "$FAKE_STARGAZERS_STDERR" >&2',
+        "    exit 1",
+        "  fi",
+        `  echo '[{"starred_at":"2999-01-01T00:00:00Z","user":{"login":"x"}}]'`,
+        "  exit 0",
         "fi",
         `echo '{"stargazers_count":16,"forks_count":5,"watchers_count":16,"subscribers_count":1}'`,
       ].join("\n"),
     );
     chmodSync(gh, 0o755);
+    const calls = join(dir, "calls.txt");
     try {
       const result = spawnSync("bash", [SCRIPT, "repo-stats", "1"], {
         env: {
@@ -516,37 +527,70 @@ describe("repo-stats under a read-scoped installation token (#7122 postmerge)", 
           HOME: dir,
           GITHUB_REPOSITORY: "o/r",
           SOLEUR_COLLECTOR_STATUS_DIR: statusDir,
+          FAKE_GH_CALLS: calls,
+          ...(stargazersStderr === null ? {} : { FAKE_STARGAZERS_STDERR: stargazersStderr }),
         } as unknown as NodeJS.ProcessEnv,
         encoding: "utf8",
         timeout: 20_000,
       });
-      let record = "";
+      let record: Record<string, unknown> | undefined;
       try {
-        record = readFileSync(join(statusDir, STATUS_FILE), "utf8");
+        const line = readFileSync(join(statusDir, STATUS_FILE), "utf8").trim().split("\n").pop() ?? "";
+        record = JSON.parse(line);
       } catch {
         /* no sidecar written */
       }
-      return { result, record };
+      let stargazersCalled = false;
+      try {
+        stargazersCalled = readFileSync(calls, "utf8").includes("/stargazers");
+      } catch {
+        /* never called */
+      }
+      return { result, record, stargazersCalled };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }
 
-  it("the integration-403 on stargazers exits 0 with a null count and the other counts intact", () => {
-    const { result, record } = runRepoStats('{"message":"Resource not accessible by integration","status":"403"}');
+  it("the integration-403 on stargazers exits 0 with a null count, the warn recorded and the other counts intact", () => {
+    const { result, record, stargazersCalled } = runRepoStats(REAL_GH_403);
+    expect(stargazersCalled, "the stargazers endpoint must actually be hit").toBe(true);
     expect(result.status).toBe(0);
     const out = JSON.parse(result.stdout);
     expect(out.new_stargazers_count).toBeNull();
+    expect(out.new_stargazers).toBeNull();
     expect(out.stargazers_unavailable).toBe(true);
     expect(out.stargazers_count).toBe(16);
     expect(out.forks_count).toBe(5);
-    expect(record).toContain('"exit":0');
-    expect(record).not.toContain("stargazers-fetch-failed");
+    // The handler reads this record, not the model: exit 0, no cause, the closed warn.
+    expect(record).toMatchObject({ collector: "github", command: "repo-stats", exit: 0, cause: "", warn: "stargazers_unavailable" });
+  });
+
+  it("a rate-limit 403 (a 403, but not the integration message) is still a hard failure", () => {
+    const { result, record } = runRepoStats("gh: API rate limit exceeded for installation (HTTP 403)");
+    expect(result.status).toBe(1);
+    expect(record).toMatchObject({ exit: 1, cause: "stargazers-fetch-failed" });
+  });
+
+  it("the integration message behind a NON-403 status is still a hard failure", () => {
+    const { result, record } = runRepoStats("gh: Resource not accessible by integration (HTTP 500)");
+    expect(result.status).toBe(1);
+    expect(record).toMatchObject({ exit: 1, cause: "stargazers-fetch-failed" });
   });
 
   it("any OTHER stargazers failure is still a hard failure with the closed cause", () => {
     const { result, record } = runRepoStats("HTTP 500: Server Error");
     expect(result.status).toBe(1);
-    expect(record).toContain("stargazers-fetch-failed");
+    expect(record).toMatchObject({ exit: 1, cause: "stargazers-fetch-failed" });
+    expect(result.stdout).toBe("");
+  });
+
+  it("when stargazers ARE readable the count is a number and nothing is flagged (control)", () => {
+    const { result, record } = runRepoStats(null);
+    expect(result.status).toBe(0);
+    const out = JSON.parse(result.stdout);
+    expect(out.new_stargazers_count).toBe(1);
+    expect(out.stargazers_unavailable).toBe(false);
+    expect(record?.warn).toBeUndefined();
   });
 });

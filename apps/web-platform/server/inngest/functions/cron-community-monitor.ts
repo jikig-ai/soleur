@@ -493,7 +493,15 @@ const KNOWN_COLLECTOR_CAUSES: ReadonlySet<string> = new Set([
   "sidecar-unsafe", // handler-produced (link / not a regular file)
   "sidecar-oversize", // handler-produced (over COLLECTOR_STATUS_MAX_BYTES)
 ]);
-const KNOWN_COLLECTOR_WARNS: ReadonlySet<string> = new Set(["truncated_at_per_page"]);
+// `stargazers_unavailable` is the READ-scoped token's permanent, known limit (GitHub 403s the
+// stargazers list unless the token carries contents:write). It is a fact about the token, not
+// a latent data-quality risk, so it is acted on (the github row is forced to partial/auth) but
+// never reported to Sentry: a daily event for a standing condition is what stops a signal being read.
+const STARGAZERS_UNAVAILABLE_WARN = "stargazers_unavailable";
+const KNOWN_COLLECTOR_WARNS: ReadonlySet<string> = new Set([
+  "truncated_at_per_page",
+  STARGAZERS_UNAVAILABLE_WARN,
+]);
 
 function sanitizeCollectorRecord(raw: unknown): CollectorStatusRecord {
   const r = (raw !== null && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -961,7 +969,7 @@ export async function cronCommunityMonitorHandler({
           },
         );
         collectorSignalRed = true;
-      } else if (collectorVerdict.warned.length > 0) {
+      } else if (collectorVerdict.warned.some((r) => r.warn !== STARGAZERS_UNAVAILABLE_WARN)) {
         // Truncation is latent, not present-tense: the run's data is correct,
         // but a future one may silently undercount. Reported so it is visible,
         // deliberately NOT paged -- a nightly page for a hypothetical is how a
@@ -971,6 +979,7 @@ export async function cronCommunityMonitorHandler({
         reportSilentFallback(
           new Error(
             `github collector hit a per_page cap: ${collectorVerdict.warned
+              .filter((r) => r.warn !== STARGAZERS_UNAVAILABLE_WARN)
               .map((r) => `${r.command ?? "unknown"}(${r.warn})`)
               .join("; ")}`,
           ),
@@ -978,7 +987,10 @@ export async function cronCommunityMonitorHandler({
             feature: "cron-community-monitor",
             op: "collector-status-warn",
             message: "a collector fetch returned exactly per_page items",
-            extra: { fn: "cron-community-monitor", warned: collectorVerdict.warned },
+            extra: {
+              fn: "cron-community-monitor",
+              warned: collectorVerdict.warned.filter((r) => r.warn !== STARGAZERS_UNAVAILABLE_WARN),
+            },
           },
         );
       } else if (collectorVerdict.missing) {
@@ -1059,7 +1071,14 @@ export async function cronCommunityMonitorHandler({
                 ? { status: "failed", failureCause: "script-error" }
                 : collectorVerdict.missing && githubStatus !== "disabled" && githubStatus !== "failed"
                   ? { status: "partial", failureCause: "unknown" }
-                  : undefined;
+                  : // The model is told to do this itself; the handler does not rely on it. A
+                    // `collected` github row over an unavailable stargazer count would publish
+                    // "New stargazers 0" as a measurement. The other eight numbers are real, so
+                    // they stay (keepMetrics) under the partial label.
+                    collectorVerdict.warned.some((r) => r.warn === STARGAZERS_UNAVAILABLE_WARN) &&
+                      githubStatus === "collected"
+                    ? { status: "partial", failureCause: "auth", keepMetrics: true }
+                    : undefined;
             const rendered = renderCommunityPublication(parsed.draft, {
               runDate,
               repo: `${REPO_OWNER}/${REPO_NAME}`,
