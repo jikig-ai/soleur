@@ -350,12 +350,12 @@ ADR-272 and the W1 C4 edits ship in PR 1; the W2 and W3 amendments and component
 
 ### Pre-merge (PR 1 — W1)
 
-- [ ] Phase 0 measurements recorded in `phase-0-measurements.md` with the command for each; results either confirm the plan or change it in the same PR.
-- [ ] `buildAgentSandboxConfig` returns typed `credentials.envVars` denying exactly the auth variables `buildAgentEnv` can inject; set-equality test and drift-guard test green; `STRIPE_SECRET_KEY` and `GH_TOKEN` not denied; the four absent/both/neither cases covered.
-- [ ] Live probe (or replay-canary assertion) shows `printenv ANTHROPIC_API_KEY` empty inside a hosted-style sandbox while the turn completes.
-- [ ] Fixture re-captured at SDK 0.3.284 in a baseline commit, then re-captured with the deny; `sandbox-canary-regression.test.sh` green.
-- [ ] ADR-272 written, ADR-075 pointer added, C4 edits made, and the three C4 test suites green; `adr-ordinals` check green against fresh `origin/main`.
-- [ ] Art. 30 register TOM entry added for the measured control only; no public legal document gains a security claim.
+- [x] Phase 0 measurements recorded in `phase-0-measurements.md`; results confirmed the mechanism and changed two things (OAuth token is already withheld by the CLI; the fixture cannot be re-captured, #9614).
+- [x] `buildAgentSandboxConfig` returns typed `credentials.envVars` denying exactly the auth variables `buildAgentEnv` can inject; `agent-sandbox-credential-deny.test.ts` green (set equality, deny mode, service tokens and `GH_TOKEN` not denied, read-only config too), mutation battery 7/7. Absent/both/neither cases ride the existing `agent-env*.test.ts` scheme tests.
+- [x] Live probe shows the Anthropic key absent in sandboxed Bash with the CLI turn completing (`phase-0-measurements.md`), and `sandbox-credential-deny-argv.test.ts` asserts the real SDK argv carries both `--unsetenv` pairs on every CI run; mutation battery 5/5.
+- [ ] **Amended:** the committed canary fixture is not re-captured (SDK 0.3.284's `--tmpfs <HOME>/.claude/bridge-spawn` cannot be projected; tracked in #9614). `sandbox-canary-regression.test.sh` and `sandbox-canary.test.ts` stay green in the affected gate, which is run once at exit.
+- [x] ADR-272 written, ADR-075 addendum added, C4 edge edited and `model.likec4.json` regenerated, `c4-code-syntax`, `c4-render`, `c4-count-parity` and `c4-model-freshness` green. The `adr-ordinals` check against fresh `origin/main` is re-run at ship.
+- [x] Art. 30 register TOM entry added for the measured control only; no public legal document gains a security claim.
 
 ### Pre-merge (PR 2 — W2)
 
@@ -398,6 +398,16 @@ PR bodies use `Ref #9601`, never `Closes` (the epic stays open for slices 2-3).
 - **Canary fixture capture needs Anthropic credentials** (a paid Haiku turn); it runs through the existing creds-gated path, not on a developer machine by default.
 - **Scan posture.** Born blocking (precedent #6517) but scoped to CRITICAL with a fix available, enabled only after the current image passes. A newly disclosed base-image CVE can block an unrelated push; the recovery sequence and dispatch override are the escape, and a re-run keeps the original inputs.
 - A plan whose `## User-Brand Impact` is empty fails `deepen-plan` Phase 4.6; this one is filled.
+
+## Implementation Notes — PR 1 (W1)
+
+Deviations from the plan as written, each with its reason:
+
+- **The shared constant lives in `server/agent-auth-env-vars.ts`, not in `agent-env.ts`.** `agent-runner-helpers.test.ts` mocks `@/server/agent-env` wholesale, so importing the constant from there into the sandbox config would break that suite, and the canary imports the sandbox config lazily so its graph must stay small.
+- **Phase 0 used a scripted API stand-in, not a paid turn.** No Anthropic credential was available in the shell or the dev Doppler config, and the stand-in is the better instrument anyway: it removes the model from the assertion path and puts no real key in the sandbox. Its source is `test/helpers/anthropic-stub.ts`.
+- **The canary fixture is not re-captured** (see the amended acceptance criterion and #9614). The argv-level guard is a new CI test that drives the canary's own capture function, so the property is checked on every run without the fixture.
+- **The drift test lives in `agent-sandbox-credential-deny.test.ts`**, not `agent-runner-sandbox-config.test.ts` (that file covers Sentry tagging) or `agent-runner-helpers.test.ts` (it mocks the module the new test needs real).
+- **Prompt line:** one unconditional `## Credentials` block in `agent-runner.ts`, with its test in `agent-runner-tools.test.ts`. The cc-soleur-go prompt path has no Connected Services block and is unchanged.
 
 ## Non-Goals / Deferrals
 

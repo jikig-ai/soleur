@@ -14,8 +14,10 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**Adopting — 2026-10-06.** The mechanism is measured live (below). It becomes `accepted` when the first release after PR #9599
-merges shows the canary path running the re-captured fixture without a manual step. W1 of the agent-security epic #9601.
+**Adopting — 2026-10-06.** The mechanism is measured live (below) and guarded in CI at the config and the argv level. It becomes
+`accepted` after the first release containing PR #9599 runs with hosted agent sessions starting normally (the sandbox starts
+under `failIfUnavailable`, so a rejected `credentials` block would surface as `feature=agent-sandbox` Sentry events and failed
+session starts). W1 of the agent-security epic #9601.
 
 ## Context
 
@@ -89,13 +91,20 @@ properties or different credentials:
 ## Consequences
 
 - P1 holds for the API key: a prompt-injected hosted session cannot read the owner's Anthropic key from a shell command.
-- The canary fixture (`infra/sandbox-canary-argv.json`) is a pure function of (SDK version, sandbox config), so it is re-captured
-  with this change (ADR-079). It was already stale: captured at SDK 0.3.197 against the 0.3.284 pin.
+- The deny changes the real bwrap argv: it adds `--unsetenv ANTHROPIC_API_KEY` and `--unsetenv CLAUDE_CODE_OAUTH_TOKEN`
+  (measured on SDK 0.3.284). The committed canary fixture (`infra/sandbox-canary-argv.json`) is a function of (SDK version,
+  sandbox config) and was **not** re-captured here: it was already stale (captured at SDK 0.3.197 against the 0.3.284 pin) and
+  cannot be re-captured today because the canary's projection refuses SDK 0.3.284's `--tmpfs <HOME>/.claude/bridge-spawn`
+  (#9614). The deny is guarded at the argv level without the fixture (Verification).
 - Public security claims stay unchanged until the controls are measured in production (#9603). The Art. 30 register gains a
   measured-control entry only.
 
 ## Verification
 
-`apps/web-platform/test/agent-sandbox-credential-deny.test.ts` (set equality with what `buildAgentEnv` injects, deny mode, service
-tokens not denied; mutation-checked 7/7), the re-captured canary fixture run by the creds-gated CI path, and
-`scripts/verify-agent-security-slice1.sh` as the local discoverability probe.
+- `apps/web-platform/test/agent-sandbox-credential-deny.test.ts`: the config object. Set equality with what `buildAgentEnv`
+  injects, deny mode, service tokens not denied. Mutation-checked 7/7.
+- `apps/web-platform/test/sandbox-credential-deny-argv.test.ts`: what the real SDK does with it. Drives the canary's own capture
+  function (real SDK, real config, a bwrap shim) against a scripted API stand-in and asserts the real setup argv carries
+  `--unsetenv` for each auth variable and for no service token. No credential, no bubblewrap, no model; about 3 seconds in the
+  webplat shard. If an SDK bump stops honouring `sandbox.credentials`, this reds. Mutation-checked 5/5.
+- `scripts/verify-agent-security-slice1.sh` as the local discoverability probe.

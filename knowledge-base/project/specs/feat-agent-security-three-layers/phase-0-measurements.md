@@ -27,7 +27,14 @@ With a decoy `~/.claude/.credentials.json` under the CLI's `HOME`, sandboxed Bas
 
 ## 1.1.2 — does the deny appear as `--unsetenv` in the bwrap argv?
 
-Not measured by this probe (it observes the effect, not the argv). Answered during the canary re-capture (tasks.md 2.5): the captured argv for the config with the deny is compared against the baseline capture.
+**Yes.** The repo's own in-image capture procedure (`node:22-slim`, pinned digest, `bun scripts/sandbox-canary.mjs --capture`, scripted API stand-in) was run on the parent commit and on the current tree, with a patched copy that writes the raw argv before projection. The raw bwrap setup argv differs only by two inserted pairs near the front, plus random socket names and proxy passwords the canary already normalizes:
+
+```text
+--unsetenv ANTHROPIC_API_KEY
+--unsetenv CLAUDE_CODE_OAUTH_TOKEN
+```
+
+Both runs then fail in the canary's projection step (`host_path token '/root/.claude/bridge-spawn'`): SDK 0.3.284 adds `--tmpfs <HOME>/.claude/bridge-spawn`, which the canary has no placeholder for. The committed fixture is therefore stale (captured at SDK 0.3.197) and cannot be re-captured today; that is a separate, pre-existing defect, filed as #9614. The W1 guard does not depend on the fixture: `test/sandbox-credential-deny-argv.test.ts` drives the canary's own capture function and asserts the real argv carries both `--unsetenv` pairs.
 
 ## 1.2 — customer hook-decision matrix for W2
 
