@@ -354,7 +354,7 @@ keyspace_sum() {  # prints "<keys> <expires>" or "__UNREADABLE__"
   # db line, and the sum reads a perfectly valid "0 0" — which makes T3's two population predicates
   # vacuous and lets an EMPTY store cut over and be marked done. The section header is what
   # separates "Redis answered and the store is empty" from "Redis refused to answer".
-  printf '%s\n' "$out" | grep -qi '^# Keyspace' || { printf '__UNREADABLE__'; return; }
+  printf '%s\n' "$out" | grep -ci '^# Keyspace' >/dev/null || { printf '__UNREADABLE__'; return; }
   printf '%s\n' "$out" | awk -F'[,:=]' '
     /^db[0-9]+:/ { for (i = 1; i < NF; i++) { if ($i == "keys") k += $(i+1); if ($i == "expires") e += $(i+1) } found = 1 }
     END { if (!found) { k = 0; e = 0 } printf "%d %d", k, e }'
