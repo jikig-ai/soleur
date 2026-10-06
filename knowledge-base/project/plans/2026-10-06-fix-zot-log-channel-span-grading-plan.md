@@ -37,6 +37,58 @@ enrols the script); the operator elected to fix it now rather than on re-enrollm
 
 *Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).*
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Proposed Solution (boot-source scoping, control_missing arm,
+unscopeable-leak disposition), Guard Contract (contamination row), References.
+**Research agents used:** none spawned (this process has no subagent-spawn
+capability) — verification and review were performed inline against the tree and
+live GitHub state; halt gates 4.6/4.7/4.8/4.9/4.10/4.11/4.12 all evaluated
+mechanically and pass.
+
+### Key Improvements
+
+1. Boot and boundary derive only from **host-scoped** stamped rows —
+   `SOLEUR_ZOT_LOG_DROPPED` carries `boot_id` but no `host=` (verified
+   `cloud-init-registry.yml:1573`), so letting it select `NEWEST_BOOT` would
+   re-open the "one contaminating row selects the evidence base" class.
+2. `control_missing` arm preserved ahead of boot derivation; unscopeable
+   leak-shaped rows route to exit 3 (CANNOT ESTABLISH), never a false FAIL and
+   never a silent clean.
+3. `FLOOR_ROWS` computed over the bounded span, closing a systematic
+   ~30-minute false `below_expected_floor` after every replace.
+
+### New Considerations Discovered
+
+- **Sibling collision surface mapped:** `zot-upload-ceiling-7556.sh` (enrolled,
+  live tracker #7556) and `zot-fill-rate-7341.sh` strip the envelope prefix and
+  parse the payload from `^\{time:` — any `boot_id=` inserted into the envelope
+  head breaks the enrolled probe. The chosen design makes no producer change,
+  so no collision; Alternative A records the constraint verbatim for any future
+  per-row-stamp work.
+- **`registry-host-replace-dispatch.yml` fires on rendered diff of
+  `cloud-init-registry.yml` push to main** — a template edit self-delivers via
+  a destructive replace of the sole image-pull path; another reason the
+  producer change is deferred out of this PR.
+- **Negative-claim verification (4.45):** every load-bearing "does not carry /
+  cannot supply / never selects" claim in this plan was grepped against the
+  emit lines: envelope `SOLEUR_ZOT_LOG … host=$HOST_NAME_V $clean` carries no
+  `boot_id` (line 1760); `SOLEUR_ZOT_LOG_DROPPED` carries `boot_id` but no
+  `host=` (line 1573); `SOLEUR_ZOT_LOG_BOOT` carries both (line 2635);
+  pre-delivery control rows carry no `log_shipper_*` fields (fixture
+  `control_row_predelivery`); `[0-9a-fA-F-]+` excludes the `unknown` sentinel.
+- **Precedent diff (4.4):** pattern is NOT novel — the single-awk-pass,
+  trusted-head, newest-real-boot shape has two merged precedents
+  (`zot-last-err-redact-7500.sh` PR #8272; `registry-luks-live-8386.sh`); this
+  plan's divergence is *source* of the boot (control-channel heartbeat rows,
+  since this channel's envelope carries no per-row `boot_id`), recorded as the
+  boundary-precision residual.
+- **Exit-code semantic re-check (per the wall-clock learning):** new exit 3
+  renders `CANNOT ESTABLISH` under `sweep-followthroughs.sh` — same disposition
+  as exit 2 (issue stays open) with an honest heading; the sweeper's reopen
+  path fires only on exit 1, unchanged.
+
 ## Problem Statement / Motivation
 
 Issue #8278. The probe's three evidence sources have three spans:
@@ -307,7 +359,7 @@ using the `dt` column to bind the graded set to the newest real boot:
 
 ### Phase 3 — ADR-184 addendum
 
-- Short amendment to `knowledge-base/engineering/architecture/decisions/ADR-184-*.md`:
+- Short amendment to `knowledge-base/engineering/architecture/decisions/ADR-184-registry-host-container-log-shipper.md`:
   the recorded PASS/`delivery evidence: boot_marker(1)` text at the 2026-08-12
   amendment is now historical; record the one-pass newest-boot grading shape, the
   exit-3 addition, and the retired 72h marker arm. No new ADR (the mechanism is
@@ -317,7 +369,7 @@ using the `dt` column to bind the graded set to the newest real boot:
 
 - `scripts/followthroughs/zot-log-channel-7440.sh` — the rewrite above.
 - `tests/scripts/test-zot-log-channel-probe.sh` — fixtures + new cases + floor.
-- `knowledge-base/engineering/architecture/decisions/ADR-184-*.md` — addendum.
+- `knowledge-base/engineering/architecture/decisions/ADR-184-registry-host-container-log-shipper.md` — addendum.
 
 ## Files to Create
 
@@ -502,7 +554,7 @@ in Files to Edit/Create — verified against the ui-surface term set).
 - `### ADR` — No new ADR. The mechanism (delivery proof keyed on a producer-only
   token, verdicts scoped to the newest real boot, one pass) is ADR-211's existing
   `## Decision` applied to a second channel — an application, not a new decision
-  or a divergence. `knowledge-base/engineering/architecture/decisions/ADR-184-*.md`
+  or a divergence. `knowledge-base/engineering/architecture/decisions/ADR-184-registry-host-container-log-shipper.md`
   gets a short addendum recording the new grading shape (its amendment block
   quotes the retired `boot_marker(1)` evidence verbatim).
 - `### C4 views` — **No C4 impact.** Checked `model.c4`, `views.c4`, `spec.c4`:
