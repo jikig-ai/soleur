@@ -24,6 +24,11 @@ describe("Cursor CLI plugin package", () => {
     expect(instructions).toContain("does not classify the session as `cursor`");
     expect(instructions).toContain("`.claude/settings.json` is unmeasured");
     expect(instructions).not.toContain("## Tools");
+    expect(instructions).toContain("If a canonical file tells you to call those tools, stop.");
+    expect(instructions).toContain(
+      "When `/go` or a stub names a skill, Read `plugins/soleur/skills/<name>/SKILL.md` and follow that file.",
+    );
+    expect(instructions).not.toContain("Do not follow a line that names");
   });
 
   test("go.md cursor spellings stay inside the three harness-forms regions", () => {
