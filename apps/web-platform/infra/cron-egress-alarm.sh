@@ -34,6 +34,10 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
       OPENSSL_CONF OPENSSL_MODULES OPENSSL_ENGINES LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
 # The pin's [a-z0-9] / [a-f0-9] classes are locale-defined; pin the locale.
 export LC_ALL=C
+# Token-shape guard for the Resend bearer: the key rides curl's stdin config
+# channel (never argv), so a value that could break out of the config string
+# is refused before any curl runs.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
 
 LOG_TAG="cron-egress-alarm"
 SENTRY_SLUG="cron-egress-resolve"
@@ -141,6 +145,11 @@ if ! command -v jq >/dev/null; then
   RESEND_API_KEY=""
   [[ -n "$RESEND_SKIP_REASON" ]] || RESEND_SKIP_REASON="jq"
 fi
+if [[ -n "${RESEND_API_KEY:-}" ]] && ! _bearer_ok "$RESEND_API_KEY"; then
+  log "WARNING: RESEND_API_KEY failed the token-shape guard — skipping email channel"
+  RESEND_API_KEY=""
+  RESEND_SKIP_REASON="token_shape"
+fi
 if [[ -n "${RESEND_API_KEY:-}" ]]; then
   HOSTNAME_STR="$(hostname)"
   JOURNAL_TAIL="$(journalctl -u "$FAILED_UNIT" -n 20 --no-pager 2>/dev/null | tail -c 2000 || echo '(journal unavailable)')"
@@ -157,9 +166,9 @@ $SENTRY_CHANNEL_NOTE}" \
   RESEND_RC=0
   HTTP_CODE="$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" --max-time 10 \
     -X POST "https://api.resend.com/emails" \
-    -H "Authorization: Bearer ${RESEND_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" 2>/dev/null)" || { RESEND_RC=$?; HTTP_CODE="000"; }
+    -d "$PAYLOAD" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY") 2>/dev/null)" || { RESEND_RC=$?; HTTP_CODE="000"; }
   if [[ "$HTTP_CODE" =~ ^2 ]]; then
     touch "$EMAIL_COOLDOWN_FILE" || log "WARNING: could not write the email cooldown stamp ${EMAIL_COOLDOWN_FILE} — the next fire will email again"
   else

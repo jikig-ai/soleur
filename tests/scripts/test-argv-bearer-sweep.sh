@@ -115,7 +115,7 @@ for d in "$REALBIN" "$SHIMDIR" "$SYN" "$BODIES" "$ROWS"; do
   assert_fixture_dir "$d"
   mkdir -p "$d"
 done
-for t in bash cat date grep egrep head tail jq sed tr awk sort uniq wc mktemp rm mkdir env dirname basename cut tee expr sleep readlink ls cp mv xargs true false id uname; do
+for t in bash cat date grep egrep head tail jq sed tr awk sort uniq wc mktemp rm mkdir env dirname basename cut tee expr sleep readlink ls cp mv xargs true false id uname paste openssl; do
   p="$(type -P "$t" || true)"
   [[ -n "$p" ]] && ln -s "$p" "$REALBIN/$t"
 done
@@ -162,7 +162,7 @@ apply_value() { # $1 flag, $2 value
     -D|--dump-header) dump="$2" ;;
     -d|--data|--data-binary|--data-raw|--data-urlencode)
       if [[ "$2" == "@-" ]]; then unmodelled "$1 @- (body on stdin)"; fi ;;
-    -X|--request|-m|--max-time|--connect-timeout|--max-redirs|--proto|--retry|--retry-delay|--retry-max-time|-A|--user-agent|-u|--user|-e|--referer|--noproxy) : ;;
+    -X|--request|-m|--max-time|--connect-timeout|--max-redirs|--proto|--proto-redir|--retry|--retry-delay|--retry-max-time|-A|--user-agent|-u|--user|-e|--referer|--noproxy) : ;;
     --url) urls+=("$2") ;;
     *) unmodelled "$1" ;;
   esac
@@ -175,7 +175,7 @@ while (( i < ${#args[@]} )); do
     --fail) failmode=fail ;;
     --fail-with-body) failmode=body ;;
     --*=*) apply_value "${a%%=*}" "${a#*=}" ;;
-    --header|--write-out|--output|--dump-header|--request|--data|--data-binary|--data-raw|--data-urlencode|--max-time|--connect-timeout|--max-redirs|--proto|--retry|--retry-delay|--retry-max-time|--user-agent|--user|--referer|--noproxy|--url|--config)
+    --header|--write-out|--output|--dump-header|--request|--data|--data-binary|--data-raw|--data-urlencode|--max-time|--connect-timeout|--max-redirs|--proto|--proto-redir|--retry|--retry-delay|--retry-max-time|--user-agent|--user|--referer|--noproxy|--url|--config)
       (( i < ${#args[@]} )) || unmodelled "$a (missing value)"
       apply_value "$a" "${args[i]}"; i=$((i + 1)) ;;
     --) while (( i < ${#args[@]} )); do urls+=("${args[i]}"); i=$((i + 1)); done ;;
@@ -310,7 +310,7 @@ FIXTURE_TOKEN="synthetic-fixture-token-0001"
 # run_probe <rowname> <script> [NAME=value ...]  -> RUN_RC, $ROWS/<rowname>/{stdout,stderr,shim/}
 # RUN_FLAGS (array) holds extra `bash` flags for this one call (e.g. -x). Every run is under
 # `env -i`, so the only environment a probe sees is the one spelled out here.
-RUN_RC=0; RUN_ROW=""; RUN_FLAGS=()
+RUN_RC=0; RUN_ROW=""; RUN_FLAGS=(); RUN_ARGS=(); RUN_EXTRA_PATH=""
 run_probe() {
   local name="$1" script="$2"; shift 2
   RUN_ROW="$ROWS/$name"
@@ -318,9 +318,9 @@ run_probe() {
   mkdir -p "$RUN_ROW/home" "$RUN_ROW/tmp" "$RUN_ROW/shim"
   (
     cd "$RUN_ROW" || exit 99
-    env -i PATH="$SHIMDIR:$REALBIN" HOME="$RUN_ROW/home" TMPDIR="$RUN_ROW/tmp" \
+    env -i PATH="${RUN_EXTRA_PATH:+$RUN_EXTRA_PATH:}$SHIMDIR:$REALBIN" HOME="$RUN_ROW/home" TMPDIR="$RUN_ROW/tmp" \
       SHIM_DIR="$RUN_ROW/shim" SHIM_FIXTURE_TOKEN="$FIXTURE_TOKEN" "$@" \
-      "$BASH_BIN" ${RUN_FLAGS[@]+"${RUN_FLAGS[@]}"} "$script" > "$RUN_ROW/stdout" 2> "$RUN_ROW/stderr"
+      "$BASH_BIN" ${RUN_FLAGS[@]+"${RUN_FLAGS[@]}"} "$script" ${RUN_ARGS[@]+"${RUN_ARGS[@]}"} < /dev/null > "$RUN_ROW/stdout" 2> "$RUN_ROW/stderr"
   )
   RUN_RC=$?
 }
@@ -861,6 +861,201 @@ done <<< "$DELEGATED_MANIFEST"
 echo "=== manifest: $N_DYN dynamic, $N_STATIC static-only, $N_DELEGATED delegated; population $(printf '%s\n' "$POP" | grep -c . || true) ==="
 
 # =====================================================================================
+# STAGE 3: THE LIVE-IN-APPLY INFRA SCRIPTS (#9597). Two scripts run by the push-triggered
+# infra apply carried a bearer on curl's argv; the changed transport is proven HERE, before
+# merge, by running each under the PATH-shim curl:
+#   fresh-host-boot-trail.sh   two Sentry reads (org events query + polled project read)
+#   verify-tunnel-ingress-origin.sh  two calls: the Cloudflare config read (Bearer) and the
+#                              deploy-status read (webhook HMAC + CF Access id/secret headers)
+# A failure of the second blocks the apply, so its refusal path is exercised too.
+# =====================================================================================
+INFRA_SCRIPTS="$REPO_ROOT/apps/web-platform/infra/scripts"
+FHBT="$INFRA_SCRIPTS/fresh-host-boot-trail.sh"
+VTIO="$INFRA_SCRIPTS/verify-tunnel-ingress-origin.sh"
+[[ -f "$FHBT" && -f "$VTIO" ]] || fatal "stage 3: the live-in-apply scripts are missing ($FHBT, $VTIO)"
+printf '%s' '[]' > "$BODIES/empty_array.json"
+printf '%s' '{"data":[{"timestamp":"2026-10-01T00:00:00+00:00","stage":"app_zot","host_name":"soleur-web-9","detail":"synthetic"}]}' > "$BODIES/origin_event.json"
+printf '%s' '{"success":true,"result":{"config":{"ingress":[{"hostname":"deploy.soleur.example","service":"http://10.0.1.10:9000"},{"hostname":"ssh.soleur.example","service":"ssh://10.0.1.10:22"},{"service":"http_status:404"}]}}}' > "$BODIES/cf_tunnel_cfg.json"
+
+# mutated_copy <script> <outfile> <from-literal> <to-literal>: a copy with ONE literal replaced;
+# FATAL if the literal is absent (a mutation that does not land reports the baseline, which is
+# indistinguishable from a pass).
+mutated_copy() {
+  local src="$1" out="$2" from="$3" to="$4" text
+  text="$(cat "$src"; printf x)"; text="${text%x}"
+  [[ "$text" == *"$from"* ]] || fatal "mutation did not land: '${from:0:60}...' not found in $src"
+  assert_fixture_dir "$out"
+  printf '%s' "${text/"$from"/"$to"}" > "$out"
+}
+assert_fixture_dir "$SYN"
+BEARER_FN='_bearer_ok() { local LC_ALL=C; case "${1:-}" in '"''"'|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }'
+
+# --- fresh-host-boot-trail.sh ------------------------------------------------------------------
+trail_env() { # <rowname> -> prints NAME=value args for run_probe (summary file lives in the row dir)
+  printf '%s\n' "GITHUB_STEP_SUMMARY=$ROWS/$1/summary" "WEB_HOST_KEY=web-9" "JOB_STATUS=failure" "BOOT_TRAIL_SINCE=0" "SHIM_BODY_FILE=$BODIES/empty_array.json"
+}
+mkdir -p "$ROWS/t1-origin" "$ROWS/t2-main"
+RUN_ARGS=(--image-origin web-9)
+run_probe t1-origin "$FHBT" "SENTRY_ACTIONS_RO_TOKEN=$FIXTURE_TOKEN" "SHIM_BODY_FILE=$BODIES/origin_event.json" "BOOT_TRAIL_SINCE=0"
+RUN_ARGS=()
+rc=$RUN_RC; evaluate "$RUN_ROW" 'de\.sentry\.io' 2 "$FIXTURE_TOKEN"
+if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -qF 'image-origin: stage=app_zot' "$RUN_ROW/stdout"; then
+  row "fresh-host-boot-trail --image-origin: both Sentry org reads carry the bearer on stdin only (>= 2 calls), token in no argv" ok
+else row "fresh-host-boot-trail --image-origin: both Sentry org reads carry the bearer on stdin only (>= 2 calls), token in no argv" fail "rc=$rc failed='$EV_FAILED'"; fi
+
+mapfile -t _t2env < <(trail_env t2-main)
+run_probe t2-main "$FHBT" "SENTRY_ACTIONS_RO_TOKEN=$FIXTURE_TOKEN" "${_t2env[@]}"
+rc=$RUN_RC; evaluate "$RUN_ROW" 'de\.sentry\.io' 2 "$FIXTURE_TOKEN"
+if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]]; then
+  row "fresh-host-boot-trail main flow: the polled project read AND the image-origin read carry the bearer on stdin only (>= 2 calls)" ok
+else row "fresh-host-boot-trail main flow: the polled project read AND the image-origin read carry the bearer on stdin only (>= 2 calls)" fail "rc=$rc failed='$EV_FAILED'"; fi
+if ! grep -qF '/tmp/sentry-events.json' "$FHBT"; then row "fresh-host-boot-trail: no fixed /tmp/sentry-events.json path remains (script-owned mktemp)" ok
+else row "fresh-host-boot-trail: no fixed /tmp/sentry-events.json path remains (script-owned mktemp)" fail "the fixed path is back"; fi
+
+# hostile token classes: zero calls, the skip is NAMED, the token is never echoed.
+ft_ok=1; ft_detail=""
+for cls in quote-newline-url newline-only non-ascii quote space; do
+  mkdir -p "$ROWS/t3-main-$cls" "$ROWS/t3-origin-$cls"
+  mapfile -t _e < <(trail_env "t3-main-$cls"); _e=("${_e[@]/JOB_STATUS=failure/JOB_STATUS=success}")
+  run_probe "t3-main-$cls" "$FHBT" "SENTRY_ACTIONS_RO_TOKEN=$(tok_for "$cls")" "${_e[@]}"
+  count_calls "$RUN_ROW"
+  { [[ "$RUN_RC" -eq 0 && "$EV_CALLS" -eq 0 ]] && grep -aqF 'failed the token-shape check' "$RUN_ROW/stdout" && ! grep -aq 'SYNTHMARK000' "$RUN_ROW/stdout" "$RUN_ROW/stderr" "$RUN_ROW/summary"; } \
+    || { ft_ok=0; ft_detail+=" [main/$cls rc=$RUN_RC calls=$EV_CALLS]"; }
+  mapfile -t _e < <(trail_env "t3-origin-$cls")
+  RUN_ARGS=(--image-origin web-9)
+  run_probe "t3-origin-$cls" "$FHBT" "SENTRY_ACTIONS_RO_TOKEN=$(tok_for "$cls")" "${_e[@]}"
+  RUN_ARGS=()
+  count_calls "$RUN_ROW"
+  { [[ "$RUN_RC" -eq 2 && "$EV_CALLS" -eq 0 ]] && grep -aqF 'TRANSIENT' "$RUN_ROW/stdout" && ! grep -aq 'SYNTHMARK000' "$RUN_ROW/stdout" "$RUN_ROW/stderr"; } \
+    || { ft_ok=0; ft_detail+=" [origin/$cls rc=$RUN_RC calls=$EV_CALLS]"; }
+done
+if [[ "$ft_ok" -eq 1 ]]; then row "fresh-host-boot-trail: hostile tokens (quote+newline+url, newline, non-ASCII, quote, space) make zero calls, name the skip (main: exit 0; --image-origin: TRANSIENT rc 2), never echo the token" ok
+else row "fresh-host-boot-trail: hostile tokens (quote+newline+url, newline, non-ASCII, quote, space) make zero calls, name the skip (main: exit 0; --image-origin: TRANSIENT rc 2), never echo the token" fail "$ft_detail"; fi
+for mode in env flag; do
+  if xtrace_check "$FHBT" SENTRY_ACTIONS_RO_TOKEN "t4-$mode" "$mode"; then row "fresh-host-boot-trail: refuses xtrace ($mode form): rc 78, zero calls, no token on output" ok
+  else row "fresh-host-boot-trail: refuses xtrace ($mode form): rc 78, zero calls, no token on output" fail "$XT_DETAIL"; fi
+done
+# harness + code mutations against the real script
+mapfile -t _e < <(trail_env t5-nostdin)
+run_probe t5-nostdin "$FHBT" "SENTRY_ACTIONS_RO_TOKEN=$FIXTURE_TOKEN" "${_e[@]}" SHIM_MUTATE=nostdin
+evaluate "$RUN_ROW" 'de\.sentry\.io' 2 "$FIXTURE_TOKEN"
+if has_check bearer-not-on-stdin; then row "fresh-host-boot-trail: a shim that stops recording stdin turns the row RED" ok
+else row "fresh-host-boot-trail: a shim that stops recording stdin turns the row RED" fail "failed='$EV_FAILED'"; fi
+FROM_PS='< <(printf '"'"'header = "Authorization: Bearer %s"\n'"'"' "$SENTRY_ACTIONS_RO_TOKEN")'
+mutated_copy "$FHBT" "$SYN/fhbt-argv.sh" "$FROM_PS" '-H "Authorization: Bearer $SENTRY_ACTIONS_RO_TOKEN"'
+mapfile -t _e < <(trail_env t6-argv)
+run_probe t6-argv "$SYN/fhbt-argv.sh" "SENTRY_ACTIONS_RO_TOKEN=$FIXTURE_TOKEN" "${_e[@]}"
+evaluate "$RUN_ROW" 'de\.sentry\.io' 1 "$FIXTURE_TOKEN"
+if has_check token-in-argv; then row "fresh-host-boot-trail: restoring the argv bearer on either read is RED on token-in-argv" ok
+else row "fresh-host-boot-trail: restoring the argv bearer on either read is RED on token-in-argv" fail "failed='$EV_FAILED'"; fi
+mutated_copy "$FHBT" "$SYN/fhbt-noguard.sh" "$BEARER_FN" '_bearer_ok() { return 0; }'
+mapfile -t _e < <(trail_env t7-noguard)
+run_probe t7-noguard "$SYN/fhbt-noguard.sh" "SENTRY_ACTIONS_RO_TOKEN=$(tok_for quote-newline-url)" "${_e[@]}"
+evaluate "$RUN_ROW" 'de\.sentry\.io' 1 "SYNTHMARK0001"
+if has_check injected; then row "fresh-host-boot-trail: removing the token-shape guard is RED on injected (the shim records the injected config line)" ok
+else row "fresh-host-boot-trail: removing the token-shape guard is RED on injected (the shim records the injected config line)" fail "failed='$EV_FAILED'"; fi
+
+# --- verify-tunnel-ingress-origin.sh ----------------------------------------------------------
+VT_STUBS="$TMPD/vt-stubs"; assert_fixture_dir "$VT_STUBS"; mkdir -p "$VT_STUBS"
+cat > "$VT_STUBS/doppler" <<'VT_DOPPLER'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  run) printf '"10.0.1.10"\n' ;;
+  secrets)
+    case "${3:-}" in
+      CF_API_TOKEN) printf '%s' "${VT_CF_API_TOKEN:-}" ;;
+      CF_ACCOUNT_ID) printf 'acct0001' ;;
+      APP_DOMAIN_BASE) printf 'soleur.example' ;;
+      WEBHOOK_DEPLOY_SECRET) printf 'webhook-secret-0001' ;;
+      CF_ACCESS_CLIENT_ID) printf '%s' "${VT_CF_ACCESS_ID:-cfid0001}" ;;
+      CF_ACCESS_CLIENT_SECRET) printf '%s' "${VT_CF_ACCESS_SECRET:-cfsecret0001}" ;;
+      *) exit 1 ;;
+    esac ;;
+  *) exit 1 ;;
+esac
+VT_DOPPLER
+cat > "$VT_STUBS/terraform" <<'VT_TERRAFORM'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "state show") printf '    id = "11111111-2222-3333-4444-555555555555"\n' ;;
+  *) exit 1 ;;
+esac
+VT_TERRAFORM
+sed -i "1s|.*|#!${BASH_BIN}|" "$VT_STUBS/doppler" "$VT_STUBS/terraform"
+chmod +x "$VT_STUBS/doppler" "$VT_STUBS/terraform"
+vt_run() { # <rowname> <script> [env...] -- runs under the stub set; CF token defaults to the fixture
+  local name="$1" script="$2"; shift 2
+  RUN_EXTRA_PATH="$VT_STUBS"
+  run_probe "$name" "$script" "VT_CF_API_TOKEN=$FIXTURE_TOKEN" "SHIM_BODY_FILE=$BODIES/cf_tunnel_cfg.json" SHIM_MODE=noauth "$@"
+  RUN_EXTRA_PATH=""
+}
+vt_stdin() { cat "$ROWS/$1/shim/calls/$2.stdin" 2>/dev/null; }
+# The script echoes `::add-mask::<secret>` on purpose (that is how the runner learns to mask it), so
+# "never echoed" means: not on stderr, and not on any ::error:: / ::warning:: annotation line.
+vt_leaks() { # <rowdir> <marker> -> 0 when the marker leaks outside ::add-mask::
+  local ann; ann="$(grep -aE '^::(error|warning|notice)::' "$1/stdout" "$1/stderr" || true)"
+  [[ "$ann" == *"$2"* ]] || grep -aqF -- "$2" "$1/stderr"
+}
+vt_argv_has() { local f; for f in "$ROWS/$1"/shim/calls/*.argv; do [[ -e "$f" ]] && grep -aqF -- "$2" "$f" && return 0; done; return 1; }
+
+vt_run v1-ok "$VTIO"
+v_rc=$RUN_RC; count_calls "$RUN_ROW"
+v_hmac="$(printf '' | openssl dgst -sha256 -hmac webhook-secret-0001 | sed 's/.*= //')"
+v_s1="$(vt_stdin v1-ok 1)"; v_s2="$(vt_stdin v1-ok 2)"
+v_want2="$(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: cfid0001"\nheader = "CF-Access-Client-Secret: cfsecret0001"' "$v_hmac")"
+v_bad=""
+[[ "$v_rc" -eq 0 && "$EV_CALLS" -eq 2 ]] || v_bad+=" rc=$v_rc calls=$EV_CALLS"
+[[ "$v_s1" == "header = \"Authorization: Bearer $FIXTURE_TOKEN\"" ]] || v_bad+=" call1-stdin"
+[[ "$v_s2" == "$v_want2" ]] || v_bad+=" call2-stdin"
+for needle in "$FIXTURE_TOKEN" cfid0001 cfsecret0001 "$v_hmac" webhook-secret-0001; do vt_argv_has v1-ok "$needle" && v_bad+=" argv-has-credential"; done
+for f in "$ROWS"/v1-ok/shim/calls/*.injected; do [[ -s "$f" ]] && v_bad+=" injected"; done
+[[ ! -e "$ROWS/v1-ok/shim/unexpected" && ! -e "$ROWS/v1-ok/shim/unmodelled" ]] || v_bad+=" stub-called"
+if [[ -z "$v_bad" ]]; then row "verify-tunnel-ingress-origin: the Cloudflare read carries the bearer on stdin; the deploy-status read carries the HMAC + CF Access id + CF Access secret as three stdin headers in order; no credential in any argv" ok
+else row "verify-tunnel-ingress-origin: the Cloudflare read carries the bearer on stdin; the deploy-status read carries the HMAC + CF Access id + CF Access secret as three stdin headers in order; no credential in any argv" fail "$v_bad"; fi
+
+# unusable CF API token: gate failure (exit 1), zero calls, token never echoed
+vt_ok=1; vt_detail=""
+for cls in quote-newline-url newline-only non-ascii quote space; do
+  vt_run "v2-$cls" "$VTIO" "VT_CF_API_TOKEN=$(tok_for "$cls")"
+  count_calls "$RUN_ROW"
+  { [[ "$RUN_RC" -eq 1 && "$EV_CALLS" -eq 0 ]] && grep -aqF 'CF_API_TOKEN failed the token-shape check' "$RUN_ROW/stdout" "$RUN_ROW/stderr" && ! vt_leaks "$RUN_ROW" 'SYNTHMARK000'; } \
+    || { vt_ok=0; vt_detail+=" [$cls rc=$RUN_RC calls=$EV_CALLS]"; }
+done
+if [[ "$vt_ok" -eq 1 ]]; then row "verify-tunnel-ingress-origin: a malformed CF API token is a gate failure (exit 1) with zero calls and is never echoed" ok
+else row "verify-tunnel-ingress-origin: a malformed CF API token is a gate failure (exit 1) with zero calls and is never echoed" fail "$vt_detail"; fi
+# unusable CF Access secret: the config read may run, the deploy-status call must NOT, and it is a gate failure
+vt_ok=1; vt_detail=""
+v3_i=0
+for sec in 'SYNTHMARK0001"x' $'SYNTHMARK0001\nheader = "X-Injected: 1"' 'SYNTHMARK0001\x'; do
+  v3_i=$((v3_i + 1))
+  vt_run "v3-secret-$v3_i" "$VTIO" "VT_CF_ACCESS_SECRET=$sec"
+  count_calls "$RUN_ROW"
+  { [[ "$RUN_RC" -eq 1 && "$EV_CALLS" -eq 1 ]] && grep -aqF 'header-value check' "$RUN_ROW/stdout" "$RUN_ROW/stderr" && ! vt_leaks "$RUN_ROW" 'SYNTHMARK000'; } \
+    || { vt_ok=0; vt_detail+=" [rc=$RUN_RC calls=$EV_CALLS]"; }
+done
+if [[ "$vt_ok" -eq 1 ]]; then row "verify-tunnel-ingress-origin: a CF Access secret carrying a quote, backslash or injected newline stops BEFORE the deploy-status call (exit 1) and is never echoed" ok
+else row "verify-tunnel-ingress-origin: a CF Access secret carrying a quote, backslash or injected newline stops BEFORE the deploy-status call (exit 1) and is never echoed" fail "$vt_detail"; fi
+for mode in env flag; do
+  RUN_EXTRA_PATH="$VT_STUBS"
+  if xtrace_check "$VTIO" CF_API_TOKEN "v4-$mode" "$mode"; then row "verify-tunnel-ingress-origin: refuses xtrace ($mode form): rc 78, zero calls, no token on output" ok
+  else row "verify-tunnel-ingress-origin: refuses xtrace ($mode form): rc 78, zero calls, no token on output" fail "$XT_DETAIL"; fi
+  RUN_EXTRA_PATH=""
+done
+# mutations: argv restored on the second call; guards removed
+mutated_copy "$VTIO" "$SYN/vtio-argv.sh" '< <(printf '"'"'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n'"'"' \
+          "$HMAC" "$CF_ACCESS_ID" "$CF_ACCESS_SECRET")' '-H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}"'
+vt_run v5-argv "$SYN/vtio-argv.sh"
+if vt_argv_has v5-argv cfsecret0001; then row "verify-tunnel-ingress-origin: restoring a CF Access header on argv is RED (the credential shows in a recorded argv)" ok
+else row "verify-tunnel-ingress-origin: restoring a CF Access header on argv is RED (the credential shows in a recorded argv)" fail "the mutant's credential did not reach argv"; fi
+mutated_copy "$VTIO" "$SYN/vtio-noguard.sh" '_cfg_ok() { local LC_ALL=C; case "${1:-}" in '"''"'|*'"'"'"'"'"'*|*'"'"'\'"'"'*|*[[:cntrl:]]*) return 1 ;; esac; }' '_cfg_ok() { return 0; }'
+vt_run v6-noguard "$SYN/vtio-noguard.sh" 'VT_CF_ACCESS_SECRET=SYNTHMARK0001"x'
+v6_inj=0; for f in "$ROWS"/v6-noguard/shim/calls/*.injected; do [[ -s "$f" ]] && v6_inj=1; done
+if [[ "$v6_inj" -eq 1 ]]; then row "verify-tunnel-ingress-origin: removing the header-value guard is RED (the shim records the injected config line)" ok
+else row "verify-tunnel-ingress-origin: removing the header-value guard is RED (the shim records the injected config line)" fail "no INJECTED recorded for the unguarded mutant"; fi
+echo "=== stage 3: fresh-host-boot-trail + verify-tunnel-ingress-origin transport rows done ==="
+
+# =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
@@ -875,7 +1070,7 @@ fi
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=137
+EXPECTED_TESTS=153
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

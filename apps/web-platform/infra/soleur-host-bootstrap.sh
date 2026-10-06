@@ -1036,6 +1036,11 @@ INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
 # zot-registry.tf local.betterstack_logs_ingest_url). Any other value skips this channel and keeps
 # Sentry, like an unprovisioned host; the marker must never abort.
 readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
+# (#9597) The bearer rides curl's STDIN config channel, never its argument list (readable by every
+# local user via /proc/<pid>/cmdline). A token with a newline, quote or space would inject a config
+# directive, so it is shape-checked first. POSIX sh: no `local`, so the C-locale pin lives in a
+# subshell body, and the pipe form below stands in for the process substitution /bin/sh lacks.
+bearer_ok() ( LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac )
 # A skipped or failed direct POST is NOT silent: this row is one of the soak marker's two inputs, and its
 # absence reads as "not live yet". It raises a distinct WARNING stage whose Sentry detail carries the same
 # joinable fields the row would have (reason, luks_arm, escrow, boot_id); the row grammar is unchanged.
@@ -1045,9 +1050,15 @@ detail() { # <stage> <text>: the per-stage detail channel soleur-boot-emit reads
   printf '%s' "$2" > "$DDIR/$1" 2>/dev/null || true
 }
 BS_WHY=""
-if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
-  post() { curl --disable --noproxy '*' -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ] && bearer_ok "$TOKEN"; then
+  post() { printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl --disable --noproxy '*' -fsS -m 10 --config - -H 'Content-Type: application/json' "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
   post || post || { BS_WHY=post_failed; echo "[fresh-boot-ready] Better Stack egress FAILED: $LINE" >&2; }
+elif [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
+  # Pinned destination, but the token failed the shape check: SKIP-AND-REPORT, never fail-stop
+  # (this runs under set -e from cloud-init and sits above the dark-host detector). It is reported
+  # as its own reason, not misread as an unpinned URL.
+  BS_WHY=bad_token_shape
+  echo "[fresh-boot-ready] refusing a Better Stack token that failed the shape check; Sentry only" >&2
 elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
   BS_WHY=unpinned_url
   echo "[fresh-boot-ready] refusing to send the Better Stack token to an unpinned destination; Sentry only" >&2

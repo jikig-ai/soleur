@@ -80,18 +80,23 @@ EOF
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
-url=""; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
+url=""; cfg=0; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; [[ "$a" == "--config" ]] && cfg=1; done
 printf '%s\n' "$url" >> "$STUB_LOG"
+# The credential travels on stdin (`--config -`), never argv: record both channels per call so the rows
+# can assert argv carries no token and stdin carries exactly one header line. Read stdin ONLY when
+# `--config -` is present (the writer is a process substitution nobody else would drain).
+printf '%s\n' "$*" >> "$STUB_ARGV"
+stdin=""; if [[ "$cfg" == 1 ]]; then stdin="$(cat; printf x)"; stdin="${stdin%x}"; printf '%s' "$stdin" >> "$STUB_STDIN"; fi
 refuse() { printf 'stub-curl: %s\n' "$*" >> "$STUB_ERR"; exit 22; }
 case "$url" in
-  "https://ghcr.io/token?scope=repository:project-zot/zot-linux-amd64:pull") printf '{"token":"synthetic"}'; exit 0 ;;
+  "https://ghcr.io/token?scope=repository:project-zot/zot-linux-amd64:pull") printf '{"token":"%s"}' "${STUB_TOKEN_JSON:-synthetic-fixture-token-0001}"; exit 0 ;;
   https://ghcr.io/v2/project-zot/zot-linux-amd64/manifests/sha256:*)
-    [[ " $* " == *" Authorization: Bearer synthetic "* ]] || refuse "manifest read without the pull token"
+    [[ "$stdin" == $'header = "Authorization: Bearer synthetic-fixture-token-0001"\n' ]] || refuse "manifest read without the pull token on stdin"
     h="${url##*/sha256:}"
     [[ "$h" == "$(cat "$STUB_IMG/manifest.hex")" ]] || refuse "manifest for unexpected digest $h"
     f="$STUB_IMG/blobs/${STUB_MANIFEST_OVERRIDE:-$h}"; cat "$f"; exit 0 ;;
   https://ghcr.io/v2/project-zot/zot-linux-amd64/blobs/sha256:*)
-    [[ " $* " == *" Authorization: Bearer synthetic "* ]] || refuse "blob read without the pull token"
+    [[ "$stdin" == $'header = "Authorization: Bearer synthetic-fixture-token-0001"\n' ]] || refuse "blob read without the pull token on stdin"
     h="${url##*/sha256:}"
     [[ -f "$STUB_IMG/blobs/$h" ]] || refuse "no blob $h"
     if [[ "$h" == "${STUB_TAMPER:-none}" ]]; then printf 'tampered'; exit 0; fi
@@ -101,9 +106,9 @@ refuse "unrouted url: $url"
 STUB
 chmod +x "$TMP/bin/curl"
 
-export STUB_LOG="$TMP/curl.log" STUB_ERR="$TMP/stub.err"
+export STUB_LOG="$TMP/curl.log" STUB_ERR="$TMP/stub.err" STUB_ARGV="$TMP/curl.argv" STUB_STDIN="$TMP/curl.stdin"
 run_build() { # run_build <img-dir> <tf> <out> → rc; stdout+stderr to $TMP/out.txt
-  : > "$STUB_ERR"
+  : > "$STUB_ERR"; : > "$STUB_LOG"; : > "$STUB_ARGV"; : > "$STUB_STDIN"
   STUB_IMG="$1" ZOT_REGISTRY_TF="$2" PATH="$TMP/bin:$PATH" bash "$SUT" build "$3" > "$TMP/out.txt" 2>&1
 }
 run_verify() { # run_verify <tf> <tar>
@@ -227,6 +232,38 @@ else
   [[ ! -e "$TMP/c.tar" ]] && grep -q "$C2" "$TMP/out.txt" && pass "B9 a tampered config blob is refused and names it" || fail "B9 refused without naming the config blob or left an archive"
 fi
 
+# B10 — the pull token never rides curl's argv; it arrives as exactly one `header = ...` config line
+# on stdin per authenticated call (manifest + config blob + 2 layers = 4 calls), and the stub already
+# refused any call whose stdin was not exactly that line.
+TOKV="synthetic-fixture-token-0001"
+if run_build "$IMG2" "$TF2" "$TMP/s.tar" && no_stub_refusals; then
+  [[ "$(grep -cF -- "$TOKV" "$STUB_ARGV" || true)" == 0 && "$(grep -cF -- 'Authorization' "$STUB_ARGV" || true)" == 0 ]] \
+    && [[ "$(grep -cF -- 'header = "Authorization: Bearer synthetic-fixture-token-0001"' "$STUB_STDIN" || true)" == 4 ]] \
+    && [[ "$(grep -cF -- '--config -' "$STUB_ARGV" || true)" == 4 ]] \
+    && pass "B10 pull token is absent from every curl argv and present once per fetch (4) as a stdin header line" \
+    || fail "B10 argv/stdin channel wrong: argv=[$(tr '\n' '|' < "$STUB_ARGV")] stdin=[$(tr '\n' '|' < "$STUB_STDIN")]"
+else
+  fail "B10 canonical build failed: $(tr '\n' ' ' < "$TMP/out.txt") $(cat "$STUB_ERR")"
+fi
+
+# B11 — a token outside the bearer charset (newline, quote, space) is refused BEFORE any manifest or
+# blob curl runs: rc 1, a refusal message, no archive, and the token text never appears in the output.
+# A newline/quote would otherwise inject a second config directive into the stdin config.
+for shape in 'nl:tok\nurl = \"https://evil.example/\"' 'quote:tok\"x' 'space:tok x'; do
+  lbl="${shape%%:*}"; tj="${shape#*:}"; rm -f "$TMP/r.tar"
+  if STUB_TOKEN_JSON="$tj" run_build "$IMG2" "$TF2" "$TMP/r.tar"; then
+    fail "B11 ($lbl) a token with an unsafe shape was accepted"
+  else
+    rc=$?
+    [[ "$rc" -eq 1 && ! -e "$TMP/r.tar" ]] \
+      && grep -qF "unexpected shape" "$TMP/out.txt" \
+      && ! grep -qF "evil.example" "$TMP/out.txt" && ! grep -qF "tok x" "$TMP/out.txt" \
+      && [[ "$(grep -c '/v2/' "$STUB_LOG" || true)" == 0 ]] && [[ ! -s "$STUB_STDIN" ]] \
+      && pass "B11 ($lbl) an unsafe-shape pull token is refused: rc 1, no manifest/blob curl, token not echoed" \
+      || fail "B11 ($lbl) rc=$rc out=[$(tr '\n' ' ' < "$TMP/out.txt")] log=[$(tr '\n' ' ' < "$STUB_LOG")]"
+  fi
+done
+
 echo "== verify =="
 # V1 — the canonical archive verifies.
 run_verify "$TF2" "$TMP/a.tar" && pass "V1 the canonical archive verifies against D" || fail "V1 canonical archive failed verify: $(tr '\n' ' ' < "$TMP/vout.txt")"
@@ -290,8 +327,8 @@ if [[ "$PASS" -ne $((_cp+1)) || "$FAIL" -ne $((_cf+1)) || "${#FAILURES[@]}" -ne 
 fi
 PASS=$((PASS-1)); FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # EQUALITY, not a floor: adding a row must move this literal.
-if [[ "$((PASS + FAIL))" -ne 23 ]]; then
-  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 23 are expected.\n' "$((PASS + FAIL))" >&2
+if [[ "$((PASS + FAIL))" -ne 27 ]]; then
+  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 27 are expected.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="
