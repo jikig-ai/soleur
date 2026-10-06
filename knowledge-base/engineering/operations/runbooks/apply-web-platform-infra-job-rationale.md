@@ -396,6 +396,13 @@ workspaces store, `random_password.workspaces_luks`, `doppler_secret.workspaces_
 create. After the swap web-1's password leaves the push-apply graph; its addresses stay in the list as defense in depth.
 `[skip-web-platform-apply]` is the only bypass and skips the apply entirely.
 
+> **Superseded 2026-10-06 (#9372), in part, from the merge of the closing change:** the sentence "A first `create` stays
+> legal" is no longer true for the web-class pair (`random_password.workspaces_luks_web` and
+> `doppler_secret.workspaces_luks_web_key`). The HALT now counts a `create` at those two addresses and refuses it, with no
+> acknowledgement path. A first `create` stays legal at the other four addresses. The single-use escrow-create workflow is
+> retired, so a lost pair entry is recovered by a reviewed import of the existing entry into state, merged with the
+> kill-switch line, never by a re-create. The text above is kept as the dated record.
+
 ## registry_luks_recut
 
 See also: knowledge-base/engineering/operations/runbooks/registry-luks-recut-6929.md

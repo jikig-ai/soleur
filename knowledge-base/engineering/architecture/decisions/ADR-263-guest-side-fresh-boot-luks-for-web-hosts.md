@@ -638,6 +638,8 @@ hand-set value and an inherited `prd` name, a false positive that is safe). The 
 with #9372; the coupled artifacts are listed in
 <https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5980161163>.
 
+> **Superseded 2026-10-06 (#9372), in part, from the merge of the closing change:** the line "A first create of the passphrase and its key copy is legal under `luks_passphrase_rotations`" (gate-shape item 2 above) no longer holds for the web-class pair (`random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`). From the merge of this change the rotation HALT of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` counts a `create` at those two addresses and the apply refuses it with no acknowledgement path; a first create stays legal at the other four addresses. The single-use escrow-create workflow (`apply-web-escrow-create.yml`) and its names helper are retired by the same change, so no workflow creates the web-class pair. The recovery for a lost pair entry is a reviewed import of the existing entry into state, never a re-create. The status stays `adopting`, and this marker does not record that the rebirth has run: it is dispatch-only and still pending. The text above is kept as the dated record.
+
 **Alternatives considered and rejected.** Re-enabling `apply-web-platform-infra.yml` (its whole-root plan carries unrelated
 destroy and replace entries, and the file sits near its byte cap). A new `apply_target` on that workflow (same file, same
 cap). A local, ungated `terraform apply` from a workstation (bypasses every gate and the serializer;
