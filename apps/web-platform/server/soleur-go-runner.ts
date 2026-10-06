@@ -63,6 +63,7 @@ import {
   mirrorWithDebounce,
 } from "./observability";
 import { stripStopGateMarkup } from "./stop-gate-markup";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 // #5394 — skip the Sentry mirror for the expected repo-cloning/error dispatch
 // block (re-thrown to the dispatch catch, which emits the honest client message).
 import { RepoNotReadyError } from "./repo-readiness";
@@ -949,6 +950,37 @@ export interface DispatchEvents {
     toolName: string;
     elapsedSeconds: number;
   }) => void;
+  /**
+   * #9538 — mid-stream stale-resume signal. Fires from `consumeStream`'s
+   * catch when the SDK iterator throws the dead-session signature
+   * (`No conversation found with session ID`) on a dispatch that
+   * attempted a `resume:` (`state.sessionId` set). The cc-dispatcher
+   * wires this to clear `conversations.session_id`, emit the
+   * `context_reset` honesty frame, and re-dispatch the turn cold — the
+   * mid-stream counterpart to the dispatch-time `clearCcSessionId`
+   * (#3266 R7). Optional + fire-and-forget: non-cc callers and existing
+   * tests ignore it; the runner `try/catch`es the invocation so a
+   * throwing listener mirrors to Sentry rather than escaping the catch.
+   * NOT a `WorkflowEnd` variant — this path emits no `internal_error`,
+   * so it must not route through `onWorkflowEnded`'s terminal handling.
+   *
+   * **Ordering:** fires AFTER `closeQuery(state)` — whose
+   * `activeQueries.delete` has already run — so a listener may
+   * re-dispatch synchronously; the dying entry cannot take the
+   * `queryReused` path. `deadSessionId` carries `state.sessionId`
+   * (non-null on this arm) — authoritative when the dispatcher's own
+   * dispatch arg and the rebound state id diverge. `lastBlockKind`
+   * carries the block telemetry the dispatcher needs to pick the
+   * tool-orphan reset notice (a turn that died mid-`tool_use` warrants
+   * the re-confirmation copy, not the generic one). When no listener is
+   * wired (non-cc callers, or the retry's deliberately stripped events),
+   * the runner falls back to the normal `internal_error` terminal frame —
+   * a dead resume with no recovery still ends the turn honestly.
+   */
+  onStaleResume?: (info: {
+    deadSessionId: string;
+    lastBlockKind: "text" | "tool_use" | null;
+  }) => void;
 }
 
 export interface DispatchArgs {
@@ -1035,6 +1067,16 @@ export interface DispatchArgs {
    * Forwarded straight through to `QueryFactoryArgs.setBashAutonomous`.
    */
   setBashAutonomous?: (autonomous: boolean) => void;
+  /**
+   * #9538 — single-turn context-reset notice carried by the dispatcher's
+   * stale-resume re-dispatch (the prefill guard did not fire — the
+   * session died mid-stream — so `realSdkQueryFactory`'s guard-driven
+   * notice path never runs). Forwarded straight through to
+   * `QueryFactoryArgs.contextResetNotice`, which appends it to
+   * `effectiveSystemPrompt` at the existing notice site. Ignored on the
+   * warm/`queryReused` path — the factory is never invoked there.
+   */
+  contextResetNotice?: string;
 }
 
 export interface DispatchResult {
@@ -1119,9 +1161,21 @@ export interface QueryFactoryArgs {
   documentExtractMeta?: DocumentExtractMeta;
   /** 2026-05-06 Bug A1: absolute-path Read directive support. See `DispatchArgs.workspacePath`. */
   workspacePath?: string;
+  /**
+   * #9538 — dispatcher-supplied context-reset notice (stale-resume
+   * re-dispatch). `realSdkQueryFactory` appends it to the system prompt
+   * at the same site as the prefill guard's `contextResetNotice`.
+   * Factories that do not handle it may ignore the field.
+   */
+  contextResetNotice?: string;
 }
 
 export type QueryFactory = (args: QueryFactoryArgs) => Promise<Query> | Query;
+
+/** Why a query closed — threaded to `deps.onCloseQuery` so the cc hook can
+ *  distinguish a dead-resume recovery close (keep the lease held; the retry
+ *  re-acquires it) from a disconnect grace-abort (checkpoint in-flight work). */
+export type CloseQueryReason = "disconnected" | "stale-resume";
 
 export interface SoleurGoRunnerDeps {
   queryFactory: QueryFactory;
@@ -1160,7 +1214,9 @@ export interface SoleurGoRunnerDeps {
     // #5356 — only a disconnect grace-abort carries a reason; the cc dispatcher
     // hook checkpoints in-flight work iff `reason === "disconnected"`. Natural
     // completion / idle reap / bare close leave it undefined (→ no checkpoint).
-    reason?: "disconnected";
+    // #9538 — "stale-resume" marks the dead-resume recovery close; the hook
+    // replicates but keeps the lease HELD for the synchronous re-dispatch.
+    reason?: CloseQueryReason;
   }) => void;
 }
 
@@ -1169,7 +1225,7 @@ export interface SoleurGoRunner {
   hasActiveQuery(conversationId: string): boolean;
   activeQueriesSize(): number;
   reapIdle(): number;
-  closeConversation(conversationId: string, reason?: "disconnected"): void;
+  closeConversation(conversationId: string, reason?: CloseQueryReason): void;
   /**
    * Drain EVERY active query on process shutdown (SIGTERM). Aborts WITHOUT
    * a checkpoint reason — matching the legacy `abortAllSessions` parity
@@ -1819,6 +1875,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     toolUseId: string,
   ): void {
     if (!pendingPrompts || !emitInteractivePrompt) return;
+    // ADR-113 addendum (#9539): a support dispatch has NO interactive surface —
+    // its transport is a per-request SSE stream while `emitInteractivePrompt`
+    // writes to the process WS sink and `pendingPrompts` entries are answerable
+    // via `interactive_prompt_response` over the user's Command Center socket
+    // (a cross-surface tool_result injection into a no-interaction turn).
+    // `SUPPORT_EXTRA_DISALLOWED_TOOLS` schema removal is the primary lever;
+    // this is the chokepoint belt for a model emitting a removed tool.
+    if (state.persona === "support") return;
     const classified = classifyInteractiveTool(toolName, toolInput, cwd);
     if (!classified) return;
     const promptId = mintPromptId(randomUUID());
@@ -2046,7 +2110,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeQuery(state);
   }
 
-  function closeQuery(state: ActiveQuery, reason?: "disconnected"): void {
+  function closeQuery(state: ActiveQuery, reason?: CloseQueryReason): void {
     clearRunaway(state);
     clearTurnHardCap(state);
     // #3040 Finding 4 — defense-in-depth: reset paused fields so a stale
@@ -2538,18 +2602,48 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         // are ignored at V1. V2 will route stream_event → WS cumulative deltas.
       }
     } catch (err) {
+      // #9538 — mid-stream stale-resume. A persisted `session_id` that
+      // points at a deleted/rotated SDK session constructs `query({
+      // resume })` fine and dies HERE, inside the iterator — past the
+      // dispatch-time catch that already clears the column (R7). The
+      // `state.sessionId` gate is load-bearing: the signature only means
+      // "dead resume" when a session is actually attached. This arm must
+      // NOT emit `internal_error` — the terminal
+      // `session_ended` disables client input while the stale
+      // `conversations.session_id` survives, so every retry reproduces
+      // the same failure forever at zero tokens. It must NOT
+      // `reportSilentFallback` either — expected operational behavior,
+      // same reasoning as the legacy `agent-runner.ts` re-throw arm.
+      // `state.sessionId` doubles as the recovery payload — non-null
+      // whenever a session was attempted or captured (a warm `queryReused`
+      // turn never re-resumes, so no `queryReused` check is needed: its
+      // iterator cannot produce this signature, and a rebound id still
+      // names a session the SDK just reported dead). The
+      // `deadSessionId !== null` test below carries both the signature
+      // match AND the type narrowing for the emit.
+      const deadSessionId =
+        err instanceof Error &&
+        err.message.includes(SDK_STALE_RESUME_SESSION_ID)
+          ? state.sessionId
+          : null;
+      // `reportSilentFallback` below was unconditional pre-#9538. Preserve
+      // that for a stale signature landing on an already-CLOSED query —
+      // the arm inside `!state.closed` never runs there, so without this
+      // the error would leave zero telemetry of any tier.
+      const wasClosed = state.closed;
       if (!state.closed) {
-        // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
-        // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
-        // by throwing through the for-await. When `cause === "denied_jti"`
-        // the session is irrecoverably revoked; emit the discriminated
-        // `session_revoked` terminal status so cc-dispatcher routes it
-        // through the terminal `session_ended` family and agent/API
-        // consumers receive the operator-supplied reason instead of a
-        // generic "Something went wrong". Best-effort RPC: a null status
-        // here just leaves reason/deniedAt null (the helper already
-        // mirrored any RPC failure to Sentry).
         if (
+          // #4440 follow-up to #4418 — JWT-deny propagation. The SDK
+          // iterator surfaces any mid-stream tenant-RPC `RuntimeAuthError`
+          // by throwing through the for-await. When `cause === "denied_jti"`
+          // the session is irrecoverably revoked; emit the discriminated
+          // `session_revoked` terminal status so cc-dispatcher routes it
+          // through the terminal `session_ended` family and agents/API
+          // consumers receive the operator-supplied reason instead of a
+          // generic "Something went wrong". Best-effort RPC: a null status
+          // here just leaves reason/deniedAt null (the helper already
+          // mirrored any RPC failure to Sentry). Ordered FIRST so a
+          // revocation error can never be consumed by the stale arm.
           err instanceof RuntimeAuthError &&
           err.cause === "denied_jti"
         ) {
@@ -2559,6 +2653,75 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             reason: status?.reason ?? null,
             deniedAt: status?.deniedAt ?? null,
           });
+        } else if (deadSessionId !== null) {
+          // Warn-tier occurrence marker (NOT error tier): the Sentry warn
+          // stream counts recoveries; `extra.conversationId` groups repeat
+          // fires so a clear that did not land is distinguishable from a
+          // new dead session. `lastBlockKind` carries evidence for the
+          // speculative edge where the signature fires after content
+          // already streamed (SDK-internal re-resume): buffered text is
+          // dropped with the dead query, and this field is its only
+          // record.
+          warnSilentFallback(null, {
+            feature: "soleur-go-runner",
+            op: "stale-resume-recovery",
+            message:
+              "stale resume — cleared session_id and re-dispatching cold",
+            extra: {
+              conversationId: state.conversationId,
+              deadSessionId,
+              lastBlockKind: state.lastBlockKind,
+            },
+          });
+          state.closed = true;
+          // Teardown BEFORE emit: `closeQuery` drains the close-hook
+          // (bash-gate drain, tool-attempt flush, lease replication) and
+          // runs `activeQueries.delete` — a listener's synchronous
+          // re-dispatch lands on a clean map and takes the cold path
+          // (see `DispatchEvents.onStaleResume`). The "stale-resume"
+          // reason lets the close-hook keep the worktree lease HELD — the
+          // retry re-acquires same-host keep-gen, and a deferred release
+          // would tombstone the row out from under it (migration-116).
+          closeQuery(state, "stale-resume");
+          const staleListener = state.events.onStaleResume;
+          if (staleListener) {
+            try {
+              staleListener({
+                deadSessionId,
+                lastBlockKind: state.lastBlockKind,
+              });
+            } catch (listenerErr) {
+              reportSilentFallback(listenerErr, {
+                feature: "soleur-go-runner",
+                op: "onStaleResume",
+                extra: { conversationId: state.conversationId },
+              });
+              // Terminal-honesty fallback: a throwing listener stranded
+              // the recovery — emit the terminal frame the client expects
+              // rather than leaving a silently dead turn.
+              try {
+                state.events.onWorkflowEnded({
+                  status: "internal_error",
+                  error: "stale-resume recovery listener failed",
+                });
+              } catch {
+                // Best-effort — the mirror above already carries it.
+              }
+            }
+          } else {
+            // No recovery wired (non-cc consumer, or the retry's
+            // deliberately stripped events — which is what BOUNDS the
+            // recovery to one re-dispatch: a repeat signature on the
+            // retried turn lands here and terminates honestly).
+            try {
+              state.events.onWorkflowEnded({
+                status: "internal_error",
+                error: "stale-resume recovery unavailable",
+              });
+            } catch {
+              // Best-effort — the turn is already closed.
+            }
+          }
         } else {
           emitWorkflowEnded(state, {
             status: "internal_error",
@@ -2566,11 +2729,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           });
         }
       }
-      reportSilentFallback(err, {
-        feature: "soleur-go-runner",
-        op: "consumeStream",
-        extra: { conversationId: state.conversationId },
-      });
+      if (deadSessionId === null || wasClosed) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "consumeStream",
+          extra: { conversationId: state.conversationId },
+        });
+      }
     }
   }
 
@@ -2660,6 +2825,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           // sink so the factory publishes `bashAutonomous` to the
           // dispatcher's command_stream emit gate (D1).
           setBashAutonomous: args.setBashAutonomous,
+          // #9538 — stale-resume re-dispatch carries a reset notice for
+          // the factory's system-prompt append site.
+          contextResetNotice: args.contextResetNotice,
         });
       } catch (err) {
         // #5394 — a RepoNotReadyError (repo cloning/error) is an expected,
@@ -3279,7 +3447,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
   function closeConversation(
     conversationId: string,
-    reason?: "disconnected",
+    reason?: CloseQueryReason,
   ): void {
     const state = activeQueries.get(conversationId);
     if (!state) return;

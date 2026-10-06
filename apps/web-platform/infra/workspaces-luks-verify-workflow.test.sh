@@ -1324,8 +1324,9 @@ fi
 #
 # PROPERTY. WORKSPACES_LUKS_CUTOVER_AT exists in its Doppler config only while web-2's newest probe row is
 # fresh and reports a LUKS-backed mount with an off-host header copy (and, to EARN it, a green readiness row
-# the probe row is not older than: an INSTANCE-level join, never a boot_id equality, because the readiness
-# row is per instance and the probe row per boot); negative evidence removes it, and a FAILED QUERY (or a
+# the probe row is not older than: an INSTANCE-level join on AGE, plus the reboot proof (#9372): the newest probe
+# row's boot_id must be known and DIFFER from the readiness row's, because the readiness row is per instance and the
+# probe row per boot, so equal ids are the pre-reboot probe); negative evidence removes it, and a FAILED QUERY (or a
 # Doppler fault) leaves it untouched.
 #
 # ASSEMBLY. (1) the `web2_marker` job, parsed with PyYAML: its job-level `if:`, permissions, the issue step,
@@ -1608,10 +1609,11 @@ else
   g3_probe 3600 $LUKS $MAP ok unknown > "$FX/p_unk"
   g3_probe 3600 $LUKS $MAP ok $G3_UUID_A > "$FX/p_eq"
   g3_probe 3601 $LUKS $MAP ok $G3_UUID_A > "$FX/p_1s_older"
-  g3_ready 259200 1 ok $G3_UUID_A > "$FX/r_ok"
+  g3_ready 259200 1 ok $G3_UUID_B > "$FX/r_ok"          # the readiness row is from the FIRST boot (B); the probe rows are from a later one (A): the reboot proof
   g3_ready 259200 0 ok $G3_UUID_A > "$FX/r_luks0"
   g3_ready 259200 1 missing $G3_UUID_A > "$FX/r_escrow"
   g3_ready 259200 1 ok $G3_UUID_B > "$FX/r_boot_b"
+  g3_ready 259200 1 ok $G3_UUID_A > "$FX/r_boot_a"    # the SAME boot as p_ok: no reboot evidenced (#9372)
   g3_ready 259200 1 ok $G3_UUID_A 1 none > "$FX/r_armnone"
   g3_ready 259200 1 ok $G3_UUID_A 0 formatted > "$FX/r_ready0"
   g3_ready 259200 1 ok $G3_UUID_A 1 formatted token=0 > "$FX/r_token0"
@@ -1621,7 +1623,7 @@ else
   g3_ready 259200 1 ok $G3_UUID_A 1 formatted host=soleur-web-1 > "$FX/r_otherhost"
   g3_ready 259200 1 ok unknown > "$FX/r_unk"
   g3_ready 600 1 ok $G3_UUID_A > "$FX/r_newer"        # a rebirth: the readiness row is NEWER than p_ok (3600 s)
-  g3_ready 3600 1 ok $G3_UUID_A > "$FX/r_eq"          # same age as p_ok
+  g3_ready 3600 1 ok $G3_UUID_B > "$FX/r_eq"          # same age as p_ok
   : > "$FX/empty"
   printf '<html><body>502 Bad Gateway</body></html>\n' > "$FX/junk"
 
@@ -1766,7 +1768,7 @@ EOS
     scn S13-readiness-aged-out-marker-present-keeps p_ok  empty     "$P" 0 0 0 same green marker_kept
     scn S31-readiness-defect-irrelevant-when-keeping p_ok r_luks0   "$P" 0 0 0 same green marker_kept
     scn S32-probe-age-equal-to-readiness-age-is-GREEN p_eq r_eq     none 0 1 0 iso  green marker_written
-    scn S40-boot-id-unknown-on-both-rows-is-GREEN p_unk   r_unk     none 0 1 0 iso  green marker_written
+    scn S40-boot-id-unknown-on-both-rows-is-NOT-GREEN p_unk   r_unk     none 0 0 0 none not_live reboot_not_seen
     scn S41-old-FAIL-then-newer-OK-is-GREEN    p_oldfail  r_ok      none 0 1 0 iso  green marker_written
     scn S47-junk-readiness-body-leaves-a-kept-marker-alone p_ok junk "$P" 0 0 0 same green marker_kept
     # --- RED on the probe row: the key is deleted, the run is red ------------------------------------------
@@ -1814,10 +1816,12 @@ EOS
     G3_NEEDLE='still reads present' scn S25-delete-that-does-not-take-is-loud p_stale27h r_ok "$P" nz 0 1 same red_delete_failed probe_stale FIXTURE_DELETE_INHERITED=1
     scn S52-a-judge-fault-is-not-negative-evidence p_ok r_ok "$P" nz 0 0 same query_failed judge_error FIXTURE_JQ_BREAK=1
     G3_NEEDLE='deleting the marker FAILED' scn S51-delete-command-fails p_stale27h r_ok "$P" nz 0 1 same red_delete_failed probe_stale FIXTURE_DOPPLER_DELETE_FAIL=1
+    scn S53-probe-boot-id-equal-to-readiness-is-not-green p_ok r_boot_a none 0 0 0 none not_live reboot_not_seen
+    scn S54-readiness-boot-id-unknown-while-the-probe-is-known-is-not-green p_ok r_unk none 0 0 0 none not_live reboot_not_seen
     scn S42-doppler-set-fails    p_ok r_ok none nz 1 0 none query_failed marker_write FIXTURE_DOPPLER_SET_FAIL=1
     scn S43-read-back-mismatch   p_ok r_ok none nz 1 0 any  query_failed marker_readback FIXTURE_DOPPLER_SET_DIVERGE=1
   }
-  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52"
+  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54"
 
   # ---- PRISTINE: the battery must be clean on the code as shipped, and every scenario is its OWN assertion ----
   G3_SB="$(g3_sandbox pristine)"
@@ -1828,7 +1832,7 @@ EOS
   done
   g3_got_ids="$(printf '%s\n' "${G3_RAN[@]}" | cut -c1-3 | sort -u | tr '\n' ' ')"
   g3_want_ids="$(tr ' ' '\n' <<<"$G3_EXPECTED_IDS" | sort -u | tr '\n' ' ')"
-  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 52 ]]; then ok "G3 the registered scenario set ran exactly (52 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
+  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 54 ]]; then ok "G3 the registered scenario set ran exactly (54 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
 
   # the green scenario's two reads: host-scoped, unit-pinned, archive arm present, server-side age, no LIKE wildcard
   g3_scn "$G3_SB" "$FX/p_ok" "$FX/r_ok" none
@@ -1872,7 +1876,7 @@ root = sys.argv[1]
 WRITER = ".github/workflows/workspaces-luks-verify.yml"
 READERS = {"scripts/lib/web2-luks-rows.sh", "apps/web-platform/infra/lb-weight-gate.sh", "apps/web-platform/infra/lb-weight-gate-with-marker.sh",
            ".github/workflows/infra-validation.yml", "scripts/followthroughs/web2-luks-live-6931.sh",
-           "scripts/lib/test-affected-paths.sh"}
+           "scripts/lib/test-affected-paths.sh", "scripts/web2-rebirth-emptiness.sh", "scripts/web2-rebirth-never-pooled.sh", "scripts/web2-rebirth-ready-poll.sh"}
 KEY = re.compile(r"workspaces_luks_cutover[\"'_]*at\b|w2l_marker_name|web2-luks-rows", re.I)
 VERB = re.compile(r"doppler\b[^\n]*\bsecrets\b[^\n]*\b(set|delete|upload)\b|resource\s+[\"']doppler_secret[\"']|api\.doppler\.com"
                   r"|/secrets?/(set|delete|upload)\b|/configs/config/secrets\b"
@@ -1952,11 +1956,11 @@ PY
   g3_mut "11 strict fixed-field parser rejects the unknown extra field (must-pass row)" "S03" $LIB \
     'else {kind: "ok", age: $age, f: $f} end' 'else (if ($f | keys | length) > 5 then {kind: "junk", age: $age} else {kind: "ok", age: $age, f: $f} end) end'
   g3_mut "12 not-live exemption widened to every RED reason" "S17" marker.sh \
-    $'if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready ) ]]; then' $'if [[ "$state" == absent ]]; then'
+    $'if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready || "$reason" == reboot_not_seen ) ]]; then' $'if [[ "$state" == absent ]]; then'
   g3_mut "13 not-live exemption removed (a daily red before web-2 exists)" "S26 S27 S29" marker.sh \
-    $'if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready ) ]]; then' 'if false; then'
+    $'if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready || "$reason" == reboot_not_seen ) ]]; then' 'if false; then'
   g3_mut "13b not-live exemption no longer covers a probe older than the readiness row" "S29 S33" marker.sh \
-    $' || "$reason" == probe_predates_ready ) ]]; then' $' ) ]]; then'
+    $' || "$reason" == probe_predates_ready || "$reason" == reboot_not_seen ) ]]; then' $' ) ]]; then'
   g3_mut "14 host/identifier/unit re-check dropped" "S48 S49 S50" $LIB \
     'if (.host_name != $host or .ident != $ident or .unit != $unit or $age == null) then' 'if ($age == null) then'
   g3_mut "15a readiness ready=1 requirement dropped" "S34" $LIB $'        elif ($r.f.ready // "") != "1" then "RED reason=ready_not_ready"\n' ''
@@ -1973,6 +1977,8 @@ PY
   g3_mut "17c the token-shape check is dropped"       "S44" marker.sh $'[[ "$DOPPLER_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]] || {' 'true || {'
   g3_mut "17d a Doppler read fault reads as an absent marker" "S24 S45" marker.sh \
     $'state="$(marker_state)" || { echo "::error::could not read the marker (Doppler fault). The marker was NOT touched."; emit query_failed marker_read; exit 1; }' 'state="$(marker_state)" || state=absent'
+  g3_mut "22 the reboot proof is dropped (the marker is earned on the readiness row alone)" "S40 S53 S54" $LIB \
+    $'if [[ "$marker" != present ]] && ! w2l_reboot_seen "$pv" "$rv"; then' 'if false; then'
   g3_mut "17e a failed doppler delete is ignored"     "S51" marker.sh \
     $'|| { echo "::error::RED (${reason}) and deleting the marker FAILED."; emit red_delete_failed "$reason"; exit 1; }' '|| true'
   # row 18 — emit() is a no-op (the issue and the check-in would read an empty class). Its own CONTROL cannot be the
@@ -2190,8 +2196,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # each asserting rc, calls, final state, outcome and reason; structural rows evaluated over grids; the
 # occurrence-based census with planted writers; mutation rows 1-21) -> 313; #7376 the producer-side
 # SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316; review:
-# the drained-text and hand-off-by-sentinel rows 316 -> 318.
-WF_MIN_ASSERTIONS=318
+# the drained-text and hand-off-by-sentinel rows 316 -> 318; #9372 the reboot-proof scenario (S53) and
+# mutation row 22 318 -> 321 (measured green count after the rebase onto #9525, the ready-poll reader split and the S54 row).
+WF_MIN_ASSERTIONS=321
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

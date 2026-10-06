@@ -1007,8 +1007,10 @@ jobs:
   # body, any defective row, and rows going missing after the marker exists are still RED.
   #
   # CUSTODY. The write token (DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER, workspaces-luks-fresh-boot.tf) is
-  # scoped to the one marker config and is used by this job ONLY (the follow-through grades from probe rows
-  # and holds no Doppler credential). The job runs on the default branch alone: a `schedule:` event is
+  # scoped to the one marker config and is used by this job (the follow-through grades from probe rows and holds
+  # no Doppler credential). The ONE other holder is the single-use web-2 rebirth workflow (#9372), which binds it to
+  # one step running scripts/web2-rebirth-never-pooled.sh, a names-only reader that the census in
+  # workspaces-luks-verify-workflow.test.sh holds to no write verb (the token is read/write until #9358). The job runs on the default branch alone: a `schedule:` event is
   # always the default branch, and a dispatch is refused from any other ref, so a branch copy of this file
   # or of the helper never runs with the token. A present marker is KEPT while GREEN and removed on a non-GREEN
   # run, so its VALUE is advisory / shape-only downstream (lb-weight-gate.sh checks the shape; sourcing the
@@ -1138,7 +1140,9 @@ jobs:
               # be noise. The gate is unchanged (the marker stays absent); the moment a row exists any defect in
               # it is RED as before, and rows going missing AFTER the marker was written still delete it and
               # fail. The follow-through (web2-luks-live-6931.sh) FAILS a conversion that never produces a soak.
-              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready ) ]]; then
+              # reboot_not_seen (#9372): a GREEN probe row from the SAME boot as the readiness row is the state between
+              # a rebirth and its first reboot; the marker (and with it any weight) waits for the reboot proof.
+              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready || "$reason" == reboot_not_seen ) ]]; then
                 echo "::notice title=web-2 not live yet::${reason}: no web-2 evidence certifies this instance and the soak marker is absent. The gate stays closed; this run is not an error until web-2 has been converted (#9372; runbook web-host-replace.md, section web-2 boot failed)."
                 emit not_live "$reason"
                 exit 0

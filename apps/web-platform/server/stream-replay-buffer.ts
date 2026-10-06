@@ -45,6 +45,14 @@ export type BufferedWSMessage = Extract<
   // vanish mid-turn. Persistence (messages row) covers the reload case; buffering
   // covers the reconnect case.
   | { type: "turn_summary" }
+  // feat-session-completion-inline — the inline completion card IS buffered:
+  // a within-grace reconnect must replay it so the card renders (and the
+  // render-anchored inbox read-mark fires) even when the live emit raced the
+  // drop. Coverage is resume_stream-only — the leave-and-return debug replay
+  // path filters to `debug_event`, and `resetTurn` clears the ring at the
+  // next turn start (a reconnect spanning a turn boundary relies on the
+  // unread inbox row — the honest fallback). No messages persistence.
+  | { type: "task_completed" }
 >;
 
 // Derived from a `Record<BufferedWSMessage["type"], true>` (NOT a bare array)
@@ -65,6 +73,7 @@ const BUFFERED_FRAME_TYPE_MAP: Record<BufferedWSMessage["type"], true> = {
   usage_update: true,
   session_ended: true,
   turn_summary: true,
+  task_completed: true,
   debug_event: true,
 };
 

@@ -441,3 +441,4 @@ That path refuses `web-1`.
 - #6712 — the residual apply-time skew this procedure mitigates by pinning
 - `moved-block-wedge-cutover-5887.md` — historical #5887 cutover record (its web-2 sections are
   superseded and not executable)
+- [Runbook — the web-2 LUKS rebirth (#9372, single-use)](./web2-luks-rebirth-9372.md) — the volume conversion that a plain `web-host-create` of web-2 cannot do
