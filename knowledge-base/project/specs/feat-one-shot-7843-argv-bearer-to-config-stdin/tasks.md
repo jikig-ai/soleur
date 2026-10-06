@@ -7,11 +7,11 @@ Per-file recipe (every conversion phase): (a) if the file fails `python3 scripts
 
 ## Phase 0: Freeze and measure (no code)
 
-- [ ] 0.1 Re-run `census-argv-bearer.py` (expect `TOTAL sites=136 files=64`; TOTAL is on stderr) and the acceptance grep
-- [ ] 0.2 Lint the 19 baselined Tier 1 files by explicit path; record per-file A/B/C/D findings, behaviour-changing prerequisites, existing token guards (plan time: 13 fail, 6 only need baseline-line deletion)
-- [ ] 0.3 Record per Tier 1 script: token provenance, real character class, existing `--disable`/`--noproxy`; decide the plugin `--noproxy` policy
-- [ ] 0.4 Grep Tier 1 curls for `-v`/`--trace*`/`-D -` and stdin bodies
-- [ ] 0.5 Confirm no Tier 1 file is host-hashed or run live in the apply without its own test
+- [x] 0.1 Re-run `census-argv-bearer.py` (expect `TOTAL sites=136 files=64`; TOTAL is on stderr) and the acceptance grep
+- [x] 0.2 Lint the 19 baselined Tier 1 files by explicit path; record per-file A/B/C/D findings, behaviour-changing prerequisites, existing token guards (plan time: 13 fail, 6 only need baseline-line deletion)
+- [x] 0.3 Record per Tier 1 script: token provenance, real character class, existing `--disable`/`--noproxy`; decide the plugin `--noproxy` policy
+- [x] 0.4 Grep Tier 1 curls for `-v`/`--trace*`/`-D -` and stdin bodies
+- [x] 0.5 Confirm no Tier 1 file is host-hashed or run live in the apply without its own test
 
 ## Phase 1: Lint first, battery, pilot
 
