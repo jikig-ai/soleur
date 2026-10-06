@@ -277,13 +277,14 @@ battery() {
   check "reboot: APPLY=no made no write" "$([[ -z "$(writes)" ]]; echo $?)"
   world action_status=running; run "reboot: an action that never finishes fails" 1 "did not finish in time" reboot
   # ---- flip precondition: driven in a SANDBOX tree so the verdict never depends on what the repo's own retirement state is ----
-  flip_case() { # <name> <want-rc> <want-substring> <apply yes|no> <filter: real|two|zero|garbage> <escrow workflow: present|absent>
+  flip_case() { # <name> <want-rc> <want-substring> <apply yes|no> <filter: real|one|two|zero|garbage> <escrow workflow: present|absent>
     local sb="$TMP/flip.$RANDOM" saved="$SCRIPT_UNDER_TEST"
     mkdir -p "$sb/scripts" "$sb/tests/scripts/lib" "$sb/tests/scripts/fixtures/web-host-rebirth" "$sb/.github/workflows"
     cp "$saved" "$sb/scripts/web2-rebirth.sh"; cp "$ROOT/tests/scripts/lib/web2-rebirth-classify.sh" "$sb/tests/scripts/lib/"
-    cp "$ROOT/tests/scripts/fixtures/web-host-rebirth/passphrase-create.json" "$sb/tests/scripts/fixtures/web-host-rebirth/"
+    cp "$ROOT/tests/scripts/fixtures/web-host-rebirth/passphrase-create-password-only.json" "$sb/tests/scripts/fixtures/web-host-rebirth/"
     case "$5" in
       real) cp "$ROOT/tests/scripts/lib/destroy-guard-filter-web-platform.jq" "$sb/tests/scripts/lib/" ;;
+      one) printf '{"luks_passphrase_rotations": 1}\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
       two) printf '{"luks_passphrase_rotations": 2}\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
       zero) printf '{"luks_passphrase_rotations": 0}\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
       garbage) printf '"not an object"\n' > "$sb/tests/scripts/lib/destroy-guard-filter-web-platform.jq" ;;
@@ -292,13 +293,18 @@ battery() {
     world; SCRIPT_UNDER_TEST="$sb/scripts/web2-rebirth.sh" run "$1" "$2" "$3" flip-precondition "$4"
     SCRIPT_UNDER_TEST="$saved"
   }
-  flip_case "flip: the real filter (create exempt today) and the escrow workflow present: plan_only reports PENDING, rc 0" 0 "PENDING" no real present
-  flip_case "flip: the real filter: an apply run refuses" 1 "NOT met" yes real present
-  flip_case "flip: exemption flipped (rotations 2) and the escrow workflow RETIRED: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes two absent
-  flip_case "flip: exemption flipped but the escrow workflow still present: an apply run refuses" 1 "NOT met" yes two present
-  flip_case "flip: workflow retired but the exemption not flipped (rotations 0): an apply run refuses" 1 "NOT met" yes zero absent
-  flip_case "flip: plan_only with only one condition met reports PENDING, rc 0" 0 "PENDING" no two present
+  flip_case "flip: the real filter (reads 1: a create of the web-class passphrase counts) and the escrow workflow present: plan_only reports PENDING, rc 0" 0 "PENDING" no real present
+  flip_case "flip: the real filter and the escrow workflow present again: an apply run refuses (a regression, not a step)" 1 "NOT met" yes real present
+  flip_case "flip: the real filter and the escrow workflow absent: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes real absent
+  flip_case "flip: create counted (rotations 1) and the escrow workflow RETIRED: MET, rc 0 on an apply run" 0 "flip precondition: MET" yes one absent
+  flip_case "flip: a filter counting 2 is not the shipped design (the key copy is counted too): an apply run refuses" 1 "NOT met" yes two absent
+  flip_case "flip: create counted but the escrow workflow still present: an apply run refuses" 1 "NOT met" yes one present
+  flip_case "flip: workflow retired but a create not counted (rotations 0): an apply run refuses" 1 "NOT met" yes zero absent
+  flip_case "flip: plan_only with only one condition met reports PENDING, rc 0" 0 "PENDING" no one present
   flip_case "flip: an unevaluable filter is a refusal, never a pass" 1 "could not be evaluated" yes garbage absent
+  # The REAL repository tree, not a sandbox: the real script, the real jq filter, the real fixture and the real file system. Every other
+  # row stubs one of the four, so none of them proves the shipped tree reads MET. Pre-merge this reads MET once the closing change is in.
+  world; run "flip: the REAL repository tree reads MET on an apply run (real filter over the tracked fixture, real workflow directory)" 0 "flip precondition: MET" flip-precondition yes
   # ---- ready-poll (the anchor is web-2's own Hetzner creation time) ----
   rdy_row() { jq -cn --arg age "$1" --arg arm "$2" --arg esc "$3" --arg boot "$4" '{ts:"2026-10-06 04:00:00",age_s:$age,message:("SOLEUR_FRESH_BOOT_READY ready=1 stage=cloud_init_complete token=1 vector=1 volume=1 luks=1 luks_arm=" + $arm + " escrow=" + $esc + " boot_id=" + $boot + " host=soleur-web-2 reason=none boot_window_s=900")}'; }
   world server_age=600; rdy_row 60 formatted ok 11111111-2222-3333-4444-555555555555 > "$WORLD/bs_body"
@@ -349,7 +355,9 @@ while IFS= read -r line; do
 done <<<"$report"
 ran="${ran:-0}"
 printf 'real script: %s world scenarios, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 120 ]] || { echo "  FAIL scenario floor: ran ${ran} < 120"; fails=$((fails + 1)); }
+# Floor = the exact count: the 120 this suite ran on main plus the 3 rows the closing change added (a real-tree MET row, a
+# sandbox "real filter, escrow workflow absent" row and the exactly-1 refusal row), so deleting either one reds instead of hiding in slack.
+[[ "$ran" -ge 123 ]] || { echo "  FAIL scenario floor: ran ${ran} < 123"; fails=$((fails + 1)); }
 
 # Mutants are independent (each works in its own sandbox tree and fake worlds), so up to MUT_JOBS run at once; every mutant writes
 # its verdict line to its own file and the lines are counted once all have finished.
@@ -437,7 +445,7 @@ mutate "classify: an absent creation time reads as an age" '       if [[ -n "$cr
 mutate "ready: an unreadable creation time is accepted" '|| fail "ready-poll: the server'"'"'s creation time is unreadable' '|| true # ready-poll: the server'"'"'s creation time is unreadable'
 mutate "output: newlines in a value are no longer stripped" 'local v="${2//$'"'"'\r'"'"'/ }"; v="${v//$'"'"'\n'"'"'/ }";' 'local v="$2";'
 mutate "summary: the resume sentence is dropped" '          echo "**This was a RESUME:** nothing' '          echo "**This was not a resume:** nothing'
-mutate "flip: the rotations==2 requirement is dropped" '  [[ "$n" -eq 2 ]] || ok=no' ':'
+mutate "flip: the rotations==1 requirement is dropped" '  [[ "$n" -eq 1 ]] || ok=no' ':'
 mutate "flip: the escrow-workflow-absent requirement is dropped" '  [[ ! -e "${_ROOT}/.github/workflows/apply-web-escrow-create.yml" ]] || absent=no' ':'
 mutate "reboot: an unfinished reboot action is ignored" '  fail "reboot action ${action_id} did not finish in time"' '  true'
 mutate "ready: the anchor is not the server creation time" '  exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" "$created_epoch"' '  exec bash "${_ROOT}/scripts/web2-rebirth-ready-poll.sh" 0'
