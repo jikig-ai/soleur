@@ -88,6 +88,16 @@ export function makePendingPromptKey(
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_PER_CONVERSATION_CAP = 50;
 
+/**
+ * feat-cc-cap-raise-resume (#9565) — sentinel prefix for runner-emitted
+ * cost-cap prompts. Their `toolUseId` is never a real SDK `tool_use` id
+ * (no tool_use exists at result-time cap breach), so
+ * `handleInteractivePromptResponse` MUST branch on this prefix BEFORE
+ * delivering a `tool_result` — feeding one into the SDK stream would
+ * corrupt it.
+ */
+export const COST_CAP_TOOL_USE_ID_PREFIX = "cost-cap:";
+
 export class PendingPromptRegistry {
   private readonly records = new Map<string, PendingPromptRecord>();
   private readonly nowFn: () => number;
