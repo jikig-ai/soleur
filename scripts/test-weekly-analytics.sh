@@ -7,6 +7,16 @@
 
 set -euo pipefail
 
+# The bearer-transport section below binds a synthetic key; refuse to trace when a real one is set (see #7797).
+case "$-" in
+  *x*)
+    if [ -n "${BT_TOKEN:+x}${PLAUSIBLE_API_KEY:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source production functions (main body is guarded by BASH_SOURCE check)
