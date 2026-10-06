@@ -21,6 +21,18 @@ SHA-256 values were independently recalculated and matched. The exported
 `.soleur/pinned-compiler-resync-9304505d-20261006T065308Z-3785833/source/apps/web-platform/`.
 These local artifacts are not published or deployed.
 
+An additional source-head candidate build at `845d1455d55b76754c2cd4f3c9804a1f7d6888a1`
+used the same pinned Node 22.22.1 base and installed the app's locked builder
+and runtime dependencies offline from 1,220 integrity-checked cached archives.
+`npm ci` used `--ignore-scripts`; six unavailable optional WASM archives were
+not required by the successful Linux x64 build. Next/Webpack, TypeScript/routes,
+the custom server, Next config, development-sign-in tripwire and native Sharp
+resolution all passed. The [locked candidate build record](recovery-build-845d1455.md)
+contains the image, lockfile and artifact hashes. This resolves the prior
+current-cache version drift for this isolated app build only. Ignored install
+scripts, global CLI/system/browser tools and full runner assembly remain
+unqualified; no build artifact was published or started at this point.
+
 ## Dependency boundary
 
 The compiler mounted cached dependencies read-only; it did not run `npm ci`.
