@@ -118,3 +118,28 @@ and the test must call the function the same way the workflow does.
 
 category: workflow-issues
 module: stock-preflight-gate / terraform
+
+## Ship-Phase Addendum (CI reds on the pushed head)
+
+Three more session errors surfaced only when CI ran the repo-wide ratchets the
+file-scoped suites cannot see:
+
+11. **`lint-trap-tempfile-ownership` rule (c) flagged the new `mktemp`** — a sourced
+    library cannot own `trap ... EXIT` (it would replace the caller's), so the site
+    needed the `lint-trap-ownership: ok` annotation AND the escape fires only when the
+    marker sits on the offending line or the ONE above it — a multi-line comment block
+    whose `ok` line is three lines up reads as unannotated.
+    **Prevention:** when annotating, keep the marker a single line directly above (or
+    trailing) the allocation, and run the repo lint, not just the file suite.
+12. **Class-b high-water ratchet** — the annotation satisfies rule (c) but the census
+    still counts the entrant; `scripts/lint-trap-tempfile-ownership.highwater` must be
+    raised DELIBERATELY in the same commit (69→70 with a dated entrant note).
+    **Prevention:** after any `lint-trap-ownership: ok` addition, run
+    `--check-highwater` — the escape and the ratchet are two different ledgers.
+13. **`|| true` on an unconditional-0 diagnostic tripped the S12e/S12p swallow ban** on
+    web2-luks-rebirth — the `|| true` was redundant AND masked the stub-suite's real
+    failure (the stub lib lacked `stock_recovery_report`, so `bash -e` died before the
+    re-dispatch line). Removing it surfaced the actual stub gap.
+    **Prevention:** a function that returns 0 by contract takes no `|| true`; when a
+    test harness stubs a sourced lib, extending the stub's function surface is part of
+    the contract change, and a swallow on the call site hides the mismatch.
