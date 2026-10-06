@@ -13,20 +13,29 @@
 # Read-only control against the stored rows, same day (soleur-web-2, /mnt/data, one device /dev/sdb ext4, 7 days):
 #   filesystem_used_bytes  n=2019 hours=169 newest_age_s=169 min=15556608 max=16027648 (spread 471040)
 #   filesystem_total_bytes n=2019 hours=169 min=max=20957446144
-# which satisfies every threshold below. RED used_bytes_absent_or_host_dark therefore also means "the stored row shape
-# changed" (if the shipper ever starts flattening, tags.host moves to a top-level host) or "more than one device reports
-# /mnt/data" (the HAVING below turns a multi-device group into zero rows); the SQL and the test fixtures must change together.
+# which satisfies every threshold below. Limits of that control: it ran under Doppler read credentials while the workflow
+# uses the repo secrets BETTERSTACK_QUERY_*, so the first plan-only dispatch is the credential-parity check; and its newest row
+# (169 s) is younger than the ~40-minute hot window, so the hot arm carries the same shape (inference, not a separate probe).
+# `scripts/web2-rebirth-emptiness.sh` run under that Doppler config reproduces the control (runbook web2-luks-rebirth-9372.md).
+# `tags.host` is Vector's OS hostname, where the old host_name was a Terraform-rendered constant: equal forgery resistance (any
+# holder of the shared ingest token can write either), weaker against hostname drift on a re-imaged host, and it fails closed
+# except for a same-hostname look-alike. RED used_bytes_absent_or_host_dark therefore also means "the stored row shape
+# changed" (if the shipper ever starts flattening, tags.host moves to a top-level host) or "a device other than the one on
+# record reports /mnt/data": the HAVING below drops that metric's whole group, so it reads RED used_bytes_absent_or_host_dark
+# (used series) or RED total_bytes_absent (total series). The SQL and the test fixtures must change together.
 #
 # PASS needs ALL of, from one aggregate over 7 days (hot AND archive arm):
 #   - filesystem_used_bytes: at least 160 of 168 distinct hours covered (a gappy series is not evidence),
 #     the newest row at most 1800 s old (a dark host is not evidence), a MINIMUM above zero (a missing `value` path
 #     reads as 0 in ClickHouse, so zero is "field absent", never "empty"), a maximum at most 1 GiB (a COARSE ceiling:
 #     an empty ext4 volume holds only its own metadata, a populated one holds user data, and 1 GiB is deliberately far
-#     above the unmeasured empty baseline), and a spread (maximum minus minimum) of at most 64 MiB: a volume that took
-#     writes during the 7 days moves, an idle empty one does not. The printed min/max are read from a PLAN-ONLY run: the
+#     above the observed level, see ROW SHAPE), and a spread (maximum minus minimum) of at most 64 MiB: a volume that took
+#     large writes during the 7 days moves, an idle one does not. Neither bound proves emptiness: a flat pre-existing amount
+#     or an in-window write well under 64 MiB passes both (decision-challenges item 1). The printed min/max are read from a PLAN-ONLY run: the
 #     `web-platform-infra-apply` environment approval is a job-level gate, so it comes BEFORE this step runs, and an apply
-#     dispatch's PASS flows into the delete in the same approved job with no human reading the numbers first. The measured
-#     empty baseline is about 16 MB (see ROW SHAPE above), far below the 1 GiB ceiling.
+#     dispatch's PASS flows into the delete in the same approved job with no human reading the numbers first. The observed
+#     level (about 16 MB) is the volume's own reading, not an independent empty reference: an ext4 volume is never
+#     byte-empty, and whatever deploys seed under /mnt/data sits in that figure. It is far below the 1 GiB ceiling.
 #   - W2R_DETACHED=1 (heal:detach_done only: the volume was detached by an earlier run of this workflow that had already
 #     proven it empty, and a detached device stops reporting): freshness is not required and coverage drops to 24 hours;
 #     the zero floor, the ceiling, the spread and the volume-size window still apply.
@@ -75,7 +84,7 @@ WHERE dt > now() - INTERVAL ${W2R_LOOKBACK_DAYS} DAY
   AND JSONExtractString(raw,'tags','mountpoint') = '/mnt/data'
   AND JSONExtractString(raw,'name') IN ('filesystem_used_bytes','filesystem_total_bytes')
 GROUP BY metric_name
-HAVING uniqExact(JSONExtractString(raw,'tags','device')) = 1
+HAVING uniqExact(JSONExtractString(raw,'tags','device')) = 1 AND min(length(JSONExtractString(raw,'tags','device'))) > 0
 FORMAT JSONEachRow"
 }
 

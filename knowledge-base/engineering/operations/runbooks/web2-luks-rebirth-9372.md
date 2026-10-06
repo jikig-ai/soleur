@@ -67,12 +67,27 @@ gh run watch <databaseId> --exit-status          # confirm the run actually star
                                                  # running and one pending run, and a queued run can displace an older pending one
 ```
 
+A plan-only run is also held at the `web-platform-infra-apply` environment approval before any step runs, so `gh run watch` shows it
+waiting until the owner approves.
+
 Read the run log's `verdict:` line, the printed `pinned volume:` line, the emptiness verdict (it prints the minimum, maximum,
-spread and ceiling) and the dispatch summary. **The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
+spread and ceiling) and the dispatch summary.
+
+**Reading an emptiness RED.** `RED reason=used_bytes_absent_or_host_dark` means zero rows survived the query: a dark host, a changed
+stored row shape, or a device other than the one on record (the one-device clause drops that metric's whole group, so a second device
+on the total series reads `total_bytes_absent`). `coverage_gap`, `stale`, `not_empty`, `not_flat`, `used_bytes_zero_or_missing`,
+`used_bytes_malformed`, `total_bytes_malformed` and `not_the_20gb_volume` each name the one rule that failed. To re-run the read-only
+control without a dispatch: `doppler run -p soleur -c prd_terraform -- bash scripts/web2-rebirth-emptiness.sh` (prints `PASS ...` with
+hours, newest age, min, max and spread, or the RED reason); to see which devices report, run the same WHERE with a
+`GROUP BY JSONExtractString(raw,'tags','device')` through `scripts/betterstack-query.sh`. The control uses the Doppler read
+credentials and the workflow uses the repo secrets `BETTERSTACK_QUERY_*`, so the first plan-only dispatch is the credential-parity check.
+
+**The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
 printed used-bytes values from the plan-only run before authorizing the apply dispatch: the `web-platform-infra-apply` environment
 approval is a job-level gate, so it comes BEFORE the evidence step, and an apply dispatch's PASS flows into the delete in the same
-approved job. The Better Stack paths were confirmed 2026-10-06 and the measured empty baseline is about 16 MB (min 15.6 MB, max
-16.0 MB over 169 h; the header of `scripts/web2-rebirth-emptiness.sh` carries the control). In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
+approved job. The Better Stack paths were confirmed 2026-10-06 and the observed level is about 16 MB (min 15.6 MB, max 16.0 MB over
+169 h; the header of `scripts/web2-rebirth-emptiness.sh` carries the control). That is the volume's own reading, not an independent
+empty reference: an ext4 volume is never byte-empty, and neither the 1 GiB ceiling nor the 64 MiB spread proves emptiness. In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
 floor, the ceiling, the spread and the size window still apply. Only after the owner approves **that** apply, dispatch with `-f plan_only=false` and approve the
 `web-platform-infra-apply` environment gate. The classifier verdict is also a job output (`verdict`).
 

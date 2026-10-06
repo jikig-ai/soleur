@@ -27,7 +27,7 @@ requires_cpo_signoff: true
 4. Brief-vs-repo mismatches reconciled: the tested suite is `web2-rebirth-emptiness.test.sh`, and approval precedes evidence (job-level environment gate).
 
 ### New Considerations Discovered
-- The 1 GiB ceiling is about 60 times the measured 16 MB baseline (owner decision, not changed here).
+- The 1 GiB ceiling is about 65 to 70 times the observed 16 MB level (owner decision, not changed here).
 - An apply dispatch's PASS flows to the delete in the same approved job; only a plan-only run shows the numbers first.
 - Deepen verification: the `2026-07-12-dry-run-fixture-...` learning cited at plan time does not exist and is no longer relied on; rule ids and PR/issue numbers cited in the plan were verified live (#9372 open, #6944 open, #9532 merged, #9628 open draft).
 
@@ -339,8 +339,19 @@ runs as a regression gate. Nothing here asserts web-2 is LUKS-backed or reborn.
 or, in the catastrophic direction, a false PASS that lets the workflow delete a web-2 volume holding workspace data, which a customer
 would see as lost workspace files with no recovery path (the volume delete is irreversible).
 
-**If this leaks, the user's workflow data is exposed via:** no new vector: the change reads existing metric rows through the existing
-credentialed query script, adds no secret, prints no credential, and the test uses synthesized values only.
+**If this leaks, the user's workflow data is exposed via:** no new vector. Concretely: the `BETTERSTACK_QUERY_HOST`, `_USERNAME` and
+`_PASSWORD` environment of the `Emptiness evidence` step (the script refuses to run under xtrace with them set and the query helper
+strips every other credential-shaped variable from the child), and the PASS or RED line copied into the Actions log and the dispatch
+summary, which carries byte counts, hours and a reason token only, no user identifier. The test uses synthesized values only.
+
+**Per-role false-PASS vectors (the catastrophic direction), with where each is scoped:** (1) the owner approving a dispatch: PASS
+authorizes the delete of the pinned volume's contents, and the evidence is keyed by hostname plus `/mnt/data`, not by volume id
+(decision-challenges item 7); a flat pre-existing amount, or an in-window write under the 64 MiB spread, passes both coarse bounds
+(items 1 and 6); (2) a future agent re-using this gate: the approval is a job-level gate that precedes the evidence step (item 2) and
+the `heal:detach_done` premise is not enforced (item 3); (3) web-1's live users: the workflow refuses web-1 by name and
+`delete-volume` re-asserts the pinned id, name, labels and attachment independently of this evidence. This gate is the last evidence
+line behind the anti-pooling gate and the never-pooled marker, not the only one. The precondition for user data being on web-2 at
+all is a failure of those two, which this change neither widens nor narrows.
 
 **Brand-survival threshold:** single-user incident
 
@@ -438,7 +449,7 @@ comment on #9372 naming the first post-merge plan-only dispatch as the next owne
 ## Sharp Edges and Risks
 
 - The live control proves the SQL returns the right rows today; it does not prove web-2 is empty beyond the thresholds (about 16 MB used
-  of 20 GB, flat). The ceiling (1 GiB) is about 60 times the measured baseline and a flat 100 to 900 MB of old user data would still
+  of 20 GB, flat). The ceiling (1 GiB) is about 65 to 70 times the observed level and a flat 100 to 900 MB of old user data would still
   pass the ceiling and the spread; the brief says keep every threshold, so it is unchanged and surfaced to the owner.
 - Approval precedes evidence (job-level environment gate): an apply dispatch's PASS reaches the delete without a human reading the
   numbers first; the plan-only run is the only pre-delete read. Also unchanged and surfaced: evidence freshness vs the delete (the
