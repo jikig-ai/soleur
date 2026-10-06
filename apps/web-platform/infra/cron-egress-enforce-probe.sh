@@ -66,7 +66,7 @@ trap emit_fail EXIT
 # 1. Container readiness — bounded wait (the container starts moments before this runs;
 #    a missing container is itself a failure, not a skip, on this path).
 N=0
-until docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; do
+until docker ps --format '{{.Names}}' | grep -cx "$CONTAINER" >/dev/null; do
   N=$((N + 1))
   if [ "$N" -ge 30 ]; then
     PROBE_RESULT=container_absent
@@ -80,7 +80,7 @@ done
 # 2. Structure — the egress chain must be wired and the loader unit active BEFORE trusting
 #    the behavioral probes (a missing jump would make the negative probe pass for the wrong
 #    reason). `nft`/`systemctl` failures here mean the firewall never came up.
-if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -q 'jump SOLEUR-EGRESS'; then
+if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -c 'jump SOLEUR-EGRESS' >/dev/null; then
   PROBE_RESULT=structure_fail
   echo 'ASSERT-FAILED: docker-user-jump (SOLEUR-EGRESS jump absent from DOCKER-USER)'
   emit_fail

@@ -48,23 +48,23 @@ systemctl enable cron-egress-firewall.service || { echo 'ASSERT-FAILED: firewall
 systemctl restart cron-egress-firewall.service || { echo 'ASSERT-FAILED: firewall-restart (loader die — journalctl tail follows)'; journalctl -u cron-egress-firewall.service --no-pager -n 40 2>/dev/null || true; exit 1; }
 systemctl enable --now cron-egress-resolve.timer || { echo 'ASSERT-FAILED: resolve-timer-enable'; journalctl -u cron-egress-resolve.timer --no-pager -n 20 2>/dev/null || true; exit 1; }
 # Positive post-apply assertions (fail2ban_tuning pattern): structure...
-nft list chain ip filter DOCKER-USER | grep -Eq 'jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)' || { echo 'ASSERT-FAILED: docker-user-jump'; exit 1; }
-nft list chain ip filter SOLEUR-EGRESS | grep -q 'comment "soleur-egress: default drop"' || { echo 'ASSERT-FAILED: default-drop'; exit 1; }
-nft list chain ip filter SOLEUR-EGRESS | grep -q 'egress-dns-exfil' || { echo 'ASSERT-FAILED: dns-exfil-drop'; exit 1; }
-nft list chain ip filter SOLEUR-EGRESS | grep -q 'dport 8288 accept' || { echo 'ASSERT-FAILED: inngest-8288-accept'; exit 1; }
+nft list chain ip filter DOCKER-USER | grep -Ec 'jump[[:space:]]+SOLEUR-EGRESS([[:space:]]|$)' >/dev/null || { echo 'ASSERT-FAILED: docker-user-jump'; exit 1; }
+nft list chain ip filter SOLEUR-EGRESS | grep -c 'comment "soleur-egress: default drop"' >/dev/null || { echo 'ASSERT-FAILED: default-drop'; exit 1; }
+nft list chain ip filter SOLEUR-EGRESS | grep -c 'egress-dns-exfil' >/dev/null || { echo 'ASSERT-FAILED: dns-exfil-drop'; exit 1; }
+nft list chain ip filter SOLEUR-EGRESS | grep -c 'dport 8288 accept' >/dev/null || { echo 'ASSERT-FAILED: inngest-8288-accept'; exit 1; }
 # Dedicated Inngest host (#6178, ADR-100 cutover): the generic sentinel above passes with
 # ONLY the host-gateway rule present, so a recreated host missing 10.0.1.40:8288 would slip
 # through. Assert the dedicated-host accept specifically so a missing rule fails post-apply
 # loudly (closes the "hides from the cutover gate" hole — op=verify never sees container egress).
-nft list chain ip filter SOLEUR-EGRESS | grep -q '10.0.1.40 tcp dport 8288 accept' || { echo 'ASSERT-FAILED: dedicated-inngest-8288-accept'; exit 1; }
-nft list set ip filter soleur_egress_allow | grep -qE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
-nft list chain ip filter SOLEUR-EGRESS | grep -q 'cidr allowlist' || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
+nft list chain ip filter SOLEUR-EGRESS | grep -c '10.0.1.40 tcp dport 8288 accept' >/dev/null || { echo 'ASSERT-FAILED: dedicated-inngest-8288-accept'; exit 1; }
+nft list set ip filter soleur_egress_allow | grep -cE '[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+' >/dev/null || { echo 'ASSERT-FAILED: allow-set-populated'; exit 1; }
+nft list chain ip filter SOLEUR-EGRESS | grep -c 'cidr allowlist' >/dev/null || { echo 'ASSERT-FAILED: cidr-allowlist-rule'; exit 1; }
 # Match the GitHub octet, NOT the literal /20: nft renders an interval-set
 # element as either the `/20` prefix OR the expanded range
 # (140.82.112.0-140.82.127.255) depending on version — the literal prefix
 # grep failed the apply post-check even though the set was correctly
 # populated (proven live by a successful cron git clone). Display-agnostic.
-nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]' || { echo 'ASSERT-FAILED: cidr-set-github'; exit 1; }
+nft list set ip filter soleur_egress_allow_cidr | grep -cE '140[.]82[.]' >/dev/null || { echo 'ASSERT-FAILED: cidr-set-github'; exit 1; }
 # Prove the FULL /meta `.git`+`.api` union landed, not just the 4 big
 # git/pages blocks: at least one Azure 20.x or 4.x /32 (the api.github.com
 # LB pool whose absence caused the missed check-in, incident 5516336) must
@@ -76,7 +76,7 @@ nft list set ip filter soleur_egress_allow_cidr | grep -qE '140[.]82[.]' || { ec
 # (143.55.64.0-143.55.79.255). The delimiter anchor requires the octet to
 # START an element, so only a real 20.x/4.x element matches.
 # Display-format-agnostic, same intent as the cidr-set-github assert above.
-nft list set ip filter soleur_egress_allow_cidr | grep -qE '[,[:space:]](20|4)[.]' || { echo 'ASSERT-FAILED: cidr-set-api-pool'; exit 1; }
+nft list set ip filter soleur_egress_allow_cidr | grep -cE '[,[:space:]](20|4)[.]' >/dev/null || { echo 'ASSERT-FAILED: cidr-set-api-pool'; exit 1; }
 # GHCR carve (#9275, ADR-096 5.3b-iii): the generator subtracts GitHub's dedicated Packages
 # frontends from the allow list and records each effective hole as a
 # `# Excluded (GitHub Packages frontends): <cidr>` header line. Prove the carve LANDED in the
@@ -108,8 +108,8 @@ for c in $GHCR_EXCL; do GHCR_OK=0; if [[ "$c" =~ ^(0|[1-9][0-9]{0,2})[.](0|[1-9]
 # read rc 0), so the producer's status is re-raised from the substitution via PIPESTATUS[0]. `-q` /
 # `--noproxy` keep a planted .curlrc or proxy env from steering the result. Skipped LOUDLY on a
 # fresh host (the nft get element checks above still ran there).
-if docker ps --format '{{.Names}}' | grep -qx soleur-web-platform; then GHCR_IP="${GHCR_EXCL%%[[:space:]]*}"; GHCR_IP="${GHCR_IP%/*}"; GHCR_RC=0; GHCR_OUT="$(timeout -k 2 15 docker exec soleur-web-platform curl -q -s -o /dev/null --noproxy '*' --connect-timeout 5 --max-time 8 --resolve "ghcr.io:443:$GHCR_IP" -w '%{time_connect}' https://ghcr.io/ 2>/dev/null | head -c 64; exit "${PIPESTATUS[0]}")" || GHCR_RC=$?; GHCR_TC=malformed; if [[ "$GHCR_OUT" =~ ^[0-9]{1,3}([.][0-9]{1,9})?$ ]]; then GHCR_TC="$GHCR_OUT"; fi; if [ "$GHCR_RC" -eq 0 ] || { [ "$GHCR_TC" != malformed ] && awk -v t="$GHCR_TC" 'BEGIN { exit !(t + 0 > 0) }'; }; then echo "ASSERT-FAILED: ghcr-frontend-reachable $GHCR_IP (a bridge container completed a TCP handshake to an excluded Packages frontend; rc=$GHCR_RC)"; exit 1; elif [ "$GHCR_RC" -eq 28 ] && [ "$GHCR_TC" != malformed ]; then echo ghcr-frontend-held-ok; else echo "WARNING: ghcr-frontend-inconclusive (rc=$GHCR_RC): the live probe could not prove the drop; the nft get element checks above are the authoritative proof"; fi; else echo 'WARNING: soleur-web-platform not running — ghcr-frontend-reachable probe SKIPPED (fresh-host bootstrap); the nft get element checks above still ran'; fi
-docker network inspect bridge -f '{{.EnableIPv6}}' | grep -qx false || { echo 'ASSERT-FAILED: bridge-ipv6'; exit 1; }
+if docker ps --format '{{.Names}}' | grep -cx soleur-web-platform >/dev/null; then GHCR_IP="${GHCR_EXCL%%[[:space:]]*}"; GHCR_IP="${GHCR_IP%/*}"; GHCR_RC=0; GHCR_OUT="$(timeout -k 2 15 docker exec soleur-web-platform curl -q -s -o /dev/null --noproxy '*' --connect-timeout 5 --max-time 8 --resolve "ghcr.io:443:$GHCR_IP" -w '%{time_connect}' https://ghcr.io/ 2>/dev/null | head -c 64; exit "${PIPESTATUS[0]}")" || GHCR_RC=$?; GHCR_TC=malformed; if [[ "$GHCR_OUT" =~ ^[0-9]{1,3}([.][0-9]{1,9})?$ ]]; then GHCR_TC="$GHCR_OUT"; fi; if [ "$GHCR_RC" -eq 0 ] || { [ "$GHCR_TC" != malformed ] && awk -v t="$GHCR_TC" 'BEGIN { exit !(t + 0 > 0) }'; }; then echo "ASSERT-FAILED: ghcr-frontend-reachable $GHCR_IP (a bridge container completed a TCP handshake to an excluded Packages frontend; rc=$GHCR_RC)"; exit 1; elif [ "$GHCR_RC" -eq 28 ] && [ "$GHCR_TC" != malformed ]; then echo ghcr-frontend-held-ok; else echo "WARNING: ghcr-frontend-inconclusive (rc=$GHCR_RC): the live probe could not prove the drop; the nft get element checks above are the authoritative proof"; fi; else echo 'WARNING: soleur-web-platform not running — ghcr-frontend-reachable probe SKIPPED (fresh-host bootstrap); the nft get element checks above still ran'; fi
+docker network inspect bridge -f '{{.EnableIPv6}}' | grep -cx false >/dev/null || { echo 'ASSERT-FAILED: bridge-ipv6'; exit 1; }
 systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer || { echo 'ASSERT-FAILED: units-active'; exit 1; }
 # ...and ENFORCEMENT: egress-probe-positive — an allowlisted host reaches
 # from inside the container; egress-probe-negative — a non-allowlisted
@@ -119,7 +119,7 @@ systemctl is-active cron-egress-firewall.service cron-egress-resolve.timer || { 
 # skip the container probes LOUDLY; the next apply after deploy proves
 # enforcement (hr-fresh-host-provisioning: the server_id trigger re-runs
 # this provisioner on host replacement anyway).
-if docker ps --format '{{.Names}}' | grep -qx soleur-web-platform; then if ! docker exec soleur-web-platform curl -s -o /dev/null --max-time 20 https://api.github.com; then echo 'ASSERT-FAILED: egress-probe-positive (allowlisted host unreachable from container)'; exit 1; fi; echo egress-probe-positive-ok; if docker exec soleur-web-platform curl -s -o /dev/null --max-time 8 https://example.com; then echo 'ASSERT-FAILED: egress-probe-negative (ruleset INERT — non-allowlisted host reachable)'; exit 1; fi; echo egress-probe-negative-ok; else echo 'WARNING: soleur-web-platform not running — enforcement probes SKIPPED (fresh-host bootstrap); re-apply after first deploy to prove enforcement'; fi
+if docker ps --format '{{.Names}}' | grep -cx soleur-web-platform >/dev/null; then if ! docker exec soleur-web-platform curl -s -o /dev/null --max-time 20 https://api.github.com; then echo 'ASSERT-FAILED: egress-probe-positive (allowlisted host unreachable from container)'; exit 1; fi; echo egress-probe-positive-ok; if docker exec soleur-web-platform curl -s -o /dev/null --max-time 8 https://example.com; then echo 'ASSERT-FAILED: egress-probe-negative (ruleset INERT — non-allowlisted host reachable)'; exit 1; fi; echo egress-probe-negative-ok; else echo 'WARNING: soleur-web-platform not running — enforcement probes SKIPPED (fresh-host bootstrap); re-apply after first deploy to prove enforcement'; fi
 # Host egress untouched (AC-P2.7 spot-check; DOCKER-USER never filters
 # host OUTPUT — cloudflared/Vector/GHCR/apt are out of scope by design).
 curl -s -o /dev/null --max-time 10 https://api.github.com || { echo 'ASSERT-FAILED: host-egress'; exit 1; }

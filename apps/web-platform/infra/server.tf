@@ -970,7 +970,7 @@ locals {
   ghcr_deny_assert_sh = <<-EOT
     for h in ghcr.io pkg-containers.githubusercontent.com; do
       a=$(timeout 10 getent ahosts "$h" | awk '{print $1}' | sort -u)
-      if [ -z "$a" ] || printf '%s\n' "$a" | grep -qvxE '0\.0\.0\.0|::'; then
+      if [ -z "$a" ] || printf '%s\n' "$a" | grep -cvxE '0\.0\.0\.0|::' >/dev/null; then
         echo "FATAL: $h does not resolve ONLY to the sinkhole after the deny (#9169). Route back: the resource is now tainted, so push a fix commit or gh workflow run the owning apply workflow; never gh run rerun --failed." >&2
         exit 1
       fi
@@ -1380,7 +1380,7 @@ resource "terraform_data" "journald_persistent" {
       "test -d /var/log/journal",
       # --header lists active journal files with their paths; a persistent journal
       # has files under /var/log/journal. Volatile-only journals list /run paths.
-      "journalctl --header | grep -q '/var/log/journal'",
+      "journalctl --header | grep -c '/var/log/journal' >/dev/null",
       "test \"$(systemctl is-active systemd-journald)\" = 'active'",
       # --- #6438/#6548: re-deliver vector.toml + reload the Vector agent on the running web-1 ------
       # Render the @@HOST_NAME@@ sentinel to THIS host's TF-derived Better Stack host_name (the SAME
@@ -1604,7 +1604,7 @@ resource "terraform_data" "registry_insecure_config" {
       # the reload silently did not pick it up). Endpoint DERIVED from local.registry_endpoint
       # (#6448) so this probe follows a subnet renumber automatically; -qF = fixed-string so
       # the '.'/':' are literal.
-      "docker info 2>/dev/null | grep -qF '${local.registry_endpoint}'",
+      "docker info 2>/dev/null | grep -cF '${local.registry_endpoint}' >/dev/null",
     ]
   }
 }
@@ -1859,8 +1859,8 @@ resource "terraform_data" "infra_config_handler_bootstrap" {
       # One explicit line per unit rather than a loop: each is independently greppable, so the
       # drift guard can pin the units by name instead of trusting a loop variable to have
       # covered them.
-      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
       # hooks.json re-registers the status hook + maps the state-reporter key (the
       # exact host drift that caused the #4804 freeze: stale hooks.json had neither).
       "grep -q infra-config-status /etc/webhook/hooks.json",
@@ -2327,10 +2327,10 @@ resource "terraform_data" "deploy_pipeline_fix_web2" {
       "runuser -u deploy -- sudo -n /usr/bin/systemctl daemon-reload || { echo 'FATAL: deploy cannot run systemctl daemon-reload — SYSTEMCTL_DAEMON_RELOAD landed as text but does not resolve. This is #7220 unrepaired.' >&2; exit 1; }",
       "sudo -n -l -U deploy /usr/bin/systemd-run --collect --on-active=3s --unit=webhook-self-restart /usr/bin/systemctl restart webhook >/dev/null || { echo 'FATAL: sudo policy DENIES the --collect self-restart argv to deploy — the grant and the handler call site have drifted.' >&2; exit 1; }",
       # Drop-in adoption: LoadState-guarded, one explicit line per unit.
-      "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -q 'doppler-token.conf' || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
-      "if [ \"$(systemctl show -p LoadState --value inngest-redis.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-redis.service | grep -q 'doppler-token.conf' || { echo 'FATAL: inngest-redis.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value vector.service)\" = loaded ]; then systemctl show -p DropInPaths vector.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: vector.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-heartbeat.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-heartbeat.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-heartbeat.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-server.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-server.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-server.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
+      "if [ \"$(systemctl show -p LoadState --value inngest-redis.service)\" = loaded ]; then systemctl show -p DropInPaths inngest-redis.service | grep -c 'doppler-token.conf' >/dev/null || { echo 'FATAL: inngest-redis.service is loaded but its Doppler drop-in is not active after daemon-reload' >&2; exit 1; }; fi",
       # hooks.json re-registers the status hook + the state-reporter key.
       "grep -q infra-config-status /etc/webhook/hooks.json",
       "grep -q cat_infra_config_state_sh_b64 /etc/webhook/hooks.json",
