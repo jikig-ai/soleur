@@ -443,6 +443,10 @@ SWEEP_DEFERRALS=(
   'apps/web-platform/infra/cloud-init-inngest.yml | = | 4 | #9217'
   'apps/web-platform/infra/cloud-init-git-data.yml | = | 3 | #9217'
   'apps/web-platform/infra/git-data-bootstrap.sh | = | 1 | #9217'
+  # A fifth, for a different reason: workspaces-luks.tf's public-log forensic print is sha256-pinned and its `grep -q` form is the one the
+  # forbidden-diagnostic rule allows (apps/web-platform/infra/luks-monitor-install.test.sh, G2 and G4). Converting it needs that security
+  # review, so it rides a PR that carries the review, not a lint sweep.
+  'apps/web-platform/infra/workspaces-luks.tf | = | 1 | #9217'
 )
 
 # scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match
