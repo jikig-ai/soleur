@@ -18,13 +18,13 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-g
 - 1.2 Oracle: stub-only `PATH`, canary that `rm`/`terraform`/`git` resolve to stubs, literal expectations for absolute-path/`sudo`/NUL/oversized/garbage rows, symlink farm for jq-less and perl-less runs.
 - 1.3 Grammar fixture and the Guard 1 matrix rows (including `cd`, wrappers, `--` suffix forms, quoting of `~`/`$HOME`, symlink targets, push-flag spellings, prefilter-boundary characters, more than 32 commands, a 100 KB heredoc).
 - 1.4 Must-PASS rows and the ordinary-command corpus (about 40 commands; report the ask rate).
-- 1.5 `plugins/soleur/test/shell-argv-parity.test.sh`: byte-identity of the BEGIN/END-marked lexer region plus a small `--trace` corpus; minimum-size floor.
+- 1.5 `plugins/soleur/test/shell-argv-parity.test.sh`: byte-identity of the three BEGIN/END-marked lexer spans plus a small `--trace` corpus; span-count and minimum-size floors.
 - 1.6 `plugins/soleur/test/destructive-command-guard-mutation.test.sh`: mutates a COPY of the tree; CI rows M1-M8; run rows 9-20 once and record them.
 
 ## 2. Lexer
 
-- 2.1 Add BEGIN/END SHARED-LEXER marker comments to `.claude/hooks/lib/filing-shape.pl` (no behaviour change; its suites stay green).
-- 2.2 Create `plugins/soleur/hooks/lib/shell-argv.pl`: the identical region plus an argv-record `process_command` (q/x flags, no record cap).
+- 2.1 Add BEGIN/END SHARED-LEXER marker pairs to `.claude/hooks/lib/filing-shape.pl` around the three lexer-owned spans (the data and state the lexer reads; helper subs `fail2` through `new_word`; `lex_string` through `runner_script`), leaving the filing-only spans outside (comments only; its suites stay green).
+- 2.2 Create `plugins/soleur/hooks/lib/shell-argv.pl`: the identical spans plus an argv-record `process_command` that pushes onto `@RECORDS` (the lexer rollback depends on it), with q/x flags and no 32-record cap.
 
 ## 3. Hook
 
