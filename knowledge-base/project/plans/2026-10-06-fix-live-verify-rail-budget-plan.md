@@ -388,7 +388,8 @@ Verdict → Result mapping (pure function, exported):
                        checks=<n>)`
   absent            → FAIL:  `conversation <id> persisted but did NOT
                        appear in the rail within <total>s budget
-                       (checks=<n> reloads=<m> rail_state=<…> rpc_row=<…>
+                       (elapsed=<N>s budget=<total>s checks=<n>
+                       read_errors=<n> reloads=<m> rail_state=<…> rpc_row=<…>
                        active_repo=<…> [reload_err=<name> only when the
                        reload threw]) (the #5391/#5436 class, #9581)`
   page/reload dies  → CANT-RUN `rail-check:<waitFailureState diagnostic>`
@@ -447,7 +448,7 @@ never appears still FAILs loudly: `BLOCK=1` unchanged.
   (`{ archive:"active", status:null, domain:null, limit:15 }`) so
   `rpc_row` answers "is it in the list the rail fetched", not a
   different list.
-- **Job budget:** worst case adds ~90s to a `timeout-minutes: 15` job;
+- **Job budget:** worst case adds ~145s to a `timeout-minutes: 15` job;
   teardown ordering is unchanged (teardown still runs on FAIL).
 - **Reload timeout (deepen finding):** Playwright's `page.reload`
   signature carries `timeout` defaulting to `0` — verified against

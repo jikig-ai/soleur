@@ -670,9 +670,6 @@ describe("railVerdictToResult (#9581) — the wire shape", () => {
     expect(appeared).toMatch(/^RESULT: PASS —/);
     expect(absent).toMatch(/^RESULT: FAIL —/);
     expect(dead).toMatch(/^RESULT: CANT-RUN:/);
-    for (const l of [appeared, absent, dead]) {
-      expect(l).toMatch(/^RESULT: (PASS —|FAIL —|CANT-RUN:)/);
-    }
   });
 
   it("carries via= in BOTH pass arms — an unmeasured recovery is the defect", () => {

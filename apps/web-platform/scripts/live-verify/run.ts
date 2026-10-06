@@ -740,6 +740,10 @@ async function probeRailScope(
         workspaceId?: unknown;
         repoUrl?: unknown;
       } | null;
+      // A 200 with a non-object body is a malformed read — treat it like
+      // any other probe failure, or a bare `null` would resolve to
+      // `n/a:repo-null` and fail-fast on a misparse.
+      if (body === null || typeof body !== "object") return { ok: false };
       return {
         ok: true,
         workspaceId: typeof body?.workspaceId === "string" ? body.workspaceId : null,
@@ -1328,7 +1332,17 @@ async function driveAndVerify(
 
     return result;
   } finally {
-    if (browser) await browser.close();
+    // Guarded: on a wedged transport (the same class the reload's
+    // __wedge__ backstop exists for) an unbounded close() would either
+    // hang past the RESULT line — no-line → BLOCK=1 with zero diagnostics —
+    // or throw a verdict away into main's CANT-RUN catch. Best-effort,
+    // bounded.
+    if (browser) {
+      await Promise.race([
+        browser.close().catch(() => undefined),
+        new Promise<void>((r) => setTimeout(r, 10_000)),
+      ]);
+    }
   }
 }
 
