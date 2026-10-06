@@ -146,8 +146,8 @@ EXPECTED_HOST="${ZOT_LOG_7440_HOST:-soleur-registry}"
 # The host token is interpolated into an ERE (hostok) — a metachar would weaken host isolation.
 # Reject anything outside the hostname alphabet rather than trusting the caller's value.
 if [[ ! "$EXPECTED_HOST" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-  echo "TRANSIENT: reason=config_invalid — ZOT_LOG_7440_HOST ('$EXPECTED_HOST') is not a" >&2
-  echo "           hostname-alphabet value; refusing to interpolate it into the isolation regex." >&2
+  echo "TRANSIENT: reason=config_invalid — ZOT_LOG_7440_HOST carries non-hostname-alphabet" >&2
+  echo "           characters; refusing to interpolate it into the isolation regex." >&2
   exit 2
 fi
 # Two missed */5 heartbeats. A host that was emitting and stopped reads "dark residue", not
@@ -335,9 +335,11 @@ SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
         v = (i > 0) ? substr(rest, 1, i - 1) : rest
         sub(/ .*/, "", v)
         # The mask is three-or-more asterisks (the zot redact emits ******) — a 1-2 asterisk
-        # prefix is NOT a mask and must still flag. An EMPTY value (`Authorization:[]`) is a
-        # malformed header, not a credential — skip it, never flag it.
+        # prefix is NOT a mask and must still flag. A literally EMPTY value (`Authorization:[]`,
+        # i==1) is a malformed header — skip it. A value that empties only AFTER the space cut
+        # (`Authorization:[ x`) is a malformed UNMASKED header and fails loud.
         if (v != "" && v !~ /^(\*\*\*|REDACTED)/) return 1
+        if (v == "" && i > 1) return 1
         if (i == 0) return 0
         s = substr(rest, i)
       }
@@ -647,11 +649,13 @@ if [[ -z "$NDT_EPOCH" ]]; then
 fi
 NOW_EPOCH="${ZOT_LOG_7440_NOW:-$(date -u +%s)}"
 if [[ ! "$NOW_EPOCH" =~ ^[0-9]+$ ]]; then
-  echo "CANNOT ESTABLISH: ZOT_LOG_7440_NOW is set but not an epoch (${NOW_EPOCH}) — a probe-env" >&2
-  echo "           defect, not evidence. Under the sweeper's env -i this arm is unreachable." >&2
+  echo "CANNOT ESTABLISH: ZOT_LOG_7440_NOW is set but not an epoch — a probe-env defect, not" >&2
+  echo "           evidence. Under the sweeper's env -i this arm is unreachable." >&2
   exit 3
 fi
-ROW_AGE_SECS=$(( NOW_EPOCH - NDT_EPOCH ))
+# 10# pins base-10: a leading-zero seam value (09) would otherwise read octal and abort the
+# arithmetic under set -u — at rc 1, the reserved FAIL code.
+ROW_AGE_SECS=$(( 10#$NOW_EPOCH - NDT_EPOCH ))
 if (( ROW_AGE_SECS > PRODUCER_SILENT_SECS )); then
   echo "CANNOT ESTABLISH: reason=producer_silent boot=${NEWEST_BOOT} — the newest producer row is" >&2
   echo "           ${ROW_AGE_SECS}s old (threshold ${PRODUCER_SILENT_SECS}s, two missed */5 ticks)." >&2
