@@ -367,7 +367,7 @@ fi
 # {context, integration_id} OBJECTS, so a bare-string index never matches and the
 # condition would never retire.
 if ! jq -e --arg c "infra-validate-required" 'any(.[]; .context == $c)' <<<"$REQUIRED_JSON" >/dev/null 2>&1; then
-  if printf '%s\n' "$CHANGED" | grep -qE "$INFRA_RE"; then
+  if grep -qE "$INFRA_RE" <<<"$CHANGED"; then
     owed "diff touches the infra surface and infra-validate-required is NOT in the live required set (#6480) — the battery is its only BLOCKING gate"
   fi
 fi

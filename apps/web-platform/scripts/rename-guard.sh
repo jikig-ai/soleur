@@ -126,7 +126,7 @@ fi
 matched_allow_res() {
   local path="$1" re
   for re in "${ALLOW_RES[@]}"; do
-    if printf '%s' "${path}" | grep -qP "${re}"; then
+    if grep -qP "${re}" <<<"${path}"; then
       printf '%s\n' "${re}"
     fi
   done

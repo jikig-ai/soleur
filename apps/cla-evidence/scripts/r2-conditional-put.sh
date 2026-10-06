@@ -162,7 +162,7 @@ while [[ "$attempt" -le "$attempt_max" ]]; do
   # 4xx body (e.g., SignatureDoesNotMatch, AccessDenied, or a future
   # object-key-lock code) falls through to the existing fatal-4xx arm and
   # surfaces in the operator annotation.
-  if (( code == 409 || code == 403 )) && body_excerpt | grep -q -F '<Code>ObjectLockedByBucketPolicy</Code>'; then
+  if (( code == 409 || code == 403 )) && grep -q -F '<Code>ObjectLockedByBucketPolicy</Code>' < <(body_excerpt); then
     echo "worm-${dup_label} status=$code key=$key attempt=$attempt (worm-idempotent)"
     exit 0
   fi

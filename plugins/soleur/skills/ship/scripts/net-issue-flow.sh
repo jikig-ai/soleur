@@ -612,7 +612,7 @@ fi
 # own override — reported as OVERRIDDEN with a bypass event, while nothing in
 # the body reads as a deliberate decision. Same self-override class the hook
 # header guards against for spec files, via a different corpus path.
-if printf '%s' "$PR_BODY_SCAN" | grep -qF -- "$MARKER"; then
+if grep -qF -- "$MARKER" < <(printf '%s' "$PR_BODY_SCAN"); then
   printf '\nnet-issue-flow: OVERRIDDEN via the gate-override marker in the PR body.\n'
   printf '  Net is +%d; the override is recorded as a deliberate decision.\n' "$NET"
   _emit bypass "net-issue-flow overridden net=${NET} pr=${PR_NUMBER}"

@@ -71,7 +71,7 @@ for path in "${added[@]}"; do
   required_fields=(skill source findings_json justification approver scanner_version rule_pack_sha256 verdict timestamp)
   missing=""
   for f in "${required_fields[@]}"; do
-    if ! echo "$fm" | grep -qE "^${f}:[[:space:]]"; then
+    if ! grep -qE "^${f}:[[:space:]]" <<<"$fm"; then
       missing+="$f "
     fi
   done
@@ -130,7 +130,7 @@ for path in "${added[@]}"; do
     /^[[:space:]]*approver:/      { next }
     { print }
   ' "$path")"
-  if echo "$artifact_text" | grep -qE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'; then
+  if grep -qE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$artifact_text"; then
     invalid="$(echo "$invalid" | jq --arg p "$path" --arg r "artifact contains raw email pattern outside approver field — use path-form findings_json (point to redacted .scan-meta.json) instead of inline" '. + [{path: $p, reason: $r}]')"
     continue
   fi

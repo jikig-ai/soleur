@@ -92,7 +92,7 @@ enumerate_workflows() {
   for f in .github/workflows/scheduled-*.yml; do
     [[ -f "$f" ]] || continue
     [[ "$f" == *"pr-quality-guards"* ]] && continue
-    if printf '%s\n' "$composite" | grep -qFx "$f"; then continue; fi
+    if grep -qFx "$f" <<<"$composite"; then continue; fi
     if grep -qE 'check-runs' "$f" && grep -qE '(name=test|"name":[[:space:]]*"test")' "$f"; then
       inline+="$f"$'\n'
     fi

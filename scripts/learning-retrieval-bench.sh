@@ -542,7 +542,7 @@ SENSITIVE_QUERY_REGEX='((=|:)[[:space:]]*[a-zA-Z0-9+/]{16,}|sk-(ant-)?[a-zA-Z0-9
 # shaped literal, 1 otherwise. Case-insensitive.
 query_is_sensitive() {
   local q="$1"
-  printf '%s' "$q" | grep -iEq "$SENSITIVE_QUERY_REGEX"
+  grep -iEq "$SENSITIVE_QUERY_REGEX" <<<"$q"
 }
 
 # kbsearch_rank: two-tier (INDEX.md title-match + corpus content-match) with

@@ -47,7 +47,7 @@ fi
 marker_ln=$(grep -nF "$MARKER" -- "$input" | cut -d: -f1) || true
 
 # The credit paragraph is the LAST block: only blank lines may follow it.
-if tail -n +"$((marker_ln + 1))" -- "$input" | grep -qE '[^[:space:]]'; then
+if grep -qE '[^[:space:]]' < <(tail -n +"$((marker_ln + 1))" -- "$input"); then
   echo "strip-vendor-credit: content follows the credit marker in $input — not a trailing credit block" >&2
   exit 2
 fi
@@ -61,7 +61,7 @@ if [[ -z "${fence_ln:-}" ]]; then
   exit 2
 fi
 if [[ $((marker_ln - fence_ln)) -gt 1 ]] &&
-   sed -n "$((fence_ln + 1)),$((marker_ln - 1))p" -- "$input" | grep -qE '[^[:space:]]'; then
+   grep -qE '[^[:space:]]' < <(sed -n "$((fence_ln + 1)),$((marker_ln - 1))p" -- "$input"); then
   echo "strip-vendor-credit: non-blank content between the \`---\` fence and the credit marker in $input" >&2
   exit 2
 fi

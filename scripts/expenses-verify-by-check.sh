@@ -82,7 +82,7 @@ classify_marker() {
   [[ -z "$vb" ]]    && { echo "anomaly|missing verify_by"; return; }
   [[ -z "$owner" ]] && { echo "anomaly|missing owner"; return; }
   # source="" (present but empty) is allowed to be caught: require non-empty.
-  if ! printf '%s' "$marker" | grep -qE 'source="[^"]+"'; then
+  if ! grep -qE 'source="[^"]+"' <<<"$marker"; then
     echo "anomaly|missing or empty source"
     return
   fi

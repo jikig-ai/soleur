@@ -667,7 +667,7 @@ if (( APPLY && total_matches > 0 )); then
   # explicit zero-match message) instead of relying on the variable.
   total_matches=0
   remaining=$(inventory_all 2>&1 || true)
-  if printf '%s\n' "$remaining" | grep -q '^No matches found\.'; then
+  if grep -q '^No matches found\.' <<<"$remaining"; then
     remaining_count=0
   else
     remaining_count=$(
