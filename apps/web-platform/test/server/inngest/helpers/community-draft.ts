@@ -11,7 +11,6 @@ import {
 } from "@/server/inngest/functions/_cron-community-publication";
 
 export type DraftOverrides = {
-  periodDays?: unknown;
   platforms?: Partial<Record<CommunityPlatform, Record<string, unknown>>>;
   topics?: unknown;
   /** Extra top-level keys, merged last (used by rejection rows). */
@@ -26,7 +25,6 @@ export function validDraftObject(overrides: DraftOverrides = {}): Record<string,
     platforms[p] = { status: "collected", metrics, ...(overrides.platforms?.[p] ?? {}) };
   }
   return {
-    periodDays: overrides.periodDays ?? 1,
     platforms,
     topics: overrides.topics ?? [
       { category: "infrastructure", count: 2 },

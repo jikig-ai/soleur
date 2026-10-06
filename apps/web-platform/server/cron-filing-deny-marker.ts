@@ -133,8 +133,12 @@ const DENIED_TOOL_VOCABULARY: readonly string[] = [
   "TodoWrite",
 ];
 
-/** Upper bound on distinct names reported (the vocabulary plus `other` is 16). */
-export const MAX_DENIED_TOOLS = 12;
+/**
+ * Upper bound on distinct names reported: the vocabulary plus `other`. DERIVED, never
+ * a literal below that size, so a run that denied every class still reports `other`
+ * (a tool the hook did not know about) instead of dropping it at the cap.
+ */
+export const MAX_DENIED_TOOLS = DENIED_TOOL_VOCABULARY.length + 1;
 
 /**
  * Count EVERY denied tool call in a result event's `permission_denials` and name

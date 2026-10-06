@@ -795,6 +795,36 @@ function browserNavigateReason(toolInput, navigateOrigin) {
   return null;
 }
 
+// #7122 P1-A — the argument grammar of a `no-file-tools` cron. The allowlist matches
+// `<verb prefix> ` and the metachar screen above strips every single-quoted span, so
+// the TRAILING arguments of an allowed verb were never inspected: a single-quoted
+// `HOME[$(cmd)]` reached a router script that evaluated it in an arithmetic context,
+// and a `--query` value was interpolated into `python3 -c` source. This is the
+// structural close: for a cron that carries the directive, every
+// whitespace-separated token of every segment must match STRICT_TOKEN_RE. The check
+// runs on the RAW command text (never the quote-stripped or tokenized form), so no
+// quoting, escaping, expansion, glob, brace, comment or non-ASCII form can hide a
+// payload. Segments are split on `;` and `&&` only; any other separator, quote or
+// metacharacter is, by construction, a token outside the charset.
+const STRICT_TOKEN_RE = /^[A-Za-z0-9._:=@/+-]+$/;
+
+// Returns a FIXED deny reason (never any text from the command: the reason travels
+// back into the model's context and the permission_denials channel) or null.
+export function strictArgumentGrammarReason(command) {
+  if (typeof command !== "string") return "argument grammar (no-file-tools): non-string command";
+  let segments = 0;
+  for (const seg of command.split(/;|&&/)) {
+    const trimmed = seg.replace(/^[ \t]+|[ \t]+$/g, "");
+    if (!trimmed) continue;
+    segments++;
+    for (const token of trimmed.split(/[ \t]+/)) {
+      if (!STRICT_TOKEN_RE.test(token))
+        return "argument grammar (no-file-tools): every token must match [A-Za-z0-9._:=@/+-]+ (no quotes, expansions, brackets, braces, escapes or whitespace other than space/tab)";
+    }
+  }
+  return segments === 0 ? "argument grammar (no-file-tools): no command segment" : null;
+}
+
 // ---- the decision function (pure; unit-tested) -----------------------------
 
 export function decide(input, allowPrefixes) {
@@ -829,6 +859,12 @@ export function decide(input, allowPrefixes) {
     case "Bash": {
       const command = typeof ti.command === "string" ? ti.command : "";
       if (!command.trim()) return denyDecision("empty Bash command");
+      // #7122 P1-A — evaluated FIRST and on the raw text: a payload the quote
+      // stripping below would hide never reaches the checks that depend on it.
+      if (noFileTools) {
+        const grammarReason = strictArgumentGrammarReason(command);
+        if (grammarReason) return denyDecision(grammarReason);
+      }
       const metaReason = dangerousMetacharReason(command);
       if (metaReason) return denyDecision(`metachar: ${metaReason}`);
       const segments = splitSegments(command);

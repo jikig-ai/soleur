@@ -9,6 +9,7 @@
 // implementation site below; the #5091 plan carries the full design.
 
 import { existsSync } from "node:fs";
+import { lstat, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Octokit } from "@octokit/core";
@@ -92,8 +93,26 @@ export interface SafeCommitConfig {
    * wants equality only passes `allowedPaths: []`. Setting this switches the
    * dropped-path PR-body marker to COUNT-ONLY: a stray file's name is
    * agent-chosen and the PR body is public, so names go to Sentry alone.
+   *
+   * It also switches the workspace to the UNTRUSTED posture (#7122 P1-B): the agent
+   * that ran in it may have planted git state. Before any git command the handler
+   * rewrites `.git/config` from scratch (only `remote.origin.url` survives), removes
+   * `.git/hooks` and `.git/info/attributes`, refuses a `.git` that is not a plain
+   * directory, stages each path as a filter-free blob of the file's own bytes
+   * (`hash-object --no-filters` + `update-index`, never `git add`), refuses anything
+   * but a regular file, and — on the replay-resume arm — pushes a pre-existing branch
+   * only when it is exactly one commit touching only `exactPaths`.
    */
   exactPaths?: readonly string[];
+  /**
+   * #7122 P1-B — exactPaths mode only. Path -> the exact bytes (as a string) the
+   * handler rendered for it. After staging and BEFORE the commit, the INDEX blob of
+   * every key is read back and must equal the expected string byte-for-byte (on the
+   * resume arm, the branch tip's blob). A mismatch refuses to commit: status
+   * "failed", stage "integrity", a closed-vocabulary reason; neither the expected nor
+   * the actual bytes appear in any message, comment or Sentry extra.
+   */
+  expectedContent?: Readonly<Record<string, string>>;
   /** The handler's MEMOIZED run-start ISO timestamp (never a fresh Date). */
   runStartedAt: string;
   /** Label of the cron's scheduled output issue — guard/fail visibility comment target. */
@@ -205,6 +224,9 @@ export type SafeCommitResult =
         | "push"
         | "pr-create"
         | "auto-merge"
+        // #7122 P1-B — the workspace or the staged bytes are not what the handler
+        // produced. `message` is `integrity: <reason>`, a closed vocabulary.
+        | "integrity"
         | "unexpected";
       message: string;
     };
@@ -287,6 +309,22 @@ function safeMd(s: string): string {
   return s.replace(/[`\r\n|]/g, "ʼ");
 }
 
+// #7122 P1-B — applied to EVERY git invocation this module makes. The workspace was
+// the agent's: a hook it planted (`.git/hooks/*`), a `core.fsmonitor` command or a
+// global attributes file would otherwise run inside the handler process with its
+// environment and, after the origin re-point, with the write token. `-c` beats the
+// repo's own config. Filter drivers (`filter.<name>.clean`) cannot be wildcarded
+// here; exactPaths mode removes them by rewriting the config instead (see
+// sanitizeWorkspaceGit) and by never staging through a filter.
+const GIT_HARDENING_ARGS: readonly string[] = [
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.attributesFile=/dev/null",
+];
+
 async function runGit(
   spawnCwd: string,
   args: string[],
@@ -300,7 +338,7 @@ async function runGit(
   const { execFile } = await import("node:child_process");
   const execFileP = promisify(execFile);
   try {
-    const { stdout, stderr } = await execFileP("git", args, {
+    const { stdout, stderr } = await execFileP("git", [...GIT_HARDENING_ARGS, ...args], {
       cwd: spawnCwd,
       // Isolate from host/container git config (signing, hooksPath,
       // templates) — fixture determinism in tests AND prod predictability.
@@ -318,6 +356,138 @@ async function runGit(
     const e = err as Error & { stdout?: string; stderr?: string };
     return { ok: false, stdout: e.stdout ?? "", stderr: e.stderr ?? e.message };
   }
+}
+
+/** The raw bytes of a git object (`:<path>` = the index blob, `HEAD:<path>` = the tip's). */
+async function gitObjectBytes(spawnCwd: string, spec: string): Promise<Buffer | null> {
+  const { execFile } = await import("node:child_process");
+  const execFileP = promisify(execFile);
+  try {
+    const { stdout } = await execFileP("git", [...GIT_HARDENING_ARGS, "cat-file", "blob", spec], {
+      cwd: spawnCwd,
+      encoding: "buffer",
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+      },
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    return stdout as unknown as Buffer;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #7122 P1-B — put an agent-touched workspace's git state back to a known shape, in
+ * place, BEFORE the first git command of the handler's own pipeline. Returns a
+ * closed-vocabulary reason on refusal, or null.
+ *
+ * What an agent could have planted that `-c` cannot override: `filter.*` drivers (+
+ * `.git/info/attributes` to select them), `url.<x>.insteadOf` / `remote.origin.pushurl`
+ * (the push, with the write token, goes elsewhere), `core.sshCommand`,
+ * `credential.helper`, aliases, `include.path`. The one trustworthy fact is
+ * `remote.origin.url`, which `setOriginToken` wrote after the child exited. So the
+ * config is REWRITTEN from nothing and only that value is carried over; `.git/hooks`
+ * and `.git/info/attributes` are removed. A `.git` that is a symlink or a file
+ * (`gitdir:` indirection) is refused outright.
+ */
+async function sanitizeWorkspaceGit(spawnCwd: string): Promise<string | null> {
+  const gitDir = join(spawnCwd, ".git");
+  let st;
+  try {
+    st = await lstat(gitDir);
+  } catch {
+    return "git-dir-not-directory";
+  }
+  if (!st.isDirectory() || st.isSymbolicLink()) return "git-dir-not-directory";
+  const url = await runGit(spawnCwd, ["config", "--local", "--get", "remote.origin.url"]);
+  const originUrl = url.ok ? url.stdout.trim() : "";
+  if (!originUrl || /[\r\n]/.test(originUrl)) return "config-rewrite-failed";
+  try {
+    await rm(join(gitDir, "hooks"), { recursive: true, force: true });
+    await rm(join(gitDir, "info", "attributes"), { force: true });
+    await writeFile(join(gitDir, "config"), "[core]\n\trepositoryformatversion = 0\n", "utf-8");
+  } catch {
+    return "config-rewrite-failed";
+  }
+  const setUrl = await runGit(spawnCwd, ["config", "--local", "remote.origin.url", originUrl]);
+  const setFetch = await runGit(spawnCwd, [
+    "config",
+    "--local",
+    "remote.origin.fetch",
+    "+refs/heads/*:refs/remotes/origin/*",
+  ]);
+  return setUrl.ok && setFetch.ok ? null : "config-rewrite-failed";
+}
+
+/**
+ * exactPaths staging: each path becomes a blob of the FILE'S OWN BYTES, with no
+ * clean filter, no attribute-driven conversion and no `git add`. Anything but a
+ * regular file (a symlink would commit its target's bytes) is refused. Returns a
+ * closed-vocabulary reason on refusal, or null.
+ */
+async function stageExactPaths(spawnCwd: string, paths: readonly string[]): Promise<string | null> {
+  for (const rel of paths) {
+    let st;
+    try {
+      st = await lstat(join(spawnCwd, rel));
+    } catch {
+      return "path-not-regular-file";
+    }
+    if (!st.isFile() || st.isSymbolicLink()) return "path-not-regular-file";
+    const hashed = await runGit(spawnCwd, ["hash-object", "-w", "--no-filters", "--", rel]);
+    const sha = hashed.stdout.trim();
+    if (!hashed.ok || !/^[0-9a-f]{40,64}$/.test(sha)) return "stage-failed";
+    const idx = await runGit(spawnCwd, ["update-index", "--add", "--cacheinfo", `100644,${sha},${rel}`]);
+    if (!idx.ok) return "stage-failed";
+  }
+  return null;
+}
+
+/** Every key of `expected` must read back (from `treeish`, `:` for the index) byte-for-byte. */
+async function contentMatches(
+  spawnCwd: string,
+  treeish: string,
+  expected: Readonly<Record<string, string>>,
+): Promise<boolean> {
+  for (const [path, want] of Object.entries(expected)) {
+    const got = await gitObjectBytes(spawnCwd, `${treeish}:${path}`);
+    if (got === null || Buffer.compare(got, Buffer.from(want, "utf8")) !== 0) return false;
+  }
+  return true;
+}
+
+/**
+ * exactPaths replay-resume gate: a pre-existing branch is pushed only when it is
+ * exactly the one commit this handler would have made — one commit ahead of
+ * origin/main, touching only the exact paths, whose blobs equal the rendered bytes.
+ * Anything else may carry agent-authored content and is refused.
+ */
+async function resumeTipReason(
+  spawnCwd: string,
+  config: Pick<SafeCommitConfig, "allowedPaths" | "exactPaths" | "expectedContent">,
+): Promise<string | null> {
+  const count = await runGit(spawnCwd, ["rev-list", "origin/main..HEAD", "--count"]);
+  if (!count.ok || count.stdout.trim() !== "1") return "resume-unexpected-commit-count";
+  const names = await runGit(spawnCwd, [
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--name-only",
+    "-z",
+    "origin/main",
+    "HEAD",
+  ]);
+  if (!names.ok) return "resume-unexpected-path";
+  const changed = names.stdout.split("\0").filter(Boolean);
+  if (changed.length === 0 || !changed.every((n) => isPathAllowed(n, config))) return "resume-unexpected-path";
+  if (config.expectedContent && !(await contentMatches(spawnCwd, "HEAD", config.expectedContent))) {
+    return "resume-content-mismatch";
+  }
+  return null;
 }
 
 // GraphQL auto-merge enable, extracted from cron-bug-fixer (PR #5091) so both
@@ -493,6 +663,21 @@ async function failure(
   return { status: "failed", stage, message: scrubbed };
 }
 
+/**
+ * #7122 P1-B — the one refusal exit for "the workspace or the staged bytes are not
+ * what the handler produced". `reason` is a closed vocabulary (never a path, never
+ * content) so the message, the visibility comment and the Sentry extra can carry it
+ * verbatim.
+ */
+function integrityFailure(config: SafeCommitConfig, reason: string): Promise<SafeCommitResult> {
+  return failure(config, "integrity", `integrity: ${reason}`, {
+    extra: { reason },
+    comment:
+      `PR withheld: safe-commit refused to publish for \`${config.cronName}\` (integrity: ${reason}). ` +
+      `See Sentry op \`safe-commit-failed\` (fn=${config.cronName}).`,
+  });
+}
+
 export async function safeCommitAndPr(
   config: SafeCommitConfig,
 ): Promise<SafeCommitResult> {
@@ -533,6 +718,15 @@ export async function safeCommitAndPr(
       return failure(config, "workspace-lost", `spawnCwd missing or not a git repo: ${spawnCwd}`);
     }
 
+    // -- 1.5. #7122 P1-B — an exactPaths run treats the workspace as untrusted (the
+    //         agent that used it may have planted git state). Runs before the first
+    //         git command of this pipeline.
+    const exactMode = exactPaths !== undefined;
+    if (exactMode) {
+      const unsafe = await sanitizeWorkspaceGit(spawnCwd);
+      if (unsafe) return integrityFailure(config, unsafe);
+    }
+
     // -- 2. Replay-resume: a prior attempt already created the commit
     //       (crash between commit and push/PR). Branch-name match alone is
     //       NOT enough — a crash between `checkout -B` and `commit` leaves
@@ -545,6 +739,12 @@ export async function safeCommitAndPr(
     if (headRef.ok && headRef.stdout.trim() === branch) {
       const ahead = await runGit(spawnCwd, ["rev-list", "origin/main..HEAD", "--count"]);
       resuming = ahead.ok && Number(ahead.stdout.trim()) > 0;
+    }
+    // #7122 P1-B — a pre-existing branch ahead of origin/main in an exactPaths run is
+    // NOT trusted to be ours: refuse to push anything but the one expected commit.
+    if (resuming && exactMode) {
+      const unsafe = await resumeTipReason(spawnCwd, config);
+      if (unsafe) return integrityFailure(config, unsafe);
     }
 
     let fileCount = 0;
@@ -665,13 +865,26 @@ export async function safeCommitAndPr(
       if (!checkout.ok) {
         return failure(config, "checkout", `checkout -B ${branch}: ${checkout.stderr}`);
       }
-      const add = await runGit(spawnCwd, [
-        "add",
-        "--",
-        ...matched.map((e) => e.path),
-      ]);
-      if (!add.ok) {
-        return failure(config, "add", add.stderr);
+      if (exactMode) {
+        // Filter-free staging of the file's own bytes, then read the INDEX back and
+        // compare it with what the handler rendered BEFORE a commit can exist.
+        const unsafe = await stageExactPaths(
+          spawnCwd,
+          matched.map((e) => e.path),
+        );
+        if (unsafe) return integrityFailure(config, unsafe);
+        if (config.expectedContent && !(await contentMatches(spawnCwd, "", config.expectedContent))) {
+          return integrityFailure(config, "index-content-mismatch");
+        }
+      } else {
+        const add = await runGit(spawnCwd, [
+          "add",
+          "--",
+          ...matched.map((e) => e.path),
+        ]);
+        if (!add.ok) {
+          return failure(config, "add", add.stderr);
+        }
       }
       const commit = await runGit(
         spawnCwd,

@@ -12,10 +12,15 @@
 // Credential custody is asserted here by `permissions`: the mint mock returns a
 // READ token for the read-scoped permission set and a WRITE token for the default
 // set, so a swapped token at any call site is a red test.
+//
+// The fake issue store ANSWERS THE QUESTION ASKED: `state`, `labels`, `sort`,
+// `direction` and `per_page` are applied (helpers/issue-list-params.ts), so a
+// regression in the upsert's read shape shows up as a duplicate issue here.
 import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyIssueListParams } from "./helpers/issue-list-params";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
@@ -36,6 +41,15 @@ const digestLivenessSpy = vi.fn();
 const real = vi.hoisted(() => ({
   ensure: null as null | ((...a: unknown[]) => Promise<unknown>),
 }));
+// Faults injected into the REAL publication module's entry points (a throw whose
+// message carries a credential cannot be produced any other way), and the slug
+// getAppSlug resolves (the authoritative bot-login source).
+const pub = vi.hoisted(() => ({
+  parseFault: undefined as unknown,
+  upsertFault: undefined as unknown,
+  upsertArgs: [] as Record<string, unknown>[],
+  appSlug: "soleur-ai",
+}));
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 // --- Fake GitHub store ------------------------------------------------------
@@ -47,6 +61,7 @@ interface Row {
   user: { type: string; login: string };
   pull_request?: unknown;
   milestone?: number;
+  labels?: string[];
   created_at: string;
 }
 let issues: Row[];
@@ -67,8 +82,7 @@ const fakeRequest = vi.fn(async (route: string, params: Record<string, unknown> 
   if (queued !== undefined) throw queued;
   if (sticky[route] !== undefined) throw sticky[route];
   if (route === "GET /repos/{owner}/{repo}/issues") {
-    const sorted = [...issues].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-    return { data: sorted.slice(0, Number(params.per_page ?? 30)) };
+    return { data: applyIssueListParams(issues, params) };
   }
   if (route === "GET /repos/{owner}/{repo}/milestones") {
     return { data: milestones };
@@ -82,6 +96,7 @@ const fakeRequest = vi.fn(async (route: string, params: Record<string, unknown> 
       state: "open",
       user: BOT,
       milestone: typeof params.milestone === "number" ? params.milestone : undefined,
+      labels: Array.isArray(params.labels) ? (params.labels as string[]) : undefined,
       created_at: new Date(Date.now() + issues.length).toISOString(),
     };
     issues.push(row);
@@ -102,6 +117,32 @@ const fakeOctokit = { request: fakeRequest };
 vi.mock("@/server/github/probe-octokit", () => ({
   createProbeOctokit: () => Promise.resolve(fakeOctokit),
 }));
+
+// The authoritative bot-login source (GET /app). The handler appends "[bot]".
+vi.mock("@/server/github-app", () => ({
+  getAppSlug: () => Promise.resolve(pub.appSlug),
+}));
+
+// The REAL publication module, wrapped only to (a) inject faults at its two entry
+// points and (b) inject `retryDelayMs: 0` so a 5xx-then-success row does not sleep.
+vi.mock("@/server/inngest/functions/_cron-community-publication", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/server/inngest/functions/_cron-community-publication")>();
+  return {
+    ...actual,
+    parseCommunityDraft: (...a: Parameters<typeof actual.parseCommunityDraft>) => {
+      if (pub.parseFault !== undefined) throw pub.parseFault;
+      return actual.parseCommunityDraft(...a);
+    },
+    upsertDigestIssue: (args: Parameters<typeof actual.upsertDigestIssue>[0]) => {
+      pub.upsertArgs.push({ ...args, octokit: undefined });
+      if (pub.upsertFault !== undefined) throw pub.upsertFault;
+      return actual.upsertDigestIssue({ ...args, retryDelayMs: 0 });
+    },
+    patchIssueBody: (args: Parameters<typeof actual.patchIssueBody>[0]) =>
+      actual.patchIssueBody({ ...args, retryDelayMs: 0 }),
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: (...a: unknown[]) => reportSilentFallbackSpy(...a),
@@ -151,6 +192,7 @@ import {
   COMMUNITY_DIGEST_DIR,
   cronCommunityMonitorHandler,
 } from "@/server/inngest/functions/cron-community-monitor";
+import { COMMUNITY_DISALLOWED_TOOLS } from "@/server/inngest/functions/_cron-claude-eval-substrate";
 import {
   parseCommunityDraft,
   renderCommunityPublication,
@@ -245,10 +287,19 @@ const patches = () =>
 const opCall = (op: string) => reportSilentFallbackSpy.mock.calls.find((c) => c[1]?.op === op);
 const warnCall = (op: string) => warnSilentFallbackSpy.mock.calls.find((c) => c[1]?.op === op);
 
-function expectedRender(githubOverride?: { status: "failed" | "partial"; failureCause: "script-error" | "unknown" }) {
-  const parsed = parseCommunityDraft(validDraftFinalMessage());
+function expectedRender(
+  githubOverride?: { status: "failed" | "partial"; failureCause: "script-error" | "unknown" },
+  message = validDraftFinalMessage(),
+) {
+  const parsed = parseCommunityDraft(message);
   if (!parsed.ok) throw new Error("fixture draft must parse");
-  return renderCommunityPublication(parsed.draft, { runDate: TODAY, repo: REPO, githubOverride });
+  // generated_at is the run's own (frozen) start instant.
+  return renderCommunityPublication(parsed.draft, {
+    runDate: TODAY,
+    repo: REPO,
+    generatedAt: FROZEN.toISOString(),
+    githubOverride,
+  });
 }
 
 beforeEach(() => {
@@ -285,6 +336,10 @@ beforeEach(() => {
     events.push("safe-commit");
     return committedWithDigest();
   });
+  pub.parseFault = undefined;
+  pub.upsertFault = undefined;
+  pub.upsertArgs = [];
+  pub.appSlug = "soleur-ai";
   vi.stubEnv("SENTRY_INGEST_DOMAIN", "o4509.ingest.sentry.io");
   vi.stubEnv("SENTRY_PROJECT_ID", "4509999");
   vi.stubEnv("SENTRY_PUBLIC_KEY", "abcdef0123456789abcdef0123456789");
@@ -418,7 +473,12 @@ describe("publication flow — rejection is loud and publishes nothing", () => {
     ["a non-JSON hostile message", { finalMessage: INJECT }, "parse"],
     ["a missing final message", { finalMessage: undefined }, "missing"],
     ["an oversized (truncated) message", { finalMessageTruncated: true }, "oversized"],
-    ["a string where periodDays belongs", { finalMessage: validDraftFinalMessage({ periodDays: INJECT }) }, "schema"],
+    ["a string where topics belongs", { finalMessage: validDraftFinalMessage({ topics: INJECT }) }, "schema"],
+    [
+      "the retired periodDays key (the window is a handler constant now)",
+      { finalMessage: validDraftFinalMessage({ extra: { periodDays: 7 } }) },
+      "schema",
+    ],
     [
       "an extra top-level key named as an injection sentence",
       { finalMessage: validDraftFinalMessage({ extra: { [INJECT]: 1 } }) },
@@ -439,6 +499,12 @@ describe("publication flow — rejection is loud and publishes nothing", () => {
 
     const call = opCall("community-publication-rejected");
     expect(call, "community-publication-rejected was not reported").toBeDefined();
+    // CALL SHAPE (#8629): err is null (MESSAGE path), so Sentry keeps the `op` tag and
+    // the extras (an Error first arg is pre-captured by the pino mirror and the tagged
+    // capture is dropped). The closed reason leads the message so each reason groups.
+    expect(call![0]).toBeNull();
+    expect(call![1]).toMatchObject({ feature: "cron-community-monitor", op: "community-publication-rejected" });
+    expect(call![1].message).toContain(`community draft rejected (${reason})`);
     const extra = call![1].extra as Record<string, unknown>;
     expect(extra.reason).toBe(reason);
     expect(Object.keys(extra).sort()).toEqual(
@@ -456,6 +522,10 @@ describe("publication flow — rejection is loud and publishes nothing", () => {
     for (const v of Object.values(extra)) {
       expect(["number", "boolean", "string", "object"]).toContain(typeof v);
     }
+    // The advisory re-read must NOT run on a rejected draft: its event folds the spawn's
+    // stdout/stderr tail (which carries the rejected message) into Sentry.
+    expect(resolveOutputAwareOkSpy).not.toHaveBeenCalled();
+    expect(opCall("scheduled-output-missing")).toBeUndefined();
     // No attacker-chosen string reaches ANY Sentry call, extra or message.
     const sentry = JSON.stringify([
       ...reportSilentFallbackSpy.mock.calls.map((c) => [String(c[0]), c[1]]),
@@ -495,7 +565,9 @@ describe("publication flow — rejection is loud and publishes nothing", () => {
 
     const { out, memo } = await run();
 
-    expect(resolveOutputAwareOkSpy).toHaveBeenCalled();
+    // verify-output is not even consulted for a rejected draft (nothing was published).
+    expect(resolveOutputAwareOkSpy).not.toHaveBeenCalled();
+    expect([...memo.keys()]).not.toContain("verify-output");
     expect(out.value).toEqual({ ok: false });
     expect(heartbeatUrls()[0]).toContain("?status=error");
     expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
@@ -639,27 +711,93 @@ describe("publication flow — the issue upsert", () => {
   });
 });
 
-describe("publication flow — a commit that does not land never leaves a dangling link", () => {
-  const notCommitted: [string, Record<string, unknown>][] = [
-    ["no-changes", { status: "no-changes" }],
-    ["failed", { status: "failed", stage: "git-push", message: "remote rejected" }],
+describe("publication flow — a digest that does not land never leaves a dangling link", () => {
+  // The issue is published BEFORE the commit and links the digest file. The notice
+  // PATCH is keyed on the OUTCOME ("published and the digest did not land"), not on one
+  // return status, and the ONE exception is `no-changes` (an identical file is on main).
+  const noticeCases: [string, () => void][] = [
+    ["commit FAILED", () => safeCommitAndPrSpy.mockResolvedValue({ status: "failed", stage: "git-push", message: "remote rejected" })],
+    ["commit THREW (a throw out of safe-commit-pr)", () => safeCommitAndPrSpy.mockRejectedValue(new Error("git push failed"))],
+    [
+      "committed OTHER files but not today's digest",
+      () =>
+        safeCommitAndPrSpy.mockResolvedValue({
+          status: "committed", prNumber: 1, branch: "b", fileCount: 1, deletionCount: 0, paths: ["knowledge-base/support/community/other.md"],
+        }),
+    ],
+    [
+      "committed with undetermined paths and no replay-resume marker (contract drift)",
+      () => safeCommitAndPrSpy.mockResolvedValue({ status: "committed", prNumber: 1, branch: "b", fileCount: 0, deletionCount: 0 }),
+    ],
+    ["a step between publish and commit THROWS (verify-output rejects)", () => resolveOutputAwareOkSpy.mockRejectedValue(new Error("verify blew up"))],
   ];
-  it.each(notCommitted)("status %s PATCHes the issue to the fixed notice (body only) and turns RED", async (_n, result) => {
-    safeCommitAndPrSpy.mockResolvedValue(result);
+  it.each(noticeCases)("%s: the issue is PATCHed to the fixed notice (body only, still open) and the run is RED", async (_n, arrange) => {
+    arrange();
 
     const { out } = await run();
 
     expect(out.value).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(issues).toHaveLength(1);
     expect(issues[0].body).toBe(NOTICE);
     expect(issues[0].state).toBe("open");
     const last = patches().at(-1)!;
     expect(Object.keys(last.params).sort()).toEqual(["body", "headers", "issue_number", "owner", "repo"]);
   });
 
-  it("a committed digest leaves the rendered issue body alone", async () => {
+  it("commit `no-changes` (identical digest already on main): the link is VALID, so the issue keeps its rendered body; the run is still RED (class A)", async () => {
+    safeCommitAndPrSpy.mockResolvedValue({ status: "no-changes" });
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(issues[0].body).toBe(expectedRender().issueBody);
+    expect(patches()).toHaveLength(0);
+  });
+
+  it("a committed digest (auto-merge armed) leaves the rendered issue body alone: the notice is keyed on the liveness verdict, not on the merge", async () => {
     await run();
     expect(issues[0].body).not.toBe(NOTICE);
     expect(patches()).toHaveLength(0);
+  });
+
+  it("a replay-resume with undetermined paths is GREEN and leaves the issue alone", async () => {
+    safeCommitAndPrSpy.mockResolvedValue({ status: "committed", prNumber: 1, branch: "b", fileCount: 0, deletionCount: 0, resumed: true });
+    const { out } = await run();
+    expect(out.value).toEqual({ ok: true });
+    expect(issues[0].body).not.toBe(NOTICE);
+  });
+
+  it("a REJECTED draft published nothing, so there is no notice to write", async () => {
+    spawnClaudeEvalSpy.mockResolvedValue(okSpawn({ finalMessage: INJECT }));
+    await run();
+    expect(patches()).toHaveLength(0);
+    expect(opCall("community-publication-notice-failed")).toBeUndefined();
+  });
+
+  it("a notice PATCH that fails is reported with its op tag (message path) and never masks the RED verdict", async () => {
+    safeCommitAndPrSpy.mockRejectedValue(new Error("git push failed"));
+    // The create succeeded; every PATCH after it fails (a 403 is not retried).
+    sticky["PATCH /repos/{owner}/{repo}/issues/{issue_number}"] = Object.assign(new Error(`forbidden ${INJECT}`), { status: 403 });
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(issues[0].body).toBe(expectedRender().issueBody); // the notice never landed
+    const call = opCall("community-publication-notice-failed");
+    expect(call, "community-publication-notice-failed was not reported").toBeDefined();
+    expect(call![0]).toBeNull(); // #8629: the op tag survives only on the message path
+    expect(call![1].message).toEqual(expect.any(String));
+    expect(call![1].extra).toEqual({
+      fn: "cron-community-monitor",
+      issueNumber: issues[0].number,
+      errorName: "Error",
+      status: 403,
+    });
+    // The error's own message (which can echo a URL) is never forwarded.
+    expect(JSON.stringify(call)).not.toContain("forbidden");
   });
 });
 
@@ -735,5 +873,312 @@ describe("publication flow — agent denial telemetry", () => {
   it("stays silent when nothing was denied", async () => {
     await run();
     expect(warnCall("community-agent-denied-verb")).toBeUndefined();
+  });
+});
+
+describe("publication flow — the spawn contract (behavioural, not a source anchor)", () => {
+  it("hands spawnClaudeEval the Bash-only allow flags, the --disallowedTools list and the final-message opt-in", async () => {
+    await run();
+
+    const arg = spawnClaudeEvalSpy.mock.calls[0][0] as { flags: string[]; captureFinalMessage?: boolean };
+    const at = (flag: string) => arg.flags.indexOf(flag);
+    expect(at("--allowedTools"), "--allowedTools missing from the spawn argv").toBeGreaterThan(-1);
+    expect(arg.flags[at("--allowedTools") + 1]).toBe("Bash");
+    expect(at("--disallowedTools"), "--disallowedTools missing from the spawn argv").toBeGreaterThan(-1);
+    // The exact constant the substrate exports (mocked here with its real value).
+    expect(arg.flags[at("--disallowedTools") + 1]).toBe(COMMUNITY_DISALLOWED_TOOLS);
+    expect(arg.flags[arg.flags.length - 1]).toBe("--"); // the load-bearing end-of-options marker
+    expect(arg.captureFinalMessage).toBe(true);
+  });
+});
+
+describe("publication flow — replay across a deploy (step ids)", () => {
+  it("mints and clones under the NEW ids; a run memoized under the old ids re-mints and re-clones", async () => {
+    const { memo } = await run();
+    const keys = [...memo.keys()];
+    expect(keys).toContain("mint-read-token");
+    expect(keys).toContain("setup-workspace-ro");
+    expect(keys).not.toContain("mint-installation-token");
+    expect(keys).not.toContain("setup-workspace");
+
+    // A memo carrying the OLD (write-scoped) entries is simply not consulted.
+    mintSpy.mockClear();
+    setupWorkspaceSpy.mockClear();
+    const stale = new Map(memo);
+    stale.clear();
+    stale.set("mint-installation-token", { ok: true, data: WRITE_TOK });
+    stale.set("setup-workspace", { ok: true, data: { ok: true, ephemeralRoot: "/stale", spawnCwd: "/stale/repo" } });
+    await run({ memo: stale });
+    expect(mintSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect((mintSpy.mock.calls[0][0] as { permissions: Record<string, string> }).permissions.contents).toBe("read");
+    expect(setupWorkspaceSpy).toHaveBeenCalledTimes(1);
+    expect(setupWorkspaceSpy.mock.calls[0][0]).toMatchObject({ installationToken: READ_TOK });
+  });
+});
+
+describe("publication flow — verify-output is advisory", () => {
+  it("a verify-output FALSE NEGATIVE with a valid published draft still commits and is GREEN (the handler wrote the issue itself)", async () => {
+    resolveOutputAwareOkSpy.mockResolvedValue(false); // list lag / closed-issue refusal / non-zero exit
+
+    const { out } = await run();
+
+    expect(resolveOutputAwareOkSpy).toHaveBeenCalledTimes(1);
+    expect(out.value).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+    expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
+    expect(realDigests()).toHaveLength(1);
+    expect(patches()).toHaveLength(0); // no dangling-link notice either
+    // It ran AFTER the issue write and BEFORE the commit.
+    expect(events.indexOf("post-issue")).toBeLessThan(events.indexOf("safe-commit"));
+  });
+
+  it("a verify-output TRUE with a rejected draft cannot turn the run GREEN (covered by the rejection rows) and a valid run calls it exactly once", async () => {
+    await run();
+    expect(resolveOutputAwareOkSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("publication flow — the digest carries the REAL run timestamp and a fixed 1-day window", () => {
+  it("generated_at is the replay-stable run start, never midnight; the period is derived from runDate", async () => {
+    let committed = "";
+    safeCommitAndPrSpy.mockImplementation(async () => {
+      committed = readFileSync(join(spawnCwd, DIGEST_PATH), "utf8");
+      return committedWithDigest();
+    });
+
+    await run();
+
+    expect(committed).toContain(`\ngenerated_at: ${FROZEN.toISOString()}\n`);
+    expect(committed).not.toContain("T00:00:00Z");
+    expect(committed).toContain("\nperiod_start: 2026-06-29\n");
+    expect(committed).toContain("\nperiod_end: 2026-06-30\n");
+    expect(committed).toContain("Last 1 day, 2026-06-29 to 2026-06-30.");
+  });
+
+  it("hands safeCommitAndPr the exact rendered bytes to verify against the staged blob", async () => {
+    await run();
+    const cfg = safeCommitAndPrSpy.mock.calls[0][0] as { expectedContent?: Record<string, string> };
+    expect(cfg.expectedContent).toEqual({ [DIGEST_PATH]: expectedRender().digestMarkdown });
+  });
+});
+
+describe("publication flow — bot identity gate", () => {
+  it("passes the login resolved by getAppSlug() (+ [bot]) to the upsert, ignoring the env slug", async () => {
+    vi.stubEnv("NEXT_PUBLIC_GITHUB_APP_SLUG", "env-slug");
+    pub.appSlug = "real-app";
+    issues.push({
+      number: 8200, title: TITLE, body: "stale", state: "closed",
+      user: { type: "Bot", login: "real-app[bot]" },
+      created_at: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    const { out } = await run();
+
+    expect(pub.upsertArgs[0]).toMatchObject({ appLogin: "real-app[bot]" });
+    expect(out.value).toEqual({ ok: true });
+    expect(posts()).toHaveLength(0);
+    expect(issues[0].body).toBe(expectedRender().issueBody); // PATCHed, not duplicated
+  });
+
+  it("a Bot-authored digest under a DIFFERENT login is not PATCHed: a warn op is emitted instead of a silent duplicate", async () => {
+    pub.appSlug = "real-app";
+    issues.push({
+      number: 8201, title: TITLE, body: "somebody else's", state: "open",
+      user: { type: "Bot", login: "stale-slug[bot]" },
+      created_at: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    await run();
+
+    const warn = warnCall("community-publication-bot-login-mismatch");
+    expect(warn, "no login-mismatch warn").toBeDefined();
+    expect((warn![1].extra as Record<string, unknown>).issueNumber).toBe(8201);
+    expect(issues.find((i) => i.number === 8201)!.body).toBe("somebody else's");
+  });
+
+  it("the pre-spawn dedup read and the upsert read ask the same question (same page size and order)", async () => {
+    const { digestIssueExistsForDate } = await import("@/server/inngest/functions/_cron-shared");
+    expect(digestIssueExistsForDate).toBeDefined();
+    await run();
+    const reads = requestLog.filter((r) => r.route === "GET /repos/{owner}/{repo}/issues");
+    expect(reads.length).toBeGreaterThanOrEqual(1);
+    for (const r of reads) {
+      expect(r.params).toMatchObject({ sort: "created", direction: "desc", per_page: 10, state: "all", labels: "scheduled-community-monitor" });
+    }
+  });
+
+  it("with MORE older digests than a page holds, today's is still found (newest-first) and never duplicated", async () => {
+    for (let i = 0; i < 25; i++) {
+      issues.push({
+        number: 7000 + i, title: `[Scheduled] Community Monitor - 2026-06-${String((i % 28) + 1).padStart(2, "0")}`,
+        body: "old", state: "closed", user: BOT,
+        created_at: new Date(Date.UTC(2026, 5, 1, i)).toISOString(),
+      });
+    }
+    issues.push({
+      number: 7500, title: TITLE, body: "stale body of today's failed run", state: "closed", user: BOT,
+      created_at: new Date(Date.UTC(2026, 5, 30, 1)).toISOString(),
+    });
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: true });
+    expect(posts()).toHaveLength(0);
+    expect(issues.find((i) => i.number === 7500)!.body).toBe(expectedRender().issueBody);
+  });
+});
+
+describe("publication flow — unverified collector truth", () => {
+  it("a MISSING sidecar does not soften a github platform the draft itself reports as FAILED: it keeps `collection failed: <cause>`", async () => {
+    rmSync(join(spawnCwd, ".soleur-collector-status"), { recursive: true, force: true });
+    const message = validDraftFinalMessage({ platforms: { github: { status: "failed", failureCause: "auth" } } });
+    spawnClaudeEvalSpy.mockResolvedValue(okSpawn({ finalMessage: message }));
+
+    await run();
+
+    expect(issues[0].body).toBe(expectedRender(undefined, message).issueBody);
+    expect(issues[0].body).toContain("| GitHub | failed | collection failed: auth |");
+    expect(issues[0].body).not.toContain("metrics withheld");
+  });
+
+  it("a hostile sidecar record (unknown command / cause strings) never reaches any Sentry call", async () => {
+    writeSidecar([{ collector: INJECT, command: INJECT, exit: 1, cause: INJECT, warn: INJECT }]);
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: false }); // a failed record still pages
+    const failure = opCall("collector-status-failed");
+    expect(failure, "collector-status-failed not reported").toBeDefined();
+    expect((failure![1].extra as { failures: unknown[] }).failures).toEqual([
+      { collector: "unknown", command: "unknown", exit: 1, cause: "other", warn: "other" },
+    ]);
+    const sentry = JSON.stringify([
+      ...reportSilentFallbackSpy.mock.calls.map((c) => [String(c[0]), c[1]]),
+      ...warnSilentFallbackSpy.mock.calls.map((c) => [String(c[0]), c[1]]),
+    ]);
+    expect(sentry).not.toContain("evil.example");
+    expect(sentry).not.toContain("Ignore previous");
+  });
+
+  it("an oversized sidecar pages RED with a closed cause and the digest still renders github as failed", async () => {
+    writeFileSync(
+      join(spawnCwd, ".soleur-collector-status", "collector-status.jsonl"),
+      " ".repeat(64 * 1024 + 1),
+    );
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: false });
+    expect(issues[0].body).toContain("| GitHub | failed | collection failed: script-error |");
+    expect(opCall("collector-status-failed")![1].extra).toMatchObject({
+      failures: [{ command: "unknown", cause: "sidecar-oversize" }],
+    });
+  });
+});
+
+describe("publication flow — Sentry call shapes of the new error ops (#8629 message path)", () => {
+  it("community-publication-issue-failed: err is null, the op tag is on the call, only the error NAME and numeric status are carried", async () => {
+    pub.upsertFault = Object.assign(new Error(`GitHub 503 for https://api.github.com/x?token=${WRITE_TOK}`), { status: 503 });
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: false });
+    const call = opCall("community-publication-issue-failed");
+    expect(call, "community-publication-issue-failed was not reported").toBeDefined();
+    expect(call![0]).toBeNull();
+    expect(call![1]).toMatchObject({ feature: "cron-community-monitor", op: "community-publication-issue-failed" });
+    expect(call![1].message).toEqual(expect.any(String));
+    expect(call![1].extra).toEqual({ fn: "cron-community-monitor", errorName: "Error", status: 503 });
+    expect(JSON.stringify(call)).not.toContain(WRITE_TOK);
+    expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
+  });
+
+  it("every error-path op this PR adds is reported with a null error (an Error first arg would lose the op tag)", async () => {
+    // Source-level census over the handler's code: the three new Error-path ops may
+    // never be passed an Error, whatever the next editor "tidies".
+    const src = readFileSync(
+      join(__dirname, "../../../server/inngest/functions/cron-community-monitor.ts"),
+      "utf-8",
+    );
+    for (const op of [
+      "community-publication-rejected",
+      "community-publication-issue-failed",
+      "community-publication-notice-failed",
+    ]) {
+      const m = new RegExp(`reportSilentFallback\\(([^,]+),\\s*\\{[^}]*?op: "${op}"`, "s").exec(src);
+      expect(m, `${op} call not found`).not.toBeNull();
+      expect(m![1].trim(), `${op} must pass null`).toBe("null");
+    }
+  });
+});
+
+describe("publication flow — RESULT_SUBTYPE guard (closed vocabulary)", () => {
+  it("a hostile `subtype` is dropped from the rejection extra and never reaches Sentry", async () => {
+    spawnClaudeEvalSpy.mockResolvedValue(okSpawn({ finalMessage: INJECT, subtype: INJECT }));
+
+    await run();
+
+    const extra = opCall("community-publication-rejected")![1].extra as Record<string, unknown>;
+    expect(extra).not.toHaveProperty("resultSubtype");
+    expect(JSON.stringify([...reportSilentFallbackSpy.mock.calls, ...warnSilentFallbackSpy.mock.calls])).not.toContain("evil.example");
+  });
+
+  it("a legal subtype passes (the guard is not a blanket drop)", async () => {
+    spawnClaudeEvalSpy.mockResolvedValue(okSpawn({ finalMessage: INJECT, subtype: "error_max_turns" }));
+    await run();
+    expect((opCall("community-publication-rejected")![1].extra as Record<string, unknown>).resultSubtype).toBe("error_max_turns");
+  });
+});
+
+describe("publication flow — the workspace is always torn down and no credential leaks, whichever step throws", () => {
+  // Distinct token literals, built by concatenation so no scanner sees a credential.
+  const R2 = ["ghs", "READ", "leakcheck", "0001"].join("_");
+  const W2 = ["ghs", "WRITE", "leakcheck", "0002"].join("_");
+
+  /** Everything this run sent to Sentry, the loggers, the heartbeat and the audit fallback. */
+  function everythingEmitted(): string {
+    const replacer = (_k: string, v: unknown) =>
+      v instanceof Error ? { name: v.name, message: v.message, stack: v.stack } : v;
+    return JSON.stringify(
+      [
+        reportSilentFallbackSpy.mock.calls,
+        warnSilentFallbackSpy.mock.calls,
+        logger.info.mock.calls,
+        logger.warn.mock.calls,
+        logger.error.mock.calls,
+        fetchSpy.mock.calls.map((c) => String(c[0])),
+        ensureAuditIssueSpy.mock.calls.map((c) => Object.keys(c[0] as object)),
+        issues.map((i) => i.body),
+      ],
+      replacer,
+    );
+  }
+
+  const throwAt: [string, () => void][] = [
+    // The write token does not exist yet at validation, so only the read token can appear.
+    ["validate-publication", () => (pub.parseFault = new Error(`parse blew up with ${R2}`))],
+    ["publish-issue", () => (pub.upsertFault = Object.assign(new Error(`publish blew up with ${R2} and ${W2}`), { status: 500 }))],
+    ["safe-commit-pr", () => safeCommitAndPrSpy.mockRejectedValue(new Error(`push failed https://x-access-token:${W2}@github.com and ${R2}`))],
+  ];
+
+  it.each(throwAt)("a throw at %s: teardown runs in the finally, the run is RED, and neither token appears in anything emitted", async (_step, arrange) => {
+    mintSpy.mockImplementation(async (opts: { permissions?: Record<string, string> }) =>
+      opts.permissions?.contents === "read" ? R2 : W2,
+    );
+    arrange();
+
+    const { out } = await run();
+
+    expect(out.value).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(teardownSpy).toHaveBeenCalledTimes(1);
+    expect(teardownSpy).toHaveBeenCalledWith(tmpRoot, "cron-community-monitor");
+    expect(opCall("handler-body-threw"), "the throw was not reported").toBeDefined();
+
+    const emitted = everythingEmitted();
+    expect(emitted).not.toContain(R2);
+    expect(emitted).not.toContain(W2);
+    // Non-vacuity: the payload scan really sees the Sentry calls it is meant to cover.
+    expect(emitted).toContain("handler-body-threw");
   });
 });

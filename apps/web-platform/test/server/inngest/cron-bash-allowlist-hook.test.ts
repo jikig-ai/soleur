@@ -1073,3 +1073,98 @@ describe("no-file-tools — per-cron removal of file and sub-agent tools (#7122)
     expect(v(bash("no-file-tools"), WITH)).toBe("deny");
   });
 });
+
+// #7122 P1-A — the trailing arguments of an allowlisted verb. The allowlist
+// matches `<prefix> ` and the quote-stripped metachar screen drops every
+// single-quoted span, so `<verb> 'HOME[$(id)]'` was ALLOWED and the router script
+// then evaluated the argument (`(( limit ))` arithmetic, `python3 -c "…'$query'"`).
+// For a cron with the `no-file-tools` directive every token of every segment must
+// match a closed charset on the RAW text, so no quoting form can hide anything.
+describe("no-file-tools — strict argument grammar on every allowed command (#7122 P1-A)", () => {
+  const R = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+  const VERBS = [`${R} platforms`, `${R} discord messages`, `${R} hn mentions`, `${R} github activity`];
+  const WITH = [...VERBS, "no-file-tools"];
+  const WITHOUT = VERBS;
+  const v = (command: string, lines: string[]) =>
+    decide({ tool_name: "Bash", tool_input: { command } }, lines).hookSpecificOutput.permissionDecision;
+
+  // Each is a verb the allowlist ADMITS by prefix, followed by a payload.
+  const EXPLOITS: ReadonlyArray<[string, string]> = [
+    ["array-subscript arithmetic payload, single-quoted", `${R} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`],
+    ["same, after a channel id", `${R} discord messages 123 'HOME[$(id)]'`],
+    ["same, double-quoted", `${R} discord messages "HOME[\$(id)]"`],
+    ["same, unquoted brackets", `${R} discord messages 1 HOME[1]`],
+    ["python source breakout in --query (double-quoted)", `${R} hn mentions --query "x'+str(__import__('os').system('id'))+'"`],
+    ["python source breakout in --query (single quote inside double)", `${R} hn mentions --query "x'+__import__('os').getcwd()+'"`],
+    ["command substitution in a single-quoted --query", `${R} hn mentions --query 'x$(id)'`],
+    ["bare command substitution in --query", `${R} hn mentions --query '$(id)'`],
+    ["backtick in a single-quoted --query", `${R} hn mentions --query '\`id\`'`],
+    ["parameter expansion in a single-quoted arg", `${R} github activity 1 '\${HOME}'`],
+    ["brace expansion", `${R} discord messages 1 a{b,c}`],
+    ["a quoted semicolon", `${R} github activity 1 'a;b'`],
+    ["a quoted space (one token with whitespace)", `${R} hn mentions --query 'a b'`],
+    ["a backslash escape", `${R} github activity 1 \\$HOME`],
+    ["a glob", `${R} github activity 1 *`],
+    ["a tilde", `${R} github activity ~`],
+    ["a comment start", `${R} github activity 1 #x`],
+    ["an option carrying a substitution", `${R} github activity 1 --x=$(id)`],
+    ["a newline between tokens", `${R} github activity 1\nid`],
+    ["a non-breaking-space separator", `${R} github activity 1`],
+    ["a non-ASCII token", `${R} hn mentions --query é`],
+    ["a bare pipe-or in the chain", `${R} github activity 1 || id`],
+    ["a single ampersand", `${R} github activity 1 & id`],
+    ["a quoted verb token", `${R} 'github' activity 1`],
+  ];
+
+  it.each(EXPLOITS)("DENIES %s", (_label, command) => {
+    expect(v(command, WITH), command).toBe("deny");
+  });
+
+  it("the deny reason is fixed text: it echoes nothing from the command", () => {
+    const secret = "INJECTEDSENTENCE";
+    const r = decide(
+      { tool_name: "Bash", tool_input: { command: `${R} hn mentions --query '${secret}$(id)'` } },
+      WITH,
+    ).hookSpecificOutput as { permissionDecisionReason?: string };
+    expect(r.permissionDecisionReason).toContain("no-file-tools");
+    expect(r.permissionDecisionReason).not.toContain(secret);
+  });
+
+  // The forms the community prompt actually emits stay allowed.
+  const MUST_ALLOW: ReadonlyArray<string> = [
+    `${R} platforms`,
+    `${R} github activity 1`,
+    `${R} hn mentions --query soleur --limit 20`,
+    `${R} discord messages 123456789012345678`,
+    `${R} discord messages 123456789012345678 50 987654321`,
+    `${R} github activity 1; ${R} hn mentions --query soleur --limit 20`,
+    `${R} github activity 1 && ${R} platforms`,
+    `${R} github activity 1;${R} platforms`,
+    `${R} hn mentions --query=soleur.ai --limit=20`,
+    `${R} hn mentions --query a+b:c@d/e_f-g`,
+  ];
+  it.each(MUST_ALLOW.map((c) => [c] as [string]))("ALLOWS %s", (command) => {
+    expect(v(command, WITH), command).toBe("allow");
+  });
+
+  it("a chain with one hostile segment is denied as a whole", () => {
+    expect(v(`${R} platforms; ${R} discord messages 'HOME[$(id)]'`, WITH)).toBe("deny");
+  });
+
+  it("must PASS: a cron WITHOUT the directive is unaffected (the same payloads keep their old verdicts, so the deny above is the grammar)", () => {
+    expect(v(`${R} discord messages 'HOME[$(id)]'`, WITHOUT)).toBe("allow");
+    expect(v(`${R} hn mentions --query 'a b'`, WITHOUT)).toBe("allow");
+    expect(v(`${R} github activity 1 'x y'`, WITHOUT)).toBe("allow");
+    // ...and an ordinary quoted gh argument still works for such a cron.
+    expect(v("gh issue list --search 'is:open label:x'", ["gh issue list"])).toBe("allow");
+  });
+
+  it("strictArgumentGrammarReason is exported and pure: null for a clean command, a fixed string otherwise", async () => {
+    const { strictArgumentGrammarReason } = await import("../../../server/inngest/cron-bash-allowlist-hook.mjs");
+    expect(strictArgumentGrammarReason("a b; c d && e")).toBeNull();
+    expect(typeof strictArgumentGrammarReason("a 'b'")).toBe("string");
+    expect(strictArgumentGrammarReason("a 'INJECTED'")).not.toContain("INJECTED");
+    expect(typeof strictArgumentGrammarReason("")).toBe("string");
+    expect(typeof strictArgumentGrammarReason(" ; ; ")).toBe("string");
+  });
+});

@@ -238,6 +238,12 @@ export function resolveEvalCaptureStatus(
 
 export const KILL_ESCALATION_MS = 5_000;
 
+// #7122 P2-2 — how long the spawn waits, after the child's `exit`, for its stdout/stderr
+// pipes to be read to the end. Node can emit `exit` while the pipe still holds the final
+// `result` line; resolving on `exit` alone lost that line (a lost community draft is a
+// rejected day). Bounded: a grandchild that inherited the pipe must not hold the run open.
+export const STDIO_CLOSE_WAIT_MS = 2_000;
+
 // Hard ceiling on captured child stderr — a pathological process must not OOM
 // the worker. 8 KiB comfortably holds a git fatal: line + a few hints.
 export const STDERR_CAP_BYTES = 8192;
@@ -347,7 +353,7 @@ export const ISSUE_CREATOR_BASH_ALLOWLIST = [
   "gh label create",
 ];
 
-// #7122 — the ONLY Bash surface of cron-community-monitor: sixteen read-only router
+// #7122 — the ONLY Bash surface of cron-community-monitor: fourteen read-only router
 // invocations, each a full literal command. The old entry allowlisted the whole
 // router prefix, which also admitted `bsky post`, `linkedin post-content` and
 // `x post-tweet` (inert only because the per-platform *_ALLOW_POST env guards are
@@ -357,14 +363,19 @@ export const ISSUE_CREATOR_BASH_ALLOWLIST = [
 // handler now publishes from a validated draft, so the agent needs none of them.
 // The hook matches a prefix followed by a space or end of string, so trailing
 // arguments (`hn mentions --query soleur --limit 20`, `github activity 1`,
-// `discord messages <channel_id>`) stay allowed while a sibling verb does not.
+// `discord messages <channel_id>`) stay allowed while a sibling verb does not. They are
+// NOT free-form: for a cron carrying the `no-file-tools` directive the hook requires
+// every token of the command to match [A-Za-z0-9._:=@/+-]+ on the raw text (no quote,
+// `$`, backtick, bracket or brace), and the platform scripts validate numeric operands
+// themselves (#7122 P1-A). `discord members` (a payload of up to 1000 member objects;
+// the member count comes from guild-info's approximate count) and `hn trending` (no
+// schema field consumes it) were removed from this list for that reason.
 // allow[0] MUST be a complete command: runHookSelfTest executes it verbatim.
 // Parity with the prompt's own invocations is asserted by
 // cron-community-monitor-allowlist.test.ts (G2-8).
 export const COMMUNITY_ROUTER_READ_VERBS: readonly string[] = [
   "bash plugins/soleur/skills/community/scripts/community-router.sh platforms",
   "bash plugins/soleur/skills/community/scripts/community-router.sh discord guild-info",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh discord members",
   "bash plugins/soleur/skills/community/scripts/community-router.sh discord channels",
   "bash plugins/soleur/skills/community/scripts/community-router.sh discord messages",
   "bash plugins/soleur/skills/community/scripts/community-router.sh x fetch-metrics",
@@ -377,7 +388,6 @@ export const COMMUNITY_ROUTER_READ_VERBS: readonly string[] = [
   "bash plugins/soleur/skills/community/scripts/community-router.sh github repo-stats",
   "bash plugins/soleur/skills/community/scripts/community-router.sh github fetch-interactions",
   "bash plugins/soleur/skills/community/scripts/community-router.sh hn mentions",
-  "bash plugins/soleur/skills/community/scripts/community-router.sh hn trending",
 ];
 
 // #7122 — crons whose allow file carries the `no-file-tools` directive: the hook then
@@ -497,7 +507,7 @@ export const CRON_BASH_ALLOWLISTS: Record<string, string[]> = {
     "gh label list",
     "gh label create",
   ],
-  // community-monitor (cron-community-monitor.ts): the sixteen read-only router
+  // community-monitor (cron-community-monitor.ts): the fourteen read-only router
   // invocations and NOTHING else (#7122) — see COMMUNITY_ROUTER_READ_VERBS. The
   // router's child curl/gh-api are grandchild OS processes gated by the egress
   // firewall, NOT this hook. No gh verb: the handler upserts the issue.
@@ -839,6 +849,29 @@ export function runHookSelfTest(args: {
             `the hook does not honour it; the agent could overwrite an allowlisted script). ` +
             `Aborting cron.`,
         );
+      }
+    }
+  }
+
+  // #7122 P2-4 — the residual surface of a no-file-tools cron is the TRAILING argument
+  // of an allowlisted verb (the prefix match admits it and the quote-stripped metachar
+  // screen hides it). The hook's strict argument grammar closes it; this probe makes a
+  // regression (or a clone carrying a hook without the grammar) abort the spawn on the
+  // host, not only in CI. Probed: the first allowed command, plus the two verbs whose
+  // scripts once evaluated their operand (`discord messages`, `hn mentions`), each with
+  // a payload that is safe to RUN if it were ever allowed (`id` has no side effect).
+  if (noFileTools && allow.length > 0) {
+    const verbs = [...new Set([allow[0], ...allow.filter((l) => /\s(?:discord messages|hn mentions)$/.test(l))])];
+    for (const verb of verbs) {
+      for (const command of [`${verb} --query 'x$(id)'`, `${verb} 'HOME[$(id)]'`]) {
+        const out = run({ tool_name: "Bash", tool_input: { command } });
+        if (!out.includes('"permissionDecision":"deny"')) {
+          throw new Error(
+            `[${cronName}] containment hook self-test FAILED: the allowlisted verb "${verb}" ` +
+              `with a hostile trailing argument was NOT denied (the no-file-tools argument grammar ` +
+              `is missing or broken — the verb's script could evaluate the argument). Aborting cron.`,
+          );
+        }
       }
     }
   }
@@ -1234,6 +1267,11 @@ async function spawnClaudeEvalUnguarded(args: {
   // non-Inngest callers / tests need not supply it.
   runId?: string;
   attempt?: number;
+  // #7122 P2-3 — capture the `result` event's text as SpawnResult.finalMessage. OFF by
+  // default: three sibling crons spread the whole SpawnResult into Sentry extras, so a
+  // field nobody asked for must not exist on their result. Only a handler that validates
+  // and publishes the message (community-monitor) opts in.
+  captureFinalMessage?: boolean;
 }): Promise<SpawnResult> {
   const {
     spawnCwd,
@@ -1246,6 +1284,7 @@ async function spawnClaudeEvalUnguarded(args: {
     logger,
     runId,
     attempt,
+    captureFinalMessage = false,
   } = args;
 
   if (!existsSync(spawnCwd)) {
@@ -1364,8 +1403,15 @@ async function spawnClaudeEvalUnguarded(args: {
         },
       });
 
+      // #7122 P2-2 — resolves when a stream's readline has delivered its last line.
+      // Immediately for a stream that does not exist (spawn failure).
+      const streamsClosed: Promise<void>[] = [];
+      const closedPromise = (rl: ReturnType<typeof createInterface> | null): Promise<void> =>
+        rl ? new Promise<void>((done) => rl.once("close", () => done())) : Promise.resolve();
+
       if (child.stdout) {
         const rlOut = createInterface({ input: child.stdout });
+        streamsClosed.push(closedPromise(rlOut));
         rlOut.on("line", (line) => {
           const redacted = redactChild(line);
           logger.info({ fn: cronName, stream: "stdout" }, redacted);
@@ -1384,7 +1430,7 @@ async function spawnClaudeEvalUnguarded(args: {
             evalAllDenials = parsedResult.allDenials;
             // #7122 — redact FIRST, then cap from the HEAD: a token straddling the cut
             // must not survive as a partial prefix, and a front-cut tail is not parseable.
-            if (parsedResult.finalMessage === undefined) {
+            if (!captureFinalMessage || parsedResult.finalMessage === undefined) {
               evalFinalMessage = undefined;
               evalFinalMessageTruncated = undefined;
             } else {
@@ -1422,6 +1468,7 @@ async function spawnClaudeEvalUnguarded(args: {
       }
       if (child.stderr) {
         const rlErr = createInterface({ input: child.stderr });
+        streamsClosed.push(closedPromise(rlErr));
         // #8603: an unknown `--effort` VALUE is not an error to the CLI — it
         // warns on stderr and runs at the model's default effort. Mirror that
         // silent degraded mode to Sentry once per run
@@ -1529,27 +1576,58 @@ async function spawnClaudeEvalUnguarded(args: {
         { once: true },
       );
 
+      // #7122 P2-2 — once `exit` has been seen the (bounded) stdio drain is in flight
+      // and the exit verdict must win: a later `error` must not settle the spawn as -1
+      // (before the drain wait, `finish` ran synchronously on `exit` and the `settled`
+      // guard made a following `error` a no-op; the drain made that window async).
+      let exitSeen = false;
       child.on("exit", (exitCode, signal) => {
-        finish({
-          ok: exitCode === 0,
-          exitCode,
-          signal,
-          abortedByTimeout,
-          durationMs: Date.now() - startedAt,
-          stderrTail,
-          stdoutTail,
-          // ADR-033 I5 deterministic capture: surface the parsed cost on the
-          // SpawnResult (undefined when no result event parsed — fail-open).
-          costUsd: evalCost?.costUsd,
-          usage: evalCost?.usage,
-          model: evalCost?.model,
-          isError: evalCost?.isError ?? undefined,
-          subtype: evalCost?.subtype ?? undefined,
-          numTurns: evalCost?.numTurns ?? undefined,
-          finalMessage: evalFinalMessage,
-          finalMessageTruncated: evalFinalMessageTruncated,
-          permissionDenialCount: evalAllDenials?.permissionDenialCount,
-          deniedTools: evalAllDenials?.deniedTools,
+        exitSeen = true;
+        // #7122 P2-1 — kill the child's WHOLE process group on every exit, not only on
+        // the timeout path. A grandchild left running here could outlive the run and read
+        // the write token the handler mints into `.git/config` after this spawn resolves.
+        // Best-effort: the group is usually already gone (ESRCH). The child is its own
+        // group leader (`detached: true`); a grandchild that called setsid() escapes the
+        // group, which is why the hook also denies every verb that could start one.
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            // process group already gone
+          }
+        }
+        const durationMs = Date.now() - startedAt;
+        // #7122 P2-2 — `exit` can fire before the pipes are drained; wait (bounded) for
+        // both readlines to close so the final `result` line is never lost.
+        let waitTimer: NodeJS.Timeout | undefined;
+        const bound = new Promise<void>((done) => {
+          waitTimer = setTimeout(done, STDIO_CLOSE_WAIT_MS);
+        });
+        void Promise.race([Promise.all(streamsClosed).then(() => undefined), bound]).then(() => {
+          if (waitTimer) clearTimeout(waitTimer);
+          finish({
+            ok: exitCode === 0,
+            exitCode,
+            signal,
+            abortedByTimeout,
+            durationMs,
+            stderrTail,
+            stdoutTail,
+            // ADR-033 I5 deterministic capture: surface the parsed cost on the
+            // SpawnResult (undefined when no result event parsed — fail-open).
+            costUsd: evalCost?.costUsd,
+            usage: evalCost?.usage,
+            model: evalCost?.model,
+            isError: evalCost?.isError ?? undefined,
+            subtype: evalCost?.subtype ?? undefined,
+            numTurns: evalCost?.numTurns ?? undefined,
+            // #7122 P2-3 — present ONLY for a caller that opted in.
+            ...(captureFinalMessage
+              ? { finalMessage: evalFinalMessage, finalMessageTruncated: evalFinalMessageTruncated }
+              : {}),
+            permissionDenialCount: evalAllDenials?.permissionDenialCount,
+            deniedTools: evalAllDenials?.deniedTools,
+          });
         });
       });
       child.on("error", (err) => {
@@ -1562,6 +1640,7 @@ async function spawnClaudeEvalUnguarded(args: {
           message: "claude-code spawn failed",
           extra: { fn: cronName },
         });
+        if (exitSeen) return;
         finish({
           ok: false,
           exitCode: -1,

@@ -275,13 +275,20 @@ discord_request() {
 
 # --- Commands ---
 
-validate_snowflake_id() {
-  local id="$1"
-  local label="$2"
-  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
-    echo "Error: ${label} must be numeric. Got: ${id}" >&2
+# An operand reaches bash arithmetic, a URL or a jq program only AFTER this check:
+# `(( limit ))` and `$(( limit ))` EVALUATE their operand, so `HOME[$(cmd)]` would run
+# `cmd` (#7122). The message names the operand's LABEL and never the offending value:
+# agent runtimes surface stderr, and the value is third-party-influenced text.
+require_uint() {
+  local label="$1"
+  if [[ ! "${2:-}" =~ ^[0-9]+$ ]]; then
+    echo "Error: ${label} must be a non-negative integer." >&2
     exit 1
   fi
+}
+
+validate_snowflake_id() {
+  require_uint "$2" "$1"
 }
 
 cmd_messages() {
@@ -289,6 +296,10 @@ cmd_messages() {
   validate_snowflake_id "$channel_id" "channel_id"
   local limit="${2:-100}"
   local after_id="${3:-}"
+  require_uint "limit" "$limit"
+  if [[ -n "$after_id" ]]; then
+    require_uint "after_id" "$after_id"
+  fi
 
   local all_messages="[]"
   local fetched=0
@@ -330,6 +341,7 @@ cmd_messages() {
 
 cmd_members() {
   local limit="${1:-1000}"
+  require_uint "limit" "$limit"
   local all_members="[]"
   local after="0"
   local batch_size=1000
@@ -352,7 +364,7 @@ cmd_members() {
     total=$(echo "$all_members" | jq 'length')
 
     if (( total >= limit )); then
-      all_members=$(echo "$all_members" | jq ".[0:${limit}]")
+      all_members=$(echo "$all_members" | jq --argjson n "$limit" '.[0:$n]')
       break
     fi
 

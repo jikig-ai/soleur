@@ -24,6 +24,19 @@ require_jq() {
   fi
 }
 
+# --- Validation ---
+
+# An operand reaches a URL only AFTER this check. The message names the operand's
+# LABEL and never the offending value: agent runtimes surface stderr, and the value
+# is third-party-influenced text (#7122).
+require_uint() {
+  local label="$1"
+  if [[ ! "${2:-}" =~ ^[0-9]+$ ]]; then
+    echo "Error: ${label} must be a non-negative integer." >&2
+    exit 1
+  fi
+}
+
 # --- API helper ---
 
 hn_request() {
@@ -79,7 +92,7 @@ cmd_mentions() {
     case "$1" in
       --query) query="${2:-}"; shift 2 ;;
       --limit) limit="${2:-20}"; shift 2 ;;
-      *) echo "Error: Unknown option '${1}' for mentions." >&2; exit 1 ;;
+      *) echo "Error: Unknown option for mentions." >&2; exit 1 ;;
     esac
   done
 
@@ -87,13 +100,16 @@ cmd_mentions() {
     echo "Error: --query requires a non-empty value." >&2
     exit 1
   fi
+  require_uint "--limit" "$limit"
 
   # 7-day lookback for monitoring
   local since
   since=$(date -u -d "7 days ago" +%s 2>/dev/null || date -u -v-7d +%s 2>/dev/null)
 
   local encoded_query
-  encoded_query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$query'))" 2>/dev/null || echo "$query")
+  # The query is DATA: it reaches python through argv, never through the program text
+  # (interpolating it into `python3 -c "…'$query'…"` executed whatever the quote closed, #7122).
+  encoded_query=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$query" 2>/dev/null || echo "$query")
 
   local url="${HN_API}/search_by_date?query=${encoded_query}&tags=%28story%2Ccomment%29&numericFilters=created_at_i%3E${since}&hitsPerPage=${limit}"
 
@@ -125,9 +141,10 @@ cmd_trending() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --limit) limit="${2:-30}"; shift 2 ;;
-      *) echo "Error: Unknown option '${1}' for trending." >&2; exit 1 ;;
+      *) echo "Error: Unknown option for trending." >&2; exit 1 ;;
     esac
   done
+  require_uint "--limit" "$limit"
 
   local url="${HN_API}/search?tags=front_page&hitsPerPage=${limit}"
 

@@ -39,7 +39,12 @@ import {
   MAX_TURN_DURATION_MS,
 } from "@/server/inngest/functions/cron-community-monitor";
 import {
+  COMMUNITY_DISALLOWED_TOOLS,
+  FINAL_MESSAGE_CAP_BYTES,
+} from "@/server/inngest/functions/_cron-claude-eval-substrate";
+import {
   COMMUNITY_FAILURE_CAUSES,
+  COMMUNITY_FINAL_MESSAGE_MAX_BYTES,
   COMMUNITY_METRICS,
   COMMUNITY_PLATFORMS,
   COMMUNITY_STATUSES,
@@ -83,6 +88,18 @@ const SUT_SOURCE = readFileSync(
   "utf-8",
 );
 
+// The handler's code with whole-line `//` comments removed. A source anchor that
+// matches inside a COMMENT proves nothing about the code (cq-assert-anchor-not-bare-token):
+// wrapping the flag lines in a comment must turn the anchors below red. Only whole
+// lines are dropped: a block-comment stripper would mangle the prompt template.
+function stripLineComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//"))
+    .join("\n");
+}
+const SUT_CODE = stripLineComments(SUT_SOURCE);
+
 describe("cron-community-monitor — turn budget (max-turns exhaustion fix)", () => {
   it("spawns claude with --max-turns 80 (daily-triage parity; was 50)", () => {
     // Root cause of Sentry WEB-PLATFORM-1Z (2026-06-03 08:06 UTC): the spawn
@@ -101,15 +118,27 @@ describe("cron-community-monitor — turn budget (max-turns exhaustion fix)", ()
 
 describe("#7122 — spawn flags and credential custody (source anchors)", () => {
   it("the agent holds Bash only, and the file tools are also removed from its pool", () => {
-    expect(SUT_SOURCE).toMatch(/"--allowedTools",\s*"Bash",/);
-    expect(SUT_SOURCE).not.toMatch(/"--allowedTools",\s*"Bash,/);
-    expect(SUT_SOURCE).toMatch(/"--disallowedTools",\s*COMMUNITY_DISALLOWED_TOOLS/);
+    // Comment-stripped: the BEHAVIOURAL proof (the flags handed to spawnClaudeEval)
+    // is in cron-community-monitor-publication-flow.test.ts; this is the cheap guard.
+    expect(SUT_CODE).toMatch(/"--allowedTools",\s*"Bash",/);
+    expect(SUT_CODE).not.toMatch(/"--allowedTools",\s*"Bash,/);
+    expect(SUT_CODE).toMatch(/"--disallowedTools",\s*COMMUNITY_DISALLOWED_TOOLS/);
+    // Non-vacuity: the same anchor, commented out, no longer matches.
+    expect(stripLineComments('  // "--disallowedTools", COMMUNITY_DISALLOWED_TOOLS,\n')).not.toMatch(
+      /"--disallowedTools",\s*COMMUNITY_DISALLOWED_TOOLS/,
+    );
+  });
+
+  it("opts in to the capped final-message capture (the default is off for every other cron)", () => {
+    expect(SUT_CODE).toMatch(/captureFinalMessage: true,/);
   });
 
   it("clones and spawns with the READ token; the WRITE token is minted by a separate post-spawn step", () => {
     expect(SUT_SOURCE).toMatch(/permissions: COMMUNITY_SPAWN_TOKEN_PERMISSIONS,\s*repositories: \[REPO_NAME\]/);
     expect(SUT_SOURCE).toMatch(/permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,\s*repositories: \[REPO_NAME\]/);
     expect(SUT_SOURCE).toContain('step.run("mint-write-token"');
+    // The write token reaches safeCommitAndPr only with the rendered bytes it must equal.
+    expect(SUT_CODE).toMatch(/expectedContent: \{ \[digestPath\]: renderedDigest \},/);
     expect(SUT_SOURCE).toContain("setOriginToken(spawnCwd, token)");
     expect(SUT_SOURCE).toContain("installationToken: readToken");
     expect(SUT_SOURCE).not.toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
@@ -118,6 +147,48 @@ describe("#7122 — spawn flags and credential custody (source anchors)", () => 
   it("persists by exact path: no directory-prefix allowlist constant remains", () => {
     expect(SUT_SOURCE).not.toContain("COMMUNITY_MONITOR_ALLOWED_PATHS");
     expect(SUT_SOURCE).toMatch(/exactPaths: \[digestPath\]/);
+  });
+});
+
+// #7122 — replay across a deploy. Memoized step ids are the replay contract: a run
+// started under the OLD code (write-scoped mint, old allowlist clone) and re-driven by
+// the NEW code would read both back from its memo and run the new prompt under old
+// containment. The two steps whose meaning changed therefore carry NEW ids.
+describe("#7122 — step ids that changed meaning are new (stale memo is never reused)", () => {
+  it("mints and clones under the new ids; the old ids are gone from the handler code", () => {
+    expect(SUT_CODE).toContain('"mint-read-token"');
+    expect(SUT_CODE).toContain('"setup-workspace-ro"');
+    expect(SUT_CODE).not.toContain('"mint-installation-token"');
+    expect(SUT_CODE).not.toMatch(/step\.run\(\s*"setup-workspace"/);
+  });
+
+  it("the id contract is documented where the ids are defined", () => {
+    expect(SUT_SOURCE).toContain("STEP IDS (#7122)");
+  });
+});
+
+// #7122 — constants mirrored across a module boundary, pinned equal (a drift in either
+// direction would be silent: oversize is rejected twice, the tool lists fail safe).
+describe("#7122 — mirrored constants stay equal", () => {
+  it("the substrate's final-message cap equals the publication module's", () => {
+    expect(FINAL_MESSAGE_CAP_BYTES).toBe(COMMUNITY_FINAL_MESSAGE_MAX_BYTES);
+    expect(COMMUNITY_FINAL_MESSAGE_MAX_BYTES).toBe(16 * 1024);
+  });
+
+  it("--disallowedTools equals the hook's no-file-tools deny set plus NotebookEdit (equality, not subset)", () => {
+    const hook = readFileSync(
+      resolve(__dirname, "../../../server/inngest/cron-bash-allowlist-hook.mjs"),
+      "utf-8",
+    );
+    const m = /const NO_FILE_TOOL_NAMES = new Set\(\[([\s\S]*?)\]\);/.exec(hook);
+    expect(m, "NO_FILE_TOOL_NAMES not found in the hook source").not.toBeNull();
+    const hookTools = [...m![1].matchAll(/"([A-Za-z]+)"/g)].map((x) => x[1]);
+    expect(hookTools.length).toBeGreaterThanOrEqual(9);
+    // NotebookEdit is not a recognised class in the hook (its catch-all denies it), so
+    // the CLI layer adds it; every other member must match in BOTH directions.
+    const cli = COMMUNITY_DISALLOWED_TOOLS.split(",");
+    expect([...cli].filter((t) => t !== "NotebookEdit").sort()).toEqual([...hookTools].sort());
+    expect(cli).toContain("NotebookEdit");
   });
 });
 
@@ -159,8 +230,8 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "literal-path containment instruction (no shell-var)",
       ],
       [
-        "knowledge-base/support/community/",
-        "digest output directory",
+        "COMMUNITY_DIGEST_DIR_PATH",
+        "digest output directory (re-exported from the publication module, defined once)",
       ],
       // #7122: the dated digest filename, the `## Period` / `## Activity Summary`
       // headings and the issue body are rendered handler-side from fixed templates
@@ -191,8 +262,8 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
         "platform-persistence directive (#5111)",
       ],
       [
-        "opens a PR for your changes",
-        "handler-side persistence note (#5111)",
+        "publishes everything itself from your final message",
+        "handler-side persistence note (#5111, #7122)",
       ],
     ])("contains %s (%s)", (anchor) => {
       expect(SUT_SOURCE).toContain(anchor);
@@ -220,6 +291,13 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       ["Only changes under knowledge-base/support/community/", "persistence path sentence"],
       ["FAILED", "retired misconfiguration-issue branch"],
       ["new stargazers in the period (username", "stargazer username directive"],
+      // The window is a handler constant now; the collectors run over a fixed day.
+      ["periodDays", "model-chosen period (the handler renders the 1-day window itself)"],
+      ["period_days", "collector period field the model used to pick a window"],
+      // Allowlist narrowing: both verbs left the hook, so the prompt must not request them.
+      ["discord members", "dropped verb: member count comes from guild-info"],
+      ["hn trending", "dropped verb: nothing consumed it"],
+      ["AGENTS.md rule", "garbled rule line"],
     ])("prompt does NOT contain %s (%s)", (removed) => {
       expect(COMMUNITY_MONITOR_PROMPT).not.toContain(removed);
     });
@@ -234,7 +312,7 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
     });
 
     it("names every draft key and closed-enum member the schema defines", () => {
-      for (const key of ["periodDays", "platforms", "topics", "status", "failureCause", "metrics", "category", "count"]) {
+      for (const key of ["platforms", "topics", "status", "failureCause", "metrics", "category", "count"]) {
         expect(COMMUNITY_MONITOR_PROMPT, key).toContain(key);
       }
       for (const platform of COMMUNITY_PLATFORMS) {
@@ -259,6 +337,58 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
       expect(COMMUNITY_MONITOR_PROMPT).toContain("you have no file tools");
       expect(COMMUNITY_MONITOR_PROMPT).toContain('failureCause "output-too-large"');
       expect(COMMUNITY_FAILURE_CAUSES).toContain("output-too-large");
+    });
+
+    // The prompt text AFTER string interpolation (what the agent reads), minus the
+    // runnable-literal parity concerns covered by the allowlist suite.
+    const PROMPT = COMMUNITY_MONITOR_PROMPT;
+
+    it("one Bash call per platform: no call combines commands of two platforms", () => {
+      expect(PROMPT).toContain("ONE Bash call PER PLATFORM");
+      const ROUTER = "bash plugins/soleur/skills/community/scripts/community-router.sh";
+      // Every backtick-delimited command group is a single platform's call.
+      const groups = [...PROMPT.matchAll(/`(bash plugins\/soleur[^`]*)`/g)].map((m) => m[1]);
+      expect(groups.length).toBeGreaterThanOrEqual(9);
+      for (const g of groups) {
+        const platforms = new Set(
+          g.split(";").map((seg) => seg.trim().replace(`${ROUTER} `, "").split(" ")[0]),
+        );
+        expect(platforms.size, g).toBe(1);
+      }
+      // Discord messages are fetched per channel, with a bounded limit, never chained.
+      expect(PROMPT).toContain("discord messages <channel_id> 50");
+      expect(PROMPT).toMatch(/ONE more Bash call PER channel ID/);
+    });
+
+    it("Discord members come from guild-info; the dropped verbs are not requested", () => {
+      expect(PROMPT).toContain("approximate_member_count");
+      expect(PROMPT).not.toContain("discord members");
+      expect(PROMPT).not.toContain("hn trending");
+    });
+
+    it("defines the GitHub external counts from the collector's own output, not a maintainer guess", () => {
+      expect(PROMPT).toContain("DISTINCT `user` values");
+      expect(PROMPT).toContain("fetch-interactions");
+      expect(PROMPT).toContain("length of");
+      expect(PROMPT).toContain("`interactions` list");
+      expect(PROMPT).not.toContain("other than the maintainers");
+    });
+
+    it("tells the agent the LinkedIn engagement figure is a 0-1 ratio to multiply by 100", () => {
+      expect(PROMPT).toContain("0 to 1 RATIO");
+      expect(PROMPT).toContain("multiply it by 100");
+    });
+
+    it("states the router's `bsky` is the draft's `bluesky`, and reconciles failureCause with the closed example", () => {
+      expect(PROMPT).toContain("The router names Bluesky `bsky`");
+      expect(PROMPT).toContain("its key is `bluesky`");
+      expect(PROMPT).toContain("the only extra key you may add is failureCause");
+    });
+
+    it("an unavailable metric makes the platform partial/failed with a cause, never a measured 0", () => {
+      expect(PROMPT).toContain("must never\n   be presented as a measured 0");
+      expect(PROMPT).toContain("AND mark that platform");
+      expect(PROMPT).not.toContain("keep 0 only when the value is unavailable");
     });
 
     it("tells the agent it has no file or issue tools and must not add a text field", () => {

@@ -3,7 +3,7 @@
 //
 // The spawned agent may collect and classify; it may not publish. Three layers
 // are asserted here, all through the REAL hook's pure `decide()`:
-//   1. the Bash surface is exactly the sixteen read invocations of the community
+//   1. the Bash surface is exactly the fourteen read invocations of the community
 //      router (no gh verb at all, no bare router prefix, no posting verb);
 //   2. the `no-file-tools` directive removes the write primitive (an agent that can
 //      `Write` over the allowlisted router script and then run it executes
@@ -16,8 +16,8 @@
 // green with CRON_NO_FILE_TOOLS emptied, because the directive is produced only by
 // the builder. This file reads plugins/soleur/skills/community/scripts/*.sh, so it
 // is registered in test/repo-wide-suites.ts.
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -82,7 +82,17 @@ const COMMUNITY_PROBES: ReadonlyArray<[string, unknown, "allow" | "deny"]> = [
   ["Glob .git/config via /tmp", { tool_name: "Glob", tool_input: { pattern: "**/.git/config", path: "/tmp" } }, "deny"],
   ["Grep /pro*", { tool_name: "Grep", tool_input: { pattern: "KEY", path: "/pro*" } }, "deny"],
   ["NotebookEdit", { tool_name: "NotebookEdit", tool_input: { notebook_path: "x.ipynb" } }, "deny"],
+  // P1-A: the trailing argument of an ADMITTED verb (verified exploit shapes).
+  ["discord messages: arithmetic-context payload", bash(`${ROUTER} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`), "deny"],
+  ["discord messages: payload after the channel id", bash(`${ROUTER} discord messages 123 'HOME[$(id)]'`), "deny"],
+  ["hn mentions: python-source breakout", bash(`${ROUTER} hn mentions --query "x'+str(__import__('os').system('id'))+'"`), "deny"],
+  ["hn mentions: single-quoted substitution", bash(`${ROUTER} hn mentions --query 'x$(id)'`), "deny"],
+  ["github activity: unquoted bracket token", bash(`${ROUTER} github activity HOME[1]`), "deny"],
+  // P1-A': verbs removed from the read surface.
+  ["discord members (removed)", bash(`${ROUTER} discord members`), "deny"],
+  ["hn trending (removed)", bash(`${ROUTER} hn trending --limit 30`), "deny"],
   ["router platforms", bash(`${ROUTER} platforms`), "allow"],
+  ["hn mentions with the prompt's own arguments", bash(`${ROUTER} hn mentions --query soleur --limit 20`), "allow"],
 ];
 
 function failedProbes(fn: DecideFn, lines: string[]): string[] {
@@ -93,7 +103,7 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
   const lines = linesFor(CRON);
 
   it("G2-1: no gh verb of any kind survives in the community allowlist (create/comment/list/label)", () => {
-    expect(COMMUNITY_ROUTER_READ_VERBS.length).toBe(16);
+    expect(COMMUNITY_ROUTER_READ_VERBS.length).toBe(14);
     expect(CRON_BASH_ALLOWLISTS[CRON]).toEqual([...COMMUNITY_ROUTER_READ_VERBS]);
     expect(lines.filter((l) => /^gh\b/.test(l))).toEqual([]);
     for (const verb of ["gh issue create", "gh issue comment", "gh label create", "gh label list", "gh issue list"]) {
@@ -130,8 +140,32 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     expect(verdictWith(decide, lines, bash(`${ROUTER} discord messages 123456789012345678`))).toBe("allow");
   });
 
-  it("G2-3: EVERY member is judged — all sixteen read verbs allow and every posting verb denies (a first-member-only check is the defect)", () => {
-    expect(new Set(COMMUNITY_ROUTER_READ_VERBS).size).toBe(16);
+  it("G2-3: EVERY member is judged — all fourteen read verbs allow and every posting or removed verb denies (a first-member-only check is the defect)", () => {
+    expect(new Set(COMMUNITY_ROUTER_READ_VERBS).size).toBe(14);
+    // The exact membership, as data: an added or dropped verb is a deliberate edit here.
+    expect([...COMMUNITY_ROUTER_READ_VERBS].map((l) => l.slice(ROUTER.length + 1))).toEqual([
+      "platforms",
+      "discord guild-info",
+      "discord channels",
+      "discord messages",
+      "x fetch-metrics",
+      "bsky get-metrics",
+      "linkedin fetch-metrics",
+      "linkedin fetch-activity",
+      "github activity",
+      "github contributors",
+      "github discussions",
+      "github repo-stats",
+      "github fetch-interactions",
+      "hn mentions",
+    ]);
+    // Removed (P1-A'): `discord members` returns up to 1000 member objects (the count comes
+    // from guild-info's approximate count) and `hn trending` feeds no schema field.
+    for (const removed of ["discord members", "hn trending"]) {
+      expect(COMMUNITY_ROUTER_READ_VERBS, removed).not.toContain(`${ROUTER} ${removed}`);
+      expect(verdictWith(decide, lines, bash(`${ROUTER} ${removed}`)), removed).toBe("deny");
+      expect(verdictWith(decide, lines, bash(`${ROUTER} ${removed} 100`)), `${removed} 100`).toBe("deny");
+    }
     for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
       expect(verdictWith(decide, lines, bash(verb)), verb).toBe("allow");
     }
@@ -250,11 +284,43 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
     const realFailures = failedProbes(decide as DecideFn, lines);
     expect(realFailures).toEqual([]);
     const allowAllFailures = failedProbes(allowAll, lines);
-    // Every deny probe is caught (all but the single allow control).
+    // Every deny probe is caught (all but the allow controls).
     expect(allowAllFailures.length).toBe(COMMUNITY_PROBES.filter(([, , w]) => w === "deny").length);
     expect(allowAllFailures.length).toBeGreaterThanOrEqual(15);
     // And a deny-everything stub is caught by the allow control (the suite cannot go green on a hook that blocks all).
-    expect(failedProbes(denyAll, lines)).toEqual(["router platforms"]);
+    expect(failedProbes(denyAll, lines)).toEqual(
+      COMMUNITY_PROBES.filter(([, , w]) => w === "allow").map(([label]) => label),
+    );
+    expect(COMMUNITY_PROBES.filter(([, , w]) => w === "allow").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("G2-11: the argument grammar is what denies a hostile trailing argument, through the REAL delivered lines — and the same payload is allowed once the directive is removed", () => {
+    const hostile = [
+      `${ROUTER} discord messages 'HOME[$(cat .git/config /proc/self/environ >&2)]'`,
+      `${ROUTER} hn mentions --query "x'+str(__import__('os').system('id'))+'"`,
+      `${ROUTER} github activity 1 'a b'`,
+    ];
+    const noDirective = lines.filter((l) => l !== "no-file-tools");
+    for (const h of hostile) {
+      expect(verdictWith(decide, lines, bash(h)), h).toBe("deny");
+      // Control: the verb prefix alone admits it, which is the hole the grammar closes.
+      expect(verdictWith(decide, noDirective, bash(h)), `control ${h}`).toBe("allow");
+    }
+    // Every one of the fourteen verbs, invoked with the numeric / flag arguments the prompt uses.
+    const withArgs: Record<string, string> = {
+      "discord messages": "123456789012345678",
+      "github activity": "1",
+      "github contributors": "1",
+      "github discussions": "1",
+      "github repo-stats": "1",
+      "github fetch-interactions": "1",
+      "hn mentions": "--query soleur --limit 20",
+    };
+    for (const verb of COMMUNITY_ROUTER_READ_VERBS) {
+      const key = verb.slice(ROUTER.length + 1);
+      const cmd = withArgs[key] ? `${verb} ${withArgs[key]}` : verb;
+      expect(verdictWith(decide, lines, bash(cmd)), cmd).toBe("allow");
+    }
   });
 
   it("G2-10 (must PASS): chained `;` read verbs allow, and a cron WITHOUT the directive is unaffected", () => {
@@ -262,7 +328,7 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
       verdictWith(
         decide,
         lines,
-        bash(`${ROUTER} github fetch-interactions 1; ${ROUTER} hn trending --limit 30`),
+        bash(`${ROUTER} github fetch-interactions 1; ${ROUTER} hn mentions --query soleur --limit 30`),
       ),
     ).toBe("allow");
     expect(
@@ -270,12 +336,12 @@ describe("cron-community-monitor allowlist closure (#7122 Guard 2)", () => {
         decide,
         lines,
         bash(
-          `${ROUTER} discord guild-info; ${ROUTER} discord members; ${ROUTER} discord channels; ${ROUTER} x fetch-metrics; ${ROUTER} bsky get-metrics; ${ROUTER} linkedin fetch-metrics; ${ROUTER} linkedin fetch-activity`,
+          `${ROUTER} discord guild-info; ${ROUTER} discord channels; ${ROUTER} x fetch-metrics; ${ROUTER} bsky get-metrics; ${ROUTER} linkedin fetch-metrics; ${ROUTER} linkedin fetch-activity`,
         ),
       ),
     ).toBe("allow");
     // One bad segment in a chain poisons the whole command.
-    expect(verdictWith(decide, lines, bash(`${ROUTER} hn trending; ${ROUTER} bsky post x`))).toBe("deny");
+    expect(verdictWith(decide, lines, bash(`${ROUTER} hn mentions; ${ROUTER} bsky post x`))).toBe("deny");
     // A different cron keeps its own Bash surface and its tools.
     const other = linesFor(OTHER_CRON);
     expect(
@@ -324,6 +390,194 @@ describe("community router scripts — posting verbs and secret-echo guards (sou
       expect(code, `${f}: set -x`).not.toMatch(/\bset\s+-[a-zA-Z]*x/);
       expect(code, `${f}: declare -p`).not.toMatch(/\bdeclare\s+-[a-zA-Z]*p/);
     }
+  });
+});
+
+// #7122 P1-A, script layer — an argument of an allowlisted verb must never be
+// EVALUATED by the platform script it reaches. Three sink classes, detected by SYNTAX on
+// comment-stripped source (never a bare token): (1) a positional/option-derived variable
+// used in a bash arithmetic context without a `^[0-9]+$` guard (`(( limit ))`, `$(( … ))`
+// evaluate `HOME[$(cmd)]` as code); (2) any `$` interpolated into the program text of
+// `python3 -c "…"` or a double-quoted jq program (pass values by sys.argv / --arg /
+// --argjson instead); (3) `eval`, `bash -c`, `sh -c` beyond the one pinned registry line.
+// The detectors are exported-by-position so the non-vacuity rows can run them on
+// synthetic bad and good snippets, not only on the real scripts.
+function stripShellComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .map((l) => l.replace(/\s+#\s.*$/, ""))
+    .join("\n");
+}
+
+/** `name() { … }` bodies, keyed by function name (a `^}` at column 0 ends one). */
+function shellFunctions(code: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const re = /^([A-Za-z_]\w*)\(\)\s*\{\n([\s\S]*?)^\}/gm;
+  for (const m of code.matchAll(re)) out.set(m[1], m[2]);
+  return out;
+}
+
+/** Variables a `cmd_*` handler binds from its positional parameters (its caller-controlled operands). */
+function operandVars(body: string): Set<string> {
+  const vars = new Set<string>();
+  for (const m of body.matchAll(/^\s*(?:local\s+)?([A-Za-z_]\w*)=\(?"\$\{?[0-9]/gm)) vars.add(m[1]);
+  return vars;
+}
+
+function arithmeticIdentifiers(body: string): Set<string> {
+  const ids = new Set<string>();
+  for (const m of body.matchAll(/\(\(([^\n]*?)\)\)/g)) {
+    const expr = m[1].replace(/\$\{#\w+\}/g, " ");
+    for (const id of expr.matchAll(/\b[A-Za-z_]\w*\b/g)) ids.add(id[0]);
+  }
+  return ids;
+}
+
+const numericGuardFor = (v: string, body: string): boolean =>
+  new RegExp(String.raw`"\$\{?${v}\}?"\s*=~\s*\^\[0-9\]\+\$`).test(body) ||
+  new RegExp(String.raw`\brequire_uint\s+\S+\s+"\$\{?${v}\}?"`).test(body);
+
+/** Findings for one script's comment-stripped source; empty means clean. */
+function evaluationSinkFindings(code: string): string[] {
+  const findings: string[] = [];
+  for (const [fn, body] of shellFunctions(code)) {
+    if (!fn.startsWith("cmd_")) continue;
+    const used = arithmeticIdentifiers(body);
+    for (const v of operandVars(body)) {
+      if (used.has(v) && !numericGuardFor(v, body)) findings.push(`${fn}: operand \`${v}\` reaches an arithmetic context without a numeric guard`);
+    }
+  }
+  if (/\bpython3?\s+-c\s+"(?:[^"\\]|\\.)*\$/.test(code)) findings.push("python -c program text interpolates a shell variable");
+  if (/\bjq\b[^\n]*?\s"\s*[.\[{(|](?:[^"\\\n]|\\.)*\$/.test(code)) findings.push("a double-quoted jq program interpolates a shell variable");
+  if (/\bjq\b(?:\s+-[A-Za-z-]+)*\s+"\$\{?\w+\}?"(?:\s|$)/m.test(code)) findings.push("a jq program is supplied from a variable");
+  if (/\b(?:bash|sh|zsh)\s+-[a-z]*c\b/.test(code)) findings.push("bash/sh -c");
+  for (const m of code.matchAll(/(^|[;&|(\s])eval\s+([^\n]*)/gm)) {
+    if (m[2].trim() !== '"$auth_cmd" &>/dev/null && return 0 || return 1') findings.push(`eval ${m[2].trim().slice(0, 40)}`);
+  }
+  return findings;
+}
+
+describe("community router scripts — no argument is evaluated by the script it reaches (#7122 P1-A, source tests)", () => {
+  const files = readdirSync(SCRIPTS_DIR).filter((f) => f.endsWith(".sh"));
+  const codeOf = (f: string) => stripShellComments(readFileSync(join(SCRIPTS_DIR, f), "utf-8"));
+
+  it("every community script is clean of the three sink classes", () => {
+    expect(files).toEqual(expect.arrayContaining(["discord-community.sh", "hn-community.sh", "community-router.sh", "github-community.sh"]));
+    const failures = files.flatMap((f) => evaluationSinkFindings(codeOf(f)).map((x) => `${f}: ${x}`));
+    expect(failures).toEqual([]);
+  });
+
+  it("non-vacuity: the detectors FIRE on the verified exploit shapes and stay quiet on the guarded forms", () => {
+    const bad = {
+      arithmetic: 'cmd_messages() {\n  local limit="${2:-100}"\n  while (( fetched < limit )); do\n    :\n  done\n}\n',
+      arithmeticSubst: 'cmd_members() {\n  local limit="${1:-1000}"\n  local b=$(( limit < 5 ? limit : 5 ))\n}\n',
+      python: "x=$(python3 -c \"import urllib.parse; print(urllib.parse.quote('$query'))\")\n",
+      jq: 'x=$(echo "$m" | jq ".[0:${limit}]")\n',
+      jqVar: 'x=$(jq -r "$prog" <<<"$m")\n',
+      eval: 'eval "$user_cmd"\n',
+      bashC: 'bash -c "$1"\n',
+    };
+    for (const [name, snippet] of Object.entries(bad)) {
+      expect(evaluationSinkFindings(snippet), name).not.toEqual([]);
+    }
+    const good = {
+      arithmetic: 'cmd_messages() {\n  local limit="${2:-100}"\n  require_uint limit "$limit"\n  while (( fetched < limit )); do\n    :\n  done\n}\n',
+      arithmeticRegex: 'cmd_x() {\n  local n="${1:-5}"\n  if ! [[ "$n" =~ ^[0-9]+$ ]]; then exit 1; fi\n  (( n > 1 ))\n}\n',
+      python: "x=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' \"$query\")\n",
+      jq: 'x=$(echo "$m" | jq --argjson n "$limit" \'.[0:$n]\')\n',
+      lengthOnly: 'cmd_post() {\n  local text="${1:?usage}"\n  if (( ${#text} > 280 )); then exit 1; fi\n}\n',
+    };
+    for (const [name, snippet] of Object.entries(good)) {
+      expect(evaluationSinkFindings(snippet), name).toEqual([]);
+    }
+  });
+
+  it("non-vacuity: the guarded-arithmetic path is actually exercised on the real scripts (a guard that is never needed proves nothing)", () => {
+    let guardedUses = 0;
+    for (const f of files) {
+      for (const [fn, body] of shellFunctions(codeOf(f))) {
+        if (!fn.startsWith("cmd_")) continue;
+        const used = arithmeticIdentifiers(body);
+        for (const v of operandVars(body)) if (used.has(v) && numericGuardFor(v, body)) guardedUses++;
+      }
+    }
+    // discord messages (limit), x fetch-mentions (mr_val) and the two `--max` handlers at minimum.
+    expect(guardedUses).toBeGreaterThanOrEqual(3);
+  });
+
+  it("require_uint: its emitted lines expand only the script-chosen label, never the operand", () => {
+    for (const f of ["discord-community.sh", "hn-community.sh"]) {
+      const m = codeOf(f).match(/^require_uint\(\)\s*\{\n([\s\S]*?)^\}/m);
+      expect(m, `${f}: require_uint helper`).not.toBeNull();
+      const emitted = m![1].split("\n").filter((l) => /\b(?:echo|printf)\b/.test(l));
+      expect(emitted.length, `${f}: the helper must report the rejection`).toBeGreaterThan(0);
+      for (const l of emitted) expect(l, `${f}: ${l}`).not.toMatch(/\$\{?(?:2|value|val|arg)\b/);
+      expect(m![1]).toMatch(/exit 1/);
+    }
+  });
+
+  // Behavioural proof on the REAL scripts: a hostile operand is rejected BEFORE any
+  // evaluation or network call, nothing from it is echoed, and no marker file appears.
+  describe("real-script rows (fake credentials, a stub curl; no network)", () => {
+    const hostile = (marker: string) => `HOME[$(touch ${marker})]`;
+    function run(script: string, args: string[], extraPath?: string) {
+      const dir = mkdtempSync(join(tmpdir(), "soleur-router-"));
+      const marker = join(dir, "pwned");
+      const result = spawnSync("bash", [join(SCRIPTS_DIR, script), ...args.map((a) => a.replaceAll("MARKER", marker))], {
+        env: {
+          PATH: `${extraPath ? extraPath + ":" : ""}${process.env.PATH}`,
+          HOME: dir,
+          // Synthesized, token-shaped by pattern only (cq-test-fixtures-synthesized-only).
+          DISCORD_BOT_TOKEN: "aaaa.bbbb.cccc",
+          DISCORD_GUILD_ID: "1",
+        } as unknown as NodeJS.ProcessEnv,
+        encoding: "utf8",
+        timeout: 20_000,
+      });
+      const pwned = existsSync(marker);
+      rmSync(dir, { recursive: true, force: true });
+      return { ...result, pwned, marker };
+    }
+
+    it("discord messages: a hostile limit or after_id exits non-zero, runs nothing and echoes nothing", () => {
+      for (const args of [
+        ["messages", "123", hostile("MARKER")],
+        ["messages", "123", "5", hostile("MARKER")],
+        ["messages", hostile("MARKER")],
+        ["members", hostile("MARKER")],
+        ["messages", "123", "1;id"],
+      ]) {
+        const r = run("discord-community.sh", args);
+        expect(r.status, args.join(" ")).not.toBe(0);
+        expect(r.pwned, `${args.join(" ")}: marker created`).toBe(false);
+        expect(`${r.stdout}${r.stderr}`).not.toMatch(/HOME\[|touch|pwned|1;id/);
+      }
+    });
+
+    it("hn: a hostile --limit is rejected without echo, and a python-source breakout in --query is inert data", () => {
+      const bin = mkdtempSync(join(tmpdir(), "soleur-stubbin-"));
+      writeFileSync(join(bin, "curl"), '#!/usr/bin/env bash\nprintf \'{"hits":[],"nbHits":0,"exhaustiveNbHits":true}\\n200\'\n', { mode: 0o755 });
+      try {
+        const lim = run("hn-community.sh", ["mentions", "--query", "soleur", "--limit", hostile("MARKER")], bin);
+        expect(lim.status).not.toBe(0);
+        expect(lim.pwned).toBe(false);
+        expect(`${lim.stdout}${lim.stderr}`).not.toMatch(/HOME\[|touch|pwned/);
+        const trend = run("hn-community.sh", ["trending", "--limit", hostile("MARKER")], bin);
+        expect(trend.status).not.toBe(0);
+        expect(trend.pwned).toBe(false);
+        // The exploit string from the review: it closes the python quote and calls os.system.
+        const q = run("hn-community.sh", ["mentions", "--query", "x'+str(__import__('os').system('touch MARKER'))+'", "--limit", "5"], bin);
+        expect(q.pwned, "the query was executed as python source").toBe(false);
+        expect(q.status, q.stderr).toBe(0);
+        // Control: a benign run through the same harness succeeds (the stub path is live).
+        const ok = run("hn-community.sh", ["mentions", "--query", "soleur", "--limit", "5"], bin);
+        expect(ok.status, ok.stderr).toBe(0);
+        expect(JSON.parse(ok.stdout).count).toBe(0);
+      } finally {
+        rmSync(bin, { recursive: true, force: true });
+      }
+    });
   });
 });
 

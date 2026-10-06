@@ -155,17 +155,18 @@ describe("countPermissionDenials (#7122)", () => {
     expect(JSON.stringify(r)).not.toContain("gh issue");
   });
 
-  it("covers the whole closed vocabulary and bounds the list at MAX_DENIED_TOOLS (first-seen wins)", () => {
+  it("covers the whole closed vocabulary INCLUDING `other`: the cap is at least the vocabulary size", () => {
     const all = [
       "Bash", "Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "NotebookEdit",
       "Task", "Agent", "Skill", "WebFetch", "WebSearch", "ToolSearch", "TodoWrite", "mcp__x__y",
     ];
     const r = countPermissionDenials(all.map((t) => d(t)));
     expect(r.permissionDenialCount).toBe(all.length);
-    expect(MAX_DENIED_TOOLS).toBe(12);
-    expect(r.deniedTools).toHaveLength(MAX_DENIED_TOOLS);
-    expect(r.deniedTools).toEqual(all.slice(0, MAX_DENIED_TOOLS));
-    // `other` is a member like any other once the list has room for it.
+    // 15 vocabulary names + `other` = 16: a cap below that silently drops `other`, the one
+    // class that says "a tool the hook did not know about was denied".
+    expect(MAX_DENIED_TOOLS).toBeGreaterThanOrEqual(all.length);
+    expect(r.deniedTools).toEqual(all.slice(0, all.length - 1).concat("other"));
+    expect(r.deniedTools).toContain("other");
     expect(countPermissionDenials([d("mcp__x__y")]).deniedTools).toEqual(["other"]);
   });
 

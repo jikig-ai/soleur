@@ -93,10 +93,20 @@ const TOPIC_LABELS: Record<CommunityTopicCategory, string> = {
 };
 
 export const MAX_TOPICS = COMMUNITY_TOPIC_CATEGORIES.length;
-export const MIN_PERIOD_DAYS = 1;
-export const MAX_PERIOD_DAYS = 31;
 
-/** Final-message cap. The substrate truncates at the same figure and flags it. */
+/**
+ * The collection window, in days. A HANDLER constant, not a draft field: the
+ * collectors are invoked with a fixed 1-day window (see the prompt), so period_start,
+ * period_end and the "Last 1 day" wording are derived from this and the run date, and
+ * the model cannot present a number measured over one day as a week's.
+ */
+export const COMMUNITY_PERIOD_DAYS = 1;
+
+/**
+ * Final-message cap. The substrate truncates at the same figure (FINAL_MESSAGE_CAP_BYTES in
+ * _cron-claude-eval-substrate.ts) and flags it; a parity test in cron-community-monitor.test.ts
+ * pins the pair.
+ */
 export const COMMUNITY_FINAL_MESSAGE_MAX_BYTES = 16 * 1024;
 
 // =============================================================================
@@ -151,7 +161,6 @@ export const COMMUNITY_METRICS = {
 type MetricsTable = typeof COMMUNITY_METRICS;
 
 export type CommunityDraft = {
-  periodDays: number;
   platforms: {
     [P in CommunityPlatform]: {
       status: CommunityStatus;
@@ -215,7 +224,6 @@ const topicSchema = z.strictObject({
 });
 
 const draftSchema = z.strictObject({
-  periodDays: z.int().min(MIN_PERIOD_DAYS).max(MAX_PERIOD_DAYS),
   platforms: z.strictObject(platformsShape),
   topics: z
     .array(topicSchema)
@@ -249,7 +257,6 @@ export type CommunityDraftResult =
 // array index). Anything else is replaced, so no model-chosen text can ride a
 // code into Sentry via the path of an issue.
 const KNOWN_SEGMENTS: ReadonlySet<string> = new Set([
-  "periodDays",
   "platforms",
   "topics",
   "status",
@@ -323,8 +330,9 @@ export function parseCommunityDraft(
 }
 
 /**
- * Structural read of the substrate's SpawnResult (the real fields are added by
- * the substrate change; this stays decoupled so the module graph is unchanged).
+ * Structural read of the final-message fields of the substrate's SpawnResult. It
+ * takes only the two fields it needs (not the SpawnResult type) so this module
+ * does not import the substrate, keeping the module graph acyclic and light.
  */
 export function readFinalMessage(
   spawn: { finalMessage?: string; finalMessageTruncated?: boolean } | null | undefined,
@@ -352,7 +360,6 @@ export function buildExampleDraftLine(): string {
     platforms[p] = { status: "collected", metrics };
   }
   return JSON.stringify({
-    periodDays: 1,
     platforms,
     topics: [{ category: "other", count: 0 }],
   });
@@ -372,15 +379,22 @@ export type RenderOptions = {
   runDate: string;
   /** `owner/name` slug, used only for the click-through links. */
   repo: string;
+  /**
+   * The REAL run timestamp (ISO 8601 UTC instant), the handler's replay-stable
+   * `runStartedAt`. It becomes the digest's `generated_at`; a fabricated midnight
+   * would mislead any consumer that reads the frontmatter.
+   */
+  generatedAt: string;
   /** Collector-sidecar truth: replaces the model's github metrics entirely. */
   githubOverride?: GithubOverride;
 };
 
-// The committed digest directory. Mirrors COMMUNITY_DIGEST_DIR in the handler
-// (asserted equal by a test; importing the handler here would be circular).
+// The committed digest directory: defined HERE and re-exported by the handler as
+// COMMUNITY_DIGEST_DIR (single definition; the handler already imports this module).
 export const COMMUNITY_DIGEST_DIR_PATH = "knowledge-base/support/community/";
 
 const RUN_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const GENERATED_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 function shiftDate(runDate: string, days: number): string {
@@ -436,8 +450,11 @@ function headline(platform: CommunityPlatform, eff: EffectivePlatform): string {
     ([key, spec]) => `${spec.label} ${renderValue(spec, eff.metrics[key] ?? 0)}`,
   );
   const base = parts.join(", ");
+  // A partial platform's numbers are shown only under an explicit label, and the
+  // label says a 0 may be a metric the collector could not obtain (the schema has
+  // no "absent" value, so 0 is how an unavailable metric arrives).
   return eff.status === "partial"
-    ? `${base} (partial: ${eff.failureCause ?? "unknown"})`
+    ? `partial (${eff.failureCause ?? "unknown"}; a 0 may mean unavailable): ${base}`
     : base;
 }
 
@@ -445,18 +462,22 @@ export function renderCommunityPublication(
   draft: CommunityDraft,
   opts: RenderOptions,
 ): { digestMarkdown: string; issueTitle: string; issueBody: string } {
-  const { runDate, repo, githubOverride } = opts;
+  const { runDate, repo, githubOverride, generatedAt } = opts;
   if (!RUN_DATE_RE.test(runDate)) {
     throw new Error("renderCommunityPublication: runDate must be YYYY-MM-DD");
   }
   if (!REPO_RE.test(repo)) {
     throw new Error("renderCommunityPublication: repo must be owner/name");
   }
-  const periodStart = shiftDate(runDate, -draft.periodDays);
+  if (typeof generatedAt !== "string" || !GENERATED_AT_RE.test(generatedAt) || Number.isNaN(Date.parse(generatedAt))) {
+    throw new Error("renderCommunityPublication: generatedAt must be an ISO UTC instant");
+  }
+  const periodDays = COMMUNITY_PERIOD_DAYS;
+  const periodStart = shiftDate(runDate, -periodDays);
   const issuesUrl = `https://github.com/${repo}/issues`;
   const pullsUrl = `https://github.com/${repo}/pulls`;
   const digestUrl = `https://github.com/${repo}/blob/main/${COMMUNITY_DIGEST_DIR_PATH}${runDate}-digest.md`;
-  const dayWord = draft.periodDays === 1 ? "day" : "days";
+  const dayWord = periodDays === 1 ? "day" : "days";
 
   const effective = Object.fromEntries(
     COMMUNITY_PLATFORMS.map((p) => [p, effectivePlatform(draft, p, githubOverride)]),
@@ -479,14 +500,14 @@ export function renderCommunityPublication(
     "---",
     `period_start: ${periodStart}`,
     `period_end: ${runDate}`,
-    `generated_at: ${runDate}T00:00:00Z`,
+    `generated_at: ${generatedAt}`,
     "---",
     "",
     `# Community Digest - ${runDate}`,
     "",
     "## Period",
     "",
-    `Last ${draft.periodDays} ${dayWord}, ${periodStart} to ${runDate}.`,
+    `Last ${periodDays} ${dayWord}, ${periodStart} to ${runDate}.`,
     "",
     "## Activity Summary",
     "",
@@ -508,7 +529,7 @@ export function renderCommunityPublication(
   // Must never start with AUDIT_SELF_REPORT_BODY_PREFIX: the dedup predicate keys
   // on it to tell the FAILED audit stub from a real digest.
   const issueBody = [
-    `Daily community digest for ${runDate} (last ${draft.periodDays} ${dayWord}).`,
+    `Daily community digest for ${runDate} (last ${periodDays} ${dayWord}).`,
     "",
     summaryTable,
     "",
@@ -607,6 +628,8 @@ export const COMMUNITY_DIGEST_MILESTONE = "Post-MVP / Later" as const;
 
 const API_VERSION_HEADERS = { "X-GitHub-Api-Version": "2022-11-28" } as const;
 const UPSERT_MAX_ATTEMPTS = 3;
+/** Page size of the digest-for-today read. Equal to the pre-spawn dedup read's (see findExisting). */
+export const DIGEST_LIST_PAGE_SIZE = 10;
 const UPSERT_BASE_DELAY_MS = 1_000;
 
 type IssueRow = {
@@ -620,10 +643,6 @@ type IssueRow = {
 function isRetryable(err: unknown): boolean {
   const status = (err as { status?: number } | null)?.status;
   return typeof status === "number" && (status >= 500 || status === 429);
-}
-
-function defaultAppLogin(): string {
-  return `${process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai"}[bot]`;
 }
 
 async function sleepMs(ms: number): Promise<void> {
@@ -641,8 +660,12 @@ export async function upsertDigestIssue(args: {
   label: string;
   milestoneTitle: typeof COMMUNITY_DIGEST_MILESTONE;
   cronName: string;
-  /** Expected author login of a PATCHable issue. Defaults to the App's [bot] login. */
-  appLogin?: string;
+  /**
+   * Author login of a PATCHable issue: the App's `<slug>[bot]` login. REQUIRED and
+   * resolved by the caller from the authoritative source (`getAppSlug()`, GET /app),
+   * never from a build-time env default: a wrong value fails open to a duplicate issue.
+   */
+  appLogin: string;
   /** Base backoff in ms (doubles per attempt). Tests inject 0. */
   retryDelayMs?: number;
 }): Promise<{ issueNumber: number; via: "created" | "patched" }> {
@@ -656,7 +679,7 @@ export async function upsertDigestIssue(args: {
     label,
     milestoneTitle,
     cronName,
-    appLogin = defaultAppLogin(),
+    appLogin,
     retryDelayMs = UPSERT_BASE_DELAY_MS,
   } = args;
 
@@ -667,6 +690,16 @@ export async function upsertDigestIssue(args: {
 
   // FAIL-CLOSED: a read error propagates. Falling open to a create here would
   // double-file whenever the list read hiccups.
+  //
+  // READ SHAPE: label-filtered, state=all (a closed digest is still today's),
+  // newest-first, one page of DIGEST_LIST_PAGE_SIZE. The pre-spawn dedup read
+  // (digestIssueExistsForDate in _cron-shared.ts) uses the SAME page size and order,
+  // so both ask the same question of the same window. The ONE difference is
+  // deliberate: that read is author-agnostic (any real digest for today means "a
+  // digest exists", and it fails OPEN), while this one only accepts a PATCH target
+  // authored by the App bot (so a human-opened look-alike is never overwritten) and
+  // fails CLOSED.
+  let loginMismatchWarned = false;
   const findExisting = async (): Promise<number | undefined> => {
     const res = await octokit.request("GET /repos/{owner}/{repo}/issues", {
       owner,
@@ -675,17 +708,18 @@ export async function upsertDigestIssue(args: {
       labels: label,
       sort: "created",
       direction: "desc",
-      per_page: 30,
+      per_page: DIGEST_LIST_PAGE_SIZE,
       headers: API_VERSION_HEADERS,
     });
     if (!Array.isArray(res.data)) {
       throw new Error("upsertDigestIssue: issues list returned a non-array body");
     }
-    const match = (res.data as IssueRow[]).find(
+    const rows = res.data as IssueRow[];
+    // Everything that qualifies EXCEPT the author's login.
+    const candidates = rows.filter(
       (i) =>
         !i.pull_request &&
         i.user?.type === "Bot" &&
-        i.user?.login === appLogin &&
         i.title === canonicalTitle &&
         isRealScheduledDigest(
           { title: i.title, body: i.body },
@@ -695,6 +729,20 @@ export async function upsertDigestIssue(args: {
         Number.isInteger(i.number) &&
         (i.number as number) > 0,
     );
+    const match = candidates.find((i) => i.user?.login === appLogin);
+    if (match === undefined && candidates.length > 0 && !loginMismatchWarned) {
+      // A Bot-authored canonical digest exists for today but under a login other than
+      // the one we expect: the expected login is stale (App rename, slug drift) and
+      // this run is about to create a duplicate. Say so instead of doing it silently.
+      loginMismatchWarned = true;
+      warnSilentFallback(new Error("digest issue author login does not match the App bot login"), {
+        feature: cronName,
+        op: "community-publication-bot-login-mismatch",
+        message:
+          "A bot-authored digest for today exists under a different login than the resolved App login; a duplicate will be created",
+        extra: { fn: cronName, issueNumber: candidates[0].number },
+      });
+    }
     return match?.number;
   };
 

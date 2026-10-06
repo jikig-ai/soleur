@@ -71,6 +71,7 @@ import {
   parseClaudeResultLine,
   resolveEvalCaptureStatus,
   runHookSelfTest,
+  setupEphemeralWorkspace,
   spawnClaudeEval,
   spawnSimple,
   STDOUT_TAIL_CAP_BYTES,
@@ -818,12 +819,144 @@ describe("no-file-tools directive (#7122)", () => {
     }
   });
 
-  it("setupEphemeralWorkspace hands the directive to the self-test (source anchor: the delivery cross-check is wired, not merely available)", () => {
-    const src = readFileSync(
-      join(process.cwd(), "server/inngest/functions/_cron-claude-eval-substrate.ts"),
-      "utf-8",
-    );
-    expect(src).toMatch(/runHookSelfTest\(\{[^}]*\bnoFileTools\b[^}]*\}\)/s);
+  // P2-6 — behavioural, not a token anchor: run the REAL setupEphemeralWorkspace for the
+  // community cron with a `git` shim on PATH that "clones" a minimal tree whose hook is a
+  // stub. If setupEphemeralWorkspace forwards `noFileTools: true` to runHookSelfTest, the
+  // stub (which allows Write) aborts the setup with the directive's own message; a
+  // mutation that passes `false` (or drops the argument) skips that probe, the stub
+  // satisfies every other probe, and setup RESOLVES — which fails this test.
+  describe("setupEphemeralWorkspace forwards the directive to the self-test (behavioural)", () => {
+    const savedEnv = { PATH: process.env.PATH, ROOT: process.env.CRON_WORKSPACE_ROOT, HOOK: process.env.FAKE_CLONE_HOOK_SRC };
+    afterEach(() => {
+      process.env.PATH = savedEnv.PATH;
+      if (savedEnv.ROOT === undefined) delete process.env.CRON_WORKSPACE_ROOT;
+      else process.env.CRON_WORKSPACE_ROOT = savedEnv.ROOT;
+      if (savedEnv.HOOK === undefined) delete process.env.FAKE_CLONE_HOOK_SRC;
+      else process.env.FAKE_CLONE_HOOK_SRC = savedEnv.HOOK;
+    });
+
+    /** PATH shim: `git clone <url> <dest>` lays down the plugin sentinel and copies the hook at FAKE_CLONE_HOOK_SRC. */
+    function installGitShim(hookSource: string): string {
+      const dir = mkdtempSync(join(tmpdir(), "soleur-git-shim-"));
+      tmpDirs.push(dir);
+      const hookSrc = join(dir, "hook.mjs");
+      writeFileSync(hookSrc, hookSource, "utf-8");
+      const shim = join(dir, "git");
+      writeFileSync(
+        shim,
+        [
+          "#!/usr/bin/env bash",
+          'if [[ "$1" == "clone" ]]; then',
+          '  dest="${@: -1}"',
+          '  mkdir -p "$dest/plugins/soleur/.claude-plugin" "$dest/apps/web-platform/server/inngest"',
+          '  : > "$dest/plugins/soleur/.claude-plugin/plugin.json"',
+          '  cp "$FAKE_CLONE_HOOK_SRC" "$dest/apps/web-platform/server/inngest/cron-bash-allowlist-hook.mjs"',
+          "  exit 0",
+          "fi",
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      process.env.FAKE_CLONE_HOOK_SRC = hookSrc;
+      process.env.CRON_WORKSPACE_ROOT = dir;
+      process.env.PATH = `${dir}:${savedEnv.PATH}`;
+      return dir;
+    }
+
+    // Denies the canonical exfil (/proc/…) and the unknown/egress classes, ALLOWS every
+    // file tool and every other Bash command: the only probe that can catch it is the
+    // no-file-tools Write probe (and, for P2-4, the hostile-argument probe).
+    const permissiveStub = String.raw`#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+const input = JSON.parse(readFileSync(0, "utf-8"));
+let v = "deny";
+if (input.tool_name === "Bash") {
+  v = /\/proc\//.test(String(input.tool_input?.command ?? "")) ? "deny" : "allow";
+} else if (["Write", "Grep", "Task", "Skill"].includes(input.tool_name)) {
+  v = "allow";
+}
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
+process.exit(0);
+`;
+
+    it("the community cron: a hook that allows Write aborts setup with the no-file-tools message", async () => {
+      installGitShim(permissiveStub);
+      await expect(
+        setupEphemeralWorkspace({ installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop", cronName: COMMUNITY }),
+      ).rejects.toThrow(/no-file-tools.*Write|Write.*no-file-tools/s);
+    });
+
+    it("control: the same permissive stub passes setup for a cron WITHOUT the directive (so the rejection above is the forwarded flag, not the stub)", async () => {
+      installGitShim(permissiveStub);
+      const { ephemeralRoot } = await setupEphemeralWorkspace({
+        installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
+        cronName: "cron-no-directive-control",
+      });
+      expect(typeof ephemeralRoot).toBe("string");
+    });
+
+    it("the community cron passes setup against the REAL hook (directive delivered and honoured end to end)", async () => {
+      installGitShim(readFileSync(join(process.cwd(), "server/inngest/cron-bash-allowlist-hook.mjs"), "utf-8"));
+      const { spawnCwd } = await setupEphemeralWorkspace({
+        installationToken: "ghs_FAKEtoken0123456789ABCDEFghijklmnop",
+        cronName: COMMUNITY,
+      });
+      expect(readFileSync(join(spawnCwd, ".claude/cron-allow.txt"), "utf-8")).toContain("no-file-tools");
+    });
+  });
+
+  // P2-4 — an allowlisted verb with a HOSTILE trailing argument is the real residual
+  // surface. The self-test now probes it for a no-file-tools cron and aborts the spawn
+  // if the delivered hook ALLOWS it.
+  it("P2-4: throws when the delivered hook allows an allowlisted verb with a hostile trailing argument (the stub allows everything but the exfil probe and the file tools)", () => {
+    const stub = String.raw`#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+const input = JSON.parse(readFileSync(0, "utf-8"));
+let v = "deny";
+if (input.tool_name === "Bash") {
+  v = /\/proc\//.test(String(input.tool_input?.command ?? "")) ? "deny" : "allow";
+}
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
+process.exit(0);
+`;
+    const spawnCwd = makeSpawnCwd({ hookSource: stub });
+    expect(() =>
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS], noFileTools: true }),
+    ).toThrow(/trailing argument/);
+  });
+
+  it("P2-4: the hostile probes cover discord messages and hn mentions, and do NOT run for a cron without the directive", () => {
+    const seen: string[] = [];
+    const recorder = String.raw`#!/usr/bin/env node
+import { readFileSync, appendFileSync } from "node:fs";
+const input = JSON.parse(readFileSync(0, "utf-8"));
+const c = String(input.tool_input?.command ?? "");
+if (input.tool_name === "Bash") appendFileSync(process.env.PROBE_LOG, c + "\n");
+const v = input.tool_name === "Bash" && !/\/proc\/|\$\(/.test(c) ? "allow" : "deny";
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } }));
+process.exit(0);
+`;
+    const log = join(mkdtempSync(join(tmpdir(), "soleur-probe-log-")), "log.txt");
+    tmpDirs.push(join(log, ".."));
+    process.env.PROBE_LOG = log;
+    try {
+      const spawnCwd = makeSpawnCwd({ hookSource: recorder });
+      // Everything but the file tools denied by the recorder -> the no-file-tools Write probe passes; Bash allow[0] allows.
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS], noFileTools: true });
+      seen.push(...readFileSync(log, "utf-8").split("\n").filter(Boolean));
+      expect(seen.some((c) => /discord messages 'HOME\[\$\(id\)\]'/.test(c)), seen.join("|")).toBe(true);
+      expect(seen.some((c) => /hn mentions --query 'x\$\(id\)'/.test(c)), seen.join("|")).toBe(true);
+      writeFileSync(log, "");
+      // No directive: the probes are not run (no `$(id)` command is ever sent).
+      runHookSelfTest({ spawnCwd, cronName: COMMUNITY, allow: [...COMMUNITY_ROUTER_READ_VERBS] });
+    } catch (e) {
+      // The second call may legitimately throw on the Tier-2 probes of the recorder; only the log matters.
+      if (!/self-test FAILED/.test(String(e))) throw e;
+    } finally {
+      delete process.env.PROBE_LOG;
+    }
+    expect(readFileSync(log, "utf-8")).not.toContain("$(id)");
   });
 
   it("passes against the real hook when the file delivered the directive (Write/Grep/Task/Skill all deny; the Task-allow relax probe is not run)", () => {
@@ -928,7 +1061,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
 
   const TOKEN = "ghs_FAKEtoken0123456789ABCDEFghijklmnop";
 
-  async function runFakeEval(spawnCwd: string) {
+  async function runFakeEval(spawnCwd: string, extra: { captureFinalMessage?: boolean } = {}) {
     return spawnClaudeEval({
       spawnCwd,
       installationToken: TOKEN,
@@ -938,8 +1071,11 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
       cronName: "cron-bug-fixer",
       buildSpawnEnv: () => process.env,
       logger: noopLogger,
+      ...extra,
     });
   }
+  // #7122 P2-3 — finalMessage exists only for a caller that opts in.
+  const runCapturing = (spawnCwd: string) => runFakeEval(spawnCwd, { captureFinalMessage: true });
 
   // #8603 — the pinned CLI treats an unknown `--effort` VALUE as a warning, not
   // an error: it writes `Unknown --effort value '<v>' — ignoring it and using
@@ -1042,9 +1178,28 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
     JSON.stringify({ type: "result", subtype: "success", is_error: false, result, permission_denials: [], ...extra });
   const emitLine = (line: string) => `process.stdout.write(${JSON.stringify(line)} + "\\n");`;
 
+  it("#7122 P2-3: finalMessage / finalMessageTruncated are ABSENT by default (siblings spread the whole SpawnResult into Sentry extras) and present on opt-in", async () => {
+    const draft = '{"periodDays":7,"topics":[]}';
+    const bin = () => installFakeClaudeBin(emitLine(resultEvent(`${draft} ${TOKEN}`)));
+    const off = await runFakeEval(bin());
+    expect(off.finalMessage).toBeUndefined();
+    expect(off.finalMessageTruncated).toBeUndefined();
+    expect("finalMessage" in off).toBe(false);
+    expect("finalMessageTruncated" in off).toBe(false);
+    expect(JSON.stringify(off)).not.toContain('"finalMessage"');
+    // The legacy bounded tail is unchanged by the flag.
+    expect(off.stdoutTail).toContain(draft);
+    const on = await runFakeEval(bin(), { captureFinalMessage: true });
+    expect(on.finalMessage).toContain(draft);
+    expect(on.finalMessageTruncated).toBe(false);
+    // An explicit false is the default, not a third state.
+    const explicitOff = await runFakeEval(bin(), { captureFinalMessage: false });
+    expect("finalMessage" in explicitOff).toBe(false);
+  });
+
   it("#7122: finalMessage is the result text verbatim (redacted), finalMessageTruncated false, makeThrewSpawnResult carries neither", async () => {
     const draft = '{"periodDays":7,"topics":[]}';
-    const res = await runFakeEval(
+    const res = await runCapturing(
       installFakeClaudeBin(`${emitLine(JSON.stringify({ type: "system", subtype: "init" }))}${emitLine(resultEvent(draft))}`),
     );
     expect(res.finalMessage).toBe(draft);
@@ -1057,20 +1212,20 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
   });
 
   it("#7122: finalMessage passes through the child redactor (the installation token is never carried)", async () => {
-    const res = await runFakeEval(installFakeClaudeBin(emitLine(resultEvent(`echo ${TOKEN} done`))));
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(`echo ${TOKEN} done`))));
     expect(res.finalMessage).toContain("[REDACTED-INSTALLATION-TOKEN]");
     expect(res.finalMessage).not.toContain(TOKEN);
   });
 
   it("#7122: a result-less run leaves finalMessage and finalMessageTruncated undefined (plain text only)", async () => {
-    const res = await runFakeEval(installFakeClaudeBin(`process.stdout.write("Error: Reached max turns (80)\\n");`));
+    const res = await runCapturing(installFakeClaudeBin(`process.stdout.write("Error: Reached max turns (80)\\n");`));
     expect(res.finalMessage).toBeUndefined();
     expect(res.finalMessageTruncated).toBeUndefined();
   });
 
   it("#7122: a result EVENT without a string `result` (error_max_turns) is also absent, not the two-character empty-string stand-in", async () => {
     const line = JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true, num_turns: 80, permission_denials: [] });
-    const res = await runFakeEval(installFakeClaudeBin(emitLine(line)));
+    const res = await runCapturing(installFakeClaudeBin(emitLine(line)));
     expect(res.finalMessage).toBeUndefined();
     expect(res.finalMessageTruncated).toBeUndefined();
     expect(res.stdoutTail).toContain('""'); // the legacy tail keeps its stand-in; only the new field is strict
@@ -1079,7 +1234,7 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
   it("#7122: an oversized result is cut at FINAL_MESSAGE_CAP_BYTES from the HEAD (no tail slicing) and flagged", async () => {
     expect(FINAL_MESSAGE_CAP_BYTES).toBe(16 * 1024);
     const big = `HEADMARK${"A".repeat(FINAL_MESSAGE_CAP_BYTES + 5000)}TAILMARK`;
-    const res = await runFakeEval(installFakeClaudeBin(emitLine(resultEvent(big))));
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(big))));
     expect(res.finalMessageTruncated).toBe(true);
     expect(Buffer.byteLength(res.finalMessage!, "utf8")).toBe(FINAL_MESSAGE_CAP_BYTES);
     expect(res.finalMessage!.startsWith("HEADMARK")).toBe(true);
@@ -1088,14 +1243,14 @@ describe("spawnClaudeEval — stdout tail capture (#4773 PR-A)", () => {
 
   it("#7122: a result of exactly FINAL_MESSAGE_CAP_BYTES is NOT flagged", async () => {
     const exact = "B".repeat(FINAL_MESSAGE_CAP_BYTES);
-    const res = await runFakeEval(installFakeClaudeBin(emitLine(resultEvent(exact))));
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(exact))));
     expect(res.finalMessage).toBe(exact);
     expect(res.finalMessageTruncated).toBe(false);
   });
 
   it("#7122: a token straddling the cap boundary is redacted BEFORE the cut (no partial token survives)", async () => {
     const text = `${"C".repeat(FINAL_MESSAGE_CAP_BYTES - 10)}${TOKEN}${"D".repeat(100)}`;
-    const res = await runFakeEval(installFakeClaudeBin(emitLine(resultEvent(text))));
+    const res = await runCapturing(installFakeClaudeBin(emitLine(resultEvent(text))));
     expect(res.finalMessageTruncated).toBe(true);
     expect(res.finalMessage).not.toContain(TOKEN.slice(0, 12));
   });

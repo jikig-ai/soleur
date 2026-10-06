@@ -22,6 +22,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyIssueListParams } from "./helpers/issue-list-params";
 
 vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
@@ -47,6 +48,7 @@ interface StoredIssue {
   state?: "open" | "closed";
   user?: { type: string; login: string };
   pull_request?: unknown;
+  labels?: string[];
 }
 let store: StoredIssue[];
 let nextNumber: number;
@@ -68,10 +70,10 @@ const fakeRequest = vi.fn(
     if (route === "GET /repos/{owner}/{repo}/issues") {
       const fault = listFaults.shift();
       if (fault !== undefined) throw fault;
-      const sorted = [...store].sort((a, b) =>
-        a.created_at < b.created_at ? 1 : -1,
-      );
-      return { data: sorted.slice(0, params.per_page ?? 30) };
+      // The fake ANSWERS THE QUESTION ASKED: state, labels, sort, direction and
+      // per_page are applied, so a changed read shape cannot hide (a real GitHub page
+      // that no longer holds today's digest makes the upsert file a duplicate).
+      return { data: applyIssueListParams(store, params) };
     }
     if (route === "GET /repos/{owner}/{repo}/milestones") {
       return { data: [{ number: 7, title: "Post-MVP / Later" }] };
@@ -84,6 +86,7 @@ const fakeRequest = vi.fn(
         number: nextNumber++,
         state: "open",
         user: BOT,
+        labels: Array.isArray(params.labels) ? (params.labels as string[]) : undefined,
       };
       store.push(row);
       return { data: { number: row.number } };
@@ -112,6 +115,11 @@ const fakeRequest = vi.fn(
 
 vi.mock("@/server/github/probe-octokit", () => ({
   createProbeOctokit: () => Promise.resolve({ request: fakeRequest }),
+}));
+
+// The authoritative bot-login source the handler resolves (GET /app).
+vi.mock("@/server/github-app", () => ({
+  getAppSlug: () => Promise.resolve("soleur-ai"),
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -150,7 +158,10 @@ vi.mock("@/server/inngest/functions/_cron-shared", async (importOriginal) => {
   };
 });
 
-import { cronCommunityMonitorHandler } from "@/server/inngest/functions/cron-community-monitor";
+import {
+  COMMUNITY_DIGEST_DIR,
+  cronCommunityMonitorHandler,
+} from "@/server/inngest/functions/cron-community-monitor";
 import { validDraftFinalMessage } from "./helpers/community-draft";
 
 const TITLE_PREFIX = "[Scheduled] Community Monitor -";
@@ -164,8 +175,9 @@ const TODAY = FROZEN.toISOString().slice(0, 10);
 const YESTERDAY = new Date(FROZEN.getTime() - 86_400_000)
   .toISOString()
   .slice(0, 10);
-// Mirrors COMMUNITY_DIGEST_DIR + the `<date>-digest.md` shape in the handler.
-const DIGEST_PATH = `knowledge-base/support/community/${TODAY}-digest.md`;
+// Derived from the handler's own constant (re-exported from the publication module),
+// not mirrored as a second literal.
+const DIGEST_PATH = `${COMMUNITY_DIGEST_DIR}${TODAY}-digest.md`;
 
 const okSpawn = {
   ok: true, exitCode: 0, signal: null, abortedByTimeout: false,
@@ -421,6 +433,44 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
     expect(store[0].title).toBe(`${TITLE_PREFIX} ${TODAY}`);
     expect(store[0].body).toMatch(/^Daily community digest for 2026-06-30/);
     expect(store[0].user).toEqual(BOT);
+  });
+
+  it("#7122 — the pre-spawn dedup read and the upsert read are the SAME question (page size, order, state, label)", async () => {
+    await invoke(makeStep());
+    const reads = fakeRequest.mock.calls
+      .filter((c) => c[0] === "GET /repos/{owner}/{repo}/issues")
+      .map((c) => c[1] as Record<string, unknown>);
+    expect(reads.length).toBeGreaterThanOrEqual(2); // the dedup read, then the upsert's
+    const shape = (p: Record<string, unknown>) => ({
+      per_page: p.per_page, sort: p.sort, direction: p.direction, state: p.state, labels: p.labels,
+    });
+    for (const r of reads) expect(shape(r)).toEqual(shape(reads[0]));
+    expect(reads[0].per_page).toBe(10);
+    expect(reads[0].direction).toBe("desc");
+  });
+
+  it("#7122 — with MORE older digests than a page holds, recovery still finds today's issue (newest-first) and PATCHes it instead of filing a duplicate", async () => {
+    for (let i = 0; i < 15; i++) {
+      store.push({
+        title: `${TITLE_PREFIX} 2026-06-${String(i + 1).padStart(2, "0")}`,
+        body: "old digest", state: "closed", user: BOT, number: 3000 + i,
+        created_at: new Date(Date.UTC(2026, 5, 1, i)).toISOString(),
+      });
+    }
+    store.push({
+      title: `${TITLE_PREFIX} ${TODAY}`, body: "stale body of today's failed run", state: "closed",
+      user: BOT, number: 3500, created_at: new Date(Date.UTC(2026, 5, 30, 1)).toISOString(),
+    });
+    expect(committedPaths.has(DIGEST_PATH)).toBe(false); // the commit never landed: recover
+
+    await invoke(makeStep());
+
+    expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
+    expect(realDigestCount()).toBe(1);
+    expect(store.find((i) => i.number === 3500)!.body).toMatch(/^Daily community digest for 2026-06-30/);
+    expect(
+      fakeRequest.mock.calls.some((c) => c[0] === "POST /repos/{owner}/{repo}/issues"),
+    ).toBe(false);
   });
 
   it("date anchor is replay-stable: yesterday's digest does NOT suppress today's", async () => {

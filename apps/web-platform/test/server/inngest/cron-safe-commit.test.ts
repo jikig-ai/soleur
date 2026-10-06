@@ -10,7 +10,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
@@ -44,6 +45,7 @@ import {
   DEFAULT_MAX_DELETIONS,
   SYNTHETIC_CHECK_NAMES,
   enableAutoMergeSquash,
+  deriveBranchName,
   isPathAllowed,
   parsePorcelainZ,
   safeCommitAndPr,
@@ -1097,5 +1099,209 @@ describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
         "> ⚠️ 2 changed path(s) outside the persistence allowlist were NOT committed " +
         "(Sentry op `safe-commit-paths-dropped`): `plugins/soleur/docs/page.md`, `weirdʼnameʼx.md`",
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// #7122 P1-B — the handler's git steps run in a workspace the agent may have
+// planted state in (clean filter + info/attributes, hooks, core.fsmonitor, a
+// pushurl / insteadOf redirect, a pre-created branch ahead of origin/main). In
+// exactPaths mode the handler must neither EXECUTE planted state nor push bytes it
+// did not render. Every row plants state AFTER the seed so the fixture's own setup
+// stays clean, and proves the effect with a marker file, never by reading config.
+// ---------------------------------------------------------------------------
+
+const DIGEST_BYTES = "# 2026-06-10\nrendered by the handler\n";
+
+function marker(f: Fixture, name: string): string {
+  return join(f.root, `marker-${name}`);
+}
+
+/** Plant a hook, a clean filter, an fsmonitor and a push redirect inside the repo's .git. */
+async function plantHostileGitState(f: Fixture): Promise<{ evilRemote: string }> {
+  const hooks = join(f.repo, ".git", "hooks");
+  await mkdir(hooks, { recursive: true });
+  for (const hook of ["pre-commit", "commit-msg", "post-commit", "pre-push", "reference-transaction"]) {
+    await writeFile(join(hooks, hook), `#!/bin/sh\ntouch '${marker(f, `hook-${hook}`)}'\nexit 0\n`);
+    await chmod(join(hooks, hook), 0o755);
+  }
+  const fsm = join(f.root, "fsmonitor.sh");
+  await writeFile(fsm, `#!/bin/sh\ntouch '${marker(f, "fsmonitor")}'\nexit 0\n`);
+  await chmod(fsm, 0o755);
+  const filter = join(f.root, "filter.sh");
+  await writeFile(filter, `#!/bin/sh\ntouch '${marker(f, "filter")}'\ncat >/dev/null\necho ATTACKER_CHOSEN_TEXT\n`);
+  await chmod(filter, 0o755);
+  const evilRemote = join(f.root, "evil.git");
+  await execFileP("git", ["init", "--bare", evilRemote], { env: gitFixtureEnv(evilRemote) });
+  const cfg = (k: string, v: string) =>
+    execFileP("git", ["config", "--local", k, v], { cwd: f.repo, env: { ...gitFixtureEnv(f.repo), ...SEED_ENV } });
+  await cfg("core.fsmonitor", fsm);
+  await cfg("filter.x.clean", filter);
+  await cfg("filter.x.required", "true");
+  await cfg("remote.origin.pushurl", evilRemote);
+  await mkdir(join(f.repo, ".git", "info"), { recursive: true });
+  await writeFile(join(f.repo, ".git", "info", "attributes"), "* filter=x\n");
+  return { evilRemote };
+}
+
+async function remoteBranches(remote: string): Promise<string[]> {
+  const out = await execFileP("git", ["--git-dir", remote, "for-each-ref", "--format=%(refname:short)", "refs/heads/"], {
+    env: gitFixtureEnv(remote),
+  });
+  return out.stdout.split("\n").filter(Boolean);
+}
+
+describe("safeCommitAndPr — #7122 P1-B planted workspace state (exactPaths mode)", () => {
+  const expected = (): Record<string, string> => ({ [TODAY_DIGEST]: DIGEST_BYTES });
+
+  async function writeDigest(f: Fixture, content = DIGEST_BYTES): Promise<void> {
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.repo, TODAY_DIGEST), content);
+  }
+
+  it("B-1: a planted hook, clean filter, fsmonitor and pushurl redirect execute NOTHING and the committed bytes are the rendered bytes", async () => {
+    const f = await makeFixture();
+    const { evilRemote } = await plantHostileGitState(f);
+    await writeDigest(f);
+
+    const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+
+    expect(result.status).toBe("committed");
+    for (const m of ["filter", "fsmonitor", "hook-pre-commit", "hook-commit-msg", "hook-post-commit", "hook-pre-push", "hook-reference-transaction"]) {
+      expect(existsSync(marker(f, m)), `planted ${m} executed`).toBe(false);
+    }
+    // The blob in the pushed branch is byte-identical to the rendered digest (no ATTACKER_CHOSEN_TEXT).
+    const branch = result.status === "committed" ? result.branch : "";
+    const blob = (await execFileP("git", ["--git-dir", f.remote, "show", `${branch}:${TODAY_DIGEST}`], { env: gitFixtureEnv(f.remote) })).stdout;
+    expect(blob).toBe(DIGEST_BYTES);
+    // The push went to the REAL origin; the planted pushurl received nothing.
+    expect(await remoteBranches(f.remote)).toContain(branch);
+    expect(await remoteBranches(evilRemote)).toEqual([]);
+  });
+
+  it("B-1b: the harness is live — the same planted state DOES execute under a plain git add/commit (the markers are not unreachable)", async () => {
+    const f = await makeFixture();
+    await plantHostileGitState(f);
+    await writeDigest(f);
+    await execFileP("git", ["add", "--", TODAY_DIGEST], { cwd: f.repo, env: { ...gitFixtureEnv(f.repo), ...SEED_ENV } });
+    await execFileP("git", ["commit", "-m", "x"], { cwd: f.repo, env: { ...gitFixtureEnv(f.repo), ...SEED_ENV } });
+    expect(existsSync(marker(f, "filter"))).toBe(true);
+    expect(existsSync(marker(f, "hook-pre-commit"))).toBe(true);
+  });
+
+  it("B-2: expectedContent that differs from the staged blob refuses to commit: failed/integrity, nothing pushed, no content in any message", async () => {
+    const f = await makeFixture();
+    const onDisk = "# 2026-06-10\nSECRET-ON-DISK-8841\n";
+    await writeDigest(f, onDisk);
+    const wanted = { [TODAY_DIGEST]: "# 2026-06-10\nSECRET-EXPECTED-7720\n" };
+
+    const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: wanted });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.stage).toBe("integrity");
+      expect(result.message).toBe("integrity: index-content-mismatch");
+    }
+    expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    const everything = JSON.stringify([result, reportSilentFallbackMock.mock.calls]);
+    expect(everything).not.toContain("SECRET-ON-DISK-8841");
+    expect(everything).not.toContain("SECRET-EXPECTED-7720");
+    const op = reportSilentFallbackMock.mock.calls.find((c) => c[1]?.op === "safe-commit-failed");
+    expect(op?.[1].extra).toMatchObject({ stage: "integrity", reason: "index-content-mismatch" });
+    // No commit was created locally either.
+    expect(await tgit(f.repo, "rev-list", "origin/main..HEAD", "--count")).toBe("0");
+  });
+
+  it("B-2b: byte-for-byte, not normalised — a trailing-newline difference is a mismatch", async () => {
+    const f = await makeFixture();
+    await writeDigest(f, "# 2026-06-10\nline");
+    const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: { [TODAY_DIGEST]: "# 2026-06-10\nline\n" } });
+    expect(result.status === "failed" && result.stage).toBe("integrity");
+  });
+
+  it("B-3: a symlink planted at the digest path is refused (it would commit the target's bytes)", async () => {
+    const f = await makeFixture();
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.root, "target.txt"), DIGEST_BYTES);
+    await symlink(join(f.root, "target.txt"), join(f.repo, TODAY_DIGEST));
+    const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" && result.message).toBe("integrity: path-not-regular-file");
+    expect(await remoteBranches(f.remote)).toEqual(["main"]);
+  });
+
+  it("B-4: a `.git` that is not a plain directory is refused before any git command runs", async () => {
+    const f = await makeFixture();
+    await writeDigest(f);
+    const moved = join(f.root, "real-git");
+    await execFileP("mv", [join(f.repo, ".git"), moved]);
+    await symlink(moved, join(f.repo, ".git"));
+    const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+    expect(result.status === "failed" && result.message).toBe("integrity: git-dir-not-directory");
+  });
+
+  describe("replay-resume arm (a pre-existing branch ahead of origin/main)", () => {
+    const branchFor = () => deriveBranchName("cron-test-fixture", RUN_STARTED_AT);
+
+    async function precreateBranch(f: Fixture, files: Record<string, string>): Promise<void> {
+      await tgit(f.repo, "checkout", "-b", branchFor());
+      for (const [rel, content] of Object.entries(files)) {
+        await mkdir(dirname(join(f.repo, rel)), { recursive: true });
+        await writeFile(join(f.repo, rel), content);
+      }
+      await tgit(f.repo, "add", "--", ...Object.keys(files));
+      await tgit(f.repo, "commit", "-m", "agent-authored");
+    }
+
+    it("B-5: a branch carrying an EXTRA file beside the digest is NOT pushed", async () => {
+      const f = await makeFixture();
+      await precreateBranch(f, { [TODAY_DIGEST]: DIGEST_BYTES, "knowledge-base/planted.md": "ATTACKER_CHOSEN_TEXT\n" });
+      const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+      expect(result.status).toBe("failed");
+      expect(result.status === "failed" && result.message).toBe("integrity: resume-unexpected-path");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("B-5b: a branch whose digest blob differs from the rendered bytes is NOT pushed", async () => {
+      const f = await makeFixture();
+      await precreateBranch(f, { [TODAY_DIGEST]: "ATTACKER_CHOSEN_TEXT\n" });
+      const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+      expect(result.status === "failed" && result.message).toBe("integrity: resume-content-mismatch");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("B-5c: more than one commit ahead of origin/main is NOT pushed", async () => {
+      const f = await makeFixture();
+      await precreateBranch(f, { [TODAY_DIGEST]: DIGEST_BYTES });
+      await writeFile(join(f.repo, TODAY_DIGEST), DIGEST_BYTES);
+      await tgit(f.repo, "commit", "--allow-empty", "-m", "second");
+      const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+      expect(result.status === "failed" && result.message).toBe("integrity: resume-unexpected-commit-count");
+      expect(await remoteBranches(f.remote)).toEqual(["main"]);
+    });
+
+    it("B-5d (control): a genuine replay — one commit, only the digest, the rendered bytes — still resumes and pushes", async () => {
+      const f = await makeFixture();
+      await precreateBranch(f, { [TODAY_DIGEST]: DIGEST_BYTES });
+      const result = await safeCommitAndPr({ ...exactConfig(f, makeOctokitStub()), expectedContent: expected() });
+      expect(result.status).toBe("committed");
+      expect(result.status === "committed" && result.resumed).toBe(true);
+      expect(await remoteBranches(f.remote)).toContain(branchFor());
+    });
+  });
+});
+
+describe("safeCommitAndPr — #7122 P1-B git hardening applies to every caller (not only exactPaths)", () => {
+  it("B-6: a planted pre-commit hook and core.fsmonitor do not run in the default allowedPaths mode either", async () => {
+    const f = await makeFixture();
+    await plantHostileGitState(f);
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-2.md"), "edited\n");
+    const result = await safeCommitAndPr(baseConfig(f, makeOctokitStub()));
+    expect(result.status).toBe("committed");
+    expect(existsSync(marker(f, "fsmonitor"))).toBe(false);
+    for (const h of ["pre-commit", "commit-msg", "post-commit", "pre-push", "reference-transaction"]) {
+      expect(existsSync(marker(f, `hook-${h}`)), h).toBe(false);
+    }
   });
 });

@@ -22,6 +22,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyIssueListParams, type ListableIssue } from "./helpers/issue-list-params";
 
 // Short-circuit the inngest client startup-key check (same path next build uses).
 vi.hoisted(() => {
@@ -50,17 +51,44 @@ vi.mock("@/server/observability", () => ({
 
 // #7122 — the publish step upserts the digest issue through the App-installation
 // client. This suite drives the handler's CONTROL FLOW, so the client is a minimal
-// in-memory fake (no existing issue, no milestone, create succeeds); the issue-store
-// invariants live in the dedup and publication-flow suites.
+// in-memory fake (no milestone, create succeeds); the issue-store invariants live in
+// the dedup and publication-flow suites. The list read still APPLIES its request
+// parameters (state, labels, sort, direction, per_page), so a changed read shape is
+// not invisible here.
+type FakeIssueRow = ListableIssue & {
+  title: string; body: string; user: { type: string; login: string };
+};
+const { fakeIssues, requests } = vi.hoisted(() => ({
+  fakeIssues: [] as unknown[],
+  requests: [] as { route: string; params: Record<string, unknown> }[],
+}));
 vi.mock("@/server/github/probe-octokit", () => ({
   createProbeOctokit: () =>
     Promise.resolve({
-      request: async (route: string) => {
-        if (route === "POST /repos/{owner}/{repo}/issues") return { data: { number: 4242 } };
-        if (route.startsWith("PATCH ")) return { data: { number: 4242 } };
+      request: async (route: string, params: Record<string, unknown> = {}) => {
+        requests.push({ route, params });
+        const rows = fakeIssues as FakeIssueRow[];
+        if (route === "POST /repos/{owner}/{repo}/issues") {
+          rows.push({
+            number: 4242, state: "open", title: String(params.title), body: String(params.body),
+            labels: params.labels as string[], user: { type: "Bot", login: "soleur-ai[bot]" },
+          });
+          return { data: { number: 4242 } };
+        }
+        if (route.startsWith("PATCH ")) {
+          const row = rows.find((r) => r.number === params.issue_number);
+          if (row) row.body = String(params.body);
+          return { data: { number: 4242 } };
+        }
+        if (route === "GET /repos/{owner}/{repo}/issues") return { data: applyIssueListParams(rows, params) };
         return { data: [] };
       },
     }),
+}));
+
+// The authoritative bot-login source the handler resolves (GET /app).
+vi.mock("@/server/github-app", () => ({
+  getAppSlug: () => Promise.resolve("soleur-ai"),
 }));
 
 vi.mock("@/server/inngest/functions/_cron-claude-eval-substrate", () => ({
@@ -206,6 +234,8 @@ const committedWithDigest = () => ({
 let tmpRoot: string;
 
 beforeEach(() => {
+  fakeIssues.length = 0;
+  requests.length = 0;
   tmpRoot = mkdtempSync(join(tmpdir(), "community-heartbeat-"));
   mkdirSync(join(tmpRoot, "repo"), { recursive: true });
   // `toFake: ["Date"]` only — setTimeout stays real so the heartbeat retry
@@ -263,7 +293,7 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
   // trailing persistence throw on an output-present run stayed GREEN. Both are
   // now RED-and-terminal, deliberately.
   //
-  // The retry was never capable of recovery. `setup-workspace` runs inside
+  // The retry was never capable of recovery. `setup-workspace-ro` runs inside
   // step.run (memoized), and the handler's `finally` tears down ephemeralRoot
   // unconditionally — so a replay reads back a path that has already been
   // rm -rf'd, and safeCommitAndPr hits its `workspace-lost` guard, which
@@ -301,6 +331,11 @@ describe("cron-community-monitor — throw-path heartbeat (#5728)", () => {
     expect(heartbeatUrls()[0]).toContain("?status=error");
     // still self-reports the underlying persistence failure
     expect(reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "handler-body-threw")).toBe(true);
+    // The throw skipped the liveness table, but the issue the handler already
+    // published must not keep linking a digest that never landed: it is PATCHed to
+    // the fixed notice from AFTER the inner try/catch (a step of its own).
+    expect(step.executed).toContain("patch-digest-notice");
+    expect((fakeIssues as FakeIssueRow[])[0].body).toBe("digest not committed - see Sentry");
   });
 
   // #8726 — driven through runLikeInngest, because an inline `makeStep` hands
@@ -353,6 +388,37 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     expect(res).toEqual({ ok: false });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatUrls()[0]).toContain("?status=error");
+  });
+
+  it("#7122 — no-changes leaves the published issue alone (the identical digest is on main, so its link is valid)", async () => {
+    safeCommitAndPrSpy.mockResolvedValue({ status: "no-changes" as const });
+    const step = makeStep();
+    await invoke(step, 0, 2);
+
+    expect(step.executed).not.toContain("patch-digest-notice");
+    expect((fakeIssues as FakeIssueRow[])[0].body).not.toBe("digest not committed - see Sentry");
+  });
+
+  it("#7122 — verify-output is advisory: a false negative still commits and posts GREEN", async () => {
+    resolveOutputAwareOkSpy.mockResolvedValue(false);
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: true });
+    expect(heartbeatUrls()[0]).toContain("?status=ok");
+    expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
+    expect(step.executed).not.toContain("patch-digest-notice");
+  });
+
+  it("#7122 — a throw between publish and commit (verify-output) reddens the run and PATCHes the notice; nothing is committed", async () => {
+    const step = makeStep("verify-output");
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
+    expect(step.executed).toContain("patch-digest-notice");
+    expect((fakeIssues as FakeIssueRow[])[0].body).toBe("digest not committed - see Sentry");
   });
 
   it("issue filed but persistence FAILED turns the monitor RED", async () => {
@@ -496,9 +562,9 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     );
   });
 
-  it("#7122 — a REJECTED draft turns the monitor RED and persists nothing, even though verify-output is satisfied", async () => {
-    // verify-output is a presence check that a human comment can satisfy; the
-    // validation verdict is the real gate (heartbeatOk && publication.ok).
+  it("#7122 — a REJECTED draft turns the monitor RED and persists nothing; verify-output is not even consulted", async () => {
+    // The validation verdict (plus the handler's own issue write) is the gate. The
+    // advisory re-read must not run on a rejection: its event carries the spawn tail.
     resolveOutputAwareOkSpy.mockResolvedValue(true);
     spawnClaudeEvalSpy.mockResolvedValue({ ...okSpawn, finalMessage: undefined });
     const step = makeStep();
@@ -507,6 +573,8 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     expect(res).toEqual({ ok: false });
     expect(heartbeatUrls()[0]).toContain("?status=error");
     expect(step.executed).not.toContain("publish-issue");
+    expect(step.executed).not.toContain("verify-output");
+    expect(resolveOutputAwareOkSpy).not.toHaveBeenCalled();
     expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
     expect(
       reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "community-publication-rejected"),
