@@ -1107,8 +1107,10 @@ jobs:
               return 0
             fi
             # Anchored: only the CLI's own key-miss line classifies as absent — a config or
-            # project miss ("Could not find requested config|project") stays a fault.
-            if grep -qiE '^Doppler Error: Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
+            # project miss ("Could not find requested config|project") stays a fault. ANSI
+            # colour codes are stripped first (the CLI colourises on a TTY, and a forced-color
+            # environment would otherwise turn a legit absent into a false marker_read fault).
+            if grep -qiE '^Doppler Error: Could not find requested secret' <<<"$(sed $'s/\x1b\\[[0-9;]*m//g' <<<"$out")"; then printf 'absent'; return 0; fi
             # Self-describing fault (#9429): the run log must name the CLI's own error — but the
             # error text is REMOTE input, so it gets the same posture as show_ssh_stderr: the
             # token-shape guard above pins DOPPLER_TOKEN to [A-Za-z0-9._-] (glob-literal, so the
