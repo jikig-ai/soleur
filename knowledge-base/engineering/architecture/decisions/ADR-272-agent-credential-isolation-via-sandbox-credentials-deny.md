@@ -23,9 +23,10 @@ criterion. W1 of the agent-security epic #9601.
 string instead of an array) or unknown-mode `credentials` block is accepted silently. The session starts, the turn completes, and
 the key is still present in sandboxed Bash (`AK=PRESENT`, four variants, no error). So an SDK that renamed or ignored
 `sandbox.credentials` would start every session normally with the key exposed, and nothing would reach Sentry:
-`failIfUnavailable` covers missing sandbox dependencies (bubblewrap, socat), not option acceptance. The only detectors are CI:
-the argv test, the real-sandbox test, and the capture gate that fires on a change to the sandbox config, the names module or an
-SDK bump. Whoever bumps the SDK owns that signal. (A runtime canary that probes the live image is the stronger control; it is
+`failIfUnavailable` covers missing sandbox dependencies (bubblewrap, socat), not option acceptance. The always-on detectors are
+the argv test and the real-sandbox test, both in the required webplat job. The capture gate (it fires on a change to the sandbox
+config, the names module or an SDK bump) is dark-launch and cannot give a verdict while the fixture is stale (#9614), so it is not
+counted. Whoever bumps the SDK owns that signal. (A runtime canary that probes the live image is the stronger control; it is
 blocked on the canary fixture, #9614.)
 
 ## Context
@@ -81,8 +82,8 @@ involved.
   shipped argv shape without the SDK, saw host pids and reached different conclusions about which flag does the work, so no
   mechanism (PID namespace, user namespace, dumpability) is claimed, and `denyRead` is explicitly not the barrier. A change to
   the sandbox flags needs this re-measured; `sandbox-credential-deny-runtime.test.ts` repeats it on every CI run with real
-  bubblewrap. Measured on a dev host and a CI runner, not inside the production container image (its seccomp and AppArmor
-  profiles differ), which stays an open item with #9614.
+  bubblewrap. Measured on a dev host (the CI test has not yet been seen to run on a runner as this is written), and not inside the
+  production container image (its seccomp and AppArmor profiles differ), which stays an open item with #9614.
 - A renamed, re-shaped or unknown-mode `credentials` block is accepted without error and the key stays present (Status).
 
 ## Rejected / deferred alternatives
@@ -126,8 +127,8 @@ properties or different credentials:
 ## Consequences
 
 - The owner's Anthropic API key is not readable from a sandboxed shell command, by the routes measured here (the process
-  environment, every readable `/proc/<pid>/environ`, `ps`), on a dev host and a CI runner. The deny is not a claim about any other
-  credential, and not a claim about the production container image.
+  environment, every readable `/proc/<pid>/environ`, `ps`), on a dev host. The deny is not a claim about any other credential, and
+  not a claim about the production container image.
 - The deny changes the real bwrap argv: it adds `--unsetenv ANTHROPIC_API_KEY` and `--unsetenv CLAUDE_CODE_OAUTH_TOKEN`
   (measured on SDK 0.3.284). The committed canary fixture (`infra/sandbox-canary-argv.json`) is a function of (SDK version,
   sandbox config) and was **not** re-captured here: it was already stale (captured at SDK 0.3.197 against the 0.3.284 pin; see
@@ -135,8 +136,8 @@ properties or different credentials:
   `--tmpfs <HOME>/.claude/bridge-spawn` (#9614). So the faithful canary cannot yet give a trustworthy verdict on this change; the
   deny is guarded at the argv level without the fixture (Verification).
 - The deny removes no legitimate in-session workflow, because sandboxed Bash has no route to the Anthropic API: egress is closed
-  (`allowedDomains: []`, and `api.anthropic.com` is never on the entitled-token list), so a command that needed the key could not
-  have used it. (A grep of `plugins/` finds skills that mention the variable, for example `eval-harness` and `model-launch-review`;
+  unless the entitled-token GitHub allowlist applies (`allowedDomains: []` otherwise, and `api.anthropic.com` is never on that
+  list; read from the config, not probed), so a command that needed the key could not have used it. (A grep of `plugins/` finds skills that mention the variable, for example `eval-harness` and `model-launch-review`;
   they are operator-side or CI-side, and whether any is ever invoked from a hosted session was not established; the closed egress is
   what makes it moot.)
 - Public security claims stay unchanged until the controls are measured in production (#9603). The Art. 30 register gains a
@@ -163,6 +164,6 @@ properties or different credentials:
   `--unsetenv` for exactly the auth variables (no service token, no later `--setenv` of them). No credential, no bubblewrap run, no
   model; about 8 seconds locally. It needs `bwrap` and `socat` on PATH for the SDK's own startup check (CI installs both in the
   webplat job). If an SDK bump stops honouring `sandbox.credentials`, this reds; it is the only detector (see Status).
-- Mutation proof: an 8-row battery against these guards, each row confirmed to land, is recorded in
+- Mutation proof: two batteries against these guards (24 rows), each row confirmed to land, are recorded in
   `knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md` §1.4.
 - `scripts/verify-agent-security-slice1.sh` as the local discoverability probe.

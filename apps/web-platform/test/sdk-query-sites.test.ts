@@ -12,8 +12,9 @@ import { stripComments } from "./helpers/strip-comments";
 // {allowedTools: []}})` file passed everything), so each site is named here with
 // the control it relies on, and a new one fails this test until someone decides.
 //
-// Population: any non-test module under server/, lib/ or app/ that imports the
-// SDK's `query` (static, aliased, or via dynamic import). Comments are stripped
+// Population: any non-test module under server/, lib/ or app/ that imports a
+// session-starting export of the SDK (`query`, `startup`, `prewarm`; static or
+// aliased), any namespace import of it, or a dynamic import of it. Comments are stripped
 // by the TypeScript parser, so prose mentioning the package does not count.
 
 const ROOT = path.join(__dirname, "..");
@@ -57,7 +58,10 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-const STATIC_QUERY = new RegExp(`import\\s*(?:type\\s*)?\\{[^}]*\\bquery\\b[^}]*\\}\\s*from\\s*["']${SDK}["']`);
+const STATIC_QUERY = new RegExp(
+  `import\\s*\\{[^}]*\\b(?:query|startup|prewarm)\\b[^}]*\\}\\s*from\\s*["']${SDK}["']`,
+);
+const NAMESPACE = new RegExp(`import\\s*\\*\\s*as\\s+\\w+\\s+from\\s*["']${SDK}["']`);
 const DYNAMIC = new RegExp(`import\\(\\s*["']${SDK}["']\\s*\\)`);
 
 describe("every Agent SDK query() site is accounted for (W1)", () => {
@@ -71,7 +75,7 @@ describe("every Agent SDK query() site is accounted for (W1)", () => {
       // Prefilter: stripping only removes text, and the parser-based stripper is slow.
       if (!raw.includes(SDK)) continue;
       const code = stripComments(raw, rel);
-      if (STATIC_QUERY.test(code) || DYNAMIC.test(code)) found.set(rel, code);
+      if (STATIC_QUERY.test(code) || NAMESPACE.test(code) || DYNAMIC.test(code)) found.set(rel, code);
     }
   }
 

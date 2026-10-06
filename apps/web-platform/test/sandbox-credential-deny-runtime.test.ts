@@ -31,8 +31,9 @@ import { pointCliAtStub, scrubAmbientCliEnv } from "./helpers/hermetic-cli-env";
 
 const DECOY = "decoy-api-key-sentinel";
 
-// Same convention as the C4 render suite: an unusable bwrap SKIPS locally and
-// FAILS where CI sets C4_BWRAP_REQUIRED, so the guard cannot go silently absent.
+// Same convention as the C4 render suite: an unusable sandbox (bwrap that cannot
+// create one, or no socat, which the SDK's own startup check needs) SKIPS locally
+// and FAILS where CI sets C4_BWRAP_REQUIRED, so the guard cannot go silently absent.
 const BWRAP_OK =
   process.platform === "linux" &&
   spawnSync(
@@ -40,10 +41,13 @@ const BWRAP_OK =
     ["--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "--", "true"],
     { stdio: "ignore", timeout: 15_000 },
   ).status === 0;
-if (process.platform === "linux" && !BWRAP_OK && process.env.C4_BWRAP_REQUIRED) {
+const SOCAT_OK =
+  process.platform === "linux" && spawnSync("sh", ["-c", "command -v socat"], { stdio: "ignore" }).status === 0;
+const SANDBOX_OK = BWRAP_OK && SOCAT_OK;
+if (process.platform === "linux" && !SANDBOX_OK && process.env.C4_BWRAP_REQUIRED) {
   throw new Error(
-    "C4_BWRAP_REQUIRED is set but bwrap cannot create a sandbox here. " +
-      "apt-get install bubblewrap && sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 (Ubuntu)",
+    `C4_BWRAP_REQUIRED is set but the sandbox cannot run here (bwrap usable: ${BWRAP_OK}, socat on PATH: ${SOCAT_OK}). ` +
+      "apt-get install bubblewrap socat && sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 (Ubuntu)",
   );
 }
 
@@ -64,17 +68,13 @@ interface Observation {
   decoyInEnviron: number;
 }
 
-describe.skipIf(!BWRAP_OK)("the credential deny, observed from inside the real sandbox (W1)", () => {
+describe.skipIf(!SANDBOX_OK)("the credential deny, observed from inside the real sandbox (W1)", () => {
   let stub: AnthropicStub | undefined;
   let root: string;
   let own: string;
   let home: string;
 
   beforeAll(async () => {
-    const socat = spawnSync("sh", ["-c", "command -v socat"], { stdio: "ignore" });
-    if (socat.status !== 0) {
-      throw new Error("socat is not on PATH: the SDK refuses to start its sandbox without it (CI installs it).");
-    }
     root = realpathSync(mkdtempSync(join(tmpdir(), "sbx-deny-rt-")));
     own = join(root, "00000000-0000-0000-0000-000000000001");
     mkdirSync(own);
@@ -89,18 +89,23 @@ describe.skipIf(!BWRAP_OK)("the credential deny, observed from inside the real s
   afterAll(async () => {
     vi.unstubAllEnvs();
     await stub?.close();
-    for (const dir of [root, `${root}-c4-staging`, home]) {
-      if (dir) rmSync(dir, { recursive: true, force: true });
+    if (root) {
+      for (const dir of [root, `${root}-c4-staging`]) rmSync(dir, { recursive: true, force: true });
     }
+    if (home) rmSync(home, { recursive: true, force: true });
   });
 
   async function observe(denyEntries: boolean): Promise<Observation> {
     const base = buildAgentSandboxConfig(own);
     const sandbox = denyEntries ? base : { ...base, credentials: { envVars: [] } };
     const seen: string[] = [];
+    // Aborted in `finally`, so a hung stand-in or a failed assertion mid-iteration
+    // cannot leave the CLI child running past the test.
+    const controller = new AbortController();
     const q = query({
       prompt: "probe",
       options: {
+        abortController: controller,
         model: "claude-haiku-4-5-20251001",
         maxTurns: 3,
         permissionMode: "default",
@@ -111,13 +116,17 @@ describe.skipIf(!BWRAP_OK)("the credential deny, observed from inside the real s
         canUseTool: async (_name, input) => ({ behavior: "allow", updatedInput: input }),
       },
     });
-    for await (const msg of q) {
-      if (msg.type === "user") {
-        const text = JSON.stringify((msg as { message?: { content?: unknown } }).message?.content ?? "");
-        for (const m of text.matchAll(/(READABLE_ENVIRONS|DECOY_IN_ENVIRON)=(\d+)|AK=(PRESENT|ABSENT)/g)) {
-          seen.push(m[0]);
+    try {
+      for await (const msg of q) {
+        if (msg.type === "user") {
+          const text = JSON.stringify((msg as { message?: { content?: unknown } }).message?.content ?? "");
+          for (const m of text.matchAll(/(READABLE_ENVIRONS|DECOY_IN_ENVIRON)=(\d+)|AK=(PRESENT|ABSENT)/g)) {
+            seen.push(m[0]);
+          }
         }
       }
+    } finally {
+      controller.abort();
     }
     const num = (key: string): number => {
       const hit = seen.find((s) => s.startsWith(`${key}=`));

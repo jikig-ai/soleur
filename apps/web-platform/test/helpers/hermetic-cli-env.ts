@@ -4,13 +4,15 @@
 // `CLAUDE_CONFIG_DIR` would send the run to a real provider, with real settings
 // and hooks, or through a proxy that sees the Authorization header.
 //
-// This is an ALLOWLIST-by-exclusion rather than a list of names: it clears every
-// variable under the prefixes the CLI and the providers read, so a variable the
-// bundled binary starts reading next release is already covered.
+// This is a PREFIX denylist rather than a list of names: it clears every variable
+// under the prefixes the CLI and the providers read, so a variable the bundled
+// binary starts reading next release is already covered. It does not clear
+// generic Node/TLS variables (NODE_OPTIONS, SSL_CERT_FILE, ...): a hermeticity
+// gap, not a credential path.
 
 import { vi } from "vitest";
 
-const AMBIENT_CLI_ENV = /^(ANTHROPIC|CLAUDE|AWS|GOOGLE|AZURE|OPENAI)_|_proxy$/i;
+const AMBIENT_CLI_ENV = /^(ANTHROPIC|CLAUDE|AWS|GOOGLE|AZURE|OPENAI)_|^CLAUDECODE$|_proxy$/i;
 
 /** Unset every ambient CLI/provider/proxy variable for this test file (undone by `vi.unstubAllEnvs`). */
 export function scrubAmbientCliEnv(): string[] {

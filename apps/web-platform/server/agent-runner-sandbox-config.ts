@@ -26,8 +26,11 @@ const log = createChildLogger("agent-sandbox");
 //     — see `cc-dispatcher.ts realSdkQueryFactory` body).
 //   - `enableWeakerNestedSandbox: true` — Docker containers cannot mount
 //     /proc inside user namespaces; this skips `--proc /proc` in bwrap
-//     (#1557). The PID namespace, not `denyRead`, is what hides the CLI
-//     parent's environment (measured, ADR-272).
+//     (#1557). `denyRead` is NOT what keeps the CLI parent's environment out
+//     of reach. Measured (ADR-272): no process environment readable from
+//     inside the sandbox carries the key. Which bubblewrap flag does that work
+//     is not established, so a change to the sandbox flags needs re-measuring
+//     (`sandbox-credential-deny-runtime.test.ts` repeats it).
 //   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
@@ -366,9 +369,9 @@ export function buildAgentSandboxConfig(
     allowUnsandboxedCommands: false,
     // Docker containers cannot mount proc inside user namespaces (kernel
     // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
-    // (#1557). What keeps the CLI parent's environment out of reach is the PID
-    // namespace (`--unshare-pid`), not `denyRead`: measured with decoy values
-    // in ADR-272 (the sandbox sees its own processes only).
+    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // the outcome (no readable environ carries the key) is measured in ADR-272
+    // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,
     network: {
       allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
