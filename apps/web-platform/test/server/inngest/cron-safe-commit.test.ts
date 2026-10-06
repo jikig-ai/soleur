@@ -44,6 +44,7 @@ import {
   DEFAULT_MAX_DELETIONS,
   SYNTHETIC_CHECK_NAMES,
   enableAutoMergeSquash,
+  isPathAllowed,
   parsePorcelainZ,
   safeCommitAndPr,
   type SafeCommitResult,
@@ -135,7 +136,9 @@ afterEach(async () => {
   vi.clearAllMocks();
   while (fixtures.length) {
     const f = fixtures.pop()!;
-    await rm(f.root, { recursive: true, force: true });
+    // maxRetries: a push can leave git's post-push housekeeping writing under
+    // remote.git/ while teardown runs (observed once as ENOTEMPTY).
+    await rm(f.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -904,6 +907,195 @@ describe("safeCommitAndPr — #5111 option surface", () => {
     expect(octokit.request).not.toHaveBeenCalledWith(
       "PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge",
       expect.anything(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #7122 Guard 3 — exact-path persistence + PR-body count. The community
+// monitor persists ONE handler-authored dated digest; every other path the
+// workspace dirtied is dropped, and in exactPaths mode no agent-chosen file
+// name may reach the public PR body (count only). Row numbers are the plan's
+// Guard 3 mutation matrix.
+// ---------------------------------------------------------------------------
+
+const DIGEST_DIR = "knowledge-base/support/community/";
+const TODAY_DIGEST = `${DIGEST_DIR}2026-06-10-digest.md`;
+const PRIOR_DIGEST = `${DIGEST_DIR}2026-06-09-digest.md`;
+
+/** Commit a previously published digest so an edit to it is a TRACKED modification. */
+async function seedPublishedDigest(f: Fixture): Promise<void> {
+  await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+  await writeFile(join(f.repo, PRIOR_DIGEST), "# 2026-06-09\npublished\n");
+  await tgit(f.repo, "add", "--", PRIOR_DIGEST);
+  await tgit(f.repo, "commit", "-m", "seed published digest");
+  await tgit(f.repo, "push", "origin", "main");
+}
+
+function exactConfig(f: Fixture, octokit: OctokitStub) {
+  return {
+    ...baseConfig(f, octokit),
+    allowedPaths: [] as readonly string[],
+    exactPaths: [TODAY_DIGEST] as readonly string[],
+  };
+}
+
+/** The `body` argument of the POST .../pulls call, or undefined if never called. */
+function prBodyArg(octokit: OctokitStub): unknown {
+  const call = octokit.request.mock.calls.find(
+    (c) => c[0] === "POST /repos/{owner}/{repo}/pulls",
+  );
+  return (call?.[1] as { body?: unknown } | undefined)?.body;
+}
+
+describe("isPathAllowed — one shared predicate for the matched/dropped partitions", () => {
+  it("allowedPaths: [] with exactPaths: [] matches nothing", () => {
+    expect(isPathAllowed(TODAY_DIGEST, { allowedPaths: [], exactPaths: [] })).toBe(false);
+    expect(isPathAllowed("knowledge-base/marketing/file-0.md", {})).toBe(false);
+  });
+
+  it("allowedPaths keeps bare startsWith prefix semantics", () => {
+    const cfg = { allowedPaths: ["knowledge-base/marketing/"] };
+    expect(isPathAllowed("knowledge-base/marketing/file-0.md", cfg)).toBe(true);
+    expect(isPathAllowed("knowledge-base/marketing-evil.md", cfg)).toBe(false);
+  });
+
+  it("exactPaths matches by string equality only (no prefix, no suffix)", () => {
+    const cfg = { allowedPaths: [], exactPaths: [TODAY_DIGEST] };
+    expect(isPathAllowed(TODAY_DIGEST, cfg)).toBe(true);
+    expect(isPathAllowed(`${TODAY_DIGEST}.evil`, cfg)).toBe(false);
+    expect(isPathAllowed(`${DIGEST_DIR}2026-06-10-digest.m`, cfg)).toBe(false);
+    expect(isPathAllowed(PRIOR_DIGEST, cfg)).toBe(false);
+    expect(isPathAllowed(DIGEST_DIR, cfg)).toBe(false);
+  });
+
+  it("exactPaths branch rejects traversal, absolute and empty candidates even if listed", () => {
+    for (const bad of ["../x.md", "a/../b.md", "/etc/passwd", "a/./b.md", ""]) {
+      expect(isPathAllowed(bad, { exactPaths: [bad] }), `candidate ${JSON.stringify(bad)}`).toBe(false);
+    }
+  });
+});
+
+describe("safeCommitAndPr — #7122 exactPaths mode (Guard 3)", () => {
+  it("G3-1: an edited published digest and a `.evil` sibling are dropped; the committed set is exactly [today digest]", async () => {
+    const f = await makeFixture();
+    await seedPublishedDigest(f);
+    await writeFile(join(f.repo, PRIOR_DIGEST), "# 2026-06-09\nREWRITTEN\n");
+    await writeFile(join(f.repo, TODAY_DIGEST), "# 2026-06-10\ntoday\n");
+    await writeFile(join(f.repo, `${TODAY_DIGEST}.evil`), "evil\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr(exactConfig(f, octokit));
+
+    expect(result.status).toBe("committed");
+    const shown = await tgit(f.repo, "show", "--name-only", "--format=", "HEAD");
+    expect(shown.split("\n").filter(Boolean)).toEqual([TODAY_DIGEST]);
+    if (result.status === "committed") expect(result.paths).toEqual([TODAY_DIGEST]);
+    // Both dropped paths are still LOUD in Sentry (names go there, not to the PR).
+    const dropCalls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-paths-dropped",
+    );
+    expect(dropCalls).toHaveLength(1);
+    expect(dropCalls[0][1].extra.droppedCount).toBe(2);
+    expect(dropCalls[0][1].extra.sample).toEqual(
+      expect.arrayContaining([PRIOR_DIGEST, `${TODAY_DIGEST}.evil`]),
+    );
+  });
+
+  it("G3-3: a hostile file name never appears in the PR body; the marker is the count-only form", async () => {
+    const f = await makeFixture();
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.repo, TODAY_DIGEST), "# today\n");
+    await writeFile(join(f.repo, "www.evil.example-free-money"), "x\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr(exactConfig(f, octokit));
+
+    expect(result.status).toBe("committed");
+    const body = prBodyArg(octokit);
+    expect(body).toBeTypeOf("string");
+    expect(body as string).not.toContain("www.evil.example-free-money");
+    expect(body as string).toContain(
+      "> ⚠️ 1 changed path(s) outside the persistence allowlist were NOT committed " +
+        "(Sentry op `safe-commit-paths-dropped`)",
+    );
+    // Count-only: the marker line ends at the closing paren, no `:` name list.
+    expect(body as string).not.toMatch(/safe-commit-paths-dropped`\):/);
+  });
+
+  it("G3-4: two stray files (one conforming, one hostile) render as `2 changed path(s)` and neither name", async () => {
+    const f = await makeFixture();
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.repo, TODAY_DIGEST), "# today\n");
+    // Conforming-looking name (a plausible dated digest for another day) + a hostile one.
+    await writeFile(join(f.repo, `${DIGEST_DIR}2026-06-11-digest.md`), "other day\n");
+    await writeFile(join(f.repo, "www.evil.example-free-money"), "x\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr(exactConfig(f, octokit));
+
+    expect(result.status).toBe("committed");
+    const body = prBodyArg(octokit);
+    expect(body).toBeTypeOf("string");
+    expect(body as string).toContain("2 changed path(s) outside the persistence allowlist");
+    expect(body as string).not.toContain("2026-06-11-digest.md");
+    expect(body as string).not.toContain("www.evil.example-free-money");
+  });
+
+  it("G3-5: a predicate that ignores exactPaths would commit nothing — the real one commits the exact path", async () => {
+    // Guard against vacuity: with allowedPaths: [] and exactPaths ignored, the
+    // matched set is empty and the run is `no-changes` (RED liveness upstream).
+    const f = await makeFixture();
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.repo, TODAY_DIGEST), "# today\n");
+
+    const octokit = makeOctokitStub();
+    const result = await safeCommitAndPr(exactConfig(f, octokit));
+
+    expect(result.status).toBe("committed");
+    expect(result.status === "committed" ? result.fileCount : 0).toBe(1);
+    // And the mutation itself: the same fixture under an exactPaths-less config
+    // matches nothing, which is exactly what an exactPaths-ignoring predicate yields.
+    const f2 = await makeFixture();
+    await mkdir(join(f2.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f2.repo, TODAY_DIGEST), "# today\n");
+    const ignoring = await safeCommitAndPr({
+      ...baseConfig(f2, makeOctokitStub()),
+      allowedPaths: [],
+    });
+    expect(ignoring.status).toBe("no-changes");
+  });
+
+  it("G3-6: the PR-body mock actually received a string body (harness is not vacuous)", async () => {
+    const f = await makeFixture();
+    await mkdir(join(f.repo, DIGEST_DIR), { recursive: true });
+    await writeFile(join(f.repo, TODAY_DIGEST), "# today\n");
+
+    const octokit = makeOctokitStub();
+    await safeCommitAndPr(exactConfig(f, octokit));
+
+    const arg = prBodyArg(octokit);
+    expect(arg).toBeTypeOf("string");
+    expect((arg as string).length).toBeGreaterThan(0);
+    // Self-check the extractor: a stub that never saw the PR POST yields undefined.
+    expect(prBodyArg(makeOctokitStub())).toBeUndefined();
+  });
+
+  it("G3-7: allowedPaths mode keeps today's dropped-path marker BYTE-FOR-BYTE (names included)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-1.md"), "updated\n");
+    await writeFile(join(f.repo, "plugins/soleur/docs/page.md"), "# changed\n");
+    await writeFile(join(f.repo, "weird`name|x.md"), "x\n");
+
+    const octokit = makeOctokitStub();
+    await safeCommitAndPr(baseConfig(f, octokit));
+
+    const body = prBodyArg(octokit);
+    expect(body).toBeTypeOf("string");
+    expect(body).toBe(
+      "Automated PR from `cron-test-fixture` — committed handler-side via safeCommitAndPr (#5091).\n\n" +
+        "> ⚠️ 2 changed path(s) outside the persistence allowlist were NOT committed " +
+        "(Sentry op `safe-commit-paths-dropped`): `plugins/soleur/docs/page.md`, `weirdʼnameʼx.md`",
     );
   });
 });

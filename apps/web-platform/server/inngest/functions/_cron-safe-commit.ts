@@ -84,6 +84,16 @@ export interface SafeCommitConfig {
    * bare "foo" would also match "foobar.md".
    */
   allowedPaths: readonly string[];
+  /**
+   * #7122 — repo-root-relative paths persisted by STRING EQUALITY (no prefix
+   * matching), for a cron whose single output path is handler-authored and
+   * known before the commit (the community digest). A path is allowed when it
+   * matches `allowedPaths` (prefix) OR `exactPaths` (equality); a cron that
+   * wants equality only passes `allowedPaths: []`. Setting this switches the
+   * dropped-path PR-body marker to COUNT-ONLY: a stray file's name is
+   * agent-chosen and the PR body is public, so names go to Sentry alone.
+   */
+  exactPaths?: readonly string[];
   /** The handler's MEMOIZED run-start ISO timestamp (never a fresh Date). */
   runStartedAt: string;
   /** Label of the cron's scheduled output issue — guard/fail visibility comment target. */
@@ -247,6 +257,28 @@ export function deriveBranchName(cronName: string, runStartedAt: string): string
   // "2026-06-10T11:00:03.123Z" → "2026-06-10-110003"
   const ts = runStartedAt.slice(0, 19).replace("T", "-").replace(/:/g, "");
   return `ci/${prefix}-${ts}`;
+}
+
+/**
+ * The ONE persistence-allowlist predicate. Both the `matched` and `dropped`
+ * partitions call it, so a path is on exactly one side by construction (a second
+ * matcher is how a "dropped" path ends up committed). `allowedPaths` keeps its
+ * bare `startsWith` prefix semantics; `exactPaths` is string equality on the
+ * repo-relative path. `git status` never reports a `..` segment, a leading `/`
+ * or an empty path, so the exact branch refuses them outright: an equality list
+ * must never be able to name something outside the repo even if a caller builds
+ * it from data. Empty/absent lists match nothing.
+ */
+export function isPathAllowed(
+  path: string,
+  cfg: { allowedPaths?: readonly string[]; exactPaths?: readonly string[] },
+): boolean {
+  if (cfg.allowedPaths?.some((p) => path.startsWith(p))) return true;
+  if (!cfg.exactPaths?.length) return false;
+  if (path === "" || path.startsWith("/") || path.split("/").some((seg) => seg === ".." || seg === ".")) {
+    return false;
+  }
+  return cfg.exactPaths.includes(path);
 }
 
 /** Neutralize markdown-breaking chars in untrusted strings (paths) before
@@ -464,7 +496,7 @@ async function failure(
 export async function safeCommitAndPr(
   config: SafeCommitConfig,
 ): Promise<SafeCommitResult> {
-  const { spawnCwd, cronName, allowedPaths, runStartedAt, logger } = config;
+  const { spawnCwd, cronName, allowedPaths, exactPaths, runStartedAt, logger } = config;
   // #5111: a fast-fail SUBSET of git-check-ref-format (not exhaustive) —
   // rejects `:` `.` whitespace and option-shaped leading `-` at stage
   // "checkout" BEFORE any git mutation. Callers compute branch names from
@@ -562,17 +594,14 @@ export async function safeCommitAndPr(
         (e) => !STRUCTURAL_EXCLUSION_PREFIXES.some((p) => e.path.startsWith(p)),
       );
 
-      // -- 5. Allowlist filter; non-structural drops are LOUD.
-      const matched = nonStructural.filter((e) =>
-        allowedPaths.some((p) => e.path.startsWith(p)),
-      );
-      const dropped = nonStructural.filter(
-        (e) => !allowedPaths.some((p) => e.path.startsWith(p)),
-      );
+      // -- 5. Allowlist filter; non-structural drops are LOUD. One predicate
+      //       (isPathAllowed) decides BOTH sides of the partition.
+      const matched = nonStructural.filter((e) => isPathAllowed(e.path, config));
+      const dropped = nonStructural.filter((e) => !isPathAllowed(e.path, config));
       if (dropped.length > 0) {
         reportSilentFallback(
           new Error(
-            `safeCommitAndPr dropped ${dropped.length} changed path(s) outside allowedPaths for ${cronName}`,
+            `safeCommitAndPr dropped ${dropped.length} changed path(s) outside the allowlist for ${cronName}`,
           ),
           {
             feature: cronName,
@@ -583,12 +612,16 @@ export async function safeCommitAndPr(
               droppedCount: dropped.length,
               sample: dropped.slice(0, 10).map((e) => e.path),
               allowedPaths,
+              ...(exactPaths ? { exactPaths } : {}),
             },
           },
         );
       }
 
-      // -- 6. Deletion guard (the #5026 class, bounded structurally).
+      // -- 6. Deletion guard (the #5026 class, bounded structurally). The
+      //       sample below lists TRACKED paths only (a deletion needs a tracked
+      //       file, which an agent cannot name into existence), so it stays on
+      //       safeMd and is NOT subject to the exactPaths count-only rule.
       deletionCount = matched.filter((e) => e.x === "D" || e.y === "D").length;
       if (deletionCount > DEFAULT_MAX_DELETIONS) {
         const sample = matched
@@ -598,7 +631,7 @@ export async function safeCommitAndPr(
         return failure(
           config,
           "deletion-guard",
-          `${deletionCount} staged-or-worktree deletions inside allowedPaths exceed max ${DEFAULT_MAX_DELETIONS}`,
+          `${deletionCount} staged-or-worktree deletions inside the allowlist exceed max ${DEFAULT_MAX_DELETIONS}`,
           {
             extra: { deletionCount, max: DEFAULT_MAX_DELETIONS, sample },
             comment:
@@ -613,7 +646,7 @@ export async function safeCommitAndPr(
       if (matched.length === 0) {
         logger?.info(
           { fn: cronName, op: "safe-commit-no-changes" },
-          `safeCommitAndPr: no committable changes inside allowedPaths for ${cronName}`,
+          `safeCommitAndPr: no committable changes inside the allowlist for ${cronName}`,
         );
         emitCronPersistResult({
           cron: cronName,
@@ -657,13 +690,19 @@ export async function safeCommitAndPr(
       // PR body is derived here (not caller config): static stem plus a
       // LOUD marker when the allowlist dropped paths, so a truncated PR is
       // visible on the PR itself, not only in Sentry (review P2).
+      // exactPaths mode (#7122) renders the COUNT only: names are agent-chosen
+      // and this body is public. allowedPaths mode is byte-for-byte unchanged.
       if (dropped.length > 0) {
-        prBodyExtras.push(
+        const marker =
           `> ⚠️ ${dropped.length} changed path(s) outside the persistence allowlist were NOT committed ` +
-            `(Sentry op \`safe-commit-paths-dropped\`): ${dropped
-              .slice(0, 10)
-              .map((e) => `\`${safeMd(e.path)}\``)
-              .join(", ")}`,
+          `(Sentry op \`safe-commit-paths-dropped\`)`;
+        prBodyExtras.push(
+          exactPaths
+            ? marker
+            : `${marker}: ${dropped
+                .slice(0, 10)
+                .map((e) => `\`${safeMd(e.path)}\``)
+                .join(", ")}`,
         );
       }
     }
