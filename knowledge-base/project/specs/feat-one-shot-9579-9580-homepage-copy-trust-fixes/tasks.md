@@ -5,6 +5,8 @@ Issues: Closes #9579, Closes #9580. Draft PR: #9584. Follow-ups filed: #9588 to 
 
 ## Phase 0: Prerequisites (before any copy edit)
 
+Outcome (2026-10-06): 0.1 and 0.2 are blocked on a Plausible login (Stats and Sites APIs answer 402 for this plan; no login credentials in Doppler); 0.3 is UNVERIFIABLE through the API, so the double opt-in sentence and the confirming success text were NOT shipped (fallback wording). Tracked in #9605. 0.4 done (fact-check PARTIAL, wording corrected, re-verification below). 0.5 done (tagged click fires the event under the site script and CSP). The Playwright MCP server was reachable.
+
 - 0.1 Pull the 28-day Plausible baseline (visitors to `/`, `Waitlist Signup` with `location=homepage-hero`); record it as a comment on #9588.
 - 0.2 Create the Plausible goal `Hero Self-host Click` (Sites API, else Playwright on the dashboard; login or 2FA is the only hand-off).
 - 0.3 Verify Buttondown double opt-in is enabled; gates both the privacy line (D5) and the success text (D7); freeze all copy after this step.
