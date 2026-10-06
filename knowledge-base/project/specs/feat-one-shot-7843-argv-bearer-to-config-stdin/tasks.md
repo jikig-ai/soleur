@@ -16,9 +16,9 @@ Per-file recipe (every conversion phase): (a) if the file fails `python3 scripts
 ## Phase 1: Lint first, battery, pilot
 
 - [x] 1.1 Rule D fix: `_destination_vars` skips tokens after a redirection operator and masks `<(...)`; fixture `compliant-stdin-bearer-procsub-bare.sh` first
-- [ ] 1.2 Wrapper awareness for Rules D and E (file-wide names, transitive closure, command position, argument splicing); `--census` before/after; resolve new offenders in the same commit
-- [ ] 1.3 Guard 1 fixtures and rows first, then `check_rule_e()` + `main()` plumbing (`"e"` map entry, `load_baseline_e`, `--write-baseline-e`, `offenders_e`, equality on path and count in full-tree mode), own scope function, invocation-segment scan, file-wide variable-held headers, config-hazard sub-checks
-- [ ] 1.4 Generate baseline E (path TAB count) from the unconverted tree; diff vs census; resolve differences
+- [x] 1.2 Wrapper awareness for Rules D and E (file-wide names, transitive closure, command position, argument splicing); `--census` before/after; resolve new offenders in the same commit
+- [x] 1.3 Guard 1 fixtures and rows first, then `check_rule_e()` + `main()` plumbing (`"e"` map entry, `load_baseline_e`, `--write-baseline-e`, `offenders_e`, equality on path and count in full-tree mode), own scope function, invocation-segment scan, file-wide variable-held headers, config-hazard sub-checks
+- [x] 1.4 Generate baseline E (path TAB count) from the unconverted tree; diff vs census; resolve differences
 - [ ] 1.5 Write `tests/scripts/test-argv-bearer-sweep.sh` (instrument controls, real-curl oracle, auth-gated shim, rows keyed to baseline E); register in `scripts/test-all.sh`, shard manifest, affected-paths; prove registration by `grep -c` and a run log
 - [ ] 1.6 Pilot `arm-checkpoint.sh` (A), `configure-sentry-alerts.sh` (B), `provision-plausible-goals.sh` (array-held)
 

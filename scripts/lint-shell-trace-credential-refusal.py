@@ -49,11 +49,13 @@ EXIT CODES (mirroring lint-credential-path-literals.py):
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import re
 import shlex
 import subprocess
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -1012,7 +1014,7 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
     del preamble_at  # Rule D is independent of the xtrace refusal.
     body = "\n".join(strip_comment(x) for x in lines)
     out: list[str] = []
-    for lineno, scopes in _curl_commands(lines):
+    for lineno, scopes in _curl_commands(lines) + _wrapper_commands(lines):
         cmd, invocation = scopes
         credentialed = bool(
             CURL_CRED_FLAGS.search(cmd)
@@ -1083,7 +1085,7 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
                     f"env-settable and never compared against a literal.\n"
                     f"  Pin it: refuse unless ${var} equals the expected destination.\n"
                 )
-    return out
+    return list(dict.fromkeys(out))
 
 
 # --- Rule E: no bearer token in a curl command's own argument list ------------
@@ -1257,9 +1259,9 @@ def _e_skip_paren(s: str, i: int) -> int:
     return n
 
 
-def _e_split(cmd: str) -> list[tuple[str, str]]:
-    """Split a logical command into (segment, separator-before) at the shell's own
-    command boundaries, QUOTE- and SUBSTITUTION-aware.
+def _e_split_pos(cmd: str, keep_subs: bool = False, base: int = 0) -> list[tuple[str, str, int]]:
+    """Split a logical command into (segment, separator-before, start-offset) at the
+    shell's own command boundaries, QUOTE- and SUBSTITUTION-aware.
 
     `_curl_commands` splits on every `;`/`|` including inside quotes and process
     substitutions, which cuts a `< <(printf ... | ...)` feed in half. Here nothing
@@ -1268,17 +1270,30 @@ def _e_split(cmd: str) -> list[tuple[str, str]]:
     its body is split recursively into segments of its own. That keeps
     `curl "$base/x?e=$(jq ... '$v|@uri')" -H "$auth"` ONE command (the `-H` after the
     substitution is still curl's argument) and still finds `x=$(curl ...)`.
+
+    `keep_subs=True` keeps the substitution's RAW text in the enclosing segment instead
+    of the placeholder (its body is still split into segments of its own). Wrapper
+    awareness needs that: a call's arguments are spliced into a wrapper's curl line as
+    TEXT, and `-d "$(jq ... "$SINK")"` must not lose the variable it carries. In that
+    mode a segment's text is exactly `cmd[start:start + len(segment)]`, which is what
+    lets a command word be located and replaced in place.
     """
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, int]] = []
     cur: list[str] = []
+    seg_at = [0]
     q: str | None = None
     pending = ""
     n = len(cmd)
     i = 0
 
+    def put(text: str, at: int) -> None:
+        if not cur:
+            seg_at[0] = at
+        cur.append(text)
+
     def flush(next_sep: str) -> None:
         nonlocal pending
-        out.append(("".join(cur), pending))
+        out.append(("".join(cur), pending, base + seg_at[0]))
         cur.clear()
         pending = next_sep
 
@@ -1288,48 +1303,48 @@ def _e_split(cmd: str) -> list[tuple[str, str]]:
     while i < n:
         c = cmd[i]
         if q == "'":
-            cur.append(c)
+            put(c, i)
             if c == "'":
                 q = None
             i += 1
             continue
         if c == "\\" and i + 1 < n:
-            cur.append(cmd[i:i + 2])
+            put(cmd[i:i + 2], i)
             i += 2
             continue
         if cmd.startswith("$(", i):
             j = _e_skip_paren(cmd, i + 2)
-            out.extend(_e_split(body(i + 2, j)))
-            cur.append("__CMDSUB__")
+            out.extend(_e_split_pos(body(i + 2, j), keep_subs, base + i + 2))
+            put(cmd[i:j] if keep_subs else "__CMDSUB__", i)
             i = j
             continue
         if c == "`":
             j = cmd.find("`", i + 1)
             j = n if j < 0 else j
-            out.extend(_e_split(cmd[i + 1:j]))
-            cur.append("__CMDSUB__")
+            out.extend(_e_split_pos(cmd[i + 1:j], keep_subs, base + i + 1))
+            put(cmd[i:j + 1] if keep_subs else "__CMDSUB__", i)
             i = j + 1
             continue
         if q == '"':
-            cur.append(c)
+            put(c, i)
             if c == '"':
                 q = None
             i += 1
             continue
         if c in "'\"":
             q = c
-            cur.append(c)
+            put(c, i)
             i += 1
             continue
         if cmd.startswith(("<(", ">("), i):
             j = _e_skip_paren(cmd, i + 2)
-            cur.append(cmd[i:j])
+            put(cmd[i:j], i)
             i = j
             continue
         if c == "(":
             j = _e_skip_paren(cmd, i + 1)
             flush("")
-            out.extend(_e_split(body(i + 1, j)))
+            out.extend(_e_split_pos(body(i + 1, j), keep_subs, base + i + 1))
             i = j
             continue
         if c in ";|" or cmd.startswith("&&", i):
@@ -1339,16 +1354,22 @@ def _e_split(cmd: str) -> list[tuple[str, str]]:
             flush(cmd[i:j])
             i = j
             continue
-        cur.append(c)
+        put(c, i)
         i += 1
     flush("")
-    return [(s, sep) for s, sep in out if s.strip()]
+    return [(s, sep, at) for s, sep, at in out if s.strip()]
 
 
-def _e_words(seg: str) -> list[str]:
-    """Shell words of one segment, RAW (quotes kept). `<(...)` is part of one word."""
-    words: list[str] = []
+def _e_split(cmd: str) -> list[tuple[str, str]]:
+    """`_e_split_pos` without offsets and with substitutions masked (Rule E's own view)."""
+    return [(s, sep) for s, sep, _at in _e_split_pos(cmd)]
+
+
+def _e_words_pos(seg: str) -> list[tuple[str, int]]:
+    """Shell words of one segment as (RAW word, start offset). `<(...)` is part of one word."""
+    words: list[tuple[str, int]] = []
     cur: list[str] = []
+    cur_at = 0
     q: str | None = None
     depth = 0
     i, n = 0, len(seg)
@@ -1365,6 +1386,8 @@ def _e_words(seg: str) -> list[str]:
             i += 1
             continue
         if c == "\\" and i + 1 < n:
+            if not cur:
+                cur_at = i
             cur.append(seg[i:i + 2])
             i += 2
             continue
@@ -1376,15 +1399,22 @@ def _e_words(seg: str) -> list[str]:
             depth = max(0, depth - 1)
         elif c.isspace() and depth == 0:
             if cur:
-                words.append("".join(cur))
+                words.append(("".join(cur), cur_at))
                 cur = []
             i += 1
             continue
+        if not cur:
+            cur_at = i
         cur.append(c)
         i += 1
     if cur:
-        words.append("".join(cur))
+        words.append(("".join(cur), cur_at))
     return words
+
+
+def _e_words(seg: str) -> list[str]:
+    """Shell words of one segment, RAW (quotes kept). `<(...)` is part of one word."""
+    return [w for w, _at in _e_words_pos(seg)]
 
 
 def _e_unq(word: str) -> str:
@@ -1392,21 +1422,26 @@ def _e_unq(word: str) -> str:
     return re.sub(r"[\"']", "", word)
 
 
-def _e_curl_args(seg: str) -> list[str] | None:
-    """The words after `curl` when curl is in COMMAND POSITION in this segment, else None.
+_E_FUNC_HEADER = re.compile(r"^[A-Za-z_][\w:.-]*\(\)$")
 
-    Command position is what separates an executed curl from printed text:
-    `echo "curl -H 'Authorization: Bearer $T' ..."` has `echo` in front of it.
-    Only assignments, control keywords and the usual wrappers (`env`, `timeout`,
-    `nice`) may precede it.
+
+def _e_cmd_index(words: list[str]) -> int:
+    """Index of the COMMAND word of a segment (len(words) when there is none).
+
+    Only assignments, control keywords, a function header (`name()` / `name ()` /
+    `function name`, so a one-line `f() { curl ...; }` body is reached) and the usual
+    wrappers (`env`, `timeout`, `nice`) may precede it.
     """
-    words = _e_words(seg)
     n = len(words)
     i = 0
     while i < n:
         w = words[i]
-        if w in _E_KEYWORDS or _E_ASSIGN_WORD.match(w):
+        if w in _E_KEYWORDS or _E_ASSIGN_WORD.match(w) or _E_FUNC_HEADER.match(w):
             i += 1
+        elif w == "function":
+            i += 2
+        elif i + 1 < n and words[i + 1] == "()":
+            i += 2
         elif w == "env":
             i += 1
             while i < n and (words[i].startswith("-") or "=" in words[i]):
@@ -1417,7 +1452,18 @@ def _e_curl_args(seg: str) -> list[str] | None:
                 i += 1
         else:
             break
-    if i < n and re.fullmatch(r"(?:[\w./-]*/)?curl", words[i]):
+    return i
+
+
+def _e_curl_args(seg: str) -> list[str] | None:
+    """The words after `curl` when curl is in COMMAND POSITION in this segment, else None.
+
+    Command position is what separates an executed curl from printed text:
+    `echo "curl -H 'Authorization: Bearer $T' ..."` has `echo` in front of it.
+    """
+    words = _e_words(seg)
+    i = _e_cmd_index(words)
+    if i < len(words) and re.fullmatch(r"(?:[\w./-]*/)?curl", words[i]):
         return words[i + 1:]
     return None
 
@@ -1468,6 +1514,336 @@ def _e_span(lines: list[str], i: int) -> tuple[int, int]:
     return start, end
 
 
+# --- Wrapper awareness (Rules D and E) -----------------------------------------
+# A curl call hidden behind a file-local function is invisible to a scan for the word
+# `curl`: `curl_retry -s -H "Authorization: Bearer $T" "$URL"` has no `curl` word, and
+# the wrapper's own curl line (`"$CURL_BIN" ... "$@"`) names neither the credential nor
+# the destination. Four rules make the call site the unit of analysis:
+#   (a) wrapper NAMES are collected FILE-WIDE first -- a function whose body invokes
+#       curl (a literal `curl` or a curl-binary variable such as `"$CURL_BIN"`), plus
+#       the transitive closure to a fixpoint -- so a wrapper defined AFTER its call
+#       site counts, and so does `sb_get() { sb_curl ...; }`;
+#   (b) a name matches only in COMMAND position (line start, after `|`, `;`, `&&`,
+#       `||`, `(`, `$(`, a backtick, `!`), never as an argument (`echo api_get ...`);
+#   (c) the logical command for a call is the wrapper's curl line with `"$@"` (and
+#       `$1`..`$9`) replaced by the call's arguments, recursively through wrappers;
+#   (d) Rule D's flag/credential/destination checks run on that spliced command; the
+#       pin check therefore sees the call's `"$URL"`. Rule E's argv check runs on the
+#       call-site ARGUMENTS only (the wrapper's own line is already judged where it is
+#       written), and its stdin hazards on the spliced words.
+_E_FUNC_DEF = re.compile(
+    r"^\s*(?:function\s+([A-Za-z_][\w:.-]*)(?:\s*\(\s*\))?|([A-Za-z_][\w:.-]*)\s*\(\s*\))\s*(.*)$"
+)
+_E_CURL_LITERAL = re.compile(r"(?:[\w./-]*/)?curl")
+_E_CURL_VAR = re.compile(r"\$\{?\w*(?:CURL|curl)\w*(?::[-=][^}]*)?\}?")
+# Positional parameters spliced into a wrapper's curl line. A WHOLE-quoted `"$@"` /
+# `"$1"` token is replaced together with its quotes (the call's own words carry theirs);
+# an embedded `$1` is replaced bare.
+_SPLICE_ARG = re.compile(
+    r"(?<!\S)\"\$(?:\{(?P<qb>[@*]|[1-9])\}|(?P<qa>[@*]|[1-9]))\"(?![^\s)])"
+    r"|\$(?:\{(?P<b>[@*]|[1-9])\}|(?P<a>[@*]|[1-9]))"
+)
+_FORWARDS_ARGS = re.compile(r"\$(?:[@*1-9]|\{[@*1-9]\})")
+_PREFIX_TAIL = re.compile(
+    r"(?:(?:[A-Za-z_]\w*\+?=)?\$\(|`|\(|\{|!|\b(?:if|then|elif|else|do|while|until)\b"
+    r"|(?:function\s+)?[A-Za-z_][\w:.-]*\s*\(\s*\))\s*$"
+)
+_Wrapper = namedtuple("_Wrapper", "start end uses")
+
+
+def _is_curl_word(word: str) -> bool:
+    """A command word that runs curl: `curl`, `/usr/bin/curl`, or a curl-binary variable
+    (`"$CURL_BIN"`, `"${CURL_BIN:-curl}"`) -- the transport-seam spelling wrappers use."""
+    w = _e_unq(word)
+    return bool(_E_CURL_LITERAL.fullmatch(w) or _E_CURL_VAR.fullmatch(w))
+
+
+def _logical_raw(lines: list[str], i: int) -> str:
+    """The raw logical command containing physical line `i`, joined as `_curl_commands` does."""
+    start, end = _e_span(lines, i)
+    return " ".join(
+        strip_trailing_comment(strip_comment(x)).strip().rstrip("\\").strip()
+        for x in lines[start:end + 1]
+    )
+
+
+def _brace_delta(text: str) -> int:
+    t = re.sub(r"\\.", "", text)
+    t = re.sub(r"'[^']*'|\"[^\"]*\"", "", t)
+    t = re.sub(r"\$\{[^}]*\}", "", t)
+    return t.count("{") - t.count("}")
+
+
+def _function_extents(lines: list[str]) -> list[tuple[str, int, int]]:
+    """(name, definition line, last line) of every brace-bodied shell function."""
+    out: list[tuple[str, int, int]] = []
+    for d, raw in enumerate(lines):
+        line = strip_trailing_comment(strip_comment(raw))
+        m = _E_FUNC_DEF.match(line)
+        if not m:
+            continue
+        name = m.group(1) or m.group(2)
+        rest = m.group(3).strip()
+        first = d
+        if not rest.startswith("{"):
+            if rest:
+                continue
+            first = d + 1
+            while first < len(lines) and not strip_comment(lines[first]).strip():
+                first += 1
+            if first >= len(lines) or not strip_comment(lines[first]).strip().startswith("{"):
+                continue
+            rest = strip_trailing_comment(strip_comment(lines[first])).strip()
+        depth, end = 0, len(lines) - 1
+        for j in range(first, len(lines)):
+            depth += _brace_delta(rest if j == first else strip_trailing_comment(strip_comment(lines[j])))
+            if depth <= 0:
+                end = j
+                break
+        out.append((name, d, end))
+    return out
+
+
+def _cmd_hits(raw: str, wnames) -> list[dict]:
+    """Every command-position `curl` / wrapper call in one logical command."""
+    hits: list[dict] = []
+    segs = _e_split_pos(raw, keep_subs=True)
+    for idx, (seg, sep, start) in enumerate(segs):
+        wp = _e_words_pos(seg)
+        words = [w for w, _at in wp]
+        k = _e_cmd_index(words)
+        if k >= len(words):
+            continue
+        word = words[k]
+        if _is_curl_word(word):
+            kind, callee = "curl", None
+        elif _e_unq(word) in wnames:
+            kind, callee = "call", _e_unq(word)
+        else:
+            continue
+        at = start + wp[k][1]
+        hits.append({
+            "kind": kind, "callee": callee, "word": word,
+            "cmd_at": at, "args_at": at + len(word), "seg_end": start + len(seg),
+            "heredoc_prev": bool(
+                sep.startswith("|") and idx > 0
+                and any(E_HEREDOC.match(x) for x in _e_words(segs[idx - 1][0]))
+            ),
+        })
+    return hits
+
+
+def _hit_qualifies(h: dict, raw: str) -> bool:
+    """A curl run always counts; a call to another wrapper counts only when it FORWARDS its
+    own arguments (`"$@"`, `$1`). Otherwise an orchestrating `main`/`run_all` that merely
+    calls wrappers would become a wrapper itself and duplicate every finding at its own
+    call -- its in-body calls are already call sites in their own right."""
+    return h["kind"] == "curl" or bool(_FORWARDS_ARGS.search(raw[h["args_at"]:h["seg_end"]]))
+
+
+def _wrapper_table(lines: list[str]) -> dict[str, "_Wrapper"]:
+    """name -> _Wrapper(start, end, uses) for every function that reaches curl.
+
+    `uses` are the body lines that run curl or call another wrapper. The set grows to a
+    FIXPOINT: each pass reads the wrappers the PREVIOUS pass found (a snapshot, not the
+    live set, so the result never depends on definition order).
+    """
+    funcs = _function_extents(lines)
+    if not funcs:
+        return {}
+    in_heredoc = _heredoc_body_lines(lines)
+    wnames: set[str] = set()
+    table: dict[str, _Wrapper] = {}
+    changed = True
+    while changed:
+        known = frozenset(wnames)
+        name_re = (re.compile(r"(?<![\w.-])(?:" + "|".join(map(re.escape, sorted(known, key=len, reverse=True)))
+                              + r")(?![\w.-])") if known else None)
+        table = {}
+        for name, d, e in funcs:
+            if _is_curl_word(name):
+                continue
+            uses = []
+            for L in range(d, e + 1):
+                if L in in_heredoc:
+                    continue
+                text = strip_trailing_comment(strip_comment(lines[L]))
+                if not text or not (re.search("curl", text, re.I) or (name_re and name_re.search(text))):
+                    continue
+                raw = _logical_raw(lines, L)
+                if any(_hit_qualifies(h, raw) for h in _cmd_hits(raw, known)):
+                    uses.append(L)
+            if uses:
+                prev = table.get(name)
+                table[name] = _Wrapper(min(d, prev.start) if prev else d, max(e, prev.end) if prev else e,
+                                       (prev.uses if prev else []) + uses)
+        new = set(table) - wnames
+        changed = bool(new)
+        wnames |= new
+    return table
+
+
+def _splice_args(region: str, args: list[str]) -> tuple[str, bool]:
+    """-> (region with `"$@"`/`$1`.. replaced by the call's argument words, forwards?)."""
+    def repl(m):
+        tok = m.group("qb") or m.group("qa") or m.group("b") or m.group("a")
+        if tok in ("@", "*"):
+            return " ".join(args)
+        k = int(tok)
+        return args[k - 1] if k <= len(args) else ""
+    return _SPLICE_ARG.sub(repl, region), bool(_FORWARDS_ARGS.search(region))
+
+
+def _clean_prefix(prefix: str) -> str:
+    """Drop what opens the command (`x=$(`, `if`, `(`, a backtick) so a masked
+    substitution does not hide the curl that follows it; pipeline stages stay."""
+    p = prefix.rstrip()
+    while True:
+        q = _PREFIX_TAIL.sub("", p).rstrip()
+        if q == p:
+            break
+        p = q
+    return p + " " if p else ""
+
+
+def _wrapper_expand(lines: list[str], table: dict, name: str, args: list[str],
+                    depth: int = 0, trail: tuple = ()) -> list[dict]:
+    """Every curl invocation reachable from a call of wrapper `name` with `args`.
+
+    Each result carries the SPLICED logical command and invocation (what Rule D reads),
+    the spliced curl argument words (what Rule E's stdin hazards read), whether the
+    chain forwards the call's arguments at every step, and how many steps it took.
+    """
+    if depth > 4 or name in trail or name not in table:
+        return []
+    out: list[dict] = []
+    seen: set[tuple[int, int]] = set()
+    names = set(table)
+    for L in table[name].uses:
+        span = _e_span(lines, L)
+        if span in seen:
+            continue
+        seen.add(span)
+        raw = _logical_raw(lines, L)
+        for h in _cmd_hits(raw, names):
+            if not _hit_qualifies(h, raw):
+                continue
+            region = _inline_arrays(raw[h["args_at"]:h["seg_end"]], lines, L)
+            spliced, fwd = _splice_args(region, args)
+            prefix = _clean_prefix(raw[:h["cmd_at"]])
+            if h["kind"] == "curl":
+                inv = ("curl " + spliced.strip()).strip()
+                cmd = prefix + inv + " ; " + raw[h["seg_end"]:]
+                out.append({
+                    "cmd": _inline_config_file(cmd, lines),
+                    "inv": _inline_config_file(inv, lines),
+                    "words": _e_words(spliced), "fwd": fwd, "steps": 1,
+                    "heredoc": h["heredoc_prev"],
+                    "direct": bool(_E_CURL_LITERAL.fullmatch(_e_unq(h["word"]))),
+                })
+            else:
+                for r in _wrapper_expand(lines, table, h["callee"], _e_words(spliced), depth + 1, trail + (name,)):
+                    out.append({**r, "fwd": r["fwd"] and fwd, "steps": r["steps"] + 1,
+                                "cmd": prefix + r["cmd"]})
+    return out
+
+
+def _wrapper_sites(lines: list[str]) -> list[tuple[int, str, list[str], list[dict]]]:
+    """(line, wrapper, call-site argument words, expansions) for every wrapper CALL."""
+    table = _wrapper_table(lines)
+    if not table:
+        return []
+    in_heredoc = _heredoc_body_lines(lines)
+    name_re = re.compile(r"(?<![\w.-])(?:" + "|".join(map(re.escape, sorted(table, key=len, reverse=True)))
+                         + r")(?![\w.-])")
+    sites: list[tuple[int, str, list[str], list[dict]]] = []
+    seen_spans: set[tuple[int, int]] = set()
+    for i, raw in enumerate(lines):
+        if i in in_heredoc:
+            continue
+        text = strip_trailing_comment(strip_comment(raw))
+        if not text or not name_re.search(text):
+            continue
+        span = _e_span(lines, i)
+        if span in seen_spans:
+            continue
+        seen_spans.add(span)
+        names = set(table)
+        logical = _logical_raw(lines, i)
+        for h in _cmd_hits(logical, names):
+            if h["kind"] != "call":
+                continue
+            call_words = _e_words(_inline_arrays(logical[h["args_at"]:h["seg_end"]], lines, i))
+            full = _wrapper_expand(lines, table, h["callee"], call_words)
+            base = _wrapper_expand(lines, table, h["callee"], [])
+            for r, b in zip(full, base):
+                r["base"] = b["words"]
+            if full:
+                sites.append((i, h["callee"], call_words, full))
+    return sites
+
+
+@functools.lru_cache(maxsize=8)
+def _wrapper_sites_cached(lines_t: tuple) -> list:
+    return _wrapper_sites(list(lines_t))
+
+
+def _wrapper_commands(lines: list[str]) -> list[tuple[int, tuple[str, str]]]:
+    """Spliced (cmd, invocation) pairs for Rule D, one per curl reachable from a call.
+
+    A one-step wrapper whose curl line forwards nothing and is a literal `curl` is skipped:
+    it is the very line `_curl_commands` already judges, so splicing adds nothing.
+    """
+    out: list[tuple[int, tuple[str, str]]] = []
+    for lineno, _callee, _call_words, results in _wrapper_sites_cached(tuple(lines)):
+        for r in results:
+            if r["steps"] == 1 and not r["fwd"] and r["direct"]:
+                continue
+            out.append((lineno, (r["cmd"], r["inv"])))
+    return out
+
+
+def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
+    """Classify the words after `curl` (or after a wrapper name): what travels on argv and
+    which stdin-form hazards the words carry."""
+    f = {"bearer": False, "apikey": False, "cfg": False, "hdr_stdin": False,
+         "verbose": False, "body": False, "heredoc": False}
+    i = 0
+    while i < len(args):
+        w = args[i]
+        nxt = _e_unq(args[i + 1]) if i + 1 < len(args) else ""
+        val, after = _e_header_value(args, i)
+        am = E_ARRAY_WORD.match(w)
+        if am and am.group(1) in bearer_arrays:
+            f["bearer"] = True
+        if val is not None:
+            hv = _e_unq(val)
+            if hv.startswith("@"):
+                f["hdr_stdin"] = f["hdr_stdin"] or hv.startswith("@-")
+            elif E_BEARER.search(hv) or (held_re and held_re.search(hv)):
+                f["bearer"] = True
+            elif E_APIKEY.match(hv):
+                f["apikey"] = True
+            i = after
+            continue
+        if w in ("-K", "--config") and nxt == "-":
+            f["cfg"] = True
+        elif w == "-K-":
+            f["cfg"] = True
+        if E_VERBOSE.match(w) or (w in ("-D", "--dump-header") and nxt == "-") or w == "-D-":
+            f["verbose"] = True
+        if E_STDIN_BODY.match(w) and _E_BODY_AT_STDIN.match(nxt):
+            f["body"] = True
+        elif re.match(r"^-d@-$|^--data[\w-]*=@-$", w):
+            f["body"] = True
+        elif (w in ("-T", "--upload-file") and nxt == "-") or w == "-T-":
+            f["body"] = True
+        if E_HEREDOC.match(w):
+            f["heredoc"] = True
+        i += 1
+    return f
+
+
 def check_rule_e(rel: str, lines: list[str]) -> list[str]:
     """One finding per curl call site that carries a bearer on argv (see the Rule E block)."""
     held = _e_held_names(lines)
@@ -1497,41 +1873,9 @@ def check_rule_e(rel: str, lines: list[str]) -> list[str]:
             continue
         seen_spans.add(span)
 
-        bearer_argv = apikey = cfg_stdin = hdr_stdin = False
-        verbose = body = heredoc = False
-        i = 0
-        while i < len(args):
-            w = args[i]
-            nxt = _e_unq(args[i + 1]) if i + 1 < len(args) else ""
-            val, after = _e_header_value(args, i)
-            am = E_ARRAY_WORD.match(w)
-            if am and am.group(1) in bearer_arrays:
-                bearer_argv = True
-            if val is not None:
-                hv = _e_unq(val)
-                if hv.startswith("@"):
-                    hdr_stdin = hdr_stdin or hv.startswith("@-")
-                elif E_BEARER.search(hv) or (held_re and held_re.search(hv)):
-                    bearer_argv = True
-                elif E_APIKEY.match(hv):
-                    apikey = True
-                i = after
-                continue
-            if w in ("-K", "--config") and nxt == "-":
-                cfg_stdin = True
-            elif w == "-K-":
-                cfg_stdin = True
-            if E_VERBOSE.match(w) or (w in ("-D", "--dump-header") and nxt == "-") or w == "-D-":
-                verbose = True
-            if E_STDIN_BODY.match(w) and _E_BODY_AT_STDIN.match(nxt):
-                body = True
-            elif re.match(r"^-d@-$|^--data[\w-]*=@-$", w):
-                body = True
-            elif (w in ("-T", "--upload-file") and nxt == "-") or w == "-T-":
-                body = True
-            if E_HEREDOC.match(w):
-                heredoc = True
-            i += 1
+        f = _e_scan(args, held_re, bearer_arrays)
+        bearer_argv, apikey, cfg_stdin, hdr_stdin = f["bearer"], f["apikey"], f["cfg"], f["hdr_stdin"]
+        verbose, body, heredoc = f["verbose"], f["body"], f["heredoc"]
         # A heredoc/here-string on the PRECEDING pipeline stage feeds the same stdin.
         if segs[at][1].startswith("|") and at > 0:
             if any(E_HEREDOC.match(w) for w in _e_words(segs[at - 1][0])):
@@ -1558,6 +1902,44 @@ def check_rule_e(rel: str, lines: list[str]) -> list[str]:
                 f"{rel}:{lineno + 1}: bearer token on curl argv -- " + "; ".join(reasons) + ".\n"
                 "  Feed the header on stdin instead: "
                 "`curl … --config - \"$URL\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
+            )
+    # Wrapper CALL sites. The bearer/apikey judgement reads the arguments the author wrote
+    # at THIS call; the stdin hazards read the spliced words, and count only when the call
+    # adds them (a hazard already present in the wrapper's own line is reported there).
+    for lineno, callee, call_words, results in _wrapper_sites_cached(tuple(lines)):
+        cf = _e_scan(call_words, held_re, bearer_arrays) if any(r["fwd"] for r in results) else {}
+        bearer_argv, apikey = cf.get("bearer", False), cf.get("apikey", False)
+        verbose = body = heredoc = bearer_ctx = False
+        for r in results:
+            sf = _e_scan(r["words"], held_re, bearer_arrays)
+            bf = _e_scan(r["base"], held_re, bearer_arrays)
+            hdr = sf["hdr_stdin"] or sf["cfg"]
+            bhdr = bf["hdr_stdin"] or bf["cfg"]
+            verbose = verbose or (sf["cfg"] and sf["verbose"] and not (bf["cfg"] and bf["verbose"]))
+            body = body or (sf["cfg"] and sf["body"] and not (bf["cfg"] and bf["body"]))
+            heredoc = heredoc or (hdr and (sf["heredoc"] or r["heredoc"])
+                                  and not (bhdr and (bf["heredoc"] or r["heredoc"])))
+            bearer_ctx = bearer_ctx or bool(E_BEARER.search(r["cmd"])) or bool(held_re and held_re.search(r["cmd"]))
+        reasons = []
+        if bearer_argv:
+            reasons.append(f"a bearer header is an argument of this call to `{callee}`, which hands it to curl "
+                           "on argv, readable by every local user in /proc/<pid>/cmdline and `ps`")
+        if apikey and (bearer_argv or bearer_ctx):
+            reasons.append("a second credential header (`apikey:`) travels on argv beside the bearer")
+        if verbose:
+            reasons.append("config-stdin hazard: -v/--verbose/--trace*/-D - prints the config's "
+                           "headers, Authorization included, to the terminal")
+        if body:
+            reasons.append("config-stdin hazard: a stdin body (`@-`, `-T -`) cannot share a stdin "
+                           "that is already the config")
+        if heredoc:
+            reasons.append("config-stdin hazard: a here-string/heredoc feeding the header writes it "
+                           "to a temp file; use a process substitution")
+        if reasons:
+            out.append(
+                f"{rel}:{lineno + 1}: bearer token on curl argv -- " + "; ".join(reasons) + ".\n"
+                "  Feed the header on stdin instead, inside the wrapper: "
+                "`curl … --config - \"$@\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
             )
     return out
 

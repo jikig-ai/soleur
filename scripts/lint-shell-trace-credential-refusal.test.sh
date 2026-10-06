@@ -631,6 +631,11 @@ e_row 'Rule E: header held in a variable and passed as -H "$var" is reported' "$
 e_row 'Rule E: header held in an array (`=(`, `+=(` and an assignment after `&&`) is reported, one message per call site' "$LINT" "$FIX/violation-argv-bearer-array-held.sh" 3
 e_row 'Rule E: --header single-quoted lower case, -H"..." with no space, and a header AFTER the URL: one message each' "$LINT" "$FIX/violation-argv-bearer-long-form.sh" 3
 e_row 'Rule E: config-stdin hazards (-v, -d @-, here-string) on a --config - call: one message each' "$LINT" "$FIX/violation-argv-bearer-config-hazards.sh" 3
+# Wrapper awareness (plan 1.2): the bearer is an argument of a CALL to a file-local
+# function that invokes curl. Six call sites, ALL above their wrapper's definition:
+# a direct call, a transitive wrapper, a call after `||`, one inside $(...), one after
+# `! ` chained by `&&`, and one inside backticks.
+e_row 'Rule E: bearer at six call sites of file-local wrappers (defined AFTER use, transitive, after ||, in $(...), after !, in backticks): one message each' "$LINT" "$FIX/violation-argv-bearer-wrapper.sh" 6
 
 # MUST-PASS rows. The canonical row is NOT the only one: a suite whose single
 # compliant fixture is the canonical form cannot tell "discriminates" from
@@ -639,6 +644,23 @@ e_row 'Rule E: canonical `--config -` fed by a process substitution inside $(...
 e_row 'Rule E: bare `--config -` fed by a process substitution passes' "$LINT" "$FIX/compliant-stdin-bearer-procsub-bare.sh" 0
 e_row 'Rule E: `printf ... | curl -H @-` passes (the assembly names a bearer, the invocation does not)' "$LINT" "$FIX/compliant-stdin-bearer-header-at-stdin.sh" 0
 e_row 'Rule E: --header @<(...), -K -, --config <(...), a trailing-comment bearer and a standalone anon-key apikey: all pass' "$LINT" "$FIX/compliant-all-safe-forms.sh" 0
+# A wrapper whose own curl keeps the bearer on stdin, called with only a URL and flags
+# (also rc 0 = Rule D clean on the spliced call), plus a wrapper NAME used as an
+# argument of `echo`, which is not a call.
+e_row 'Rule E: a wrapper with a stdin bearer called with only a URL/flags passes (Rule D clean too); a wrapper name as an echo argument is not a call' "$LINT" "$FIX/compliant-stdin-bearer-wrapper.sh" 0
+
+# Rule D through a wrapper: the wrapper's own curl names no destination ("$@"), the
+# call passes an env-settable "$API_URL" that is never pinned. Exactly one Rule D
+# message, nothing from Rule E (the bearer is on stdin) or A/B/C.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-wrapper-env-url.sh")"
+d_msgs="$(cat "$WORK/out" "$WORK/err" | grep -cE 'credentialed curl sends to \$API_URL, which is env-settable')"
+d_tot="$(grep -ohE '[0-9]+ violation\(s\)' "$WORK/err" | grep -oE '^[0-9]+')"
+e_msgs="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
+if [ "$rc" = "1" ] && [ "$d_msgs" = "1" ] && [ "${d_tot:-0}" = "1" ] && [ "$e_msgs" = "0" ]; then
+  pass "Rule D: a wrapper called with an env-settable \"\$API_URL\" that is never pinned is reported once, and only by Rule D"
+else
+  fail "Rule D wrapper env-url: expected rc=1 with exactly one destination message and nothing else, got rc=$rc D=$d_msgs total=${d_tot:-0} E=$e_msgs"
+fi
 
 # Matrix row 1: the canonical compliant fixture with its --config - call replaced
 # by the argv form must read RED with exactly one Rule E message.
@@ -975,7 +997,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
 # Re-measured at 115 (#9597, Rule E rows, fixtures, mutation rows and baseline-E sandbox rows).
-MIN_ASSERTIONS=115
+MIN_ASSERTIONS=118
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
