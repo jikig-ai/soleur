@@ -56,7 +56,9 @@ describe.skipIf(process.platform !== "linux")(
     afterAll(async () => {
       vi.unstubAllEnvs();
       await stub?.close();
-      if (home) rmSync(home, { recursive: true, force: true });
+      // The CLI of the aborted capture can still be in its SIGTERM grace and writing
+      // under HOME, so a single rmSync races it (ENOTEMPTY in CI); retry.
+      if (home) rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     });
 
     it("emits --unsetenv for every auth variable, in the real captured setup argv", async () => {

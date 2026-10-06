@@ -90,9 +90,9 @@ describe.skipIf(!SANDBOX_OK)("the credential deny, observed from inside the real
     vi.unstubAllEnvs();
     await stub?.close();
     if (root) {
-      for (const dir of [root, `${root}-c4-staging`]) rmSync(dir, { recursive: true, force: true });
+      for (const dir of [root, `${root}-c4-staging`]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
     }
-    if (home) rmSync(home, { recursive: true, force: true });
+    if (home) rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
   });
 
   async function observe(denyEntries: boolean): Promise<Observation> {
