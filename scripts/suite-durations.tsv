@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-06T18:39:25Z
+# generated-at=2026-10-06T22:29:02Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -97,6 +97,7 @@ plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	155
 plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh	2658	measured
 plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	174	measured
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	16728	measured
+plugins/soleur/skills/community/test/community-argv.test.sh	996	floor
 plugins/soleur/skills/community/test/github-community.test.sh	964	measured
 plugins/soleur/skills/compound/test/phase-16.test.sh	1845	measured
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	9611	measured
@@ -165,6 +166,7 @@ plugins/soleur/test/fixture-env-adoption.test.sh	11087	measured
 plugins/soleur/test/fixture-relative-assert.test.sh	12398	measured
 plugins/soleur/test/flag-detach-shared.test.sh	8219	measured
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	4908	measured
+plugins/soleur/test/flagsmith-stdin-config.test.sh	996	floor
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	9	measured
 plugins/soleur/test/gdpr-gate-self-test.test.sh	337	measured
 plugins/soleur/test/generate-kb-index.test.sh	615	measured
@@ -372,6 +374,8 @@ scripts/lint-doppler-description-length-unit	2187	measured
 scripts/lint-dual-lockfile	722	measured
 scripts/lint-dual-lockfile-live	804	measured
 scripts/lint-encryption-posture	2943	measured
+scripts/lint-gh-argv-arg	996	floor
+scripts/lint-gh-argv-arg-live	996	floor
 scripts/lint-guard-contract	1376	measured
 scripts/lint-guard-contract-live	608	measured
 scripts/lint-infra-no-human-steps	2871	measured

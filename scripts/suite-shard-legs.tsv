@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=996
-# generated-at=2026-10-06T18:39:25Z
+# generated-at=2026-10-06T22:29:02Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -100,6 +100,7 @@ plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh	7
 plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot.test.sh	1
 plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	1
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	7
+plugins/soleur/skills/community/test/community-argv.test.sh	7
 plugins/soleur/skills/community/test/github-community.test.sh	2
 plugins/soleur/skills/compound/test/phase-16.test.sh	2
 plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh	5
@@ -168,6 +169,7 @@ plugins/soleur/test/fixture-env-adoption.test.sh	4
 plugins/soleur/test/fixture-relative-assert.test.sh	2
 plugins/soleur/test/flag-detach-shared.test.sh	5
 plugins/soleur/test/flag-org-scoping-pr2.test.sh	7
+plugins/soleur/test/flagsmith-stdin-config.test.sh	1
 plugins/soleur/test/gdpr-gate-glob-liveness.test.sh	1
 plugins/soleur/test/gdpr-gate-self-test.test.sh	6
 plugins/soleur/test/generate-kb-index.test.sh	6
@@ -375,6 +377,8 @@ scripts/lint-doppler-description-length-unit	7
 scripts/lint-dual-lockfile	2
 scripts/lint-dual-lockfile-live	3
 scripts/lint-encryption-posture	6
+scripts/lint-gh-argv-arg	3
+scripts/lint-gh-argv-arg-live	7
 scripts/lint-guard-contract	7
 scripts/lint-guard-contract-live	6
 scripts/lint-infra-no-human-steps	8
