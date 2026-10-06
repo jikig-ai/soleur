@@ -36,6 +36,19 @@ suite run, the file restored and compared.
 | G4.2 | heartbeat not withheld when refused | RED, 9 |
 | S1 | probe suite: stub call logger neutered | RED, 1 (instrument control P-X1c) |
 
+### Fix-round rows (final tree, e3a3bb8845 plus the review-round-2 changes)
+
+| Row | Mutation | Result |
+|---|---|---|
+| S-url / S-proxy / S-insecure | a second directive (`url =`, `proxy =`, `insecure`) added to the POST's stdin config | RED, 1 each (stdin golden) |
+| S4 | second curl with an evil `.../private-networks` URL and the raw token as `data =` | RED, 2 (IMDS exemption is by exact URL) |
+| T1-T4 | `_bearer_ok` allows `"`, space, newline, or backslash (one at a time) | RED, 42 / 48 / 4 / 4 (one fixture per forbidden character) |
+| U1 | the unset-credentials branch no longer withholds the heartbeat | RED, 2 |
+| V1 / V2 | `assert()` always passes / `_fail` neutered | RED via the instrument self-test (`[FATAL] instrument self-test`), 0 rows needed |
+| W1 / W2 | probe `check()` / `assert_cmd` always pass | RED via the instrument self-test |
+| V3 | the accounting-identity condition replaced by `if false` | SURVIVES in a healthy suite: the identity can only be witnessed by a fault, and the self-tests above catch the faults it guards first (the meta-guard's ARM 10e fires the identity on a fixture) |
+
+
 Not run here: appending `set -x` after the refusal and a credential command above it are owned by the repo-wide lint (Rules A and B), green on
-the final tree. Anti-vacuity: both suites now carry a call-site `CASES` counter, a `MIN_CASES` floor and a PASS+FAIL==CASES conservation check
-reported by `printf` + `exit 1`; `scripts/guard-vacuity-floor.test.sh` constructs and fires both (the suites are promoted there, ledger unchanged).
+the final tree. Anti-vacuity: both suites now carry a `CASES` counter moved by the assert wrappers (never inside the `_pass`/`_fail` verdict helpers), a
+`[FATAL] accounting identity` check, a `MIN_CASES` floor and an instrument self-test, reported by `printf` + `exit 1`; `scripts/guard-vacuity-floor.test.sh` constructs and fires both (the suites are promoted there, ledger unchanged).

@@ -114,8 +114,10 @@ readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
 # would add directives (`url =`, `header =`, `next`). Real Better Stack tokens are plain alphanumerics:
 # anything else is refused rather than escaped.
 _bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
-# SHIP_REFUSED=true when this run could not report. The heartbeat below is then withheld: a guard that
-# cannot report must not claim health, so the beat lapses and the absence alarm names the guard.
+# SHIP_REFUSED=true when this run could not even attempt to report (token or URL unset, URL unpinned, token
+# malformed). The heartbeat below is then withheld: a guard that cannot report must not claim health, so the
+# beat lapses and the absence alarm names the guard. A POST that was ATTEMPTED and failed (Better Stack down)
+# does not set it: that is an outage of the destination, and the beat's own network path fails with it.
 SHIP_REFUSED=false
 if [ -n "$TOKEN" ] && ! _bearer_ok "$TOKEN"; then
   SHIP_REFUSED=true
@@ -131,12 +133,14 @@ elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
   SHIP_REFUSED=true
   echo "[nic] unpinned_url: refusing to send the Better Stack token to an unpinned destination — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
 else
+  SHIP_REFUSED=true
   echo "[nic] WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset (run under 'doppler run --project soleur --config prd', source /etc/default/web-private-nic-guard) — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
 fi
 # (7) Liveness heartbeat — ping the dedicated web_nic_guard beat on EVERY healthy run so the fault-
 # emitter is observable-when-healthy (a SOLEUR_PRIVATE_NIC emit that never fires is indistinguishable
-# from "guard dead"). Ping ONLY when nic_ok — a NIC-broken host must let the beat lapse so absence
-# alarms. Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
+# from "guard dead"). Ping ONLY when nic_ok AND the guard could report (not SHIP_REFUSED) — a NIC-broken
+# host, or a guard that cannot ship, must let the beat lapse so absence alarms. Decode a missing beat by
+# reading the guard's stderr in Better Stack (`bad_token` / `unpinned_url` / `WARN` vs `nic_ok=false`). Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
 URL="${WEB_NIC_GUARD_URL:-}"
 # The ping URL is itself the secret and still rides curl's argv (tracked as #9639); the flags confine it.
 beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null "$URL" 2>/dev/null; }

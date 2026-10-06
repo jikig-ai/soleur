@@ -36,8 +36,8 @@ set -e
 # `set -x` are all caught. Placed BEFORE `trap emit_fail EXIT` so emit_fail's credential steps never
 # run under trace and the EXIT trap is not armed when the refusal exits. This exit is deliberately
 # SILENT (no Sentry event: emitting needs the DSN, which is what is being protected); the caller
-# (cloud-init.yml) logs the FATAL line and powers the host off on any non-zero exit, so a traced
-# fresh-host boot fails closed and is observable only by that host's absence (tracked as #9639).
+# (cloud-init.yml) powers the host off on any non-zero exit, so a traced fresh-host boot fails closed and
+# is observable only by that host's absence (the refusal text reaches stderr only; tracked as #9639).
 # LIMIT: emit_fail sources a deploy-owned file as root; a `set -x` planted there is not caught by this
 # entry check (tracked as #9639).
 case "$-" in

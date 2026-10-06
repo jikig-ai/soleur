@@ -28,26 +28,48 @@ CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 
 PASS=0
 FAIL=0
-CASES=0   # incremented at the CALL SITE by every helper below, independent of the verdict
+CASES=0   # moved by the assert wrappers below, never inside the verdict helpers (accounting identity at the bottom)
+# Verdict helpers: they move only the verdict counters.
+_pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
+_fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
+# Instrument self-test (printf + exit, never through the helpers it checks): drive a wrapper on a case that
+# MUST fail and one that MUST pass and require the matching verdict counter to move. An always-pass
+# wrapper (`... || true`) leaves every row green; only this sees it.
+_selftest() { # <label> <fail-arm-command...> -- <pass-arm-command...>
+  local label="$1" p0=$PASS f0=$FAIL c0=$CASES; shift
+  local -a fa=() pa=(); local seen=false w
+  for w in "$@"; do if [[ "$w" == "--" ]]; then seen=true; elif [[ "$seen" == true ]]; then pa+=("$w"); else fa+=("$w"); fi; done
+  "${fa[@]}" >/dev/null
+  if [[ "$FAIL" -ne $((f0 + 1)) || "$PASS" -ne "$p0" ]]; then
+    printf '[FATAL] instrument self-test: %s did not record a FAIL for a case that must fail\n' "$label" >&2; exit 1
+  fi
+  "${pa[@]}" >/dev/null
+  if [[ "$PASS" -ne $((p0 + 1)) || "$FAIL" -ne $((f0 + 1)) ]]; then
+    printf '[FATAL] instrument self-test: %s did not record a PASS for a case that must pass\n' "$label" >&2; exit 1
+  fi
+  PASS=$p0; FAIL=$f0; CASES=$c0
+}
 
 assert_grep() {
   local description="$1" pattern="$2" file="$3"
   CASES=$((CASES + 1))
   if grep -qE -- "$pattern" "$file"; then
-    PASS=$((PASS + 1)); echo "  PASS: $description"
+    _pass "$description"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $description (pattern not found in $(basename "$file"): $pattern)"
+    _fail "$description (pattern not found in $(basename "$file"): $pattern)"
   fi
 }
 assert_cmd() {
   local description="$1"; shift
   CASES=$((CASES + 1))
   if "$@" >/dev/null 2>&1; then
-    PASS=$((PASS + 1)); echo "  PASS: $description"
+    _pass "$description"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $description ($*)"
+    _fail "$description ($*)"
   fi
 }
+_selftest "assert_grep" assert_grep st "no-such-pattern-xyzzy" "$PROBE" -- assert_grep st '^#!' "$PROBE"
+_selftest "assert_cmd" assert_cmd st false -- assert_cmd st true
 
 echo "--- fresh-host egress-enforcement probe drift-guard (#5933) ---"
 
@@ -228,8 +250,9 @@ run_probe() {
 }
 check() {  # check <description> <cond>   (eval'd; same shape as the other suites)
   CASES=$((CASES + 1))
-  if eval "$2"; then PASS=$((PASS + 1)); echo "  PASS: $1"; else FAIL=$((FAIL + 1)); echo "  FAIL: $1 (condition: $2)"; fi
+  if eval "$2"; then _pass "$1"; else _fail "$1 (condition: $2)"; fi
 }
+_selftest "check" check st false -- check st true
 for form in bash-x SHELLOPTS BASH_ENV; do
   case "$form" in
     bash-x)    run_probe -- -x ;;
@@ -256,14 +279,15 @@ check "P-L the probe's repo path is absent from the A/B/C baseline" \
   '[[ "$(grep -cxF "apps/web-platform/infra/cron-egress-enforce-probe.sh" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt")" -eq 0 ]]'
 check "P-L non-vacuity: the baseline is readable and non-empty" '[[ -s "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt" ]]'
 
-# Anti-vacuity: reported by printf + exit, never through the helpers it backstops (ADR-193).
+# Accounting identity, then the anti-vacuity floor. Reported by printf + exit, never through the helpers they
+# backstop (ADR-193); the case counter moves in the wrappers, not in _pass/_fail.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
+  exit 1
+fi
 MIN_CASES=56
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
-  exit 1
-fi
-if [[ "$((PASS + FAIL))" -ne "$CASES" ]]; then
-  printf '[FATAL] verdict conservation: %d passed + %d failed != %d assertions called\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
 
