@@ -115,8 +115,11 @@ supa() {
     < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$SUPA_KEY" "$SUPA_KEY")
 }
 
+# The Flagsmith management key travels the same way: a stdin config header, never argv.
+_bearer_ok "$FLAGSMITH_TOKEN" || { echo "FLAGSMITH_MANAGEMENT_API_KEY has an unexpected shape" >&2; exit 2; }
 fs_api() {
-  curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $FLAGSMITH_TOKEN" -H "Content-Type: application/json" "$@"
+  curl --disable --noproxy '*' -sS -H "Content-Type: application/json" "$@" --config - \
+    < <(printf 'header = "Authorization: Api-Key %s"\n' "$FLAGSMITH_TOKEN")
 }
 
 # --- resolve user ----------------------------------------------------------
