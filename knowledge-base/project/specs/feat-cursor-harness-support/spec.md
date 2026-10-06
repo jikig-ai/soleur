@@ -102,7 +102,7 @@ A listing job is added only when a pinned Cursor CLI can list skills headlessly.
 
 ### TR8: Architecture decision before code
 
-Planning runs `/architecture create 'Add Cursor as a fifth supported harness'` before implementation.
+Planning runs `/architecture create 'Add a Cursor CLI plugin adapter'` before implementation. The title does not say supported. Support is the end of slice 2.
 
 ## Slice order
 
