@@ -250,6 +250,16 @@ else
   pass "T13b c4-staging-root.ts edit triggers the capture gate"
 fi
 
+# T13c — W1 (#9601, ADR-272): agent-auth-env-vars.ts is the source of the
+# `--unsetenv` pairs in the real bwrap argv (buildAgentSandboxConfig denies
+# exactly that set), so an edit to it must TRIGGER the capture gate too.
+echo "T13c: agent-auth-env-vars.ts edit triggers capture gate (argv_drift) → fail"
+if run_capture_gate "apps/web-platform/server/agent-auth-env-vars.ts" 1 '{"verdict":"canary_infra_error","reason":"argv_drift"}' ""; then
+  fail "T13c expected non-zero (agent-auth-env-vars.ts must trigger the capture gate)"
+else
+  pass "T13c agent-auth-env-vars.ts edit triggers the capture gate"
+fi
+
 # T14 — SANDBOX_CANARY_GATE_ENABLED unset → section 3 DORMANT even on a
 # trigger+creds PR (the always-run lockfile-sync gate must not run the paid
 # capture / false-block a routine canary-script edit).
