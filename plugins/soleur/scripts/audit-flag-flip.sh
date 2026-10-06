@@ -73,11 +73,22 @@ audit_flag_flip_rpc() {
     '{p_flag_name:$f, p_env:$e, p_target:$t, p_action:$a, p_before_bool:$b, p_after_bool:$af, p_actor:$ac, p_approval_method:$am}') \
     || { echo "FATAL: failed to build audit RPC body (bad before/after token: '$before'/'$after')" >&2; _audit_failed_marker bad-body; return 4; }
 
-  resp=$(curl -sS -w '\n%{http_code}' -X POST \
-    -H "apikey: ${srk}" -H "Authorization: Bearer ${srk}" \
+  # Token-shape guard (never echoes the value): the key is written into curl's stdin
+  # config below, so a quote or newline in it would inject a config directive. An
+  # unusable key makes zero curl calls and the same failure outcome (rc 4) as any other
+  # failed append, never success.
+  _audit_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+  _audit_bearer_ok "$srk" \
+    || { echo "FATAL: audit append key has an unexpected shape (not sent)" >&2; _audit_failed_marker bad-key-shape; return 4; }
+
+  # The service-role key rides curl's stdin config channel (both the apikey and the
+  # Authorization header), never its argument list.
+  resp=$(curl --disable --noproxy '*' -sS -w '\n%{http_code}' -X POST \
     -H "Content-Type: application/json" -H "Accept: application/json" \
-    "${url}/rest/v1/rpc/audit_flag_flip" -d "$body") \
-    || { echo "FATAL: audit RPC request failed (curl error)" >&2; _audit_failed_marker curl-error; return 4; }
+    --config - \
+    "${url}/rest/v1/rpc/audit_flag_flip" -d "$body" \
+    < <(printf 'header = "apikey: %s"\nheader = "Authorization: Bearer %s"\n' "$srk" "$srk")) \
+    || { echo "FATAL: audit RPC request failed (transport error)" >&2; _audit_failed_marker curl-error; return 4; }
 
   code=$(printf '%s' "$resp" | tail -n1)
   body=$(printf '%s' "$resp" | sed '$d')
