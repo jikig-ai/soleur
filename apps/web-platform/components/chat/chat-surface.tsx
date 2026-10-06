@@ -645,7 +645,13 @@ export function ChatSurface({
   // effect above reads them, and that effect's own strip already removes
   // `q` when it runs. On every other surface the foreign param is left
   // untouched. Latched like the first-run once-guard so the strip fires
-  // exactly once per mount.
+  // exactly once per mount — a second `?q=` navigation to this same pathname
+  // leaves its param in the URL (same once-per-mount scope as firstRun).
+  // The wholesale clear also drops params outside the deferral set (e.g.
+  // `leader`) — identical to the first-run strip's `msg+leader` trade-off,
+  // and harmless here because startSession consumes `leader` in an earlier-
+  // ordered effect. No producer emits `q` combined with other params; the
+  // residue cases (`?fr=1&q=x` with no staged files) are crafted-URL-only.
   const qStrippedRef = useRef(false);
   useEffect(() => {
     if (qStrippedRef.current) return;
@@ -1376,10 +1382,15 @@ export function ChatSurface({
             draftKey={draftKey}
             // #9557 — `?q=` composer prefill: only the producer's target
             // surface (full-variant /chat/new) consumes it, and `?msg=` wins
-            // (auto-send beats prefill). `""` collapses to undefined so a
-            // bare `?q=` is a no-op downstream, not a latch burn.
+            // (auto-send beats prefill). `fr=1` also wins — a staged-files
+            // first-run send must not land with a prefill parked beside it.
+            // `""` collapses to undefined so a bare `?q=` is a no-op
+            // downstream, not a latch burn.
             prefill={
-              variant === "full" && conversationId === "new" && !msgParam
+              variant === "full" &&
+              conversationId === "new" &&
+              !msgParam &&
+              !frParam
                 ? qParam || undefined
                 : undefined
             }

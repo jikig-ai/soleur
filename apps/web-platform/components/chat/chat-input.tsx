@@ -222,14 +222,18 @@ export function ChatInput({
   // semantics (FR-8): a hydrated draftKey draft / typed text wins and is
   // never clobbered, and clearing it later does not resurrect the param. The
   // functional updater reads the post-queue value so a draftKey rehydrate
-  // committed in the same batch still wins.
+  // committed in the same batch still wins. Focus is unconditional — the
+  // render-scope `value` can lag the same-batch draft rehydrate, and focusing
+  // a composer that kept its draft is benign either way. Once-per-mount:
+  // a second `?q=` navigation to this same pathname does not re-apply (the
+  // latch is burned; matches the first-run once-guard's identical scope).
   const prefillAppliedRef = useRef(false);
   useEffect(() => {
     if (prefillAppliedRef.current || !prefill) return;
     prefillAppliedRef.current = true;
     setValue((prev) => (prev === "" ? prefill : prev));
-    if (value === "") textareaRef.current?.focus();
-  }, [prefill, value]);
+    textareaRef.current?.focus();
+  }, [prefill]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());

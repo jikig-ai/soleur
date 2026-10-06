@@ -131,7 +131,7 @@ import { resolveEffectiveInstallationId } from "./cc-effective-installation";
 // Session-start self-heal: if the active workspace has a connected repo but no
 // matching clone on disk, clone/repair it so the Concierge has a real git repo
 // to work in (fixes the "No git repository found" blocker). Generic per-user.
-import { getCurrentRepoUrl, getCurrentRepoStatus } from "./current-repo-url";
+import { readCurrentRepoUrlResult, getCurrentRepoStatus } from "./current-repo-url";
 import {
   ensureWorkspaceRepoCloned,
   ensureWorkspaceDirExists,
@@ -1811,7 +1811,7 @@ export const realSdkQueryFactory: QueryFactory = async (
       bashAutonomous,
       autonomousAckAt,
       isWorkspaceOwner,
-      repoUrl,
+      repoUrlResult,
       repoReadinessRow,
     ] =
       await Promise.all([
@@ -1840,7 +1840,9 @@ export const realSdkQueryFactory: QueryFactory = async (
         // Per-user connected repo (normalized, membership-checked). Drives the
         // session-start ensure-repo self-heal below. null = not connected.
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
-        getCurrentRepoUrl(args.userId, activeWorkspaceId),
+        // The degrade-aware variant is used so the support deny→handoff flag
+        // can distinguish "no repo" from a transient resolve failure.
+        readCurrentRepoUrlResult(args.userId, activeWorkspaceId),
         // #5394 — active workspace repo readiness (repo_status from workspaces,
         // sanitized reason from users.repo_error). Joins the Promise.all so it
         // adds ZERO sequential await on the cold-start hot path. Fail-open
@@ -1848,6 +1850,12 @@ export const realSdkQueryFactory: QueryFactory = async (
         // ADR-044 PR-1: keyed on the unified activeWorkspaceId.
         getCurrentRepoStatus(args.userId, activeWorkspaceId),
       ]);
+
+    // #9556 — every existing consumer below reads the bare url; the support
+    // deny→handoff flag additionally reads `repoUrlResult.degraded` so a
+    // transient resolve failure emits `undefined` (legacy caveat arm) rather
+    // than a false "not connected" verdict.
+    const repoUrl = repoUrlResult.url;
 
     // #5394 Layer A — the single Concierge dispatch readiness gate. Runs AFTER
     // repoUrl/repo_status resolve and BEFORE ensureWorkspaceDirExists /
@@ -2698,9 +2706,16 @@ export const realSdkQueryFactory: QueryFactory = async (
     // included), so recording it on the escalation costs ZERO extra DB reads.
     // Deliberately `repoUrl !== null`, not repoStatus: `cloning`/`error` still
     // means a repo IS connected — the destination surface explains its own
-    // state. The deny() wrapper in permission-callback.ts stamps this onto the
-    // escalation record; the route emits it on the `support_handoff` frame.
-    repoConnected: repoUrl !== null,
+    // state. `degraded` (a transient tenant-mint/query blip, not an honest
+    // "no repo") emits `undefined` → the legacy caveat arm rather than telling
+    // a connected user to connect. Snapshot scope: resolved once at cold
+    // dispatch — a warm-turn Query reuse keeps this value for the Query's
+    // lifetime (bounded by the idle reaper), so mid-conversation connect or
+    // disconnect events are not re-read; both stale arms self-correct at the
+    // destination. The deny() wrapper in permission-callback.ts stamps this
+    // onto the escalation record; the route emits it on the `support_handoff`
+    // frame.
+    repoConnected: repoUrlResult.degraded ? undefined : repoUrl !== null,
     // P1 stale-snapshot — read the LIVE in-session ack posture (flipped by the
     // ws-handler on a successful ack) so command #2 after an ack is friction-free
     // instead of re-holding on the frozen cold-start snapshot.

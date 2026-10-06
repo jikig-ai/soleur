@@ -175,13 +175,13 @@ export async function POST(request: Request): Promise<Response> {
         // load-bearing; a `stream` frame's replace-text semantics is the
         // other reason the emit is terminal-adjacent). Consume-on-read makes
         // this fire exactly once per recorded deny, never unconditionally.
-        const consumed = SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)
+        const consumedEscalation = SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)
           ? consumeSupportEscalation(conversationId)
           : null;
         try {
           for (const frame of supportTerminalPrefixFrames(
             msg,
-            consumed === null
+            consumedEscalation === null
               ? null
               : {
                   type: "support_handoff",
@@ -189,32 +189,32 @@ export async function POST(request: Request): Promise<Response> {
                   conversationId,
                   // #9556 — undefined drops the key at JSON.stringify, keeping
                   // the frame additive-safe for dep-unwired emitters.
-                  repoConnected: consumed.repoConnected,
+                  repoConnected: consumedEscalation.repoConnected,
                 },
           )) {
             controller.enqueue(encoder.encode(formatSupportSseFrame(frame)));
           }
         } catch {
-          // A consumed flag with a dead stream is neither `emitted` nor
+          // A consumed record with a dead stream is neither `emitted` nor
           // `cleared-unconsumed` — mark it so the deny→emit join still reads.
           // The stream is already dead; the turn must not wait out the cap.
-          if (consumed !== null) {
+          if (consumedEscalation !== null) {
             log.warn(
-              { sec: true, conversationId, source: consumed.source },
+              { sec: true, conversationId, source: consumedEscalation.source },
               "support-handoff-emit-failed",
             );
           }
           if (SUPPORT_TERMINAL_FRAME_TYPES.has(msg.type)) finishTurn();
           return false;
         }
-        if (consumed !== null) {
+        if (consumedEscalation !== null) {
           log.info(
             {
               sec: true,
               conversationId,
-              source: consumed.source,
+              source: consumedEscalation.source,
               // #9556 — which copy arm the user saw is derivable per turn.
-              repoConnected: consumed.repoConnected,
+              repoConnected: consumedEscalation.repoConnected,
             },
             "support-handoff-emitted",
           );

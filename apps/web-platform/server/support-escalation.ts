@@ -48,8 +48,9 @@ export interface SupportEscalationRecord {
    * Whether the dispatching workspace had a connected repo when the deny
    * fired — injected from `CanUseToolDeps.repoConnected`, which cc-dispatcher
    * fills from the `repoUrl` it already resolves per dispatch. `undefined`
-   * when the dep is unwired (legacy runner, dep-less contexts): the emitted
-   * frame omits the field and the client renders the legacy copy arm.
+   * when the dep is unwired (dep-less deny contexts — unit tests and any
+   * future runner path that does not fill the field): the emitted frame
+   * omits the field and the client renders the legacy copy arm.
    */
   repoConnected?: boolean;
 }

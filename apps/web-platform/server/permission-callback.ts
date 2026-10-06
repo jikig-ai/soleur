@@ -243,10 +243,14 @@ export interface CanUseToolDeps {
    * every dispatch already performs, so zero added DB reads). The closure-local
    * `deny()` wrapper below stamps it onto every support escalation record so
    * the route's `support_handoff` frame carries it and the rendered copy can
-   * degrade honestly for repo-less users. Optional: the legacy runner and
-   * dep-less contexts leave it unwired — the record stores `undefined`, the
-   * emitted frame omits the field, and the copy falls back to the legacy
-   * caveat arm.
+   * degrade honestly for repo-less users. Optional: dep-less contexts (unit
+   * tests, any future runner that builds deps without the field) leave it
+   * unwired — the record stores `undefined`, the emitted frame omits the
+   * field, and the copy falls back to the legacy caveat arm. (The legacy
+   * `agent-runner.ts` construction is NOT such a producer: it hard-pins
+   * `command_center` and never sets `persona`, so it cannot reach a support
+   * deny at all — in production every support deny carries a concrete
+   * boolean.)
    */
   repoConnected?: boolean;
 }
@@ -280,10 +284,15 @@ export interface CanUseToolContext {
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
   // #9556 — one injection point for the deny→handoff flag: every support deny
-  // path calls `deny(`, which stamps the dispatch-resolved repo-connected state
-  // onto the escalation record. This mirrors denySupport's own contract ("every
-  // present and future support deny path gets record + telemetry for free") one
-  // level up — a future deny site that calls `deny(` cannot forget the field.
+  // path THAT ESCALATES calls `deny(`, which stamps the dispatch-resolved
+  // repo-connected state onto the escalation record. (The deliberately
+  // NON-escalating support denies below — `AskUserQuestion`,
+  // `TodoWrite`/`ExitPlanMode` and the other UX-signal belts — bypass `deny(`;
+  // recording an escalation for them would emit a spurious support_handoff
+  // frame, the very thing their "no interactive surface" comments forbid.)
+  // This mirrors denySupport's own contract ("every present and future
+  // escalating support deny path gets record + telemetry for free") one level
+  // up — a future deny site that calls `deny(` cannot forget the field.
   // The spread order makes deps.repoConnected authoritative even if a call site
   // passed its own; an unwired dep records `undefined` (the frame then omits
   // the field → legacy copy arm).

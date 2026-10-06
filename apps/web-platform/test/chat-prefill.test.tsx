@@ -20,11 +20,18 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { setControlledValue } from "./helpers/dom";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { createWebSocketMock } from "./mocks/use-websocket";
+import {
+  setPendingFiles,
+  getPendingFiles,
+  clearPendingFiles,
+} from "@/lib/pending-attachments";
+import type { AttachmentRef } from "@/lib/types";
 
 const REAL_A = "0a1b2c3d-0000-4000-8000-00000000000a";
 
 const mockSendMessage = vi.fn();
 const mockStartSession = vi.fn();
+const mockUpload = vi.fn();
 const mockFetch = vi.fn();
 
 let wsReturn = createWebSocketMock();
@@ -42,6 +49,23 @@ vi.mock("@/lib/client-observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
 }));
+
+vi.mock("@/lib/upload-attachments", () => ({
+  uploadPendingFiles: (files: File[], id: string) => mockUpload(files, id),
+}));
+
+function mdFile(name = "notes.md"): File {
+  return new File(["synthetic"], name, { type: "text/markdown" });
+}
+
+function refFor(file: File, id: string): AttachmentRef {
+  return {
+    storagePath: `user/${id}/${file.name}`,
+    filename: file.name,
+    contentType: "text/markdown",
+    sizeBytes: 9,
+  };
+}
 
 // Stable router object + stable replace: a fresh object per render would churn
 // the `router` effect dependency (see chat-surface-sidebar.test.tsx).
@@ -128,6 +152,13 @@ describe("ChatInput — prefill prop (#9557)", () => {
 
     rerender(<ChatInput {...commonProps} prefill="second" />);
     expect(ta.value).toBe("first");
+
+    // Discriminates the latch itself: clearing the text does NOT resurrect the
+    // new prefill — an unlatched impl would re-apply "second" into the now-
+    // empty composer when the prop change re-fires the effect.
+    act(() => setControlledValue(ta, ""));
+    rerender(<ChatInput {...commonProps} prefill="second" />);
+    expect(ta.value).toBe("");
   });
 
   it("never clobbers a hydrated draftKey draft — the param is consumed, clearing the draft does not resurrect it", () => {
@@ -166,6 +197,8 @@ describe("ChatSurface — ?q= prefill (#9557)", () => {
   beforeEach(() => {
     mockSendMessage.mockReset();
     mockStartSession.mockReset();
+    mockUpload.mockReset();
+    clearPendingFiles();
     mockReplace.mockReset();
     // Reflect the real router: router.replace(pathname) clears the WHOLE query,
     // so a strip must never fire while a first-run param is still pending.
@@ -268,5 +301,34 @@ describe("ChatSurface — ?q= prefill (#9557)", () => {
 
     expect(composer().value).toBe("");
     expect(mockSendMessage).not.toHaveBeenCalled();
+  });
+
+  // frParam is the strip guard's mutation-surviving arm: without it the
+  // q-strip fires a SECOND replace alongside the first-run's own. Pinned via
+  // replace arity — the first-run effect (earlier-ordered) consumes `fr` and
+  // strips the whole query itself, so exactly one replace is correct.
+  it("?q= + ?fr=1 with staged files: the first-run send wins, q never prefills, one replace total", async () => {
+    const f = mdFile();
+    setPendingFiles([f]);
+    mockSearchParams.set("q", "param text");
+    mockSearchParams.set("fr", "1");
+    mockUpload.mockResolvedValueOnce([refFor(f, REAL_A)]);
+
+    render(surface());
+    await settle();
+
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage).toHaveBeenCalledWith("", [refFor(f, REAL_A)]);
+    // `fr` also excludes the prefill gate — a staged-files send must not
+    // land with prefilled text parked beside it.
+    expect(composer().value).toBe("");
+    // The first-run's own strip is the ONLY replace; a second would mean the
+    // q-strip fired on a pending first-run param — the guard's raison d'être.
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(mockReplace).toHaveBeenCalledWith("/dashboard/chat/new", {
+      scroll: false,
+    });
+    expect(getPendingFiles()).toEqual([]);
   });
 });
