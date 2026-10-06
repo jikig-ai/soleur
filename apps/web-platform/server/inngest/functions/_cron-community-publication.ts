@@ -774,3 +774,39 @@ export async function upsertDigestIssue(args: {
   }
   throw lastErr;
 }
+
+/**
+ * PATCH an issue's body and nothing else (never state, title, labels or
+ * assignees, so a closed issue stays closed). Used by the handler to replace the
+ * rendered digest with the fixed "not committed" notice when the commit does not
+ * land. Bounded retry on 5xx/429; any other failure throws.
+ */
+export async function patchIssueBody(args: {
+  octokit: CommunityOctokit;
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  body: string;
+  /** Base backoff in ms (doubles per attempt). Tests inject 0. */
+  retryDelayMs?: number;
+}): Promise<void> {
+  const { octokit, owner, repo, issueNumber, body, retryDelayMs = UPSERT_BASE_DELAY_MS } = args;
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+    throw new Error("patchIssueBody: issueNumber must be a positive integer");
+  }
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await octokit.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body,
+        headers: API_VERSION_HEADERS,
+      });
+      return;
+    } catch (err) {
+      if (!isRetryable(err) || attempt >= UPSERT_MAX_ATTEMPTS) throw err;
+      await sleepMs(retryDelayMs * 2 ** (attempt - 1));
+    }
+  }
+}

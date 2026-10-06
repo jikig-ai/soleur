@@ -18,6 +18,9 @@
 //   - a deploy lease that outlasts the setup step's retry takes the ADR-078
 //     deferral (DeployInProgressError thrown from the handler body, NO
 //     heartbeat), driven across the real step boundary (#8726)
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Short-circuit the inngest client startup-key check (same path next build uses).
@@ -26,6 +29,7 @@ vi.hoisted(() => {
 });
 
 const reportSilentFallbackSpy = vi.fn();
+const warnSilentFallbackSpy = vi.fn();
 const resolveOutputAwareOkSpy = vi.fn();
 const ensureAuditIssueSpy = vi.fn();
 const spawnClaudeEvalSpy = vi.fn();
@@ -41,13 +45,34 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: (...a: unknown[]) => reportSilentFallbackSpy(...a),
-  warnSilentFallback: vi.fn(),
+  warnSilentFallback: (...a: unknown[]) => warnSilentFallbackSpy(...a),
+}));
+
+// #7122 — the publish step upserts the digest issue through the App-installation
+// client. This suite drives the handler's CONTROL FLOW, so the client is a minimal
+// in-memory fake (no existing issue, no milestone, create succeeds); the issue-store
+// invariants live in the dedup and publication-flow suites.
+vi.mock("@/server/github/probe-octokit", () => ({
+  createProbeOctokit: () =>
+    Promise.resolve({
+      request: async (route: string) => {
+        if (route === "POST /repos/{owner}/{repo}/issues") return { data: { number: 4242 } };
+        if (route.startsWith("PATCH ")) return { data: { number: 4242 } };
+        return { data: [] };
+      },
+    }),
 }));
 
 vi.mock("@/server/inngest/functions/_cron-claude-eval-substrate", () => ({
   setupEphemeralWorkspace: (...a: unknown[]) => setupWorkspaceSpy(...a),
   teardownEphemeralWorkspace: (...a: unknown[]) => teardownSpy(...a),
   spawnClaudeEval: (...a: unknown[]) => spawnClaudeEvalSpy(...a),
+  setOriginToken: vi.fn().mockResolvedValue(undefined),
+  makeThrewSpawnResult: () => ({
+    ok: false, exitCode: -1, signal: null, abortedByTimeout: false,
+    durationMs: 0, stdoutTail: "", stderrTail: "",
+  }),
+  COMMUNITY_DISALLOWED_TOOLS: "Read,Glob,Grep,Write,Edit,MultiEdit,NotebookEdit,Task,Agent,Skill",
   KILL_ESCALATION_MS: 5000,
 }));
 
@@ -98,6 +123,7 @@ import {
 } from "@/server/inngest/functions/cron-community-monitor";
 import { DeployInProgressError } from "@/server/inngest/functions/_cron-shared";
 import { runLikeInngest } from "../../helpers/inngest-step-harness";
+import { validDraftFinalMessage } from "./helpers/community-draft";
 
 /**
  * `throwOn` makes the named step reject, which is the only seam for simulating a
@@ -134,6 +160,8 @@ const invoke = (
     maxAttempts,
   } as HandlerArg);
 
+// #7122 — the agent's deliverable is its FINAL MESSAGE (a one-line JSON draft); the
+// handler renders and publishes it. `finalMessage` is what the happy path needs.
 const okSpawn = {
   ok: true,
   exitCode: 0,
@@ -142,6 +170,8 @@ const okSpawn = {
   durationMs: 1000,
   stdoutTail: "",
   stderrTail: "",
+  finalMessage: validDraftFinalMessage(),
+  finalMessageTruncated: false,
 };
 
 // #6714 — the handler now CONSUMES safeCommitAndPr's return value (R16a: it was
@@ -171,13 +201,19 @@ const committedWithDigest = () => ({
   paths: [DIGEST_PATH],
 });
 
+// The handler writes the rendered digest into the workspace, so the workspace is a
+// REAL directory (the previous /tmp/x/repo fixture never existed on disk).
+let tmpRoot: string;
+
 beforeEach(() => {
+  tmpRoot = mkdtempSync(join(tmpdir(), "community-heartbeat-"));
+  mkdirSync(join(tmpRoot, "repo"), { recursive: true });
   // `toFake: ["Date"]` only — setTimeout stays real so the heartbeat retry
   // backoff and call-count assertions are unaffected (this suite's fetch always
   // resolves 202). Mirrors the dedup suite.
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(FROZEN);
-  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: "/tmp/x", spawnCwd: "/tmp/x/repo" });
+  setupWorkspaceSpy.mockResolvedValue({ ephemeralRoot: tmpRoot, spawnCwd: join(tmpRoot, "repo") });
   spawnClaudeEvalSpy.mockResolvedValue(okSpawn);
   resolveOutputAwareOkSpy.mockResolvedValue(true);
   safeCommitAndPrSpy.mockImplementation(async () => committedWithDigest());
@@ -192,6 +228,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  rmSync(tmpRoot, { recursive: true, force: true });
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -434,6 +471,57 @@ describe("cron-community-monitor — digest liveness (#6714)", () => {
     expect(digestFileMock).toHaveBeenCalledWith(
       expect.objectContaining({ attempt: 1, digest_path: DIGEST_PATH }),
     );
+  });
+
+  it("#7122 — the digest-file marker names the handler as writer and the validation verdict", async () => {
+    // `present` alone cannot tell "the agent never produced a draft" from "the
+    // draft was rejected" now that the handler writes the file.
+    await invoke(makeStep(), 0, 2);
+    expect(digestFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verdict: "ok", writer: "handler", present: 1, digest_path: DIGEST_PATH }),
+    );
+
+    digestFileMock.mockClear();
+    spawnClaudeEvalSpy.mockResolvedValue({ ...okSpawn, finalMessage: "not a draft" });
+    await invoke(makeStep(), 0, 2);
+    expect(digestFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verdict: "rejected", writer: "handler" }),
+    );
+
+    digestFileMock.mockClear();
+    spawnClaudeEvalSpy.mockResolvedValue({ ...okSpawn, abortedByTimeout: true });
+    await invoke(makeStep(), 0, 2);
+    expect(digestFileMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verdict: "skipped-timeout", writer: "handler" }),
+    );
+  });
+
+  it("#7122 — a REJECTED draft turns the monitor RED and persists nothing, even though verify-output is satisfied", async () => {
+    // verify-output is a presence check that a human comment can satisfy; the
+    // validation verdict is the real gate (heartbeatOk && publication.ok).
+    resolveOutputAwareOkSpy.mockResolvedValue(true);
+    spawnClaudeEvalSpy.mockResolvedValue({ ...okSpawn, finalMessage: undefined });
+    const step = makeStep();
+    const res = await invoke(step, 0, 2);
+
+    expect(res).toEqual({ ok: false });
+    expect(heartbeatUrls()[0]).toContain("?status=error");
+    expect(step.executed).not.toContain("publish-issue");
+    expect(safeCommitAndPrSpy).not.toHaveBeenCalled();
+    expect(
+      reportSilentFallbackSpy.mock.calls.some((c) => c[1]?.op === "community-publication-rejected"),
+    ).toBe(true);
+  });
+
+  it("#7122 — the audit fallback never receives a spawn token and withholds model output", async () => {
+    spawnClaudeEvalSpy.mockResolvedValue({ ...okSpawn, finalMessage: "not a draft" });
+    await invoke(makeStep(), 0, 2);
+
+    expect(ensureAuditIssueSpy).toHaveBeenCalledTimes(1);
+    const arg = ensureAuditIssueSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.withholdModelOutput).toBe(true);
+    expect(arg.octokit).toBeDefined();
+    expect(arg).not.toHaveProperty("installationToken");
   });
 
   it("a replay-resume with UNDETERMINED paths stays GREEN (R21 carve-out)", async () => {

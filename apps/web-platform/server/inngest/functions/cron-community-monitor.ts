@@ -4,13 +4,14 @@
 // structural template is PR-7's cron-roadmap-review.ts.
 //
 // BUCKET II (kb-writer + pr-creator) — first bucket-ii migration in the
-// claude-code-spawn cohort. CLO bucket-ii means more careful authorization
-// context: the spawned agent writes KB files and creates issues; since
-// #5111 the PLATFORM commits and opens the PR handler-side (the agent no
-// longer runs git/gh persistence verbs). The buildSpawnEnv allowlist is
-// wider than bucket-i (adds 7 community-platform vars for Discord,
-// Bluesky, LinkedIn) but still uses the explicit-allowlist shape (NOT
-// denylist / spread).
+// claude-code-spawn cohort. Since #7122 the spawned agent only COLLECTS and
+// CLASSIFIES: its single deliverable is its final message (one line of compact
+// JSON). The HANDLER validates that draft against a closed schema, renders the
+// digest file and the tracking issue from fixed templates and publishes them;
+// since #5111 the PLATFORM also commits and opens the PR handler-side. The
+// buildSpawnEnv allowlist is wider than bucket-i (adds 7 community-platform vars
+// for Discord, Bluesky, LinkedIn) but still uses the explicit-allowlist shape
+// (NOT denylist / spread).
 //
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — claude binary spawned INSIDE step.run (Inngest replay memoization).
@@ -38,7 +39,7 @@
 //     linkedin fetch-metrics/fetch-activity commands require — #4049).
 //   - --max-turns 80 (was 50, orig 40 — see turn-budget rationale on
 //     MAX_TURN_DURATION_MS); --allowedTools is NARROWER than the cohort
-//     default (no WebSearch, WebFetch). (The original GHA workflow
+//     default (#7122: Bash ONLY, no file tools). (The original GHA workflow
 //     scheduled-community-monitor.yml was deleted in #4468; this comment no
 //     longer mirrors a live file.)
 //   - Cron 0 8 * * * (daily 08:00 UTC, not weekly Monday 09:00).
@@ -57,13 +58,17 @@
 // comment is corrected so the disproven spawn-cwd auto-discovery theory cannot
 // mislead future edits. See #4993 / #4987.
 //
-// GH TOKEN — installation token minted via createProbeOctokit() →
-// installation discovery → generateInstallationToken(installation.id), narrowed
-// to DEFAULT_CRON_TOKEN_PERMISSIONS scoped to [REPO_NAME] (#5199).
-// Injected as GH_TOKEN so the spawned claude can run the allowlisted
-// `gh issue create`/`gh issue list`/`gh issue comment` + `gh label` verbs
-// (persistence runs handler-side via safeCommitAndPr — #5111; the prompt forbids
-// git/gh-pr verbs and the containment hook denies `gh api`).
+// GH TOKEN CUSTODY (#7122) — two installation tokens, minted via the App and each
+// scoped to [REPO_NAME] (#5199):
+//   - READ token (COMMUNITY_SPAWN_TOKEN_PERMISSIONS: contents/issues/pull_requests
+//     all "read"). Used for the clone (it lands in .git/config) and injected as
+//     GH_TOKEN, so the agent holds NO write credential during its run.
+//   - WRITE token (DEFAULT_CRON_TOKEN_PERMISSIONS). Minted only AFTER the spawn
+//     has exited and the draft validated (never on the timeout path), then
+//     origin is re-pointed at it for the handler's own git steps.
+// The issue upsert and the audit-issue fallback use the App-installation client
+// (createProbeOctokit) rather than either token, because the fallback must work
+// when the run died before a write token existed.
 
 import {
   redactToken,
@@ -80,8 +85,10 @@ import {
   deferDeployOnFinalAttempt,
   unwrapSetupVerdict,
   type WorkspaceSetupVerdict,
+  COMMUNITY_SPAWN_TOKEN_PERMISSIONS,
   DEFAULT_CRON_TOKEN_PERMISSIONS,
   REPO_NAME,
+  REPO_OWNER,
   type HandlerArgs,
 } from "./_cron-shared";
 import {
@@ -89,10 +96,13 @@ import {
   teardownEphemeralWorkspace,
   spawnClaudeEval,
   makeThrewSpawnResult,
+  setOriginToken,
+  COMMUNITY_DISALLOWED_TOOLS,
   type SpawnResult,
 } from "./_cron-claude-eval-substrate";
 import { safeCommitAndPr } from "./_cron-safe-commit";
 import {
+  COMMUNITY_DIGEST_MILESTONE,
   COMMUNITY_FAILURE_CAUSES,
   COMMUNITY_STATUSES,
   COMMUNITY_TOPIC_CATEGORIES,
@@ -100,7 +110,17 @@ import {
   MAX_TOPICS,
   MIN_PERIOD_DAYS,
   buildExampleDraftLine,
+  parseCommunityDraft,
+  patchIssueBody,
+  readFinalMessage,
+  renderCommunityPublication,
+  upsertDigestIssue,
+  writeDigestFileContained,
+  type CommunityOctokit,
+  type GithubOverride,
 } from "./_cron-community-publication";
+import type { Octokit } from "@octokit/core";
+import { createProbeOctokit } from "@/server/github/probe-octokit";
 import {
   emitCommunityDigestFile,
   emitCronDedupSkip,
@@ -109,7 +129,7 @@ import {
   type CronDigestLivenessMarker,
 } from "@/server/cron-liveness-marker";
 import { inngest } from "@/server/inngest/client";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
 import { EXECUTION_MODEL } from "@/server/inngest/model-tiers";
 import { CLAUDE_EVAL_THROTTLE } from "@/server/inngest/cron-budgets";
 
@@ -148,7 +168,17 @@ export { KILL_ESCALATION_MS } from "./_cron-claude-eval-substrate";
 // turn-budget rationale on MAX_TURN_DURATION_MS below.
 //   --model claude-sonnet-5-5
 //   --max-turns 80
-//   --allowedTools Bash,Read,Write,Edit,Glob,Grep
+//   --allowedTools Bash
+//   --disallowedTools COMMUNITY_DISALLOWED_TOOLS (#7122)
+//
+// #7122 — the agent holds Bash and nothing else. The LOAD-BEARING layer is the
+// per-spawn `no-file-tools` directive in the containment hook (it denies
+// Read/Glob/Grep/Write/Edit/MultiEdit/Task/Agent/Skill and the hook self-test
+// probes the deny). `--disallowedTools` is a SECOND layer that removes the same
+// tools (and NotebookEdit) from the model's pool: no other cron spawn passes it,
+// and how the flag composes with a hook `allow` cannot be proved offline, so
+// nothing here relies on it alone. The first post-merge run is the live evidence
+// (a Write attempt must surface as a denial, never a write).
 const CLAUDE_CODE_FLAGS = [
   "--print",
   "--model",
@@ -156,7 +186,9 @@ const CLAUDE_CODE_FLAGS = [
   "--max-turns",
   "80",
   "--allowedTools",
-  "Bash,Read,Write,Edit,Glob,Grep",
+  "Bash",
+  "--disallowedTools",
+  COMMUNITY_DISALLOWED_TOOLS,
   "--",
 ];
 
@@ -227,7 +259,10 @@ a date in your output.
    "failed" (nothing usable) or "partial" (some numbers usable) and a
    failureCause. Never omit a platform, and never substitute a number from a
    previous digest, because a command failed. Use 0 for any number you could
-   not obtain.
+   not obtain. If a collector's output is truncated or exceeds the inline limit,
+   you cannot read the rest (you have no file tools): report that platform with
+   status "partial" and failureCause "output-too-large" rather than guess its
+   counts.
 
 3. **Classify topics.** From this run's GitHub activity and discussion data,
    count how many items fall under each topic category. Use only the categories
@@ -266,12 +301,11 @@ The platform commits and opens a PR for your changes automatically after the run
 You have no file-writing or issue-creating tools; do not try to use any.
 `;
 
-// Persistence allowlist (#5111): verbatim from the prompt's former scoped
-// staging list (the dated digest directory).
 // The dated digest lives directly under this dir as `<YYYY-MM-DD>-digest.md`.
-// Single source of truth for the persistence allowlist, the workspace stat
-// (marker 3) and the committed-artifact liveness assertion — a drifted copy in
-// any one of the three would silently un-assert the artifact.
+// Single source of truth for the dated digest path, the workspace stat (marker 3)
+// and the committed-artifact liveness assertion — a drifted copy in any one of
+// them would silently un-assert the artifact. #7122: persistence is by EXACT path
+// (the one handler-rendered dated file), never by this directory as a prefix.
 // EXPORTED so the three test suites that assert against the dated digest path
 // derive it from this value instead of hardcoding a mirror. The comment below
 // calls this the single source of truth; before the export it was not one.
@@ -288,7 +322,11 @@ You have no file-writing or issue-creating tools; do not try to use any.
 export const PRODUCER_CLASS = "A";
 
 export const COMMUNITY_DIGEST_DIR = "knowledge-base/support/community/";
-const COMMUNITY_MONITOR_ALLOWED_PATHS = [COMMUNITY_DIGEST_DIR] as const;
+
+// #7122 — the fixed body the issue is PATCHed to when the digest commit does not
+// land, so the issue never links a file that will not exist. A handler constant:
+// no model text and no variable part.
+const DIGEST_NOT_COMMITTED_NOTICE = "digest not committed - see Sentry";
 
 // --- Collector-status sidecar (#6695) ---------------------------------------
 //
@@ -302,8 +340,9 @@ const COMMUNITY_MONITOR_ALLOWED_PATHS = [COMMUNITY_DIGEST_DIR] as const;
 //
 // The sidecar is the one deterministic path: the collector appends a JSONL
 // record per dispatch and the handler reads it directly, with no LLM in the
-// middle. It lives under spawnCwd but outside COMMUNITY_MONITOR_ALLOWED_PATHS,
-// so safeCommitAndPr can never commit it, and teardown discards it.
+// middle. It lives under spawnCwd, is not the exact digest path and is covered by
+// safeCommitAndPr's structural exclusions, so it can never be committed, and
+// teardown discards it.
 const COLLECTOR_STATUS_DIRNAME = ".soleur-collector-status";
 const COLLECTOR_STATUS_FILENAME = "collector-status.jsonl";
 
@@ -429,6 +468,39 @@ function buildSpawnEnv(installationToken: string): NodeJS.ProcessEnv {
 // Handler
 // =============================================================================
 
+// Redact EVERY credential the handler can hold (the read token always, the write
+// token once minted) out of a message before it is reported.
+function redactTokens(text: string, ...tokens: Array<string | undefined>): string {
+  return tokens.reduce<string>((acc, t) => (t ? redactToken(acc, t) : acc), text);
+}
+
+// #7122 — the memoized output of the validate-publication step. JSON-serialisable
+// by construction (Inngest memoizes it) and it carries the RENDERED text only,
+// never the raw draft.
+type PublicationVerdict =
+  | { ok: true; digestMarkdown: string; issueTitle: string; issueBody: string }
+  | { ok: false };
+
+// Closed-vocabulary guard for a string that comes from the claude result event
+// (e.g. `success`, `error_max_turns`). Anything else is dropped, never forwarded.
+const RESULT_SUBTYPE_RE = /^[a-z_]{1,48}$/;
+
+// #7122 — every permission denial in the spawn (not only filings, which
+// SOLEUR_CRON_FILING_DENY counts). The prompt never instructs a denied verb, so a
+// non-zero count means the agent reached for something outside its allowlist
+// (injection attempt or drift). WARN-level, count plus closed tool names only; the
+// run stays GREEN because nothing was published.
+function mirrorAgentDenials(result: SpawnResult): void {
+  const count = result.permissionDenialCount ?? 0;
+  if (count <= 0) return;
+  warnSilentFallback(new Error(`community agent had ${count} denied tool call(s)`), {
+    feature: "cron-community-monitor",
+    op: "community-agent-denied-verb",
+    message: "the spawned community agent attempted tool calls the containment hook denied",
+    extra: { fn: "cron-community-monitor", count, deniedTools: result.deniedTools ?? [] },
+  });
+}
+
 export async function cronCommunityMonitorHandler({
   step,
   logger,
@@ -523,12 +595,15 @@ export async function cronCommunityMonitorHandler({
     return { ok: true };
   }
 
-  const installationToken = await step.run(
+  // #7122 — the READ token: it is cloned into .git/config and injected as the
+  // agent's GH_TOKEN, so it must carry no write scope. The WRITE token is minted
+  // after the spawn (step "mint-write-token" below).
+  const readToken = await step.run(
     "mint-installation-token",
     async () => {
       return mintInstallationToken({
         tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
-        permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+        permissions: COMMUNITY_SPAWN_TOKEN_PERMISSIONS,
         repositories: [REPO_NAME],
       });
     },
@@ -538,13 +613,13 @@ export async function cronCommunityMonitorHandler({
   try {
     verdict = await step.run("setup-workspace", async () =>
       deferDeployOnFinalAttempt(
-        () => setupEphemeralWorkspace({ installationToken, cronName: "cron-community-monitor" }),
+        () => setupEphemeralWorkspace({ installationToken: readToken, cronName: "cron-community-monitor" }),
         { attempt, maxAttempts },
       ),
     );
   } catch (err) {
     const e = err as Error;
-    const redactedMsg = redactToken(e.message ?? "", installationToken);
+    const redactedMsg = redactTokens(e.message ?? "", readToken);
     const redacted = new Error(redactedMsg);
     redacted.name = e.name;
     reportSilentFallback(redacted, {
@@ -609,13 +684,16 @@ export async function cronCommunityMonitorHandler({
     let livenessOk = false;
     let threw = false;
     let spawnResult: SpawnResult | null = null;
+    // #7122 — minted only after the spawn and a validated draft; redacted in every
+    // catch alongside the read token.
+    let writeToken: string | undefined;
     try {
       spawnResult = await step.run(
         "claude-eval",
         async (): Promise<SpawnResult> => {
-          return spawnClaudeEval({
+          const result = await spawnClaudeEval({
             spawnCwd: spawnCwd,
-            installationToken,
+            installationToken: readToken,
             flags: CLAUDE_CODE_FLAGS,
             prompt: injectRunDate(COMMUNITY_MONITOR_PROMPT, runStartedAt),
             maxTurnDurationMs: MAX_TURN_DURATION_MS,
@@ -631,6 +709,9 @@ export async function cronCommunityMonitorHandler({
             runId,
             attempt,
           });
+          // Inside the step so the warn fires once (the step output is memoized).
+          mirrorAgentDenials(result);
+          return result;
         },
       );
 
@@ -652,31 +733,14 @@ export async function cronCommunityMonitorHandler({
         );
       }
 
-      // --- output-aware heartbeat. This cron is an always-create producer — it
-      //     writes a dated digest and files a GitHub issue summarizing the
-      //     findings every run (even the no-platform-enabled path creates a titled
-      //     issue) — so a clean exit that produced no `scheduled-community-monitor`
-      //     issue in the run window turns the monitor RED (and emits
-      //     `scheduled-output-missing`) instead of false-green on claude's exit
-      //     code. Mirrors the 3 producers wired by PR #4714 (#4730). Infra faults
-      //     still page via the early-return status=error heartbeats. ---
-      heartbeatOk = await step.run("verify-output", async () =>
-        resolveOutputAwareOk({
-          spawnOk: spawnResult!.ok,
-          label: SENTRY_MONITOR_SLUG,
-          runStartedAt,
-          cronName: "cron-community-monitor",
-          stderrTail: spawnResult!.stderrTail,
-          exitCode: spawnResult!.exitCode,
-          stdoutTail: spawnResult!.stdoutTail,
-        }),
-      );
-
       // --- Collector-status gate (#6695). Deliberately placed BEFORE the
       //     persistence gate below: that branch is guarded on
       //     `heartbeatOk && !abortedByTimeout`, so reading the sidecar inside it
       //     would make the signal unreachable on exactly the runs it exists to
-      //     catch. reportSilentFallback fires UNCONDITIONALLY on a non-zero
+      //     catch. #7122: it now also runs BEFORE validate-publication, because
+      //     the rendered github row is bound to this verdict (a failed or absent
+      //     sidecar overrides what the draft claims) and it runs even on a
+      //     timeout, where everything after it is skipped. reportSilentFallback fires UNCONDITIONALLY on a non-zero
       //     record and heartbeatOk is set independently of resolveOutputAwareOk's
       //     return value — its catch branch falls back to the spawn exit code
       //     (deliberate fail-open, #5139) and would otherwise mask this. ---
@@ -684,10 +748,10 @@ export async function cronCommunityMonitorHandler({
         readCollectorStatus(spawnCwd),
       );
 
-      const verdict = classifyCollectorStatus(collectorStatus);
+      const collectorVerdict = classifyCollectorStatus(collectorStatus);
 
-      if (verdict.failed.length > 0) {
-        const summary = verdict.failed
+      if (collectorVerdict.failed.length > 0) {
+        const summary = collectorVerdict.failed
           .map((r) => `${r.command ?? "unknown"}(exit=${r.exit}${r.cause ? `, cause=${r.cause}` : ""})`)
           .join("; ");
         reportSilentFallback(
@@ -696,11 +760,11 @@ export async function cronCommunityMonitorHandler({
             feature: "cron-community-monitor",
             op: "collector-status-failed",
             message: "one or more github collector commands exited non-zero",
-            extra: { fn: "cron-community-monitor", failures: verdict.failed },
+            extra: { fn: "cron-community-monitor", failures: collectorVerdict.failed },
           },
         );
         collectorSignalRed = true;
-      } else if (verdict.warned.length > 0) {
+      } else if (collectorVerdict.warned.length > 0) {
         // Truncation is latent, not present-tense: the run's data is correct,
         // but a future one may silently undercount. Reported so it is visible,
         // deliberately NOT paged -- a nightly page for a hypothetical is how a
@@ -709,7 +773,7 @@ export async function cronCommunityMonitorHandler({
         // dead-end this PR exists to remove.
         reportSilentFallback(
           new Error(
-            `github collector hit a per_page cap: ${verdict.warned
+            `github collector hit a per_page cap: ${collectorVerdict.warned
               .map((r) => `${r.command ?? "unknown"}(${r.warn})`)
               .join("; ")}`,
           ),
@@ -717,10 +781,10 @@ export async function cronCommunityMonitorHandler({
             feature: "cron-community-monitor",
             op: "collector-status-warn",
             message: "a collector fetch returned exactly per_page items",
-            extra: { fn: "cron-community-monitor", warned: verdict.warned },
+            extra: { fn: "cron-community-monitor", warned: collectorVerdict.warned },
           },
         );
-      } else if (verdict.missing) {
+      } else if (collectorVerdict.missing) {
         // Distinguished from "all collectors succeeded". The sidecar should
         // exist on every healthy run (the github commands are unconditional), so
         // its absence means the collector never ran or could not write. Reported
@@ -737,6 +801,149 @@ export async function cronCommunityMonitorHandler({
           },
         );
       }
+
+      // --- #7122 publication. SKIPPED ENTIRELY on a timeout: a killed run is
+      //     unverified work, and the timeout is already loud above. Otherwise it
+      //     runs regardless of the exit code (a non-zero exit with a valid final
+      //     message is the documented healthy #4747 shape; an errored run simply
+      //     fails the parse). The HANDLER authors every published byte: the final
+      //     message is validated against the closed schema and rendered from fixed
+      //     templates, and the memoized step output is the rendered text, never
+      //     the raw draft. ---
+      const runDate = runStartedAt.slice(0, 10);
+      let publication: PublicationVerdict = { ok: false };
+      let published: { issueNumber: number; via: "created" | "patched" } | undefined;
+      if (!spawnResult.abortedByTimeout) {
+        publication = await step.run(
+          "validate-publication",
+          async (): Promise<PublicationVerdict> => {
+            const { text, truncated } = readFinalMessage(spawnResult);
+            const parsed = parseCommunityDraft(text, { truncated });
+            if (!parsed.ok) {
+              // Closed vocabulary and numbers ONLY: never message text, never a
+              // key name, never a zod message (all of which can carry model text).
+              const subtype = spawnResult!.subtype;
+              const numTurns = spawnResult!.numTurns;
+              reportSilentFallback(new Error(`community draft rejected (${parsed.reason})`), {
+                feature: "cron-community-monitor",
+                op: "community-publication-rejected",
+                message: "the agent's final message failed validation; nothing was published",
+                extra: {
+                  fn: "cron-community-monitor",
+                  reason: parsed.reason,
+                  codes: parsed.codes,
+                  draftBytes: text === undefined ? 0 : Buffer.byteLength(text, "utf8"),
+                  abortedByTimeout: spawnResult!.abortedByTimeout,
+                  spawnExit: spawnResult!.exitCode,
+                  ...(typeof subtype === "string" && RESULT_SUBTYPE_RE.test(subtype)
+                    ? { resultSubtype: subtype }
+                    : {}),
+                  ...(typeof numTurns === "number" && Number.isFinite(numTurns) ? { numTurns } : {}),
+                  denialCount: spawnResult!.permissionDenialCount ?? 0,
+                  sidecarPresent: !collectorVerdict.missing,
+                  startsWithBrace: text?.trimStart().startsWith("{") ?? false,
+                },
+              });
+              return { ok: false };
+            }
+            // Collector truth is bound into the render: the model cannot publish
+            // github numbers over a collector that reported failure. A missing
+            // sidecar keeps today's non-paging behaviour, but the digest never
+            // presents UNVERIFIED github numbers as collected. (A github platform
+            // the draft itself reports as disabled/failed carries no numbers, so
+            // it is not softened to "partial".)
+            const githubStatus = parsed.draft.platforms.github.status;
+            const githubOverride: GithubOverride | undefined =
+              collectorVerdict.failed.length > 0
+                ? { status: "failed", failureCause: "script-error" }
+                : collectorVerdict.missing && githubStatus !== "disabled" && githubStatus !== "failed"
+                  ? { status: "partial", failureCause: "unknown" }
+                  : undefined;
+            const rendered = renderCommunityPublication(parsed.draft, {
+              runDate,
+              repo: `${REPO_OWNER}/${REPO_NAME}`,
+              githubOverride,
+            });
+            await writeDigestFileContained(spawnCwd, digestPath, rendered.digestMarkdown);
+            return {
+              ok: true,
+              digestMarkdown: rendered.digestMarkdown,
+              issueTitle: rendered.issueTitle,
+              issueBody: rendered.issueBody,
+            };
+          },
+        );
+
+        if (publication.ok) {
+          // The WRITE token exists only from here: after the child has exited and
+          // the draft validated, never on the timeout path. Origin is re-pointed
+          // at it so the handler's own git steps authenticate.
+          writeToken = await step.run("mint-write-token", async () => {
+            const token = await mintInstallationToken({
+              tokenMinLifetimeMs: TOKEN_MIN_LIFETIME_MS,
+              permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,
+              repositories: [REPO_NAME],
+            });
+            await setOriginToken(spawnCwd, token);
+            return token;
+          });
+          const toPublish = publication;
+          published = await step.run("publish-issue", async () => {
+            try {
+              // The App-installation client, not either spawn token. The read
+              // FAILS CLOSED inside the upsert (an error throws; it never falls
+              // open to a duplicate create).
+              const octokit = (await createProbeOctokit()) as unknown as CommunityOctokit;
+              return await upsertDigestIssue({
+                octokit,
+                owner: REPO_OWNER,
+                repo: REPO_NAME,
+                runDate,
+                title: toPublish.issueTitle,
+                body: toPublish.issueBody,
+                label: SENTRY_MONITOR_SLUG,
+                milestoneTitle: COMMUNITY_DIGEST_MILESTONE,
+                cronName: "cron-community-monitor",
+              });
+            } catch (err) {
+              reportSilentFallback(err, {
+                feature: "cron-community-monitor",
+                op: "community-publication-issue-failed",
+                message: "the handler could not upsert the digest issue",
+                extra: { fn: "cron-community-monitor" },
+              });
+              throw err;
+            }
+          });
+        }
+
+        // --- output-aware heartbeat. This cron is an always-create producer — it
+        //     files a GitHub issue summarizing the findings every run — so a clean
+        //     exit that produced no `scheduled-community-monitor` issue in the run
+        //     window turns the monitor RED (and emits `scheduled-output-missing`)
+        //     instead of false-green on claude's exit code. Mirrors the 3
+        //     producers wired by PR #4714 (#4730). Infra faults still page via the
+        //     early-return status=error heartbeats. #7122: the issue is now the
+        //     handler's own write, so this read is no longer proof that the agent
+        //     produced anything — and it cannot credit a PATCHed CLOSED issue
+        //     (only a non-closed updated_at bump counts), so the handler's own
+        //     PATCH satisfies it for the patched path, and the validation verdict
+        //     is the real gate: a human comment bumping updated_at cannot let
+        //     persistence run without a render. ---
+        const verifyOutputOk = await step.run("verify-output", async () =>
+          resolveOutputAwareOk({
+            spawnOk: spawnResult!.ok,
+            label: SENTRY_MONITOR_SLUG,
+            runStartedAt,
+            cronName: "cron-community-monitor",
+            stderrTail: spawnResult!.stderrTail,
+            exitCode: spawnResult!.exitCode,
+            stdoutTail: spawnResult!.stdoutTail,
+          }),
+        );
+        heartbeatOk = (verifyOutputOk || published?.via === "patched") && publication.ok;
+      }
+      const renderedDigest = publication.ok ? publication.digestMarkdown : undefined;
 
       // --- Step 4.5: deterministic persistence (#5111, pattern from #5091 /
       //     cron-seo-aeo-audit.ts). Gated on the issue-verified output rather
@@ -766,23 +973,31 @@ export async function cronCommunityMonitorHandler({
         attempt: attempt ?? 0,
         digest_path: digestPath,
         present: existsSync(joinPath(spawnCwd, digestPath)) ? 1 : 0,
+        // present alone cannot tell "the agent never produced a draft" from
+        // "validation rejected it" now that the handler writes the file.
+        verdict: spawnResult.abortedByTimeout ? "skipped-timeout" : publication.ok ? "ok" : "rejected",
+        writer: "handler",
       });
       if (heartbeatOk && !spawnResult.abortedByTimeout) {
-        // #6714 R16a, THE PRIMARY DEFECT: this return value was DISCARDED, so a
-        // {status:"failed"} or {status:"no-changes"} was silently dropped and
-        // the monitor stayed GREEN with nothing committed.
-        const commitResult = await step.run("safe-commit-pr", async () =>
-          safeCommitAndPr({
+        // #6714 R16a: the result is CONSUMED (it was once discarded). #7122: the
+        // digest is re-written (idempotent) first: a retry after a throw in
+        // publish-issue finds the memoized validate step skipped and the file gone.
+        const commitResult = await step.run("safe-commit-pr", async () => {
+          if (renderedDigest === undefined) throw new Error("no validated digest to commit");
+          await writeDigestFileContained(spawnCwd, digestPath, renderedDigest);
+          return safeCommitAndPr({
             spawnCwd: spawnCwd,
-            installationToken,
+            // The write token is minted whenever publication.ok, which the gate implies.
+            installationToken: writeToken!,
             cronName: "cron-community-monitor",
             commitMessage: "docs: daily community digest",
-            allowedPaths: COMMUNITY_MONITOR_ALLOWED_PATHS,
+            allowedPaths: [],
+            exactPaths: [digestPath],
             runStartedAt,
             scheduledIssueLabel: SENTRY_MONITOR_SLUG,
             logger,
-          }),
-        );
+          });
+        });
         // The liveness table. `livenessOk` is FALSE until proven otherwise, so
         // only the two arms below can turn the run GREEN; everything else —
         // "no-changes", "failed", committed-without-today's-digest, and every
@@ -792,9 +1007,8 @@ export async function cronCommunityMonitorHandler({
         if (commitResult.status === "committed") {
           if (commitResult.paths?.includes(digestPath)) {
             // THE POSITIVE: today's digest is demonstrably in the commit.
-            // `includes` is membership, not position — the allowlist covers the
-            // whole community directory, so the agent may land other files
-            // beside the digest and the digest need not be first.
+            // `includes` is membership, not position: the digest need not be
+            // first in the committed set.
             livenessOk = true;
             livenessReason = "digest-committed";
           } else if (commitResult.paths === undefined) {
@@ -824,6 +1038,33 @@ export async function cronCommunityMonitorHandler({
           ok: livenessOk ? 1 : 0,
           reason: livenessReason,
         });
+        // #7122 — a commit that did not land must not leave the public issue
+        // pointing at a file that will not exist: PATCH it to the fixed notice
+        // (body only, never reopens; a handler constant, no model text). Its own
+        // failure is reported and never masks the liveness verdict above.
+        if (commitResult.status !== "committed" && published) {
+          const issueNumber = published.issueNumber;
+          await step.run("patch-digest-notice", async () => {
+            try {
+              await patchIssueBody({
+                octokit: (await createProbeOctokit()) as unknown as CommunityOctokit,
+                owner: REPO_OWNER,
+                repo: REPO_NAME,
+                issueNumber,
+                body: DIGEST_NOT_COMMITTED_NOTICE,
+              });
+            } catch (noticeErr) {
+              // Named apart from the body's catch (err): the collector-status
+              // suite anchors on the first `catch (err)` after persistence.
+              reportSilentFallback(noticeErr, {
+                feature: "cron-community-monitor",
+                op: "community-publication-notice-failed",
+                message: "could not PATCH the digest issue to the not-committed notice",
+                extra: { fn: "cron-community-monitor", issueNumber },
+              });
+            }
+          });
+        }
       } else {
         // #6714 marker 2 — this gate had NO else, so a RED or timed-out run
         // skipped persistence leaving no trace on any operator-reachable
@@ -852,7 +1093,7 @@ export async function cronCommunityMonitorHandler({
       // persistence failure self-reports here.
       threw = true;
       const e = err as Error;
-      const redactedMsg = redactToken(e.message ?? "", installationToken);
+      const redactedMsg = redactTokens(e.message ?? "", readToken, writeToken);
       const redacted = new Error(redactedMsg);
       redacted.name = e.name;
       reportSilentFallback(redacted, {
@@ -928,7 +1169,12 @@ export async function cronCommunityMonitorHandler({
                   cronName: "cron-community-monitor",
                   runStartedAt,
                   spawnResult: spawnResult ?? makeThrewSpawnResult("cron-community-monitor"),
-                  installationToken,
+                  // #7122: the App-installation client, NOT a spawn token: this
+                  // fallback must work when the run died before a write token
+                  // existed (and the read token cannot create an issue). The
+                  // public issue must not republish model output either.
+                  octokit: (await createProbeOctokit()) as unknown as Octokit,
+                  withholdModelOutput: true,
                 });
               } catch (err) {
                 reportSilentFallback(err, {

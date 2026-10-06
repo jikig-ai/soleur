@@ -40,6 +40,7 @@ import {
   parseCommunityDraft,
   readFinalMessage,
   renderCommunityPublication,
+  patchIssueBody,
   upsertDigestIssue,
   writeDigestFileContained,
   type CommunityDraft,
@@ -1131,6 +1132,50 @@ function disallowedZodConstructors(src: string): string[] {
   if (/\bz\s*\[/.test(stripComments(src))) bad.push("z[...]");
   return bad;
 }
+
+describe("patchIssueBody", () => {
+  const patchArgs = (fake: ReturnType<typeof makeFake>, over: Partial<Parameters<typeof patchIssueBody>[0]> = {}) => ({
+    octokit: { request: fake.request },
+    owner: "jikig-ai",
+    repo: "soleur",
+    issueNumber: 5,
+    body: "digest not committed - see Sentry",
+    retryDelayMs: 0,
+    ...over,
+  });
+
+  it("PATCHes the body ONLY (never state, title, labels or assignees), so a closed issue stays closed", async () => {
+    const fake = makeFake({ issues: [botIssue()] });
+    await patchIssueBody(patchArgs(fake));
+    expect(fake.calls).toHaveLength(1);
+    expect(Object.keys(fake.calls[0].params).sort()).toEqual(["body", "headers", "issue_number", "owner", "repo"]);
+    expect(fake.store[0].body).toBe("digest not committed - see Sentry");
+    expect(fake.store[0].state).toBe("closed");
+  });
+
+  it("retries a 5xx and then succeeds", async () => {
+    const fake = makeFake({ issues: [botIssue()], script: [{ match: /^PATCH/, error: { status: 503 } }] });
+    await patchIssueBody(patchArgs(fake));
+    expect(fake.calls.filter((c) => c.route.startsWith("PATCH"))).toHaveLength(2);
+    expect(fake.store[0].body).toBe("digest not committed - see Sentry");
+  });
+
+  it("gives up after the bounded attempts on a persistent 5xx, and does not retry a 4xx", async () => {
+    const down = makeFake({ issues: [botIssue()], script: [{ match: /^PATCH/, error: { status: 502 }, times: 10 }] });
+    await expect(patchIssueBody(patchArgs(down))).rejects.toMatchObject({ status: 502 });
+    expect(down.calls).toHaveLength(3);
+
+    const bad = makeFake({ issues: [botIssue()], script: [{ match: /^PATCH/, error: { status: 422 }, times: 10 }] });
+    await expect(patchIssueBody(patchArgs(bad))).rejects.toMatchObject({ status: 422 });
+    expect(bad.calls).toHaveLength(1);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])("refuses a non-positive-integer issue number (%s) without any request", async (n) => {
+    const fake = makeFake({});
+    await expect(patchIssueBody(patchArgs(fake, { issueNumber: n }))).rejects.toThrow(/issueNumber/);
+    expect(fake.calls).toHaveLength(0);
+  });
+});
 
 describe("module import hygiene", () => {
   it("imports zod only as `{ z }` from the top-level package", () => {

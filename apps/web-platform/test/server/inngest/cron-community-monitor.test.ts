@@ -99,6 +99,28 @@ describe("cron-community-monitor — turn budget (max-turns exhaustion fix)", ()
   });
 });
 
+describe("#7122 — spawn flags and credential custody (source anchors)", () => {
+  it("the agent holds Bash only, and the file tools are also removed from its pool", () => {
+    expect(SUT_SOURCE).toMatch(/"--allowedTools",\s*"Bash",/);
+    expect(SUT_SOURCE).not.toMatch(/"--allowedTools",\s*"Bash,/);
+    expect(SUT_SOURCE).toMatch(/"--disallowedTools",\s*COMMUNITY_DISALLOWED_TOOLS/);
+  });
+
+  it("clones and spawns with the READ token; the WRITE token is minted by a separate post-spawn step", () => {
+    expect(SUT_SOURCE).toMatch(/permissions: COMMUNITY_SPAWN_TOKEN_PERMISSIONS,\s*repositories: \[REPO_NAME\]/);
+    expect(SUT_SOURCE).toMatch(/permissions: DEFAULT_CRON_TOKEN_PERMISSIONS,\s*repositories: \[REPO_NAME\]/);
+    expect(SUT_SOURCE).toContain('step.run("mint-write-token"');
+    expect(SUT_SOURCE).toContain("setOriginToken(spawnCwd, token)");
+    expect(SUT_SOURCE).toContain("installationToken: readToken");
+    expect(SUT_SOURCE).not.toContain("ISSUE_CREATOR_CRON_TOKEN_PERMISSIONS");
+  });
+
+  it("persists by exact path: no directory-prefix allowlist constant remains", () => {
+    expect(SUT_SOURCE).not.toContain("COMMUNITY_MONITOR_ALLOWED_PATHS");
+    expect(SUT_SOURCE).toMatch(/exactPaths: \[digestPath\]/);
+  });
+});
+
 describe("registration source-shape anchors (cross-check the import-time smoke)", () => {
   it.each([
     ['id: "cron-community-monitor"', "canonical function id"],
@@ -230,6 +252,13 @@ describe("COMMUNITY_MONITOR_PROMPT — anchor strings (regression-detection)", (
     it("keeps the {{RUN_DATE}} sentinel (injectRunDate throws without it)", () => {
       expect(() => injectRunDate(COMMUNITY_MONITOR_PROMPT, "2026-10-06T08:00:00.000Z")).not.toThrow();
       expect(injectRunDate(COMMUNITY_MONITOR_PROMPT, "2026-10-06T08:00:00.000Z")).toContain("2026-10-06");
+    });
+
+    it("tells the agent a truncated collector output is partial/output-too-large, not guessed (it has no file tools to read a spill)", () => {
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("truncated or exceeds the inline limit");
+      expect(COMMUNITY_MONITOR_PROMPT).toContain("you have no file tools");
+      expect(COMMUNITY_MONITOR_PROMPT).toContain('failureCause "output-too-large"');
+      expect(COMMUNITY_FAILURE_CAUSES).toContain("output-too-large");
     });
 
     it("tells the agent it has no file or issue tools and must not add a text field", () => {

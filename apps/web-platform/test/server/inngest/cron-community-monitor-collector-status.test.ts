@@ -223,14 +223,39 @@ describe("paging must not discard the digest (separation invariant)", () => {
     "utf8",
   );
 
+  // #7122 — the sidecar read moved UP: it now runs right after claude-eval and
+  // BEFORE validate-publication (the rendered github row is bound to its verdict),
+  // so the gate's slice ends at the validation step instead of the persistence
+  // comment. These source-slice checks are SECONDARY guards; the behavioural row
+  // (sidecar red -> page RED, digest still committed, github rendered `failed`) is
+  // cron-community-monitor-publication-flow.test.ts, which drives the real handler.
+  const GATE_START = 'step.run("verify-collector-status"';
+  const GATE_END = 'step.run(\n          "validate-publication"';
+
   it("never lowers heartbeatOk inside the collector gate (digest must survive)", () => {
-    const gate = src.slice(
-      src.indexOf("verify-collector-status"),
-      src.indexOf("Step 4.5: deterministic persistence"),
-    );
+    const gate = src.slice(src.indexOf(GATE_START), src.indexOf(GATE_END));
+    expect(src.indexOf(GATE_START)).toBeGreaterThan(-1);
+    expect(src.indexOf(GATE_END)).toBeGreaterThan(src.indexOf(GATE_START));
     expect(gate.length).toBeGreaterThan(200); // slice anchors resolved
     expect(gate).toContain("collectorSignalRed = true");
     expect(gate).not.toContain("heartbeatOk = false");
+  });
+
+  it("reads the sidecar BEFORE validation, publication and the persistence gate", () => {
+    const at = (needle: string) => {
+      const i = src.indexOf(needle);
+      expect(i, `${needle} not found`).toBeGreaterThan(-1);
+      return i;
+    };
+    const order = [
+      at(GATE_START),
+      at(GATE_END),
+      at('step.run("mint-write-token"'),
+      at('step.run("publish-issue"'),
+      at('step.run("verify-output"'),
+      at("safeCommitAndPr({"),
+    ];
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it("applies the flag after BOTH persistence and the catch, so a trailing throw cannot drop the page", () => {
