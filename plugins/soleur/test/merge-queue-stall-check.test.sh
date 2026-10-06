@@ -256,6 +256,9 @@ case "$1 $2" in
     esac ;;
   "issue close")
     shift 2; num="$1"
+    # Failure precedes the record: a failed real close leaves the issue OPEN,
+    # so a stub that records before failing would claim a close that never was.
+    if [[ "${GH_STUB_CLOSE_FAIL:-0}" == "1" ]]; then echo "stub: issue close 500" >&2; exit 1; fi
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --comment) echo "COMMENT:$2" >> "$GH_STUB_LOG.close"; shift 2 ;;
@@ -263,7 +266,6 @@ case "$1 $2" in
       esac
     done
     echo "CLOSE:$num" >> "$GH_STUB_LOG.close"
-    if [[ "${GH_STUB_CLOSE_FAIL:-0}" == "1" ]]; then echo "stub: issue close 500" >&2; exit 1; fi
     exit 0 ;;
   "issue create")
     shift 2
@@ -499,8 +501,16 @@ drain_check() {
   [[ -z "$DRAIN_CLOSE_LIST" ]] \
     || { REASON="an issue outside the merge-queue-stall label was drained"; return 1; }
 
+  # A failed close warns and retries next sweep — it must not abort the loop
+  # or mark the issue closed.
+  { issue 8 OPEN merge-queue-stall "$(stall_title 101)"; } | issues_json > "$iss"
+  printf '101=MERGED\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts" 0 1
+  [[ "$DRAIN_RC" -eq 0 && -z "$DRAIN_CLOSE_LIST" && "$DRAIN_ALL" == *"warning"* ]] \
+    || { REASON="a failed close was not contained (rc=$DRAIN_RC closes=$DRAIN_CLOSE_LIST)"; return 1; }
+
   # The -L 50 bound emits a cap notice when the sweep hits it.
-  { for i in $(seq 1 51); do issue "$i" OPEN merge-queue-stall "$(stall_title 9$i)"; done; } | issues_json > "$iss"
+  { for i in $(seq 1 51); do issue "$i" OPEN merge-queue-stall "$(stall_title "9$i")"; done; } | issues_json > "$iss"
   { for i in $(seq 1 51); do echo "9$i=OPEN"; done; } > "$sts"
   run_drain "$wf" "$iss" "$sts"
   [[ -z "$DRAIN_CLOSE_LIST" && "$DRAIN_ALL" == *"::notice::"* ]] \

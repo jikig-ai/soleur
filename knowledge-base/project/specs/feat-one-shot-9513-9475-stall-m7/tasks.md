@@ -20,7 +20,7 @@ Issues: #9513 (executor visibility + drain), #9475 (M7 flake)
 
 - [x] 2.1 Edit `apps/web-platform/server/inngest/functions/cron-merge-queue-stall-dispatch.ts`
   - [x] 2.1.1 Add the `check-previous-run` step after mint, before `dispatch-workflow`: `GET .../actions/workflows/{workflow_id}/runs` `per_page=5`, no event filter; verdict ∈ {ok, failed, stuck, pending, none, unknown}.
-  - [x] 2.1.2 `failed` = completed with conclusion in `failure|timed_out|cancelled|startup_failure|action_required|stale`; `stuck` = non-completed with `created_at` older than 11 min; `pending` = younger non-completed; `none` = empty list; `unknown` = Octokit error (never throws).
+  - [x] 2.1.2 `failed` = completed with conclusion in `failure|timed_out|cancelled|startup_failure|action_required|stale`; `stuck` = `in_progress` with `run_started_at` > 11 min (past the job's own timeout) OR `queued`/`waiting`/`requested`/`pending` with `created_at` > 5 min (never got a runner; the floor keeps a just-landed schedule/manual run from paging); `pending` = all other non-completed shapes incl. unparseable timestamps; `none` = empty list; `unknown` = Octokit error (never throws).
   - [x] 2.1.3 `failed|stuck|unknown` → `reportSilentFallback` (run id, conclusion, html_url in `extra`; token redacted) + heartbeat `ok:false`; else heartbeat `ok: dispatch.ok`.
   - [x] 2.1.4 Result gains `previousRun` field; `ok` remains the dispatch verdict.
   - [x] 2.1.5 Update the header Liveness paragraph (green now means dispatched AND prior run not red/stuck).

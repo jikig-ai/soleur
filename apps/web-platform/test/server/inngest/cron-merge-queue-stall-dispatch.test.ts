@@ -20,7 +20,6 @@ const h = vi.hoisted(() => {
     // either call pass vacuously. Queues hold one-shot results; the *Error
     // fields express "every call to that endpoint rejects". A queued entry is
     // a thunk so a non-Error rejection (incl. `undefined`) stays expressible.
-    runsResponses: [] as Array<() => unknown>,
     dispatchResponses: [] as Array<() => unknown>,
     runsError: undefined as unknown,
     dispatchError: undefined as unknown,
@@ -40,22 +39,17 @@ function installRequestRouting() {
       return next ? next() : { status: 204 };
     }
     if (h.hasRunsError) throw h.runsError;
-    const next = h.runsResponses.shift();
-    return next ? next() : { status: 200, data: h.defaultRuns };
+    return { status: 200, data: h.defaultRuns };
   });
 }
 
-// One-shot helpers: queue a rejection/result for the NEXT call to that
-// endpoint (mirrors mockRejectedValueOnce but endpoint-scoped).
-const getRejects = (v: unknown) =>
-  h.runsResponses.push(() => {
-    throw v;
-  });
+// One-shot helper: queue a rejection for the NEXT dispatch POST (mirrors
+// mockRejectedValueOnce but endpoint-scoped — a thunk so a non-Error
+// rejection, incl. `undefined`, stays expressible).
 const postRejects = (v: unknown) =>
   h.dispatchResponses.push(() => {
     throw v;
   });
-const getReturns = (v: unknown) => h.runsResponses.push(() => v);
 
 // The SUT does `const { Octokit } = await import("@octokit/core")`; mocking it
 // makes the dispatch call observable without hitting GitHub.
@@ -246,7 +240,6 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
   beforeEach(() => {
     h.requestSpy.mockReset();
     installRequestRouting();
-    h.runsResponses.length = 0;
     h.dispatchResponses.length = 0;
     h.hasRunsError = false;
     h.hasDispatchError = false;
@@ -598,7 +591,6 @@ describe("cronMergeQueueStallDispatchHandler — check-previous-run (#9513)", ()
   beforeEach(() => {
     h.requestSpy.mockReset();
     installRequestRouting();
-    h.runsResponses.length = 0;
     h.dispatchResponses.length = 0;
     h.hasRunsError = false;
     h.hasDispatchError = false;
@@ -626,12 +618,28 @@ describe("cronMergeQueueStallDispatchHandler — check-previous-run (#9513)", ()
       ...extra,
     };
   }
-  function inFlight(status: string, minutesAgo: number) {
+  // createdMinutesAgo = age since created_at; startedMinutesAgo = age since
+  // run_started_at (absent = GitHub has not recorded a job start — a run that
+  // is still queued never sets it).
+  function inFlight(
+    status: string,
+    createdMinutesAgo: number,
+    startedMinutesAgo?: number,
+  ) {
     return {
       id: 4343,
       status,
       conclusion: null,
-      created_at: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+      created_at: new Date(
+        Date.now() - createdMinutesAgo * 60_000,
+      ).toISOString(),
+      ...(startedMinutesAgo !== undefined
+        ? {
+            run_started_at: new Date(
+              Date.now() - startedMinutesAgo * 60_000,
+            ).toISOString(),
+          }
+        : {}),
       html_url: "https://github.com/jikig-ai/soleur/actions/runs/4343",
     };
   }
@@ -690,8 +698,12 @@ describe("cronMergeQueueStallDispatchHandler — check-previous-run (#9513)", ()
     },
   );
 
-  it("a prior run still non-completed past the executor's own 10-min timeout is stuck — it pages", async () => {
-    h.defaultRuns = { workflow_runs: [inFlight("in_progress", 20)] };
+  it("an in_progress run past its own 10-min job budget is stuck — it pages", async () => {
+    // run_started_at — not created_at — is the basis: a run that queued 9 min
+    // and started 2 min ago is legitimately mid-flight, not stuck.
+    h.defaultRuns = {
+      workflow_runs: [inFlight("in_progress", 20, 20)],
+    };
 
     const result = await cronMergeQueueStallDispatchHandler({
       step: makeStep(),
@@ -703,12 +715,60 @@ describe("cronMergeQueueStallDispatchHandler — check-previous-run (#9513)", ()
     expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
   });
 
+  it("a long queue wait followed by a short in_progress job is pending, not stuck — the basis is run_started_at", async () => {
+    h.defaultRuns = {
+      workflow_runs: [inFlight("in_progress", 20, 3)],
+    };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, previousRun: "pending" });
+    expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+  });
+
+  it("an in_progress run with no run_started_at is pending — never page on a field we could not read", async () => {
+    h.defaultRuns = { workflow_runs: [inFlight("in_progress", 20)] };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, previousRun: "pending" });
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["queued", 20],
+    ["waiting", 15],
+    ["pending", 30],
+    ["requested", 12],
+  ])(
+    "a %s run %i min old never got a runner — stuck (the runner-wait gap)",
+    async (status, minutes) => {
+      h.defaultRuns = { workflow_runs: [inFlight(status, minutes)] };
+
+      const result = await cronMergeQueueStallDispatchHandler({
+        step: makeStep(),
+        logger,
+      });
+
+      expect(result).toMatchObject({ ok: true, previousRun: "stuck" });
+      expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+      expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+    },
+  );
+
   it.each([
     ["queued", 2],
-    ["in_progress", 8],
     ["waiting", 1],
+    ["queued", 0],
   ])(
-    "a %s run %i min old is still pending — strictly younger than the stuck threshold, no page",
+    "a %s run %i min old is still pending — under the queue floor a just-landed run never pages",
     async (status, minutes) => {
       h.defaultRuns = { workflow_runs: [inFlight(status, minutes)] };
 

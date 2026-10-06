@@ -28,9 +28,13 @@ mutation matrices/harness rows/anchors), 4.12 (scope check complete), 4.55
 queue-health sweep source, read verbatim).
 
 ### Key Improvements
-- `stuck` verdict threshold fixed at 11 min — strictly above the executor's
-  own `timeout-minutes: 10`, so a merely-late run can never page and a
-  genuinely runner-waited run pages at most one tick late.
+- `stuck` verdict splits two bases (refined again at review): `in_progress`
+  judged on `run_started_at` against 11 min (the job's own 10-min timeout —
+  a queue-delayed but recently-started job is legitimately mid-flight), and
+  `queued`/`waiting`/`requested`/`pending` judged on `created_at` against a
+  5-min floor (the previous tick's run is ~10 min old at check time, so a
+  schedule-fallback or manual run landing seconds ago can never page). An
+  unparseable timestamp reads `pending`, never `stuck`.
 - Unfiltered runs list adopted over `event=workflow_dispatch` — covers
   schedule-fallback and manual reds at zero cost (recorded in Scope Check
   as an inferred superset of the issue's "previous dispatched run").
@@ -170,10 +174,17 @@ step so the newest listed run is deterministically the previous tick's:
 - Verdict on the newest run: `status == "completed"` → `conclusion ==
   "success"` is `ok`, any failure-class conclusion
   (`failure|timed_out|cancelled|startup_failure|action_required|stale`) is
-  `failed`; `status != "completed"` → `stuck` when `created_at` is older than
-  ~11 min (past the workflow's own 10-min timeout; the ~10-min tick means the
-  previous run is judged at ~t+10 and a merely-late run never false-pages),
-  else `pending`; an empty list is `none`; an Octokit error is `unknown`.
+  `failed`; non-completed splits two ways (deepen refinement — a queued run
+  and a running job have different clocks): `in_progress` → `stuck` only
+  when `run_started_at` is older than ~11 min (past the job's own
+  `timeout-minutes: 10`; a run that queued long but started recently is
+  legitimately mid-flight, and GitHub marks an over-cap job `timed_out`
+  anyway), while `queued`/`waiting`/`requested`/`pending` → `stuck` only
+  when `created_at` is older than ~5 min (the previous tick's run is ~10
+  min old at check time, so the floor separates it from a
+  schedule-fallback or manual run that landed seconds ago — a just-created
+  queued run must never page); younger cases are `pending`; an empty list
+  is `none`; an Octokit error is `unknown`.
 - `failed`/`stuck`/`unknown` → `reportSilentFallback` (run id, conclusion,
   `html_url` in `extra`, token redacted) **and** the heartbeat posts
   `ok:false`; `ok`/`pending`/`none` → the heartbeat posts `ok: dispatch.ok`.
@@ -491,9 +502,13 @@ new external actor, system, container, or relationship is introduced.
   `failure|timed_out|cancelled|startup_failure|action_required|stale` →
   `reportSilentFallback` (run id/conclusion/url in `extra`, token redacted)
   and the heartbeat posts `ok:false`.
-- FR3: newest prior run `status != "completed"` with `created_at` older than
-  11 minutes → verdict `stuck` → same report + `ok:false` heartbeat; a
-  younger non-completed run → `pending` → heartbeat `ok: dispatch.ok`.
+- FR3: newest prior run non-completed → `in_progress` is `stuck` only when
+  `run_started_at` is older than 11 minutes (the job exceeded its own
+  `timeout-minutes: 10`), `queued`/`waiting`/`requested`/`pending` is
+  `stuck` only when `created_at` is older than 5 minutes (a just-landed
+  schedule/manual run never pages); `stuck` → same report + `ok:false`
+  heartbeat; all other non-completed shapes → `pending` → heartbeat
+  `ok: dispatch.ok`.
 - FR4: runs-list GET failure → verdict `unknown` → report + `ok:false`
   heartbeat; the step never throws.
 - FR5: empty `workflow_runs` → `none` → heartbeat `ok: dispatch.ok`.

@@ -113,12 +113,19 @@ const RETRY_DELAY_MS = 2_000;
 // alert gap as a dispatched one (this workflow only ever fires on
 // schedule + workflow_dispatch, so nothing else can appear).
 const RUNS_PER_PAGE = 5;
-// Strictly above the executor's `timeout-minutes: 10`: a run still
-// non-completed past this age cannot be a legitimately late-but-running job —
-// it is the runner-wait / wedged-run class #9513 calls out. On the 10-minute
-// tick the previous run is read at ~t+10, so a merely-late run never
-// false-pages and a genuinely stuck run pages at most one tick late.
+// The two non-completed bases a "stuck" verdict can rest on:
+//  - `in_progress`: the job has exceeded its own `timeout-minutes: 10` —
+//    judged from `run_started_at` (NOT `created_at`: a run that waited in the
+//    queue is legitimately mid-flight when its job age is still under the cap;
+//    GitHub itself marks a past-cap job `timed_out`, which the `failed`
+//    verdict then catches — this branch only fires for a wedged one).
+//  - queued / requested / waiting / pending: the run never got a runner.
+//    Judged from `created_at` against a 5-minute floor — the previous tick's
+//    run is ~10 min old at check time, so the floor separates it from a
+//    schedule-fallback or manually-dispatched run that landed seconds ago
+//    (a just-created queued run must never page).
 const STUCK_RUN_AGE_MS = 11 * 60 * 1000;
+const STUCK_QUEUE_AGE_MS = 5 * 60 * 1000;
 // Failure-class conclusions (exhaustive against the Actions enum; `skipped`
 // and `neutral` are not reds).
 const BAD_CONCLUSIONS = new Set([
@@ -162,6 +169,7 @@ type WorkflowRunRow = {
   status?: string | null;
   conclusion?: string | null;
   created_at?: string;
+  run_started_at?: string;
   html_url?: string;
 };
 
@@ -263,12 +271,14 @@ export async function cronMergeQueueStallDispatchHandler({
         const prev = runs[0];
         if (!prev) return { verdict: "none" };
         if (prev.status !== "completed") {
-          // Non-completed: judge by age, not conclusion (which is still null).
-          // An unparseable created_at is pending, not stuck — never page on a
-          // field we could not read.
-          const ageMs =
-            Date.now() - Date.parse(prev.created_at ?? "");
-          if (Number.isFinite(ageMs) && ageMs > STUCK_RUN_AGE_MS) {
+          // Non-completed: two bases (see STUCK_*_AGE_MS comments). A field we
+          // could not read (unparseable timestamp) is pending, never stuck —
+          // never page on a value we failed to parse.
+          const nowMs = Date.now();
+          const stuckIf = (
+            ageMs: number,
+          ): PreviousRunVerdict | null => {
+            if (ageMs <= 0) return null;
             const v: PreviousRunVerdict = {
               verdict: "stuck",
               status: String(prev.status),
@@ -276,8 +286,26 @@ export async function cronMergeQueueStallDispatchHandler({
               runId: prev.id,
               runUrl: prev.html_url,
             };
-            reportRed("stuck", v);
+            reportRed(`stuck (status=${prev.status})`, v);
             return v;
+          };
+          if (prev.status === "in_progress") {
+            const startedMs = Date.parse(prev.run_started_at ?? "");
+            if (
+              Number.isFinite(startedMs) &&
+              nowMs - startedMs > STUCK_RUN_AGE_MS
+            ) {
+              return stuckIf(nowMs - startedMs) ?? { verdict: "pending" };
+            }
+            return { verdict: "pending" };
+          }
+          // queued / requested / waiting / pending — never got a runner.
+          const createdMs = Date.parse(prev.created_at ?? "");
+          if (
+            Number.isFinite(createdMs) &&
+            nowMs - createdMs > STUCK_QUEUE_AGE_MS
+          ) {
+            return stuckIf(nowMs - createdMs) ?? { verdict: "pending" };
           }
           return { verdict: "pending" };
         }
@@ -313,10 +341,6 @@ export async function cronMergeQueueStallDispatchHandler({
           message: "merge-queue-stall-dispatch previous-run check failed",
           extra: { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
         });
-        logger.warn(
-          { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
-          "previous-run check unreadable — treating as an error check-in",
-        );
         return { verdict: "unknown", errorSummary: redacted.message };
       }
     },
