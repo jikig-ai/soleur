@@ -587,3 +587,16 @@ a second in-image run (`--verify`) returned `verify_ok`. The only change: one
 `--tmpfs ${CANARY_C4_STAGING}` after `--tmpfs /proc`, plus the new `prepDirs` entry. The real-bwrap
 replay proof (`SDK_SANDBOX_REGRESSION_DOCKER=1 sandbox-canary-regression.test.sh`) passed.
 Status stays `adopting`.
+
+## Amendment — 2026-10-06 (#9614/#9618): SDK-internal HOME-derived dirs are placeholdered via a capture-computed root
+
+SDK 0.3.284 emits `--tmpfs <homedir>/.claude/bridge-spawn` — an SDK-internal dir
+(`join(homedir(), ".claude", "bridge-spawn")` in the bundled CLI; no env
+override exists, so the 2026-09-24 rule's sub-clauses (a) env-overridable and
+(b) mkdtemp-redirected cannot apply). The projection gains a fourth named
+placeholder, `${CANARY_BRIDGE_SPAWN}`, mapped from a `bridgeSpawnRoot` that
+`doCapture` derives with the same `homedir()` expression the SDK evaluates and
+passes into `normalizeCapturedArgv`. The host_path fail-loud guard is
+unchanged: any OTHER `/root`|`/home` token still throws, including the
+bridge-spawn dir itself when `bridgeSpawnRoot` is not supplied. Status stays
+`adopting` (Deferral A).
