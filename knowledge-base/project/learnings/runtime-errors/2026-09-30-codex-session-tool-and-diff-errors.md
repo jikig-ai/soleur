@@ -578,6 +578,17 @@ is not a completed lint check of those files.
   advisory was verified against 11 existing open Dependabot alerts on main;
   it is tracked upstream state, not a new evidence-document finding.
 
+## Isolated recovery container assertion — 2026-10-06
+
+- Docker's inspected `HostConfig.NetworkMode` for `--network=container:<name>`
+  is normalized to the target container ID on this runner. Comparing it to the
+  requested container-name string rejected a correctly shared isolated
+  namespace. Assert the `container:` prefix and compare the suffix with the
+  recorded target ID, or inspect network namespace identity directly. This
+  failed after the synthetic migration setup and before application startup;
+  the owned PostgreSQL and PostgREST containers were confirmed removed. The
+  one authorized rehearsal was not retried.
+
 ## Recovery-readiness continuation errors — 2026-10-06
 
 - The first session-state read again guessed the rollout directory and failed;

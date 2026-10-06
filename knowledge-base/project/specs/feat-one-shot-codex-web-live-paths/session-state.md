@@ -416,3 +416,10 @@
   browser-authentication copying or verification retry occurred. All subsequent
   qualification, full-branch review and promotion gates remain open; keep draft,
   default-off and customer content blocked.
+
+## Continuation update — 2026-10-06 isolated recovery attempt
+
+- User authorized one wholly synthetic disposable recovery rehearsal; local suites and other live/provider restrictions remained held. A fresh PostgreSQL container with `--network=none` created a disposable database. The 13 unchanged scoped migration bodies applied successfully, synthetic fixtures and setup assertions completed, and the initial snapshot command exited zero.
+- The run stopped while checking PostgREST's container configuration: the harness's Docker network-mode assertion compared the requested container name with Docker's returned shared-network value and rejected it. The cleanup record confirms the PostgreSQL and PostgREST containers were removed. No application restart, post-state comparison, recovery scenario SQL, screenshots, auth/provider access or egress occurred. The rehearsal was not retried.
+- [Recovery readiness](recovery-readiness-2026-10-06.md#isolated-rehearsal-attempt-incomplete) records the partial result and boundaries. The [offline exact-source build record](node22-pinned-build-9304505d.md) remains the evidence for compilation; this attempt does not qualify recovery, runtime parity or Web compatibility. A further recovery attempt would need its own authorization, followed by authenticated screenshots, an eligible routine consumer, separate permitted Web matrices, attributable mode-specific CLO dispositions, full-branch review and promotion gates.
+- PR #9051 remains draft, Codex default-off and customer content blocked. API-key remains PENDING with no live permission/key/deadline; managed hosted auth remains BLOCKED. No credentials were inspected, no provider/auth call or shared database/production write occurred, no flag/cohort changed, and no browser authentication state was copied. Local suites remain held.

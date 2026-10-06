@@ -68,35 +68,45 @@ require retained settings, attempts, protected fields and ledger. Candidate
 identification and static invariant inspection do not establish application
 startup, retained-state compatibility, concurrency behavior or Web parity.
 
-## Prepared isolated rehearsal scope
+## Isolated rehearsal attempt: incomplete
 
-Execution remains held pending clarification of the user's local-verification
-hold. This is a concrete proposed scope, not an executed harness or successful
-rehearsal. The agent would own execution and teardown after that scope is
-authorized; no database or log-fetch task is handed to the operator.
+The user authorized one disposable, wholly synthetic recovery rehearsal. A fresh
+PostgreSQL container ran with `--network=none`; its disposable database applied
+the 13 unchanged migration bodies listed below on the declared synthetic base,
+seeded two synthetic tenants and captured the pre-replacement state. Database
+creation, scoped migration setup and the initial snapshot each exited zero.
 
-1. Assemble and identify the candidate runner with locked dependencies and
-   recorded tool versions. Use no inherited credentials, existing volumes or
-   shared services; retain exact artifact hashes and the served build SHA.
-2. Create one exclusively owned disposable database from the unchanged
-   applicable migration chain and its filename/blob-hash ledger. The existing
-   `migration-145-codex-backfill.integration.test.ts` must not run unchanged:
-   its non-CI path selects `supabase_db_web-platform`, and its handcrafted
-   fixture explicitly does not prove the complete chain.
-3. Seed two wholly synthetic tenants, distinct owner mode choices, Claude and
-   routine controls, admitted and unadmitted old-generation attempts, current
-   attempts and bounded protected checkpoints. Capture exact before-state.
-4. Replace/restart application artifacts only, retaining the database. Verify
-   mode choices, attempt identities, original `accepted_at` values, ledger
-   filenames/blob hashes and unrelated tenant controls survive. Verify admitted
-   old-generation completion, refusal of stale retry/checkpoint writes, and
-   refusal of unadmitted stale execution.
-5. Exercise owner/tenant/member boundaries and erasure using synthetic local
-   identities, with no real auth service, provider launcher or external egress.
-   Keep Codex disabled. Verify erased checkpoints cannot be recreated.
-6. Record bounded logs, before/after results, candidate/runtime hashes and
-   teardown of only task-owned resources. Label direct RPC evidence separately
-   from application startup and authenticated Web evidence.
+The run stopped before waiting for PostgREST or starting the application.
+Starting the local PostgREST container reached a runner assertion that compared
+Docker's reported shared network value with the requested container-name string.
+The assertion did not accept the value Docker returned. The runner then removed both owned containers;
+the bounded record at the worktree scratch path reports both removals confirmed.
+No application runtime, before/after comparison, recovery scenario SQL or
+external egress ran. This is a harness validation failure, not a recovery pass.
+The run was not retried; exact logs and the failed record remain task-owned under
+`.soleur/isolated-recovery-845d1455-20261006T073743Z-510203/` and are excluded
+from the commit.
+
+The prepared and partially applied closure contains 13 unchanged complete
+migration bodies: 138, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151
+and 152. Their full files and Git blob hashes were checked against HEAD before
+setup. The remaining 170 of 183 forward migrations were not applied. Base
+tables, auth claim helpers and membership functions are synthetic; this does
+not execute the production runner or prove the full historical schema.
+
+The remaining planned checks stay unqualified:
+
+1. Correct the container-network assertion, then prepare a new one-shot
+   rehearsal with a fresh task-owned database and container names.
+2. Start the candidate application against the retained database and verify
+   connected startup and graceful stop for both application instances.
+3. Compare exact pre/post application state, then run the stale-generation,
+   owner/member/tenant and erasure SQL cases.
+4. Record bounded logs, artifact hashes, scenario results and confirmed teardown.
+
+The existing `migration-145-codex-backfill.integration.test.ts` must not run
+unchanged: its non-CI path selects `supabase_db_web-platform`, and its
+handcrafted fixture does not prove the complete chain.
 
 A mock repository or direct SQL rehearsal alone cannot qualify deployed Web
 compatibility. Authenticated screenshots, routine eligibility, separate
