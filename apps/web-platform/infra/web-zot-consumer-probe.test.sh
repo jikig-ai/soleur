@@ -154,29 +154,84 @@ assert "(e) dead endpoint => NOT the unexpected-code catch-all (the 000000 doubl
 assert "(e) dead endpoint => NO ping (absence alarms)" "[[ ! -s '$DEAD_PING' ]]"
 assert "(e) dead endpoint => exit 0" "[[ '$DEAD_EC' -eq 0 ]]"
 
-# (b) COPY with `-u ...` stripped => anonymous => 401 => exit 3, no ping (proves -u load-bearing).
+# (b) COPY with the stdin `--config -` auth channel stripped => anonymous => 401 => exit 3, no ping
+# (proves the auth channel — formerly `-u` — is load-bearing).
 STRIP_U="$TMP/probe-no-u.sh"
-sed 's/ -u "$ZUSER:$ZTOK"//' "$SUT" > "$STRIP_U"
-assert "(b) the -u strip actually removed the auth flag from the probe curl" \
-  "grep -q \" -s -o /dev/null -w\" '$STRIP_U' && ! grep -q ' -s -u ' '$STRIP_U'"
+sed 's/ -m 10 --config - "http/ -m 10 "http/' "$SUT" > "$STRIP_U"
+assert "(b) the strip actually removed the auth channel from the probe curl" \
+  "grep -q \" -s -o /dev/null -w\" '$STRIP_U' && ! grep -qF -e '--config - \"http' '$STRIP_U' && ! cmp -s '$SUT' '$STRIP_U'"
 run_probe "$STRIP_U" known/repo
-assert "(b) -u stripped => anonymous => 401 => NO ping" "[[ '$PINGED' == no ]]"
-assert "(b) -u stripped => exit 3 (HARD failure — proves -u is load-bearing)" "[[ '$EC' -eq 3 ]]"
-assert "(b) -u stripped => reports the auth-broke hard failure" "grep -q 'HARD FAILURE: 401' <<<\"\$OUT\""
+assert "(b) auth channel stripped => anonymous => 401 => NO ping" "[[ '$PINGED' == no ]]"
+assert "(b) auth channel stripped => exit 3 (HARD failure — proves the auth channel is load-bearing)" "[[ '$EC' -eq 3 ]]"
+assert "(b) auth channel stripped => reports the auth-broke hard failure" "grep -q 'HARD FAILURE: 401' <<<\"\$OUT\""
 
 # (c) COPY with `-f` injected into the probe curl => the 404 code capture is corrupted
 # (curl prints '404' then exits non-zero => `|| echo 000` appends => CODE=404000), so the
 # clean 404 classification is destroyed (proves the ABSENCE of -f is load-bearing).
 FORCE_F="$TMP/probe-force-f.sh"
-sed 's/ -s -u "/ -sf -u "/' "$SUT" > "$FORCE_F"
+sed 's| -s -o /dev/null -w| -sf -o /dev/null -w|' "$SUT" > "$FORCE_F"
 assert "(c) the -f injection actually added -f to the probe curl" \
-  "grep -q ' -sf -u \"\$ZUSER:\$ZTOK\"' '$FORCE_F'"
+  "grep -qF -e \"'*' -sf -o /dev/null -w\" '$FORCE_F'"
 run_probe "$FORCE_F" nonexistent/repo
 assert "(c) -f injected => the 404 classification is DESTROYED (no EMPTY/DETACHED verdict)" \
   "! grep -q 'EMPTY/DETACHED' <<<\"\$OUT\""
 assert "(c) -f injected => the corrupted code lands in the unexpected-code branch" \
   "grep -q 'unexpected code' <<<\"\$OUT\""
 assert "(c) -f injected => still no ping (never green over a corrupted verdict)" "[[ '$PINGED' == no ]]"
+
+# --- credential channel: stdin config, never argv (argv is readable by every local user) -------
+# A stub `curl` on PATH records its argv and drains its stdin, then answers 200. The real-registry rows
+# above prove the stdin `user =` line authenticates end to end; these prove WHERE the credential rides
+# and that an unsafe value is refused before any curl runs.
+echo "--- credential channel: argv clean, stdin exact; unsafe values refused ---"
+mkdir -p "$TMP/stubbin"
+cat > "$TMP/stubbin/curl" <<'STUBCURL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STUB_ARGV"
+cfg=0; for a in "$@"; do [[ "$a" == "--config" ]] && cfg=1; done
+[[ "$cfg" == 1 ]] && cat >> "$STUB_STDIN"
+printf '200'
+STUBCURL
+chmod +x "$TMP/stubbin/curl"
+run_stub() {  # <ZUSER> <ZTOK> -> EC / PINGED / OUT / SARGV / SSTDIN (files)
+  local pinglog outf ec=0
+  SARGV="$(mktemp "$TMP/sargv.XXXXXX")"; SSTDIN="$(mktemp "$TMP/sstdin.XXXXXX")"
+  pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
+  STUB_ARGV="$SARGV" STUB_STDIN="$SSTDIN" PATH="$TMP/stubbin:$PATH" \
+    SOLEUR_ZOT_PROBE_PING_LOG="$pinglog" ZOT_ENDPOINT="127.0.0.1:9" ZOT_PROBE_REPO=known/repo ZUSER="$1" ZTOK="$2" \
+    timeout 20 bash "$SUT" >"$outf" 2>&1 || ec=$?
+  EC=$ec; PINGED=no; [[ -s "$pinglog" ]] && PINGED=yes; OUT="$(cat "$outf")"
+}
+run_stub zuser synthetic-fixture-token-0001
+assert "(f) valid credential => probe ran, 200 => ping, exit 0" "[[ '$PINGED' == yes && '$EC' -eq 0 ]]"
+assert "(f) the credential is NOT on curl's argv (neither user nor token)" \
+  "[[ -s '$SARGV' ]] && ! grep -qF -e synthetic-fixture-token-0001 -e zuser '$SARGV' && ! grep -qF -e ' -u ' '$SARGV'"
+assert "(f) the argv asks curl to read its config from stdin" "grep -qF -e '--config - ' '$SARGV'"
+assert "(f) stdin carries exactly one config line: user = \"zuser:<token>\"" \
+  "[[ \"\$(cat '$SSTDIN')\" == 'user = \"zuser:synthetic-fixture-token-0001\"' && \"\$(wc -l < '$SSTDIN')\" -eq 1 ]]"
+
+# Unsafe values (a quote or backslash would close/escape the quoted config string; a newline would inject
+# a second directive) are refused with the SAME FATAL exit 1 as an unset credential, BEFORE curl runs,
+# and the value is never echoed.
+unsafe_row() {  # <label> <ZUSER> <ZTOK> <must-not-echo>
+  run_stub "$2" "$3"
+  assert "(g) $1 => FATAL exit 1, no ping" "[[ '$EC' -eq 1 && '$PINGED' == no ]] && grep -q 'FATAL: ZOT_PULL_USER/ZOT_PULL_TOKEN contains a character' <<<\"\$OUT\""
+  assert "(g) $1 => curl never invoked (nothing sent)" "[[ ! -s '$SARGV' && ! -s '$SSTDIN' ]]"
+  # Not via assert(): the value carries quotes/backslashes that would break its eval'd condition string.
+  if grep -qF -e "$4" <<<"$OUT"; then FAIL=$((FAIL + 1)); echo "  FAIL: (g) $1 => the value is not echoed (it WAS echoed)"
+  else PASS=$((PASS + 1)); echo "  PASS: (g) $1 => the value is not echoed"; fi
+}
+unsafe_row "token with a double quote" zuser 'synthetic"fixture' 'synthetic"fixture'
+unsafe_row "token with a backslash"    zuser 'synthetic\fixture' 'synthetic\fixture'
+unsafe_row "token with a newline (directive injection)" zuser $'synthetic\nurl = "http://evil.invalid/"' 'evil.invalid'
+unsafe_row "user with a double quote"  'zu"ser' synthetic-fixture-token-0001 'zu"ser'
+
+# Mutation proof: the same rows must RED against a copy that carries the credential on argv again.
+ARGV_MUT="$TMP/probe-argv.sh"
+sed 's| --config - "http| -u "$ZUSER:$ZTOK" "http|; s|< <(printf .user = "%s:%s"\\n. "$ZUSER" "$ZTOK") ||' "$SUT" > "$ARGV_MUT"
+SUT_REAL="$SUT"; SUT="$ARGV_MUT"; run_stub zuser synthetic-fixture-token-0001; SUT="$SUT_REAL"
+assert "(h) mutation check: the argv form of the probe IS caught by the (f) argv assertion" \
+  "grep -qF -e synthetic-fixture-token-0001 '$SARGV'"
 
 # --- static drift-guard: doppler-auth unit-start contract + observability delivery --------
 # (#6438 §1 unit-start fix.) The unit runs `doppler run` as ROOT. Without Environment=HOME=/root

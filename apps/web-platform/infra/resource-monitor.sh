@@ -55,6 +55,12 @@ emit_refusal() {
     || printf '[%s] logger=absent (%s not shipped off-box)\n' "$LOG_TAG" "${1%% *}" >&2
 }
 
+# (#9597) Bearer-token shape guard. The Resend key rides curl's stdin config
+# channel (`--config -`), never its argv (/proc/<pid>/cmdline is world-readable),
+# so a value that could break out of the config string (quote, newline, space)
+# is refused before any byte moves. Reason token only -- never the value.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
 if [[ -z "${RESEND_API_KEY:-}" ]]; then
   echo "WARNING: RESEND_API_KEY not set, skipping" >&2
   exit 0
@@ -137,13 +143,19 @@ send_alert() {
   # (#7873) transport confinement, position load-bearing — rationale in disk-monitor.sh › send_alert().
   # The loopback metrics curl in sample_active_sessions() is UNcredentialed and
   # plain http — it must NOT receive these flags.
+  # (#9597) The credential rides stdin (`--config -`), one config per call.
+  _bearer_ok "${RESEND_API_KEY:-}" || {
+    echo "WARNING: RESEND_API_KEY failed the token-shape guard, skipping send" >&2
+    emit_refusal "SOLEUR_RESOURCE_MONITOR_SEND_SKIPPED channel=resend reason=token_shape"
+    return 0
+  }
   local HTTP_CODE rc=0
   HTTP_CODE=$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w "%{http_code}" \
     --max-time 10 \
-    -X POST "https://api.resend.com/emails" \
-    -H "Authorization: Bearer ${RESEND_API_KEY}" \
+    -X POST --config - "https://api.resend.com/emails" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" 2>/dev/null) || { rc=$?; HTTP_CODE="000"; }
+    -d "$PAYLOAD" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$RESEND_API_KEY")) || { rc=$?; HTTP_CODE="000"; }
 
   if [[ ! "$HTTP_CODE" =~ ^2 ]]; then
     echo "WARNING: Resend API POST failed (HTTP ${HTTP_CODE})" >&2
