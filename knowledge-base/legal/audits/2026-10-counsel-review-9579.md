@@ -114,6 +114,7 @@ Overall: **DISCHARGED**.
 **Correction required to #9605 (condition C2).** The issue body says, for the case where double opt-in is OFF, "close this item with a comment". That is the wrong outcome. The published Privacy Policy 4.6 and 5.x, GDPR Policy 3.6 ("verified through double opt-in") and the Art. 30 register PA-6 (TOMs: "double opt-in confirmation (consent verification)") all state that double opt-in is operating. If Buttondown double opt-in is OFF, those statements are false and the consent basis (Art. 6(1)(a), Art. 7(1) ability to demonstrate consent) is mis-described, which is a CLO finding, not a closed item. The issue must say: if ON, restore the stronger waitlist strings and change the footer to the confirmation wording below; if OFF, escalate to CLO and correct the three published documents before anything else.
 
 **Drafted wording for #9605, if ON (not applied here):**
+
 - Footer (`base.njk` line 351): `'You are on the list. If a confirmation email arrives, open it to finish signing up.'` Use the same wording as the waitlist text so one string is verified once. Recompute the CSP hash last and run the CSP validator.
 
 | Counsel | Date | Channel | Sign-off | Comments |
@@ -152,10 +153,12 @@ Two notes, neither a blocker. (a) "certainly" is the strongest word and the one 
 ## Artifact 5 — Can the hosted tier be bought or signed up for now?
 
 **Facts as the repo shows them.**
+
 - The marketing surface offers only a waitlist for hosted: every pricing tier card carries a "Coming Soon" badge and a waitlist or contact call to action (`pricing.njk` lines 231, 245, 259); the pricing meta description reads "from $49/month once hosted plans open. Join the waitlist."; the hosted offer JSON-LD is named "Solo (Hosted version, coming soon)" with the description "from $49 per month once the waitlist opens" and declares no `availability`, `PreOrder`, `BuyAction` or `OrderAction` (a guard asserts that on every marketing page). Compare pages say "hosted version coming soon, from 49 dollars per month". Getting-started says "hosted plans (coming soon; join the waitlist)". `llms.txt` says "hosted version is coming soon (waitlist)". `/vision/` links the waitlist. No marketing page links to `app.soleur.ai` as a way to buy.
 - Remaining price statements are hosted-only and sit under that framing: the pricing page's "$49/mo" tier prices (each card badged), "From $49/mo" in the comparison stack, and the FAQ "Why should I pay $49/mo when AI coding tools cost $20?" (`pricing.njk` line 290). That FAQ question states a price without availability wording but sits on a page whose header, tier cards and the adjacent FAQ (line 307, "We are building the hosted platform now. Join the waitlist...") say it is not yet available. I rule it acceptable. An optional tightening is "Why would I pay $49/mo (planned hosted price) when AI coding tools cost $20?", with its JSON-LD twin at line 328 changed identically (the parity test pins the pair).
 
 **The mismatch the lead asked about.** The following also exist, and the "coming soon" wording is in tension with them:
+
 - `apps/web-platform/app/api/checkout/route.ts` ships a Stripe Checkout session route with tier validation (`VALID_TARGET_TIERS`: solo, startup, scale, enterprise) and double-charge guards.
 - The roadmap lists "Stripe live mode activation" as Done (item 4.10, #1444).
 - `apps/web-platform/app/(auth)/signup/page.tsx` is a public sign-up page; no invite or waitlist gate is visible in `(auth)/signup`.
@@ -163,6 +166,7 @@ Two notes, neither a blocker. (a) "certainly" is the strongest word and the one 
 - A published blog post (`plugins/soleur/docs/blog/...agents-that-use-apis-not-browsers`, outside this diff) carries "Connect your repo at app.soleur.ai" as a call to action.
 
 **Ruling: not a blocker for this PR; TRACKED (condition C3).** Reasons.
+
 1. Direction of the error. The PR moves the marketing surface toward the more conservative statement: it stops advertising a purchasable hosted tier. A "coming soon" label on a product that technically has a reachable sign-up understates availability; it does not induce a purchase of something that does not exist, and the checkout path is not offered from any page this PR touches. The harm pattern of a false availability claim (a visitor pays for something undeliverable) is absent.
 2. The legal pages are not made false by the PR. They describe the processing that actually occurs when someone does sign up (and must, because any account or payment that exists is governed by them). They were true before this PR and remain true.
 3. The reconciliation is a product and legal decision, not a copy fix: either gate `app.soleur.ai` sign-up and checkout to match "coming soon" (CTO/CPO), or state a limited-availability posture in the DPD, AUP and Terms and in the marketing copy (CLO/CMO), and fix the blog CTA. Doing it inside a marketing-copy PR would either edit `docs/legal/**` (which this PR deliberately does not) or invent a product posture.

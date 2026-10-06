@@ -31,14 +31,14 @@ draft_notice: "Draft internal legal guidance for a non-lawyer founder. NOT a sub
 
 | # | Source | URL | Page's own date / version | How read |
 |---|--------|-----|---------------------------|----------|
-| S1 | Support article 15036540, "Use the Claude Agent SDK with your Claude plan" | https://support.claude.com/en/articles/15036540 | Dated June 16, 2026 | Raw HTTP body, text-extracted |
-| S2 | Consumer Terms of Service | https://www.anthropic.com/legal/consumer-terms | Effective October 8, 2025 | Raw HTTP body, text-extracted |
-| S3 | Claude Code, "Legal and compliance" | https://code.claude.com/docs/en/legal-and-compliance (and `.md` variant) | Undated | Raw `.md` body, plus WebFetch extraction |
-| S4 | Claude Agent SDK overview | https://code.claude.com/docs/en/agent-sdk/overview (`.md` variant) | Undated | Raw `.md` body |
-| S5 | Claude Code, "Authentication" | https://code.claude.com/docs/en/authentication (`.md` variant) | Undated | Raw `.md` body |
-| S6 | Commercial Terms of Service | https://www.anthropic.com/legal/commercial-terms | Effective June 17, 2025 | Raw HTTP body, text-extracted |
-| S7 | Usage Policy (AUP) | https://www.anthropic.com/legal/aup | Effective September 15, 2025 | Raw HTTP body, text-extracted |
-| S8 | Internet Archive snapshots of S3, used only to date changes | https://web.archive.org/web/20260601/https://code.claude.com/docs/en/legal-and-compliance and the 20260616, 20260804, 20260816100738, 20260830094710, 20260909140928 captures | Snapshot dates as listed | Raw HTML |
+| S1 | Support article 15036540, "Use the Claude Agent SDK with your Claude plan" | <https://support.claude.com/en/articles/15036540> | Dated June 16, 2026 | Raw HTTP body, text-extracted |
+| S2 | Consumer Terms of Service | <https://www.anthropic.com/legal/consumer-terms> | Effective October 8, 2025 | Raw HTTP body, text-extracted |
+| S3 | Claude Code, "Legal and compliance" | <https://code.claude.com/docs/en/legal-and-compliance> (and `.md` variant) | Undated | Raw `.md` body, plus WebFetch extraction |
+| S4 | Claude Agent SDK overview | <https://code.claude.com/docs/en/agent-sdk/overview> (`.md` variant) | Undated | Raw `.md` body |
+| S5 | Claude Code, "Authentication" | <https://code.claude.com/docs/en/authentication> (`.md` variant) | Undated | Raw `.md` body |
+| S6 | Commercial Terms of Service | <https://www.anthropic.com/legal/commercial-terms> | Effective June 17, 2025 | Raw HTTP body, text-extracted |
+| S7 | Usage Policy (AUP) | <https://www.anthropic.com/legal/aup> | Effective September 15, 2025 | Raw HTTP body, text-extracted |
+| S8 | Internet Archive snapshots of S3, used only to date changes | <https://web.archive.org/web/20260601/https://code.claude.com/docs/en/legal-and-compliance> and the 20260616, 20260804, 20260816100738, 20260830094710, 20260909140928 captures | Snapshot dates as listed | Raw HTML |
 
 ## 2. What the live terms say
 
