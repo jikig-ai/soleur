@@ -125,9 +125,19 @@ jobs:
           # Label-scoped primary list, not --search: the search index lags
           # minutes, and dispatch-primary + schedule fallback can double-fire a
           # slot ~1-2 min apart — inside the lag — double-filing the incident.
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 50 \
-            --label "ci/actions-queue-health" --json number,title \
-            --jq --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' | head -1)
+          # `gh --jq` takes one expression and does not forward `--arg` (#9533):
+          # the title match is a standalone second-stage jq. Fail-open with a
+          # visible ::error:: — an unguarded pipefail abort on a transient gh
+          # fault would silence the one step that exists to file the alarm
+          # (the trade the workspaces-luks-verify issue step already makes: a
+          # duplicate is recoverable, a missed filing is not; the self-close
+          # sweep drains dupes by label).
+          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+            --label "ci/actions-queue-health" --json number,title 2>/dev/null \
+            | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')"; then
+            echo "::error::dedupe query failed (gh issue list) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
+            EXISTING=""
+          fi
 
           QR=$(printf '%s' "$METRICS" | jq -r '.queued_runs // "?"')
           LQ=$(printf '%s' "$METRICS" | jq -r '.live_queued_runs // "?"')
@@ -173,9 +183,14 @@ jobs:
           # Soft issue — NOT action-required: an API blip must not page, and a
           # persistent failure keeps updating this one issue. (#6374 convention.)
           ISSUE_TITLE="[ci/actions-queue-health] Queue-health probe unavailable (API/prereq failure)"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open -L 50 \
-            --label "ci/actions-queue-health" --json number,title \
-            --jq --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' | head -1)
+          # Same repipe as the under-assignment step above: `gh --jq` does not
+          # forward `--arg` (#9533), so the title match runs in a standalone jq.
+          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --state open -L 50 \
+            --label "ci/actions-queue-health" --json number,title 2>/dev/null \
+            | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')"; then
+            echo "::error::dedupe query failed (gh issue list) — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
+            EXISTING=""
+          fi
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Probe still UNKNOWN at ${NOW}. Run: ${RUN_URL}"

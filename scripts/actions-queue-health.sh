@@ -135,9 +135,14 @@ IP_RUN_COUNT="$(printf '%s' "$IP_RUNS_JSON" | jq -r '.workflow_runs | length' 2>
 IP_TOTAL="$(printf '%s' "$IP_RUNS_JSON" | jq -r '.total_count // 0' 2>/dev/null)"
 # A truncated in-progress page undercounts delivered concurrency — and a
 # healthy pool delivering >MAX_IP_RUNS runs would read as UNDER_ASSIGNED.
-# Fail UNKNOWN, not silent.
-if [ "${IP_TOTAL:-0}" -gt "$IP_RUN_COUNT" ] 2>/dev/null; then
-  echo "UNKNOWN: in-progress runs truncated ($IP_RUN_COUNT of $IP_TOTAL > MAX_IP_RUNS=$MAX_IP_RUNS)" >&2
+# Fail UNKNOWN, not silent. But total_count is a point-in-time snapshot that
+# races the page: a run completing between the count read and the page fetch
+# shows IP_TOTAL > IP_RUN_COUNT with NO truncation (#9533 — the Oct-5 UNKNOWN
+# verdicts were this race, "7 of 8", not a truncated list). Only a FULL page
+# can be truncated; delivered concurrency below is measured from the page
+# itself either way.
+if [ "$IP_RUN_COUNT" -ge "$MAX_IP_RUNS" ] 2>/dev/null && [ "${IP_TOTAL:-0}" -gt "$IP_RUN_COUNT" ] 2>/dev/null; then
+  echo "UNKNOWN: in-progress runs truncated (page full at MAX_IP_RUNS=$MAX_IP_RUNS, total_count=$IP_TOTAL)" >&2
   exit 2
 fi
 

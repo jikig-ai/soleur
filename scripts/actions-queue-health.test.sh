@@ -336,13 +336,34 @@ inprogress 1
 queued_page $(live_rows 30 1900)
 expect "two-page jobs payload sums to 30 delivered -> SATURATED" 0 "SATURATED:"
 
-# 19. In-progress list truncation: total_count exceeds the page -> UNKNOWN,
-#     never an undercounted delivered that false-pages UNDER_ASSIGNED.
+# 19. In-progress list GENUINE truncation: a FULL page with total_count beyond
+#     it -> UNKNOWN, never an undercounted delivered that false-pages
+#     UNDER_ASSIGNED. Knob-scaled (MAX_IP_RUNS=1): 1 row + total_count=2.
 mkplan team
 queued_count 0
-printf '{"total_count":150,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
+printf '{"total_count":2,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
 jobs_for 700 "$(infl x 1)"
-expect "in-progress truncation -> UNKNOWN rc2" 2 "UNKNOWN:"
+PROBE_ENV="MAX_IP_RUNS=1" expect "in-progress page full + total beyond -> UNKNOWN rc2" 2 "UNKNOWN:"
+
+# 19b. The Oct-5 race (#9533): total_count is a point-in-time snapshot — a run
+#      completing between the count read and the page fetch yields
+#      total_count > page length with NO truncation. 7 of 8 rows, partial
+#      page -> must NOT UNKNOWN; the probe judges on the rows it got.
+mkplan team
+queued_count 0
+rows=(); for i in 700 701 702 703 704 705 706; do rows+=("$(run_row $i "$(iso_ago 300)")"); done
+printf '{"total_count":8,"workflow_runs":[%s]}\n' "$(IFS=,; echo "${rows[*]}")" > "$WORK/fix/inprogress.json"
+for i in 700 701 702 703 704 705 706; do jobs_for "$i" "$(infl x "$i")"; done
+expect "partial page + stale total_count (Oct-5 race) -> judged, not UNKNOWN" 0 "HEALTHY:"
+
+# 19c. Boundary: page exactly full AND total_count == page length -> complete,
+#      not truncated — proceeds to a verdict.
+mkplan team
+queued_count 0
+printf '{"total_count":2,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)"),$(run_row 701 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
+jobs_for 700 "$(infl x 1)"; jobs_for 701 "$(infl x 2)"
+PROBE_ENV="MAX_IP_RUNS=2" expect "full page + total_count == page length -> judged" 0 "HEALTHY:"
+unset PROBE_ENV 2>/dev/null || true
 
 # 20. Non-numeric knob must fail UNKNOWN, not degrade the gate to a false
 #     HEALTHY (an unbound QUEUE_DEPTH_ALERT makes the stall test error-false).
@@ -402,12 +423,32 @@ jobs_for 700 "$(infl x 1)" \
 queued_page $(live_rows 30 1900)
 expect "queued jobs inside an in-progress run do not count as delivered" 1 "UNDER_ASSIGNED:"
 
+# 25. Workflow hygiene (#9533): the filing steps' dedupe query must never again
+#     combine gh's one-expression --jq with a jq-style --arg — gh aborts the
+#     step with "unknown arguments" under set -euo pipefail, and the alarm the
+#     step exists to file is never filed. Count-shaped greps, never a
+#     pipe-fed grep -q reader (grep-q-pipe-guard).
+QH_WF=".github/workflows/scheduled-actions-queue-health.yml"
+qh_jq_arg="$(grep -c -- '--jq --arg' "$QH_WF" 2>/dev/null || true)"
+if [ "$qh_jq_arg" -eq 0 ]; then
+  pass "workflow carries zero 'gh --jq + --arg' sites"
+else
+  fail "workflow re-introduced gh --jq --arg ($qh_jq_arg site(s)) — repipe through standalone jq"
+fi
+qh_steps="$(grep -c -- '- name: File ' "$QH_WF" 2>/dev/null || true)"
+qh_named="$(grep -cE -- '- name: (File action-required on runner under-assignment|File probe-unavailable note on UNKNOWN)' "$QH_WF" 2>/dev/null || true)"
+if [ "$qh_named" -eq 2 ] && [ "$qh_steps" -ge 2 ]; then
+  pass "both queue-health filing steps present (under-assignment + probe-unavailable)"
+else
+  fail "queue-health filing steps drifted (File steps=$qh_steps, named=$qh_named)"
+fi
+
 # Anti-vacuity floor: deleting every assertion must not exit 0. Reports
 # directly and exits (ADR-193): a floor routed through fail() is disarmed
 # by the same neutered machinery it exists to catch.
 total=$((passes + fails))
-if [ "$total" -lt 24 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=24" >&2
+if [ "$total" -lt 29 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=29" >&2
   exit 1
 fi
 
