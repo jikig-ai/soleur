@@ -21,11 +21,12 @@ ADR-166 is the in-repo precedent for the mechanical gate).
 
 SCOPE
 -----
-Every `.github/workflows/*.yml|yaml` and every `scripts/**/*.sh`, RECURSIVELY
-(the issue's `scripts/*.sh` is the floor; `scripts/lib/` and
-`scripts/followthroughs/` run the same gh dedupe shapes). Excluded:
-`scripts/fixtures/**` and `*.fixture` -- those are canned inputs to OTHER
-linters; their "violations" are intentional data, never executed argv.
+Every `.github/workflows/*.yml|yaml` and every `**/*.sh` in the tree —
+hooks, plugin scripts, tests and followthroughs execute the same gh argv, so
+"repo-wide" means the whole tree, not `scripts/` alone. Excluded: `.git`,
+`.worktrees`, `node_modules`, `dist`, `.next`, `__pycache__`, venvs, and any
+`fixtures/` directory -- fixture trees are canned inputs to OTHER linters;
+their "violations" are intentional data, never executed argv.
 
 SCAN MODEL (per file)
 ---------------------
@@ -374,6 +375,10 @@ def scan_file(path: str, rel: str):
     return findings
 
 
+SKIP_DIRS = {".git", ".worktrees", "node_modules", "dist", ".next",
+             "__pycache__", ".venv", "venv", "fixtures"}
+
+
 def collect(root: str):
     targets = []
     wf_dir = os.path.join(root, ".github", "workflows")
@@ -381,12 +386,8 @@ def collect(root: str):
         for name in sorted(os.listdir(wf_dir)):
             if name.endswith((".yml", ".yaml")):
                 targets.append(os.path.join(wf_dir, name))
-    scripts_dir = os.path.join(root, "scripts")
-    for dirpath, dirnames, filenames in os.walk(scripts_dir):
-        dirnames.sort()
-        if os.path.relpath(dirpath, scripts_dir).split(os.sep)[0] == "fixtures":
-            dirnames[:] = []
-            continue
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         for name in sorted(filenames):
             if name.endswith(".sh"):
                 targets.append(os.path.join(dirpath, name))

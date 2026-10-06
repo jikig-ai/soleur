@@ -313,10 +313,13 @@ if [[ "${wf_n:-0}" -ge 80 ]]; then
 else
   fail "H2 live scan reaches >=80 workflows" ">=80" "${wf_n:-<unparsed>}"
 fi
-if [[ "${sh_n:-0}" -ge 250 ]]; then
-  pass "H2b live scan reaches >=250 shell scripts (got ${sh_n:-0})"
+# The floor pins the repo-WIDE walk (all **/*.sh outside fixtures/ and vendored
+# dirs), not the scripts/-only scope the first draft carried — a scope regression
+# back to ~470 must not stay green.
+if [[ "${sh_n:-0}" -ge 1000 ]]; then
+  pass "H2b live scan reaches >=1000 shell scripts (got ${sh_n:-0})"
 else
-  fail "H2b live scan reaches >=250 shell scripts" ">=250" "${sh_n:-<unparsed>}"
+  fail "H2b live scan reaches >=1000 shell scripts" ">=1000" "${sh_n:-<unparsed>}"
 fi
 
 # H3 -- VERIFY THE VERIFIER: plant the defect into a copy of a live workflow
