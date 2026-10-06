@@ -133,8 +133,8 @@ schema-constrained publication path"); the properties underneath it are:
   `run-report-label` directive for every row and `runHookSelfTest` then probes
   `gh issue create --label <label>`, aborting the spawn if it is not allowed. Removing `gh issue create`
   without handling this would abort every run.
-- Learnings applied: PA-27 coerce-and-mirror-without-values (TR3); the 2026-07-19 fabricated-stats
-  post-mortem (a schema bounds structure, not truth); `2026-03-15-env-var-post-guard-defense-in-depth`
+- Learnings applied: PA-27 coerce-and-mirror-without-values (TR3); the 2026-07-19 community-monitor-fabricated-github-stats
+  learning (a schema bounds structure, not truth); `2026-03-15-env-var-post-guard-defense-in-depth`
   (make the unsafe action structurally impossible); `cq-test-fixtures-synthesized-only`.
 - Functional-overlap check: two external-registry skills cover generic prompt-injection guidance or AI-code
   review; neither is a publication allowlist. Nothing installed; nothing redundant to build.

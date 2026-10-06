@@ -498,7 +498,7 @@ finding that the existing corpus cannot be erased, is the only honest dispositio
 > to the published artefacts; the agent's redacted final message (up to 16 KiB) is memoised in the `claude-eval` step
 > output, unvalidated, and is not republished. Whether any of this substitutes for R4 is for counsel at #7119.
 
-> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-272 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
+> **Further correction 2026-10-06 (#7122, review round 2); append-only.** the allowlist is **thirteen exact-literal** commands with no agent-chosen argument other than a numeric Discord channel id, so the statement that a grammar-conforming query token can still reach `hn.algolia.com` is withdrawn (the HN query word is a pinned literal; ADR-272 residual (e)). "Fixed at one day" and "daily time series" are withdrawn as stated: the collection windows differ by platform (GitHub 1 day; Hacker News mentions 7 days; Discord the latest 50 messages per channel; X, Bluesky and LinkedIn totals as of collection), so the published series is a daily series of mixed-window values.**
 
 ---
 

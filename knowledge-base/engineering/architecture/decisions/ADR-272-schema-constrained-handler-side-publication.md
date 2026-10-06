@@ -241,8 +241,8 @@ below for that reason.
   `LINKEDIN_PERSON_URN`, `LINKEDIN_ORG_ID`), plus `ANTHROPIC_API_KEY`, the READ-scoped `GH_TOKEN`, and `PATH`, `HOME`,
   `NODE_ENV`; the handler wrapper adds `SOLEUR_COLLECTOR_STATUS_DIR` and the substrate adds
   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the child sees 19. With no write primitive, no posting verb, no code-execution
-  path and no network egress verb they cannot be used to publish, but a covert encoding of one into the free integers or an
-  allowed `--query` token (see (e)) would be a permanent public leak or a third-party disclosure. Containment rests on the hook's
+  path and no network egress verb they cannot be used to publish, but a covert encoding of one into the free integers or the
+  one agent-chosen token, a numeric Discord channel id (the HN query word is pinned; see (e)), would be a permanent public leak or a third-party disclosure. Containment rests on the hook's
   `/proc` and secret-read denies, the argument grammar, and the router scripts not echoing env (a source test asserts no
   `printenv`, bare `env`, `set -x` or `declare -p` in them).
 

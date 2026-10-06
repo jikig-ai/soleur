@@ -5,7 +5,7 @@ date: 2026-10-06
 issue: 7122
 related_issues: [7119, 7121, 7123, 7124, 9606]
 attestation-authority: clo
-status: DRAFT-requires-counsel-review (counsel-ready; not signed off; this document records what the change does and does not do and makes no determination on R1-R5, the lawful basis or the substitution question)
+status: DISCHARGED (CLO internal v1 sign-off, 2026-10-06, conditional on merge of PR #9596; prose cross-checked against the implementation; makes no determination on R1-R5, the lawful basis or the substitution question, which stay for counsel at #7119; external counsel re-review reserved for the section 7 triggers)
 scope: "Forward path of cron-community-monitor only. Does not cover cron-daily-triage, the published corpus, the lawful-basis conclusion or any docs/legal/ text."
 related_adrs: [ADR-272]
 related:
@@ -44,7 +44,7 @@ From the merge of #7122, for `cron-community-monitor` only (technical record: AD
    reference. The digest no longer carries Top Contributors, Community Interactions, stargazer usernames, quoted excerpts or free-text
    prose.
 3. **The agent has no write or publication capability and no GitHub write credential during its run.** No file tools, no `gh`
-   publication verb, thirteen exact-literal read-only collector invocations (no agent-chosen argument of any kind), a READ-scoped
+   publication verb, thirteen exact-literal read-only collector invocations (the only agent-chosen token is the numeric Discord channel id in `discord messages <uint> 50`), a READ-scoped
    installation token for the clone and the spawn; the GitHub write token is minted only after the spawn. The Discord, Bluesky, X
    and LinkedIn credentials that the read collectors need, several of them posting credentials, **remain in the spawn
    environment** (ADR-272 residual (g)); the agent cannot use them to publish because it has no posting verb, file tool or
@@ -74,7 +74,7 @@ The wording to use, and no stronger:
 | Human gate | **None.** The digest still auto-merges (`mergeMode: "auto"`). A human gate is the stated fallback if counsel requires one. |
 | Numeric truth | An injection (or a collector error) can still choose in-range integers; the schema bounds structure, not truth. The collector-status sidecar (#6695) binds github status into the render; nothing verifies the counts themselves. |
 | Enum selection | Which enum members are published (statuses, failure causes, topic categories) remains model-influenced. |
-| Covert integer channel | About 35 free integers could encode a secret that reached the agent's context. The routes that put secrets into context were narrowed, but non-GitHub collector credentials remain in the spawn environment (ADR-272 residual (g)), and a `--query` token that fits the argument grammar can still carry a short string to `hn.algolia.com` (residual (e)). |
+| Covert integer channel | About 35 free integers could encode a secret that reached the agent's context. The routes that put secrets into context were narrowed, but non-GitHub collector credentials remain in the spawn environment (ADR-272 residual (g)), and a numeric Discord channel id (digits only) is the one agent-chosen argument; the HN query word is a pinned literal (residual (e)). |
 | Memoised final message | The agent's redacted final message (up to 16 KiB, community monitor only) is stored in the `claude-eval` step output before validation. It is Inngest run state, not published; its retention is not re-measured here. |
 | Anthropic ingestion | Raw collected text (Discord messages, comments, Hacker News posts) still reaches Anthropic; **no PII scrub exists on that input** (#7124, PA-31 §(g)(8)). Anthropic retention and the unsigned Zero-Retention amendment are unchanged. |
 | Published corpus | The 80+ digests (45 with the commenter table, 65 naming stargazers) remain published in a public repository with two forks; Art. 17 is still not implementable against append-only history. |
@@ -89,8 +89,7 @@ Do not read "the schema carries no direct identifier" as "the digest cannot affe
 population a count can single a person out. The fields at risk are not limited to a first outside contributor (`externalContributors`),
 a single interacting account (`externalInteractions`) or a topic with a count of one: the Discord `members` and `messages` counts for a
 **private guild** (a small, enumerable membership) and the GitHub `newStargazers` count can each identify an individual or an event.
-The collection period is fixed at **one day** by a handler constant (the model cannot widen it), so the published series is a **daily
-time series**, and day-over-day differences can point at a specific day's actor. The external-activity fields were added deliberately
+Collection windows are fixed by the allowlist and differ by platform (GitHub 1 day; Hacker News 7 days; Discord latest 50 messages per channel; X, Bluesky and LinkedIn totals), so the published series is a **daily series of mixed-window values**, and day-over-day differences can point at a specific day's actor. The external-activity fields were added deliberately
 so outside activity stays visible without a name. The practical exposure is much smaller than before and is a judgement for counsel,
 not a conclusion recorded here. A model-chosen count is also not verified to be true.
 
