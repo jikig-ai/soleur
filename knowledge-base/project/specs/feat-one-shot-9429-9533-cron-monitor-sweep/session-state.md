@@ -22,10 +22,13 @@
 - Artifacts: `knowledge-base/project/specs/feat-one-shot-9429-9533-cron-monitor-sweep/tasks.md`; commits `12a4dfd2c1` + `99cdb4d6fc` pushed
 
 ## Work Phase
-- Status: pending
+- Status: done — suites 325/325 (luks) + 32/32 (queue-health) green; impl commits 245925c9c0/7f5a15f0a8.
 
 ## Review Phase
-- Status: pending
+- Status: done. 8-seat panel (tier none, coverage full 8/8): 1 P1 + 4 P2 + ~14 P3, all resolved inline (0dae60baea, 1bafa7a98f, a2aaf8e27c, e920a53af4); deferred scope-outs filed #9612/#9613. Fix-round seats died on model rate limit; one consolidated verification pass closed 11/11 + N1/N2 residuals (trailer honestly records `degraded 1/7 agents`).
+
+## QA
+- Live probe dry-run: HEALTHY rc0 (64 queued/14 in-progress — partial page judged). Live doppler get on real config: `Could not find requested secret` rc1 — absent arm; local ANSI colorisation → ANSI-strip hardening added.
 
 ## Ship Phase
-- Status: pending
+- Status: in progress — PR #9571 ready, `semver:patch`, auto-merge armed; synced main (9554+9569+9552, no file overlap); fixture-relative-assert baseline regenerated (18→19 sites, c469d1b6a7). Awaiting merge-queue checks on sync head.

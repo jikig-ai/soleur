@@ -26,4 +26,13 @@ Closes #9429, closes #9533. Non-goals: #9513, #9510, #9475 (untouched files, sta
 - [x] 4.1 `bash scripts/actions-queue-health.test.sh` → 0; `bash apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh` → 0 (incl. Guard-3 mutation battery).
 - [x] 4.2 `grep -n 'no-interactive' .github/workflows/workspaces-luks-verify.yml` → exactly the `secrets set` line; `grep -c -- '--jq --arg' .github/workflows/scheduled-actions-queue-health.yml` → `0`.
 - [x] 4.3 `bash -n` the edited run bodies.
-- [ ] 4.4 PR body: `Closes #9429` + `Closes #9533` + `## Changelog`; note #9554 (no file overlap) and #9513/#9510/#9475 remaining open.
+- [x] 4.4 PR body: `Closes #9429` + `Closes #9533` + `## Changelog`; note #9554 (no file overlap — since merged) and #9513/#9510/#9475 remaining open. `## User-Brand Impact` (`none` + scope-out reason) added for the sensitive-path gate.
+
+## Phase 5 — review round 1 (done)
+
+- [x] 5.1 P1: `WF_MIN_ASSERTIONS` 321 → 325 (S55+17g → 323; S56+17h → 325), ledger records both deltas.
+- [x] 5.2 P2: hygiene pin widened — strip `| jq …` segments + comment lines, assert no `--arg`/`--argjson` survives anywhere (order/spelling-proof); pin `if ! ISSUE_LIST=` count == 2.
+- [x] 5.3 P2: `marker_state` fault arm prints sanitized+prefixed diagnostic (`[doppler-stderr]`, token+`dp.*` masked, ANSI/CR stripped, 8K cap); anchored `^Doppler Error: Could not find requested secret` absent-match (ANSI-stripped input).
+- [x] 5.4 P2: mutation 17h (bespoke row — defect legitimately reds control S01): fold `--no-interactive` into `marker_args` → S01 reds via stub's set-only-flag refusal.
+- [x] 5.5 P3 batch: empty-value → absent; `after=unknown` prose; dedupe diagnosability (`ISSUE_LIST` capture, two-leg if/elif, bounded single-line `::error::` breadcrumb, gh stderr → tempfile not stdout); probe numeric validation + `MAX_IP_RUNS` clamp ≤100; `- name:` anchored grep; missing-workflow guards; S56.
+- [x] 5.6 Follow-ups filed: #9612 (repo-wide --arg-in-gh sentinel + sibling dedupe normalization), #9613 (doppler_call() helper for sibling stderr sites).
