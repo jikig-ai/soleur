@@ -11,6 +11,24 @@ brand_survival_threshold: aggregate pattern
 
 # infra: re-pin web-2's SSH host key after the 2026-10-06 replacement (Ref #9372)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06. Scoped to the plan's size: the halt gates were run mechanically
+rather than fanning out the full agent roster (one data file, no code, no new mechanism).
+
+- Gates run: User-Brand Impact (pass, `aggregate pattern`), Observability (section added, see
+  below), PAT-shaped variable sweep (none), Guard Contract (no guard in the deliverable; lint
+  reports 0 entries), Scope Check (one unfenced section, all 8 asks mapped), Encryption Posture
+  (no store or connection introduced; the file is a public host key), UI-wireframe (no UI).
+- Citations re-verified live: #9151 CLOSED and its commit `bef6dd5a07` introduced the pin; #9305
+  MERGED and re-pinned this same file on 2026-09-30; #9372 OPEN; ADR-237 and the runbook section
+  "What the replace does NOT restore" exist at the cited paths. No AGENTS.md rule IDs are cited.
+- Added: the `## Observability` section (the pin sits under `apps/web-platform/infra/`, which the
+  mechanical trigger treats as production infra), and a diff-scope AC that lists the files the
+  pipeline writes.
+- Deliberately not done: re-running the capture, a second `ssh-keyscan`, or any live-host check.
+  The brief forbids re-capture; the live-host verification belongs to the owner-gated re-enable.
+
 ## Overview
 
 web-2 was replaced (Hetzner server id 169095540, IPv4 204.168.189.200, created 2026-10-06T19:32:09Z).
@@ -81,6 +99,40 @@ replace does NOT restore" lists the re-pin); PR #9305 (same operation, 2026-09-3
   earlier (no Cloudflare hop, minimal interception window), the pin fails closed on mismatch, and
   the owner-gated re-enable of the apply workflow is where the end-to-end probe re-verifies the
   key against the live host before anything trusts it in production.
+
+## Observability
+
+The pin is committed data, not a running service, so it has no liveness signal of its own; the
+signals below are the ones that exist today. Nothing here claims an alert fires on a path that is
+currently disabled.
+
+```yaml
+liveness_signal:
+  what: the pin file's committed fingerprint header matches the captured key (CI row H1 of web-2-host-key-local.test.sh); the live-host check is the apply workflow's end-to-end probe, which only runs once that workflow is re-enabled by the owner
+  cadence: per PR run for H1; per apply run for the probe
+  alert_target: the failed CI check on a PR; a red apply-deploy-pipeline-fix.yml run once re-enabled
+  configured_in: apps/web-platform/infra/web-2-host-key-local.test.sh and .github/workflows/apply-deploy-pipeline-fix.yml
+error_reporting:
+  destination: GitHub Actions check and run status (no Sentry surface: this is infrastructure data, not application code)
+  fail_loud: the HCL local errors on a malformed pin (every plan fails closed); an SSH handshake rejects a host whose key differs from the pin
+failure_modes:
+  - mode: pin does not match the live host's key
+    detection: the apply workflow's SSH handshake and end-to-end probe fail closed once the workflow is re-enabled
+    alert_route: red workflow run, owner-visible; web-2 keeps serving what it already runs
+  - mode: pin file malformed or header disagrees with the key line
+    detection: web-2-host-key-local.test.sh (shape rows and H1) fails on the PR
+    alert_route: blocking CI check on the PR
+logs:
+  where: GitHub Actions run logs
+  retention: GitHub's default Actions log retention
+discoverability_test:
+  command: grep -c "fingerprint: SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ" apps/web-platform/infra/web-2-ssh-host-key.pub
+  expected_output: "1"
+```
+
+The `discoverability_test` reads only the committed header (it prints `0` on the pre-change tree
+and `1` once the new pin is in place); it does not verify the key against the live host, which is
+exactly the gap the weak cross-check statement in the PR body discloses.
 
 ## Files to Edit
 
