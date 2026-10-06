@@ -50,3 +50,18 @@ No P1 in the committed state; the panel caught and the fix commits `b91b180beb`/
 - unfiltered positive controls on both deny rows; emit-fork coverage for verifyAgentSandboxHardening; shim fails closed when `/proc/self/fd` is unenumerable
 - docs: ADR-050/075 name all four probes; plan/tasks corrected (moby attribution, `--add-seccomp-fd`, raw sock_filter[], setns-pidns rationale); canary-probe-set.md decodes the five verdict reasons; apply-deploy-pipeline-fix prints reason+probe
 - Verified live: probes pass through shim+real bwrap; mutant shim without the sweep trips `fd_hygiene_bypass`; no-shim trips `userns_filter_bypass`; unfiltered control permits nested userns
+
+## 2026-10-06 — shipped
+
+- PR #9595 MERGED to main via merge queue at 2026-10-06T12:53:43Z (merge commit
+  `eb92243fe8`). All required checks green; `sandbox-canary-capture-gate` red is
+  dark-launch + pre-existing (#9614/#9618 — stale fixture vs SDK 0.3.284,
+  fails on parent commit too; no `sdk-bump-verified:` ack added — would have
+  been a dishonest self-attestation).
+- Review trailer: `Reviewed-By-Soleur` + `Reviewed-Coverage: full 12/12 agents`
+  (commit 43a4b538f0).
+- #8752 auto-closed COMPLETED via `Closes #8752`. Decision-challenge issue
+  filed: #9619.
+- Post-merge probes live on the deploy path: canary `--replay` (4 hardening
+  probes) + `op=sandbox-hardening-selfprobe` boot check — first prod deploy
+  exercises both.
