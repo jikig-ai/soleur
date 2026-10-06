@@ -1,5 +1,7 @@
 # Session State
 
+> **Superseded in part (review phase, 2026-10-06):** the first design counted a create of BOTH web-class addresses, read 2 over `passphrase-create.json` and recommended a "reviewed import" recovery. The shipped design counts the passphrase alone, reads 1 over `passphrase-create-password-only.json`, and retracts the import recovery (not a verified route). See the plan's "Review-Phase Amendments" and `decision-challenges.md` items 4 and 5.
+
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-10-06-feat-web2-luks-rebirth-closing-change-plan.md
 - Status: complete

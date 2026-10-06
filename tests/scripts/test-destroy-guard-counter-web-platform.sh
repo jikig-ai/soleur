@@ -1400,14 +1400,14 @@ _t64d_holds() { [[ "$1" == "1:1" ]]; } # the must-HALT predicate, shared with th
 t_workspaces_passphrase_create_halts() {
   local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-workspaces-luks-passphrase-first-create.json")
   if _t64d_holds "$out"; then
-    _report "T64d a CREATE of the web-class passphrase HALTs (the password create counted, the key-copy create beside it not, rc=1)" ok
+    _report "T64d a CREATE of the web-class passphrase HALTs (one create counted, rc=1; which address counted is pinned by T64n and T64e)" ok
   else
     _report "T64d a CREATE of the web-class passphrase HALTs" fail "got '$out' want '1:1'"
   fi
 }
 
 # MUST-STAY-LEGAL and SUITE-SIDE HARNESS rows for the create arm (Guard 1).
-#  (1) a create at the OTHER four addresses reads 0 (inngest recut route, web-1 pair), and a no-op at all six reads 0:
+#  (1) a create at the OTHER five addresses reads 0 (inngest recut route, web-1 pair), and a no-op at all six reads 0:
 #      widening the arm to all six, or counting no-op, reds this row.
 #  (2) the T64d expectation is not satisfiable by a plan that does nothing: with the first-create fixture's actions
 #      changed from ["create"] to ["no-op"] the T64d predicate ("1:1") must NOT hold, so a must-HALT row that passes
@@ -1479,7 +1479,7 @@ t_workspaces_passphrase_every_address_counted() {
     d="$(_wl_shape_check "$FILTER" "$a" "$(_wl_create_want "$a")")"; detail="${detail}${d}"
   done
   if [[ -z "$detail" ]]; then
-    _report "T64e each of the four workspaces passphrase addresses scores on update/delete/forget/unreadable, a create counts at the web-class pair only, and no-op never counts" ok
+    _report "T64e each of the four workspaces passphrase addresses scores on update/delete/forget/unreadable, a create counts at the web-class passphrase address only, and no-op never counts" ok
   else
     _report "T64e each of the four workspaces passphrase addresses is counted" fail "$detail"
   fi
@@ -1719,7 +1719,7 @@ t_apply_job_luks_halt_names_workspaces() {
   code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
   # Emissions only (comment-stripped, `echo "::error::` lines): the operator reads these during the incident.
   local emitted; emitted="$(grep -F 'echo "::error::' <<<"$code" || true)"
-  for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'escrow-create workflow is retired' 'no documented or verified automated recovery' 'NOT a supported route' '[skip-web-platform-apply]'; do
+  for v in 'random_password.workspaces_luks_web' 'doppler_secret.workspaces_luks_web_key' 'luksChangeKey' 'NEVER a replace' 'escrow-create workflow is retired' 'no documented or verified automated recovery' 'NOT a supported route' 'is not refused' '[skip-web-platform-apply]'; do
     grep -qF "$v" <<<"$emitted" || { ok=0; missing="${missing} ${v};"; }
   done
   # CREATE is required in the FIRST emission of the HALT body only: the uppercase verb also occurs in other emissions
@@ -1727,6 +1727,11 @@ t_apply_job_luks_halt_names_workspaces() {
   local first_emit; first_emit="$(_luks_halt_body "$code" | grep -F 'echo "::error::' | head -1 || true)"
   grep -qF 'CREATE' <<<"$first_emit" || { ok=0; missing="${missing} CREATE-in-first-emission;"; }
   grep -qF 'a CREATE counts only at the web-class passphrase' <<<"$first_emit" || { ok=0; missing="${missing} create-scope-in-first-emission;"; }
+  grep -qF 'CREATE, UPDATE, DELETE or FORGET' <<<"$first_emit" || { ok=0; missing="${missing} verb-list-in-first-emission;"; }
+  # ABSENCE pins: the retracted recovery and the retired "only legal verb" sentence must not come back in any emission of the job
+  for v in 'reviewed import' 'first create is the only legal verb' 'imports the existing state entry'; do
+    ! grep -qF "$v" <<<"$emitted" || { ok=0; missing="${missing} retired-text-present:${v};"; }
+  done
   # The offending-lines grep must name EVERY address of the counted set explicitly, derived from the filter's own
   # luks_passphrase_addrs (a generic `_luks` pattern matches 42 resource names, and the earlier anchor-free regex was
   # satisfied by the pre-change `inngest_redis_luks` pattern). Boundary-matched, so `random_password.workspaces_luks`

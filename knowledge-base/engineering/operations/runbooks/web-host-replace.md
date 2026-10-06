@@ -95,7 +95,7 @@ When a replace aborts at this step, the cause is in its annotations and its own 
 `escrow-split-contract:CAUSE` line per family of missing name (a Terraform-managed name not created yet, none was missing on 2026-10-04 and the escrow-create workflow is retired, so only the push-apply can create them now; or the R2 pair, the live
 mint, the only gap on that date). **If `prd_workspaces_luks_web` does not exist at all**, the checker exits 3 and prints a `NOTE` instead of a
 `CAUSE` line: `escrow-split-contract:NOTE prd_workspaces_luks_web was not found; this is usually consistent with the web-platform push-apply (apply-web-platform-infra.yml) not having created it yet (unmeasured: the read failed, absence of the config is not proven)`.
-That says what the failed read is consistent with; it is not a diagnosis. (Read the push-apply's current state before relying on it. The single-use workflow that once created the three names is retired, and the apply HALT now refuses a create of the web-class passphrase pair.)
+That says what the failed read is consistent with; it is not a diagnosis. (Read the push-apply's current state before relying on it. The single-use escrow-create workflow is retired (its only run was plan-only), and the apply HALT now refuses a create of the web-class passphrase (`random_password.workspaces_luks_web`); the push-apply can still create the config, the bucket and the name secrets.)
 
 **A green run is necessary, not sufficient, and valid only when it ran.** The check reads secret *names*, so it cannot tell a
 bucket-scoped R2 pair from web-1's pair pasted under the same names (the mint step on #9377 requires a signed `HEAD` of

@@ -468,6 +468,6 @@ Recorded by the review phase; the sections above stay as the dated plan. Where t
    local-state sandbox (random provider 3.9.0/3.9.1) that the import plans `special = true -> false`, a forced replacement. The HALT text,
    ADR-263 marker and runbooks now say there is no documented or verified automated recovery and the owner decides. The follow-up
    measurement is a checkbox on #9572.
-3. **Scope of "no workflow creates them"** is the passphrase pair only; the push-apply still creates the escrow config, bucket and name
+3. **Scope of "no workflow creates them"** is the web-class passphrase only; the push-apply still creates the escrow config, bucket and name
    secrets, and a create there is not halted.
 4. **Floors** are exact: destroy-guard 107, `web2-rebirth.test.sh` 123 scenarios.

@@ -297,7 +297,7 @@ cmd_flip_precondition() { # apply=yes|no
   [[ "$n" =~ ^[0-9]+$ ]] || fail "flip precondition: the destroy-guard filter could not be evaluated over the fixture"
   [[ "$n" -eq 1 ]] || ok=no
   [[ ! -e "${_ROOT}/.github/workflows/apply-web-escrow-create.yml" ]] || absent=no
-  echo "flip precondition: luks_passphrase_rotations over a create of the web-class passphrase = ${n} (needs exactly 1); apply-web-escrow-create.yml absent = ${absent}"
+  echo "flip precondition: luks_passphrase_rotations over a create of the web-class passphrase = ${n} (needs 1: the passphrase create; widening the arm to the key copy is caught by the destroy-guard suite, not here); apply-web-escrow-create.yml absent = ${absent}"
   if [[ "$ok" == yes && "$absent" == yes ]]; then echo "flip precondition: MET"; out met met; return 0; fi
   if [[ "$apply" == yes ]]; then
     fail "flip precondition NOT met: the escrow-create workflow file is present again, or the rotation HALT no longer counts a create of the web-class passphrase (the closing change for #9372 retired the one and flipped the other, so this is a regression to revert, not a step to perform); this dispatch will not format web-2"

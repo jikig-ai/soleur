@@ -509,7 +509,7 @@ object versioning (#7992).
 - A first create cannot be told from a state loss: if state were lost or rewound after a web-class volume was formatted,
   both web resources would plan as `create`, which the HALT permits, and the provider would overwrite the live secret. The
   state bucket's own protections are the control.
-  > **Superseded 2026-10-06 (#9372), in part:** "which the HALT permits" no longer holds for the web-class pair: from the
+  > **Superseded 2026-10-06 (#9372), in part:** "which the HALT permits" no longer holds for the web-class passphrase: from the
   > merge of the retirement change (#9569) the HALT counts a `create` of the web-class passphrase (see the dated marker under
   > the D9 gate-shape item). The state bucket's protections remain the control for the other five addresses.
 - A tainted first create of the generator is blocked by `prevent_destroy` on the next plan; recover with `terraform untaint`
@@ -536,7 +536,7 @@ object versioning (#7992).
   treats a `create` as legal because no web-class volume is formatted yet; that basis ends when the rebirth formats web-2,
   after which a lost or rewound state entry (planned as a `create`, overwriting the live Doppler secret) must be counted too.
   The exemption applies to all six addresses, including web-1's long-lived pair, where a `create` can only mean state loss.
-  > **Superseded 2026-10-06 (#9372), in part:** item (3) is done for the web-class pair from the merge of the retirement
+  > **Superseded 2026-10-06 (#9372), in part:** item (3) is done for the web-class passphrase from the merge of the retirement
   > change (#9569): the HALT now counts a `create` of the web-class passphrase. The exemption still applies to the other five
   > addresses, including the web-class key copy and web-1's pair. Items (1) and (2) stay open.
 - **Indexed-address blind spots.** The rotation HALT compares a base address, with a module prefix and a trailing
@@ -574,7 +574,7 @@ object versioning (#7992).
   plan must show creates only for the web-class pair. Tracked as C8 with the other open legal conditions in
   <https://github.com/jikig-ai/soleur/issues/9377#issuecomment-5974285193> (C4: supersede the conditional wording in the
   register cells after the push-apply; C5: verify the Sentry rule edit applied; C8: this check).
-  > **Superseded 2026-10-06 (#9372), in part:** "the HALT does not count a `create`" no longer holds for the web-class pair
+  > **Superseded 2026-10-06 (#9372), in part:** "the HALT does not count a `create`" no longer holds for the web-class passphrase
   > from the merge of the retirement change (#9569). The premise itself (a hand-set value cannot be excluded from the
   > repository) is unchanged.
 - **The credential read in the preflight's fallback arm is not seen by the privileged-tier census.** The census's check of
@@ -647,7 +647,7 @@ hand-set value and an inherited `prd` name, a false positive that is safe). The 
 with #9372; the coupled artifacts are listed in
 <https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5980161163>.
 
-> **Superseded 2026-10-06 (#9372), in part, from the merge of the closing change:** the line "A first create of the passphrase and its key copy is legal under `luks_passphrase_rotations`" (gate-shape item 2 above) no longer holds for the web-class passphrase. From the merge of this change the rotation HALT of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` counts a `create` of `random_password.workspaces_luks_web` and the apply refuses it with no acknowledgement path. A create of `doppler_secret.workspaces_luks_web_key` alone stays legal (it restores the same state-held value, and a missing copy is itself an incident; the CTO's re-ruling of 2026-10-06 narrowed the earlier two-address scope), as does a first create at the other four addresses. The single-use escrow-create workflow (`apply-web-escrow-create.yml`) and its names helper are retired by the same change; the push-apply can still create the escrow config, bucket and name secrets, and a create there is not halted. There is no documented or verified automated recovery for a lost passphrase entry: importing the existing value is not a supported route (measured in a sandbox with the lock-pinned random provider, the import plans `special = true -> false`, a forced replacement that `prevent_destroy` refuses and that, forced, would mint a new passphrase), the live value is unharmed while its Doppler copy exists, and the repair is the owner's decision (for example a `terraform state pull` snapshot, if one was taken; the state backend has no versioning, ADR-006). Whether an import plus a state-attribute fix yields a clean plan is unmeasured and tracked on #9572. The status stays `adopting`, and this marker does not record that the rebirth has run: it is dispatch-only and still pending. The text above is kept as the dated record.
+> **Superseded 2026-10-06 (#9372), in part, from the merge of the closing change:** the line "A first create of the passphrase and its key copy is legal under `luks_passphrase_rotations`" (gate-shape item 2 above) no longer holds for the web-class passphrase. From the merge of this change the rotation HALT of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` counts a `create` of `random_password.workspaces_luks_web` and the apply refuses it with no acknowledgement path. A create of `doppler_secret.workspaces_luks_web_key` alone stays legal (it restores the same state-held value, and a missing copy is itself an incident; the CTO's re-ruling of 2026-10-06 narrowed the earlier two-address scope), as does a first create at the other four addresses. The single-use escrow-create workflow (`apply-web-escrow-create.yml`) and its names helper are retired by the same change; the push-apply can still create the escrow config, bucket and name secrets, and a create there is not halted. There is no documented or verified automated recovery for a lost passphrase entry: importing the existing value is not a supported route (measured in a sandbox with the lock-pinned random provider, the import plans `special = true -> false`, a forced replacement that `prevent_destroy` refuses and that, forced, would mint a new passphrase), the live value is unharmed while its Doppler copy exists, and the repair is the owner's decision (for example a `terraform state pull` snapshot, if one was taken; the state backend has no versioning, ADR-006). Whether an import plus a state-attribute fix yields a clean plan is unmeasured and tracked on #9572. The status stays `adopting`, and this marker does not record that the rebirth has run: it is dispatch-only and still pending. The passages above that describe the live names precondition describe the retired workflow's design and stay as the dated record. The text above is kept as the dated record.
 
 **Alternatives considered and rejected.** Re-enabling `apply-web-platform-infra.yml` (its whole-root plan carries unrelated
 destroy and replace entries, and the file sits near its byte cap). A new `apply_target` on that workflow (same file, same
@@ -773,6 +773,6 @@ names-only step that a census holds to that. Authorization is process, not mecha
 rotation HALT's `create` exemption, which the apply path of this workflow requires to have merged first.
 
 > **Clarified 2026-10-06 (#9372):** "the closing change" in the paragraph above names two changes. The retirement of
-> `apply-web-escrow-create.yml` and the flip of the HALT's `create` arm merged together as #9569. The deletion of the rebirth
+> `apply-web-escrow-create.yml` and the flip of the HALT's `create` arm merge together as PR #9569. The deletion of the rebirth
 > workflow, its scripts, gate and fixtures is a later change made after use (runbook `web2-luks-rebirth-9372.md`, closing
 > row 5).
