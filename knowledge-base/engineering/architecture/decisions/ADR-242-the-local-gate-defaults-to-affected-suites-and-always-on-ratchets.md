@@ -491,7 +491,7 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     both runner-critical files against a closed grammar, and the pre-pass takes the bounded walk (`AFFECTED_RUNNER_IN_SCOPE reason=registration-only`,
     `AFFECTED_SUMMARY ... fallback=none`) only when EVERY changed line fits: **G0** headers only (a mode, rename, delete, binary or no-newline marker is
     semantic); **G1** zero removed lines (an edited line is a removal plus an addition); **G2** every line added to the runner is a blank line, a `#`
-    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`; a plain repo-relative first
+    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`; a plain repo-relative first <!-- markdownlint-disable-line MD038 -->
     path argument that is not option-shaped, has no leading `/` and no `..` segment; `python3 -m` only `unittest|pytest`; no quote, substitution, redirect,
     `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that is not blank or a comment must itself be a
     complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line strings; every added line must also equal the
