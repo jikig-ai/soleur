@@ -36,3 +36,14 @@ Persisted by plan (headless). Rendered into the PR body by ship. Neither item is
 - code-simplicity: cut it (the next pass edits that file anyway). Kieran: fix the false "required check" wording.
   Plan default: keep a comment-only correction with no PR number. Reverse it if a third subsystem touch is
   unwelcome.
+
+## 5. Taste: security and observability findings left out of this pass
+
+- security-sentinel P1/P2: (a) `emit_fail` sources a deploy-owned env file as root after the refusal (F5);
+  (b) the unit wrapper expands the secret heartbeat URL before the guard's refusal (F6); (c) TLS-trust env unset and
+  `--proto '=https'` are cheap and realistic because `doppler run` injects the whole prd config (F2).
+  observability-coverage P1: the cron-probe failure has no standing page (F7), the refused-direct-POST mode has no
+  alert (F8). Plan default: each is recorded with a trigger and filed, none added to this pass, because each edits a
+  surface outside the two scripts (a unit file, a `.tf` alert, `cloud-init.yml`, an emit path) or widens the
+  brief's three named properties. Say so if (a) or (b) should ride this PR: (b) is a one-line unit edit that
+  re-triggers the same resource.

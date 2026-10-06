@@ -17,6 +17,36 @@ Spec lacks a valid `lane:` (no spec.md for this branch), so it defaults to `cros
 PR body uses `Ref #9217`, `Ref #7005`, `Ref #6601`, `Ref #7376`, `Ref #7797`, `Ref #9482`; never `Closes` (every one
 is a standing tracker that stays open after this pass). Draft PR: #9632.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Method:** deepen gates 4.5-4.12 run mechanically (user-brand impact present with a valid threshold; observability
+block present and its probe executable; no PAT-shaped tokens; no UI surface; no store or connection so no encryption
+posture; Guard Contract lint green with a structural assembly; Scope Check count 1 and compliant; no downtime-class
+trigger); every cited line, ADR and rule id re-read at its source; four review agents (security-sentinel,
+observability-coverage-reviewer, architecture-strategist, test-design-reviewer) over the finished plan.
+
+### Key improvements applied
+
+1. Fixed a false detection claim: the per-host uptime monitor cited for the cron-probe failure was retired
+   (`uptime-alerts.tf:138`); detection is now the boot trail, and the no-alert modes are stated as such (F7, F8).
+2. Corrected the apply-path claims: `ignore_changes` yields NO planned change for `hcloud_server.web`; a green apply can
+   hide a skipped SSH leg and a no-op arm step, so AC11/AC12 read the run summary and Better Stack rows; running web-2
+   keeps the old guard; the existing off-host image-coherence preflight already covers the baked-script hash trap.
+3. Narrowed Guard 1's claim honestly: the property covers the two scripts; the unit wrapper and the deploy-owned env
+   file sourced as root sit outside it (F5, F6) instead of being claimed clean.
+4. Fixed seven test-design defects before any test exists (a pre-existing row would have flipped in RED from an `env`
+   lookup under a stripped PATH; the pinned-POST row is a positive control, not RED; exported variables would have
+   leaked between rows; stub argv logging order and format; line-anchored cron stub assertions; the mktemp trap lint;
+   non-vacuity of the parity and baseline rows).
+5. Added the Network-Outage deep-dive (resource-shape trigger) and three carrier-census rows.
+
+### New considerations discovered
+
+- `doppler run` injects the whole prd config into the guard, so TLS-trust environment variables (F2) are more
+  realistic than first weighed.
+- The Sentry-curl deferral (F1) is acceptable on the merits, but the call site runs with `HOME=/root`.
+
 ## Overview
 
 Pass 1 of the merge-queue flakiness series. The two scripts that carry the last deferred file-exact
@@ -45,7 +75,7 @@ new findings on both. That prototype is evidence the design is sufficient, not a
 | "Class W deploy files auto-apply on merge" (`apply-deploy-pipeline-fix.yml`) | Neither file is in that workflow's `paths:` filter or in `terraform_data.deploy_pipeline_fix`'s `triggers_replace` (`grep -n 'cron-egress\|nic-guard' .github/workflows/apply-deploy-pipeline-fix.yml` returns nothing; `server.tf` is NOT edited here, so its `server.tf` path trigger does not fire either). What does fire is listed in `## Infrastructure (IaC)` | `[skip-deploy-fix-apply]` is irrelevant to this PR and is never used. Blast radius stated below |
 | The two files carry `grep -q` hits that block editing | Both rows are `=` (2 and 4) in `.claude/hooks/grep-q-pipe-guard.test.sh`; the edits add no `grep` at all, so the ceilings hold | Verify by running that suite; do not touch the rows |
 | "`--disable` and `--noproxy '*'` on every credentialed curl" | In `cron-egress-enforce-probe.sh` the only credentialed curl is the Sentry POST (`X-Sentry-Auth` key from the DSN). Lint Rule D does not see it (header name not in `CURL_AUTH_HEADER`, variable `$KEY` has no prefix before `_KEY`), and `cron-egress-enforce-probe.test.sh` "Sentry TRANSPORT parity" pins that exact `curl -m 10 --retry 3 -sf -X POST ...` line byte-identical to `soleur-host-bootstrap.sh:58`; a third copy lives in `workspaces-luks-emit.sh:361` | Leave that curl unchanged in this pass (a one-file edit reds the parity guard, and the other two copies are a baked boot installer and a file under LUKS security review). Recorded as a User-Challenge in `decision-challenges.md` and as follow-up F1 (with a filed issue, per `wg-defer-only-after-inline-triage`) |
-| Research-agent claim: edits "could cross the 23,800 B user_data budget" and `cron-egress-enforce-probe.sh` is hashed into `private_nic_guard_install` | False. `user_data` carries only `host_scripts_content_hash` (64 hex chars, `server.tf:311-312`, `:401`); script bytes are baked into the image (`Dockerfile`), so `cloud-init-user-data-size.test.ts` is unaffected. `triggers_replace` of `private_nic_guard_install` (`server.tf:895-907`) hashes only `web-private-nic-guard.{sh,service,timer}`, the private IP, the ingest URL and a token digest; `cron-egress-enforce-probe.sh` appears once in `server.tf` (`:201`, `host_script_files`) | Run `cloud-init-user-data-size` anyway as a check; no byte-budget work |
+| Research-agent claim: edits "could cross the 23,800 B user_data budget" and `cron-egress-enforce-probe.sh` is hashed into `private_nic_guard_install` | False. `user_data` carries only `host_scripts_content_hash` (64 hex chars, `server.tf:311-312`, `:401`); script bytes are baked into the image (`Dockerfile`), so `cloud-init-user-data-size.test.ts` is unaffected. `triggers_replace` of `private_nic_guard_install` (`server.tf:896-908`) hashes only `web-private-nic-guard.{sh,service,timer}`, the private IP, the ingest URL and a token digest; `cron-egress-enforce-probe.sh` appears once in `server.tf` (`:201`, `host_script_files`) | Run `cloud-init-user-data-size` anyway as a check; no byte-budget work |
 
 ## Research Insights
 
@@ -104,6 +134,7 @@ lines across every `*.test.*`, per `knowledge-base/project/learnings/test-failur
 | `betterstack-send-failed-alert-mutation.test.sh` M18 (`:355-361`) | mutates the NIC guard's `--data-raw "{\"message\":\"$LINE\"}"` payload text; the guard is in its sandbox population (`:74`) | payload text is not edited, so the anchor survives; run the suite |
 | `betterstack-send-failed-alert.test.sh` (the guard M18 drives) | walks `apps/web-platform/infra/*.sh` for Better Stack posters | run it; the new flags sit between `curl` and `-fsS` |
 | `fresh-boot-parity.test.sh:109-113`, `doppler-injection-bound.test.sh:232`, `arm-heartbeats*.test.sh`, `plugins/soleur/lib/heartbeat-manifest.ts:206-210` | name-level or unit-level references | unaffected; run |
+| `web-probe-envwrite.sh:48-49` (fresh-host env file writer), `vector.toml:270` and `web-private-nic-guard.service:22` (`SyslogIdentifier=web-nic-guard`, the Source 4 shipping key), `workspaces-luks-emit.sh:11-23,50` (header claims to mirror the probe's emit boundary), `scripts/followthroughs/l3-probe-armed-6438.sh:62` and `web2-standby-soak-6459.sh:70` (read the NIC-guard heartbeat state) | env value, log identifier, comment parity, heartbeat readers | unaffected by the edits; the env writer must carry the pinned value (it does, from the same local); the log identifier must stay on the refusal line's stderr path |
 | `.claude/hooks/grep-q-pipe-guard.test.sh:458-463` (deferral rows 2 and 4) | `=` ceilings | no `grep` added; comment text updated |
 | `scripts/lint-shell-trace-credential-refusal.baseline.txt` (lines 10, 21), `...-d.baseline.txt` (line 17) | file-keyed suppression | entries removed (drawdown) |
 | `scripts/lint-shell-trace-credential-refusal.test.sh` | scaffold and mutation fixtures; no per-file baseline count found | run it after the baseline edit |
@@ -139,14 +170,42 @@ not fire through its `server.tf` path trigger either).
    timer unit, all idempotent. No container restart, no host restart, no host replace. A timer tick that lands
    during the non-atomic env-file rewrite can read an empty `EXPECTED_IP` and exit 1 once; the next tick recovers
    (a property of every re-provision of this resource, not introduced here).
-2. `hcloud_server.web` plans a `user_data` text diff (new `host_scripts_content_hash`) that `ignore_changes`
-   suppresses: no replace, no downtime. The apply run's plan output is the evidence (post-merge AC11).
+2. `hcloud_server.web` carries `ignore_changes = [user_data, ...]` (`server.tf:597`), so the new
+   `host_scripts_content_hash` produces NO planned change for it: no replace, no downtime. The evidence is the
+   absence of any `hcloud_server.web` line in the run's `Plan:` output (post-merge AC11). Nothing else re-plans:
+   `host_script_files` and `host_scripts_content_hash` are referenced only in `server.tf` (`:173-310`, `:311`,
+   `:401`), no module reads them, and the only `file()` of either script is the NIC guard's own `triggers_replace`.
 3. `web-platform-release.yml` (`apps/web-platform/**`) builds and deploys a new image the normal way; both scripts
    reach a FRESH host only through that image (`soleur-host-bootstrap.sh` verifies the baked set against the hash at
    boot and aborts loudly on a stale image, the existing ADR-080 trap that applies to every edit of a baked
-   script and needs no extra step).
+   script). A fresh-host dispatch is protected by an existing gate: `web_host_create` and `web_host_replace` run
+   `apps/web-platform/infra/scripts/host-image-coherence-preflight.sh` off-host BEFORE any destructive step
+   (`apply-web-platform-infra.yml:5074`, `:5504`), so a dispatch between this merge and the new image deploying
+   fails loudly and early; a web-2 replace should wait for the new release or pin `image_tag` to it.
 4. `cron-egress-enforce-probe.sh` has no running-host delivery path: it executes only at fresh-host boot. The first
    execution of the hardened copy is the next fresh web-host boot.
+5. The running web-2 keeps the UNHARDENED NIC guard until it is replaced: `private_nic_guard_install` targets
+   `web["web-1"]` only (`server.tf:902`) and `deploy_pipeline_fix_web2` (`server.tf:2135`) has no NIC-guard
+   delivery. Fresh hosts get the hardened copy through the image; the running web-2 does not. Stated here so
+   the pass is not read as fleet-wide.
+6. Gates on that apply, so a green merge is not proof it ran: the SSH-provisioned leg runs only when
+   `CI_SSH_ACCESS_TOKEN_ID` is readable in Doppler `prd_terraform` (`apply-web-platform-infra.yml:1118-1146`); when it
+   is absent the leg is skipped, the run stays green and only a notice goes out (`:1255-1282`). The heartbeat arm
+   step is a no-op for an already-armed monitor (`arm-heartbeats.sh:411-414`), so a refusing guard would not fail
+   the apply and would surface as heartbeat absence after about 480 s (`arm-heartbeats.sh:488-491`). Post-merge AC11
+   and AC12 therefore read the run summary for "SSH stage: ran" and the Better Stack rows, not just the run
+   conclusion. Also: the PR must not carry a commit-message line that is exactly `[skip-web-platform-apply]` or
+   `[ack-destroy]` (`:326-350`), and `infra-validation.yml` also fires on `apps/*/infra/**`.
+
+### Network-Outage Deep-Dive (resource-shape trigger)
+
+The post-merge apply drives a resource whose provisioners use `connection { type = "ssh" }`. L3 firewall: the CI
+runner reaches web-1 over the Cloudflare tunnel SSH bridge (`.github/actions/cf-tunnel-ssh-bridge`, header of
+`apply-web-platform-infra.yml:316-318`), not through `var.admin_ips`, and this plan changes no firewall, DNS or
+tunnel resource. L3 DNS/routing: unchanged (bridge host key pinned via `local.web_1_ssh_host_key`). L7 TLS/proxy and
+L7 application: not exercised by this change beyond the existing provisioner. Verification artifact: the apply
+run's "SSH stage" summary line (AC11). Not verified here and not claimed: current egress-IP reachability of web-1,
+because the bridge makes it irrelevant to this path.
 
 `[skip-deploy-fix-apply]` is not used and has nothing to skip here.
 
@@ -182,53 +241,76 @@ during RED/GREEN, and the result is recorded in the PR body (see `## Guard Contr
 - Harness changes (none alters an existing assertion's meaning), all required by the rows below because today
   `run_guard` hard-codes `bash "$SUT"` and discards stdout, stderr and rc:
   (i) `run_guard` takes optional `SUT_UNDER_TEST` (default `$SUT`), a launch-flags array (`bash` flags such as
-  `-x`) and an `EXTRA_ENV` array passed through `env` (`SHELLOPTS` is readonly in the test shell, so it can only
-  travel via `env`), and records rc plus stdout and stderr into `$RC`, `$OUT`, `$ERR`;
-  (ii) the `curl` stub appends its argv ONE ARGUMENT PER LINE (calls separated by a marker line) to `$STUB_ARGV`,
-  because the payload and the `Authorization: Bearer ...` header both contain spaces, and honours
+  `-x`) and an `EXTRA_ENV` array passed through `env`, and records rc plus stdout and stderr into `$RC`, `$OUT`,
+  `$ERR`. `ENV_BIN` and `BASH_BIN` are resolved by absolute path once, next to `TIMEOUT_BIN`: the hide-ip arm
+  (T3) runs with `PATH=$nobin`, which has no `env`, so an `env` call by name would flip a pre-existing row to
+  rc 127 in RED. Everything that varies (`STUB_POST_RC`, `STUB_PING_RC`, `INGEST_URL`, `INGEST_URL_PINNED`,
+  `BASH_ENV`, `SHELLOPTS`) travels ONLY through `EXTRA_ENV`, never exported in the test shell (an exported evil
+  `INGEST_URL_PINNED` would poison X3c, X4 and every later row), and `$STUB_ARGV` is truncated per run;
+  (ii) the `curl` stub logs, BEFORE its early IMDS exit, its argv one argument per line with `printf '%s\n' "$a"`
+  (never `echo`: `-n` is a valid curl flag), calls separated by a marker line, to `$STUB_ARGV`, because the
+  payload and the `Authorization: Bearer ...` header both contain spaces; the IMDS call is identified by the
+  stub's own `*private-networks*` predicate; it also honours
   `STUB_POST_RC` and `STUB_PING_RC` so the `post || post` and heartbeat `||` fallback copies are reachable (the
   stub exits 0 unconditionally today);
   (iii) the synthetic destination becomes `PINNED_URL`, read at test time from `zot-registry.tf` with the `sed`
   expression `fresh-boot-ready.test.sh` S4d already uses (never retyped), and `BETTERSTACK_INGEST_URL="$PINNED_URL"`
   replaces `https://synthetic.invalid/ingest`. Before the pin exists this is a no-op for the old script, so every
   existing row stays green in RED.
-- **X1 xtrace refusal fires** (Guard 1): a loop over three launch forms, each with `EXPECTED_IP`, a synthetic token
+- **X1 xtrace refusal fires** (Guard 1): a loop over three launch forms (each form its own labelled `assert`, and a
+  failing rc check prints the rc and the first `$ERR` line so a `timeout` rc 124 is not misread as a refusal bug;
+  `$TMP/xt.env` is created once before the loop), each with `EXPECTED_IP`, a synthetic token
   `SYNTH-TOKEN-7797` and heartbeat URL `https://synthetic.invalid/beat/SYNTH-BEAT-7797` in the environment:
   `bash -x "$SUT"`, `env SHELLOPTS=xtrace bash "$SUT"`, and `env BASH_ENV="$TMP/xt.env" bash "$SUT"` where `xt.env`
   holds `set -x`. Assert per form: rc is exactly 78; a stderr line NOT beginning with `+` contains
   `refusing to run under xtrace` (xtrace itself echoes `+ printf '[FATAL] refusing ...'`, so an unanchored match
-  would pass even if the message never printed); neither stdout nor stderr contains `SYNTH-TOKEN-7797` or
+  would pass even if the message never printed; extract with `grep -v '^+' <<<"$ERR" | grep -c ... >/dev/null`,
+  which is not a pipe-fed `grep -q`); neither stdout nor stderr contains `SYNTH-TOKEN-7797` or
   `SYNTH-BEAT-7797`; `$STUB_EMIT`, `$STUB_PING` and `$STUB_ARGV` are empty (the stub `curl` is on PATH, so a leak
   would be recorded).
-- **X1b unconditional**: one `bash -x` launch with NO credential in the environment still exits 78. The lint
+- **X1b unconditional**: one `bash -x` launch with NO credential and `EXPECTED_IP` unset in the environment still
+  exits 78 (assert only rc 78; on the pristine script the old fatal path returns rc 1, which is red for the right
+  reason, and the refusal must also precede the `EXPECTED_IP` check at lines 28-31). The lint
   accepts a conditional `${TOKEN:+x}` refusal for this file, so this is the only guard that the unconditional
   property holds. The existing T1 healthy run is the untraced positive control.
 - **X2 transport argv** (Guard 2): after a healthy run, a POST-failing run (`STUB_POST_RC=1`) and a
   heartbeat-failing run (`STUB_PING_RC=1`), walk `$STUB_ARGV` per call: every call that is not the IMDS probe has
   `--disable` as its FIRST argument, and `--noproxy` is immediately followed by `*` (adjacency over the argument
   array). Floors so the loop cannot pass vacuously: at least 2 POST calls and 2 ping calls across the failing runs.
-- **X3 pin** (Guard 3), each case asserting the POST count in `$STUB_ARGV` and that the token string appears in no
-  recorded argv: pinned URL (and with a different token and `EXPECTED_IP`) -> POST made to exactly `$PINNED_URL`;
-  an unrelated URL, the pinned host over `http://`, the pinned URL minus its trailing slash,
+- **X3 pin** (Guard 3): first assert `$PINNED_URL` is non-empty and matches `^https://` (an empty `sed` result
+  would make the parity rows compare empty against empty). Pinned URL (also with a different token and
+  `EXPECTED_IP`) -> exactly one POST to `$PINNED_URL`: this row is GREEN on the pristine script and is the
+  positive control, not a RED row (it carries Guard 3 mutation 5). Each REFUSED case asserts the POST count is 0
+  and the token string appears in no recorded argv (the token legitimately appears in the pinned case, so the
+  assertion is scoped to refused cases): an unrelated URL, the pinned host over `http://`, the pinned URL minus its trailing slash,
   `https://<pinned-host>@evil.invalid/`, and `https://evil.invalid/?x=<pinned-host>/` -> ZERO POST calls, a stderr
   line containing `unpinned_url`, the heartbeat still pings (nic_ok path unchanged), rc 0.
 - **X3b not redirectable by env**: `INGEST_URL_PINNED=https://evil.invalid/` and
-  `BETTERSTACK_INGEST_URL=https://evil.invalid/` both exported -> zero POSTs. (An exported `INGEST_URL` alone is
-  GREEN on the pristine script, since the script already overwrites it; it is not a RED row and is not added.)
+  `BETTERSTACK_INGEST_URL=https://evil.invalid/` both set through `EXTRA_ENV` -> zero POSTs; and the other half as
+  a positive control: `INGEST_URL_PINNED=https://evil.invalid/` with the REAL pinned `BETTERSTACK_INGEST_URL` still
+  POSTs to the real pinned URL. A token-empty row (pinned URL, no token) makes zero POSTs. (An exported
+  `INGEST_URL` alone is GREEN on the pristine script, since the script already overwrites it; not added.)
   ADR-214: no env-declared seam; the only way a test reaches a non-vendor destination is the PATH `curl` stub.
 - **X3c parity**: the script's `readonly INGEST_URL_PINNED="..."` line equals the `zot-registry.tf` literal
   byte-for-byte (trailing slash included) and contains no `$` or backtick.
-- **X4 drawdown**: the SUT path is absent from both baseline files (one `grep -c ... >/dev/null`). The lint itself
+- **X4 drawdown**: the SUT's FULL repo path (`apps/web-platform/infra/web-private-nic-guard.sh`, the form the
+  baseline lines carry) is absent from both baseline files (`grep -cxF`; a basename needle would be green on the
+  pristine tree). The lint itself
   is not re-run in the suite: the repo-wide run (`test-all.sh:4761`, required `test` shard) already executes it,
   and after the drawdown that run covers both files.
 
 **`apps/web-platform/infra/cron-egress-enforce-probe.test.sh`**:
 
-- Stub dir PREPENDED to PATH (`timeout 15 doppler` and `docker` resolve from PATH; never replace it):
+- Stub dir created with `mktemp -d` under an `EXIT` trap that removes it (`lint-trap-tempfile-ownership.py`
+  rule c fires on a `mktemp` with no owning trap; precedent `fresh-boot-ready.test.sh:189`), and PREPENDED to PATH
+  per run (`PATH="$STUBS:$PATH" ... bash`, never exported globally, so it cannot shadow `sleep` or `curl` for later
+  rows; `run_probe` is wrapped in `timeout 20`; `timeout 15 doppler` and `docker` resolve from PATH):
   `docker` (dispatch on `$1`: `ps` prints `soleur-web-platform`; `exec` returns 0 for `api.github.com` and 28 for
   `example.com`; refuses unknown argv like the `fresh-boot-ready` stubs), `nft` (prints `jump SOLEUR-EGRESS`),
   `systemctl` (`is-active` rc 0), `sleep`, and `doppler` (prints a non-empty synthetic DSN) plus `curl`, each
-  logging its argv to `$STUB_CALLS`. A small `run_probe <probe-path> [bash flags]` helper (new; the suite has none)
+  logging `name<TAB>argv` to `$STUB_CALLS`, asserted with line-anchored patterns (`^curl`, `^doppler`, `^REFUSED`):
+  the healthy path legitimately logs `docker exec ... curl ...`, so an unanchored "curl never called" check would
+  go red on a healthy run. A small `run_probe <probe-path> [bash flags]` helper (new; the suite has none)
   captures rc, stdout, stderr and the call log.
 - **P-X1** `bash -x`, `env SHELLOPTS=xtrace bash`, and `BASH_ENV` forms: rc exactly 78; a non-`+` stderr line
   contains `refusing to run under xtrace`; `$STUB_CALLS` is EMPTY. The empty log is what proves the refusal sits
@@ -237,13 +319,13 @@ during RED/GREEN, and the result is recorded in the PR body (see `## Guard Contr
 - **P-X1c** the same stubs, untraced: rc 0, prints `egress-enforce-ok`, `doppler` and `curl` stubs never called
   (the clean-success path disarms the trap). This is the cron suite's only positive control (the suite has no
   healthy-run row today).
-- **P-L** the probe path is absent from the A/B/C baseline (one `grep -c`).
+- **P-L** the probe's full repo path is absent from the A/B/C baseline (`grep -cxF`).
 - The existing Sentry TRANSPORT parity block is unchanged and must stay green (it is why the Sentry curl is
   untouched).
 
 Confirm RED by running both suites against the pristine scripts: the failures must be exactly the new rows above
-(X1 x3 forms, X1b, X2, the X3 refused cases and the pinned-POST row, X3b, X3c literal row, X4, P-X1 x3, P-L) and
-no pre-existing row.
+(X1 x3 forms, X1b, X2, the X3 refused cases, X3b, X3c literal row, X4, P-X1 x3, P-L) and no pre-existing row; the
+pinned-POST, `INGEST_URL_PINNED`-with-real-URL and untraced rows are GREEN in RED by design (positive controls).
 
 ### Phase 1 — GREEN (the two scripts)
 
@@ -259,9 +341,10 @@ esac
 preceded by a short comment stating: unconditional because `emit_fail` ACQUIRES the DSN at runtime so a
 `${VAR:+x}` hatch would be open by construction; placed before the EXIT trap so the refusal is not itself traced or
 re-emitted; the caller (`cloud-init.yml:807`) treats any non-zero exit as "power off the host", so a refusal on a
-traced fresh-host boot powers it off, which is the intended fail-closed outcome. Nothing in `cloud-init.yml`,
-`soleur-host-bootstrap.sh` or `server.tf` enables tracing (`grep -n 'set -x\|bash -x\|SHELLOPTS'` over those files
-returns only the refusal text itself). No other line changes.
+traced fresh-host boot powers it off, which is the intended fail-closed outcome. No SHIPPED boot path enables
+tracing (`grep -n 'set -x\|bash -x\|SHELLOPTS'` over `cloud-init.yml`, `soleur-host-bootstrap.sh` and `server.tf`
+returns only the refusal text itself); the one surface that could is the deploy-owned env file `emit_fail`
+sources (F5), a pre-existing privilege-boundary question this pass does not change. No other line changes.
 
 `apps/web-platform/infra/web-private-nic-guard.sh`:
 
@@ -347,7 +430,12 @@ reads) is covered only if the refusal precedes it, and the refusal tests the STA
 spellings. Three launch forms reach that state (`bash -x`, `SHELLOPTS=xtrace`, a `BASH_ENV` file with `set -x`,
 two of which carry no `-x` token) and a fourth is a later `set -x` inside the file (lint Rule B). Two scripts, so
 every row runs per script where it applies; the sibling that already carries the refusal
-(`soleur-host-bootstrap.sh:26`) is out of scope.
+(`soleur-host-bootstrap.sh:26`) is out of scope. The property is about the two SCRIPTS' own commands. Two
+neighbouring surfaces are outside that assembly and recorded as follow-ups, not silently claimed: the unit wrapper
+`web-private-nic-guard.service:29` (`doppler run -- bash -c 'export WEB_NIC_GUARD_URL="${!KEY}"; exec guard'`)
+expands the secret heartbeat URL in its inner shell BEFORE the guard's refusal can run (F6), and the cron probe's
+`emit_fail` sources `/etc/default/webhook-deploy` as root (`cron-egress-enforce-probe.sh:49`), a file chowned to the
+`deploy` user (`cloud-init.yml:447-449`) (F5).
 
 **Mutation matrix:**
 
@@ -435,18 +523,18 @@ script-only edit of the literal cannot pass X3c, and editing both is visible as 
 liveness_signal:
   what: Better Stack heartbeat web_nic_guard, pinged on every healthy NIC-guard run (unchanged); plus SOLEUR_PRIVATE_NIC rows shipped by the direct POST
   cadence: per timer tick (web-private-nic-guard.timer)
-  alert_target: Better Stack (heartbeat absence pages through the existing web_nic_guard alert)
+  alert_target: Better Stack heartbeat absence emails (email=true; call, sms and push are false and betterstack_paid_tier defaults to false, so no escalation policy; apps/web-platform/infra/web-probe.tf:52)
   configured_in: apps/web-platform/infra/web-probe.tf:52 (betteruptime_heartbeat.web_nic_guard)
 error_reporting:
   destination: stderr of web-private-nic-guard.service into journald, shipped by Vector to Better Stack Logs (Source 4); the cron probe reports through its existing Sentry emit_fail envelope
   fail_loud: "[nic] unpinned_url: refusing to send the Better Stack token to an unpinned destination" (new, NIC guard); "[FATAL] refusing to run under xtrace" (both scripts, to the caller's stderr)
 failure_modes:
   - mode: NIC guard pin mismatch (env file value differs from the literal) so the direct POST is refused while the heartbeat keeps firing
-    detection: the journald unpinned_url line above, and the absence of fresh SOLEUR_PRIVATE_NIC rows in Better Stack Logs after the post-merge apply (Phase 4 query); the parity rows in the suite prevent the drift at CI time
-    alert_route: Better Stack Logs query in the post-merge check; no new page is added (the heartbeat still proves the guard is alive)
+    detection: the journald unpinned_url line above (shipped under SyslogIdentifier=web-nic-guard, listed in vector.toml:270 Source 4, queryable with scripts/betterstack-query.sh --grep unpinned_url), and the absence of fresh SOLEUR_PRIVATE_NIC rows after the post-merge apply (Phase 4 query); the parity rows in the suite prevent the drift at CI time
+    alert_route: operator-polled Better Stack Logs query in the post-merge check; NO standing alert exists for this mode and none is added here (the heartbeat stays green while the direct POST is refused, which is the gap); follow-up F8 adds a logtail alert on unpinned_url
   - mode: cron probe launched under tracing on a fresh host, exits 78
-    detection: cloud-init treats the non-zero exit as a failed probe and powers the host off, so the per-host uptime detector (#5933 item 1) reports the host absent; no Sentry event is emitted by design (running the DSN fetch under trace is the leak being prevented)
-    alert_route: per-host uptime monitor
+    detection: cloud-init treats the non-zero exit as a failed probe and powers the host off (cloud-init.yml:807-809, which echoes to the cloud-init output log and emits nothing else); no Sentry event is emitted by design (running the DSN fetch under trace is the leak being prevented). The host never reaches the `cloud_init_complete` boot-trail stage in Better Stack, which is how a dark fresh host is read (knowledge-base/engineering/operations/runbooks/web-host-birth.md, "Expect cloud_init_complete as the last-reached stage"; scripts/followthroughs/web-fresh-boot-zot-8651.sh). The per-host uptime monitor from #5933 item 1 was retired (uptime-alerts.tf:138) and is NOT a detector here; xtrace cannot occur in a shipped boot path, so this mode is defence only
+    alert_route: boot-trail absence read by the web-host-birth runbook and the fresh-boot followthrough probe; no standing page (follow-up F7 adds a boot-emit before the power-off)
   - mode: NIC guard launched under tracing on web-1, exits 78
     detection: unit result failed in journald; the heartbeat lapses because no beat is sent, so the existing absence alarm fires
     alert_route: Better Stack heartbeat absence
@@ -545,8 +633,8 @@ guard cannot be traced on-host by design; follow-ups F1 (filed issue with trigge
 
 ### Post-merge
 
-- [ ] AC11 (via `soleur:postmerge`) the `apply-web-platform-infra.yml` push run for the merge SHA concludes `success` with no `::error::`, its SSH-provisioned leg having applied `terraform_data.private_nic_guard_install`, and its plan shows no `hcloud_server.web` replace.
-- [ ] AC12 `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_PRIVATE_NIC --limit 20` returns web-variant rows (`reboot_count=0 zot_store_mounted=n/a`) after the apply, and a `--grep unpinned_url` query returns none.
+- [ ] AC11 (via `soleur:postmerge`) the `apply-web-platform-infra.yml` push run for the merge SHA concludes `success` with no `::error::`, its summary reads "SSH stage: ran" (a skipped SSH leg is green too, so the conclusion alone proves nothing), the apply output shows `terraform_data.private_nic_guard_install` replaced, and no `hcloud_server.web` line appears in any `Plan:` output.
+- [ ] AC12 after at least two timer ticks past the apply, `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m --grep SOLEUR_PRIVATE_NIC --limit 20` returns web-variant rows (`reboot_count=0 zot_store_mounted=n/a`) dated after the apply, and a `--grep unpinned_url` query returns none; the arm step cannot catch a refusing guard (no-op for an armed monitor), so these rows are the check.
 - [ ] AC13 Evidence comments posted on #9217 and #7797; one learning per finding committed.
 
 ## Test Scenarios
@@ -564,15 +652,31 @@ Each is explicitly NOT done in this pass. All ride tracker #9217 unless a row na
 #9217 lists them, and F1 gets its own issue before the PR leaves draft (milestone from
 `knowledge-base/product/roadmap.md`).
 
-- F1 Sentry-DSN curl family: harden the `curl -m 10 --retry 3 -sf -X POST ".../store/"` transport in
+- F1 Sentry-DSN curl family (call site runs with `HOME=/root`, `cloud-init.yml:347`, so a root `.curlrc` would be
+  read; nothing writes one at boot): harden the `curl -m 10 --retry 3 -sf -X POST ".../store/"` transport in
   `cron-egress-enforce-probe.sh`, `soleur-host-bootstrap.sh:58,287` and `workspaces-luks-emit.sh:361` TOGETHER
   (the parity guard forces lockstep), and teach Rule D to classify `X-Sentry-Auth` / DSN-key curls (a lint blind
   spot, belongs with Item F). Re-evaluate when: the next edit to any of the three files, or the LUKS security
   review pass, whichever comes first.
-- F2 TLS-trust and git-trace environment hardening (`SSLKEYLOGFILE`, `CURL_CA_BUNDLE`, `SSL_CERT_*`, `CURL_HOME`,
+- F2 TLS-trust and git-trace environment hardening (more realistic than it looks: `doppler run` injects the whole
+  prd config into the guard and its curls, so anyone who can write that config can set `SSLKEYLOGFILE`,
+  `CURL_CA_BUNDLE` or `SSL_CERT_*`; `--proto '=https'` on both curls is cheap defence in depth) (`SSLKEYLOGFILE`, `CURL_CA_BUNDLE`, `SSL_CERT_*`, `CURL_HOME`,
   `GIT_TRACE*`) as a family-wide property.
 - F3 Heartbeat-curl flags on the sibling probes (`web-zot-consumer-probe.sh:67`, `web-git-data-probe.sh:40`,
   `inngest-consumer-probe.sh:94-95`): same secret-URL shape, outside this brief's two files.
+- F5 `cron-egress-enforce-probe.sh:49` sources `/etc/default/webhook-deploy` as root inside `emit_fail`; that file is
+  chowned to the `deploy` user (`cloud-init.yml:447-449`), so a planted `set -x` (or any code) runs in the root
+  context after the refusal passed. Pre-existing privilege-boundary issue (security-sentinel P1); fix by reading the
+  token with `sed -n` instead of sourcing, with a seam-free fixture row. Not in this pass: it edits the failure
+  path of a fail-closed boot script.
+- F6 `web-private-nic-guard.service:29` expands `${!WEB_NIC_GUARD_URL_KEY}` in an inner `bash -c` before the guard's
+  refusal can run; move the indirect lookup into the guard after the refusal (and the same shape in the sibling
+  probe units).
+- F7 Emit a boot-trail event (`soleur-boot-emit`) before the probe's `poweroff -f` (`cloud-init.yml:809`) so a
+  refused or failed probe is visible without the cloud-init output log (observability review P1).
+- F8 A `logtail_exploration_alert` on `SYSLOG_IDENTIFIER='web-nic-guard'` rows containing `unpinned_url`
+  (precedent `luks_monitor_host_timer_dark`, `monitor_send_failed` in `betterstack-logs-alerts.tf`), so the
+  refused-direct-POST mode has a standing alert instead of the post-merge query only.
 - F4 Bearer and heartbeat URL on curl's argv (visible in the process table); precedent for the stdin-config form is
   `cloud-init-inngest.yml:327`.
 - Brief-named later passes: converting the 6 greps in these two files; Wave A3 other rows (`cloud-init-*.yml` and

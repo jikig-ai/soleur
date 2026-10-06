@@ -9,8 +9,11 @@ Branch: `feat-one-shot-a3-credential-hardening-egress-probe-nic-guard` | Draft P
   (`python3 scripts/lint-shell-trace-credential-refusal.py <file>`: expect 1 finding for the probe, 3 for the guard).
 - 0.2 `web-private-nic-guard.test.sh` harness
   - 0.2.1 `run_guard`: `SUT_UNDER_TEST`, launch-flags array, `EXTRA_ENV` array via `env` (SHELLOPTS is readonly in
-    the test shell); capture rc, stdout and stderr into `$RC`, `$OUT`, `$ERR`.
-  - 0.2.2 `curl` stub: argv one argument per line (calls separated by a marker) into `$STUB_ARGV`;
+    the test shell); `ENV_BIN`/`BASH_BIN` by absolute path (T3's hide-ip PATH has no `env`); everything that varies
+    travels only through `EXTRA_ENV`, never exported; capture rc, stdout and stderr into `$RC`, `$OUT`, `$ERR`;
+    truncate `$STUB_ARGV` per run.
+  - 0.2.2 `curl` stub: log BEFORE the IMDS early exit, `printf '%s\n' "$a"` per argument (never `echo`), calls
+    separated by a marker, into `$STUB_ARGV`;
     `STUB_POST_RC` and `STUB_PING_RC` knobs so the fallback copies are reachable.
   - 0.2.3 `PINNED_URL` read from `zot-registry.tf` (same `sed` as `fresh-boot-ready.test.sh` S4d); feed it as
     `BETTERSTACK_INGEST_URL` in `run_guard`.
@@ -20,14 +23,17 @@ Branch: `feat-one-shot-a3-credential-hardening-egress-probe-nic-guard` | Draft P
   - 0.3.2 X1b: `bash -x` with no credential still 78.
   - 0.3.3 X2 argv walk (healthy, POST-failing, heartbeat-failing): first argument `--disable`, `--noproxy` adjacent
     to `*`, call-count floors (2 POST, 2 ping).
-  - 0.3.4 X3 pin: pinned (also with other token and `EXPECTED_IP`) POSTs; unrelated, `http://`, no trailing slash,
+  - 0.3.4 X3 pin: first assert `$PINNED_URL` non-empty and `^https://`; pinned (also with other token and
+    `EXPECTED_IP`) POSTs (GREEN in RED, a positive control); token-empty makes zero POSTs; unrelated, `http://`, no trailing slash,
     `@evil`, `?x=host/` make zero POSTs, `unpinned_url` on stderr, heartbeat still pings, rc 0.
-  - 0.3.5 X3b: exported `INGEST_URL_PINNED` and `BETTERSTACK_INGEST_URL` both evil -> zero POSTs.
+  - 0.3.5 X3b: `INGEST_URL_PINNED` and `BETTERSTACK_INGEST_URL` both evil (via `EXTRA_ENV`) -> zero POSTs; evil
+    `INGEST_URL_PINNED` with the real pinned URL still POSTs.
   - 0.3.6 X3c: literal equals `zot-registry.tf` byte-for-byte, no `$` or backtick.
-  - 0.3.7 X4: path absent from both baselines.
+  - 0.3.7 X4: full repo path absent from both baselines (`grep -cxF`).
 - 0.4 `cron-egress-enforce-probe.test.sh`
-  - 0.4.1 `run_probe <path> [flags]` helper and stub dir prepended to PATH (`docker` dispatching on `$1` and refusing
-    unknown argv, `nft`, `systemctl`, `sleep`, `doppler` printing a synthetic DSN, `curl`), logging to `$STUB_CALLS`.
+  - 0.4.1 `run_probe <path> [flags]` helper (wrapped in `timeout 20`), stub dir from `mktemp -d` under an EXIT
+    trap, prepended to PATH per run (`docker` dispatching on `$1` and refusing
+    unknown argv, `nft`, `systemctl`, `sleep`, `doppler` printing a synthetic DSN, `curl`), logging `name<TAB>argv` to `$STUB_CALLS` (assert line-anchored `^curl`, `^doppler`, `^REFUSED`).
   - 0.4.2 P-X1 (three launch forms: rc 78, non-`+` stderr line, empty call log); P-X1c (untraced: rc 0,
     `egress-enforce-ok`, doppler and curl never called); P-L (path absent from the A/B/C baseline).
 - 0.5 Run both suites against the PRISTINE scripts and record RED: only the new rows fail; no pre-existing row.
@@ -85,6 +91,9 @@ Branch: `feat-one-shot-a3-credential-hardening-egress-probe-nic-guard` | Draft P
     from the single `.tf` source in the same change.
   - L3 [test-failures] verify every research-subagent claim at `file:line` before it enters a plan: two false
     carrier claims (size budget, `triggers_replace` membership) in this plan's own research.
+- 4.3b File issues for the follow-ups with a re-evaluation trigger: F1 (with the Rule D blind spot), and one
+  combined issue for F5/F6/F7/F8 (security-sentinel and observability findings). F2/F3/F4 ride #9217.
 - 4.4 Evidence comments on #9217 and #7797.
-- 4.5 Post-merge (via `soleur:postmerge`): apply run `success` with the SSH-provisioned leg, no `hcloud_server.web`
-  replace in the plan, `SOLEUR_PRIVATE_NIC` rows present after the apply and no `unpinned_url` rows.
+- 4.5 Post-merge (via `soleur:postmerge`): apply run `success` AND summary "SSH stage: ran" (a skipped leg is green
+  too), `private_nic_guard_install` replaced, no `hcloud_server.web` line in any `Plan:`; after two timer ticks,
+  `SOLEUR_PRIVATE_NIC` rows present and no `unpinned_url` rows. Note in the PR that running web-2 keeps the old guard.
