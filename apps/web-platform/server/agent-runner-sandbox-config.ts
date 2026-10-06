@@ -310,7 +310,8 @@ export function buildAgentSandboxConfig(
   const { denyRead: siblingDeny, degraded } = enumerateSiblingDenyPaths(workspacePath);
   // ADR-113 — support-persona containment: additional absolute paths to obscure
   // (`--tmpfs`) from the read-only support session. The support agent runs under
-  // `--ro-bind / /` (whole FS readable) with Bash (kb-search greps), so the
+  // `--ro-bind / /` (whole FS readable) with Bash retained as the
+  // deny+escalate tripwire (kb-search itself is Read/Grep/Glob-only, #9559), so the
   // internal `knowledge-base/` (confidential operator post-mortems/roadmap/ADRs)
   // is denied here at the tool/root level — NOT by prompt. Deduped with the
   // sibling deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
