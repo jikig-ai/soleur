@@ -36,5 +36,5 @@ Hard limits: code PR only. No dispatch (plan-only or real) of `web2-luks-rebirth
 ## Phase 5: Ship
 
 - 5.1 Security-focused review (security-sentinel + user-impact-reviewer) before merge; resolve findings.
-- 5.2 PR body: `Ref #9372`, the recorded live control, Vector 0.43.1 reproduction summary, measured baseline, `tags.host` trust note, decision-challenges, and the no-dispatch/no-approval/no-write statement.
+- 5.2 PR body: `Ref #9372`, the recorded live control, Vector 0.43.1 reproduction summary, observed level (the volume's own reading, not an independent empty reference), `tags.host` trust note, decision-challenges, and the no-dispatch/no-approval/no-write statement.
 - 5.3 Comment on #6944 (root cause; does not close it) and on #9372 (next owner-gated step: first post-merge plan-only dispatch).

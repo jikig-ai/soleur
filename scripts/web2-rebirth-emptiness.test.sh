@@ -27,12 +27,19 @@ real_total='{"name":"filesystem_total_bytes","namespace":"host","tags":{"collect
 # non-canonical but valid: other values, extra tag keys, permuted key order
 real_used2='{"gauge":{"value":15900000.0},"kind":"absolute","tags":{"mountpoint":"/mnt/data","host":"soleur-web-2","extra":"x","filesystem":"ext4","device":"/dev/sdb","collector":"filesystem"},"namespace":"host","name":"filesystem_used_bytes","timestamp":"2026-01-02T00:00:00.000000000Z"}'
 # the shape the gate USED to read: flat fields no stored row carries
+# shellcheck disable=SC2034  # read through ${!nm} in the decoy loop
 legacy_row='{"host_name":"soleur-web-2","source_kind":"host_metrics","metric":{"name":"filesystem_used_bytes","value":16000000.0},"mountpoint":"/mnt/data"}'
+# shellcheck disable=SC2034  # read through ${!nm} in the decoy loop
 decoy_host='{"name":"filesystem_used_bytes","namespace":"host","tags":{"collector":"filesystem","device":"/dev/sdb","filesystem":"ext4","host":"soleur-web-platform","mountpoint":"/mnt/data"},"kind":"absolute","gauge":{"value":16000000.0}}'
+# shellcheck disable=SC2034  # read through ${!nm} in the decoy loop
 decoy_scalar_tags='{"name":"filesystem_used_bytes","namespace":"host","tags":"soleur-web-2","kind":"absolute","gauge":{"value":16000000.0}}'
+# shellcheck disable=SC2034  # read through ${!nm} in the decoy loop
 decoy_mount="${real_used/\"mountpoint\":\"\/mnt\/data\"/\"mountpoint\":\"\/\"}"
+# shellcheck disable=SC2034  # read through ${!nm} in the decoy loop
 decoy_ns="${real_used/\"namespace\":\"host\"/\"namespace\":\"process\"}"
+# shellcheck disable=SC2034  # read through ${!nm} in the decoy loop
 decoy_name="${real_used/filesystem_used_bytes/filesystem_free_bytes}"
+decoy_nodev="${real_used/\"device\":\"\/dev\/sdb\",/}"
 decoy_no_gauge='{"name":"filesystem_used_bytes","namespace":"host","tags":{"collector":"filesystem","device":"/dev/sdb","filesystem":"ext4","host":"soleur-web-2","mountpoint":"/mnt/data"},"kind":"absolute"}'
 
 # w2r_sql_paths <sql-text> -- resolve the SQL's own JSON paths under a STRICT grammar. Prints, one per line:
@@ -43,7 +50,7 @@ decoy_no_gauge='{"name":"filesystem_used_bytes","namespace":"host","tags":{"coll
 # (an `OR`, `!=`, `LIKE` or two conjuncts on one line must fail, never be skipped). Zero conjuncts is `parsed 0` and returns 1.
 w2r_sql_paths() {
   local sql="$1" line state=0 seen=0 rc=0 p v floats f sel
-  local re_win="^WHERE dt > now\(\) - INTERVAL [0-9]+ DAY$"
+  local re_win="^WHERE dt > now\(\) - INTERVAL [0-9]+ DAY AND dt <= now\(\)$"
   local re_eq="^  AND JSONExtractString\(raw,('[a-z_]+'(,'[a-z_]+')?)\) = '([^']*)'$"
   local re_in="^  AND JSONExtractString\(raw,('[a-z_]+'(,'[a-z_]+')?)\) IN \(('[^']*'(,'[^']*')*)\)$"
   while IFS= read -r line; do
@@ -92,9 +99,9 @@ float_nonzero() {
   local pa; pa="$(jq -nc --arg p "$2" '$p | split(",")')"
   jq -e --argjson p "$pa" '(try getpath($p) catch null) as $x | ($x | type) == "number" and $x > 0' <<<"$1" >/dev/null 2>&1
 }
-# has_device <row-json> -- tags.device is a non-empty string (an empty one would make the one-device HAVING inert).
+# has_device <row-json> <a,b> -- the HAVING's device path (read from the SQL) is a non-empty string (an empty one would make the one-device HAVING inert).
 # shellcheck disable=SC2329  # invoked through chk_cmd's "$@"
-has_device() { jq -e '((try .tags.device catch null) // "") | (type == "string" and length > 0)' <<<"$1" >/dev/null 2>&1; }
+has_device() { local pa; pa="$(jq -nc --arg p "$2" '$p | split(",")')"; jq -e --argjson p "$pa" '((try getpath($p) catch null) // "") | (type == "string" and length > 0)' <<<"$1" >/dev/null 2>&1; }
 # the SQL as it was BEFORE the fix (flat paths no stored row carries): the harness's own negative control.
 legacy_sql() {
   printf '%s' "SELECT JSONExtractString(raw,'metric','name') AS metric_name, count() AS n, min(JSONExtractFloat(raw,'metric','value')) AS vmin, max(JSONExtractFloat(raw,'metric','value')) AS vmax
@@ -149,6 +156,9 @@ battery() {
   chk "RED: total one byte under the lower volume bound" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 14999999999 14999999999 240)\n"
   chk "PASS: total exactly at the upper volume bound" "PASS" "${good_used}\n$(row filesystem_total_bytes 168 21500000000 21500000000 240)\n"
   chk "RED: total one byte over the upper volume bound" "RED reason=not_the_20gb_volume" "${good_used}\n$(row filesystem_total_bytes 168 21500000001 21500000001 240)\n"
+  chk "PASS line carries min, max, spread and detached in their own slots" "PASS hours=168 newest_age_s=240 max_used_bytes=28500000 min_used_bytes=28000000 ceiling_bytes=1073741824 spread_bytes=500000 detached=false" "${good_used}\n${good_total}\n"
+  W2R_DETACHED=1 chk "DETACHED PASS line says detached=true" "PASS hours=30 newest_age_s=90000 max_used_bytes=28500000 min_used_bytes=28000000 ceiling_bytes=1073741824 spread_bytes=500000 detached=true" "$(row filesystem_used_bytes 30 28000000 28500000 90000)\n${good_total}\n"
+  W2R_DETACHED=2 chk "RED: only the value 1 relaxes freshness (2 does not)" "RED reason=stale" "$(row filesystem_used_bytes 168 28000000 28500000 90000)\n${good_total}\n"
   W2R_DETACHED=1 chk "DETACHED: exactly 24 hours of coverage is accepted" "PASS" "$(row filesystem_used_bytes 24 28000000 28500000 90000)\n${good_total}\n"
   chk "RED: a metric_name that is not a string makes the judge ERROR, which must be RED (never PASS)" "RED reason=emptiness_judge_error" '{"metric_name":["a"],"hours":"168","vmin":1,"vmax":2,"newest_age_s":"5"}\n'
   W2R_DETACHED=0 chk "RED: W2R_DETACHED=0 does not relax freshness (only 1 does)" "RED reason=stale" "$(row filesystem_used_bytes 168 28000000 28500000 90000)\n${good_total}\n"
@@ -157,9 +167,8 @@ battery() {
   # ---- the SQL's own paths, resolved against real-shape stored rows ----
   # chk_cmd <name> <command...>: the command is the assertion; a non-zero status prints a FAILED line (every assertion counts toward n).
   chk_cmd() { local name="$1"; shift; n=$((n + 1)); "$@" || printf 'FAILED %s\n' "$name"; }
-  # shellcheck disable=SC2329  # invoked through chk_cmd's "$@"
   not() { ! "$@"; }
-  local sql paths prc conds floats selname c nc_out nc_rc lc fpath rest expected_rest
+  local sql paths prc conds floats selname c nc_out nc_rc lc fpath dpath rest expected_rest nm r
   # controls for the helpers every later assertion rides on: not() must invert both ways and chk_cmd must report a failing command
   chk_cmd "control: not() inverts true and false" test "$(not true; echo $?)$(not false; echo $?)" = "10"
   chk_cmd "control: chk_cmd prints a FAILED line for a failing command" test "$(chk_cmd ctl false)" = "FAILED ctl"
@@ -178,11 +187,15 @@ battery() {
   fpath="$(awk -F'\t' '$1=="FLOAT"{print $2; exit}' <<<"$paths")"
   chk_cmd "the aggregate value path (${fpath}) resolves to a non-zero number on a real used row" float_nonzero "$real_used" "$fpath"
   chk_cmd "the aggregate value path resolves to a non-zero number on the non-canonical row" float_nonzero "$real_used2" "$fpath"
+  dpath="$(sed -n "s/^HAVING uniqExact(JSONExtractString(raw,'\([a-z_]*\)','\([a-z_]*\)')).*/\1,\2/p" <<<"$sql")"
+  chk_cmd "the HAVING's device path was extracted from the SQL (${dpath})" test "$dpath" = "tags,device"
   for r in "$real_used" "$real_used2" "$real_total"; do
-    chk_cmd "a real-shape row carries a non-empty tags.device: ${r:0:50}" has_device "$r"
+    chk_cmd "a real-shape row carries a non-empty device at the HAVING's path: ${r:0:50}" has_device "$r" "$dpath"
   done
-  for r in "$legacy_row" "$decoy_host" "$decoy_scalar_tags" "$decoy_mount" "$decoy_ns" "$decoy_name"; do
-    chk_cmd "a legacy / other-host / scalar-tags / other-mount / other-namespace / other-name row VIOLATES a conjunct: ${r:0:60}" not row_satisfies "$r" "$conds"
+  chk_cmd "a row without a device tag does NOT satisfy has_device (the control for the control)" not has_device "$decoy_nodev" "$dpath"
+  for nm in legacy_row decoy_host decoy_scalar_tags decoy_mount decoy_ns decoy_name; do
+    r="${!nm}"
+    chk_cmd "${nm} VIOLATES a conjunct" not row_satisfies "$r" "$conds"
   done
   chk_cmd "decoy without gauge still satisfies the conjuncts (only the value path can reject it)" row_satisfies "$decoy_no_gauge" "$conds"
   chk_cmd "an absent gauge does not resolve to a non-zero number" not float_nonzero "$decoy_no_gauge" "$fpath"
@@ -195,11 +208,13 @@ battery() {
   chk_cmd "negative control: an unrecognised conjunct (OR 1 = 1) fails the strict grammar (rc ${nc_rc})" test "$nc_rc" -ne 0 -a "${nc_out#*FAILED}" != "$nc_out"
   # Everything outside the WHERE conjuncts, pinned by EXACT TEXT: the aggregates and their aliases, both FROM arms, the window,
   # GROUP BY, HAVING and FORMAT. (The conjunct lines are covered by the strict grammar and the set comparison above.)
-  rest="$(grep -vE "^  AND JSONExtractString\(raw," <<<"$sql")"
+  # only the conjunct lines BETWEEN the WHERE line and GROUP BY are removed (the strict grammar judges those); a prefix-shaped line
+  # anywhere else stays in `rest` and breaks the text pin.
+  rest="$(awk '/^WHERE/{w=1; print; next} /^GROUP BY/{w=0} !(w && /^  AND JSONExtractString\(raw,/)' <<<"$sql")"
   expected_rest="$(cat <<'EOF'
 SELECT JSONExtractString(raw,'name') AS metric_name, count() AS n, countDistinct(toStartOfHour(dt)) AS hours, min(JSONExtractFloat(raw,'gauge','value')) AS vmin, max(JSONExtractFloat(raw,'gauge','value')) AS vmax, min(dateDiff('second', dt, now())) AS newest_age_s
 FROM (SELECT dt, raw FROM remote($BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)
-WHERE dt > now() - INTERVAL 7 DAY
+WHERE dt > now() - INTERVAL 7 DAY AND dt <= now()
 GROUP BY metric_name
 HAVING uniqExact(JSONExtractString(raw,'tags','device')) = 1 AND min(length(JSONExtractString(raw,'tags','device'))) > 0
 FORMAT JSONEachRow
@@ -225,7 +240,7 @@ fails=0; ran=0
 parse_report "$(battery "$SCRIPT" 2>&1)"
 fails=$P_FAILS; ran=$P_RAN
 printf 'real script: %s assertions, %s failed\n' "$ran" "$fails"
-[[ "$ran" -ge 63 ]] || { echo "  FAIL assertion floor: ran ${ran} < 63"; fails=$((fails + 1)); }
+[[ "$ran" -ge 68 ]] || { echo "  FAIL assertion floor: ran ${ran} < 68"; fails=$((fails + 1)); }
 parse_report $'FAILED c1\nRAN 3\nnoise' quiet
 if [[ "$P_FAILS" -eq 1 && "$P_RAN" -eq 3 ]]; then echo "  ok   report parser control (1 failed, 3 ran)"; else echo "  FAIL report parser control (got ${P_FAILS} failed, ${P_RAN} ran)"; fails=$((fails + 1)); fi
 
@@ -238,10 +253,13 @@ if [[ "$rc" -eq 2 ]]; then echo "  ok   transport failure exits 2 (not a verdict
 printf '%s\n' "$good_used" "$good_total" > "$TMP/pass.body"; : > "$TMP/red.body"
 for spec in "pass:0" "red:1"; do
   nm="${spec%%:*}"; want="${spec##*:}"
-  printf '#!/usr/bin/env bash\ncat "%s/%s.body"\n' "$TMP" "$nm" > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/curl.args"\ncat "%s/%s.body"\n' "$TMP" "$TMP" "$nm" > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
   BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=u BETTERSTACK_QUERY_PASSWORD=p PATH="$TMP/bin:$PATH" bash "$SCRIPT" >/dev/null 2>&1; rc=$?
   if [[ "$rc" -eq "$want" ]]; then echo "  ok   main exits ${want} on a ${nm} body"; else echo "  FAIL main exited ${rc} on a ${nm} body, want ${want}"; fails=$((fails + 1)); fi
 done
+
+# main must SEND the pinned query: the shim recorded the curl arguments of the last run (the SQL is passed with -d).
+if grep -qF "HAVING uniqExact(JSONExtractString(raw,'tags','device')) = 1" "$TMP/curl.args" && grep -qF "AND dt <= now()" "$TMP/curl.args" && grep -qF "soleur-web-2" "$TMP/curl.args" && grep -qF "'filesystem_used_bytes','filesystem_total_bytes'" "$TMP/curl.args"; then echo "  ok   main sends the pinned SQL to the query helper"; else echo "  FAIL main did not send the pinned SQL (HAVING, upper window bound, host, names)"; fails=$((fails + 1)); fi
 
 # A red BASELINE makes every mutation look killed, so the kill-counting only runs against a green one.
 BASE_RED="$fails"; MUT_N=0; MUT_KILLED=0
@@ -254,12 +272,25 @@ run_mutant() {
   if cmp -s "$SCRIPT" "$copy"; then M_LANDED=0; M_AFTER=0; return; fi
   M_LANDED=1; parse_report "$(battery "$copy" 2>&1)" quiet; M_AFTER=$P_FAILS
 }
+# mut_verdict: the ONE classifier of a mutant, used by mutate() and by the comment-only control. A legitimate kill reds a handful of
+# assertions; a mutant that merely BREAKS the script reds most of them (a syntax error measured at about 47 of 63), and that is a crash,
+# not a kill.
+mut_verdict() {
+  if [[ "$M_LANDED" -eq 0 ]]; then echo NOTLANDED
+  elif [[ $((M_AFTER * 4)) -gt "$ran" ]]; then echo BROKE
+  elif [[ "$M_AFTER" -gt 0 ]]; then echo KILLED
+  else echo SURVIVED; fi
+}
 mutate() { # <name> <sed-script>
   MUT_N=$((MUT_N + 1))
   [[ "$BASE_RED" -eq 0 ]] || { echo "  skip mutation '$1': the baseline is red, so a kill count would be void"; return; }
   run_mutant "$2"
-  if [[ "$M_LANDED" -eq 0 ]]; then echo "  FAIL mutation '$1' did not change the script"; fails=$((fails + 1)); return; fi
-  if [[ "$M_AFTER" -gt 0 ]]; then MUT_KILLED=$((MUT_KILLED + 1)); echo "  ok   mutation killed: $1 (${M_AFTER} red)"; else echo "  FAIL mutation SURVIVED: $1"; fails=$((fails + 1)); fi
+  case "$(mut_verdict)" in
+    KILLED) MUT_KILLED=$((MUT_KILLED + 1)); echo "  ok   mutation killed: $1 (${M_AFTER} red)" ;;
+    NOTLANDED) echo "  FAIL mutation '$1' did not change the script"; fails=$((fails + 1)) ;;
+    BROKE) echo "  FAIL mutation '$1' BROKE the battery (${M_AFTER} red of ${ran}): a crash is not a kill"; fails=$((fails + 1)) ;;
+    *) echo "  FAIL mutation SURVIVED: $1"; fails=$((fails + 1)) ;;
+  esac
 }
 mutate "coverage rule removed"  's/elif \(\$u\.hours \| num\) < \$minh then/elif false then/'
 mutate "staleness rule removed" 's/elif \(\$detached \| not\) and \(\$u\.newest_age_s \| num\) > \$maxage then/elif false then/'
@@ -289,15 +320,18 @@ mutate "newest-age direction flipped" "s/dateDiff\('second', dt, now\(\)\)/dateD
 mutate "archive-arm selector changed" "s/_row_type = 1/_row_type = 2/"
 mutate "one-device clause widened with OR 1 = 1" "s/^(HAVING .*) > 0\$/\1 > 0 OR 1 = 1/"
 mutate "non-empty device guard removed" "s/ AND min\(length\(JSONExtractString\(raw,'tags','device'\)\)\) > 0\$//"
-mutate "GROUP BY widened to one row per count" "s/^GROUP BY metric_name\$/GROUP BY metric_name, n/"
+mutate "GROUP BY gains an extra key" "s/^GROUP BY metric_name\$/GROUP BY metric_name, n/"
+mutate "upper window bound removed" "s/ AND dt <= now\\(\\)//"
+mutate "a prefix-shaped line added after the HAVING (outside the WHERE block)" "s/^FORMAT JSONEachRow\"/  AND JSONExtractString(raw,'name') = '' OR 1 = 1\nFORMAT JSONEachRow\"/"
+mutate "a prefix-shaped line added before the WHERE" "s/^WHERE dt >/  AND JSONExtractString(raw,'name') = '' OR 1 = 1\nWHERE dt >/"
 mutate "hot arm pointed at another table" 's/remote\(\\\$BS_TABLE\)/remote(\\$BS_TABLE_OTHER)/'
 # the harness itself: an edit that changes only a comment must SURVIVE, or the battery cannot tell a harmless edit from a kill
 if [[ "$BASE_RED" -eq 0 ]]; then
   run_mutant 's/^# Exit: 0 PASS.*$/# Exit: 0 PASS (comment-only control edit)/'
-  if [[ "$M_LANDED" -eq 1 && "$M_AFTER" -eq 0 ]]; then echo "  ok   control: a comment-only edit survives (the battery discriminates)"; else echo "  FAIL control: a comment-only edit was landed=${M_LANDED} red=${M_AFTER}, want landed=1 red=0"; fails=$((fails + 1)); fi
+  if [[ "$(mut_verdict)" == SURVIVED ]]; then echo "  ok   control: a comment-only edit survives (the battery discriminates)"; else echo "  FAIL control: a comment-only edit was ${M_LANDED}/${M_AFTER} (verdict $(mut_verdict)), want SURVIVED"; fails=$((fails + 1)); fi
   if [[ "$MUT_KILLED" -ne "$MUT_N" ]]; then echo "  FAIL mutation accounting: ${MUT_KILLED} killed of ${MUT_N} launched"; fails=$((fails + 1)); fi
 fi
-[[ "$MUT_N" -ge 28 ]] || { echo "  FAIL mutation floor: ${MUT_N} mutate rows < 28"; fails=$((fails + 1)); }
+[[ "$MUT_N" -ge 31 ]] || { echo "  FAIL mutation floor: ${MUT_N} mutate rows < 31"; fails=$((fails + 1)); }
 
 [[ "$fails" -eq 0 ]] && { echo "web2-rebirth-emptiness: all assertions and mutations passed"; exit 0; }
 echo "web2-rebirth-emptiness: ${fails} FAILED"; exit 1

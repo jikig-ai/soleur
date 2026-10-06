@@ -21,12 +21,14 @@ requires_cpo_signoff: true
 **Research agents used:** learnings-researcher (plan), plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow-analyzer, CTO devex, CPO advisory)
 
 ### Key Improvements
+
 1. Root cause established by reproduction (Vector 0.43.1 `tag_metrics` is a silent no-op on metric events) and the fix scoped to the query, not the shipper.
 2. Live read-only positive control recorded: the new SQL returns the two aggregate rows that PASS every threshold today; a `HAVING uniqExact(device) = 1` closes a series-pooling hole.
 3. Test design cut to a strict path-and-value check (no jq SQL interpreter); canary, collector predicate and decoy fleet cut; one guard instead of two.
 4. Brief-vs-repo mismatches reconciled: the tested suite is `web2-rebirth-emptiness.test.sh`, and approval precedes evidence (job-level environment gate).
 
 ### New Considerations Discovered
+
 - The 1 GiB ceiling is about 65 to 70 times the observed 16 MB level (owner decision, not changed here).
 - An apply dispatch's PASS flows to the delete in the same approved job; only a plan-only run shows the numbers first.
 - Deepen verification: the `2026-07-12-dry-run-fixture-...` learning cited at plan time does not exist and is no longer relied on; rule ids and PR/issue numbers cited in the plan were verified live (#9372 open, #6944 open, #9532 merged, #9628 open draft).
@@ -191,9 +193,9 @@ FORMAT JSONEachRow
   live control passes with it (one device, `/dev/sdb`). Cost accepted: a device rename inside the 7 days would be a false RED (safe).
 - Fail-closed direction: every added predicate only REMOVES rows. An absent `gauge.value` reads as 0, so the existing `min > 0`
   rule still yields RED `used_bytes_zero_or_missing`. Zero rows stays RED. `w2r_emptiness_verdict` and `w2r_main` are NOT touched.
-- Why `tags.host`: it is the machine's own hostname written by Vector's `host_metrics` source and equals `W2L_HOST_NAME`. Trust is
+- Why `tags.host`: it is the machine's own hostname written by Vector's `host_metrics` source and equals `W2L_HOST_NAME`. Forgery trust is
   unchanged: any holder of the shared ingest token can write `tags.host`, `namespace`, `mountpoint` or `host_name` alike; the extra
-  predicates raise the accident bar, not the forgery bar. `$BS_TABLE` / `$BS_TABLE_S3` stay literal for the query script.
+  predicates raise the accident bar, not the forgery bar. Unlike the old Terraform-rendered `host_name`, `tags.host` is the OS hostname, so it is weaker against hostname drift on a re-imaged host and evidence is keyed by hostname plus mountpoint, not the pinned volume id (decision-challenges item 7). `$BS_TABLE` / `$BS_TABLE_S3` stay literal for the query script.
 - **Header rewrite:** confirmed paths with the date and the evidence (the recorded control, the runbook section, the Vector 0.43.1
   reproduction); keep the "`dm-*` vs LUKS mapper device is unverified, so this evidence is NOT claimed to vanish after LUKS" caveat;
   correct "the owner reads min/max before approving" (approval precedes the step; the numbers are read from the plan-only run);
@@ -351,15 +353,15 @@ authorizes the delete of the pinned volume's contents, and the evidence is keyed
 the `heal:detach_done` premise is not enforced (item 3); (3) web-1's live users: the workflow refuses web-1 by name and
 `delete-volume` re-asserts the pinned id, name, labels and attachment independently of this evidence. This gate is the last evidence
 line behind the anti-pooling gate and the never-pooled marker, not the only one. The precondition for user data being on web-2 at
-all is a failure of those two, which this change neither widens nor narrows.
+all is expected to be a failure of those two (deploys also seed `/mnt/data`, so a deployed but unpooled web-2 still holds content there), which this change neither widens nor narrows.
 
 **Brand-survival threshold:** single-user incident
 
 - CPO sign-off: `requires_cpo_signoff: true`. An advisory CPO pass during plan review returned "sign-off with conditions"
   (C1 sign-off recorded as a pre-work gate and not self-attributed; C2 the PR body must not imply the gate is proven before the first
   post-merge plan-only dispatch, and the PASS line's min/max stay visible; C3 keep the live control in the PR body and do not waive
-  AC9; C4 the PR body states `tags.host` is no weaker than `host_name`). That advisory is NOT the owner's or CPO's sign-off: the
-  sign-off remains a gate before `soleur:work` begins.
+  AC9; C4 the PR body states `tags.host` has the same forgery bar as `host_name` but is weaker against hostname drift on a re-imaged host (decision-challenges item 7)). That advisory is NOT the owner's or CPO's sign-off: the
+  sign-off remains a gate before `soleur:work` begins. **Recorded 2026-10-06:** the owner answered an interactive question during the one-shot run with "Sign off, start work" (thresholds unchanged, ceiling decision deferred). That is the owner's own answer to a question put to them, quoted as given, not an agent attribution; the CPO advisory stays advisory.
 - Parent-plan CPO/CLO/CTO conditions carry forward unchanged (no threshold weakened, no data-protection surface, trust boundary unchanged).
 - Review-time (REQUIRED, AC9): `soleur:engineering:review:security-sentinel` and `soleur:engineering:review:user-impact-reviewer`,
   asked: can any input produce PASS without the stored rows proving emptiness; does any predicate widen what matches; does the path

@@ -16,13 +16,16 @@
 # which satisfies every threshold below. Limits of that control: it ran under Doppler read credentials while the workflow
 # uses the repo secrets BETTERSTACK_QUERY_*, so the first plan-only dispatch is the credential-parity check; and its newest row
 # (169 s) is younger than the ~40-minute hot window, so the hot arm carries the same shape (inference, not a separate probe).
-# `scripts/web2-rebirth-emptiness.sh` run under that Doppler config reproduces the control (runbook web2-luks-rebirth-9372.md).
+# Running this script under the Doppler config soleur/prd_terraform re-runs the control: it prints the used series' hours, newest
+# age, min, max and spread (not n or the total series; runbook web2-luks-rebirth-9372.md).
 # `tags.host` is Vector's OS hostname, where the old host_name was a Terraform-rendered constant: equal forgery resistance (any
-# holder of the shared ingest token can write either), weaker against hostname drift on a re-imaged host, and it fails closed
-# except for a same-hostname look-alike. RED used_bytes_absent_or_host_dark therefore also means "the stored row shape
-# changed" (if the shipper ever starts flattening, tags.host moves to a top-level host) or "a device other than the one on
-# record reports /mnt/data": the HAVING below drops that metric's whole group, so it reads RED used_bytes_absent_or_host_dark
-# (used series) or RED total_bytes_absent (total series). The SQL and the test fixtures must change together.
+# holder of the shared ingest token can write either) and weaker against hostname drift on a re-imaged host. Evidence is keyed by
+# hostname plus mountpoint, NOT by the pinned volume id: anything mounted at /mnt/data on a host with that hostname that reports
+# one consistent device passes (decision-challenges item 7). RED used_bytes_absent_or_host_dark therefore also means "the stored
+# row shape changed" (if the shipper ever starts flattening, tags.host moves to a top-level host), "more than one distinct device
+# reported /mnt/data in the window", or "tags.device is missing, empty or not a string on some row": the HAVING below drops that
+# metric's whole group, so it reads RED used_bytes_absent_or_host_dark (used series) or RED total_bytes_absent (total series).
+# `AND dt <= now()` keeps a future-dated row from pinning the newest age below zero. The SQL and the test fixtures change together.
 #
 # PASS needs ALL of, from one aggregate over 7 days (hot AND archive arm):
 #   - filesystem_used_bytes: at least 160 of 168 distinct hours covered (a gappy series is not evidence),
@@ -78,7 +81,7 @@ W2R_TOTAL_MAX_BYTES=21500000000
 w2r_sql_emptiness() {
   printf '%s' "SELECT JSONExtractString(raw,'name') AS metric_name, count() AS n, countDistinct(toStartOfHour(dt)) AS hours, min(JSONExtractFloat(raw,'gauge','value')) AS vmin, max(JSONExtractFloat(raw,'gauge','value')) AS vmax, min(dateDiff('second', dt, now())) AS newest_age_s
 FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
-WHERE dt > now() - INTERVAL ${W2R_LOOKBACK_DAYS} DAY
+WHERE dt > now() - INTERVAL ${W2R_LOOKBACK_DAYS} DAY AND dt <= now()
   AND JSONExtractString(raw,'tags','host') = '${W2L_HOST_NAME}'
   AND JSONExtractString(raw,'namespace') = 'host'
   AND JSONExtractString(raw,'tags','mountpoint') = '/mnt/data'
