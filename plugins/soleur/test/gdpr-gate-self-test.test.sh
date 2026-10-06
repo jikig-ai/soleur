@@ -132,10 +132,11 @@ else
 fi
 
 # Inngest function must exist on disk — the vendor-drift cron was migrated
-# from GHA to Inngest (TR9 Phase 2 #3948). The notice-frontmatter.sh parser
-# still references the old GHA workflow name for cron-run-stale calculation
-# (gh run list); this will be updated when cron-run-stale migrates to Inngest
-# event log queries.
+# from GHA to Inngest (TR9 Phase 2 #3948). The notice-frontmatter.sh parser's
+# cron-run-stale probe reads the function's GitHub artifact (the weekly
+# `ci/vendor-attest-*` attestation PR) since #7255 — if the function file
+# disappears the ATTEST_BRANCH_PREFIX contract is gone and the probe's
+# 999 fallback applies until the binding is repointed again.
 if [[ -f "$INNGEST_FN_FILE" ]]; then
   echo "  PASS: cron-content-vendor-drift.ts exists (migrated from GHA)"
   PASS=$((PASS + 1))

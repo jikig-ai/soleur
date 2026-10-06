@@ -854,8 +854,10 @@ run_alarm() {
   mkdir -p "$d/bin"
   cat > "$d/bin/curl" << MOCK
 #!/bin/bash
-vendor=""; scheme_http=0; has_proto=0
+vendor=""; scheme_http=0; has_proto=0; cfg_stdin=0; prev=""
 for arg in "\$@"; do
+  [[ "\$prev" == "--config" && "\$arg" == "-" ]] && cfg_stdin=1
+  prev="\$arg"
   case "\$arg" in
     *api.resend.com*) vendor="api.resend.com" ;;
     *.sentry.io*) vendor="sentry.io" ;;
@@ -877,6 +879,8 @@ if [[ -n "\$vendor" ]]; then
   if [[ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]]; then echo "TLS_ENV_LEAK" >> "$d/curl_violations"; fi
 fi
 if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$d/curl_violations"; fi
+# \`--config -\`: consume (and record) the stdin config so the writer is read
+if [[ "\$cfg_stdin" -eq 1 ]]; then cat >> "$d/curl_stdin"; fi
 # one line per INVOCATION (the -d payload is multi-line JSON)
 echo "\$*" | tr '\\n' ' ' >> "$d/curl_args"; echo >> "$d/curl_args"
 if [[ -n "\${ALARM_MOCK_CURL_EXIT:-}" ]]; then echo "000"; exit "\$ALARM_MOCK_CURL_EXIT"; fi
@@ -1050,6 +1054,44 @@ grep -qF "reason=cooldown unit=invalid-unit-name" "$ALARM_D/logger_args" 2>/dev/
 grep -qF "../evil" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
 alarm_row "alarm exec: a %n outside the unit-name charset reads unit=invalid-unit-name in every marker" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
 rm -rf "$ALARM_D"
+
+# Rows 9-10 (argv-bearer sweep): the Resend key rides curl's stdin config
+# channel, never argv; a key that fails the token-shape guard takes the existing
+# SEND_SKIPPED arm (reason=token_shape) with NO call to api.resend.com.
+# Row 9: valid synthetic key -> argv clean, stdin exact, no violations, exit 0.
+ALARM_D="$(mktemp -d -t alarm-bearer.XXXXXXXX)"
+ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+grep -qF "re_test_fake_key_123" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+grep -qF "Authorization" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+grep -qF -- "--config -" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+[[ "$(cat "$ALARM_D/curl_stdin" 2>/dev/null)" == 'header = "Authorization: Bearer re_test_fake_key_123"' ]] || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_violations" ]] || ALARM_OK=0
+[[ -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+alarm_row "alarm exec: Resend key absent from curl argv, exact 'header = \"Authorization: Bearer <key>\"' on the --config - stdin, 2xx stamps cooldown" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 10: malformed keys (space, double quote, embedded newline) -> never reach
+# curl; SEND_SKIPPED channel=resend reason=token_shape; Sentry channel still
+# posts; exit 0 as for every other skip; the key never appears in output/logger.
+for ALARM_BAD in "re_test fake key" 're_test"fake' $'re_test\nheader = "x"'; do
+  ALARM_D="$(mktemp -d -t alarm-bearer.XXXXXXXX)"
+  ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" "RESEND_API_KEY=$ALARM_BAD" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+  ALARM_OK=1
+  [[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+  grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+  [[ ! -e "$ALARM_D/curl_stdin" ]] || ALARM_OK=0
+  [[ ! -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+  grep -qF "sentry.io" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+  grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=token_shape unit=cron-egress-resolve.service" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+  grep -cF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=token_shape" >/dev/null <<<"$ALARM_OUT" || ALARM_OK=0
+  grep -qF "_SEND_FAILED" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+  grep -qF "fake" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+  alarm_row "alarm exec: malformed Resend key ($(printf '%q' "$ALARM_BAD" | cut -c1-12)...) -> no Resend curl, SEND_SKIPPED reason=token_shape, exit 0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+  rm -rf "$ALARM_D"
+done
 
 # Parity rows. (a) The predicate-only `sentry-dest-pin` region must be BYTE-
 # IDENTICAL in the alarm (inside sentry_checkin()) and container-restart-
@@ -1890,8 +1932,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 301 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 301. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 312 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 312. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
