@@ -498,25 +498,25 @@ identity; row identity is carried by the named rows above and by L2.
 
 ### Pre-merge (PR)
 
-- [ ] With a tracked `.mcp.json` that differs from `HEAD` (unstaged), the Step 0 fence leaves its bytes
+- [x] With a tracked `.mcp.json` that differs from `HEAD` (unstaged), the Step 0 fence leaves its bytes
   unchanged and prints `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty` (R12).
-- [ ] Same when the change is staged but uncommitted (R12b), on the capability-refusal and
+- [x] Same when the change is staged but uncommitted (R12b), on the capability-refusal and
   classifier-absent arms (R12c, R12d), and when `HEAD` is unborn so the probe errors (R12f). A read failure still reports `mcp-json-read-failed rc=1` (R12g).
-- [ ] The skip is non-fatal: `cleanup-merged` still dispatches on the success arm (R12), and no
+- [x] The skip is non-fatal: `cleanup-merged` still dispatches on the success arm (R12), and no
   `.mcp.json.soleur-tmp` is left (R12).
-- [ ] A symlinked `.mcp.json` and a `skip-worktree` edit are kept (R12j, R12i); a file the gate itself refreshed prints no marker on the next run (R12h).
-- [ ] A tracked-clean `.mcp.json` that differs from `main` is still restored and prints no
+- [x] A symlinked `.mcp.json` and a `skip-worktree` edit are kept (R12j, R12i); a file the gate itself refreshed prints no marker on the next run (R12h).
+- [x] A tracked-clean `.mcp.json` that differs from `main` is still restored and prints no
   `mcp-json-dirty` (R3); an untracked one is still restored (R12e).
-- [ ] R3d (main carries none) and R3g (no local main) stay green, and R12g pins `SHOW_RC=$?` for the
+- [x] R3d (main carries none) and R3g (no local main) stay green, and R12g pins `SHOW_RC=$?` for the
   `read-failed` arm that neither of them reaches.
-- [ ] `go.md` diff is confined to the restore block, one fence-internal comment, and the one prose
+- [x] `go.md` diff is confined to the restore block, one fence-internal comment, and the one prose
   sentence; R8 (byte-identical resolvers) and R10 (three fences, no fourth) stay green. Verify with
   `git diff --stat` and a read of the hunk headers: no hunk inside a `# --- soleur plugin-root resolver`
   region.
-- [ ] `bash plugins/soleur/test/go-session-gates.test.sh` (with `SOLEUR_GO_GATES_SKIP_H3=1`) is green
+- [x] `bash plugins/soleur/test/go-session-gates.test.sh` (with `SOLEUR_GO_GATES_SKIP_H3=1`) is green
   at `MIN_ASSERTIONS` equal to the measured total; fixture baselines are green (regenerated only if
   they moved).
-- [ ] `/data/git-repositories/jikig-ai/soleur/.mcp.json` in the primary checkout is untouched
+- [x] `/data/git-repositories/jikig-ai/soleur/.mcp.json` in the primary checkout is untouched
   (`git -C /data/git-repositories/jikig-ai/soleur status --short .mcp.json` still shows `M`, same
   `sha256sum` before and after the work).
 - [ ] PR body carries `Closes #9622` and a `## Changelog` section (`semver:patch`).
