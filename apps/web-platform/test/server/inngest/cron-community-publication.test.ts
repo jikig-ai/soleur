@@ -694,7 +694,8 @@ describe("renderCommunityPublication", () => {
 
   it("the committed digest carries no URL at all (MD034: the required markdown-lint check refuses a bare one); the issue body keeps its links", () => {
     const out = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
-    expect(out.digestMarkdown).not.toMatch(/https?:\/\//);
+    // Any scheme or a bare `www.` host: markdownlint's MD034 flags both.
+    expect(out.digestMarkdown).not.toMatch(/[a-z][a-z0-9+.-]*:\/\/|\bwww\./i);
     // Non-vacuity: the follow-up section is still rendered, and the issue body still links.
     expect(out.digestMarkdown).toContain("Review inbound items in the open issues and pull requests of this repository.");
     expect(out.issueBody).toContain(`Inbound items: https://github.com/${REPO}/issues`);
@@ -798,7 +799,6 @@ describe("renderCommunityPublication", () => {
     // The issue body carries the links; the committed digest carries none (MD034, see below).
     expect(issueBody).toContain("https://github.com/jikig-ai/soleur/issues");
     expect(issueBody).toContain("https://github.com/jikig-ai/soleur/pulls");
-    expect(digestMarkdown).not.toContain("https://");
     expect(issueBody).toContain(
       `https://github.com/jikig-ai/soleur/blob/main/knowledge-base/support/community/${RUN_DATE}-digest.md`,
     );
