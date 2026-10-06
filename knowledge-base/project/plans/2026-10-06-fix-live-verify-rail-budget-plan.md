@@ -608,11 +608,11 @@ row 8 is what catches a weakening that only this side could introduce.
   observe window of ~45s and, absent, performs exactly one
   `page.reload({waitUntil:"domcontentloaded", timeout: 30_000})`
   followed by a second ~45s window. The two windows plus probe/reload time are enclosed in ONE
-  named total ceiling constant (≈ `RAIL_ASSERT_TOTAL_BUDGET_MS ≈ 100s`)
+  named total ceiling constant (`RAIL_ASSERT_TOTAL_BUDGET_MS` = 150s — raised at review: the 100s figure could starve phase B to ~5s after worst-case probe+reload latency)
   so the check can never out-wait its own budget — the 20s constant's
   original wall-clock-bounding role is preserved at the higher value
   (defense-relaxation accounting: it bounded FAIL-detection latency and
-  job time; the new ceiling bounds the same threats at ~100s inside the
+  job time; the new ceiling bounds the same threats at 150s inside the
   15-min job budget).
 - [ ] AC2: Before the reload, the harness probes
   `list_conversations_enriched` with the rail's own scope inputs

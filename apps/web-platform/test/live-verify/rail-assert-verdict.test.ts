@@ -35,7 +35,8 @@ const FAST = {
 function fakeRailRow(opts: {
   seq?: boolean[];
   err?: Error | Error[];
-  visibleWhen?: () => boolean;
+  throwAfter?: { at: number; err: Error };
+  visibleWhen?: (calls: number) => boolean;
   hang?: boolean;
 }) {
   let i = 0;
@@ -45,12 +46,16 @@ function fakeRailRow(opts: {
     isVisible: async (): Promise<boolean> => {
       calls++;
       if (opts.hang) return new Promise<boolean>(() => {});
+      if (opts.throwAfter && calls > opts.throwAfter.at) throw opts.throwAfter.err;
       if (errs && i < errs.length) {
         i++;
         throw errs[i - 1];
       }
       if (errs && !Array.isArray(opts.err)) throw errs[0];
-      if (opts.visibleWhen) return opts.visibleWhen();
+      // The call count is passed so a predicate can key visibility to the
+      // Nth READ, not to elapsed wall-clock — deterministic under CI jitter
+      // where a timed seq's index drifts with event-loop stalls.
+      if (opts.visibleWhen) return opts.visibleWhen(calls);
       const seq = opts.seq ?? [false];
       const v = seq[Math.min(i, seq.length - 1)];
       i++;
@@ -83,6 +88,8 @@ function fakePage(opts: {
     if (sel === '[data-testid="conversations-rail"]') return rc.rail ?? 0;
     return 0;
   };
+  const recordedGetUrls: string[] = [];
+  const reloadArgs: ({ waitUntil?: string; timeout?: number } | undefined)[] = [];
   return {
     url: () => "https://app.example.com/dashboard/chat/new",
     title: async () => "Soleur",
@@ -91,13 +98,17 @@ function fakePage(opts: {
       first: () => ({ isVisible: async () => true }),
     }),
     locator: (sel: string) => ({ count: async () => counts(sel) }),
-    reload: async () => {
+    reload: async (arg?: { waitUntil?: string; timeout?: number }) => {
       counters.n++;
+      reloadArgs.push(arg);
       if (opts.reloadErr) throw opts.reloadErr;
       return null;
     },
+    recordedGetUrls,
+    reloadArgs,
     request: {
-      get: async () => {
+      get: async (url: string) => {
+        recordedGetUrls.push(url);
         const r = opts.activeRepo ?? {
           ok: true as const,
           body: { workspaceId: WS_ID, repoUrl: "https://example.invalid/repo" },
@@ -109,7 +120,11 @@ function fakePage(opts: {
         return { ok: () => true, status: () => 200, json: async () => r.body };
       },
     },
-  } as unknown as Parameters<typeof assertRailRowVisible>[0]["page"];
+  } as unknown as Parameters<typeof assertRailRowVisible>[0]["page"] &
+    {
+      recordedGetUrls: string[];
+      reloadArgs: ({ waitUntil?: string; timeout?: number } | undefined)[];
+    };
 }
 
 /** Fake supabase whose .rpc resolves PostgREST's {data, error} shape. */
@@ -118,15 +133,20 @@ function fakeSupabase(behavior: {
   error?: { message?: string; code?: string; name?: string };
   throws?: Error;
   calls?: { n: number };
+  rpcCalls?: { fn: string; args: Record<string, unknown> }[];
 }) {
   const counters = behavior.calls ?? { n: 0 };
+  const rpcCalls = behavior.rpcCalls ?? [];
   return {
-    rpc: async () => {
+    rpc: async (fn: string, args: Record<string, unknown>) => {
       counters.n++;
+      rpcCalls.push({ fn, args });
       if (behavior.throws) throw behavior.throws;
       return { data: behavior.data ?? [], error: behavior.error ?? null };
     },
-  } as unknown as Parameters<typeof assertRailRowVisible>[0]["supabase"];
+    rpcCalls,
+  } as unknown as Parameters<typeof assertRailRowVisible>[0]["supabase"] &
+    { rpcCalls: { fn: string; args: Record<string, unknown> }[] };
 }
 
 const nav = () => ({ status: () => 200 });
@@ -134,14 +154,17 @@ const nav = () => ({ status: () => 200 });
 function deps(over: {
   seq?: boolean[];
   railRowErr?: Error | Error[];
-  visibleWhen?: () => boolean;
+  throwAfter?: { at: number; err: Error };
+  visibleWhen?: (calls: number) => boolean;
   hang?: boolean;
   page?: ReturnType<typeof fakePage>;
   supabase?: ReturnType<typeof fakeSupabase>;
+  budget?: { [K in keyof typeof FAST]: number };
 }) {
   const row = fakeRailRow({
     seq: over.seq,
     err: over.railRowErr,
+    throwAfter: over.throwAfter,
     visibleWhen: over.visibleWhen,
     hang: over.hang,
   });
@@ -153,7 +176,7 @@ function deps(over: {
       supabase: over.supabase ?? fakeSupabase({ data: [{ id: CONV_ID }] }),
       convId: CONV_ID,
       productionUrl: "https://app.example.com",
-      budget: { ...FAST },
+      budget: { ...(over.budget ?? FAST) },
     },
     row,
   };
@@ -173,14 +196,21 @@ describe("assertRailRowVisible (#9581) — the observe arm", () => {
 
   it("returns appeared via=direct when the row lands inside the observe window", async () => {
     const reloadCalls = { n: 0 };
+    const rpcCalls = { n: 0 };
     const { seam, row } = deps({
-      seq: [false, false, true],
+      // Call-count keyed, not wall-clock: the row lands on the third READ
+      // regardless of event-loop jitter (a timed seq's index would drift
+      // under CI contention and flip this to via=reload + reloadCalls=1).
+      visibleWhen: (n) => n >= 3,
       page: fakePage({ reloadCalls }),
+      supabase: fakeSupabase({ calls: rpcCalls }),
     });
     const v = await assertRailRowVisible(seam);
     expect(v).toMatchObject({ kind: "appeared", via: "direct" });
     expect(row.stats().calls).toBe(3);
     expect(reloadCalls.n).toBe(0);
+    // An early PASS never reaches the scope probe.
+    expect(rpcCalls.n).toBe(0);
   });
 
   it("returns appeared via=reload when the row lands only after the reload draw", async () => {
@@ -199,6 +229,21 @@ describe("assertRailRowVisible (#9581) — the observe arm", () => {
     const line = emitLine(railVerdictToResult(v, CONV_ID));
     expect(line).toContain("via=reload");
     expect(line).toContain("elapsed=");
+  });
+
+  it("passes reload the MANDATORY bounded options — an explicit waitUntil and a positive timeout", async () => {
+    // Playwright's .d.ts documents a default timeout of 0 (unbounded) — a
+    // mutation dropping `timeout: reloadMs` or `waitUntil` is the exact
+    // defect RAIL_RELOAD_TIMEOUT_MS exists to prevent, and a fake that
+    // ignores its args cannot see it.
+    const page = fakePage({});
+    const { seam } = deps({ seq: [false], page });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("absent");
+    expect(page.reloadArgs).toHaveLength(1);
+    expect(page.reloadArgs[0]).toMatchObject({ waitUntil: "domcontentloaded" });
+    expect(typeof page.reloadArgs[0]?.timeout).toBe("number");
+    expect(page.reloadArgs[0]?.timeout).toBeGreaterThan(0);
   });
 
   it("attributes a row that lands during the scope probe to via=direct — not to the reload it never needed", async () => {
@@ -236,6 +281,46 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     expect(line).toContain("rpc_row=no");
   });
 
+  it("resolves rpc_row=no when the list is populated but THIS id is absent — membership, not emptiness", async () => {
+    // `data: []` returns "no" for ANY membership predicate — a mutation to
+    // `data.length > 0` would stay green. A populated list missing convId
+    // is the discriminating fixture.
+    const OTHER_ID = "99999999-8888-4777-8666-111111111111";
+    const reloadCalls = { n: 0 };
+    const { seam } = deps({
+      seq: [false],
+      page: fakePage({ reloadCalls }),
+      supabase: fakeSupabase({ data: [{ id: OTHER_ID }, { id: OTHER_ID }] }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v).toMatchObject({ kind: "absent", rpcRow: "no" });
+    expect(reloadCalls.n).toBe(0);
+  });
+
+  it("probes the rail's OWN data path — active-repo endpoint and the enriched RPC with rail-parity args", async () => {
+    // The discriminator's whole value is scope parity with the rail's SWR
+    // fetch. Fakes that ignore their args can't pin it — record and assert.
+    const page = fakePage({});
+    const rpcCalls: { fn: string; args: Record<string, unknown> }[] = [];
+    const { seam } = deps({
+      seq: [false],
+      page,
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }], rpcCalls }),
+    });
+    await assertRailRowVisible(seam);
+    expect(page.recordedGetUrls[0]).toMatch(/\/api\/workspace\/active-repo$/);
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]?.fn).toBe("list_conversations_enriched");
+    expect(rpcCalls[0]?.args).toMatchObject({
+      p_repo_url: "https://example.invalid/repo",
+      p_workspace_id: WS_ID,
+      p_archive: "active",
+      p_status: null,
+      p_domain: null,
+      p_limit: 15,
+    });
+  });
+
   it("FAIL-fasts when the resolved repoUrl is null (a repo-less rail cannot be helped by a reload)", async () => {
     const reloadCalls = { n: 0 };
     const rpcCalls = { n: 0 };
@@ -249,6 +334,25 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     });
     const v = await assertRailRowVisible(seam);
     expect(v.kind).toBe("absent");
+    expect(v).toMatchObject({ rpcRow: "n/a:repo-null" });
+    expect(reloadCalls.n).toBe(0);
+    expect(rpcCalls.n).toBe(0);
+  });
+
+  it("FAIL-fasts when workspaceId resolves null — a null scope is out-of-scope, tagged honestly", async () => {
+    const reloadCalls = { n: 0 };
+    const rpcCalls = { n: 0 };
+    const { seam } = deps({
+      seq: [false],
+      page: fakePage({
+        reloadCalls,
+        activeRepo: { ok: true, body: { workspaceId: null, repoUrl: "https://example.invalid/repo" } },
+      }),
+      supabase: fakeSupabase({ calls: rpcCalls }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("absent");
+    expect(v).toMatchObject({ rpcRow: "n/a:workspace-null" });
     expect(reloadCalls.n).toBe(0);
     expect(rpcCalls.n).toBe(0);
   });
@@ -270,6 +374,10 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     expect(line).toContain("rpc_row=yes");
     expect(line).toContain("rail_state=rows:4");
     expect(line).toContain("reloads=1");
+    expect(line).toContain("active_repo=resolved");
+    expect(line).toContain("read_errors=");
+    expect(line).toContain("budget=");
+    expect(line).toContain("elapsed=");
     expect(reloadCalls.n).toBe(1);
   });
 
@@ -282,10 +390,12 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     });
     const v = await assertRailRowVisible(seam);
     expect(v.kind).toBe("absent");
-    expect(v).toMatchObject({ rpcRow: expect.stringContaining("unreadable") });
+    // The tag carries the PostgREST code — `unreadable:` alone would let a
+    // name-preferred or dropped-tag mutation stay green.
+    expect(v).toMatchObject({ rpcRow: "unreadable:57014" });
     expect(reloadCalls.n).toBe(1);
     const line = emitLine(railVerdictToResult(v, CONV_ID));
-    expect(line).toContain("rpc_row=unreadable:");
+    expect(line).toContain("rpc_row=unreadable:57014");
   });
 
   it("records reload_err but keeps polling — a thrown reload is not verdict material", async () => {
@@ -299,6 +409,7 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     });
     const v = await assertRailRowVisible(seam);
     expect(v.kind).toBe("absent");
+    expect(v).toMatchObject({ reloads: 1 });
     const line = emitLine(railVerdictToResult(v, CONV_ID));
     expect(line).toContain("reload_err=TimeoutError");
   });
@@ -312,6 +423,44 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     const line = emitLine(railVerdictToResult(v, CONV_ID));
     expect(line).toMatch(/^RESULT: CANT-RUN:/);
     expect(line).toContain("rail-check:");
+  });
+
+  it("maps page death AFTER a clean read to CANT-RUN via the dead classification — not absent", async () => {
+    // First read resolves clean (sawCleanRead=true), then the page dies.
+    // The `dead` arm — not the `!sawCleanRead` backstop — must produce this
+    // verdict, or a crashed browser emits BLOCK=1 FAIL for a rail it could
+    // never have rendered.
+    const closed = new Error("Target page, context or browser has been closed");
+    const { seam } = deps({
+      seq: [false],
+      throwAfter: { at: 1, err: closed },
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
+  });
+
+  it("maps a crash-class message (Playwright's real strings) to CANT-RUN", async () => {
+    // "Navigation failed because page crashed!" / "Page crashed" /
+    // "Target crashed" are the vendor's crash messages — none contain
+    // "closed". Name is plain "Error" (client-side TargetClosedError
+    // doesn't set .name either).
+    const { seam } = deps({
+      railRowErr: new Error("Navigation failed because page crashed!"),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
+  });
+
+  it("maps a closed-target throw from page.reload to CANT-RUN", async () => {
+    const reloadCalls = { n: 0 };
+    const closed = new Error("Target page, context or browser has been closed");
+    const { seam } = deps({
+      seq: [false],
+      page: fakePage({ reloadCalls, reloadErr: closed }),
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }] }),
+    });
+    const v = await assertRailRowVisible(seam);
+    expect(v.kind).toBe("unverifiable");
   });
 
   it("treats `execution context was destroyed` as a missed tick, not page death — it is the retriable navigation race", async () => {
@@ -353,6 +502,25 @@ describe("assertRailRowVisible (#9581) — the discriminator", () => {
     expect(v.kind).toBe("absent");
     expect(v).toMatchObject({ rpcRow: "unreadable:shape" });
     expect(reloadCalls.n).toBe(1);
+  });
+
+  it("guarantees phase B a full observe window — probe/reload latency cannot starve it", async () => {
+    // The mutation this pins: `pollWindow(totalDeadline, "reload")` lets
+    // phase B extend past `phaseBStart + observeMs`; with the floor, a row
+    // landing BETWEEN the floor deadline and the ceiling stays absent.
+    // Budgets: observe=80, probes ~4ms each, reload ~4ms -> phase B starts
+    // ~90ms in, floor ends ~170ms, ceiling 1000ms. Row lands at ~300ms —
+    // inside a starved-extended window, outside the floored one.
+    const marker = { at: 0 };
+    const { seam } = deps({
+      visibleWhen: () => marker.at !== 0 && Date.now() >= marker.at,
+      budget: { observeMs: 80, pollMs: 2, readMs: 10, totalMs: 1000, probeMs: 60, reloadMs: 60 },
+      supabase: fakeSupabase({ data: [{ id: CONV_ID }] }),
+    });
+    const pending = assertRailRowVisible(seam);
+    marker.at = Date.now() + 300;
+    const v = await pending;
+    expect(v.kind).toBe("absent");
   });
 });
 

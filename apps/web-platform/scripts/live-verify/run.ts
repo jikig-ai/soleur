@@ -421,10 +421,12 @@ function errorName(err: unknown): string {
  * `execution context was destroyed` is deliberately ABSENT — it is the
  * RETRIABLE navigation race (documented below in waitFailureState's catch),
  * not death: a stray navigation during a poll tick would otherwise convert
- * a reachable verdict into CANT-RUN. A truly dead page throws `closed`/
- * `crashed` on the next tick anyway. */
+ * a reachable verdict into CANT-RUN. `crashed` covers Playwright's real
+ * crash strings — "Page crashed", "Navigation failed because page
+ * crashed!", "Target crashed <logs>" — which are the same death class the
+ * #5485 Wayland-GPU crash history produced. */
 const CLOSED_TARGET_RE =
-  /target.{0,30}closed|has been closed|browser has crashed/i;
+  /target.{0,30}closed|has been closed|crashed/i;
 
 function isClosedTargetError(err: unknown): boolean {
   const name =
@@ -673,10 +675,16 @@ export async function railRowState(page: Page): Promise<string> {
   const railCount = await bounded(() => page.locator(RAIL).count(), -1);
   if (railCount === 0) return "rail-absent";
   const rows = await bounded(
-    () => page.locator(`${RAIL} a[href^="/dashboard/chat/"]`).count(),
+    () =>
+      // `:not(/new)` excludes the persistent "+ New" NavLink (and the empty
+      // branch's CTA), which matches the plain prefix and would overcount
+      // conversation rows by one.
+      page.locator(`${RAIL} a[href^="/dashboard/chat/"]:not([href$="/new"])`).count(),
     -1,
   );
-  if (railCount === -1 || rows === -1) return "unreadable";
+  if (railCount === -1 || errCount === -1 || emptyCount === -1 || rows === -1) {
+    return "unreadable";
+  }
   // `rows:0` cannot distinguish "rendered list missing the row" from
   // "loading never settled" (the rail's ternary renders the rows-map branch
   // with zero anchors while `loading` stays true) — a DOM-only read cannot
@@ -713,16 +721,20 @@ async function probeRailScope(
   convId: string,
   productionUrl: string,
   probeMs: number,
-): Promise<{ activeRepo: string; repoUrlNull: boolean; rpcRow: string }> {
+): Promise<{
+  activeRepo: string;
+  scopeNull: "repo" | "workspace" | null;
+  rpcRow: string;
+}> {
   const scope = await bounded(
     async (): Promise<
       | { ok: true; workspaceId: string | null; repoUrl: string | null }
-      | { ok: false }
+      | { ok: false; status?: number }
     > => {
       const res = await page.request.get(
         `${productionUrl}/api/workspace/active-repo`,
       );
-      if (!res.ok()) return { ok: false };
+      if (!res.ok()) return { ok: false, status: res.status() };
       const body = (await res.json()) as {
         workspaceId?: unknown;
         repoUrl?: unknown;
@@ -739,14 +751,23 @@ async function probeRailScope(
   if (!scope.ok) {
     return {
       activeRepo: "unreadable",
-      repoUrlNull: false,
-      rpcRow: "unreadable:active-repo",
+      scopeNull: null,
+      rpcRow: `unreadable:active-repo${scope.status !== undefined ? `:${scope.status}` : ""}`,
     };
   }
   // A repo-less rail scope cannot list the row no matter how many times we
-  // reload — report it and let the caller fail fast.
+  // reload — report it and let the caller fail fast. `n/a:` (not
+  // `unreadable:`): the probe succeeded; the RPC was not run because the
+  // scope itself is empty.
   if (scope.repoUrl === null) {
-    return { activeRepo: "resolved", repoUrlNull: true, rpcRow: "unreadable:repo-null" };
+    return { activeRepo: "resolved", scopeNull: "repo", rpcRow: "n/a:repo-null" };
+  }
+  if (scope.workspaceId === null) {
+    return {
+      activeRepo: "resolved",
+      scopeNull: "workspace",
+      rpcRow: "n/a:workspace-null",
+    };
   }
   const rpcRow = await bounded(
     async () => {
@@ -756,6 +777,10 @@ async function probeRailScope(
         p_archive: "active",
         p_status: null,
         p_domain: null,
+        // These args mirror the rail's own fetch byte-for-byte
+        // (use-conversations.ts's list_conversations_enriched call, with
+        // p_limit = RAIL_LIMIT in conversations-rail.tsx — pinned by the
+        // live-verify suite so a rail-limit change drifts red, not silent).
         p_limit: 15,
       });
       if (error) return `unreadable:${rpcErrorTag(error)}`;
@@ -771,10 +796,10 @@ async function probeRailScope(
         ? "yes"
         : "no";
     },
-    "unreadable:timeout",
+    "unreadable:rpc",
     probeMs,
   );
-  return { activeRepo: "resolved", repoUrlNull: false, rpcRow };
+  return { activeRepo: "resolved", scopeNull: null, rpcRow };
 }
 
 export interface RailAssertDeps {
@@ -842,15 +867,19 @@ export async function assertRailRowVisible(
 
   const readOnce = async (): Promise<"visible" | "hidden" | "dead"> => {
     checks++;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      // bounded(): isVisible() accepts no timeout and still needs a renderer
-      // round-trip — a wedged renderer must yield a missed tick, not a stall
-      // that swallows the deadline and the RESULT line with it.
-      const v = await bounded(
-        () => deps.railRow.isVisible(),
-        null,
-        readMs,
-      );
+      // A manual race — NOT bounded(): bounded's catch-all resolves the
+      // fallback on a page-death throw too, which would make the "dead"
+      // classification below unreachable and a crashed browser read as
+      // absent -> FAIL -> BLOCK=1. Timeout yields the null sentinel (a
+      // missed tick); a rejection propagates to the catch and classifies.
+      const v = await Promise.race([
+        deps.railRow.isVisible(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), readMs);
+        }),
+      ]);
       if (v === null) {
         readErrs++;
         return "hidden";
@@ -868,12 +897,19 @@ export async function assertRailRowVisible(
       readErrs++;
       unreadableCause ??= err;
       return "hidden";
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   };
 
+  // The navigation response diagnostics read: the original goto until a
+  // reload produces a fresher one (post-reload CANT-RUN should describe the
+  // reload's navigation, not the pre-send one).
+  let navAfter = deps.nav;
+
   const unverifiable = async (): Promise<RailVerdict> => ({
     kind: "unverifiable",
-    reason: `rail-check:${await waitFailureState(deps.page, deps.nav, "rail", unreadableCause)}`,
+    reason: `rail-check:${await waitFailureState(deps.page, navAfter, "rail", unreadableCause)}`,
   });
 
   const pollWindow = async (
@@ -908,18 +944,21 @@ export async function assertRailRowVisible(
     deps.productionUrl,
     probeMs,
   );
-  if (scope.repoUrlNull || scope.rpcRow === "no") {
-    return {
-      kind: "absent",
-      checks,
-      readErrs,
-      reloads,
-      elapsedMs: Date.now() - started,
-      railState: await railRowState(deps.page),
-      rpcRow: scope.rpcRow,
-      activeRepo: scope.activeRepo,
-      budgetMs: totalMs,
-    };
+  const absentVerdict = async (): Promise<RailVerdict> => ({
+    kind: "absent",
+    checks,
+    readErrs,
+    reloads,
+    elapsedMs: Date.now() - started,
+    railState: await railRowState(deps.page),
+    rpcRow: scope.rpcRow,
+    activeRepo: scope.activeRepo,
+    reloadErr,
+    budgetMs: totalMs,
+  });
+
+  if (scope.scopeNull !== null || scope.rpcRow === "no") {
+    return absentVerdict();
   }
 
   // One last direct-arm read before spending the reload: the app's own
@@ -937,11 +976,26 @@ export async function assertRailRowVisible(
   // draw), then a SECOND full observe window. Phase B gets its own deadline
   // (start + observeMs, capped at the ceiling), not the ceiling itself —
   // otherwise probe/reload latency could starve the recovery window to a
-  // few seconds and reintroduce the flake this fixes.
+  // few seconds and reintroduce the flake this fixes. Note: the reload also
+  // re-runs mount effects (a second start_session on the 10/user/hr
+  // limiter) — another reason the draw is one, not N.
   if (Date.now() < totalDeadline) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await deps.page.reload({ waitUntil: "domcontentloaded", timeout: reloadMs });
+      // A manual race — NOT bounded(), for the same reason as readOnce:
+      // bounded would swallow a page-death throw into the fallback and kill
+      // the dead classification. Playwright's timeout: reloadMs bounds the
+      // NAVIGATION; the outer race (reloadMs + 5s) is the backstop for a
+      // wedged driver/CDP transport where even the timeout can't fire.
+      const reNav = await Promise.race([
+        deps.page.reload({ waitUntil: "domcontentloaded", timeout: reloadMs }),
+        new Promise<"__wedge__">((resolve) => {
+          timer = setTimeout(() => resolve("__wedge__"), reloadMs + 5_000);
+        }),
+      ]);
       reloads++;
+      if (reNav === "__wedge__") reloadErr = "reload-unbounded-wedge";
+      else if (reNav) navAfter = reNav;
     } catch (err) {
       if (isClosedTargetError(err)) {
         unreadableCause = err;
@@ -949,6 +1003,8 @@ export async function assertRailRowVisible(
       }
       reloadErr = errorName(err);
       reloads++;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
@@ -972,18 +1028,7 @@ export async function assertRailRowVisible(
     return unverifiable();
   }
 
-  return {
-    kind: "absent",
-    checks,
-    readErrs,
-    reloads,
-    elapsedMs: Date.now() - started,
-    railState: await railRowState(deps.page),
-    rpcRow: scope.rpcRow,
-    activeRepo: scope.activeRepo,
-    reloadErr,
-    budgetMs: totalMs,
-  };
+  return absentVerdict();
 }
 
 /**
@@ -1196,7 +1241,8 @@ async function driveAndVerify(
     // conversations row persists. The deployed app no longer NAVIGATES to
     // /dashboard/chat/<id> on a fresh send — it materializes the conversation
     // IN PLACE by dispatching CONVERSATION_CREATED_EVENT so the rail refetches
-    // (the #5391/#5436 rail-race fix replaced the URL navigation). The old
+    // (the deterministic fresh-conversation fix — #5449 — replaced the URL
+    // navigation with in-place materialization). The old
     // waitForURL(/dashboard/chat/<uuid>/) assertion therefore could NEVER match
     // against the current app — poll the persisted row instead and derive the
     // id from it (not from the URL).
@@ -1249,7 +1295,19 @@ async function driveAndVerify(
 
     // Teardown as the synthetic user's own session (RLS), regardless of result.
     const teardown = await teardownConversation(supabase, cfg, verified, convId);
-    if (teardown.kind === "CANT-RUN") return teardown;
+    if (teardown.kind === "CANT-RUN") {
+      // A rail FAIL must not be downgraded to non-blocking CANT-RUN — the
+      // regression signal outranks the teardown breach, so the teardown
+      // reason rides inside the FAIL detail instead (#9581 review). For
+      // PASS the breach IS the result (nothing blocked, operator alerted).
+      if (result.kind === "FAIL") {
+        return {
+          kind: "FAIL",
+          detail: `${result.detail} teardown=${teardown.reason.slice(0, 120)}`,
+        };
+      }
+      return teardown;
+    }
 
     return result;
   } finally {
@@ -1479,16 +1537,15 @@ export function emitLine(result: Result): string {
 }
 
 function emit(result: Result): void {
-  const line =
-    result.kind === "CANT-RUN"
-      ? `RESULT: CANT-RUN:${redact(result.reason)}`
-      : `RESULT: ${result.kind} — ${redact(result.detail)}`;
-  // Single structured line (FR6). redact() scrubs any captured value that
-  // reached EITHER string. The CANT-RUN branch was previously unredacted while
-  // its sibling was — an asymmetry that was latent while reasons were fixed
-  // tokens, and becomes load-bearing now that waitFailureState() puts live page
-  // state (title, path) into a reason (#7969).
-  console.log(line);
+  // Delegates to emitLine: the wire format lives in exactly ONE place —
+  // the exported, test-pinned builder. An inline copy here would let the
+  // shipped string drift from the asserted one while the suite stays green
+  // (the endpoints-covered-wire-not class). redact() inside emitLine scrubs
+  // any captured value that reached EITHER string; the CANT-RUN branch was
+  // previously unredacted while its sibling was — an asymmetry that was
+  // latent while reasons were fixed tokens, and becomes load-bearing now
+  // that waitFailureState() puts live page state into a reason (#7969).
+  console.log(emitLine(result));
 }
 
 async function main(): Promise<void> {
