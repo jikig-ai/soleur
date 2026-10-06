@@ -589,8 +589,11 @@ stock_recovery_report() {
       fi
       pstate="unprobed (${state_note})"
       if [[ -n "$state_file" ]]; then
+        # Scope the descent to .values (post-apply STATE) — `.configuration` also carries
+        # `address` keys for everything the plan declared, so an unscoped `..` would read a
+        # destroyed-but-declared server as "present", picking the wrong recovery arm.
         pstate=$(jq -r --arg a "$addr" '
-          [.. | objects | select(.address? == $a)] as $m
+          [.values | .. | objects | select(.address? == $a and .type? == "hcloud_server")] as $m
           | if ($m | length) == 0 then "absent — the create never landed; a re-dispatch plans a bare create"
             elif ([$m[] | (.status? // "")] | any(. == "tainted")) then "tainted in state — the create landed and a LATER step failed; a re-dispatch of the replace target plans delete+create"
             else "present in state — the create landed; a re-dispatch plans no server create for it" end

@@ -1006,13 +1006,20 @@ grep -q 're-dispatch' <<<"$out" && pass || fail "T31: the doctrine must name the
 grep -q 'retained\|preserved' <<<"$out" && pass || fail "T31: the doctrine must state the volumes are retained/preserved. out=$out"
 grep -q 'bypass' <<<"$out" && pass || fail "T31: the no-bypass doctrine must be stated. out=$out"
 # state arm: absent vs tainted pick OPPOSITE re-dispatch arms, so the report must name which
-jq -n '{values:{root_module:{resources:[{address:"hcloud_server.a"}]}}}' > "$TMP/state.json"
+jq -n '{values:{root_module:{resources:[{address:"hcloud_server.a",type:"hcloud_server"}]}}}' > "$TMP/state.json"
 out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/state.json" 2>&1)
 grep -q 'hcloud_server.a.*present' <<<"$out" && pass || fail "T31: a present-in-state address must say so. out=$out"
 grep -q 'hcloud_server.b.*absent' <<<"$out" && pass || fail "T31: an absent address must be named absent (bare-create arm). out=$out"
-jq -n '{values:{root_module:{resources:[{address:"hcloud_server.a",status:"tainted"}]}}}' > "$TMP/state.json"
+jq -n '{values:{root_module:{resources:[{address:"hcloud_server.a",type:"hcloud_server",status:"tainted"}]}}}' > "$TMP/state.json"
 out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/state.json" 2>&1)
 grep -q 'hcloud_server.a.*tainted' <<<"$out" && pass || fail "T31: a tainted address must be named tainted (delete+create arm). out=$out"
+# REGRESSION: `terraform show -json` carries .configuration (the DECLARED addresses) as well as
+# .values (the APPLIED state). A destroyed-but-declared server appears only under
+# .configuration — it must read ABSENT, not present (that misreads into the delete+create arm).
+jq -n '{configuration:{root_module:{resources:[{address:"hcloud_server.a",type:"hcloud_server"}]}}, values:{root_module:{resources:[]}}}' > "$TMP/state.json"
+out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/state.json" 2>&1)
+grep -q 'hcloud_server.a.*absent' <<<"$out" && pass || fail "T31: a declared-but-destroyed address (configuration only) must read absent, not present. out=$out"
+grep -q 'hcloud_server.a.*present' <<<"$out" && fail "T31: a configuration-only address read as present — the jq descended past .values" || pass
 # degrade arms: a plan with no server creates and an unreadable state file both annotate, never crash
 jq -n '{resource_changes:[{address:"hcloud_volume.x",type:"hcloud_volume",change:{actions:["create"],after:{}}}]}' > "$TMP/nosrv.json"
 out=$(stock_recovery_report t-job "$TMP/nosrv.json" 2>&1); rc=$?
