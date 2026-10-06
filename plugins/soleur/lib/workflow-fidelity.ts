@@ -132,8 +132,9 @@ export function mandatorySuccessors(skill: string): readonly string[] {
 }
 
 /**
- * The operator-typed / adapter-rendered form of one skill on one harness — the same four
- * branches as `formatSkillInvocation` in harness.ts. Docs name skills as `soleur:<name>` and
+ * The operator-typed / adapter-rendered form of one skill on one harness. The cursor
+ * arm is `formatSkillRef`-only until `detectHarness` returns `cursor`. `formatSkillInvocation`
+ * does not share that arm in slice 1. Docs name skills as `soleur:<name>` and
  * leave THIS to the adapter (ADR-226); every fidelity string below goes through it so no
  * harness receives another harness's form (arch F3, #8299).
  */

@@ -144,6 +144,63 @@ describe("cursor name map fixture", () => {
     }
   });
 
+  test("a rewritten read target and an extra stub are named", () => {
+    const root = fixture();
+    try {
+      expect(writeCursorNameMap(root)).toEqual([]);
+      const path = join(root, "cursor/skills/sync/SKILL.md");
+      writeFileSync(path, readFileSync(path, "utf8").replace("Read `commands/sync.md`", "Read `skills/sync/SKILL.md`"));
+      const drift = runCheck(root);
+      expect(drift.exitCode).toBe(1);
+      expect(combined(drift)).toContain("DRIFT: cursor/skills/sync/SKILL.md");
+      expect(combined(drift)).not.toContain("cursor-name-map ok");
+
+      expect(writeCursorNameMap(root)).toEqual([]);
+      const extraDir = join(root, "cursor/skills/soleur-stale");
+      mkdirSync(extraDir, { recursive: true });
+      writeFileSync(join(extraDir, "SKILL.md"), "stale\n");
+      const extra = runCheck(root);
+      expect(extra.exitCode).toBe(1);
+      expect(combined(extra)).toContain("EXTRA: cursor/skills/soleur-stale/SKILL.md");
+      expect(combined(extra)).not.toContain("cursor-name-map ok");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a directory extra is reported and does not throw", () => {
+    const root = fixture();
+    try {
+      expect(writeCursorNameMap(root)).toEqual([]);
+      const nested = join(root, "cursor/agents/nested-extra");
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(join(nested, "child.md"), "extra\n");
+      expect(writeCursorNameMap(root)).toEqual(["EXTRA: cursor/agents/nested-extra"]);
+      expect(existsSync(join(nested, "child.md"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("operator-typed frontmatter is copied onto the stub", () => {
+    const root = fixture();
+    try {
+      const dir = join(root, "skills", "flag-delete");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "SKILL.md"),
+        "---\nname: x\ndescription: \"Delete a flag.\"\ndisable-model-invocation: true\n---\n\nbody\n",
+      );
+      expect(writeCursorNameMap(root)).toEqual([]);
+      const stub = readFileSync(join(root, "cursor/skills/soleur-flag-delete/SKILL.md"), "utf8");
+      expect(stub).toContain("disable-model-invocation: true");
+      expect(stub).toContain("does not block a commit");
+      expect(stub).toContain("does not classify the session as cursor");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a new canonical skill is missing until regenerate, and go stays unprefixed", () => {
     const root = fixture();
     try {

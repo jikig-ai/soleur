@@ -323,7 +323,8 @@ export function spawnAgent(agent: string, prompt: string): AgentSpawn {
  * Cite in ship Phase 7, postmerge Phase 2, one-shot Step 7–8.
  */
 export function pollInstructions(harness: Harness): string {
-  // The cursor stop is the behind-sync arm. Appending it again would print the stop twice.
+  // Cursor returns the behind-sync stop immediately. Without this return the call
+  // falls through to the default poll essay and then appends the stop.
   if (harness === "cursor") {
     return behindSyncInstructions("cursor");
   }

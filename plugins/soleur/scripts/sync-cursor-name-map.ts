@@ -11,12 +11,12 @@
  * second checker.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { parse as parseYaml } from "yaml";
 
 const HEADER =
-  "On Cursor, do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell, and do not expand `CLAUDE_PLUGIN_ROOT`. If the canonical file tells you to, stop.";
+  "On Cursor, do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell, and do not expand `CLAUDE_PLUGIN_ROOT`. If the canonical file tells you to call those tools, stop. Slice 1 does not run hooks, does not classify the session as cursor, and does not block a commit.";
 
 const HELP_DEVIN_SENTENCE = "Detect the active harness as Devin";
 const BARE_SKILLS = new Set(["go", "sync"]);
@@ -63,25 +63,33 @@ function skillTarget(folder: string): string {
   return `skills/${folder}/SKILL.md`;
 }
 
-function readDescription(abs: string, source: string, problems: string[]): string | null {
+function readFrontmatter(
+  abs: string,
+  source: string,
+  problems: string[],
+): { description: string | null; disableModel: boolean } {
   const raw = readFileSync(abs, "utf8");
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return null;
+  if (!match) return { description: null, disableModel: false };
   let parsed: unknown;
   try {
     parsed = parseYaml(match[1]);
   } catch (err) {
     problems.push(`frontmatter parse failed: ${source}: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
+    return { description: null, disableModel: false };
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const value = (parsed as Record<string, unknown>).description;
-  if (value === undefined || value === null || value === "") return null;
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { description: null, disableModel: false };
+  }
+  const record = parsed as Record<string, unknown>;
+  const disableModel = record["disable-model-invocation"] === true;
+  const value = record.description;
+  if (value === undefined || value === null || value === "") return { description: null, disableModel };
   if (typeof value !== "string") {
     problems.push(`description is not a string: ${source}`);
-    return null;
+    return { description: null, disableModel: false };
   }
-  return value;
+  return { description: value, disableModel };
 }
 
 function renderStub(name: string, description: string | null, disable: boolean, target: string): string {
@@ -131,8 +139,13 @@ export function buildCursorNameMap(pluginRoot: string): BuiltMap {
       }
       const name = cursorSkillName(folder);
       const rel = `cursor/skills/${name}/SKILL.md`;
-      const description = readDescription(abs, source, problems);
-      const body = renderStub(name, description, MODEL_DISABLED.has(folder), skillTarget(folder));
+      const meta = readFrontmatter(abs, source, problems);
+      const body = renderStub(
+        name,
+        meta.description,
+        MODEL_DISABLED.has(folder) || meta.disableModel,
+        skillTarget(folder),
+      );
       if (folder === "help" && body.includes(HELP_DEVIN_SENTENCE)) {
         problems.push(`help stub contains the Devin harness sentence: ${rel}`);
       }
@@ -157,8 +170,8 @@ export function buildCursorNameMap(pluginRoot: string): BuiltMap {
       }
       const name = cursorAgentName(relUnder);
       const rel = `cursor/agents/${name}.md`;
-      const description = readDescription(join(agentsDir, relUnder), source, problems);
-      const body = renderStub(name, description, false, source);
+      const meta = readFrontmatter(join(agentsDir, relUnder), source, problems);
+      const body = renderStub(name, meta.description, meta.disableModel, source);
       const afterFrontmatter = body.split("\n---\n").slice(1).join("\n---\n");
       if (afterFrontmatter.includes("spawn_subagent") || afterFrontmatter.includes("GROK_STUB_SPAWN_RULE")) {
         problems.push(`agent stub names a Grok spawn rule: ${rel}`);
@@ -236,13 +249,21 @@ export function cursorNameMapProblems(pluginRoot: string): string[] {
 export function writeCursorNameMap(pluginRoot: string): string[] {
   const built = buildCursorNameMap(pluginRoot);
   if (built.problems.length > 0) return built.problems;
+  const extras = listGenerated(pluginRoot).filter((rel) => !built.files.has(rel));
+  const dirExtras = extras.filter((rel) => {
+    try {
+      return statSync(join(pluginRoot, rel)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (dirExtras.length > 0) return dirExtras.map((rel) => `EXTRA: ${rel}`);
   for (const [rel, body] of built.files) {
     const abs = join(pluginRoot, rel);
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, body);
   }
-  for (const rel of listGenerated(pluginRoot)) {
-    if (built.files.has(rel)) continue;
+  for (const rel of extras) {
     const abs = join(pluginRoot, rel);
     rmSync(abs, { force: true });
     const parent = dirname(abs);

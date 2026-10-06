@@ -8,7 +8,7 @@ Slice 1 does not classify the session as `cursor`. Detection does not return `cu
 
 Unmeasured surfaces stay unmeasured. Whether the CLI loads `.claude/settings.json` is unmeasured. This file does not say other hook sources are off.
 
-This slice does not call the plugin supported. `/go` and `/sync` stay bare. Every other skill is `/soleur-<name>`, including `/soleur-help`, `/soleur-plan`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins. Do not type those four for Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. If a canonical file tells you to, stop and read the file the stub names.
+This slice does not call the plugin supported. `/go` and `/sync` stay bare. Every other skill is `/soleur-<name>`, including `/soleur-help`, `/soleur-plan`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins. Do not type those four for Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. If a canonical file tells you to call those tools, stop. Do not follow a line that names the Skill tool or the Task tool.
 
 Local install prints `agent --plugin-dir` with the absolute plugin directory. This slice does not classify the session as cursor, does not run hooks, and does not block a commit.
 

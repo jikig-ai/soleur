@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
 
@@ -52,6 +52,10 @@ describe("Cursor CLI plugin package", () => {
     }
     expect(text).toContain("If harness is unknown and Skill/slash tools are unavailable, STOP");
     expect(text).not.toContain("cursor --plugin-dir");
+    expect(text).toContain("On Grok Build only. Map `soleur:<skill>`");
+    expect(text).toContain("**Cursor CLI:** Read `plugins/soleur/skills/<name>/SKILL.md`");
+    expect(text).toContain("Every other skill uses the prefixed form, including");
+    expect(text).toContain("The unknown-harness stop below is a different case.");
   });
 
   test("help.md cursor column names the prefixed skills and the built-ins not to type", () => {
@@ -59,15 +63,20 @@ describe("Cursor CLI plugin package", () => {
     const grok = help.slice(help.indexOf("### Grok Build"), help.indexOf("### Cursor CLI"));
     expect(grok).toContain("/help                 This help listing");
     expect(grok).not.toContain("/soleur-help");
-    const cursor = help.slice(help.indexOf("### Cursor CLI"));
+    const cursorStart = help.indexOf("### Cursor CLI");
+    const fence = help.indexOf("```text", cursorStart);
+    const fenceEnd = help.indexOf("```", fence + 7);
+    const cursor = help.slice(fence, fenceEnd);
     expect(cursor).toContain("/go");
     expect(cursor).toContain("/sync");
     expect(cursor).toContain("/soleur-help");
     expect(cursor).toContain("/soleur-plan");
     expect(cursor).toContain("/soleur-review");
-    expect(cursor).toContain("Do not type");
-    expect(cursor).toContain("/plan");
-    expect(cursor).toContain("/shell");
+    expect(cursor).toContain("Do not type Cursor's built-ins /plan, /help, /review, or /shell for Soleur.");
+    expect(cursor).not.toMatch(/^ {2}\/plan /m);
+    expect(cursor).not.toMatch(/^ {2}\/help /m);
+    expect(cursor).not.toMatch(/^ {2}\/review /m);
+    expect(cursor).not.toMatch(/^ {2}\/shell /m);
     expect(cursor).toContain("does not classify the session as cursor");
   });
 
@@ -99,16 +108,19 @@ describe("Cursor CLI plugin package", () => {
       });
       expect(missing.exitCode).not.toBe(0);
       expect(missing.stdout.toString()).toContain("agent is not on PATH");
+      expect(missing.stdout.toString()).not.toContain("agent --plugin-dir");
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
 
     const bin = mkdtempSync(join(tmpdir(), "soleur-cursor-path-"));
     try {
-      writeFileSync(join(bin, "agent"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const marker = join(bin, "agent-ran");
+      writeFileSync(join(bin, "agent"), `#!/bin/sh\ntouch '${marker}'\nexit 99\n`, { mode: 0o755 });
       const present = Bun.spawnSync(["bash", join(repoRoot, "scripts/setup-cursor.sh")], {
         env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` },
       });
+      expect(existsSync(marker)).toBe(false);
       expect(present.exitCode).toBe(0);
       const stdout = present.stdout.toString();
       expect(stdout).toContain(`agent --plugin-dir ${pluginRoot}`);
