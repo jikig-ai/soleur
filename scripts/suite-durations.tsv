@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=local:37148301745,37130724002,37116885720,37112007418,37111686980
 # default-weight-ms=996
-# generated-at=2026-10-06T07:48:27Z
+# generated-at=2026-10-06T14:11:14Z
 # generator=regenerate-shard-manifest.py v3
 .claude/hooks/agent-token-tee.test.sh	6792	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	905	measured
@@ -483,6 +483,7 @@ tests/hooks/drop-sentinel-parity	30	measured
 tests/hooks/emissions	1409	measured
 tests/hooks/incidents	583	measured
 tests/scripts/apply-github-infra-mint-shape	533	measured
+tests/scripts/argv-bearer-sweep	996	floor
 tests/scripts/audit-bot-codeql-coverage	950	measured
 tests/scripts/audit-ruleset-bypass	1320	measured
 tests/scripts/betterstack-absence-classifier	62	measured

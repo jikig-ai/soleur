@@ -16,6 +16,6 @@ esac
 # how a guard teaches its reader to baseline files that are already correct.
 args=(
   --disable --noproxy '*'
-  -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}"
+  -sS --config -
 )
-curl "${args[@]}" https://example.invalid/ || true
+curl "${args[@]}" https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true

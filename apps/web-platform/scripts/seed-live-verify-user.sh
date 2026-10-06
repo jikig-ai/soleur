@@ -206,11 +206,35 @@ if [[ -n "$ref" && "$is_custom_domain" -eq 0 ]]; then
   fi
 fi
 
+# Destination pin: the service-role key now travels to $SB_URL, which is env-derived, so an
+# override could redirect it to a host the operator did not intend. This script seeds PRD
+# only (DOPPLER_CONFIG=prd above); refuse anything but the live prd Supabase project, reached
+# either by its custom domain or by its own 20-char ref (a local run may use the canonical
+# shape). The dev project (hr-dev-prd-distinct-supabase-projects) is a distinct project and is
+# NOT accepted here. Placed after the shape/role/ref refusals above so their messages are
+# unchanged, and before the first request so the key is never sent anywhere else.
+case "$SB_URL" in
+  https://api.soleur.ai|https://ifsccnjhymdmidffkzhl.supabase.co) ;;
+  *) echo "::error::Refusing to seed: NEXT_PUBLIC_SUPABASE_URL is not the prd Supabase project host"; exit 1 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and both credential headers,
+# so the service-role key travels on curl's stdin config channel and never on its argument
+# list (/proc/<pid>/cmdline, ps, a traced parent). A newline in the key would inject a curl
+# config directive and an empty one would send the request unauthenticated, so it is refused
+# before curl runs; the value is never echoed. The non-secret Content-Type stays on argv.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+sb_curl() {
+  _bearer_ok "${SRK:-}" || { echo "sb_curl: SUPABASE_SERVICE_ROLE_KEY unusable" >&2; return 2; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\nheader = "apikey: %s"\n' "$SRK" "$SRK")
+}
+_bearer_ok "$SRK" || { echo "::error::SUPABASE_SERVICE_ROLE_KEY has an unusable shape; refusing to seed"; exit 1; }
+
 # Behavioural proof, run for BOTH formats: a JWT's role claim is self-asserted,
 # so the probe is what actually establishes the privilege. Read-only.
-probe_code=$(curl --disable --noproxy '*' --proto '=https' -g -sS -o /dev/null \
+probe_code=$(sb_curl --proto '=https' -g -sS -o /dev/null \
   -w '%{http_code}' --max-time 20 \
-  -H "Authorization: Bearer $SRK" -H "apikey: $SRK" \
   "$SB_URL/auth/v1/admin/users?per_page=1" || echo "000")
 if [[ "$probe_code" != "200" ]]; then
   echo "::error::service-role probe against $url_host returned HTTP $probe_code (expected 200)."
@@ -222,8 +246,6 @@ echo "::notice::Pre-flight OK (DOPPLER_CONFIG=prd, key=$key_form, admin-probe=20
 
 # --- Seed ----------------------------------------------------------------
 
-header_auth="Authorization: Bearer $SRK"
-header_api="apikey: $SRK"
 header_json="Content-Type: application/json"
 
 # DERIVED from lib/legal/tc-version.ts, never restated. A hand-kept literal
@@ -291,9 +313,8 @@ find_user_by_email() {
   # for the LOCAL bootstrap path, where the UID does not exist yet.
   if [[ -n "${LIVE_VERIFY_EXPECTED_UID:-}" ]]; then
     local by_uid
-    by_uid=$(curl --disable --noproxy '*' -sf \
+    by_uid=$(sb_curl -sf \
       "$SB_URL/auth/v1/admin/users/$LIVE_VERIFY_EXPECTED_UID" \
-      -H "$header_auth" -H "$header_api" \
       | jq -r --arg e "$email" 'if .email == $e then .id else "" end' 2>/dev/null) || by_uid=""
     if [[ -n "$by_uid" ]]; then printf '%s' "$by_uid"; return 0; fi
     # A set UID that does not resolve to this email is a MISMATCH, not a cue to
@@ -304,8 +325,8 @@ find_user_by_email() {
       return 1
     fi
   fi
-  total=$(curl --disable --noproxy '*' -sfD - -o /dev/null \
-    "$SB_URL/auth/v1/admin/users?per_page=1" -H "$header_auth" -H "$header_api" \
+  total=$(sb_curl -sfD - -o /dev/null \
+    "$SB_URL/auth/v1/admin/users?per_page=1" \
     | tr -d '\r' | sed -n 's/^[Xx]-[Tt]otal-[Cc]ount: *//p' | head -1)
   [[ "$total" =~ ^[0-9]+$ ]] || {
     echo "::error::admin users listing returned no x-total-count — cannot bound the search" >&2
@@ -313,9 +334,8 @@ find_user_by_email() {
   }
   local pages=$(( (total + per_page - 1) / per_page ))
   while (( page <= pages )); do
-    id=$(curl --disable --noproxy '*' -sf \
+    id=$(sb_curl -sf \
       "$SB_URL/auth/v1/admin/users?per_page=$per_page&page=$page" \
-      -H "$header_auth" -H "$header_api" \
       | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""')
     [[ -n "$id" ]] && { printf '%s' "$id"; return 0; }
     page=$(( page + 1 ))
@@ -327,8 +347,8 @@ user_id=$(find_user_by_email "$EMAIL")
 
 if [[ -z "$user_id" ]]; then
   echo "Creating $EMAIL..."
-  create_response=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
-    -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  create_response=$(sb_curl -sf "$SB_URL/auth/v1/admin/users" \
+    -X POST -H "$header_json" \
     -d "$(jq -nc --arg email "$EMAIL" --arg password "$LIVE_VERIFY_USER_PASSWORD" \
       '{email: $email, password: $password, email_confirm: true}')")
   user_id=$(printf '%s' "$create_response" | jq -r '.id // ""')
@@ -340,8 +360,8 @@ if [[ -z "$user_id" ]]; then
   echo "  Created."
 else
   echo "Refreshing password for $EMAIL..."
-  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users/$user_id" \
-    -X PUT -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/auth/v1/admin/users/$user_id" \
+    -X PUT -H "$header_json" \
     -d "$(jq -nc --arg password "$LIVE_VERIFY_USER_PASSWORD" \
       '{password: $password, email_confirm: true}')" \
     > /dev/null
@@ -355,8 +375,8 @@ fi
 # directly records consent with no audit row — measured in prod on the synthetic
 # principal: tc_accepted_version set since 2026-06-17, ledger EMPTY (#7969).
 echo "  Provisioning public.users row..."
-curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
-  -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
+sb_curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
+  -X PATCH -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc \
     '{workspace_status: "ready", repo_status: "ready"}')" \
@@ -366,16 +386,15 @@ curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
 # is a no-op when the version already matches, and the ledger INSERT is
 # ON CONFLICT (user_id, version) DO NOTHING.
 echo "  Recording T&C acceptance (v$TC_VERSION) via public.accept_terms..."
-curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/rpc/accept_terms" \
-  -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+sb_curl -sf "$SB_URL/rest/v1/rpc/accept_terms" \
+  -X POST -H "$header_json" \
   -d "$(jq -nc --arg uid "$user_id" --arg v "$TC_VERSION" --arg sha "$TC_DOCUMENT_SHA" \
     '{p_user_id: $uid, p_version: $v, p_doc_sha: $sha}')" \
   > /dev/null
 
 # Resolve the solo workspace (handle_new_user trigger sets id == user.id; the
 # owner membership row is the authoritative lookup).
-workspace_id=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$user_id&role=eq.owner&select=workspace_id&limit=1" \
-  -H "$header_auth" -H "$header_api" \
+workspace_id=$(sb_curl -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$user_id&role=eq.owner&select=workspace_id&limit=1" \
   | jq -r '.[0].workspace_id // ""')
 if [[ -z "$workspace_id" ]]; then
   echo "::error::No owned workspace membership for $user_id (handle_new_user trigger did not fire?)"
@@ -387,8 +406,8 @@ fi
 # createConversation aborts "No connected repository" and the rail check can
 # never materialize a conversation (CTO ruling Q3 — the seed-qa-user.sh gap).
 echo "  Provisioning workspaces row (repo_url sentinel + repo_status=ready)..."
-curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
-  -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
+sb_curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id" \
+  -X PATCH -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "$(jq -nc --arg url "$SENTINEL_REPO_URL" \
     '{repo_status: "ready", repo_url: $url}')" \
@@ -409,8 +428,7 @@ curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id
 # role bypasses the SELECT-only RLS (mig 060:41-43); the table has no
 # insert/update trigger and no table-level REVOKE FROM service_role.
 echo "  Resolving organization_id for the active-workspace binding..."
-org_id=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id&select=organization_id" \
-  -H "$header_auth" -H "$header_api" \
+org_id=$(sb_curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$workspace_id&select=organization_id" \
   | jq -r '.[0].organization_id // ""')
 if [[ -z "$org_id" ]]; then
   echo "::error::No organization_id on workspace $workspace_id (handle_new_user trigger did not provision an org?)"
@@ -420,8 +438,8 @@ fi
 # POST upsert (NOT a bare PATCH: no row exists yet, so ?user_id=eq.X matches 0
 # rows and silently no-ops, leaving the binding absent and the harness broken).
 echo "  Binding active workspace (user_session_state upsert)..."
-curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/user_session_state?on_conflict=user_id" \
-  -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+sb_curl -sf "$SB_URL/rest/v1/user_session_state?on_conflict=user_id" \
+  -X POST -H "$header_json" \
   -H "Prefer: resolution=merge-duplicates,return=minimal" \
   -d "$(jq -nc \
     --arg uid "$user_id" \
@@ -434,12 +452,11 @@ curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/user_session_state?on_conflict
 # Dummy decrypt-poisoned anthropic api_keys row (has-key gate). iv/auth_tag are
 # NOT NULL (mig 004); GCM verification can never succeed on these, so any real
 # dispatch fails decryption — the row only drives the "key on file" UI state.
-existing_key=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
-  -H "$header_auth" -H "$header_api" \
+existing_key=$(sb_curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
   | jq -r '.[0].id // ""')
 if [[ -z "$existing_key" ]]; then
-  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys" \
-    -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/rest/v1/api_keys" \
+    -X POST -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "$(jq -nc --arg uid "$user_id" \
       '{user_id: $uid, provider: "anthropic", encrypted_key: "live-verify-dummy-not-real", iv: "bGl2ZS12ZXJpZnktaXY=", auth_tag: "bGl2ZS12ZXJpZnktdGFn", is_valid: true}')" \

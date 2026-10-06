@@ -44,15 +44,34 @@ SB_URL="$NEXT_PUBLIC_SUPABASE_URL"
 SRK="$SUPABASE_SERVICE_ROLE_KEY"
 ANON="$NEXT_PUBLIC_SUPABASE_ANON_KEY"
 
-header_auth="Authorization: Bearer $SRK"
-header_api="apikey: $SRK"
 header_json="Content-Type: application/json"
+
+# Destination pin: the service-role key now travels to $SB_URL, which is env-derived, so an
+# override could redirect it to a host the operator did not intend. This script is dev-only
+# (DOPPLER_CONFIG=dev above), so refuse anything but the live dev Supabase project host; the
+# prd project is a distinct Supabase project and is NOT accepted here.
+case "$SB_URL" in
+  https://mlwiodleouzwniehynfz.supabase.co) ;;
+  *) echo "ERROR: Refusing to seed: NEXT_PUBLIC_SUPABASE_URL is not the dev Supabase project host" >&2; exit 1 ;;
+esac
+
+# One wrapper owns the transport flags, the token-shape guard and both credential headers,
+# so the service-role key travels on curl's stdin config channel and never on its argument
+# list (/proc/<pid>/cmdline, ps, a traced parent). A newline in the key would inject a curl
+# config directive and an empty one would send the request unauthenticated, so it is refused
+# before curl runs; the value is never echoed. The non-secret Content-Type stays on argv.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+sb_curl() {
+  _bearer_ok "${SRK:-}" || { echo "sb_curl: SUPABASE_SERVICE_ROLE_KEY unusable" >&2; return 2; }
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\nheader = "apikey: %s"\n' "$SRK" "$SRK")
+}
+_bearer_ok "$SRK" || { echo "ERROR: SUPABASE_SERVICE_ROLE_KEY has an unusable shape; refusing to seed" >&2; exit 1; }
 
 echo "=== Seeding QA user: $QA_EMAIL ==="
 
 # 1. Find or create the QA user
-USER_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
-  -H "$header_auth" -H "$header_api" | \
+USER_ID=$(sb_curl -sf "$SB_URL/auth/v1/admin/users" | \
   python3 -c "
 import sys, json
 users = json.load(sys.stdin).get('users', [])
@@ -62,23 +81,23 @@ print(match[0]['id'] if match else '')
 
 if [[ -z "$USER_ID" ]]; then
   echo "Creating user..."
-  USER_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users" \
-    -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  USER_ID=$(sb_curl -sf "$SB_URL/auth/v1/admin/users" \
+    -X POST -H "$header_json" \
     -d "{\"email\":\"$QA_EMAIL\",\"password\":\"$QA_PASSWORD\",\"email_confirm\":true}" | \
     python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
   echo "Created user: $USER_ID"
 else
   echo "Found existing user: $USER_ID"
   # Ensure password is set
-  curl --disable --noproxy '*' -sf "$SB_URL/auth/v1/admin/users/$USER_ID" \
-    -X PUT -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/auth/v1/admin/users/$USER_ID" \
+    -X PUT -H "$header_json" \
     -d "{\"password\":\"$QA_PASSWORD\"}" > /dev/null
 fi
 
 # 2. Provision user row (tc_accepted, workspace, repo)
 echo "Provisioning user row..."
-curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$USER_ID" \
-  -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
+sb_curl -sf "$SB_URL/rest/v1/users?id=eq.$USER_ID" \
+  -X PATCH -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "{
     \"tc_accepted_version\": \"$TC_VERSION\",
@@ -90,16 +109,15 @@ curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/users?id=eq.$USER_ID" \
 echo "  tc_accepted_version=$TC_VERSION, workspace=ready, repo=ready"
 
 # 3. Ensure a dummy API key exists
-EXISTING_KEY=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$USER_ID&provider=eq.anthropic&select=id" \
-  -H "$header_auth" -H "$header_api" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
+EXISTING_KEY=$(sb_curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$USER_ID&provider=eq.anthropic&select=id" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
 
 if [[ -z "$EXISTING_KEY" ]]; then
   echo "Creating dummy API key..."
   # iv/auth_tag are NOT NULL (migration 004). The values are decrypt-poisoned
   # by design: GCM verification can never succeed on them, so the row drives
   # the "key on file" UI state but any real agent dispatch fails decryption.
-  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/api_keys" \
-    -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/rest/v1/api_keys" \
+    -X POST -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "{
       \"user_id\": \"$USER_ID\",
@@ -120,8 +138,7 @@ fi
 # user id (migration 053 handle_new_user, ADR-038). conversations.workspace_id
 # and messages.workspace_id are NOT NULL since migration 059;
 # messages.template_id is NOT NULL since migration 053.
-WORKSPACE_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$USER_ID&role=eq.owner&select=workspace_id&limit=1" \
-  -H "$header_auth" -H "$header_api" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['workspace_id'] if d else '')")
+WORKSPACE_ID=$(sb_curl -sf "$SB_URL/rest/v1/workspace_members?user_id=eq.$USER_ID&role=eq.owner&select=workspace_id&limit=1" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['workspace_id'] if d else '')")
 if [[ -z "$WORKSPACE_ID" ]]; then
   echo "ERROR: no owned workspace membership for QA user $USER_ID" >&2
   exit 1
@@ -130,25 +147,24 @@ fi
 # Mirror repo readiness to the workspace row: post-ADR-044 (migrations
 # 079/080/081) the KB/sync read path gates on workspaces.repo_status, not
 # users.repo_status — without this the seeded user is split-brain.
-curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/workspaces?id=eq.$WORKSPACE_ID" \
-  -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
+sb_curl -sf "$SB_URL/rest/v1/workspaces?id=eq.$WORKSPACE_ID" \
+  -X PATCH -H "$header_json" \
   -H "Prefer: return=minimal" \
   -d "{\"repo_status\": \"ready\"}" > /dev/null
 
-CONV_ID=$(curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/conversations?user_id=eq.$USER_ID&select=id&order=created_at.asc&limit=1" \
-  -H "$header_auth" -H "$header_api" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
+CONV_ID=$(sb_curl -sf "$SB_URL/rest/v1/conversations?user_id=eq.$USER_ID&select=id&order=created_at.asc&limit=1" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d else '')")
 if [[ -n "$CONV_ID" ]]; then
   echo "  Conversation already exists: $CONV_ID"
 else
   echo "Creating conversation with sample messages..."
   CONV_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/conversations" \
-    -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/rest/v1/conversations" \
+    -X POST -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "{\"id\":\"$CONV_ID\",\"user_id\":\"$USER_ID\",\"workspace_id\":\"$WORKSPACE_ID\"}" > /dev/null
 
-  curl --disable --noproxy '*' -sf "$SB_URL/rest/v1/messages" \
-    -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+  sb_curl -sf "$SB_URL/rest/v1/messages" \
+    -X POST -H "$header_json" \
     -H "Prefer: return=minimal" \
     -d "[
       {\"conversation_id\":\"$CONV_ID\",\"workspace_id\":\"$WORKSPACE_ID\",\"template_id\":\"$TEMPLATE_ID\",\"role\":\"user\",\"leader_id\":null,\"content\":\"What is the current state of our marketing strategy?\"},

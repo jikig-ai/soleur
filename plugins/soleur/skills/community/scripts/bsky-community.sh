@@ -175,6 +175,24 @@ readonly BSKY_API="https://bsky.social/xrpc"
 ACCESS_JWT=""
 USER_DID=""
 
+# --- Bearer transport (#7843) ---
+# ACCESS_JWT is parsed out of an API reply, so it is RESPONSE-DERIVED: untrusted bytes. It
+# rides curl's STDIN config channel (`--config -`), never its argument list, where every
+# local user would read it from /proc/<pid>/cmdline. That channel is line-oriented, so a
+# token holding a quote and a newline could append a `url = "..."` directive and make curl
+# issue a second request. The guard refuses anything outside the JWT/base64url alphabet
+# BEFORE the value is formatted into the stream, and never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# Every authenticated request goes through here: ONE place owns the transport flags
+# (`--disable` first, `--noproxy '*'`), the token-shape guard and the header. Returns 120
+# with zero curl calls when the token is unusable; callers map that to a refusal.
+bsky_authed_curl() {
+  _bearer_ok "$ACCESS_JWT" || return 120
+  curl --disable --noproxy '*' "$@" --config - \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$ACCESS_JWT")
+}
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -236,6 +254,11 @@ create_session() {
       USER_DID=$(echo "$body" | jq -r '.did // empty')
       if [[ -z "$ACCESS_JWT" || -z "$USER_DID" ]]; then
         echo "Error: Session response missing accessJwt or DID." >&2
+        exit 1
+      fi
+      if ! _bearer_ok "$ACCESS_JWT"; then
+        ACCESS_JWT=""
+        echo "Error: Session response carried an accessJwt with an unexpected shape; refusing to use it." >&2
         exit 1
       fi
       ;;
@@ -316,9 +339,12 @@ get_request() {
 
   local response http_code body
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bearer ${ACCESS_JWT}" \
+  response=$(bsky_authed_curl -s -w "\n%{http_code}" \
     "$url" 2>/dev/null) || __curl_rc=$?
+  if (( __curl_rc == 120 )); then
+    echo "Error: Bluesky session token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."
     exit 1
@@ -344,12 +370,9 @@ post_request() {
   fi
 
   local url="${BSKY_API}/${endpoint}"
+  # `--disable` first and `--noproxy '*'` plus the bearer are added by bsky_authed_curl.
   local -a curl_args=(
-    # `--disable` first (position is load-bearing) and `--noproxy '*'`: the array
-    # is expanded as `curl "${curl_args[@]}"`, so element 0 is curl's first arg.
-    --disable --noproxy '*'
     -s -w "\n%{http_code}"
-    -H "Authorization: Bearer ${ACCESS_JWT}"
     -H "Content-Type: application/json"
   )
 
@@ -359,7 +382,11 @@ post_request() {
 
   local response http_code body
   local __curl_rc=0
-  response=$(curl "${curl_args[@]}" "$url" 2>/dev/null) || __curl_rc=$?
+  response=$(bsky_authed_curl "${curl_args[@]}" "$url" 2>/dev/null) || __curl_rc=$?
+  if (( __curl_rc == 120 )); then
+    echo "Error: Bluesky session token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to Bluesky API."
     exit 1

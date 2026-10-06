@@ -11,4 +11,4 @@ case "$-" in
 esac
 
 # Rule D: --disable present and first, --noproxy ABSENT. ALL_PROXY still redirects.
-curl --disable -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true
+curl --disable -sS --config - https://example.invalid/ < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true
