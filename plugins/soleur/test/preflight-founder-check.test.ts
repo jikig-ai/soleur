@@ -484,6 +484,86 @@ describe("verify: resolution", () => {
   });
 });
 
+describe("block extraction and parsing (in-process tables)", () => {
+  const FC = ["founder_check:", "  kind: command", '  text: "t"'];
+  const fence = (open: string, close: string, body: string[] = FC) => [open, ...body, close];
+  const AC = "## Acceptance Criteria";
+  // [name, document lines, how many blocks extract_blocks must return]
+  const docs: [string, string[], number][] = [
+    ["a plain fenced block under the heading", [AC, "", ...fence("```yaml", "```")], 1],
+    ["the heading is case-insensitive", ["## acceptance criteria", ...fence("```yaml", "```")], 1],
+    ["a suffixed heading", ["## Acceptance Criteria (v2)", ...fence("```yaml", "```")], 1],
+    ["an h3 inside the section does not end it", [AC, "### Details", ...fence("```yaml", "```")], 1],
+    ["a following h2 ends the section", [AC, "## Other", ...fence("```yaml", "```")], 0],
+    ["an h1 is not the heading", ["# Acceptance Criteria", ...fence("```yaml", "```")], 0],
+    ["a heading that only starts with the words is not the heading", ["## Acceptance Criteriafoo", ...fence("```yaml", "```")], 0],
+    ["a tilde fence", [AC, ...fence("~~~yaml", "~~~")], 1],
+    ["a longer backtick fence", [AC, ...fence("````yaml", "````")], 1],
+    ["an indent of three spaces is still a fence", [AC, ...fence("   ```yaml", "   ```")], 1],
+    ["an indent of four spaces is code, not a fence", [AC, ...fence("    ```yaml", "    ```")], 0],
+    ["a 4-backtick fence quoting a 3-backtick example is one quote, not a block", [AC, "````text", ...fence("```yaml", "```"), "````"], 0],
+    ["the real block after a quoting fence is still found, exactly once", [AC, "````text", ...fence("```yaml", "```"), "````", ...fence("```yaml", "```")], 1],
+    ["a backtick fence is not closed by a tilde fence (only the later backtick line closes it)", [AC, ...fence("```yaml", "~~~", [...FC, "~~~"]), "```"], 1],
+    ["a closer with an info string does not close", [AC, "```yaml", ...FC, "``` yaml", "  more: x", "```"], 1],
+    ["a heading inside a fence does not start a section", ["```", AC, "```", ...fence("```yaml", "```")], 0],
+    ["a heading inside a fence does not END the section", [AC, "```text", "## Other", "```", ...fence("```yaml", "```")], 1],
+    ["a fence whose first line is not founder_check:", [AC, ...fence("```yaml", "```", ["other:", "  a: b"])], 0],
+    ["an unterminated fence yields nothing", [AC, "```yaml", ...FC], 0],
+  ];
+
+  test("every document yields exactly the expected number of blocks", () => {
+    const got: number[] = harness("out = [len(fc.extract_blocks(chr(10).join(d))) for d in data]", docs.map((d) => d[1]));
+    docs.forEach(([name, , want], i) => expect([name, got[i]]).toEqual([name, want]));
+  });
+
+  test("a tilde closer does not end a backtick fence: its line stays in the block body", () => {
+    const body: string[][] = harness("out = fc.extract_blocks(chr(10).join(data))", [AC, "```yaml", ...FC, "~~~", "```"].join("\n").split("\n") as unknown as string[]);
+    expect(body[0]).toContain("~~~");
+  });
+
+  // [name, block lines, expected fields (a subset) | null for a ParseError]
+  const blocks: [string, string[], Record<string, unknown> | null][] = [
+    ["a double-quoted scalar", [...FC], { text: "t", kind: "command" }],
+    ["a doubled single quote unescapes", ["founder_check:", "  text: 'it''s'"], { text: "it's" }],
+    ["a # inside quotes is text, not a comment", ["founder_check:", '  command: "grep a # b f"'], { command: "grep a # b f" }],
+    ["a trailing comment is removed", ["founder_check:", "  expected: ok # because"], { expected: "ok" }],
+    ["a # with no space before it is part of the value", ["founder_check:", "  expected: a#b"], { expected: "a#b" }],
+    ["an empty pins literal", ["founder_check:", "  pins: {}"], { pins: {} }],
+    ["a block-form pins map", ["founder_check:", "  pins:", "    a.sh: " + "a".repeat(40)], { pins: { "a.sh": "a".repeat(40) } }],
+    ["an unterminated double quote", ["founder_check:", '  text: "abc'], null],
+    ["an unterminated single quote", ["founder_check:", "  text: 'abc"], null],
+    ["a lone quote", ["founder_check:", '  text: "'], null],
+    ["a flow map with content", ["founder_check:", "  pins: {a: b}"], null],
+    ["a flow list with content", ["founder_check:", "  expected: [1]"], null],
+    ["a nested collection inside pins", ["founder_check:", "  pins:", "    a.sh: [x]"], null],
+    ["inconsistent indentation", ["founder_check:", "  kind: command", "   text: x"], null],
+    ["an unindented field", ["founder_check:", "kind: command"], null],
+    ["an empty block", ["founder_check:"], null],
+    ["only comments", ["founder_check:", "  # nothing"], null],
+    ["a duplicate key", ["founder_check:", "  kind: command", "  kind: judgement"], null],
+    ["a line that is not key: value", ["founder_check:", "  just words"], null],
+    ["a bad JSON escape in a double quote", ["founder_check:", '  text: "a\\qb"'], null],
+    ["not starting with founder_check:", ["other:", "  a: b"], null],
+  ];
+
+  test("every block parses to the expected fields, or is a ParseError", () => {
+    const code = [
+      "out = []",
+      "for lines in data:",
+      "    try:",
+      "        out.append(fc.parse_block(lines))",
+      "    except fc.ParseError:",
+      "        out.append(None)",
+    ].join("\n");
+    const got: (Record<string, unknown> | null)[] = harness(code, blocks.map((b) => b[1]));
+    blocks.forEach(([name, , want], i) => {
+      if (want === null) expect([name, got[i]]).toEqual([name, null]);
+      else expect([name, Object.fromEntries(Object.keys(want).map((k) => [k, (got[i] as Record<string, unknown>)?.[k]]))]).toEqual([name, want]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 describe("verify: freeze comparison (Guard 1)", () => {
   test("a block frozen before any code is OK and reports its identity", () => {
     const r = new Repo();
@@ -1085,6 +1165,116 @@ describe("verify: outputs and failure modes", () => {
     expect(readFileSync(f, "utf8")).toBe(BASE.command);
   });
 
+  test("a hash: that disagrees with the block's own fields is FAIL, whether the wrong one is at the freeze or at HEAD", () => {
+    // wrong at HEAD only
+    const a = new Repo();
+    a.freeze();
+    a.write("src/a.txt", "a\n");
+    a.commit("code");
+    a.freeze(BASE, "p.md", OPERATOR, { hash: "0".repeat(64) });
+    expect(a.verify().json?.reason).toBe("hash-mismatch");
+    // wrong at the freeze only (HEAD repaired afterwards, canonical fields unchanged)
+    const b = new Repo();
+    b.freeze(BASE, "p.md", OPERATOR, { hash: "0".repeat(64) });
+    b.write("src/a.txt", "a\n");
+    b.commit("code");
+    b.freeze(BASE, "p.md", OPERATOR, {});
+    expect(b.verify().json?.reason).toBe("hash-mismatch");
+  });
+
+  test("a freeze copy that does not parse says so ('freeze copy:'); an unparseable HEAD block does not", () => {
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE).replace('  kind: command', '  kind: command\n  text: "second"') }));
+    r.commit("plan: freeze with a duplicate key");
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.freeze();
+    const v = r.verify();
+    expect([v.json?.reason, String(v.json?.detail).startsWith("freeze copy: ")]).toEqual(["unparseable", true]);
+    const h = new Repo();
+    h.freeze();
+    h.write("src/a.txt", "a\n");
+    h.commit("code");
+    h.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE).replace('  kind: command', '  kind: command\n  text: "second"') }));
+    h.commit("break the block");
+    const w = h.verify();
+    expect([w.json?.reason, String(w.json?.detail).startsWith("freeze copy: ")]).toEqual(["unparseable", false]);
+  });
+
+  test("the static rules judge the FROZEN block: an edit to a forbidden command is a change, not a rejection", () => {
+    const r = new Repo();
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    r.freeze({ ...BASE, command: "rm -rf x" });
+    expect(r.verify().json?.outcome).toBe("CHANGED-SINCE-APPROVAL");
+  });
+
+  test("identities compare case-insensitively: an upper-case commit email and PR login are the operator", () => {
+    const r = new Repo();
+    r.freeze(BASE, "p.md", OPERATOR.toUpperCase());
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    expect(r.verify().json?.outcome).toBe("OK");
+    const pr = r.verify(["--pr-author", "OctoCat", "--operator-login", "octocat"]);
+    expect([pr.json?.outcome, pr.json?.pr_author_checked]).toEqual(["OK", true]);
+    expect(r.verify(["--pr-author", "octocat", "--operator-login", "someone-else"]).json?.flags).toContain("pr-author");
+  });
+
+  test("non-ASCII text hashes as written (the canonical hash is not ASCII-escaped)", () => {
+    const f = { ...BASE, text: "the café page says ✓ — 日本語" };
+    const r = new Repo();
+    r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(f) }));
+    const v = r.verify(["--candidate"]);
+    expect([v.json?.outcome, v.json?.hash]).toEqual(["OK", canonicalHash(f)]);
+  });
+
+  test("--plan accepts a plan under the plans directory and refuses a sibling directory with the same prefix", () => {
+    const r = new Repo();
+    r.write("knowledge-base/project/plans-x/p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+    r.commit("a plan outside the plans directory");
+    const v = r.py(["verify", "--base", "origin/main", "--no-pr", "--plan", "knowledge-base/project/plans-x/p.md"]);
+    expect([v.json?.outcome, v.json?.reason]).toEqual(["FAIL", "plan-outside-plans-dir"]);
+    const ok = new Repo();
+    ok.freeze();
+    expect(ok.py(["verify", "--base", "origin/main", "--no-pr", "--plan", `${PLANS}/p.md`]).json?.outcome).not.toBe("FAIL");
+  });
+
+  test("archival is followed even when git's rename detection is off in the repository", () => {
+    const r = new Repo();
+    r.git(["config", "diff.renames", "false"]);
+    r.freeze();
+    r.write("src/a.txt", "a\n");
+    r.commit("code");
+    mkdirSync(join(r.dir, PLANS, "archive"), { recursive: true });
+    r.git(["mv", `${PLANS}/p.md`, `${PLANS}/archive/20261006-120000-p.md`]);
+    r.commit("archive the plan");
+    expect(r.verify().json?.outcome).toBe("OK");
+  });
+
+  test("abbreviated flags are refused at every subcommand (allow_abbrev is off)", () => {
+    const r = new Repo();
+    expect(r.py(["verify", "--bas", "origin/main"]).status).toBe(2);
+    expect(r.py(["log", "--outc", "PASSED"]).status).toBe(2);
+    expect(r.py(["text", "--lis"]).status).toBe(2);
+    expect(r.py(["summar"]).status).toBe(2);
+  });
+
+  test("text --underlying only takes a cause the script knows", () => {
+    const r = new Repo();
+    expect(r.py(["text", "headless-stop", "--underlying", "BOGUS"]).status).toBe(2);
+    expect(r.py(["text", "headless-stop", "--underlying", "FAILED"]).status).toBe(0);
+  });
+
+  test("text strips control characters from the record's detail before printing it", () => {
+    const r = new Repo();
+    const f = join(r.scratch, "d.json");
+    writeFileSync(f, JSON.stringify({ outcome: "FAIL", reason: "a-future-reason", detail: "bad\u001b[2J\u2028detail" }));
+    const t = r.py(["text", "rejected-ask", "--verify-json", f]);
+    expect(t.stdout).toContain("Reason: bad [2J detail");
+    expect(t.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u2028\u2029]/);
+  });
+
   test("a verb gate that cannot be run is FAIL verb-gate-unavailable, never an accept", () => {
     const dir = mkdtempSync(join(TMP, "fcng-"));
     made.push(dir);
@@ -1178,6 +1368,8 @@ describe("classify: the verdict matrix (in-process)", () => {
     ["rc 127 is INVALID, even at baseline", [127, "", "ok", "baseline", "rg", true], "INVALID", "tooling-rc-127"],
     ["curl rc 6 is INVALID", [6, "", "ok", "acceptance", "curl", true], "INVALID", "curl-rc-6"],
     ["curl rc 28 at baseline is INVALID", [28, "", "ok", "baseline", "curl", true], "INVALID", "curl-rc-28"],
+    ["curl rc 7 is INVALID", [7, "", "ok", "acceptance", "curl", true], "INVALID", "curl-rc-7"],
+    ["rc 124 at baseline is INVALID", [124, "", "ok", "baseline", "grep", true], "INVALID", "tooling-rc-124"],
     ["rc 6 for a non-curl verb is an ordinary fail", [6, "", "ok", "acceptance", "grep", true], "FAILED", "non-zero-or-expected-absent"],
     ["an unhealthy sandbox is INVALID at acceptance", [0, "ok", "ok", "acceptance", "grep", false], "INVALID", "sandbox-unhealthy"],
     ["an unhealthy sandbox is INVALID at baseline too", [1, "", "ok", "baseline", "grep", false], "INVALID", "sandbox-unhealthy"],
@@ -1231,6 +1423,23 @@ describe("classify: the CLI reads the verify record and measured inputs only", (
     const { r, file } = frozenFile();
     expect(cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0"]).status).toBe(2);
     expect(cls(r, ["--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+  });
+
+  test("a health control that returns 124, 126, 127 or 2 is unhealthy, not just 1", () => {
+    const { r, file } = frozenFile();
+    for (const c of ["2", "124", "126", "127", "255"]) {
+      const a = cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", c]);
+      expect([c, a.json?.outcome, a.json?.reason]).toEqual([c, "INVALID", "sandbox-unhealthy"]);
+    }
+  });
+
+  test("a polarity outside baseline|acceptance, an abbreviated flag and an unreadable --stdout-file are refused", () => {
+    const { r, file } = frozenFile();
+    expect(cls(r, ["--verify-json", file, "--polarity", "Acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+    expect(cls(r, ["--verify-json", file, "--polarity", "accept", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
+    expect(cls(r, ["--verify-j", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2); // allow_abbrev is off
+    const missing = cls(r, ["--verify-json", file, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0", "--stdout-file", join(r.scratch, "no-such.txt")]);
+    expect([missing.status, missing.stderr]).toEqual([2, expect.stringContaining("cannot read --stdout-file")]);
   });
 
   test("a quoted curl verb is still curl: rc 6 is INVALID", () => {
@@ -1470,6 +1679,88 @@ describe("log: the only writer of outcomes", () => {
     expect(existsSync(logPath(r))).toBe(false);
   });
 
+  test("every row column follows its record: rc, polarity, kind and expected_matched are not constants", () => {
+    // acceptance, rc 1, expected text absent: FAILED with expected_matched false and rc 1
+    const f = scenario("FAILED");
+    expect(log(f.r, f.file, ["--mode", "interactive", "--outcome", "FAILED", ...f.extra]).status).toBe(0);
+    const row = Object.fromEntries(COLS.map((c, i) => [c, cells(f.r)[0][i]]));
+    expect([row.kind, row.polarity, row.rc, row.outcome, row.expected_matched]).toEqual(["command", "acceptance", "1", "FAILED", "false"]);
+    // a judgement check says so
+    const j = JUDGED();
+    log(j.r, j.file, ["--mode", "interactive", "--outcome", "FOUNDER-CONFIRMED"]);
+    const jr = Object.fromEntries(COLS.map((c, i) => [c, cells(j.r)[0][i]]));
+    expect([jr.kind, jr.rc, jr.expected_matched, jr.outcome]).toEqual(["judgement", "", "", "FOUNDER-CONFIRMED"]);
+    // baseline rows: FAILED-AS-EXPECTED and VACUOUS are both accepted and logged at baseline polarity
+    for (const [rc, out, want] of [["1", "", "FAILED-AS-EXPECTED"], ["0", "1\n", "VACUOUS"]] as const) {
+      const r = new Repo();
+      r.plan("p.md", scaffold("plan-ac.md", { BLOCK: renderBlock(BASE) }));
+      const cand = r.verifyFile(["--candidate"], "cand.json");
+      const so = join(r.scratch, "so.txt");
+      writeFileSync(so, out);
+      const cl = join(r.scratch, "cl.json");
+      expect(r.classify(["--verify-json", cand.file, "--polarity", "baseline", "--rc", rc, "--control-rc", "0", "--stdout-file", so, "--out", cl]).json?.outcome).toBe(want);
+      const l = runPy(["log", "--verify-json", cand.file, "--classify-json", cl, "--polarity", "baseline", "--mode", "interactive", "--outcome", want], { cwd: r.dir, env: r.env() });
+      expect([want, l.status]).toEqual([want, 0]);
+      const b = Object.fromEntries(COLS.map((c, i) => [c, cells(r)[0][i]]));
+      expect([b.polarity, b.rc, b.outcome]).toEqual(["baseline", rc, want]);
+    }
+  });
+
+  test("an override can name INVALID or BLOCK-REJECTED when the records show it", () => {
+    for (const cause of ["INVALID", "BLOCK-REJECTED"]) {
+      const { r, file, extra } = scenario(cause);
+      const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", cause, "--reason-stdin"], "ship it\n");
+      expect([cause, l.status]).toEqual([cause, 0]);
+      expect(cells(r)[0][COLS.indexOf("underlying")]).toBe(cause);
+    }
+  });
+
+  test("the reason is capped, and the header is written once however many rows follow", () => {
+    const { r, file, extra } = scenario("FAILED");
+    const long = "x".repeat(2000);
+    for (let i = 0; i < 2; i++) log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "FAILED", "--reason-stdin"], long + "\n");
+    const rows = cells(r);
+    expect(rows.length).toBe(2);
+    expect(rows[0][COLS.indexOf("reason")].length).toBeLessThanOrEqual(600);
+    expect(rows[0][COLS.indexOf("reason")].length).toBeGreaterThan(500);
+    expect(readFileSync(logPath(r), "utf8").split("\n").filter((l) => l.startsWith("| kind ")).length).toBe(1);
+  });
+
+  test("a bogus polarity is a usage error at log too", () => {
+    const { r, file } = JUDGED();
+    const l = runPy(["log", "--verify-json", file, "--polarity", "accept", "--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"], { cwd: r.dir, env: r.env() });
+    expect(l.status).toBe(2);
+  });
+
+  test("an override names its cause: no cause, or a cause outside the four, is refused", () => {
+    const { r, file, extra } = scenario("FAILED");
+    for (const u of ["UNTRUSTED", "SKIP-NOSANDBOX", "failed"]) {
+      expect([u, log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", u, "--reason-stdin"], "x\n").status]).toEqual([u, 2]);
+    }
+  });
+
+  test("an override of a changed check with the verify record's reasons truncated and sanitised", () => {
+    const { r, file } = scenario("CHANGED-SINCE-APPROVAL");
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    doc.reasons = ["field-changed", "x".repeat(200), "a|b\u001b[2J"];
+    writeFileSync(file, JSON.stringify(doc));
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", "CHANGED-SINCE-APPROVAL", "--reason-stdin"], "ok\n");
+    expect(l.status).toBe(0);
+    const reason = cells(r)[0][COLS.indexOf("reason")];
+    expect(reason).not.toContain("x".repeat(41));
+    expect(reason).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(cells(r)[0].length).toBe(COLS.length);
+  });
+
+  test("an override of a changed check keeps the FROZEN command beside the reason too", () => {
+    const { r, file } = scenario("CHANGED-SINCE-APPROVAL");
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    doc.block.command = "grep -c other f";
+    writeFileSync(file, JSON.stringify(doc));
+    log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", "--underlying", "CHANGED-SINCE-APPROVAL", "--reason-stdin"], "ok\n");
+    expect(cells(r)[0][COLS.indexOf("reason")]).toContain("frozen command: " + BASE.command);
+  });
+
   test("an override needs a reason and names what it overrides; a blank reason is refused", () => {
     const { r, file, extra } = scenario("FAILED");
     const base = ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra];
@@ -1555,11 +1846,24 @@ describe("log: the only writer of outcomes", () => {
     expect(existsSync(logPath(r))).toBe(false);
   });
 
-  test("an unsafe branch name or a detached HEAD writes nothing (no path is invented)", () => {
+  test("a detached HEAD writes nothing (no path is invented)", () => {
     const { r, file } = JUDGED();
     r.git(["checkout", "-q", "--detach"]);
     const l = log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
-    expect(l.status).toBe(3);
+    expect([l.status, existsSync(join(r.dir, LOGDIR))]).toEqual([3, false]);
+  });
+
+  test("a branch name outside [A-Za-z0-9._-] segments writes nothing; a slash branch writes under its own directory", () => {
+    for (const bad of ["feat+x", "feat$x", "feat@x", "feat,x"]) {
+      const { r, file } = JUDGED();
+      r.git(["checkout", "-q", "-b", bad]);
+      const l = log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+      expect([bad, l.status, existsSync(join(r.dir, "knowledge-base/project/specs", bad))]).toEqual([bad, 3, false]);
+    }
+    const { r, file } = JUDGED();
+    r.git(["checkout", "-q", "-b", "feat/sub.dir_1"]);
+    expect(log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]).status).toBe(0);
+    expect(existsSync(join(r.dir, "knowledge-base/project/specs/feat/sub.dir_1/founder-check-log.md"))).toBe(true);
   });
 
   test("commit-log commits ONLY the log, in one commit, and is a no-op the second time", () => {
@@ -1685,6 +1989,21 @@ describe("log: the only writer of outcomes", () => {
     expect([rec.outcome, rec.reason]).toEqual(["FAIL", "internal-error"]);
     expect(r.classify(["--verify-json", f, "--polarity", "acceptance", "--rc", "0", "--control-rc", "0"]).status).toBe(2);
     expect(log(r, f, ["--mode", "interactive", "--outcome", "PASSED"]).status).toBe(3);
+  });
+
+  test("commit-log reports a failed commit (a failing hook) with exit 1 and the reason, and leaves the log uncommitted", () => {
+    const { r, file } = JUDGED();
+    log(r, file, ["--mode", "interactive", "--outcome", "NEEDS-YOUR-EYES"]);
+    writeFileSync(join(r.dir, ".git/hooks/pre-commit"), "#!/bin/sh\necho nope >&2\nexit 1\n", { mode: 0o755 });
+    const c = r.py(["commit-log"]);
+    expect([c.status, c.stderr]).toEqual([1, expect.stringContaining("could not commit the log")]);
+    expect(r.git(["status", "--porcelain", "--untracked-files=all"])).toContain("founder-check-log.md");
+  });
+
+  test("the script source holds no literal U+2028 or U+2029 (they are written as escapes)", () => {
+    const src = readFileSync(SCRIPT, "utf8");
+    expect([src.includes("\u2028"), src.includes("\u2029")]).toEqual([false, false]);
+    expect(src).toContain("\\u2028\\u2029");
   });
 
   test("commit-log with no log is a no-op", () => {
@@ -1907,6 +2226,73 @@ describe("docs: the references say what the script does", () => {
     for (const b of fences(REF + PLANREF + SEC13)) {
       expect(b).not.toMatch(/--(command|expected|hash|first-token|creates|sandbox-healthy|target-present|tested-sha|output-sha256|reason)\s+["<]/);
       expect(b).not.toMatch(/--(command|expected|reason)\s/);
+    }
+  });
+
+  test("every documented script call parses against the real argument parser (a renamed flag or subcommand is RED)", () => {
+    const calls: string[][] = [];
+    for (const b of fences(REF + PLANREF)) {
+      for (const line of b.split("\n")) {
+        const m = line.match(/founder-check\.py"\s+([a-z-]+)(.*)$/);
+        if (!m) continue;
+        const toks = [m[1], ...(m[2].replace(/<<.*$/, "").match(/"[^"]*"|<[^>]*>|\S+/g) ?? [])];
+        const out: string[] = [];
+        toks.forEach((t, i) => {
+          if (t.startsWith('"')) return out.push(t.slice(1, -1).replaceAll("$PREFLIGHT_TMP", "/tmp/x"));
+          if (!t.startsWith("<")) return out.push(t);
+          const flag = toks[i - 1];
+          out.push({ "--rc": "0", "--control-rc": "0", "--attempt-n": "1", "--mode": "interactive", "--outcome": "PASSED", "--underlying": "FAILED" }[flag] ?? "0");
+        });
+        calls.push(out);
+      }
+    }
+    expect(calls.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(calls.map((c) => c[0]))).toEqual(new Set(["verify", "classify", "log", "commit-log"]));
+    const code = [
+      "out = []",
+      "for argv in data:",
+      "    try:",
+      "        a = fc.build_parser().parse_args(argv)",
+      "        assert callable(a.fn)  # the subcommand is wired",
+      "        out.append({k: v for k, v in vars(a).items() if k != 'fn'})",
+      "    except SystemExit:",
+      "        out.append(None)",
+    ].join("\n");
+    const got: (Record<string, unknown> | null)[] = harness(code, calls);
+    calls.forEach((c, i) => expect([c.join(" "), got[i] !== null]).toEqual([c.join(" "), true]));
+    const by = (cmd: string) => got.filter((g, i) => g && calls[i][0] === cmd) as Record<string, unknown>[];
+    expect(by("classify").every((g) => g.command_file && g.stdout_file && g.out && g.polarity === "acceptance")).toBe(true);
+    expect(by("verify").some((g) => g.command_out && g.out)).toBe(true);
+    expect(by("log").every((g) => g.polarity === "acceptance" && g.reason_stdin === true)).toBe(true);
+  });
+
+  test("every `founder-check.py <word>` mention names a real subcommand", () => {
+    const subs: string[] = harness("out = sorted(fc.build_parser()._subparsers._group_actions[0].choices)", null);
+    expect(subs).toEqual(["classify", "commit-log", "log", "summary", "text", "verify"]);
+    const mentioned = [...(REF + PLANREF + SEC13).matchAll(/founder-check\.py"?`?\s+([a-z][a-z-]*)/g)].map((m) => m[1]);
+    expect(mentioned.length).toBeGreaterThan(20);
+    for (const m of new Set(mentioned)) expect([m, subs.includes(m)]).toEqual([m, true]);
+  });
+
+  test("headless is the documented default, and the outcome-to-wording tables map each outcome to its own key", () => {
+    expect(REF).toContain("**Headless is the default.** Pass `--mode headless` to `log` unless");
+    const rowOf = (label: RegExp) => REF.split("\n").filter((l) => label.test(l)).join("\n");
+    const MAP: [RegExp, string[], string[]][] = [
+      [/^\| FAILED \| `founder-check\.py text/, ["text failed-ask"], ["text invalid-ask", "text changed-ask", "text rejected-ask"]],
+      [/^\| INVALID \| `founder-check\.py text/, ["text invalid-ask"], ["text failed-ask", "text changed-ask", "text rejected-ask"]],
+      [/^\| CHANGED-SINCE-APPROVAL \| `founder-check\.py text/, ["text changed-ask", "text opt-restore"], ["text failed-ask", "text invalid-ask", "text rejected-ask"]],
+      [/^\| BLOCK-REJECTED \| `founder-check\.py text/, ["text rejected-ask"], ["text failed-ask", "text invalid-ask", "text changed-ask"]],
+      [/^\| UNTRUSTED \| No question/, ["text untrusted-fail", "text untrusted-unmeasured"], ["text failed-ask", "text eyes-ask"]],
+      [/^\| NEEDS-YOUR-EYES/, ["text eyes-ask", "text judgement"], ["text failed-ask", "text untrusted-fail"]],
+      [/^\| SKIP-NOSANDBOX with a block/, ["text no-sandbox", "text no-sandbox-stop"], ["text failed-ask"]],
+      [/^\| PASSED \| PASS/, ["text aggregate-pass"], ["text aggregate-judgement"]],
+      [/^\| FOUNDER-CONFIRMED \| PASS/, ["text aggregate-judgement"], ["text aggregate-pass"]],
+    ];
+    for (const [label, has, hasNot] of MAP) {
+      const row = rowOf(label);
+      expect([String(label), row.length > 0]).toEqual([String(label), true]);
+      for (const k of has) expect([String(label), k, row.includes(k)]).toEqual([String(label), k, true]);
+      for (const k of hasNot) expect([String(label), k, row.includes(k)]).toEqual([String(label), k, false]);
     }
   });
 

@@ -246,8 +246,8 @@ LOG_COLUMNS = (
 # anything is shown or run. The sandbox is the control; this is the early, legible refusal.
 _SHELL_ACTIVE = re.compile(r"\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_]")
 _SUBSTITUTION = re.compile(r"\$\(|`|\$\{|<\(|>\(")
-_CONTROL = re.compile("[\x00-\x1f\x7f  ]")
-_HARD_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f  ]")  # text may keep \t and \n
+_CONTROL = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
+_HARD_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f\u2028\u2029]")  # text may keep \t and \n
 _SECRET_SHAPES = (
     re.compile(r"(?i)\bbearer[ \t]+[A-Za-z0-9._~+/=-]{8,}"),
     re.compile(r"(?i)\bauthorization[ \t]*:"),
