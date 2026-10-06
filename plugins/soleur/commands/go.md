@@ -432,8 +432,34 @@ if [ "$DO_RESTORE" = true ]; then
   # before forking `git show`, so every failure mode leaves a 0-byte .mcp.json. Measured:
   # 67 bytes -> 0, silently, with `2>/dev/null || true` swallowing the status and reporting
   # rc 0. On a customer machine that file is their MCP server registry, commonly holding
-  # per-server tokens, and it is untracked — so the loss is unrecoverable.
-  if git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
+  # per-server tokens, and it is usually untracked there — so the loss is unrecoverable. In
+  # this repo it is TRACKED, and an uncommitted edit is lost the same way (#9622).
+  #
+  # An uncommitted edit to a TRACKED .mcp.json is the operator's work, not stale state (#9622).
+  # KEEP when: the path is a symlink (mv would replace the link itself); or it is tracked and either
+  # not a plain cached entry (skip-worktree `S` / assume-unchanged `h` hide edits from git diff) or
+  # differs from HEAD. Compared to HEAD, not the index: `git diff --quiet` without HEAD reads a
+  # staged-only change as clean. ANY non-zero diff status (1 = differs, >1 = could not tell, e.g. an
+  # unborn branch) keeps the file: an error probing it must fail toward keeping it. An untracked
+  # regular file, or a tracked-plain one equal to HEAD, falls through to the restore below.
+  KEEP=false
+  if [ -L .mcp.json ]; then
+    KEEP=true
+  elif git ls-files --error-unmatch -- .mcp.json >/dev/null 2>&1; then
+    case "$(git ls-files -v -- .mcp.json 2>/dev/null)" in
+      "H "*) git diff --quiet HEAD -- .mcp.json 2>/dev/null || KEEP=true ;;
+      *) KEEP=true ;;
+    esac
+  fi
+  if [ "$KEEP" = true ]; then
+    # Already main's bytes: nothing to protect and nothing to restore, so say nothing. Without this a
+    # file the gate itself refreshed reads as "dirty" on every later session start.
+    if git show main:.mcp.json 2>/dev/null | cmp -s - .mcp.json; then
+      :
+    else
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty"
+    fi
+  elif git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
     if mv .mcp.json.soleur-tmp .mcp.json; then
       :
     else
@@ -461,7 +487,7 @@ if [ "$DO_RESTORE" = true ]; then
 fi
 ```
 
-The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree (file gets overwritten on next session-start from the new CWD). Skip silently on first error — do not block routing on session-start hygiene.
+The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree for a clean or untracked file (it is overwritten on next session-start from the new CWD). A tracked `.mcp.json` with uncommitted changes is left alone and reported as `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty`: review it with `git diff HEAD -- .mcp.json`, then commit it, or `git checkout -- .mcp.json` to drop it; an intentional local variant can be pinned with `git update-index --skip-worktree .mcp.json`, which the guard also keeps (the marker still prints for it). Skip silently on first error — do not block routing on session-start hygiene.
 
 See `knowledge-base/project/learnings/2026-05-11-bundle-brainstorm-deliberate-revert-and-fixture-source-record.md` Session Errors #1-#2 for the gap this closes.
 
