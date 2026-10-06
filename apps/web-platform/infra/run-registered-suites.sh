@@ -649,11 +649,6 @@ _SUITE_BOUNDS=(
   # default (rc=124, run 36912548151) on a starved -P4 CI leg while green. Pin at 900 per the
   # boot-unlock precedent above, so a slow day renders as this suite's RED, not a leg timeout.
   "apps/web-platform/infra/workspaces-luks-provision.test.sh=900"
-  # #9377: the escrow-create suite runs ~200 rows plus a ~70-spec mutation battery (approximately 105 s wall on a 16-core
-  # box; 325 to 415 s pinned to one core, load-dependent, about 10 CPU-min in total). 900 s keeps ~2.2x headroom over the
-  # single-core figure, so a starved -P4 leg cannot bound-kill a green run (the workspaces-luks-provision incident class
-  # cited above).
-  "apps/web-platform/infra/web-escrow-create-workflow.test.sh=900"
   # #9372: the rebirth workflow suite runs ~42 rows, executes the real gate under bash -e and a 20-spec mutation battery
   # (about 65 s on a quiet box). 900 s keeps ~10x headroom so a starved -P4 leg renders as this suite's RED, not a leg timeout.
   "apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh=900"
