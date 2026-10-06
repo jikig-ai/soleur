@@ -67,10 +67,29 @@ gh run watch <databaseId> --exit-status          # confirm the run actually star
                                                  # running and one pending run, and a queued run can displace an older pending one
 ```
 
+A plan-only run is also held at the `web-platform-infra-apply` environment approval before any step runs, so `gh run watch` shows it
+waiting until the owner approves.
+
 Read the run log's `verdict:` line, the printed `pinned volume:` line, the emptiness verdict (it prints the minimum, maximum,
-spread and ceiling) and the dispatch summary. **The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
-printed used-bytes values before approving the apply, and the first live run is also the first measurement of the real empty
-baseline. In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
+spread and ceiling) and the dispatch summary.
+
+**Reading an emptiness RED.** `RED reason=used_bytes_absent_or_host_dark` means no row for the used series survived the query: a dark host, a changed
+stored row shape, more than one distinct device reporting `/mnt/data` in the window, or a missing, empty or non-string `tags.device` on
+some row (the one-device clause drops that metric's whole group, so the same fault on the total series reads `total_bytes_absent`).
+The other reasons name the FIRST rule that failed, in this order: `used_bytes_malformed`, `coverage_gap`, `stale`,
+`used_bytes_zero_or_missing`, `not_empty`, `not_flat`, `total_bytes_absent`, `total_bytes_malformed`, `not_the_20gb_volume`; `emptiness_body_unparseable` and
+`emptiness_judge_error` mean the answer could not be read, and exit code 2 means the read did not answer at all (no verdict). To re-run the read-only
+control without a dispatch: `doppler run -p soleur -c prd_terraform -- bash scripts/web2-rebirth-emptiness.sh` (prints `PASS ...` with
+hours, newest age, min, max and spread, or the RED reason); to see which devices report, run the same WHERE with a
+`GROUP BY JSONExtractString(raw,'tags','device')` through `scripts/betterstack-query.sh`. The control uses the Doppler read
+credentials and the workflow uses the repo secrets `BETTERSTACK_QUERY_*`, so the first plan-only dispatch is the credential-parity check.
+
+**The 1 GiB ceiling is a coarse bound, not proof of emptiness:** the owner reads the
+printed used-bytes values from the plan-only run before authorizing the apply dispatch: the `web-platform-infra-apply` environment
+approval is a job-level gate, so it comes BEFORE the evidence step, and an apply dispatch's PASS flows into the delete in the same
+approved job. The Better Stack paths were confirmed 2026-10-06 and the observed level is about 16 MB (min 15.6 MB, max 16.0 MB over
+169 h; the header of `scripts/web2-rebirth-emptiness.sh` carries the control). That is the volume's own reading, not an independent
+empty reference: an ext4 volume is never byte-empty, and neither the 1 GiB ceiling nor the 64 MiB spread proves emptiness. In the `heal:detach_done` window the freshness bound is dropped and coverage falls to 24 h (a detached device stops reporting); the zero
 floor, the ceiling, the spread and the size window still apply. Only after the owner approves **that** apply, dispatch with `-f plan_only=false` and approve the
 `web-platform-infra-apply` environment gate. The classifier verdict is also a job output (`verdict`).
 
@@ -113,8 +132,8 @@ freshness, a non-zero minimum because a missing value path reads as 0, the 1 GiB
 writes is not "idle", and a 15 to 21.5 GB total so a mis-mounted root disk cannot pass), the soak marker absent by exact-name
 membership over secret **names** (a list shape the reader cannot interpret is a refusal, never "absent"), the Hetzner volume still
 ext4 with the pinned id, name and labels. **Not measured by this run:** web-2's serving weight (no weight orchestrator exists in the
-repo at this SHA; the marker is the only seam and the dispatch is only from `main` where the anti-pooling CI suite `lb-weight-gate.test.sh` has run). The Better Stack JSON paths and the `dm-*` exclusion in `vector.toml` are **unconfirmed until the first live query**; an
-absent field fails closed.
+repo at this SHA; the marker is the only seam and the dispatch is only from `main` where the anti-pooling CI suite `lb-weight-gate.test.sh` has run). The Better Stack JSON paths were confirmed on 2026-10-06 (`tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value`); the
+`dm-*` exclusion in `vector.toml` (whether it drops the LUKS mapper device) is still **unconfirmed**; an absent field fails closed.
 
 After the apply: a `SOLEUR_FRESH_BOOT_READY` row newer than web-2's own Hetzner creation time with `luks=1 luks_arm=formatted
 escrow=ok`; a read-only birth-time consistency check of the escrowed header and the two passphrase copies (`restore NOT exercised;
