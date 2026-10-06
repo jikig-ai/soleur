@@ -692,6 +692,14 @@ describe("renderCommunityPublication", () => {
     expect(out.issueTitle).toBe(`${SCHEDULED_DIGEST_TITLE_PREFIX} ${RUN_DATE}`);
   });
 
+  it("the committed digest carries no URL at all (MD034: the required markdown-lint check refuses a bare one); the issue body keeps its links", () => {
+    const out = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
+    expect(out.digestMarkdown).not.toMatch(/https?:\/\//);
+    // Non-vacuity: the follow-up section is still rendered, and the issue body still links.
+    expect(out.digestMarkdown).toContain("Review inbound items in the open issues and pull requests of this repository.");
+    expect(out.issueBody).toContain(`Inbound items: https://github.com/${REPO}/issues`);
+  });
+
   it("issue body never starts with the audit self-report prefix", () => {
     const out = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
     expect(out.issueBody.startsWith(AUDIT_SELF_REPORT_BODY_PREFIX)).toBe(false);
@@ -787,10 +795,10 @@ describe("renderCommunityPublication", () => {
 
   it("carries the handler-constant click-through lines derived from repo", () => {
     const { digestMarkdown, issueBody } = renderCommunityPublication(base(), { runDate: RUN_DATE, repo: REPO, generatedAt: GENERATED_AT });
-    for (const text of [digestMarkdown, issueBody]) {
-      expect(text).toContain("https://github.com/jikig-ai/soleur/issues");
-      expect(text).toContain("https://github.com/jikig-ai/soleur/pulls");
-    }
+    // The issue body carries the links; the committed digest carries none (MD034, see below).
+    expect(issueBody).toContain("https://github.com/jikig-ai/soleur/issues");
+    expect(issueBody).toContain("https://github.com/jikig-ai/soleur/pulls");
+    expect(digestMarkdown).not.toContain("https://");
     expect(issueBody).toContain(
       `https://github.com/jikig-ai/soleur/blob/main/knowledge-base/support/community/${RUN_DATE}-digest.md`,
     );
