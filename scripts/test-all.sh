@@ -5650,6 +5650,12 @@ if want_scripts; then
   # probe's header claims to detect, so the claim is checked rather than asserted.
   # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
   run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  # (#7843) The argv-bearer sweep's CONVERSION BATTERY (Guard 2). Registered HERE for the
+  # reason every line around it is: nothing auto-discovers tests/scripts/, and the orphan
+  # linter's producer is `*.test.sh`. Hermetic: a PATH-shim curl, synthesized tokens, no
+  # network, no Doppler. Its rows are keyed off the Rule E baseline, so each probe
+  # conversion flips the same rows from "argv bearer present (known)" to the full contract.
+  run_suite "tests/scripts/argv-bearer-sweep" bash tests/scripts/test-argv-bearer-sweep.sh
   # #8050 — the PR-time reference gate and the `tf`/`reference` sides of the
   # projection module. The probe's reference is projected from the Terraform
   # plan; the committed copy the daily job reads is held equal to the plan by
