@@ -10,13 +10,46 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => {
   process.env.NEXT_PHASE = "phase-production-build";
   return {
-    requestSpy: vi.fn(async (..._args: unknown[]) => ({ status: 204 })),
+    requestSpy: vi.fn(),
     reportSilentFallbackSpy: vi.fn((..._args: unknown[]) => {}),
     mintSpy: vi.fn(async (_opts: unknown) => "fake-installation-token"),
     heartbeatSpy: vi.fn(async (_opts: unknown) => {}),
     ctorSpy: vi.fn((_opts: unknown) => {}),
+    // Endpoint-routed stubbing. The SUT's check-previous-run GET and the
+    // dispatch POST share requestSpy; a single "always 204" shape would let
+    // either call pass vacuously. Queues hold one-shot results; the *Error
+    // fields express "every call to that endpoint rejects". A queued entry is
+    // a thunk so a non-Error rejection (incl. `undefined`) stays expressible.
+    dispatchResponses: [] as Array<() => unknown>,
+    runsError: undefined as unknown,
+    dispatchError: undefined as unknown,
+    hasRunsError: false,
+    hasDispatchError: false,
+    defaultRuns: { workflow_runs: [] as unknown[] },
   };
 });
+
+// Installed after every mockReset — the routing IS the stub contract.
+function installRequestRouting() {
+  h.requestSpy.mockImplementation(async (endpoint: unknown) => {
+    const url = String(endpoint);
+    if (url.includes("/dispatches")) {
+      if (h.hasDispatchError) throw h.dispatchError;
+      const next = h.dispatchResponses.shift();
+      return next ? next() : { status: 204 };
+    }
+    if (h.hasRunsError) throw h.runsError;
+    return { status: 200, data: h.defaultRuns };
+  });
+}
+
+// One-shot helper: queue a rejection for the NEXT dispatch POST (mirrors
+// mockRejectedValueOnce but endpoint-scoped — a thunk so a non-Error
+// rejection, incl. `undefined`, stays expressible).
+const postRejects = (v: unknown) =>
+  h.dispatchResponses.push(() => {
+    throw v;
+  });
 
 // The SUT does `const { Octokit } = await import("@octokit/core")`; mocking it
 // makes the dispatch call observable without hitting GitHub.
@@ -205,7 +238,25 @@ describe("dispatch target exists on disk and accepts workflow_dispatch", () => {
 
 describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
   beforeEach(() => {
-    h.requestSpy.mockClear();
+    h.requestSpy.mockReset();
+    installRequestRouting();
+    h.dispatchResponses.length = 0;
+    h.hasRunsError = false;
+    h.hasDispatchError = false;
+    h.runsError = undefined;
+    h.dispatchError = undefined;
+    // Healthy default: the previous executor run concluded success.
+    h.defaultRuns = {
+      workflow_runs: [
+        {
+          id: 41,
+          status: "completed",
+          conclusion: "success",
+          created_at: "2026-10-06T09:50:00Z",
+          html_url: "https://github.com/jikig-ai/soleur/actions/runs/41",
+        },
+      ],
+    };
     h.reportSilentFallbackSpy.mockClear();
     h.mintSpy.mockClear();
     h.heartbeatSpy.mockReset();
@@ -213,8 +264,6 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     h.ctorSpy.mockClear();
     logger.info.mockClear();
     logger.warn.mockClear();
-    h.requestSpy.mockReset();
-    h.requestSpy.mockResolvedValue({ status: 204 });
     h.mintSpy.mockReset();
     h.mintSpy.mockResolvedValue("fake-installation-token");
   });
@@ -233,8 +282,21 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
       repositories: ["soleur"],
     });
 
-    expect(h.requestSpy).toHaveBeenCalledTimes(1);
-    const [endpoint, params] = h.requestSpy.mock.calls[0];
+    // Two calls, in this order: the previous-run check GETs the runs list
+    // BEFORE the dispatch POST so the newest listed run is deterministically
+    // the previous tick's.
+    expect(h.requestSpy).toHaveBeenCalledTimes(2);
+    const [checkEndpoint, checkParams] = h.requestSpy.mock.calls[0];
+    expect(checkEndpoint).toBe(
+      "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+    );
+    expect(checkParams).toEqual({
+      owner: "jikig-ai",
+      repo: "soleur",
+      workflow_id: "merge-queue-stall-check.yml",
+      per_page: 5,
+    });
+    const [endpoint, params] = h.requestSpy.mock.calls[1];
     expect(endpoint).toBe(
       "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
     );
@@ -245,13 +307,15 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
       workflow_id: "merge-queue-stall-check.yml",
       ref: "main",
     });
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, previousRun: "ok" });
     expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
 
-    // The minted token must actually reach the request: an Octokit built with
-    // no auth would 404 on every tick while the mint and params stay green.
-    expect(h.ctorSpy).toHaveBeenCalledTimes(1);
+    // The minted token must actually reach BOTH requests: an Octokit built
+    // with no auth would 404 on every tick while the mint and params stay
+    // green. One client is built per step.
+    expect(h.ctorSpy).toHaveBeenCalledTimes(2);
     expect(h.ctorSpy.mock.calls[0][0]).toEqual({ auth: "fake-installation-token" });
+    expect(h.ctorSpy.mock.calls[1][0]).toEqual({ auth: "fake-installation-token" });
 
     expect(h.heartbeatSpy).toHaveBeenCalledTimes(1);
     expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({
@@ -273,7 +337,7 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
       status = 403;
       name = "HttpError";
     }
-    h.requestSpy.mockRejectedValueOnce(new HttpError(`${token} leaked 403`));
+    postRejects(new HttpError(`${token} leaked 403`));
 
     const result = await cronMergeQueueStallDispatchHandler({
       step: makeStep(),
@@ -282,8 +346,9 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
 
     expect(result).toMatchObject({ ok: false });
     expect(result.errorSummary).toBeTruthy();
-    // The minted token (not a literal) is what reached the request.
+    // The minted token (not a literal) is what reached the requests.
     expect(h.ctorSpy.mock.calls[0][0]).toEqual({ auth: token });
+    expect(h.ctorSpy.mock.calls[1][0]).toEqual({ auth: token });
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     const [errArg, options] = h.reportSilentFallbackSpy.mock.calls[0];
     // Exhaustive: an extra field (for example the token in `extra`) must fail.
@@ -316,7 +381,8 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
   });
 
   it("a 4xx is a real defect: reported at once, with no retry", async () => {
-    h.requestSpy.mockRejectedValue(httpError(404, "Not Found"));
+    h.hasDispatchError = true;
+    h.dispatchError = httpError(404, "Not Found");
 
     const result = await cronMergeQueueStallDispatchHandler({
       step: makeStep(),
@@ -324,7 +390,8 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     });
 
     expect(result).toMatchObject({ ok: false });
-    expect(h.requestSpy).toHaveBeenCalledTimes(1);
+    // One runs-list GET (check) + one dispatch POST (no retry on 4xx).
+    expect(h.requestSpy).toHaveBeenCalledTimes(2);
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -344,12 +411,13 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     it.each([429, 500, 502])(
       "a %i followed by success dispatches, with no report, a warn log and an ok heartbeat",
       async (status) => {
-        h.requestSpy.mockRejectedValueOnce(httpError(status, "transient"));
+        postRejects(httpError(status, "transient"));
 
         const result = await run();
 
-        expect(result).toEqual({ ok: true });
-        expect(h.requestSpy).toHaveBeenCalledTimes(2);
+        expect(result).toEqual({ ok: true, previousRun: "ok" });
+        // 1 runs-list GET + 2 dispatch POST attempts.
+        expect(h.requestSpy).toHaveBeenCalledTimes(3);
         expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
         expect(logger.warn).toHaveBeenCalledTimes(1);
         expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
@@ -357,23 +425,25 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     );
 
     it("waits the full retry delay before the second attempt", async () => {
-      h.requestSpy.mockRejectedValueOnce(httpError(502, "Bad Gateway"));
+      postRejects(httpError(502, "Bad Gateway"));
       const pending = cronMergeQueueStallDispatchHandler({
         step: makeStep(),
         logger,
       });
 
+      // The check GET + the first dispatch attempt already landed.
       await vi.advanceTimersByTimeAsync(1_999);
-      expect(h.requestSpy).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
       expect(h.requestSpy).toHaveBeenCalledTimes(2);
-      await expect(pending).resolves.toEqual({ ok: true });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.requestSpy).toHaveBeenCalledTimes(3);
+      await expect(pending).resolves.toEqual({ ok: true, previousRun: "ok" });
     });
 
     it("a retried 5xx whose message embeds the token is redacted on the final report", async () => {
       const token = "tok-" + "retried-path-secret-value";
       h.mintSpy.mockResolvedValue(token);
-      h.requestSpy.mockRejectedValue(httpError(503, `${token} unavailable`));
+      h.hasDispatchError = true;
+      h.dispatchError = httpError(503, `${token} unavailable`);
 
       const result = await run();
 
@@ -386,8 +456,8 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     it("a non-Error rejection whose toString carries the token is redacted, and one that throws is contained", async () => {
       const token = "tok-" + "tostring-secret-value";
       h.mintSpy.mockResolvedValue(token);
-      h.requestSpy.mockRejectedValueOnce({ toString: () => `weird ${token}` });
-      h.requestSpy.mockRejectedValueOnce({ toString: () => `weird ${token}` });
+      postRejects({ toString: () => `weird ${token}` });
+      postRejects({ toString: () => `weird ${token}` });
 
       const first = await run();
       expect(first).toMatchObject({ ok: false });
@@ -395,34 +465,42 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
       expect(first.errorSummary).toContain("[REDACTED-INSTALLATION-TOKEN]");
 
       h.requestSpy.mockReset();
+      installRequestRouting();
       const hostile = Object.create(null) as object;
-      h.requestSpy.mockRejectedValue(hostile);
+      h.hasDispatchError = true;
+      h.dispatchError = hostile;
       const second = await run();
-      expect(second).toEqual({ ok: false, errorSummary: "unserializable error" });
+      expect(second).toEqual({
+        ok: false,
+        errorSummary: "unserializable error",
+        previousRun: "ok",
+      });
     });
 
     it("a network error (no HTTP status) is retried the same way", async () => {
-      h.requestSpy.mockRejectedValueOnce(new Error("socket hang up"));
+      postRejects(new Error("socket hang up"));
 
       const result = await run();
 
-      expect(result).toEqual({ ok: true });
-      expect(h.requestSpy).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({ ok: true, previousRun: "ok" });
+      expect(h.requestSpy).toHaveBeenCalledTimes(3);
     });
 
     it("a second transient failure is reported once, after exactly two attempts", async () => {
-      h.requestSpy.mockRejectedValue(httpError(503, "Service Unavailable"));
+      h.hasDispatchError = true;
+      h.dispatchError = httpError(503, "Service Unavailable");
 
       const result = await run();
 
       expect(result).toMatchObject({ ok: false });
-      expect(h.requestSpy).toHaveBeenCalledTimes(2);
+      expect(h.requestSpy).toHaveBeenCalledTimes(3);
       expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
       expect(h.heartbeatSpy).toHaveBeenCalledTimes(1);
     });
 
     it("a rejection with no value at all is reported, never thrown out of the step", async () => {
-      h.requestSpy.mockRejectedValue(undefined);
+      postRejects(undefined);
+      postRejects(undefined);
 
       const result = await run();
 
@@ -467,13 +545,13 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
       cronMergeQueueStallDispatchHandler({ step: makeStep(), logger }),
     ).rejects.toThrow("sentry down");
 
-    expect(h.requestSpy).toHaveBeenCalledTimes(1);
+    expect(h.requestSpy).toHaveBeenCalledTimes(2);
     expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
     expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
   });
 
   it("replay safety: a failed dispatch yields exactly one report and one heartbeat across replays", async () => {
-    h.requestSpy.mockRejectedValueOnce(httpError(403, "boom 403"));
+    postRejects(httpError(403, "boom 403"));
     const step = makeReplayingStep();
 
     // Inngest re-executes the whole handler after every step; the memoized
@@ -486,7 +564,8 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     expect(second).toEqual(first);
     expect(third).toEqual(first);
     expect(h.mintSpy).toHaveBeenCalledTimes(1);
-    expect(h.requestSpy).toHaveBeenCalledTimes(1);
+    // One runs-list GET + one dispatch POST, memoized across all three passes.
+    expect(h.requestSpy).toHaveBeenCalledTimes(2);
     expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     expect(h.heartbeatSpy).toHaveBeenCalledTimes(1);
   });
@@ -505,5 +584,316 @@ describe("cronMergeQueueStallDispatchHandler — dispatch behavior", () => {
     expect(h.mintSpy).toHaveBeenCalledTimes(1);
     expect(h.requestSpy).not.toHaveBeenCalled();
     expect(h.heartbeatSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("cronMergeQueueStallDispatchHandler — check-previous-run (#9513)", () => {
+  beforeEach(() => {
+    h.requestSpy.mockReset();
+    installRequestRouting();
+    h.dispatchResponses.length = 0;
+    h.hasRunsError = false;
+    h.hasDispatchError = false;
+    h.runsError = undefined;
+    h.dispatchError = undefined;
+    h.defaultRuns = { workflow_runs: [] };
+    h.reportSilentFallbackSpy.mockClear();
+    h.mintSpy.mockReset();
+    h.mintSpy.mockResolvedValue("fake-installation-token");
+    h.heartbeatSpy.mockReset();
+    h.heartbeatSpy.mockResolvedValue(undefined);
+    h.ctorSpy.mockClear();
+    logger.info.mockClear();
+    logger.warn.mockClear();
+  });
+
+  // A completed prior run. Age is irrelevant once status === "completed".
+  function completed(conclusion: string, extra: Record<string, unknown> = {}) {
+    return {
+      id: 4242,
+      status: "completed",
+      conclusion,
+      created_at: "2026-10-06T09:50:00Z",
+      html_url: "https://github.com/jikig-ai/soleur/actions/runs/4242",
+      ...extra,
+    };
+  }
+  // createdMinutesAgo = age since created_at; startedMinutesAgo = age since
+  // run_started_at (absent = GitHub has not recorded a job start — a run that
+  // is still queued never sets it).
+  function inFlight(
+    status: string,
+    createdMinutesAgo: number,
+    startedMinutesAgo?: number,
+  ) {
+    return {
+      id: 4343,
+      status,
+      conclusion: null,
+      created_at: new Date(
+        Date.now() - createdMinutesAgo * 60_000,
+      ).toISOString(),
+      ...(startedMinutesAgo !== undefined
+        ? {
+            run_started_at: new Date(
+              Date.now() - startedMinutesAgo * 60_000,
+            ).toISOString(),
+          }
+        : {}),
+      html_url: "https://github.com/jikig-ai/soleur/actions/runs/4343",
+    };
+  }
+
+  it.each([
+    "failure",
+    "timed_out",
+    "cancelled",
+    "startup_failure",
+    "action_required",
+    "stale",
+  ])(
+    "a prior run concluding %s reports to Sentry and heartbeats not-ok — the dispatch itself still succeeded",
+    async (conclusion) => {
+      h.defaultRuns = { workflow_runs: [completed(conclusion)] };
+
+      const result = await cronMergeQueueStallDispatchHandler({
+        step: makeStep(),
+        logger,
+      });
+
+      // The function did its job — it dispatched AND reported the failure it
+      // found — so the dispatch verdict stays ok while the check-in carries
+      // the alarm.
+      expect(result).toMatchObject({ ok: true, previousRun: "failed" });
+      expect(h.requestSpy).toHaveBeenCalledTimes(2);
+      expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+      const [_errArg, options] = h.reportSilentFallbackSpy.mock.calls[0];
+      expect(options).toMatchObject({
+        feature: "cron-merge-queue-stall-dispatch",
+        op: "check-previous-run",
+      });
+      // The report must carry the evidence an operator needs to open the run.
+      const extra = (options as { extra?: Record<string, unknown> }).extra ?? {};
+      expect(extra.conclusion).toBe(conclusion);
+      expect(extra.runId).toBe(4242);
+      expect(extra.runUrl).toContain("/actions/runs/4242");
+      expect(h.heartbeatSpy).toHaveBeenCalledTimes(1);
+      expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+    },
+  );
+
+  it.each(["success", "skipped", "neutral"])(
+    "a prior run concluding %s is ok-class — green check-in, no report",
+    async (conclusion) => {
+      h.defaultRuns = { workflow_runs: [completed(conclusion)] };
+
+      const result = await cronMergeQueueStallDispatchHandler({
+        step: makeStep(),
+        logger,
+      });
+
+      expect(result).toEqual({ ok: true, previousRun: "ok" });
+      expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+      expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+    },
+  );
+
+  it("an in_progress run past its own 10-min job budget is stuck — it pages", async () => {
+    // run_started_at — not created_at — is the basis: a run that queued 9 min
+    // and started 2 min ago is legitimately mid-flight, not stuck.
+    h.defaultRuns = {
+      workflow_runs: [inFlight("in_progress", 20, 20)],
+    };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toMatchObject({ ok: true, previousRun: "stuck" });
+    expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+  });
+
+  it("a long queue wait followed by a short in_progress job is pending, not stuck — the basis is run_started_at", async () => {
+    h.defaultRuns = {
+      workflow_runs: [inFlight("in_progress", 20, 3)],
+    };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, previousRun: "pending" });
+    expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+  });
+
+  it("an in_progress run with no run_started_at is pending — never page on a field we could not read", async () => {
+    h.defaultRuns = { workflow_runs: [inFlight("in_progress", 20)] };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, previousRun: "pending" });
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["queued", 20],
+    ["waiting", 15],
+    ["pending", 30],
+    ["requested", 12],
+  ])(
+    "a %s run %i min old never got a runner — stuck (the runner-wait gap)",
+    async (status, minutes) => {
+      h.defaultRuns = { workflow_runs: [inFlight(status, minutes)] };
+
+      const result = await cronMergeQueueStallDispatchHandler({
+        step: makeStep(),
+        logger,
+      });
+
+      expect(result).toMatchObject({ ok: true, previousRun: "stuck" });
+      expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+      expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+    },
+  );
+
+  it.each([
+    ["queued", 2],
+    ["waiting", 1],
+    ["queued", 0],
+  ])(
+    "a %s run %i min old is still pending — under the queue floor a just-landed run never pages",
+    async (status, minutes) => {
+      h.defaultRuns = { workflow_runs: [inFlight(status, minutes)] };
+
+      const result = await cronMergeQueueStallDispatchHandler({
+        step: makeStep(),
+        logger,
+      });
+
+      expect(result).toEqual({ ok: true, previousRun: "pending" });
+      expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+      expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+    },
+  );
+
+  it("an empty runs list is a green tick — nothing previous to judge", async () => {
+    h.defaultRuns = { workflow_runs: [] };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, previousRun: "none" });
+    expect(h.reportSilentFallbackSpy).not.toHaveBeenCalled();
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
+  });
+
+  it("a failed runs-list read is unknown — a blind check is a failed check: report + not-ok heartbeat", async () => {
+    h.hasRunsError = true;
+    h.runsError = httpError(500, "runs list blew up");
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toMatchObject({ ok: true, previousRun: "unknown" });
+    // The dispatch still happened — blindness must not stop the probe.
+    const endpoints = h.requestSpy.mock.calls.map((c) => String(c[0]));
+    expect(endpoints.some((e) => e.includes("/dispatches"))).toBe(true);
+    expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    const [_err, options] = h.reportSilentFallbackSpy.mock.calls[0];
+    expect(options).toMatchObject({ op: "check-previous-run" });
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+  });
+
+  it("the check never throws out of the handler — a runs-list 403 stays a verdict, not a crash", async () => {
+    h.hasRunsError = true;
+    h.runsError = httpError(403, "token lacks runs read");
+
+    await expect(
+      cronMergeQueueStallDispatchHandler({ step: makeStep(), logger }),
+    ).resolves.toMatchObject({ ok: true, previousRun: "unknown" });
+  });
+
+  it("a non-error prior-run verdict composed with a failed dispatch still heartbeats not-ok", async () => {
+    h.defaultRuns = { workflow_runs: [completed("success")] };
+    h.hasDispatchError = true;
+    h.dispatchError = httpError(500, "dispatch blew up");
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+  });
+
+  it("a failed prior-run verdict composes: the error check-in survives a healthy dispatch", async () => {
+    h.defaultRuns = { workflow_runs: [completed("failure")] };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toMatchObject({ ok: true, previousRun: "failed" });
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: false });
+  });
+
+  it("the runs-list read does not leak the token into a report extra field", async () => {
+    const token = "tok-" + "check-prev-run-secret";
+    h.mintSpy.mockResolvedValue(token);
+    h.hasRunsError = true;
+    h.runsError = httpError(500, `${token} leaked in 500`);
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toMatchObject({ previousRun: "unknown" });
+    expect(JSON.stringify(h.reportSilentFallbackSpy.mock.calls)).not.toContain(token);
+    const [errArg] = h.reportSilentFallbackSpy.mock.calls[0];
+    expect((errArg as Error).message).toContain("[REDACTED-INSTALLATION-TOKEN]");
+  });
+
+  it("replay safety: the check is memoized — three handler passes produce one runs GET", async () => {
+    h.defaultRuns = { workflow_runs: [completed("failure")] };
+    const step = makeReplayingStep();
+
+    const first = await cronMergeQueueStallDispatchHandler({ step, logger });
+    const second = await cronMergeQueueStallDispatchHandler({ step, logger });
+    const third = await cronMergeQueueStallDispatchHandler({ step, logger });
+
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+    // 1 GET + 1 POST across all replays — the report fires once, not per pass.
+    expect(h.requestSpy).toHaveBeenCalledTimes(2);
+    expect(h.reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
+    expect(h.heartbeatSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the newest listed run wins — a red second entry behind a green first does not page", async () => {
+    h.defaultRuns = {
+      workflow_runs: [completed("success"), completed("failure", { id: 4000 })],
+    };
+
+    const result = await cronMergeQueueStallDispatchHandler({
+      step: makeStep(),
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true, previousRun: "ok" });
+    expect(h.heartbeatSpy.mock.calls[0][0]).toMatchObject({ ok: true });
   });
 });
