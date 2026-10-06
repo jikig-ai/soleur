@@ -27,7 +27,7 @@ Put a build-time validator under the directory whose CI path filter gates its co
 
 ## Session Errors
 
-1. **A forked agent running `soleur:work` could not run review/compound/ship (no agent surface).** Recovery: parent ran the tail. **Prevention:** routed a Common Pitfalls bullet into `work/SKILL.md` (brief forks to stop after implementation).
+1. **A forked agent running `soleur:work` could not run review/compound/ship (no agent surface).** Recovery: parent ran the tail. **Prevention:** brief a fork to stop after the implementation tail and return, because the parent runs review, compound and ship. A one-line pitfall in `work/SKILL.md` was tried and reverted: that file sits 240 bytes under its lifecycle byte ratchet, so the rule needs a references/ extraction in its own PR, not a bullet.
 2. **A review seat left the worktree on a detached HEAD** (empty `git branch --show-current`, clean status). Recovery: `git switch <branch>`. **Prevention:** already documented in review Sharp Edges; check the branch after the panel returns.
 3. **WIP checkpoint committed with `--no-verify`** to protect fixes before a mutation battery. Recovery: the final commit ran hooks. **Prevention:** commit before mutating (kept), but prefer `LEFTHOOK_EXCLUDE=bun-test` over `--no-verify`.
 4. **`cat > "$TMPDIR/msg.txt"` failed (unset TMPDIR -> `/msg.txt`).** Recovery: `mktemp -t`. **Prevention:** never build a path from a possibly-unset variable.
