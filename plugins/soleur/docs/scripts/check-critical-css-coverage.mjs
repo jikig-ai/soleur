@@ -31,6 +31,10 @@ const TEMPLATE_ROOTS = [
   resolve(REPO_ROOT, "plugins/soleur/docs/pages"),
   resolve(REPO_ROOT, "plugins/soleur/docs/_includes"),
 ];
+// Standalone templates outside the two roots. The homepage (index.njk) renders
+// the first screen of the site yet was never scanned, so a new above-fold class
+// added there could ship without an inline rule (#9579).
+const TEMPLATE_FILES = [resolve(REPO_ROOT, "plugins/soleur/docs/index.njk")];
 const SITE_ROOT = resolve(REPO_ROOT, "_site");
 // Any built page contains the same inline <style> block from base.njk.
 // /pricing/index.html is a deterministic choice (always built, always uses the layout).
@@ -90,19 +94,21 @@ function listFiles(root, ext) {
 function extractClassesFromTemplates() {
   const used = new Map(); // class -> Set<file>
   const classAttrRe = /class\s*=\s*"([^"]+)"/g;
-  for (const root of TEMPLATE_ROOTS) {
-    for (const file of listFiles(root, ".njk")) {
-      const src = readFileSync(file, "utf8");
-      let m;
-      while ((m = classAttrRe.exec(src)) !== null) {
-        for (const cls of m[1].split(/\s+/).filter(Boolean)) {
-          // Skip Nunjucks expressions like {{ foo }} that may appear inside class=""
-          if (cls.includes("{") || cls.includes("}")) continue;
-          // Skip anything that doesn't look like a single CSS class token
-          if (!/^[A-Za-z][\w-]*$/.test(cls)) continue;
-          if (!used.has(cls)) used.set(cls, new Set());
-          used.get(cls).add(file);
-        }
+  const files = [
+    ...TEMPLATE_ROOTS.flatMap((root) => listFiles(root, ".njk")),
+    ...TEMPLATE_FILES.filter((f) => existsSync(f)),
+  ];
+  for (const file of files) {
+    const src = readFileSync(file, "utf8");
+    let m;
+    while ((m = classAttrRe.exec(src)) !== null) {
+      for (const cls of m[1].split(/\s+/).filter(Boolean)) {
+        // Skip Nunjucks expressions like {{ foo }} that may appear inside class=""
+        if (cls.includes("{") || cls.includes("}")) continue;
+        // Skip anything that doesn't look like a single CSS class token
+        if (!/^[A-Za-z][\w-]*$/.test(cls)) continue;
+        if (!used.has(cls)) used.set(cls, new Set());
+        used.get(cls).add(file);
       }
     }
   }

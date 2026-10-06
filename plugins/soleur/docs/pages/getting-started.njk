@@ -4,8 +4,8 @@ seoTitle: "Get Started with Soleur — Install Your AI Organization in Two Comma
 description: "Install Soleur in two commands and run a full AI organization — marketing, legal, finance, operations, sales, and support — without hiring anyone."
 layout: base.njk
 permalink: getting-started/
-date: 2026-06-01
-last_updated: 2026-09-11
+date: 2026-10-06
+last_updated: 2026-10-06
 ---
 
     <!-- Hero -->
@@ -47,7 +47,9 @@ last_updated: 2026-09-11
         <p class="section-label">Source-available. Install in Claude Code.</p>
         <h2 class="section-title">Run it yourself</h2>
 
-        <p>Prefer to run it yourself? Soleur is source-available and works in Claude Code today. Install it in two commands, keep every byte of memory on your own machine, and upgrade to the hosted version whenever you&rsquo;re ready.</p>
+        <p>Prefer to run it yourself? Soleur is source-available and works in Claude Code today. Install it in two commands, keep your knowledge base as plain files on your own machine, and upgrade to the hosted version whenever you&rsquo;re ready.</p>
+
+        <p>To run the self-hosted version you need <a href="https://docs.claude.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a>, signed in with your Claude plan or an Anthropic API key.</p>
 
         <!-- verified: 2026-08-12 source: https://code.claude.com/docs/en/plugins -->
         <div class="quickstart-code">
@@ -220,8 +222,8 @@ claude plugin install soleur@soleur-marketplace</code></pre>
             <p class="faq-answer">Yes. Claude Code: <code>/soleur:sync</code>. Grok Build: <code>/sync</code>. Analyze the codebase and populate the knowledge base with your project's conventions, architecture, and patterns. Soleur adapts to your existing codebase rather than requiring a fresh start.</p>
           </details>
           <details class="faq-item">
-            <summary class="faq-question">What is the difference between the cloud platform and self-hosted?</summary>
-            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access, your data, your compute. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
+            <summary class="faq-question">What is the difference between the hosted version and self-hosted?</summary>
+            <p class="faq-answer">Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access, your files, running inside your own Claude Code. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
           </details>
         </div>
       </div>
@@ -282,10 +284,10 @@ claude plugin install soleur@soleur-marketplace</code></pre>
         },
         {
           "@type": "Question",
-          "name": "What is the difference between the cloud platform and self-hosted?",
+          "name": "What is the difference between the hosted version and self-hosted?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access, your data, your compute. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
+            "text": {{ ("Both versions ship the same agents and skills. The self-hosted version runs inside Claude Code on your machine -- full access, your files, running inside your own Claude Code. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
           }
         }
       ]

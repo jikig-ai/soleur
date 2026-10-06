@@ -39,6 +39,13 @@ const NAV_TIMEOUT_MS = 15_000;
 const HONEYPOT_MAX_HEIGHT_PX = 1;
 const HONEYPOT_MIN_OFFSCREEN_LEFT_PX = -100;
 const H1_MIN_FONT_PX = 40;
+// Homepage-only (#9579): the waitlist privacy line is load-bearing and sits
+// above the fold, so the inline-CSS-only state must keep it BELOW the submit
+// button (its flex-basis:100% lives in the inline block) and the page must not
+// overflow horizontally on a phone. The routes file has one global viewport, so
+// the 390px check opens a second browser context.
+const HOME_PATH = "/";
+const PHONE_VIEWPORT = { width: 390, height: 844 };
 
 // Worker pool size: each route opens a `BrowserContext` (~30MB resident).
 // 4 in parallel keeps memory under ~150MB on GitHub runners (7GB) while
@@ -81,6 +88,32 @@ try {
   console.error(`screenshot-gate: server unreachable at ${BASE_URL}: ${err.message}`);
   await browser.close();
   process.exit(2);
+}
+
+async function phoneOverflowErrors() {
+  const ctx = await browser.newContext({ viewport: PHONE_VIEWPORT });
+  const page = await ctx.newPage();
+  const errs = [];
+  try {
+    await page.route("**/*.css", (request) => request.abort());
+    try {
+      await page.goto(`${BASE_URL}${HOME_PATH}`, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    } catch (err) {
+      return [`phone-width navigation failed: ${err.message}`];
+    }
+    const m = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    if (m.scrollWidth > m.clientWidth) {
+      errs.push(
+        `homepage overflows horizontally at ${PHONE_VIEWPORT.width}px (scrollWidth=${m.scrollWidth} > clientWidth=${m.clientWidth}) in the inline-CSS-only state`,
+      );
+    }
+  } finally {
+    await ctx.close();
+  }
+  return errs;
 }
 
 async function auditRoute(route) {
@@ -127,7 +160,17 @@ async function auditRoute(route) {
       const landingCtaH2Font = landingCtaH2
         ? getComputedStyle(landingCtaH2).fontFamily.toLowerCase()
         : null;
+      const privacy = document.getElementById("homepage-waitlist-privacy");
+      const submit = document.querySelector("#homepage-waitlist-form button[type='submit']");
+      const card = document.querySelector(".hero-waitlist-form-card");
+      const plan = document.querySelector(".landing-hero-plan");
       return {
+        cardBorderPx: card ? parseFloat(getComputedStyle(card).borderTopWidth) : null,
+        planDisplay: plan ? getComputedStyle(plan).display : null,
+        hasHomeForm: !!privacy && !!submit,
+        privacyTop: privacy ? privacy.getBoundingClientRect().top : null,
+        privacyPosition: privacy ? getComputedStyle(privacy).position : null,
+        submitBottom: submit ? submit.getBoundingClientRect().bottom : null,
         hasHoneypot: !!honeypotWrapper,
         honeypotHeight: honeypotRect ? honeypotRect.height : null,
         honeypotLeft: honeypotRect ? honeypotRect.left : null,
@@ -186,6 +229,31 @@ async function auditRoute(route) {
       errs.push(
         `.landing-cta h2 uses "${result.landingCtaH2Font}" (expected display font: cormorant/garamond) — .landing-cta h2 font-family missing from inline CSS`,
       );
+    }
+
+    if (route.path === HOME_PATH) {
+      if (!result.hasHomeForm) {
+        errs.push("homepage hero waitlist form missing its privacy line or submit button");
+      } else {
+        if (result.privacyPosition === "absolute") {
+          errs.push("hero privacy line is position:absolute — still hidden like .sr-only");
+        }
+        if (result.privacyTop < result.submitBottom - 1) {
+          errs.push(
+            `hero privacy line (top=${result.privacyTop.toFixed(1)}px) is not below the submit button (bottom=${result.submitBottom.toFixed(1)}px) — .newsletter-privacy flex-basis:100% missing from inline CSS`,
+          );
+        }
+      }
+      // The hosted card and the two-sentence plan line are styled only by inline
+      // rules before the stylesheet swaps; a dropped rule collapses them into
+      // unstyled blocks (a visible layout jump at swap).
+      if (result.cardBorderPx === null || result.cardBorderPx < 1) {
+        errs.push(".hero-waitlist-form-card has no border — its inline rule is missing from the critical CSS");
+      }
+      if (result.planDisplay !== "grid") {
+        errs.push(`.landing-hero-plan display is "${result.planDisplay}" (expected grid) — its inline rule is missing from the critical CSS`);
+      }
+      errs.push(...(await phoneOverflowErrors()));
     }
 
     if (errs.length) {

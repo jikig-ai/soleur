@@ -27,7 +27,7 @@
   <!-- CSP: Cloudflare Bot Fight Mode injects an inline script with per-request
        tokens. This script is intentionally blocked by script-src (its hash is
        unpredictable). The blocked script has no user-facing impact — see #1149. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM=' 'sha256-9o2LMPU0pCC0i/83pWDPlO90JiCMiJbUjQWPhLF+W0Y='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-ui11TjyYFeNYI9dQpevWUVjQWg0VNdVSiUwDTtjTbA4=' 'sha256-9o2LMPU0pCC0i/83pWDPlO90JiCMiJbUjQWPhLF+W0Y='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
   <script type="application/ld+json">
   {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
   {
@@ -71,19 +71,6 @@
           {{ site.linkedinCompany | jsonLdSafe | safe }},
           {{ site.bluesky | jsonLdSafe | safe }},
           {{ site.discord | jsonLdSafe | safe }}
-        ],
-        "subjectOf": [
-          {
-            "@type": "NewsArticle",
-            "url": "https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609",
-            "headline": "Anthropic CEO Dario Amodei Predicts The First Billion-Dollar Solopreneur",
-            "datePublished": "2025-03-25",
-            "publisher": {
-              "@type": "Organization",
-              "name": "Inc.",
-              "url": "https://www.inc.com/"
-            }
-          }
         ]
       },
       {
@@ -133,7 +120,8 @@
        .nav-caret, .skip-link, .landing-hero*, .section-label,
        .section-title, .section-desc, .landing-section, .landing-section-inner,
        .landing-stats, .landing-stat*, .btn, .btn-primary, .btn--sm,
-       .newsletter-form*, .hero-waitlist-form*, .hero (blog), .blog-post-meta,
+       .newsletter-form*, .hero-waitlist-form*, .landing-hero-install*, .landing-hero-plan,
+       .btn-secondary (hero form submit), .sr-only, .hero (blog), .blog-post-meta,
        .page-hero*, .landing-cta*, .honeypot-trap. Any new selector rendered
        above the fold on any docs page MUST be added here AND covered by the
        deploy-docs screenshot gate (plugins/soleur/docs/scripts/screenshot-gate.mjs)
@@ -198,8 +186,19 @@
       .newsletter-form button[type="submit"]{cursor:pointer;border:none}
       .hero-waitlist-form{max-width:560px;margin:var(--space-6) auto 0;align-items:stretch}
       .hero-waitlist-form input[type="email"]{background:#111}
-      .hero-waitlist-form .btn-primary{flex-shrink:0;padding:var(--space-3) var(--space-6)}
-      @media(max-width:768px){.hero-waitlist-form{max-width:100%}.hero-waitlist-form input[type="email"],.hero-waitlist-form .btn-primary{flex:1 1 100%}}
+      .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+      .btn-secondary{border:1px solid var(--color-border);color:var(--color-text-secondary);padding:var(--space-4) var(--space-6)}
+      .hero-waitlist-form button[type="submit"].btn-secondary{background:transparent;border:1px solid var(--color-border);color:var(--color-text);flex-shrink:0;padding:var(--space-3) var(--space-6)}
+      .landing-hero-install{margin-top:var(--space-6)}
+      .landing-hero-install-note{font-size:var(--text-sm);color:var(--color-text-secondary);margin-top:var(--space-3)}
+      .hero-waitlist-form-card{max-width:560px;margin:var(--space-6) auto 0;padding:var(--space-5);border:1px solid var(--color-border);border-radius:8px;background:var(--color-bg-secondary);text-align:left}
+      .hero-waitlist-form-label{font-size:var(--text-sm);font-weight:600;color:var(--color-text);margin-bottom:var(--space-3)}
+      .hero-waitlist-form-card .hero-waitlist-form{max-width:none;margin:0}
+      .hero-waitlist-form .newsletter-privacy{flex-basis:100%;font-size:var(--text-xs);color:var(--color-text-secondary);margin-top:var(--space-1);text-align:left}
+      .hero-waitlist-form .newsletter-status{flex-basis:100%;min-height:1.5em;font-size:var(--text-sm);text-align:center}
+      .landing-hero-plan{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-6);max-width:760px;margin:var(--space-6) auto 0;font-size:var(--text-sm);color:var(--color-text-secondary);text-align:left}
+      .landing-hero .hero-cta{margin-top:var(--space-5)}
+      @media(max-width:768px){.hero-waitlist-form{max-width:100%}.hero-waitlist-form input[type="email"],.hero-waitlist-form .btn-secondary{flex:1 1 100%}.landing-hero-plan{grid-template-columns:1fr}.hero-waitlist-form-card{padding:var(--space-4)}}
       /* Blog above-fold */
       .hero{background:var(--color-bg);color:var(--color-text);padding:var(--space-10) 0 var(--space-8);margin-top:var(--header-h);position:relative;text-align:center;border-bottom:1px solid var(--color-border)}
       .hero h1{font-size:var(--text-4xl);margin-bottom:var(--space-4);letter-spacing:-0.02em}
@@ -309,6 +308,7 @@
           {%- endfor %}
         </ul>
         <span class="footer-copyright">&copy; {{ site.name }} 2026</span>
+        <span class="footer-copyright">{{ site.name }} is an independent product, not affiliated with, sponsored by, or endorsed by Anthropic.</span>
       </div>
     </div>
   </footer>
@@ -356,7 +356,7 @@
 
   document.querySelectorAll('.waitlist-form').forEach(function(form) {
     handleSignupForm(form, {
-      successMessage: 'You are on the list. We will notify you when the cloud platform is ready.',
+      successMessage: 'You are on the list. We will notify you when the hosted version is ready.',
       event: 'Waitlist Signup',
       props: function(f) {
         var tier = f.querySelector('input[name="metadata__tier_interest"]');
@@ -367,7 +367,7 @@
 
   document.querySelectorAll('.hero-waitlist-form').forEach(function(form) {
     handleSignupForm(form, {
-      successMessage: 'You are on the list. We will notify you when the cloud platform is ready.',
+      successMessage: 'You are on the list. We will notify you when the hosted version is ready.',
       event: 'Waitlist Signup',
       props: function(f) { return { location: 'homepage-hero' }; }
     });

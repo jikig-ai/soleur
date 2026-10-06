@@ -2223,7 +2223,9 @@ describe("#9579 Guard 3 — attribution (no false Inc.com subject claim, no unve
     const home = readSite("index.html");
     expect(/<section class="landing-quote">[\s\S]*?<blockquote/.test(home), "no blockquote in the quote section").toBe(false);
     expect(home.includes("inc.com/ben-sherry/"), "Inc. source link remains (must-PASS)").toBe(true);
-    expect(visibleText(home).includes("not affiliated with"), "non-affiliation line present").toBe(true);
+    const quote = home.match(/<section class="landing-quote">([\s\S]*?)<\/section>/);
+    expect(quote, "quote section present").not.toBeNull();
+    expect(visibleText(quote![1]).includes("not affiliated with"), "non-affiliation line sits in the quote section").toBe(true);
   });
 });
 
