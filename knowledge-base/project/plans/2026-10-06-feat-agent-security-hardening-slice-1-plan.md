@@ -66,7 +66,7 @@ Three small changes that need no new infrastructure, one per exposure the articl
 
 **If this leaks, the user's data / money is exposed via:** their Anthropic API key or OAuth token read out of the agent's Bash environment by a prompt-injected instruction (`env`, `printenv`, `$ANTHROPIC_API_KEY`), spent or exfiltrated; and, for W2, an agent running `terraform destroy` or a force-push against their own production resources.
 
-**Brand-survival threshold:** single-user incident
+- **Brand-survival threshold:** single-user incident
 
 CPO sign-off: the brainstorm's CPO assessment is carried forward; explicit sign-off on the **final W2 decision set** is recorded in PR 2's body before PR 2 starts (acceptance criterion below). `soleur:engineering:review:user-impact-reviewer` runs at review time.
 
@@ -244,11 +244,11 @@ liveness_signal:
   configured_in: .github/workflows/reusable-release.yml; apps/web-platform/server/agent-runner-sandbox-config.ts
 error_reporting:
   destination: GitHub Actions run status (W3); Sentry feature=agent-sandbox (W1); hook output to the harness transcript (W2)
-  fail_loud: yes — scan failure and scanner error both fail the release job; sandbox config rejection throws under failIfUnavailable; an unparseable hook envelope answers ask rather than allow
+  fail_loud: yes — scan failure and scanner error both fail the release job; a missing sandbox dependency throws under failIfUnavailable (an ignored credentials block does not, see failure_modes); an unparseable hook envelope answers ask rather than allow
 failure_modes:
   - mode: SDK rejects or ignores the credentials block
-    detection: creds-gated live probe in CI and canary fixture byte-diff; startup failure reaches Sentry via failIfUnavailable
-    alert_route: Sentry feature=agent-sandbox; CI red on the SDK-bump gate
+    detection: CI only, measured (SDK 0.3.284 accepts a renamed or malformed credentials block silently, so nothing reaches Sentry): the argv test and the real-bubblewrap behaviour test in test-webplat; the canary fixture is stale (#9614) and gives no verdict
+    alert_route: CI red on test-webplat; no runtime route exists
   - mode: guard hook silently not registered
     detection: registration parity tests (ADR-223) and the static probe script
     alert_route: CI red
