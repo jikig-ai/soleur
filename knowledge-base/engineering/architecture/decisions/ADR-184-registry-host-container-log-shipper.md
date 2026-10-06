@@ -456,3 +456,43 @@ pressure. Recorded because it is that counter's first real reading, not because 
 An earlier draft called this "comfortably clear of the floor of 7", which compares two unrelated
 counters: `FLOOR_ROWS` is a MINIMUM for `n_envelope` and the probe never applies it to `n_drop`.
 The meaningful comparison for a drop count is the shipper's per-tick rate cap, not the floor.
+
+## Amendment 2026-10 — one-pass, newest-boot grading (#8278)
+
+**The defect.** The probe's exit-1 arm graded credential-shaped leaks over an unscoped 30-minute
+window, while its delivery evidence came from a *separate* `SOLEUR_ZOT_LOG_BOOT` marker query over
+`--since 72h`. A window straddling a host replace mixed two host generations: delivery proven on
+the newest boot, a leak graded on rows the dead boot emitted — a public FAIL (or a close) resting
+on evidence about a host that no longer exists. Same defect class as #7960, which PR #8272 fixed
+on the sibling channel by reading proof and grade from one boot-scoped pass; ADR-211's decision is
+applied here to this channel, so no new ADR was written.
+
+**The shape now.** One bounded span feeds every verdict-keyed value. Both channels
+(`SOLEUR_ZOT_LOG`, `SOLEUR_ZOT_DISK`) decode to `(dt, tag, message)` TSVs — `dt` is the boundary
+key because it is ingest-assigned, the one field the producer cannot set — merge, sort ascending,
+and feed ONE awk pass. The pass derives `NEWEST_BOOT` from the newest **host-scoped stamped** row
+(control rows read on the trusted head before ` zot_last_err=`; `SOLEUR_ZOT_LOG_BOOT` markers via
+their own `host=`; `SOLEUR_ZOT_LOG_DROPPED` rows carry `boot_id` but no `host=`, so they
+corroborate and count on a boot already derived but can never select one), takes `B0` as the
+earliest stamped dt on that boot — an in-window marker tightens it to ~provision time — and emits
+one summary line: boot scope, delivery fields, every count, and the leak grade over envelope rows
+at `dt >= B0` only. Any `grep`/`tail` read of the raw sets outside the pass is the defect the
+probe's Guard Contract forbids. The separate `boot_marker(1)` / `--since 72h` delivery arm is
+retired; in-window markers arrive through the same `SOLEUR_ZOT_LOG` result set and now tighten the
+boundary rather than stand as independent proof.
+
+**Exit 3, CANNOT ESTABLISH.** Three fail-loud states were added and none may collapse into an
+exit-2 wait or a false verdict: no usable `boot_id` on any host-scoped stamped row (the boot
+cannot be derived); a missing or non-integer pass summary (a probe defect, never a vacuous
+zero-count); and credential-shaped envelope rows *outside* the gradable span (`ungraded…rows=N`,
+named — unattributed evidence is neither FAIL nor PASS). The row-count floor is computed over the
+bounded span `min(WINDOW_MIN, B0→newest-dt minutes)`, removing the systematic false
+`below_expected_floor` every replace used to post for ~30 minutes. Residual, recorded not hidden:
+boundary precision is ±5 min (heartbeat cadence), so a row in the (replace, first-heartbeat) gap
+without an in-window marker is conservatively ungraded rather than mis-graded.
+
+**Why this landed now.** #8278 was labelled `blocked` with a "re-evaluate when the script is
+re-enrolled" clause, and three dated triage re-checks (#8456 thread) confirmed the defect latent
+under deferral. The operator elected to fix it ahead of re-enrollment — which is the ordering the
+issue itself prescribes ("must land in the same PR as, or before, any PR that adds a directive"),
+since a probe enrolled while unscoped would grade the next real straddle over mixed generations.

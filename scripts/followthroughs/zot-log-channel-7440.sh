@@ -36,14 +36,45 @@
 # correctly-behaving exit-2 probe posts one comment per sweep until delivery.
 #
 # EXIT CONTRACT (scripts/sweep-followthroughs.sh) — AND THE SINGLE `exit 1` IS DELIBERATE:
-#   0 = PASS       envelope rows observed AND the positive control present.
+#   0 = PASS       envelope rows observed on the newest real boot AND the positive control present.
 #   2 = TRANSIENT  not delivered, delivered-but-silent, below floor, control missing,
 #                  channel dark, or ANY auth/query/decode failure. Each prints a DISTINCT reason —
 #                  an unprovisioned credential must never read as "not yet delivered".
-#   1 = FAIL       emitted ONLY when a credential shape is found in the channel. This is the one
-#                  carve-out and it is intentional: a leak is a REGRESSION, not a not-yet, and at
-#                  this plan's `single-user incident` brand-survival threshold it must reopen and
-#                  comment. Everywhere else exit 1 is forbidden because it reopens daily.
+#   3 = CANNOT ESTABLISH   the newest boot cannot be derived, the pass emitted nothing usable, or
+#                  credential-shaped rows exist OUTSIDE the gradable span. Added 2026-10 (#8278):
+#                  a branch that refuses to assert a delivery or leak state must not ship under a
+#                  heading that asserts one. Same disposition as 2 (issue stays open).
+#   1 = FAIL       emitted ONLY when a credential shape is found in the channel's GRADED span.
+#                  This is the one carve-out and it is intentional: a leak is a REGRESSION, not a
+#                  not-yet, and at this plan's `single-user incident` brand-survival threshold it
+#                  must reopen and comment. Everywhere else exit 1 is forbidden because it reopens
+#                  daily.
+#
+# GUARD CONTRACT (#8278 — the split-span defect this revision removes). Before this fix the
+# verdict and its delivery evidence came from DIFFERENT SPANS: the exit-1 arm graded leaks over
+# an unscoped 30-minute window while delivery was established from a SEPARATE SOLEUR_ZOT_LOG_BOOT
+# marker query over --since 72h. A window straddling a replace mixed two host generations, so a
+# public FAIL — or a close — could rest on evidence about a dead host. The 72h query is DELETED;
+# in-window SOLEUR_ZOT_LOG_BOOT/_DROPPED rows now arrive through the same SOLEUR_ZOT_LOG result
+# set (the warehouse LIKE is a substring match). The shape, ported from
+# scripts/followthroughs/registry-luks-live-8386.sh and ADR-211:
+#
+#   - The newest real boot is derived from host-scoped STAMPED rows only: control rows (trusted
+#     head cut at ` zot_last_err=`) and SOLEUR_ZOT_LOG_BOOT markers (own host= field). A
+#     SOLEUR_ZOT_LOG_DROPPED row carries boot_id but NO host=, so it corroborates and counts on a
+#     boot already derived but can never SELECT one.
+#   - The boundary B0 is the earliest ingest dt among stamped rows on that boot; an in-window
+#     BOOT marker on the boot tightens it to ~provision time. Envelope rows carry no boot_id, so
+#     their scope is the boundary, not a field — the dt column is ingest-assigned, the one field
+#     the producer cannot set.
+#   - ONE awk pass over the dt-sorted, tag-carried rows of BOTH channels produces every value a
+#     verdict keys on — the boot scope, the boundary, the delivery proof, every count, and the
+#     leak grade. A second pass over the same rows, a field read outside this pass, or a read
+#     past the trusted cut is the defect this file's Guard Contract forbids.
+#
+# Residual, recorded not hidden: boundary precision is ±5 min (heartbeat cadence) — an envelope
+# row in the (replace, first-heartbeat) gap without an in-window marker is conservatively
+# UNGRADED rather than mis-graded.
 #
 # THE DISCRIMINATOR IS POSITIVE AND HOST-ISOLATED. It asserts that a decoded message STARTS WITH
 # the envelope the shipper stamps. It is emphatically NOT the negation "raw does not begin with the
@@ -87,6 +118,19 @@
 #   BETTERSTACK_QUERY_HOST, BETTERSTACK_QUERY_USERNAME, BETTERSTACK_QUERY_PASSWORD
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This probe binds BETTERSTACK_QUERY_PASSWORD, and shell tracing echoes a
+# command AFTER expansion -- so under `bash -x` the credential reaches the transcript at the moment
+# it is bound, before it is used for anything. Two live tokens leaked exactly that way. Refuse to
+# run traced while a credential is present, rather than trusting the caller not to trace.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${HOST_TOKEN:+x}${ZOT_ONLY_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${ZOT_LOG_7440_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
 
@@ -107,16 +151,6 @@ WINDOW="${ZOT_LOG_7440_WINDOW:-30m}"
 WINDOW_MIN="${ZOT_LOG_7440_WINDOW_MIN:-30}"
 LIMIT="${ZOT_LOG_7440_LIMIT:-400}"
 
-# EXPECTED FLOOR, computed rather than asserted. zot-liveness-heartbeat.timer fires every 60s
-# (OnUnitActiveSec=60s) and zot logs EVERY request at info level, so one genuine zot line lands per
-# minute BY CONSTRUCTION — ~1,440/day before any real pull traffic. That rate (1/min) sits well
-# under the shipper's 17-per-5-minute cap, so liveness rows are never the ones dropped. A shortfall
-# against this is therefore measurable rather than a judgement call. The quarter-of-expected floor
-# absorbs ingest lag and a partial first window without tolerating a mostly-dead shipper.
-EXPECTED_ROWS="$WINDOW_MIN"
-FLOOR_ROWS=$(( EXPECTED_ROWS / 4 ))
-[[ "$FLOOR_ROWS" -ge 3 ]] || FLOOR_ROWS=3
-
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then
     echo "TRANSIENT: reason=credentials_unset — $v is unset, so the Logs warehouse cannot be" >&2
@@ -133,18 +167,16 @@ if [[ ! -x "$QUERY" ]]; then
 fi
 
 # --- decode helper: JSONEachRow -> .raw (a JSON *string*) -> .message ------------------------
-# Both hops use `fromjson?` so a non-JSON noise line is skipped rather than aborting the stream,
-# and `// empty` drops fieldless rows instead of emitting a literal "null".
-decode_messages() {
-  jq -R -r 'fromjson? | .raw // empty' 2>/dev/null \
-    | jq -R -r 'fromjson? | .message // empty' 2>/dev/null
-}
-
-count_lines() {
-  local n
-  n=$(grep -c . 2>/dev/null || true)
-  [[ "$n" =~ ^[0-9]+$ ]] || n=0
-  printf '%s' "$n"
+# Both hops use `fromjson?` so a non-JSON noise line is skipped rather than aborting the stream.
+# `dt` IS CARRIED THROUGH as a TSV column beside a channel tag: it is the only field in the row
+# the producer cannot set, and it is the sort/boundary key that binds the graded set to the
+# newest real boot (#8278). @tsv is LOAD-BEARING: it escapes an embedded newline to a literal
+# backslash-n, so one warehouse row can never split into two awk records — dropping it hands a
+# crafted row a fully-trusted synthetic head.
+decode_tsv() { # $1 = one-letter channel tag
+  jq -R -r --arg tag "$1" \
+    'fromjson? | select(.raw != null) | [(.dt // ""), $tag, (((.raw | fromjson?) // {}) | (.message // ""))] | @tsv' \
+    2>/dev/null
 }
 
 # betterstack-query.sh exits 3 on unset credentials and 64 on an unknown flag; ANY non-zero maps to
@@ -187,6 +219,10 @@ run_query() {
 queryfail_rc()  { local r="${1#QUERYFAIL }"; printf '%s' "${r%% *}"; }
 queryfail_msg() { local r="${1#QUERYFAIL }"; [[ "$r" == *" "* ]] && printf '%s' "${r#* }"; }
 
+# TWO QUERIES, ONE SPAN. --grep SOLEUR_ZOT_LOG is a substring LIKE, so it returns envelope rows,
+# SOLEUR_ZOT_LOG_DROPPED rows AND SOLEUR_ZOT_LOG_BOOT markers alike — all on the SAME --since
+# "$WINDOW" --no-archive window. There is no second marker query: the previous --since 72h arm
+# was the split span this revision exists to remove (#8278).
 raw_log=$(run_query "SOLEUR_ZOT_LOG")
 if [[ "$raw_log" == QUERYFAIL* ]]; then
   echo "TRANSIENT: reason=query_failed — betterstack-query.sh exited $(queryfail_rc "$raw_log") querying" >&2
@@ -195,148 +231,288 @@ if [[ "$raw_log" == QUERYFAIL* ]]; then
   exit 2
 fi
 
-decoded=$(printf '%s\n' "$raw_log" | decode_messages)
-
-# PREFIX-ANCHORED and HOST-ISOLATED — and the anchor is `grep -E "^…"`, not `grep -F` (#7444
-# R18). `grep -F` has NO anchor, so the comment that used to sit here claiming "a fixed prefix at
-# offset 0 … can never sit at offset 0" described a property the code did not have. Measured: a
-# warehouse row that merely MENTIONS the envelope mid-line satisfied it, and 30 such rows clear
-# FLOOR_ROWS and exit 0 — auto-flipping ADR-184 to accepted on prose. The three sibling marker
-# greps below were anchored all along, which is what made this read as an omission.
-#
-# The prefix contains no ERE metacharacter, so -E changes nothing except adding the anchor.
-envelope_hits=$(printf '%s\n' "$decoded" | grep -E "^${ENVELOPE_PREFIX}${HOST_TOKEN} " || true)
-n_envelope=$(printf '%s\n' "$envelope_hits" | count_lines)
-# THE BOOT MARKER NEEDS ITS OWN WINDOW (#7444 R32). It fires ONCE, from runcmd, at provision
-# time — but it was being read out of $decoded, i.e. the 30-minute `--no-archive` hot-window
-# query sized for the steady envelope stream. So `n_boot > 0` was true only if a sweep happened
-# to run within ~30 minutes of a host replace, and false for the rest of that host's life.
-# That made the ONE field that breaks the four-way `post_fail=unknown` collapse unreadable in
-# practice. Queried separately at 72h WITH the archive arm, which is the window its cadence
-# actually needs; past the source's 3-day retention it is gone permanently, which the arms below
-# say rather than implying the absence is evidence.
-boot_raw=$(BOOT_WINDOW=72h; "$QUERY" --since 72h --limit "$LIMIT" --grep "$BOOT_MARKER" 2>/dev/null || printf '')
-boot_hits=$(printf '%s\n' "$boot_raw" | decode_messages | grep -E "^${BOOT_MARKER} boot_id=[0-9a-f-]+ host=${HOST_TOKEN}( |$)" || true)
-n_boot=$(printf '%s\n' "$boot_hits" | count_lines)
-drop_hits=$(printf '%s\n' "$decoded" | grep -E "^${DROP_MARKER} n=" || true)
-n_drop=$(printf '%s\n' "$drop_hits" | count_lines)
-
-# --- positive control: is the READ PATH alive at all? ---------------------------------------
 control_raw=$(run_query "$CONTROL_MARKER")
 if [[ "$control_raw" == QUERYFAIL* ]]; then
   echo "TRANSIENT: reason=query_failed — the control query exited $(queryfail_rc "$control_raw")." >&2
   [[ -n "$(queryfail_msg "$control_raw")" ]] && echo "           $(queryfail_msg "$control_raw")" >&2
   exit 2
 fi
-control_decoded=$(printf '%s\n' "$control_raw" | decode_messages | grep -E "^${CONTROL_MARKER} " || true)
-n_control=$(printf '%s\n' "$control_decoded" | count_lines)
 
-# The reporter carries the shipper's own health on an INDEPENDENT working path, which is the only
-# signal that survives a totally dead shipper egress.
-# `[0-9]+` alone cannot match the reporter's `unknown` DEFAULT, which is what it emits when the
-# shipper's state file is unreadable — so an unset value silently read as "no POST failures", an
-# absence the probe never measured. Captured as its own sub-state instead.
-shipper_post_fail_raw=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_post_fail=[^ ]+' | tail -1 | sed 's/^log_shipper_post_fail=//' || true)
-shipper_post_fail=""
-shipper_post_fail_unknown=0
-case "$shipper_post_fail_raw" in
-  '')           : ;;                                   # field absent entirely (old cloud-init)
-  *[!0-9]*)     shipper_post_fail_unknown=1 ;;         # `unknown` — state file unreadable
-  *)            shipper_post_fail=$shipper_post_fail_raw ;;
-esac
-current_boot_id=$(printf '%s\n' "$control_decoded" | grep -oE 'boot_id=[0-9a-f-]+' | tail -1 | sed 's/^boot_id=//' || true)
-# The reporter carries three more shipper fields on this same row and the probe held them all
-# while telling the operator to go re-run the query it had just run (#7444 R19). last_ok_age_s in
-# particular decides between the two hypotheses `delivered_but_silent` otherwise only guesses at:
-# -1 means no row has EVER shipped, while a small age with zero envelope rows means the shipper
-# works and the envelope/grep drifted.
-shipper_last_ok_age=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_last_ok_age_s=-?[0-9]+' | tail -1 | sed 's/^log_shipper_last_ok_age_s=//' || true)
-shipper_dropped_cum=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_dropped_cum=[^ ]+' | tail -1 | sed 's/^log_shipper_dropped_cum=//' || true)
-shipper_drop_seq=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_drop_seq=[^ ]+' | tail -1 | sed 's/^log_shipper_drop_seq=//' || true)
+# --- THE ONE PASS ----------------------------------------------------------------------------
+# Both channels decode to (dt, tag, message) TSVs, are merged and sorted ascending on the
+# ingest-assigned dt, and feed ONE awk program. The pass holds the rows and, in END:
+#   1. derives NEWEST_BOOT from the newest host-scoped STAMPED row (control head, or a
+#      SOLEUR_ZOT_LOG_BOOT marker's own host=; never a _DROPPED row — it carries no host=);
+#   2. derives B0, the earliest stamped dt on that boot (an in-window marker tightens it to
+#      ~provision time);
+#   3. produces every verdict-keyed value on that boot's span: all counts, the delivery fields,
+#      and the leak grade — in-scope envelope rows at dt >= B0, pre-boundary rows counted apart.
+# Written for POSIX awk: no interval expressions, no [[:classes:]], no gawk extensions — the
+# runner awk is mawk. The integer guard below is what keeps a dialect error on the
+# CANNOT-ESTABLISH side, never a false verdict.
+SUMMARY="$({ printf '%s\n' "$raw_log"     | decode_tsv L
+            printf '%s\n' "$control_raw" | decode_tsv C; } \
+  | sort \
+  | awk -F'\t' \
+      -v host="$HOST_TOKEN" \
+      -v envpfx="${ENVELOPE_PREFIX}${HOST_TOKEN} " \
+      -v ctlm="${CONTROL_MARKER} " \
+      -v bootm="${BOOT_MARKER} " \
+      -v dropm="${DROP_MARKER} " \
+      -v zottok="$ZOT_ONLY_TOKEN" '
+    function head(m,   i) {
+      # THE TRUSTED REGION: control-row verdict fields come only from the head before the
+      # free-text ` zot_last_err=` tail. A crafted tail cannot supply a boot_id, a host= or a
+      # reporter field. The `: $0` fallback makes the whole record the head when there is no
+      # tail — unreachable for a non-producer row because every classification below anchors on
+      # the producer envelope at offset 0.
+      i = index(m, " zot_last_err=")
+      return (i > 0) ? substr(m, 1, i - 1) : m
+    }
+    function fval(h, k,   re, s) {
+      # Leftmost match, value = everything up to the next space — a field can therefore never
+      # carry a space into a verdict even if the producer emitted one.
+      re = "(^| )" k "=[^ ]*"
+      if (!match(h, re)) return ""
+      s = substr(h, RSTART, RLENGTH)
+      sub(/^ /, "", s)
+      return substr(s, length(k) + 2)
+    }
+    function hostok(h) { return h ~ ("(^| )host=" host "($| )") }
+    function bootof(h) {
+      # [0-9a-fA-F-]+ rather than [^ ]* — the class is what excludes `unknown`, the producer
+      # /proc-unreadable DEFAULT sentinel: u, n, k, w are absent from it.
+      if (!match(h, / boot_id=[0-9a-fA-F-]+/)) return ""
+      return substr(h, RSTART + 9, RLENGTH - 9)
+    }
+    function authleak(m) {
+      # An Authorization value that is NEITHER the zot mask NOR our REDACTED marker. POSIX
+      # awk has no intervals, so the three-asterisk prefix stands in for \*{3,} — a 3/4/5+
+      # mask does not post a public FAIL.
+      return (index(m, "Authorization:[") > 0 && m !~ /Authorization:\[(\*\*\*|REDACTED)/)
+    }
+    function shapeleak(m,   rest, run) {
+      if (m ~ /\$2[aby]\$[0-9][0-9]\$/) return 1
+      if (match(m, /dp\.(pt|st|sa|ct)\./)) {
+        # No interval expressions in POSIX awk: measure the run after the prefix instead —
+        # a real service token is dp.st.<config>.<random>, and the dot in the charset is what
+        # reaches the 20-char floor.
+        rest = substr(m, RSTART + RLENGTH)
+        run = rest
+        sub(/[^A-Za-z0-9._-].*$/, "", run)
+        return (length(run) >= 20)
+      }
+      return 0
+    }
+    { nr++; Rdt[nr] = $1; Rtag[nr] = $2; Rmsg[nr] = substr($0, length($1) + length($2) + 3) }
+    END {
+      # (1) NEWEST BOOT — newest host-scoped stamped row, newest first.
+      nb = ""
+      for (i = nr; i >= 1; i--) {
+        m = Rmsg[i]
+        if (Rtag[i] == "C") {
+          h = head(m)
+          if (!hostok(h)) continue
+          b = bootof(h)
+          if (b != "") { nb = b; break }
+        } else if (index(m, bootm) == 1) {
+          if (hostok(m)) { b = bootof(m); if (b != "") { nb = b; break } }
+        }
+      }
+      # (2) B0 — earliest stamped row on the newest boot (a marker counts, so the boundary
+      #     tightens to ~provision time).
+      b0 = ""
+      if (nb != "") {
+        for (i = 1; i <= nr; i++) {
+          m = Rmsg[i]
+          if (Rtag[i] == "C") { h = head(m); if (hostok(h) && bootof(h) == nb) { b0 = Rdt[i]; break } }
+          else if (index(m, bootm) == 1) { if (hostok(m) && bootof(m) == nb) { b0 = Rdt[i]; break } }
+        }
+      }
+      # (3) Every verdict value, on the bounded span.
+      n_ctl=0; n_env=0; n_env_pre=0; n_drop=0; n_boot_marker=0
+      n_zot=0; n_gcs=0; n_gcd=0; n_gcb=0; n_patch=0
+      n_auth=0; n_shape=0; n_leak_out=0
+      pf_present=0; pf_val=""; last_ok=""; dcum=""; dseq=""
+      for (i = 1; i <= nr; i++) {
+        m = Rmsg[i]; d = Rdt[i]
+        if (Rtag[i] == "C") {
+          if (index(m, ctlm) != 1) continue
+          h = head(m)
+          if (!hostok(h)) continue
+          n_ctl++
+          if (nb != "" && bootof(h) == nb) {
+            v = fval(h, "log_shipper_post_fail");      if (v != "") { pf_present=1; pf_val=v }
+            v = fval(h, "log_shipper_last_ok_age_s");  if (v != "") last_ok=v
+            v = fval(h, "log_shipper_dropped_cum");    if (v != "") dcum=v
+            v = fval(h, "log_shipper_drop_seq");       if (v != "") dseq=v
+          }
+          continue
+        }
+        if (index(m, dropm) == 1) {
+          # Stamped but NOT host-verifiable: counts only on a boot already derived.
+          if (nb != "" && bootof(m) == nb) n_drop++
+          continue
+        }
+        if (index(m, bootm) == 1) {
+          if (nb != "" && hostok(m) && bootof(m) == nb) n_boot_marker++
+          continue
+        }
+        if (index(m, envpfx) == 1) {
+          # Envelope rows carry no boot_id — their scope is the boundary, not a field.
+          if (b0 != "" && d >= b0) {
+            n_env++
+            if (index(m, zottok) > 0) n_zot++
+            if (index(m, "message:executing gc") > 0) n_gcs++
+            if (index(m, "message:gc successfully completed") > 0) n_gcd++
+            if (index(m, "message:garbage collected blobs") > 0) n_gcb++
+            if (index(m, "message:PatchBlobUpload") > 0) n_patch++
+            if (authleak(m)) n_auth++
+            if (shapeleak(m)) n_shape++
+          } else {
+            n_env_pre++
+            # A credential shape OUTSIDE the gradable span is counted separately — it is
+            # evidence that exists but cannot be attributed to the live host generation.
+            if (authleak(m) || shapeleak(m)) n_leak_out++
+          }
+        }
+      }
+      # dt carries a space ("YYYY-MM-DD HH:MM:SS.ffffff"); emit the two timestamp fields in
+      # T-form so the summary stays whitespace-splittable for `read -r`.
+      sub(/ /, "T", b0)
+      ndt = (nr > 0) ? Rdt[nr] : "-"
+      sub(/ /, "T", ndt)
+      print n_ctl, n_env, n_env_pre, n_drop, n_boot_marker, n_zot, n_gcs, n_gcd, n_gcb, n_patch, \
+            n_auth, n_shape, n_leak_out, pf_present, \
+            (pf_val  == "" ? "-" : pf_val),  (last_ok == "" ? "-" : last_ok), \
+            (dcum    == "" ? "-" : dcum),    (dseq    == "" ? "-" : dseq), \
+            (nb      == "" ? "-" : nb),      (b0      == "" ? "-" : b0), ndt
+    }')"
+read -r N_CTL N_ENV N_ENV_PRE N_DROP N_BOOT_MARKER N_ZOT N_GCS N_GCD N_GCB N_PATCH \
+        N_AUTH N_SHAPE N_LEAK_OUT PF_PRESENT PF_VAL LAST_OK DCUM DSEQ \
+        NEWEST_BOOT B0_DT NEWEST_DT <<< "$SUMMARY"
 
-# --- DELIVERY DISCRIMINATION: this is what separates WAIT from ACT ---------------------------
-# GATED ON A KEY THAT ONLY THE NEW CLOUD-INIT CAN PRODUCE (#7444 F-7), never on boot_id drift.
-#
-# boot_id drift is NOT a provisioning event on this host. The private-NIC guard calls `reboot` as
-# a convergence primitive, and cloud-init's `runcmd` is per-instance, so a plain reboot of the
-# CURRENT, UN-REPLACED host flips boot_id without delivering anything. Reproduced: that drift
-# alone flipped delivered=1 -> reason=delivered_but_silent -> "ACT, NOT WAIT", starting the 90-day
-# escalation clock against a host that was never replaced.
-#
-# `log_shipper_post_fail=` exists only in the reporter shipped BY this change, so its presence on
-# a control row is positive proof the new cloud-init ran — and its ABSENCE proves the opposite,
-# regardless of how many times the host has rebooted. The boot marker remains the primary
-# evidence; this is the fallback that replaces the drift heuristic.
-delivered=0
-delivery_evidence="none"
-if [[ "$n_boot" -gt 0 ]]; then
-  delivered=1
-  delivery_evidence="boot_marker(${n_boot})"
-elif [[ -n "$shipper_post_fail_raw" ]]; then
-  delivered=1
-  delivery_evidence="reporter_carries_shipper_fields(log_shipper_post_fail=${shipper_post_fail_raw})"
+# THE INTEGER GUARD — "could not measure" is never zero. A missing or non-integer summary field
+# means the pass did not run to completion (a dialect error, a changed row shape), and bash
+# treats an empty operand as false in every arithmetic test — without this guard a failed awk
+# would read as "zero rows everywhere" and post verdicts on a measurement that never happened.
+# This is the only thing between a broken pass and a false verdict; do not simplify it away.
+_guard_ok=1
+for _n in "$N_CTL" "$N_ENV" "$N_ENV_PRE" "$N_DROP" "$N_BOOT_MARKER" "$N_ZOT" "$N_GCS" "$N_GCD" \
+          "$N_GCB" "$N_PATCH" "$N_AUTH" "$N_SHAPE" "$N_LEAK_OUT" "$PF_PRESENT"; do
+  case "$_n" in ''|*[!0-9]*) _guard_ok=0 ;; esac
+done
+for _s in "$PF_VAL" "$LAST_OK" "$DCUM" "$DSEQ" "$NEWEST_BOOT" "$B0_DT" "$NEWEST_DT"; do
+  case "$_s" in '') _guard_ok=0 ;; esac
+done
+if [[ "$_guard_ok" -ne 1 ]]; then
+  echo "CANNOT ESTABLISH: the grading pass produced no usable summary — a probe defect (an awk" >&2
+  echo "           dialect error, a changed row shape), not evidence in either direction." >&2
+  exit 3
 fi
 
-# --- CREDENTIAL-SHAPE SCAN: the sole exit-1 arm ---------------------------------------------
-# Scans the DECODED shipped messages, never this file. Three shapes, each measured or reasoned:
-#  (a) an Authorization header value that is NEITHER zot's own mask (******) NOR our REDACTED
-#      marker — i.e. redaction regressed and a real value reached the wire;
-#  (b) a Doppler token prefix — the token class actually present on this host;
-#  (c) a bcrypt hash prefix, which would mean the htpasswd file's contents leaked into a log line.
-#      (a) is a SUBTRACTION, not a match: the sanitizer strips quotes, so a shipped header object
-#      renders `Authorization:[******]`. Selecting rows that HAVE the header and then removing the
-#      masked and redacted forms is what makes "the value is something else" detectable at all — a
-#      positive pattern for "a credential" cannot be written, but "not one of the two safe forms"
-#      can. Single-quoted throughout: an unquoted `$2[aby]$` would expand as a positional param.
-auth_rows=$(printf '%s\n' "$envelope_hits" | grep -F 'Authorization:[' || true)
-auth_leaks=$(printf '%s\n' "$auth_rows" | grep -vE 'Authorization:\[(\*{3,}|REDACTED)' || true)
-#      The Doppler charset MUST include `.` — a real service token is `dp.st.<config>.<random>`, so
-#      a dot-free trailing class stops at the config segment (3 chars) and never reaches the 20-char
-#      floor. That form matched nothing and was caught only by the C8c fixture.
-shape_leaks=$(printf '%s\n' "$envelope_hits" \
-  | grep -E 'dp\.(pt|st|sa|ct)\.[A-Za-z0-9._-]{20,}|\$2[aby]\$[0-9]{2}\$' || true)
-n_auth_leak=$(printf '%s\n' "$auth_leaks" | count_lines)
-n_shape_leak=$(printf '%s\n' "$shape_leaks" | count_lines)
-n_leak=$(( n_auth_leak + n_shape_leak ))
-
+# --- CREDENTIAL-SHAPE SCAN, BOOT-SCOPED: the sole exit-1 arm --------------------------------
+# Grades ONLY envelope rows at dt >= the newest boot's boundary. Three shapes: (a) an
+# Authorization value that is neither zot's ****** mask nor our REDACTED marker; (b) a Doppler
+# token prefix; (c) a bcrypt hash prefix. Counts only — the values are never echoed.
+n_leak=$(( N_AUTH + N_SHAPE ))
 if [[ "$n_leak" -gt 0 ]]; then
-  echo "FAIL: reason=credential_shape_in_channel — ${n_leak} shipped row(s) in the last ${WINDOW}" >&2
-  echo "      carry something shaped like a credential. This is the ONE arm that exits 1, because" >&2
-  echo "      a leak is a regression rather than a not-yet, and the registry's push credential" >&2
-  echo "      protects the image supply chain — a leaked one is a SUPPLY-CHAIN exposure, not a" >&2
-  echo "      log-hygiene defect. Every holder of BETTERSTACK_QUERY_* can read these rows." >&2
+  echo "FAIL: reason=credential_shape_in_channel boot=${NEWEST_BOOT} — ${n_leak} shipped row(s) in" >&2
+  echo "      the newest boot's span carry something shaped like a credential. This is the ONE" >&2
+  echo "      arm that exits 1, because a leak is a regression rather than a not-yet, and the" >&2
+  echo "      registry's push credential protects the image supply chain — a leaked one is a" >&2
+  echo "      SUPPLY-CHAIN exposure, not a log-hygiene defect. Every holder of BETTERSTACK_QUERY_*" >&2
+  echo "      can read these rows." >&2
   echo "      Next: rotate the affected credential FIRST, then fix redact() in" >&2
   echo "      apps/web-platform/infra/cloud-init-registry.yml." >&2
   echo "      COUNTS ONLY — the matching values are deliberately NOT echoed, because this probe's" >&2
   echo "      output is posted verbatim as a comment on a public issue by the sweeper, so printing" >&2
   echo "      them would copy the leak out of one channel and into two more:" >&2
-  echo "        unmasked_authorization_rows=${n_auth_leak} token_or_hash_shaped_rows=${n_shape_leak}" >&2
+  echo "        unmasked_authorization_rows=${N_AUTH} token_or_hash_shaped_rows=${N_SHAPE}" >&2
   exit 1
 fi
 
-# --- zero envelope rows: FOUR distinct reasons, never collapsed ------------------------------
-if [[ "$n_envelope" -eq 0 ]]; then
-  if [[ "$n_control" -eq 0 ]]; then
-    echo "TRANSIENT: reason=channel_dark — zero envelope rows AND zero ${CONTROL_MARKER} control" >&2
-    echo "           rows in the last ${WINDOW}. The control lands on this source every 5 min, so an" >&2
-    echo "           empty control means the READ PATH is not answering. This probe has measured" >&2
-    echo "           NOTHING about the channel — do NOT read it as 'the shipper is absent'." >&2
-    echo "           Next: check the Better Stack query credentials and the hot-window bound" >&2
-    echo "           before concluding anything about the host." >&2
-    exit 2
-  fi
+# A credential shape OUTSIDE the gradable span is not a FAIL — it cannot be attributed to the
+# live host generation — and it is not silence either. CANNOT ESTABLISH, with the count named.
+if [[ "$N_LEAK_OUT" -gt 0 ]]; then
+  echo "CANNOT ESTABLISH: ungraded_credential_rows=${N_LEAK_OUT} — credential-shaped envelope" >&2
+  echo "           row(s) sit OUTSIDE the newest boot's graded span (dt < ${B0_DT}). A leak" >&2
+  echo "           cannot be attributed to the live host generation from these rows, and the" >&2
+  echo "           counts-only rule forbids grading it as this boot's own. This is deliberately" >&2
+  echo "           neither FAIL (unattributed evidence) nor PASS (a credential shape was seen)." >&2
+  exit 3
+fi
+
+# --- zero rows on the newest boot -----------------------------------------------------------
+if [[ "$N_ENV" -eq 0 && "$N_ENV_PRE" -eq 0 && "$N_CTL" -eq 0 && "$N_BOOT_MARKER" -eq 0 && "$N_DROP" -eq 0 ]]; then
+  echo "TRANSIENT: reason=channel_dark — zero envelope rows AND zero ${CONTROL_MARKER} control" >&2
+  echo "           rows in the last ${WINDOW}. The control lands on this source every 5 min, so an" >&2
+  echo "           empty control means the READ PATH is not answering. This probe has measured" >&2
+  echo "           NOTHING about the channel — do NOT read it as 'the shipper is absent'." >&2
+  echo "           Next: check the Better Stack query credentials and the hot-window bound" >&2
+  echo "           before concluding anything about the host." >&2
+  exit 2
+fi
+
+# Envelope content exists but the heartbeat does not — preserved AHEAD of boot derivation: the
+# envelope proves the read path answers while the reporter's silence masks a separate incident.
+if [[ "$N_CTL" -eq 0 && ( "$N_ENV" -gt 0 || "$N_ENV_PRE" -gt 0 ) ]]; then
+  echo "TRANSIENT: reason=control_missing — ${N_ENV} envelope row(s) present, so the channel is" >&2
+  echo "           demonstrably LIVE, but zero ${CONTROL_MARKER} control rows in the last ${WINDOW}." >&2
+  echo "           Deliberately NOT channel_dark: the envelope proves the read path answers, so" >&2
+  echo "           this masks a SEPARATE live incident — the 5-min disk reporter has stopped." >&2
+  echo "           Next: investigate the disk heartbeat cron, not this channel." >&2
+  exit 2
+fi
+
+# No usable boot_id anywhere means the newest boot cannot be derived, so nothing is gradable.
+# exit 3, NOT 2: the sweeper renders 2 as "NOT YET" and 3 as "CANNOT ESTABLISH", and a branch
+# whose whole purpose is refusing to assert a delivery or leak state must not ship under a
+# heading that asserts one.
+if [[ "$NEWEST_BOOT" == "-" ]]; then
+  echo "CANNOT ESTABLISH: no usable boot_id on any host-scoped stamped row — every boot_id is" >&2
+  echo "           absent or the 'unknown' /proc-fallback sentinel. The newest real boot cannot" >&2
+  echo "           be derived, so delivery cannot be established and the leak grade cannot be" >&2
+  echo "           scoped." >&2
+  echo "           ACTION: rows present with no real boot_id is a PRODUCER regression — check the" >&2
+  echo "           \`boot_id=\` field in cloud-init-registry.yml's LINE= emitter." >&2
+  exit 3
+fi
+
+# --- zero envelope rows ON THE NEWEST BOOT: delivery discrimination --------------------------
+# GATED ON A KEY THAT ONLY THE NEW CLOUD-INIT CAN PRODUCE, read on the newest boot's OWN rows:
+# log_shipper_post_fail= present on a control row of NEWEST_BOOT, a _DROPPED or _BOOT row on
+# NEWEST_BOOT. boot_id drift is NOT evidence: the private-NIC guard reboots as a convergence
+# primitive and runcmd is per-instance, so drift without a replace proves nothing (#7444 F-7).
+delivered=0
+delivery_evidence="none"
+if [[ "$PF_PRESENT" -eq 1 ]]; then
+  delivered=1
+  delivery_evidence="postfail_on_boot(log_shipper_post_fail=${PF_VAL})"
+elif [[ "$N_DROP" -gt 0 ]]; then
+  delivered=1
+  delivery_evidence="drop_row_on_boot(${N_DROP})"
+elif [[ "$N_BOOT_MARKER" -gt 0 ]]; then
+  delivered=1
+  delivery_evidence="boot_marker_on_boot(${N_BOOT_MARKER})"
+elif [[ "$N_ENV" -gt 0 ]]; then
+  delivered=1
+  delivery_evidence="envelope_on_boot(${N_ENV})"
+fi
+
+if [[ "$N_ENV" -eq 0 ]]; then
   if [[ "$delivered" -eq 1 ]]; then
-    echo "TRANSIENT: reason=delivered_but_silent — the host HAS been provisioned since this change" >&2
-    echo "           was authored (${delivery_evidence}), yet zero envelope rows arrived in the last" >&2
-    echo "           ${WINDOW} while the read path is alive (${n_control} control row(s))." >&2
+    echo "TRANSIENT: reason=delivered_but_silent boot=${NEWEST_BOOT} — the host HAS been provisioned" >&2
+    echo "           since this change was authored (${delivery_evidence}), yet zero envelope rows" >&2
+    echo "           arrived in the last ${WINDOW} on the newest boot while the read path is" >&2
+    echo "           alive (${N_CTL} control row(s))." >&2
     # FIRST-TICK SOFTENING, GATED ON THE LITERAL -1 (#7456). The shipper is a 4-59/5 cron one-shot,
     # so between a host's birth and its first tick this arm was firing "ACT, NOT WAIT" at a host
     # that had simply never run one. Measured 2026-08-12: replaced 20:54:12Z, this arm at 20:56:32Z,
     # unassisted PASS at 20:58:45Z. The discriminator is the reporter's OWN last_ok_age_s, so no
-    # clock is introduced — this probe reads none, decode_messages drops dt, and the boot marker
-    # carries no timestamp. The test MUST be the literal "-1", never emptiness: the pre-delivery
-    # reporter emits no log_shipper_* fields at all, and softening on absence would weaken the
-    # genuine escalation that case pins (C3g).
+    # clock is introduced — this probe reads none. The test MUST be the literal "-1", never
+    # emptiness: the pre-delivery reporter emits no log_shipper_* fields at all, and softening on
+    # absence would weaken the genuine escalation that case pins (C3g).
     # THE ACT FRAMING IS NEVER SUPPRESSED. An earlier revision replaced it with a reassuring
     # "expected until its first tick" whenever last_ok_age_s was the literal -1. That is unsafe and
     # NOT FIXABLE ON THIS ROW: -1 is the reporter's DEFAULT on an unreadable state file, so a host
@@ -353,7 +529,7 @@ if [[ "$n_envelope" -eq 0 ]]; then
     echo "           THIS IS THE STATE THAT MEANS ACT, NOT WAIT, and it is deliberately NOT" >&2
     echo "           collapsed into 'not delivered': the shipper's cron tick is failing, its" >&2
     echo "           journald match is wrong, or jq is missing on the host." >&2
-    if [[ "${shipper_last_ok_age:-}" == "-1" ]]; then
+    if [[ "$LAST_OK" == "-1" ]]; then
       echo "           BEFORE ACTING, rule out a first tick: last_ok_age_s=-1 means no row has EVER" >&2
       echo "           shipped, which is also the state of a host replaced minutes ago — the shipper" >&2
       echo "           is a 4-59/5 cron one-shot. Measured 2026-08-12: a host born 20:54:12Z read" >&2
@@ -361,13 +537,13 @@ if [[ "$n_envelope" -eq 0 ]]; then
       echo "           just replaced, re-run after the next 5-minute boundary. If it has been up" >&2
       echo "           longer than that, -1 is a DEAD shipper and the arms below name the cause." >&2
     fi
-    if [[ "$shipper_post_fail_unknown" -eq 1 ]]; then
+    if [[ "$PF_VAL" == "unknown" ]]; then
       echo "           The reporter says log_shipper_post_fail=unknown, which is NOT zero: it means" >&2
       echo "           the shipper's state file was unreadable, so the shipper may never have run a" >&2
       echo "           single tick. reason=shipper_state_unreadable — do NOT read this as 'no POST" >&2
       echo "           failures', which would be an absence this probe never measured." >&2
-    elif [[ -n "$shipper_post_fail" && "$shipper_post_fail" != "0" ]]; then
-      echo "           The reporter's INDEPENDENT path says log_shipper_post_fail=${shipper_post_fail}," >&2
+    elif [[ "$PF_VAL" =~ ^[0-9]+$ && "$PF_VAL" != "0" ]]; then
+      echo "           The reporter's INDEPENDENT path says log_shipper_post_fail=${PF_VAL}," >&2
       echo "           so ticks ARE running and their POSTs are failing — that is an egress or token" >&2
       echo "           fault, not a dead shipper. reason=shipper_post_failing." >&2
     else
@@ -375,24 +551,25 @@ if [[ "$n_envelope" -eq 0 ]]; then
       echo "           all rather than failing to egress." >&2
     fi
     echo "           Reporter fields already read on this run (no second query needed):" >&2
-    echo "             log_shipper_post_fail=${shipper_post_fail_raw:-<absent>}" >&2
-    echo "             log_shipper_last_ok_age_s=${shipper_last_ok_age:-<absent>}  (-1 = no row has EVER shipped)" >&2
-    echo "             log_shipper_dropped_cum=${shipper_dropped_cum:-<absent>}  drop_seq=${shipper_drop_seq:-<absent>}" >&2
-    if [[ "${shipper_last_ok_age:-}" == "-1" ]]; then
+    echo "             log_shipper_post_fail=${PF_VAL}  (- = absent on the newest boot's rows)" >&2
+    echo "             log_shipper_last_ok_age_s=${LAST_OK}  (-1 = no row has EVER shipped)" >&2
+    echo "             log_shipper_dropped_cum=${DCUM}  drop_seq=${DSEQ}" >&2
+    if [[ "$LAST_OK" == "-1" ]]; then
       : # already led with above — a never-worked state, not a regression.
-    elif [[ -n "${shipper_last_ok_age:-}" ]]; then
+    elif [[ "$LAST_OK" != "-" ]]; then
       echo "           A finite last_ok_age_s with zero envelope rows means the shipper IS" >&2
       echo "           delivering and the envelope prefix or the probe's grep has drifted." >&2
     fi
     exit 2
   fi
-  echo "TRANSIENT: reason=not_delivered — zero envelope rows, no ${BOOT_MARKER} row, and no" >&2
-  echo "           log_shipper_post_fail= field on any ${CONTROL_MARKER} row. That field exists" >&2
-  echo "           only in the reporter this change ships, so its absence is positive proof the" >&2
-  echo "           new cloud-init has not run (boot_id currently ${current_boot_id:-unknown}; note" >&2
-  echo "           boot_id DRIFT is not used as evidence — this host self-reboots via the NIC" >&2
-  echo "           guard, and runcmd is per-instance, so drift without a replace proves nothing)." >&2
-  echo "           The read path IS alive (${n_control} control row(s)), so" >&2
+  echo "TRANSIENT: reason=not_delivered boot=${NEWEST_BOOT} — zero envelope rows on the newest" >&2
+  echo "           boot, no ${BOOT_MARKER} row on it, and no log_shipper_post_fail= field on any" >&2
+  echo "           of its ${CONTROL_MARKER} rows. That field exists only in the reporter this" >&2
+  echo "           change ships, so its absence on THIS boot is positive proof the new" >&2
+  echo "           cloud-init has not run here (boot_id DRIFT is not used as evidence — this" >&2
+  echo "           host self-reboots via the NIC guard, and runcmd is per-instance, so drift" >&2
+  echo "           without a replace proves nothing)." >&2
+  echo "           The read path IS alive (${N_CTL} control row(s)), so" >&2
   echo "           this is a MEASURED absence rather than a dark channel." >&2
   echo "           SINCE 2026-08-12 THIS IS A REGRESSION, NOT A NOT-YET. The channel was DELIVERED" >&2
   echo "           2026-08-12T20:54:12Z (run 31639782781) and first read back 21:03:51Z, which" >&2
@@ -407,38 +584,48 @@ if [[ "$n_envelope" -eq 0 ]]; then
   exit 2
 fi
 
-# --- envelope rows exist. Control must too, or a live incident is being masked ---------------
-if [[ "$n_control" -eq 0 ]]; then
-  echo "TRANSIENT: reason=control_missing — ${n_envelope} envelope row(s) present, so the channel is" >&2
-  echo "           demonstrably LIVE, but zero ${CONTROL_MARKER} control rows in the last ${WINDOW}." >&2
-  echo "           Deliberately NOT channel_dark: the envelope proves the read path answers, so" >&2
-  echo "           this masks a SEPARATE live incident — the 5-min disk reporter has stopped." >&2
-  echo "           Next: investigate the disk heartbeat cron, not this channel." >&2
-  exit 2
-fi
-
 # --- the zot-only token must be present, or these rows are not really zot's output -----------
-n_zot_token=$(printf '%s\n' "$envelope_hits" | grep -cF "$ZOT_ONLY_TOKEN" || true)
-[[ "$n_zot_token" =~ ^[0-9]+$ ]] || n_zot_token=0
-if [[ "$n_zot_token" -eq 0 ]]; then
-  echo "TRANSIENT: reason=envelope_without_zot_content — ${n_envelope} envelope row(s) carry the" >&2
-  echo "           shipper's own framing but NONE contains ${ZOT_ONLY_TOKEN}, the substring only" >&2
-  echo "           zot's own output produces. The shipper is alive and shipping something that is" >&2
-  echo "           not zot log content — a journald match that resolves to the wrong unit." >&2
+if [[ "$N_ZOT" -eq 0 ]]; then
+  echo "TRANSIENT: reason=envelope_without_zot_content boot=${NEWEST_BOOT} — ${N_ENV} envelope row(s)" >&2
+  echo "           on the newest boot carry the shipper's own framing but NONE contains" >&2
+  echo "           ${ZOT_ONLY_TOKEN}, the substring only zot's own output produces. The shipper is" >&2
+  echo "           alive and shipping something that is not zot log content — a journald match" >&2
+  echo "           that resolves to the wrong unit." >&2
   exit 2
 fi
 
-if [[ "$n_envelope" -lt "$FLOOR_ROWS" ]]; then
-  echo "TRANSIENT: reason=below_expected_floor — ${n_envelope} envelope row(s) in the last ${WINDOW}," >&2
-  echo "           against a computed expectation of ~${EXPECTED_ROWS} and a floor of ${FLOOR_ROWS}." >&2
+# --- EXPECTED FLOOR, computed over the BOUNDED span (#8278) -----------------------------------
+# zot-liveness-heartbeat.timer fires every 60s (OnUnitActiveSec=60s) and zot logs EVERY request
+# at info level, so one genuine zot line lands per minute BY CONSTRUCTION. The expectation is
+# now measured over the BOUNDED span — the minutes from B0 to the newest row — not the full
+# window: a boundary inside the window would otherwise post a systematic false
+# below_expected_floor for ~30 minutes after every replace.
+B0_EPOCH="$(date -u -d "$B0_DT" +%s 2>/dev/null)" || B0_EPOCH=""
+NDT_EPOCH="$(date -u -d "$NEWEST_DT" +%s 2>/dev/null)" || NDT_EPOCH=""
+if [[ -z "$B0_EPOCH" || -z "$NDT_EPOCH" ]]; then
+  echo "CANNOT ESTABLISH: the boundary (${B0_DT}) or the newest row's ingest time (${NEWEST_DT})" >&2
+  echo "           could not be parsed — the bounded span is unmeasurable, so the row-count" >&2
+  echo "           floor cannot be graded honestly." >&2
+  exit 3
+fi
+SPAN_MIN=$(( (NDT_EPOCH - B0_EPOCH) / 60 ))
+(( SPAN_MIN < 0 )) && SPAN_MIN=0
+EXPECTED_ROWS="$WINDOW_MIN"
+(( SPAN_MIN < EXPECTED_ROWS )) && EXPECTED_ROWS=$SPAN_MIN
+FLOOR_ROWS=$(( EXPECTED_ROWS / 4 ))
+[[ "$FLOOR_ROWS" -ge 3 ]] || FLOOR_ROWS=3
+
+if [[ "$N_ENV" -lt "$FLOOR_ROWS" ]]; then
+  echo "TRANSIENT: reason=below_expected_floor boot=${NEWEST_BOOT} — ${N_ENV} envelope row(s) in the" >&2
+  echo "           bounded span, against a computed expectation of ~${EXPECTED_ROWS} and a floor of ${FLOOR_ROWS}." >&2
   echo "           The 60s liveness timer plus zot's log-every-request behaviour put one genuine" >&2
   echo "           line per minute on this channel BY CONSTRUCTION, so a shortfall is measurable" >&2
   echo "           rather than a judgement call. The shipper is partly working: POSTs are failing," >&2
   echo "           the rate cap is mis-sized, or the unit is restart-looping." >&2
-  if [[ -n "$shipper_post_fail" && "$shipper_post_fail" != "0" ]]; then
-    echo "           log_shipper_post_fail=${shipper_post_fail} on the reporter's independent path." >&2
+  if [[ "$PF_VAL" =~ ^[0-9]+$ && "$PF_VAL" != "0" ]]; then
+    echo "           log_shipper_post_fail=${PF_VAL} on the reporter's independent path." >&2
   fi
-  echo "           ${n_drop} ${DROP_MARKER} row(s) in the same window." >&2
+  echo "           ${N_DROP} ${DROP_MARKER} row(s) on the same boot." >&2
   exit 2
 fi
 
@@ -448,40 +635,24 @@ fi
 # no completion, and that ratio is unreadable from a channel that admits only completions.
 # ANCHORED ON THE PARSED message FIELD, matching the producer (#7444 R33). is_cap_exempt keys on
 # zerolog's `.message`, which is what closed the bypass where any client sending
-# `User-Agent: executing gc` bought cap exemption for every one of its request lines. The reader
-# counted the same four classes with a bare `grep -cF` over the WHOLE row, so that string in a
-# header still counted here — byte-identical literals, different semantics, no gate between them.
-# sanitize() strips quotes, so a shipped zerolog row renders `message:executing gc` while a
-# header-borne one renders `User-Agent:[executing gc]` with `message:HTTP API`.
-# STAYS FOUR-CLASS DELIBERATELY (#7555). The producer's cap-exempt set is now WIDER than these
-# four: #7444 R12 added four crash classes (panic:, fatal error, runtime error, [signal] — which
-# #7555 also repaired, since they could never match a PLAINTEXT panic), and #7555 added the
-# HTTP-API half of an upload-failure pairing. This reader is NOT an exemption census and must not
-# become one. It answers one question — is the #7440 channel delivering, and what is the gc
-# start/complete RATIO — for which these four are the vocabulary. The upload-pairing question has
-# its own probe (scripts/followthroughs/zot-upload-ceiling-7556.sh); counting it here too would be
-# a second encoding that can drift from the first.
+# `User-Agent: executing gc` bought cap exemption for every one of its request lines. STAYS
+# FOUR-CLASS DELIBERATELY (#7555): this reader is NOT an exemption census and must not become one.
+# It answers one question — is the #7440 channel delivering, and what is the gc start/complete
+# RATIO — for which these four are the vocabulary.
 #
 # The consequence to keep in view: these counts are a lower bound on exempt volume, never a
 # measure of it. Do not read a flat gc count as "the exempt lane is quiet".
-n_gc_start=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:executing gc' || true)
-n_gc_done=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:gc successfully completed' || true)
-n_gc_blobs=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:garbage collected blobs' || true)
-n_patch=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:PatchBlobUpload' || true)
-for v in n_gc_start n_gc_done n_gc_blobs n_patch; do
-  [[ "${!v}" =~ ^[0-9]+$ ]] || eval "$v=0"
-done
 
-echo "PASS: envelope rows observed (envelope=${n_envelope} control=${n_control} gc_start=${n_gc_start} gc_done=${n_gc_done} gc_blobs=${n_gc_blobs} patch_upload=${n_patch} dropped_rows=${n_drop})"
-echo "      Window ${WINDOW}; expectation ~${EXPECTED_ROWS} rows, floor ${FLOOR_ROWS}; delivery evidence: ${delivery_evidence}."
+echo "PASS: envelope rows observed (envelope=${N_ENV} control=${N_CTL} pre_boot=${N_ENV_PRE} gc_start=${N_GCS} gc_done=${N_GCD} gc_blobs=${N_GCB} patch_upload=${N_PATCH} dropped_rows=${N_DROP})"
+echo "      Window ${WINDOW} boot=${NEWEST_BOOT}; expectation ~${EXPECTED_ROWS} rows (bounded span ${SPAN_MIN}m), floor ${FLOOR_ROWS}; delivery evidence: ${delivery_evidence}."
 echo "      This is a READBACK, not the emitter's self-report: each row was read back OUT of the"
 echo "      warehouse through the ClickHouse path, which no exit code on the host can fake. The"
 echo "      match is POSITIVE and host-isolated — a decoded message starting with"
 echo "      '${ENVELOPE_PREFIX}${HOST_TOKEN}' — so the ${CONTROL_MARKER} echo rows that make a naive"
 echo "      'zotregistry.dev' grep return 53 hits today cannot satisfy it."
-echo "      ${n_zot_token} of ${n_envelope} row(s) carry ${ZOT_ONLY_TOKEN}, the substring only zot's"
+echo "      ${N_ZOT} of ${N_ENV} row(s) carry ${ZOT_ONLY_TOKEN}, the substring only zot's"
 echo "      own output produces."
-echo "      The gc start/complete ratio (${n_gc_start}/${n_gc_done}) is now readable, which is what"
+echo "      The gc start/complete ratio (${N_GCS}/${N_GCD}) is now readable, which is what"
 echo "      makes the downstream growth-attribution question answerable from telemetry at all."
 echo "      ADR-184 may now flip adopting -> accepted."
 # NO ROW EXCERPT. sweep-followthroughs.sh captures this stdout with 2>&1 and posts it as a comment
