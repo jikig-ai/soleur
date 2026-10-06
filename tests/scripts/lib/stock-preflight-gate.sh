@@ -579,7 +579,12 @@ stock_recovery_report() {
       # values — the state dump can carry live tokens, so the file must not sit at a
       # predictable world-readable path. mktemp's own file is 0600 regardless.
       if command -v terraform >/dev/null 2>&1; then
-        state_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/stock-recovery-state.XXXXXXXX")" && cleanup_state=1
+        # `local -x TMPDIR` + `mktemp -t`: the fixture-scan rule counts only the bare/`-t`
+        # forms as provably absolute, and the function-scoped export keeps RUNNER_TEMP
+        # honoured at runtime without leaking an env var into the caller's shell.
+        local -x TMPDIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+        # lint-trap-ownership: ok — every return path rm -f's it, and a sourced library must not trap EXIT over its caller's (ADR-129 rule (c))
+        state_file="$(mktemp -t stock-recovery-state.XXXXXXXX)" && cleanup_state=1
         if [[ -n "$state_file" ]]; then
           terraform show -json > "$state_file" 2>/dev/null || { rm -f "$state_file"; state_file=""; }
         fi

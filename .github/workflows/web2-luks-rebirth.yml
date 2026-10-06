@@ -405,7 +405,7 @@ jobs:
             terraform apply -no-color -input=false tfplan-post; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report web2-luks-rebirth tfplan-post.json --probe-state || true
+            stock_recovery_report web2-luks-rebirth tfplan-post.json --probe-state
             echo "::error::terraform apply (rebirth of web-2) failed. The empty volume is already gone; web-2 is dark and standby-only. Re-dispatch with the same inputs: the classifier names the window and heals it."
             exit 1
           fi

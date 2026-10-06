@@ -2108,7 +2108,7 @@ jobs:
             terraform apply -no-color -input=false tfplan; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report inngest-host-replace tfplan.json --probe-state || true
+            stock_recovery_report inngest-host-replace tfplan.json --probe-state
             echo "::error::terraform apply (inngest-host-replace) failed mid-replace — the host may be absent and its Redis AOF volume detached-but-retained. Re-dispatch inngest-host-replace to recover per the recovery-read above."
             exit 1
           fi
@@ -2623,7 +2623,7 @@ jobs:
             # twins; an unmarked twin reads as still-true.
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report registry-host-replace tfplan.json --probe-state || true
+            stock_recovery_report registry-host-replace tfplan.json --probe-state
             echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071, read PAT revoked + minter disabled), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-host-replace to recover from the preserved volume"
             exit 1
           fi
@@ -2864,7 +2864,7 @@ jobs:
             # Same #7071 retraction as above. Do not reinstate the fallback claim.
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report registry-region-migrate tfplan.json --probe-state || true
+            stock_recovery_report registry-region-migrate tfplan.json --probe-state
             echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-region-migrate to retry the fresh-region create"
             exit 1
           fi
@@ -3634,7 +3634,7 @@ jobs:
             # editing this job, and fixed here on edit-locality grounds.)
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report registry-luks-recut tfplan.json --probe-state || true
+            stock_recovery_report registry-luks-recut tfplan.json --probe-state
             echo "::error::terraform apply (registry-luks-recut) failed mid-recut — the registry may be DOWN and the store may already be destroyed. Hosts CANNOT fall back to GHCR (#7071: the pull credential is revoked); already-running containers keep serving, but no host can pull until the store is refilled. RE-DISPATCH registry-luks-recut with the SAME confirm and the SAME id: the resume arm covers all three mid-apply windows, is admitted by the live Hetzner probe, and chains the restore that refills the store."
             exit 1
           fi
@@ -4300,7 +4300,7 @@ jobs:
             terraform apply -no-color -input=false tfplan; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report git-data-host-replace tfplan.json --probe-state || true
+            stock_recovery_report git-data-host-replace tfplan.json --probe-state
             echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
             exit 1
           fi
@@ -5221,7 +5221,7 @@ jobs:
             terraform apply -no-color -input=false tfplan; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report web-host-create tfplan.json --probe-state || true
+            stock_recovery_report web-host-create tfplan.json --probe-state
             echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create WITH its NIC and volume attachment, and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — and completing that host by hand does NOT fix it: cloud-init runcmd is once-per-instance and has already finished on a host with no private IP, so attaching the NIC afterwards leaves the app unconfigured. That host must be REPLACED, not completed."
             exit 1
           fi
@@ -5643,7 +5643,7 @@ jobs:
             terraform apply -no-color -input=false tfplan; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report web-host-replace tfplan.json --probe-state || true
+            stock_recovery_report web-host-replace tfplan.json --probe-state
             echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), TWO states are reachable and they have OPPOSITE recoveries — the recovery-read above names which one the post-failure state is in. (a) The create never returned an id, so the resource is ABSENT FROM STATE: re-dispatching THIS target plans zero replaces and the gate correctly refuses; the recovery is apply_target=web-host-create, additive and graded against the birth contract. (b) The create returned an id and a later step failed, so the resource is IN state and TAINTED: that plans delete+create, which THIS gate PASSES, so re-dispatch web-host-replace — web-host-create would be refused by the birth gate on its destroy arm. The earlier wording asserted both halves at once ("ABSENT from the provider but PRESENT in state as tainted ... the gate will refuse it"), which is self-refuting and sent the operator to the wrong remedy in case (b). The workspaces volume was preserved by omission and re-attaches to the new host."
             exit 1
           fi
@@ -6160,7 +6160,7 @@ jobs:
             terraform apply -no-color -input=false tfplan; then
             # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
             source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
-            stock_recovery_report git-data-host-create tfplan.json --probe-state || true
+            stock_recovery_report git-data-host-create tfplan.json --probe-state
             echo "::error::terraform apply (git-data-host-create) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is normally the correct remedy, and the gate's requirement arm accepts a no-op on every member the server's creation does not entail, so a partial apply does NOT wedge the retry."
             echo "::error::TWO EXCEPTIONS. (1) If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses. Completing that host by hand does not fix it: cloud-init runcmd is once-per-instance and has already finished, and ADR-115 excludes git-data from the reboot primitive — that host must be REPLACED, not completed. (2) If the failure names doppler_config.git_data_prd already existing, the config was created outside terraform; a re-dispatch CANNOT succeed because the Doppler API returns 400 'Name is already in use' rather than adopting it. Run 'terraform import doppler_config.git_data_prd soleur.prd_git_data' first. See the runbook's partial-birth decision tree."
             exit 1
