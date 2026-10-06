@@ -60,6 +60,6 @@ Recorded by `knowledge-base/project/plans/2026-10-06-feat-homepage-fanout-demo-p
 - FR1a label: `How a brief reaches the departments` ("fans out" implied parallel dispatch).
 - FR2: a visible `Illustrative example · sample data` tag at the top of the figure, in addition to the two caption lines.
 - Design deviations from the approved wireframe: flat outline chips with state glyphs (Stopped not a solid white fill, Done receding), a gold left border on the two founder-action rows, the connector dropped below 768 px, content-driven wrapping instead of a 320 px breakpoint, no hover or pointer styling.
-- TR3: the bun test parses `STATUS_LABELS` keys from `apps/web-platform/lib/types.ts` as text; the Eleventy build checks a local closed constant and throws on bad rows; the validator lives in `plugins/soleur/lib/fanout-validate.js`.
+- TR3: the bun test parses `STATUS_LABELS` keys from `apps/web-platform/lib/types.ts` as text; the Eleventy build checks a local closed constant and throws on bad rows; the validator lives in `plugins/soleur/docs/scripts/fanout-validate.mjs` (moved from `plugins/soleur/lib/` in review so the docs CI path filters cover it).
 - Wireframe screenshots 13–15 are superseded for the label, the Finance and Engineering rows and the chip and connector treatment.
 - Hero-test confound: ship now; the attribution rule is pre-registered on #9588 before merge. The copy upgrade after #9578 ships is #9661.

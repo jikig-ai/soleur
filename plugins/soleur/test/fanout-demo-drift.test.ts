@@ -25,11 +25,13 @@ import * as fanoutModule from "../docs/_data/fanoutDemo.js";
 import {
   STATUS_LABELS as LOCAL_STATUS_LABELS,
   validateFanout,
-} from "../lib/fanout-validate.js";
+  validateFrame,
+} from "../docs/scripts/fanout-validate.mjs";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const TYPES_TS = resolve(REPO_ROOT, "apps/web-platform/lib/types.ts");
 const STYLE_CSS = resolve(REPO_ROOT, "plugins/soleur/docs/css/style.css");
+const FANOUT_DATA_JS = resolve(REPO_ROOT, "plugins/soleur/docs/_data/fanoutDemo.js");
 
 let tmpSite: string;
 let HOME: string;
@@ -72,11 +74,20 @@ export function statusLabelKeys(typesText: string): string[] {
   return keys;
 }
 
-// The section of the homepage this feature owns: the one <section> holding the figure.
+// The section of the homepage this feature owns: the <section> holding the figure, found by
+// section-depth so a nested <section> cannot hide the rest of it from every guard.
 function fanoutSection(html: string): string {
-  const m = html.match(/<section class="landing-section fanout-section"[\s\S]*?<\/section>/);
-  if (!m) throw new Error("fanout section not found in the built homepage");
-  return m[0];
+  const start = html.indexOf('<section class="landing-section fanout-section"');
+  if (start === -1) throw new Error("fanout section not found in the built homepage");
+  const re = /<(\/?)section\b[^>]*>/g;
+  re.lastIndex = start;
+  let depth = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return html.slice(start, m.index + m[0].length);
+  }
+  throw new Error("fanout section is not terminated in the built homepage");
 }
 
 function figureOf(section: string): string {
@@ -89,29 +100,40 @@ function rowsOf(section: string): string[] {
   return [...section.matchAll(/<li class="fanout-row"[\s\S]*?<\/li>/g)].map((m) => m[0]);
 }
 
-// Attribute values that carry text a reader, a screen reader or a summariser can see.
+// Every attribute value except class: data-*, aria-*, alt, title and href can all carry text
+// a reader, a screen reader, a scraper or a summariser sees, so none is exempt by name.
 function attributeText(html: string): string[] {
   const out: string[] = [];
   for (const { raw } of tagsOf(html)) {
-    for (const m of raw.matchAll(/\b(?:alt|aria-label|aria-description|title)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
-      out.push(decodeEntities(m[1] ?? m[2] ?? ""));
+    for (const m of raw.matchAll(/\b([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      if (m[1].toLowerCase() === "class") continue;
+      out.push(decodeEntities(m[2] ?? m[3] ?? ""));
     }
   }
   return out;
+}
+
+function stripCssComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
 function collapse(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
-// Case-insensitive, word-bounded; CLI is the one case-sensitive term.
+// Case-insensitive, word-bounded, with common inflections (installs, plugins, terminals);
+// CLI is the one case-sensitive term. "installation" is deliberately not a hit.
+const FORBIDDEN_TERMS = [
+  "hosted", "web app", "dashboard", "install", "terminal", "plugin", "Claude", "Anthropic",
+  "your check", "your checks", "your standard", "your bar", "your definition of done",
+  "acceptance check", "acceptance criteria", "you define", "checks you set", "margin check",
+  "automatically", "verified", "verify", "verifies", "verification",
+];
 const FORBIDDEN: { term: string; re: RegExp }[] = [
-  ...[
-    "hosted", "web app", "dashboard", "install", "terminal", "plugin", "Claude", "Anthropic",
-    "your check", "your checks", "your standard", "your bar", "your definition of done",
-    "acceptance check", "acceptance criteria", "you define", "checks you set", "margin check",
-    "automatically", "verified",
-  ].map((term) => ({ term, re: new RegExp(`\\b${term.replace(/ /g, "\\s+")}\\b`, "i") })),
+  ...FORBIDDEN_TERMS.map((term) => ({
+    term,
+    re: new RegExp(`\\b${term.replace(/ /g, "\\s+")}(?:s|es|ed|ing)?\\b`, "i"),
+  })),
   { term: "CLI", re: /\bCLI\b/ },
 ];
 
@@ -145,61 +167,59 @@ function blocksOf(css: string, header: string): { body: string; depth: number }[
 
 describe("validateFanout (the one chokepoint the build and this suite share)", () => {
   const DEPTS = ["legal", "marketing", "finance", "engineering"];
-  const row = (department: string, status: string, label: string, line = "Sample line.") => ({
-    department,
-    status,
-    label,
-    line,
-  });
+  const row = (department: string, status: string, line = "Sample line.") => ({ department, status, line });
   const good = () => [
-    row("legal", "completed", "Done"),
-    row("marketing", "completed", "Done"),
-    row("finance", "waiting_for_user", "Waiting on you"),
-    row("engineering", "failed", "Stopped"),
+    row("legal", "completed"),
+    row("marketing", "completed"),
+    row("finance", "waiting_for_user"),
+    row("engineering", "failed"),
   ];
 
-  test("accepts a compliant set, including labels that differ from the product's", () => {
+  test("accepts a compliant set", () => {
     expect(() => validateFanout(good(), DEPTS, LOCAL_STATUS_LABELS)).not.toThrow();
   });
 
   test("accepts a different fictional set with the same keys", () => {
     const other = [
-      row("marketing", "completed", "Done", "A different sample line."),
-      row("legal", "failed", "Stopped", "Another."),
-      row("engineering", "waiting_for_user", "Waiting on you", "More."),
-      row("finance", "completed", "Done", "Last."),
+      row("marketing", "completed", "A different sample line."),
+      row("legal", "failed", "Another."),
+      row("engineering", "waiting_for_user", "More."),
+      row("finance", "completed", "Last."),
     ];
     expect(() => validateFanout(other, DEPTS, LOCAL_STATUS_LABELS)).not.toThrow();
   });
 
   test("rejects a status key outside the closed constant, naming the row and key", () => {
     const rows = good();
-    rows[2] = row("finance", "bogus_status", "Waiting on you");
+    rows[2] = row("finance", "bogus_status");
     expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/row 3.*status.*bogus_status/s);
   });
 
-  test("rejects a label that does not match its key", () => {
+  test("the status map is a real parameter: a key only a custom map has is accepted, and defaults to the local constant", () => {
     const rows = good();
-    rows[3] = row("engineering", "failed", "Done");
-    expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/row 4.*label.*failed/s);
+    rows[0] = row("legal", "custom_only");
+    expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/custom_only/);
+    expect(() => validateFanout(rows, DEPTS, { ...LOCAL_STATUS_LABELS, custom_only: "Custom" })).not.toThrow();
+    expect(() => validateFanout(good(), DEPTS)).not.toThrow();
+    expect(() => validateFanout(rows, DEPTS)).toThrow(/custom_only/);
   });
 
   test("rejects five rows and three rows", () => {
-    expect(() =>
-      validateFanout([...good(), row("legal", "completed", "Done")], DEPTS, LOCAL_STATUS_LABELS),
-    ).toThrow(/exactly four rows.*5/s);
+    expect(() => validateFanout([...good(), row("legal", "completed")], DEPTS, LOCAL_STATUS_LABELS)).toThrow(
+      /exactly four rows.*5/s,
+    );
     expect(() => validateFanout(good().slice(0, 3), DEPTS, LOCAL_STATUS_LABELS)).toThrow(/exactly four rows.*3/s);
   });
 
   test("rejects a department key agents.js does not have", () => {
     const rows = good();
-    rows[1] = row("astrology", "completed", "Done");
+    rows[1] = row("astrology", "completed");
     expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/row 2.*department.*astrology/s);
   });
 
   test("rejects a missing field and a blank line", () => {
     const rows: any[] = good();
-    rows[0] = { department: "legal", status: "completed", label: "Done" };
+    rows[0] = { department: "legal", status: "completed" };
     expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/row 1.*line/s);
     const blank = good();
     blank[0].line = "   ";
@@ -208,8 +228,41 @@ describe("validateFanout (the one chokepoint the build and this suite share)", (
 
   test("rejects the same department twice", () => {
     const rows = good();
-    rows[1] = row("legal", "completed", "Done");
-    expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/row 2.*legal.*twice|duplicate/is);
+    rows[1] = row("legal", "completed");
+    expect(() => validateFanout(rows, DEPTS, LOCAL_STATUS_LABELS)).toThrow(/row 2.*legal.*twice/s);
+  });
+});
+
+describe("validateFrame (the disclosure text must fail the build when it goes missing)", () => {
+  const frame = (): any => ({ ...(fanoutModule.default as () => any)() });
+
+  test("accepts the shipped frame", () => {
+    expect(() => validateFrame(frame())).not.toThrow();
+  });
+
+  test("rejects an emptied or renamed caption, a third caption line, and a blank heading", () => {
+    const empty = frame();
+    empty.captionLines = [];
+    expect(() => validateFrame(empty)).toThrow(/captionLines/);
+    const renamed = frame();
+    delete renamed.captionLines;
+    renamed.captions = ["a", "b"];
+    expect(() => validateFrame(renamed)).toThrow(/captionLines/);
+    const third = frame();
+    third.captionLines = [...third.captionLines, "Soleur guarantees every launch is compliant."];
+    expect(() => validateFrame(third)).toThrow(/captionLines/);
+    const blank = frame();
+    blank.heading = "  ";
+    expect(() => validateFrame(blank)).toThrow(/heading/);
+  });
+
+  test("rejects a figure name or first caption that drops 'Illustrative example'", () => {
+    const fig = frame();
+    fig.figureName = "One founder brief and four departments";
+    expect(() => validateFrame(fig)).toThrow(/figureName/);
+    const cap = frame();
+    cap.captionLines = ["Sample data.", cap.captionLines[1]];
+    expect(() => validateFrame(cap)).toThrow(/caption/);
   });
 });
 
@@ -217,10 +270,6 @@ describe("validateFanout (the one chokepoint the build and this suite share)", (
 
 describe("status vocabulary parity with apps/web-platform/lib/types.ts", () => {
   const types = readFileSync(TYPES_TS, "utf8");
-
-  test("the parser finds at least four STATUS_LABELS keys", () => {
-    expect(statusLabelKeys(types).length).toBeGreaterThanOrEqual(4);
-  });
 
   test("the parser reads RED on a text with no STATUS_LABELS (its own dispatch)", () => {
     expect(() => statusLabelKeys("export const OTHER = { a: 1 } as const;")).toThrow(/STATUS_LABELS/);
@@ -240,6 +289,15 @@ describe("_data/fanoutDemo.js", () => {
   test("is default-export-only (a second named export makes Eleventy skip the function)", () => {
     expect(Object.keys(fanoutModule)).toEqual(["default"]);
     expect(typeof fanoutModule.default).toBe("function");
+  });
+
+  test("the default function calls both validators (the build-time throw is wired, not just exported)", () => {
+    const src = readFileSync(FANOUT_DATA_JS, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/validateFanout\(\s*ROWS\b/);
+    expect(src).toMatch(/validateFrame\(\s*frame\s*\)/);
+    expect(src.indexOf("validateFrame(")).toBeLessThan(src.indexOf("return {"));
   });
 
   test("declares the four approved rows in order, with display names from agents.js", () => {
@@ -263,6 +321,13 @@ describe("built homepage: the section", () => {
     expect(plainText(section).length).toBeGreaterThan(300);
   });
 
+  test("instrument: the section extractor is depth-aware (a nested <section> does not end it early)", () => {
+    const fixture =
+      '<section class="landing-section fanout-section"><section>inner</section>TAIL</section><p>after</p>';
+    expect(fanoutSection(fixture)).toContain("TAIL");
+    expect(fanoutSection(fixture)).not.toContain("after");
+  });
+
   test("sits after the positioning section and before the quote block", () => {
     const at = (needle: string) => HOME.indexOf(needle);
     expect(at("This Is the Way")).toBeGreaterThan(-1);
@@ -279,6 +344,9 @@ describe("built homepage: the section", () => {
       expect(text).toContain(data.rows[i].name);
       expect(text).toContain(data.rows[i].label);
       expect(text).toContain(data.rows[i].line);
+    });
+    rows.forEach((html, i) => {
+      expect(html.match(/<li class="fanout-row"[^>]*>/)![0]).toContain(`data-status="${data.rows[i].status}"`);
     });
     const finance = collapse(plainText(rows[2]));
     expect(finance).toContain(
@@ -301,9 +369,12 @@ describe("built homepage: the section", () => {
     const figure = figureOf(section);
     expect(collapse(plainText(figure))).toContain("Illustrative example · sample data");
     const cap = figure.match(/<figcaption[\s\S]*?<\/figcaption>/)?.[0] ?? "";
-    expect(collapse(plainText(cap))).toContain(
-      "Illustrative example with sample data. Not a live run, a product screenshot or a customer result. Agent output is a draft for you to review and approve. Soleur does not guarantee that any test or review will catch every problem.",
-    );
+    const paragraphs = [...cap.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g)].map((m) => collapse(plainText(m[1])));
+    expect(paragraphs).toEqual([
+      "Illustrative example with sample data. Not a live run, a product screenshot or a customer result.",
+      "Agent output is a draft for you to review and approve. Soleur does not guarantee that any test or review will catch every problem.",
+    ]);
+    expect(collapse(plainText(cap))).toBe(paragraphs.join(" "));
   });
 
   test("the figure's accessible name starts with 'Illustrative example'", () => {
@@ -312,13 +383,19 @@ describe("built homepage: the section", () => {
     expect(decodeEntities(label).startsWith("Illustrative example")).toBe(true);
   });
 
-  test("rows read 'Department: Status. Line.' to a screen reader (hidden colon, aria-hidden glyph and connector)", () => {
+  test("rows read 'Department: Status. Line.' to a screen reader (department, hidden colon, glyph hidden, then label and line)", () => {
     const section = fanoutSection(HOME);
+    const data = (fanoutModule.default as () => any)();
     expect(section).toContain('<ul class="fanout-rows" role="list">');
-    for (const r of rowsOf(section)) {
+    rowsOf(section).forEach((r, i) => {
       expect(r).toMatch(/<span class="fanout-colon sr-only">:<\/span>/);
       expect(r).toMatch(/<span class="fanout-glyph" aria-hidden="true">/);
-    }
+      const at = (needle: string) => r.indexOf(needle);
+      expect(at(data.rows[i].name)).toBeGreaterThan(-1);
+      expect(at("fanout-colon")).toBeGreaterThan(at(data.rows[i].name));
+      expect(at(data.rows[i].label)).toBeGreaterThan(at("fanout-colon"));
+      expect(at(data.rows[i].line)).toBeGreaterThan(at(data.rows[i].label));
+    });
     expect(section).not.toMatch(/<figure[^>]*role="list"/);
   });
 });
@@ -333,7 +410,7 @@ describe("built homepage: anchor, scroll margin, reduced motion", () => {
     expect(link).not.toBeNull();
   });
 
-  const css = readFileSync(STYLE_CSS, "utf8");
+  const css = stripCssComments(readFileSync(STYLE_CSS, "utf8"));
 
   test("style.css gives #departments the fixed-header scroll margin", () => {
     expect(css).toMatch(
@@ -349,9 +426,35 @@ describe("built homepage: anchor, scroll margin, reduced motion", () => {
   });
 });
 
+describe("style.css: the status hooks and generated text", () => {
+  const css = stripCssComments(readFileSync(STYLE_CSS, "utf8"));
+
+  test("every status key the validator allows has a glyph rule keyed on data-status", () => {
+    for (const key of Object.keys(LOCAL_STATUS_LABELS)) {
+      expect(css).toMatch(new RegExp(`\\.fanout-row\\[data-status="${key}"\\]\\s+\\.fanout-glyph::before`));
+    }
+  });
+
+  test("instrument: comment stripping removes a commented-out rule", () => {
+    expect(stripCssComments('/* #departments { scroll-margin-top: 1px } */ a{}')).not.toContain("scroll-margin-top");
+  });
+
+  test("generated content in .fanout-* rules carries no forbidden claim", () => {
+    const rules = [...css.matchAll(/([^{}]*fanout[^{}]*)\{([^{}]*)\}/g)];
+    const contents = rules.flatMap((r) => [...r[2].matchAll(/content:\s*"([^"]*)"/g)].map((m) => m[1]));
+    expect(contents.length).toBeGreaterThanOrEqual(4);
+    for (const c of contents) expect(forbiddenHits(c)).toEqual([]);
+  });
+});
+
 describe("built homepage: copy guardrails", () => {
   test("instrument: the forbidden list is populated and non-hits pass", () => {
-    expect(FORBIDDEN.length).toBeGreaterThanOrEqual(20);
+    expect(FORBIDDEN.length).toBe(FORBIDDEN_TERMS.length + 1);
+    expect(FORBIDDEN_TERMS.length).toBe(23);
+    for (const term of FORBIDDEN_TERMS) expect(forbiddenHits(`a ${term} b`)).toContain(term);
+    expect(forbiddenHits("Installs plugins in your terminals, dashboards, verifies it")).toEqual(
+      expect.arrayContaining(["install", "plugin", "terminal", "dashboard", "verifies"]),
+    );
     expect(forbiddenHits("click Client ghosted installation")).toEqual([]);
     expect(forbiddenHits("your check will run in the Terminal, hosted by Claude")).toEqual(
       expect.arrayContaining(["your check", "terminal", "hosted", "Claude"]),
@@ -384,6 +487,11 @@ describe("built homepage: copy guardrails", () => {
   test("no button, form, script, plausible markup or JSON-LD inside the section", () => {
     const section = fanoutSection(HOME);
     expect(section).not.toMatch(/<(button|form|script|input|select|textarea)\b/i);
+    expect(section).not.toMatch(/<(img|picture|svg|iframe|video|audio|object|embed|canvas)\b/i);
+    expect(section).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(section).not.toMatch(/\b(?:tabindex\s*=|role\s*=\s*["']button)/i);
+    const hrefs = [...section.matchAll(/<a\b[^>]*\bhref\s*=\s*"([^"]*)"/gi)].map((m) => m[1]);
+    expect(hrefs).toEqual(["#departments"]);
     expect(section.toLowerCase()).not.toContain("plausible");
     expect(section).not.toContain("application/ld+json");
     expect(section).not.toMatch(/\{\{|\{%/);

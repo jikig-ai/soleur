@@ -2023,8 +2023,10 @@
     text-decoration: underline;
   }
 
-  /* Connector: desktop only, drawn per row (the row's own midpoint), aria-hidden by nature. */
-  @media (min-width: 768px) {
+  /* Connector: desktop only (769px up, the site's mobile boundary is max-width: 768px), drawn per
+     row (the row's own midpoint), decorative. It is background-drawn, so it is dropped by design in
+     forced-colors and print; the rows read the same without it. */
+  @media (min-width: 769px) {
     .fanout-rows { padding-left: var(--space-6); }
     .fanout-row::before,
     .fanout-row::after {
@@ -2052,7 +2054,6 @@
 }
 
 @media (forced-colors: active) {
-  .fanout-chip { border: 1px solid CanvasText; }
   .fanout-row[data-status="waiting_for_user"],
   .fanout-row[data-status="failed"] { border-left-color: Highlight; }
 }
