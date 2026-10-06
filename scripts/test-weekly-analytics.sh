@@ -314,7 +314,7 @@ bt_run() {  # $1 = api key; runs in a subshell, never inherits the test's own se
       PLAUSIBLE_SITE_ID="example.test" bash "$SCRIPT_DIR/weekly-analytics.sh" ) >/dev/null 2>&1
 }
 
-BT_TOKEN="synthetic-plausible-key-0123"
+BT_TOKEN="plausible-fixture"
 bt_rc=0; bt_run "$BT_TOKEN" || bt_rc=$?
 bt_argv="$(cat "$BT_DIR"/rec/argv.* 2>/dev/null | tr '\0' ' ')"
 assert_eq "bearer-transport: preflight exits 0 on 402 skip" "0" "$bt_rc"

@@ -22,7 +22,7 @@ fi
 # is a distinct evasion of a `-H "Authorization: Bearer` pattern match.
 # 1) the long flag, single-quoted, lower case. (A single-quoted value cannot expand,
 #    so it carries a synthesized token; the spelling is the point.)
-curl --disable --noproxy '*' -sS --header 'authorization: bearer FAKE_notarealtoken_0000000000' "$SINK_URL" || true
+curl --disable --noproxy '*' -sS --header 'authorization: bearer FAKE' "$SINK_URL" || true
 # 2) the short flag with NO space before its value.
 curl --disable --noproxy '*' -sS -H"Authorization:Bearer${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
 # 3) the header AFTER the URL.
