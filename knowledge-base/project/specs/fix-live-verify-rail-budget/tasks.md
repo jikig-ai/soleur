@@ -49,8 +49,10 @@ Issue: #9581 (Closes)
     p_domain:null, p_limit:15 })` membership check →
     `rpc_row = yes|no|unreadable:<reason>`
   - `rpc_row=no` or `repoUrl=null` → `absent` immediately (no reload)
-  - otherwise `page.reload({waitUntil:"domcontentloaded"})` (thrown reload →
-    `reload_err` diagnostic, keep polling) + Phase B poll to ~45s
+  - otherwise `page.reload({waitUntil:"domcontentloaded",
+    timeout: 30_000})` — the d.ts default is `0` = no timeout; the explicit
+    bound is mandatory (thrown reload → `reload_err` diagnostic, keep
+    polling) + Phase B poll to ~45s
   - `isVisible()` target-closed/context-destroyed → `unverifiable`
   - one named total ceiling (`RAIL_ASSERT_TOTAL_BUDGET_MS` ≈ 100s)
 - [ ] 2.2 Add `railRowState` collector (error | empty | rows:n | rail-absent |

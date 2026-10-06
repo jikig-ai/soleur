@@ -13,6 +13,46 @@ brand_survival_threshold: none
 
 # fix: live-verify rail check FAILs on rail-listing lag — bounded observe + reload recovery + data-vs-render discriminator
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** Proposed Solution, Technical Considerations,
+Hypotheses, Guard Contract, Acceptance Criteria, References
+**Research agents used:** inline equivalents (this harness exposes no
+Task/Skill spawner — all fan-outs were executed as direct reads/greps/gh
+probes by the planning process): repo-research (run.ts + rail data path
+read end-to-end), learnings (rail-race cycle + vacuity learnings),
+git-history (attribution probes), framework-docs (@playwright/test
+installed `.d.ts` + migration 125 signature), review lenses
+(correctness/simplicity/architecture/spec-flow self-review).
+
+### Key Improvements
+
+1. `page.reload` now carries an explicit `timeout: 30_000` — the
+   installed `.d.ts` documents a default of `0` (no timeout), so an
+   unpinned reload could outwait the total budget ceiling.
+2. Failure diagnostics gained `reload_err` and the verdict taxonomy
+   distinguishes thrown-reload (keep polling) from page-death
+   (CANT-RUN) — a navigation-timeout throw does not close the page.
+3. `rpc_row=no` OR `repoUrl === null` fails fast BEFORE the reload —
+   scope-broken rows are a genuine regression, not lag, and must not
+   burn the recovery draw.
+4. Guard Contract matrix expanded to the required row roles
+   (SUT/dispatch/second-member-ordering/suite-RED/must-PASS).
+
+### New Considerations Discovered
+
+- Playwright `page.reload` default timeout is `0` (no timeout) —
+  verified in `node_modules/playwright-core/types/types.d.ts`.
+- `list_conversations_enriched` signature confirmed against migration
+  125: `(p_repo_url text, p_workspace_id uuid, p_archive text,
+  p_status text, p_domain text, p_limit int)` — the probe spec is
+  byte-consistent.
+- `scripts/watch-live-verify-pass.sh` extracts only the
+  `RESULT: <kind>` token, so enriched PASS/FAIL details cannot break
+  the PASS watcher; no Sentry alert filters on the detail text (verified
+  `apps/web-platform/infra/sentry/`).
+
 ## Overview
 
 The post-deploy live-verify harness emits a blocking `RESULT: FAIL` when a
@@ -195,6 +235,11 @@ active-repo settle, or the RPC is slow.
 - `learnings/2026-07-16-five-documented-traps-recurred-and-a-perturbing-instrument-is-not-evidence.md`
   — the reload arm is a perturbation, so the FAIL discriminator
   (rpc_row + rail_state) is what keeps it honest.
+- `learnings/2026-07-27-a-check-that-cannot-report-is-indistinguishable-from-one-that-passed.md`
+  — a FAIL that cannot say WHY is the same check repeated: the
+  `rail_state`/`rpc_row`/`active_repo` fields are the reporting layer
+  this lesson prescribes, added at the failure path where they cost
+  nothing on PASS.
 - `wait-failure-state`/`no-bare-visibility-wait` conventions (PR #8092) —
   never-throws bounded diagnostics; source-pin the wire, anti-vacuity floor
   in a different file.
@@ -252,6 +297,23 @@ in the same run.)
    final DOM render — inside the browser, after every network layer
    succeeded.
 
+### Network-Outage Deep-Dive (deepen-plan §4.5 verification)
+
+Layer-by-layer verdict against the checklist's required artifacts:
+
+- **L3 firewall allow-list — verified-by-artifact:** the same run's
+  PostgREST poll (`pollFreshConversationId`) returned the committed row
+  from `api.soleur.ai` — TCP/443 to Supabase proven open in-run.
+- **L3 DNS/routing — verified-by-artifact:** session mint, document load,
+  and WS `session_started` all completed upstream of the failed wait.
+- **L7 TLS/proxy — verified-by-artifact:** TLS to `api.soleur.ai` +
+  the app origin and WSS both established in the same run.
+- **L7 application — verified-by-artifact:** the app served the page,
+  accepted the session, persisted the row; the only failing hop was the
+  final DOM render — inside the browser, downstream of every network
+  layer. No L3/L7 hypothesis survives; the residual hypotheses below are
+  all inside the delivery/render path.
+
 Flake-mechanism hypotheses (each names its recovery arm + discriminator):
 
 - **H1 — realtime INSERT landed pre-SUBSCRIBED and all bounded retries
@@ -301,7 +363,10 @@ Phase B — RECOVER (one reload, ≈45s more):
   rpc_row === "no" OR resolved repoUrl === null → verdict { kind:"absent" }
     IMMEDIATELY (scope-broken / repo-less rail — a reload cannot help;
     H4 is a genuine FAIL, not lag).
-  otherwise        → page.reload({ waitUntil:"domcontentloaded" });
+  otherwise        → page.reload({ waitUntil:"domcontentloaded",
+    timeout: 30_000 });   // d.ts: reload's default timeout is 0 = NO
+    // timeout — an unpinned reload can hang past the total ceiling;
+    // the bound is mandatory, not optional.
     keep polling isVisible() ~1.5s to the phase-B deadline.
     A thrown reload is NOT verdict material: capture `reload_err=<name>`
     into diagnostics and KEEP POLLING — a navigation-timeout throw does
@@ -383,6 +448,24 @@ never appears still FAILs loudly: `BLOCK=1` unchanged.
   different list.
 - **Job budget:** worst case adds ~90s to a `timeout-minutes: 15` job;
   teardown ordering is unchanged (teardown still runs on FAIL).
+- **Reload timeout (deepen finding):** Playwright's `page.reload`
+  signature carries `timeout` defaulting to `0` — verified against
+  `node_modules/playwright-core/types/types.d.ts` (`reload(options?:
+  { timeout?: number; waitUntil?: … })`, doc: "Defaults to `0` - no
+  timeout"). The seam MUST pass an explicit `timeout: 30_000` or a
+  wedged navigation can outwait `RAIL_ASSERT_TOTAL_BUDGET_MS`; a thrown
+  reload still routes to `reload_err` + keep-polling, never a verdict.
+- **Precedent diff (deepen §4.4):** every pattern the seam prescribes
+  has a same-file / same-suite precedent — never-throws bounded
+  diagnostics (`waitFailureState`'s `safe()` race, run.ts:412-426),
+  exported pure helpers for testability (`parseWsErrorFrame`,
+  `classifyDriveResult`, `pollFreshConversationId`), the
+  seam-call-site source pin (`no-bare-visibility-wait.test.ts`), the
+  fake-Page fixture shape (`wait-failure-state.test.ts` `fakePage`).
+  `page.request.get` + `supabase.rpc` on the rail's own data source is
+  the one novel combination — no precedent; the probe is confined to
+  the failure path so its blast radius is a diagnostic, not a verdict
+  path.
 - **Trigger gate:** `scripts/live-verify/run.ts` is not in
   `trigger-paths.txt` — the harness does not self-trigger on release.
   Same as every prior harness fix (#8092); no file added to the trigger
@@ -468,17 +551,18 @@ wire-not class).
 
 | # | Mutation | Expected |
 |---|----------|----------|
-| 1 | Delete the reload arm (observe then straight to FAIL) | RED — the appears-only-after-reload scenario asserts PASS `via=reload` |
-| 2 | Revert the call site to bare `railRow.waitFor` (bypass the seam entirely) | RED — source-pin asserts the rail assertion routes through the exported seam and `railRow.waitFor(` is absent |
-| 3 | Make `rpc_row=no` fall through to reload instead of FAIL-fast | RED — the scope-out scenario asserts FAIL without a reload call |
-| 4 | Map the unverifiable (page-dead) verdict to FAIL | RED — classification test asserts CANT-RUN |
-| 5 | Emit PASS without `via=` in the detail | RED — wire-shape test asserts the `via=` token in both PASS arms (guard's own dispatch: an unmeasured recovery is the defect this guard exists over) |
-| 6 | Suite: fixture where the row appears on tick 1 AND a second fixture where it appears only after reload — both must PASS the seam | must-PASS — pins that the guard accepts permitted variation (recovery path does not alter the verdict kind) |
-| 7 | Suite: `emit(FAIL)` output must still match `/^RESULT: FAIL —/` and `emit(PASS)` `/^RESULT: PASS —/` | RED if wire prefixes drift — anchors the workflow classifier outside this diff |
+| 1 | SUT — delete the reload arm (observe then straight to FAIL) | RED — the appears-only-after-reload scenario asserts PASS `via=reload` |
+| 2 | SUT — revert the call site to bare `railRow.waitFor` (bypass the seam entirely) | RED — source-pin asserts the rail assertion routes through the exported seam and `railRow.waitFor(` is absent |
+| 3 | SUT — `rpc_row=no` falls through to reload instead of FAIL-fast | RED — the scope-out scenario asserts FAIL **without** a reload call; this is the required ordering row: member 2 (the recovery draw) must not run when member 1 (the scope probe) has already decided — a check that runs both unconditionally cannot distinguish scope-broken from lag |
+| 4 | SUT — map the unverifiable (page-dead) verdict to FAIL | RED — classification test asserts CANT-RUN |
+| 5 | Guard's own dispatch — emit PASS without `via=` in the detail | RED — wire-shape test asserts the `via=` token in both PASS arms; an unmeasured recovery is the defect this guard exists over |
+| 6 | Suite (harness) — drop the reload-call-count assertion from the appears-after-reload fixture | RED — a no-reload SUT then passes undetected; the suite must itself assert `reloadCalls === 1` (a guard reporting "0 recoveries exercised" and passing is vacuous) |
+| 7 | must-PASS (non-canonical input, explicitly permitted variation) — fixture A: row appears on observe tick 3; fixture B: appears only on post-reload tick 2 | both must PASS the seam with correct `via=` — proves the guard accepts the recovery-path variation it is designed to tolerate, not just the canonical tick-1 case |
+| 8 | Suite (harness) — `emit(FAIL)` / `emit(PASS)` output must match `/^RESULT: (FAIL|PASS) —/` | RED if wire prefixes drift — anchors the workflow classifier outside this diff |
 
 **Anchor.** The workflow classifier (`.github/workflows/web-platform-release.yml`
 emit step) is outside this diff but is the consumer the wire shape protects —
-row 7 is what catches a weakening that only this side could introduce.
+row 8 is what catches a weakening that only this side could introduce.
 
 ## Scope Check
 
@@ -516,8 +600,8 @@ row 7 is what catches a weakening that only this side could introduce.
 - [ ] AC1: `run.ts`'s rail assertion no longer relies on a single 20s
   `waitFor`; it polls `railRow.isVisible()` on a bounded interval across an
   observe window of ~45s and, absent, performs exactly one
-  `page.reload({waitUntil:"domcontentloaded"})` followed by a second ~45s
-  window. The two windows plus probe/reload time are enclosed in ONE
+  `page.reload({waitUntil:"domcontentloaded", timeout: 30_000})`
+  followed by a second ~45s window. The two windows plus probe/reload time are enclosed in ONE
   named total ceiling constant (≈ `RAIL_ASSERT_TOTAL_BUDGET_MS ≈ 100s`)
   so the check can never out-wait its own budget — the 20s constant's
   original wall-clock-bounding role is preserved at the higher value
