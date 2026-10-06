@@ -234,12 +234,12 @@ while IFS= read -r f; do
   # direct readers, I derived its floor from the PRE-migration tree, and it fired at 2-of-3 on
   # the very run that proved the migration had worked.)
   direct=0; via_lib=0
-  printf '%s' "$code" | grep -qE -- "$READS_COMMENTS" && direct=1   # rule4-grep
-  printf '%s' "$code" | grep -qE -- "$LIB_CALL" && via_lib=1
+  grep -qE -- "$READS_COMMENTS" <<<"$code" && direct=1   # rule4-grep
+  grep -qE -- "$LIB_CALL" <<<"$code" && via_lib=1
   (( direct == 1 || via_lib == 1 )) || continue
   scanned_rule4=$((scanned_rule4 + 1))                              # rule4-count
   (( direct == 1 )) || continue
-  printf '%s' "$code" | grep -qE -- "$VERDICT_BRANCH" || continue
+  grep -qE -- "$VERDICT_BRANCH" <<<"$code" || continue
   # (c) NO via_lib exemption for a DIRECT reader. The old line was `(( via_lib == 0 )) || continue`,
   # so a single occurrence of the call anywhere in the file exempted it -- a probe could call the
   # lib once and then decide on an unfiltered `.comments[].body`, which is the "both endpoints

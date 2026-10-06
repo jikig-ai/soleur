@@ -205,6 +205,7 @@
 2	apps/web-platform/infra/scripts/gen-github-egress-cidr.sh
 1	apps/web-platform/infra/soleur-host-bootstrap-observability.test.sh
 1	apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
+2	apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh
 1	apps/web-platform/infra/web-git-data-probe.sh
 2	apps/web-platform/infra/web-zot-consumer-probe.sh
 6	apps/web-platform/infra/workspaces-boot-unlock.test.sh
@@ -311,6 +312,7 @@
 3	plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh
 1	plugins/soleur/skills/skill-security-scan/scripts/run-self-test.sh
 1	plugins/soleur/test/c4-from-components.test.sh
+1	plugins/soleur/test/claude-code-action-auth.test.sh
 6	plugins/soleur/test/fanout-suite-scope.test.sh
 1	plugins/soleur/test/fixture-dir-operand-assert.test.sh
 2	plugins/soleur/test/fixture-env-adoption.test.sh
@@ -443,6 +445,9 @@
 1	scripts/update-ci-required-ruleset.sh
 1	scripts/upstream-report-scrub.sh
 1	scripts/weakness-miner.sh
+1	scripts/web2-rebirth-recovery-check.sh
+1	scripts/web2-rebirth-recovery-check.test.sh
+33	scripts/web2-rebirth.test.sh
 3	scripts/weekly-analytics.sh
 2	tests/commands/test-sync-producer-reachability.sh
 2	tests/commands/test-sync-rule-prune.sh

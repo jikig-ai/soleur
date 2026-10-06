@@ -664,7 +664,7 @@ tc_tree_has_mount() {
     [[ -n "$(ls -A -- "$dir" 2>/dev/null)" ]]
     return
   fi
-  printf '%s\n' "$lines" | grep -qvx -- "$dev"
+  grep -qvx -- "$dev" <<<"$lines"
 }
 
 # tc_quar_age_min <entry> — minutes since the entry entered quarantine.

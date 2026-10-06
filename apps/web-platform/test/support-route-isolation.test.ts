@@ -20,7 +20,9 @@ describe("support transport isolation from the Command Center WS", () => {
     "app/api/support/route.ts",
     "components/support/use-support-chat.ts",
     "lib/support-sse.ts",
+    "lib/support-handoff.ts",
     "server/support-conversation.ts",
+    "server/support-escalation.ts",
   ];
 
   for (const f of files) {

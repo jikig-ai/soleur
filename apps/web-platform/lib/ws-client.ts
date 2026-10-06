@@ -986,6 +986,37 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // Non-buffered frames carry no `seq` and bypass the gate.
       const frameSeq = (msg as { seq?: number }).seq;
       if (typeof frameSeq === "number") {
+        // Buffered-frame seq counters are PER-CONVERSATION server-side — a
+        // seq-bearing frame bound to ANOTHER conversation (sendToClient is
+        // user-scoped) must be dropped before the cursor advances, or its
+        // foreign seq would silently swallow this surface's own later frames
+        // (and corrupt the reconnect ack). Coverage is limited to convId-
+        // bearing types (task_completed required, usage_update required,
+        // session_ended optional) — convId-less buffered frames can't be
+        // foreign-detected (pre-existing gap). task_completed is the first
+        // frame guaranteed to arrive cross-conversation on every completion.
+        if (
+          "conversationId" in msg &&
+          typeof msg.conversationId === "string" &&
+          msg.conversationId !== realConversationIdRef.current
+        ) {
+          // Preserve the session_ended mismatch breadcrumb — that case's
+          // designed observability (below) is unreachable for stamped frames
+          // once they drop here.
+          if (msg.type === "session_ended") {
+            Sentry.addBreadcrumb({
+              category: "abort-turn",
+              message: "session-ended-conversationid-mismatch",
+              level: "warning",
+              data: {
+                received: msg.conversationId,
+                current: realConversationIdRef.current,
+                droppedAt: "seq-gate",
+              },
+            });
+          }
+          return;
+        }
         if (frameSeq <= lastRenderedSeqRef.current) {
           return; // already-rendered replayed frame — drop
         }
@@ -1088,6 +1119,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // the timer intent out of the pure reducer for the useEffect above. See #2217.
           // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
           // are inert pass-throughs in the reducer; Stage 4 wires rendering.
+          // Unlike `session_ended.reason` (free-form z.string(), warned on
+          // in its own arm), `workflow_ended.status` is a closed
+          // z.enum(WORKFLOW_END_STATUSES) — an unmapped status is rejected
+          // upstream at parseWSMessage and reports via the
+          // `ws-zod-parse-failure` Sentry event, so no unmapped-status warn
+          // is needed inside this parse-gated arm (it could never fire).
+          // Render-side copy coverage lives in lib/workflow-ended-copy.ts.
           dispatch({ type: "stream_event", msg });
           // #5282 — a genuinely-rendered post-reattach frame CONFIRMS the resume
           // succeeded (replayed gap frame or resumed live frame). Promote to the
@@ -1261,6 +1299,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // current realConversationId so the observability stays — if the
           // server ever produces such a frame, the breadcrumb surfaces it
           // for triage instead of leaving a silent Stop UI deadlock.
+          // feat-session-completion-inline addendum: a STAMPED (seq-bearing)
+          // session_ended bound to another conversation now drops earlier at
+          // the replay seq gate (its foreign seq would corrupt this surface's
+          // cursor) — that narrows (b)'s "gate nothing" to unseq'd or
+          // matching frames and makes the breadcrumb unreachable for stamped
+          // mismatches. Deliberate: a foreign-conversation session_ended
+          // wiping this surface's streams was worse cross-talk than the
+          // wedge it guarded, and a diverged-binding session (issue #9567)
+          // drops every convId frame anyway.
           const targetConv = realConversationIdRef.current;
           if (
             msg.conversationId &&
@@ -1482,6 +1529,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // so it survives reconnect replay AND is rehydrated from the messages
           // table on reload. Route through the message reducer to append a
           // ChatTurnSummaryMessage to the main list.
+          dispatch({ type: "stream_event", msg });
+          break;
+        }
+        case "task_completed": {
+          // feat-session-completion-inline — the inline completion card.
+          // Buffered (carries seq → replay-dedup gated above, which also drops
+          // seq-bearing foreign-conversation frames early). sendToClient is
+          // user-scoped, so drop a frame bound to another conversation's
+          // surface (the #9515 reasoning_narration guard class — required
+          // field here, not optional).
+          // Residual (pre-existing): a context_path 23505 rebind can resolve
+          // the server-side session to a different conversationId than the
+          // pending id this client holds — the frame then drops here while
+          // suppression already fired. The unread row + badge stay honest.
+          if (msg.conversationId !== realConversationIdRef.current) break;
+          // The read-mark POST lives in TaskCompletedCard's mount effect —
+          // "read" fires only once the card actually committed to the tree.
           dispatch({ type: "stream_event", msg });
           break;
         }

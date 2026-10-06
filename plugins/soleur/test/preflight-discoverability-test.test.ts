@@ -2820,7 +2820,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // through DATABASE_URL_POOLER (Doppler soleur/prd). NO SUBSTITUTE: the table is service-role only (RLS on,
   // zero policies, every privilege revoked from anon/authenticated), so no unauthenticated probe can read it.
   // Genuine.
-  const BASELINE_DECLARED_PROBES = 44;
+  // #9372 (2026-10-05): +1 (44 -> 45) for `2026-10-05-feat-web2-luks-rebirth-workflow-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) alone and grades web-2's readiness and probe rows. NO SUBSTITUTE: those rows land only
+  // in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 45;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

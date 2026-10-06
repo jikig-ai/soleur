@@ -146,3 +146,14 @@ the conditions for removing that refusal, not for creating rows.
   reads it. An agent-facing route surface arrives with agent inboxes (#9459).
 - The daily probe proves the fallback path only; routed-path coverage arrives
   with the first real route (#9459).
+
+## Addendum 2026-10-05 — Resend Inboxes ruled out for EU-resident inboxes
+
+The "Adopt Resend Inboxes now" row above rested on missing information. Resend answered in writing on
+2026-10-05 (`knowledge-base/project/questionnaires/2026-10-05-email-vendor-inboxes-eu-residency.md`): Inboxes stores
+all data in the United States (bodies, headers, attachments, metadata, logs and backups), cannot commit in the DPA to
+EU-only storage or processing, and its founder advises against building on it for an EU-residency requirement. The
+transfer basis is the Standard Contractual Clauses plus the EU-U.S. Data Privacy Framework. This matches the
+existing Resend Inbound posture recorded in ADR-055 (US custody), so it is not a new transfer for the current
+pipeline, but it removes Inboxes as a candidate for any inbox that must be EU-resident. The routing table stays
+vendor-neutral; a per-user or per-agent inbox needs a different provider or a self-hosted receiver, tracked in #9459.

@@ -110,3 +110,89 @@ gating precondition, not code alone. A curated product-help corpus at the suppor
 - Command Center path is byte-neutral (the `command_center` branch preserves gate order, `cwd=workspacePath`, `allowWrite=[workspacePath]`).
 - A dropped persona hop is a compile error; a garbage value throws; a support turn cannot gain repo write (sandbox `allowWrite:[]`) nor the 95-skill surface (SDK `skills` + canUseTool default-deny).
 - Minimum test set (CTO): `resolveWorkspaceMode` unit (impossible-state + never-throw), support repo-gate-bypass, **support sandbox write-set empty**, CC non-regression characterization, end-to-end persona threading into `CanUseToolDeps`, skill-allowlist deny (bare+FQN), `disallowedTools` membership, and the ws-handler honest-degrade wire boundary.
+
+## Decision addendum (2026-10-05, #9539): deny → handoff escalation channel
+
+A write-requiring task dispatched into a support turn used to dead-end: the deny
+message relayed "file writes are disabled" with no path to a write-capable
+session. The boundary stays — `sandboxWrite:"none"`, `allowWrite:[]`,
+`cwdSource:"plugin"` are unchanged — but every *engineering-intent deny* now
+records a per-conversation escalation, and the support route emits a
+`support_handoff` SSE frame (`{task, conversationId}`, task server-derived from
+the POSTed message, ≤500 code points) immediately BEFORE the terminal frame.
+The client stores it in a separate `handoffMarkdown` state field so
+`stream`-replace and error-fallback cannot discard it, and renders an
+"Ask an agent →" deep link to `/dashboard/chat/new?msg=<task>`.
+
+Mechanism:
+
+- `server/support-escalation.ts` — bounded FIFO registry +
+  `denySupport` (structured `deny-support-{skill,bash,tool}` log + permission-decision
+  log + record + user-relayable deny, one authoring point). Escalation sources:
+  `skill` (non-allowlisted Skill), `bash` (blocklist or non-safe command),
+  `tool` (every other denied engineering surface).
+- `permission-callback.ts` — deny-with-record covers ALL engineering-intent
+  surfaces: Skill-deny, BOTH Bash deny sites (blocklist, plus a short-circuit
+  after the safe-allowlist + near-miss telemetry and BEFORE
+  `bashAutonomous`/cache/review-gate), write-class file tools (`Write`/`Edit`/
+  `MultiEdit`/`NotebookEdit`), outside-workspace file denies, `Agent`, platform
+  tools, and deny-by-default. The Bash short-circuit also closes two latent
+  leaks: on an acked autonomous workspace a non-safe command was silently
+  auto-ALLOWED, and on an un-acked owner path a WS-bound `autonomous_disclosure`
+  hold could be cross-surface-acked. `AskUserQuestion`/`TodoWrite`/
+  `ExitPlanMode` get persona-deny belts WITHOUT an escalation record (a UX
+  signal is not an engineering attempt) and join
+  `SUPPORT_EXTRA_DISALLOWED_TOOLS`.
+- `soleur-go-runner.ts` — `bridgeInteractivePromptIfApplicable` returns early
+  for `persona === "support"`: the bridge fires on tool_use *sighting* (before
+  `canUseTool`), so it is the chokepoint belt keeping `interactive_prompt`
+  frames + answerable `pendingPrompts` entries off the WS sink even if a model
+  emits a schema-removed tool.
+- `cc-dispatcher.ts` — support dispatches filter `allowedTools` against
+  `SUPPORT_EXTRA_DISALLOWED_TOOLS` (auto-approve bypasses `canUseTool`, so the
+  overlap would defeat both schema removal and the belts), and the entire C4
+  surface — `edit_c4_diagram` registration, `platformToolNames` entry, and
+  `c4PromptAddendum` — is gated off support (the tool commits to the user's
+  repo via the installation token, a real write outside `allowWrite:[]`).
+- `app/api/support/route.ts` — consume-on-read at the terminal boundary
+  (exactly-once, never unconditional), `clearSupportEscalation` at stream open
+  (zombie-turn stale flag) and teardown, a per-conversation busy guard (409 to
+  a second POST while a turn is in-flight — the sticky conversation + warm
+  Query rebind would otherwise cross-attribute the escalation flag), and
+  `support-handoff-emitted` / `support-handoff-cleared-unconsumed` /
+  `support-handoff-emit-failed` / `support-escalation-evicted` markers for the
+  deny→emit join.
+- `lib/support-handoff.ts` — canonical label/href/encoded-link builder +
+  `SUPPORT_AGENT_SESSION_HINT` (the plain-text pointer all deny messages
+  compose from — model-relayed prose and the rendered link cannot drift).
+- The handoff frame is a support-local `SupportSseMessage` member, NOT a
+  `WSMessage` member — the bidirectional `_SchemaCovers` drift pin makes a bare
+  member a compile error, and the frame can never legitimately arrive on the WS.
+  `lib/types.ts` / `ws-zod-schemas.ts` are untouched; the CC dispatch path is
+  byte-neutral.
+
+Known residuals (tracked, not silently accepted): `kb-search`'s documented
+`git grep`/`grep`/script shell-outs hit the Bash deny and record a spurious
+handoff on a pure help question (#9559); `git branch <name>` and other
+write-shaped safe-allowlisted commands auto-approve with no deny and no
+handoff (#9555); the GH-token mint/askpass/egress surface is not persona-gated
+(#9558); a zombie turn recording a deny *during* a successor turn's window is
+the remaining flag-attribution edge after the busy guard (a per-dispatch key
+cannot reach the per-Query `canUseTool` ctx without new plumbing).
+
+## Alternatives Considered (this addendum)
+
+- **Silent intent re-routing** (server sniffs the task for engineering intent and
+  re-routes the turn to the command_center dispatch). Rejected: a prompt-phrasing
+  privilege axis on a security boundary — a crafted "engineering-sounding"
+  support message would gain the repo-write surface the persona exists to deny;
+  and repo-less support users would dead-end in a different place (the CC
+  dispatch requires a connected repo).
+- **Opt-in support write grant** (e.g. let the support session write to the
+  user's workspace on request). Rejected for this change: it re-opens the
+  plugin-root write-escape class the `allowWrite:[]` pin exists to close, and
+  needs a consent/ack substrate that does not exist on the SSE surface. The
+  handoff link is the honest interim path to a session that already has the
+  write surface wired.
+- **`WSMessage` union member + shared reducer.** Rejected by the drift guard and
+  by transport semantics — see above.

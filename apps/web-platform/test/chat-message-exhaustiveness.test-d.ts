@@ -42,6 +42,8 @@ function assertExhaustive(msg: ChatMessage): string {
       return msg.body;
     case "turn_summary":
       return msg.content;
+    case "task_completed":
+      return msg.inboxItemId;
     default: {
       const _exhaustive: never = msg;
       void _exhaustive;

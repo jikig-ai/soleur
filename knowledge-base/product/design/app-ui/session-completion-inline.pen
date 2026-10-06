@@ -1,0 +1,480 @@
+{
+  "version": "2.18",
+  "children": [
+    {
+      "type": "frame",
+      "id": "U0eCn7",
+      "x": 0,
+      "y": 0,
+      "name": "A — Viewing: completion card renders inline",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "xV1kP",
+          "name": "caption",
+          "width": "fill_container",
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "T0WV6",
+              "fill": "#C9A962",
+              "content": "VIEWING THE CONVERSATION",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "bold"
+            },
+            {
+              "type": "text",
+              "id": "g5FYv",
+              "fill": "#848484",
+              "content": "socket bound to this conversation — inbox item + push suppressed, card renders inline",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tfT8C",
+          "name": "header",
+          "width": "fill_container",
+          "stroke": "#2A2A2A",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "strokeAlignment": "inner",
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "dfQPp",
+              "fill": "#FFFFFF",
+              "content": "Soleur Concierge",
+              "fontFamily": "Inter",
+              "fontSize": 17,
+              "fontWeight": "600"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "rJAcq",
+          "name": "thread",
+          "clip": true,
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "gMLjh",
+              "name": "userRow",
+              "width": "fill_container",
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "q11s4i",
+                  "name": "userBubble",
+                  "width": 420,
+                  "fill": "#1E1E1E",
+                  "cornerRadius": 12,
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "QZRqY",
+                      "fill": "#FFFFFF",
+                      "content": "Fix the flaky retry in the upload flow",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "QBccS",
+              "name": "assistantRow",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "qkrgd",
+                  "name": "assistantBubble",
+                  "width": 560,
+                  "fill": "#141414",
+                  "cornerRadius": 12,
+                  "stroke": "#2A2A2A",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    14,
+                    18
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZdF8X",
+                      "fill": "#FFFFFF",
+                      "content": "Done — the retry now backs off on 5xx and I added a regression test.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "BHATQ",
+              "name": "cardRow",
+              "width": "fill_container",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "e0OYTE",
+                  "name": "TaskCompletedCard",
+                  "width": 560,
+                  "fill": "#141414",
+                  "cornerRadius": 12,
+                  "stroke": "#34D399",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "gap": 12,
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "vCATU",
+                      "name": "dot",
+                      "fill": "#34D399",
+                      "width": 8,
+                      "height": 8
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ZiUum",
+                      "name": "cardText",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 2,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "bMKkC",
+                          "fill": "#FFFFFF",
+                          "content": "Soleur finished your request",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "text",
+                          "id": "bugrl",
+                          "fill": "#848484",
+                          "content": "Just now · also in your inbox",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "A8XNX",
+              "name": "note",
+              "width": 560,
+              "fill": "#1A160C",
+              "cornerRadius": 8,
+              "layout": "vertical",
+              "gap": 4,
+              "padding": [
+                10,
+                14
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "o4zsk",
+                  "fill": "#C9A962",
+                  "content": "RULE — only when viewing:",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "bold"
+                },
+                {
+                  "type": "text",
+                  "id": "dUI2x",
+                  "fill": "#848484",
+                  "content": "push + email suppressed; inbox row auto-marks read when this card renders",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "NeJIK",
+          "name": "composer",
+          "width": "fill_container",
+          "stroke": "#2A2A2A",
+          "strokeWidth": {
+            "top": 1
+          },
+          "strokeAlignment": "inner",
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "pnDm1",
+              "name": "inputBox",
+              "width": "fill_container",
+              "height": 44,
+              "fill": "#141414",
+              "cornerRadius": 8,
+              "stroke": "#2A2A2A",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "FFO7M",
+                  "fill": "#6A6A6A",
+                  "content": "Message Soleur…",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Wxu8Y",
+      "x": 1560,
+      "y": 0,
+      "name": "B — Not viewing: inbox + push unchanged",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "NoGrb",
+          "name": "caption",
+          "width": "fill_container",
+          "gap": 12,
+          "padding": [
+            16,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "yHYPW",
+              "fill": "#C9A962",
+              "content": "NOT VIEWING",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "bold"
+            },
+            {
+              "type": "text",
+              "id": "ABsxV",
+              "fill": "#848484",
+              "content": "other conversation / another page / app closed — today’s behavior keeps firing",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "F6UgP2",
+          "name": "inboxHeader",
+          "width": "fill_container",
+          "stroke": "#2A2A2A",
+          "strokeWidth": {
+            "bottom": 1
+          },
+          "strokeAlignment": "inner",
+          "gap": 10,
+          "padding": [
+            16,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "YlPGQ",
+              "fill": "#FFFFFF",
+              "content": "Inbox",
+              "fontFamily": "Inter",
+              "fontSize": 17,
+              "fontWeight": "600"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "jxXmy",
+          "name": "inboxList",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "UrwoO",
+              "name": "inboxItemRow",
+              "width": "fill_container",
+              "fill": "#141414",
+              "cornerRadius": 12,
+              "stroke": "#2A2A2A",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "gap": 12,
+              "padding": [
+                14,
+                16
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "DB1xX",
+                  "name": "idot",
+                  "fill": "#848484",
+                  "width": 8,
+                  "height": 8
+                },
+                {
+                  "type": "frame",
+                  "id": "I12sEy",
+                  "name": "irowText",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "GRgAf",
+                      "fill": "#FFFFFF",
+                      "content": "Soleur finished your request",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "text",
+                      "id": "lBlv7",
+                      "fill": "#848484",
+                      "content": "unread · tap to open the conversation",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "g4mSpx",
+          "name": "pushBanner",
+          "width": 520,
+          "fill": "#1E1E1E",
+          "cornerRadius": 12,
+          "stroke": "#2A2A2A",
+          "strokeWidth": 1,
+          "strokeAlignment": "inner",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            12,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "xITlm",
+              "fill": "#FFFFFF",
+              "content": "New item in your Soleur inbox",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "vCJxJ",
+              "fill": "#848484",
+              "content": "Soleur finished your request",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "fileToken": "2f28817d-67f1-4c2d-8b52-562e14bb6580"
+}

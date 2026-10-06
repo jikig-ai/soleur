@@ -185,6 +185,14 @@ viol() { V+=("escrow-split-contract:FAIL $1: $2"); }
 
 # code <file>: the file with comment-only lines removed, so a comment that mentions the name never trips the census.
 code() { grep -vE '^[[:space:]]*(#|//)' "$1" 2>/dev/null || true; }
+# viol_if_code_matches <file> <ERE> <viol-file> <msg>: a MATCH in the comment-stripped file is a violation, and so is a
+# grep that could not run (rc above 1, e.g. a bad ERE). An unreadable file is NOT distinguished from a miss: code() ends in
+# `|| true`, so grep then sees empty input. No pipe, so the reader exiting early cannot flip the verdict.
+viol_if_code_matches() {
+  local rc=0
+  grep -qE -- "$2" < <(code "$1") || rc=$?
+  if (( rc == 0 )); then viol "$3" "$4"; elif (( rc > 1 )); then viol "$3" "scan could not run (grep rc=$rc): $4"; fi
+}
 bare_count() { code "$1" | grep -cE "$BARE" || true; }
 # tf_block <file> <type> <name>: a resource block (comment-stripped), brace-depth extracted.
 tf_block() {
@@ -214,21 +222,21 @@ done
 ci="$ROOT/cloud-init.yml"
 if [[ -f "$ci" ]]; then
   [[ "$(code "$ci" | grep -c 'WORKSPACES_DOPPLER_CONFIG=')" == 1 ]] || viol cloud-init.yml "expected exactly one WORKSPACES_DOPPLER_CONFIG= line in code"
-  code "$ci" | grep -E 'WORKSPACES_DOPPLER_CONFIG=' | grep -qE 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web([^A-Za-z0-9_]|$)' \
+  grep -qE 'WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web([^A-Za-z0-9_]|$)' < <(code "$ci" | grep -E 'WORKSPACES_DOPPLER_CONFIG=') \
     || viol cloud-init.yml "the boot env file must name prd_workspaces_luks_web (web-class host)"
   [[ "$(bare_count "$ci")" == 0 ]] || viol cloud-init.yml "names web-1's prd_workspaces_luks in code"
 fi
 
 pv="$ROOT/workspaces-luks-provision.sh"
 if [[ -f "$pv" ]]; then
-  code "$pv" | grep -qE -- '--config[[:space:]]+prd_workspaces_luks([^A-Za-z0-9_]|$)' && viol workspaces-luks-provision.sh "hardcodes --config prd_workspaces_luks"
-  code "$pv" | grep -qE -- '--config "\$CFG"' || viol workspaces-luks-provision.sh 'the key read must select the config from the boot env file (--config "$CFG")'
-  code "$pv" | grep -q 'prd_workspaces_luks_web' || viol workspaces-luks-provision.sh "does not accept prd_workspaces_luks_web (a web host whose boot env names it would fail closed at config)"
+  viol_if_code_matches "$pv" '--config[[:space:]]+prd_workspaces_luks([^A-Za-z0-9_]|$)' workspaces-luks-provision.sh "hardcodes --config prd_workspaces_luks"
+  grep -qE -- '--config "\$CFG"' < <(code "$pv") || viol workspaces-luks-provision.sh 'the key read must select the config from the boot env file (--config "$CFG")'
+  grep -q 'prd_workspaces_luks_web' < <(code "$pv") || viol workspaces-luks-provision.sh "does not accept prd_workspaces_luks_web (a web host whose boot env names it would fail closed at config)"
 fi
 
 ro="$ROOT/workspaces-luks-reopen.sh"
 if [[ -f "$ro" ]]; then
-  code "$ro" | grep -qE -- '--config "\$WORKSPACES_DOPPLER_CONFIG"' || viol workspaces-luks-reopen.sh 'the key read must use --config "$WORKSPACES_DOPPLER_CONFIG"'
+  grep -qE -- '--config "\$WORKSPACES_DOPPLER_CONFIG"' < <(code "$ro") || viol workspaces-luks-reopen.sh 'the key read must use --config "$WORKSPACES_DOPPLER_CONFIG"'
   [[ "$(bare_count "$ro")" == 0 ]] || viol workspaces-luks-reopen.sh "names web-1's prd_workspaces_luks in code (the config comes from the boot env file)"
 fi
 
@@ -288,7 +296,7 @@ fi
 
 sv="$ROOT/server.tf"
 if [[ -f "$sv" ]]; then
-  code "$sv" | grep -qE '^[[:space:]]*workspaces_luks_fresh_boot_token[[:space:]]*=[[:space:]]*doppler_service_token\.workspaces_luks_fresh_boot_web\.key[[:space:]]*$' \
+  grep -qE '^[[:space:]]*workspaces_luks_fresh_boot_token[[:space:]]*=[[:space:]]*doppler_service_token\.workspaces_luks_fresh_boot_web\.key[[:space:]]*$' < <(code "$sv") \
     || viol server.tf "user_data must carry doppler_service_token.workspaces_luks_fresh_boot_web.key (the web-class token), not the pre-split one"
   [[ "$(bare_count "$sv")" == 0 ]] || viol server.tf "names web-1's prd_workspaces_luks in code"
 fi
@@ -302,11 +310,11 @@ fi
 for f in "${WEB1_FILES[@]}"; do
   p="$ROOT/$f"; [[ -f "$p" ]] || continue
   [[ "$(bare_count "$p")" -ge 1 ]] || viol "$f" "web-1 path no longer names prd_workspaces_luks (a stale exclusion entry, or a broken scan, must not read as clean)"
-  code "$p" | grep -qE 'prd_workspaces_luks_web' && viol "$f" "web-1 path names prd_workspaces_luks_web (web-1 keeps its own config)"
+  viol_if_code_matches "$p" 'prd_workspaces_luks_web' "$f" "web-1 path names prd_workspaces_luks_web (web-1 keeps its own config)"
 done
 wl="$ROOT/workspaces-luks.tf"
 if [[ -f "$wl" ]]; then
-  code "$wl" | grep -E "WORKSPACES_DOPPLER_CONFIG=%s" | grep -qE "'prd_workspaces_luks'" \
+  grep -qE "'prd_workspaces_luks'" < <(code "$wl" | grep -E "WORKSPACES_DOPPLER_CONFIG=%s") \
     || viol workspaces-luks.tf "web-1's SSH installer must keep writing WORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks"
 fi
 
