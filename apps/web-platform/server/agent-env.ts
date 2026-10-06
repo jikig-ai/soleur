@@ -1,5 +1,6 @@
 import { PROVIDER_CONFIG } from "./providers";
 import { assertTrustedPluginPath, isPluginPathTestEnv } from "./plugin-path";
+import { API_KEY_ENV_VAR, OAUTH_ENV_VAR } from "./agent-auth-env-vars";
 
 /**
  * The auth scheme an agent run is funded by. `api_key` feeds the raw
@@ -79,8 +80,8 @@ const ALLOWED_SERVICE_ENV_VARS = new Set(
 // with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR `ANTHROPIC_API_KEY` (per-
 // token API). Injecting BOTH is the silent-API-billing trap (FR2): the SDK
 // prefers one but the operator believes they are on the subscription.
-const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY";
-const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN";
+// The two auth variable names live in `agent-auth-env-vars.ts` so the sandbox
+// config denies exactly the set injected here (W1, ADR-272).
 
 /**
  * Optional env extras that are NOT service tokens and NOT auth vars.

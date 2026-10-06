@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, realpathSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
+import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, join } from "path";
 
 import { createChildLogger } from "./logger";
@@ -143,6 +144,12 @@ export type AgentSandboxConfig = {
   filesystem: {
     allowWrite: string[];
     denyRead: string[];
+  };
+  // W1 (#9601, ADR-272): unset the owner's Anthropic credential for every
+  // sandboxed Bash command. Typed (not left to the index signature) so a test
+  // reads the entries as data, not `unknown`.
+  credentials: {
+    envVars: { name: string; mode: "deny" }[];
   };
 } & { [x: string]: unknown };
 
@@ -381,6 +388,21 @@ export function buildAgentSandboxConfig(
       // Per-sibling deny (NOT the broad "/workspaces" parent) so the own
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
+    },
+    // W1 (#9601, ADR-272) — P1: a prompt-injected session cannot read the
+    // owner's Anthropic key out of its shell. `deny` unsets the variable for
+    // every sandboxed command; the CLI process keeps it for its own API calls.
+    // Deliberately NOT denied: connected-service tokens (the agent is told they
+    // are available — `## Connected Services`), GH_TOKEN and
+    // GIT_INSTALLATION_TOKEN (`gh`/`git` need the short-lived App token). Those
+    // stay readable until the credential broker (#9543). Measured on SDK
+    // 0.3.284: the API key reaches Bash by default; the OAuth token is already
+    // withheld by the CLI, so its entry is defense in depth.
+    credentials: {
+      envVars: AGENT_AUTH_ENV_VARS.map((name) => ({
+        name,
+        mode: "deny" as const,
+      })),
     },
   };
 }
