@@ -1020,7 +1020,7 @@ jobs:
           # An ::error:: annotation makes the run itself legible (observability layer 6) — the plan
           # named this destination, and without it a not-serving run is green with an empty summary.
           echo "::error::#7674 dedicated inngest host verdict=${VERDICT} — ${DETAIL}"
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[0].number // empty' 2>/dev/null )"; then
+          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[0].number // empty' 2>/dev/null)"; then
             echo "::error::inngest-dedicated-host: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           fi
@@ -1073,7 +1073,7 @@ jobs:
           gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
           gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
           TITLE="[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken"
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number,title 2>/dev/null | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null )"; then
+          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number,title 2>/dev/null | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null)"; then
             echo "::error::inngest-dedicated-host: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           fi
@@ -1171,7 +1171,7 @@ jobs:
             --description "Web inngest quiesced by op=quiesce-web while the dedicated host is not serving" 2>/dev/null || true
           gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
             --description "Needs an operator decision or action" 2>/dev/null || true
-          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[0].number // empty' 2>/dev/null )"; then
+          if ! EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[0].number // empty' 2>/dev/null)"; then
             echo "::error::inngest-no-live-scheduler: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."
             EXISTING=""
           fi
