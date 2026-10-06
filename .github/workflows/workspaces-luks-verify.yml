@@ -1090,7 +1090,11 @@ jobs:
             exit 1
           fi
 
-          marker_args=(--no-interactive -p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")
+          marker_args=(-p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")
+          # marker_args is shared by get/read-back/delete; the interactive-skip flag carried on
+          # the `secrets set` argv below exists only on that verb of the installed Doppler CLI
+          # (v3.76.6) — get/delete reject it as an unknown flag, which is what produced four days
+          # of `marker_read` reds (#9429). Do not fold it back into this array.
           # marker_state prints `present` or `absent`; any other outcome (an auth or transport fault) is a
           # failure of THIS function, never an `absent`.
           marker_state() {
@@ -1098,6 +1102,12 @@ jobs:
             out="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}" 2>&1)" || rc=$?
             if [[ "$rc" -eq 0 ]]; then printf 'present'; return 0; fi
             if grep -qiF 'Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
+            # Self-describing fault (#9429): the run log must name the CLI's own error. The
+            # literal substitution is safe — the token-shape guard above pins DOPPLER_TOKEN to
+            # [A-Za-z0-9._-]; the sed is a defensive second net for any other dp.* token shape.
+            # stderr, not stdout: the caller captures stdout, so this cannot corrupt the verdict.
+            sed -E 's/dp\.[a-z]+\.[A-Za-z0-9._-]+/[REDACTED-TOKEN]/g' \
+              <<<"${out//$DOPPLER_TOKEN/[REDACTED-DOPPLER-TOKEN]}" >&2
             return 1
           }
 
@@ -1115,7 +1125,7 @@ jobs:
                 exit 0
               fi
               at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              printf '%s' "$at" | doppler secrets set "$W2L_MARKER_NAME" "${marker_args[@]}" >/dev/null \
+              printf '%s' "$at" | doppler secrets set "$W2L_MARKER_NAME" --no-interactive "${marker_args[@]}" >/dev/null \
                 || { echo "::error::writing the marker failed."; emit query_failed marker_write; exit 1; }
               got="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}")" || got=""
               [[ "$got" == "$at" ]] || { echo "::error::the marker did not read back as written."; emit query_failed marker_readback; exit 1; }

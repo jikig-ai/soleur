@@ -1667,9 +1667,19 @@ case "$*" in *"${DOPPLER_TOKEN:-@@none@@}"*) echo "doppler stub: the token appea
 [[ "${DOPPLER_TOKEN:-}" == dp.st.fixture0token ]] || { echo "doppler stub: wrong or absent DOPPLER_TOKEN" >&2; exit 64; }
 verb="${1:-} ${2:-}"; key="${3:-}"
 [[ "$key" == WORKSPACES_LUKS_CUTOVER_AT ]] || { echo "doppler stub: REFUSED key '$key'" >&2; exit 64; }
-for need in " --no-interactive " " -p soleur " " -c prd_workspaces_luks_marker "; do
+for need in " -p soleur " " -c prd_workspaces_luks_marker "; do
   case " $* " in *"$need"*) : ;; *) echo "doppler stub: REFUSED scope (missing$need)" >&2; exit 64 ;; esac
 done
+# Flag-surface model of the real CLI (v3.76.6): --no-interactive exists ONLY on
+# `secrets set` (it skips the confirmation prompt); `secrets get` and
+# `secrets delete` reject it with 'unknown flag'. #9429 ran four days red on
+# exactly that — the flag sat in the shared marker_args and every read failed.
+case "$verb" in
+  "secrets set")
+    case " $* " in *" --no-interactive "*) : ;; *) echo "doppler stub: set missing --no-interactive" >&2; exit 64 ;; esac ;;
+  "secrets get"|"secrets delete")
+    case " $* " in *" --no-interactive "*) echo "doppler stub: --no-interactive is a set-only flag (#9429)" >&2; exit 64 ;; esac ;;
+esac
 case "$verb" in
   "secrets get")
     [[ "${FIXTURE_DOPPLER_GET_FAIL:-0}" == 1 ]] && { echo "Doppler Error: unable to reach the API" >&2; exit 1; }
@@ -1813,6 +1823,9 @@ EOS
     # --- Doppler faults ------------------------------------------------------------------------------------------
     scn S24-doppler-read-fault-on-green p_ok r_ok "$P" nz 0 0 same query_failed marker_read FIXTURE_DOPPLER_GET_FAIL=1
     scn S45-doppler-read-fault-on-red p_stale27h r_ok "$P" nz 0 0 same query_failed marker_read FIXTURE_DOPPLER_GET_FAIL=1
+    # S55 — #9429: the fault arm must say WHY. The needle is the stub's own stderr line; without the
+    # sanitized print in marker_state() the run log names only the wrapper's "could not read" text.
+    G3_NEEDLE='unable to reach the API' scn S55-marker-read-fault-is-self-describing p_ok r_ok "$P" nz 0 0 same query_failed marker_read FIXTURE_DOPPLER_GET_FAIL=1
     G3_NEEDLE='still reads present' scn S25-delete-that-does-not-take-is-loud p_stale27h r_ok "$P" nz 0 1 same red_delete_failed probe_stale FIXTURE_DELETE_INHERITED=1
     scn S52-a-judge-fault-is-not-negative-evidence p_ok r_ok "$P" nz 0 0 same query_failed judge_error FIXTURE_JQ_BREAK=1
     G3_NEEDLE='deleting the marker FAILED' scn S51-delete-command-fails p_stale27h r_ok "$P" nz 0 1 same red_delete_failed probe_stale FIXTURE_DOPPLER_DELETE_FAIL=1
@@ -1821,7 +1834,7 @@ EOS
     scn S42-doppler-set-fails    p_ok r_ok none nz 1 0 none query_failed marker_write FIXTURE_DOPPLER_SET_FAIL=1
     scn S43-read-back-mismatch   p_ok r_ok none nz 1 0 any  query_failed marker_readback FIXTURE_DOPPLER_SET_DIVERGE=1
   }
-  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54"
+  G3_EXPECTED_IDS="S01 S02 S03 S04 S05 S06 S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43 S44 S45 S46 S47 S48 S49 S50 S51 S52 S53 S54 S55"
 
   # ---- PRISTINE: the battery must be clean on the code as shipped, and every scenario is its OWN assertion ----
   G3_SB="$(g3_sandbox pristine)"
@@ -1832,7 +1845,7 @@ EOS
   done
   g3_got_ids="$(printf '%s\n' "${G3_RAN[@]}" | cut -c1-3 | sort -u | tr '\n' ' ')"
   g3_want_ids="$(tr ' ' '\n' <<<"$G3_EXPECTED_IDS" | sort -u | tr '\n' ' ')"
-  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 54 ]]; then ok "G3 the registered scenario set ran exactly (54 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
+  if [[ "$g3_got_ids" == "$g3_want_ids" && "${#G3_RAN[@]}" -eq 55 ]]; then ok "G3 the registered scenario set ran exactly (55 ids, each once)"; else no "G3 the scenario set drifted: ran [$g3_got_ids] (${#G3_RAN[@]} runs), expected [$g3_want_ids]"; fi
 
   # the green scenario's two reads: host-scoped, unit-pinned, archive arm present, server-side age, no LIKE wildcard
   g3_scn "$G3_SB" "$FX/p_ok" "$FX/r_ok" none
@@ -1993,6 +2006,8 @@ PY
   rm -rf "$g3_sb18"
   g3_mut "17f a judge fault is treated as negative evidence" "S52" marker.sh \
     $'if [[ "$reason" == *_judge_error ]]; then' 'if false; then'
+  g3_mut "17g a marker read fault logs nothing about why" "S55" marker.sh \
+    $'  sed -E \'s/dp\\.[a-z]+\\.[A-Za-z0-9._-]+/[REDACTED-TOKEN]/g\' \\\n    <<<"${out//$DOPPLER_TOKEN/[REDACTED-DOPPLER-TOKEN]}" >&2' '  :'
   # row 20 — the query child keeps the marker write token. It cannot go through g3_mut (its CONTROL scenario is the green
   # path, which the leak itself breaks), so: the mutant must land, parse, and then fail the green path BECAUSE of the leak.
   g3_sb20="$(g3_sandbox m20)"
@@ -2198,6 +2213,7 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # SIGPIPE race rows (landing check, must-PASS late producer, non-draining-stub control) 313 -> 316; review:
 # the drained-text and hand-off-by-sentinel rows 316 -> 318; #9372 the reboot-proof scenario (S53) and
 # mutation row 22 318 -> 321 (measured green count after the rebase onto #9525, the ready-poll reader split and the S54 row).
+# #9429: S55 (self-describing marker-read fault) + the set-only flag model + mutation row 17g 321 -> 323.
 WF_MIN_ASSERTIONS=321
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
