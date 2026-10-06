@@ -36,3 +36,27 @@ A `cronName` arg/env would force the hook to duplicate `CRON_MCP_ALLOWLISTS` ins
 - The Chromium baked in the image must match `@playwright/mcp`'s `playwright-core` (registry + CDN are off the egress allowlist); a drift guard (`playwright-mcp-version-pin.test.ts`) enforces the Dockerfile↔lockfile pin. The pinned version (`@playwright/mcp@0.0.75`) is the newest **stable** release clearing the repo's release-age supply-chain floor (3 days) so the lockfile resolves it (the floor moved from bun's `minimum-release-age` to `.npmrc`'s `min-release-age` in ADR-191, and there is now one lockfile, not two); the Dockerfile bakes its `playwright-core@1.61.0-alpha-1778188671000`.
 - Third directive shape (2026-09-11, ADR-216 addendum): `run-report-label <label>` — the substrate issues it for the run-report crons; same producer/consumer contract.
 - Brand-survival threshold for the restored cron is single-user incident; this primitive widens the containment posture's attack surface, so any new `mcp__*` allowance is a CPO/security-sign-off-class change.
+
+## Addendum - 2026-10-06 (#7122)
+
+Append-only; nothing above is edited. Source decision: ADR-272.
+
+**A fourth directive shape, and the first one that is not an allowance.** The file grammar above (`mcp-allow`, `navigate-origin`,
+and the ADR-216 `run-report-label`) gains `no-file-tools`: a bare flag line, written by the substrate (`buildAllowlistLines`, from
+`CRON_NO_FILE_TOOLS`) only for `cron-community-monitor`. Where the earlier directives widen what one cron may do, this one
+removes tools. When it is present, `decide()` denies `Read`, `Glob`, `Grep`, `Write`, `Edit`, `MultiEdit`, `Task`, `Agent` and
+`Skill` by ABSENCE of the tool, before any per-tool path check, so no argument shape can reach a deny-list that was never meant
+to be the control (a recursive `Grep` rooted at `/` with a `proc/*/environ` glob and a `Glob` for `**/.git/config` both pass the
+path deny-list). `NotebookEdit` is not in that set because the catch-all already denies it.
+
+**The directive also changes how Bash arguments are read.** For a cron that carries it, `strictArgumentGrammarReason` runs first
+on the raw command text and requires every whitespace-separated token of every `;`/`&&` segment to match
+`[A-Za-z0-9._:=@/+-]+`. This is the same per-cron, file-delivered, agent-unreadable policy channel, now used to tighten the
+argument grammar of an allowlisted verb: the verb-prefix match alone had left trailing arguments uninspected, and they reached
+`python3 -c` source and bash arithmetic evaluation. Per-cron scoping stays structural: a file without the line gets neither the
+tool denial nor the grammar (the hook tests assert it), and `runHookSelfTest` re-probes the written clone per spawn
+(`Write`, `Grep`, `Task`, `Skill` must DENY).
+
+**Not a second source of truth for the CLI layer.** The community cron also passes `--disallowedTools` (a CLI-level second layer).
+That list is independent of this directive, and the hook remains the load-bearing layer: how the flag composes with a hook `allow`
+is not provable offline (ADR-272 decision item 3).

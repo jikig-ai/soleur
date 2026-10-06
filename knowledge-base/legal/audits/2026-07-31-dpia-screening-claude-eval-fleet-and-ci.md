@@ -216,6 +216,25 @@ counsel assesses the absence of a human gate as unacceptable at any volume.
 >   #7119. The finding stays recorded as an interim posture for the fleet as a whole. The conclusion of
 >   this memo (full DPIA required for PA-32, overdue, #7121) is unchanged.
 
+> **Further correction 2026-10-06 (#7122, review) - residuals (a) and (b); append-only.** Corrections to the
+> 2026-10-06 note above, which stays as written.
+>
+> - **Residual (a)**: "unsolicited Art. 9 text cannot be carried into that publication" is scoped to the
+>   **published artefacts**. For `cron-community-monitor` alone the agent's redacted final message (up to 16 KiB) is
+>   memoised in the `claude-eval` step output (Inngest run state, not a published surface) before it is validated, so a
+>   non-conforming message could hold such text there without being republished.
+> - **Residual (b)**: the agent holds **no GitHub write credential** during its run, and nothing wider is claimed: the
+>   Discord, Bluesky, X and LinkedIn credentials for the read collectors, several of them posting credentials, remain in
+>   the spawn environment (ADR-272 residual (g)). Review found a P1 on this very finding: trailing arguments of allowlisted
+>   router verbs reached `python3 -c` source and bash arithmetic evaluation, so the agent could execute code with that
+>   environment; a strict argument grammar plus script-side operand validation now closes the code-execution leg (a
+>   grammar-conforming query token can still reach `hn.algolia.com`; ADR-272 residual (e)) and the allowlist is fourteen
+>   verbs, not sixteen. The counts caveat is wider than the note says: Discord `members` and `messages` for a private guild
+>   and `github.newStargazers` can single a person out as well, and with the period fixed at one day the published series
+>   is a daily time series. The phrase "R4's objective is met for the community digest by a different mechanism" is
+>   withdrawn: the exposure R4 described is **narrowed** for future output, and whether that substitutes for R4 is for
+>   counsel at #7119. This PR closes issue #7122; `cron-daily-triage` stays OPEN under #9606.
+
 **(c) The already-published corpus cannot be erased.** 80 digests, 45 with the commenter
 table, 65 naming stargazers, on a public repository with two forks, with zero deletions ever.
 No remediation reaches this: R1–R4 govern future runs only. *There is no recovery path.* The
@@ -320,6 +339,12 @@ for the affected activity.
 > **would** fire on a new free-text field in the publication schema or an additional published
 > surface; those are also named re-evaluation triggers in
 > `knowledge-base/legal/audits/2026-10-clo-attestation-7122.md`.
+
+> **Further correction 2026-10-06 (#7122, review) - triggers 1 and 4; append-only.** Trigger 4 would also fire on
+> any new allowlisted router verb, or any script that interpolates an argument, for a cron whose agent ingests
+> third-party content: review found that trailing arguments of allowlisted verbs are a code-execution and egress path
+> unless the argument grammar and the scripts' operand validation hold. Trigger 1's "has not fired as written" stands, and
+> "narrowed" (not "met") is the word for what #7122 does to the R4 exposure.
 
 ---
 

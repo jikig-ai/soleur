@@ -63,3 +63,32 @@ This PR-class split deliberately preserved each live cron's production-proven me
 
 - #5026 (destructive incident) · #5091 / PR #5098 (helper) · #5111 (consolidation batch) · #5138 (watchdog, gates Tier-2 restoration) · #5139 (tri-state verify gate)
 - ADR-033 (claude-spawn substrate) · #5018 / #5046 (Tier-2 deferral and partial restoration)
+
+## Addendum - 2026-10-06 (#7122)
+
+Append-only; nothing above is edited. Source decision: ADR-272.
+
+**Authorship of the committed bytes is now a platform responsibility too, for one cron.** The decision above makes persistence
+the platform's job; for `cron-community-monitor` the handler also authors what is persisted (a digest rendered from a validated
+closed-schema draft), and the agent has no write primitive. `SafeCommitConfig` gains two fields that exist for that case only.
+
+- **`exactPaths`**, with one shared predicate `isPathAllowed(path, { allowedPaths, exactPaths })` partitioning `matched` and
+  `dropped`. A path is allowed when it matches `allowedPaths` by prefix OR `exactPaths` by equality; community passes
+  `allowedPaths: []` and the single dated digest path. In exact mode the dropped-path PR-body marker renders a count only (a
+  stray file's name is agent-chosen and the PR body is public; names go to Sentry). The other 14 callers keep prefix semantics
+  and their marker byte for byte.
+- **`expectedContent`**, exact mode only: path to the exact bytes the handler rendered. After staging and before the commit the
+  index blob must equal them byte for byte; on the replay-resume arm the branch tip's blob must.
+
+**Exact mode also switches the workspace to an untrusted posture** (review finding P1-B): the directory the agent ran in may hold
+planted git state. Every git invocation the module makes passes `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c
+core.attributesFile=/dev/null`; before the first git command `.git` is sanitised (config rewritten from nothing with only
+`remote.origin.url` carried over, `.git/hooks` and `.git/info/attributes` removed, a symlinked or file `.git` refused); staging is
+filter-free (`hash-object --no-filters` + `update-index`, never `git add`) and refuses anything but a regular file; and the
+replay-resume arm pushes a pre-existing branch only when it is exactly one commit touching only `exactPaths` with the expected
+content. A refusal is stage `integrity` with a closed-vocabulary reason and no bytes in any message or Sentry extra.
+
+**What this does not change.** The merge-mode table, the two permanent exemptions and the four parity invariants stand. Community
+stays in the `auto` class. The Consequences bullet on monitoring semantics applies: an `integrity` refusal is a Sentry and
+issue-comment signal, and the handler's `patch-digest-notice` (ADR-272) repairs the public issue the refusal would otherwise leave
+linking a digest that did not land.

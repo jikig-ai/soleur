@@ -488,6 +488,16 @@ finding that the existing corpus cannot be erased, is the only honest dispositio
 > #9606), the necessity conclusion of this Arm, or the lawful-basis cell of PA-32, all of which stand
 > as written. There is still no human gate, and counts in the schema can single a person out.
 
+> **Further correction 2026-10-06 (#7122, review) - the R4 row only; append-only.** In the note above, "no write
+> credential" is read as "**no GitHub write credential**" (the Discord, Bluesky, X and LinkedIn credentials for the read
+> collectors remain in the spawn environment; ADR-272 residual (g)), and "reaches R4's objective" is withdrawn in favour of
+> "**narrows** the exposure R4 described, for future output of that one cron": no redaction pass was built and nothing
+> here treats R4 as met. Counts that can single a person out are not limited to external contributors, interactions and
+> topic counts: Discord `members` and `messages` for a private guild and `newStargazers` can too, and with the period fixed
+> at one day the published series is a daily time series. The statement that no model-chosen text is persisted is scoped
+> to the published artefacts; the agent's redacted final message (up to 16 KiB) is memoised in the `claude-eval` step
+> output, unvalidated, and is not republished. Whether any of this substitutes for R4 is for counsel at #7119.
+
 ---
 
 ## Arm C — CI contributors

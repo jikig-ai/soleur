@@ -5,7 +5,7 @@ date: 2026-10-06
 issue: 7122
 related_issues: [7119, 7121, 7123, 7124, 9606]
 attestation-authority: clo
-status: DRAFT-requires-counsel-review (counsel-ready; not signed off; no determination is made by this document)
+status: DRAFT-requires-counsel-review (counsel-ready; not signed off; this document records what the change does and does not do and makes no determination on R1-R5, the lawful basis or the substitution question)
 scope: "Forward path of cron-community-monitor only. Does not cover cron-daily-triage, the published corpus, the lawful-basis conclusion or any docs/legal/ text."
 related_adrs: [ADR-272]
 related:
@@ -23,8 +23,11 @@ related:
 ## 1. What this document is
 
 A counsel-ready statement of what PR #7122 changes in the processing described at Art. 30 register PA-32 and PA-31, what it does
-not change, and what would make the position need re-assessing. It records **no determination**. The substitution question (does the
-new mechanism stand in for remediation R1-R4) belongs to counsel at #7119 and is posed here, not answered.
+not change, and what would make the position need re-assessing. It records **no determination**: it describes a mechanism and
+the exposure that mechanism narrows, and it does not say that any remediation (R1-R5) is met, closed or satisfied. The
+substitution question (does the new mechanism stand in for remediation R1-R4) belongs to counsel at #7119 and is posed here, not
+answered. The PR closes issue #7122, but `cron-daily-triage` stays OPEN under #9606; the compliance-posture row for #7122 stays
+OPEN for it, so a reader of the closed issue should follow that pointer.
 
 ## 2. What changed (forward path of one cron)
 
@@ -33,13 +36,19 @@ From the merge of #7122, for `cron-community-monitor` only (technical record: AD
 1. **The published bytes are no longer model-authored.** The model's final message is a one-line JSON draft. The handler parses it
    against a closed schema whose leaves are bounded integers and closed enum members; there is no free-text field. The handler
    renders the committed digest file and the tracking-issue body from fixed templates, so the set of strings that can be published is
-   a finite template family and model output selects values within it.
+   a finite template family and model output selects values within it. "No model-chosen free text" is a statement about the
+   **published artefacts** only: the agent's redacted final message (up to 16 KiB) is memoised in the `claude-eval` step output
+   (`captureFinalMessage`, this cron only; Inngest run state, not a published surface) before it is validated, so a
+   non-conforming message would be held there, never republished.
 2. **The schema carries no direct identifier.** It has no field that can hold a handle, a name, a username, a snippet or an issue
    reference. The digest no longer carries Top Contributors, Community Interactions, stargazer usernames, quoted excerpts or free-text
    prose.
-3. **The agent has no write or publication capability and no write credential during its run.** No file tools, no `gh` publication
-   verb, sixteen read-only collector invocations, a READ-scoped installation token for the clone and the spawn; the write token is
-   minted only after the spawn.
+3. **The agent has no write or publication capability and no GitHub write credential during its run.** No file tools, no `gh`
+   publication verb, fourteen read-only collector invocations, a strict argument grammar on every command, a READ-scoped
+   installation token for the clone and the spawn; the GitHub write token is minted only after the spawn. The Discord, Bluesky, X
+   and LinkedIn credentials that the read collectors need, several of them posting credentials, **remain in the spawn
+   environment** (ADR-272 residual (g)); the agent cannot use them to publish because it has no posting verb, file tool or
+   code-execution path, not because they are absent.
 4. **Failure publishes nothing from the model.** A rejected or missing draft turns the run RED with a Sentry event carrying codes
    and counts only, and the failure-path audit issue withholds the model's output.
 5. **Records.** The register (PA-31 and PA-32 cells), the posture rows, the DPIA screening memo and the LIA R4 row carry append-only
@@ -51,10 +60,11 @@ The wording to use, and no stronger:
 
 - Future output of `cron-community-monitor` is **structurally incapable of the R1/R2/R3 content** (stargazer usernames, the commenter
   table, attributed quotation).
-- **R4's objective** (a control on what reaches publication that does not depend on a prompt) is met for the community digest by a
-  **different mechanism** (closed schema plus handler-side render), not by the redaction pass R4 described. No redaction pass was built.
-- Whether that **substitutes for R1-R4 is for counsel at #7119.** No record in this change treats R1, R2 or R4 as met, and none
-  describes the published corpus as altered.
+- The exposure **R4** described (nothing that does not depend on a prompt stands between the model and publication) is **narrowed**
+  for the community digest by a **different mechanism** (closed schema plus handler-side render), not by the redaction pass R4
+  described. No redaction pass was built. This document does not say R4 is met.
+- Whether that **substitutes for R1-R4 is for counsel at #7119.** No record in this change treats R1, R2 or R4 as met, closed or
+  satisfied, and none describes the published corpus as altered.
 - R5 and the Art. 17 analysis are untouched.
 
 ## 4. What did not change
@@ -64,7 +74,8 @@ The wording to use, and no stronger:
 | Human gate | **None.** The digest still auto-merges (`mergeMode: "auto"`). A human gate is the stated fallback if counsel requires one. |
 | Numeric truth | An injection (or a collector error) can still choose in-range integers; the schema bounds structure, not truth. The collector-status sidecar (#6695) binds github status into the render; nothing verifies the counts themselves. |
 | Enum selection | Which enum members are published (statuses, failure causes, topic categories) remains model-influenced. |
-| Covert integer channel | About 35 free integers could encode a secret that reached the agent's context. The routes that put secrets into context were closed, but non-GitHub collector credentials remain in the spawn environment (ADR-272 residual (g)). |
+| Covert integer channel | About 35 free integers could encode a secret that reached the agent's context. The routes that put secrets into context were narrowed, but non-GitHub collector credentials remain in the spawn environment (ADR-272 residual (g)), and a `--query` token that fits the argument grammar can still carry a short string to `hn.algolia.com` (residual (e)). |
+| Memoised final message | The agent's redacted final message (up to 16 KiB, community monitor only) is stored in the `claude-eval` step output before validation. It is Inngest run state, not published; its retention is not re-measured here. |
 | Anthropic ingestion | Raw collected text (Discord messages, comments, Hacker News posts) still reaches Anthropic; **no PII scrub exists on that input** (#7124, PA-31 §(g)(8)). Anthropic retention and the unsigned Zero-Retention amendment are unchanged. |
 | Published corpus | The 80+ digests (45 with the commenter table, 65 naming stargazers) remain published in a public repository with two forks; Art. 17 is still not implementable against append-only history. |
 | `cron-daily-triage` | **Not fixed.** A PA-32 member that publishes public issue comments, has no output allowlist, no human gate and no containment hook (#7123). Tracked in #9606; the #7122 posture row stays OPEN for it. |
@@ -75,18 +86,46 @@ The wording to use, and no stronger:
 ## 5. The counts-can-single-out caveat
 
 Do not read "the schema carries no direct identifier" as "the digest cannot affect an individual". Counts are published, and in a small
-population a count can single a person out: for example a first outside contributor (`externalContributors`), a single interacting
-account (`externalInteractions`), or a topic with a count of one. These two fields were added deliberately so outside activity stays
-visible without a name. The practical exposure is much smaller than before and is a judgement for counsel, not a conclusion recorded
-here. A model-chosen count is also not verified to be true.
+population a count can single a person out. The fields at risk are not limited to a first outside contributor (`externalContributors`),
+a single interacting account (`externalInteractions`) or a topic with a count of one: the Discord `members` and `messages` counts for a
+**private guild** (a small, enumerable membership) and the GitHub `newStargazers` count can each identify an individual or an event.
+The collection period is fixed at **one day** by a handler constant (the model cannot widen it), so the published series is a **daily
+time series**, and day-over-day differences can point at a specific day's actor. The external-activity fields were added deliberately
+so outside activity stays visible without a name. The practical exposure is much smaller than before and is a judgement for counsel,
+not a conclusion recorded here. A model-chosen count is also not verified to be true.
 
 ## 6. Verification status at the date of this draft
 
-- The control is implemented and tested offline (schema leaf-injection, hook deny rows, exact-path commit, credential custody).
-- **Live evidence is pending** until the first post-merge run: a `Write` attempt must appear as a hook denial (the `--disallowedTools`
-  flag is a second layer whose composition with a hook allow is unproven offline), the read token must suffice for every collector
-  (no `collector-status-failed`), and the digest must land. The register §(f) live-state note is updated only after that run.
+- The control is implemented and tested offline (schema leaf-injection, hook deny rows, argument-grammar rows, exact-path commit
+  with content check, credential custody).
+- **Live evidence is pending, and the first run proves less than it appears to.** The `--disallowedTools` flag is a second layer
+  whose composition with a hook allow is unproven offline. If it works, the model never sees a file tool and never attempts
+  `Write`, so a healthy first run (zero `permissionDenialCount`, the digest landing) proves **neither layer**: it shows only that
+  the collectors and the draft path work under the new flags. The hook's deny is evidenced by the per-spawn `runHookSelfTest`
+  probe and the hook tests, not by the live run. A denial is evidence in one direction only: a non-zero `permissionDenialCount`
+  with a file tool in `deniedTools` (Sentry op `community-agent-denied-verb`) shows the model still reached for the tool and that
+  the hook refused it; absence of a denial says nothing about either layer. The read token must also suffice for every collector
+  (no `collector-status-failed`). The register §(f) live-state note is updated only after the first run.
 - A counsel-led note is to be added to #7119 after merge.
+
+## 6a. Recorded review event: argument injection (P1) and its fix
+
+Panel review of the PR (2026-10-06) found that the first draft's controls had a window narrower than their property. The hook
+allowlisted a verb prefix and its metacharacter screen stripped single-quoted spans, so the **trailing arguments** of an allowed
+router verb were never inspected, and they were not inert data: a single-quoted `HOME[$(cmd)]` reached bash arithmetic evaluation
+in the Discord script (`(( limit ))`), and an `hn mentions --query` value was interpolated into `python3 -c` source. A steered
+agent could therefore have executed code with the spawn environment, which includes the non-GitHub posting credentials, and the
+first draft's `discord members` verb also placed up to 1000 member objects in the agent's context, reachable by the same path.
+The ADR's first draft recorded these arguments as accepted residual (e) on the premise that the agent "holds no secret in
+context"; that premise was false.
+
+Fixed before merge, in two independent controls: (i) for a cron carrying the `no-file-tools` directive the hook requires every
+token of every command segment to match `[A-Za-z0-9._:=@/+-]+` on the raw text; (ii) the platform scripts validate their numeric
+operands and pass the HN query through `sys.argv`. `discord members` and `hn trending` were removed from the allowlist (fourteen
+verbs remain). A related finding (agent-planted `.git` state reaching the handler's git steps) is closed by sanitising `.git`,
+disabling hooks, fsmonitor and attributes, staging filter-free and requiring the staged bytes to equal the handler's rendered
+bytes. Residual (e) is rewritten in ADR-272: narrowed, not closed, because a grammar-conforming `--query` token can still reach
+`hn.algolia.com`. This is recorded here as a review event, not as a determination.
 
 ## 7. Re-evaluation triggers
 
@@ -101,3 +140,6 @@ Re-assess this attestation (and the markers it describes) on any of:
 6. Two consecutive `parse` rejections of the daily draft (possible abuse), or three consecutive `schema` rejections leading to the
    documented unknown-enum coercion (ADR-272): re-check that the coercion keeps every published leaf in a closed set.
 7. A change to the collectors or router verbs that sends the agent's context a larger or more identifying set of fields.
+8. **Any new allowlisted verb, or any script that interpolates an argument** (into a shell arithmetic context, an interpreter's
+   program text, a URL, a query or a jq program): the argument-injection finding in section 6a is exactly this class, and the
+   grammar plus operand validation only hold for the verbs and scripts reviewed.

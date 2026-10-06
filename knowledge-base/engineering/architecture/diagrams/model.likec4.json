@@ -1874,7 +1874,7 @@
 "id": "tbocap"
 },
 "lhr9lu": {
-"title": "Scheduled UNATTENDED authorship: the Inngest-fired claude-eval crons spawn an agent into an ephemeral server-side workspace and land committed KB content via safeCommitAndPr (branch → PR → auto-merge squash). For the community-monitor cron the committed bytes are handler-rendered from a validated closed-schema draft, not authored by the agent, which holds no write tool and no write credential during its run (ADR-272, #7122). Liveness of that landing is asserted handler-locally per producer class (ADR-126 amendment, #6750)",
+"title": "Scheduled UNATTENDED authorship: the Inngest-fired claude-eval crons spawn an agent into an ephemeral server-side workspace and land committed KB content via safeCommitAndPr (branch → PR → auto-merge squash). For the community-monitor cron the committed bytes are handler-rendered from a validated closed-schema draft, not authored by the agent, which holds no write tool and no GitHub write credential during its run (ADR-272, #7122). Liveness of that landing is asserted handler-locally per producer class (ADR-126 amendment, #6750)",
 "technology": "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)",
 "source": {
 "model": "platform.webapp.api"
