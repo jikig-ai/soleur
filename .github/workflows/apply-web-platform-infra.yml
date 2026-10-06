@@ -4038,7 +4038,7 @@ jobs:
           # The LATEST emit decides — an older served_repos=0 must not cover a newer
           # populated reading (rows arrive newest-first, one JSONEachRow object per line).
           latest="$(printf '%s' "$rows" | head -1)"
-          if printf '%s' "$latest" | grep -qE '"served_repos":"0"'; then
+          if printf '%s' "$latest" | grep -cE '"served_repos":"0"' >/dev/null; then
             echo "rotate precondition ok: latest git-data boot emit reports served_repos=0"
           elif [ -z "$rows" ]; then
             echo "::error::rotate precondition UNREADABLE — no stage=boot_complete emit on host_name=soleur-git-data in Better Stack (the served_repos=0 field could not be read). Failing closed: an unreadable store is not an empty store. Do NOT re-dispatch until the emit path is verified."

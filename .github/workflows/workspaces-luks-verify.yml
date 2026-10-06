@@ -289,7 +289,7 @@ jobs:
             # which case it classifies and exits the step.
             [[ "$1" -eq 255 ]] || return 0
             if head -c 8192 "$2" 2>/dev/null | LC_ALL=C tr -cd '\12\40-\176' \
-                | grep -qE '^(Host key verification failed\.|@ +WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! +@|Unable to negotiate with .+: no matching host key type found.*)$'; then
+                | grep -cE '^(Host key verification failed\.|@ +WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! +@|Unable to negotiate with .+: no matching host key type found.*)$' >/dev/null; then
               echo "::error title=workspaces-luks-verify::verdict=host_key_mismatch role=web"
               echo "::error::web-1 presented a host key other than its committed pin (apps/web-platform/infra/web-1-ssh-host-key.pub), or none of the pinned algorithm. NOT an at-rest finding, and NOT a transport blip: re-dispatching cannot fix it. Follow \"Host-key mismatch (H4)\" in knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md (wrong capture -> re-capture PR; otherwise breach-notice triage). Never re-enable TOFU."
               emit_class unavailable web_1_host_key_mismatch
