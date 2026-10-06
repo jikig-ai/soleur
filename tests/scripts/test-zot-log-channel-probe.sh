@@ -75,9 +75,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "70" ]]; then
+  if [[ "$ran" -lt "95" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 70"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 95"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -98,21 +98,37 @@ assert "the probe exists" "[[ -f '$PROBE' ]]"
 
 BASELINE_BOOT="bc135d5b-d509-41c4-8129-9181421e845c"
 DRIFTED_BOOT="ffffffff-1111-2222-3333-444444444444"
+FOREIGN_BOOT="aaaaaaaa-0000-0000-0000-000000000000"
 HOSTV="soleur-registry"
 ENV_PREFIX_LITERAL="SOLEUR_ZOT_LOG shipper=zot-log-shipper host="
 
+# `dt` IS THE BOUNDARY KEY the probe now scopes on (#8278): the graded set is the newest real
+# boot's span, so fixtures must be able to place rows at chosen ingest times. dt is the only
+# field the producer cannot set — it is what binds rows to a boot when the envelope carries no
+# boot_id of its own.
+DT0="2026-08-11 10:00:00.000000"
+
 # Wrap a bare message in the real two-layer encoding: the inner object is JSON-encoded into a
-# string, which becomes the `raw` column of the outer object.
-row() { jq -cn --arg m "$1" '{dt:"2026-08-11 10:00:00.000000", raw:({message:$m}|tostring)}'; }
+# string, which becomes the `raw` column of the outer object. $2 is the optional ingest dt.
+row() { jq -cn --arg dt "${2:-$DT0}" --arg m "$1" '{dt:$dt, raw:({message:$m}|tostring)}'; }
 
 ZOTLINE='level:info,message:HTTP API,module:http,component:session,clientIP:10.0.1.30:39330,method:GET,path:/v2/,statusCode:401,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92'
 
-envelope_row() { row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV $ZOTLINE"; }
+envelope_row() { row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV $ZOTLINE" "${1:-$DT0}"; }
+# A boot marker row on the named boot at a chosen dt. The probe no longer queries it separately:
+# in-window markers flow through the SOLEUR_ZOT_LOG arm and tighten the graded boundary to
+# ~provision time.
+boot_marker_row() { row "SOLEUR_ZOT_LOG_BOOT boot_id=$1 host=$HOSTV shipper_cron=present journald_storage=persistent" "$2"; }
+# A foreign-host marker — host-scoped rows from another host must never select the boot.
+foreign_marker_row() { row "SOLEUR_ZOT_LOG_BOOT boot_id=$1 host=some-other-host shipper_cron=present" "$2"; }
+# SOLEUR_ZOT_LOG_DROPPED carries boot_id but NO host= — it corroborates and counts on a boot
+# already derived, but must never SELECT the boot or the boundary.
+dropped_row() { row "SOLEUR_ZOT_LOG_DROPPED n=4 interval_s=300 boot_id=$1 seq=9 cum=57 reason=rate_cap" "$2"; }
 # A control row from the reporter THIS CHANGE SHIPS — it carries the log_shipper_* fields, whose
 # presence is the probe's delivery discriminator (#7444 F-7).
 control_row() {
-  local boot="$1" postfail="${2:-0}"
-  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot log_shipper_post_fail=$postfail log_shipper_last_ok_age_s=42 log_shipper_dropped_cum=0 log_shipper_drop_seq=0 host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
+  local boot="$1" postfail="${2:-0}" dt="${3:-$DT0}"
+  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot log_shipper_post_fail=$postfail log_shipper_last_ok_age_s=42 log_shipper_dropped_cum=0 log_shipper_drop_seq=0 host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}" "$dt"
 }
 
 # A control row whose shipper has NEVER completed a tick: last_ok_age_s is the literal -1 the
@@ -124,8 +140,8 @@ control_row() {
 # shipper emits. No field here separates "born four minutes ago" from "dead for a week", which is
 # why the ACT framing is never suppressed and the first-tick note is additive.
 control_row_never_ticked() {
-  local boot="$1" uptime="${2:-240}"
-  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running zot_uptime_s=$uptime boot_id=$boot log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 log_shipper_dropped_cum=unknown log_shipper_drop_seq=unknown host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
+  local boot="$1" uptime="${2:-240}" dt="${3:-$DT0}"
+  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running zot_uptime_s=$uptime boot_id=$boot log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 log_shipper_dropped_cum=unknown log_shipper_drop_seq=unknown host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}" "$dt"
 }
 
 # A control row from the reporter running on the host TODAY, i.e. BEFORE this change is delivered.
@@ -133,8 +149,8 @@ control_row_never_ticked() {
 # shipper. This is what makes "not delivered" a POSITIVE, measured observation rather than an
 # inference from boot_id, which drifts on every self-reboot without any provisioning happening.
 control_row_predelivery() {
-  local boot="$1"
-  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
+  local boot="$1" dt="${2:-$DT0}"
+  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}" "$dt"
 }
 
 # The query stub dispatches on --grep, which is what makes per-case fixtures possible. It VALIDATES
@@ -160,13 +176,12 @@ if [[ -n "${STUB_QUERY_RC:-}" && "${STUB_QUERY_RC}" != 0 ]]; then
   echo "betterstack-query.sh: credentials not injected (BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD)" >&2
   exit "$STUB_QUERY_RC"
 fi
-# The boot marker is queried SEPARATELY (#7444 R32) on its own 72h archive-inclusive window,
-# because it fires once at provision and cannot be found in the 30m hot window sized for the
-# steady envelope stream. The stub must model that dispatch or the probe's boot arm is untested.
-# STUB_BOOT_ROWS falls back to STUB_LOG_ROWS so fixtures that place a boot row alongside the
-# envelope rows keep working unchanged.
+# The probe no longer queries the boot marker on a separate 72h archive window (#8278): the
+# split-span query was the defect — delivery evidence came from a different span than the rows
+# being graded. In-window SOLEUR_ZOT_LOG_BOOT / _DROPPED rows now arrive through the SAME
+# SOLEUR_ZOT_LOG result set as the envelope rows (the warehouse LIKE is a substring match), so
+# there is exactly one LOG arm here and no separate boot dispatch to model.
 case "$grep_arg" in
-  SOLEUR_ZOT_LOG_BOOT) _b="${STUB_BOOT_ROWS:-${STUB_LOG_ROWS:-/nonexistent}}"; [[ -r "$_b" ]] && cat "$_b" ;;
   SOLEUR_ZOT_LOG)  [[ -r "${STUB_LOG_ROWS:-/nonexistent}"     ]] && cat "$STUB_LOG_ROWS" ;;
   SOLEUR_ZOT_DISK) [[ -r "${STUB_CONTROL_ROWS:-/nonexistent}" ]] && cat "$STUB_CONTROL_ROWS" ;;
 esac
@@ -197,9 +212,11 @@ EMPTY="$TMP/empty"; : > "$EMPTY"
 # --- C1: PASS-ARM REACHABILITY ------------------------------------------------------------
 # Without this, "never emits exit 1" is satisfiable by a probe that can never pass at all.
 # 30 envelope rows == the computed expectation for a 30-minute window at the 60s liveness cadence.
+# The control row sits 30 minutes back so the bounded span (B0 -> newest row) is a full window
+# and the floor reads the same ~30-row expectation it computed before the boot-scoping fix.
 C1_LOG="$TMP/c1.log"; : > "$C1_LOG"
 for _ in $(seq 1 30); do envelope_row >> "$C1_LOG"; done
-C1_CTL="$TMP/c1.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C1_CTL"
+C1_CTL="$TMP/c1.ctl"; control_row "$DRIFTED_BOOT" 0 "2026-08-11 09:30:00.000000" > "$C1_CTL"
 run_probe "$C1_LOG" "$C1_CTL"
 assert "C1 control+envelope present -> exit 0 (the PASS arm is REACHABLE)" "[[ '$CASE_RC' -eq 0 ]]"
 assert "C1 PASS output states the envelope and control counts" \
@@ -264,8 +281,12 @@ assert "C3e it does NOT claim the reporter saw no POST failures" \
   "! grep -q 'reports no POST failures' <<<\"\$CASE_OUT\""
 
 # --- C3b: same state reached via the BOOT MARKER rather than boot_id drift -----------------
+# The marker now arrives in-window through the LOG arm, not a separate query. Given a dt NEWER
+# than the pre-delivery control row, it selects the newest boot itself — it is host-scoped AND
+# stamped, which is exactly what qualifies a row to choose the evidence base — and delivery then
+# keys on it.
 C3B_LOG="$TMP/c3b.log"
-row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_cron=present journald_storage=persistent" > "$C3B_LOG"
+boot_marker_row "$DRIFTED_BOOT" "2026-08-11 10:01:00.000000" > "$C3B_LOG"
 run_probe "$C3B_LOG" "$C2_CTL"
 assert "C3b a boot marker with zero envelope rows -> delivered_but_silent" \
   "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
@@ -317,7 +338,7 @@ assert "C3f3 a control row without last_ok_age_s=-1 gets no first-tick note" \
 # C3g: THE REGRESSION GUARD. control_row_predelivery has NO log_shipper_* fields; reading absent
 # as "never ticked" would soften the arm here and silently weaken the escalation C3b pins.
 C3G_LOG="$TMP/c3g.log"
-row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_cron=present journald_storage=persistent" > "$C3G_LOG"
+boot_marker_row "$DRIFTED_BOOT" "2026-08-11 10:01:00.000000" > "$C3G_LOG"
 run_probe "$C3G_LOG" "$C2_CTL"
 assert "C3g an ABSENT last_ok_age_s does NOT soften (absence != the literal -1)" \
   "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
@@ -446,24 +467,25 @@ assert "C15 a header-borne 'executing gc' is NOT counted as gc evidence (gc_star
 assert "C15 the genuine gc row IS counted (non-vacuity: the count is not simply zero)" \
   "! grep -qE 'gc_start=0( |\\))' <<<\"\$CASE_OUT\""
 
-# --- C14: the boot marker is queried on its OWN window (#7444 R32) ------------------------
-# It fires once at provision; reading it out of the 30m --no-archive hot window made the field
-# that breaks the four-way post_fail=unknown collapse unreadable for all but ~30 minutes of a
-# host's life. Assert the separate query happened, at a wide window, WITH the archive arm.
-C14_BOOT="$TMP/c14.boot"
-row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_cron=present journald_storage=persistent" > "$C14_BOOT"
+# --- C14: the boot marker flows through the LOG arm; there is NO second query (#8278) ------
+# The old arm read the marker out of a separate 72h archive query — a different span than the
+# rows being graded, which was the defect this fix removes. In-window marker rows now arrive in
+# the same SOLEUR_ZOT_LOG result set, select the boot only when host-scoped and stamped, and
+# tighten the graded boundary to ~provision time. Assert (a) delivery via an in-window marker,
+# (b) no separate boot-marker query is issued at all, and (c) no 72h window is queried.
+C14_LOG="$TMP/c14.log"; boot_marker_row "$DRIFTED_BOOT" "2026-08-11 10:01:00.000000" > "$C14_LOG"
 C14_CTL="$TMP/c14.ctl"; control_row_predelivery "$BASELINE_BOOT" > "$C14_CTL"
-run_probe "$EMPTY" "$C14_CTL" STUB_BOOT_ROWS="$C14_BOOT"
-assert "C14 the boot marker is queried on a window WIDER than the envelope window" \
-  "grep -qE 'grep=SOLEUR_ZOT_LOG_BOOT since=(72h|[0-9]+[dh])' '$LAST_QCALLS'"
-assert "C14 the boot-marker query does NOT pass --no-archive (the row is older than the hot window)" \
-  "[[ \$(grep 'grep=SOLEUR_ZOT_LOG_BOOT' '$LAST_QCALLS' | grep -c 'noarchive=1') -eq 0 ]]"
-assert "C14 a boot marker found on its own window counts as delivery, even with a pre-delivery control row" \
+run_probe "$C14_LOG" "$C14_CTL"
+assert "C14 an in-window boot marker counts as delivery on its own boot" \
   "grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
-# Host isolation: source 2457081 is shared, so a boot marker from ANOTHER host must not count.
-C14_OTHER="$TMP/c14.other"
-row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=some-other-host shipper_cron=present" > "$C14_OTHER"
-run_probe "$EMPTY" "$C14_CTL" STUB_BOOT_ROWS="$C14_OTHER"
+assert "C14 the probe issues NO separate SOLEUR_ZOT_LOG_BOOT query (the split span is gone)" \
+  "! grep -q 'grep=SOLEUR_ZOT_LOG_BOOT' '$LAST_QCALLS'"
+assert "C14 no query runs on a 72h window (only the one bounded window exists)" \
+  "! grep -q 'since=72h' '$LAST_QCALLS'"
+# Host isolation: source 2457081 is shared, so a boot marker from ANOTHER host can neither
+# select the boot nor count as delivery here.
+C14_OTHER="$TMP/c14.other"; foreign_marker_row "$DRIFTED_BOOT" "2026-08-11 10:01:00.000000" > "$C14_OTHER"
+run_probe "$C14_OTHER" "$C14_CTL"
 assert "C14 a boot marker from a DIFFERENT host does not count as delivery here" \
   "grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\""
 
@@ -533,6 +555,139 @@ for _ in $(seq 1 30); do row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur
 run_probe "$C11_LOG" "$C1_CTL"
 assert "C11 a DIFFERENT host's envelope rows do not count (shared source, in-message isolation)" \
   "[[ '$CASE_RC' -ne 0 ]]"
+
+# --- S1–S10: BOOT-SPAN SCOPING (#8278) ----------------------------------------------------
+# THE DEFECT THESE PIN. The probe used to grade leaks over an unscoped 30-minute window while
+# its delivery evidence came from a SEPARATE 72h marker query — a window straddling a replace
+# mixed two host generations, so a public FAIL or a close could rest on evidence about a dead
+# host. The fix: the newest real boot is derived from host-scoped stamped rows ONLY (control
+# rows + SOLEUR_ZOT_LOG_BOOT markers; _DROPPED rows corroborate but never select), the graded
+# set is bounded to that boot's span by the ingest-assigned dt column, and every verdict-keyed
+# value comes out of ONE awk pass.
+DT_0900="2026-08-11 09:00:00.000000"
+DT_0930="2026-08-11 09:30:00.000000"
+DT_0950="2026-08-11 09:50:00.000000"
+DT_0955="2026-08-11 09:55:00.000000"
+DT_0956="2026-08-11 09:56:00.000000"
+
+# S1: THE STRADDLE. A leak-shaped envelope row BEFORE the boundary is outside the graded set —
+# the pre-fix probe would exit 1 on it (evidence about a dead host). Post-fix it must neither
+# FAIL (rows outside the newest boot are unattributed) nor silently clean: an ungradeable
+# credential shape is CANNOT ESTABLISH with the count named.
+S1_LOG="$TMP/s1.log"; : > "$S1_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP API,headers:{Accept:[*/*],Authorization:[Basic c3ludGhldGljOm5vdC1yZWFsLXNlY3JldA==],User-Agent:[curl/8.5.0]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "$DT_0900" >> "$S1_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S1_LOG"; done
+S1_CTL="$TMP/s1.ctl"; : > "$S1_CTL"
+control_row "$DRIFTED_BOOT" 0 "$DT_0950" >> "$S1_CTL"
+control_row "$DRIFTED_BOOT" 0 "$DT0" >> "$S1_CTL"
+run_probe "$S1_LOG" "$S1_CTL"
+assert "S1 a pre-boundary leak row does NOT exit 1 (the dead boot's rows are not graded)" \
+  "[[ '$CASE_RC' -ne 1 ]]"
+assert "S1 it is exit 3 CANNOT ESTABLISH — never a false FAIL and never a silent clean" \
+  "[[ '$CASE_RC' -eq 3 ]]"
+assert "S1 the ungraded credential-row count is named in the verdict" \
+  "grep -qE 'ungraded_credential_rows=1' <<<\"\$CASE_OUT\""
+
+# S2: a leak-shaped row INSIDE the newest boot's span exits 1 and names the boot it was graded
+# against. The boot= token is a Guard Contract requirement, not decoration: without it a FAIL
+# says nothing about WHICH host generation leaked.
+S2_LOG="$TMP/s2.log"; : > "$S2_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S2_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP API,headers:{Accept:[*/*],Authorization:[Basic c3ludGhldGljOm5vdC1yZWFsLXNlY3JldA==],User-Agent:[curl/8.5.0]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "$DT_0956" >> "$S2_LOG"
+run_probe "$S2_LOG" "$S1_CTL"
+assert "S2 a post-boundary leak -> exit 1 (the sole FAIL arm, on the graded boot)" \
+  "[[ '$CASE_RC' -eq 1 ]]"
+assert "S2 reason=credential_shape_in_channel" \
+  "grep -q 'reason=credential_shape_in_channel' <<<\"\$CASE_OUT\""
+assert "S2 the verdict names the boot it graded (boot=$DRIFTED_BOOT)" \
+  "grep -q \"boot=$DRIFTED_BOOT\" <<<\"\$CASE_OUT\""
+assert "S2 the leaked VALUE is never echoed (counts-only output discipline)" \
+  "! grep -q 'c3ludGhldGljOm5vdC1yZWFsLXNlY3JldA' <<<\"\$CASE_OUT\""
+
+# S3: log_shipper_post_fail on the OLD boot only proves nothing about the NEWEST one. This is
+# the same span discipline the issue names, applied to the delivery key: a reporter field from
+# the previous host generation is not evidence this boot delivered.
+S3_CTL="$TMP/s3.ctl"; : > "$S3_CTL"
+control_row "$DRIFTED_BOOT" 0 "$DT_0930" >> "$S3_CTL"
+control_row_predelivery "$BASELINE_BOOT" "$DT0" >> "$S3_CTL"
+run_probe "$EMPTY" "$S3_CTL"
+assert "S3 post_fail present only on the OLDER boot -> not_delivered, never delivered_but_silent" \
+  "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\" && ! grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
+
+# S4: THE FORGED TAIL. zot_last_err is free text (attacker-influenced through request headers):
+# a tail carrying ` boot_id=` + ` log_shipper_post_fail=` must not select the boot NOR supply
+# the proof token — the trusted-head cut holds for both.
+S4_CTL="$TMP/s4.ctl"
+row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$BASELINE_BOOT host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API} boot_id=$FOREIGN_BOOT log_shipper_post_fail=0 log_shipper_last_ok_age_s=9" "$DT0" > "$S4_CTL"
+run_probe "$EMPTY" "$S4_CTL"
+assert "S4 a forged tail cannot supply post_fail= (would read delivered_but_silent uncut)" \
+  "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\" && ! grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
+assert "S4 a forged tail cannot select the boot (verdict stays on $BASELINE_BOOT)" \
+  "grep -q \"boot=$BASELINE_BOOT\" <<<\"\$CASE_OUT\" && ! grep -q \"boot=$FOREIGN_BOOT\" <<<\"\$CASE_OUT\""
+
+# S5 + S7: NO USABLE boot_id — the 'unknown' /proc-fallback sentinel or no field at all. The
+# newest boot cannot be derived, so nothing is gradable: exit 3, never 0/1/2.
+S5_CTL="$TMP/s5.ctl"
+row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=unknown host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API}" "$DT0" > "$S5_CTL"
+S5_LOG="$TMP/s5.log"; : > "$S5_LOG"; for _ in $(seq 1 30); do envelope_row >> "$S5_LOG"; done
+run_probe "$S5_LOG" "$S5_CTL"
+assert "S5 boot_id=unknown on every stamped row -> exit 3 (it is not an identity)" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'CANNOT ESTABLISH' <<<\"\$CASE_OUT\""
+S7_CTL="$TMP/s7.ctl"
+row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API}" "$DT0" > "$S7_CTL"
+run_probe "$S5_LOG" "$S7_CTL"
+assert "S7 boot_id absent from every stamped row -> exit 3 (no boot can be derived)" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'CANNOT ESTABLISH' <<<\"\$CASE_OUT\""
+
+# S6: THE VACUITY GUARD. A pass that emits nothing (or non-integers) must exit 3 — a failed awk
+# reading as 'zero rows everywhere' would post verdicts on a measurement that never happened.
+FAKEBIN="$TMP/fakebin"; mkdir -p "$FAKEBIN"
+printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
+run_probe "$S1_LOG" "$S1_CTL" PATH="$FAKEBIN:/usr/bin:/bin"
+assert "S6 an awk that produces NO summary -> exit 3, not a vacuous clean" "[[ '$CASE_RC' -eq 3 ]]"
+printf '#!/bin/sh\necho not-a-summary\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
+run_probe "$S1_LOG" "$S1_CTL" PATH="$FAKEBIN:/usr/bin:/bin"
+assert "S6 an awk that produces a non-integer summary -> exit 3" "[[ '$CASE_RC' -eq 3 ]]"
+rm -f "$FAKEBIN/awk"
+
+# S8: THE MARKER TIGHTENS THE BOUNDARY to ~provision time. With control rows on the boot at
+# 10:00 only, the boundary without a marker is 10:00 — a row in the (provision, first-heartbeat)
+# gap would go ungraded. An in-window SOLEUR_ZOT_LOG_BOOT marker on the same boot at 09:55 is
+# itself a host-scoped stamped row, so it moves B0 back to 09:55 and the gap row IS graded.
+S8_LOG="$TMP/s8.log"; : > "$S8_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP API,headers:{Accept:[*/*],Authorization:[Basic c3ludGhldGljOm5vdC1yZWFsLXNlY3JldA==],User-Agent:[curl/8.5.0]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "$DT_0956" >> "$S8_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S8_LOG"; done
+boot_marker_row "$DRIFTED_BOOT" "$DT_0955" >> "$S8_LOG"
+S8_CTL="$TMP/s8.ctl"; control_row "$DRIFTED_BOOT" 0 "$DT0" > "$S8_CTL"
+run_probe "$S8_LOG" "$S8_CTL"
+assert "S8 a leak in the marker-tightened gap IS graded -> exit 1" "[[ '$CASE_RC' -eq 1 ]]"
+assert "S8 the verdict names the marker's boot" "grep -q \"boot=$DRIFTED_BOOT\" <<<\"\$CASE_OUT\""
+# The control: remove the marker and the SAME gap row leaves the graded set (boundary falls
+# back to the first stamped row at 10:00) — proving the marker moved B0, not something else.
+S8_NOMARK="$TMP/s8nomark.log"; grep -v SOLEUR_ZOT_LOG_BOOT "$S8_LOG" > "$S8_NOMARK"
+run_probe "$S8_NOMARK" "$S8_CTL"
+assert "S8 without the marker the gap row is pre-boundary -> exit 3, not 1" "[[ '$CASE_RC' -eq 3 ]]"
+
+# S9: A SOLEUR_ZOT_LOG_DROPPED ROW NEVER SELECTS. It carries boot_id but NO host= (verified in
+# cloud-init-registry.yml's ship() call), so it cannot be host-verified. A DROPPED row stamped
+# with a NEWER foreign boot_id must leave the ctl-derived boot in place — one unverifiable row
+# must not get to choose the evidence base.
+S9_LOG="$TMP/s9.log"; dropped_row "$FOREIGN_BOOT" "2026-08-11 10:05:00.000000" > "$S9_LOG"
+run_probe "$S9_LOG" "$S8_CTL"
+assert "S9 a DROPPED row on a foreign newer boot cannot select the evidence base" \
+  "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\" && grep -q \"boot=$DRIFTED_BOOT\" <<<\"\$CASE_OUT\""
+
+# S10: rows without stamps are BOUNDED, not dropped (must-PASS). An unstamped envelope row on
+# the graded span still grades alongside a stamped DROPPED row on the same boot — delivery
+# needs only one same-boot source.
+S10_LOG="$TMP/s10.log"; : > "$S10_LOG"
+dropped_row "$DRIFTED_BOOT" "$DT_0955" >> "$S10_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S10_LOG"; done
+run_probe "$S10_LOG" "$S1_CTL"
+assert "S10 an unstamped envelope row on the bounded span still grades -> exit 0" \
+  "[[ '$CASE_RC' -eq 0 ]]"
+assert "S10 the stamped DROPPED row is counted on the derived boot (dropped_rows=1)" \
+  "grep -q 'dropped_rows=1' <<<\"\$CASE_OUT\""
 
 # --- C12: structural contract assertions on the probe as a FILE --------------------------
 # AC14: anchored on the executable form, because the prose above legitimately contains 'exit 1'.
