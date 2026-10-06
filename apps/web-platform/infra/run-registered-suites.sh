@@ -654,6 +654,9 @@ _SUITE_BOUNDS=(
   # single-core figure, so a starved -P4 leg cannot bound-kill a green run (the workspaces-luks-provision incident class
   # cited above).
   "apps/web-platform/infra/web-escrow-create-workflow.test.sh=900"
+  # #9372: the rebirth workflow suite runs ~42 rows, executes the real gate under bash -e and a 20-spec mutation battery
+  # (about 65 s on a quiet box). 900 s keeps ~10x headroom so a starved -P4 leg renders as this suite's RED, not a leg timeout.
+  "apps/web-platform/infra/web2-luks-rebirth-workflow.test.sh=900"
 )
 export SOLEUR_SUITE_TIMEOUTS="${_SUITE_BOUNDS[*]}"
 export SOLEUR_SUITE_TIMEOUT_DEFAULT

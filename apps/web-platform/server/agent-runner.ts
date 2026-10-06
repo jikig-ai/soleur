@@ -2492,6 +2492,10 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               conversationId,
               workspaceId: activeWorkspaceId,
               title: `${leader.title} finished`,
+              // feat-session-completion-inline — emits the inline card frame;
+              // sendToClient injects so notifications.ts never imports the
+              // ws-handler graph (cycle).
+              emit: sendToClient,
             });
           }
 
