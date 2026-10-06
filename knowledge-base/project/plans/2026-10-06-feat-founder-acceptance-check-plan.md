@@ -513,3 +513,18 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 ## Addendum — 2026-10-06 (#9578, CLO wording review of the built text)
 
 > **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`pass`, `first-use`, `no-sandbox`, `no-sandbox-ask`, `invalid-ask`, `aggregate-judgement`, `overridden-line`, `nosandbox-continued`, `headless-stop`, `untrusted-ask`), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.
+
+## Addendum — 2026-10-06 (the 12-seat review round; append-only)
+
+> **Supersedes the Acceptance Criteria above where it differs.** The criteria above are kept as written, ticked at the time they were
+> true. Four are no longer true as written: `creates` in the edit-after-freeze list is cut; "interactive shows the exact command and
+> runs nothing before the answer" is now "shown and never run" (UNTRUSTED is a FAIL); the log no longer holds `output_sha256`; and the
+> `plan/SKILL.md` growth bound is unchanged. See ADR-274's addendum for the decisions. Each box below is ticked only after its literal
+> command was run in this round.
+
+- [x] `bun test plugins/soleur/test/preflight-founder-check.test.ts` reports 0 failures, and the mutation battery (every new guard, run in an allocated sandbox with an unmutated control first) kills every mutant that is not recorded below as equivalent.
+- [x] `bash plugins/soleur/test/preflight-check10-suite-integrity.test.sh` is green with its floors ratcheted to the measured values (tests 343+, manifest regenerated, section 1c scanning the reference wrapper).
+- [x] `python3 scripts/lint-skill-body-budget.py --base <merge-base>` and `python3 scripts/lint-rule-bodies.py --check --base <merge-base>` are green, and `plugins/soleur/skills/plan/SKILL.md` is unchanged by this round.
+- [x] `founder-check.py text --list` names every constant and the references name each as `text <key>`; no prose in the three references contains "verified", "proven" or "safe" (the docs tests pin both).
+- [x] The `contributor` description in `model.c4` no longer says a foreign check is confirmed before it runs, and `model.likec4.json` is regenerated (`bash plugins/soleur/test/c4-count-parity.test.sh` green).
+- [ ] The CLO has reviewed the **changed** wording constants listed in the review-round report (`first-use`, `no-block`, `headless-stop` changed; `approval-ask`, `baseline-ok`, `baseline-vacuous`, `capture-question`, `changed-ask`, `eyes-ask`, `failed-ask`, `overridden-changed`, `overridden-failed`, `overridden-invalid`, `overridden-rejected`, `reason-prompt`, `rejected-ask`, `untrusted-fail` added; `no-sandbox-ask`, `nosandbox-continued`, `overridden-line`, `untrusted-ask` removed). Criterion 16 above stays unchecked until then.

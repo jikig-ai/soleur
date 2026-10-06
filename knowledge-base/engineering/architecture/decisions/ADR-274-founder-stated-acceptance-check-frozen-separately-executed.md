@@ -106,3 +106,40 @@ properties need. Extracting the sandbox into a script was rejected here: it conf
 
 The `contributor` actor's description and its adjacent comment in `model.c4` said the discoverability probe is the one PR-head artifact
 preflight executes; they now say plan-declared probes and checks, with no count. No element or relationship is added.
+
+## Addendum — 2026-10-06 (#9578, the 12-seat review round)
+
+> **Supersedes the numbered decisions above where it differs.** Append-only: the text above is kept as written so the change is
+> legible. Source of every item: the review of #9637.
+
+1. **`creates:` is cut.** A path that is absent now and present later is a check the work can satisfy by writing the file, so it
+   certifies nothing about the founder's intent. The canonical fields are now `kind`, `text`, `command`, `expected`, `pins`,
+   `approved_by` and `approved_at`; `hash:` stays in the block (spec FR2/TR1) and is computed by the script, not trusted from it.
+2. **UNTRUSTED is a FAIL, not a prompt.** Decision 6 said an interactive run shows the command and asks. A freeze commit's author is a
+   name anyone can type, so a "yes" to a contributor-written command is a founder approving something they did not write. The command
+   and its author are now shown and nothing runs; the founder states their own check or runs the shown one by hand. A forged operator
+   email is also not enough: with a PR present, both the PR author and the authenticated login must be supplied and equal, or the
+   verdict is `UNTRUSTED` (`pr-author-unmeasurable`). `--no-pr` is the explicit statement that no PR exists.
+3. **File-based interface.** The plan's command, expected text and reason are never typed into a shell word. `verify` writes a decision
+   record and the raw command to files; `classify` and `log` read the record; the one-line reason arrives on stdin. A founder's
+   quoting, backticks or `$( )` therefore cannot reach a shell, and the static rules (control characters, shell-active tokens, secret
+   shapes, the verb gate on the dequoted first word, interpreter operands that are existing pinned repo-relative scripts, and
+   `git -c`, `rg --pre` and `curl -K`) run at `verify` as well as in the sandbox.
+4. **Archival and renames follow the plan.** Compound moves a plan into `plans/archive/<timestamp>-<name>.md` and a spec directory the
+   same way. The freeze is keyed on the plan's identity with the archive prefix stripped, renames are tracked through history, and the
+   log path follows an archived spec directory, so archiving a plan no longer reads as "freeze without block".
+5. **Re-freeze is a real act.** A deliberate change is a commit whose subject starts `plan: re-freeze founder-stated check`, authored
+   by the operator, on a plan that was not already reviewed on main; `verify --candidate --refreeze` baselines it. Candidate mode is
+   refused when a freeze exists without `--refreeze`, and an unresolvable base is `FAIL` when any plan holds a block and `NO-BLOCK`
+   when none does.
+6. **Headless is declared by the caller, defaulting to headless.** The script cannot see whether a founder is present; the
+   references name the predicate (interactive session, no `--headless`, `CI` unset) and default to headless when unsure. Six stopped
+   outcomes map to `STOPPED-AWAITING-FOUNDER` with the cause kept, `OVERRIDDEN` needs a reason and a named cause, and a block present
+   with no sandbox stops the run in every mode (the interactive "continue" was cut: a gate that went dark must not read as green).
+7. **`output_sha256` is dropped from the log** (it let a reader test a guessed output offline) and `commit-log` stages and commits only
+   the log, as `founder-check: log`.
+8. **What a pin does not cover.** A pin fixes one repository script by blob. What that script imports, reads or calls is not pinned,
+   so an interpreter check is only as stable as everything its script loads. Stated in the references so it is not mistaken for a
+   guarantee.
+9. **Wording.** Every founder-facing sentence now lives in `founder-check.py` (`text <key>`); the references only name the key. The
+   changed constants are routed for a second CLO review before ship.

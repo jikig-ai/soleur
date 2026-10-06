@@ -51,3 +51,11 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 - [x] 6.1 Run the suites and lints (plan Phase 6.1–6.2)
 - [x] 6.2 Trace `soleur:ship` staging of `founder-check-log.md`
 - [ ] 6.3 CLO review of prompt, notice, banner and result wording
+
+## Phase 7 — Review round (2026-10-06)
+
+- [x] 7.1 Rewrite `founder-check.py` (file-based interface, canonical fields, archive and re-freeze handling, UNTRUSTED as FAIL)
+- [x] 7.2 Rewrite the suite, the fixtures and the three references for the new interface
+- [x] 7.3 Ratchet the integrity suite (section 1c, manifest, floors)
+- [x] 7.4 Append the ADR, plan, spec and decision-challenges addenda; soften the `contributor` wording and regenerate the C4 json
+- [ ] 7.5 Second CLO review of every changed `WORDING` constant (parent)

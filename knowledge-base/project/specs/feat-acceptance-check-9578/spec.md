@@ -65,3 +65,15 @@ Recorded by `knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-che
 ## Addendum — 2026-10-06 (#9578, CLO wording review of the built text)
 
 > **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`pass`, `first-use`, `no-sandbox`, `no-sandbox-ask`, `invalid-ask`, `aggregate-judgement`, `overridden-line`, `nosandbox-continued`, `headless-stop`, `untrusted-ask`), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.
+
+## Addendum — 2026-10-06 (review round; append-only)
+
+- FR2/TR1 unchanged: `hash:` stays in the block and is computed by `founder-check.py`; the canonical fields are now `kind`, `text`,
+  `command`, `expected`, `pins`, `approved_by`, `approved_at`. `creates:` is removed.
+- The script's interface is file-based (`verify --out/--command-out`, `classify --verify-json`, `log --verify-json`, reason on
+  stdin) so no plan-authored value is typed into a shell word.
+- UNTRUSTED is a FAIL that shows the command and its author and never runs it; a forged operator email is not trusted without both PR
+  logins (or `--no-pr`).
+- Archival (`plans/archive/<ts>-name.md`) and renames keep the freeze; a re-freeze is an operator commit whose subject starts
+  `plan: re-freeze founder-stated check`.
+- Pins fix the named script only, not what it loads.

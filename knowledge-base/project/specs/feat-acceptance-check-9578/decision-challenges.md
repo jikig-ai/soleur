@@ -27,3 +27,16 @@ Recorded at plan time 2026-10-06 from plan-review (taste and user-challenge item
 ## Addendum — 2026-10-06 (#9578, CLO wording review of the built text)
 
 > **Supersedes the wording quoted above where it differs.** The CLO ruled the pass sentence's "complete or safe" negation out (no founder-facing string may contain "verified", "proven" or "safe", with no exemption), and edited the first-use notice (network access, public repository, no secrets), the no-sandbox sentences ("did not run on this computer, so nothing was checked"), the prompts for INVALID, UNTRUSTED, OVERRIDDEN and headless stops, and the roll-up lines. The authority is the `WORDING` constants in `plugins/soleur/skills/preflight/scripts/founder-check.py` (`pass`, `first-use`, `no-sandbox`, `no-sandbox-ask`, `invalid-ask`, `aggregate-judgement`, `overridden-line`, `nosandbox-continued`, `headless-stop`, `untrusted-ask`), pinned by `plugins/soleur/test/preflight-founder-check.test.ts`. Decision-challenge item 7 is resolved by rewrite, not by exemption.
+
+## Addendum — 2026-10-06 (the 12-seat review round; supersedes items above where it differs)
+
+10. **UNTRUSTED no longer prompts.** Item "Applied" above said a block whose freeze or PR author is not the local operator needs
+    show-before-run interactively. It is now a FAIL that shows the command and its author and runs nothing (ADR-274 addendum, item 2).
+    Operator's call if a founder-confirmed run of someone else's command is wanted after all; the cost is that the confirmation is
+    the founder approving a command they did not write.
+11. **`creates:` is cut** (the work can satisfy a path-exists check by writing the file); baselines of "the new file exists" are not
+    supported and are judgement checks.
+12. **No interactive continue when the sandbox is missing.** A block present with no sandbox stops the run in every mode.
+13. **Disputed finding, kept as built:** `expected` rejects only substitution forms (`$(`, backtick, `${`, `<(`, `>(`) and control
+    characters, not every shell-active token. Legitimate expected literals such as `<h1>` or `a|b` contain `<`, `>` and `|`, and the
+    file-based interface never types `expected` into a shell word.
