@@ -15,6 +15,41 @@ lane: cross-domain
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary (deepen-plan pass, 2026-10-06)
+
+Deepen ran inline (no Task subagent in this harness). Halts evaluated:
+4.6 user-brand (section + scope-out present), 4.7 observability (5-field
+schema, `curl` probe, literal `workflow_runs` expected output), 4.8 (no new
+PAT-shaped variables), 4.9 (no UI surface — skipped), 4.10 (no persistent
+store or new cross-component connection — the runs-list call reuses the
+existing GitHub API edge), 4.11 (two guards with property/assembly/≥3-row
+mutation matrices/harness rows/anchors), 4.12 (scope check complete), 4.55
+(no offline-inducing operation), 4.4 precedent-diff (drain mirrors the
+queue-health sweep source, read verbatim).
+
+### Key Improvements
+- `stuck` verdict threshold fixed at 11 min — strictly above the executor's
+  own `timeout-minutes: 10`, so a merely-late run can never page and a
+  genuinely runner-waited run pages at most one tick late.
+- Unfiltered runs list adopted over `event=workflow_dispatch` — covers
+  schedule-fallback and manual reds at zero cost (recorded in Scope Check
+  as an inferred superset of the issue's "previous dispatched run").
+- `gh issue view` substituted for `gh pr view` in the drain — identical
+  state information under the existing `issues:write` grant; avoids a
+  `pull-requests: read` widening (verified against live #9571).
+- M7 reachable failure shapes enumerated: `declined_suites=3` (real elapsed
+  ≥ ceiling before `bumpfixture` — closed by the 300/360 margin), absent
+  marker (runner died pre-epilogue — covered by the rc/log dump);
+  `declined_suites=1|0` proven mechanically unreachable on this code path.
+
+### New Considerations Discovered
+- The M7 sandbox arm runs `_AFFECTED=1` (CI stripped) — the affected
+  pre-pass executes inside the sandbox but degrades via `index-missing`
+  before `_RUN_START_EPOCH`, so 10-05's derivation merges cannot reach the
+  verdict path (task (a) answer).
+- Drain anchor `PR #N pending` matches the detect step's filed title AND
+  its dedupe `match_anchor` — three consumers share one canonical shape.
+
 ## Overview
 
 Two tracked Oct 5–6 merge-queue/CI findings close in one change set. The
