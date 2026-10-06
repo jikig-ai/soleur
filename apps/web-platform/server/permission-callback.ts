@@ -246,11 +246,13 @@ export interface CanUseToolDeps {
    * degrade honestly for repo-less users. Optional: dep-less contexts (unit
    * tests, any future runner that builds deps without the field) leave it
    * unwired — the record stores `undefined`, the emitted frame omits the
-   * field, and the copy falls back to the legacy caveat arm. (The legacy
-   * `agent-runner.ts` construction is NOT such a producer: it hard-pins
-   * `command_center` and never sets `persona`, so it cannot reach a support
-   * deny at all — in production every support deny carries a concrete
-   * boolean.)
+   * field, and the copy falls back to the legacy caveat arm. `undefined` also
+   * occurs on a WIRED dep whose dispatch-time read resolved degraded (a
+   * transient blip, not an honest "no repo" — see cc-dispatcher), so in
+   * production the flag is {true, false, undefined}, not a bare boolean.
+   * (The legacy `agent-runner.ts` construction is NOT such a producer: it
+   * hard-pins `command_center` and never sets `persona`, so it cannot reach
+   * a support deny at all.)
    */
   repoConnected?: boolean;
 }

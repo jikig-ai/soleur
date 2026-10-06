@@ -648,10 +648,11 @@ export function ChatSurface({
   // exactly once per mount — a second `?q=` navigation to this same pathname
   // leaves its param in the URL (same once-per-mount scope as firstRun).
   // The wholesale clear also drops params outside the deferral set (e.g.
-  // `leader`) — identical to the first-run strip's `msg+leader` trade-off,
-  // and harmless here because startSession consumes `leader` in an earlier-
-  // ordered effect. No producer emits `q` combined with other params; the
-  // residue cases (`?fr=1&q=x` with no staged files) are crafted-URL-only.
+  // `leader` — unlike the first-run strip, this effect has no
+  // `sessionConfirmed` gate, so a crafted `?q=&leader=` URL CAN strip leader
+  // before startSession consumes it while `status` is still connecting).
+  // No producer emits `q` combined with other params; the reachable cases
+  // are crafted-URL-only residue.
   const qStrippedRef = useRef(false);
   useEffect(() => {
     if (qStrippedRef.current) return;

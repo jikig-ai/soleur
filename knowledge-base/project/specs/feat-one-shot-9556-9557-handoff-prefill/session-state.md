@@ -46,4 +46,8 @@ Change class: `code` · Tier: `none` (plan frontmatter + declared sensitive-path
 | PR body needs `Closes #9556/#9557` | ship-time artifact | git-history-analyzer | P3 — ship handles |
 | cc-dispatcher.ts:2145 path-join warning | pre-existing, untouched line | semgrep-sast | none — not in diff |
 
-Clean lenses: security-sentinel, performance-oracle, semgrep-sast (PR-introduced), git-history (claims byte-exact), data-integrity, agent-native, architecture, pattern-recognition — no P1s anywhere.
+Clean lenses (no findings filed): security-sentinel, performance-oracle, semgrep-sast (PR-introduced). All other seats filed P3-class findings only — no P1s anywhere in the first round.
+
+### Fix round 1 (fd4a137b..13451984d3, seats=10)
+
+Round-1 seats found **1 P1 + 1 P2 + several P3s**, all fixed in `b7a7564603` + follow-up: stale `current-repo-url` mocks in `cc-dispatcher-warm-presandbox-mkdir.test.ts` and `cc-dispatcher-prefill-guard.test.ts` (suite-wide breaks from the `readCurrentRepoUrlResult` swap); "concrete boolean" overstatement contradicted by the same commit's degraded arm; `denySupport` JSDoc/source misquote; `undefined`-source enumeration gaps in support-escalation.ts + ADR-113; unsound "earlier-ordered effect" rationale in the strip comment; latch test needed a distinct third prefill to discriminate under `[prefill]` deps.

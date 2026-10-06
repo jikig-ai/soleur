@@ -123,11 +123,13 @@ records a per-conversation escalation, and the support route emits a
 `support_handoff` SSE frame (`{task, conversationId, repoConnected?}`, task
 server-derived from the POSTed message, ≤500 code points) immediately BEFORE
 the terminal frame. `repoConnected?` is recorded at deny time, sourced from the
-`repoUrl` resolution `dispatchSoleurGo` already performs (`repoUrl !== null`,
-zero extra reads); it stays optional so dep-less deny contexts (unit tests
-and any future unwired deps path) keep the pre-widening frame shape — the
-legacy `agent-runner.ts` deps construction never sets `persona: "support"`,
-so it cannot reach a support deny at all and is NOT such a producer.
+`repoUrl` resolution `dispatchSoleurGo` already performs
+(`readCurrentRepoUrlResult`, zero extra reads — `degraded` emits `undefined`
+rather than a false "not connected"); it stays optional so dep-less deny
+contexts (unit tests and any future unwired deps path) keep the
+pre-widening frame shape — the legacy `agent-runner.ts` deps construction
+never sets `persona: "support"`, so it cannot reach a support deny at all
+and is NOT such a producer.
 The client stores it in a separate `handoffMarkdown` state field so
 `stream`-replace and error-fallback cannot discard it, and renders an
 "Ask an agent →" deep link to `/dashboard/chat/new?msg=<task>`.

@@ -49,8 +49,10 @@ export interface SupportEscalationRecord {
    * fired — injected from `CanUseToolDeps.repoConnected`, which cc-dispatcher
    * fills from the `repoUrl` it already resolves per dispatch. `undefined`
    * when the dep is unwired (dep-less deny contexts — unit tests and any
-   * future runner path that does not fill the field): the emitted frame
-   * omits the field and the client renders the legacy copy arm.
+   * future runner path that does not fill the field) OR when the wired dep
+   * resolved degraded (a transient dispatch-time read blip — cc-dispatcher
+   * emits `undefined` rather than a false "not connected"): the emitted
+   * frame omits the field and the client renders the legacy copy arm.
    */
   repoConnected?: boolean;
 }
@@ -116,7 +118,9 @@ export function clearSupportEscalation(conversationId: string): boolean {
  * One authoring point for a support-persona deny: structured `deny-support-*`
  * log (the observability join key is `conversationId`), permission-decision
  * log, escalation record, and the ADR-070 user-relayable deny — every present
- * and future support deny path gets record + telemetry for free.
+ * and future ESCALATING support deny path gets record + telemetry for free.
+ * (The deliberately non-escalating support denies — AskUserQuestion and the
+ * UX-signal belts in permission-callback.ts — bypass this helper.)
  *
  * `detail` is sanitized before logging and ALSO emitted under the legacy
  * `requested` key for the skill arm — the original `deny-support-skill` line
