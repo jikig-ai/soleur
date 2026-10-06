@@ -38,7 +38,7 @@ Forms: F1 `-q` to `-c` plus `>/dev/null` (default, dialect-neutral, byte-exact);
 - [ ] 4.1 `ci-deploy.sh` (15) in lockstep with `soleur-host-bootstrap.sh:454`; keep `ci-deploy.test.sh:9697-9701` mutation rows applying
 - [ ] 4.2 `soleur-host-bootstrap.sh`, `web-private-nic-guard.sh`, `cron-egress-*.sh`, `cloud-init.yml:511` (F1)
 - [ ] 4.3 `server.tf` (9) and `workspaces-luks.tf:253` inline strings (F1); `terraform fmt -check` and `validate`; enumerate every workflow that can apply each edited `.tf`
-- [ ] 4.4 Run the owning suites by name plus `bash -n`, `sh -n`, shellcheck
+- [ ] 4.4 Run the owning suites by name (including `cloud-init-user-data-size.test.ts`, `cron-egress-enforce-probe.test.sh`, `soleur-host-bootstrap-observability.test.sh`, `cloud-init-ghcr-seed-login.test.sh`, `inngest-luks-cutover.test.sh`) plus `bash -n`, `sh -n`, shellcheck
 - [ ] 4.5 Confirm the four replace-class files are untouched (AC3 command)
 
 ## Phase 5 - Verify, evidence, ship

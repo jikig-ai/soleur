@@ -16,6 +16,31 @@ requires_cpo_signoff: false
 Spec lacks a valid `lane:` (no spec.md for this branch) — defaulted to `cross-domain` (fail-closed).
 PR body uses `Ref #9217`, `Ref #7005`, `Ref #6601`, `Ref #7376`, `Ref #9482`; never `Closes`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Method:** the plan-review panel (DHH, Kieran, code-simplicity, CTO devex) served as the review fan-out; the deepen gates 4.5-4.12 were run mechanically; every cited issue, PR, rule id, path and command was re-verified live (below). No additional per-section research agents were spawned: the Phase 1 research already read the guard, the three user_data renders, the apply workflows and the pin sites directly.
+
+### Key improvements applied
+1. Corrected a false claim: `scripts/check-deploy-script-parity.sh` does not tie the two `_gak_ref_ok` copies; the `GAK_BOTH` rows of `ci-deploy.test.sh` do (Kieran P1).
+2. The real-table probe now runs `scan_sweep` on a scratch root, so `SWEEP_PATHSPEC` and `PATTERN_V2` are exercised and the "zero rule" for `.github` and `lefthook.yml` is proven, not only the verdict (Kieran P1).
+3. Mutation row 6 inserted below the gated rows (above them it was masked by a stale-deferral red), and rows 2, 3, 4, 7 demoted to one-off hand mutations (simplicity P1).
+4. Suite lists completed (`cloud-init-user-data-size.test.ts`, `cron-egress-enforce-probe.test.sh`, `soleur-host-bootstrap-observability.test.sh`, `inngest-luks-cutover.test.sh`, `cloud-init-ghcr-seed-login.test.sh`); `web-private-nic-guard.sh` added to the re-provision-on-merge risk.
+5. Behaviour-preserving form for `reusable-release.yml` (`|| tags=""`), AC exit-status traps fixed, streaming-producer census added (none among the 140 lines).
+
+### New considerations discovered
+
+- The per-merge apply excludes the inngest, registry and git-data hosts, so the user_data drift is silent until the next full apply or dispatch; the plan no longer cites the destroy guard as a barrier.
+- `cron-egress-*` edits re-run the nft install on web hosts at merge, and #8945 records that `nft -f` does not replace atomically (see R9).
+- Two plan-review reviewers recommend splitting class W up front; persisted as a User-Challenge in `specs/feat-one-shot-merge-queue-pipefail-wave-a2/decision-challenges.md`.
+
+### Live verifications run in this pass
+
+- `gh issue view` on #9554, #9525, #9523, #9552, #9576, #9529, #9571, #9569, #8945, #7432, #9482, #7376, #6601, #7005, #5288: all exist; #9554/#9525/#9523/#5288 MERGED, the rest OPEN; titles match the roles the plan gives them.
+- Rule ids cited in the plan all resolve to active `[id: ...]` entries in `AGENTS.md`.
+- Gate 4.12: exactly one unfenced `## Scope Check`; gate 4.8: no PAT-shaped token; gate 4.11: `python3 scripts/lint-guard-contract.py` green (1 guard entry in this plan).
+- `bash .claude/hooks/grep-q-pipe-guard.test.sh` takes 2.9 s locally and prints `PASS: grep-q-zero-sweep-pass`.
+
 ## Overview
 
 The 2026-10-06 sweep (#9554, merge `ed6a77b868`) made the guard derive the pipe-fed early-exit
@@ -280,7 +305,7 @@ discoverability_test:
   expected_output: "PASS: grep-q-zero-sweep-pass"
 ```
 
-(The command takes about 3 s locally, measured: `real 0m2.932s`, inside preflight Check 10's 15 s cap.)
+(Check 10 fit, argued rather than waived: the command matches deepen-plan's suite-shaped detection only because the guard lives in a `*.test.sh` file; it is one file, measured at `real 0m2.932s`, well inside the 15 s cap, and its own `PASS:` line is the signal, so no smaller command prints it. First token `bash` is on the probe-verb allowlist, and the command contains no `ssh`.)
 
 ## Architecture Decision (ADR/C4)
 
@@ -290,6 +315,17 @@ describe actors, systems and containers; this change adds none and touches no ac
 (checked against `model.c4`, `views.c4`, `spec.c4`: no element is named after a guard, a deferral table or a
 CI predicate). The cardinality gate `plugins/soleur/test/c4-count-parity.test.sh` is run in Phase 5 as the
 backstop rather than reasoned about.
+
+## Encryption Posture
+
+```yaml
+# Not triggered. This change introduces no persistent store and no new cross-component connection:
+# it rewrites read-only grep predicates inside existing scripts and CI steps. The `.tf` and cloud-init
+# paths in the file list match the detection regex only because inline shell strings sit inside them;
+# no resource, volume, bucket, queue, endpoint or TLS setting is added or altered.
+at_rest: []
+in_transit: []
+```
 
 ## Guard Contract
 
@@ -433,7 +469,7 @@ gate does not fire). Engineering-internal specialists are covered by the Plan Re
 - **R5 Merge-queue and CI cost.** `.github/workflows/**` and `apps/web-platform/infra/**` edits arm path-gated batteries (`deploy-script-tests` x4 shards, `infra-validate`, the PR-quality guards); this PR does not edit `scripts/lib/test-affected-paths.sh`, so the ~2,900 s full battery is not armed by it. Mitigation: one batched push.
 - **R6 Local blind spot.** `--affected` does not select the guard for `.github/` or `lefthook.yml` edits (the guard's path list at `scripts/lib/test-affected-paths.sh:1415` names `.claude/hooks/`, `plugins/.`, `apps/web-platform/infra/` and four suites). Mitigation: run the guard by name; widening the index is machinery (item H/G territory), not this PR.
 - **R7 Post-merge prod effect (class W).** `apply-deploy-pipeline-fix.yml` pushes the new `ci-deploy.sh` and siblings to web hosts over the CF tunnel and the SSH bridge; a mis-edit stalls deploys. Mitigation: `ci-deploy.test.sh`, `bash -n`, the apply run log read by `soleur:postmerge`, and revert-ready single-purpose commits.
-- **R9 Cron-egress re-provision on merge.** `cron-egress-*.sh` (`server.tf` cron-egress `triggers_replace`) and `web-private-nic-guard.sh` (hashed into `terraform_data.private_nic_guard_install.triggers_replace`, owning suite `web-private-nic-guard.test.sh`) are hashed into `terraform_data` `triggers_replace`, and `apply-web-platform-infra.yml` fires on any `apps/web-platform/infra/**` merge, so editing them re-runs the nft install and `cron-egress-postapply-assert.sh` on the web hosts. This is the designed path for any edit to those files, not a side effect, but a slip in the 12 converted assertion lines fails the apply. Mitigation: `cron-egress-firewall.test.sh`, `cron-egress-self-heal.test.sh`, `cron-egress-nftables.test.sh`, and AC15 reads the apply run.
+- **R9 Cron-egress re-provision on merge.** `cron-egress-*.sh` (`server.tf` cron-egress `triggers_replace`) and `web-private-nic-guard.sh` (hashed into `terraform_data.private_nic_guard_install.triggers_replace`, owning suite `web-private-nic-guard.test.sh`) are hashed into `terraform_data` `triggers_replace`, and `apply-web-platform-infra.yml` fires on any `apps/web-platform/infra/**` merge, so editing them re-runs the nft install and `cron-egress-postapply-assert.sh` on the web hosts. This is the designed path for any edit to those files, not a side effect, but a slip in the 12 converted assertion lines fails the apply. A second consideration: #8945 records that `nft -f` does not replace a ruleset atomically, so the re-install can open a short egress-policy window on the web host while it runs. That is the existing behaviour of every edit to these files, not new, and this PR changes only grep predicates inside the assert script, not the ruleset. Mitigation: `cron-egress-firewall.test.sh`, `cron-egress-self-heal.test.sh`, `cron-egress-nftables.test.sh`, and AC15 reads the apply run.
 - **R8 Image-coherence chain.** Editing host scripts moves `host_scripts_content_hash` away from the baked pin used by `web-host-create` until the next release; this is the same effect as every routine edit to these files and is accepted, not mitigated here.
 - **Accepted gaps (unchanged):** 403 secondary rate limit not retried; late run on a congested runner pool not detected.
 
