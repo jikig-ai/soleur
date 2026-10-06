@@ -287,13 +287,15 @@ jobs:
           # under the bare `v` prefix are rejected (#4082). The tag list is read
           # into a variable first and grep reads that value, so no producer sits
           # on the other end of a pipe that `grep -m1` closes early (the producer
-          # is the side that takes SIGPIPE, not grep). `|| tags=""` keeps the
-          # old behaviour when `git tag` itself fails (fall through to 0.0.0).
+          # is the side that takes SIGPIPE, not grep). A failing `git tag` aborts
+          # the step (errexit), which is what the old pipeline did under the
+          # repo's documented -eo pipefail default for a `run:` with no `shell:`
+          # key; it must NOT fall through to the 0.0.0 bootstrap arm below.
           # `|| [ $? -eq 1 ]` lets the existing empty-fallback below fire on
           # no-match (grep exit 1, bootstrap of a new prefix) WITHOUT masking
           # grep exit 2 (regex syntax error — would surface a latent escaping
           # bug instead of silently falling back to 0.0.0).
-          tags=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname) || tags=""
+          tags=$(git tag --list "${TAG_PREFIX}*" --sort=-version:refname)
           LATEST_TAG=$(grep -m1 -E "^${TAG_PREFIX_RE}[0-9]+\.[0-9]+\.[0-9]+$" <<<"$tags" || [ $? -eq 1 ])
 
           if [ -z "$LATEST_TAG" ]; then

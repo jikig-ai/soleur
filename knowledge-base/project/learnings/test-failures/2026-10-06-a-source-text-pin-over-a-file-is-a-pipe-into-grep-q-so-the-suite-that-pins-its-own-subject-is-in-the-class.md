@@ -10,8 +10,9 @@ so it read as a flake.
 ## Root cause
 
 Line 779 is `grep -vE '^[[:space:]]*#' "$GEN" | grep -qE '^[[:space:]]*meta_json=...'` under `set -uo pipefail`.
-`$GEN` is 17,002 bytes and the match is on line 88. `grep -v` writes in 4 KiB chunks, `grep -q` exits at the
-first match, and the producer takes SIGPIPE (rc 141), or EPIPE (rc 1) where SIGPIPE is ignored as on the CI
+`$GEN` is 17,002 bytes raw; the reader sees the comment-stripped stream (8,753 bytes), where the match is on
+stream line 36, about byte 1,522, so roughly 7,200 bytes are still unwritten when `grep -q` exits. `grep -v`
+writes in 4 KiB chunks, `grep -q` exits at the first match, and the producer takes SIGPIPE (rc 141), or EPIPE (rc 1) where SIGPIPE is ignored as on the CI
 runner. `pipefail` reports the producer's status, so a present line reads as absent. Measured at the exact
 assertion, 3,000 iterations: default SIGPIPE 4 misses, ignored SIGPIPE 1 miss (19 and 11 in an earlier run of the
 same loop); `grep: write error: Broken pipe` on stderr. After the rewrite: 0 and 0.

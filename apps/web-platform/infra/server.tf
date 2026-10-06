@@ -1602,7 +1602,7 @@ resource "terraform_data" "registry_insecure_config" {
       "systemctl reload docker",
       # Assert dockerd now honors the private-net zot registry as insecure (fail loud if
       # the reload silently did not pick it up). Endpoint DERIVED from local.registry_endpoint
-      # (#6448) so this probe follows a subnet renumber automatically; -qF = fixed-string so
+      # (#6448) so this probe follows a subnet renumber automatically; -cF = fixed-string so
       # the '.'/':' are literal.
       "docker info 2>/dev/null | grep -cF '${local.registry_endpoint}' >/dev/null",
     ]

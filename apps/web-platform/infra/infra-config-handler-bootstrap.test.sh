@@ -263,7 +263,7 @@ assert "the inngest-heartbeat DropInPaths probe greps a real drop-in anchor" \
 assert "the inngest-server DropInPaths probe greps a real drop-in anchor" \
   "printf '%s' \"\$BLOCK\" | grep -F 'DropInPaths inngest-server.service' | grep -qF \"grep -c 'doppler-token.conf' >/dev/null\""
 assert "no DropInPaths probe was weakened to an empty grep pattern" \
-  "! printf '%s' \"\$BLOCK\" | grep -F DropInPaths | grep -qE \"grep -[qc] ''\""
+  "! printf '%s' \"\$BLOCK\" | grep -F DropInPaths | grep -qE \"grep -[qc][A-Za-z]* (''|\\\"\\\")\""
 
 # AC-B4 -- activation, not just reload. inngest-heartbeat and inngest-server carry drop-ins in
 # FILE_MAP and are absent from RESTART_MAP, so the reload is the only activation step THIS channel

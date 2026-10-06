@@ -81,7 +81,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/drain-labeled-backlog/scripts/group-by-area.s
 
 The helper:
 
-- Validates the label exists via `gh label list` and the milestone title exists via `gh api ...milestones` + `grep -Fxc ... >/dev/null` before querying. Both checks fail fast on invalid input rather than producing a silent empty cluster.
+- Validates the label exists via `gh label list` and the milestone title exists via `gh api ...milestones` + an exact-line `grep -Fx` before querying. Both checks fail fast on invalid input rather than producing a silent empty cluster.
 - Uses two-stage piping (`gh --json ... | jq`), never `gh --jq` with `--arg` (learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`).
 - Parses each issue body for file paths matching `(ts|tsx|js|jsx|py|rb|go|md|sh|yml|yaml|sql|tf|njk)` extensions via a non-capturing regex.
 - Assigns each issue to an **area** = top two path segments (e.g., `apps/web-platform`, `plugins/soleur`) of its most-referenced file path.

@@ -482,3 +482,11 @@ gate does not fire). Engineering-internal specialists are covered by the Plan Re
 - A `.tf` hit is Terraform source, not shell: edit only the shell token inside the string, keep `\"` escapes, and let `terraform fmt -check` prove the string still parses.
 - Do not use `[skip-deploy-fix-apply]`: skipping leaves the repo text and the host copy different, and the 12 h drift cron then reds. The merge is the authorization (`apply-deploy-pipeline-fix.yml` header).
 - Counts in this plan carry the command that produced them and rot; re-measure before quoting in the PR body.
+
+## Addendum — 2026-10-06 (work and review outcome)
+
+Supersedes the "four replace-class files" and "T4.3 converts `workspaces-luks.tf:253`" statements above; the plan body is left as written.
+
+- The guard ships **six** file-exact `=` rows, not four: the four `user_data` carriers, plus `workspaces-luks.tf` (the public-log forensic print is sha256-pinned and only the `grep -q` form is allowed by `luks-monitor-install.test.sh` G2/G4) and `inngest-luks-cutover.sh` (baked into the digest-pinned inngest bootstrap image; `cloud-init-inngest-bootstrap.test.sh` GuardA requires byte-identity with `vinngest-v1.1.44`). Both were converted first and reverted after a suite run and the architecture review seat found them.
+- Three source-text pins outside the diff followed the conversion and were updated here: `ci-deploy.test.sh` row 7.14c, `infra-config-handler-bootstrap.test.sh`, `web-ghcr-deny.test.sh` mutation 15, and `cloud-init-user-data-size.test.ts`. The T0.3 census was derived from basenames and missed the last two; running the full affected gate would have found them (the operator chose to rely on CI).
+- `reusable-release.yml`: the `|| tags=""` fallback was dropped. A failing `git tag` aborts the step, which is what the old pipeline did under the repo's documented `-eo pipefail` default.

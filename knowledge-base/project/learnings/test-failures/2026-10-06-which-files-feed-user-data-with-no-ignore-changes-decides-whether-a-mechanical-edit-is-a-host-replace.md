@@ -9,7 +9,11 @@ directory, showed 21 of the 92 sit in four files whose bytes are rendered into `
 `cloud-init-inngest.yml` (4), `cloud-init-git-data.yml` (3), `git-data-bootstrap.sh` (1, embedded by the
 git-data userdata module). Those three servers carry no `ignore_changes = [user_data]`, and `user_data` is
 ForceNew on the provider, so a one-token lint edit to any of them is a host replace at the next full apply or
-maintenance-window dispatch.
+maintenance-window dispatch. Review then found two more carrier classes the directory census could not see:
+`workspaces-luks.tf`'s public-log forensic print is sha256-pinned (`luks-monitor-install.test.sh` G2/G4 allow
+only the `grep -q` form), and `inngest-luks-cutover.sh` is baked into the digest-pinned inngest bootstrap image
+(`cloud-init-inngest-bootstrap.test.sh` GuardA requires byte-identity with tag `vinngest-v1.1.44`, so an edit
+needs a new image and a pin bump in `cloud-init-inngest.yml`). The shipped table therefore has six file-exact rows.
 
 ## Root cause
 
@@ -28,11 +32,15 @@ every loose (`<=`) row is test-shaped, so a broad production row cannot absorb a
 
 ## Key insight
 
-Before calling an edit mechanical, ask what the file is a CARRIER of, not what directory it lives in. The
-question has a mechanical answer: read the `lifecycle` block of every resource that renders the file
-(`grep -n ignore_changes` on the server resources) and check whether the per-merge apply covers that resource.
-The same file can be inert on one host (`cloud-init.yml` on web-1, `ignore_changes=[user_data]`) and a replace
-trigger on another.
+Before calling an edit mechanical, ask what the file is a CARRIER of, not what directory it lives in, and which
+OTHER files pin its bytes or text. Three mechanical answers: read the `lifecycle` block of every resource that
+renders the file (`grep -n ignore_changes` on the server resources) and check whether the per-merge apply covers
+that resource; `grep` the edited basename against every `triggers_replace`, `filesha256` and image-pin test; and
+run the sibling suites that reference the file by TEXT, not only by name (here three suites outside the diff
+pinned converted lines: `web-ghcr-deny.test.sh`, `cloud-init-user-data-size.test.ts`, `ci-deploy.test.sh`). A
+basename-derived census found two of the five carrier classes; the architecture review seat found the rest by
+running suites the diff never named. `cloud-init.yml` is rendered only by the web hosts, which carry
+`ignore_changes = [user_data]`, so the same edit is inert there and a replace on the three hosts above.
 
 ## Tags
 

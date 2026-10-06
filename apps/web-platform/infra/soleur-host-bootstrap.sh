@@ -744,7 +744,7 @@ cat > /usr/local/bin/soleur-wait-nic <<'NICEOF'
 # boot is a blind surface (no SSH, no shell), so an arm that emitted nothing would be
 # indistinguishable from a gate that never shipped.
 EXPECTED="$1"
-# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -qwF -- ""` matches
+# (0) ARGUMENT GUARD — load-bearing, and the direction that matters. `grep -cwF -- ""` matches
 # EVERY line, so an empty argument would make the first probe succeed and emit
 # private_nic_ready: positive evidence that a check passed which was never performed. That is
 # strictly worse than the fail-open this helper is designed for, and it inverts the #6415
@@ -770,7 +770,7 @@ if [ "$PROBE_OK" != true ]; then
   exit 0
 fi
 # (2) Probe. The probe's EXIT is captured separately from the match result, because a pipeline
-# reports only grep's status: `ip … 2>/dev/null | grep -qwF` makes an `ip` that RUNS AND FAILS
+# reports only grep's status: `ip … 2>/dev/null | grep -cwF` makes an `ip` that RUNS AND FAILS
 # (netlink denied, truncated image) indistinguishable from one that ran and found nothing —
 # reporting "could not measure" as "absent", the #6415 mislabel arriving through a second door.
 # probe_ran records whether the instrument EVER worked; the fault arm fires only if it never did
