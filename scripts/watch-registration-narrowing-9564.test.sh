@@ -123,11 +123,11 @@ merge_commit() {
 # also adds a run_suite line): it must never be counted as a registration run.
 conflict_merge() {
   g checkout -q -b side2 "$BASE" || fatal "branch fixture failed"
-  echo 'run_suite "scripts/side" bash side.sh' >> "$REPO/$TEST_ALL"; commit_all "side registration"; SHAS="$SHAS $(g log -1 --format=%h)"
+  assert_fixture_dir "$REPO"; echo 'run_suite "scripts/side" bash side.sh' >> "$REPO/$TEST_ALL"; commit_all "side registration"; SHAS="$SHAS $(g log -1 --format=%h)"
   g checkout -q main || fatal "checkout fixture failed"
-  echo 'run_suite "scripts/mainline" bash main.sh' >> "$REPO/$TEST_ALL"; commit_all "main registration"; SHAS="$SHAS $(g log -1 --format=%h)"
+  assert_fixture_dir "$REPO"; echo 'run_suite "scripts/mainline" bash main.sh' >> "$REPO/$TEST_ALL"; commit_all "main registration"; SHAS="$SHAS $(g log -1 --format=%h)"
   g merge -q side2 -m "merge side2 (hand-resolved)" >/dev/null 2>&1
-  printf 'a\nb\nrun_suite "scripts/mainline" bash main.sh\nrun_suite "scripts/side" bash side.sh\nrun_suite "scripts/merged-extra" bash x.sh\n' > "$REPO/$TEST_ALL"
+  assert_fixture_dir "$REPO"; printf 'a\nb\nrun_suite "scripts/mainline" bash main.sh\nrun_suite "scripts/side" bash side.sh\nrun_suite "scripts/merged-extra" bash x.sh\n' > "$REPO/$TEST_ALL"
   commit_all "merge side2 (hand-resolved)"
 }
 # Shapes that touch the runner and MENTION `run_suite` without registering a suite.
@@ -139,7 +139,7 @@ other_run_suite() { assert_fixture_dir "$REPO"; echo "# tidy $RANDOM" >> "$REPO/
 # A base commit that EXISTS but is not an ancestor of HEAD.
 offbranch_base() {
   g checkout -q -b off "$BASE" || fatal "branch fixture failed"
-  echo "off-$RANDOM" >> "$REPO/other.txt"; commit_all "off-branch commit"
+  assert_fixture_dir "$REPO"; echo "off-$RANDOM" >> "$REPO/other.txt"; commit_all "off-branch commit"
   OFF="$(g rev-parse HEAD)"; g checkout -q main || fatal "checkout fixture failed"
 }
 
@@ -274,6 +274,7 @@ mkrepo; q 1; q 2; q 3; run --help
 
 # ---- S12: refuses to run under xtrace (the script holds a live token) ----
 mkrepo; q 1; q 2; q 3
+assert_fixture_dir "$REPO"; assert_fixture_dir "$MOCKD"
 ( cd "$REPO" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" GH_REPO=jikig-ai/soleur "WATCH_BASE_SHA=$BASE" bash -x "$SUT" ) > "$MOCKD/stdout" 2> "$MOCKD/stderr"
 RC=$?; ERR="$(cat "$MOCKD/stderr")"
 [[ "$RC" -eq 78 && "$ERR" == *"refusing to run under xtrace"* && "$(wc -l < "$MOCKD/calls")" -eq 0 ]] && pass "S12 bash -x: exit 78 with the refusal, no gh call" || fail "S12 (rc=$RC err=$ERR)"
@@ -287,10 +288,10 @@ wf_active="$(grep -vE '^[[:space:]]*#' "$WF")"
 # checkout is full-depth, the token and permission the script needs are declared, and the
 # step runs THIS script (which must exist).
 wf_missing=""
-printf '%s\n' "$wf_active" | grep -qF "    - cron: '17 9 * * 1'" || wf_missing="$wf_missing cron"
-printf '%s\n' "$wf_active" | grep -qE '^          fetch-depth: 0$' || wf_missing="$wf_missing fetch-depth"
-printf '%s\n' "$wf_active" | grep -qE '^  issues: write$' || wf_missing="$wf_missing issues-write"
-printf '%s\n' "$wf_active" | grep -qF 'GH_TOKEN: ${{ github.token }}' || wf_missing="$wf_missing GH_TOKEN"
+grep -qF "    - cron: '17 9 * * 1'" <<<"$wf_active" || wf_missing="$wf_missing cron"
+grep -qE '^          fetch-depth: 0$' <<<"$wf_active" || wf_missing="$wf_missing fetch-depth"
+grep -qE '^  issues: write$' <<<"$wf_active" || wf_missing="$wf_missing issues-write"
+grep -qF 'GH_TOKEN: ${{ github.token }}' <<<"$wf_active" || wf_missing="$wf_missing GH_TOKEN"
 wf_run="$(printf '%s\n' "$wf_active" | sed -nE 's/^        run: bash (scripts\/[A-Za-z0-9._-]+\.sh)$/\1/p')"
 [[ "$wf_run" == "scripts/watch-registration-narrowing-9564.sh" && -f "$SCRIPT_DIR/../$wf_run" ]] || wf_missing="$wf_missing run-script"
 [[ -z "$wf_missing" ]] && pass "S13b workflow contract: weekly cron, fetch-depth 0, issues:write, GH_TOKEN, runs the watcher script" || fail "S13b workflow lines missing:$wf_missing"
