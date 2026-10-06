@@ -89,7 +89,7 @@ No architectural decision: a static marketing section. `model.c4` does not model
 
 ## Approved copy (spec FR1a as amended by the plan-gate decisions)
 
-> **Superseded 2026-10-06 (CLO review of the built text, #9577):** the wording below is the pre-CLO copy. The company name in the brief card, the H2, the Legal and Marketing lines, caption line 1 and caption line 2, and the figure name were all amended; the authority is the "FR1a/FR2 amendment (CLO review)" paragraph in `knowledge-base/project/specs/feat-homepage-demo-9577/spec.md` and the shipped `plugins/soleur/docs/_data/fanoutDemo.js`, pinned verbatim by `plugins/soleur/test/fanout-demo-drift.test.ts`. Do not paste from this block.
+> **Superseded 2026-10-06 (CLO review of the built text, #9577):** the wording below is the pre-CLO copy. The company name in the brief card, the H2, the Legal and Marketing lines, caption line 1 and caption line 2, and the figure name were all amended; the authority is the "FR1a/FR2 amendment (CLO review)" paragraph in `knowledge-base/project/specs/archive/20261006-205404-feat-homepage-demo-9577/spec.md` and the shipped `plugins/soleur/docs/_data/fanoutDemo.js`, pinned verbatim by `plugins/soleur/test/fanout-demo-drift.test.ts`. Do not paste from this block.
 
 Label `How a brief reaches the departments` (CSS-uppercased). Visible tag `Illustrative example · sample data`. H2 `One brief reaches the departments it concerns. You keep the final say.` Brief card eyebrow `Founder brief`, text `Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.` Rows (department order unchanged):
 
@@ -185,7 +185,7 @@ Test-first (`cq-write-failing-tests-before`): Phase 1 is RED, Phase 2 turns it G
 
 - `plugins/soleur/docs/index.njk`
 - `plugins/soleur/docs/css/style.css`
-- `knowledge-base/project/specs/feat-homepage-demo-9577/spec.md` (amendment: Option A copy, label, deviations, PNGs superseded)
+- `knowledge-base/project/specs/archive/20261006-205404-feat-homepage-demo-9577/spec.md` (amendment: Option A copy, label, deviations, PNGs superseded)
 - `knowledge-base/marketing/brand-guide.md` (pre-merge: bundled-change line in the hero-CTA test block)
 
 **Not edited, on purpose:** the inline critical CSS in `base.njk`, `ABOVE_FOLD_PREFIXES`, any JSON-LD, `llms.txt.njk`, the hero markup, `stats.js`, the web-platform app, and the wireframe `.pen`.
