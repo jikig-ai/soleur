@@ -475,6 +475,19 @@ remaining aggregate publication.** Until then, the limb should be minimised or c
 that R4 alone is not sufficient for the **already-published** 80 digests: R5, or an accepted
 finding that the existing corpus cannot be erased, is the only honest disposition for those.
 
+> **Superseded in part 2026-10-06 (#7122) - the R4 row only; append-only, nothing above is retracted.**
+> The R4 row's mechanism ("a code-level redaction pass over the digest file and the issue body")
+> was **not built**, and its stated reason ("there is no output allowlist and there is a publication
+> tool") no longer describes `cron-community-monitor`: from the merge of #7122 its digest and tracking
+> issue are rendered by the handler from a closed schema (bounded integers and closed enum members; no
+> free-text field), and the agent has no write tool, no publication verb and no write credential
+> during its run (ADR-272). That is a different mechanism that reaches R4's objective for **future**
+> output of that one cron. Whether it substitutes for R4, and what it means for R1-R3 (future output is
+> structurally incapable of that content), is **for counsel at #7119**. It does not touch the
+> already-published 80 digests (R5), `cron-daily-triage` (no output allowlist, no human gate, no hook;
+> #9606), the necessity conclusion of this Arm, or the lawful-basis cell of PA-32, all of which stand
+> as written. There is still no human gate, and counts in the schema can single a person out.
+
 ---
 
 ## Arm C — CI contributors

@@ -604,7 +604,7 @@ model {
   //
   // A second relationship on an existing pair is legal and already present in this
   // model (hetzner -> zotRegistry x2), and it is why the altitude had to be right.
-  api -> kb "Scheduled UNATTENDED authorship: the Inngest-fired claude-eval crons spawn an agent into an ephemeral server-side workspace and land committed KB content via safeCommitAndPr (branch → PR → auto-merge squash). Liveness of that landing is asserted handler-locally per producer class (ADR-126 amendment, #6750)" { technology "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)" }
+  api -> kb "Scheduled UNATTENDED authorship: the Inngest-fired claude-eval crons spawn an agent into an ephemeral server-side workspace and land committed KB content via safeCommitAndPr (branch → PR → auto-merge squash). For the community-monitor cron the committed bytes are handler-rendered from a validated closed-schema draft, not authored by the agent, which holds no write tool and no write credential during its run (ADR-272, #7122). Liveness of that landing is asserted handler-locally per producer class (ADR-126 amendment, #6750)" { technology "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)" }
   skills -> kb "Reads/writes" { technology "File I/O" }
   agents -> kb "Reads/writes" { technology "File I/O" }
   api -> supabase "Auth and data; per-call audit_github_token_use write for every GitHub App-token use through the audited createGitHubAppClient factory (reads AND Workstream issue writes, Art. 30 PA-16, ADR-109); platform-owned synthetic traffic on the operator repo writes no audit row by design (the probe/drift-guard clients, cron mintInstallationToken callers, and the #8495 watchdog dispatch clock)" { technology "HTTPS" }

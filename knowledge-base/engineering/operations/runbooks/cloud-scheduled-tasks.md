@@ -774,6 +774,87 @@ an incident. Rule them out in order:
 Note the re-spawn in cases 2 and 3 costs a full agent run, and the re-spawned agent files its own
 dated issue — so **two issues with the same dated title for one day is expected**, not a bug.
 
+### H13 — Community publication rejected (`cron-community-monitor`, #7122 / ADR-272)
+
+The `scheduled-community-monitor` monitor goes RED and Sentry holds an event with
+`op: community-publication-rejected`. Since #7122 the agent no longer files the issue
+or writes the digest: its final message is a one-line JSON draft that the handler
+validates against a closed schema and renders itself (ADR-272). A rejected draft is
+**loud and never published**; nothing from the model's output reaches the repository or
+the issue. The failure-path audit issue is handler-authored and withholds the model's
+output by design, so the issue body will not tell you why: Sentry will.
+
+**Sentry first, no SSH** (`hr-no-ssh-fallback-in-runbooks`). The monitor alert (or the
+Sentry issue it links) names the event. Read it inline; do not open the dashboard to
+eyeball it:
+
+```bash
+# Issue summary, then the event's extras (the discriminating fields are in `extra`).
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh <issue-id>
+doppler run -p soleur -c prd -- scripts/sentry-issue.sh --latest-event <issue-id>
+```
+
+If you have no issue id, search by the op tag (`op:community-publication-rejected`)
+with the same read-scoped token; this search form is unverified as written, so confirm
+an HTTP 200 before trusting an empty result. Tags and run id come from the
+sentry-correlation middleware (`inngest.fn_id`, `inngest.run_id`).
+
+Read these `extra` fields in one pass; none carries text from the model, only closed
+vocabulary and numbers:
+
+| Field | What it separates |
+|---|---|
+| `reason` | `missing`, `oversized`, `parse` (not one valid JSON object) or `schema` (valid JSON, wrong shape) |
+| `codes` | zod issue codes plus schema-known leaf paths only, never values or key names |
+| `draftBytes`, `startsWithBrace` | an empty or narrated message vs an oversized or fenced one |
+| `abortedByTimeout`, `spawnExit`, `resultSubtype`, `numTurns` | a timeout, an errored run or max turns, vs a run that finished and answered badly |
+| `denialCount`, `sidecarPresent` | an agent that reached for a denied verb; collectors that never ran |
+
+**Three statements to act on:**
+
+1. **That day's digest is lost and is NOT retried.** There is no automatic retry and the
+   platform does not backfill the missed day. The monitor is the notice.
+2. **The founder does nothing for a single occurrence.** No action, no manual re-run, no
+   issue: one rejection is model drift or an in-flight run, and the next scheduled run
+   (daily 08:00 UTC) starts clean.
+3. **Two follow-up triggers, written down so nobody improvises:**
+   - **Three consecutive RED runs with `reason: schema`** trigger the documented follow-up
+     in ADR-272: coerce unknown enum members to `other` (the PA-27 `MAIL_CLASS_ALLOWLIST`
+     precedent) instead of rejecting. It is an enum-parse edit plus its test, small enough
+     to do inline rather than file.
+   - **Two consecutive `reason: parse` rejections are possible abuse, not drift.** A
+     persistent hostile message in the collection window (a pinned message, a long-lived
+     comment) can make the agent's final message fail the strict parse every day. Inspect
+     the ingested sources (the Discord channels, Hacker News mentions and the GitHub
+     comments in the period) for the injected text. The enum coercion above does not cover
+     a non-JSON message.
+
+**The first RED after the #7122 deploy may be an in-flight run.** A run that memoized
+`claude-eval` under the old prompt (the agent filed the issue itself; its final message is
+not a draft) and resumed on the new code is rejected at validation and goes RED for that
+day. The deploy drain waits for a live child, so this is one daily slot at most. Read
+`reason` and `startsWithBrace` before treating it as drift.
+
+**Expect a visible format discontinuity.** From the first run after the deploy, the
+published digest and issue are counts, statuses and topic counts only. The sections that
+came from free text (Top Contributors, Community Interactions, stargazer usernames,
+quoted excerpts, narrative Trending prose) are gone by design; digests dated before the
+cutover keep their old format. The interactive `/soleur:community digest` skill still
+shows full detail on demand. This is not a regression.
+
+**Related ops** (queried the same way):
+
+- `community-agent-denied-verb` (warn): the spawn recorded at least one denied tool call.
+  The run stays **GREEN** because nothing was published; the prompt never instructs a
+  denied verb, so a non-zero count is anomalous and worth a look at `deniedTools`, but it
+  pages no one by design.
+- `community-publication-issue-failed`: the handler could not upsert the tracking issue
+  (GitHub 5xx after bounded retry, or a PATCH-target check refusing). The monitor goes RED;
+  the digest is not committed for that run.
+- `collector-status-failed`: the collector sidecar reported a failed record (for example
+  the READ-scoped token under-serves a collector). The digest still commits with github
+  rendered `failed`.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
