@@ -153,11 +153,12 @@ describe("ChatInput — prefill prop (#9557)", () => {
     rerender(<ChatInput {...commonProps} prefill="second" />);
     expect(ta.value).toBe("first");
 
-    // Discriminates the latch itself: clearing the text does NOT resurrect the
-    // new prefill — an unlatched impl would re-apply "second" into the now-
-    // empty composer when the prop change re-fires the effect.
+    // Discriminates the latch itself: clearing the text does NOT resurrect a
+    // CHANGED prefill — an unlatched impl re-fires on the "second"→"third" prop
+    // change and seeds the now-empty composer. (A same-string rerender would
+    // not re-fire under [prefill] deps, so a distinct value is load-bearing.)
     act(() => setControlledValue(ta, ""));
-    rerender(<ChatInput {...commonProps} prefill="second" />);
+    rerender(<ChatInput {...commonProps} prefill="third" />);
     expect(ta.value).toBe("");
   });
 
