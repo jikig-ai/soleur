@@ -52,6 +52,17 @@ describe("classifySandboxStartupError — sandboxKind (Phase-0 shape, #5875)", (
     expect(c.errorCode).toBe("bwrap_error");
   });
 
+  it("tags the #8752 PATH-shim refusal marker as a sandbox-namespace denial", () => {
+    // The shim fails closed with `bwrap-shim: <cause>` + exit 65 — the
+    // `bwrap` token inside the marker routes it to seccomp_or_userns_denial,
+    // not a generic environment error.
+    const c = classifySandboxStartupError(
+      new Error("Command failed with exit code 65: bwrap-shim: seccomp artifact not readable: /app/infra/bwrap-userns-clone3-deny.bpf"),
+      "0.3.197",
+    );
+    expect(c.sandboxKind).toBe("seccomp_or_userns_denial");
+  });
+
   it("does NOT mis-tag a generic model/API error (no sandbox token)", () => {
     const c = classifySandboxStartupError(
       new Error("Anthropic API 529 overloaded_error"),
