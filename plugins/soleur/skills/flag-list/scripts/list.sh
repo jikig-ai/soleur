@@ -115,6 +115,7 @@ print(json.dumps({s["id"]: s["name"] for s in d.get("results", [])}))
 # Mirrors flip.sh get_live_version_uuid + version-scoped featurestates read.
 get_live_version_uuid() {
   local env_id="$1" feature_id="$2"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/" \
     | python3 -c '
 import json, sys

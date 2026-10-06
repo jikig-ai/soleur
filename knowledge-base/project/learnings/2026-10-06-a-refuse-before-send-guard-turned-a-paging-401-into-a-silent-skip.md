@@ -46,7 +46,7 @@ alert predicate, never by reusing the sibling unit's marker.
    notifications fired per pause, not at the end** — Recovery: `SendMessage` "make no further tool calls,
    reply now with the report", then read the seat's last assistant text from its output with `jq` (never
    `Read`/`tail` the JSONL). **Prevention:** treat a transcript whose last block is `tool_use` as
-   unfinished (routed to the review skill's Sharp Edges).
+   unfinished. (Not routed into the review skill: its body sits 3 bytes under the 477000-byte ceiling, so a Sharp Edge bullet fails `lint-skill-body-budget` until a block is extracted to `references/` first.)
 3. **New anti-vacuity floors were invisible or unconstructible to `guard-vacuity-floor`** — `-ne N` floors
    are not recognised as floors, and a sentinel outside the harness vocabulary (`ANTI-VACUITY FLOOR` is
    upper-case; the grep is case-sensitive) scores CONSTRUCTION, growing the ratchet 15 -> 16. Recovery:

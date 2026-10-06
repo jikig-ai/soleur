@@ -248,6 +248,7 @@ sys.exit(3)
 # Uses numeric env_id (the /features/feature-segments/ endpoint accepts int).
 read_feature_segment_id() {
   local env_id="$1" feature_id="$2" segment_id="$3"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/features/feature-segments/?environment=${env_id}&feature=${feature_id}" \
     | python3 -c "
 import json, sys
@@ -262,6 +263,7 @@ print('')
 # Get the live (published, is_live) version uuid for (env, feature).
 get_live_version_uuid() {
   local env_id="$1" feature_id="$2"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/" \
     | python3 -c "
 import json, sys
@@ -278,6 +280,7 @@ sys.exit(3)
 # segment overrides in one call.
 read_segment_state() {
   local env_id="$1" feature_id="$2" segment_id="$3"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "missing"; return; }
   local live_uuid
   live_uuid=$(get_live_version_uuid "$env_id" "$feature_id") || { echo "missing"; return; }
   fs_api "${FLAGSMITH_API}/environments/${env_id}/features/${feature_id}/versions/${live_uuid}/featurestates/" \
@@ -300,6 +303,7 @@ print('missing')
 # whether a feature_segment row already exists.
 flip_segment_in_env() {
   local env_id="$1" feature_id="$2" segment_id="$3" enabled="$4"
+  [[ "$feature_id" =~ ^[0-9]+$ ]] || { echo "invalid feature id (expected an integer)" >&2; return 1; }
 
   local existing_fs_id
   existing_fs_id=$(read_feature_segment_id "$env_id" "$feature_id" "$segment_id")

@@ -105,6 +105,7 @@ function runScript(label: string, extraEnv: Record<string, string>, failOn = 0):
     encoding: "utf8",
     env: {
       PATH: `${binDir}:${process.env.PATH}`,
+      NODE_ENV: "test",
       HOME: dir,
       TMPDIR: tmp,
       MOCK_DIR: mockDir,
