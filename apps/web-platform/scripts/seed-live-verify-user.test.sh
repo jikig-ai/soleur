@@ -94,9 +94,15 @@ fi
 #     emitted before first use so everything downstream is masked. Excluding it
 #     is not a hole in this check — a rule that forbade it would forbid the
 #     repo's own masking precedent (registry-pull-path-health.sh).
+#   - the sb_curl wrapper's `< <(printf 'header = "Authorization: Bearer %s"…')`
+#     is a printf of the key whose output is curl's STDIN config, not the terminal.
+#     It is excluded by its exact shape (a process substitution feeding the
+#     config), and the #7797 section below asserts that channel behaviourally,
+#     so this exclusion cannot hide a printf that really displays the key.
 secret_echo=$(grep -nE '(echo|printf)[^|]*\$\{?(LIVE_VERIFY_USER_PASSWORD|SUPABASE_SERVICE_ROLE_KEY|SRK)\b' "$SEED" \
   | grep -vE '\|[[:space:]]*(tr|cut|base64|wc|jq|openssl)' \
-  | grep -vF '::add-mask::' || true)
+  | grep -vF '::add-mask::' \
+  | grep -vE '^[0-9]+:[[:space:]]+< <\(printf '"'"'header = "Authorization: Bearer %s"\\nheader = "apikey: %s"\\n'"'"' "\$SRK" "\$SRK"\)$' || true)
 if [[ -n "$secret_echo" ]]; then
   echo "  FAIL: seed displays a secret variable:" >&2
   printf '%s\n' "$secret_echo" >&2
@@ -322,6 +328,98 @@ else
   fail=1
 fi
 
+# --- #7797: the service-role key must reach curl on STDIN, never on argv ---
+#
+# Every Supabase call goes through one sb_curl wrapper that feeds BOTH credential
+# headers on curl's `--config -`; nothing may put the key in a `-H` argument
+# (/proc/<pid>/cmdline, `ps`, an audit log). Static shape first, then a behavioural
+# run against a PATH-shimmed curl that records each call's argv (NUL-delimited) and
+# the stdin it was handed.
+if grep -qE 'header_auth|header_api|-H "(Authorization|apikey)' "$SEED"; then
+  echo "  FAIL: seed still builds an Authorization/apikey header for curl argv" >&2
+  fail=1
+else
+  echo "  ok: seed carries no Authorization/apikey header on a curl argument list"
+fi
+if [[ "$(grep -cE '^[^#]*(^|[^_a-z])curl ' "$SEED")" -ne 1 ]]; then
+  echo "  FAIL: seed calls bare curl outside the sb_curl wrapper" >&2
+  fail=1
+else
+  echo "  ok: the only bare curl in the seed is the one inside the sb_curl wrapper"
+fi
+
+shim_dir="$(mktemp -d)" || exit 2
+mkdir -p "$shim_dir/bin" "$shim_dir/rec"
+cat > "$shim_dir/bin/curl" <<'SHIMEOF'
+#!/usr/bin/env bash
+n=$(ls "$SHIM_REC" | grep -c '^argv\.')
+printf '%s\0' "$@" > "$SHIM_REC/argv.$n"
+cat > "$SHIM_REC/stdin.$n" 2>/dev/null || true
+case "$*" in
+  *"%{http_code}"*) printf 200 ;;
+  *"-sfD -"*) printf 'HTTP/2 200\r\nX-Total-Count: 1\r\n\r\n' ;;
+  *"admin/users?per_page=200"*) echo '{"users":[{"email":"live-verify@soleur.ai","id":"uid1"}]}' ;;
+  *"workspace_members"*) echo '[{"workspace_id":"w1"}]' ;;
+  *"organization_id"*) echo '[{"organization_id":"o1"}]' ;;
+  *"api_keys?"*) echo '[]' ;;
+  *) : ;;
+esac
+exit 0
+SHIMEOF
+chmod +x "$shim_dir/bin/curl"
+SYN_KEY="sb_secret_SYNTHETICKEY123"
+shim_out=$(env -i PATH="$shim_dir/bin:$PATH" HOME="${HOME:-/tmp}" SHIM_REC="$shim_dir/rec" \
+  DOPPLER_CONFIG="prd" NEXT_PUBLIC_SUPABASE_URL="https://api.soleur.ai" \
+  NEXT_PUBLIC_SUPABASE_ANON_KEY="anon-key-not-used" LIVE_VERIFY_USER_PASSWORD="placeholder-not-reached" \
+  SUPABASE_SERVICE_ROLE_KEY="$SYN_KEY" bash "$SEED" 2>&1); shim_rc=$?
+shim_report="$(python3 - "$shim_dir/rec" "$SYN_KEY" <<'PYEOF'
+import glob, sys
+rec, key = sys.argv[1:3]
+calls = sorted(glob.glob(rec + "/argv.*"))
+bad = []
+for f in calls:
+    argv = open(f, "rb").read()
+    stdin = open(f.replace("argv.", "stdin."), "rb").read().decode()
+    if key.encode() in argv or b"Authorization" in argv or b"apikey" in argv:
+        bad.append(f + ": credential on argv")
+    if 'header = "Authorization: Bearer %s"\n' % key not in stdin or 'header = "apikey: %s"\n' % key not in stdin:
+        bad.append(f + ": headers missing from stdin config")
+    if not argv.startswith(b"--disable\0--noproxy\0*\0"):
+        bad.append(f + ": --disable/--noproxy not first")
+print("FAIL:" + "; ".join(bad) if bad else ("OK:%d calls" % len(calls) if calls else "FAIL:no curl call was recorded"))
+PYEOF
+)"
+if [[ "$shim_rc" -eq 0 && "$shim_report" == OK:* ]]; then
+  echo "  ok: every seed curl call carries both headers on stdin and the key on no argv (${shim_report#OK:})"
+else
+  echo "  FAIL: seed run under the curl shim (rc=$shim_rc): ${shim_report#FAIL:}" >&2
+  fail=1
+fi
+if printf '%s' "$shim_out" | grep -qF "$SYN_KEY"; then
+  echo "  FAIL: the service-role key appeared in the seed's output" >&2
+  fail=1
+else
+  echo "  ok: the service-role key never appears in the seed's output"
+fi
+
+# Unusable keys (empty, whitespace) must stop before ANY curl call is made.
+for bad_key in "" "sb_secret_a b"; do
+  rm -f "$shim_dir"/rec/*
+  env -i PATH="$shim_dir/bin:$PATH" HOME="${HOME:-/tmp}" SHIM_REC="$shim_dir/rec" \
+    DOPPLER_CONFIG="prd" NEXT_PUBLIC_SUPABASE_URL="https://api.soleur.ai" \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY="anon-key-not-used" LIVE_VERIFY_USER_PASSWORD="placeholder-not-reached" \
+    SUPABASE_SERVICE_ROLE_KEY="$bad_key" bash "$SEED" >/dev/null 2>&1
+  bad_rc=$?
+  bad_calls=$(ls "$shim_dir/rec" | grep -c '^argv\.' || true)
+  if [[ "$bad_rc" -ne 0 && "$bad_calls" -eq 0 ]]; then
+    echo "  ok: unusable key refused with no curl call (rc=$bad_rc)"
+  else
+    echo "  FAIL: unusable key got rc=$bad_rc with $bad_calls curl call(s)" >&2
+    fail=1
+  fi
+done
+rm -rf "$shim_dir"
+
 # ANTI-VACUITY FLOOR. The registration lint proves this FILE is discovered; it
 # says nothing about whether the file still asserts anything, and the runner
 # finds it by glob — so a gutted suite would report green indefinitely. Counts
@@ -330,8 +428,8 @@ fi
 # Set to the MEASURED count from a green run, not a guessed one: slack between
 # a floor and the real value is budget an edit can spend silently.
 _concluded="$(grep -cE '^[[:space:]]*echo "  (ok|FAIL):' "$0" || true)"
-if [[ "${_concluded:-0}" -lt 39 ]]; then
-  printf 'FATAL: only %s verdict site(s) remain in this suite; expected >= 39.\n' "${_concluded:-0}" >&2
+if [[ "${_concluded:-0}" -lt 49 ]]; then
+  printf 'FATAL: only %s verdict site(s) remain in this suite; expected >= 49.\n' "${_concluded:-0}" >&2
   exit 1
 fi
 
