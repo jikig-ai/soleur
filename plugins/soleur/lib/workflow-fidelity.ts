@@ -9,6 +9,7 @@
  */
 
 import type { Harness } from "./harness";
+import { cursorSkillSlash } from "../scripts/sync-cursor-name-map";
 
 /** Skills that own a multi-phase pipeline — must be invoked, never inlined. */
 export const PIPELINE_SKILLS = [
@@ -144,6 +145,8 @@ export function formatSkillRef(skill: string, harness: Harness): string {
       return `/${skill}`;
     case "devin":
       return `/soleur:${skill}`;
+    case "cursor":
+      return cursorSkillSlash(skill);
     default:
       return `soleur:${skill}`;
   }
@@ -262,6 +265,15 @@ function formatSkillList(skills: readonly string[], harness: Harness): string {
  * Cite in go.md Step 2.1 (`<!-- workflow-fidelity:block:go-post-route:start -->`).
  */
 export function workflowFidelityInstructions(harness: Harness): string {
+  if (harness === "cursor") {
+    return [
+      "**Workflow fidelity (Cursor CLI)**",
+      "- Read the canonical file the stub names, relative to the plugin root, and follow that file.",
+      `- \`${formatSkillRef("go", harness)}\` and \`${formatSkillRef("sync", harness)}\` stay bare. Every other name is prefixed, including \`${formatSkillRef("plan", harness)}\`, \`${formatSkillRef("help", harness)}\`, and \`${formatSkillRef("review", harness)}\`.`,
+      "- Slice 1 does not run hooks and does not classify the session as cursor.",
+    ].join("\n");
+  }
+
   const invokeSurface =
     harness === "codex"
       ? "skill loading (skills.read when available; otherwise read the installed SKILL.md and execute its full workflow)"

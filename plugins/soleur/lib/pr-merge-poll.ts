@@ -82,6 +82,16 @@ export function behindSyncInstructions(harness: Harness): string {
         `- FORBIDDEN: heartbeating on pending checks while BEHIND or DIRTY — auto-merge is blocked — unless the script reported \`kind=queued\` (exit 11 with \`--step\`): a PR in the merge queue is not blocked, the queue merges it, so keep heartbeating and never sync it; \`kind=dequeued\` (exit 13) stops the poll with the recovery.`,
       ].join("\n");
 
+    case "cursor":
+      return [
+        "**BEHIND/DIRTY resync (Cursor CLI)**",
+        "- No wait primitive has been measured on the Cursor CLI.",
+        "- This run cannot finish that gate.",
+        "- Continue that merge on a harness that already has a wait, or stop.",
+        "- Do not invent a wait. Do not hand the wait to the operator.",
+        "- This stop does not make the plugin supported.",
+      ].join("\n");
+
     default:
       return [
         "**BEHIND/DIRTY resync**",

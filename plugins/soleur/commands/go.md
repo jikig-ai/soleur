@@ -488,6 +488,7 @@ Before applying the routing table, detect the active harness and use the correct
 | Grok Build | **Slash command** — `/<skill>` (e.g. `/one-shot`) | **spawn_subagent** | `/go` (not `/soleur:go`) |
 | Codex | Load `$soleur:<skill>` through `skills.read` or the installed SKILL.md | **spawn_agent** with canonical instructions | `$soleur:go` |
 | Devin CLI | **Slash command** — `/soleur:<skill>` | **run_subagent** with agent id | `/soleur:go` |
+| Cursor CLI | Read the canonical file the stub names. Soleur names are `/go`, `/sync`, `/soleur-plan`, `/soleur-help`, and `/soleur-review` | Prefixed stem, for example `/soleur-engineering-cto` | `/go` |
 
 **Codex harness:** read [Codex compatibility instructions](../codex/INSTRUCTIONS.md).
 Use the installed plugin root for plugin-owned paths. Reading the full named
@@ -502,6 +503,8 @@ Devin exposes Soleur skills as slash commands: `/soleur:<skill>` (e.g. `/soleur:
 **Grok Build harness:** entry is `/go` (slash command); agents via `spawn_subagent`. Invoke a skill by Reading `plugins/soleur/skills/<name>/SKILL.md` in this process (`/<skill>` names the skill; it is not a nested tool_use). **Agent spawn keys:** Grok matches `subagent_type` to the `.grok/agents/` **filename stem** (colons → hyphens), e.g. `soleur:product:cpo` → `soleur-product-cpo`. Colon form is listed in some error catalogs but is **rejected** at spawn — always use `spawnAgent()` / `agentIdToGrokSubagentType()`. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
 
 **Devin CLI harness:** entry is `/soleur:go` (slash command); agents via `run_subagent`. Invoke routed skills with the `/soleur:<skill>` slash command. See `lib/harness.ts:detectHarness`, `formatSkillInvocation`, `spawnAgent`.
+
+**Cursor CLI harness:** Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins, not Soleur. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor. Read [Cursor compatibility instructions](../cursor/INSTRUCTIONS.md).
 
 **Self-reference (Phase C #6323 / epic #6320):** This document + the eval-harness Grok arm were produced and shipped by invoking `/go 6320 implement and ship the next open feature` (next open = Phase C #6323) inside worktree `feat-one-shot-6323-grok-phase-c` (draft PR #6329). The routing contract above is the enforceable spec exercised by this very run. Edits to the go-routing block are gated by eval-harness (see `gated-skills.json` + `eval-gate:block:go-routing`).
 
@@ -550,6 +553,7 @@ If intent is clear, route without confirmation:
 - **Claude Code:** invoke via the **Skill tool** (`soleur:<skill>`, args = original user input). Agents: **Task tool** with `subagent_type` and prompt = original user input.
 - **Grok Build:** Read `plugins/soleur/skills/<skill>/SKILL.md` in this process and run it to completion (`/<skill>` names the skill; it is not a nested tool_use). Agents: **spawn_subagent** with the agent id and prompt = original user input.
 - **Devin CLI:** invoke via the **`/soleur:<skill>` slash command** with args = original user input. Agents: **run_subagent** with the agent id and prompt = original user input.
+- **Cursor CLI:** read the canonical file the stub names. `/go` and `/sync` stay bare; other skills are `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Do not call the Skill tool, the Task tool, `run_subagent`, or AwaitShell. Slice 1 does not run hooks and does not classify the session as cursor.
 <!-- harness-forms:end -->
 
 Map `soleur:<skill>` cells in the table to the Grok skill name `/<skill>` (strip the `soleur:` prefix) and Read that SKILL.md — do not nested-invoke slash. **Exception:** rows whose `Routes To` cell names an agent (e.g., `soleur:legal:clo`) instead of a `soleur:<skill>` skill spawn that agent — never substitute a manual workflow. When extending this table, prefer routing to a skill when one exists; route to an agent only when no skill wraps the desired behavior.
@@ -568,6 +572,7 @@ If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: B
 - **Worktree-plan-vs-issue alignment (`#N` entry → "Continue in that worktree").** When the input is an issue `#N` and a topically-named worktree already exists, NAME-relevance is NOT issue-relevance. Before offering "Continue in that worktree", grep the worktree's planning artifact (`knowledge-base/project/plans/*`, `specs/feat-*/spec.md` frontmatter `closes:`) for the input issue number. If the worktree's plan targets a DIFFERENT (sibling) issue, surface that mismatch in the `AskUserQuestion` options (offer a fresh worktree for `#N` vs. continuing the existing one for `#M`). Issues that a body explicitly splits into a "separate PR" / "follow-up PR" must not be silently co-located. See `knowledge-base/project/learnings/2026-05-29-brand-hex-commit-gate-and-go-worktree-plan-mismatch.md`.
 <!-- harness-forms:start -->
 - **Grok entry is `/go`, not `/soleur:go`.** If the operator typed `/soleur:go`, continue — that is Claude's slash; Grok's is `/go`. Do not refuse or re-prompt.
+- **Cursor CLI entry is `/go` and `/sync`.** Soleur plan, help, and review are `/soleur-plan`, `/soleur-help`, and `/soleur-review`. Cursor's `/plan`, `/help`, `/review`, and `/shell` are built-ins. Slice 1 does not run hooks and does not classify the session as cursor.
 <!-- harness-forms:end -->
 - **Grok Build bypass guard (#6325 class).** If you routed to `soleur:one-shot` and find yourself writing product code or running `git commit` before `soleur:review` and `soleur:ship` ran, STOP — you inlined the pipeline. Invoke `soleur:one-shot <args>` (or continue the active one-shot Steps 3–8), never "implement then report done."
 - **Brainstorm / plan / work bypass guard (#6320 lifecycle).** If you routed to `soleur:brainstorm` and wrote product code, or finished brainstorm/plan artifacts without invoking `soleur:plan` or `soleur:work`, or pushed from `soleur:work` without `soleur:review` → `soleur:ship`, STOP — invoke the mandated successor from `workflow-fidelity.ts` (`BRAINSTORM_CHILD_SKILLS`, `IMPLEMENTATION_TAIL`).

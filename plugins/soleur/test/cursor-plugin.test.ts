@@ -19,6 +19,56 @@ describe("Cursor CLI plugin package", () => {
     expect(readFileSync(join(pluginRoot, "hooks/hooks.json"), "utf8")).not.toBe(
       readFileSync(join(pluginRoot, "cursor/hooks-empty.json"), "utf8"),
     );
+    const instructions = readFileSync(join(pluginRoot, "cursor/INSTRUCTIONS.md"), "utf8");
+    expect(instructions).toContain("registers no hook events");
+    expect(instructions).toContain("does not classify the session as `cursor`");
+    expect(instructions).toContain("`.claude/settings.json` is unmeasured");
+    expect(instructions).not.toContain("## Tools");
+  });
+
+  test("go.md cursor spellings stay inside the three harness-forms regions", () => {
+    const text = readFileSync(join(pluginRoot, "commands/go.md"), "utf8");
+    const regions = [...text.matchAll(/<!-- harness-forms:start -->([\s\S]*?)<!-- harness-forms:end -->/g)].map((m) => m[1] ?? "");
+    expect(regions).toHaveLength(3);
+    const joined = regions.join("\n");
+    for (const phrase of [
+      "/go",
+      "/sync",
+      "/soleur-plan",
+      "/soleur-help",
+      "/soleur-review",
+      "/plan",
+      "/help",
+      "/review",
+      "/shell",
+      "does not run hooks",
+      "does not classify the session as cursor",
+      "Skill tool",
+      "Task tool",
+      "run_subagent",
+      "AwaitShell",
+    ]) {
+      expect(joined).toContain(phrase);
+    }
+    expect(text).toContain("If harness is unknown and Skill/slash tools are unavailable, STOP");
+    expect(text).not.toContain("cursor --plugin-dir");
+  });
+
+  test("help.md cursor column names the prefixed skills and the built-ins not to type", () => {
+    const help = readFileSync(join(pluginRoot, "commands/help.md"), "utf8");
+    const grok = help.slice(help.indexOf("### Grok Build"), help.indexOf("### Cursor CLI"));
+    expect(grok).toContain("/help                 This help listing");
+    expect(grok).not.toContain("/soleur-help");
+    const cursor = help.slice(help.indexOf("### Cursor CLI"));
+    expect(cursor).toContain("/go");
+    expect(cursor).toContain("/sync");
+    expect(cursor).toContain("/soleur-help");
+    expect(cursor).toContain("/soleur-plan");
+    expect(cursor).toContain("/soleur-review");
+    expect(cursor).toContain("Do not type");
+    expect(cursor).toContain("/plan");
+    expect(cursor).toContain("/shell");
+    expect(cursor).toContain("does not classify the session as cursor");
   });
 
   test("commands directory keeps the default command scan from registering bare names", () => {
