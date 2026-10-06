@@ -11,8 +11,9 @@ printed only `MODE=full (degraded: runner-changed)`, with no cost and no way out
 ## Solution
 
 A closed-grammar classifier over the runner-file diff (`_aff_classify_runner_diff`, ADR-242 decision 20). A diff takes the bounded selection
-only when every changed line is a new single-line `run_suite` registration (or a blank or comment line directly below one); any other line,
-in any hunk of either file, keeps `runner-changed`. The degraded banner now states the cause, the manifest-weight cost, the first offending
+only when every changed line is a new single-line `run_suite` registration (or a blank or comment line directly below one), optionally with
+the `AFFECTED_*_PATHS` block or `ALWAYS_ON_SUITES` entry for a suite the same diff registers; any other line, in any hunk of either file, keeps
+`runner-changed`. The degraded banner now states the cause, the manifest-weight cost, the first offending
 `<file>:<line> [rule-code]` and the preview and scope commands, and `--help` has a `RUNNER EDITS` block.
 
 ## Key Insight
@@ -33,7 +34,7 @@ in any hunk of either file, keeps `runner-changed`. The degraded banner now stat
    a 36% saving. The 43 edge suites cost 36.9 min and 13.6 min of them are heavy batteries that reach the runner only through
    self-inclusion; dropping those is a separate design (tracked on #9564).
 5. **A banner that prints diff text is an injection channel.** The output is read by agents, so the banner prints only a path, a line
-   number and a fixed rule code; a row feeds it an offending line carrying a forged `AFFECTED_SUMMARY` record, an ANSI escape and instruction
+   number, a fixed rule code and, for label findings, the charset-restricted label (spaces shown as `_`, cut at 64 characters); a row feeds it an offending line carrying a forged `AFFECTED_SUMMARY` record, an ANSI escape and instruction
    prose and asserts none of it reaches the output.
 
 ## Session Errors

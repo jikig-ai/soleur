@@ -187,7 +187,8 @@ Decisions added by this amendment:
    timeout, so one knob bounds both of tc_acquire's wait stages and on expiry
    it proceeds with the `LOCK_CONTENDED_PROCEEDING` banner rather than
    aborting.
-10. **`runner-changed` is scope-aware.** Under `staged` the ladder arm is
+10. **`runner-changed` is scope-aware.** *(Closing sentence superseded in part, and its "unconditional always-on runner-SUT battery" premise corrected,
+    by decision 20: a registration-only diff now takes the bounded selection under branch scope too.)* Under `staged` the ladder arm is
     gated off and the staged runner/index path is detected *inside* the
     bounded-selection walk — the paths are in the staged set by construction,
     so their declared self-edges plus the unconditional always-on runner-SUT
@@ -490,20 +491,26 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     both runner-critical files against a closed grammar, and the pre-pass takes the bounded walk (`AFFECTED_RUNNER_IN_SCOPE reason=registration-only`,
     `AFFECTED_SUMMARY ... fallback=none`) only when EVERY changed line fits: **G0** headers only (a mode, rename, delete, binary or no-newline marker is
     semantic); **G1** zero removed lines (an edited line is a removal plus an addition); **G2** every line added to the runner is a blank line, a `#`
-    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`, no option-shaped first
-    argument, no quote, substitution, redirect, `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that
-    is not blank or a comment must itself be a complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line
-    strings); **G3** the only admitted additions to `scripts/lib/test-affected-paths.sh` are one contiguous `AFFECTED_<MAP(label)>_PATHS=( ... )` block
-    (opener directly below another array's closing `)` or entry, entries in a closed charset, closer a lone `)`, all in one hunk) and one entry of
-    `ALWAYS_ON_SUITES`, each bound (**G5**) to a label ADDED in the same diff, with the array defined exactly once and not named by any
+    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`; a plain repo-relative first
+    path argument that is not option-shaped, has no leading `/` and no `..` segment; `python3 -m` only `unittest|pytest`; no quote, substitution, redirect,
+    `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that is not blank or a comment must itself be a
+    complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line strings; every added line must also equal the
+    working-tree line it claims to be); **G3** the only admitted additions to `scripts/lib/test-affected-paths.sh` are one contiguous
+    `AFFECTED_<MAP(label)>_PATHS=( ... )` block per added suite (opener directly below another array's closing `)` or entry, entries in a closed charset,
+    closer a lone `)`, all in one hunk) and entries of `ALWAYS_ON_SUITES`, each bound (**G5**) to a label ADDED in the same diff, with the array defined exactly once and not named by any
     `AFFECTED_CONSUMED_EDGES` pair, because the label-to-array map is not injective; **G4** `bash -n` passes on both post-images. The pre-pass then requires every
-    added label to occur exactly once in the live `--enumerate-commands` stream, every anchor label at least once, and no OTHER live label to map to a
-    declared array name, because loops and globs produce
-    about half of the live registrations and their labels never appear as literals; any other count degrades to the full fallback through the same print
-    block (never a new ladder arm, which repeated the #9197 defect). Anything the classifier cannot decide (no merge-base, a git error, `--paths` mode, an
-    empty diff text) is `undecidable` and behaves as semantic. The classifier is not computed under `--affected-scope=staged`, which stays byte-identical.
+    added label to occur exactly once in the live `--enumerate-commands` stream, every anchor label at least once, no added label to inherit an
+    already-declared array, and no OTHER live label to map to a declared array name, because loops and globs produce about half of the live registrations
+    and their labels never appear as literals; any other count degrades to the full fallback through the same print block (never a new ladder arm, which
+    repeated the #9197 defect). That check runs after the 70-80 s walk and against the `all`-group stream, an accepted cost of deciding on the live stream.
+    Anything the classifier cannot decide (no merge-base, a git error, an empty diff text, a diff that registers nothing) is `undecidable` and behaves as
+    semantic; under `--paths` the classifier is not computed at all. It is also not computed under `--affected-scope=staged`, which stays byte-identical.
+    The verdict covers only the two trigger files: a registration that rides along with an edit to a third runner-sourced file
+    (`scripts/lib/test-relevance-paths.sh`, `scripts/lib/test-contention.sh`, ...) gets that file's ordinary edge-based selection, exactly as editing it
+    alone does today.
     The full-fallback banner states the cause, the manifest-weight cost (`about N min`, or "duration unknown"), the first offending `<file>:<line>
-    [rule-code]` and a fixed sentence per code; it never prints diff text, because agents read this output.
+    [rule-code]` and a fixed sentence per code; it never prints diff text, because agents read this output (the only free-form token is an added label, restricted to
+    the registration charset, with spaces shown as `_` and cut at 64 characters).
     **This SUPERSEDES decision 10's closing sentence** ("Branch scope keeps the full-corpus fallback byte-identical") for registration-only diffs, and
     **CORRECTS a stale premise in decision 10**: it cites an "unconditional always-on runner-SUT battery (which includes `scripts/test-all-affected`)", but
     ADR-262 withdrew that suite from `ALWAYS_ON_SUITES`; it still runs on every runner-touching diff because the runner is in its declared edge set and the
@@ -511,13 +518,14 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     diff-content inspection" and said the dangerous narrowing edit is data-shaped. A closed allowlist of whole-line shapes models none of bash's syntax and
     every miss falls toward the full battery, so it is not fragile in the way that matters; and the only data edit that can narrow (a new
     `AFFECTED_*_PATHS` array on an existing unclassified label turns "always runs" into "runs only when its edge is touched") is refused because every
-    declaration must bind to a label the same diff registers. **Measured:** of 226 runner-touching commits since 2026-06-01, 152 (67%) fit the grammar including the anchor rule and 139 add
-    a registration; the full battery is 91.4 min at manifest weights against 58.6 min for a bounded selection (a 36% saving, not minutes: 13.6 min of the
+    declaration must bind to a label the same diff registers. **Measured** (2026-10-05, over 226 non-merge commits touching either runner file since 2026-06-01; 230 on 2026-10-06): 152 (67%) fit the
+    grammar including the anchor rule and 139 of those add a registration; the full battery is 91.4 min at manifest weights against 58.6 min for a bounded selection (a 36% saving, not minutes: 13.6 min of the
     43 edge suites are heavy batteries that are not runner-SUT, and narrowing those is a separate, deferred concept). **Accepted residual**, the same class
     as decision 10's with a larger window (the whole branch, not one commit's index): the classifier lives in the file it judges, so a PR that edits it is
-    semantic by G1/G2 and goes full; a PR that breaks it AND weakens its rows in one diff is outside this guard, bounded by the rows living in
-    `scripts/test-all-affected.test.sh` (selected by every runner-touching run) and by CI's full sharded battery on the PR head, which stays the merge
-    gate. The `PR_GATE_MACHINERY_PATHS` arming of ADR-262 is unchanged: the name list a registration-only run reads still contains both paths.
+    semantic by G1/G2 and goes full. The real residual is a latent gap in the already-merged grammar that wrongly admits a FUTURE diff (for example, the
+    anchor check is by label, so it relies on every two-space `run_suite "` literal in the runner being a live call site). It is defended by the closed,
+    default-deny grammar, the live-stream checks and `bash -n`, by the rows in `scripts/test-all-affected.test.sh` (selected by every runner-touching run), and
+    by CI's full sharded battery on the PR head, which stays the merge gate. The `PR_GATE_MACHINERY_PATHS` arming of ADR-262 is unchanged: the name list a registration-only run reads still contains both paths.
 
     Alternatives considered: (b) registrations in a data file (about 560 registrations interleaved with relevance-gated blocks and ordinal-indexed shard
     selection; the data file would become a third runner-critical path needing its own grammar, which is mechanism (a) relocated); (c) banner only (does not
@@ -525,5 +533,5 @@ receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
     a classifier in a third file (an edit to it would not match the two-file trigger); admitting deletions or edits (a removed `run_suite` is a narrowing
     edit by definition); `SUITE_GLOBS` auto-discovery of root `scripts/*.test.sh` (162 explicit registrations make it a mass conversion, and "registration
     is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
-    runner-only line. They serve about 3.5% of the measured demand (5 of 142 registration-only commits touched the index) and were kept because the
-    operator named "a new AFFECTED_*_PATHS array" as registration-only.
+    runner-only line. They serve about 3.5% of the measured demand (5 of the commits that fit the grammar touched the index at all: 4 array blocks, 1 entry) and
+    were kept because the operator named "a new AFFECTED_*_PATHS array" as registration-only.

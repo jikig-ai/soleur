@@ -228,7 +228,8 @@ s = s.replace(old, old + '''  # SANDBOX corpus trim (#8322 suite): only the labe
     apps/web-platform/infra/run-registered-suites.sh|\\
     tests/commands/sync-domain-model|\\
     plugins/soleur/test/c4-model-freshness.test.sh|\\
-    test/x-community|plugins/soleur|zz/new-suite|scripts/lint-dual_lockfile) : ;;
+    test/x-community|plugins/soleur|zz/new-suite|scripts/lint-dual_lockfile|\\
+    tests/hooks/drop_sentinel-parity) : ;;
     *) return 0 ;;
   esac
 ''', 1)
@@ -480,17 +481,33 @@ fi
 cases=$((cases + 1))
 _k3_dir="$TESTROOT/k3-manifests"; mkdir -p "$_k3_dir" || { echo "FATAL: k3 fixture dir" >&2; exit 2; }
 assert_fixture_dir "$_k3_dir"
-printf '# synthetic\nzz/a\t120000\tmeasured\nzz/b\t30000\tmeasured\n' > "$_k3_dir/suite-durations.tsv"
-printf '# synthetic\nzz/c\t30000\tmeasured\n' > "$_k3_dir/suite-durations-heavy.tsv"
+printf '# synthetic\nzz/a\t100000\tmeasured\nzz/b\t40000\tmeasured\n' > "$_k3_dir/suite-durations.tsv"
+printf '# synthetic\nzz/c\t52000\tmeasured\n' > "$_k3_dir/suite-durations-heavy.tsv"
 SANDBOX_MANIFEST_DIR="$_k3_dir" SANDBOX_LIB=with-lib run_arm \
   'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
   -- --affected
-# 120000 + 30000 + 30000 ms = 3 minutes exactly.
+# 100000 + 40000 + 52000 ms = 192000 ms = 3.2 minutes: rounds to 3 (a ceiling gives 4, and dropping
+# the heavy manifest gives 2).
 if grep -qF 'about 3 min of suite time at manifest weights, serial and uncontended' <<<"$ARM_OUT" \
    && ! grep -qF 'duration unknown' <<<"$ARM_OUT"; then
-  pass "k3: the banner's N is the manifest sum (3 min for the synthetic 180000 ms)"
+  pass "k3: the banner's N is the rounded manifest sum (3 min for the synthetic 192000 ms)"
 else
   fail "k3: cost clause wrong; out: $(grep -F 'battery is running' <<<"$ARM_OUT" | head -2)"
+fi
+
+cases=$((cases + 1))
+_k3b_dir="$TESTROOT/k3b-manifests"; mkdir -p "$_k3b_dir" || { echo "FATAL: k3b fixture dir" >&2; exit 2; }
+assert_fixture_dir "$_k3b_dir"
+printf '# synthetic\nzz/a\t120000\tmeasured\n' > "$_k3b_dir/suite-durations.tsv"
+printf '# synthetic\nzz/c\t90000\tmeasured\n' > "$_k3b_dir/suite-durations-heavy.tsv"
+SANDBOX_MANIFEST_DIR="$_k3b_dir" SANDBOX_LIB=with-lib run_arm \
+  'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  -- --affected
+# 210000 ms = 3.5 minutes: rounds to 4 (a floor gives 3).
+if grep -qF 'about 4 min of suite time' <<<"$ARM_OUT"; then
+  pass "k3b: 3.5 minutes rounds to 4 (floor and heavy-manifest-dropping variants differ)"
+else
+  fail "k3b: cost clause wrong; out: $(grep -F 'battery is running' <<<"$ARM_OUT" | head -2)"
 fi
 
 cases=$((cases + 1))
@@ -514,12 +531,12 @@ fi
 # H1/H2 swap in a permissive and a reject-all stub and require the table to notice.
 _rc_src="$TESTROOT/classifier.sh"
 awk '/^_aff_rd_root\(\) \{$/ { on = 1 } on { print } on && /^_aff_classify_runner_diff\(\) \{$/ { inf = 1 } inf && /^}$/ { exit }' "$RUNNER" > "$_rc_src"
-_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_label_map|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
+_rc_defs=$(grep -c -E '^(_aff_rd_root|_aff_rd_diff|_aff_label_map|_aff_runner_offend|_aff_classify_runner_diff)\(\) \{$' "$_rc_src" || true)
 cases=$((cases + 1))
-if [[ "$_rc_defs" == "4" ]] && bash -n "$_rc_src"; then
-  pass "rc0: the classifier extracts as four functions and parses"
+if [[ "$_rc_defs" == "5" ]] && bash -n "$_rc_src"; then
+  pass "rc0: the classifier extracts as five functions and parses"
 else
-  fail "rc0: classifier extraction found $_rc_defs of 4 functions (or it does not parse)"
+  fail "rc0: classifier extraction found $_rc_defs of 5 functions (or it does not parse)"
 fi
 
 RC_BASE_RUNNER='#!/usr/bin/env bash
@@ -529,6 +546,9 @@ run_suite() { :; }
 if true; then
   run_suite "a/one" bash a/one.test.sh
   run_suite "a/two" bash a/two.test.sh
+fi
+if true; then
+  run_suite "a/three" bash a/three.test.sh
 fi
 cat <<'"'"'USAGE'"'"'
 usage: runner
@@ -587,14 +607,14 @@ rc_ins() {
   PAT="$pat" TXT="$txt" awk '{ print } $0 == ENVIRON["PAT"] && !done { printf "%s\n", ENVIRON["TXT"]; done = 1 }' \
     "$d/scripts/test-all.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/test-all.sh"
 }
-# Replace the first line equal to $2 with $3 (empty $3 deletes it).
+# Replace the first line equal to $2 with $3; a non-empty 4th argument deletes the line instead.
 rc_rep() {
   local d="$1" pat="$2" new="$3"
   assert_fixture_dir "$d"
   PAT="$pat" NEW="$new" DEL="${4:-}" awk '$0 == ENVIRON["PAT"] && !done { done = 1; if (ENVIRON["DEL"] == "") print ENVIRON["NEW"]; next } { print }' \
     "$d/scripts/test-all.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/test-all.sh"
 }
-rc_lib_append() { # dir text...
+rc_lib_append() { # dir text (one argument, may hold newlines)
   local d="$1"; shift
   assert_fixture_dir "$d"
   printf '%s\n' "$1" >> "$d/scripts/lib/test-affected-paths.sh"
@@ -607,7 +627,6 @@ rc_lib_ins() { # dir pattern text
 }
 RC_BLOCK=$'\n# x/new — declared edge\nAFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n  "scripts/lib/test-affected-paths.sh"   # THIS FILE\n)'
 RC_TWO='  run_suite "a/two" bash a/two.test.sh'
-RC_ONE='  run_suite "a/one" bash a/one.test.sh'
 
 # Mutations. Each edits the scratch repo's working tree (and may commit); the table below names
 # the verdict each must produce.
@@ -618,7 +637,7 @@ m_ok_bun()         { rc_ins "$1" "$RC_TWO" '  run_suite "x/bun" bun test apps/x/
 m_ok_blank_comment() { rc_ins "$1" "$RC_TWO" $'\n  # a note\n  run_suite "x/new" bash x/new.test.sh'; }
 m_ok_two_in_hunk() { rc_ins "$1" "$RC_TWO" $'  run_suite "x/n1" bash x/n1.test.sh\n  run_suite "x/n2" bash x/n2.test.sh'; }
 m_ok_comment_only() { rc_ins "$1" "$RC_TWO" '  # just a note'; }
-m_ok_mnemonic()    { rc_g -C "$1" config diff.mnemonicPrefix true; rc_g -C "$1" config diff.noprefix true; m_ok_single "$1"; }
+m_ok_mnemonic()    { assert_fixture_dir "$1"; rc_g -C "$1" config diff.mnemonicPrefix true; rc_g -C "$1" config diff.noprefix true; m_ok_single "$1"; }
 m_s_fallback()     { rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; }
 m_s_floor()        { rc_rep "$1" '_MIN_ALWAYS_ON_DECLARED=141' '_MIN_ALWAYS_ON_DECLARED=0'; }
 m_s_smuggle_semi() { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash a.test.sh; _aff_fallback='; }
@@ -635,10 +654,14 @@ m_s_cont_blank()   { rc_ins "$1" 'x=1 \' ''; }
 m_s_heredoc_blank() { rc_ins "$1" 'usage: runner' ''; }
 m_s_after_nonreg() { rc_ins "$1" '  y=2' '  run_suite "x/new" bash x/new.test.sh'; }
 m_s_first_in_group() { rc_ins "$1" 'if true; then' '  run_suite "x/new" bash x/new.test.sh'; }
-m_s_chmod()        { chmod +x "$1/scripts/test-all.sh"; }
-m_s_delete_file()  { rm -f "$1/scripts/test-all.sh"; }
-m_s_binary()       { printf 'scripts/test-all.sh -diff\n' > "$1/.gitattributes"; m_ok_single "$1"; }
-m_s_nonewline()    { local d="$1"; assert_fixture_dir "$d"; printf '%s' "$RC_BASE_RUNNER" | head -c -1 > "$d/scripts/test-all.sh"; }
+m_s_chmod()        { assert_fixture_dir "$1"; chmod +x "$1/scripts/test-all.sh"; }
+m_s_delete_file()  { assert_fixture_dir "$1"; rm -f "$1/scripts/test-all.sh"; }
+m_s_lib_delete()   { assert_fixture_dir "$1"; rm -f "$1/scripts/lib/test-affected-paths.sh"; m_ok_single "$1"; }
+m_s_binary()       { assert_fixture_dir "$1"; printf 'scripts/test-all.sh -diff\n' > "$1/.gitattributes"; m_ok_single "$1"; }
+m_s_nonewline()    { local d="$1"; assert_fixture_dir "$d"; printf '%s' "${RC_BASE_RUNNER%?}" > "$d/scripts/test-all.sh"; }
+# A clean filter strips the CR from the diff text while the working-tree line keeps it: the diff and
+# the file the runner will read disagree (G2-postimage).
+m_s_postimage()    { assert_fixture_dir "$1"; printf 'scripts/test-all.sh filter=crstrip\n' > "$1/.gitattributes"; rc_g -C "$1" config filter.crstrip.clean "tr -d '\\r'"; rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\r'; }
 m_s_removed_dashes() { m_ok_single "$1"; rc_rep "$1" '-- note kept in the heredoc' '' del; }
 m_s_added_plusplus() { m_ok_single "$1"; rc_ins "$1" '  y=2' '++ x'; }
 m_s_crlf()         { rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\r'; }
@@ -667,12 +690,24 @@ m_s_idx_edges_target() { m_ok_idx_block "$1"; }
 m_s_idx_dup_def()  { m_ok_idx_block "$1"; }
 m_s_idx_in_function() { m_ok_single "$1"; rc_lib_ins "$1" '  :' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
 m_s_idx_closer_cmd() { m_ok_single "$1"; rc_lib_append "$1" $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n) ; _aff_fallback='; }
+m_ok_two_groups()  { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash x/new.test.sh'; rc_ins "$1" '  run_suite "a/three" bash a/three.test.sh' '  run_suite "x/new3" bash x/new3.test.sh'; }
+m_ok_idx_dotslash() { rc_ins "$1" "$RC_TWO" '  run_suite "./x" bash x/new.test.sh'; rc_lib_append "$1" $'AFFECTED__X_PATHS=(\n  "x/new.test.sh"\n)'; }
+m_s_idx_two_blocks() { m_ok_idx_block "$1"; rc_lib_append "$1" $'AFFECTED_A_ONE_PATHS=(\n  "a/one.test.sh"\n)'; }
+m_s_idx_two_entries() { m_ok_single "$1"; rc_lib_ins "$1" '  "a/one"' $'  "x/new"\n  "a/two"'; }
+m_s_path_dotdot()  { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash ../x.sh'; }
+m_s_path_abs()     { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bash /abs/x.sh'; }
+m_s_bun_abs()      { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" bun test /abs/x.test.ts'; }
+m_s_py_m_other()   { rc_ins "$1" "$RC_TWO" '  run_suite "x/new" python3 -m pip install x'; }
+# core.autocrlf=true hides a CR from a plain diff; the pinned diff shows it (G2-cr), where an unpinned
+# one would report a text/file differential (G2-postimage).
+m_s_crlf_autocrlf() { assert_fixture_dir "$1"; rc_g -C "$1" config core.autocrlf true; rc_ins "$1" "$RC_TWO" $'  run_suite "x/new" bash x/new.test.sh\r'; }
+m_s_cont_comment() { rc_ins "$1" 'x=1 \' '  # a note'; }
 m_s_idx_nested()   { m_ok_single "$1"; rc_lib_ins "$1" '  "a/two.test.sh"' $'AFFECTED_X_NEW_PATHS=(\n  "x/new.test.sh"\n)'; }
 m_s_idx_comment_alone() { rc_lib_append "$1" '# a note'; }
 m_s_idx_removed()  { local d="$1"; assert_fixture_dir "$d"; grep -v 'THIS FILE' "$d/scripts/lib/test-affected-paths.sh" > "$d/.rc.tmp" && mv "$d/.rc.tmp" "$d/scripts/lib/test-affected-paths.sh"; m_ok_single "$d"; }
-m_s_committed()    { rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; rc_g -C "$1" commit -q -am semantic; m_ok_single "$1"; }
+m_s_committed()    { assert_fixture_dir "$1"; rc_ins "$1" "$RC_TWO" '  _aff_fallback=""'; rc_g -C "$1" commit -q -am semantic; m_ok_single "$1"; }
 m_u_empty()        { :; }
-m_u_no_origin()    { rc_g -C "$1" update-ref -d refs/remotes/origin/main; m_ok_single "$1"; }
+m_u_no_origin()    { assert_fixture_dir "$1"; rc_g -C "$1" update-ref -d refs/remotes/origin/main; m_ok_single "$1"; }
 
 # name | mutation | expected "<class>[:<first code>|:<labels>]" | repo flavour
 RC_TABLE=(
@@ -731,6 +766,18 @@ RC_TABLE=(
   's_idx_edges_target|m_s_idx_edges_target|semantic:INDEX-ARRAY-NAME|edges-pair'
   's_idx_dup_def|m_s_idx_dup_def|semantic:INDEX-ARRAY-NAME|has-x-new'
   's_idx_nested|m_s_idx_nested|semantic:G4-syntax|'
+  'ok_two_groups|m_ok_two_groups|registration-only:x/new,x/new3|'
+  'ok_idx_dotslash|m_ok_idx_dotslash|registration-only:./x|'
+  's_idx_two_blocks|m_s_idx_two_blocks|semantic:INDEX-UNBOUND|'
+  's_idx_two_entries|m_s_idx_two_entries|semantic:INDEX-UNBOUND|'
+  's_path_dotdot|m_s_path_dotdot|semantic:G2-charset|'
+  's_path_abs|m_s_path_abs|semantic:G2-charset|'
+  's_bun_abs|m_s_bun_abs|semantic:G2-charset|'
+  's_py_m_other|m_s_py_m_other|semantic:G2-charset|'
+  's_cont_comment|m_s_cont_comment|semantic:G2-anchor|'
+  's_crlf_autocrlf|m_s_crlf_autocrlf|semantic:G2-cr|'
+  's_lib_delete|m_s_lib_delete|semantic:G0-header|'
+  's_postimage|m_s_postimage|semantic:G2-postimage|'
   's_idx_in_function|m_s_idx_in_function|semantic:INDEX-ANCHOR|'
   's_idx_closer_cmd|m_s_idx_closer_cmd|semantic:INDEX-SHAPE|'
   's_idx_comment_alone|m_s_idx_comment_alone|undecidable:no-registration|'
@@ -772,6 +819,7 @@ rc_run_table() {
     if [[ "$got" != "$want" ]]; then
       bad=$((bad + 1))
       [[ -n "${RC_VERBOSE:-}" ]] && echo "    [row $name] want '$want' got '$got'" >&2
+      [[ -n "${RC_BADLOG:-}" ]] && printf '%s\n' "$name" >> "$RC_BADLOG"
     fi
   done
   echo "$bad"
@@ -779,35 +827,35 @@ rc_run_table() {
 
 cases=$((cases + 1))
 _rc_bad="$(RC_VERBOSE=1 rc_run_table "$_rc_src" 2>"$TESTROOT/rc-table.err")"
-if [[ "$_rc_bad" == "0" ]]; then
+# A floor on the table itself: deleting rows would otherwise read as a smaller green table.
+if [[ "$_rc_bad" == "0" ]] && (( ${#RC_TABLE[@]} >= 75 )); then
   pass "rc1: all ${#RC_TABLE[@]} classifier rows give the table's verdict (registration-only shapes pass, every semantic edit stays full)"
 else
-  fail "rc1: $_rc_bad classifier row(s) differ from the table: $(tr '\n' ' ' < "$TESTROOT/rc-table.err" | head -c 900)"
+  fail "rc1: $_rc_bad classifier row(s) differ from the table (table rows: ${#RC_TABLE[@]}, floor 75): $(tr '\n' ' ' < "$TESTROOT/rc-table.err" | head -c 900)"
 fi
 
-# H1: a permissive stub (everything registration-only) — the semantic rows must notice.
+# H1: a permissive stub (everything registration-only, no labels) — EVERY table row must notice,
+# since no row expects an empty registration-only verdict.
 cases=$((cases + 1))
 cat > "$TESTROOT/clf-permissive.sh" <<'STUB'
 _aff_classify_runner_diff() { _aff_runner_class=registration-only; _aff_runner_added_labels=(); _aff_runner_offenders=(); _aff_runner_reason=""; }
 STUB
 _h1_bad="$(rc_run_table "$TESTROOT/clf-permissive.sh" 2>/dev/null)"
-if (( _h1_bad > 20 )); then pass "H1: a permissive classifier stub reddens $_h1_bad rows (the table can see a classifier that admits everything)"
-else fail "H1: a permissive stub only reddened $_h1_bad rows"; fi
+if (( _h1_bad == ${#RC_TABLE[@]} )); then pass "H1: a permissive classifier stub reddens all $_h1_bad rows (the table can see a classifier that admits everything)"
+else fail "H1: a permissive stub reddened $_h1_bad of ${#RC_TABLE[@]} rows"; fi
 
-# H2: a reject-everything stub — the must-PASS rows (and only they, plus the undecidable rows) must notice.
+# H2: a reject-everything stub — every must-PASS row (name prefix ok_) must notice, by NAME: a
+# count threshold is satisfied by the semantic rows alone and proves nothing about must-pass rows.
 cases=$((cases + 1))
 cat > "$TESTROOT/clf-rejectall.sh" <<'STUB'
 _aff_classify_runner_diff() { _aff_runner_class=semantic; _aff_runner_added_labels=(); _aff_runner_offenders=("x:0 G2-shape"); _aff_runner_reason=""; }
 STUB
-_h2_bad="$(rc_run_table "$TESTROOT/clf-rejectall.sh" 2>/dev/null)"
-_h2_pass_rows=$(printf '%s\n' "${RC_TABLE[@]}" | grep -c '|registration-only' || true)
-if (( _h2_bad >= _h2_pass_rows )) && (( _h2_pass_rows >= 5 )); then pass "H2: a reject-everything stub reddens $_h2_bad rows including all $_h2_pass_rows must-pass rows"
-else fail "H2: a reject-all stub reddened $_h2_bad rows against $_h2_pass_rows must-pass rows"; fi
-
-# H3: the must-PASS non-canonical inputs are each shaped differently from the canonical bash row
-# (dotted+spaced label, python -m, bun test, blank+comment run, two in one hunk, comment-only).
-cases=$((cases + 1))
-if (( _h2_pass_rows >= 7 )); then pass "H3: $_h2_pass_rows must-pass shapes in the table"; else fail "H3: only $_h2_pass_rows must-pass shapes"; fi
+RC_BADLOG="$TESTROOT/h2-bad.log"; : > "$RC_BADLOG"
+_h2_bad="$(RC_BADLOG="$RC_BADLOG" rc_run_table "$TESTROOT/clf-rejectall.sh" 2>/dev/null)"
+_h2_ok_rows=$(printf '%s\n' "${RC_TABLE[@]}" | grep -c '^ok_' || true)
+_h2_ok_red=$(grep -c '^ok_' "$RC_BADLOG" || true)
+if (( _h2_ok_rows >= 7 )) && (( _h2_ok_red == _h2_ok_rows )); then pass "H2: a reject-everything stub reddens all $_h2_ok_rows must-pass (ok_*) rows by name ($_h2_bad rows in total)"
+else fail "H2: reject-all stub reddened $_h2_ok_red of $_h2_ok_rows ok_* rows"; fi
 
 # --- Rows re*: end to end through the sandboxed runner ------------------------------
 # The sandbox replaces the classifier's two READ functions at build time (never shipped inline)
@@ -865,6 +913,8 @@ if grep -qF 'fallback=runner-changed' <<<"$_re2_sum" \
   && grep -qF $'AFFECTED_FALLBACK\treason=runner-changed' <<<"$ARM_OUT" \
   && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT" \
   && grep -qF 'first: scripts/test-all.sh:4 [G2-shape]' <<<"$ARM_OUT" \
+  && grep -qF '  G2-shape: an added line outside the closed registration shape' <<<"$ARM_OUT" \
+  && grep -qF '1 finding(s) outside the registration grammar' <<<"$ARM_OUT" \
   && ! grep -qF '_aff_fallback' <<<"$ARM_OUT"; then
   pass "re2: a registration plus one semantic line goes full; the banner names scripts/test-all.sh:4 [G2-shape], no source text"
 else
@@ -881,6 +931,7 @@ SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
   "SANDBOX_RD_ROOT=$_re3_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_DUAL")" -- --print-selection
 _re3_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
 if grep -qF 'fallback=runner-changed' <<<"$_re3_sum" && grep -qF '[LABEL-NOT-UNIQUE]' <<<"$ARM_OUT" \
+  && grep -qF '1 finding(s)' <<<"$ARM_OUT" \
   && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
   pass "re3: an added label that already exists in the live stream degrades to full (LABEL-NOT-UNIQUE)"
 else
@@ -953,6 +1004,7 @@ fi
 
 # re9: staged scope never computes the class: byte-identical to before (sc6 keeps its note).
 cases=$((cases + 1))
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
 SANDBOX_LIB=with-lib run_arm 'SANDBOX_STAGED_NAMES=scripts/test-all.sh' \
   "SANDBOX_RD_ROOT=$_re1_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_NEW")" -- --print-selection --affected-scope=staged
 if grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=runner-changed' <<<"$ARM_OUT" \
@@ -974,13 +1026,13 @@ re_idx_root() { # $1 = name, $2 = runner line 3 (the added registration), remain
   local l; for l in "$@"; do printf '%s\n' "$l" >> "$d/scripts/lib/test-affected-paths.sh"; done
   printf '%s' "$d"
 }
-re_idx_diff() { # $1 = added runner line, $2.. = added lib block lines (lib lines start at 4)
-  local reg="$1"; shift
+re_idx_diff() { # $1 = runner diff text, $2.. = added lib block lines (lib lines start at 4)
+  local rdiff="$1"; shift
   local out
   out=$'diff --git a/scripts/lib/test-affected-paths.sh b/scripts/lib/test-affected-paths.sh\nindex 1111111..2222222 100644\n--- a/scripts/lib/test-affected-paths.sh\n+++ b/scripts/lib/test-affected-paths.sh'
   out+=$'\n'"@@ -3,0 +4,$# @@"
   local l; for l in "$@"; do out+=$'\n'"+${l}"; done
-  out+=$'\n'"$(re_diff 3 1 "$reg")"
+  out+=$'\n'"$rdiff"
   printf '%s' "$out"
 }
 RE_LIB_HEAD=('ALWAYS_ON_SUITES=(' '  "a/one"' ')')
@@ -989,7 +1041,7 @@ _re11_block=('AFFECTED_ZZ_NEW_SUITE_PATHS=(' '  "zz/new.test.sh"' '  "scripts/li
 _re11_root=$(re_idx_root re11 "$RE_NEW" "${RE_LIB_HEAD[@]}" "${_re11_block[@]}")
 SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
 SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
-  "SANDBOX_RD_ROOT=$_re11_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$RE_NEW" "${_re11_block[@]}")" -- --print-selection
+  "SANDBOX_RD_ROOT=$_re11_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$(re_diff 3 1 "$RE_NEW")" "${_re11_block[@]}")" -- --print-selection
 _re11_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
 if grep -qF $'AFFECTED_RUNNER_IN_SCOPE\treason=registration-only' <<<"$ARM_OUT" && grep -qF 'fallback=none' <<<"$_re11_sum"; then
   pass "re11: a registration plus its own declared-edge block stays bounded"
@@ -1003,13 +1055,82 @@ _re10_block=('AFFECTED_SCRIPTS_LINT_DUAL_LOCKFILE_PATHS=(' '  "scripts/lint-dual
 _re10_root=$(re_idx_root re10 "$RE_COLL" "${RE_LIB_HEAD[@]}" "${_re10_block[@]}")
 SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_COLL}" \
 SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
-  "SANDBOX_RD_ROOT=$_re10_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$RE_COLL" "${_re10_block[@]}")" -- --print-selection
+  "SANDBOX_RD_ROOT=$_re10_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$(re_diff 3 1 "$RE_COLL")" "${_re10_block[@]}")" -- --print-selection
 _re10_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
 if grep -qF 'fallback=runner-changed' <<<"$_re10_sum" && grep -qF '[INDEX-ARRAY-NAME]' <<<"$ARM_OUT" \
    && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
   pass "re10: a declared array another live label also maps to degrades to full (INDEX-ARRAY-NAME)"
 else
   fail "re10: summary='${_re10_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re12: a new label whose census name is ALREADY a declared array (here the real
+# tests/hooks/drop-sentinel-parity array) inherits that suite's edges without any index edit.
+cases=$((cases + 1))
+RE_INH='  run_suite "tests/hooks/drop_sentinel-parity" bash tests/hooks/zz.test.sh'
+_re12_root=$(re_root re12 "$RE_DUAL" "$RE_INH")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_INH}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re12_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_INH")" -- --print-selection
+_re12_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re12_sum" && grep -qF '[INDEX-ARRAY-NAME]' <<<"$ARM_OUT"; then
+  pass "re12: a new label that maps to an already-declared array degrades to full"
+else
+  fail "re12: summary='${_re12_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re13: TWO added registrations, the SECOND aliasing a live label — a check that stops at the first
+# added label (fixture of one) would pass.
+cases=$((cases + 1))
+_re13_root=$(re_root re13 "$RE_DUAL" "$RE_NEW" "$RE_DUAL")
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}"$'\n'"${RE_DUAL}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re13_root" "SANDBOX_RD_DIFF=$(re_diff 3 2 "$RE_NEW" "$RE_DUAL")" -- --print-selection
+_re13_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re13_sum" && grep -qF '[LABEL-NOT-UNIQUE]' <<<"$ARM_OUT"; then
+  pass "re13: the second of two added registrations aliasing a live label degrades to full"
+else
+  fail "re13: summary='${_re13_sum}'"
+fi
+
+# re14: TWO declared blocks, the SECOND colliding with another live label (injectivity must walk
+# every pair, not only the first).
+cases=$((cases + 1))
+_re14_blocks=('AFFECTED_ZZ_NEW_SUITE_PATHS=(' '  "zz/new.test.sh"' ')' 'AFFECTED_SCRIPTS_LINT_DUAL_LOCKFILE_PATHS=(' '  "scripts/lint-dual_lockfile.test.sh"' ')')
+_re14_root=$(re_idx_root re14 "$RE_NEW" "${RE_LIB_HEAD[@]}" "${_re14_blocks[@]}")
+printf '%s\n' "$RE_COLL" >> "$_re14_root/scripts/test-all.sh"
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}"$'\n'"${RE_COLL}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' \
+  "SANDBOX_RD_ROOT=$_re14_root" "SANDBOX_RD_DIFF=$(re_idx_diff "$(re_diff 3 2 "$RE_NEW" "$RE_COLL")" "${_re14_blocks[@]}")" -- --print-selection
+_re14_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re14_sum" && grep -qF '[INDEX-ARRAY-NAME]' <<<"$ARM_OUT"; then
+  pass "re14: injectivity walks every declared pair (the second block collides)"
+else
+  fail "re14: summary='${_re14_sum}' out: $(grep -F '[affected]' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re15: SOLEUR_TEST_FORCE_ALL wins the ladder before the class can matter.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
+SANDBOX_LIB=with-lib run_arm 'SANDBOX_DIFF_NAMES=scripts/test-all.sh' 'SOLEUR_TEST_FORCE_ALL=1' \
+  "SANDBOX_RD_ROOT=$_re1_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_NEW")" -- --print-selection
+if grep -qF $'AFFECTED_FALLBACK\treason=force-all' <<<"$ARM_OUT" && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "re15: SOLEUR_TEST_FORCE_ALL keeps a registration-only fixture on the full battery"
+else
+  fail "re15: out: $(grep -E 'AFFECTED_' <<<"$ARM_OUT" | head -4 | tr '\n' '|')"
+fi
+
+# re16: --paths never classifies — with a LIVE registration-only seam diff beside it, so the verdict
+# (not the banner text) is what decides.
+cases=$((cases + 1))
+SANDBOX_MUT_OLD="$RE_DUAL" SANDBOX_MUT_NEW="${RE_DUAL}"$'\n'"${RE_NEW}" \
+SANDBOX_LIB=with-lib run_arm \
+  "SANDBOX_RD_ROOT=$_re1_root" "SANDBOX_RD_DIFF=$(re_diff 3 1 "$RE_NEW")" -- --print-selection --paths=scripts/test-all.sh
+_re16_sum=$(grep -F 'AFFECTED_SUMMARY' <<<"$ARM_OUT" | head -1)
+if grep -qF 'fallback=runner-changed' <<<"$_re16_sum" && ! grep -qF 'AFFECTED_RUNNER_IN_SCOPE' <<<"$ARM_OUT"; then
+  pass "re16: --paths with a live registration-only seam diff still goes full"
+else
+  fail "re16: summary='${_re16_sum}'"
 fi
 
 # H5: the extraction under test is the runner's own text — the classifier the matrix drove is
@@ -2594,7 +2715,7 @@ if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
-MIN_CASES=106
+MIN_CASES=111
 if (( cases < MIN_CASES )); then
   echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
   exit 2
