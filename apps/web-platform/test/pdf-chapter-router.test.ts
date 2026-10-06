@@ -199,6 +199,25 @@ describe("selectChapter", () => {
     expect(callArgs?.options?.model).toBe("claude-sonnet-5-5");
   });
 
+  // This call passes no `env`/`sandbox`, so the CLI inherits the server
+  // environment (W1, ADR-272). A routing turn needs no tool at all; `tools: []`
+  // disables every built-in so a prompt-injected question cannot reach Bash/Read.
+  it("disables every built-in tool (the call has no sandbox and inherits the server env)", async () => {
+    mockQuery.mockReturnValue(fakeQuery({ text: "1", totalCostUsd: 0.001 }));
+
+    await selectChapter({
+      question: "anything",
+      outline: sampleOutline,
+      conversationCostState: { totalCostUsd: 0, perConvCap: 0.5 },
+    });
+
+    const callArgs = mockQuery.mock.calls[0]?.[0] as
+      | { options?: { tools?: unknown; allowedTools?: unknown } }
+      | undefined;
+    expect(callArgs?.options?.tools).toEqual([]);
+    expect(callArgs?.options?.allowedTools).toEqual([]);
+  });
+
   it("returns kind:'router-error' when the SDK throws and mirrors to Sentry", async () => {
     const sdkError = new Error("upstream 500");
     mockQuery.mockImplementation(() => {

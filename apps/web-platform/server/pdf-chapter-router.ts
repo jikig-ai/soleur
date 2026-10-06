@@ -157,6 +157,11 @@ export async function selectChapter(
       options: {
         model: ROUTING_MODEL,
         systemPrompt,
+        // `tools: []` disables every built-in tool (SDK Options.tools). This
+        // call passes no `env` or `sandbox`, so the CLI inherits the server
+        // environment; a single-request routing turn has no use for Bash or
+        // Read, and `allowedTools: []` alone only means "nothing auto-approved".
+        tools: [],
         allowedTools: [],
         maxTurns: 1,
       },

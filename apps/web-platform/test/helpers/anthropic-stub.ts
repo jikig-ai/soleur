@@ -1,7 +1,8 @@
 // A scripted stand-in for the Anthropic Messages API, for tests that must drive
 // the REAL Agent SDK / CLI through one tool call without a model, a credential
-// or the network. First request that carries tools and no tool_result answers
-// with one `Bash` tool_use; every other request answers with plain text.
+// or the network. EVERY request that carries tools and no tool_result answers
+// with one `Bash` tool_use (the stub keeps no state, so keep the command
+// side-effect free: `true`); every other request answers with plain text.
 //
 // Point the CLI at it with ANTHROPIC_BASE_URL. The model is out of the
 // assertion path (the sharp-edge rule for LLM-mediated security tests): what a

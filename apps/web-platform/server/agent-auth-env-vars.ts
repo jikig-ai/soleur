@@ -1,12 +1,14 @@
 // The environment variables that carry the owner's Anthropic credential into an
-// agent session. ONE source for both sides of the W1 boundary (#9601, ADR-272):
-// `buildAgentEnv` injects exactly one of these per scheme, and
-// `buildAgentSandboxConfig` denies exactly this set to sandboxed Bash, so a
-// third auth variable cannot be added to one side only.
+// agent session (#9601, ADR-272). `buildAgentEnv` injects exactly one of these
+// per scheme, and `buildAgentSandboxConfig` denies exactly this set to sandboxed
+// Bash. Both read the names from here, and
+// `test/agent-sandbox-credential-deny.test.ts` derives the injected set from
+// `buildAgentEnv`'s output and requires it to equal this one, so a third auth
+// variable added on the injection side fails that test rather than going unseen.
 //
-// Dependency-free on purpose: the sandbox config is imported lazily by the
-// canary replay path and mocked wholesale by suites that stub `agent-env`, so
-// it must not pull `agent-env`'s graph (providers, plugin-path) behind it.
+// Dependency-free on purpose. The canary capture path imports the sandbox config
+// lazily, and importing it must not pull `agent-env`'s graph (providers,
+// plugin-path) behind it, so the names live in a module with no imports.
 
 /** Raw Anthropic API key (per-token billing). */
 export const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY" as const;

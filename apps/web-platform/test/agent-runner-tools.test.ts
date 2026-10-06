@@ -124,6 +124,7 @@ vi.mock("../server/observability", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import { CREDENTIALS_PROMPT_DIRECTIVE } from "../server/soleur-go-runner";
 import {
   DEFAULT_API_KEY_ROW,
   createSupabaseMockImpl,
@@ -584,8 +585,10 @@ describe("agent-runner MCP tool wiring", () => {
 
   // W1 (#9601): the Anthropic credential is withheld from sandboxed Bash, so an
   // agent that finds it empty must not ask the user to paste it into the chat.
-  // The line rides EVERY hosted session, with or without connected services.
-  test("system prompt says the Anthropic credential is withheld and must never be requested", async () => {
+  // The directive rides EVERY hosted session, with or without connected
+  // services (the Concierge path carries the same constant: see
+  // credentials-prompt-directive.test.ts).
+  test("system prompt carries the Credentials directive when no service is connected", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
       repo_status: "ready",
@@ -597,11 +600,29 @@ describe("agent-runner MCP tool wiring", () => {
     await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.systemPrompt).toContain("## Credentials");
-    expect(options.systemPrompt).toContain("withheld from shell commands by design");
-    expect(options.systemPrompt).toContain("Never ask the user for it");
+    expect(options.systemPrompt).toContain(CREDENTIALS_PROMPT_DIRECTIVE);
     // Heading collision guard: this block must not masquerade as Connected Services.
     expect(options.systemPrompt).not.toContain("## Connected Services");
+  });
+
+  test("system prompt carries the Credentials directive alongside Connected Services", async () => {
+    const plausibleRow = { ...DEFAULT_API_KEY_ROW, id: "key-plausible", provider: "plausible" };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("## Connected Services");
+    expect(options.systemPrompt).toContain(CREDENTIALS_PROMPT_DIRECTIVE);
   });
 
   test("system prompt omits Plausible from Connected Services when no Plausible token", async () => {

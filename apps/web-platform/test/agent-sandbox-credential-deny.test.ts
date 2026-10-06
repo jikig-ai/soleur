@@ -4,10 +4,13 @@
 // `buildAgentEnv` can inject; service tokens and GH_TOKEN stay readable
 // (Connected Services depends on them — see ADR-272).
 //
-// The assertions are over the RETURNED object and over what `buildAgentEnv`
-// actually injects per scheme — never over a constant — so deleting the
-// block, changing `mode`, or adding an auth variable on the injection side
-// alone all fail here.
+// The injected set is DERIVED from `buildAgentEnv`'s output by value flow: the
+// credential is a unique sentinel, and an auth variable is any key whose value
+// carries it. That makes the guard independent of the constant it checks — a
+// third variable set from the credential, in one scheme or in every scheme, in
+// any option shape, changes the derived set and fails here. The wire from the
+// builder to the real `query()` options is pinned in
+// agent-runner-query-options.test.ts.
 
 import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -16,11 +19,34 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildAgentEnv, type AgentCredential } from "@/server/agent-env";
-import { AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
+import { API_KEY_ENV_VAR, AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 import { PROVIDER_CONFIG } from "@/server/providers";
 
-const SCHEMES: AgentCredential["scheme"][] = ["api_key", "oauth_token"];
+// Every auth scheme. A Record keyed on the union makes a NEW scheme a compile
+// error here, so it cannot be added to the injector without being sampled.
+const SCHEME_REGISTRY: Record<AgentCredential["scheme"], true> = {
+  api_key: true,
+  oauth_token: true,
+};
+const SCHEMES = Object.keys(SCHEME_REGISTRY) as AgentCredential["scheme"][];
+
+const SENTINEL = "credential-sentinel-7c1e4f";
+
+// Option shapes buildAgentEnv takes: bare, and with every optional input set.
+const SHAPES: { label: string; tokens?: Record<string, string>; opts?: Parameters<typeof buildAgentEnv>[2] }[] = [
+  { label: "bare" },
+  {
+    label: "all inputs",
+    tokens: Object.fromEntries(Object.values(PROVIDER_CONFIG).map((c) => [c.envVar, "service-token-value"])),
+    opts: {
+      ghToken: "gh-token-value",
+      gitAskpassScriptPath: "/tmp/askpass.sh",
+      gitInstallationToken: "installation-token-value",
+      pluginPath: "/tmp/plugins/soleur",
+    },
+  },
+];
 
 describe("buildAgentSandboxConfig — Anthropic credential deny (W1)", () => {
   let root: string;
@@ -43,18 +69,23 @@ describe("buildAgentSandboxConfig — Anthropic credential deny (W1)", () => {
   const denied = (): { name: string; mode: string }[] =>
     buildAgentSandboxConfig(own).credentials.envVars;
 
-  // The auth variables buildAgentEnv can inject, derived from its OUTPUT:
-  // each scheme injects exactly one exclusive auth variable, so the union of
-  // per-scheme keys minus the keys common to every scheme is the auth set.
-  // A third auth variable added on the injection side changes this set.
-  const injectedAuthVars = (): string[] => {
-    const perScheme = SCHEMES.map(
-      (scheme) =>
-        new Set(Object.keys(buildAgentEnv({ scheme, value: "probe-value" }))),
-    );
-    const union = new Set(perScheme.flatMap((s) => [...s]));
-    return [...union].filter((k) => !perScheme.every((s) => s.has(k))).sort();
-  };
+  // Keys of buildAgentEnv's output whose VALUE carries the credential.
+  const authVarsFor = (scheme: AgentCredential["scheme"], shape: (typeof SHAPES)[number]): string[] =>
+    Object.entries(buildAgentEnv({ scheme, value: SENTINEL }, shape.tokens, shape.opts))
+      .filter(([, v]) => v.includes(SENTINEL))
+      .map(([k]) => k)
+      .sort();
+
+  const injectedAuthVars = (): string[] =>
+    [...new Set(SCHEMES.flatMap((scheme) => SHAPES.flatMap((shape) => authVarsFor(scheme, shape))))].sort();
+
+  it("injects exactly ONE auth variable per scheme and option shape (the silent-billing trap)", () => {
+    for (const scheme of SCHEMES) {
+      for (const shape of SHAPES) {
+        expect(authVarsFor(scheme, shape), `${scheme} / ${shape.label}`).toHaveLength(1);
+      }
+    }
+  });
 
   it("denies exactly the auth variables buildAgentEnv can inject, in deny mode", () => {
     const entries = denied();
@@ -62,11 +93,16 @@ describe("buildAgentSandboxConfig — Anthropic credential deny (W1)", () => {
     for (const e of entries) expect(e.mode).toBe("deny");
   });
 
-  it("covers both schemes and the shared constant (instrument is not empty)", () => {
+  it("is anchored to the shared constant, and the instrument is not empty", () => {
     expect(SCHEMES.length).toBeGreaterThanOrEqual(2);
-    expect(injectedAuthVars().length).toBe(SCHEMES.length);
-    expect(denied().length).toBe(AGENT_AUTH_ENV_VARS.length);
+    expect(injectedAuthVars()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
     expect(new Set(denied().map((e) => e.name)).size).toBe(denied().length);
+  });
+
+  it("the provider table names the same API-key variable as the shared constant", () => {
+    // `providers.ts` repeats the literal (it must stay importable on the client
+    // side); a rename in one place must not leave the other behind.
+    expect(PROVIDER_CONFIG.anthropic.envVar).toBe(API_KEY_ENV_VAR);
   });
 
   it("does NOT deny connected-service tokens, GH_TOKEN, or the git installation token", () => {
@@ -80,10 +116,10 @@ describe("buildAgentSandboxConfig — Anthropic credential deny (W1)", () => {
     expect(names.has("GIT_INSTALLATION_TOKEN")).toBe(false);
   });
 
-  it("keeps the credentials block on the read-only (support persona) config too", () => {
-    const entries = buildAgentSandboxConfig(own, {
-      readOnly: true,
-    }).credentials.envVars;
-    expect(entries.map((e) => e.name).sort()).toEqual(injectedAuthVars());
+  it("keeps the credentials block on the read-only (support persona) and egress configs too", () => {
+    for (const opts of [{ readOnly: true }, { allowGithubEgress: true }]) {
+      const entries = buildAgentSandboxConfig(own, opts).credentials.envVars;
+      expect(entries.map((e) => e.name).sort(), JSON.stringify(opts)).toEqual(injectedAuthVars());
+    }
   });
 });

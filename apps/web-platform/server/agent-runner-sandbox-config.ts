@@ -25,9 +25,9 @@ const log = createChildLogger("agent-sandbox");
 //     `feature: "agent-sandbox"` (the cc path mirrors the same precedent
 //     — see `cc-dispatcher.ts realSdkQueryFactory` body).
 //   - `enableWeakerNestedSandbox: true` — Docker containers cannot mount
-//     /proc inside user namespaces; this skips `--proc /proc` in bwrap.
-//     `/proc` is already in `denyRead`, so the weaker mode is acceptable
-//     (#1557).
+//     /proc inside user namespaces; this skips `--proc /proc` in bwrap
+//     (#1557). The PID namespace, not `denyRead`, is what hides the CLI
+//     parent's environment (measured, ADR-272).
 //   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
 //     no outbound network by default; `opts.allowGithubEgress` widens
 //     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
@@ -149,7 +149,7 @@ export type AgentSandboxConfig = {
   // sandboxed Bash command. Typed (not left to the index signature) so a test
   // reads the entries as data, not `unknown`.
   credentials: {
-    envVars: { name: string; mode: "deny" }[];
+    envVars: { name: (typeof AGENT_AUTH_ENV_VARS)[number]; mode: "deny" }[];
   };
 } & { [x: string]: unknown };
 
@@ -365,8 +365,10 @@ export function buildAgentSandboxConfig(
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
     // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap,
-    // which is acceptable because /proc is already in denyRead (#1557).
+    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
+    // (#1557). What keeps the CLI parent's environment out of reach is the PID
+    // namespace (`--unshare-pid`), not `denyRead`: measured with decoy values
+    // in ADR-272 (the sandbox sees its own processes only).
     enableWeakerNestedSandbox: true,
     network: {
       allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
@@ -389,8 +391,8 @@ export function buildAgentSandboxConfig(
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
     },
-    // W1 (#9601, ADR-272) — P1: a prompt-injected session cannot read the
-    // owner's Anthropic key out of its shell. `deny` unsets the variable for
+    // W1 (#9601, ADR-272): a prompt-injected session cannot read the owner's
+    // Anthropic key out of its shell. `deny` unsets the variable for
     // every sandboxed command; the CLI process keeps it for its own API calls.
     // Deliberately NOT denied: connected-service tokens (the agent is told they
     // are available — `## Connected Services`), GH_TOKEN and

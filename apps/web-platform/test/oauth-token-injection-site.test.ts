@@ -36,6 +36,11 @@ const NAME_IDENTIFIER_USERS: Record<string, Set<string>> = {
   ]),
 };
 
+// Identifier uses are judged on code, not prose: a comment that mentions a name
+// is not a reference. (The literal check below stays on raw text on purpose.)
+const stripComments = (text: string): string =>
+  text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
 function* walkTsFiles(dir: string): Generator<string> {
   let entries: import("node:fs").Dirent[];
   try {
@@ -48,7 +53,10 @@ function* walkTsFiles(dir: string): Generator<string> {
     if (e.isDirectory()) {
       if (e.name === "node_modules" || e.name === ".next") continue;
       yield* walkTsFiles(full);
-    } else if (/\.tsx?$/.test(e.name) && !/\.(test|spec)\.tsx?$/.test(e.name)) {
+    } else if (
+      /\.(ts|tsx|mts|js|mjs|cjs)$/.test(e.name) &&
+      !/\.(test|spec)\.(ts|tsx|mts|js|mjs|cjs)$/.test(e.name)
+    ) {
       yield full;
     }
   }
@@ -72,7 +80,7 @@ describe("CLAUDE_CODE_OAUTH_TOKEN single injection site (CWE-526)", () => {
     for (const base of SCAN_DIRS) {
       for (const file of walkTsFiles(path.join(ROOT, base))) {
         const rel = path.relative(ROOT, file);
-        const text = readFileSync(file, "utf8");
+        const text = stripComments(readFileSync(file, "utf8"));
         for (const [ident, allowed] of Object.entries(NAME_IDENTIFIER_USERS)) {
           if (allowed.has(rel)) continue;
           if (new RegExp(`\\b${ident}\\b`).test(text)) offenders.push(`${rel} -> ${ident}`);
@@ -82,10 +90,30 @@ describe("CLAUDE_CODE_OAUTH_TOKEN single injection site (CWE-526)", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("the names module only defines names: it never reads or writes the environment", () => {
-    const text = readFileSync(path.join(ROOT, AUTH_NAMES_MODULE), "utf8");
+  it("the scan is not vacuous: it sees the injector, the sandbox config and the names module", () => {
+    const seen = new Set<string>();
+    for (const base of SCAN_DIRS) {
+      for (const file of walkTsFiles(path.join(ROOT, base))) seen.add(path.relative(ROOT, file));
+    }
+    for (const must of [
+      path.join("server", "agent-env.ts"),
+      path.join("server", "agent-runner-sandbox-config.ts"),
+      AUTH_NAMES_MODULE,
+    ]) {
+      expect(seen.has(must), must).toBe(true);
+    }
+    expect(seen.size).toBeGreaterThan(100);
+  });
+
+  it("the names module only defines names: no imports, no environment access, no re-exports", () => {
+    const raw = readFileSync(path.join(ROOT, AUTH_NAMES_MODULE), "utf8");
     // The instrument is not empty: the module really defines the names.
-    expect(text).toContain(LITERAL);
-    expect(text).not.toMatch(/process\.env|\benv\s*\[|\.env\b/);
+    expect(raw).toContain(LITERAL);
+    const code = stripComments(raw);
+    // Any import (`import { env } from "node:process"`), `process`/`globalThis`
+    // access in any spelling (`process["env"]`), require/eval, or an env word.
+    expect(code).not.toMatch(/\b(import|require|process|globalThis|eval|Function|env)\b/);
+    // Re-export forms would hand the names to a module this test does not scan.
+    expect(code).not.toMatch(/\bexport\s*(\*|\{)/);
   });
 });

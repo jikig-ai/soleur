@@ -31,7 +31,7 @@ An AlphaSignal article argues prompts are not a security boundary and agents nee
 
 ## Functional Requirements
 
-- FR1: Verify what `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` strips; set it if safe; inject service tokens only into the skill/step that needs them.
+- FR1: Withhold the owner's Anthropic credential from sandboxed Bash with the per-variable `sandbox.credentials` deny. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` was verified and REJECTED (it strips the service tokens Connected Services needs; ADR-272 Decision 2). Service-token scoping moves to the credential broker (#9543).
 - FR2: Port a minimal PreToolUse guard (rm -rf of ancestors, terraform destroy/apply, doppler secret writes, force-push to main) into `plugins/soleur/hooks/hooks.json`.
 - FR3: Decide and record the sequencing of #9534 against #4671, #4672, #9545; update roadmap/issue dependencies (`--add-blocked-by`).
 - FR4: Credential broker design (placeholder-and-swap) tracked with #9543.

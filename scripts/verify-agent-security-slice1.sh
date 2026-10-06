@@ -40,15 +40,29 @@ check() { # check <label> <count> <minimum>
 }
 
 # --- W1: sandbox denies the owner's Anthropic credential to sandboxed Bash ---
-cfg="$root/apps/web-platform/server/agent-runner-sandbox-config.ts"
-consts="$root/apps/web-platform/server/agent-auth-env-vars.ts"
-if need_file "$cfg" && need_file "$consts"; then
+# Each check counts the lines matching one anchored pattern ("at least N"); a
+# reformat that wraps a call across lines trips it, which is the intended noise.
+app="$root/apps/web-platform/server"
+cfg="$app/agent-runner-sandbox-config.ts"
+consts="$app/agent-auth-env-vars.ts"
+qopts="$app/agent-runner-query-options.ts"
+legacy="$app/agent-runner.ts"
+cc="$app/soleur-go-runner.ts"
+if need_file "$cfg" && need_file "$consts" && need_file "$qopts" && need_file "$legacy" && need_file "$cc"; then
   check "credentials deny block built from the shared constant" \
-    "$(grep -c -e 'AGENT_AUTH_ENV_VARS.map' "$cfg" || true)" 1
-  check "deny mode on every entry" \
-    "$(grep -c -e 'mode: "deny" as const' "$cfg" || true)" 1
-  check "both auth variables named in the shared constant" \
-    "$(grep -c -e 'ANTHROPIC_API_KEY' -e 'CLAUDE_CODE_OAUTH_TOKEN' "$consts" || true)" 2
+    "$(grep -c -E '^ *envVars: AGENT_AUTH_ENV_VARS\.map\(' "$cfg" || true)" 1
+  check "deny mode on the entries" \
+    "$(grep -c -E '^ *mode: "deny" as const,' "$cfg" || true)" 1
+  check "API key name defined in the shared constant" \
+    "$(grep -c -E '^export const API_KEY_ENV_VAR = "ANTHROPIC_API_KEY"' "$consts" || true)" 1
+  check "OAuth token name defined in the shared constant" \
+    "$(grep -c -E '^export const OAUTH_ENV_VAR = "CLAUDE_CODE_OAUTH_TOKEN"' "$consts" || true)" 1
+  check "production options builder takes the sandbox from buildAgentSandboxConfig" \
+    "$(grep -c -E '^ *sandbox: buildAgentSandboxConfig\(' "$qopts" || true)" 1
+  check "credentials directive used by the legacy prompt builder" \
+    "$(grep -c -E 'CREDENTIALS_PROMPT_DIRECTIVE' "$legacy" || true)" 2
+  check "credentials directive defined and used by the Concierge prompt builder" \
+    "$(grep -c -E 'CREDENTIALS_PROMPT_DIRECTIVE' "$cc" || true)" 2
 fi
 
 if [ "$fail" -eq 0 ]; then

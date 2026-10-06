@@ -36,6 +36,38 @@ With a decoy `~/.claude/.credentials.json` under the CLI's `HOME`, sandboxed Bas
 
 Both runs then fail in the canary's projection step (`host_path token '/root/.claude/bridge-spawn'`): SDK 0.3.284 adds `--tmpfs <HOME>/.claude/bridge-spawn`, which the canary has no placeholder for. The committed fixture is therefore stale (captured at SDK 0.3.197) and cannot be re-captured today; that is a separate, pre-existing defect, filed as #9614. The W1 guard does not depend on the fixture: `test/sandbox-credential-deny-argv.test.ts` drives the canary's own capture function and asserts the real argv carries both `--unsetenv` pairs.
 
+## 1.3 — can sandboxed Bash reach the CLI parent's environment through `/proc`? (review follow-up)
+
+Raised by the security seat of the PR 1 review: the argv carries `--tmpfs /proc` early and `--bind /proc /proc` last, and the config comment said `/proc` is "already in `denyRead`". Measured with the real SDK 0.3.284 and the production `buildAgentSandboxConfig` (so `enableWeakerNestedSandbox: true`), on the dev host (not the production container), decoy API key in the CLI environment; the probe prints counts only:
+
+| Probe inside sandboxed Bash | Result |
+|---|---|
+| pids visible in `/proc` | 6 (the sandbox's own PID namespace; the CLI parent is not among them) |
+| `/proc/<pid>/environ` files readable | 2 |
+| readable environ files containing the decoy key | **0** |
+| `ps eww` lines containing the decoy key | **0** |
+| `cat /proc/$PPID/environ` | readable, but `$PPID` is the sandbox's own parent, not the CLI |
+| `$ANTHROPIC_API_KEY` | absent |
+
+Conclusion: the PID namespace (`--unshare-pid`), not `denyRead`, keeps the CLI parent's environment out of reach, on this host. The comments in `agent-runner-sandbox-config.ts` were corrected. Not re-measured inside the production container image, which has its own seccomp and AppArmor profiles; the argv shape is the same.
+
+## 1.4 — mutation proof of the W1 guards (review follow-up)
+
+An 8-row battery run in an allocated sandbox copy, after a green unmutated control (6 files, 69 tests); every mutation was confirmed to have landed, and each reddened the named guard:
+
+| Mutation | Guard that reddened |
+|---|---|
+| production factory overrides `credentials` with an empty list (the wire) | `agent-runner-query-options.test.ts` (3 cases) |
+| a third auth variable set from the credential in BOTH schemes | `agent-sandbox-credential-deny.test.ts` (4 cases) |
+| directive removed from the Concierge baseline prompt | `credentials-prompt-directive.test.ts` |
+| directive removed from the legacy prompt builder | `agent-runner-tools.test.ts` (2 cases) |
+| OAuth name dropped from the shared constant | `agent-sandbox-credential-deny.test.ts` (3 cases) |
+| the names module imports `env` | `oauth-token-injection-site.test.ts` |
+| `mode: "deny"` changed to `"mask"` | query-options, unit and argv tests |
+| `credentials` block removed from the config | query-options, unit and argv tests |
+
+The first two rows were survivors of the earlier self-run battery: it mutated the config builder and the constant, never the wire to the consumer and never a variable common to every scheme.
+
 ## 1.2 — customer hook-decision matrix for W2
 
 Deferred to the start of PR 2 (non-gating for PR 1, gating for PR 2), as the plan states.

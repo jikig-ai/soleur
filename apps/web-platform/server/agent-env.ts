@@ -76,12 +76,13 @@ const ALLOWED_SERVICE_ENV_VARS = new Set(
   Object.values(PROVIDER_CONFIG).map((c) => c.envVar),
 );
 
-// The two mutually-exclusive auth env vars. The CLI subprocess authenticates
-// with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR `ANTHROPIC_API_KEY` (per-
-// token API). Injecting BOTH is the silent-API-billing trap (FR2): the SDK
-// prefers one but the operator believes they are on the subscription.
-// The two auth variable names live in `agent-auth-env-vars.ts` so the sandbox
-// config denies exactly the set injected here (W1, ADR-272).
+// The two auth variables are mutually exclusive: the CLI subprocess
+// authenticates with `CLAUDE_CODE_OAUTH_TOKEN` (subscription) XOR
+// `ANTHROPIC_API_KEY` (per-token API). Injecting BOTH is the silent-API-billing
+// trap (FR2): the SDK prefers one but the operator believes they are on the
+// subscription. Their names (`OAUTH_ENV_VAR`, `API_KEY_ENV_VAR`) live in
+// `agent-auth-env-vars.ts`, which the sandbox config reads to deny the same set
+// to sandboxed Bash (W1, ADR-272).
 
 /**
  * Optional env extras that are NOT service tokens and NOT auth vars.

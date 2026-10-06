@@ -33,6 +33,7 @@ vi.mock("@/server/sandbox-hook", () => ({
 
 import { buildAgentQueryOptions } from "@/server/agent-runner-query-options";
 import { buildAgentEnv } from "@/server/agent-env";
+import { AGENT_AUTH_ENV_VARS } from "@/server/agent-auth-env-vars";
 import { resolveWorkspaceMode } from "@/server/workspace-mode";
 
 const WORKSPACE = "/tmp/test-workspace";
@@ -69,6 +70,27 @@ describe("buildAgentQueryOptions — canonical shape (T1)", () => {
     expect(opts.hooks!.PreToolUse![0].matcher).toContain("Bash");
     expect(opts.systemPrompt).toBe("you are a router");
     expect(opts.canUseTool).toBe(minArgs.canUseTool);
+  });
+});
+
+// W1 (#9601, ADR-272): the credential deny is only real if the sandbox object
+// the REAL factories hand to `query()` carries it. `agent-sandbox-credential-deny`
+// pins `buildAgentSandboxConfig`; this pins the wire from that builder to the
+// consumer — an override, spread or hand-written `sandbox:` literal here
+// removes the deny while every builder-level test stays green.
+describe("buildAgentQueryOptions — Anthropic credential deny reaches opts.sandbox (W1)", () => {
+  const cases: [string, Partial<typeof minArgs> & Record<string, unknown>][] = [
+    ["legacy shape (no GitHub egress)", {}],
+    ["entitled GitHub egress (ghToken)", { ghToken: "ghs_install_tok" }],
+    ["read-only support persona", { mode: resolveWorkspaceMode("support") }],
+  ];
+  it.each(cases)("%s", (_label, extra) => {
+    const opts = buildAgentQueryOptions({ ...minArgs, ...extra });
+    const entries = (opts.sandbox as { credentials?: { envVars: { name: string; mode: string }[] } })
+      .credentials?.envVars;
+    expect(entries).toBeDefined();
+    expect((entries ?? []).map((e) => e.name).sort()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
+    for (const e of entries ?? []) expect(e.mode).toBe("deny");
   });
 });
 

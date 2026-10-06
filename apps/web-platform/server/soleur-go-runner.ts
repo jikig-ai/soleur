@@ -150,6 +150,21 @@ export const READ_TOOL_PDF_CAPABILITY_DIRECTIVE =
   "To read a PDF the user has shared, attached, or referenced, " +
   "call the Read tool with the file path — it handles PDFs end-to-end.";
 
+// W1 (#9601, ADR-272): the Anthropic credential that funds a hosted session is
+// unset for sandboxed Bash on BOTH entry paths (the deny rides the shared
+// `buildAgentSandboxConfig`), so BOTH system-prompt builders carry this one
+// directive. An agent that finds the variable empty must not ask the user to
+// paste it into the chat, where it would land in `messages.body` and the
+// transcript. Behavioural only: it names no mechanism (an injected agent should
+// not be told how the withholding works) and makes no claim about which other
+// credentials the shell can see. The last sentence keeps a project's OWN key
+// requests working.
+export const CREDENTIALS_PROMPT_DIRECTIVE =
+  "## Credentials\n" +
+  "The credential that runs this session is not available in shell commands, and you do not need it: " +
+  "never ask the user for it or to paste it into the chat. " +
+  "A key the user's own project needs is a different matter; ask for that as you would any project secret.";
+
 // Item 2 (plan §Phase 2): the Concierge runs `gh` with a GitHub App
 // INSTALLATION token. Such tokens cannot call `GET /user`, so `gh auth status`
 // (which probes that endpoint) ALWAYS reports the token invalid — even though
@@ -1407,6 +1422,8 @@ export function buildSoleurGoSystemPrompt(
     PRE_DISPATCH_NARRATION_DIRECTIVE,
     "",
     READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
+    "",
+    CREDENTIALS_PROMPT_DIRECTIVE,
     "",
     GH_AUTH_STATUS_GUIDANCE_DIRECTIVE,
     "",

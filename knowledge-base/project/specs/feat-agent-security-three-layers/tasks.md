@@ -14,14 +14,14 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-agent-security-hardening-sli
 
 ### 2. Implementation
 
-- 2.1 Export `AGENT_AUTH_ENV_VARS` (frozen `as const` tuple) from `apps/web-platform/server/agent-env.ts`; use it in both auth branches.
+- 2.1 Export `AGENT_AUTH_ENV_VARS` (frozen `as const` tuple) from the dependency-free `apps/web-platform/server/agent-auth-env-vars.ts`; `agent-env.ts` imports the two names. (Shipped there, not in `agent-env.ts`, so the sandbox config does not pull `agent-env`'s graph.)
 - 2.2 Add the typed `credentials` field to `AgentSandboxConfig` and the deny block to `buildAgentSandboxConfig` in `agent-runner-sandbox-config.ts`, with the comment naming P1 and why service tokens and `GH_TOKEN` are not denied.
-- 2.3 Add one line to the `## Connected Services` block in `agent-runner.ts`: the Anthropic credential is withheld from shell commands by design and must never be requested.
+- 2.3 Add a separate `## Credentials` directive (`CREDENTIALS_PROMPT_DIRECTIVE`, exported from `soleur-go-runner.ts`) to BOTH hosted prompt builders (legacy `agent-runner.ts` and the Concierge baseline): the agent must not ask the user for the session credential. Behavioural only; it names no mechanism.
 - 2.4 Tests (write first, per `cq-write-failing-tests-before`):
-  - 2.4.1 `apps/web-platform/test/agent-runner-sandbox-config.test.ts`: both names `deny`; set equality with the auth vars `buildAgentEnv` injects per scheme; scheme count at least 2; `STRIPE_SECRET_KEY` and `GH_TOKEN` not denied.
+  - 2.4.1 `apps/web-platform/test/agent-sandbox-credential-deny.test.ts`: both names `deny`; the injected set DERIVED from `buildAgentEnv`'s output by value flow (sentinel credential, every scheme and option shape) equals the denied set; service tokens and `GH_TOKEN` not denied. Plus the production wire in `agent-runner-query-options.test.ts` (the sandbox object `query()` receives carries the deny).
   - 2.4.2 `apps/web-platform/test/agent-runner-helpers.test.ts` drift guard and `test/server/agent-env-allowlist.test.ts` assertions.
   - 2.4.3 Cases: BYOK missing, both schemes set, neither set, service token absent.
-- 2.5 Canary fixture: re-capture `apps/web-platform/infra/sandbox-canary-argv.json` at SDK 0.3.284 through the in-image verify flow as a baseline commit (it was captured at 0.3.197); review and record unrelated drift; then re-capture with the deny.
+- 2.5 Canary fixture: NOT re-captured. It is stale (SDK 0.3.197 against the 0.3.284 pin) and cannot be re-captured while the canary projection refuses `--tmpfs <HOME>/.claude/bridge-spawn` (#9614). The deny is guarded at the argv level by `test/sandbox-credential-deny-argv.test.ts` instead (task 2.5.1).
   - 2.5.1 If task 1.1.2 shows the deny in the argv, assert it in `sandbox-canary-regression.test.sh`.
   - 2.5.2 Otherwise add the live probe to the creds-gated `sdk-bump-sandbox-gate.sh` path, with a CI log line stating it ran.
 - 2.6 Create `scripts/verify-agent-security-slice1.sh` with the W1 check only; it prints `slice1-security: ok`, compares with `grep -c`, and has no shell-active characters in its command line.
@@ -29,7 +29,7 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-agent-security-hardening-sli
 ### 3. Architecture, legal, docs
 
 - 3.1 Write ADR-272 (W1 only): decision, rejected scrub, `mask` deferral, Phase 0 measurements, residuals, out-of-scope spawn table; re-verify the ordinal against fresh `origin/main` before merge.
-- 3.2 Add the pointer in ADR-075's Alternatives table.
+- 3.2 Add the pointer to ADR-272 as an addendum in ADR-075 (shipped as an addendum, not an Alternatives-table row).
 - 3.3 C4: read `model.c4`, `views.c4`, `spec.c4` in full; edit the `engine -> anthropic` edge description; run `c4-code-syntax.test.ts`, `c4-render.test.ts`, `c4-count-parity.test.sh`.
 - 3.4 Add the measured-control TOM entry to `knowledge-base/legal/article-30-register.md`; add no public claim.
 - 3.5 Comment on #9543 with the `mask` finding and its constraints.
