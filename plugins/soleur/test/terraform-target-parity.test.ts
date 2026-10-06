@@ -2224,11 +2224,9 @@ const MAIN_ROOT_TF_WORKFLOWS = [
   "apply-deploy-pipeline-fix.yml",
   "scheduled-terraform-drift.yml",
   "infra-validation.yml",
-  // #9377: the dispatch-only, create-only escrow workflow plans and applies the main root (single-use; retired
-  // with the #9372 checklist, which takes this entry out and the census count back to 3).
-  "apply-web-escrow-create.yml",
-  // #9372: the dispatch-only, single-use web-2 rebirth plans and applies the main root (retired with the same closing
-  // checklist, which takes this entry out and the census count back to 3).
+  // #9372: the dispatch-only, single-use web-2 rebirth plans and applies the main root (it retires after use, which
+  // takes this entry out and the census count back to 3; the create-only escrow workflow that sat beside it retired
+  // with the closing change).
   "web2-luks-rebirth.yml",
 ];
 
@@ -2352,7 +2350,7 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
     // computed at runtime from a changed-files job), so it is listed by hand; every other
     // entry must be found, and nothing else may be.
     expect(found).toEqual(MAIN_ROOT_TF_WORKFLOWS.filter((f) => f !== "infra-validation.yml").sort());
-    expect(found.length).toBe(5);
+    expect(found.length).toBe(4);
   });
 
   // ─── Inline pin-load arm (follower retired, #8211 PR2 / ADR-237 D6 amendment) ───────
@@ -6139,12 +6137,6 @@ describe("Guard 2 mutation battery (#7587)", () => {
 // `[[ -n "${ALLOW_LUKS:-}" ]] && exit 0` before its `exit 1` kept the earlier text pins green.
 const LUKS_FILTER = resolve(REPO_ROOT, "tests/scripts/lib/destroy-guard-filter-web-platform.jq");
 const WEB_PASSPHRASE_PAIR = ["random_password.workspaces_luks_web", "doppler_secret.workspaces_luks_web_key"];
-/**
- * The ONE workflow file other than apply-web-platform-infra.yml that may -target the pair (#9377): the dispatch-only,
- * create-only apply-web-escrow-create.yml, and only in the shape the "exempt workflow file" row below pins. Single-use:
- * the retirement checklist on #9372 removes this constant, the file and the MAIN_ROOT_TF_WORKFLOWS entry together.
- */
-const EXEMPT_PAIR_WORKFLOW = "apply-web-escrow-create.yml";
 const escRe = (a: string) => a.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 /** Whole-line `#` comments out. (stripComments is HCL-flavoured and also eats `//`, which shell lines may contain.) */
 const stripShellLineComments = (t: string) =>
@@ -6413,10 +6405,9 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     }
   });
 
-  test("NO other workflow FILE -targets or -replaces either member of the pair, except the single EXEMPT_PAIR_WORKFLOW pinned by the next row (apply-deploy-pipeline-fix shares the filter but has no luks HALT)", () => {
+  test("NO other workflow FILE -targets or -replaces either member of the pair (apply-deploy-pipeline-fix shares the filter but has no luks HALT)", () => {
     const dir = resolve(REPO_ROOT, ".github/workflows");
-    expect(readdirSync(dir), "the exempt file must exist, or the exemption covers nothing").toContain(EXEMPT_PAIR_WORKFLOW);
-    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml" && f !== EXEMPT_PAIR_WORKFLOW);
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml");
     expect(files, "the scan must cover the sibling main-root planners").toContain("apply-deploy-pipeline-fix.yml");
     expect(files.length).toBeGreaterThan(10);
     for (const f of files) {
@@ -6428,44 +6419,6 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
         expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
       }
     }
-  });
-
-  test("the exempt workflow file reaches the pair only in the create-only shape: dispatch-only, exactly the five header-web addresses, no -replace, the allow-set and the seven counters, gate before names before a plan_only-guarded apply of the saved plan (#9377)", () => {
-    type Step = { id?: string; run?: string; if?: string };
-    const text = readFileSync(resolve(REPO_ROOT, ".github/workflows", EXEMPT_PAIR_WORKFLOW), "utf8");
-    const doc = parseYaml(text) as { on?: Record<string, unknown>; jobs?: Record<string, { steps?: Step[] }> };
-    expect(Object.keys(doc.on ?? {})).toEqual(["workflow_dispatch"]);
-    expect(Object.keys(doc.jobs ?? {})).toEqual(["create"]);
-    const steps = doc.jobs?.create?.steps ?? [];
-    // The five addresses come from the Terraform file that declares them, NOT from the workflow.
-    const tf = readFileSync(resolve(REPO_ROOT, "apps/web-platform/infra/workspaces-luks-header-web.tf"), "utf8");
-    const five = [...tf.matchAll(/^resource\s+"([a-z_0-9]+)"\s+"([A-Za-z0-9_]+)"/gm)].map((m) => `${m[1]}.${m[2]}`).sort();
-    expect(five.length, "the header-web file must declare exactly five resources").toBe(5);
-    for (const a of WEB_PASSPHRASE_PAIR) expect(five).toContain(a);
-    const code = joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n")));
-    const targets = [...code.matchAll(/-target=(\S+)/g)].map((m) => m[1]).sort();
-    expect(targets).toEqual(five);
-    expect(code).not.toMatch(/-replace\b/);
-    const at = (id: string) => steps.findIndex((st) => st.id === id);
-    // Comment-stripped: a comment naming a counter must not satisfy the assertion that the counter is graded.
-    const gate = stripShellLineComments(String(steps[at("gate")]?.run ?? ""));
-    for (const a of five) expect(gate, `the gate's allow-set must name ${a}`).toContain(`"${a}"`);
-    const counters = /^\s*COUNTERS="([^"]*)"/m.exec(gate)?.[1]?.split(/\s+/) ?? [];
-    for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "luks_passphrase_rotations", "undecidable_entries", "apex_move_orphans"]) {
-      expect(counters, `the gate's COUNTERS assignment must grade ${c}`).toContain(c);
-    }
-    expect(gate).toContain("plan_ok");
-    expect(gate).toContain("destroy-guard-filter-web-platform.jq");
-    // Exactly one plan, one show and one apply across ALL run bodies, in any spacing and with any -chdir.
-    const verbs = [...joinContinuations(stripShellLineComments(steps.map((st) => String(st.run ?? "")).join("\n"))).matchAll(/\bterraform\b(?:\s+-\S+)*\s+([a-z][a-z-]*)/g)].map((m) => m[1]).sort();
-    expect(verbs).toEqual(["apply", "init", "plan", "show"]);
-    const [iPlan, iGate, iNames, iApply] = [at("plan"), at("gate"), at("names"), at("apply")];
-    expect(iPlan).toBeGreaterThan(-1);
-    expect(iPlan < iGate && iGate < iNames && iNames < iApply).toBe(true);
-    expect(steps[iApply].if).toBe("inputs.plan_only != true");
-    const apply = stripShellLineComments(String(steps[iApply].run ?? ""));
-    expect(apply).toMatch(/terraform apply\b[^\n]*-auto-approve[^\n]*\btfplan\s*$/m);
-    expect(apply).not.toMatch(/-target|-replace/);
   });
 
   test("the reach scan sees a flag and its value split by a line continuation (instrument rows)", () => {
@@ -6664,7 +6617,7 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     const start = halt.findIndex((l) => /^\s*if \[\[ "\$luks_rotations" -gt 0 \]\]; then\s*$/.test(l));
     const end = halt.findIndex((l, i) => i > start && /^ {10}fi\s*$/.test(l));
     const body = halt.slice(start, end);
-    const message = body.find((l) => l.includes("terraform plan would UPDATE, DELETE or FORGET")) ?? "";
+    const message = body.find((l) => l.includes("terraform plan would CREATE, UPDATE, DELETE or FORGET")) ?? "";
     const grepLine = body.find((l) => /^\s*grep -F\b/.test(l)) ?? "";
     expect(message, "the HALT headline must exist").not.toBe("");
     expect(grepLine, "the plan-line grep must exist").not.toBe("");
