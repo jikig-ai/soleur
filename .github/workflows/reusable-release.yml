@@ -288,9 +288,9 @@ jobs:
           # into a variable first and grep reads that value, so no producer sits
           # on the other end of a pipe that `grep -m1` closes early (the producer
           # is the side that takes SIGPIPE, not grep). A failing `git tag` aborts
-          # the step (errexit), which is what the old pipeline did under the
-          # repo's documented -eo pipefail default for a `run:` with no `shell:`
-          # key; it must NOT fall through to the 0.0.0 bootstrap arm below.
+          # the step (errexit) rather than falling through to the 0.0.0 bootstrap
+          # arm below, which would compute a regressed version. (The old pipeline
+          # aborted or masked it depending on the step's pipefail default.)
           # `|| [ $? -eq 1 ]` lets the existing empty-fallback below fire on
           # no-match (grep exit 1, bootstrap of a new prefix) WITHOUT masking
           # grep exit 2 (regex syntax error — would surface a latent escaping

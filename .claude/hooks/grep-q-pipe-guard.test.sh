@@ -883,9 +883,9 @@ _loose_not_test_shaped() { # <rows...> -> the glob of each `<=` row that is not 
 loose_bad="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}")"
 [[ -z "$loose_bad" ]] \
   || sweep_probe_fail+=("real-table-test-shaped: loose (<=) rows whose glob is not test-shaped: ${loose_bad//$'\n'/ } — production code could fall into their slack; make the row tight (=) or the glob test-shaped")
-loose_ctl="$(_loose_not_test_shaped "${SWEEP_DEFERRALS[@]}" 'apps/web-platform/infra/* | <= | 99 | #9217' '.github/workflows/test-* | <= | 9 | #9217' 'scripts/x.test.sh | = | 1 | #9217')"
+loose_ctl="$(_loose_not_test_shaped 'apps/web-platform/infra/* | <= | 99 | #9217' '.github/workflows/test-* | <= | 9 | #9217' 'scripts/x.test.sh | = | 1 | #9217')"
 [[ "$loose_ctl" == $'apps/web-platform/infra/*\n.github/workflows/test-*' ]] \
-  || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two, and not the tight row)")
+  || sweep_probe_fail+=("real-table-test-shaped-control: injected production-shaped loose rows were reported as [${loose_ctl//$'\n'/ }] (want exactly the two injected rows, and not the tight one)")
 # The loose-row check sees only `<=` rows, so a TIGHT production row would pass it. Every non-test-shaped row, in any mode, must be one of the
 # file-exact deferrals above: no glob characters, and exactly GATED_PROD_ROWS of them. Adding a production row is then a visible two-place edit.
 GATED_PROD_ROWS=6
@@ -895,7 +895,7 @@ for _row in "${SWEEP_DEFERRALS[@]}"; do
   [[ "$_g" =~ $_ts_re ]] || prod_globs+="$_g"$'\n'
 done
 prod_n=$(grep -c . <<<"$prod_globs" || true)
-prod_wild=$(grep -c '[*?[]' <<<"$prod_globs" || true)
+prod_wild=$(grep -c '[*?[(!@+)]' <<<"$prod_globs" || true)
 [[ "$prod_n" == "$GATED_PROD_ROWS" && "$prod_wild" == 0 ]] \
   || sweep_probe_fail+=("real-table-production-rows: ${prod_n:-<err>} non-test-shaped rows (want exactly $GATED_PROD_ROWS), ${prod_wild:-<err>} with a glob character (want 0) — a production row is a host-replace claim; add it here AND to GATED_PROD_ROWS")
 
