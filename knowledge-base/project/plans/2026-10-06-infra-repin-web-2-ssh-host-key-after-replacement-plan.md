@@ -1,0 +1,259 @@
+---
+title: "infra: re-pin web-2's SSH host key after the 2026-10-06 replacement (Ref #9372)"
+type: infra
+date: 2026-10-06
+slug: repin-web-2-ssh-host-key-after-replacement
+branch: feat-one-shot-9372-web2-host-key-repin
+issue: 9372
+lane: single-domain
+brand_survival_threshold: aggregate pattern
+---
+
+# infra: re-pin web-2's SSH host key after the 2026-10-06 replacement (Ref #9372)
+
+## Overview
+
+web-2 was replaced (Hetzner server id 169095540, IPv4 204.168.189.200, created 2026-10-06T19:32:09Z).
+A replaced host mints a new sshd host key, so the committed pin
+`apps/web-platform/infra/web-2-ssh-host-key.pub` (fingerprint `SHA256:P0J9dUv6...`, captured
+2026-09-30 against the previous host) no longer matches. Until it is re-pinned,
+`local.web_2_ssh_host_key` and the `deploy_pipeline_fix_web2` sibling would trust a key the live
+host does not present, so every web-2 delivery fails closed.
+
+This PR does one thing: replace the pin file on main with the already-captured file, copied
+byte-for-byte. It references #9372 (`Ref #9372`) and never closes it. The capture was produced by
+`scripts/capture-web-2-host-key.sh` on 2026-10-06T19:37:27Z; it is not re-run here.
+
+Source file (read-only input, outside the repo):
+`/tmp/claude-1000/-data-git-repositories-jikig-ai-soleur/2bc60a9e-7ca0-414d-bbcd-15a8e4f8b7c9/scratchpad/web-2-ssh-host-key.captured.pub`
+
+## Research Insights
+
+**Premise Validation.** Checked: #9372 is OPEN (so `Ref`, never `Closes`, is correct and the
+premise holds); #9151 (the delivery-via-bastion work that introduced the pin) is CLOSED; the pin
+file exists on `origin/main` at the cited path; precedent PR #9305 re-pinned the same file after
+the 2026-09-30 replace and is the shape to follow. The captured file's key line, run through
+`ssh-keygen -lf`, prints `SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ`, which equals the
+`# fingerprint:` header in that file and the fingerprint given in the task, so the header and
+key agree. Nothing else in the repo hardcodes the old fingerprint or key body (grep of
+`P0J9dUv60r9` / the old key fragment outside plans/specs: only the pin file itself).
+
+**Property List.**
+
+1. `web-2-ssh-host-key.pub` on main holds exactly the key captured from the replacement host.
+2. The file still parses as a valid pin at both consumer sites (HCL `local.web_2_ssh_host_key`
+   and the bash twin `write-known-hosts.sh`), and its `# fingerprint:` header equals
+   `ssh-keygen -lf` of its key line.
+3. The PR body records the fingerprint, the capture vantage, and the weakness of the cross-check,
+   so a reviewer can judge the pin without re-deriving it.
+4. The PR makes no claim about web-2's disk encryption or boot state, and does not enable,
+   dispatch, or apply anything.
+
+**Cut List.** None. No mechanism beyond the file swap is proposed (no script, no test, no
+workflow change). Every property is bought by the file copy plus the existing hermetic suites;
+nothing new is added.
+
+**Merge side-effect check (read-only).** `apply-deploy-pipeline-fix.yml` lists the pin file in its
+`on.push.paths`, and `terraform_data.deploy_pipeline_fix_web2.triggers_replace` hashes it
+(`server.tf`). Verified with `gh api repos/jikig-ai/soleur/actions/workflows/274867255`: the
+workflow state is `disabled_manually`, so merging this PR does not fire an apply. This differs
+from #9305, where merge did change production. The pin file is not in the ship skill's
+Deploy-Pipeline-Fix drift-gate trigger list (that list covers `deploy_pipeline_fix`, the web-1
+resource), so that gate does not fire.
+
+**Institutional context.** `knowledge-base/engineering/architecture/decisions/ADR-237-ssh-host-keys-are-pinned.md`
+(the pin policy); `knowledge-base/engineering/operations/runbooks/web-host-replace.md` ("What the
+replace does NOT restore" lists the re-pin); PR #9305 (same operation, 2026-09-30).
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** nothing user-facing. A wrong or malformed pin
+  makes the next web-2 deploy-pipeline apply fail closed (the HCL local errors, or the SSH
+  handshake rejects the host); web-2 keeps serving whatever it already runs.
+- **If this leaks, the user's workflow is exposed via:** no secret is in the file (it is a
+  public host key). The residual risk is a pin captured from the wrong party: this capture was a
+  first-sight, trust-on-first-use read of a brand-new host with no prior `known_hosts` entry, so
+  it proves "this is what 204.168.189.200 presented at 19:37:27Z", not independent identity. If
+  that read had been intercepted, a later apply would run its remote-exec against the interceptor.
+- **Brand-survival threshold:** `aggregate pattern`
+- **Threshold decision (challengeable):** not `single-user incident` because the capture was a
+  direct connection from an ADMIN_IPS egress to the public port of a server created five minutes
+  earlier (no Cloudflare hop, minimal interception window), the pin fails closed on mismatch, and
+  the owner-gated re-enable of the apply workflow is where the end-to-end probe re-verifies the
+  key against the live host before anything trusts it in production.
+
+## Files to Edit
+
+- `apps/web-platform/infra/web-2-ssh-host-key.pub` — overwrite with the captured file
+  (6 comment lines + 1 key line). The key line must not be edited.
+
+## Files to Create
+
+- None in the product tree. (`knowledge-base/project/specs/feat-one-shot-9372-web2-host-key-repin/tasks.md`
+  is the plan's task breakdown only.)
+
+## Open Code-Review Overlap
+
+None. Queried open `code-review` issues for `web-2-ssh-host-key` and `capture-web-2-host-key`:
+no matches.
+
+## Implementation
+
+1. **Copy verbatim.** `cp` the captured file over the pin file. Do not retype, reformat or trim.
+   Afterwards confirm byte identity: `cmp <captured> apps/web-platform/infra/web-2-ssh-host-key.pub`
+   exits 0, and `git diff --stat` shows only this one file.
+2. **Fingerprint round-trip.** `ssh-keygen -lf apps/web-platform/infra/web-2-ssh-host-key.pub`
+   prints `SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ`.
+3. **Run the hermetic suites** (all offline; no network, no apply):
+   - `bash scripts/capture-web-2-host-key.test.sh` (stubs `ssh-keyscan`; expects 17 passed)
+   - `bash apps/web-platform/infra/web-2-host-key-local.test.sh` (pin-shape check: HCL local and
+     bash twin agree, and row `H1` asserts the committed header equals `ssh-keygen -lf` of the
+     key line; expects 23 passed). `H1` is the check that actually exercises the new file.
+   - Also the three suites #9305 ran, since they reference the pin file:
+     `bash apps/web-platform/infra/web-ghcr-deny.test.sh`,
+     `bash apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh`, and
+     `bun test plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`.
+   Baseline on the unmodified tree (run during planning): capture suite 17/17, pin-shape suite
+   23/23.
+4. **PR.** Title `chore(infra): re-pin web-2's SSH host key after the 2026-10-06 replacement`.
+   Body must contain, in this order: what changed and why; the capture vantage; the new
+   fingerprint; the honest cross-check statement; the "apply workflow stays paused" paragraph;
+   `Ref #9372`; the `## Changelog` section (patch). Draft below.
+
+### PR body draft (the implementer fills in test counts from the real runs)
+
+```markdown
+Re-pins web-2's SSH host key after the replacement server was created. A replaced host mints a
+new sshd host key, so the previous pin (`SHA256:P0J9dUv60r9UHDLAxaTZ9hZDLJ9TYuciQQnQTtdtYiQ`,
+captured 2026-09-30) no longer matches. The new pin file is the captured file copied verbatim.
+
+## Capture
+
+- Script: `scripts/capture-web-2-host-key.sh` (`ssh-keyscan -T 10 -t ecdsa`), captured 2026-10-06T19:37:27Z.
+- Target: the replacement web-2, Hetzner server id 169095540, IPv4 204.168.189.200, created 2026-10-06T19:32:09Z.
+- Vantage: directly to web-2's public port 22 from an ADMIN_IPS egress, not via Cloudflare.
+- New fingerprint: `SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ` (ECDSA-P256).
+  `ssh-keygen -lf` on the committed key line prints the same value.
+
+## Cross-check strength: weak
+
+There was no prior `known_hosts` entry for this IP and no second independent read. This is a
+first-sight capture of a brand-new host. A replaced web-2 legitimately changes its key (web-2 is
+cattle), so a changed key is expected and is not by itself evidence of anything. The pin proves
+what 204.168.189.200 presented at capture time, not the host's identity by an independent
+channel. The end-to-end probe in the apply workflow is what re-checks the pin against the live
+host once that workflow is re-enabled.
+
+## apply-deploy-pipeline-fix.yml stays paused
+
+`apply-deploy-pipeline-fix.yml` lists this file in its push paths, but the workflow is disabled
+and stays disabled when this PR merges, so merging does not run an apply. Re-enabling it is a
+separate owner go-ahead and is not part of this PR. This PR does not dispatch, enable, or
+disable any workflow, write to Doppler, mint a token, run Terraform, or reboot anything.
+
+## Scope
+
+Only `apps/web-platform/infra/web-2-ssh-host-key.pub` changes. This PR makes no claim about
+web-2's disk or encryption state. That evidence is tracked on #9372 and is not established here.
+
+## Tests
+
+- `scripts/capture-web-2-host-key.test.sh`: <N> passed, 0 failed
+- `apps/web-platform/infra/web-2-host-key-local.test.sh` (pin-shape check, incl. H1 header vs key): <N> passed, 0 failed
+- `web-ghcr-deny.test.sh`, `web-host-provisioner-parity-mutation.test.sh`, `ship-deploy-pipeline-fix-gate.test.ts`: <results>
+
+Ref #9372
+
+## Changelog
+
+- Re-pinned web-2's SSH host key after the 2026-10-06 server replacement.
+```
+
+## Acceptance Criteria
+
+- [ ] `cmp` of the captured file and `apps/web-platform/infra/web-2-ssh-host-key.pub` exits 0, and
+      `git diff origin/main...HEAD --name-only` lists the pin file plus only files the pipeline
+      writes (this plan, `specs/feat-one-shot-9372-web2-host-key-repin/tasks.md`, and any
+      `session-state.md` or regenerated `knowledge-base/INDEX.md`); no source, workflow or
+      Terraform file.
+- [ ] `ssh-keygen -lf apps/web-platform/infra/web-2-ssh-host-key.pub` prints
+      `SHA256:8cJIrIjqGvsIniYIh2caQBBFN0pykjVQBFnY+ubMIWQ`.
+- [ ] `bash scripts/capture-web-2-host-key.test.sh` reports 17 passed, 0 failed.
+- [ ] `bash apps/web-platform/infra/web-2-host-key-local.test.sh` reports 23 passed, 0 failed,
+      including row `H1`.
+- [ ] The three pin-referencing suites listed in Implementation step 3 pass.
+- [ ] PR body contains the fingerprint, the capture vantage, the weak-cross-check statement, and
+      the paragraph that `apply-deploy-pipeline-fix.yml` stays paused until merge and that
+      re-enabling it is a separate owner go-ahead.
+- [ ] PR body uses `Ref #9372` and contains no `Closes`/`Fixes`/`Resolves` keyword for it
+      (`gh pr view --json body --jq .body | grep -iE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #9372'`
+      returns nothing).
+- [ ] Neither the PR body, the commit message, nor any changed file says web-2 is LUKS-backed,
+      reborn, or encrypted (`grep -inE 'luks|reborn|encrypt'` over the diff and PR body finds
+      only the explicit "makes no claim" sentence).
+- [ ] No workflow dispatch/enable/disable, Doppler write, token mint, Terraform apply or reboot
+      was performed in this session.
+
+## Test Scenarios
+
+- Given the captured file copied into place, when `web-2-host-key-local.test.sh` runs, then
+  `H1` passes because the `# fingerprint:` header equals `ssh-keygen -lf` of the key line, and the
+  HCL local evaluates to exactly the new key line.
+- Given the new pin, when the bash twin (`write-known-hosts.sh web-2 <pin>`) runs inside that
+  suite, then it accepts the file with the same verdict as the HCL site.
+- Given the capture-script suite, when it runs against its stubbed `ssh-keyscan`, then 17/17
+  pass; it does not touch the committed pin and does not use the network.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "Replace apps/web-platform/infra/web-2-ssh-host-key.pub on main with the file at ..." | Implementation 1 | mapped |
+| 2 | "copy it verbatim; do not re-run the capture script and do not edit the key line" | Implementation 1 (`cmp` AC) | mapped |
+| 3 | "Put the fingerprint and the capture vantage in the PR body" | PR body draft, Capture | mapped |
+| 4 | "The cross-check was weak" | PR body draft, Cross-check strength | mapped |
+| 5 | "Include the existing hermetic tests that cover the pin file" | Implementation 3 | mapped |
+| 6 | "PR body uses \"Ref #9372\" only, never \"Closes\"" | PR body draft, AC grep | mapped |
+| 7 | "Do not claim web-2 is LUKS-backed, reborn or encrypted anywhere" | Scope paragraph, AC grep | mapped |
+| 8 | "apply-deploy-pipeline-fix.yml stays paused until this PR merges and that re-enabling it is a separate owner go-ahead" | PR body draft, paused paragraph | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| Copy pin file | "Replace apps/web-platform/infra/web-2-ssh-host-key.pub on main" | asked |
+| Run both suites | "run the suite for scripts/capture-web-2-host-key.sh and the pin-shape check" | asked |
+| Three extra suites (ghcr-deny, parity-mutation, ship gate test) | none | inferred: PR #9305 ran them because they reference this file; a one-line run each, no code change |
+| `cmp` / `ssh-keygen -lf` checks | "copy it verbatim ... do not edit the key line" | asked |
+
+### Split Assessment
+
+- Subsystems touched: 1 (`apps/web-platform/infra`)
+- Planned files: 1 | Estimated changed lines: ~7
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
+## Domain Review
+
+**Domains relevant:** none
+
+No cross-domain implications detected. This is a one-file infrastructure pin refresh with no new
+infrastructure, no schema, no UI, no copy, and no new architectural decision (ADR-237 already
+defines the pin policy), so no ADR/C4 update is required. The Observability, Encryption Posture
+and Guard Contract gates do not fire: no code-class file is edited, no store or connection is
+introduced, and no guard is added (the existing suites are run, not changed).
+
+## Sharp Edges
+
+- The captured file's comment header omits the IP and egress IP that the previous pin carried
+  (it says "web-2's public :22" without the address). That is expected: the file is copied
+  verbatim, and the IP and vantage belong in the PR body instead. Do not "fix" the header.
+- The pin file is a push-path of `apply-deploy-pipeline-fix.yml`. It is disabled now; if it is
+  ever found enabled at merge time, do not dispatch or toggle it from this PR's session. Stop
+  and report.
+- A plan `## User-Brand Impact` section that is empty or placeholder text fails deepen-plan
+  Phase 4.6; this one is filled.
+- Do not state or imply web-2's LUKS/encryption/reboot status anywhere (graded reboot proof
+  does not exist yet).
