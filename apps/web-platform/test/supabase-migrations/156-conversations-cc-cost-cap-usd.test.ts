@@ -46,3 +46,35 @@ describe("migration 156_conversations_cc_cost_cap_usd", () => {
     );
   });
 });
+
+describe("migration 157_conversations_cc_cost_cap_usd_check", () => {
+  // Split from 156: 156 was applied to shared dev before the CHECK was
+  // added (dev-ledger-parity arm A1 — applied bodies are immutable).
+  const sql157 = readFileSync(
+    path.join(
+      __dirname,
+      "../../supabase/migrations/157_conversations_cc_cost_cap_usd_check.sql",
+    ),
+    "utf8",
+  );
+  const down157 = readFileSync(
+    path.join(
+      __dirname,
+      "../../supabase/migrations/157_conversations_cc_cost_cap_usd_check.down.sql",
+    ),
+    "utf8",
+  );
+
+  it("adds a positive-value CHECK constraint on cc_cost_cap_usd", () => {
+    expect(sql157).toMatch(
+      /ADD\s+CONSTRAINT\s+cc_cost_cap_usd_positive\s+CHECK/i,
+    );
+    expect(sql157).toMatch(/cc_cost_cap_usd\s*>\s*0/);
+  });
+
+  it("down migration drops the constraint", () => {
+    expect(down157).toMatch(
+      /DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?cc_cost_cap_usd_positive/i,
+    );
+  });
+});

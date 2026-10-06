@@ -32,9 +32,7 @@ DO $$ BEGIN
 END $$;
 
 ALTER TABLE public.conversations
-  ADD COLUMN IF NOT EXISTS cc_cost_cap_usd numeric,
-  ADD CONSTRAINT cc_cost_cap_usd_positive
-    CHECK (cc_cost_cap_usd IS NULL OR cc_cost_cap_usd > 0);
+  ADD COLUMN IF NOT EXISTS cc_cost_cap_usd numeric;
 
 COMMENT ON COLUMN public.conversations.cc_cost_cap_usd IS
   'feat-cc-cap-raise-resume (#9565) — user-chosen per-conversation USD '
