@@ -19,10 +19,11 @@ None blocking. `inngest-boot-emitter.sh` named in the brief is absent on main (o
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; agents: learnings-researcher, cto, dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer, security-sentinel, architecture-strategist, spec-flow-analyzer, test-design-reviewer.
 
-## Work + Review Phase (2026-10-06)
-- Status: **budget-capped by the API weekly limit (HTTP 429, resets 2026-10-07 20:00 Europe/Paris)** — not by the pipeline tally.
-- Work phase: complete. 53 Tier 1 scripts converted, Rule E + wrapper-aware Rule D, conversion battery, ADR-202 addendum; census == Tier 2 (11 files / 13 sites); rebased on origin/main a1211d8cef; pushed.
-- Review: **degraded.** Both design-validity seats (simplicity, architecture) died on 429 before delivering; the full panel never ran. Inline fallback only: shellcheck -S error on 64 touched scripts rc 0; census/lints/ratchets green; no non-bash shebang uses process substitution; no printf format-string or exec'd-printf token leaks.
-- Trailer emitted as `Reviewed-Coverage: inline-fallback 0/10 agents`. It is NOT full-strength evidence.
-- Known unverified residual: the `SENTRY_PROJECT` pin (empty|web-platform|soleur-web-platform) in sentry-monitors-audit.sh / audit-sentry-extra-text-references.sh / configure-sentry-alerts.sh — workflows pass `secrets.SENTRY_PROJECT`, whose value was not read. A mismatch makes those audits refuse (release job only warns).
-- Remaining: re-run `soleur:review` with the full panel after the limit resets (do NOT go straight to compound/ship), then resolve findings, `soleur:qa`, `soleur:compound`, `soleur:ship`. Affected-test gate (`scripts/test-all.sh --affected`) was queued behind sibling runs and killed; re-run before ship. PR #9594 is still a draft.
+## Work + Review + QA + Compound (2026-10-06)
+- Work: complete. 53 Tier 1 scripts converted, Rule E + wrapper-aware Rule D, conversion battery (137 rows), ADR-202 addendum; census == Tier 2 (11 files / 13 sites, deferred to #9597); `set-role.sh` fixed in `cd4125cc81`.
+- Review: re-run after the API limit reset; fixes applied. Trailer: `Reviewed-Coverage: degraded 4/10 agents (missing: architecture, pattern, data-integrity, test-design, user-impact, performance, agent-native, structural-enumeration)`. Gaps covered by inline checks, NOT full-strength evidence.
+- QA: skipped, Test Scenarios are Given/When/Then prose (covered by the battery and lint suite); no dashboard files in the diff.
+- Local `scripts/test-all.sh --affected`: queued ~55 min behind sibling worktrees and abandoned; owning suites ran directly and green; CI is the authoritative full gate.
+- Compound: learning written under `knowledge-base/project/learnings/`. Archival of this spec dir deferred until after ship reads `decision-challenges.md`.
+- Known unverified residual: the `SENTRY_PROJECT` pin (empty|web-platform|soleur-web-platform) in sentry-monitors-audit.sh / audit-sentry-extra-text-references.sh / configure-sentry-alerts.sh was not checked against the real secret. A mismatch makes those audits refuse (the release job only warns).
+- Next: `soleur:ship` (PR #9594 is still a draft).
