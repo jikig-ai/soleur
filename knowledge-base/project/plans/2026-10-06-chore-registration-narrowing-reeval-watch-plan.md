@@ -10,6 +10,22 @@ lane: cross-domain
 
 # chore: watch the #9564 re-evaluation trigger and notify once (never close)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Passes:** plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens), sharp-edges catalogue pass, deepen-plan halts 4.4, 4.6-4.8, 4.11, 4.12, plan-time execution of every prescribed command.
+
+### Key Improvements
+
+1. The count is now zero-deletion commits only (reviewers found the bare touching-commit count was noise).
+2. Check order puts the issue-state self-disable before the base-commit check, so a retired watcher cannot go red on a history rewrite; the workflow gains a concurrency group.
+3. Scope Check rewritten to the canonical schema; the one descoped ask (the sweeper probe) is justified from sweeper source.
+4. Cuts applied after review: env seams, sanitization, re-arm mode, workflow-shape scenario, one mutation row; the pointer is a comment, not a body edit.
+
+### New Considerations Discovered
+
+- Part (a) will very likely be met about a day after merge; the real gate is part (b), which at manifest weights is 18.6% (below the 20% bar). The reviewers' challenge to the whole mechanism is recorded in `knowledge-base/project/specs/feat-one-shot-9564-followthrough-enrollment/decision-challenges.md` (DC1, DC2).
+
 ## Overview
 
 #9564 (registration-only second-stage narrowing) was brainstormed and kept deferred. Its
@@ -78,21 +94,44 @@ the closest "notify once, never close, silent below the condition" precedent.
 
 **Commands run once at plan time** (plan-sharp-edges: a plan that cites a probe has not verified it): `git merge-base --is-ancestor 2cfef66506... HEAD` (ancestor ok); the exact `git log --no-merges --format='%h%x09%cs%x09%s' <base>..HEAD -- <two paths>` (1 row, `6215e5a3fd`); the `--numstat` awk sum (`+15/-0`); and the dedup jq filter (`.author.login` is `github-actions` or `github-actions[bot]`, body contains the sentinel) against #9564's live comments (0 matches, field path `.comments[].author.login` present, value `deruelle` for the two human comments).
 
+**Scheduled-work pattern check (deepen 4.4).** Inngest cron functions exist (`git ls-files | grep -E 'apps/web-platform/server/inngest/functions/cron-'` returns hits), so the default for scheduled work is Inngest (ADR-033). GitHub Actions cron is the sanctioned exception here: the job is purely git/repo-scoped (a `git log` count and one issue comment), uses only the default workflow token, needs no app context, app secret or Sentry integration, and gains nothing from `step.run` memoization. Two siblings set the precedent (`live-verify-pass-watch.yml`, `codeql-1537-revisit-watch.yml`). The workflow is named `registration-narrowing-watch.yml`, outside the `scheduled-*.yml` filename the `new-scheduled-cron-prefer-inngest.sh` hook gates, matching those siblings; do NOT use the hook's `gate-override` comment.
+
 **Open Code-Review Overlap.** Open `code-review` issues naming planned files: #8659 and #7942 (`scripts/test-all.sh`), #8800 (`scripts/lib/test-affected-paths.sh`). Disposition: **Acknowledge** all three. They concern test-helper EXIT traps, unrun `*.mutation.sh` batteries and a census sandbox hazard; this plan adds one `run_suite` line and one edge array and touches none of those concerns. They remain open.
 
 ## Scope Check
 
-| Ask | Mapped to |
-|---|---|
-| Enroll #9564 in an automated check | Phase 1 (script + workflow), Phase 3 (issue pointer note) |
-| Part (a) mechanical | `scripts/watch-registration-narrowing-9564.sh` count |
-| Part (b) cannot be mechanical | Notice text states it and the measurement; no code |
-| Must NOT auto-close | Script's only `gh` writes are `issue comment`; asserted in the suite (Guard 1) |
-| Comment once per crossing | Per-threshold sentinel read from bot-authored comments |
-| Probe under `scripts/followthroughs/` + directive + label | Replaced with justification (Overview; Cut List); recorded for the PR body |
-| Say why in the PR body if the sweeper is not used | AC9 |
+### Ask Mapping
 
-Inferred items: none beyond registering the new suite in the test runner (mechanically required, Phase 2). Split assessment: single PR.
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "enroll the deferred registration-only narrowing issue in an automated check so its re-evaluation trigger is watched without a human remembering" [brief] | Phase 1 watcher script + workflow; Phase 4 post-merge run | mapped |
+| 2 | "a probe script under scripts/followthroughs/ (copy plugins/soleur/skills/ship/references/followthrough-stub-template.sh; read knowledge-base/engineering/operations/runbooks/followthrough-convention.md first) plus the unfenced column-0 soleur:followthrough directive in the body of #9564 and the follow-through label" [brief] | Files to Create (watcher script + workflow replace the probe + directive + label) | descoped — justification: the brief's own fallback clause ("If the sweeper's semantics force close-on-pass, use a different mechanism instead ... and say why in the PR body") applies by its intent: read in `scripts/sweep-followthroughs.sh`, every non-0/1 verdict posts a comment with no dedup, so a sweeper tracker cannot satisfy ask 4; the convention directs this shape to a dedicated workflow. The convention was read first, as asked. |
+| 3 | "#9564 must NOT be auto-closed when the count reaches 3 — it must stay open and the action is a notification (a comment naming the count and the commits, asking a human to decide whether to re-open the design, and stating that part (b) needs a human measurement)" [brief] | Phase 1 step 4 notice body; Guard 1 (never-close, M3, S9) | mapped |
+| 4 | "comment once per threshold crossing" [brief] | Phase 1 step 3 dedup (bot-authored sentinel); Guard 1 M1, M4, M6; S3-S5 | mapped |
+| 5 | "Keep it small; this is docs/ops machinery with no user-facing surface." [brief] | Plan Review cuts (env seams, sanitization, re-arm); `decision-challenges.md` DC1 | mapped |
+| 6 | "Refs #9564 (do not use a closing keyword for it)." [brief] | AC9 | mapped |
+| 7 | "say why in the PR body" [brief] | AC9 | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| `scripts/watch-registration-narrowing-9564.sh` | "watched without a human remembering"; "comment once per threshold crossing" | asked |
+| `.github/workflows/registration-narrowing-watch.yml` | "use a different mechanism instead (soleur:schedule cron workflow ...)" | asked |
+| Notice body incl. part (b) hand-off and 54.4 min arithmetic | "stating that part (b) needs a human measurement" | asked |
+| Zero-deletion filter in the count | — | inferred — justification: plan review found a bare touching-commit count measures noise (about 3.4 per day); the filter keeps the count a tight upper bound on "registration-only runs" without undercounting, which is what ask 1's trigger names |
+| `--print-count` mode | — | inferred — justification: the Observability gate needs a local, non-SSH discoverability command, and the convention says a watcher that stays silent is indistinguishable from one that works |
+| `scripts/watch-registration-narrowing-9564.test.sh` (S1-S11, M1-M8) | "#9564 must NOT be auto-closed" | inferred — justification: the never-close and once-only contracts are exit-code/call-set contracts; the convention says a contract nothing drives is a comment, and a new workflow cannot be dispatched before merge. Reduced after review (decision-challenges DC1) |
+| `run_suite` line + two TSV rows | — | inferred — justification: `scripts/*.test.sh` is not auto-globbed, so an unregistered suite is the orphan class and the orphan/shard-leg lints go red |
+| #9564 pointer comment (Phase 3) | "its re-evaluation trigger is watched" | inferred — justification: without a pointer on the tracker, a later reader enrols #9564 in the sweeper and gets the daily-comment behaviour this plan avoids |
+| Post-merge `gh workflow run` check | "watched without a human remembering" | inferred — justification: the convention's "it didn't comment is indistinguishable from it worked" |
+
+### Split Assessment
+
+- Subsystems touched: 3 — `scripts/`, `.github/workflows/`, `knowledge-base/project/{plans,specs}/`
+- Planned files: 6 (3 created, 3 edited; a 7th is conditional) | Estimated changed lines: about 450
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
 
 ## User-Brand Impact
 
