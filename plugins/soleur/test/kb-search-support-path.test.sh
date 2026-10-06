@@ -216,7 +216,27 @@ else
   FAIL=$((FAIL + 1))
 fi
 
-# Floor = the green-run assertion count (12): exists + marker + non-empty
-# section + no-fence + 4 controls + 3 corpus files + learnings. Re-derive
-# from a green run rather than lowering by feel.
-print_results 12
+# kb-tags.txt freshness: every tag used in corpus frontmatter must appear in
+# the artifact — a stale kb-tags.txt makes `kb-search --tag <real>` emit
+# "No matches" on the support path (ship-advisor finding, PR #9570). INDEX.md
+# is hand-curated (not generator output) so it is NOT freshness-checked here.
+if (( ${#learnings[@]} >= 1 )); then
+  STALE_TAGS=$(grep -h '^tags:' "${learnings[@]}" 2>/dev/null \
+    | sed 's/^tags:[[:space:]]*//; s/[][]//g' | tr ',' '\n' | tr -d ' ' \
+    | sort -u | grep -vFxf "$KB_DIR/kb-tags.txt" || true)
+else
+  # empty corpus already failed above; an unset grep would read stdin and hang
+  STALE_TAGS=""
+fi
+if [[ -z "$STALE_TAGS" ]]; then
+  echo "  PASS: kb-tags.txt covers every tag used in corpus frontmatter"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: kb-tags.txt is stale — tags used in corpus frontmatter but absent: $(echo "$STALE_TAGS" | tr '\n' ' ')"
+  FAIL=$((FAIL + 1))
+fi
+
+# Floor = the green-run assertion count (13): exists + marker + non-empty
+# section + no-fence + 4 controls + 3 corpus files + learnings + tag
+# freshness. Re-derive from a green run rather than lowering by feel.
+print_results 13
