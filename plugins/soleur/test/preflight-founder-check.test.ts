@@ -29,7 +29,11 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { gitFixtureEnv } from "./lib/git-fixture-env";
 
-const SCRIPT = join(import.meta.dir, "..", "skills", "preflight", "scripts", "founder-check.py");
+// FOUNDER_CHECK_SCRIPT is a seam for the mutation battery only: it points the whole suite at a
+// MUTATED COPY of the script (with probe-verb-gate.sh beside it) so a surviving mutant is a measured
+// result. Unset, the suite drives the production script.
+const SCRIPT =
+  process.env.FOUNDER_CHECK_SCRIPT ?? join(import.meta.dir, "..", "skills", "preflight", "scripts", "founder-check.py");
 const FIXTURES = join(import.meta.dir, "fixtures", "founder-check");
 const PLANS = "knowledge-base/project/plans";
 const OPERATOR = "fixture@example.com"; // gitFixtureEnv()'s synthesized identity

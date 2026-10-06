@@ -1474,7 +1474,7 @@ Runs the check a founder wrote in their own words, approved as an exact command,
 
 1. **Resolve.** Run `founder-check.py verify` (reference section 1). `NO-BLOCK` is SKIP with the pinned banner; a missing block with freeze evidence is FAIL, never SKIP; `UNTRUSTED` and `CHANGED-SINCE-APPROVAL` stop and are decided in Phase 2.
 2. **Run only through Step 10.5.** The approved command runs in the Step 10.5 sandbox via the reference's wrapper, with `CMD` set to the command. Check 13 declares no sandbox of its own and never executes the command any other way. First run `true` through the same wrapper: it must return rc 0 (sandbox-health control).
-3. **Classify and record.** `founder-check.py classify` is the one chokepoint; `founder-check.py log` is the only writer of outcomes and prints the metadata-only `SOLEUR_FOUNDER_CHECK_RESULT` marker.
+3. **Classify and record.** `founder-check.py classify` is the one chokepoint; `founder-check.py log` is the only writer of outcomes and prints the metadata-only `SOLEUR_FOUNDER_CHECK_RESULT` marker. Preflight commits nothing: ship stages `knowledge-base/` artifacts before preflight runs, so print `commit knowledge-base/project/specs/<branch>/founder-check-log.md` after logging.
 4. **Say only what is true.** A pass reads "ran, returned success against `<sha>`", from `founder-check.py text`. It never claims the work is verified.
 
 `SKIP-NOSANDBOX` here is stated as "your check did not run on this host"; with an approved block present it stops the run (a gate that went dark must not read as green).
