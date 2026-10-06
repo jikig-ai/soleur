@@ -227,7 +227,7 @@ fi
 # api_host is derived from the response body (links.regionUrl), so pin it to Sentry's own
 # data-plane hosts before the bearer is sent there again (auth_get / auth_put).
 case "$api_host" in
-  sentry.io|us.sentry.io|de.sentry.io) ;;
+  sentry.io|us.sentry.io|de.sentry.io|eu.sentry.io|jikigai-eu.sentry.io|jikigai.sentry.io) ;;
   *) echo "ERROR: refusing api host (expected a sentry.io data-plane host)" >&2; exit 1 ;;
 esac
 

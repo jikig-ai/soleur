@@ -16,7 +16,7 @@ That list cannot be proven complete; the state test needs no list. The
 interceptor is the COMPLEMENT, scoped to what is never committed (ad-hoc
 `bash -c`, scripts the model wrote but never committed) -- filed separately.
 
-TWO RULES, because the preamble is a point-in-time assertion and not an
+RULES A and B, because the preamble is a point-in-time assertion and not an
 invariant:
   Rule A (prologue) -- the refusal must appear before any command other than
       set/shopt. Stated as a prologue rule rather than "before the first bind"
@@ -1122,10 +1122,21 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # a bearer inside a trailing comment, printed command text (`echo`/`printf` of a
 # curl command: curl is not in command position) and YAML (only shell is scanned).
 #
-# DOCUMENTED BLIND SPOTS: a curl hidden in a wrapper function (wrapper awareness is a
-# separate step), a header passed positionally (`-H "$2"`), a bearer in a script
-# SOURCED from a library, a second curl on the SAME physical line (the last one is
-# judged, as in Rule D), and multi-line quoted strings that print a curl command.
+# WHY THE STDIN CONFIG FORM (measured, curl 8.22, bash 5.3): (1) `printf ... | curl --config -`
+# returns 141 under `set -o pipefail` when the consumer never reads stdin (a 100 KB payload
+# reproduces it reliably), so the form is a process substitution
+# (`curl ... --config - < <(printf ...)`), which keeps curl the only observed command; (2) a
+# token holding a newline plus `url = "..."` makes curl issue a SECOND request, env-sourced
+# tokens included, so every converted call carries a token-shape guard first; (3) an unset
+# token inside the process substitution yields a headerless request, not an abort. The
+# battery tests/scripts/test-argv-bearer-sweep.sh (C3 real-curl oracle, mutation 8) pins (1)-(3).
+#
+# WRAPPERS: a call to a file-local function that runs curl is judged on the spliced command
+# (file-wide wrapper table, transitive closure, `"$@"` replaced by the call's words).
+# DOCUMENTED BLIND SPOTS: a wrapper defined in a SOURCED library, a header passed
+# positionally (`-H "$2"` inside a wrapper), a bearer in a script SOURCED from a library, a
+# second curl on the SAME physical line (the last one is judged, as in Rule D), and
+# multi-line quoted strings that print a curl command.
 #
 # Baseline E is `path<TAB>site-count`. Unlike the other baselines it is compared by
 # EQUALITY in the repo-wide run: a listed file must still offend and its live count

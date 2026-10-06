@@ -277,15 +277,15 @@ assert_eq "the fake curl exits 64 on a PATCH body it does not recognise" "64" "$
 printf 'up' > "$FAKE_STATE/1.status"
 st_curl -fsS --max-time 15 https://x.test/heartbeats/1 >/dev/null 2>&1
 assert_eq "the fake curl answers 401 (and -f turns that into rc 22) with no Authorization header" "22" "$?"
-PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS -fsS --max-time 15 --config - https://x.test/heartbeats/1" <<< 'header = "Authorization: Bearer "' >/dev/null 2>&1
+printf '%s\n' 'header = "Authorization: Bearer "' | PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS -fsS --max-time 15 --config - https://x.test/heartbeats/1" >/dev/null 2>&1
 assert_eq "the fake curl answers 401 for an EMPTY bearer on stdin" "22" "$?"
 st_curl -fsS --max-time 15 --config - https://x.test/heartbeats/1 >/dev/null 2>&1
 assert_eq "the fake curl accepts a non-empty bearer arriving on stdin (200)" "0" "$?"
-PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS -fsS --max-time 15 -H 'Authorization: Bearer x' --config - https://x.test/heartbeats/1" <<< "$ST_HDR" >/dev/null 2>&1
+printf '%s\n' "$ST_HDR" | PATH="$BIN:$PATH" bash -c "curl $ST_FLAGS -fsS --max-time 15 -H 'Authorization: Bearer x' --config - https://x.test/heartbeats/1" >/dev/null 2>&1
 assert_eq "the fake curl REFUSES (rc 65) a bearer on argv, even with a valid stdin config" "65" "$?"
-PATH="$BIN:$PATH" bash -c "curl -fsS --noproxy '*' --max-time 15 --disable --config - https://x.test/heartbeats/1" <<< "$ST_HDR" >/dev/null 2>&1
+printf '%s\n' "$ST_HDR" | PATH="$BIN:$PATH" bash -c "curl -fsS --noproxy '*' --max-time 15 --disable --config - https://x.test/heartbeats/1" >/dev/null 2>&1
 assert_eq "the fake curl REFUSES (rc 66) a call whose FIRST argument is not --disable" "66" "$?"
-PATH="$BIN:$PATH" bash -c "curl --disable -fsS --max-time 15 --config - https://x.test/heartbeats/1" <<< "$ST_HDR" >/dev/null 2>&1
+printf '%s\n' "$ST_HDR" | PATH="$BIN:$PATH" bash -c "curl --disable -fsS --max-time 15 --config - https://x.test/heartbeats/1" >/dev/null 2>&1
 assert_eq "the fake curl REFUSES (rc 66) a call with no --noproxy '*'" "66" "$?"
 printf '500' > "$FAKE_HTTP/1.get"
 st_curl -fsS --max-time 15 --config - https://x.test/heartbeats/1 >/dev/null 2>&1

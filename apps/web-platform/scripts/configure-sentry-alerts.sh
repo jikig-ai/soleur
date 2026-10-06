@@ -93,9 +93,11 @@ case "$SENTRY_PROJECT" in
   web-platform|soleur-web-platform) ;;
   *) echo "ERROR: refusing project (expected web-platform)" >&2; exit 2 ;;
 esac
+# The escape-hatch value is the host the repo secret SENTRY_API_HOST carries: the ORG-SUBDOMAIN
+# (reusable-release.yml documents `jikigai-eu.sentry.io`), or one of Sentry's region hosts.
 case "${SENTRY_API_HOST:-}" in
-  ''|sentry.io|de.sentry.io) ;;
-  *) echo "ERROR: refusing SENTRY_API_HOST (expected sentry.io or de.sentry.io)" >&2; exit 2 ;;
+  ''|sentry.io|us.sentry.io|de.sentry.io|eu.sentry.io|jikigai-eu.sentry.io|jikigai.sentry.io) ;;
+  *) echo "ERROR: refusing SENTRY_API_HOST (expected the org subdomain or a sentry.io region host)" >&2; exit 2 ;;
 esac
 
 # One wrapper owns the transport flags, the token-shape guard and the bearer header, so
@@ -134,7 +136,7 @@ if [[ -z "$api_host" ]]; then
   exit 1
 fi
 case "$api_host" in
-  sentry.io|de.sentry.io) ;;
+  sentry.io|us.sentry.io|de.sentry.io|eu.sentry.io|jikigai-eu.sentry.io|jikigai.sentry.io) ;;
   *) echo "ERROR: refusing api host" >&2; exit 2 ;;
 esac
 echo "[info] Using Sentry API host: ${api_host}"

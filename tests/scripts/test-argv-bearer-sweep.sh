@@ -27,12 +27,10 @@
 #      (quote + newline + `url = "..."`) -- so the shim's INJECTED model is calibrated to
 #      the real tool, not to the author's belief about it.
 #
-# EXPECTATIONS ARE KEYED OFF BASELINE E (scripts/lint-shell-trace-credential-refusal-e
-# .baseline.txt): a probe still listed there asserts "argv bearer present (known,
-# unconverted)"; once it is removed the same row asserts the FULL contract and the
-# converted-only rows (hostile tokens, xtrace refusal, 100 KB pipefail) switch on. Every
-# commit is therefore green and the RED-versus-GREEN evidence is the same rows flipping.
-# Rows only ever GROW as probes convert, so EXPECTED_TESTS is a LOWER bound.
+# EVERY DERIVED PROBE ASSERTS THE FULL CONTRACT (bearer on stdin, token in no argv, hostile
+# tokens refused, xtrace refusal, 100 KB pipefail). Baseline E (scripts/lint-shell-trace-
+# credential-refusal-e.baseline.txt) lists only the deferred host-deployed infra scripts, so a
+# followthrough probe reappearing there is itself a failure (population row below).
 #
 # THE POPULATION IS DERIVED (git ls-files scripts/followthroughs/*.sh holding a
 # credentialed curl), never counted: each member must be in exactly one of the dynamic
@@ -571,7 +569,7 @@ evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
 if has_check bearer-not-on-stdin; then row "mutation 4a: a shim that stops recording stdin turns the canonical probe RED" ok
 else row "mutation 4a: a shim that stops recording stdin turns the canonical probe RED" fail "failed='$EV_FAILED'"; fi
 P_STRIP="$SYN/synth-stripped.sh"; sed 's/Authorization: Bearer/X-Stripped: Bearer/g' "$P_CANON" > "$P_STRIP"
-grep -q 'X-Stripped' "$P_STRIP" || fatal "mutation 6 (stripped copy) did not land"
+grep -q 'X-Stripped' "$P_STRIP" || fatal "mutation 4 (stripped copy) did not land"
 run_probe m4b-noauth "$P_STRIP" "${canon_env[@]}" SHIM_MUTATE=noauth
 if transient_outcome "$RUN_ROW" "$RUN_RC"; then
   row "mutation 4b: a shim that stops being auth-gated lets a stripped header reach PASS, and the check sees it" fail "stripped probe still read as TRANSIENT"
@@ -678,8 +676,7 @@ done
 # STAGE 2: THE MANIFEST, KEYED OFF BASELINE E
 # =====================================================================================
 BASE_E="scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
-[[ -f "$BASE_E" ]] || fatal "baseline E is missing ($BASE_E); the rows key off it"
-in_baseline_e() { awk -F'\t' -v p="$1" '/^#/ {next} $1 == p {f = 1} END {exit f ? 0 : 1}' "$BASE_E"; }
+[[ -f "$BASE_E" ]] || fatal "baseline E is missing ($BASE_E); the population row reads it"
 
 # DYNAMIC: name | token env var | hosts (regex) | min_calls | canned 200 body. Outcome contract of
 # every row: the OK body reaches `^PASS` with rc 0; a 401 / stripped header / unusable token is
@@ -733,35 +730,28 @@ if [[ -n "$POP" && -z "$DUP" && -z "$UNCLASSIFIED" && -z "$STALE_ENTRY" ]]; then
 else
   row "population: every followthrough probe holding a credentialed curl is classified exactly once (dynamic, static-only or delegated)" fail "unclassified='${UNCLASSIFIED//$'\n'/,}' stale='${STALE_ENTRY//$'\n'/,}' duplicated='${DUP//$'\n'/,}' derived=$(printf '%s\n' "$POP" | grep -c . || true)"
 fi
-# Every probe still in baseline E is in the population (a baseline entry for a probe the suite
-# does not know would be an unexamined exclusion).
-BE_UNKNOWN="$(awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\/[^\/]+\.sh$/ {print $1}' "$BASE_E" | sed 's|.*/||; s|\.sh$||' | sort -u | comm -23 - <(printf '%s\n' "$POP"))"
-if [[ -z "$BE_UNKNOWN" ]]; then row "population: every followthrough listed in baseline E is in the derived population" ok
-else row "population: every followthrough listed in baseline E is in the derived population" fail "unknown='${BE_UNKNOWN//$'\n'/,}'"; fi
+# No followthrough probe may sit in baseline E: they are all converted, so a listed one is an
+# argv bearer that crept back (or an exclusion nobody examined).
+BE_FOLLOWTHROUGH="$(awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$BASE_E")"
+if [[ -z "$BE_FOLLOWTHROUGH" ]]; then row "population: no followthrough probe is listed in baseline E" ok
+else row "population: no followthrough probe is listed in baseline E" fail "listed='${BE_FOLLOWTHROUGH//$'\n'/,}'"; fi
 
 # --- DYNAMIC rows ----------------------------------------------------------------------------
-N_DYN=0; N_DYN_CONVERTED=0
+N_DYN=0
 probe_rows() { # name tokvar hosts min body
   local name="$1" tokvar="$2" hosts="$3" min="$4" body="$5"
-  local rel="scripts/followthroughs/$name.sh" script="$REPO_ROOT/scripts/followthroughs/$name.sh" state rc
+  local rel="scripts/followthroughs/$name.sh" script="$REPO_ROOT/scripts/followthroughs/$name.sh" rc
   N_DYN=$((N_DYN + 1))
   if [[ ! -f "$script" ]]; then row "$name: manifest entry names an existing probe" fail "$rel is missing"; return 0; fi
-  if in_baseline_e "$rel"; then state=unconverted; else state=converted; N_DYN_CONVERTED=$((N_DYN_CONVERTED + 1)); fi
   local -a okenv=("$tokvar=$FIXTURE_TOKEN" "SHIM_BODY_FILE=$BODIES/$body.json")
 
-  # A. contract (keyed off baseline E)
+  # A. the full contract
   run_probe "$name-A" "$script" "${okenv[@]}"
   rc=$RUN_RC; evaluate "$RUN_ROW" "$hosts" "$min" "$FIXTURE_TOKEN"
   local outcome_ok=0; [[ "$rc" -eq 0 ]] && grep -q '^PASS' "$RUN_ROW/stdout" && outcome_ok=1
-  if [[ "$state" == unconverted ]]; then
-    if [[ "$outcome_ok" -eq 1 && "$(sorted_failed)" == "bearer-not-on-stdin token-in-argv" ]]; then
-      row "$name: argv bearer present (known, unconverted); the instrument reaches PASS through it ($EV_HOST_CALLS call(s))" ok
-    else row "$name: argv bearer present (known, unconverted); the instrument reaches PASS through it" fail "state=unconverted rc=$rc failed='$EV_FAILED' (a probe that no longer carries an argv bearer must leave baseline E in the same diff)"; fi
-  else
-    if [[ "$outcome_ok" -eq 1 && -z "$EV_FAILED" ]]; then
-      row "$name: full contract (every call to the manifest hosts has the bearer on stdin, token in no argv, >= $min call(s))" ok
-    else row "$name: full contract (every call to the manifest hosts has the bearer on stdin, token in no argv, >= $min call(s))" fail "state=converted rc=$rc calls=$EV_HOST_CALLS failed='$EV_FAILED'"; fi
-  fi
+  if [[ "$outcome_ok" -eq 1 && -z "$EV_FAILED" ]]; then
+    row "$name: full contract (every call to the manifest hosts has the bearer on stdin, token in no argv, >= $min call(s))" ok
+  else row "$name: full contract (every call to the manifest hosts has the bearer on stdin, token in no argv, >= $min call(s))" fail "rc=$rc calls=$EV_HOST_CALLS failed='$EV_FAILED'"; fi
 
   # B. a 401 must never reach the PASS outcome
   run_probe "$name-B" "$script" "${okenv[@]}" SHIM_MODE=deny
@@ -779,7 +769,7 @@ probe_rows() { # name tokvar hosts min body
     else row "$name: a header-stripped copy never reaches PASS (rc 2, TRANSIENT on stderr)" fail "rc=$RUN_RC"; fi
   fi
 
-  # D. unset and empty token: zero calls, TRANSIENT rc 2 (holds in BOTH states)
+  # D. unset and empty token: zero calls, TRANSIENT rc 2
   local cls d_ok=1 d_detail=""
   for cls in unset empty; do
     shape_check "$script" "$tokvar" "$cls" "$name-D-$cls" "SHIM_BODY_FILE=$BODIES/$body.json" || { d_ok=0; d_detail+=" [$cls: $SHAPE_DETAIL]"; }
@@ -789,7 +779,6 @@ probe_rows() { # name tokvar hosts min body
 
   # CONVERTED-ONLY rows: they assert properties a conversion adds, so they switch on when the
   # probe leaves baseline E (rows only grow; EXPECTED_TESTS is a lower bound).
-  [[ "$state" == converted ]] || return 0
 
   # E1. hostile token shapes
   local e_ok=1 e_detail=""
@@ -865,7 +854,7 @@ while IFS='|' read -r d_name d_test; do
   else row "delegated $d_name: owning test $d_test exists, is tracked and names the probe" fail "the owning test is missing, untracked or no longer names the probe"; fi
 done <<< "$DELEGATED_MANIFEST"
 
-echo "=== manifest: $N_DYN dynamic ($N_DYN_CONVERTED converted), $N_STATIC static-only, $N_DELEGATED delegated; population $(printf '%s\n' "$POP" | grep -c . || true) ==="
+echo "=== manifest: $N_DYN dynamic, $N_STATIC static-only, $N_DELEGATED delegated; population $(printf '%s\n' "$POP" | grep -c . || true) ==="
 
 # =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
@@ -882,7 +871,7 @@ fi
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=77
+EXPECTED_TESTS=137
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2

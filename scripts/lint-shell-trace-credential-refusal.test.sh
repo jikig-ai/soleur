@@ -982,6 +982,20 @@ else
 fi
 
 # --- verdict -----------------------------------------------------------------
+# The token-shape guard `_bearer_ok` is copied inline into every converted script (host-deployed and
+# plugin-shipped scripts cannot source a repo-relative lib), so nothing but THIS row stops the copies
+# drifting apart: every definition, including the prefixed variants of sourced libs, must carry the
+# one canonical body, and the population must not silently collapse.
+_CANON_BODY='{ local LC_ALL=C; case "${1:-}" in '"''"'|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }'
+_copies="$(git grep -hE '_bearer_ok\(\) *\{' -- '*.sh' ':!*.test.sh' ':!tests/scripts/test-*' ':!scripts/fixtures' | sed -E 's/^[[:space:]]*[A-Za-z0-9_]*_bearer_ok\(\) *//')"
+_n_copies="$(printf '%s\n' "$_copies" | grep -c . || true)"
+_n_off="$(printf '%s\n' "$_copies" | grep -vcxF -- "$_CANON_BODY" || true)"
+if [ "$_n_copies" -ge 40 ] && [ "$_n_off" = "0" ]; then
+  pass "token-shape guard: all $_n_copies inline copies of _bearer_ok carry the one canonical body"
+else
+  fail "token-shape guard drift: copies=$_n_copies off-canonical=$_n_off (expected >= 40 copies, 0 off-canonical)"
+fi
+
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
@@ -996,8 +1010,8 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 115 (#9597, Rule E rows, fixtures, mutation rows and baseline-E sandbox rows).
-MIN_ASSERTIONS=118
+# Re-measured at 119 (#9597: Rule E rows, fixtures, mutation rows, baseline-E sandbox rows, guard-parity row).
+MIN_ASSERTIONS=119
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
