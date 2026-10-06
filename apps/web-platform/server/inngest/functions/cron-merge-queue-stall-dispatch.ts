@@ -44,28 +44,41 @@
  * tick phase and the measured median runner wait (about 30 s), and negative once runner wait exceeds
  * roughly 5 to 15 minutes, which the measured p90 (about 20 minutes on a
  * congested pool, ADR-248, 2026-09-24) does. A dispatch that lands but whose
- * run is delayed on the runner pool is NOT detected by this change, so the
- * probe stays BEST-EFFORT in both directions. The post-merge measurement of `startedAt - createdAt` over the
+ * run is delayed on the runner pool IS detected by `check-previous-run`
+ * (#9513): the next tick reads the previous run's status/conclusion through
+ * the same `actions:write` token and posts an error check-in when the run
+ * concluded red or is still non-completed past the executor's own
+ * `timeout-minutes: 10` (the runner-wait gap). The probe still stays
+ * BEST-EFFORT in both directions — the detection is one tick late by design,
+ * so a margin-sized delay lands before the verdict does. The post-merge
+ * measurement of `startedAt - createdAt` over the
  * dispatched runs is the evidence for tuning cadence or adding an
  * executor-side heartbeat (tracked by the routing follow-up issue).
  *
  * Liveness (this is the first DISPATCHER-fed monitor slug): the heartbeat for
  * `scheduled-merge-queue-stall-dispatch` is posted by THIS function, not by the
  * executed workflow, because the workflow carries no Sentry secrets. A green
- * check-in therefore means "dispatched", not "probe executed". Do not "fix"
- * that by moving the heartbeat into the workflow without revisiting the
- * secrets posture documented in its header.
+ * check-in means "dispatched AND the previous executor run was not
+ * red/stuck/unreadable" — an error check-in means the dispatch POST failed OR
+ * the previous run concluded in the failure class OR was still non-completed
+ * past `STUCK_RUN_AGE_MS` OR the runs-list read itself failed (a blind check
+ * is a failed check). Do not "fix" this by moving the heartbeat into the
+ * workflow without revisiting the secrets posture documented in its header.
  *  - Dispatch error path: an Octokit failure inside `dispatch-workflow` is
  *    reported loudly to the Sentry issues stream via `reportSilentFallback`
  *    (token redacted) and the check-in carries an error status.
+ *  - Previous-run error path: a failure-class conclusion, a stuck run, or a
+ *    failed runs-list read is reported through the same channel
+ *    (`op: check-previous-run`) and flips the check-in to error while the
+ *    function's result stays the dispatch verdict.
  *  - Token-mint failure: posts an error check-in, then rethrows so
  *    `retries: 1` and the Inngest sentry-correlation middleware (tagged
  *    `inngest.fn_id`) still apply.
  *
  * REPLAY SAFETY: Inngest re-executes the whole handler after every step, so a
- * side effect outside a `step.run` repeats on every replay. The report happens
- * INSIDE the dispatch step (memoized, and the step never throws, so the next
- * 10-minute tick is the retry), and the heartbeat is a step callback.
+ * side effect outside a `step.run` repeats on every replay. The reports happen
+ * INSIDE the check and dispatch steps (memoized, and neither step throws, so
+ * the next 10-minute tick is the retry), and the heartbeat is a step callback.
  */
 import { inngest } from "@/server/inngest/client";
 import {
@@ -93,7 +106,64 @@ const TOKEN_MIN_LIFETIME_MS = 5 * 60 * 1000;
 // real defect and is reported immediately, without a retry.
 const RETRY_DELAY_MS = 2_000;
 
-type DispatchResult = { ok: boolean; errorSummary?: string };
+// #9513 — the check-previous-run verdicts. The newest listed run is
+// deterministically the previous tick's because the check runs BEFORE this
+// tick's dispatch POST lands in the list. The list is intentionally
+// unfiltered: a schedule-fallback or manually-dispatched red run is the same
+// alert gap as a dispatched one (this workflow only ever fires on
+// schedule + workflow_dispatch, so nothing else can appear).
+const RUNS_PER_PAGE = 5;
+// Strictly above the executor's `timeout-minutes: 10`: a run still
+// non-completed past this age cannot be a legitimately late-but-running job —
+// it is the runner-wait / wedged-run class #9513 calls out. On the 10-minute
+// tick the previous run is read at ~t+10, so a merely-late run never
+// false-pages and a genuinely stuck run pages at most one tick late.
+const STUCK_RUN_AGE_MS = 11 * 60 * 1000;
+// Failure-class conclusions (exhaustive against the Actions enum; `skipped`
+// and `neutral` are not reds).
+const BAD_CONCLUSIONS = new Set([
+  "failure",
+  "timed_out",
+  "cancelled",
+  "startup_failure",
+  "action_required",
+  "stale",
+]);
+
+type PreviousRunVerdict =
+  | { verdict: "ok" }
+  | { verdict: "pending" }
+  | { verdict: "none" }
+  | {
+      verdict: "failed";
+      conclusion: string;
+      runId?: number;
+      runUrl?: string;
+    }
+  | {
+      verdict: "stuck";
+      status: string;
+      ageMinutes: number;
+      runId?: number;
+      runUrl?: string;
+    }
+  | { verdict: "unknown"; errorSummary: string };
+
+// The dispatch step's own outcome.
+type DispatchOutcome = { ok: boolean; errorSummary?: string };
+
+// The handler's result: the dispatch verdict plus what the check found.
+type DispatchResult = DispatchOutcome & {
+  previousRun: PreviousRunVerdict["verdict"];
+};
+
+type WorkflowRunRow = {
+  id?: number;
+  status?: string | null;
+  conclusion?: string | null;
+  created_at?: string;
+  html_url?: string;
+};
 
 // Never throws: the dispatch step's catch must stay total, and `String(err)`
 // throws for a prototype-less object or a throwing toString.
@@ -149,11 +219,114 @@ export async function cronMergeQueueStallDispatchHandler({
     throw err;
   }
 
+  // #9513 — executor-visibility check. Runs BEFORE the dispatch so the newest
+  // listed run is deterministically the previous tick's (afterwards, the
+  // just-POSTed run races into the list and "previous" becomes ambiguous). It
+  // reads through the same actions:write installation token — the runs-list
+  // endpoint is a read under the existing grant, no new secret or permission.
+  // Never throws: a failed read is the `unknown` verdict, which reports and
+  // pages (a blind check is a failed check) but never aborts this tick's
+  // dispatch. The report happens INSIDE the step so it is memoized across
+  // replays exactly like the dispatch report.
+  const previousRun = await step.run(
+    "check-previous-run",
+    async (): Promise<PreviousRunVerdict> => {
+      const reportRed = (
+        kind: string,
+        detail: Record<string, unknown>,
+      ): void => {
+        reportSilentFallback(
+          new Error(`previous merge-queue-stall-check run ${kind}`),
+          {
+            feature: FUNCTION_NAME,
+            op: "check-previous-run",
+            message: `merge-queue-stall-dispatch found a ${kind} previous run`,
+            extra: { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE, ...detail },
+          },
+        );
+      };
+      try {
+        const { Octokit } = await import("@octokit/core");
+        const octokit = new Octokit({ auth: installationToken });
+        const resp = await octokit.request(
+          "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+          {
+            owner: REPO_OWNER,
+            repo: REPO_NAME,
+            workflow_id: WORKFLOW_FILE,
+            per_page: RUNS_PER_PAGE,
+          },
+        );
+        const runs =
+          ((resp.data ?? {}) as { workflow_runs?: WorkflowRunRow[] })
+            .workflow_runs ?? [];
+        const prev = runs[0];
+        if (!prev) return { verdict: "none" };
+        if (prev.status !== "completed") {
+          // Non-completed: judge by age, not conclusion (which is still null).
+          // An unparseable created_at is pending, not stuck — never page on a
+          // field we could not read.
+          const ageMs =
+            Date.now() - Date.parse(prev.created_at ?? "");
+          if (Number.isFinite(ageMs) && ageMs > STUCK_RUN_AGE_MS) {
+            const v: PreviousRunVerdict = {
+              verdict: "stuck",
+              status: String(prev.status),
+              ageMinutes: Math.floor(ageMs / 60_000),
+              runId: prev.id,
+              runUrl: prev.html_url,
+            };
+            reportRed("stuck", v);
+            return v;
+          }
+          return { verdict: "pending" };
+        }
+        if (
+          typeof prev.conclusion === "string" &&
+          BAD_CONCLUSIONS.has(prev.conclusion)
+        ) {
+          const v: PreviousRunVerdict = {
+            verdict: "failed",
+            conclusion: prev.conclusion,
+            runId: prev.id,
+            runUrl: prev.html_url,
+          };
+          reportRed(`red (conclusion=${prev.conclusion})`, v);
+          return v;
+        }
+        return { verdict: "ok" };
+      } catch (err) {
+        // Same redaction contract as the dispatch step: the minted token can
+        // ride inside an Octokit error message on its way to Sentry.
+        const redacted = new Error(
+          redactToken(safeMessage(err), installationToken),
+        );
+        const e = (err ?? {}) as { name?: unknown };
+        try {
+          if (typeof e.name === "string") redacted.name = e.name;
+        } catch {
+          // a throwing name getter must not escape the never-throws step
+        }
+        reportSilentFallback(redacted, {
+          feature: FUNCTION_NAME,
+          op: "check-previous-run",
+          message: "merge-queue-stall-dispatch previous-run check failed",
+          extra: { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
+        });
+        logger.warn(
+          { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
+          "previous-run check unreadable — treating as an error check-in",
+        );
+        return { verdict: "unknown", errorSummary: redacted.message };
+      }
+    },
+  );
+
   // Catch and report INSIDE the step so the report is memoized across replays.
   // The step never throws: a failed POST is retried by the next cron tick.
   const dispatch = await step.run(
     "dispatch-workflow",
-    async (): Promise<DispatchResult> => {
+    async (): Promise<DispatchOutcome> => {
       try {
         const { Octokit } = await import("@octokit/core");
         const octokit = new Octokit({ auth: installationToken });
@@ -206,10 +379,17 @@ export async function cronMergeQueueStallDispatchHandler({
   );
 
   // Its own step, and a callback (not an eager promise): a heartbeat failure
-  // must not be reported as a dispatch failure.
+  // must not be reported as a dispatch failure. The check-in is red when the
+  // dispatch failed OR the previous-run check found red/stuck/unknown —
+  // `pending` (still legitimately in flight) and `none` (first-ever tick) are
+  // not failures (issue #9513).
   await step.run("sentry-heartbeat", async () => {
     await postSentryHeartbeat({
-      ok: dispatch.ok,
+      ok:
+        dispatch.ok &&
+        (previousRun.verdict === "ok" ||
+          previousRun.verdict === "pending" ||
+          previousRun.verdict === "none"),
       sentryMonitorSlug: SENTRY_MONITOR_SLUG,
       cronName: FUNCTION_NAME,
       logger,
@@ -221,9 +401,13 @@ export async function cronMergeQueueStallDispatchHandler({
       { fn: FUNCTION_NAME, workflow: WORKFLOW_FILE },
       "Dispatched merge-queue-stall-check workflow",
     );
-    return { ok: true };
+    return { ok: true, previousRun: previousRun.verdict };
   }
-  return { ok: false, errorSummary: dispatch.errorSummary };
+  return {
+    ok: false,
+    errorSummary: dispatch.errorSummary,
+    previousRun: previousRun.verdict,
+  };
 }
 
 export const cronMergeQueueStallDispatch = inngest.createFunction(

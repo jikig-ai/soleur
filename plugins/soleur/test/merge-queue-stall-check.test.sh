@@ -31,7 +31,7 @@ TF_REAL="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
 SANDBOX_PATH="/usr/local/bin:/usr/bin:/bin"
 
 # EXACT number of PASS verdicts a healthy run records. Update deliberately when a row is added.
-EXPECTED_PASSES=51
+EXPECTED_PASSES=61
 
 passes=0; fails=0; FAILED=()
 pass() { passes=$((passes + 1)); echo "  PASS: $1"; }
@@ -79,7 +79,7 @@ def wf_facts(path):
         if "continue-on-error" in job:
             coe.append("job:%s" % jn)
         for st in job.get("steps") or []:
-            steps.append({"name": st.get("name"), "run": st.get("run")})
+            steps.append({"name": st.get("name"), "run": st.get("run"), "if": st.get("if")})
             if "continue-on-error" in st:
                 coe.append("step:%s" % st.get("name"))
             if isinstance(st.get("run"), str):
@@ -157,6 +157,21 @@ structural_check() {
     || { REASON="filed issue label set lacks merge-queue-stall + action-required"; return 1; }
   jq -e 'any(.runs[]; test("gh run list [^\\n]*--event merge_group") and test("gh api graphql -f query="))' <<<"$f" >/dev/null \
     || { REASON="issue body lacks agent-runnable gh run list --event merge_group / gh api graphql commands"; return 1; }
+  # ---- drain step invariants (#9513) -----------------------------------------
+  local drain_step drain_run
+  drain_step="$(jq -c '.steps[] | select(.name == "Drain stale stall issues")' <<<"$f" | head -n 1)"
+  [[ -n "$drain_step" ]] || { REASON="drain step 'Drain stale stall issues' missing"; return 1; }
+  [[ "$(jq -r '.if // empty' <<<"$drain_step")" == "always()" ]] \
+    || { REASON="drain step is not gated on if: always() (an aborted detect run must not skip it)"; return 1; }
+  drain_run="$(jq -r '.run // empty' <<<"$drain_step")"
+  [[ "$drain_run" == *"gh issue list"* && "$drain_run" == *"--json number,title --label merge-queue-stall"* && "$drain_run" == *"-L 50"* ]] \
+    || { REASON="drain enumeration is not a bounded (-L 50) label-scoped gh issue list --json"; return 1; }
+  [[ "$drain_run" == *"gh issue view"* && "$drain_run" == *"--json state"* && "$drain_run" == *"gh issue close"* ]] \
+    || { REASON="drain does not read the target PR state before closing"; return 1; }
+  # The flag-arg form (--jq '<expr>' / --jq='...') on an issue-list line —
+  # anchored to the command so a comment mentioning `--jq` cannot false-hit.
+  ! grep -qE 'gh issue list[^#\n]*--jq[ =]' <<<"$drain_run" \
+    || { REASON="drain pushes a filter through gh --jq (use standalone jq — gh --jq does not forward --arg)"; return 1; }
   return 0
 }
 
@@ -204,24 +219,52 @@ case "$1 $2" in
     if [[ "${GH_STUB_LABEL_FAIL:-0}" == "1" ]]; then echo "stub: label already exists" >&2; exit 1; fi
     exit 0 ;;
   "issue list")
+    if [[ "${GH_STUB_LIST_FAIL:-0}" == "1" ]]; then echo "stub: issue list 502" >&2; exit 1; fi
     shift 2; state="all"; label=""; limit=30; fields=""; jqx=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --state) state="$2"; shift 2 ;;
         --label) label="$2"; shift 2 ;;
-        --limit) limit="$2"; shift 2 ;;
+        --limit|-L) limit="$2"; shift 2 ;;
         --json)  fields="$2"; shift 2 ;;
         --jq)    jqx="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
-    [[ -n "$fields" && -n "$jqx" ]] || { echo "stub gh: issue list needs --json and --jq" >&2; exit 64; }
+    # --jq is optional: the drain lists --json then filters in standalone jq
+    # (the real `gh --jq` does not forward --arg, so the workflow never passes
+    # an arg-bearing filter through it).
+    [[ -n "$fields" ]] || { echo "stub gh: issue list needs --json" >&2; exit 64; }
     jq -c --arg state "$state" --arg label "$label" --argjson limit "$limit" --arg fields "$fields" '
       map(select($state == "all" or (.state | ascii_downcase) == $state))
       | map(select($label == "" or any(.labels[]?; .name == $label)))
       | .[0:$limit]
       | map(with_entries(select(.key as $k | ($fields | split(",")) | index($k))))' "$GH_STUB_ISSUES" \
-      | jq -r "$jqx" ;;
+      | if [[ -n "$jqx" ]]; then jq -r "$jqx"; else jq -c '.'; fi ;;
+  "issue view")
+    # Serves per-number target states from GH_STUB_STATES (lines `NUM=STATE`;
+    # `NUM=FAIL` simulates a view failure — the drain must fail toward keeping).
+    shift 2; num="$1"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in *) shift ;; esac
+    done
+    st="$(awk -F= -v n="$num" '$1==n {print $2}' "${GH_STUB_STATES:-/dev/null}" 2>/dev/null || true)"
+    case "$st" in
+      FAIL) echo "stub: issue view 500" >&2; exit 1 ;;
+      "")   echo "stub gh: no canned state for issue $num" >&2; exit 1 ;;
+      *)    jq -nc --arg s "$st" '{state:$s}' ;;
+    esac ;;
+  "issue close")
+    shift 2; num="$1"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --comment) echo "COMMENT:$2" >> "$GH_STUB_LOG.close"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    echo "CLOSE:$num" >> "$GH_STUB_LOG.close"
+    if [[ "${GH_STUB_CLOSE_FAIL:-0}" == "1" ]]; then echo "stub: issue close 500" >&2; exit 1; fi
+    exit 0 ;;
   "issue create")
     shift 2
     while [[ $# -gt 0 ]]; do
@@ -369,9 +412,106 @@ behav_check() {
   return 0
 }
 
+# ---- drain behavioural harness (#9513) -------------------------------------------------
+# run_drain <workflow> <issues-json> <states-file> [list-fail] [close-fail]
+# The states file maps target PR numbers to `gh issue view --json state` results:
+# one `NUM=STATE` line each; `NUM=FAIL` simulates a view error (must fail toward
+# keeping). Closes land in GH_STUB_LOG.close as CLOSE:<issue> + COMMENT:<text>.
+DRAIN_RC=0; DRAIN_CLOSE_LIST=""
+run_drain() {
+  local wf="$1" iss="$2" sts="$3" listfail="${4:-0}" closefail="${5:-0}" f body
+  f="$(python3 "$HELPER" wf "$wf")"
+  body="$WORK/drain-body.sh"
+  jq -r '.steps[] | select(.name == "Drain stale stall issues") | .run' <<<"$f" > "$body"
+  if [[ ! -s "$body" ]]; then DRAIN_RC=64; DRAIN_CLOSE_LIST=""; return; fi
+  rm -f "$WORK/gh.log" "$WORK/gh.log.close" "$WORK/drain.out" "$WORK/drain.err"
+  env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" GH_REPO="o/r" GH_TOKEN=x RUN_URL="https://run/x" \
+    GH_STUB_LOG="$WORK/gh.log" GH_STUB_ISSUES="$iss" GH_STUB_STATES="$sts" \
+    GH_STUB_LIST_FAIL="$listfail" GH_STUB_CLOSE_FAIL="$closefail" \
+    bash "$body" >"$WORK/drain.out" 2>"$WORK/drain.err"
+  DRAIN_RC=$?
+  DRAIN_CLOSE_LIST="$(grep '^CLOSE:' "$WORK/gh.log.close" 2>/dev/null | cut -d: -f2 | tr '\n' ' ' || true)"
+  DRAIN_ALL="$(cat "$WORK/drain.out" "$WORK/drain.err" 2>/dev/null || true)"
+}
+
+stall_title() { printf 'merge-queue stall: PR #%s pending >45m (suspected, verify first)' "$1"; }
+
+# drain_check <workflow>: executes the real drain step body against canned issues.
+# 0 = every drain behaviour holds.
+drain_check() {
+  local wf="$1" iss="$WORK/drain-issues.json" sts="$WORK/drain-states.txt"
+  REASON=""
+
+  # An OPEN target is kept — the close decision is the whole guard, so this arm
+  # runs first: a mutation that closes everything REDs here before the merged arm.
+  { issue 8 OPEN merge-queue-stall "$(stall_title 101)"; } | issues_json > "$iss"
+  printf '101=OPEN\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ "$DRAIN_RC" -eq 0 && -z "$DRAIN_CLOSE_LIST" ]] \
+    || { REASON="open target's stall issue was drained (closes=$DRAIN_CLOSE_LIST rc=$DRAIN_RC)"; return 1; }
+
+  # A MERGED target drains.
+  printf '101=MERGED\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ "$DRAIN_RC" -eq 0 && "$DRAIN_CLOSE_LIST" == *"8"* ]] \
+    || { REASON="merged target's stall issue was not drained (closes=$DRAIN_CLOSE_LIST rc=$DRAIN_RC)"; return 1; }
+
+  # A CLOSED-unmerged target drains too.
+  printf '101=CLOSED\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ "$DRAIN_CLOSE_LIST" == *"8"* ]] \
+    || { REASON="closed-unmerged target's stall issue was not drained"; return 1; }
+
+  # The close is per-issue: a merged sibling drains while the open one stays.
+  { issue 8 OPEN merge-queue-stall "$(stall_title 101)";
+    issue 9 OPEN merge-queue-stall "$(stall_title 102)";
+    issue 10 OPEN merge-queue-stall "hand-filed note with no PR anchor"; } | issues_json > "$iss"
+  printf '101=MERGED\n102=OPEN\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ "$DRAIN_CLOSE_LIST" == *"8"* && "$DRAIN_CLOSE_LIST" != *"9"* && "$DRAIN_CLOSE_LIST" != *"10"* ]] \
+    || { REASON="mixed sweep did not close exactly the merged-target issue (closes=$DRAIN_CLOSE_LIST)"; return 1; }
+
+  # A title without the filed 'PR #N pending' anchor is never examined or closed.
+  { issue 10 OPEN merge-queue-stall "hand-filed note with no PR anchor"; } | issues_json > "$iss"
+  : > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ "$DRAIN_RC" -eq 0 && -z "$DRAIN_CLOSE_LIST" \
+     && "$(grep -c 'issue view' "$WORK/gh.log" 2>/dev/null || true)" -eq 0 ]] \
+    || { REASON="a non-filed-title stall issue was examined or closed (closes=$DRAIN_CLOSE_LIST)"; return 1; }
+
+  # An unreadable target state fails toward keeping, with a warning.
+  { issue 8 OPEN merge-queue-stall "$(stall_title 101)"; } | issues_json > "$iss"
+  printf '101=FAIL\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ "$DRAIN_RC" -eq 0 && -z "$DRAIN_CLOSE_LIST" && "$DRAIN_ALL" == *"warning"* ]] \
+    || { REASON="an unreadable target state did not fail toward keeping (closes=$DRAIN_CLOSE_LIST)"; return 1; }
+
+  # An enumeration failure fails OPEN: sanitized ::error:: and zero closes.
+  printf '101=MERGED\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts" 1
+  [[ "$DRAIN_RC" -eq 0 && -z "$DRAIN_CLOSE_LIST" && "$DRAIN_ALL" == *"::error::"* ]] \
+    || { REASON="a failed enumeration did not fail open with ::error:: (closes=$DRAIN_CLOSE_LIST)"; return 1; }
+
+  # Label scope: an other-label issue with a stall-shaped title is never drained.
+  { issue 12 OPEN other-label "$(stall_title 105)"; } | issues_json > "$iss"
+  printf '105=MERGED\n' > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ -z "$DRAIN_CLOSE_LIST" ]] \
+    || { REASON="an issue outside the merge-queue-stall label was drained"; return 1; }
+
+  # The -L 50 bound emits a cap notice when the sweep hits it.
+  { for i in $(seq 1 51); do issue "$i" OPEN merge-queue-stall "$(stall_title 9$i)"; done; } | issues_json > "$iss"
+  { for i in $(seq 1 51); do echo "9$i=OPEN"; done; } > "$sts"
+  run_drain "$wf" "$iss" "$sts"
+  [[ -z "$DRAIN_CLOSE_LIST" && "$DRAIN_ALL" == *"::notice::"* ]] \
+    || { REASON="the -L 50 enumeration cap did not emit a ::notice::"; return 1; }
+  return 0
+}
+
 # ---- rows ---------------------------------------------------------------------------------------
 if structural_check "$WF_REAL"; then pass "S0 real workflow: structural invariants hold"; else fail "S0 real workflow: structural invariants hold ($REASON)"; fi
 if behav_check "$WF_REAL"; then pass "B0 real workflow: executed run body behaves on canned queues"; else fail "B0 real workflow: executed run body behaves on canned queues ($REASON)"; fi
+if drain_check "$WF_REAL"; then pass "B1 real workflow: drain step closes only issues whose target PR left OPEN"; else fail "B1 real workflow: drain step behaves ($REASON)"; fi
 
 # Derivation sanity: the .tf numbers are real and the relation is not vacuous.
 if [[ "$TF_TIMEOUT" -gt 0 && "$TF_BUILD" -ge 1 ]]; then pass "D0 derived tf timeout=$TF_TIMEOUT build window=$TF_BUILD (positive integers)"; else fail "D0 derived tf values"; fi
@@ -398,6 +538,9 @@ if grep -q 'FALSE POSITIVES ARE POSSIBLE' "$WF_REAL" && grep -q 'SUSPECTED stall
 else
   fail "S12 header states the false-positive possibility and the threshold-below-CI-maximum fact"
 fi
+chk "S13 drain step exists, gated on if: always()" 'any(.steps[]; .name == "Drain stale stall issues" and .if == "always()")'
+chk "S14 drain enumeration is a bounded label-scoped --json list" 'any(.runs[]; test("gh issue list") and test("\\-L 50") and test("--label merge-queue-stall") and test("--json number,title"))'
+chk "S15 drain reads the target state before closing" 'any(.runs[]; test("gh issue view") and test("--json state") and test("gh issue close"))'
 
 # ---- mutation engine ----------------------------------------------------------------------------
 # mutate <label> <engine: structural|behav> <expected-reason-regex> <python-expr over s (str) returning str>
@@ -422,10 +565,10 @@ PY
   fi
 }
 
-# Positive control: an UNMUTATED sandbox copy must be green on both engines, so a sandbox-harness
+# Positive control: an UNMUTATED sandbox copy must be green on all engines, so a sandbox-harness
 # fault cannot manufacture the RED verdicts below.
 cp "$WF_REAL" "$SB/control.yml"
-if structural_check "$SB/control.yml" && behav_check "$SB/control.yml"; then pass "M0 positive control: unmutated sandbox copy is GREEN on both engines"; else fail "M0 positive control ($REASON)"; fi
+if structural_check "$SB/control.yml" && behav_check "$SB/control.yml" && drain_check "$SB/control.yml"; then pass "M0 positive control: unmutated sandbox copy is GREEN on all engines"; else fail "M0 positive control ($REASON)"; fi
 
 mutate "M1 threshold raised to the timeout -> RED" structural 'threshold 60 >= check_response_timeout_minutes' \
   "s.replace(\"STALL_THRESHOLD_MINUTES: '45'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\")"
@@ -494,6 +637,20 @@ mutate "Q13 title no longer says the stall is suspected -> RED" behav 'does not 
   "s.replace(' (suspected, verify first)', '')"
 mutate "Q14 body no longer opens with the SUSPECTED caveat -> RED" behav 'suspected / healthy-slow-build caveat' \
   "s.replace('SUSPECTED merge-queue stall (needs verification)', 'Merge-queue stall')"
+
+# ---- drain mutations (#9513): the drain engine executes the real drain run body ---------
+mutate "MD1 drain step renamed -> RED (structural)" structural 'drain step' \
+  "s.replace('name: Drain stale stall issues', 'name: Drain something else')"
+mutate "MD2 drain loses if: always() -> RED (structural)" structural 'always' \
+  "s.replace('        if: always()\\n', '')"
+mutate "MD3 drain drops the state read -> RED (merged target kept)" drain 'merged target' \
+  "s.replace('gh issue view ', 'echo ')"
+mutate "MD4 drain closes OPEN targets -> RED" drain 'open target' \
+  "s.replace('\"\$state\" != \"OPEN\"', '\"\$state\" == \"OPEN\"')"
+mutate "MD5 drain drops the label scope -> RED" drain 'outside the merge-queue-stall label' \
+  "s.replace('--json number,title --label merge-queue-stall', '--json number,title')"
+mutate "MD6 drain drops the -L 50 bound -> RED" drain 'cap' \
+  "s.replace('-L 50 ', '')"
 
 # ---- controls: the mutation engine and the chk helper must FAIL on inputs that must fail ---------------
 # control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input that
