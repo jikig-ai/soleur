@@ -89,6 +89,8 @@ No architectural decision: a static marketing section. `model.c4` does not model
 
 ## Approved copy (spec FR1a as amended by the plan-gate decisions)
 
+> **Superseded 2026-10-06 (CLO review of the built text, #9577):** the wording below is the pre-CLO copy. The company name in the brief card, the H2, the Legal and Marketing lines, caption line 1 and caption line 2, and the figure name were all amended; the authority is the "FR1a/FR2 amendment (CLO review)" paragraph in `knowledge-base/project/specs/feat-homepage-demo-9577/spec.md` and the shipped `plugins/soleur/docs/_data/fanoutDemo.js`, pinned verbatim by `plugins/soleur/test/fanout-demo-drift.test.ts`. Do not paste from this block.
+
 Label `How a brief reaches the departments` (CSS-uppercased). Visible tag `Illustrative example · sample data`. H2 `One brief reaches the departments it concerns. You keep the final say.` Brief card eyebrow `Founder brief`, text `Fernlight is adding shared reminders. Launch it to current customers as a paid add-on.` Rows (department order unchanged):
 
 | Department | Status | Line |

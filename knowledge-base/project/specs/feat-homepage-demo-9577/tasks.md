@@ -28,7 +28,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-homepage-fanout-demo-plan.md
 
 ## Phase 4 — Review gates and pre-merge records
 
-- [ ] 4.1 CLO review of the built text
+- [x] 4.1 CLO review of the built text (verdict PASS-WITH-EDITS 2026-10-06, edits applied in bae62205d5; verdict recorded in the spec amendment)
 - [x] 4.2 Spec amendment is already recorded; mark wireframe PNGs 13–15 superseded
 - [x] 4.3 Pre-merge bundled-change line in the `brand-guide.md` hero-CTA note
 - [x] 4.4 Comment the attribution rule on #9588
