@@ -22,6 +22,7 @@ PR body uses `Ref #9217`, `Ref #7005`, `Ref #6601`, `Ref #7376`, `Ref #9482`; ne
 **Method:** the plan-review panel (DHH, Kieran, code-simplicity, CTO devex) served as the review fan-out; the deepen gates 4.5-4.12 were run mechanically; every cited issue, PR, rule id, path and command was re-verified live (below). No additional per-section research agents were spawned: the Phase 1 research already read the guard, the three user_data renders, the apply workflows and the pin sites directly.
 
 ### Key improvements applied
+
 1. Corrected a false claim: `scripts/check-deploy-script-parity.sh` does not tie the two `_gak_ref_ok` copies; the `GAK_BOTH` rows of `ci-deploy.test.sh` do (Kieran P1).
 2. The real-table probe now runs `scan_sweep` on a scratch root, so `SWEEP_PATHSPEC` and `PATTERN_V2` are exercised and the "zero rule" for `.github` and `lefthook.yml` is proven, not only the verdict (Kieran P1).
 3. Mutation row 6 inserted below the gated rows (above them it was masked by a stale-deferral red), and rows 2, 3, 4, 7 demoted to one-off hand mutations (simplicity P1).
