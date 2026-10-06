@@ -179,6 +179,73 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: ASSERT-FAILED branch did not emit+halt as expected (got: $SENTINEL_OUT)"
 fi
 
+# --- #7797 hardening: xtrace refusal (the probe ACQUIRES a live DSN via `doppler secrets get`) ----
+# Behavioural: the REAL probe runs against PATH stubs, so a refusal is observed rather than grepped.
+# Unconditional on purpose: a `${VAR:+x}` hatch would be open by construction since the credential is
+# acquired at runtime. The empty call log below proves the refusal precedes every probe step AND the
+# `trap emit_fail EXIT` (an armed trap would call the doppler stub on exit).
+echo "-- xtrace refusal (#7797) --"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+ENV_BIN="$(command -v env || true)"; BASH_BIN="$(command -v bash || true)"; TIMEOUT_BIN="$(command -v timeout || true)"
+STUBS="$(mktemp -d)"; trap 'rm -rf "$STUBS"' EXIT
+STUB_CALLS="$STUBS/calls"
+mk_stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$STUBS/$1"; chmod +x "$STUBS/$1"; }
+LOGLINE='printf "%s\t%s\n" "$(basename "$0")" "$*" >> "$STUB_CALLS"'
+mk_stub docker "$LOGLINE
+case \"\$1\" in
+  ps) echo soleur-web-platform ;;
+  exec) case \"\$*\" in *api.github.com*) exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
+  *) echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
+esac"
+mk_stub nft "$LOGLINE
+echo 'jump SOLEUR-EGRESS'"
+mk_stub systemctl "$LOGLINE
+exit 0"
+mk_stub sleep "exit 0"
+mk_stub doppler "$LOGLINE
+echo 'https://synthetickey@o0.ingest.invalid/42'"
+mk_stub curl "$LOGLINE
+exit 0"
+printf 'set -x\n' > "$STUBS/xt.env"
+RC=0; ERR=""; OUT=""
+# run_probe <env words...> -- <bash flags...>: runs the real probe, resets the call log first.
+run_probe() {
+  local -a envw=() flags=(); local seen=false w
+  for w in "$@"; do
+    if [[ "$w" == "--" ]]; then seen=true; elif [[ "$seen" == true ]]; then flags+=("$w"); else envw+=("$w"); fi
+  done
+  : > "$STUB_CALLS"
+  RC=0
+  OUT="$("$ENV_BIN" PATH="$STUBS:$PATH" STUB_CALLS="$STUB_CALLS" ${envw[@]+"${envw[@]}"} \
+    "$TIMEOUT_BIN" 20 "$BASH_BIN" ${flags[@]+"${flags[@]}"} "$PROBE" 2>"$STUBS/err")" || RC=$?
+  ERR="$(cat "$STUBS/err" 2>/dev/null || true)"
+}
+check() {  # check <description> <cond>   (eval'd; same shape as the other suites)
+  if eval "$2"; then PASS=$((PASS + 1)); echo "  PASS: $1"; else FAIL=$((FAIL + 1)); echo "  FAIL: $1 (condition: $2)"; fi
+}
+for form in bash-x SHELLOPTS BASH_ENV; do
+  case "$form" in
+    bash-x)    run_probe -- -x ;;
+    SHELLOPTS) run_probe SHELLOPTS=xtrace -- ;;
+    BASH_ENV)  run_probe BASH_ENV="$STUBS/xt.env" -- ;;
+  esac
+  check "P-X1[$form] exits 78 (got rc=$RC; first stderr line: $(printf '%s' "$ERR" | sed -n '1p'))" '[[ "$RC" -eq 78 ]]'
+  check "P-X1[$form] a NON-'+' stderr line carries the refusal message" \
+    '[[ "$(grep -v "^+" <<<"$ERR" | grep -c "refusing to run under xtrace" || true)" -ge 1 ]]'
+  check "P-X1[$form] no stub was called (refusal precedes every probe step and the EXIT trap)" '[[ ! -s "$STUB_CALLS" ]]'
+done
+run_probe --
+check "P-X1c untraced run is not refused: rc 0 and prints egress-enforce-ok (positive control)" \
+  '[[ "$RC" -eq 0 && "$OUT" == *egress-enforce-ok* ]]'
+check "P-X1c the clean-success path never acquires the DSN (doppler and curl on the host never called)" \
+  '[[ "$(grep -c "^doppler" "$STUB_CALLS" || true)" -eq 0 && "$(grep -c "^curl" "$STUB_CALLS" || true)" -eq 0 ]]'
+check "P-X1c no stub refused an unexpected argv" '[[ "$(grep -c "^REFUSED" "$STUB_CALLS" || true)" -eq 0 ]]'
+
+echo "-- drawdown (#7797): not grandfathered in the credential-refusal baseline --"
+check "P-L the probe's repo path is absent from the A/B/C baseline" \
+  '[[ "$(grep -cxF "apps/web-platform/infra/cron-egress-enforce-probe.sh" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt")" -eq 0 ]]'
+check "P-L non-vacuity: the baseline is readable and non-empty" '[[ -s "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt" ]]'
+
 echo ""
 echo "RESULT: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]] || exit 1
