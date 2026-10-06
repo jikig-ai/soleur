@@ -169,6 +169,17 @@ def luks_passphrase_addrs: [
   "doppler_secret.workspaces_luks_web_key"
 ];
 
+# The two addresses where a CREATE also halts (the closing change for #9372). The web-class pair was created by a
+# single-use workflow that is now retired, so a plan that CREATES either entry means state lost it, and applying
+# that would mint a new passphrase over the live one. The set is deliberately NARROWER than luks_passphrase_addrs:
+# a create at the other four stays legal (the inngest pair has its own recut route, and web-1's pair already exists
+# with no creation flow). Widening it is a tracked follow-up, not an edit to make here. Matched through
+# luks_passphrase_base like the six-address list, so a for_each-indexed address counts too.
+def luks_passphrase_create_halt_addrs: [
+  "random_password.workspaces_luks_web",
+  "doppler_secret.workspaces_luks_web_key"
+];
+
 # The resource address with a leading module path and a trailing instance index removed, so
 # `random_password.workspaces_luks_web["web-2"]`, `...[0]` and `module.x.random_password.workspaces_luks_web`
 # all read as `random_password.workspaces_luks_web`. Used ONLY by luks_passphrase_rotations: every other counter
@@ -423,8 +434,10 @@ def destroyed_at($addr):
   # that re-links it cannot rotate it silently. `[ack-destroy]` cannot discriminate a passphrase replace from any
   # other delete in the same merge, so the workspaces members get the same non-ackable treatment as the inngest
   # pair, and for the same reason: a rotated value leaves the LUKS header cut from the old one, no copy of the old
-  # value survives (Terraform state keeps only the latest), and the host has no console. A first CREATE of the
-  # web-class pair stays legal (no web-class volume is formatted yet). Rotating a populated volume is a header
+  # value survives (Terraform state keeps only the latest), and the host has no console. A CREATE of the
+  # web-class pair halts as well (luks_passphrase_create_halt_addrs): the workflow that created it is retired,
+  # so a planned create means state lost an entry, and recovery is a reviewed import of the existing entry,
+  # never a re-create. A create at the other four addresses stays legal. Rotating a populated volume is a header
   # re-key (`cryptsetup luksChangeKey`) followed by an intentional state change under review, never a Terraform
   # replace; the apply job's HALT text says so.
   #
@@ -452,9 +465,10 @@ def destroyed_at($addr):
   # That address is in the per-merge `-target=` list, so an unattended merge apply reaches it. The
   # result is a Doppler passphrase the live LUKS header was never cut from: the store is
   # unopenable on the next boot, on a host with no SSH and no console, and the header key is the
-  # only copy. The parity claim below is now true rather than aspirational. A first CREATE is legal and expected
-  # — this volume is being cut to LUKS for the first time, and inngest_volume_recut_gate makes the
-  # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
+  # only copy. The parity claim below is now true rather than aspirational. A first CREATE of THIS (inngest) pair
+  # stays legal and expected — the volume is being cut to LUKS for the first time, and inngest_volume_recut_gate
+  # makes the same three-verb exclusion for the same reason. (A create of the web-class pair is the one exception,
+  # above: it halts, because its creating workflow is retired.) `forget` IS counted: a Terraform 1.7+ state-drop
   # of the passphrase leaves the header cut from a value nothing records any more, which is the
   # stranding hazard wearing a different hat (the same note the retire counters carry at T49).
   # 11th surface (#7695 review F1): AN ENTRY WHOSE VERB SET CANNOT BE READ, AT ANY ADDRESS.
@@ -504,12 +518,19 @@ def destroyed_at($addr):
           # gate scripts via plan-gate-preamble.sh, which does not run on this workflow path.
           #
           # An entry AT THESE ADDRESSES whose verb set cannot be read is not evidence of safety, so
-          # it counts. `["no-op"]` and `["create"]` are decidable and legitimately score 0 — no-op
-          # is the routine merge reading, and a first create is this volume being cut to LUKS for
-          # the first time.
+          # it counts. `["no-op"]` is decidable and legitimately scores 0 — it is the routine merge
+          # reading — and so is a `["create"]` at the four addresses that are NOT in
+          # luks_passphrase_create_halt_addrs (a first create of the inngest pair or of web-1's pair).
+          # A create at the web-class pair counts: its creating workflow is retired, so a planned create
+          # means state lost the entry. The base address goes through luks_passphrase_base like the
+          # membership test above, so an indexed or module-prefixed spelling counts too.
           ((.change.actions | type) != "array")
           or ((.change.actions | length) == 0)
           or (.change.actions | any(. == "update" or . == "delete" or . == "forget"))
+          or (
+            (.change.actions | any(. == "create"))
+            and IN(.address | strings | luks_passphrase_base; luks_passphrase_create_halt_addrs[])
+          )
         ) ]
     | length
   ),
