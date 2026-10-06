@@ -9,9 +9,10 @@
 // `.feature-grid`, `.testimonial-row`, `.product-spec-card`).
 //
 // This static check enumerates every class used in `pages/**` and `_includes/**`
-// that matches an above-fold prefix pattern, then asserts each class has at
-// least one CSS rule in the inline `<style>` block of any built page (the inline
-// block is identical across pages).
+// that matches an above-fold prefix pattern, PLUS every class inside the homepage
+// hero that the full stylesheet styles (derived from the hero section, not listed),
+// then asserts each class has at least one CSS rule in the inline `<style>` block of
+// any built page (the inline block is identical across pages).
 //
 // Run AFTER `npx @11ty/eleventy` (needs _site/) and before the screenshot gate.
 //
@@ -99,9 +100,12 @@ function listFiles(root, ext) {
   return out;
 }
 
+// class="a b", class='a b' or class=a: the value, in whichever form it is written.
+const CLASS_ATTR_RE = /\bclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+const classValue = (m) => m[1] ?? m[2] ?? m[3] ?? "";
+
 function extractClassesFromTemplates() {
   const used = new Map(); // class -> Set<file>
-  const classAttrRe = /class\s*=\s*"([^"]+)"/g;
   const files = [
     ...TEMPLATE_ROOTS.flatMap((root) => listFiles(root, ".njk")),
     ...TEMPLATE_FILES,
@@ -114,9 +118,8 @@ function extractClassesFromTemplates() {
   }
   for (const file of files) {
     const src = readFileSync(file, "utf8");
-    let m;
-    while ((m = classAttrRe.exec(src)) !== null) {
-      for (const cls of m[1].split(/\s+/).filter(Boolean)) {
+    for (const m of src.matchAll(CLASS_ATTR_RE)) {
+      for (const cls of classValue(m).split(/\s+/).filter(Boolean)) {
         // Skip Nunjucks expressions like {{ foo }} that may appear inside class=""
         if (cls.includes("{") || cls.includes("}")) continue;
         // Skip anything that doesn't look like a single CSS class token
@@ -174,11 +177,28 @@ function stripCssComments(css) {
 }
 function heroClassesStyledByStylesheet() {
   const src = readFileSync(TEMPLATE_FILES[0], "utf8");
-  const hero = src.match(/<section class="landing-hero">([\s\S]*?)<\/section>/);
-  if (!hero) {
-    console.error("check-critical-css-coverage: <section class=\"landing-hero\"> not found in index.njk");
+  // The hero ends at ITS closing tag: a nested <section> must not cut the class set short.
+  const open = src.match(/<section\b[^>]*\bclass\s*=\s*["']?landing-hero["'\s>][^>]*>/);
+  if (!open) {
+    console.error("check-critical-css-coverage: the landing-hero <section> was not found in index.njk");
     process.exit(2);
   }
+  let depth = 1;
+  let end = -1;
+  const tags = /<(\/?)section\b/g;
+  tags.lastIndex = open.index + open[0].length;
+  for (let t = tags.exec(src); t !== null; t = tags.exec(src)) {
+    depth += t[1] ? -1 : 1;
+    if (depth === 0) {
+      end = t.index;
+      break;
+    }
+  }
+  if (end === -1) {
+    console.error("check-critical-css-coverage: the landing-hero <section> is never closed in index.njk");
+    process.exit(2);
+  }
+  const hero = [null, src.slice(open.index + open[0].length, end)];
   const fullCssPath = resolve(REPO_ROOT, "plugins/soleur/docs/css/style.css");
   if (!existsSync(fullCssPath)) {
     console.error(`check-critical-css-coverage: stylesheet not found: ${fullCssPath}`);
@@ -186,8 +206,8 @@ function heroClassesStyledByStylesheet() {
   }
   const fullCss = stripCssComments(readFileSync(fullCssPath, "utf8"));
   const classes = new Set();
-  for (const m of hero[1].matchAll(/class\s*=\s*"([^"]+)"/g)) {
-    for (const cls of m[1].split(/\s+/).filter(Boolean)) {
+  for (const m of hero[1].matchAll(CLASS_ATTR_RE)) {
+    for (const cls of classValue(m).split(/\s+/).filter(Boolean)) {
       if (/^[A-Za-z][\w-]*$/.test(cls)) classes.add(cls);
     }
   }

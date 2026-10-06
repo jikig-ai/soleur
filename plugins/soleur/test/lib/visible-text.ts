@@ -26,15 +26,22 @@ const ENTITIES: Record<string, string> = {
   amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
   rsquo: "’", lsquo: "‘", ldquo: "“", rdquo: "”", mdash: "—",
   ndash: "–", hellip: "…", rarr: "→",
-  ensp: " ", emsp: " ", thinsp: " ", shy: "", zwj: "", zwnj: "",
+  ensp: " ", emsp: " ", thinsp: " ", hairsp: " ", numsp: " ", puncsp: " ",
+  NonBreakingSpace: " ", shy: "", zwj: "", zwnj: "", ZeroWidthSpace: "",
 };
 
-// Characters a browser renders as nothing: soft hyphen, zero-width space and
-// joiners, word joiner, BOM. Built from char codes so the source stays ASCII.
-const INVISIBLE_RE = new RegExp(
-  "[" + [0xad, 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff].map((c) => String.fromCharCode(c)).join("") + "]",
-  "g",
-);
+// Characters a browser renders as nothing: every Unicode format character
+// (soft hyphen, zero-width space and joiners, LRM/RLM, word joiner, BOM) plus the
+// combining grapheme joiner and the Mongolian vowel separator. Built with a
+// property escape and char codes, so no invisible character sits in this source.
+const INVISIBLE_RE = new RegExp("[\\p{Cf}" + String.fromCharCode(0x34f, 0x180e) + "]", "gu");
+
+// The one place every text arm normalises: visible text, attributes, JSON-LD
+// strings and llms.txt all reach `sentencesOf`, so a hidden character cannot split
+// a word in one arm and not another.
+export function stripInvisible(s: string): string {
+  return s.replace(INVISIBLE_RE, "");
+}
 
 // One pass: `&amp;lt;` becomes the literal text `&lt;`, never `<`.
 export function decodeEntities(s: string): string {
@@ -111,9 +118,14 @@ export function visibleText(html: string): string {
   return decodeEntities(out);
 }
 
+// A sentence ends at [.!?] plus whitespace, unless the next word starts in lower
+// case ("as Inc. reported", "approx. two seats") or the period closes e.g., i.e.
+// or vs. Merging two sentences is the unsafe direction for a guard (a neighbour's
+// "waitlist" would excuse a price), so the rule only declines to split where the
+// continuation is lower case.
 export function sentencesOf(text: string): string[] {
-  return text
-    .split(new RegExp(`${BOUNDARY}+|(?<!\\b(?:e\\.g|i\\.e|vs|etc)\\.)(?<=[.!?])\\s+`, "i"))
+  return stripInvisible(text)
+    .split(new RegExp(`${BOUNDARY}+|(?<!\\b(?:[eE]\\.g|[iI]\\.e|[vV]s)\\.)(?<=[.!?])\\s+(?=[^a-z\\s])`))
     .map((s) => s.replace(/\s+/g, " ").trim())
     .filter((s) => s.length > 0);
 }
@@ -208,7 +220,9 @@ export function openAncestors(html: string, target: number): string[] {
     if (raw.startsWith("</")) {
       const at = stack.map((t) => t.name).lastIndexOf(name);
       if (at !== -1) stack.length = at;
-    } else if (!VOID_TAGS.has(name) && !raw.endsWith("/>")) {
+    } else if (!VOID_TAGS.has(name)) {
+      // `/>` does not close a non-void HTML element (`<div/>` is an open div, and an
+      // unquoted `action=/x/>` ends in one), so only the void list decides.
       stack.push({ name, raw });
     }
   }

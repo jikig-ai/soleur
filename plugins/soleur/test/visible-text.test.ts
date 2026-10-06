@@ -3,7 +3,7 @@
 // review of #9579 found or a property the guards depend on.
 
 import { describe, test, expect } from "bun:test";
-import { decodeEntities, openAncestors, plainText, sentencesOf, tagsOf, visibleText, withoutInert } from "./lib/visible-text";
+import { decodeEntities, openAncestors, plainText, sentencesOf, stripInvisible, tagsOf, visibleText, withoutInert } from "./lib/visible-text";
 
 describe("visible-text scanner", () => {
   test("a heading without a final period does not merge with the next block", () => {
@@ -51,18 +51,28 @@ describe("visible-text scanner", () => {
     expect(sentencesOf(visibleText(html)).some((s) => /Hosted runs on your Claude plan/.test(s))).toBe(true);
   });
 
-  // One row per block-level family: a boundary missing from any of them lets a
-  // plan sentence in one item borrow a self-host marker from its neighbour.
-  test.each([
-    ["li", "<ul><li>Pay with your Claude Pro plan</li><li>Self-hosted is free</li></ul>"],
-    ["td", "<table><tr><td>Pay with your Claude Pro plan</td><td>Self-hosted is free</td></tr></table>"],
-    ["th", "<table><tr><th>Pay with your Claude Pro plan</th><th>Self-hosted is free</th></tr></table>"],
-    ["dt/dd", "<dl><dt>Pay with your Claude Pro plan</dt><dd>Self-hosted is free</dd></dl>"],
-    ["summary", "<details><summary>Pay with your Claude Pro plan</summary><p>Self-hosted is free</p></details>"],
-    ["br", "<p>Pay with your Claude Pro plan<br>Self-hosted is free</p>"],
-    ["figcaption", "<figure><figcaption>Pay with your Claude Pro plan</figcaption><p>Self-hosted is free</p></figure>"],
-  ])("a %s boundary separates neighbouring sentences", (_name, html) => {
-    expect(sentencesOf(visibleText(html))).toEqual(["Pay with your Claude Pro plan", "Self-hosted is free"]);
+  // One row per block-level tag, with BARE text on both sides (a neighbouring <p> is
+  // itself a boundary and would hide a missing member). The list is written here,
+  // not read from the scanner, so deleting a member from the scanner fails a row.
+  const BLOCK = [
+    "address", "article", "aside", "blockquote", "dd", "details", "div", "dl", "dt",
+    "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+    "header", "li", "main", "nav", "ol", "p", "section", "summary", "table", "td",
+    "th", "tr", "ul",
+  ];
+  test.each(BLOCK)("a <%s> boundary separates bare neighbouring text", (tag) => {
+    expect(sentencesOf(visibleText(`Pay with your Claude Pro plan<${tag}>Self-hosted is free</${tag}>Next thing`))).toEqual([
+      "Pay with your Claude Pro plan",
+      "Self-hosted is free",
+      "Next thing",
+    ]);
+  });
+
+  test.each(["br", "hr"])("a void <%s> separates bare neighbouring text", (tag) => {
+    expect(sentencesOf(visibleText(`Pay with your Claude Pro plan<${tag}>Self-hosted is free`))).toEqual([
+      "Pay with your Claude Pro plan",
+      "Self-hosted is free",
+    ]);
   });
 
   test("inline tags are not boundaries", () => {
@@ -72,13 +82,18 @@ describe("visible-text scanner", () => {
     expect(sentencesOf(visibleText("<p>Hosted <button>uses</button> your <label>Claude plan</label>.</p>"))).toEqual([
       "Hosted uses your Claude plan.",
     ]);
+    for (const tag of ["a", "abbr", "b", "code", "em", "i", "mark", "small", "span", "strong", "sub", "sup", "time", "u"]) {
+      expect(sentencesOf(visibleText(`Hosted <${tag}>uses</${tag}> your Claude plan`)), `<${tag}> is inline`).toEqual([
+        "Hosted uses your Claude plan",
+      ]);
+    }
   });
 
-  test("every named entity decodes to its character", () => {
+  test("every named entity (visible and invisible) decodes to its character", () => {
     const table: Record<string, string> = {
       amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", rsquo: "\u2019", lsquo: "\u2018", ldquo: "\u201c",
       rdquo: "\u201d", mdash: "\u2014", ndash: "\u2013", hellip: "\u2026", rarr: "\u2192", ensp: " ", emsp: " ",
-      thinsp: " ",
+      thinsp: " ", hairsp: " ", numsp: " ", puncsp: " ", NonBreakingSpace: " ", shy: "", zwj: "", zwnj: "", ZeroWidthSpace: "",
     };
     for (const [name, ch] of Object.entries(table)) {
       expect(decodeEntities(`a&${name};b`).replace(/\s/g, " "), `&${name};`).toBe(`a${ch}b`.replace(/\s/g, " "));
@@ -86,13 +101,18 @@ describe("visible-text scanner", () => {
     expect(decodeEntities("a&nbsp;b").replace(/\s/g, " ")).toBe("a b");
   });
 
-  test("characters a browser renders as nothing do not split a word", () => {
-    const soft = String.fromCharCode(0xad);
-    const zw = String.fromCharCode(0x200b);
-    expect(plainText(`<p>pri&shy;vate pri&#173;vate pri${soft}vate pri${zw}vate pri&zwj;vate pri&zwnj;vate</p>`)).toBe(
-      "private private private private private private",
-    );
-  });
+  // Every character in the strip set, spelled as a literal and as a numeric reference.
+  // Built from char codes so no invisible character sits in this test's source.
+  test.each([0xad, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060, 0xfeff, 0x34f, 0x180e])(
+    "U+%i does not split a word, as a literal, as a reference and in a sentence-only arm",
+    (code) => {
+      const ch = String.fromCharCode(code);
+      expect(plainText(`<p>pri${ch}vate</p>`), "literal in markup").toBe("private");
+      expect(plainText(`<p>pri&#${code};vate</p>`), "numeric reference in markup").toBe("private");
+      expect(sentencesOf(`pri${ch}vate data`), "JSON-LD / llms.txt arm (sentencesOf only)").toEqual(["private data"]);
+      expect(stripInvisible(`a${ch}b`)).toBe("ab");
+    },
+  );
 
   test("space-class entities become spaces so a phrase still matches", () => {
     expect(plainText("<p>Claude&ensp;plan Claude&thinsp;plan Claude&emsp;plan</p>")).toBe(
@@ -100,18 +120,47 @@ describe("visible-text scanner", () => {
     );
   });
 
-  test("the sentence split does not cut at e.g., i.e., vs. or etc.", () => {
+  test("the sentence split keeps e.g., i.e. and vs. inside a sentence and cuts before a capital", () => {
     expect(sentencesOf("Self-hosted uses a plan, e.g. hosted ones too. Next one.")).toEqual([
       "Self-hosted uses a plan, e.g. hosted ones too.",
       "Next one.",
     ]);
     expect(sentencesOf("A vs. B differ. Done.")).toEqual(["A vs. B differ.", "Done."]);
     expect(sentencesOf("Pro, i.e. paid. Free.")).toEqual(["Pro, i.e. paid.", "Free."]);
+    expect(sentencesOf("E.g. hosted ones. Free.")).toEqual(["E.g. hosted ones.", "Free."]);
+  });
+
+  test("a period before a lower-case word does not end the sentence; before a capital it does", () => {
+    expect(sentencesOf("As Inc. reported, hosted is private. Done.")).toEqual(["As Inc. reported, hosted is private.", "Done."]);
+    expect(sentencesOf("Plans, API, etc. Self-hosted is free.")).toEqual(["Plans, API, etc.", "Self-hosted is free."]);
+    expect(sentencesOf("Hosted costs $49 per month, etc. Coming soon.")).toEqual(["Hosted costs $49 per month, etc.", "Coming soon."]);
   });
 
   test("tagsOf honours quoted > and skips comments and script bodies", () => {
     const html = '<a title="a>b" href="/x">t</a><!-- <b> --><script>if (a < b) {}</script><img alt="x">';
     expect(tagsOf(html).map((t) => t.raw)).toEqual(['<a title="a>b" href="/x">', "</a>", "<script>", "</script>", '<img alt="x">']);
+  });
+
+  test.each(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"])(
+    "a void <%s> is never listed as an open ancestor",
+    (tag) => {
+      const html = `<section><${tag}><span id="t"></span></section>`;
+      expect(openAncestors(html, html.indexOf('<span id="t">'))).toEqual(["<section>"]);
+    },
+  );
+
+  test("`/>` does not close a non-void element, so an unquoted value ending in a slash cannot hide a hidden form", () => {
+    const f = '<form hidden action=/x/><span id="t"></span></form>';
+    expect(openAncestors(f, f.indexOf('<span id="t">'))).toEqual(["<form hidden action=/x/>"]);
+    const d = '<div hidden/><span id="t"></span></div>';
+    expect(openAncestors(d, d.indexOf('<span id="t">'))).toEqual(["<div hidden/>"]);
+  });
+
+  test("a closing tag with no opener is ignored; a closing tag pops everything opened inside it", () => {
+    const stray = '<section></aside><span id="t"></span></section>';
+    expect(openAncestors(stray, stray.indexOf('<span id="t">'))).toEqual(["<section>"]);
+    const nested = '<section><div><p></section><span id="t"></span>';
+    expect(openAncestors(nested, nested.indexOf('<span id="t">'))).toEqual([]);
   });
 
   test("openAncestors lists the still-open tags, outermost first, ignoring void and closed ones", () => {
