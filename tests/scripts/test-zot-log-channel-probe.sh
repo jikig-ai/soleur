@@ -199,8 +199,8 @@ run_probe() {
     BETTERSTACK_QUERY_USERNAME="synthetic-user" \
     BETTERSTACK_QUERY_PASSWORD="synthetic-not-a-real-secret" \
     ZOT_LOG_7440_QUERY_BIN="$STUB" \
-    ZOT_LOG_7440_BASELINE_BOOT_ID="$BASELINE_BOOT" \
     ZOT_LOG_7440_HOST="$HOSTV" \
+    ZOT_LOG_7440_NOW="$(date -u -d "$DT0" +%s)" \
     STUB_LOG_ROWS="$logrows" STUB_CONTROL_ROWS="$controlrows" STUB_QCALLS="$STUB_QCALLS" \
     "$@" \
     timeout 60 bash "$PROBE" 2>&1) || CASE_RC=$?
@@ -306,8 +306,8 @@ assert "C3c the reported counter value comes from the reporter's own line" \
 # ("ACT, NOT WAIT") at 20:56:32Z, and PASSed unassisted at 20:58:45Z. The shipper is a 4-59/5 cron
 # one-shot, so a host born at 20:54 has its first tick at 20:59 — the escalation fired against a
 # host that had simply never run one. The softening reads the LITERAL -1 the reporter already
-# emits; it adds no clock, because this probe has none (decode_messages drops dt, the boot marker
-# carries no timestamp, and adding one would touch all five call sites of the shared decoder).
+# emits; the softening needs no host-age clock of its own (the probe does carry dt for the
+# boundary and a wall-clock for producer freshness — but the -1 gate deliberately reads neither).
 C3F_CTL="$TMP/c3f.ctl"; control_row_never_ticked "$DRIFTED_BOOT" > "$C3F_CTL"
 run_probe "$EMPTY" "$C3F_CTL"
 assert "C3f last_ok_age_s=-1 still exits 2 (softening is not a pass)" "[[ '$CASE_RC' -eq 2 ]]"
@@ -328,12 +328,14 @@ assert "C3f2 a never-ticked shipper on an OLD host is told to ACT, not to wait" 
 assert "C3f2 uptime is NOT used as host age (zot_uptime_s is container-run age)" \
   "! grep -q 'zot_uptime_s=' <<<\"\$CASE_OUT\""
 
-# C3f3: absence is not youth. A missing zot_uptime_s must not soften.
+# C3f3: absence is not youth. A missing zot_uptime_s must not suppress the ACT framing — the
+# row DOES carry last_ok_age_s=-1, so the additive first-tick note is expected too; the axis is
+# that a field the probe does not read cannot soften or harden the verdict.
 C3F3_CTL="$TMP/c3f3.ctl"
 row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$DRIFTED_BOOT log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 host=$HOSTV" > "$C3F3_CTL"
 run_probe "$EMPTY" "$C3F3_CTL"
-assert "C3f3 a control row without last_ok_age_s=-1 gets no first-tick note" \
-  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+assert "C3f3 an absent zot_uptime_s leaves both the ACT framing AND the first-tick note" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\" && grep -q 'rule out a first tick' <<<\"\$CASE_OUT\""
 
 # C3g: THE REGRESSION GUARD. control_row_predelivery has NO log_shipper_* fields; reading absent
 # as "never ticked" would soften the arm here and silently weaken the escalation C3b pins.
@@ -482,6 +484,10 @@ assert "C14 the probe issues NO separate SOLEUR_ZOT_LOG_BOOT query (the split sp
   "! grep -q 'grep=SOLEUR_ZOT_LOG_BOOT' '$LAST_QCALLS'"
 assert "C14 no query runs on a 72h window (only the one bounded window exists)" \
   "! grep -q 'since=72h' '$LAST_QCALLS'"
+assert "C14 exactly TWO queries are issued (one per channel, one span — cardinality, not spelling)" \
+  "[[ \$(wc -l < '$LAST_QCALLS') -eq 2 ]]"
+assert "C14 every query runs on the same bounded hot window" \
+  "! grep -vq 'since=30m noarchive=1' '$LAST_QCALLS'"
 # Host isolation: source 2457081 is shared, so a boot marker from ANOTHER host can neither
 # select the boot nor count as delivery here.
 C14_OTHER="$TMP/c14.other"; foreign_marker_row "$DRIFTED_BOOT" "2026-08-11 10:01:00.000000" > "$C14_OTHER"
@@ -569,6 +575,7 @@ DT_0930="2026-08-11 09:30:00.000000"
 DT_0950="2026-08-11 09:50:00.000000"
 DT_0955="2026-08-11 09:55:00.000000"
 DT_0956="2026-08-11 09:56:00.000000"
+DT_1005="2026-08-11 10:05:00.000000"
 
 # S1: THE STRADDLE. A leak-shaped envelope row BEFORE the boundary is outside the graded set —
 # the pre-fix probe would exit 1 on it (evidence about a dead host). Post-fix it must neither
@@ -644,10 +651,12 @@ assert "S7 boot_id absent from every stamped row -> exit 3 (no boot can be deriv
 FAKEBIN="$TMP/fakebin"; mkdir -p "$FAKEBIN"
 printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
 run_probe "$S1_LOG" "$S1_CTL" PATH="$FAKEBIN:/usr/bin:/bin"
-assert "S6 an awk that produces NO summary -> exit 3, not a vacuous clean" "[[ '$CASE_RC' -eq 3 ]]"
+assert "S6 an awk that produces NO summary -> exit 3, not a vacuous clean" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'grading pass produced no usable summary' <<<\"$CASE_OUT\""
 printf '#!/bin/sh\necho not-a-summary\n' > "$FAKEBIN/awk"; chmod +x "$FAKEBIN/awk"
 run_probe "$S1_LOG" "$S1_CTL" PATH="$FAKEBIN:/usr/bin:/bin"
-assert "S6 an awk that produces a non-integer summary -> exit 3" "[[ '$CASE_RC' -eq 3 ]]"
+assert "S6 an awk that produces a non-integer summary -> exit 3" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'grading pass produced no usable summary' <<<\"$CASE_OUT\""
 rm -f "$FAKEBIN/awk"
 
 # S8: THE MARKER TIGHTENS THE BOUNDARY to ~provision time. With control rows on the boot at
@@ -666,13 +675,14 @@ assert "S8 the verdict names the marker's boot" "grep -q \"boot=$DRIFTED_BOOT\" 
 # back to the first stamped row at 10:00) — proving the marker moved B0, not something else.
 S8_NOMARK="$TMP/s8nomark.log"; grep -v SOLEUR_ZOT_LOG_BOOT "$S8_LOG" > "$S8_NOMARK"
 run_probe "$S8_NOMARK" "$S8_CTL"
-assert "S8 without the marker the gap row is pre-boundary -> exit 3, not 1" "[[ '$CASE_RC' -eq 3 ]]"
+assert "S8 without the marker the gap row is pre-boundary -> exit 3, not 1" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'ungraded_credential_rows=1' <<<\"$CASE_OUT\""
 
 # S9: A SOLEUR_ZOT_LOG_DROPPED ROW NEVER SELECTS. It carries boot_id but NO host= (verified in
 # cloud-init-registry.yml's ship() call), so it cannot be host-verified. A DROPPED row stamped
 # with a NEWER foreign boot_id must leave the ctl-derived boot in place — one unverifiable row
 # must not get to choose the evidence base.
-S9_LOG="$TMP/s9.log"; dropped_row "$FOREIGN_BOOT" "2026-08-11 10:05:00.000000" > "$S9_LOG"
+S9_LOG="$TMP/s9.log"; dropped_row "$FOREIGN_BOOT" "$DT_1005" > "$S9_LOG"
 run_probe "$S9_LOG" "$S8_CTL"
 assert "S9 a DROPPED row on a foreign newer boot cannot select the evidence base" \
   "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\" && grep -q \"boot=$DRIFTED_BOOT\" <<<\"\$CASE_OUT\""
@@ -688,6 +698,58 @@ assert "S10 an unstamped envelope row on the bounded span still grades -> exit 0
   "[[ '$CASE_RC' -eq 0 ]]"
 assert "S10 the stamped DROPPED row is counted on the derived boot (dropped_rows=1)" \
   "grep -q 'dropped_rows=1' <<<\"\$CASE_OUT\""
+
+# S11: AN UNANCHORED C-CHANNEL ROW NEVER SELECTS OR BOUNDS. --grep SOLEUR_ZOT_DISK is a
+# substring LIKE, so a row that merely CONTAINS the marker — a quoted row, a request-header
+# echo — lands in the control channel. Only a message STARTING with "SOLEUR_ZOT_DISK " is a
+# reporter row; a mid-line mention carrying host=+boot_id= must not pick the evidence base.
+S11_CTL="$TMP/s11.ctl"
+control_row "$DRIFTED_BOOT" 0 "$DT_0950" > "$S11_CTL"
+row "notice forwarder quoting a row: SOLEUR_ZOT_DISK pcent=9 zot_restarts=0 ping_rc=0 host=$HOSTV boot_id=$FOREIGN_BOOT" "$DT_1005" >> "$S11_CTL"
+run_probe "$S8_NOMARK" "$S11_CTL"
+assert "S11 a mid-line SOLEUR_ZOT_DISK mention on the newest dt cannot select the boot" \
+  "[[ '$CASE_RC' -eq 1 ]] && grep -q \"boot=$DRIFTED_BOOT\" <<<\"\$CASE_OUT\" && ! grep -q \"boot=$FOREIGN_BOOT\" <<<\"\$CASE_OUT\""
+# The drag direction: a same-boot mid-line mention EARLY in the window must not pull B0 back
+# past the marker — without the anchor it would un-grade a real pre-marker leak into the span.
+S11B_LOG="$TMP/s11b.log"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP API,headers:{Accept:[*/*],Authorization:[Basic c3ludGhldGljOm5vdC1yZWFsLXNlY3JldA==],User-Agent:[curl/8.5.0]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "2026-08-11 09:40:00.000000" > "$S11B_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S11B_LOG"; done
+boot_marker_row "$DRIFTED_BOOT" "$DT_0955" >> "$S11B_LOG"
+S11_CTL2="$TMP/s11b.ctl"
+control_row "$DRIFTED_BOOT" 0 "$DT0" > "$S11_CTL2"
+row "notice forwarder quoting a row: SOLEUR_ZOT_DISK pcent=9 zot_restarts=0 ping_rc=0 host=$HOSTV boot_id=$DRIFTED_BOOT" "$DT_0900" >> "$S11_CTL2"
+run_probe "$S11B_LOG" "$S11_CTL2"
+assert "S11 a mid-line same-boot mention at an early dt cannot drag B0 before the marker" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'ungraded_credential_rows=1' <<<\"\$CASE_OUT\""
+
+# S12: PRODUCER FRESHNESS. Rows whose newest dt is older than two heartbeat ticks describe a
+# host that stopped emitting — residue must never satisfy the floor into a PASS. The seam is
+# ZOT_LOG_7440_NOW (pinned to DT0 by run_probe): newest row 09:35 against now=10:00 is 1500s
+# stale, over the 600s threshold.
+S12_CTL="$TMP/s12.ctl"; control_row "$DRIFTED_BOOT" 0 "$DT_0930" > "$S12_CTL"
+S12_LOG="$TMP/s12.log"; : > "$S12_LOG"; for _ in $(seq 1 30); do envelope_row "2026-08-11 09:35:00.000000" >> "$S12_LOG"; done
+run_probe "$S12_LOG" "$S12_CTL"
+assert "S12 a window whose newest row is >600s stale -> exit 3 reason=producer_silent, never PASS" \
+  "[[ '$CASE_RC' -eq 3 ]] && grep -q 'producer_silent' <<<\"\$CASE_OUT\""
+
+# S13: A DECOY MASK MUST NOT CANCEL A REAL VALUE. authleak is per-occurrence: a row carrying
+# both `Authorization:[******]` and `Authorization:[Basic …]` still flags.
+S13_LOG="$TMP/s13.log"; : > "$S13_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S13_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP API,headers:{Authorization:[******],X-Fwd:[Authorization:[Basic c3ludGhldGljOm5vdC1yZWFsLXNlY3JldA==]]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "$DT_0956" >> "$S13_LOG"
+run_probe "$S13_LOG" "$S1_CTL"
+assert "S13 a masked + unmasked Authorization pair on ONE row still fails -> exit 1" \
+  "[[ '$CASE_RC' -eq 1 ]] && grep -q 'unmasked_authorization_rows=1' <<<\"\$CASE_OUT\""
+
+# S14: DOT PADDING IS NOT A TOKEN. `.` sits in the measured token charset, so `dp.st.` followed
+# by nothing but dots must NOT trip the shape scan — otherwise a crafted request path could post
+# a public FAIL on demand.
+S14_LOG="$TMP/s14.log"; : > "$S14_LOG"
+for _ in $(seq 1 30); do envelope_row "$DT_0956" >> "$S14_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:info,message:HTTP API,headers:{User-Agent:[dp.st........................]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92" "$DT_0956" >> "$S14_LOG"
+run_probe "$S14_LOG" "$S1_CTL"
+assert "S14 dot padding after a dp.<kind>. prefix is not token-shaped -> still PASS" \
+  "[[ '$CASE_RC' -eq 0 ]]"
 
 # --- C12: structural contract assertions on the probe as a FILE --------------------------
 # AC14: anchored on the executable form, because the prose above legitimately contains 'exit 1'.
@@ -730,7 +792,7 @@ assert "C12 the probe passes --no-archive on its queries" "grep -qF -- '--no-arc
 #
 # Two-stage predicate mirroring C12's, and the two stages are not optional: the prose above
 # legitimately names the forbidden construct, so a single-stage grep false-FAILS a compliant file.
-N_EXCERPT=$(grep -nE '\$\{?(envelope_hits|decoded|auth_rows|shape_leaks|drop_hits|boot_hits|control_decoded)\}?"?[[:space:]]*\|[[:space:]]*(tail|head|cut|sed)\b' "$PROBE" | grep -vcE '^[0-9]+:[[:space:]]*#' || true)
+N_EXCERPT=$(grep -nE '\$\{?(envelope_hits|decoded|auth_rows|shape_leaks|drop_hits|boot_hits|control_decoded|raw_log|control_raw|SUMMARY)\}?"?[[:space:]]*\|[[:space:]]*(tail|head|cut|sed)\b' "$PROBE" | grep -vcE '^[0-9]+:[[:space:]]*#' || true)
 [[ "$N_EXCERPT" =~ ^[0-9]+$ ]] || N_EXCERPT=0
 assert "C13 no raw row variable is excerpted to stdout (the sweeper posts stdout to a PUBLIC issue)" \
   "[[ '$N_EXCERPT' -eq 0 ]]"

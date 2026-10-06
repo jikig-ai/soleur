@@ -492,7 +492,21 @@ boundary precision is ±5 min (heartbeat cadence), so a row in the (replace, fir
 without an in-window marker is conservatively ungraded rather than mis-graded.
 
 **Why this landed now.** #8278 was labelled `blocked` with a "re-evaluate when the script is
-re-enrolled" clause, and three dated triage re-checks (#8456 thread) confirmed the defect latent
+re-enrolled" clause, and three dated triage re-checks (the issue's own comment thread) confirmed the defect latent
 under deferral. The operator elected to fix it ahead of re-enrollment — which is the ordering the
 issue itself prescribes ("must land in the same PR as, or before, any PR that adds a directive"),
 since a probe enrolled while unscoped would grade the next real straddle over mixed generations.
+
+**Review-round hardening (PR #9607 panel).** The ten-seat review found the classification
+predicate triplicated — and already drifted: boot selection and boundary derivation admitted any
+control-channel row, while counting required the offset-0 `SOLEUR_ZOT_DISK ` anchor. A row that
+merely *mentions* the marker (the control grep is a substring LIKE) could therefore pick the
+evidence base. The rewrite hoists classification into the main awk rule (`Rcls`/`Risctl`/`Rhost`/
+`Rboot`), so selection, bounding, and counting read one computed classification. The same round
+added: a producer-freshness gate (`producer_silent`, two missed */5 ticks — residue must never
+satisfy the floor), a total jq decode filter (a malformed-JSON-shape row can never halt the
+stream), a keyed `k=v` summary in place of a 21-field positional read, per-occurrence
+`Authorization:` scanning (a decoy mask can no longer cancel a real value on the same row), a
+substance check on the Doppler-shape run (dot padding cannot post a public FAIL), value clamping
+on producer fields echoed to the public comment, and an `n_other` bucket so unclassifiable grep
+hits are counted rather than invisible.
