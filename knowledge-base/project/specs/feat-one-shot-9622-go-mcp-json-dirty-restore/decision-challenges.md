@@ -28,3 +28,16 @@ Mechanical findings were applied to the plan.
    the status-quo revert-on-commit hazard, and that it would delete the `HEAD` probe, the exit-code
    policy, the stale fixture and five re-points. It contradicts the stated ask "a clean-tracked/untracked
    row still restoring", so the operator's direction was kept. Decide whether to file a follow-up issue.
+
+## Deepen-plan additions (2026-10-06)
+
+8. **Pre-existing arbitrary-path write via a `.mcp.json.soleur-tmp` symlink** (security-sentinel, medium). A hostile repo that tracks that
+   symlink plus a `.mcp.json` on main makes `git show main:.mcp.json > .mcp.json.soleur-tmp` write main's bytes through the link. The
+   one-line fix (`rm -f .mcp.json.soleur-tmp` before the redirect) sits inside the restore block but answers no ask, so it was NOT applied.
+   Recommend applying it in this PR or filing a follow-up issue.
+9. **Untracked `.mcp.json` that differs from main is still overwritten** (spec-flow gap 4). Same loss class as #9622; the brief's
+   "untracked -> existing behavior" and ask 9 pin it, and R12e asserts it. Option: keep untracked-and-differing files too (skip with the
+   marker; restore only an absent file). Decide whether to change the brief.
+10. **Byte-compare guard alternative** (security-sentinel): decide dirtiness by `git cat-file blob HEAD:.mcp.json | cmp -s - .mcp.json`
+    instead of index state. It would also cover clean filters and a staged deletion, at the cost of a `cmp` dependency and a different
+    failure shape. The applied fix covers `skip-worktree`/`assume-unchanged` and symlinks through `ls-files -v` and `[ -L ]` instead.

@@ -12,6 +12,40 @@ requires_cpo_signoff: false
 
 # fix(go): session-start .mcp.json restore overwrites a dirty tracked file
 
+## Enhancement Summary
+
+**Deepened on:** 2026-10-06
+**Sections enhanced:** guard design (Phase 2), Phase 1 rows, Guard Contract, Scope Check, Observability
+**Gates run:** 4.6 User-Brand Impact (pass), 4.7 Observability (one finding fixed: `expected_output` was a whitespace-bearing
+phrase that Check 10's tokenizer would reject; now the single token `reason=mcp-json-dirty`), 4.8 PAT (none), 4.9 UI (n/a),
+4.10 Encryption (n/a), 4.11 Guard Contract (`scripts/lint-guard-contract.py` green; assembly names the chokepoint), 4.12 Scope Check (one live
+section, all rows mapped), citation checks (rule ids, `#N` refs, `knowledge-base/` paths all resolve).
+**Agents used:** plan-review panel (DHH, Kieran, code-simplicity, CTO), then security-sentinel and spec-flow-analyzer. The full
+40-agent fan-out was declined as disproportionate for a ~25-line shell change whose four-seat review had already run
+on the same text; each agent claim below was re-measured in a throwaway repo by the planner.
+
+### Key Improvements
+
+1. **Equal-to-main silent branch reinstated** (spec-flow, CTO): without it the marker prints on every session start after
+   the gate's own refresh and tells the operator they have edits they never made.
+2. **Guard now also keeps a symlinked `.mcp.json` and a tracked entry that is not a plain cached entry** (`skip-worktree`
+   tag `S`, `assume-unchanged` tag `h`): the plan's first predicate read both as clean and overwrote them (security-sentinel,
+   spec-flow; both reproduced, then re-measured under bash and dash).
+3. The prose remedy no longer claims `git checkout -- .mcp.json` ends the marker (it re-arms one more refresh); it names commit,
+   rebase onto main, or the `skip-worktree` pin.
+
+### New Considerations Discovered
+
+- **Pre-existing, out of scope, recorded as a decision challenge:** `git show main:.mcp.json > .mcp.json.soleur-tmp` follows a
+  pre-existing `.mcp.json.soleur-tmp` symlink, so a hostile repo that tracks that symlink and a `.mcp.json` on main gets an
+  arbitrary-path write. One-line fix (`rm -f .mcp.json.soleur-tmp` before the redirect; R12g's directory case still reaches rc 1).
+- **Untracked `.mcp.json` that differs from main is still overwritten** (ask 9 pins this as a must-PASS row). Same loss class as
+  the issue; recorded as a user-challenge rather than changed.
+- Accepted: TOCTOU between the check and the `mv` (one `git show` wide); `fsmonitor` and `filter.*.clean` run from user
+  config in the same trust domain as the existing `git worktree list`; the marker is a fixed string and leaks no path or content.
+- Measured and needing no plan change: detached HEAD, `core.autocrlf`, gitignored-but-tracked, merge conflict (`UU`),
+  rebase stopped on another file, bare root, linked worktree.
+
 ## Overview
 
 `/soleur:go` Step 0 (`plugins/soleur/commands/go.md`, the restore block under
@@ -21,8 +55,10 @@ write-then-rename. It does so unconditionally. In this repo `.mcp.json` is
 local Playwright launch variant) is silently replaced by main's bytes. The loss was
 recoverable only because the operator had copied the file aside by hand.
 
-Fix: before the write, if `.mcp.json` is tracked and differs from `HEAD`, **skip the
-restore** and print `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty`. Skip was chosen
+Fix: before the write, if `.mcp.json` is tracked and differs from `HEAD` (or is a symlink, or a tracked
+entry in a non-plain state such as `skip-worktree`), **skip the restore** and print
+`SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty`; when the file already holds main's bytes the skip is
+silent. Skip was chosen
 over timestamped-backup because it is the smaller change, leaves no stray file in the
 worktree (the existing block already treats stray `*.soleur-tmp` files as a defect), and
 needs no new operator-facing artifact to explain. An untracked `.mcp.json`, or a tracked
@@ -60,7 +96,7 @@ Cut List (mechanisms considered and removed before design):
 | Timestamped backup then overwrite | 1 | Skip already buys property 1 with no new artifact; backup adds a file to the worktree and a second marker spelling. Issue permits either; lead directive prefers skip. |
 | Compare to `main` instead of `HEAD` | 1 | Would flag every stale-but-clean worktree as dirty, which is exactly the case the refresh exists for. `HEAD` is the right baseline for "uncommitted". |
 | New operator-facing bullet in the marker list above the fence | 2 | None of the existing `mcp-json-*` markers has one; the one-line prose fix after the fence carries the remedy. |
-| Equal-to-main silent branch (no marker when dirty file already equals main) | 2 | YAGNI. A dirty file that equals main prints a harmless extra marker; the extra branch and its rows buy nothing the issue asked for. |
+| ~~Equal-to-main silent branch~~ | 2 | **REINSTATED at deepen-plan** (spec-flow + CTO). The original cut assumed the extra marker was a one-off; it is not: after the gate refreshes a stale clean file, the file is dirty vs `HEAD` on every later session start, so the marker would print forever and say "kept your edits" for edits nobody made. A ~3-line silent branch fixes the steady state. |
 | Editing a Codex/Devin/Grok/Cursor mirror | 3 | None carries the block (see Mirror check). |
 
 ### Mirror check (lead item d)
@@ -139,10 +175,12 @@ untracked on `main`, which is the untracked arm).
   differs from main and the file is clean, so the gate overwrites it with main's bytes and a later
   `git commit -a` would silently revert the branch's change. Out of scope for #9622; recorded as a
   decision challenge (a design where tracked files are never refreshed contradicts ask 9).
-- Acknowledged limitation (not deferred scope): when the gate refreshes a clean tracked file whose
-  `HEAD` differs from main, the refreshed file is itself dirty vs `HEAD`, so later session-starts in
-  that worktree print `mcp-json-dirty` and stop refreshing until the operator commits or
-  `git checkout -- .mcp.json`. Failing toward "do not overwrite" is the intended direction.
+- Remaining limitation (not deferred scope): when the gate refreshes a clean tracked file whose `HEAD`
+  differs from main, the refreshed file is dirty vs `HEAD`. Later session starts are now SILENT while the file
+  still equals main (equal-to-main branch), but if main's `.mcp.json` changes again the file differs from
+  both and prints `mcp-json-dirty` with no further refresh until the operator commits, rebases onto main,
+  or `git checkout -- .mcp.json` (which only re-arms one more refresh). Failing toward "do not overwrite"
+  is the intended direction.
 - Institutional learnings applied: write-then-rename and "measure the cause, do not name one"
   (AP-021) are already in the block and are preserved; the suite's `${ws:?}` guard lesson (R3d
   comment) applies to every new row that runs `git -C "$ws"` from the parent shell; `fixture-env`
@@ -208,6 +246,9 @@ failure_modes:
   - mode: guard over-fires and a clean/untracked file stops refreshing
     detection: go-session-gates.test.sh R3 and R12e (must-PASS) fail in CI
     alert_route: red CI on the PR / merge queue
+  - mode: a symlinked or skip-worktree .mcp.json is replaced/overwritten
+    detection: go-session-gates.test.sh R12i and R12j fail in CI
+    alert_route: red CI on the PR / merge queue
   - mode: restore leaves .mcp.json.soleur-tmp behind on the skip path
     detection: R12 asserts no temp file in the worktree after the run
     alert_route: red CI on the PR / merge queue
@@ -217,8 +258,8 @@ logs:
   retention: session lifetime; the dirty file itself persists until the operator resolves it
 
 discoverability_test:
-  command: grep -o 'SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty' plugins/soleur/commands/go.md
-  expected_output: SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty
+  command: grep -o 'reason=mcp-json-dirty' plugins/soleur/commands/go.md
+  expected_output: reason=mcp-json-dirty
 ```
 
 ## Files to Edit
@@ -274,6 +315,10 @@ Order follows `cq-write-failing-tests-before`: rows first, RED, then the fix.
    | R12f | two bare repos built with `assert_fixture_dir` + `git_fixture_env`: (i) `git init -b main`, `.mcp.json` staged, **no commit** (unborn `HEAD`, no `main`); (ii) same but `.mcp.json` left untracked | success arm | (i) marker `reason=mcp-json-dirty` present, content unchanged. `git diff HEAD` exits 128 here, so this pins "any non-zero skips"; before the fix only the marker assertion is RED (the file survives because there is no `main`). (ii) `want_not_in` `reason=mcp-json-dirty` and `want_in` `reason=mcp-json-no-local-main`: pins the `ls-files` conjunct, which no born-repo row can see (4 assertions total) |
    | R12g | `stale` fixture plus `mkdir "$ws/.mcp.json.soleur-tmp"` before the run | success arm | the temp redirect fails (`Is a directory`, rc 1): `want_in` `reason=mcp-json-read-failed rc=1`, `want_not_in` `reason=mcp-json-dirty`. Pins `SHOW_RC=$?` surviving the `elif` restructure (2 assertions). Leave the directory; the block's `rm -f` only complains on stderr |
 
+   | R12h | `stale` | success arm, TWICE in the same workspace | run 1: content equals `main:.mcp.json` (refreshed). run 2: `want_not_in` `reason=mcp-json-dirty` and content still equals main (the self-refresh steady state is silent; mutation: drop the equal-to-main branch) (3 assertions) |
+   | R12i | default fixture + `git update-index --skip-worktree .mcp.json` (tag `S`), edited | success arm | content unchanged; marker present (2). Under the old predicate `git diff HEAD` reads this clean |
+   | R12j | `stale` + `git rm --cached` + commit, then `.mcp.json` replaced by a symlink to a scratch target file whose bytes differ from main's (untracked, so `git diff HEAD` reads 0 and only the `-L` branch can keep it) | success arm | `[ -L "$ws/.mcp.json" ]` still true; target file bytes unchanged; marker present (3). Deliberate extension past "dirty vs HEAD": `mv` would replace the link itself |
+
    No assertion is added to R3: the existing "restored from main" check cannot pass if the guard fired
    on that stale fixture, so a marker `want_not_in` there would be redundant.
 4. Run the suite with `SOLEUR_GO_GATES_SKIP_H3=1`. Expected before the fix: R12, R12b, R12c, R12d, R12f (marker assertion only) RED;
@@ -287,18 +332,39 @@ Edit only inside the `if [ "$DO_RESTORE" = true ]; then` block. Change the first
 
 ```sh
   # An uncommitted edit to a TRACKED .mcp.json is the operator's work, not stale state (#9622).
-  # Compared to HEAD, not the index: `git diff --quiet` without HEAD reads a staged-only change
-  # as clean. ANY non-zero status (1 = differs, >1 = could not tell, e.g. an unborn branch) skips:
-  # an error probing the file must fail toward keeping it. Untracked, or tracked and equal to
-  # HEAD, falls through to the restore below, unchanged.
-  if git ls-files --error-unmatch -- .mcp.json >/dev/null 2>&1 \
-     && ! git diff --quiet HEAD -- .mcp.json 2>/dev/null; then
-    echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty"
+  # KEEP when: the path is a symlink (mv would replace the link itself); or it is tracked and either
+  # not a plain cached entry (skip-worktree `S` / assume-unchanged `h` hide edits from git diff) or
+  # differs from HEAD. Compared to HEAD, not the index: `git diff --quiet` without HEAD reads a
+  # staged-only change as clean. ANY non-zero diff status (1 = differs, >1 = could not tell, e.g. an
+  # unborn branch) keeps the file: an error probing it must fail toward keeping it. Untracked regular
+  # file, or tracked-plain and equal to HEAD, falls through to the restore below, unchanged.
+  KEEP=false
+  if [ -L .mcp.json ]; then
+    KEEP=true
+  elif git ls-files --error-unmatch -- .mcp.json >/dev/null 2>&1; then
+    case "$(git ls-files -v -- .mcp.json 2>/dev/null)" in
+      "H "*) git diff --quiet HEAD -- .mcp.json 2>/dev/null || KEEP=true ;;
+      *) KEEP=true ;;
+    esac
+  fi
+  if [ "$KEEP" = true ]; then
+    # Already main's bytes: nothing to protect and nothing to restore, so say nothing. Without this a
+    # file the gate itself refreshed reads as "dirty" on every later session start.
+    if git show main:.mcp.json 2>/dev/null | cmp -s - .mcp.json; then
+      :
+    else
+      echo "SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty"
+    fi
   elif git show main:.mcp.json > .mcp.json.soleur-tmp 2>/dev/null; then
 ```
 
 Everything else in the block (inner `mv`, the `else` with `SHOW_RC=$?`) is untouched. Notes:
 
+- Measured 2026-10-06 in bash AND dash against throwaway repos (`/tmp` scratch guard script): clean-stale -> RESTORE;
+  dirty -> MARKER; dirty and equal to main -> silent; skip-worktree (`ls-files -v` tag `S`) -> MARKER;
+  assume-unchanged (tag `h`) -> MARKER; symlink -> MARKER; untracked and differing -> RESTORE (unchanged).
+  `cmp` is POSIX; if it were absent the pipeline status is non-zero, which reads "not equal" and prints the
+  marker, i.e. fails toward the visible behavior. The pipeline's status is `cmp`'s, so no `pipefail`.
 - No `set` option, no `[[`, no `timeout` command, no `find` call; POSIX `git` flags only. R9's banned-form rows and
   R10b's "no `find` after the resolver" rows stay green. The resolver snippet (R8) is not touched.
 - The two comment lines above the existing `# Write-then-rename` paragraph that call `.mcp.json`
@@ -308,14 +374,14 @@ Everything else in the block (inner `mv`, the `else` with `SHOW_RC=$?`) is untou
   overwritten on next session-start from the new CWD)." with a version that keeps that sentence for
   clean/untracked files and adds that a tracked `.mcp.json` with uncommitted changes is left alone and
   reported as `SOLEUR_SESSION_START_SKIPPED reason=mcp-json-dirty`, with the remedy
-  (`git diff HEAD -- .mcp.json` to review, then commit or `git checkout -- .mcp.json` to accept the committed version). The sentence must also say the marker can come from the gate's own earlier refresh of a stale file, which that same `git checkout` clears.
+  (`git diff HEAD -- .mcp.json` to review, then commit it, or `git checkout -- .mcp.json` to drop it; an intentional local variant can be pinned with `git update-index --skip-worktree .mcp.json`, which the guard also keeps; the marker still prints for it, a quieter pinned-state reason being a possible follow-up). Do NOT tell the operator that `git checkout` ends the marker: the next session start refreshes the stale file again; the durable remedies are committing, rebasing onto main, or the skip-worktree pin.
   One to two sentences; do not touch "Skip silently on first error".
 
 ### Phase 3 — floors, baselines, regression sweep
 
 1. Raise `MIN_ASSERTIONS` in the test file to the **measured** total with `SOLEUR_GO_GATES_SKIP_H3=1`
    (the file's own comment: never derive it from a local run where `claude` is present). Expected
-   194 + 17 = 211: R12 (4) + R12b (2) + R12c (2) + R12d (2) + R12e (1) + R12f (4) + R12g (2). The
+   194 + 25 = 219: R12 (4) + R12b (2) + R12c (2) + R12d (2) + R12e (1) + R12f (4) + R12g (2) + R12h (3) + R12i (2) + R12j (3). The
    per-row counts are the intent; a dropped assertion must not hide inside the floor. Measure, do not
    trust this number.
    Update the "Raising it is part of adding a row" comment with the new total.
@@ -367,6 +433,10 @@ construction, a second writer outside the block is NOT, which is mutation 5.
 | 5 | Add a second writer for `.mcp.json` in another arm, outside the restore block | RED only if that arm is driven with a dirty fixture: R12c (capability arm) and R12d (classifier arm) are the two non-success arms driven |
 | 8 | Drop the `ls-files` conjunct (probe `git diff HEAD` alone) | RED: R12f (ii) (untracked file on an unborn `HEAD` would read `mcp-json-dirty`) |
 | 9 | Clobber `$?` between the `elif` condition and the `else` arm | RED: R12g |
+| 10 | Drop the `[ -L ]` branch | RED: R12j |
+| 11 | Drop the plain-entry check (`case` on `ls-files -v`) | RED: R12i |
+| 12 | Drop the equal-to-main silent branch | RED: R12h (second run prints the marker) |
+| 13 | Make the equal-to-main branch always silent | RED: R12 (a genuinely dirty file must print the marker) |
 | 6 | Guard prints nothing on skip (silent keep) | RED: R12 marker `want_in` (a guard reporting "kept" without a marker is vacuous) |
 | 7 | Treat probe errors as clean (test `git diff --quiet HEAD` for rc == 1 instead of rc != 0) | RED: R12f (unborn `HEAD` makes `git diff HEAD` exit 128; marker must still be `mcp-json-dirty`) |
 
@@ -412,6 +482,7 @@ identity; row identity is carried by the named rows above and by L2.
 | go.md fence comment reword | "Edit only the restore block" | inferred — justification: the existing comment asserts `.mcp.json` is untracked, which this fix contradicts; leaving it would make the block self-contradictory |
 | `mk_workspace` stale mode and five row re-points | "add a test row" | inferred — justification: the suite's default fixture is itself a tracked-dirty file, so five existing rows depend on the overwrite and go RED after the fix; without a second fixture shape the clean-restore rows cannot exist |
 | R12 / R12b / R12c / R12d / R12e | ask 4, ask 9 | asked |
+| go.md `[ -L ]` branch, `ls-files -v` plain-entry check, equal-to-main silent branch; R12h / R12i / R12j | — | inferred — justification: same loss class as the ask (an operator's local `.mcp.json` replaced); deepen-plan measured each (symlink replaced by a regular file, `skip-worktree`/`assume-unchanged` edits invisible to `git diff HEAD`, and the marker printing forever after the gate's own refresh) |
 | R12f / R12g (unborn HEAD probe-error path; read-failed `SHOW_RC`) | — | inferred — justification: the guard's fail-toward-keeping policy on a probe error is a stated design decision and a mutation row (7) needs a row that can see it |
 | `MIN_ASSERTIONS` raise | — | inferred — justification: the suite's floor must track its rows or deleting the new rows stays green |
 | baseline regeneration | — | inferred — justification: `fixture-relative-assert` and `fixture-dir-operand-assert` pin per-file site counts by row-equality; new `git -C "$ws"` sites reddens them unless regenerated in the same commit |
@@ -433,6 +504,7 @@ identity; row identity is carried by the named rows above and by L2.
   classifier-absent arms (R12c, R12d), and when `HEAD` is unborn so the probe errors (R12f). A read failure still reports `mcp-json-read-failed rc=1` (R12g).
 - [ ] The skip is non-fatal: `cleanup-merged` still dispatches on the success arm (R12), and no
   `.mcp.json.soleur-tmp` is left (R12).
+- [ ] A symlinked `.mcp.json` and a `skip-worktree` edit are kept (R12j, R12i); a file the gate itself refreshed prints no marker on the next run (R12h).
 - [ ] A tracked-clean `.mcp.json` that differs from `main` is still restored and prints no
   `mcp-json-dirty` (R3); an untracked one is still restored (R12e).
 - [ ] R3d (main carries none) and R3g (no local main) stay green, and R12g pins `SHOW_RC=$?` for the
