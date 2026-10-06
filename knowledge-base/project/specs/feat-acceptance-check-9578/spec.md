@@ -51,3 +51,13 @@ The founder never states or approves what proves the work is done. Acceptance cr
 - The CLO has reviewed the final UI and result wording.
 - No marketing, changelog or demo copy claims the feature before it ships.
 - The spec-flow analysis of the fail, retry and override flow is done at plan time.
+
+## Plan-stage amendments (2026-10-06)
+
+Recorded by `knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan.md`:
+
+- FR1: the prompt is asked in the plan skill only in v1; the brainstorm half is deferred (#9658, brainstorm body ceiling).
+- TR2: a new preflight Check 13 reusing Step 10.5, not a generalised Check 10.
+- TR3: a new suite `preflight-founder-check.test.ts` with fixtures under `fixtures/founder-check/`, registered in the suite-integrity gate; `plan-skeleton-checkpoint.test.ts` gets a compatibility case; `preflight-discoverability-test.test.ts` is not edited.
+- FR2: the block also carries `kind`, `creates` and `pins`; `hash` is an identity and the freeze copy in git history is the control.
+- FR5: retries are uncapped and logged; accept-anyway is the only override and is interactive only. Multiple checks, headless capture and PR-body surfacing are deferred (#9657).
