@@ -54,4 +54,4 @@ Mechanical findings were applied to the plan.
 13. **Writers outside the restore block (not applied: outside the operator's stated scope).** `worktree-manager.sh cleanup-merged`'s
     non-bare tail (`reset --hard HEAD`, `sync_bare_files` `checkout-index -f`) and `AGENTS.rules.md` rule
     `wg-at-session-start-after-cleanup-merged` (prescribes the unguarded `git show main:.mcp.json > .mcp.json`) can still overwrite a
-    tracked, dirty `.mcp.json`; a cwd-relative `.mcp.json` also writes `sub/.mcp.json` from a subdirectory. Tracked in a follow-up issue.
+    tracked, dirty `.mcp.json`. Tracked in #9663. (The cwd-relative write from a subdirectory was inside the block and is fixed: R12o.)
