@@ -1,6 +1,6 @@
 # Tasks: re-pin web-2 SSH host key (Ref #9372)
 
-Plan: knowledge-base/project/plans/2026-10-06-infra-repin-web-2-ssh-host-key-after-replacement-plan.md
+Plan: knowledge-base/project/plans/archive/20261006-221100-2026-10-06-infra-repin-web-2-ssh-host-key-after-replacement-plan.md
 
 ## Phase 1: Core change
 

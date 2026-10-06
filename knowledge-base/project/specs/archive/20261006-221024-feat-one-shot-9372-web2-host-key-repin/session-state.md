@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: knowledge-base/project/plans/2026-10-06-infra-repin-web-2-ssh-host-key-after-replacement-plan.md
+- Plan file: knowledge-base/project/plans/archive/20261006-221100-2026-10-06-infra-repin-web-2-ssh-host-key-after-replacement-plan.md
 - Status: complete
 
 ### Errors
