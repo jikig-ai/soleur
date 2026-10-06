@@ -294,7 +294,7 @@ const warnCall = (op: string) => warnSilentFallbackSpy.mock.calls.find((c) => c[
 const noticeBody = () => withDigestNotice(expectedRender().issueBody, "not committed - see Sentry");
 
 function expectedRender(
-  githubOverride?: { status: "failed" | "partial"; failureCause: "script-error" | "unknown" },
+  githubOverride?: { status: "failed" | "partial"; failureCause: "script-error" | "unknown" | "auth"; keepMetrics?: boolean },
   message = validDraftFinalMessage(),
 ) {
   const parsed = parseCommunityDraft(message);
@@ -640,6 +640,54 @@ describe("publication flow — collector truth is bound into the render", () => 
     expect(opCall("collector-status-failed")).toBeDefined();
     // The digest honestly reports the failure AND was committed (paging != discarding).
     expect(safeCommitAndPrSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stargazers_unavailable warn forces a draft that says github collected to partial/auth, KEEPS the other numbers, stays GREEN and is not reported to Sentry", async () => {
+    // The model is told to do this itself; the handler must not depend on it. A draft that
+    // reports `collected` with newStargazers 0 would publish an unmeasured 0 as a measurement.
+    writeSidecar([
+      { collector: "github", command: "repo-stats", exit: 0, cause: "", warn: "stargazers_unavailable" },
+      { collector: "github", command: "activity", exit: 0 },
+    ]);
+
+    const { out } = await run();
+
+    const exp = expectedRender({ status: "partial", failureCause: "auth", keepMetrics: true });
+    expect(out.value).toEqual({ ok: true });
+    expect(issues[0].body).toBe(exp.issueBody);
+    expect(issues[0].body).toMatch(/\| GitHub \| partial \| partial \(auth; a 0 may mean unavailable\): Stars \d+/);
+    expect(opCall("collector-status-warn")).toBeUndefined();
+    expect(opCall("collector-status-failed")).toBeUndefined();
+    expect(opCall("collector-status-missing")).toBeUndefined();
+  });
+
+  it("a stargazers_unavailable warn does not soften a github platform the draft itself reports as failed", async () => {
+    writeSidecar([{ collector: "github", command: "repo-stats", exit: 0, cause: "", warn: "stargazers_unavailable" }]);
+    spawnClaudeEvalSpy.mockResolvedValue(
+      okSpawn({
+        finalMessage: validDraftFinalMessage({ platforms: { github: { status: "failed", failureCause: "rate-limit" } } }),
+      }),
+    );
+
+    await run();
+
+    expect(issues[0].body).toContain("| GitHub | failed | collection failed: rate-limit |");
+  });
+
+  it("a per_page truncation warn is STILL reported next to a stargazers_unavailable warn (the new warn does not swallow the old)", async () => {
+    writeSidecar([
+      { collector: "github", command: "repo-stats", exit: 0, cause: "", warn: "stargazers_unavailable" },
+      { collector: "github", command: "activity", exit: 0, cause: "", warn: "truncated_at_per_page" },
+    ]);
+
+    await run();
+
+    const call = opCall("collector-status-warn");
+    expect(call, "the truncation warn must still be reported").toBeDefined();
+    // The Error object serializes to {}, so read its message directly; and read `extra` too.
+    const text = `${(call?.[0] as Error | undefined)?.message ?? ""} ${JSON.stringify(call?.[1]?.extra ?? {})}`;
+    expect(text).toContain("truncated_at_per_page");
+    expect(text).not.toContain("stargazers_unavailable");
   });
 
   it("a MISSING sidecar renders github partial/unknown (never an unverified 'collected') and stays GREEN", async () => {
