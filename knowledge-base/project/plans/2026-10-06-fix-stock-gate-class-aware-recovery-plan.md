@@ -175,7 +175,9 @@ logs:
   retention: GitHub default run-log retention
 discoverability_test:
   command: git grep -l stock_abort_closing .github/workflows/
-  expected_output: apply-web-platform-infra.yml
+  expected_output: |-
+    apply-web-platform-infra.yml
+    web2-luks-rebirth.yml   # sibling site wired during review (9a2d84a35e)
 ```
 
 The probe proves the class-aware closing helper is wired into the workflow (a site that silently
