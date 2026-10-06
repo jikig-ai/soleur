@@ -414,12 +414,18 @@ the row query alone cannot show that file content survived.
 ## If the apply fails partway
 
 A replace destroys before it creates, so check the apply output for whether the destroy
-landed:
+landed. Since #9510 the failed run does part of this work itself: the apply step's failure
+branch runs `stock_recovery_report`, which prints a `recovery-read` block that re-fetches
+Hetzner stock for every planned server create, names the post-failure `class=` per address
+(`orderable` on a green re-read means the failure was NOT stock — quota, image, attach or
+bootstrap; `stock` means wait and re-dispatch), and — when `terraform show -json` is readable —
+states per address whether it is absent or tainted in state. Read that block first; the
+decision tree below is what it is reporting against.
 
 - **Destroy did not run** — nothing changed. Re-dispatch after fixing the cause.
 - **Destroy landed, create failed** (out-of-stock is the documented cause) — **two states are
   reachable and their recoveries are opposite.** Determine which one you are in first, from
-  the apply log or a Hetzner API existence probe:
+  the recovery-read block, the apply log, or a Hetzner API existence probe:
 
   ```bash
   curl -sS -H "Authorization: Bearer $HCLOUD_TOKEN" \

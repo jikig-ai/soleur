@@ -2087,7 +2087,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::inngest-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). Refusing to apply — the destroy would succeed and the create would not, stranding the inngest host with its Redis AOF volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
+            stock_abort_closing inngest-host-replace "Refusing to apply — the destroy would succeed and the create would not, stranding the inngest host with its Redis AOF volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "inngest-host-replace plan is the exact scoped recreate. Plan summary:"
@@ -2101,8 +2101,17 @@ jobs:
         # we applied) that the Redis AOF volume carries no delete action (backstop to the guard).
         run: |
           set -euo pipefail
-          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -no-color -input=false tfplan
+          # Mid-replace failure: the destroy ran first, so name the fresh stock class before the
+          # operator acts — stock-caused vs config/contract/apply failures take different arms.
+          # stock_recovery_report is a diagnostic annotation only; it always returns 0 (#9510).
+          if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false tfplan; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report inngest-host-replace tfplan.json --probe-state || true
+            echo "::error::terraform apply (inngest-host-replace) failed mid-replace — the host may be absent and its Redis AOF volume detached-but-retained. Re-dispatch inngest-host-replace to recover per the recovery-read above."
+            exit 1
+          fi
           VOL_DELETES=$(jq '[.resource_changes[]?
             | select(.address == "hcloud_volume.inngest_redis")
             | select(.change.actions? | index("delete"))] | length' tfplan.json)
@@ -2587,7 +2596,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::registry-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). Refusing to apply — the destroy would succeed and the create would not, stranding the registry with its zot store volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
+            stock_abort_closing registry-host-replace "Refusing to apply — the destroy would succeed and the create would not, stranding the registry with its zot store volume detached (#6393, #6463). NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-host-replace plan is the exact scoped recreate. Plan summary:"
@@ -2612,6 +2621,9 @@ jobs:
             # revoked (401) and the minter is disabled (403 DENIED), so no host pulls from GHCR
             # at all. This PR corrected the same sentence on the recut arm and left these two
             # twins; an unmarked twin reads as still-true.
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report registry-host-replace tfplan.json --probe-state || true
             echo "::error::terraform apply (registry-host-replace) failed mid-replace — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071, read PAT revoked + minter disabled), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-host-replace to recover from the preserved volume"
             exit 1
           fi
@@ -2829,7 +2841,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::registry-region-migrate stock-preflight ABORTED: the registry's server_type is not orderable in the TARGET region (var.registry_location; see the ::error:: lines above). Refusing to apply — the old registry would be destroyed and the new one would not land (#6393, #6463). Pick a region where the type is orderable, or wait for stock. NO [ack-destroy] bypass on this path."
+            stock_abort_closing registry-region-migrate "Refusing to apply — the old registry would be destroyed and the new one would not land (#6393, #6463). On class=stock, pick a region where the type is orderable, or wait for stock. NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-region-migrate plan is the exact scoped migration. Plan summary:"
@@ -2850,6 +2862,9 @@ jobs:
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             # Same #7071 retraction as above. Do not reinstate the fallback claim.
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report registry-region-migrate tfplan.json --probe-state || true
             echo "::error::terraform apply (registry-region-migrate) failed — registry may be DOWN. NOTHING covers serving while it is: the host->GHCR fallback is dead (#7071), so already-running containers keep serving and any restart cannot pull. re-dispatch registry-region-migrate to retry the fresh-region create"
             exit 1
           fi
@@ -3168,14 +3183,20 @@ jobs:
           # deny a recut on live vendor state. stock_preflight_gate in the recut job stays the
           # only authoritative check.
           set +e
-          stock_out=$(stock_preflight "$SRV_TYPE" "$SRV_LOC" 2>&1); stock_rc=$?
+          # Redirect, never $(...): the failure class lives in _STOCK_LAST_CLASS, a
+          # sourced-shell global that a command substitution would lose to its subshell (#9510).
+          _probe_file="$(mktemp)"
+          stock_preflight "$SRV_TYPE" "$SRV_LOC" > "$_probe_file" 2>&1; stock_rc=$?
+          stock_out="$(cat "$_probe_file")"; rm -f "$_probe_file"
           set -e
           if (( stock_rc == 0 )); then
             echo "::notice::Pre-rehearsal stock probe: ${SRV_TYPE} is orderable in ${SRV_LOC} right now. Proceeding to the rehearsal."
           else
             # Re-emitted as a WARNING, first line only: an ::error:: here would read as a denial
-            # from a step that denies nothing.
-            echo "::warning::Pre-rehearsal stock probe: ${SRV_TYPE} is NOT currently orderable in ${SRV_LOC} — the recut will very likely abort later at stock_preflight_gate, AFTER this job has moved multiple GB through the rehearsal. $(printf '%s' "$stock_out" | head -1 | tr '\n' ' ')"
+            # from a step that denies nothing. The class token is the real one — class=stock is
+            # the only arm that means "not orderable"; config/unreachable/malformed are not a
+            # stock miss and say so (#9510).
+            echo "::warning::Pre-rehearsal stock probe: ${SRV_TYPE} is not proven orderable in ${SRV_LOC} (class=${_STOCK_LAST_CLASS:-unknown}) — the recut will very likely abort later at stock_preflight_gate, AFTER this job has moved multiple GB through the rehearsal. $(printf '%s' "$stock_out" | head -1 | tr '\n' ' ')"
           fi
 
       - name: Start throwaway registry for the D10 rehearsal
@@ -3528,7 +3549,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::registry-luks-recut stock-preflight ABORTED: the registry's server_type is not orderable in its location (see the ::error:: lines above). Refusing to apply — NOTHING has been destroyed. Wait for stock and re-fire, or if the type is unavailable in this region generally, use registry-region-migrate. NO [ack-destroy] bypass on this path."
+            stock_abort_closing registry-luks-recut "Refusing to apply — NOTHING has been destroyed. On class=stock, wait for stock and re-fire, or if the type is unavailable in this region generally, use registry-region-migrate. NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "registry-luks-recut plan is the exact scoped recut. Plan summary:"
@@ -3611,6 +3632,9 @@ jobs:
             # at all. Already-RUNNING containers keep serving; the fleet is one restart away
             # from an outage. (Not enumerated in the plan's four stale sites — found while
             # editing this job, and fixed here on edit-locality grounds.)
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report registry-luks-recut tfplan.json --probe-state || true
             echo "::error::terraform apply (registry-luks-recut) failed mid-recut — the registry may be DOWN and the store may already be destroyed. Hosts CANNOT fall back to GHCR (#7071: the pull credential is revoked); already-running containers keep serving, but no host can pull until the store is refilled. RE-DISPATCH registry-luks-recut with the SAME confirm and the SAME id: the resume arm covers all three mid-apply windows, is admitted by the live Hetzner probe, and chains the restore that refills the store."
             exit 1
           fi
@@ -4235,7 +4259,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::git-data-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above). If git-data has never been born you will have aborted at the destroy-guard above, not here — this dispatch cannot birth it on any type (#6977). On the REPLACE path, keep the remediation ORDER in the ::error:: lines above: waiting for stock is free, changing the type is a cost/HA decision (#6463). If you do change it, note that var.git_data_server_type has no dispatch input and no Doppler key — it is edited in variables.tf and MERGED to main (the arch is DERIVED from its prefix, so cax*/cpx*/cx*/ccx* all boot correctly). Refusing to apply (#6393, #6463). NO [ack-destroy] bypass on this path."
+            stock_abort_closing git-data-host-replace "If git-data has never been born you will have aborted at the destroy-guard above, not here — this dispatch cannot birth it on any type (#6977). On the REPLACE path, keep the remediation ORDER in the ::error:: lines above: waiting for stock is free, changing the type is a cost/HA decision (#6463). If you do change it, note that var.git_data_server_type has no dispatch input and no Doppler key — it is edited in variables.tf and MERGED to main (the arch is DERIVED from its prefix, so cax*/cpx*/cx*/ccx* all boot correctly). Refusing to apply (#6393, #6463). NO [ack-destroy] bypass on this path."
             exit 1
           fi
           echo "git-data-host-replace plan is the exact scoped recreate. Plan summary:"
@@ -4274,6 +4298,9 @@ jobs:
           # recovery annotation, then fail hard (gating behavior unchanged).
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report git-data-host-replace tfplan.json --probe-state || true
             echo "::error::terraform apply (git-data-host-replace) failed mid-replace — git-data may be DOWN (single-writer, no serving fallback); pushes/pulls fail (not corrupt); BOTH volumes are preserved — re-dispatch git-data-host-replace to recover from them"
             exit 1
           fi
@@ -5159,7 +5186,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::web-host-create stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the repair path and #6463). Refusing to apply — the server create would fail AFTER its volume and heartbeats were already created, leaving a stranded volume and heartbeats that page as down."
+            stock_abort_closing web-host-create "Refusing to apply — the server create would fail AFTER its volume and heartbeats were already created, leaving a stranded volume and heartbeats that page as down (#6393). NO [ack-destroy] bypass."
             exit 1
           fi
           echo "birth gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
@@ -5192,6 +5219,9 @@ jobs:
           set -euo pipefail
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report web-host-create tfplan.json --probe-state || true
             echo "::error::terraform apply (web-host-create for ${WEB_HOST_KEY}) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is safe and is the normal remedy. Partial-create nuance: if the failure was BEFORE the server landed (its volume/heartbeats created, server not), the retry still plans exactly one server create WITH its NIC and volume attachment, and the gate passes. If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses — and completing that host by hand does NOT fix it: cloud-init runcmd is once-per-instance and has already finished on a host with no private IP, so attaching the NIC afterwards leaves the app unconfigured. That host must be REPLACED, not completed."
             exit 1
           fi
@@ -5579,7 +5609,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::web-host-replace stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the repair path and #6463). Refusing to apply — a replace destroys the existing host FIRST, so an out-of-stock create leaves ${WEB_HOST_KEY} gone and unrecreatable (#6393, #6400). Repin var.web_hosts to an orderable type and merge that change before re-dispatching."
+            stock_abort_closing web-host-replace "Refusing to apply — a replace destroys the existing host FIRST, so a failed create leaves ${WEB_HOST_KEY} gone and unrecreatable until a re-dispatch lands (#6393, #6400). On a durable stock miss, repin var.web_hosts to an orderable type and merge that change before re-dispatching. NO [ack-destroy] bypass."
             exit 1
           fi
           echo "replace gate + stock preflight PASSED for ${WEB_HOST_KEY}. Plan summary:"
@@ -5611,7 +5641,10 @@ jobs:
           set -euo pipefail
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), TWO states are reachable and they have OPPOSITE recoveries — determine which one before acting, via terraform state or a Hetzner API existence probe. (a) The create never returned an id, so the resource is ABSENT FROM STATE: re-dispatching THIS target plans zero replaces and the gate correctly refuses; the recovery is apply_target=web-host-create, additive and graded against the birth contract. (b) The create returned an id and a later step failed, so the resource is IN state and TAINTED: that plans delete+create, which THIS gate PASSES, so re-dispatch web-host-replace — web-host-create would be refused by the birth gate on its destroy arm. The earlier wording asserted both halves at once ("ABSENT from the provider but PRESENT in state as tainted ... the gate will refuse it"), which is self-refuting and sent the operator to the wrong remedy in case (b). The workspaces volume was preserved by omission and re-attaches to the new host."
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report web-host-replace tfplan.json --probe-state || true
+            echo "::error::terraform apply (web-host-replace for ${WEB_HOST_KEY}) failed. This operation DESTROYS BEFORE IT CREATES, so ${WEB_HOST_KEY} may be gone: check the apply output for whether the destroy completed. If the destroy landed and the create did not (out-of-stock is the documented cause, #6393/#6400), TWO states are reachable and they have OPPOSITE recoveries — the recovery-read above names which one the post-failure state is in. (a) The create never returned an id, so the resource is ABSENT FROM STATE: re-dispatching THIS target plans zero replaces and the gate correctly refuses; the recovery is apply_target=web-host-create, additive and graded against the birth contract. (b) The create returned an id and a later step failed, so the resource is IN state and TAINTED: that plans delete+create, which THIS gate PASSES, so re-dispatch web-host-replace — web-host-create would be refused by the birth gate on its destroy arm. The earlier wording asserted both halves at once ("ABSENT from the provider but PRESENT in state as tainted ... the gate will refuse it"), which is self-refuting and sent the operator to the wrong remedy in case (b). The workspaces volume was preserved by omission and re-attaches to the new host."
             exit 1
           fi
           echo "replace applied: ${WEB_HOST_KEY}. The pre-apply gate proved the plan carried exactly one replace of this host with its private NIC, its volume attachment and the fleet firewall. A green apply is NOT a green boot — boot telemetry is surfaced by the next step."
@@ -6088,7 +6121,7 @@ jobs:
           # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
           if ! stock_preflight_gate tfplan.json; then
-            echo "::error::git-data-host-create stock-preflight ABORTED: the planned server_type is not orderable in its target location (see the ::error:: lines above for the repair path and #6463). Refusing to apply — terraform creates both volumes before the server, so the create would fail AFTER leaving two stranded billed volumes."
+            stock_abort_closing git-data-host-create "Refusing to apply — terraform creates both volumes before the server, so the create would fail AFTER leaving two stranded billed volumes (#6393). NO [ack-destroy] bypass."
             exit 1
           fi
           echo "birth gate + stock preflight PASSED. Plan summary:"
@@ -6125,6 +6158,9 @@ jobs:
           set -euo pipefail
           if ! doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
+            # shellcheck source=tests/scripts/lib/stock-preflight-gate.sh
+            source "${GITHUB_WORKSPACE}/tests/scripts/lib/stock-preflight-gate.sh"
+            stock_recovery_report git-data-host-create tfplan.json --probe-state || true
             echo "::error::terraform apply (git-data-host-create) failed. The operation is additive, so nothing existing was destroyed; inspect the error, then re-dispatch — a re-dispatch is normally the correct remedy, and the gate's requirement arm accepts a no-op on every member the server's creation does not entail, so a partial apply does NOT wedge the retry."
             echo "::error::TWO EXCEPTIONS. (1) If the SERVER landed and a later address did not, the retry plans ZERO server creates and the gate correctly refuses. Completing that host by hand does not fix it: cloud-init runcmd is once-per-instance and has already finished, and ADR-115 excludes git-data from the reboot primitive — that host must be REPLACED, not completed. (2) If the failure names doppler_config.git_data_prd already existing, the config was created outside terraform; a re-dispatch CANNOT succeed because the Doppler API returns 400 'Name is already in use' rather than adopting it. Run 'terraform import doppler_config.git_data_prd soleur.prd_git_data' first. See the runbook's partial-birth decision tree."
             exit 1
