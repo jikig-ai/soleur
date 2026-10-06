@@ -22,7 +22,7 @@ Leave the Sentry curl byte-identical, file a lockstep follow-up with a re-evalua
 Derive the pinned literal in the test from its single source (`zot-registry.tf`) so the harness feeds the real pin and a
 rotation reds the suite instead of silently degrading to "refused". Mutation note: a mutant that adds a posting branch
 AFTER the existing `unpinned_url` catch-all survived because it is unreachable, an equivalent mutant; placed before the
-catch-all it reds 12 rows. Place a branch mutation where it can run before calling a survivor a gap.
+catch-all it reds 26 rows. Place a branch mutation where it can run before calling a survivor a gap.
 
 ## Key insight
 

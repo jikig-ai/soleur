@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -u
 # Refuse to run under xtrace (#7797): this guard handles a Better Stack bearer token and a secret
-# heartbeat URL (WEB_NIC_GUARD_URL), so tracing would print them. Unconditional on purpose: it also
-# covers the heartbeat URL, which no credential-name rule can see. It tests the STATE (`$-`), so
-# `bash -x`, SHELLOPTS=xtrace and a BASH_ENV `set -x` are all caught. The guard therefore cannot be
-# traced on-host by design; web-private-nic-guard.test.sh runs it against stubs and is the way to
-# observe it.
+# heartbeat URL (WEB_NIC_GUARD_URL), so tracing would print them. Unconditional on purpose: it is not
+# keyed on a credential name, which no name rule can see for the heartbeat URL. It tests the STATE
+# (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV `set -x` are all caught. The guard therefore
+# cannot be traced on-host by design: read its stderr via `journalctl -t web-nic-guard` (shipped to
+# Better Stack by Vector), and run web-private-nic-guard.test.sh to observe it against stubs.
+# LIMIT: this covers the script's own commands. The unit's ExecStart wrapper expands the secret
+# heartbeat URL in an inner `bash -c` before this check can run (tracked as #9639).
 case "$-" in
   *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
@@ -105,10 +107,20 @@ TOKEN="${BETTERSTACK_LOGS_TOKEN:-}"
 INGEST_URL="${BETTERSTACK_INGEST_URL:-}"
 # The bearer token goes ONLY to this one Better Stack source. Equals local.betterstack_logs_ingest_url
 # in zot-registry.tf (and INGEST_URL_PINNED in soleur-host-bootstrap.sh); web-private-nic-guard.test.sh
-# reads the .tf at test time and reds on drift. readonly + a plain literal: nothing in the environment
-# can reach it (an exported INGEST_URL_PINNED is overwritten here).
+# reads the .tf at test time and reds on drift, and betterstack-ingest-parity.test.sh counts every copy.
+# readonly + a plain literal: an exported INGEST_URL_PINNED is overwritten here.
 readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
-if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
+# The token is spliced into curl CONFIG grammar below, so a value holding a quote, backslash or newline
+# would add directives (`url =`, `header =`, `next`). Real Better Stack tokens are plain alphanumerics:
+# anything else is refused rather than escaped.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+# SHIP_REFUSED=true when this run could not report. The heartbeat below is then withheld: a guard that
+# cannot report must not claim health, so the beat lapses and the absence alarm names the guard.
+SHIP_REFUSED=false
+if [ -n "$TOKEN" ] && ! _bearer_ok "$TOKEN"; then
+  SHIP_REFUSED=true
+  echo "[nic] bad_token: BETTERSTACK_LOGS_TOKEN has characters outside the token alphabet; refusing to build a curl config from it — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
+elif [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
   # --disable first (skip ~/.curlrc) and --noproxy '*' (ignore proxy env vars): the bearer must not
   # leave through a config file or a proxy the environment names.
   # The bearer rides a stdin config (`--config -`), never the argument list: argv is readable by every
@@ -116,6 +128,7 @@ if [ -n "$TOKEN" ] && [ "$INGEST_URL" = "$INGEST_URL_PINNED" ]; then
   post() { curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - "$INGEST_URL" --data-raw "{\"message\":\"$LINE\"}" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1; }
   post || post || echo "[nic] SOLEUR_PRIVATE_NIC egress to Better Stack Logs FAILED: $LINE" >&2
 elif [ -n "$TOKEN" ] && [ -n "$INGEST_URL" ]; then
+  SHIP_REFUSED=true
   echo "[nic] unpinned_url: refusing to send the Better Stack token to an unpinned destination — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
 else
   echo "[nic] WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset (run under 'doppler run --project soleur --config prd', source /etc/default/web-private-nic-guard) — SOLEUR_PRIVATE_NIC not shipped: $LINE" >&2
@@ -125,8 +138,10 @@ fi
 # from "guard dead"). Ping ONLY when nic_ok — a NIC-broken host must let the beat lapse so absence
 # alarms. Independent unit/failure-domain from the zot beat (folding would re-introduce OR-masking).
 URL="${WEB_NIC_GUARD_URL:-}"
-if [ "$NIC_OK" = true ] && [ -n "$URL" ]; then
-  curl --disable --noproxy '*' -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || curl --disable --noproxy '*' -fsS -m 10 -o /dev/null "$URL" 2>/dev/null || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true, url_present=yes)" >&2
+# The ping URL is itself the secret and still rides curl's argv (tracked as #9639); the flags confine it.
+beat() { curl --disable --noproxy '*' -fsS -m 10 -o /dev/null "$URL" 2>/dev/null; }
+if [ "$NIC_OK" = true ] && [ "$SHIP_REFUSED" = false ] && [ -n "$URL" ]; then
+  beat || beat || echo "[nic] WARN: web_nic_guard heartbeat ping FAILED (nic_ok=true, url_present=yes)" >&2
 fi
 # NO reboot. The web-host variant terminates here by design.
 exit 0

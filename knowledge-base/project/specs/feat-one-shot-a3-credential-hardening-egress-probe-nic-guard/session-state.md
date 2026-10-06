@@ -18,3 +18,6 @@ Splice deleted sections once (restored); IaC hook blocked one phrase (reworded);
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan and their review agents.
+
+## Review round
+- 11-seat panel at 98dd60d02b; fixes applied inline in the review commit; see decision-challenges.md (Review-round decisions).

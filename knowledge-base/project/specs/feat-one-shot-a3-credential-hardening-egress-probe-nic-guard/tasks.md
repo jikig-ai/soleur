@@ -92,8 +92,15 @@ Branch: `feat-one-shot-a3-credential-hardening-egress-probe-nic-guard` | Draft P
   - L3 [test-failures] verify every research-subagent claim at `file:line` before it enters a plan: two false
     carrier claims (size budget, `triggers_replace` membership) in this plan's own research.
 - 4.3b File issues for the follow-ups with a re-evaluation trigger: F1 (with the Rule D blind spot), and one
-  combined issue for F5/F6/F7/F8 (security-sentinel and observability findings). F2/F3/F4 ride #9217.
+  combined issue for F5/F6/F7/F8 (security-sentinel and observability findings). F2/F3 and the heartbeat half of F4 ride #9217; F1 is #9638 and F5-F8 are #9639.
 - 4.4 Evidence comments on #9217 and #7797.
 - 4.5 Post-merge (via `soleur:postmerge`): apply run `success` AND summary "SSH stage: ran" (a skipped leg is green
   too), `private_nic_guard_install` replaced, no `hcloud_server.web` line in any `Plan:`; after two timer ticks,
   `SOLEUR_PRIVATE_NIC` rows present and no `unpinned_url` rows. Note in the PR that running web-2 keeps the old guard.
+
+## Review round (2026-10-06)
+
+- [x] Token-shape guard; heartbeat withheld on refusal; `beat()` wrapper; bearer to stdin config; Rule E baseline entry removed
+- [x] NIC suite: per-call stdin attribution, golden-argv allowlist, every run audited, call-site CASES floor, hermetic env, more refused URLs
+- [x] Probe suite: instrument control for the call log, DSN-free streams, CASES floor; both suites promoted in the vacuity meta-guard
+- [x] `betterstack-ingest-parity` floor 7 to 8; mutation matrix re-run on the final tree (`mutation-matrix.md`)

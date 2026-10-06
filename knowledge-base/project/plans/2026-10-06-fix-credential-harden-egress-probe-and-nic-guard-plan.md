@@ -116,8 +116,9 @@ parity test `fresh-boot-ready.test.sh` S4a/S4d and mutation row "bearer sent to 
   `web-probes-token-rotation` verifier) — CUT from this pass; follow-up F2 (neither script runs git; the TLS-trust
   environment is a separate property from the three the brief names).
 - Hardening the IMDS curl (`169.254.169.254`) — CUT. It carries no credential.
-- Moving the bearer off argv (`curl -K -`, precedent `cloud-init-inngest.yml:327`) — CUT; follow-up F4. The
-  repo's existing precedent for this destination (`soleur-host-bootstrap.sh:1049`) also passes it in argv.
+- Moving the bearer off argv (`curl -K -`, precedent `cloud-init-inngest.yml:327`) — WAS CUT, DONE IN THE REVIEW ROUND: the sibling Rule E sweep
+  merged with this guard baselined, and `--changed` bypasses baselines, so the bearer now rides `--config -` (see `decision-challenges.md`).
+  The heartbeat URL is still on argv (#9639).
 
 **Carrier census** (what else reads or pins these two files; found by grepping basenames AND fragments of the old
 lines across every `*.test.*`, per `knowledge-base/project/learnings/test-failures/2026-10-06-which-files-feed-user-data-with-no-ignore-changes-decides-whether-a-mechanical-edit-is-a-host-replace.md`):
@@ -752,3 +753,13 @@ a conditional form misses the secret heartbeat URL); exact-equality `readonly` p
 `decision-challenges.md` (it is the headless channel `ship` renders); the F1 issue; evidence comments (named
 deliverable). DHH's point that a traced fresh-host boot powers the host off for an ingest-only key is accepted as
 R2: the refusal is what the lint requires and nothing in the boot path enables tracing.
+
+
+## Addendum — 2026-10-06 (review round, #9632)
+
+Superseded statements above, kept for the record: the Cut List entry that deferred the bearer-off-argv move (done, see its note), the Phase 1
+snippet showing `-H "Authorization: Bearer $TOKEN"` (now a stdin config), "the heartbeat still pings" on a refused URL (now withheld), and the
+baseline lists naming two files (the Rule E baseline is a third). Added in review: a token-shape guard, a `beat()` wrapper, a golden-argv
+allowlist and per-call stdin attribution in the NIC suite, call-site CASES floors in both suites (promoted in `guard-vacuity-floor.test.sh`),
+and the `betterstack-ingest-parity.test.sh` floor for `s2457081` raised 7 to 8. Tests grew to roughly 330 lines; the ~100-line target was not met
+and the reason is the test-design findings. Follow-up issues: #9638 (F1), #9639 (F5-F8).

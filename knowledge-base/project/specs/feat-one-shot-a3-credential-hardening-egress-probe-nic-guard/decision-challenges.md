@@ -47,3 +47,18 @@ Persisted by plan (headless). Rendered into the PR body by ship. Neither item is
   surface outside the two scripts (a unit file, a `.tf` alert, `cloud-init.yml`, an emit path) or widens the
   brief's three named properties. Say so if (a) or (b) should ride this PR: (b) is a one-line unit edit that
   re-triggers the same resource.
+
+## Review-round decisions (#9632, 2026-10-06)
+
+- **Bearer moved to a stdin config (reverses the plan's "F4 cut").** A sibling sweep (Rule E, baseline E) merged to `main` while this PR was
+  open with the NIC guard baselined at one site. `--changed` bypasses baselines for a touched file, so leaving it would have made the pass fail
+  the lint it exists to satisfy. The heartbeat URL is still on argv (#9639).
+- **Heartbeat withheld when the guard cannot report (new, reverses "heartbeat still pings").** A refused URL or a malformed token left the
+  heartbeat green with only an un-alerted stderr line; four seats raised it. The beat now lapses, so the existing absence alarm names the guard.
+  Cost: a pin mismatch emails "web_nic_guard heartbeat absent" even when the NIC is fine; the stderr line in Better Stack says why.
+- **Token-shape guard (new).** The token is spliced into curl config grammar, so a quote or newline would add directives. Refused, never escaped.
+- **Rejected review suggestions.** Collapsing the test harness (simplicity P2-B/C) conflicts with the test-design P1s that require the audit walk
+  and the golden-argv allowlist; the walk stays. Editing `cloud-init.yml` and `vector.toml` comments was skipped: both are rendered/deployed
+  surfaces and a comment edit there is not free; the probe header carries the correction instead.
+- **Follow-ups and where they live.** F1 is #9638; F5-F8 (and the unit wrapper expanding the heartbeat URL before the refusal, `BASH_ENV` and
+  `PS4` ordering, `webhook-deploy` sourced as root) are #9639. F2 (TLS-trust env) and F4's heartbeat half ride #9217.
