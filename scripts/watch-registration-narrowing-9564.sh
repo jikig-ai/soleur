@@ -14,7 +14,7 @@
 # Trigger (the spec's section above):
 #   (a) >= THRESHOLD registration-only runner runs after ADR-242 decision 20, and
 #   (b) the two PR-gated batteries exceed 20% of the median observed wait.
-# Only (a) is mechanical, approximated by an UPPER BOUND: commits on the default
+# Only (a) is mechanical, approximated (it can over- or under-count): commits on the default
 # branch since BASE_SHA that touch the two runner files, delete no line in either,
 # and add at least one `run_suite` line to the runner (a registration-only edit is
 # purely additive and registers a suite). (b) has no recorded data source, so the
@@ -159,7 +159,7 @@ fi
 body="$(cat <<EOF
 ### Re-evaluation watch: part (a) reached (${COUNT} registration-shaped runner commits since ${BASE_SHA:0:10})
 
-Commits on the default branch since the decision-20 merge that touch \`scripts/test-all.sh\` or \`scripts/lib/test-affected-paths.sh\`, delete no line in either, and add a \`run_suite\` line (an upper bound on registration-only runs; ${EXCLUDED} other touching commits had a deleted line or no new \`run_suite\` line and were not counted):
+Commits on the default branch since the decision-20 merge that touch \`scripts/test-all.sh\` or \`scripts/lib/test-affected-paths.sh\`, delete no line in either, and add a \`run_suite\` line (an approximation of registration-only runs, which can over- or under-count; ${EXCLUDED} other touching commits had a deleted line or no new \`run_suite\` line and were not counted):
 
 $(printf '%s' "$LIST" | sed 's/^/- /')
 
