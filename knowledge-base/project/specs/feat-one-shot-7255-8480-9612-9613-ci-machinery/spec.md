@@ -28,7 +28,7 @@ Four sibling CI-machinery repairs on one PR (closes #7255, #8480, #9612, #9613):
 
 3. **#9612** — new `scripts/lint-gh-argv-arg.py` sentinel (continuation-joined,
    comment-stripped, argv-segmented scan of `.github/workflows/*.yml|yaml` +
-   `scripts/*.sh` for a standalone `--arg` token inside a `gh` command segment)
+   `scripts/*.sh` for a standalone jq-flag token (`--arg|--argjson|--argfile|--slurpfile|--rawfile`) inside a `gh` command segment)
    + `scripts/lint-gh-argv-arg.test.sh` + both registered in `scripts/test-all.sh`.
    Normalize 13 dedupe sites (zot :240/:293/:432/:480/:516; inngest-health
    :510/:537/:566/:586/:606/:633/:1052/:1354) to the fail-open-with-`::error::`

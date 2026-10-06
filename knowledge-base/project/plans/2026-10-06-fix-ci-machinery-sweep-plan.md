@@ -503,6 +503,33 @@ surface; triggers (a)–(d) — (d) assessed: `plugins/soleur/` is an existing d
 - The `## User-Brand Impact` section is filled (threshold `none` + scope-out reason) — deepen-plan
   Phase 4.6 halts on an empty one.
 
+## Enhancement Summary (deepen-plan pass)
+
+Applied inline (no subagent spawn in this harness — the mechanical halt gates and the
+learnings sweep ran directly):
+
+- **Halt gates verified mechanically:** 4.6 `## User-Brand Impact` present (threshold `none` +
+  scope-out reason — required because `apps/web-platform/infra/` matches `SENSITIVE_PATH_RE`);
+  4.7 `## Observability` 5-field block present with an allowlisted `<15s` discoverability_test;
+  4.8 no PAT-shaped TF variable introduced (`GH_TOKEN` is a pre-existing gh-CLI env, not a
+  provisioned credential); 4.9 no UI files → wireframe gate silent; 4.10 no store/connection →
+  skip; 4.11 `lint-guard-contract.py` run over this file — `3 guard entries`, clean; 4.12
+  `## Scope Check` single unfenced heading, all subsections + `Recommendation:` present.
+- **Learning folded — jq-flag family widening** (`learnings/2026-03-04-gh-jq-does-not-support-arg-flag.md`):
+  gh rejects the whole jq-flag family in argv, not only `--arg`. Sentinel detection widens to
+  `--arg|--argjson|--argfile|--slurpfile|--rawfile` (standalone tokens); the issue's named shape
+  stays the headline case. tasks.md Phase 3 updated to match.
+- **Learning folded — workflow-file Edit-tool friction** (`learnings/2026-03-18-security-reminder-hook-blocks-workflow-edits.md`):
+  a PreToolUse security reminder may fire on the first Edit/Write of `.github/workflows/*.yml`;
+  retry the same tool call — do not work around it with sed.
+- **Precedent check (4.4):** no new scheduled workflow is introduced (hook gate `new-scheduled-cron-prefer-inngest`
+  untouched as a trigger); the dedupe normalization copies the in-repo reference shapes verbatim.
+- **Portability edge recorded:** the probe's `timeout 5s`/`date -d` are GNU-isms already shipped in
+  `cmd_cron_run_stale`; this fix preserves them unchanged (macOS hosts continue to fail-safe to 999,
+  same as today — no portability regression, out of scope for this PR).
+- **tasks.md propagation:** the flag-family widening is reflected in Phase 3 step text.
+- No corrections requiring plan-body restructuring; all four issue mappings unchanged.
+
 ## References & Research
 
 - `plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh:186-244` — the probe
