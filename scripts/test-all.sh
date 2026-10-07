@@ -4802,6 +4802,10 @@ if want_scripts; then
   # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
   # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
   run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
+  # #9677: the opt-in Docker builder-cache prune, the effective-space report (df delta + snapper
+  # note) and the cleanup-merged wrapper that places both after the cleanup lock is released.
+  # docker/findmnt/df/snapper are PATH shims; the argv the SUT sends is asserted.
+  run_suite "tests/scripts/cleanup-merged-space" bash tests/scripts/test-cleanup-merged-space.sh
   # Agent sandbox allocator (soleur-sandbox.sh new|rm): disk-only base, owner marker,
   # refusals on unmarked/foreign paths are asserted in both directions.
   run_suite "tests/scripts/soleur-sandbox" bash tests/scripts/test-soleur-sandbox.sh
@@ -5114,6 +5118,9 @@ if want_scripts; then
   run_suite "scripts/web2-rebirth-emptiness" bash scripts/web2-rebirth-emptiness.test.sh
   run_suite "scripts/web2-rebirth-never-pooled" bash scripts/web2-rebirth-never-pooled.test.sh
   run_suite "scripts/web2-rebirth-recovery-check" bash scripts/web2-rebirth-recovery-check.test.sh
+  # #9372 — the agent-dispatchable, approval-gated soft reboot of the allow-listed web-2 standby: the writer's refusal table and the
+  # read-only rows evidence reader against a fake Hetzner/Terraform/Better Stack world, with a claim-word scan and a mutation battery.
+  run_suite "scripts/web-host-reboot" bash scripts/web-host-reboot.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the

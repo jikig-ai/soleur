@@ -1110,7 +1110,7 @@ returning 500 rows and **zero** probe rows: the refuse-loop and `doppler run` wr
 takes exactly one term; 2.0 calls it twice; the wiring suite asserts one term per call and distinct
 terms. Host isolation happens after decoding, never in `--grep`.
 
-### 7. The deliberate G8/E10 divergence
+### 7. The deliberate G8/E10 divergence — RESOLVED 2026-10-07 (#8078)
 
 Guard 2 (`inngest_host_dark_gate`) requires `server_active == "inactive"`. The execute gate
 (`inngest_execute_registry_gate`) requires `server_active != "active"`. Under the P1-5 refuse loop
@@ -1125,6 +1125,15 @@ the `/proc/sys/kernel/random/boot_id` UUID shape (it is the E13 join key after h
 so a `boot_id=unknown` row — the emitter's read-failed fallback — now refuses BOTH gates as
 `unreadable`, where Guard 2 previously required only presence. Safe direction; the recut battery
 stayed green.
+
+**RESOLVED 2026-10-07 (#8078):** G8 now carries E10's predicate verbatim — present, non-empty,
+not `unknown`, and not `active` — so `activating` (the P1-5 start-refusal loop) and `failed` (a
+latched start-limit) read as not-serving while `unknown`/empty still refuse `unreadable`. The
+broadening is safe because G9 independently requires a non-200 loopback, G19 re-reads the flag
+synchronously and allows only `rolled-back`/`aborted`, and under P1-5 `activating` cannot reach
+`active` without the flag leaving the safe pre-arm state. The fixtures prove both new
+non-serving states, and the mutation battery carries the widen-back row (restoring `== inactive`
+must red the `activating` fixture) and the `!= unknown` deletion row.
 
 ### 8. The reachable-arm asymmetry is deferred
 
@@ -1773,7 +1782,9 @@ that means for this ADR. It amends no Decision.
   destroyed one (both share `host_name` during a replace). This is runbook order
   (`inngest-server.md` § "Provision unit (#8562)"), backed by the unit-side quiesce. A cutover gate
   row that refuses `op=resume` until the new `iid` has emitted `bootstrap-done` is a tracked
-  deferral, not part of this change.
+  deferral, not part of this change. **Shipped 2026-10-07 as op=resume G4 (#9177)** — the gate runs
+  `inngest-provision-unit-8562.sh` itself and refuses anything but `verdict=PASS` for the current
+  iid, so the runbook ordering rule can no longer be silently skipped (see the 2026-10-07 addendum).
 - **The singleton property is unchanged.** A host that provisions late never serves on its own
   authority: `inngest-server-flip-guard.sh` refuses a production start on an inherited `done`, one
   this host carries no `done-owner` marker for (Decision 6, added 2026-08-12, #7228). A replaced
@@ -1840,3 +1851,46 @@ v1.19.4→v1.45.1 delta includes two data-destroying migrations
 (`000006_apps_unique_active_name` force-archives+renames duplicate app names;
 `000007_spans_is_deferred` DROPs the column) plus rebuildable index DROP+recreates
 (000008/000009/000010). The follow-through tracker is filed at this PR's merge.
+
+## Addendum — 2026-10-07 (#7777, #8078, #9177) — the latch becomes a ledger, and two gate rows close
+
+Three related changes, all on the surfaces this ADR owns. It amends no Decision.
+
+- **The latch is now an append-only LEDGER, and `op=reflush` is its second record type
+  (#7777).** The monotonic latch that #7228 added — existence of
+  `/mnt/data/inngest-cutover/flip-done.latch` means "a FLUSHALL has already run" — had no
+  authorized way to be superseded: a deliberate recut (the `inngest-volume-recut` apply target's
+  `redis_keys > 0` refusal) could require the store emptied a second time, and the only answers
+  were a volume wipe or an out-of-band latch delete against the deny-all host. The latch now
+  holds one record per line — `flushed_at=… host=… dbsize=…` for a performed FLUSHALL, and
+  `cleared_at=… run=… by=… boot_id=…` for a reviewer-gated authorization to flush again —
+  appended with `>>` and never edited or truncated. `flush_already_performed` reads the NEWEST
+  record: a `cleared_at` supersedes the `flushed_at` it follows without erasing it, a later
+  `flushed_at` re-latches, and any other tail fails closed. That is the same monotonicity one
+  level up — a record is superseded only by a *later* record, never rewritten.
+- **The authorization rides the flag value, not a new secret.** `soleur-inngest/prd`'s
+  boot-isolation self-check is an exact-set match on the config, so no new secret name can
+  exist (the same constraint that kept the done-owner marker out of Doppler, #7228). `op=reflush`
+  writes `INNGEST_CUTOVER_FLIP=reflush,run=<gha-run-id>,by=<actor>` — the run id and the
+  dispatching actor ARE the evidence — and the on-host `reflush` arm appends the `cleared_at`
+  record, stamping `cleared_at` and the host's own `boot_id` at the host so a clear can never be
+  attributed to a boot that did not record it, then re-enters the shared
+  `stop → FLUSHALL → assert → flushed → start → done` path. A bare or malformed `reflush`
+  carries no authorization and is refused twice over: G4 refuses it off-host before the write,
+  and the FSM arm refuses it again on-host (`reflush-evidence-invalid`). The op sits behind the
+  same `inngest-cutover` required-reviewer environment as `op=arm`, gated on a terminal flag
+  (G1), latch-must-EXIST off-host — the inverse of arm's G3.7 (G2) — and host audibility (G3).
+  `_erg_flag_class` deliberately does NOT learn `reflush`: the execute gate's armed class stays
+  set-equal to the flip guard's prod-start allowlist (`armed|flipping|flushed|done`), and a
+  `reflush` value correctly fails both unreadable.
+- **G8 carries E10's not-serving predicate (#8078).** Recorded under §7's RESOLVED note.
+- **`op=resume` proves the host generation finished provisioning (G4, #9177).** The deferral
+  named in the #8562 addendum is shipped: `flushed` starts a prod scheduler on the current host
+  generation, and the generation's `bootstrap-done` must be evidenced first. The gate runs
+  `inngest-provision-unit-8562.sh` — the same probe the page-triage runbook uses — which anchors
+  on the newest `provision-unit-armed` row's `iid=` so a predecessor's done can never satisfy
+  it, and `resume_bootstrap_decide` proceeds only on literal `verdict=PASS` + exit 0.
+  `bootstrap-done-DEGRADED` (SQLite-only) is a named refusal, never a pass; `not-delivered`,
+  `in-progress`, probe-fault, and every unexpected shape each refuse with their own remediation.
+  The check sits after G3's audibility gate and before the mutating `flushed` write, so a
+  refusal costs nothing to leave.

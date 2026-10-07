@@ -176,6 +176,22 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cle
 3. Removes selected worktrees
 4. Cleans up empty directories
 
+### `cleanup-merged` and `space-report`
+
+`cleanup-merged` runs at every session start: it removes worktrees whose branch merged, sweeps dead-owner scratch under `/tmp` and `/var/tmp` (ADR-250), and prints what it freed. `space-report` prints the same `SOLEUR_CLEANUP_SPACE` state line without running any cleanup (read-only).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SOLEUR_QUARANTINE_DRAIN=1` | off (only the exact value `1` enables it) | Also delete scratch-quarantine entries past their TTL, inside the sweep's lock. Opt-in: a terminal delete on your machine. |
+| `SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN` / `SOLEUR_SWEEP_QUAR_WT_TTL_MIN` | 10080 (7 d) / 43200 (30 d) | Per-class TTL, minutes. |
+| `SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN` | 1440 | Floor under both TTLs, so an exported `0` cannot empty a fresh quarantine. |
+| `SOLEUR_SWEEP_DRAIN_TIMEBOX_S` / `SOLEUR_SWEEP_DRAIN_MAX_ENTRIES` | 5 / 200 | Checked between entries, per base. One very large entry can overrun them. A non-numeric value falls back to the default; a max of `0` means 200. |
+| `SOLEUR_DOCKER_PRUNE=1` / `apply` | off | After a run that removed a worktree, prune Docker build cache and dangling images older than 24 h (`1` is a dry run, an upper bound). Never `-a`, volumes or containers. Any other value (including `0`) prints `skipped reason=invalid-value`. `SOLEUR_DOCKER_TIMEOUT_S` (60) bounds each call, so `apply` can take about 140 s. |
+
+Markers (stdout): `SOLEUR_TMP_SWEEP` (adds `drained`, `drained_bytes`, `map_s`), `SOLEUR_DOCKER_PRUNE` and `SOLEUR_CLEANUP_SPACE logical_bytes=… df_delta_bytes=… fstype=… docker_prune=… snapshots=…`. A `SOLEUR_DOCKER_PRUNE skipped reason=` names every no-op: `invalid-value`, `no-worktree-removed` (the common one), `docker-missing`, `no-timeout`, `remote-daemon` (a `tcp://` or `ssh://` `DOCKER_HOST` is never pruned), `daemon-unreachable`, `timeout`, `df-failed rc=N` (dry run), `prune-failed rc=N`. Docker's own `Total:` text is embedded verbatim and is opaque. `logical_bytes` counts drained bytes only; `-` means no baseline was taken (`space-report`). `df_delta_bytes` is the signed change in free space on `/var/tmp` and can be smaller, or negative, because other processes write too and, on btrfs with snapper, snapshots keep deleted blocks pinned (`snapshots=snapper`; Soleur never deletes snapshots). `snapshots=none` is reported for any non-btrfs filesystem and for btrfs without a snapper config named `root`, so it also covers a differently named config or Timeshift.
+
+The markers stay on your machine when you run the plugin yourself. On the Soleur web platform the same lines are mirrored to server logs like every other `SOLEUR_*` marker. The sweep needs `flock`, so on stock macOS the sweep and drain skip with `flock-missing`; the Docker step needs `timeout` or `gtimeout` and otherwise prints `skipped reason=no-timeout`, and without `findmnt` the report prints `fstype=unknown snapshots=unknown`. Set `SOLEUR_DOCKER_PRUNE` in your shell profile or the session environment.
+
 ### `sync-bare-files` or `sync`
 
 Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the repo uses `core.bare=true` — on-disk files at the bare root become stale after merges since git never updates them. Auto-called after `cleanup-merged` cleans branches in bare repo context.
