@@ -287,6 +287,11 @@ transport_audit() {
     /^CALL / { flush(); k = $2; n = 0; ok1 = 0; next }
     { if (k != "") { n++; if (n == 1 && $0 ~ /^header = "Authorization: Bearer [A-Za-z0-9._~+\/=-]+"$/) ok1 = 1 } }
     END { flush(); printf "%d %d\n", miss + 0, extra + 0 }' "$STDIN_FILE")
+  # Fail CLOSED: an awk that errors leaves both empty, which must not read as "no bad calls". Also require that
+  # the stdin walk saw as many calls as the argv walk did (a control that the walk looked at anything).
+  local n_stdin n_argv
+  n_stdin=$(grep -c '^CALL ' "$STDIN_FILE" || true); n_argv=$(grep -c '^--CALL--$' "$ARGV_FILE" || true)
+  if [[ ! "$miss" =~ ^[0-9]+$ || ! "$extra" =~ ^[0-9]+$ || "$n_stdin" != "$n_argv" ]]; then miss=1; extra=1; fi
   TA_BEARER_BAD=$((miss + extra))
 }
 
@@ -447,11 +452,13 @@ assert "X1c: the untraced healthy run is not refused (positive control)" "[[ \"\
 echo "--- X2: every credentialed curl is --disable-first with --noproxy '*' ---"
 run_guard true 0 true;                              transport_audit; X2_HEALTHY_POST=$TA_POST; X2_HEALTHY_PING=$TA_PING; X2_BAD=$TA_BAD
 EXTRA_ENV=(STUB_POST_RC=1); run_guard true 0 true;  transport_audit; X2_POSTFAIL_POST=$TA_POST; X2_BAD=$((X2_BAD + TA_BAD))
+X2_POSTFAIL_BEAT=no; [[ -n "$PING" ]] && X2_POSTFAIL_BEAT=yes
 EXTRA_ENV=(STUB_PING_RC=1); run_guard true 0 true;  transport_audit; X2_PINGFAIL_PING=$TA_PING; X2_BAD=$((X2_BAD + TA_BAD))
 assert "X2 floors: a healthy run issues >=1 POST and >=1 ping (the walk is not vacuous)" \
   "[[ \"\$X2_HEALTHY_POST\" -ge 1 && \"\$X2_HEALTHY_PING\" -ge 1 ]]"
 assert "X2 floors: the failing runs reach the fallback copies (>=2 POST, >=2 ping)" \
   "[[ \"\$X2_POSTFAIL_POST\" -ge 2 && \"\$X2_PINGFAIL_PING\" -ge 2 ]]"
+assert "X2 a POST that was ATTEMPTED and failed still beats (an outage of the destination is not a refusal)" "[[ \"\$X2_POSTFAIL_BEAT\" == yes ]]"
 assert "X2: no credentialed curl is missing --disable-first or --noproxy '*' (bad calls=$X2_BAD)" "[[ \"\$X2_BAD\" -eq 0 ]]"
 
 # --- X3: the bearer goes only to the pinned URL ---------------------------------------------
@@ -543,7 +550,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=153
+MIN_CASES=154
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1

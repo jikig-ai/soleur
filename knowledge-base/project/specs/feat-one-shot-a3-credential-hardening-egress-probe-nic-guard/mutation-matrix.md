@@ -52,3 +52,8 @@ suite run, the file restored and compared.
 Not run here: appending `set -x` after the refusal and a credential command above it are owned by the repo-wide lint (Rules A and B), green on
 the final tree. Anti-vacuity: both suites now carry a `CASES` counter moved by the assert wrappers (never inside the `_pass`/`_fail` verdict helpers), a
 `[FATAL] accounting identity` check, a `MIN_CASES` floor and an instrument self-test, reported by `printf` + `exit 1`; `scripts/guard-vacuity-floor.test.sh` constructs and fires both (the suites are promoted there, ledger unchanged).
+
+Verification pass (single, after the fix round) added two rows, both RED now: R1 (the stdin-audit awk program broken, which used to read as
+"no bad calls": the audit now fails closed on non-numeric output and on a stdin/argv call-count mismatch) and R6 (a failed POST also withholding
+the beat: X2 now asserts a failed POST still beats). Known and accepted: a bearer line for the WRONG token passes the stdin golden (X5 pins the exact
+token on the healthy run, and `post()` is a single function); the heartbeat URL is not pinned by the ping golden (predates this PR, #9639 F9).
