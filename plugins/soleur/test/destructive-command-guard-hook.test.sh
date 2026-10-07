@@ -816,7 +816,7 @@ X @@ time rm -rf ~ @@ deny @@ - @@ time rm -rf ~
 X @@ an assignment prefix @@ deny @@ - @@ FOO=1 BAR=2 rm -rf ~
 X @@ bash -c 'rm -rf ~' @@ deny @@ - @@ bash -c 'rm -rf ~'
 X @@ sh -c "rm -rf $HOME" @@ deny @@ - @@ sh -c "rm -rf $HOME"
-X @@ bash -lc 'rm -rf ~' (a flag cluster) @@ deny @@ - @@ bash -lc 'rm -rf ~'
+L @@ bash -lc 'rm -rf ~' (a flag cluster, literal: a login shell may reset PATH) @@ deny @@ - @@ bash -lc 'rm -rf ~'
 X @@ nested bash -c @@ deny @@ - @@ bash -c 'bash -c "rm -rf ~"'
 X @@ eval "rm -rf ~" @@ deny @@ - @@ eval "rm -rf ~"
 X @@ eval of eval @@ deny @@ - @@ eval "eval 'rm -rf ~'"
@@ -860,7 +860,7 @@ X @@ doppler run with options @@ ask @@ - @@ doppler run --project p --config c 
 X @@ aws-vault exec p -- terraform destroy @@ ask @@ - @@ aws-vault exec p -- terraform destroy
 X @@ op run -- terraform destroy @@ ask @@ - @@ op run -- terraform destroy
 X @@ bash -c 'terraform destroy' @@ ask @@ - @@ bash -c 'terraform destroy'
-X @@ bash -lc 'terraform destroy' @@ ask @@ - @@ bash -lc 'terraform destroy'
+L @@ bash -lc 'terraform destroy' (literal: a login shell may reset PATH) @@ ask @@ - @@ bash -lc 'terraform destroy'
 X @@ sh -c "terraform destroy" @@ ask @@ - @@ sh -c "terraform destroy"
 X @@ zsh -c 'terraform destroy' @@ ask @@ - @@ zsh -c 'terraform destroy'
 X @@ dash -c 'terraform destroy' @@ ask @@ - @@ dash -c 'terraform destroy'
