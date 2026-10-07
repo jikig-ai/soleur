@@ -739,6 +739,61 @@ tree_row() {
   GUARD_HOOK="$saved"
 }
 
+# Instrument self-test, part 2: the helpers that OWN the verdict (verdict_of, chk, jqchk and env_row's comparison) are driven with a
+# known-good and a known-bad input each, before any row. Reported by printf + exit 1, never through the helpers it backstops. A
+# helper that always reads "ok" would otherwise turn every row green: nothing else in the suite drives them with a bad input.
+_st_fatal() { printf '[FATAL] instrument self-test: %s\n' "$1" >&2; exit 1; }
+_st_p="$PASS_COUNT"; _st_f="$FAIL_COUNT"; _st_c="$CHECKED"; _st_rowsel="$ROWSEL"; _st_out="$HOOK_OUT"
+ROWSEL=""   # the probes below must run whatever DCG_ROWS selects
+[[ "$(verdict_of a a)" == ok && "$(verdict_of a b)" == bad && "$(verdict_of '' x)" == bad && "$(verdict_of ask none)" == bad ]] \
+  || _st_fatal "verdict_of does not tell an equal pair from an unequal one"
+# chk: ok records a pass and only a pass, anything else records a fail and only a fail, and CHECKED moves for each
+{ chk "self-test: chk ok" ok; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 1)) && "$FAIL_COUNT" -eq "$_st_f" && "$CHECKED" -eq $((_st_c + 1)) ]] || _st_fatal "chk did not record a pass for ok"
+{ chk "self-test: chk bad" bad; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 1)) && "$FAIL_COUNT" -eq $((_st_f + 1)) && "$CHECKED" -eq $((_st_c + 2)) ]] || _st_fatal "chk did not record a fail for bad"
+{ chk "self-test: chk other" "okay"; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 1)) && "$FAIL_COUNT" -eq $((_st_f + 2)) && "$CHECKED" -eq $((_st_c + 3)) ]] || _st_fatal "chk did not record a fail for a value that is not exactly ok"
+# jqchk: asserts on HOOK_OUT; a true filter passes, a false and a null filter fail, extra jq args reach the filter
+# (the count-only meta copy has FAST set, where jqchk records a fixed bad: nothing to probe there)
+if [[ -z "$FAST" ]]; then
+HOOK_OUT='{"a":1,"b":"x"}'
+_st_p="$PASS_COUNT"; _st_f="$FAIL_COUNT"
+{ jqchk "self-test: jqchk true" '.a == 1'; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 1)) && "$FAIL_COUNT" -eq "$_st_f" ]] || _st_fatal "jqchk failed a filter that is true of the output"
+{ jqchk "self-test: jqchk false" '.a == 2'; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 1)) && "$FAIL_COUNT" -eq $((_st_f + 1)) ]] || _st_fatal "jqchk passed a filter that is false of the output"
+{ jqchk "self-test: jqchk null" '.zz'; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 1)) && "$FAIL_COUNT" -eq $((_st_f + 2)) ]] || _st_fatal "jqchk passed a filter that is null on the output"
+{ jqchk "self-test: jqchk arg" '.b == $v' --arg v x; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 2)) && "$FAIL_COUNT" -eq $((_st_f + 2)) ]] || _st_fatal "jqchk did not hand its --arg to the filter"
+HOOK_OUT=""
+{ jqchk "self-test: jqchk empty output" '.a == 1'; } >/dev/null 2>&1
+[[ "$PASS_COUNT" -eq $((_st_p + 2)) && "$FAIL_COUNT" -eq $((_st_f + 3)) ]] || _st_fatal "jqchk passed on an empty output"
+fi
+# env_row (and hook_run, classify): one stub hook that asks and one that stays silent, each against a wanted ask and a wanted none
+if [[ -z "$FAST" ]]; then
+  assert_fixture_dir "$WORK"
+  mkdir -p "$WORK/selftest" || harness_die "selftest mkdir"
+  cat > "$WORK/selftest/ask.sh" <<'ASKEOF'
+#!/bin/sh
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"r"}}'
+ASKEOF
+  printf '#!/bin/sh\nexit 0\n' > "$WORK/selftest/silent.sh"
+  _st_saved="$GUARD_HOOK"
+  _st_run() { # <stub> <want> <expect: ok|bad>
+    local p0="$PASS_COUNT" f0="$FAIL_COUNT"
+    GUARD_HOOK="$WORK/selftest/$1"; { env_row "self-test: env_row" "$2" '{}'; } >/dev/null 2>&1; GUARD_HOOK="$_st_saved"
+    if [[ "$3" == ok ]]; then [[ "$PASS_COUNT" -eq $((p0 + 1)) && "$FAIL_COUNT" -eq "$f0" ]]; else [[ "$PASS_COUNT" -eq "$p0" && "$FAIL_COUNT" -eq $((f0 + 1)) ]]; fi
+  }
+  _st_run ask.sh ask ok || _st_fatal "env_row did not pass a stub hook that asks when an ask was wanted"
+  _st_run silent.sh none ok || _st_fatal "env_row did not pass a stub hook that is silent when none was wanted"
+  _st_run ask.sh none bad || _st_fatal "env_row passed a stub hook that asks when none was wanted"
+  _st_run silent.sh ask bad || _st_fatal "env_row passed a stub hook that is silent when an ask was wanted"
+fi
+ROWSEL="$_st_rowsel"; HOOK_OUT="$_st_out"; GOT=""
+PASS_COUNT=0; FAIL_COUNT=0; CHECKED=0; ROWS_LIT=0; SELECTED=0
+
 # =====================================================================================================
 echo "== static: the hook file, its header and its portability =="
 if [[ -f "$GUARD_HOOK" && -x "$GUARD_HOOK" ]]; then _x=ok; else _x=bad; fi
