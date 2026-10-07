@@ -112,4 +112,30 @@ describe("Devin plugin package", () => {
       for (const toolName of ["exec", "Bash"]) expect(matcher.test(toolName)).toBe(true);
     }
   });
+
+  test("the destructive-command guard binds Bash only, and Devin's exec is a recorded skip rather than an accident (W2 D9)", () => {
+    const { hooks } = readJson(join(pluginRoot, "hooks/hooks.json")) as {
+      hooks: { PreToolUse: { matcher?: string; hooks: { command: string }[] }[] };
+    };
+    const guards = hooks.PreToolUse.filter((entry) =>
+      entry.hooks.some((hook) => hook.command.includes("destructive-command-guard")),
+    );
+    expect(guards.length).toBe(1);
+    const matcher = new RegExp(guards[0].matcher ?? "");
+    expect(matcher.test("Bash")).toBe(true);
+    expect(matcher.test("exec")).toBe(false);
+    // The ledger row that says why exec is not bound: a hook that is not bound under Devin must say so there.
+    const ledger = readFileSync(join(repoRoot, ".claude/hooks/devin-dispositions.tsv"), "utf8")
+      .split("\n")
+      .filter((line) => line.includes("plugins/soleur/hooks/destructive-command-guard.sh"))
+      .map((line) => line.split("\t"));
+    expect(ledger.length).toBe(1);
+    expect(ledger[0].slice(0, 5)).toEqual([
+      "soleur-plugin",
+      "plugins/soleur/hooks/destructive-command-guard.sh",
+      "PreToolUse",
+      "^Bash$",
+      "skip",
+    ]);
+  });
 });
