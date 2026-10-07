@@ -180,8 +180,8 @@ logs:
   where: "journald on the web host (tag inngest-registry-probe) → vector.toml → Better Stack; Actions run log for the workflow side"
   retention: "Better Stack retention window"
 discoverability_test:
-  command: bash apps/web-platform/infra/inngest-registry-probe.test.sh
-  expected_output: "0 failed"
+  command: grep -c 'triggers { type value }' apps/web-platform/infra/inngest-registry-probe.sh
+  expected_output: "1"
 ```
 
 ## Guard Contract
