@@ -9,7 +9,19 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${DIR}/.." && pwd)"
 RSCRIPT="${ROOT}/scripts/web-host-reboot.sh"
 ESCRIPT="${ROOT}/scripts/web-host-reboot-evidence.sh"
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+# A fixture directory is refused unless it is a non-empty absolute path (the canonical guard the repo's fixture lints key on).
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$ROOT"
+TMP="$(mktemp -d)"; assert_fixture_dir "$TMP"; trap 'rm -rf "$TMP"' EXIT
 REAL_DATE="$(command -v date)"
 TOK="tok-SENTINEL-9f3a7c"
 SID=169095540
@@ -148,7 +160,7 @@ fx_boot() { # id first_age newest_age n
 # ---- the world ---------------------------------------------------------------------------------------------------------
 WN=0
 world() { # flags...   (builds the reboot AND evidence world; every file is one small fact)
-  WN=$((WN + 1)); W="${BATTERY_DIR:-$TMP}/w.${WN}"; rm -rf "$W"; mkdir -p "$W"; export WORLD="$W"
+  WN=$((WN + 1)); W="${BATTERY_DIR:-$TMP}/w.${WN}"; assert_fixture_dir "$W"; rm -rf "$W"; mkdir -p "$W"; export WORLD="$W"
   : > "$W/calls.log"; : > "$W/writes.log"; : > "$W/order.log"; : > "$W/queries.log"; : > "$W/argv.log"
   echo "$SID" > "$W/server_id"; echo ok > "$W/servers_mode"; echo 2026-10-06T19:32:09+00:00 > "$W/server_created"
   echo 1 > "$W/state_web1"; echo "$SID" > "$W/state_web2"; echo absent > "$W/never"
@@ -181,16 +193,16 @@ world() { # flags...   (builds the reboot AND evidence world; every file is one 
   [[ -f "$W/approvals_fail" ]] || echo '[{"user":{"login":"approver-one"},"state":"approved"}]' > "$W/approvals"
 }
 # set_rows <ready|probe|boots> <content...>   (replaces one fixture file)
-set_rows() { local k="$1"; shift; printf '%s\n' "$@" > "$W/bs.$k"; }
-set_boots() { : > "$W/bs.boots"; local b; for b in "$@"; do fx_boot ${b} >> "$W/bs.boots"; done; }   # each arg: "id first newest n"
-bsfail() { echo "${2:-99}" > "$W/bsfail.$1"; echo "${3:-503}" > "$W/bsfail_mode.$1"; }
+set_rows() { local k="$1"; shift; assert_fixture_dir "$W"; printf '%s\n' "$@" > "$W/bs.$k"; }
+set_boots() { assert_fixture_dir "$W"; : > "$W/bs.boots"; local b; for b in "$@"; do fx_boot ${b} >> "$W/bs.boots"; done; }   # each arg: "id first newest n"
+bsfail() { assert_fixture_dir "$W"; echo "${2:-99}" > "$W/bsfail.$1"; echo "${3:-503}" > "$W/bsfail_mode.$1"; }
 now_in_world() { if [[ -f "$W/clock" ]]; then cat "$W/clock"; else "$REAL_DATE" -u +%s; fi; }
 anchor_now() { echo $(( $(now_in_world) - SINCE )); }
 
 # ---- row bookkeeping ---------------------------------------------------------------------------------------------------
 deny_hits() { grep -iEo "$DENY_RE" || true; }
 check() { # <name> <condition-result 0|1>
-  echo x >> "$BATTERY_DIR/checks"
+  assert_fixture_dir "$BATTERY_DIR"; echo x >> "$BATTERY_DIR/checks"
   if [[ "$2" -ne 0 ]]; then printf 'FAILED %s\n' "$1"; fi
 }
 cond() { if "$@"; then echo 0; else echo 1; fi; }
@@ -199,7 +211,7 @@ RBASH=(bash); EBASH=(bash); RENV=(); ENVE=()
 # universal checks over one finished run: footer on every path, no claim word, no secret, no unexpected call
 common_checks() { # <name> <stdout> <script-kind: r|e>
   local name="$1" o="$2" kind="$3" err hits
-  echo x >> "$BATTERY_DIR/scanned"
+  assert_fixture_dir "$BATTERY_DIR"; echo x >> "$BATTERY_DIR/scanned"
   err="$(grep -v -e '^::add-mask::' -e '^+' "$W/stderr" 2>/dev/null || true)"
   [[ "$o" == *"$FOOTER"* ]] || printf 'FAILED %s (the fixed footer is missing from stdout)\n' "$name"
   hits="$(printf '%s\n%s\n' "$o" "$err" | deny_hits | head -3 | tr '\n' ' ')"
@@ -217,7 +229,7 @@ common_checks() { # <name> <stdout> <script-kind: r|e>
 runr() { # <name> <want-rc> <want-substring|-> <args...>
   local name="$1" want="$2" sub="$3"; shift 3
   local o rc=0 e
-  echo x >> "$BATTERY_DIR/runs"; echo r >> "$BATTERY_DIR/rruns"
+  assert_fixture_dir "$BATTERY_DIR"; echo x >> "$BATTERY_DIR/runs"; echo r >> "$BATTERY_DIR/rruns"
   local -a envv=(PATH="$TMP/bin:/usr/bin:/bin" HOME="$W" WORLD="$W" INFRA_DIR="$W" GITHUB_OUTPUT="$W/gh_out" GITHUB_STEP_SUMMARY="$W/summary"
                  WEB_HOST_REBOOT_ACTION_POLL_S=0 REPO=o/r GH_TOKEN=x)
   [[ -f "$W/no_token" ]] || envv+=(HCLOUD_TOKEN="$TOK")
@@ -437,12 +449,16 @@ battery_evidence() {
   world; rune "evidence: an unknown verb is a usage error" 64 "usage" frobnicate
   world; rune "evidence: no verb is a usage error" 64 "usage"
   # the helper must load and must define every function the reader calls
-  local sb="$BATTERY_DIR/sb"; mkdir -p "$sb/scripts"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$sb/scripts/"; cp "$E_SCRIPT" "$sb/scripts/web-host-reboot-evidence.sh"
+  local sb="$BATTERY_DIR/sb"
+  assert_fixture_dir "$sb"; assert_fixture_dir "$E_SCRIPT"; assert_fixture_dir "$ROOT"
+  mkdir -p "$sb/scripts"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$sb/scripts/"; cp "$E_SCRIPT" "$sb/scripts/web-host-reboot-evidence.sh"
   sed -i 's/^w2l_fetch_ready() .*/: removed/' "$sb/scripts/lib/web2-luks-rows.sh"
   world; E_SAVE="$E_SCRIPT"; E_SCRIPT="$sb/scripts/web-host-reboot-evidence.sh"
   rune "evidence: a helper that lacks a function the reader calls is exit 3" 3 "CANNOT ESTABLISH" $(grade_args); E_SCRIPT="$E_SAVE"
   # BASH_SOURCE-relative resolution is real: a sandbox helper with another host name is what the sandbox script queries
-  local sb2="$BATTERY_DIR/sb2"; mkdir -p "$sb2/scripts"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$sb2/scripts/"; cp "$E_SCRIPT" "$sb2/scripts/web-host-reboot-evidence.sh"
+  local sb2="$BATTERY_DIR/sb2"
+  assert_fixture_dir "$sb2"; assert_fixture_dir "$E_SCRIPT"; assert_fixture_dir "$ROOT"
+  mkdir -p "$sb2/scripts"; cp -r "$ROOT/scripts/lib" "$ROOT/scripts/betterstack-query.sh" "$sb2/scripts/"; cp "$E_SCRIPT" "$sb2/scripts/web-host-reboot-evidence.sh"
   sed -i 's/^W2L_HOST_NAME="soleur-web-2"/W2L_HOST_NAME="soleur-web-9-sandbox"/' "$sb2/scripts/lib/web2-luks-rows.sh"
   world; E_SAVE="$E_SCRIPT"; E_SCRIPT="$sb2/scripts/web-host-reboot-evidence.sh"; rune "evidence: (control) a sandbox copy resolves its OWN helper" 4 "-" $(grade_args)
   check "evidence: (control) the sandbox helper's host name reached the query" "$([[ "$(grep -c 'soleur-web-9-sandbox' "$W/sql.log")" -ge 1 ]]; echo $?)"; E_SCRIPT="$E_SAVE"
@@ -453,7 +469,7 @@ battery_evidence() {
   world; bsfail boots; rune "evidence: snapshot with a read fault prints unavailable and still exits 0" 0 "unavailable" snapshot
   world; touch "$W/no_creds"; rune "evidence: snapshot without credentials is exit 3" 3 "CANNOT ESTABLISH" snapshot
   # ---- the deadline is a wall clock, however many iterations that takes; the clock is read before the queries
-  world clock; local a; a="$(anchor_now)"; : > "$W/order.log"
+  world clock; local a; a="$(anchor_now)"; assert_fixture_dir "$W"; : > "$W/order.log"
   rune "evidence: a 2 minute window with a 30 s poll ends at the deadline with the exit-4 reason" 4 "reason=request_not_acted_on" grade --anchor "$a" --window-min 2 --poll-s 30
   check "evidence: the 30 s poll made 5 iterations" "$([[ "$(printf '%s\n' "$LASTOUT" | grep -c '^iteration ')" == 5 ]]; echo $?)"
   check "evidence: the clock is read before each iteration's queries (no sleep leads straight into a query)" "$([[ "$(tr '\n' ' ' < "$W/order.log")" != *"S Q"* && "$(tr '\n' ' ' < "$W/order.log")" == *"S D Q Q Q"* ]]; echo $?)"
@@ -677,6 +693,7 @@ PY
 
 mk_sandbox() { # <dir>
   local d="$1" f
+  assert_fixture_dir "$d"; assert_fixture_dir "$DIR"; assert_fixture_dir "$RSCRIPT"; assert_fixture_dir "$ESCRIPT"
   mkdir -p "$d/scripts" "$d/apps/web-platform/infra"
   cp -r "$ROOT/scripts/lib" "$d/scripts/"
   cp "$ROOT/scripts/betterstack-query.sh" "$RSCRIPT" "$ESCRIPT" "$DIR/web-host-reboot.test.sh" "$d/scripts/"
@@ -744,7 +761,10 @@ n_res="$(find "$MUT_DIR/res" -type f -name '[0-9]*' | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "  FAIL a mutant did not report ($n_res of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
 MUT_FLOOR=42
-if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then printf '  FAIL mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"; exit 1; fi
+if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then
+  printf '  FAIL mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
+  exit 1
+fi
 printf 'mutants: %s ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
 # The pristine files are untouched: the real subjects, the helper and the rebirth script hash the same as at the start.
 SUM_AFTER="$(cd "$ROOT" && sha256sum scripts/web-host-reboot.sh scripts/web-host-reboot-evidence.sh scripts/lib/web2-luks-rows.sh scripts/betterstack-query.sh scripts/web2-rebirth.sh 2>/dev/null | sort)"

@@ -540,6 +540,15 @@ AFFECTED_SCRIPTS_WEB2_REBIRTH_RECOVERY_CHECK_PATHS=(
   "scripts/web2-rebirth-recovery-check.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# #9372: the web-host reboot suite walks the tracked tree under scripts/, .github/ and apps/ (its census of reboot-request call sites, so a
+# third such site anywhere in those roots is RED) and reads the workflow, the infra census suite and the rebirth scripts it pins
+# helper bodies against; its verdict is scoped to those three roots, not to the rest of the corpus (plugins/, knowledge-base/).
+AFFECTED_SCRIPTS_WEB_HOST_REBOOT_PATHS=(
+  "scripts/"
+  ".github/"
+  "apps/"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_SCRIPTS_TUNNEL_CONNECTOR_CENSUS_PATHS=(
   "scripts/tunnel-connector-census.sh"
   "scripts/tunnel-connector-census.test.sh"

@@ -709,7 +709,10 @@ done <<<"$report"
 printf 'real workflow: %s rows, %s failed\n' "$ran" "$fails"
 # Floors are reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
 ROW_FLOOR=71
-if [[ "${ran:-0}" -lt "$ROW_FLOOR" ]]; then printf 'FAIL - row floor: only %s rows ran (floor %s)\n' "$ran" "$ROW_FLOOR"; exit 1; fi
+if [[ "${ran:-0}" -lt "$ROW_FLOOR" ]]; then
+  printf 'FAIL - row floor: only %s rows ran (floor %s)\n' "$ran" "$ROW_FLOOR"
+  exit 1
+fi
 
 # ---- the mutation battery: one edit per row on a COPY, each must go red; must-pass edits stay green ------------------------------
 # A mutant is a python snippet that transforms the workflow text `s` through rep()/swap(); an edit that does not land exactly the
@@ -1039,7 +1042,10 @@ n_res="$(find "$TMP/mres" -type f | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "FAIL - a mutant did not report (${n_res} of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
 MUT_FLOOR=65
-if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then printf 'FAIL - mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"; exit 1; fi
+if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then
+  printf 'FAIL - mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
+  exit 1
+fi
 printf 'mutants: %s ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
 echo
 if [[ "$fails" -gt 0 ]]; then echo "web-host-reboot-workflow: ${fails} FAILED"; exit 1; fi
