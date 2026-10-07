@@ -103,3 +103,47 @@ A support response must be bound to the intended project; generic documentation
 does not prove its actual settings. Record unanswered items as unknown. Provider
 permission for the exact hosted authentication route remains a separate request
 prepared in the [account guide](../feat-one-shot-codex-web-live-paths/account-evidence-guide-2026-10-06.md#exact-provider-route).
+
+## Read-only inspection authorization and access results — 2026-10-07
+
+The operator explicitly authorized read-only inspection of the nominated test
+account's project metadata, project retention and inherited organization
+retention. This supersedes only the earlier authenticated-settings-read hold.
+Inference, setting changes, key creation, credential-value inspection and
+browser-auth copying remain prohibited. It grants no Web qualification,
+recovery retry, cohort change or promotion permission.
+
+A fresh isolated, headed browser reached OpenAI sign-in. The operator entered
+authentication directly in that browser, then reported repeated Cloudflare
+verification. A redacted snapshot independently showed a security-verification
+heading and human-verification checkbox. No authenticated project page was
+observed. Challenge retries stopped and that browser was closed; no browser
+authentication state was exported or copied.
+
+A subsequent names-only check of Doppler `soleur` configs `prd`, `dev`,
+`prd_terraform` and `cli_ops` returned no reference names containing `OPENAI`
+or `CODEX`. No secret values were requested. This is limited reference discovery,
+not proof that the nominated account has no key. Neither of the two checked
+admin-key environment references was present. No running Chrome/Chromium/Brave
+browser process was found for inspection in place.
+
+The public Help Center loaded in a separate isolated browser. Its Open chat
+button did not expose an intake form; after rejecting optional cookies, the
+page displayed an error. The cause was not established. That browser was
+closed. No support request, interest form or other external message was sent.
+
+Official documentation supplies a concrete read-only alternative:
+
+| Read | Documented result | Evidence limit |
+|---|---|---|
+| [Project metadata](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/methods/retrieve) | Optional `residency`, including Global, regional storage or combined storage/processing configurations | An omitted field does not establish a region |
+| [Project retention](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/subresources/data_retention/methods/retrieve) | Project retention type, including `organization_default` | Inheritance needs the organization value |
+| [Organization retention](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/data_retention/methods/retrieve) | Configured organization retention type | Availability or an error alone does not prove the effective policy |
+
+These documented Admin API reads were not executed; the examples require admin
+authentication and no suitable access reference was established. Project residency
+also does not establish an actual request's processing location: the
+[regional-processing guide](https://developers.openai.com/api/docs/guides/your-data#select-a-processing-region-per-request)
+requires endpoint, model and eligibility checks. Account retention/inheritance
+and configured storage/processing regions remain unconfirmed. The prepared
+support request above remains unsent, and both mode dispositions are unchanged.
