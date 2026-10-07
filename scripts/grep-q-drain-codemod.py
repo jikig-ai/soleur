@@ -564,14 +564,14 @@ def do_verify(args):
     if sh(["git", "-C", root, "rev-parse", "--verify", "--quiet", base + "^{commit}"], check=False).returncode != 0:
         die(3, "UNRESOLVED: base %r does not resolve to a commit; nothing was verified" % base)
     ns = sh(["git", "-C", root, "diff", "--name-status", "--no-renames", "--no-color", base]).stdout.decode("latin-1")
+    # only files the guard's own pathspec sweeps are in scope (the guard file itself, this tool and docs are not)
+    swept = set(sh(["git", "-C", root, "ls-files", "--"] + pathspec).stdout.decode("latin-1").split("\n"))
     files = []
     unexplained = []
     for raw in ns.splitlines():
         status, _, path = raw.partition("\t")
         row = owner_of(path, globs)
-        if row not in wanted or path in args.exclude:
-            continue
-        if not path.endswith((".sh", ".bash", ".bats", ".yml", ".yaml", ".tf", ".template", ".js")):
+        if row not in wanted or path in args.exclude or path not in swept:
             continue
         if status != "M":
             unexplained.append("%s: status %s (only modifications of existing files are a transform)" % (path, status))

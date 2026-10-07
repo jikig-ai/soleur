@@ -78,6 +78,11 @@
 #   POSIX sh, Terraform inline, runcmd, or a value that may be empty  ->  producer | grep -cE P >/dev/null   (same exit status as -q, reads all input)
 #   an output-bearing  | grep -m1 P | ...  in bash, on a value that is never empty  ->  grep -m1 P <<<"$V" | ...
 #   a line that must show the shape  ->  append  # sigpipe-demo: intentional
+# Wave B (#9217) converts the test-harness rows with scripts/grep-q-drain-codemod.py: `apply` is a dry run unless --write, `verify --base REF
+# --hand-edits FILE` proves a diff is only that rewrite plus listed hand edits. It refuses, into a printed hand queue, a -m/--max-count (still an
+# early exit), an operand-q cluster (-eq), an unbounded producer, a redirected stdout, a match inside a quoted string or heredoc (data), and any
+# file naming sigpipe/EPIPE/false-FAIL/broken pipe unless a human has read it (a demonstration may be what the line is). The tool and its selftest
+# below are deleted with the last glob row.
 # A gate whose MISS skips a check must route a grep that could not run (rc above 1) to the gate, not to "clean". Note that a
 # failed here-string or process substitution returns rc 1 (a miss), not above 1, so this routing covers a bad pattern or an
 # unreadable file, not a redirect failure.
@@ -427,16 +432,13 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
 SWEEP_DEFERRALS=(
-  '.claude/*.test.sh | <= | 91 | #9217'
+  '.claude/*.test.sh | <= | 5 | #9217'
   'tests/* | <= | 181 | #9217'
   'plugins/soleur/test/* | <= | 140 | #9217'
   'plugins/soleur/*.test.sh | <= | 66 | #9217'
   'apps/web-platform/*.test.sh | <= | 180 | #9217'
-  '.github/scripts/test/* | <= | 9 | #9217'
   'scripts/*.test.sh | <= | 128 | #9217'
-  'scripts/test-* | <= | 6 | #9217'
-  'scripts/lib/test-* | <= | 1 | #9217'
-  '*.test.sh | <= | 2 | #9217'
+  'scripts/test-* | <= | 2 | #9217'
   # Wave A2 (this table's last production rows) converted .github/, lefthook.yml, the drain workflow prompt and every other
   # apps/web-platform/infra file. These four stay, file-exact and tight (`=`), because their bytes feed `user_data` of
   # `hcloud_server.{registry,inngest,git_data}`, which carry NO `ignore_changes = [user_data]` (ADR-100, ADR-169): any edit is a

@@ -1,0 +1,5 @@
+# S1 hand edits, keyed by BASE-side (origin/main 411f034290) line range: path:OLD[-OLD2]:reason
+.github/scripts/test/test-tag-filter.sh:72-75:H-m mirror: read the sorted tag list into a variable, grep -m1 reads the value (reusable-release.yml shape)
+.github/scripts/test/test-tag-filter.sh:108-109:H-m mirror inside the bash -c block (ac7-pipefail-safe)
+.github/scripts/test/test-tag-filter.sh:137-138:H-m mirror for the unescaped-regex control
+.claude/hooks/iac-plan-write-guard.test.sh:268:H-demo: T6 asserts the pipe form races; marker appended
