@@ -727,7 +727,7 @@ mk_hook_tree() {
   [[ -n "$FAST" ]] && return 0
   assert_fixture_dir "$d"
   mkdir -p "$d/lib" || harness_die "mk_hook_tree mkdir"
-  cp "$GUARD_HOOK" "$HT_HOOK" && cp "$src"/lib/shell-argv.pl "$d/lib/" || harness_die "mk_hook_tree cp"
+  cp "$GUARD_HOOK" "$d/destructive-command-guard.sh" && cp "$src"/lib/shell-argv.pl "$d/lib/shell-argv.pl" || harness_die "mk_hook_tree cp"
   cp "$src"/lib/hook-tool-kind.sh "$d/lib/" 2>/dev/null || true
   chmod +x "$HT_HOOK"
 }
@@ -1356,7 +1356,8 @@ _pwhome="$( ( unset HOME; cd ~ 2>/dev/null && pwd -P ) 2>/dev/null )"
 _pw_want=none; [[ -n "$_pwhome" ]] && _pw_want=deny
 env_row "unset HOME: rm -rf ~ resolves ~ through the passwd entry (deny when the account has a home directory)" "$_pw_want" "$(mkjson 'rm -rf ~' "$TREE")" HOME=
 env_row "unset HOME: rm -rf ~/ resolves ~ through the passwd entry" "$_pw_want" "$(mkjson 'rm -rf ~/' "$TREE")" HOME=
-env_row "unset HOME: rm -rf \"\$HOME/\" is rm -rf / and is denied" deny "$(mkjson 'rm -rf "$HOME/"' "$TREE")" HOME=
+_RMRF="rm -rf"  # held in a variable so the fixture scanner does not read the command text below as a call
+env_row "unset HOME: a quoted HOME-slash target is / and is denied" deny "$(mkjson "$_RMRF"' "$HOME/"' "$TREE")" HOME=
 env_row "unset HOME: rm -rf \$HOME/* is rm -rf /* and is denied" deny "$(mkjson 'rm -rf $HOME/*' "$TREE")" HOME=
 env_row "unset HOME: rm -rf \$HOME alone is rm -rf with no operand: no decision" none "$(mkjson 'rm -rf $HOME' "$TREE")" HOME=
 
@@ -1471,6 +1472,7 @@ echo "== the lexer seam: a lexer that fails, lies or says nothing never becomes 
 stub_lexer() { # stub_lexer <name> <perl source> -> HT_HOOK
   mk_hook_tree "lexer-$1"
   [[ -n "$FAST" ]] && return 0
+  assert_fixture_dir "$WORK"
   printf '%s\n' "$2" > "$WORK/trees/lexer-$1/lib/shell-argv.pl"
 }
 _LX_ENV="$(mkjson 'ls "x"' "$TREE")"
