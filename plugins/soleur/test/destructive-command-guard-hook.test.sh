@@ -887,6 +887,7 @@ ASKEOF
     if [[ "$3" == ok ]]; then [[ "$PASS_COUNT" -eq $((p0 + 1)) && "$FAIL_COUNT" -eq "$f0" ]]; else [[ "$PASS_COUNT" -eq "$p0" && "$FAIL_COUNT" -eq $((f0 + 1)) ]]; fi
   }
   # a stub that answers correctly after 6 s: the elapsed limit of bound_row (5 s) is the only thing that can fail it
+  assert_fixture_dir "$WORK"
   { printf '#!/bin/sh\nsleep 6\n'; tail -n +2 "$WORK/selftest/ask.sh"; } > "$WORK/selftest/slow.sh"
   chmod +x "$WORK/selftest/slow.sh"
   _st_run ask.sh ask ok || _st_fatal "env_row did not pass a stub hook that asks when an ask was wanted"
@@ -923,6 +924,7 @@ ASKEOF
   _st_call silent.sh bad LH "self-test: LH" ask /home/st-fixture 'terraform destroy' || _st_fatal "LH passed a hook that is silent where the literal ask is wanted"
   _st_call ask.sh bad LH "self-test: LH" none /home/st-fixture 'ls' || _st_fatal "LH passed a hook that asks where none is wanted"
   # bound_row hands the hook the working tree for a `-` cwd (as run_row does), never the literal `-`
+  assert_fixture_dir "$WORK"
   { printf '#!/bin/sh\ncat > "%s/selftest/cwd.in"\n' "$WORK"; tail -n +2 "$WORK/selftest/ask.sh"; } > "$WORK/selftest/cwd.sh"; chmod +x "$WORK/selftest/cwd.sh"
   _st_call cwd.sh ok bound_row "self-test: bound_row cwd" ask - 'ls' || _st_fatal "bound_row did not pass a hook that asks"
   [[ "$("$JQ_BIN" -r .cwd "$WORK/selftest/cwd.in" 2>/dev/null)" == "$TREE" ]] || _st_fatal "bound_row handed the hook the cwd '$("$JQ_BIN" -r .cwd "$WORK/selftest/cwd.in" 2>/dev/null)', not the working tree, for a - cwd"
@@ -1026,6 +1028,7 @@ _st_roster ok hook-ids.sh readme-all.md "a row that lists every derived id"
 _st_roster bad hook-ids.sh readme-missing.md "a row that lacks one derived id"
 _st_roster bad hook-ids.sh readme-norow.md "a README with no row for the hook"
 _st_roster bad hook-ids.sh readme-absent.md "a README that does not exist"
+assert_fixture_dir "$WORK"
 printf 'note 1 only-one\n' > "$WORK/selftest/hook-few.sh"
 _st_roster bad hook-few.sh readme-all.md "a derivation that found too few ids"
 grep -v 'rule-l' "$WORK/selftest/hook-ids.sh" > "$WORK/selftest/hook-lost.sh"
@@ -1101,6 +1104,7 @@ _st_save
 assert_fixture_dir "$WORK"
 mkdir -p "$WORK/selftest" || harness_die "selftest mkdir"
 _st_rm_fixture() { # <name> <payload printed inside the section>
+  assert_fixture_dir "$WORK"
   printf '# Plugin\n\n## Destructive-Command Guard\n\nfiller one\nfiller two\nfiller three\nfiller four\n\n%s\n\n## Next section\n\nmore\n' "$2" > "$WORK/selftest/readme-$1.md"
 }
 _st_rm_case() { # <ok|bad> <fixture name> <sentence> <what> [allowed continuation]
@@ -1839,7 +1843,7 @@ rule_row "rule id: env -iS asks with its own rule id" "env -iS 'rm -rf /'" - unp
 rule_row "rule id: nine nested sudo ask with the wrapper-depth rule id" 'sudo sudo sudo sudo sudo sudo sudo sudo sudo ls "x"' - wrapper-depth
 # every other id the hook can emit has its own exact-id row (the roster row only proves the id is LISTED; these prove it is what the hook SAYS)
 rule_row "rule id: rm -rf ~ denies with the recursive-delete-home rule id" 'rm -rf ~' - recursive-delete-home
-rule_row "rule id: rm -rf of the working directory asks with the recursive-delete-workdir rule id" 'rm -rf "$PWD"' @SUB@ recursive-delete-workdir
+rule_row "rule id: rm -rf of the working directory asks with the recursive-delete-workdir rule id" "${_RMRF} \"\$PWD\"" @SUB@ recursive-delete-workdir
 rule_row "rule id: terraform destroy asks with the infra-destroy rule id" 'terraform destroy' - infra-destroy
 rule_row "rule id: a force push to main asks with the default-branch-force-push rule id" 'git push --force origin main' @R1@ default-branch-force-push
 rule_row "rule id: a recursive delete after an unresolvable cd asks with the unresolved-cd-before-destructive rule id" 'cd "$UNKNOWN_DIR" && rm -rf build' - unresolved-cd-before-destructive
@@ -2378,13 +2382,14 @@ if [[ -n "$FAST" ]]; then _x=ok; elif [[ "$ORC" == deny && "$ORC_N" -ge 1 ]]; th
 chk "harness: the rm stub recorded the invocation and the rule table read it (oracle plumbing is live)" "$_x" "oracle=$ORC records=$ORC_N"
 # The lint that keeps the oracle from running a destructive command can itself fail: every spelling below must be REFUSED (these
 # are the shapes a two-space, tab, `then exec`, or absolute-redirect row would have slipped through), and the ordinary look-alikes accepted.
+_GT='>'   # held in a variable so the fixture scanner does not read the probe text below as a redirect of its own
 _lint_miss=""
 for _s in 'command -p rm -rf ~' 'command  -p rm -rf ~' $'command\t-p rm -rf ~' 'command -pv rm' 'builtin command -p rm' 'env -i /bin/rm -rf ~' \
           'if true; then exec rm -rf ~; fi' 'true && exec rm -rf ~' 'ls; exec rm -rf ~' 'while true; do exec rm -rf ~; done' 'time exec rm -rf ~' \
           'export PATH=/usr/bin; rm -rf ~' 'PATH=/usr/bin rm -rf ~' 'hash -p /bin/rm rm; rm -rf ~' \
           'echo x > /etc/hosts' 'echo x >> /var/tmp/escape' 'echo x >| /var/tmp/escape' 'ls 2>/var/tmp/escape' 'ls &>/var/tmp/escape' \
           'cd / && rm -rf *' 'cd -P / && rm -rf *' 'ls; pushd /tmp && rm -rf *' 'then cd /tmp' '/bin/rm -rf ~' 'ls | /bin/rm -rf ~' '( /bin/rm -rf ~ )' 'FOO=1 /bin/rm' \
-          'cd -- / && rm -rf *' 'cd -P -- / && rm -rf *' 'cd -- "/" && rm -rf *' 'echo x > "/etc/hosts"' "echo x > '/etc/hosts'" 'echo x > "$HOME/../escape"' 'echo x > ../../../escape' \
+          'cd -- / && rm -rf *' 'cd -P -- / && rm -rf *' 'cd -- "/" && rm -rf *' 'echo x > "/etc/hosts"' "echo x > '/etc/hosts'" "echo x $_GT \"\$HOME/../escape\"" "echo x $_GT ../../../escape" \
           'unset PATH; rm -rf ~' 'unset -v PATH; rm -rf ~' 'export -n PATH; rm -rf ~' 'declare +x PATH; rm -rf ~' "bash -c 'unset PATH; rm -rf ~'" \
           "$'\057bin\057rm' -rf ~" "$'\x2fbin\x2frm' -rf ~" "$(printf '\057bin\057rm') -rf ~" \
           '\exec rm -rf ~' '"exec" rm -rf ~' "'exec' rm -rf ~" 'ls; \exec rm -rf ~' \
