@@ -7,8 +7,8 @@
 #                               1 xtrace, no HCLOUD_TOKEN, or a token of an unusable shape   2 host not on the allow-list
 #                               3 confirm is not REBOOT-<host>-<digits>      4 NEVER_POOLED is not `absent`
 #                               5 not exactly one server by that name        6 id not numeric, or web-1's id
-#                               7 id differs from the one typed in confirm   8 Terraform state does not agree, or holds
-#                                                                              the resolved id for web-1
+#                               7 id differs from the one typed in confirm   8 Terraform state does not agree, holds no
+#                                                                              numeric id for web-1, or holds the resolved id for it
 #                             then the anchor epoch is written to GITHUB_OUTPUT (immediately before the POST, never earlier
 #                             and never after), the one POST is sent, and the action is polled:
 #                               9 the POST is not HTTP 201 or returns no action id (a definite 4xx withdraws the anchor: an
@@ -142,7 +142,8 @@ cmd_reboot() {
   state_shown="absent or not numeric"; [[ "$state_sid" =~ ^[0-9]+$ ]] && state_shown="$state_sid"
   [[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail "reboot: the resolved id ${sid} differs from the id in the Terraform state (${state_shown}); nothing is rebooted"
   web1_sid="$(jq -r '.web1id' <<<"$ident")"
-  [[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail "reboot: the server named ${name} carries the id the Terraform state holds for web-1; refusing to reboot the live origin; nothing is rebooted"
+  [[ "$web1_sid" =~ ^[0-9]+$ ]] || fail "reboot: the Terraform state holds no numeric id for web-1, so the live id cannot be shown to differ from web-1's; nothing is rebooted"
+  [[ "$web1_sid" != "$sid" ]] || fail "reboot: the server named ${name} carries the id the Terraform state holds for web-1; refusing to reboot the live origin; nothing is rebooted"
   anchor="$(date -u +%s)"
   out anchor_epoch "$anchor"; out server_id "$sid"
   echo "target: server_id=${sid} name=${name} created=$(clean "$(jq -r '.servers[0].created // "unknown"' "$HBODY")")"

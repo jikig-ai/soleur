@@ -109,12 +109,13 @@ case "$1 $2" in
     [[ -f "$W/state_fail" ]] && exit 1
     # decoys come FIRST: a selector that loosens mode, type, name or index picks one of them and the id comparison reds
     jq -cn --argjson w1 "$(cat "$W/state_web1")" --arg w2 "$(cat "$W/state_web2")" --arg w1id "$(cat "$W/state_web1id")" --argjson str "$([[ -f "$W/state_str" ]] && echo true || echo false)" '
-      def idv($s): if ($s|test("^[0-9]+$")) and ($str|not) then ($s|tonumber) else $s end;
+      def idv($s): if $s == "@null" then null elif ($s|test("^[0-9]+$")) and ($str|not) then ($s|tonumber) else $s end;
+      def w1attrs: if $w1id == "@missing" then {} else {id:idv($w1id)} end;
       {serial:5,lineage:"L1",resources:[
       {mode:"managed",type:"hcloud_volume",name:"web",instances:[{index_key:"web-2",attributes:{id:111}},{index_key:"web-1",attributes:{id:112}}]},
       {mode:"data",type:"hcloud_server",name:"web",instances:[{index_key:"web-2",attributes:{id:222}},{index_key:"web-1",attributes:{id:223}}]},
       {mode:"managed",type:"hcloud_server",name:"other",instances:[{index_key:"web-2",attributes:{id:444}},{index_key:"web-1",attributes:{id:445}}]},
-      {mode:"managed",type:"hcloud_server",name:"web",instances:((if $w1 == 1 then [{index_key:"web-1",attributes:{id:idv($w1id)}}] else [] end)
+      {mode:"managed",type:"hcloud_server",name:"web",instances:((if $w1 == 1 then [{index_key:"web-1",attributes:w1attrs}] else [] end)
         + (if $w2 == "none" then [] else [{index_key:"web-2",attributes:{id:idv($w2)}}] end))}]}' ;;
   *) echo "unexpected terraform $*" >> "$W/unexpected.log"; exit 1 ;;
 esac
@@ -357,7 +358,12 @@ battery_reboot() {
   world "state_web1id=${SID}"; runr "reboot: a live id equal to the id the state holds for web-1 is refused" 1 "carries the id the Terraform state holds for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id"
   world "state_web1id=${SID}" state_str; runr "reboot: the same, with string-typed ids" 1 "carries the id the Terraform state holds for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id (strings)"
   world "state_web1id=987654321"; runr "reboot: a web-1 id in the state that differs from the live id is fine" 0 "accepted by Hetzner" reboot web-2 "$CONF"
-  world "state_web1id=::error::x"; runr "reboot: a non-numeric web-1 id in the state does not refuse (the constant and the numeric compare are the checks)" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  world "state_web1id=987654321" state_str; runr "reboot: a string-typed numeric web-1 id in the state that differs from the live id is fine" 0 "accepted by Hetzner" reboot web-2 "$CONF"
+  # a state that does not GIVE a numeric web-1 id cannot show that the live id is not web-1's: refused by name, nothing rebooted (fail closed)
+  world "state_web1id=::error::x"; runr "reboot: a non-numeric string web-1 id in the state is refused" 1 "holds no numeric id for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id non-numeric"
+  check "reboot: the hostile web-1 state id is not in the output" "$([[ "$LASTOUT" != *"::error::x"* ]]; echo $?)"
+  world "state_web1id=@null"; runr "reboot: a null web-1 id in the state is refused" 1 "holds no numeric id for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id null"
+  world "state_web1id=@missing"; runr "reboot: a web-1 instance without an id attribute in the state is refused" 1 "holds no numeric id for web-1" reboot web-2 "$CONF"; want_nothing_written "reboot web-1 state id missing"
   check "reboot: terraform ran inside INFRA_DIR (the shim records a run from any other directory as an unexpected call)" "$([[ ! -s "$W/unexpected.log" ]]; echo $?)"
   # ---- refusal 9: the POST
   world post_code=403; runr "reboot: a 403 names the read-only token" 1 "reboot -> 403" reboot web-2 "$CONF"
@@ -370,6 +376,15 @@ battery_reboot() {
   world post_code=423; runr "reboot: a 423 fails" 1 "reboot -> 423" reboot web-2 "$CONF"
   world post_code=499; runr "reboot: the top of the 4xx band is definite" 1 "reboot -> 499" reboot web-2 "$CONF"
   check "reboot: a 499 withdraws the anchor" "$([[ "$(last_anchor)" == "anchor_epoch=" ]]; echo $?)"
+  # the 4xx boundary: 400, 401 and 429 are definite refusals (anchor withdrawn); 100, 301 and 307 are not (anchor kept)
+  for c in 400 401 429; do
+    world "post_code=$c"; runr "reboot: a ${c} is a definite 4xx" 1 "reboot -> ${c}" reboot web-2 "$CONF"
+    check "reboot: a ${c} withdraws the anchor (the last anchor_epoch line is empty)" "$([[ "$(last_anchor)" == "anchor_epoch=" ]]; echo $?)"
+  done
+  for c in 100 301 307; do
+    world "post_code=$c"; runr "reboot: a ${c} is not a definite 4xx: the request may have been sent" 1 "the request may have been sent" reboot web-2 "$CONF"
+    check "reboot: a ${c} keeps the anchor (the last anchor_epoch line is the epoch)" "$([[ "$(last_anchor)" =~ ^anchor_epoch=[0-9]{10}$ ]]; echo $?)"
+  done
   for c in 500 502 000 200 202 399; do
     world "post_code=$c"; runr "reboot: a POST answered ${c} may have been sent" 1 "the request may have been sent" reboot web-2 "$CONF"
     check "reboot: a ${c} keeps the anchor (the last anchor_epoch line is the epoch)" "$([[ "$(last_anchor)" =~ ^anchor_epoch=[0-9]{10}$ ]]; echo $?)"
@@ -667,6 +682,10 @@ battery_evidence() {
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 100 "${NEWD}"$'\n')"
   graded "evidence: a probe boot id with a trailing newline is no id: it never joins a boot" 2 new_boot_seen_probe_pending
   check "evidence: the newline probe id is printed as none" "$([[ "$LASTOUT" == *"latest probe row: class=ok boot_id=none"* ]]; echo $?)"
+  # the readiness row's boot id is gated like its siblings: a uuid with a trailing newline (jq's `$` matches before it) is no id
+  world; set_rows ready "$(fx_ready 45000 "${CURD}"$'\n')"; rune "evidence: snapshot with a newline-suffixed readiness boot id prints it as unknown" 0 "readiness row: boot_id=unknown age_s=45000" snapshot
+  check "evidence: the newline readiness boot id never reaches the output" "$([[ "$LASTOUT" != *"$CURD"* ]]; echo $?)"
+  world; rune "evidence: snapshot with a well-formed readiness boot id prints it" 0 "readiness row: boot_id=${CURD} age_s=45000" snapshot
   # S9: an anchor older than the boot read's reach is refused before anything is read (the clock is fixed, so the bound is exact)
   world clock; now="$(now_in_world)"
   rune "evidence: an anchor exactly at the bound (47 h) is graded" 5 "reason=instance_recreated_after_request" grade --anchor $(( now - 169200 )) --window-min 0
@@ -888,11 +907,11 @@ srow "static: (grader) the known-survivor canary is ok when it survives" "$([[ "
 srow "static: (grader) the known-survivor canary fails when it is killed (the grader could not report a survivor)" "$([[ "$(mutant_outcome survive 2)" == "FAIL killed" ]]; echo $?)"
 
 scanned_n="$(( $(grep -c . "$R_BDIR/scanned") + $(grep -c . "$E_BDIR/scanned") ))"
-SCAN_FLOOR=208
+SCAN_FLOOR=219
 if [[ "$scanned_n" -lt "$SCAN_FLOOR" ]]; then printf 'FAILED floor: only %s outputs were scanned for claim words (floor %s)\n' "$scanned_n" "$SCAN_FLOOR"; fails=$((fails + 1)); fi
-REFUSAL_FLOOR=97
+REFUSAL_FLOOR=106
 if [[ "$nrefusal_runs" -lt "$REFUSAL_FLOOR" ]]; then printf 'FAILED floor: only %s reboot runs executed (floor %s)\n' "$nrefusal_runs" "$REFUSAL_FLOOR"; fails=$((fails + 1)); fi
-ROWS_FLOOR=520
+ROWS_FLOOR=545
 total_rows=$(( ran_r + ran_e + STATIC ))
 if [[ "$total_rows" -lt "$ROWS_FLOOR" ]]; then printf 'FAILED floor: only %s rows ran (floor %s)\n' "$total_rows" "$ROWS_FLOOR"; fails=$((fails + 1)); fi
 printf 'rows: reboot %s, evidence %s, static %s, total %s (floor %s); reboot runs %s, outputs scanned %s\n' "$ran_r" "$ran_e" "$STATIC" "$total_rows" "$ROWS_FLOOR" "$nrefusal_runs" "$scanned_n"
@@ -922,7 +941,8 @@ POST_BLOCK = r"""  anchor="$(date -u +%s)"
   code="$(hapi POST "/servers/${sid}/actions/reboot" '{}')"
 """
 WEB1_CHK = r"""  web1_sid="$(jq -r '.web1id' <<<"$ident")"
-  [[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail "reboot: the server named ${name} carries the id the Terraform state holds for web-1; refusing to reboot the live origin; nothing is rebooted"
+  [[ "$web1_sid" =~ ^[0-9]+$ ]] || fail "reboot: the Terraform state holds no numeric id for web-1, so the live id cannot be shown to differ from web-1's; nothing is rebooted"
+  [[ "$web1_sid" != "$sid" ]] || fail "reboot: the server named ${name} carries the id the Terraform state holds for web-1; refusing to reboot the live origin; nothing is rebooted"
 """
 STATE_CMP = r"""  [[ "$state_sid" =~ ^[0-9]+$ && "$state_sid" == "$sid" ]] || fail "reboot: the resolved id ${sid} differs from the id in the Terraform state (${state_shown}); nothing is rebooted"
 """
@@ -964,6 +984,9 @@ m("G1.17 the action poll is cut to 2 attempts", "r", R, ('for _ in $(seq 1 24); 
 # ---- the POST boundary, the poll, the helpers and the summary (review round 1)
 m("R.1 a definite 4xx no longer withdraws the anchor", "r", R, ('    out anchor_epoch ""\n', ''))
 m("R.2 every non-201 answer withdraws the anchor (a 5xx or a transport error too)", "r", R, ('  if [[ "$code" =~ ^4[0-9][0-9]$ ]]; then', '  if true; then'))
+m("R.2b the 4xx band is narrowed to 401-499 (a 400 keeps the anchor)", "r", R, ('  if [[ "$code" =~ ^4[0-9][0-9]$ ]]; then', '  if [[ "$code" =~ ^4(0[1-9]|[1-9][0-9])$ ]]; then'))
+m("R.2c the 4xx band is widened to 3xx-4xx (a 301 or 307 withdraws the anchor)", "r", R, ('  if [[ "$code" =~ ^4[0-9][0-9]$ ]]; then', '  if [[ "$code" =~ ^[34][0-9][0-9]$ ]]; then'))
+m("R.2d the 4xx band is cut to 400-428 (a 429 keeps the anchor)", "r", R, ('  if [[ "$code" =~ ^4[0-9][0-9]$ ]]; then', '  if [[ "$code" =~ ^4([01][0-9]|2[0-8])$ ]]; then'))
 m("R.3 any 2xx is accepted as the POST answer", "r", R, (CHECK_201, '  [[ "$code" =~ ^2[0-9][0-9]$ ]] || post_failed "$code" "$anchor"\n'))
 m("R.4 a non-JSON 201 body aborts under set -e instead of reaching the named failure", "r", R, ('"$HBODY" 2>/dev/null)" || action_id=""', '"$HBODY")"'))
 m("R.5 a non-JSON poll body aborts under set -e", "r", R, ('2>/dev/null)" || st=unknown', ')"'))
@@ -973,7 +996,10 @@ m("R.8 the poll sleep is dropped", "r", R, ('    sleep "$ACTION_POLL_S"\n', ''))
 m("R.9 the poll interval is no longer validated", "r", R, ('[[ "$ACTION_POLL_S" =~ ^[0-9]{1,3}$ ]] || ACTION_POLL_S=5', ':'))
 m("R.10 the locale pin is dropped (a UTF-8 locale then reads non-ASCII digits as [0-9])", "r", R, ('\nexport LC_ALL=C\n', '\n'))
 m("R.11 the confirm id bound is cut to 11 digits", "r", R, ('[1-9][0-9]{0,11}$ ]] || fail', '[1-9][0-9]{0,10}$ ]] || fail'))
-m("R.12 the web-1 id the state holds is no longer compared with the live id", "r", R, ("""[[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail""", 'true || fail'))
+m("R.12 the web-1 id the state holds is no longer compared with the live id", "r", R, ("""  [[ "$web1_sid" != "$sid" ]] || fail""", '  true || fail'))
+m("R.12b a state without a numeric web-1 id no longer refuses (fail-open)", "r", R, ("""  [[ "$web1_sid" =~ ^[0-9]+$ ]] || fail""", '  true || fail'))
+m("R.12c the numeric web-1 id gate is skipped for a non-numeric id instead of refused (the old fail-open form)", "r", R, ("""  [[ "$web1_sid" =~ ^[0-9]+$ ]] || fail "reboot: the Terraform state holds no numeric id for web-1, so the live id cannot be shown to differ from web-1's; nothing is rebooted"
+  [[ "$web1_sid" != "$sid" ]] || fail""", """  [[ ! "$web1_sid" =~ ^[0-9]+$ || "$web1_sid" != "$sid" ]] || fail"""))
 m("R.13 the state selector no longer pins mode, type and name (a decoy resource is picked)", "r", R, ('.resources[] | select(.mode == "managed" and .type == "hcloud_server" and .name == "web") | .instances[] | select(.index_key == $h)', '.resources[] | .instances[] | select(.index_key == $h)'))
 m("R.14 the state selector drops string-typed ids", "r", R, ('select(.index_key == $h) | (.attributes.id | tostring)]', 'select(.index_key == $h) | (.attributes.id | numbers | tostring)]'))
 m("R.15 terraform runs outside INFRA_DIR (the cd is dropped)", "r", R, ('(cd "$INFRA_DIR" && terraform state pull', '(terraform state pull'))
@@ -1001,6 +1027,7 @@ m("E.2 a FAIL row is no longer compared with the new boot's first row", "e", E, 
 m("E.3 the deadline is an iteration count", "e", E, ('if (( t >= deadline )); then', 'if (( iter >= 3 )); then'))
 m("E.4 the format gate on journald boot ids is dropped", "e", E, (' and (.id | test("^[0-9a-f]{32}$")) and ((.id | length) == 32) and .n != null', ' and .n != null'))
 m("E.4b the length gate on journald boot ids is dropped (a trailing newline passes the anchored test)", "e", E, (' and ((.id | length) == 32) and .n != null', ' and .n != null'))
+m("E.4c the length gate on the readiness boot id is dropped (a trailing newline passes the anchored uuid test)", "e", E, (' {age: .age, boot: (bid | if (length == 36) then . else "unknown" end)} end)', ' {age: .age, boot: bid} end)'))
 m("E.5 a junk readiness row counts as evidence", "e", E, ('select(.kind == "row" and (.f.host // "") == $host)', 'select(true)'))
 m("E.6 a read fault no longer stops a verdict", "e", E, ('      elif $fault then res("NOT_YET"; "read_fault"; true; 5)\n', ''))
 m("E.7 the clock is read after the queries", "e", E, ('    t="$(now_epoch)"\n', '    read_all\n    t="$(now_epoch)"\n'))
@@ -1151,7 +1178,7 @@ for f in "$MUT_DIR"/res/[0-9]*; do cat "$f"; grep -q '^  FAIL' "$f" && fails=$((
 n_res="$(find "$MUT_DIR/res" -type f -name '[0-9]*' | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "  FAIL a mutant did not report ($n_res of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
-MUT_FLOOR=115
+MUT_FLOOR=121
 if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then
   printf '  FAIL mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
   exit 1

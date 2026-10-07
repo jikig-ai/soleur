@@ -101,7 +101,7 @@ read_ready() {
   # kind == "row" only: a junk row (a malformed line, an unparseable age) is a read-shape fault, never evidence
   if ! r="$(jq -c -s --arg host "$W2L_HOST_NAME" "${_W2L_JQ_DEFS}"'
       [ .[] | classify_ready | select(.kind == "row" and (.f.host // "") == $host) ] | sort_by(.age)
-      | (.[0] | if . == null then null else {age: .age, boot: bid} end)' "$f" 2>/dev/null)" || [[ -z "$r" ]]; then
+      | (.[0] | if . == null then null else {age: .age, boot: (bid | if (length == 36) then . else "unknown" end)} end)' "$f" 2>/dev/null)" || [[ -z "$r" ]]; then
     note_fault ready jq; return 1
   fi
   READY_JSON="$r"
