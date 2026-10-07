@@ -2365,7 +2365,7 @@ describe("wording constants", () => {
     "changed-ask": "The check that would run now does not match the one you approved, or it was not approved before the work began. The reason is shown above. How should this proceed?",
     "rejected-ask": "Your check could not be used as written.\nReason: {detail}\nHow should this proceed?",
     "untrusted-fail": "This check could not be matched to you as its author, so it was not run. The command and the name on the commit that saved it are shown above. To use a check here, state your own. Do not run the one above yourself unless you know and trust who wrote it.",
-    "eyes-ask": "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded as your own confirmation, and no command ran for it. No: this counts as a failed check, and you will be asked how to proceed.",
+    "eyes-ask": "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded in the repository log as your confirmation, no command ran for it, and this check no longer stops the ship. No: this counts as a failed check, and you will be asked how to proceed.",
     "reason-prompt": "In one line, why are you continuing? Your answer is saved in the repository log, marked as an override. The log may be public, so do not put passwords, keys or other people's personal details in it.",
     "overridden-failed": "Founder check did not pass and you chose to continue: <reason>",
     "overridden-invalid": "Founder check could not run properly, so it checked nothing, and you chose to continue: <reason>",
@@ -2374,13 +2374,21 @@ describe("wording constants", () => {
     "headless-stop": "Your check was stopped because it could not be used, and an unattended run cannot decide that for you. Run this step again with you present.",
     "baseline-ok": "Your check fails today, as it should before the work. This shows only that the check can fail. It does not show that it can pass, or that it checks what you care about.",
     "baseline-vacuous": "Your check already passes before any work is done, so it cannot tell you whether the new work is done.",
-    "untrusted-unmeasured": "We could not read the GitHub account details needed to confirm who wrote this check, so it was not run. Sign in to GitHub on this computer and run this step again, or state your own check.",
+    "untrusted-unmeasured": "We could not read the GitHub account details needed to compare this check's author with you, so it was not run. Sign in to GitHub on this computer and run this step again, or state your own check.",
     "no-sandbox-stop": "Because your check could not run, this stops the ship. Fix the cause shown above, or change the check to one you confirm by looking, then run this step again.",
     "opt-retry": "Run the check again.",
     "opt-restore": "Put the approved check back as it was. This undoes later edits to the check or to a script it runs.",
-    "opt-change": "Approve a different check. It must fail on the work as it stands today, or be one you confirm by looking.",
+    "opt-change": "Approve a different check. You will be shown the earlier version and the new one. The new check runs once now against the work as it stands. The work may already exist, so a pass is allowed here.",
     "opt-continue": "Let the ship go ahead anyway. This is recorded in the repository log as an override, with your reason. The check is not marked as passed.",
-    "refrozen-note": "This check was changed after it was first approved, and you approved the new text. The earlier text is shown above.",
+    "approval-ask-eyes": "Approve exactly this check as written? It is a check you confirm by looking, so no command will run. If you say yes, it is saved in this repository, which may be public. Before you ship, you will be shown what the work produced and asked whether it meets what you stated. Say yes to approve it, or tell me what to change (no passwords or keys).",
+    "approval-ask-change": "Approve this changed check exactly as written? What will run is the command shown, not the description beside it, and the earlier version is shown for comparison. If you say yes, the new version is saved in this repository, which may be public, and runs once now against the work as it stands. The work may already exist, so it passing is expected. It runs again before you ship. Say yes to approve it, or tell me what to change (no passwords or keys).",
+    "refrozen-ship-ask": "This check was changed after it was first approved, and the change was saved in this repository, which may be public. The earlier version and the current one are shown above. What will run is the command shown, not the description beside it. Run the current version now? Yes: it runs once now. No: this ship stops on a check that changed since it was first approved, and you will be asked how to proceed.",
+    "opt-change-new": "Approve a different check. It must fail on the work as it stands today, or be one you confirm by looking.",
+    "opt-retry-fixed": "Run the check again once you have fixed the cause shown above. If nothing has changed, it stops the same way.",
+    "opt-strengthen": "Write a stronger check. It runs once now and must fail on the work as it stands today.",
+    "opt-eyes": "Make this a check you confirm by looking. Nothing will run for it. Before you ship, you will be shown the work and asked whether it meets what you stated.",
+    "opt-drop": "Record that this already holds and drop the check. No founder check will run at ship, and the ship will say so.",
+    "refrozen-note": "This check was changed after it was first approved. The new text was saved with an approval recorded under your name, and the earlier text is shown above.",
     "no-pr-note": "No pull request was checked, so who wrote this check was not compared with a GitHub account.",
     "aggregate-judgement": "Founder check: you confirmed this by looking. No command ran.",
     pass: "Your check passed. This shows only that the check you wrote ran against <sha>, finished without an error and, if you set an expected result, printed it. It does not show that the work is correct or complete, or free of problems this check does not look for. Review the result before relying on it.",
@@ -2419,10 +2427,10 @@ describe("wording constants", () => {
     for (const [cause, phrase, next] of [
       ["FAILED", "it did not pass", RETRY],
       ["INVALID", "it could not run properly", RETRY],
-      ["CHANGED-SINCE-APPROVAL", "it does not match what you approved, or was not approved before the work began", "Run this step again with you present to restore or change the check, or continue anyway."],
+      ["CHANGED-SINCE-APPROVAL", "it does not match what you approved, or was not approved before the work began", "Run this step again with you present. Depending on what changed, you will be offered to confirm the changed check, restore the approved one, change the check or continue anyway."],
       ["UNTRUSTED", "it could not be matched to you as its author", "Run this step again with you present and state your own check."],
       ["NEEDS-YOUR-EYES", "it needs your own eyes on the result", "Run this step again with you present so you can look and answer."],
-      ["BLOCK-REJECTED", "it could not be used as written", "Run this step again with you present to change the check or continue anyway."],
+      ["BLOCK-REJECTED", "it could not be used as written", "Run this step again with you present. You will be offered to change the check or continue anyway or, if the problem is this computer or repository rather than the check, to try again or continue anyway."],
       ["SKIP-NOSANDBOX", "it could not run on this computer", "This check cannot run on this computer. Fix the cause shown, or change the check to one you confirm by looking, then run this step again."],
     ]) {
       // each cause promises only the answers the interactive path really offers for it
@@ -2455,6 +2463,13 @@ describe("wording constants", () => {
     for (const [c, line] of Object.entries(harness("out = fc.REJECT_REASONS", null) as Record<string, string>)) {
       expect([c, line.length > 20, /verified|proven|safe/i.test(line)]).toEqual([c, true, false]);
     }
+  });
+
+  test("two reject reasons that once misled say exactly what is true", () => {
+    const map: Record<string, string> = harness("out = fc.REJECT_REASONS", null);
+    // freeze-without-block is decided before the authorship anchor, so it may not say who approved
+    expect(map["freeze-without-block"]).toBe("a check was saved as approved earlier on this branch and it is no longer in the plan");
+    expect(map["too-long"]).toBe("the check, its description, its expected text or the approval answer is longer than a check should be");
   });
 
   test("a FAIL carries `environmental` for reasons that say nothing about the check itself", () => {
@@ -2585,6 +2600,27 @@ describe("docs: the references say what the script does", () => {
     const mentioned = [...(REF + PLANREF + SEC13).matchAll(/founder-check\.py"?`?\s+([a-z][a-z-]*)/g)].map((m) => m[1]);
     expect(mentioned.length).toBeGreaterThan(20);
     for (const m of new Set(mentioned)) expect([m, subs.includes(m)]).toEqual([m, true]);
+  });
+
+  test("the answer labels and approval sentences printed per path are the ones that are true of that path", () => {
+    const sec = (from: string, to: string) => REF.slice(REF.indexOf(from), REF.indexOf(to));
+    const s8 = sec("## 8. Changing the check mid-work", "## What a pin does not cover");
+    expect(s8).toContain("text approval-ask-change");
+    expect(s8).not.toMatch(/text\s+approval-ask(?!-)/);
+    expect(s8).toContain("text refrozen-ship-ask");
+    expect(s8).toContain("eyes-ask"); // a judgement re-freeze is asked as a looking check
+    expect(s8).toContain("the approval was already given");
+    // refrozen_from is printed before the note, so "the earlier text is shown above" is true
+    expect(REF).toMatch(/print `refrozen_from` \(its text and command\) and then\s+`founder-check\.py text refrozen-note`/);
+    // the BLOCK-REJECTED row picks the change label by whether a freeze exists, and a fixed-cause retry
+    const rej = REF.split("\n").find((l) => /^\| BLOCK-REJECTED \| /.test(l)) ?? "";
+    for (const k of ["opt-change-new", "opt-change", "opt-retry-fixed", "opt-continue", "no-freeze", "no-block-candidate"]) expect([k, rej.includes(k)]).toEqual([k, true]);
+    // the VACUOUS answers are printed, not typed, in both references
+    for (const doc of [REF, PLANREF]) for (const k of ["opt-strengthen", "opt-eyes", "opt-drop"]) expect([k, doc.includes(`text ${k}`) || doc.includes(`text\n     ${k}`) || new RegExp(`text\\s+${k}`).test(doc)]).toEqual([k, true]);
+    // capture asks the judgement sentence for a judgement check
+    expect(PLANREF).toContain("text approval-ask-eyes");
+    // when commit-log refuses, the founder is told in one plain sentence and the row stays
+    expect(REF).toMatch(/When `commit-log` refuses[\s\S]*written but not\s+committed/);
   });
 
   test("headless is the documented default, and the outcome-to-wording tables map each outcome to its own key", () => {

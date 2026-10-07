@@ -89,7 +89,8 @@ STOP_CAUSES = {
     "INVALID": ("it could not run properly", "Run this step again with you present to retry, change the check or continue anyway."),
     "CHANGED-SINCE-APPROVAL": (
         "it does not match what you approved, or was not approved before the work began",
-        "Run this step again with you present to restore or change the check, or continue anyway.",
+        "Run this step again with you present. Depending on what changed, you will be offered to confirm "
+        "the changed check, restore the approved one, change the check or continue anyway.",
     ),
     "UNTRUSTED": (
         "it could not be matched to you as its author",
@@ -101,7 +102,9 @@ STOP_CAUSES = {
     ),
     "BLOCK-REJECTED": (
         "it could not be used as written",
-        "Run this step again with you present to change the check or continue anyway.",
+        "Run this step again with you present. You will be offered to change the check or continue anyway "
+        "or, if the problem is this computer or repository rather than the check, to try again or "
+        "continue anyway.",
     ),
     "SKIP-NOSANDBOX": (
         "it could not run on this computer",
@@ -117,7 +120,7 @@ REJECT_REASONS = {
     "verb-gate": "the command starts with a program that is not on the allowed list",
     "unpinned-script": "the command runs a script that was not recorded with the check",
     "no-freeze": "the check was not saved as approved before the work began",
-    "freeze-without-block": "the check you approved is no longer in the plan",
+    "freeze-without-block": "a check was saved as approved earlier on this branch and it is no longer in the plan",
     "credentials-required": "the check needs a password or key, so it cannot run on its own",
     "unknown-field": "the check has a field that is not part of the check format",
     "invalid-kind": "the check must be either a command or something you confirm by looking",
@@ -144,7 +147,7 @@ REJECT_REASONS = {
     "plan-outside-plans-dir": "the plan file is outside the plans folder, so it was not read",
     "plan-unreadable": "the plan file could not be read",
     "internal-error": "the check could not be examined because of an internal error",
-    "too-long": "the check or the words around it are longer than a check should be",
+    "too-long": "the check, its description, its expected text or the approval answer is longer than a check should be",
     "unlisted-git-subcommand": "the command uses a git command that is not on the read-only list",
     "history-too-long": "this branch has too many commits to scan for the approved check",
 }
@@ -201,9 +204,9 @@ WORDING = {
         "run the one above yourself unless you know and trust who wrote it."
     ),
     "eyes-ask": (
-        "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded as "
-        "your own confirmation, and no command ran for it. No: this counts as a failed check, and you "
-        "will be asked how to proceed."
+        "Looking at what is shown above, does the work meet what you stated? Yes: this is recorded in the"
+        " repository log as your confirmation, no command ran for it, and this check no longer stops the "
+        "ship. No: this counts as a failed check, and you will be asked how to proceed."
     ),
     "reason-prompt": (
         "In one line, why are you continuing? Your answer is saved in the repository log, marked as an "
@@ -231,8 +234,8 @@ WORDING = {
         " done."
     ),
     "untrusted-unmeasured": (
-        "We could not read the GitHub account details needed to confirm who wrote this check, so it "
-        "was not run. Sign in to GitHub on this computer and run this step again, or state your own "
+        "We could not read the GitHub account details needed to compare this check's author with you, so "
+        "it was not run. Sign in to GitHub on this computer and run this step again, or state your own "
         "check."
     ),
     "no-sandbox-stop": (
@@ -244,16 +247,54 @@ WORDING = {
         "Put the approved check back as it was. This undoes later edits to the check or to a script it runs."
     ),
     "opt-change": (
-        "Approve a different check. It must fail on the work as it stands today, or be one you "
-        "confirm by looking."
+        "Approve a different check. You will be shown the earlier version and the new one. The new check "
+        "runs once now against the work as it stands. The work may already exist, so a pass is allowed "
+        "here."
     ),
     "opt-continue": (
         "Let the ship go ahead anyway. This is recorded in the repository log as an override, with "
         "your reason. The check is not marked as passed."
     ),
+    "approval-ask-eyes": (
+        "Approve exactly this check as written? It is a check you confirm by looking, so no command will "
+        "run. If you say yes, it is saved in this repository, which may be public. Before you ship, you "
+        "will be shown what the work produced and asked whether it meets what you stated. Say yes to "
+        "approve it, or tell me what to change (no passwords or keys)."
+    ),
+    "approval-ask-change": (
+        "Approve this changed check exactly as written? What will run is the command shown, not the "
+        "description beside it, and the earlier version is shown for comparison. If you say yes, the new "
+        "version is saved in this repository, which may be public, and runs once now against the work as "
+        "it stands. The work may already exist, so it passing is expected. It runs again before you ship."
+        " Say yes to approve it, or tell me what to change (no passwords or keys)."
+    ),
+    "refrozen-ship-ask": (
+        "This check was changed after it was first approved, and the change was saved in this repository,"
+        " which may be public. The earlier version and the current one are shown above. What will run is "
+        "the command shown, not the description beside it. Run the current version now? Yes: it runs once"
+        " now. No: this ship stops on a check that changed since it was first approved, and you will be "
+        "asked how to proceed."
+    ),
+    "opt-change-new": (
+        "Approve a different check. It must fail on the work as it stands today, or be one you confirm by"
+        " looking."
+    ),
+    "opt-retry-fixed": (
+        "Run the check again once you have fixed the cause shown above. If nothing has changed, it stops "
+        "the same way."
+    ),
+    "opt-strengthen": "Write a stronger check. It runs once now and must fail on the work as it stands today.",
+    "opt-eyes": (
+        "Make this a check you confirm by looking. Nothing will run for it. Before you ship, you will be "
+        "shown the work and asked whether it meets what you stated."
+    ),
+    "opt-drop": (
+        "Record that this already holds and drop the check. No founder check will run at ship, and the "
+        "ship will say so."
+    ),
     "refrozen-note": (
-        "This check was changed after it was first approved, and you approved the new text. The "
-        "earlier text is shown above."
+        "This check was changed after it was first approved. The new text was saved with an approval "
+        "recorded under your name, and the earlier text is shown above."
     ),
     "no-pr-note": (
         "No pull request was checked, so who wrote this check was not compared with a GitHub account."

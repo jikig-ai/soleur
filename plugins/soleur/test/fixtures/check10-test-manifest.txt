@@ -307,6 +307,7 @@ surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonica
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
 text --underlying only takes a cause the script knows
 text strips control characters from the record's detail before printing it
+the answer labels and approval sentences printed per path are the ones that are true of that path
 the baseline of a re-freeze never reads VACUOUS: a pass is reported as PASSED, a fail as FAILED
 the candidate hash is what the plan skill writes into hash: (a stale one is FAIL)
 the default under uncertainty is the full battery, and covers ENFORCEMENT not just existence
@@ -331,6 +332,7 @@ triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-nor
 twin control: the pre-migration git-root block DOES execute the decoy
 two blocks in one Acceptance Criteria section is FAIL
 two plans each carrying a block is FAIL
+two reject reasons that once misled say exactly what is true
 unknown or case-variant outcomes and modes are usage errors, never recorded
 verify emits the head sha and whether the tree is dirty
 work/SKILL.md defines the fallback once, with the conditional stated

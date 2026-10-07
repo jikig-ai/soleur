@@ -127,7 +127,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/preflight/scripts/founder-check.py" classi
 
 - `PASSED`: `founder-check.py text pass --verify-json "$PREFLIGHT_TMP/founder-check-verify.json"`, the
   exact command, the UTC time, the rc and the full output **in the terminal only**. When the record
-  says `refreeze: true` also print `founder-check.py text refrozen-note`, and when it says
+  says `refreeze: true` print `refrozen_from` (its text and command) and then
+  `founder-check.py text refrozen-note`, so the earlier text is always on screen above the note, and when it says
   `no_pr: true` also print `founder-check.py text no-pr-note`: a pass that rests on a re-approved
   check, or on no author comparison at all, must say so. The aggregate
   row is `founder-check.py text aggregate-pass --verify-json …`. It never reads a bare PASS.
@@ -169,7 +170,7 @@ never decides for the founder.
 | FAILED | `founder-check.py text failed-ask` | **Retry** (`text opt-retry`; back to section 2, `attempt_n` + 1) · **Change the check** (`text opt-change`; section 8) · **Continue anyway** (`text opt-continue`) |
 | INVALID | `founder-check.py text invalid-ask` | the same three answers |
 | CHANGED-SINCE-APPROVAL | `founder-check.py text changed-ask`, with the approved text and command (`frozen` in the record), the current ones, `changed_fields` and `reasons`. Say which it was: a field, a pinned script, or the freeze ordering (the check was saved after work had begun) | **Restore the approved check** (`text opt-restore`; leave it out when `reasons` is exactly `ordering`, because nothing changed and there is nothing to restore) · **Change the check** (`text opt-change`) · **Continue anyway** (`text opt-continue`) |
-| BLOCK-REJECTED | `founder-check.py text rejected-ask --verify-json …` | `environmental: false`: **Change the check** · **Continue anyway**. `environmental: true` (the computer or repository is the problem, not the check): **Retry** · **Continue anyway**, because changing the check would not help |
+| BLOCK-REJECTED | `founder-check.py text rejected-ask --verify-json …` | `environmental: false`: **Change the check** (`text opt-change-new` when the record has no freeze, that is `reason` is `no-freeze` or `no-block-candidate`; otherwise `text opt-change`) · **Continue anyway** (`text opt-continue`). `environmental: true` (the computer or repository is the problem, not the check): **Retry** (`text opt-retry-fixed`, because retrying changes nothing until the cause is fixed) · **Continue anyway** (`text opt-continue`), because changing the check would not help |
 | UNTRUSTED | No question. Show the escaped command from the display file, `freeze_author`, the operator's email (`git config user.email`) and `flags`. When `flags` is exactly `pr-author-unmeasurable`, print `founder-check.py text untrusted-unmeasured`; otherwise `founder-check.py text untrusted-fail` | FAIL. Nothing runs. The founder states their own check (section 8), or signs in to GitHub and re-runs when the author could not be measured. There is no continue-anyway for a check nobody could match to the founder |
 | NEEDS-YOUR-EYES (`kind: judgement`) | Show the founder's `text` and the evidence the work produced: the diff summary (`git diff --stat origin/main...HEAD`), the acceptance criteria and any test result already printed this session. Then `founder-check.py text eyes-ask` | **Yes** → `FOUNDER-CONFIRMED`, print `founder-check.py text judgement` · **No** → the FAILED row, then `failed-ask` |
 | SKIP-NOSANDBOX with a block | none | FAIL: `founder-check.py text no-sandbox`, then `founder-check.py text no-sandbox-stop`. A check that did not run is never a pass, interactive or not |
@@ -221,10 +222,14 @@ staged), and does nothing when the log is committed or absent. Ship stages its o
 preflight runs, so this is the only way a run's rows reach the branch; the commit is local and
 nothing is pushed here. Print `python3 … summary` only if the founder asks for the row count.
 
+When `commit-log` refuses (it is on the default branch, or the log path is a symbolic link) it exits 1
+with its reason on stderr. Tell the founder in one plain sentence that the log was written but not
+committed and why, and leave the row where it is: nothing is lost, and nothing here forces the commit.
+
 ## 7. Baseline mode (`--founder-check-baseline`)
 
 Invoked by `soleur:plan` at capture, after the founder approves the exact text (`founder-check.py
-text approval-ask`) and before the freeze commit. Checks 1–12 are **skipped explicitly**; only Check
+text approval-ask` for a command check, `text approval-ask-eyes` for a judgement check) and before the freeze commit. Checks 1–12 are **skipped explicitly**; only Check
 13 runs, in baseline polarity. Run the `PREFLIGHT_TMP` assignment from Step 0.1 first and nothing
 else in Phase 0.
 
@@ -240,8 +245,8 @@ else in Phase 0.
    - `FAILED-AS-EXPECTED`: print `founder-check.py text baseline-ok`. Log it with `--polarity
      baseline` and return success so the plan skill makes the freeze commit.
    - `VACUOUS` (the check already passes): print `founder-check.py text baseline-vacuous`. Refuse.
-     Offer **strengthen the check**, **mark it needs-your-eyes**, or **record it as already true and
-     drop it**. A dropped check never reappears as a pass. Before the founder types replacement
+     Offer **strengthen the check** (`text opt-strengthen`), **mark it needs-your-eyes** (`text
+     opt-eyes`), or **record it as already true and drop it** (`text opt-drop`). A dropped check never reappears as a pass. Before the founder types replacement
      text, print `founder-check.py text first-use` again: new text is committed to the repository.
    - `INVALID`: refuse. Tooling failed, so this is no evidence the check can fail or pass. On a mise
      or asdf install `node` and `bun` return rc 127 inside the sandbox (its PATH is
@@ -254,21 +259,23 @@ else in Phase 0.
 Changing the approved text is a deliberate act, never a silent edit: it is the declared
 `work → plan` back-edge. Print `founder-check.py text first-use` again before the founder types the
 replacement text, since it is committed to the repository. Show the old and the new text and ask the founder to confirm
-(`founder-check.py text approval-ask`), run `verify --candidate --refreeze` for the new text, run it
+(`founder-check.py text approval-ask-change`), run `verify --candidate --refreeze` for the new text, run it
 once (section 2, then `classify --polarity baseline`), and commit the plan with a subject that
 starts `plan: re-freeze founder-stated check`, authored by the operator.
 
 - **The baseline of a re-freeze is a report, never a must-fail test.** The work usually exists by
   now, so the new check passing is the normal case. `classify` answers `PASSED` or `FAILED` for it
   (reasons `refreeze-baseline-passes` and `refreeze-baseline-fails`), never `VACUOUS`, and `baseline-ok`
-  is not printed for it: show the result and `approval-ask` instead.
+  is not printed for it: show the result; the approval was already given.
 - **`verify` accepts that commit as the new freeze only when** the plan was frozen earlier on this
   branch (a first freeze is just a freeze), the commit changes the block (restating the same block
   changes nothing, so it cannot launder who wrote the earlier freeze), it was authored by the
   operator, and the plan was not already frozen on main.
 - **It is loud.** The record carries `refreeze: true` and `refrozen_from`, the check as it stood
-  before. Interactive: show `refrozen_from` beside `block` and print `founder-check.py text
-  approval-ask`; yes runs the check, anything else is the CHANGED-SINCE-APPROVAL row. Headless: the
+  before. Interactive: show `refrozen_from` beside `block`. For a command check print
+  `founder-check.py text refrozen-ship-ask`; yes runs the check, anything else is the
+  CHANGED-SINCE-APPROVAL row. For a judgement check show both versions and then print
+  `founder-check.py text eyes-ask`. Headless: the
   record is already `CHANGED-SINCE-APPROVAL` (reason `refreeze-needs-founder`), recorded as a stop.
 
 Until a valid re-freeze exists, Check 13 reports CHANGED-SINCE-APPROVAL.

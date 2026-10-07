@@ -47,6 +47,7 @@ records nothing. Store the founder's answer **verbatim** as `text`. Do not clean
 Propose a `command` (what runs) and an `expected` string (one literal substring of stdout; empty
 means "exit 0 only"), and one plain sentence beside them saying what the command will do. The
 founder approves the **exact text**, not a paraphrase: print `founder-check.py text approval-ask`
+(`founder-check.py text approval-ask-eyes` for a `kind: judgement` check, where no command runs)
 and record the founder's answer exactly as given in `approved_by`, with today's UTC date in
 `approved_at`. Tell the founder up front what the check can and cannot do, so nothing surprises
 them at ship:
@@ -101,8 +102,9 @@ then add the `hash` that `verify --candidate` prints. One block per plan.
    `founder-check.py text baseline-ok`), `VACUOUS` (already passes; `text baseline-vacuous`),
    `INVALID` (tooling failed) or no sandbox. A judgement check is not run and is logged as
    needs-your-eyes.
-2. `VACUOUS`: offer **strengthen the check**, **mark it needs-your-eyes**, or **record it as
-   already true and drop it**. A dropped check never reappears as a pass. Print
+2. `VACUOUS`: offer **strengthen the check** (`founder-check.py text opt-strengthen`), **mark it
+   needs-your-eyes** (`founder-check.py text opt-eyes`), or **record it as already true and drop it**
+   (`founder-check.py text opt-drop`). A dropped check never reappears as a pass. Print
    `founder-check.py text first-use` again before the founder types replacement text: it is
    committed to the repository too.
 3. On a valid baseline, **immediately** make the freeze commit, before any later plan phase and

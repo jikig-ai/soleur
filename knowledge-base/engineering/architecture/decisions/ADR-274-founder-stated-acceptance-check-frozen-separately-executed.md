@@ -155,17 +155,19 @@ preflight executes; they now say plan-declared probes and checks, with no count.
 2. **Re-freeze is loud, interactive-only and cannot launder authorship.** It counts only when the plan was frozen earlier on the
    branch and the block changed (a commit that restates the same block changes nothing, so a stranger's freeze stays `UNTRUSTED`).
    The record carries `refreeze: true` and `refrozen_from`. `verify --mode` defaults to headless, which stops on a re-freeze
-   (`CHANGED-SINCE-APPROVAL`, reason `refreeze-needs-founder`); an interactive run shows both texts and asks for the approval
-   sentence. The baseline of a re-freeze reports `PASSED` or `FAILED`, never `VACUOUS`: the work usually exists by then, so a pass is
+   (`CHANGED-SINCE-APPROVAL`, reason `refreeze-needs-founder`); an interactive run shows both texts and asks `refrozen-ship-ask` for a command check (for a
+   judgement check, `eyes-ask`). The baseline of a re-freeze reports `PASSED` or `FAILED`, never `VACUOUS`: the work usually exists by then, so a pass is
    the normal case, not a vacuous check.
 3. **Archived plans compare against main's freeze.** The merge-base lookup finds a plan under every name main knew it by, so a
    docs sweep that edits a plan main already archived is checked against main's block instead of becoming its own freeze.
 4. **Wording after the second CLO review** (PASS-WITH-EDITS). Authorship is no longer asserted: UNTRUSTED says the check "could not
    be matched to you as its author" and a separate sentence covers the unreadable-GitHub case; `changed-ask` no longer says the
    text changed (the ordering and a pinned script are also causes, and the row records which); `headless-stop` names only the
-   answers the interactive path offers for that cause; `rejected-ask` prints a plain-language reason; `approval-ask`, `eyes-ask`,
+   answers the interactive path offers for that cause;
+   > **Superseded 2026-10-07 (#9578): that was not true for BLOCK-REJECTED and CHANGED-SINCE-APPROVAL; the third addendum rewrites both next-steps (`STOP_CAUSES`).** `rejected-ask` prints a plain-language reason; `approval-ask`, `eyes-ask`,
    `reason-prompt` and `first-use` state their consequences (a yes runs the check once now, the log is public, a check can send
-   what it reads to any address); the answer labels are pinned as `opt-*` constants. `approved_by` is required and secret-scanned.
+   what it reads to any address);
+   > **Superseded 2026-10-07 (#9578): `approval-ask` is true only for a first command capture; the third addendum adds `approval-ask-eyes`, `approval-ask-change` and `refrozen-ship-ask` for the other three paths.** the answer labels are pinned as `opt-*` constants. `approved_by` is required and secret-scanned.
    A third check of the changed constants precedes ship.
 5. **Known limits, unchanged and stated plainly.** Headless and interactive are declared by the caller, and `--mode interactive`
    on `verify` is as unauthenticated as on `log`. `--no-pr` is a declaration the caller makes: under it, a freeze whose commit email
@@ -184,3 +186,28 @@ preflight executes; they now say plan-declared probes and checks, with no count.
    contain a keyword (`GITHUB_TOKEN=`, `DB_PASSWORD=`), `--password`, `--user u:p` and JWTs. (e) `--command-out` exists only for an
    `OK` verdict; other outcomes are shown from an escaped `--display-out` copy. (f) Pins hash with `--no-filters`; git path lists
    are read with `-z`; a blob is size-checked before it is read; a branch over 5000 commits is refused; field lengths are capped.
+
+## Third addendum — 2026-10-07 (#9578, the third CLO wording check, PASS-WITH-EDITS)
+
+> Append-only. Every item below was applied as the CLO drafted it.
+
+1. **A sentence is printed only on a path where it is true.** `approval-ask` stays the first-capture command sentence; a judgement
+   check prints `approval-ask-eyes` (no command runs); a section 8 change prints `approval-ask-change` (the work may already exist, a
+   pass is expected, and the earlier version is shown); an interactive re-freeze met at ship prints `refrozen-ship-ask` (the change
+   is already committed and the run is the ship run).
+2. **Answer labels are printed, not typed.** `opt-change` no longer says the new check must fail (a re-freeze baseline is a report);
+   the old text survives as `opt-change-new` for a check with no freeze yet. `opt-retry-fixed` is offered for environmental stops,
+   where retrying changes nothing until the cause is fixed. The VACUOUS answers are `opt-strengthen`, `opt-eyes` and `opt-drop`.
+3. **`refrozen-note` no longer asserts an approval the code cannot see.** It says the approval was recorded under the founder's name
+   (the commit email and `approved_by` are both agent-writable, see the second addendum), and the reference prints `refrozen_from`
+   immediately before it so "the earlier text is shown above" is true.
+4. **`headless-stop` next-steps** for BLOCK-REJECTED and CHANGED-SINCE-APPROVAL now say which answers the founder may be offered
+   (change, retry for an environmental cause, confirm, restore, continue), instead of promising a fixed set.
+5. **Smaller edits.** `eyes-ask` states that a yes is recorded in the log and the check no longer stops the ship;
+   `untrusted-unmeasured` says "compare this check's author with you" (nothing is authenticated); `freeze-without-block` no longer
+   says who approved, because it is decided before the authorship anchor; `too-long` names the parts that can be too long. When
+   `commit-log` refuses (default branch, symbolic link) the reference tells the founder the log was written but not committed.
+6. **Accepted, not changed.** `first-use` lists what the check can read, as a floor and not an "only" (the sandbox also exposes
+   `/etc`, `/usr` and, in a worktree, the shared git directory). `pass` says "the check you wrote" even when the freeze came from
+   main and no author comparison ran, which `no-pr-note` does not cover; accepted for the single-founder v1 posture.
+
