@@ -1,0 +1,11 @@
+#cloud-config
+# MUST PASS (rc 0): templated (not valid YAML) and scanned by raw lines, stdin form only.
+write_files:
+  - path: /usr/local/bin/probe.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      curl --disable --noproxy '*' -sS --config - "$SINK_URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$FIXTURE_TOKEN")
+%{ if enable_probe ~}
+      printf 'X-API-Key: %s\n' "$FIXTURE_TOKEN" | curl --disable --noproxy '*' -sS -H @- "$SINK_URL"
+%{ endif ~}

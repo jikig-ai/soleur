@@ -1,0 +1,39 @@
+# Per-file CEILING for baseline E (#9597 S1), recorded from the Phase 0 census (widened vocabulary,
+# YAML extraction + raw-line feeders). path<TAB>sites. The suite fails when baseline E lists a
+# path that is not here or a count ABOVE its ceiling: `--write-baseline-e` seeds the baseline from
+# the tool under test and would otherwise certify its own false positives. Ceilings only ever
+# shrink in spirit (a conversion lowers the live count); never raise one without re-classifying
+# the site by hand.
+apps/web-platform/infra/cloud-init-registry.yml	4
+.github/actions/anthropic-preflight/action.yml	1
+.github/actions/mint-infra-app-token/action.yml	2
+.github/actions/notify-ops-email/action.yml	1
+.github/workflows/apply-deploy-pipeline-fix.yml	6
+.github/workflows/apply-github-infra.yml	1
+.github/workflows/apply-inngest-rls.yml	4
+.github/workflows/apply-web-platform-infra.yml	6
+.github/workflows/board-status-sync.yml	1
+.github/workflows/canary-status.yml	1
+.github/workflows/deploy-inngest-image.yml	2
+.github/workflows/git-data-cutover.yml	1
+.github/workflows/git-data-rung2-rehearsal.yml	4
+.github/workflows/restart-inngest-server.yml	4
+.github/workflows/rule-audit.yml	2
+.github/workflows/scheduled-inngest-health.yml	3
+.github/workflows/scheduled-prod-version-drift.yml	2
+.github/workflows/scheduled-terraform-drift.yml	1
+.github/workflows/sentry-audit-gate.yml	1
+.github/workflows/web-platform-release.yml	5
+.github/workflows/workspaces-luks-cutover.yml	1
+.github/actions/dispatch-web-redeploy/track.sh	2
+apps/web-platform/infra/ci-deploy.sh	1
+apps/web-platform/infra/infra-config-verify.sh	1
+apps/web-platform/infra/push-infra-config.sh	1
+apps/web-platform/infra/web-private-nic-guard.sh	1
+apps/web-platform/scripts/github-app-key-status.sh	1
+scripts/check-deploy-script-parity.sh	1
+scripts/cutover-inngest.sh	20
+scripts/followthroughs/canary-promotion-5875.sh	1
+scripts/followthroughs/infra-config-activation-7220.sh	1
+scripts/followthroughs/infra-config-fatal-channel-7220.sh	1
+scripts/followthroughs/inngest-soak-6178.sh	1

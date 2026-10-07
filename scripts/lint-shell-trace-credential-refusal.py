@@ -29,9 +29,11 @@ invariant:
       five hand-written `set -x` warnings across three workflows are warning
       about exactly this shape.
   Rules C and D are documented at their definitions below. Rule E (#9597) is the
-  argv-bearer ratchet: no curl command carries a bearer token in its own argument
-  list (see the Rule E block for the members, safe forms and blind spots), with its
-  own `path<TAB>site-count` baseline compared by equality in the repo-wide run.
+  argv-credential ratchet: no curl command carries a credential header (any
+  `Authorization:` scheme, CF-Access-Client-Id/-Secret, X-Signature-256, X-API-Key) in its
+  own argument list, in tracked shell, workflow/composite-action YAML or cloud-init YAML (see
+  the Rule E block for the members, safe forms, scope and blind spots), with its own
+  `path<TAB>site-count` baseline compared by equality in the repo-wide run.
 
 SCOPE EXCLUSIONS, each with a reason:
   *.test.sh / tests/  -- suites synthesize fake tokens per
@@ -743,6 +745,16 @@ def _inline_config_file(cmd: str, lines: list[str]) -> str:
     return cmd
 
 
+# A declaration may carry ANY declaration builtin and flags, or none at all:
+# `local -a x=(`, `declare -ar x=(`, `readonly x=(` and a plain `local x=(` are the same
+# array. The prefix once knew only `local -a` / `declare -a` / `readonly -a`, so
+# `local curl_args=(` in discord-setup.sh lost its declaration (only the later `+=(`
+# append was inlined) and an `Authorization: Bot` header in it went unreported, while a
+# compliant `local x=(--disable ...)` read as a FALSE Rule D finding. Shared by Rule D, Rule E
+# and the wrapper analysis; the Rule D census before/after this change is recorded in the PR.
+_ARRAY_DECL_PREFIX = r"^\s*(?:(?:local|declare|readonly|typeset)(?:\s+-[A-Za-z]+)*\s+)?"
+
+
 def _array_body(name: str, lines: list[str], before: int | None = None) -> tuple[str, str]:
     """-> (body of the `=(` declaration, bodies of any `+=(` appends).
 
@@ -750,10 +762,7 @@ def _array_body(name: str, lines: list[str], before: int | None = None) -> tuple
     declaration can supply curl's FIRST argument, so a later `+=` append must not
     be able to satisfy the --disable-is-first check.
     """
-    decl = re.compile(
-        r"^\s*(?:local\s+-a\s+|declare\s+-a\s+|readonly\s+-a\s+)?"
-        + re.escape(name) + r"=\("
-    )
+    decl = re.compile(_ARRAY_DECL_PREFIX + re.escape(name) + r"=\(")
     append = re.compile(r"^\s*" + re.escape(name) + r"\+=\(")
     first, extra = "", ""
     # Resolve the declaration NEAREST ABOVE the invocation. A file-global scan
@@ -1088,8 +1097,8 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
     return list(dict.fromkeys(out))
 
 
-# --- Rule E: no bearer token in a curl command's own argument list ------------
-# (#9597, sweep #7843) A bearer passed as `-H "Authorization: Bearer $TOK"` is an
+# --- Rule E: no credential header in a curl command's own argument list -------
+# (#9597, sweep #7843) A credential passed as `-H "Authorization: Bearer $TOK"` is an
 # ARGUMENT of the curl process: every local user reads it from /proc/<pid>/cmdline
 # and `ps` for the life of the request, and it lands in any argv audit log. Rule D
 # confines WHERE a credentialed curl may send it and says nothing about HOW the
@@ -1099,28 +1108,60 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 #     curl --disable --noproxy '*' ... --config - "$URL" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOK")
 # (`-H @-` fed by a pipe and `--header @<(...)` are the other safe spellings).
 #
-# The property: no executed curl command carries a bearer in its OWN arguments, and
+# The property: no executed curl command carries a credential header in its OWN arguments, and
 # `--config -` calls do not re-expose it. Rule E runs on every logical command from
 # `_curl_commands()`, on that command's INVOCATION SEGMENT only -- never on the whole
 # pipeline assembly, which would flag the safe `printf 'Authorization: ...' | curl -H @-`.
 #
 # Members the property quantifies over:
+#   * VOCABULARY: ONE constant, `E_CREDENTIAL`, read at five sites (held-name capture, array
+#     capture, `_e_scan`, the call-level check, the wrapper-site check). It matches the header
+#     NAME, never a scheme list: ANY `Authorization:` value (Bearer, Bot, Basic, Digest, Token,
+#     `${SCHEME}`), `CF-Access-Client-Id:`, `CF-Access-Client-Secret:`, `X-Signature-256:` and
+#     `X-API-Key:`, in any case. `apikey:` keeps its own semantics (below). `-u`/`--user`
+#     detection is NOT here: it is deferred to the slice that converts
+#     scripts/betterstack-query.sh, its only real site;
 #   * the short `-H` and long `--header` flags, with or without a space (`-H"..."`),
-#     double- or single-quoted, any case of `Authorization`/`Bearer`, the header
-#     before OR after the URL, and any number of curl commands per script;
+#     double- or single-quoted, any case, the header before OR after the URL, and any
+#     number of curl commands per script;
 #   * a header held in a VARIABLE (`h="Authorization: Bearer $T"` ... `-H "$h"`),
 #     resolved file-wide, and in an ARRAY (`=(`/`+=(`, inlined at the call site by
-#     `_inline_arrays`);
+#     `_inline_arrays`; the declaration may be `local -a x=(`, `declare -ar x=(`, a plain
+#     `local x=(` or a bare `x=(`, see `_ARRAY_DECL_PREFIX`);
 #   * a second credential header (`apikey:`) on argv in a call that also carries a
-#     bearer, on argv or on stdin. A standalone anon-key `apikey:` call is safe;
+#     credential header, on argv or on stdin. A standalone anon-key `apikey:` call is safe;
 #   * the hazards of the stdin form itself, on a `--config -` / `-K -` call:
 #     `-v`/`--verbose`/`--trace*`/`-D -` print the config's headers to the terminal,
 #     a stdin body (`-d @-`, `--data-binary @-`, `-T -`, `--json @-`) cannot share a
 #     stdin that is already the config, and a here-string/heredoc feeding the header
 #     writes it to a temp file under bash.
 # NOT flagged: `-H @-`, `--header @<(...)`, `--config -`, `-K -`, `--config <(...)`,
-# a bearer inside a trailing comment, printed command text (`echo`/`printf` of a
-# curl command: curl is not in command position) and YAML (only shell is scanned).
+# a credential inside a trailing comment, printed command text (`echo`/`printf` of a
+# curl command: curl is not in command position) and a YAML step whose `shell:` is not bash.
+#
+# SCOPE (decision D1 of the argv-bearer sweep, tier 3). `rule_e_files()` is tracked `*.sh`
+# PLUS `.github/**/*.yml|*.yaml` (workflows and composite actions) PLUS
+# `apps/**/cloud-init*.yml`. Rules A to D key on a shebang/preamble and stay `*.sh`-only,
+# and so does `--changed`: if YAML were in `--changed`, any unrelated edit to a baselined
+# workflow (apply-web-platform-infra.yml sits under a byte gate) would force that workflow's
+# FULL remediation in the same PR. Growth in YAML is still blocked: the repo-wide run
+# compares baseline E by equality on path AND count, and an explicit path bypasses the
+# baseline, so a conversion PR proves its files clean by naming them. An explicit YAML path
+# runs Rule E only. TWO FEEDERS (see check_yaml_file): workflows and composite actions are
+# parsed with PyYAML and every `run` string value is scanned (reporting the step name and a
+# best-effort line: exact for `run: |`, the first content line for a folded scalar, the key
+# line otherwise); cloud-init files are scanned as RAW LINES because they are
+# Terraform-templated and do not parse. A `.github` YAML file PyYAML cannot parse is exit 2,
+# and so is a missing PyYAML (imported lazily, only when a workflow is about to be parsed).
+#
+# KNOWN BLIND SPOTS (census-only; a reviewer, not this lint, judges them): message BODIES
+# that carry a secret (`-d` operands, a bsky password JSON); a secret in a URL (heartbeat
+# path secrets, `x-access-token:` userinfo in git remotes); `doppler --token`; `jq --arg`
+# (a value on jq's argv); `openssl dgst -hmac "$KEY"` (about 30 sites, no stdin form);
+# header VALUES held in `env:` and passed as `-H "$H"` (the assignment is not in the scanned
+# body); `env -i`; `wget`; `gh api -H`; `-K file` configs written with the default umask;
+# cookies (`-b`, `Cookie:`) and vendor-specific custom headers (`x-gitlab-token`), pinned by
+# an xfail row in the suite; and `-u`/`--user` operands (deferred, see VOCABULARY).
 #
 # WHY THE STDIN CONFIG FORM (measured, curl 8.22, bash 5.3): (1) `printf ... | curl --config -`
 # returns 141 under `set -o pipefail` when the consumer never reads stdin (a 100 KB payload
@@ -1143,7 +1184,18 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # must match, so the baseline can only shrink in the same diff as the code it excuses.
 BASELINE_E_FILE = Path(__file__).resolve().parent / "lint-shell-trace-credential-refusal-e.baseline.txt"
 
-E_BEARER = re.compile(r"authorization\s*:\s*bearer", re.I)
+# The credential-header vocabulary, ONE constant read at five sites (held-name capture,
+# array capture, `_e_scan`, the call-level check and the wrapper-site check). It matches the
+# header NAME, never a scheme list, so `Authorization: Bearer|Bot|Basic|Digest|${SCHEME}` are
+# all credentials. One alternate per line: the suite deletes them one at a time.
+E_CREDENTIAL_HEADERS = (
+    r"authorization",
+    r"cf-access-client-id",
+    r"cf-access-client-secret",
+    r"x-signature-256",
+    r"x-api-key",
+)
+E_CREDENTIAL = re.compile(r"(?:" + "|".join(E_CREDENTIAL_HEADERS) + r")\s*:", re.I)
 E_APIKEY = re.compile(r"^\s*apikey\s*:", re.I)
 # `-H"..."`: the value is glued to the flag. A flag whose value is the NEXT word is E_HDR_FLAG.
 E_HDR_ATTACHED = re.compile(r"^-H(?=.)")
@@ -1229,7 +1281,7 @@ def _e_held_names(lines: list[str]) -> set[str]:
         if not line:
             continue
         m = _E_HELD_ASSIGN.match(line) or _E_PRINTF_V.match(line)
-        if m and E_BEARER.search(m.group(2)):
+        if m and E_CREDENTIAL.search(m.group(2)):
             held.add(m.group(1))
     return held
 
@@ -1504,7 +1556,7 @@ def _e_bearer_arrays(lines: list[str], held_re: re.Pattern | None) -> set[str]:
                 i += 1
                 continue
             hv = _e_unq(val)
-            if not hv.startswith("@") and (E_BEARER.search(hv) or (held_re and held_re.search(hv))):
+            if not hv.startswith("@") and (E_CREDENTIAL.search(hv) or (held_re and held_re.search(hv))):
                 names.add(m.group(1))
             i = nxt
     return names
@@ -1831,7 +1883,7 @@ def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
             hv = _e_unq(val)
             if hv.startswith("@"):
                 f["hdr_stdin"] = f["hdr_stdin"] or hv.startswith("@-")
-            elif E_BEARER.search(hv) or (held_re and held_re.search(hv)):
+            elif E_CREDENTIAL.search(hv) or (held_re and held_re.search(hv)):
                 f["bearer"] = True
             elif E_APIKEY.match(hv):
                 f["apikey"] = True
@@ -1855,8 +1907,23 @@ def _e_scan(args: list[str], held_re, bearer_arrays: set[str]) -> dict:
     return f
 
 
-def check_rule_e(rel: str, lines: list[str]) -> list[str]:
-    """One finding per curl call site that carries a bearer on argv (see the Rule E block)."""
+# The finding grammar is PINNED (the suite's E_MSG_RE and its self-check row key on it):
+# `<path>:<LINE>: credential header on curl argv<where> -- <reasons>`. Change the wording
+# only together with E_MSG_RE in scripts/lint-shell-trace-credential-refusal.test.sh.
+E_FINDING = "credential header on curl argv"
+E_HEADER_NAMES = "`Authorization:`, `CF-Access-Client-Id/-Secret:`, `X-Signature-256:`, `X-API-Key:`"
+
+
+def check_rule_e(rel: str, lines: list[str], line_of=None, where: str = "") -> list[str]:
+    """One finding per curl call site that carries a credential header on argv (see the Rule E block).
+
+    `line_of` maps a 0-based index into `lines` to the 1-based line REPORTED (a `run` body
+    extracted from YAML reports a line of the workflow file); `where` is text appended after
+    the finding phrase (` (step "<name>")`).
+    """
+    if line_of is None:
+        def line_of(n: int) -> int:
+            return n + 1
     held = _e_held_names(lines)
     held_re = re.compile(r"\$\{?(?:" + "|".join(map(re.escape, sorted(held))) + r")\b") if held else None
     bearer_arrays = _e_bearer_arrays(lines, held_re)
@@ -1892,13 +1959,13 @@ def check_rule_e(rel: str, lines: list[str]) -> list[str]:
             if any(E_HEREDOC.match(w) for w in _e_words(segs[at - 1][0])):
                 heredoc = True
 
-        bearer_in_call = bearer_argv or bool(E_BEARER.search(cmd)) or bool(held_re and held_re.search(cmd))
+        bearer_in_call = bearer_argv or bool(E_CREDENTIAL.search(cmd)) or bool(held_re and held_re.search(cmd))
         reasons: list[str] = []
         if bearer_argv:
-            reasons.append("a bearer header is an argument of this curl, readable by every local "
-                           "user in /proc/<pid>/cmdline and `ps`")
+            reasons.append(f"a credential header ({E_HEADER_NAMES}) is an argument of this curl, "
+                           "readable by every local user in /proc/<pid>/cmdline and `ps`")
         if apikey and bearer_in_call:
-            reasons.append("a second credential header (`apikey:`) travels on argv beside the bearer")
+            reasons.append("a second credential header (`apikey:`) travels on argv beside the credential")
         if cfg_stdin and verbose:
             reasons.append("config-stdin hazard: -v/--verbose/--trace*/-D - prints the config's "
                            "headers, Authorization included, to the terminal")
@@ -1910,8 +1977,8 @@ def check_rule_e(rel: str, lines: list[str]) -> list[str]:
                            "to a temp file; use a process substitution")
         if reasons:
             out.append(
-                f"{rel}:{lineno + 1}: bearer token on curl argv -- " + "; ".join(reasons) + ".\n"
-                "  Feed the header on stdin instead: "
+                f"{rel}:{line_of(lineno)}: {E_FINDING}{where} -- " + "; ".join(reasons) + ".\n"
+                "  Feed the header on stdin instead (any header name above, any scheme): "
                 "`curl … --config - \"$URL\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
             )
     # Wrapper CALL sites. The bearer/apikey judgement reads the arguments the author wrote
@@ -1930,13 +1997,14 @@ def check_rule_e(rel: str, lines: list[str]) -> list[str]:
             body = body or (sf["cfg"] and sf["body"] and not (bf["cfg"] and bf["body"]))
             heredoc = heredoc or (hdr and (sf["heredoc"] or r["heredoc"])
                                   and not (bhdr and (bf["heredoc"] or r["heredoc"])))
-            bearer_ctx = bearer_ctx or bool(E_BEARER.search(r["cmd"])) or bool(held_re and held_re.search(r["cmd"]))
+            bearer_ctx = bearer_ctx or bool(E_CREDENTIAL.search(r["cmd"])) or bool(held_re and held_re.search(r["cmd"]))
         reasons = []
         if bearer_argv:
-            reasons.append(f"a bearer header is an argument of this call to `{callee}`, which hands it to curl "
-                           "on argv, readable by every local user in /proc/<pid>/cmdline and `ps`")
+            reasons.append(f"a credential header ({E_HEADER_NAMES}) is an argument of this call to `{callee}`, "
+                           "which hands it to curl on argv, readable by every local user in "
+                           "/proc/<pid>/cmdline and `ps`")
         if apikey and (bearer_argv or bearer_ctx):
-            reasons.append("a second credential header (`apikey:`) travels on argv beside the bearer")
+            reasons.append("a second credential header (`apikey:`) travels on argv beside the credential")
         if verbose:
             reasons.append("config-stdin hazard: -v/--verbose/--trace*/-D - prints the config's "
                            "headers, Authorization included, to the terminal")
@@ -1948,11 +2016,143 @@ def check_rule_e(rel: str, lines: list[str]) -> list[str]:
                            "to a temp file; use a process substitution")
         if reasons:
             out.append(
-                f"{rel}:{lineno + 1}: bearer token on curl argv -- " + "; ".join(reasons) + ".\n"
-                "  Feed the header on stdin instead, inside the wrapper: "
+                f"{rel}:{line_of(lineno)}: {E_FINDING}{where} -- " + "; ".join(reasons) + ".\n"
+                "  Feed the header on stdin instead, inside the wrapper (any header name above, any scheme): "
                 "`curl … --config - \"$@\" < <(printf 'header = \"Authorization: Bearer %s\"\\n' \"$TOKEN\")`\n"
             )
     return out
+
+
+# --- Rule E over YAML (#9597 S1, decision D1) ----------------------------------
+# Two feeders, because the two YAML populations are different languages:
+#   * workflows and composite actions (`.github/**`) are scanned by EXTRACTING every `run`
+#     string value with PyYAML, so a folded scalar (`run: >-`) and an inline quoted
+#     `run: "curl ..."` step reach `check_rule_e` exactly as bash will see them. Raw YAML
+#     lines are blind to both (measured 0 of 4 flagged, against 3 of 3 literal blocks).
+#   * cloud-init files (`#cloud-config`, `cloud-init*.yml`) are scanned by RAW LINES:
+#     they are Terraform-templated (`%{ if }`, `${...}`) and do not parse as YAML, and
+#     their embedded scripts are literal blocks by construction.
+# Dispatch keys on SUFFIX and CONTENT, never on a repo-relative `.github/` prefix: explicit
+# paths (the suite's out-of-repo fixture copies) are absolute.
+# A YAML file PyYAML cannot parse is exit 2 (cannot evaluate, ADR-157) -- never a skip and
+# never a raw-line fallback. PyYAML is imported LAZILY, at the first YAML file about to be
+# parsed, so the stdlib-only `--changed` path (shell only) never needs it; a missing PyYAML
+# is exit 2 as well, and ONLY yaml.YAMLError is the unparseable-file path (a blanket
+# `except Exception` would turn a broken loader into "this file did not parse").
+YAML_SUFFIXES = (".yml", ".yaml")
+E_YAML_PATHSPECS = (".github/**/*.yml", ".github/**/*.yaml", "apps/**/cloud-init*.yml")
+SKIP_SHELLS = frozenset({"python", "pwsh", "powershell", "cmd", "node", "ruby"})
+_YAML_STR_TAG = "tag:yaml.org,2002:str"
+YamlRun = namedtuple("YamlRun", "text line style name")
+
+
+def _feeds_raw_lines(path: Path, text: str) -> bool:
+    """True for a cloud-init file: named `cloud-init*` or opening with `#cloud-config`."""
+    first = next((ln for ln in text.splitlines() if ln.strip()), "")
+    return path.name.startswith("cloud-init") or first.startswith("#cloud-config")
+
+
+def _node_kind(node) -> str:
+    return type(node).__name__  # ScalarNode | SequenceNode | MappingNode
+
+
+def _scalar_text(node) -> str | None:
+    return node.value if _node_kind(node) == "ScalarNode" else None
+
+
+def _yaml_default_shell(node) -> str | None:
+    """`defaults.run.shell` of a mapping node, or None."""
+    for k1, v1 in node.value:
+        if _scalar_text(k1) == "defaults" and _node_kind(v1) == "MappingNode":
+            for k2, v2 in v1.value:
+                if _scalar_text(k2) == "run" and _node_kind(v2) == "MappingNode":
+                    for k3, v3 in v2.value:
+                        if _scalar_text(k3) == "shell":
+                            return _scalar_text(v3)
+    return None
+
+
+def _yaml_runs(node, default_shell: str | None = None):
+    """Yield a YamlRun for every `run` string value at ANY depth that bash would execute.
+
+    Workflow steps (`jobs.<id>.steps[*]`) and composite-action steps (`runs.steps[*]`) are
+    both just mappings holding a `run` scalar, so the walk is structural, not path-keyed. A
+    step whose `shell:` (or the enclosing `defaults.run.shell`) is not bash/sh is skipped,
+    as lint-workflow-run-body-syntax.py does; no `shell:` at all means bash.
+    """
+    kind = _node_kind(node)
+    if kind == "SequenceNode":
+        for item in node.value:
+            yield from _yaml_runs(item, default_shell)
+    elif kind == "MappingNode":
+        default_shell = _yaml_default_shell(node) or default_shell
+        run_node = shell_node = name_node = None
+        for k_node, v_node in node.value:
+            k = _scalar_text(k_node)
+            if k == "run":
+                run_node = v_node
+            elif k == "shell":
+                shell_node = v_node
+            elif k == "name":
+                name_node = v_node
+        if run_node is not None and _node_kind(run_node) == "ScalarNode" and run_node.tag == _YAML_STR_TAG:
+            shell = (_scalar_text(shell_node) or default_shell or "bash")
+            if (shell.split() or [""])[0] not in SKIP_SHELLS:
+                name = (_scalar_text(name_node) or "").strip().splitlines()
+                yield YamlRun(run_node.value, run_node.start_mark.line, run_node.style,
+                              name[0][:80] if name else "")
+        for key_node, val_node in node.value:
+            yield from _yaml_runs(val_node, default_shell)
+
+
+def _check_yaml_raw(rel: str, text: str) -> tuple[int, list]:
+    e = check_rule_e(rel, text.splitlines())
+    return (1 if e else 0), [("e", v) for v in e]
+
+
+def check_yaml_file(path: Path, rel: str) -> tuple[int, list]:
+    """Rule E (only) over one YAML file -> (status, violations); status 2 = cannot evaluate."""
+    if excluded_for_rule_e(rel):
+        return 0, []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        print(f"{rel}: cannot evaluate (unreadable or not UTF-8)", file=sys.stderr)
+        return 2, []
+    if _feeds_raw_lines(path, text):
+        return _check_yaml_raw(rel, text)
+    try:
+        import yaml
+    except ImportError as exc:
+        print(f"lint-shell-trace-credential-refusal: PyYAML is required to scan workflow YAML "
+              f"({exc}); install it (python3 -m pip install pyyaml) or run where it is available",
+              file=sys.stderr)
+        sys.exit(2)
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    try:
+        docs = list(yaml.compose_all(text, Loader=loader))
+    except yaml.YAMLError as exc:
+        first = (str(exc).strip().splitlines() or ["?"])[0]
+        print(f"{rel}: cannot evaluate (YAML did not parse: {first})", file=sys.stderr)
+        return 2, []
+    out: list[str] = []
+    for doc in docs:
+        if doc is None:
+            continue
+        for run in _yaml_runs(doc):
+            start = run.line
+            if run.style == "|":
+                def line_of(n: int, start=start) -> int:
+                    return start + 2 + n
+            elif run.style == ">":
+                def line_of(n: int, start=start) -> int:
+                    return start + 2
+            else:
+                def line_of(n: int, start=start) -> int:
+                    return start + 1
+            where = f' (step "{run.name}")' if run.name else " (unnamed step)"
+            out += check_rule_e(rel, run.text.splitlines(), line_of, where)
+    return (1 if out else 0), [("e", v) for v in out]
 
 
 def check_file(path: Path) -> tuple[int, list[str]]:
@@ -1961,6 +2161,8 @@ def check_file(path: Path) -> tuple[int, list[str]]:
         rel = str(path.relative_to(REPO_ROOT))
     except ValueError:
         rel = str(path)
+    if path.suffix in YAML_SUFFIXES:
+        return check_yaml_file(path, rel)
     d_excluded = excluded_for_rule_d(rel)
     e_excluded = excluded_for_rule_e(rel)
     if excluded(rel) and d_excluded and e_excluded:
@@ -2014,6 +2216,16 @@ def all_shell_files() -> list[Path]:
     return [p for p in (REPO_ROOT / q for q in git_out(["ls-files", "*.sh"])) if p.exists()]
 
 
+def rule_e_files() -> list[Path]:
+    """Rule E's repo-wide file set: tracked `*.sh` plus tracked workflow, composite-action
+    and cloud-init YAML. Rules A to D and `--changed` stay shell-only (decision D1: an
+    unrelated edit to a baselined workflow must not force its full remediation)."""
+    shell = all_shell_files()
+    tracked = sorted({REPO_ROOT / q for q in git_out(["ls-files", "--", *E_YAML_PATHSPECS])})
+    yaml_files = [p for p in tracked if p.exists()]
+    return shell + yaml_files
+
+
 def changed_shell_files(base: str) -> list[Path]:
     merge_base = git_out(["merge-base", "HEAD", base])
     if not merge_base:
@@ -2030,7 +2242,7 @@ def targets_from_args(args: argparse.Namespace) -> list[Path]:
         return [Path(p).resolve() for p in args.paths]
     if args.changed:
         return changed_shell_files(args.base)
-    return all_shell_files()
+    return rule_e_files()
 
 
 def _load_list(path: Path) -> set[str]:
@@ -2162,7 +2374,7 @@ def main() -> int:
             )
             return 2
         BASELINE_E_FILE.write_text(
-            "# Rule E (#9597): curl commands that carry a bearer token in their OWN argument\n"
+            "# Rule E (#9597): curl commands that carry a credential header in their OWN argument\n"
             "# list (readable by every local user in /proc/<pid>/cmdline), plus the hazards of\n"
             "# the `--config -` form that replaces it. Format: `path<TAB>site-count`.\n"
             "# SHRINK-ONLY: the repo-wide run compares this file to the live offender set by\n"
@@ -2240,7 +2452,7 @@ def main() -> int:
             live = e_counts.get(path_e, 0)
             if live == 0:
                 all_violations.append(
-                    f"{path_e}: listed in baseline E (#9597) but no longer carries a bearer token on "
+                    f"{path_e}: listed in baseline E (#9597) but no longer carries a credential header on "
                     f"curl argv (or no longer exists).\n  Delete the entry: baseline E is shrink-only.\n"
                 )
             elif live != listed:
