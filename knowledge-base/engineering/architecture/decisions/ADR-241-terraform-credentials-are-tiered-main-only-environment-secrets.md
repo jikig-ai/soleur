@@ -973,6 +973,10 @@ list it, `soleur-infra-app/prd` holds exactly one token, `release-app-mint`, and
 
 Run: <https://github.com/jikig-ai/soleur/actions/runs/37222544138>.
 
+### 2026-10-07 (#9372): `web-host-reboot.yml::reboot` is a new Tier-B consumer
+
+One dated line, no status change: the dispatch-only `web-host-reboot.yml` job `reboot` consumes the Tier-B Hetzner write token through the loader behind `web-platform-infra-apply` (one soft reboot of the allow-listed web-2 server), and its `observe` job holds Better Stack read credentials only. Inventory rows: `infra-credential-tiers-8209.md` (Group 3). It retires with the rebirth workflow.
+
 ## References
 
 - Plan: `knowledge-base/project/plans/2026-09-22-feat-evict-privileged-terraform-credentials-plan.md`
