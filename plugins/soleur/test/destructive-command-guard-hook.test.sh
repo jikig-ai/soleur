@@ -854,10 +854,10 @@ if [[ "$_b4" == 0 ]]; then _x=ok; else _x=bad; fi
 chk "the hook uses no bash-4 feature and no GNU-only flag (count is 0)" "$_x" "hits: $_b4"
 # the pattern itself can fail: every known-bad spelling is a hit and the known-good look-alikes are not
 _b4_miss=""
-for _s in 'x=${v,,}' 'x=${v^^}' 'x=${v,}' 'declare -n r=x' 'local -n r=x' '[[ -v X ]]' 'case x in a) ls ;;& b) ;; esac' 'case x in a) ls ;& b) ;; esac' 'a |& b' 'printf %q x' 'printf -v o %q x' 'readarray -t a' 'mapfile a' 'declare -A m' 'sort -z' 'xargs -r ls' 'find . -printf x' 'grep -P x' 'sed -r s/a/b/' 'sed -nr s/a/b/' 'readlink -f x' 'realpath x'; do
+for _s in 'x=${v,,}' 'x=${v^^}' 'x=${v,}' 'declare -n r=x' 'local -n r=x' '[[ -v X ]]' 'case x in a) ls ;;& b) ;; esac' 'case x in a) ls ;& b) ;; esac' 'a |& b' 'printf %q x' 'printf -v o %q x' 'readarray -t a' 'mapfile a' 'declare -A m' 'sort -z' 'xargs -r ls' 'find src -printf x' 'grep -P x' 'sed -r s/a/b/' 'sed -nr s/a/b/' 'readlink -f x' 'realpath x'; do
   printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE" || _b4_miss+=" [$_s]"
 done
-for _s in "IFS=\$';&|\\n'" 'sed -E s/a/b/' 'x=${v:-,,}' 'printf %s x' 'find . -name x' 'grep -E x' 'sort -u'; do
+for _s in "IFS=\$';&|\\n'" 'sed -E s/a/b/' 'x=${v:-,,}' 'printf %s x' 'find src -name x' 'grep -E x' 'sort -u'; do
   if printf '%s\n' "$_s" | grep -qE -- "$BASH4_RE"; then _b4_miss+=" false-hit[$_s]"; fi
 done
 if [[ -z "$_b4_miss" ]]; then _x=ok; else _x=bad; fi
@@ -1892,7 +1892,7 @@ if [[ -z "$_lint_miss" ]]; then _x=ok; else _x=bad; fi
 chk "harness (lint): the executed-row lint refuses every unsafe spelling (a path reset, command -p in any spacing, exec in command position, an absolute redirect, a cd to an absolute path)" "$_x" "NOT refused:$_lint_miss"
 _lint_bad=""
 for _s in 'ls -la' 'aws-vault exec p -- terraform destroy' 'git push --exec x -f origin trunk' 'find src -name x -exec cat {} \;' 'echo "done" > /dev/null' 'ls &> /dev/null' 'pushd .. > /dev/null; rm -rf sub' \
-          'echo x > @TREE@/out.log' 'cd @TREE@ && rm -rf ../../h/home' 'command -v rm' 'command -V rm -rf ~' 'echo exec rm' 'terraform apply -destroy' 'rm -rf $HOME/*' 'cd ~ && rm -rf ./*' 'cat <<< "a > b"'; do
+          'echo x > @TREE@/out.log' 'cd @TREE@ && rm -rf ../../h/home' 'command -v rm' 'command -V rm -rf ~' 'echo exec rm' 'terraform apply -destroy' 'rm -rf $HOME/*' 'cd ~ && rm -rf ./*' 'echo "a > b"'; do
   safe_to_execute "$_s" || _lint_bad+=" [$_s]"
 done
 if [[ -z "$_lint_bad" ]]; then _x=ok; else _x=bad; fi
@@ -1904,7 +1904,7 @@ if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (lint): an unsafe row an
 src, dst, anchor, new = sys.argv[1:5]
 s = open(src).read()
 if s.count(anchor) != 1: sys.exit(1)
-open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/unsafe.test.sh" "run_table 3 3<<'ROWS'"$'\n' "run_table 3 3<<'ROWS'"$'\n'"X @@ lint probe @@ none @@ - @@ command  -p rm -rf ~"$'\n' 2>/dev/null; _u_prep=$?
+open(dst, "w").write(s.replace(anchor, new))' "$SELF" "$WORK/meta/unsafe.test.sh" "run_table 3 3${_HD}'ROWS'"$'\n' "run_table 3 3${_HD}'ROWS'"$'\n'"X @@ lint probe @@ none @@ - @@ command  -p rm -rf ~"$'\n' 2>/dev/null; _u_prep=$?
   _unsafe_out="$(env -u DCG_ROWS GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$WORK/meta/unsafe.test.sh" 2>&1 </dev/null)"; _unsafe_rc=$?
   if [[ "$_u_prep" -eq 0 && "$_unsafe_rc" -eq 2 ]] && grep -q "row 'lint probe' is not safe to execute" <<<"$_unsafe_out"; then _x=ok; else _x=bad; fi
   chk "harness (lint): a suite copy carrying an unsafe row stops with exit 2 and names the row (rc=$_unsafe_rc)" "$_x" "prep=$_u_prep out: $(tail -n 2 <<<"$_unsafe_out" | tr '\n' ' ')"
