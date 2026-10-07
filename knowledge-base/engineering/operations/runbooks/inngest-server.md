@@ -26,7 +26,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Private-NIC boot event after a host replace (#8539) | [§ Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539) |
 | `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
 | Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
-| Deliberate SECOND FLUSHALL on the same host (#7777) | `gh workflow run cutover-inngest.yml -f op=reflush` — [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush--7777) |
+| Deliberate SECOND FLUSHALL on the same host (#7777) | `gh workflow run cutover-inngest.yml -f op=reflush` — [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777) |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
 ## Inherited `done` after a host replace (#7228)
@@ -144,7 +144,7 @@ while the Hetzner API or the HCLOUD token is unavailable** — including op=luks
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
 it. If the intent is a deliberate SECOND flush on the same host — not a recovery — the verb is
-`op=reflush` (see [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush--7777)).
+`op=reflush` (see [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777)).
 For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
 
 **Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
