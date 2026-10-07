@@ -603,3 +603,11 @@ is not a completed lint check of those files.
   use. Resolve the active hook's runner rather than assuming dependency hydration
   supplies it. The effective hook path is `/dev/null` in this tool environment,
   so invoke applicable checks explicitly and retain test-runner exclusions.
+- A cloned isolated recovery runner retained its original scratch path and
+  expected the plugin seed under that scratch tree. Before running a copied
+  harness, remap every task-owned path and stage its declared inputs into a
+  fresh directory. In the rehearsal image, Docker also could not create the
+  plugin bind-mount parent after the root filesystem became read-only; add the
+  mountpoint to the image before making the root filesystem immutable. Both
+  failures occurred without external services, and task-owned containers were
+  cleaned up; do not retry beyond the authorized attempt.

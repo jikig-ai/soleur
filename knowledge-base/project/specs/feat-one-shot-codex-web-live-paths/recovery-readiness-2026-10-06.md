@@ -88,16 +88,29 @@ the 13 unchanged migration bodies listed below on the declared synthetic base,
 seeded two synthetic tenants and captured the pre-replacement state. Database
 creation, scoped migration setup and the initial snapshot each exited zero.
 
-The run stopped before waiting for PostgREST or starting the application.
-Starting the local PostgREST container reached a runner assertion that compared
-Docker's reported shared network value with the requested container-name string.
-The assertion did not accept the value Docker returned. The runner then removed both owned containers;
-the bounded record at the worktree scratch path reports both removals confirmed.
-No application runtime, before/after comparison, recovery scenario SQL or
-external egress ran. This is a harness validation failure, not a recovery pass.
-The run was not retried; exact logs and the failed record remain task-owned under
+The first run stopped before waiting for PostgREST or starting the application.
+Its runner compared Docker's reported shared-network value with the requested
+container-name string and rejected the normalized container ID. Both owned
+containers were confirmed removed. This was a harness validation failure, not
+a recovery pass; its logs and record remain under
 `.soleur/isolated-recovery-845d1455-20261006T073743Z-510203/` and are excluded
 from the commit.
+
+After separate user authorization, one fresh attempt used the corrected
+container-ID assertion, fresh disposable database/container names, and the
+same pinned candidate runtime from source `845d1455d55b76754c2cd4f3c9804a1f7d6888a1`.
+The repository head observed by the runner was `d1cc746218c1437b4b61a77fca155453774df6c0`;
+the candidate artifact predates that head and does not qualify current-source
+runtime. PostgreSQL ran with `--network=none`; its synthetic database creation,
+13-migration setup and pre-replacement snapshot all exited zero. PostgREST and
+the local REST proxy started in the isolated namespace. Candidate app startup
+then failed before process launch because the read-only image had no
+`/app/shared/plugins/soleur` mountpoint. The harness confirmed removal of the
+app, proxy, PostgREST and PostgreSQL containers. No application health check,
+post-state comparison, recovery scenario SQL or egress ran. The exact bounded
+record and logs are task-owned under
+`.soleur/isolated-recovery-9051-attempt2/` and excluded from the commit. This
+authorized attempt is incomplete, not a recovery pass, and was not retried.
 
 The prepared and partially applied closure contains 13 unchanged complete
 migration bodies: 138, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151
@@ -108,9 +121,10 @@ not execute the production runner or prove the full historical schema.
 
 The remaining planned checks stay unqualified:
 
-1. Correct the container-network assertion, then prepare a new one-shot
-   rehearsal with a fresh task-owned database and container names.
-2. Start the candidate application against the retained database and verify
+1. A further rehearsal requires new explicit authorization, a source-current
+   candidate, and a writable mountpoint created in the disposable container
+   image before applying the root-filesystem read-only setting.
+2. Start an authorized candidate against the retained database and verify
    connected startup and graceful stop for both application instances.
 3. Compare exact pre/post application state, then run the stale-generation,
    owner/member/tenant and erasure SQL cases.
