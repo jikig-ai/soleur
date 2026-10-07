@@ -23,7 +23,7 @@ The workflow soft-reboots one allow-listed host through the Hetzner API (one ACP
   done
   ```
 
-  Empty output means no run of a workflow that holds `web-1-swap` is active or waiting (one of the listed files, this workflow's own, answers HTTP 404 until it exists on the default branch; that is not a result). Dispatch only when the owner is ready to approve. If the approval is not coming, cancel with `gh run cancel <run id>`.
+  Empty output means no run of a workflow that holds `web-1-swap` is active or waiting (one of the listed files, this workflow's own, answers HTTP 404 until it exists on the default branch; that is not a result). Dispatch only when the owner is ready to approve. If the approval is not coming, cancel with `gh run cancel <run id>`. A cancelled run starts no `observe` job; if a run is cancelled after the `reboot` job ran, a request may already have been sent: read the `reboot` job's log for its anchor before any new dispatch.
 - **A re-run is refused by design.** `gh run rerun` of the whole run or of the `reboot` job would re-execute the guards at the original SHA and, with live state unchanged, issue a second request that reboots the host again. The workflow reads `github.run_attempt` in `validate` and in the `reboot` job's re-check step and refuses unless it is 1. Read the evidence and dispatch anew (after the owner's new go-ahead) instead.
 
 ## What the guards are, and are not
@@ -184,7 +184,7 @@ No SSH, no Doppler write, no token mint, no Terraform plan or apply, no ledger e
 
 ## Retirement
 
-This workflow depends on `scripts/web2-rebirth-never-pooled.sh` and shares helper bodies with `scripts/web2-rebirth.sh`. It retires with them, in the rebirth closing change, after the graded #6931 PASS: closing row 5 of [web2-luks-rebirth-9372.md](./web2-luks-rebirth-9372.md) lists every file and registration to delete and states retire-versus-keep. A tombstone row in each of the two suites (`apps/web-platform/infra/web-host-reboot-workflow.test.sh` and `scripts/web-host-reboot.test.sh`) is hard red: if either of those two rebirth scripts is gone, every `web-host-reboot*` file must be gone too, so a half retirement fails CI. **Keeping the workflow past the retirement of the rebirth scripts means editing the tombstone rows in the same PR**, together with the recorded owner decision naming a new home for the never-pooled gate. Without both the PR is red by design.
+This workflow depends on `scripts/web2-rebirth-never-pooled.sh` and shares helper bodies with `scripts/web2-rebirth.sh`. It retires with them, in the rebirth closing change, after the graded #6931 PASS: closing row 5 of [web2-luks-rebirth-9372.md](./web2-luks-rebirth-9372.md) lists every file and registration to delete and states retire-versus-keep. A tombstone row in each of the two suites (A5 and A5b in `apps/web-platform/infra/web-host-reboot-workflow.test.sh`, and the TOMBSTONE row in `scripts/web-host-reboot.test.sh`) is hard red: if either of those two rebirth scripts is gone, every `web-host-reboot*` file must be gone too, so a half retirement fails CI. **Keeping the workflow past the retirement of the rebirth scripts means editing the tombstone rows in the same PR**, together with the recorded owner decision naming a new home for the never-pooled gate. Without both the PR is red by design.
 
 ## References
 
