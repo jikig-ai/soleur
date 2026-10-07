@@ -707,51 +707,338 @@ while IFS= read -r line; do
   esac
 done <<<"$report"
 printf 'real workflow: %s rows, %s failed\n' "$ran" "$fails"
-ROW_FLOOR=85
-if [[ "${ran:-0}" -lt "$ROW_FLOOR" ]]; then printf 'FAIL - row floor: only %s rows ran (floor %s)\n' "$ran" "$ROW_FLOOR"; fails=$((fails + 1)); fi
+# Floors are reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
+ROW_FLOOR=71
+if [[ "${ran:-0}" -lt "$ROW_FLOOR" ]]; then printf 'FAIL - row floor: only %s rows ran (floor %s)\n' "$ran" "$ROW_FLOOR"; exit 1; fi
 
-# ---- the mutation battery: one edit per row on a COPY, each must go red; the harness controls come first -------------------------
+# ---- the mutation battery: one edit per row on a COPY, each must go red; must-pass edits stay green ------------------------------
+# A mutant is a python snippet that transforms the workflow text `s` through rep()/swap(); an edit that does not land exactly the
+# stated number of times, or leaves the text unchanged, is a FAILURE of the harness (a mutant that lands nothing proves nothing).
 MUT_JOBS="${MUT_JOBS:-6}"; MUT_SEQ=0; mkdir -p "$TMP/mres"
-_mutate_run() { # <idx> <expect: red|green> <label> <old> <new>
-  local idx="$1" expect="$2" label="$3" old="$4" new="$5" copy="$TMP/mut.$BASHPID.yml" bout after
-  cp "$WF_REAL" "$copy" 2>/dev/null || { echo "FAIL - mutation '${label}': the workflow is missing" > "$TMP/mres/$idx"; return; }
-  if ! python3 - "$copy" "$old" "$new" <<'PY2'
+cat > "$TMP/mutate.py" <<'PY2'
 import sys
-p, old, new = sys.argv[1:4]
+p, codefile = sys.argv[1:3]
 s = open(p).read()
-if s.count(old) != 1:
-    sys.exit(1)
-open(p, "w").write(s.replace(old, new))
+orig = s
+def rep(old, new, count=1):
+    global s
+    n = s.count(old)
+    if n != count:
+        print("LANDING: the edit matched %d times, wanted %d: %r" % (n, count, old[:70])); sys.exit(1)
+    s = s.replace(old, new)
+def _block(prefix):
+    lines = s.split("\n"); start = None
+    for i, l in enumerate(lines):
+        if l.startswith("      - ") and prefix in l:
+            if start is not None: print("LANDING: ambiguous step %r" % prefix); sys.exit(1)
+            start = i
+    if start is None: print("LANDING: no step %r" % prefix); sys.exit(1)
+    end = start + 1
+    while end < len(lines) and not (lines[end].startswith("      - ") or (lines[end] and not lines[end].startswith(" ") and not lines[end].startswith("#")) or (lines[end].startswith("  ") and not lines[end].startswith("   ") and lines[end].strip().endswith(":"))):
+        end += 1
+    return lines, start, end
+def swap(a, b):
+    global s
+    lines, sa, ea = _block(a)
+    _, sb, eb = _block(b)
+    if sa > sb: sa, ea, sb, eb = sb, eb, sa, ea
+    blk_a, blk_b = lines[sa:ea], lines[sb:eb]
+    s = "\n".join(lines[:sa] + blk_b + lines[ea:sb] + blk_a + lines[eb:])
+exec(open(codefile).read())
+if s == orig:
+    print("LANDING: the snippet left the text unchanged"); sys.exit(1)
+open(p, "w").write(s)
 PY2
-  then echo "FAIL - mutation '${label}': the edit did not land exactly once (a mutant that lands nothing proves nothing)" > "$TMP/mres/$idx"; return; fi
+_mutate_run() { # <idx> <expect: red|green> <label>
+  local idx="$1" expect="$2" label="$3" copy="$TMP/mut.$1.yml" bout after land
+  cp "$WF_REAL" "$copy" 2>/dev/null || { echo "FAIL - mutation '${label}': the workflow is missing" > "$TMP/mres/$idx"; return; }
+  if ! land="$(python3 "$TMP/mutate.py" "$copy" "$TMP/mcode.$idx.py" 2>&1)"; then
+    echo "FAIL - mutation '${label}': the edit did not land (${land:0:140})" > "$TMP/mres/$idx"; return
+  fi
   bout="$(battery "$copy" 2>&1)"
   if grep -q '^FAILED S0 ' <<<"$bout"; then echo "FAIL - mutation '${label}' broke the YAML: a parse error is not a kill" > "$TMP/mres/$idx"; rm -f "$copy"; return; fi
   after="$(grep -c '^FAILED' <<<"$bout")"
   if [[ "$expect" == red ]]; then
-    if [[ "$after" -gt 0 ]]; then echo "ok   - mutation killed: ${label} ($(grep '^FAILED' <<<"$bout" | head -1 | cut -c8-60) ... ${after} rows red)" > "$TMP/mres/$idx"; else echo "FAIL - mutation SURVIVED: ${label}" > "$TMP/mres/$idx"; fi
+    if [[ "$after" -gt 0 ]]; then echo "ok   - mutation killed: ${label} (${after} rows red, first: $(grep '^FAILED' <<<"$bout" | head -1 | cut -c8-22))" > "$TMP/mres/$idx"; else echo "FAIL - mutation SURVIVED: ${label}" > "$TMP/mres/$idx"; fi
   else
     if [[ "$after" -eq 0 ]]; then echo "ok   - must-pass edit stays green: ${label}" > "$TMP/mres/$idx"; else echo "FAIL - must-pass edit went red: ${label} ($(grep '^FAILED' <<<"$bout" | head -1 | cut -c1-120))" > "$TMP/mres/$idx"; fi
   fi
   rm -f "$copy"
 }
-mutate() { # <label> <old> <new>   (expects the battery to go red)
+mutpy() { # <red|green> <label>   (the python snippet is on stdin)
+  local expect="$1" label="$2"
   MUT_SEQ=$((MUT_SEQ + 1))
+  cat > "$TMP/mcode.$MUT_SEQ.py"
   while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$MUT_JOBS" ]]; do sleep 0.3; done
-  _mutate_run "$MUT_SEQ" red "$@" &
-}
-mutate_ok() { # <label> <old> <new>   (expects the battery to stay green: the contract allows this edit)
-  MUT_SEQ=$((MUT_SEQ + 1))
-  while [[ "$(jobs -rp | wc -l | tr -d ' ')" -ge "$MUT_JOBS" ]]; do sleep 0.3; done
-  _mutate_run "$MUT_SEQ" green "$@" &
+  _mutate_run "$MUT_SEQ" "$expect" "$label" &
 }
 # MUTATIONS_BEGIN
+mutpy red "G4 an observe step uses the credential action" <<'PY'
+rep(r'''      # The grade script writes its own step summary''', r'''      - name: Load infra credentials (observe)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # The grade script writes its own step summary''')
+PY
+mutpy red "G4 the validate job uses the credential action" <<'PY'
+rep("    timeout-minutes: 3\n    steps:\n", "    timeout-minutes: 3\n    steps:\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}\n")
+PY
+mutpy red "G4 REORDER the reboot step above the snapshot step" <<'PY'
+swap("Evidence snapshot", "Reboot request")
+PY
+mutpy red "G4 REORDER the reboot step above the never-pooled step" <<'PY'
+swap("Never-pooled evidence", "Reboot request")
+PY
+mutpy red "G4 REORDER the credential loader below the never-pooled step" <<'PY'
+swap("Load infra credentials", "Never-pooled evidence")
+PY
+mutpy red "G4 a Hetzner call (curl and the API host) in a run body" <<'PY'
+rep('echo "typed host and confirm re-checked"', 'echo "typed host and confirm re-checked"\n          curl -s https://api.hetzner.cloud/v1/servers')
+PY
+mutpy red "G4 a fourth job" <<'PY'
+s = s.rstrip("\n") + "\n\n  extra:\n    runs-on: ubuntu-24.04\n    steps:\n      - name: Validate nothing\n        run: echo hi\n"
+PY
+mutpy red "G4 a second write-capable step after the compliant first" <<'PY'
+rep("      - name: Run summary\n", '''      - name: Reboot request again (a second write)
+        env:
+          HOST: ${{ inputs.host }}
+          CONFIRM: ${{ inputs.confirm }}
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM"
+
+      - name: Run summary
+''')
+PY
+mutpy red "G4 the reboot step is renamed out of the classified set" <<'PY'
+rep("- name: Reboot request (the one Hetzner write", "- name: Fire the request (the one Hetzner write")
+PY
+mutpy red "G4 an unclassified step is added" <<'PY'
+rep("      - name: Run summary\n", "      - name: Purge the other volume\n        run: echo purge\n\n      - name: Run summary\n")
+PY
+mutpy red "G4 an action is pinned by a mutable tag" <<'PY'
+rep("hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0", "hashicorp/setup-terraform@v4")
+PY
+mutpy red "G4 an action SHA is replaced by another 40-hex value" <<'PY'
+rep("hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0", "hashicorp/setup-terraform@0123456789abcdef0123456789abcdef01234567 # v4.0.0")
+PY
+mutpy red "G4 the typed confirm is written inside a run body" <<'PY'
+rep('echo "typed host and confirm re-checked"', 'echo "typed ${{ inputs.confirm }}"')
+PY
+mutpy red "G4 a needs output is written inside a run body" <<'PY'
+rep('echo "job outputs validated"', 'echo "${{ needs.reboot.outputs.server_id }}"')
+PY
+mutpy red "G4 the never-pooled step loses its env -i allow-list" <<'PY'
+rep('''          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" DOPPLER_TOKEN="$DOPPLER_TOKEN" \\
+            bash scripts/web2-rebirth-never-pooled.sh''', '''          bash scripts/web2-rebirth-never-pooled.sh''')
+PY
+mutpy red "G4 the snapshot step loses its env -i allow-list" <<'PY'
+rep('''          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \\
+            BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" \\
+            BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \\
+            bash scripts/web-host-reboot-evidence.sh snapshot''', '''          bash scripts/web-host-reboot-evidence.sh snapshot''')
+PY
+mutpy red "G4 the reboot step loses its env -i allow-list" <<'PY'
+rep('''          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \\
+            HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \\
+            INFRA_DIR="$INFRA_DIR" NEVER_POOLED="${NEVER_POOLED:-}" \\
+            GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \\
+            bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM"''', '''          bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM"''')
+PY
+mutpy red "G4 the reboot allow-list is widened by one name" <<'PY'
+rep('INFRA_DIR="$INFRA_DIR" NEVER_POOLED="${NEVER_POOLED:-}" \\', 'INFRA_DIR="$INFRA_DIR" NEVER_POOLED="${NEVER_POOLED:-}" DOPPLER_TOKEN="${DOPPLER_TOKEN:-}" \\')
+PY
+mutpy red "G4 the snapshot allow-list is widened by one name" <<'PY'
+rep('''            BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \\
+            bash scripts/web-host-reboot-evidence.sh snapshot''', '''            BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" \\
+            bash scripts/web-host-reboot-evidence.sh snapshot''')
+PY
+mutpy red "G4 reboot loses needs: validate" <<'PY'
+rep("  reboot:\n    needs: validate\n", "  reboot:\n")
+PY
+mutpy red "G4 the reboot step gains continue-on-error" <<'PY'
+rep("        id: reboot\n", "        id: reboot\n        continue-on-error: true\n")
+PY
+mutpy red "G4 the reboot step gains a condition" <<'PY'
+rep("        id: reboot\n", "        id: reboot\n        if: ${{ always() }}\n")
+PY
+mutpy red "G4 the reboot step loses the never-pooled input" <<'PY'
+rep("          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}\n", "")
+PY
+mutpy red "G4 the never-pooled step swallows a refusal" <<'PY'
+rep("            bash scripts/web2-rebirth-never-pooled.sh\n", "            bash scripts/web2-rebirth-never-pooled.sh || true\n")
+PY
+mutpy red "G4 the snapshot step swallows a failure" <<'PY'
+rep("            bash scripts/web-host-reboot-evidence.sh snapshot\n", "            bash scripts/web-host-reboot-evidence.sh snapshot || true\n")
+PY
+mutpy red "G4 the reboot step swallows a failure" <<'PY'
+rep('bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM"\n\n      - name: Run summary', 'bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM" || true\n\n      - name: Run summary')
+PY
+mutpy red "G4 the xtrace refusal is dropped from the never-pooled step" <<'PY'
+rep('''          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" DOPPLER_TOKEN''', '''          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" DOPPLER_TOKEN''')
+PY
+mutpy red "G4 the xtrace refusal is dropped from the reboot step" <<'PY'
+rep('''          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \\
+            HCLOUD_TOKEN''', '''          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \\
+            HCLOUD_TOKEN''')
+PY
+mutpy red "G4 the xtrace refusal is dropped from the grade step" <<'PY'
+rep('''          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          rc=0''', '''          set -euo pipefail
+          rc=0''')
+PY
+mutpy red "G4 a stray write to GITHUB_ENV carries an input" <<'PY'
+rep('''          printf 'STARTED_AT=%s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"''', '''          printf 'STARTED_AT=%s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          printf 'REASON=%s\\n' "$CONFIRM" >> "$GITHUB_ENV"''')
+PY
+mutpy red "G4 the summary step stops running always" <<'PY'
+rep("        if: always()\n", "")
+PY
+mutpy red "G4 observe gains an environment" <<'PY'
+rep("  observe:\n    needs: reboot\n", "  observe:\n    needs: reboot\n    environment: web-platform-infra-apply\n")
+PY
+mutpy red "G4 observe's grade step is handed the Hetzner token" <<'PY'
+rep("          ANCHOR_EPOCH: ${{ needs.reboot.outputs.anchor_epoch }}\n        run: |\n          case", "          ANCHOR_EPOCH: ${{ needs.reboot.outputs.anchor_epoch }}\n          HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN }}\n        run: |\n          case")
+PY
+mutpy red "G4 observe's grade step is handed a Doppler token" <<'PY'
+rep("          ANCHOR_EPOCH: ${{ needs.reboot.outputs.anchor_epoch }}\n        run: |\n          case", "          ANCHOR_EPOCH: ${{ needs.reboot.outputs.anchor_epoch }}\n          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}\n        run: |\n          case")
+PY
+mutpy red "G4 observe loses its anchor condition" <<'PY'
+rep(" && needs.reboot.outputs.anchor_epoch != ''", "")
+PY
+mutpy red "G4 observe loses always()" <<'PY'
+rep("always() && github.ref == 'refs/heads/main' && needs", "github.ref == 'refs/heads/main' && needs")
+PY
+mutpy red "G4 the marker token is also bound at workflow level" <<'PY'
+rep("  INFRA_DIR: apps/web-platform/infra\n\njobs:", "  INFRA_DIR: apps/web-platform/infra\n  DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}\n\njobs:")
+PY
+mutpy red "G1 the job outputs lose the anchor" <<'PY'
+rep("      anchor_epoch: ${{ steps.reboot.outputs.anchor_epoch }}\n    steps:", "    steps:")
+PY
+mutpy red "G1 the host options are widened in the workflow only" <<'PY'
+rep("        options:\n          - web-2\n", "        options:\n          - web-2\n          - web-1\n")
+PY
+mutpy red "G1 the validate host check is loosened to a glob" <<'PY'
+rep('[[ "$HOST_RAW" == "web-2" ]] ||', '[[ "$HOST_RAW" == web-* ]] ||')
+PY
+mutpy red "G1 the validate confirm pattern drops the leading-zero rule and the length bound" <<'PY'
+rep('''confirm_re='^REBOOT-web-2-[1-9][0-9]{0,11}$'
+          [[ "$CONFIRM_RAW"''', '''confirm_re='^REBOOT-web-2-[0-9]+$'
+          [[ "$CONFIRM_RAW"''')
+PY
+mutpy red "G1 the re-check step loses the confirm pattern" <<'PY'
+rep('''confirm_re='^REBOOT-web-2-[1-9][0-9]{0,11}$'
+          [[ "$CONFIRM" =~''', '''confirm_re='^REBOOT-web-2-.*$'
+          [[ "$CONFIRM" =~''')
+PY
+mutpy red "G1 the reason charset admits a pipe" <<'PY'
+rep("reason_re='^[A-Za-z0-9 ._,:#/()-]{1,200}$'", "reason_re='^[A-Za-z0-9 ._,:#/()|-]{1,200}$'")
+PY
+mutpy red "G1 the reason length bound is raised" <<'PY'
+rep("{1,200}$'", "{1,2000}$'")
+PY
+mutpy red "G1 the reason may be empty" <<'PY'
+rep("{1,200}$'", "{0,200}$'")
+PY
+mutpy red "G1 the validate step echoes the raw confirm" <<'PY'
+rep('echo "dispatch format validated: host web-2; confirm and reason within their patterns"', 'echo "dispatch format validated: ${CONFIRM_RAW}"')
+PY
+mutpy red "G1 run-name carries the reason" <<'PY'
+rep("run-name: web-host-reboot ${{ inputs.host }} ${{ inputs.confirm }}", "run-name: web-host-reboot ${{ inputs.host }} ${{ inputs.confirm }} ${{ inputs.reason }}")
+PY
+mutpy red "G1 a schedule trigger is added" <<'PY'
+rep("on:\n  workflow_dispatch:\n    inputs:", 'on:\n  schedule:\n    - cron: "0 3 * * *"\n  workflow_dispatch:\n    inputs:')
+PY
+mutpy red "G1 the main-only guard is removed from the reboot job" <<'PY'
+rep("    if: ${{ github.ref == 'refs/heads/main' }}\n", "")
+PY
+mutpy red "G1 the environment is swapped for the reviewer-less one" <<'PY'
+rep("    environment: web-platform-infra-apply\n", "    environment: infra-privileged\n")
+PY
+mutpy red "G1 the mutex literal changes" <<'PY'
+rep("      group: web-1-swap\n", "      group: web-2-swap\n")
+PY
+mutpy red "G1 actions: read is dropped" <<'PY'
+rep("  # The summary looks up the run's approvals through the Actions API.\n  actions: read\n", "")
+PY
+mutpy red "G1 the Terraform version drifts from the apply workflow's" <<'PY'
+rep('TERRAFORM_VERSION: "1.10.5"', 'TERRAFORM_VERSION: "1.10.4"')
+PY
+mutpy red "G1 a Terraform target is named" <<'PY'
+rep("run: terraform init -input=false -lockfile=readonly", "run: terraform init -input=false -lockfile=readonly -target=hcloud_server.web")
+PY
+mutpy red "G1 a Terraform plan appears in a run body" <<'PY'
+rep('echo "typed host and confirm re-checked"', 'echo "typed host and confirm re-checked"\n          terraform plan -input=false')
+PY
+mutpy red "G2 a claim word in the grade step's PASS line (static and dynamic scans)" <<'PY'
+rep('echo "grade finished: PASS (row presence only), reason ${reason}."', 'echo "grade finished: PASS verified, reason ${reason}."')
+PY
+mutpy red "G3 the marker name is written in a run body" <<'PY'
+rep('echo "typed host and confirm re-checked"', 'echo "typed host and confirm re-checked WORKSPACES_LUKS_CUTOVER_AT"')
+PY
+mutpy red "G3 the rows helper is named in a run body" <<'PY'
+rep('echo "typed host and confirm re-checked"', 'echo "typed host and confirm re-checked scripts/lib/web2-luks-rows.sh"')
+PY
+mutpy red "O exit 2 (NOT YET) is made red" <<'PY'
+rep('next line of the log." ;;', 'next line of the log."; exit 1 ;;')
+PY
+mutpy red "O exit 4 is made green" <<'PY'
+rep('(reason ${reason}, exit 4): see the verdict and next lines above."; exit 1 ;;', '(reason ${reason}, exit 4): see the verdict and next lines above." ;;')
+PY
+mutpy red "O the unexpected-outcome arm is made green" <<'PY'
+rep('(exit ${rc}, reason ${reason})."; exit 1 ;;', '(exit ${rc}, reason ${reason})." ;;')
+PY
+mutpy red "O the grade failure is swallowed" <<'PY'
+rep("--poll-s 60 || rc=$?", "--poll-s 60 || true")
+PY
+mutpy red "O the poll window is raised" <<'PY'
+rep("--window-min 40", "--window-min 400")
+PY
+mutpy red "O the reason gate is dropped (a hostile reason would be printed)" <<'PY'
+rep('[[ "$reason" =~ $reason_re ]] || reason="unavailable"', ':')
+PY
+mutpy red "O the anchor check accepts an empty or long value" <<'PY'
+rep("anchor_re='^[0-9]{1,10}$'", "anchor_re='^[0-9]*$'")
+PY
+mutpy red "O the server id check accepts a leading zero or nothing" <<'PY'
+rep("id_re='^[1-9][0-9]{0,11}$'", "id_re='^[0-9]*$'")
+PY
+mutpy red "O a summary-verb step is added to observe (the writer script named in observe)" <<'PY'
+s = s.rstrip("\n") + "\n\n      - name: Observe summary\n        if: always()\n        run: bash scripts/web-host-reboot.sh summary\n"
+PY
+mutpy green "must-pass: a read-only validation step before the credential loader" <<'PY'
+rep("      - name: Load infra credentials (tiered)\n", '''      - name: Validate an extra input shape
+        run: echo "extra shape ok"
+
+      - name: Load infra credentials (tiered)
+''')
+PY
+mutpy green "must-pass: a header comment is reworded" <<'PY'
+rep("# THE MERGE OF THIS FILE IS INERT:", "# THE MERGE OF THIS FILE IS (still) INERT:")
+PY
+mutpy green "must-pass: a version comment gains a note" <<'PY'
+rep("hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0", "hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0 (pinned)")
+PY
+mutpy green "must-pass: the validate error text is reworded" <<'PY'
+rep("no approval was requested\"; exit 1; }\n          confirm_re", "no approval will be requested\"; exit 1; }\n          confirm_re")
+PY
 # MUTATIONS_END
 wait
 for f in "$TMP"/mres/*; do [[ -e "$f" ]] || continue; cat "$f"; grep -q '^FAIL' "$f" && fails=$((fails + 1)); done
 n_res="$(find "$TMP/mres" -type f | wc -l | tr -d ' ')"
 [[ "$n_res" -eq "$MUT_SEQ" ]] || { echo "FAIL - a mutant did not report (${n_res} of ${MUT_SEQ})"; fails=$((fails + 1)); }
 # The floor is reported by a direct printf and exit (not through a helper), so a mutant of the guard itself can be built.
-MUT_FLOOR=40
+MUT_FLOOR=65
 if [[ "$MUT_SEQ" -lt "$MUT_FLOOR" ]]; then printf 'FAIL - mutant floor: only %s mutants ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"; exit 1; fi
 printf 'mutants: %s ran (floor %s)\n' "$MUT_SEQ" "$MUT_FLOOR"
 echo
