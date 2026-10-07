@@ -5,7 +5,25 @@
 - Status: complete
 
 ### Errors
-None
+- doppler-injection-bound guard: `CUTOVER_NOOP_THROTTLE_S` seam initially missing from the
+  hand-transcribed `GUARD1_UNSET` copy (fixed in the same commit; the copy moves with the
+  argv-gate list by design).
+- A comment reproducing the `emit_state <ec> <dbsize> "<reason>"` call shape verbatim was
+  read as a real call site by the workflow suite's raw-source reason extraction (emitter
+  parity + probe parity red until reworded).
+- `lint-shell-trace-credential-refusal --changed` bypasses baselines for edited files:
+  the T5 comment edit to `scripts/cutover-inngest.sh` surfaced 20 pre-existing Rule-E
+  argv-credential sites (introduced by #9681). Drawdown applied in-branch via a new
+  `_sig_curl` wrapper; Rule-E baseline + census-ceiling rows removed.
+- CI-only failure: the noop-throttle stamp at the host-default state path persisted
+  across flip-suite cases where /var/lock is writable — a refused case's stamp
+  suppressed the next case's authorised emit. `clean_host_state_slot` now clears the
+  stamp too.
+- `fixture-relative-assert` ratchet: `: > "$NOOP_EMIT_STAMP"` is a new counted site
+  (flip.sh 4 -> 5); baseline regenerated per the lint's own recovery path.
+- GuardA (cloud-init-inngest-bootstrap.test.sh, deploy-script-tests leg 4/4 — NOT a
+  required check) is expectedly RED while HEAD's `inngest-cutover-flip.sh` drifts from
+  the pinned image tag v1.1.45; the bot pin-bump cycle rebuilds the tag post-merge.
 
 ### Decisions
 - #7696: mirror the sibling `inngest-luks-cutover.sh` `emit_noop` pattern — throttle `noop-*`
