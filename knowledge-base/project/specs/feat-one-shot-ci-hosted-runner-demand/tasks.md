@@ -19,13 +19,13 @@ Plan: `knowledge-base/project/plans/2026-10-07-ci-reduce-hosted-runner-demand-pl
 
 ## Phase 3: Stage 2 (#9512)
 
-- 3.1 Measure whether an all-skipped `ci.yml` run concludes `success` and satisfies the deploy arm
+- 3.1 Keep one real keyed job in the elided push run (an all-skipped run concludes `skipped`, measured); reuse `scripts/main-push-duplicate-skip.sh` with a `test` job-conclusion and non-draft guard
 - 3.2 Keyed tolerance arm and its Guard Contract; dark launch behind a variable
 
 ## Phase 4: Stage 3 (#9728)
 
-- 4.1 Resolve the three entry gates on a throwaway PR
-- 4.2 Draft light checks, `battery-owed.sh` distinction, Guard 1 mutation suite
+- 4.1 Resolve the entry gates on a throwaway PR (rollup, token identity, fork vars, arm-after-ready window, admin-merge path)
+- 4.2 Draft light checks (Option R preferred), `battery-owed.sh` and `admin-merge-ready.sh` rows, ship Phase 6 wait-for-ready-run, Guard 1 mutation suite
 - 4.3 Canary, then 7 days on; removal trigger at 30 days
 
 ## Phase 5: Stage 4 and 5 (#9729, #9730)

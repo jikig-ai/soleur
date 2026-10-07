@@ -12,10 +12,11 @@ brand_survival_threshold: aggregate pattern
 
 ## Status
 
-**Proposed — 2026-10-07 (#9721).** This ADR decides nothing until the plan review panel and the
-operator accept it. Each stage it names ships as its own PR, and a stage that changes a required
-check, the ruleset, or a deploy gate flips this ADR (or the ADR it amends) to `active` only after
-that stage's dark-launch exit criteria pass. Nothing in this ADR provisions infrastructure.
+**Proposed, 2026-10-07 (#9721).** On acceptance the guardrail decisions (1, 2, 3, 6, 7 and 8) become
+`adopting`. Decisions 4 and 5 are the proposed shape of stages 3 and 4; they take effect only when each
+stage's own PR restates them as an amendment (stage 4 also adds `amends: ADR-262, ADR-183` to the
+frontmatter), so finishing one stage cannot activate an unrun one. A stage flips to `active` when its
+dark-launch exit criterion passes. Nothing in this ADR provisions infrastructure.
 
 ## Context
 
@@ -72,8 +73,11 @@ separate lever and is out of scope here.
 
 1. **Demand first, supply second.** No supply change is adopted until the demand stages below have
    been re-measured. Supply options are recorded in the lever-5 memo and decided in a separate ADR.
-2. **The authority invariant.** The `merge_group` run executes the full battery against the candidate
-   tree and keeps every required context in `scripts/required-checks.txt`. The push-to-`main` run
+2. **The authority invariant.** For queue merges, the `merge_group` run executes the full battery
+   against the candidate tree and keeps every required context in `scripts/required-checks.txt`. The
+   agent `--admin` merge path skips the queue (the ruleset grants an organization-admin and a
+   repository-role bypass) and is gated only by `admin-merge-ready.sh`, so any reduction must also
+   hold there: a reduced context must never be success-equivalent to that script. The push-to-`main` run
    keeps producing the success conclusion the deploy arm's `workflow_run` trust ladder needs; it may
    be elided only per SHA, keyed on a green `merge_group` run for that exact head SHA (#9512), never
    by static removal.
@@ -84,16 +88,18 @@ separate lever and is out of scope here.
    (`battery-owed.sh`, the deploy `workflow_run` arm, `post-merge-monitor.yml`) is checked so a reduced
    result is never read as a full one; (b) the decision fails closed to the full battery when the draft state, the diff or
    the selection is undeterminable; (c) a repository variable is a kill-switch whose unset value
-   means full CI; (d) the stage dark-launches (observe or shadow before it removes anything) and has
-   a named exit criterion; (e) the stage reports the minutes it removed and the escape rate it
+   means full CI; (d) the stage dark-launches behind a kill-switch plus a stage-specific proof (a canary,
+   an experiment or a replay) and has a named exit criterion; (e) the stage reports the minutes it removed and the escape rate it
    caused, measured by the committed census (Decision 7); (f) a context whose `merge_group` arm
    trusts the PR run (`rename-guard`, `allowlist-diff`, the vendor-pin and tenant rows) is not
    weakened on a draft: those jobs live in other workflows and are left unchanged.
 4. **Draft PRs run the light set.** `ci.yml` adds `ready_for_review` to its `pull_request` types.
    While `github.event.pull_request.draft` is true and the kill-switch is on, the heavy test families
    do not run; marking the PR ready runs the full set on the same head, so a PR makes one full run
-   per ready head rather than one per draft push. A PR that makes fewer than two draft pushes loses
-   by design (the break-even is stated in the plan).
+   per ready head rather than one per draft push. A PR saves minutes only above about three draft pushes
+   (the break-even is stated in the plan), so the cheaper alternative of not pushing a draft before a
+   local `--affected` run passes is checked first. Preferred design: the draft `test` aggregator concludes
+   red ("full battery owed at ready"), so no consumer can read a light result as green.
 5. **PR runs may select affected suites; merge_group may not.** The `--affected` selection already
    shipped by ADR-242 and `--print-selection` (#9307) is computed once per run, not per shard leg,
    and PR runs decline unselected suites inside the runner, the same call-site opt-in ADR-262 uses.
