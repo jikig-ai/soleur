@@ -279,6 +279,7 @@ mut_M6a() {
 mut_M6b() { mut_replace "$1/$HK" '[[ "${SOLEUR_DISABLE_DESTRUCTIVE_GUARD-}" == "1" ]] && exit 0' '[[ -n "${SOLEUR_DISABLE_DESTRUCTIVE_GUARD-}" ]] && exit 0' 1; }
 json_edit() { # <tree> <jq filter>
   local f="$1/$JSON_REL"
+  assert_fixture_dir "$f"
   "$JQ_BIN" "$2" "$f" > "$f.new" 2>/dev/null && mv -f "$f.new" "$f"
 }
 HOOK_SEL='.hooks | map(.command) | any(contains("destructive-command-guard.sh"))'

@@ -761,6 +761,23 @@ chk "the header states the guard judges the original command, not another hook's
 if grep -qi 'terraform apply' <<<"$_hdr" && grep -Eqi 'not (a substitute|cover)|does not cover|not decided' <<<"$_hdr"; then _x=ok; else _x=bad; fi
 chk "the header carries the non-coverage statement (a plain terraform apply is not covered)" "$_x"
 
+# Every rule id the hook can emit is listed in the hooks roster (.claude/hooks/README.md), in backticks, on the hook's own row.
+# The ids are DERIVED from the hook source (a `note <rank> <id>` call or the id that opens an `emit` reason), never hand-copied;
+# the floor keeps an empty derivation (a changed emit shape) from reading as "all listed".
+HOOKS_README="$REPO_ROOT/.claude/hooks/README.md"
+_RID_LABEL="README roster: every rule id the hook can emit is listed on its row (derived from the hook source)"
+if want_row "$_RID_LABEL"; then
+  _rids="$( { grep -oE 'note [12] [a-z]+(-[a-z0-9]+)*' "$GUARD_HOOK" | awk '{print $3}'
+              grep -oE 'emit(_fixed)? (ask|deny) "(This command was NOT run\. )?[a-z]+(-[a-z0-9]+)*:' "$GUARD_HOOK" | sed -E 's/^.*"(This command was NOT run\. )?//; s/:$//'
+              grep -oE 'NOT run\. [a-z]+(-[a-z0-9]+)*:' "$GUARD_HOOK" | sed -E 's/^NOT run\. //; s/:$//'
+            } | sort -u )"
+  _rrow="$(grep -F '| `destructive-command-guard.sh`' "$HOOKS_README" 2>/dev/null)"
+  _rmiss=""; _rn=0
+  for _r in $_rids; do _rn=$((_rn + 1)); grep -qF -- "\`$_r\`" <<<"$_rrow" || _rmiss+=" $_r"; done
+  if [[ "$_rn" -ge 13 && -n "$_rrow" && -z "$_rmiss" ]]; then _x=ok; else _x=bad; fi
+  chk "$_RID_LABEL" "$_x" "derived ids=$_rn (floor 13), row found=$([[ -n "$_rrow" ]] && echo yes || echo no), missing:${_rmiss:- none}"
+fi
+
 echo "== registration (Guard 1, M7) =="
 _reg() { "$JQ_BIN" -e --arg h destructive-command-guard.sh "$@" "$HOOKS_JSON" >/dev/null 2>&1 && printf ok || printf bad; }
 chk "hooks.json carries a PreToolUse entry that runs the hook" "$(_reg '[.hooks.PreToolUse[] | select(.hooks | map(.command) | any(contains($h)))] | length == 1')"
@@ -1699,7 +1716,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=698
+MIN_CASES=699
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
