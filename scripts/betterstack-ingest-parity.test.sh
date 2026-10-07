@@ -96,7 +96,7 @@ KNOWN_SIDS="s2457081 s2734275"
 # slack, so re-pointing one file from s2457081 to s2734275 -- a silent misroute,
 # and verbatim the case the floor's own message names -- left both partitions
 # above their floors and the suite green.
-declare -A SID_FLOOR=( [s2457081]=7 [s2734275]=3 )
+declare -A SID_FLOOR=( [s2457081]=8 [s2734275]=3 )
 
 for sid in $(printf '%s\n' "${!SEEN_HOSTS[@]}" | sort); do
   distinct="$(printf '%s' "${SEEN_HOSTS[$sid]}" | sort -u | grep -c . || true)"
