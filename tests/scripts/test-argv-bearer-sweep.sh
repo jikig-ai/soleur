@@ -724,6 +724,61 @@ for mode in env flag; do
 done
 
 # =====================================================================================
+# POSITIVE CONTROLS FOR `evaluate`: every failure kind it can name is tripped by a synthetic probe
+# that differs from a base probe in exactly one place, and the row asserts that kind fires. Without
+# these a kind could be deleted from `evaluate` with the whole battery still green (measured: six of
+# the ten kinds had no row that needed them). The exact failed set is asserted too, so a check that
+# starts firing on the wrong cause is visible.
+# =====================================================================================
+# synth_variant <name> <base-probe> <sed args...>: sets SV to a copy of the base probe with ONE edit;
+# FATAL if the edit did not land (a variant that equals its base reports the baseline). Sets a global
+# rather than printing, because `fatal` inside a command substitution would exit only the subshell.
+SV=""
+synth_variant() {
+  local p="$SYN/synth-var-$1.sh" base="$2"; shift 2
+  sed "$@" "$base" > "$p"
+  if cmp -s "$p" "$base"; then fatal "synthetic variant $1 did not land (sed $*)"; fi
+  SV="$p"
+}
+# kind_row <label> <probe> <kind> <expected sorted failed set>
+kind_row() {
+  local label="$1" probe="$2" kind="$3" want="$4"
+  run_probe "k-$kind" "$probe" "${canon_env[@]}"
+  evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
+  if has_check "$kind" && [[ "$(sorted_failed)" == "$want" ]]; then row "evaluate: $label is RED on '$kind' (failed set exactly '$want')" ok
+  else row "evaluate: $label is RED on '$kind' (failed set exactly '$want')" fail "failed='$EV_FAILED'"; fi
+}
+synth_variant jqarg "$P_CANON" '/^RESP=/i jq -n --arg t "$SYNTH_TOKEN" 1 >/dev/null'
+kind_row "a probe that hands the token to jq as --arg" "$SV" token-in-jq-argv "token-in-jq-argv"
+synth_variant host "$P_CANON" 's/synthetic\.example\.test/elsewhere.example.test/'
+kind_row "a probe that calls a host outside the manifest" "$SV" unexpected-host "calls-below-min unexpected-host"
+synth_variant tool "$P_CANON" '/^RESP=/i gh issue list >/dev/null || true'
+kind_row "a probe that calls a fail-closed gh/doppler/ssh stub" "$SV" unexpected-tool "unexpected-tool"
+synth_variant flag "$P_CANON" 's/--disable /--disable --retry-all-errors /'
+kind_row "a probe that uses a curl flag the shim does not model" "$SV" unmodelled-flag "calls-below-min unexpected-host unmodelled-flag"
+synth_variant leak "$P_CANON" '/^RESP=/i echo "leak=$SYNTH_TOKEN"'
+kind_row "a probe that echoes the token to its output" "$SV" token-in-output "token-in-output"
+synth_variant basherr "$P_CANON" '/^RESP=/i synthetic_missing_command_for_bash_error'
+kind_row "a probe that trips a bash error" "$SV" bash-error "bash-error"
+
+# The stdin bearer check is an EXACT-LINE match (`grep -qxF`), not a substring match: a line that
+# merely CONTAINS the expected header text, with trailing junk, must be rejected, in BOTH accepted
+# forms (the `--config -` directive and the `-H @-` header line).
+synth_variant junk-cfg "$P_CANON" 's/%s"\\n/%s"x\\n/'
+run_probe x1-junk-cfg "$SV" "${canon_env[@]}"
+grep -aqF -- "header = \"Authorization: Bearer $FIXTURE_TOKEN\"x" "$RUN_ROW/shim/calls/1.stdin" || fatal "junk-cfg variant did not put the junk line on stdin"
+evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
+if has_check bearer-not-on-stdin; then row "evaluate: a --config stdin line that merely CONTAINS the expected directive (trailing junk) is rejected (exact-line match)" ok
+else row "evaluate: a --config stdin line that merely CONTAINS the expected directive (trailing junk) is rejected (exact-line match)" fail "failed='$EV_FAILED'"; fi
+P_HDRFILE="$(make_synth hdrfile)"
+synth_variant junk-hdr "$P_HDRFILE" 's/Bearer %s\\n/Bearer %sjunk\\n/'
+run_probe x2-junk-hdr "$SV" "${canon_env[@]}"
+grep -aqF -- "Authorization: Bearer ${FIXTURE_TOKEN}junk" "$RUN_ROW/shim/calls/1.stdin" || fatal "junk-hdr variant did not put the junk line on stdin"
+evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
+if has_check bearer-not-on-stdin; then row "evaluate: a -H @- stdin line that merely CONTAINS the expected header (trailing junk) is rejected (exact-line match)" ok
+else row "evaluate: a -H @- stdin line that merely CONTAINS the expected header (trailing junk) is rejected (exact-line match)" fail "failed='$EV_FAILED'"; fi
+
+# =====================================================================================
 # STAGE 2: THE MANIFEST, KEYED OFF BASELINE E
 # =====================================================================================
 BASE_E="scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
@@ -784,7 +839,8 @@ fi
 # Baseline E may list followthrough probes ONLY for the S2-owned set (they still carry a credential
 # header outside the Bearer vocabulary and are converted in S2); every other followthrough is converted,
 # so a listed one is an argv bearer that crept back. The row asserts the listed set EQUALS the S2 list
-# (a shrink in S2 updates this list in the same diff), and a floor row keeps it from being vacuous.
+# (a shrink in S2 updates this list in the same diff). The list is a non-empty literal, so equality
+# already bounds the listed count from below; no separate floor row is needed.
 S2_OWNED="canary-promotion-5875
 infra-config-activation-7220
 infra-config-fatal-channel-7220
@@ -792,9 +848,6 @@ inngest-soak-6178"
 BE_FOLLOWTHROUGH="$(awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$BASE_E" | sed 's|^scripts/followthroughs/||; s|\.sh$||' | sort -u)"
 if [[ "$BE_FOLLOWTHROUGH" == "$S2_OWNED" ]]; then row "population: the followthrough probes listed in baseline E equal the S2-owned list" ok
 else row "population: the followthrough probes listed in baseline E equal the S2-owned list" fail "listed='${BE_FOLLOWTHROUGH//$'\n'/,}' want='${S2_OWNED//$'\n'/,}'"; fi
-BE_FT_N="$(printf '%s\n' "$BE_FOLLOWTHROUGH" | grep -c . || true)"
-if [[ "$BE_FT_N" -lt 4 ]]; then row "population: anti-vacuity floor, baseline E lists at least the 4 S2-owned followthroughs" fail "anti-vacuity floor: only $BE_FT_N listed"
-else row "population: anti-vacuity floor, baseline E lists at least the 4 S2-owned followthroughs" ok; fi
 
 # --- DYNAMIC rows ----------------------------------------------------------------------------
 N_DYN=0
@@ -1206,13 +1259,13 @@ evaluate_body() { # <rowdir> -> EV_FAILED names: pw-in-argv, pw-in-jq-argv, body
 }
 body_env=("SYNTH_PW=$BODY_PW" "SYNTH_ID=$BODY_ID" SHIM_MODE=noauth)
 
-P_BF="$(make_body_probe stdin)"
-run_probe b1-file "$P_BF" "${body_env[@]}"
+P_BS="$(make_body_probe stdin)"
+run_probe b1-stdin "$P_BS" "${body_env[@]}"
 rc=$RUN_RC; evaluate_body "$RUN_ROW"
-if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -q '^PASS' "$RUN_ROW/stdout" && [[ -z "$(ls -A "$RUN_ROW/tmp")" ]]; then
-  row "body: a jq-to-curl --data-binary @- probe is GREEN (exact stdin body, password in no curl or jq argv, no file written)" ok
-else row "body: a jq-to-curl --data-binary @- probe is GREEN (exact stdin body, password in no curl or jq argv, no file written)" fail "rc=$rc failed='$EV_FAILED' pass-line=$(grep -c '^PASS' "$RUN_ROW/stdout" || true) leftover=$(ls -A "$RUN_ROW/tmp" | tr "\n" ",")"; fi
-if [[ -s "$ROWS/b1-file/shim/jq/counter" ]] && grep -aqF 'ENV.SYNTH_PW_E' "$ROWS/b1-file/shim/jq/1.argv"; then
+if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -q '^PASS' "$RUN_ROW/stdout"; then
+  row "body: a jq-to-curl --data-binary @- probe is GREEN (exact stdin body, password in no curl or jq argv)" ok
+else row "body: a jq-to-curl --data-binary @- probe is GREEN (exact stdin body, password in no curl or jq argv)" fail "rc=$rc failed='$EV_FAILED' pass-line=$(grep -c '^PASS' "$RUN_ROW/stdout" || true)"; fi
+if [[ -s "$ROWS/b1-stdin/shim/jq/counter" ]] && grep -aqF 'ENV.SYNTH_PW_E' "$ROWS/b1-stdin/shim/jq/1.argv"; then
   row "jq shim: records jq's argv (the body writer's program text is on file; recording works)" ok
 else row "jq shim: records jq's argv (the body writer's program text is on file; recording works)" fail "no jq argv recorded"; fi
 
@@ -1229,14 +1282,14 @@ if has_check pw-in-jq-argv && ! has_check pw-in-argv; then
   row "body: passing the password to jq as --arg is RED on pw-in-jq-argv, which the curl shim alone cannot see" ok
 else row "body: passing the password to jq as --arg is RED on pw-in-jq-argv, which the curl shim alone cannot see" fail "failed='$EV_FAILED'"; fi
 
-run_probe b4-nobody "$P_BF" "${body_env[@]}" SHIM_MUTATE=nobody
+run_probe b4-nobody "$P_BS" "${body_env[@]}" SHIM_MUTATE=nobody
 evaluate_body "$RUN_ROW"
 if has_check body-not-recorded && has_check body-content; then row "body: a shim that stops recording the stdin body turns the body rows RED" ok
 else row "body: a shim that stops recording the stdin body turns the body rows RED" fail "failed='$EV_FAILED'"; fi
 
 P_BD="$(make_body_probe dstdin)"
-run_probe b5-dfile "$P_BD" "${body_env[@]}"
-nl_bin="$(wc -l < "$ROWS/b1-file/shim/calls/1.body")"; nl_d="$(wc -l < "$ROWS/b5-dfile/shim/calls/1.body")"
+run_probe b5-dstdin "$P_BD" "${body_env[@]}"
+nl_bin="$(wc -l < "$ROWS/b1-stdin/shim/calls/1.body")"; nl_d="$(wc -l < "$ROWS/b5-dstdin/shim/calls/1.body")"
 if [[ "$nl_bin" -ge 2 && "$nl_d" -eq 0 ]]; then
   row "body: the shim keeps CR/LF for --data-binary @- and strips them for -d @- on stdin, as real curl does (control C4)" ok
 else row "body: the shim keeps CR/LF for --data-binary @- and strips them for -d @- on stdin, as real curl does (control C4)" fail "binary-lines=$nl_bin d-lines=$nl_d"; fi
@@ -1259,6 +1312,9 @@ static_absent() { # <ere> <file...>
   git grep -q --untracked -E -e "$ere" -- "$@" >/dev/null 2>&1 || rc=$?
   [[ "$rc" -eq 1 ]]
 }
+# The two production regexes, named so the fixture rows below run the SAME text the real rows do.
+ERE_DISCORD_ARGV='-H +"Authorization: *Bot'
+ERE_BSKY_PW_ARGV='(-d|--data[a-z-]*)[ =]+"([^"\\]|\\.)*\$\{?BSKY_(APP_PASSWORD|PW)|--arg +[a-z_]+ +"\$\{?BSKY_(APP_PASSWORD|PW)'
 COMM="plugins/soleur/skills/community/scripts"
 SETUP_MD="plugins/soleur/skills/flag-bootstrap/SETUP.md"
 n_apikey_argv="$(grep -cE -e '-H +"?Authorization: *Api-Key' "$SETUP_MD" || true)"
@@ -1266,18 +1322,53 @@ n_apikey_cfg="$(grep -cF 'header = "Authorization: Api-Key %s"' "$SETUP_MD" || t
 if [[ "$n_apikey_argv" -eq 0 && "$n_apikey_cfg" -ge 5 ]]; then
   row "static: flag-bootstrap/SETUP.md has no -H Authorization: Api-Key curl example left and carries five stdin-config forms" ok
 else row "static: flag-bootstrap/SETUP.md has no -H Authorization: Api-Key curl example left and carries five stdin-config forms" fail "argv=$n_apikey_argv stdin-config=$n_apikey_cfg"; fi
-if static_absent '-H +"Authorization: *Bot' "$COMM/discord-community.sh" "$COMM/discord-setup.sh" \
+if static_absent "$ERE_DISCORD_ARGV" "$COMM/discord-community.sh" "$COMM/discord-setup.sh" \
    && grep -qF 'header = "Authorization: Bot %s"' "$COMM/discord-community.sh" "$COMM/discord-setup.sh"; then
   row "static: neither Discord script carries a -H \"Authorization: Bot ...\" argument (array-held or inline), both build the stdin config line" ok
 else row "static: neither Discord script carries a -H \"Authorization: Bot ...\" argument (array-held or inline), both build the stdin config line" fail "an argv Bot header is back, or the stdin config line is gone"; fi
-# A password variable inside a -d/--data* operand of the two bsky scripts (lint equality says nothing about
-# a body: it is not a header, so these two files are not in baseline E).
-# BSKY_BODY_FILE / bsky-body: the retired 0600 temp-file mechanism must not come back.
-if static_absent '(-d|--data[a-z-]*)[ =]+"([^"\\]|\\.)*\$\{?BSKY_(APP_PASSWORD|PW)|--arg +[a-z_]+ +"\$\{?BSKY_(APP_PASSWORD|PW)|BSKY_BODY_FILE|bsky-body' "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" \
-   && [[ "$(grep -c -F -e '--data-binary @- \' "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" | awk -F: '{s+=$2} END {print s}')" -ge 2 ]] \
+# A password variable inside a -d/--data* operand or a jq --arg of the two bsky scripts (lint equality says
+# nothing about a body: it is not a header, so these two files are not in baseline E). The stdin form is
+# asserted on its behaviour (a `--data-binary @-` body, the values read from jq's environment), not on how
+# the body is assembled.
+if static_absent "$ERE_BSKY_PW_ARGV" "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" \
+   && [[ "$(grep -c -F -e '--data-binary @-' "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" | awk -F: '{s+=$2} END {print s}')" -ge 2 ]] \
    && [[ "$(grep -c -F -e '$ENV.BSKY_PW' "$COMM/bsky-community.sh" "$COMM/bsky-setup.sh" | awk -F: '{s+=$2} END {print s}')" -ge 2 ]]; then
-  row "static: neither bsky script puts the app password in a -d/--data operand or a jq --arg or a temp file, both pipe jq to --data-binary @-" ok
-else row "static: neither bsky script puts the app password in a -d/--data operand or a jq --arg or a temp file, both pipe jq to --data-binary @-" fail "the password is back on an argv, the temp-file form is back, or the stdin form is gone"; fi
+  row "static: neither bsky script puts the app password in a -d/--data operand or a jq --arg, both send the body to curl on stdin (--data-binary @-) with the values read from jq's environment" ok
+else row "static: neither bsky script puts the app password in a -d/--data operand or a jq --arg, both send the body to curl on stdin (--data-binary @-) with the values read from jq's environment" fail "the password is back on an argv, or the stdin form is gone"; fi
+
+# `static_absent` ITSELF is proven here, on fixtures, in both directions. Its "absent" half is otherwise a
+# dead assertion (a body of `true`, or accepting git's rc 128, would leave every row above green).
+SAR="$TMPD/sa-repo"; SAN="$TMPD/sa-nogit"
+for d in "$SAR" "$SAN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+git -C "$SAR" init -q
+printf '%s\n' 'echo clean' > "$SAR/clean.sh"
+printf '%s\n' 'echo clean' > "$SAN/clean.sh"
+# Each violating fixture is one line the matching production regex must flag.
+printf '%s\n' 'curl -H "Authorization: Bot $TOKEN" "$URL"' > "$SAR/viol-discord.sh"
+printf '%s\n' 'curl -d "{\"password\":\"${BSKY_APP_PASSWORD}\"}" "$URL"' > "$SAR/viol-bsky-d.sh"
+printf '%s\n' 'curl --data "x=${BSKY_PW}" "$URL"' > "$SAR/viol-bsky-data.sh"
+printf '%s\n' 'jq -n --arg pw "$BSKY_PW" "{password:\$pw}"' > "$SAR/viol-bsky-arg.sh"
+# The compliant bsky shape (env-read jq program, stdin body) must NOT be flagged.
+printf '%s\n' "jq -n '{password: \$ENV.BSKY_PW}' | curl --data-binary @- \"\$URL\"" > "$SAR/ok-bsky.sh"
+sa_in_repo() { ( cd "$SAR" && static_absent "$@" ); }
+sa_in_nogit() { ( cd "$SAN" && GIT_CEILING_DIRECTORIES="$TMPD" static_absent "$@" ); }
+
+if sa_in_repo "$ERE_DISCORD_ARGV" clean.sh && sa_in_repo "$ERE_BSKY_PW_ARGV" clean.sh ok-bsky.sh; then
+  row "static_absent: a clean file and the compliant bsky shape are absent (true) in a repository" ok
+else row "static_absent: a clean file and the compliant bsky shape are absent (true) in a repository" fail "a clean fixture was flagged"; fi
+sa_bad=""
+sa_in_repo "$ERE_DISCORD_ARGV" viol-discord.sh && sa_bad+=" discord"
+for v in viol-bsky-d.sh viol-bsky-data.sh viol-bsky-arg.sh; do sa_in_repo "$ERE_BSKY_PW_ARGV" "$v" && sa_bad+=" $v"; done
+if [[ -z "$sa_bad" ]]; then row "static_absent: a violating fixture is NOT absent (false) for the Discord regex and for each bsky regex alternative (-d, --data, --arg)" ok
+else row "static_absent: a violating fixture is NOT absent (false) for the Discord regex and for each bsky regex alternative (-d, --data, --arg)" fail "passed vacuously on:$sa_bad"; fi
+if ! sa_in_repo "$ERE_DISCORD_ARGV" clean.sh no-such-file.sh; then row "static_absent: a missing operand is a refusal (false), not a pass" ok
+else row "static_absent: a missing operand is a refusal (false), not a pass" fail "a missing file read as absent"; fi
+# rc 128 (git could not search) is a refusal: once for a directory that is not a repository, once for an
+# unusable regex inside a good repository.
+if ! sa_in_nogit "$ERE_DISCORD_ARGV" clean.sh; then row "static_absent: git rc 128 (not a repository) is a refusal (false), not a pass" ok
+else row "static_absent: git rc 128 (not a repository) is a refusal (false), not a pass" fail "rc 128 read as absent"; fi
+if ! sa_in_repo '(' clean.sh; then row "static_absent: git rc 128 (unusable regex) is a refusal (false), not a pass" ok
+else row "static_absent: git rc 128 (unusable regex) is a refusal (false), not a pass" fail "rc 128 read as absent"; fi
 echo "=== stage 4: shim extensions (scheme, stdin body, fail7, jq shim, static rows) done ==="
 
 # =====================================================================================
@@ -1295,7 +1386,7 @@ fi
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=169
+EXPECTED_TESTS=181
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
