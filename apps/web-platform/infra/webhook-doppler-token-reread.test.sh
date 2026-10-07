@@ -136,6 +136,8 @@ for a in "\$@"; do
   prev="\$a"
 done
 { echo "ARGS: \$*"; echo "BODY: \$body"; } >> "${MOCKBIN}/curl.log"
+# (#9597) the bearer rides curl's stdin config (\`--config -\`), never argv: record it separately.
+case " \$* " in *" --config - "*) cat >> "${MOCKBIN}/curl.stdin" ;; esac
 case "\$url" in
   *health*)  printf '200' ;;
   *v0/gql*)  printf '%s' '{"data":{"functions":[{"slug":"cron-x"}]}}' ;;
@@ -414,7 +416,8 @@ setup; write_token_file "$FRESH"
 rc=0; run_wiped || rc=$?
 assert_eq "G1 wiped-volume-verify arms its marker with the fresh token (rc 0)" "0" "$rc"
 assert_contains "G2 doppler saw the FRESH token" "$(cat "${MOCKBIN}/doppler.log")" "DOPPLER_TOKEN_SEEN=$FRESH"
-assert_contains "G3 the marker POST carried the Bearer secret doppler returned" "$(cat "${MOCKBIN}/curl.log")" "Bearer ${SECRET_VALUE}"
+assert_contains "G3 the marker POST carried the Bearer secret doppler returned, on curl's stdin config" "$(cat "${MOCKBIN}/curl.stdin" 2>/dev/null)" "header = \"Authorization: Bearer ${SECRET_VALUE}\""
+assert_not_contains "G3b …and the secret is in no curl argv" "$(cat "${MOCKBIN}/curl.log")" "${SECRET_VALUE}"
 teardown
 setup
 rc=0; run_wiped || rc=$?
@@ -465,6 +468,6 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # Exact count, not a floor: a floor with slack equal to one section lets that section vanish
 # green. Bump this in the same commit as any assertion change. Emitted directly (ADR-193), never
 # through the helper it backstops.
-EXPECTED_ASSERTIONS=84
+EXPECTED_ASSERTIONS=85
 if (( PASS + FAIL != EXPECTED_ASSERTIONS )); then printf 'assertion count drifted: %d != %d (update EXPECTED_ASSERTIONS in the same commit as the assertion change)\n' "$((PASS + FAIL))" "$EXPECTED_ASSERTIONS" >&2; exit 1; fi
 [[ "$FAIL" -gt 0 ]] && exit 1 || exit 0

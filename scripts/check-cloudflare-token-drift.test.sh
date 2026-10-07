@@ -240,8 +240,12 @@ cat > "$STUB_DIR/curl" <<'STUB'
 # A bearer credential must arrive on curl's STDIN config channel (`--config -`), never in argv.
 # The config is recorded to its OWN file so $MOCK_CURL_LOG keeps one line per invocation. Read stdin
 # ONLY when `--config -` is present: a curl given no config would otherwise block on the SUT's stdin.
-if [[ -n "${MOCK_CURL_STDIN_LOG:-}" && " $* " == *" --config - "* ]]; then
-  cat >> "$MOCK_CURL_STDIN_LOG"
+# The Access pair (CF-Access-Client-Id/-Secret) travels on that same channel, so the config is also
+# held in $_stdin_cfg for the credentialed/_cid decisions below.
+_stdin_cfg=""
+if [[ " $* " == *" --config - "* ]]; then
+  _stdin_cfg=$(cat)
+  [[ -n "${MOCK_CURL_STDIN_LOG:-}" && -n "$_stdin_cfg" ]] && printf '%s\n' "$_stdin_cfg" >> "$MOCK_CURL_STDIN_LOG"
 fi
 # curl is given NO env prefix by the SUT, so it sees whatever the SUT's own environment
 # still holds. That makes it the instrument for "the credential was snapshotted and both
@@ -267,10 +271,10 @@ for ((i=1; i<=$#; i++)); do
     -w) j=$((i+1)); [[ "${!j}" == *'%{http_code}'* ]] && _want_code=1 ;;
     -o) j=$((i+1)); _outfile="${!j}" ;;
     -D) j=$((i+1)); _hdrfile="${!j}" ;;
-    -H) j=$((i+1)); [[ "${!j}" == CF-Access-Client-Id:* ]] && _credentialed=1 ;;
     https://*) _host="${!i}"; _host="${_host#https://}"; _host="${_host%%/*}" ;;
   esac
 done
+[[ "$_stdin_cfg" == *'header = "CF-Access-Client-Id: '* ]] && _credentialed=1
 
 # Per-host override file: "<host>|<control_code>|<control_stamped>|<cred_code>|<cred_stamped>".
 # Without this a single MOCK_HTTP_CODE governs every host, which makes a fixture carrying
@@ -315,9 +319,9 @@ fi
 # `live: 1 dead: 1` into `live: 2 dead: 0` — a clean bill of health on the exact failure.
 if [[ "$_credentialed" == 1 && -n "${MOCK_CREDS:-}" && -f "${MOCK_CREDS}" ]]; then
   _cid=""
-  for ((i=1; i<=$#; i++)); do
-    [[ "${!i}" == CF-Access-Client-Id:* ]] && _cid="${!i#CF-Access-Client-Id: }"
-  done
+  while IFS= read -r _l; do
+    if [[ "$_l" == 'header = "CF-Access-Client-Id: '* ]]; then _cid="${_l#header = \"CF-Access-Client-Id: }"; _cid="${_cid%\"}"; fi
+  done <<<"$_stdin_cfg"
   _cline=$(grep -F "${_cid}|" "$MOCK_CREDS" 2>/dev/null | head -1)
   if [[ -n "$_cline" ]]; then
     IFS='|' read -r _ _code _stamped <<< "$_cline"
@@ -461,11 +465,13 @@ run_sut() {
 # form concatenates to "00" and every `== "0"` comparison fails. That is the same
 # print-and-fail shape as curl's `-w` output that this suite pins in the SUT (T20) —
 # reproduced here in the helper written to measure it.
-cred_probes()    { grep -c 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || true; }
+# The pair now rides curl's stdin config (never argv), so credentialed probes are counted from the
+# recorded stdin config, and control probes are every recorded invocation that was not credentialed.
+cred_probes()    { grep -c 'CF-Access-Client-Id' "$CURL_STDIN_LOG" 2>/dev/null || true; }
 # CONTROL probes are the ones WITHOUT credentials. The first version of this counted
 # `grep -c 'https://'` — every probe of either kind — so it could not have measured what
 # its name claimed even if a case had called it. It was also defined and never called.
-control_probes() { grep -cv 'CF-Access-Client-Id' "$CURL_LOG" 2>/dev/null || true; }
+control_probes() { echo $(( $(wc -l < "$CURL_LOG") - $(cred_probes) )); }
 
 echo "=== check-cloudflare-token-drift: Access service-token arm ==="
 echo ""
@@ -479,7 +485,7 @@ prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}"
 # healthy fleet by exit code alone. That indistinguishability IS the bug.
 echo "T1: REGISTRY_PUSH_ACCESS_TOKEN_* is enumerated (the key the old regex could not match)"
 run_sut t1 200 "$ACCESS_FIXTURE"
-if grep -qF 'CF-Access-Client-Id' "$CURL_LOG"; then
+if grep -qF 'CF-Access-Client-Id' "$CURL_STDIN_LOG"; then
   pass "the Access token was actually probed (old enumeration regex could not reach it)"
 else
   fail "REGISTRY_PUSH_ACCESS_TOKEN_* was never probed — enumeration missed it (curl log empty)"
@@ -511,8 +517,12 @@ fi
 echo "T4: the pair is presented as CF-Access-Client-Id/-Secret against the protected host"
 run_sut t4 200 "$ACCESS_FIXTURE"
 _t4=1
-grep -qF "CF-Access-Client-Id: ${FIX_ID}" "$CURL_LOG" || _t4=0
-grep -qF "CF-Access-Client-Secret: ${FIX_SECRET}" "$CURL_LOG" || _t4=0
+# The pair is on curl's STDIN config and in NO argv line (argv is world-readable via /proc).
+grep -qxF "header = \"CF-Access-Client-Id: ${FIX_ID}\"" "$CURL_STDIN_LOG" || _t4=0
+grep -qxF "header = \"CF-Access-Client-Secret: ${FIX_SECRET}\"" "$CURL_STDIN_LOG" || _t4=0
+grep -qF "${FIX_ID}" "$CURL_LOG" && _t4=0
+grep -qF "${FIX_SECRET}" "$CURL_LOG" && _t4=0
+grep -qF 'CF-Access' "$CURL_LOG" && _t4=0
 grep -qF 'https://registry.soleur.ai/' "$CURL_LOG" || _t4=0
 grep -qF 'user/tokens/verify' "$CURL_LOG" && _t4=0
 if [[ "$_t4" == "1" ]]; then
@@ -520,6 +530,42 @@ if [[ "$_t4" == "1" ]]; then
 else
   fail "must present CF-Access-Client-Id/-Secret to https://registry.soleur.ai/ and NOT hit user/tokens/verify"
 fi
+
+# T4b — transport pins for the Access probes. Every probe begins `--disable --noproxy *`; the
+# CONTROL probe (no credential) must not carry `--config -` (it would read stdin and could block),
+# and every CREDENTIALED probe must carry it (the pair is on stdin, not argv).
+echo "T4b: Access probes begin --disable --noproxy *; --config - only on the credentialed probe"
+_t4b=1
+[[ "$(wc -l < "$CURL_LOG")" == "2" ]] || _t4b=0
+[[ "$(grep -c -- '^--disable --noproxy \* ' "$CURL_LOG")" == "2" ]] || _t4b=0
+[[ "$(grep -cF -- '--config -' "$CURL_LOG")" == "1" ]] || _t4b=0
+[[ "$(cred_probes)" == "1" ]] || _t4b=0
+if [[ "$_t4b" == "1" ]]; then
+  pass "2 probes (control + credentialed), both begin --disable --noproxy *, exactly one carries --config -"
+else
+  fail "expected control + credentialed probe, both starting '--disable --noproxy *' with --config - on the credentialed one only. Log:\n$(cat "$CURL_LOG")"
+fi
+
+# T4c — an id/secret that could inject a curl config directive (quote, backslash, control char)
+# makes ZERO credentialed requests and is UNVERIFIABLE (never LIVE, never the destructive DEAD).
+echo "T4c: an Access id/secret outside the config-string allowlist is refused, no credentialed request"
+for _bad in 'bad"quote' 'back\slash'; do
+  run_sut t4c "200" "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
+prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${_bad}"
+  _t4c=1
+  [[ ! -s "$CURL_STDIN_LOG" ]] || _t4c=0
+  [[ "$(cred_probes)" == "0" ]] || _t4c=0
+  grep -qF 'probe-failed' "$OUT" || _t4c=0
+  ! grep -qE 'live entries: [1-9]' "$OUT" || _t4c=0
+  ! grep -qE 'dead entries: [1-9]' "$OUT" || _t4c=0
+  grep -qF 'refusing to present the Access client secret' "$OUT" || _t4c=0
+  grep -qF -- "$_bad" "$CURL_LOG" && _t4c=0
+  if [[ "$_t4c" == "1" ]]; then
+    pass "secret [$_bad] refused: zero credentialed requests, nothing on stdin or argv, UNVERIFIABLE probe-failed"
+  else
+    fail "secret [$_bad] must be refused with no credentialed request and an UNVERIFIABLE (not LIVE/DEAD) verdict (rc=$RC)"
+  fi
+done
 
 # T5 — fail CLOSED on a non-200/403 response. A timeout or 5xx means this script did not
 # LEARN the token is good, and "did not learn" must never render as LIVE. Every
@@ -626,7 +672,7 @@ echo "T12: --only scopes the scan to the named family"
 run_sut t12 200 "prd|REGISTRY_PUSH_ACCESS_TOKEN_ID|${FIX_ID}
 prd|REGISTRY_PUSH_ACCESS_TOKEN_SECRET|${FIX_SECRET}
 prd|CF_API_TOKEN_DNS_EDIT|synthetic-not-real" prd "--only REGISTRY_PUSH_ACCESS_TOKEN"
-if grep -qF 'CF-Access-Client-Id' "$CURL_LOG" && ! grep -qF 'user/tokens/verify' "$CURL_LOG"; then
+if grep -qF 'CF-Access-Client-Id' "$CURL_STDIN_LOG" && ! grep -qF 'user/tokens/verify' "$CURL_LOG"; then
   pass "--only probed the Access pair and did NOT probe the excluded API token"
 else
   fail "--only must scope the scan: expected the Access probe and no API-token probe"
