@@ -5,13 +5,17 @@
 # of the plugin tree. The other matrix rows (9-20) were run once at work time and are recorded in
 # knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md (section 1.6).
 #
-# WALL-TIME BUDGET: 60 s total for this file (measured at work time and reported in the PR; the hook suite
-# alone takes ~35 s, so every mutant runs it in REDUCED mode: DCG_ROWS=<ERE> selects only the rows that kill
-# that mutant, plus the always-on static, registration, lexer-contract and harness checks; the suite's own
-# 488-case floor does not apply to a selection and is replaced there by a selected-row count). A run that
-# takes longer is reported with a [WARN], never failed on time alone (measured: 31-41 s on a quiet box, 136 s once with five sibling
-# worktrees running suites; the budget is the quiet figure) (a slow runner is not a defect); each
-# hook-suite run is bounded by `timeout 50` so a hang cannot hold the battery.
+# WALL-TIME BUDGET: 60 s total for this file when the machine is quiet (measured at work time and reported in the PR;
+# the hook suite alone takes 35 s quiet, ~110 s under load, so every mutant runs it in REDUCED mode: DCG_ROWS=<ERE>
+# selects only the rows that kill that mutant, plus the always-on static, registration, lexer-contract and harness
+# checks; the suite's own MIN_CASES floor does not apply to a selection and is replaced there by a selected-row count).
+# Time is handled in two separate ways, and neither one scores a mutant:
+#   * a whole-battery overrun of the 60 s figure is only a [WARN] (measured: 31-41 s on a quiet box, 136 s once with five
+#     sibling worktrees running suites; a slow runner is not a defect);
+#   * each reduced hook-suite run has its own timeout, 50 s scaled by (load average / cores) with a 50 s floor and a 200 s
+#     cap (scaled_timeout below). A single run that still exceeds it is UNRESOLVED: the battery is INCONCLUSIVE (exit 3),
+#     and that mutant is counted neither as killed nor as survived, because a killed run and a survived run both need a
+#     summary the timed-out run never printed.
 #
 # PROPERTY. For each edit of the guard's chokepoints below, the hook suite turns RED on the row that is
 # designed to catch it, and it is GREEN on the unedited copy first. A mutant that is not killed, did not
@@ -198,13 +202,37 @@ parse_summary() { # reads RS_OUT
   [[ -n "$sel" ]] && RS_SEL="${sel#selected=}"
   return 0
 }
+# scaled_timeout <load average> <cores> -> seconds: 50 scaled by load/cores, floor 50, cap 200; 100 when either input is not a number.
+scaled_timeout() {
+  awk -v l="${1-}" -v c="${2-}" 'BEGIN {
+    if (l !~ /^[0-9]+([.][0-9]+)?$/ || c !~ /^[0-9]+$/ || c + 0 < 1) { print 100; exit }
+    r = l / c; if (r < 1) r = 1
+    t = int(50 * r + 0.999); if (t < 50) t = 50; if (t > 200) t = 200
+    print t
+  }'
+}
+current_timeout() { # the timeout for a run started now
+  local load cores
+  load="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)" || load=""
+  cores="$(nproc 2>/dev/null)" || cores=""
+  scaled_timeout "$load" "$cores"
+}
+RS_TIMEOUT=50
 run_suite() {
   local raw
+  RS_TIMEOUT="$(current_timeout)"
   raw="$(env -u GUARD_HOOK -u GUARD_FAST_COUNT -u GUARD_META_COPY -u SOLEUR_DISABLE_DESTRUCTIVE_GUARD \
     "GUARD_REPO_ROOT=$1" "DCG_ROWS=$2" "TMPDIR=$SCRATCH" \
-    "$TIMEOUT_BIN" 50 "$BASH" "$HOOK_SUITE" 2>&1 </dev/null)"; RS_RC=$?
+    "$TIMEOUT_BIN" "$RS_TIMEOUT" "$BASH" "$HOOK_SUITE" 2>&1 </dev/null)"; RS_RC=$?
   RS_OUT="$(printf '%s' "$raw" | strip_ansi)"
   parse_summary
+}
+# is_unresolved: the run was cut off by its timeout (timeout(1) exits 124), so it says nothing about the mutant.
+is_unresolved() { [[ "$RS_RC" -eq 124 ]]; }
+UNRESOLVED_N=0; UNRESOLVED_WHO=""
+note_unresolved() { # <what>
+  UNRESOLVED_N=$((UNRESOLVED_N + 1)); UNRESOLVED_WHO="${UNRESOLVED_WHO:+$UNRESOLVED_WHO, }$1"
+  printf '[UNRESOLVED] %s: the reduced run exceeded its %s s timeout (load %s over %s cores); it is neither killed nor survived. Re-run on a quieter machine.\n' "$1" "$RS_TIMEOUT" "$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')" "$(nproc 2>/dev/null || echo '?')"
 }
 
 # is_green: the control's contract. <min selected rows>
@@ -242,6 +270,18 @@ chk "judge: a [FATAL] floor trip is NOT a kill" "$_k"
 RS_OUT="$_canned_red"; RS_RC=2; parse_summary
 is_killed 4 'designed detector' && _k=bad || _k=ok
 chk "judge: a harness error (exit 2) is NOT a kill" "$_k"
+
+RS_OUT=""; RS_RC=124; RS_CASES=""; RS_PASS=""; RS_FAILS=""; RS_SEL=""
+is_unresolved && _u=ok || _u=bad; is_killed 4 'designed detector' && _k=bad || _k=ok; is_green 4 && _g=bad || _g=ok
+chk "judge: a run cut off by its timeout (rc 124) is UNRESOLVED, and is neither killed nor green" "$([[ $_u == ok && $_k == ok && $_g == ok ]] && printf ok || printf bad)"
+RS_OUT="$_canned_red"; RS_RC=1; parse_summary
+is_unresolved && _u=bad || _u=ok
+RS_OUT="$_canned_green"; RS_RC=0; parse_summary
+is_unresolved && _u2=bad || _u2=ok
+chk "judge: a red run and a green run are not UNRESOLVED" "$([[ $_u == ok && $_u2 == ok ]] && printf ok || printf bad)"
+chk "timeout: scaled by load over cores with a 50 s floor and a 200 s cap (and 100 s when the inputs are unreadable)" \
+  "$([[ "$(scaled_timeout 0.4 8)" == 50 && "$(scaled_timeout 8 8)" == 50 && "$(scaled_timeout 16 8)" == 100 && "$(scaled_timeout 30 8)" == 188 && "$(scaled_timeout 400 8)" == 200 && "$(scaled_timeout 3000 1)" == 200 && "$(scaled_timeout '' 8)" == 100 && "$(scaled_timeout abc 8)" == 100 && "$(scaled_timeout 5 0)" == 100 ]] && printf ok || printf bad)" \
+  "got: $(scaled_timeout 0.4 8) $(scaled_timeout 8 8) $(scaled_timeout 16 8) $(scaled_timeout 30 8) $(scaled_timeout 400 8) $(scaled_timeout 3000 1) $(scaled_timeout '' 8) $(scaled_timeout abc 8) $(scaled_timeout 5 0)"
 
 # --- a no-op edit must read as "not landed" --------------------------------------------------------------
 NOOP="$WORK/noop"
@@ -349,6 +389,11 @@ if [[ "$(diff -rq "$PRISTINE" "$CONTROL" 2>/dev/null | wc -l | tr -d ' ')" == 0 
 chk "control: the control tree is byte-identical to the pristine copy" "$_x"
 run_suite "$CONTROL" "$UNION"
 CONTROL_WALL="$((SECONDS - T0))"
+if is_unresolved; then
+  note_unresolved "control"
+  printf '[UNRESOLVED] the control run timed out: the battery is INCONCLUSIVE (exit 3), not void and not green.\n' >&2
+  exit 3
+fi
 if is_green "$UNION_FLOOR"; then _x=ok; else _x=bad; fi
 chk "control: the unedited copy is green on the union of the selections (cases=$RS_CASES fails=$RS_FAILS selected=$RS_SEL, floor $UNION_FLOOR)" "$_x"
 if [[ "$_x" != ok ]]; then
@@ -376,6 +421,7 @@ for ID in $M_IDS; do
   chk "$ID: the mutant is well-formed (it would otherwise be killed by the parser, not by its designed detector)" "$_wf"
   if [[ "$_land" == ok && "$_wf" == ok ]]; then
     run_suite "$MUT" "$M_ROWS"
+    if is_unresolved; then note_unresolved "$ID"; continue; fi
     if is_killed "$M_FLOOR" "$M_DETECT"; then _x=ok; else _x=bad; fi
     chk "$ID: the hook suite turns RED on the designed detector (rc=$RS_RC cases=${RS_CASES:-?} fails=${RS_FAILS:-?} selected=${RS_SEL:-?}, floor $M_FLOOR, $((SECONDS - t_start)) s)" "$_x" "a SURVIVING or wrongly-killed mutant: $(printf '%s\n' "$RS_OUT" | grep -E '^  \[FAIL\]|^\[FATAL\]|^HARNESS:' | head -n 3 | tr '\n' '~')"
   else
@@ -395,10 +441,14 @@ WALL="$((SECONDS - T0))"
 echo "wall-time: ${WALL}s (control ${CONTROL_WALL}s; budget 60s)"
 if [[ "$WALL" -gt 60 ]]; then echo "[WARN] wall time ${WALL}s is over the 60s budget"; fi
 echo "cases=$CHECKED passes=$PASS_COUNT fails=$FAIL_COUNT"
+if [[ "$UNRESOLVED_N" -gt 0 ]]; then
+  printf '[UNRESOLVED] %s mutant run(s) timed out (%s): the battery is INCONCLUSIVE (exit 3): not green, and no mutant is scored as survived or killed on a run that never finished.\n' "$UNRESOLVED_N" "$UNRESOLVED_WHO" >&2
+  exit 3
+fi
 if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
-MIN_CASES=51
+MIN_CASES=54
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

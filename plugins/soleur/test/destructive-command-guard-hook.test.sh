@@ -60,6 +60,10 @@
 # reported by a direct printf + exit 1 and never through the helpers it backstops.
 #
 # Run: bash plugins/soleur/test/destructive-command-guard-hook.test.sh
+# Time: 35 s on a quiet machine, ~110 s under load (every executed row spawns the hook, a shell and the oracle). The 60 s budget
+#      in the mutation suite's header is the quiet figure.
+# A run that is narrowed or redirected by a seam below says so on its FIRST line ([REDUCED RUN: ...], [COUNT-ONLY RUN: ...],
+# [REDIRECTED RUN: ...]) and again before its summary ([NOT THE FULL GATE: ...]); the exit status is unchanged.
 # Env: GUARD_HOOK (default: the real hook; point at a throwaway stub to prove the rows are not vacuous),
 #      GUARD_REPO_ROOT (the tree the hook, lexer, hooks.json and test lib are read from; the mutation suite
 #      points it at a mutated COPY) and GUARD_FAST_COUNT (used only by the in-suite meta copy),
@@ -72,7 +76,9 @@ export LC_ALL=C
 set -uo pipefail
 
 SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${GUARD_REPO_ROOT:-$(cd "$SUITE_DIR/../../.." && pwd)}"
+DEFAULT_ROOT="$(cd "$SUITE_DIR/../../.." && pwd)"
+SEAM_ROOT="${GUARD_REPO_ROOT:-}"; SEAM_HOOK="${GUARD_HOOK:-}"
+REPO_ROOT="${GUARD_REPO_ROOT:-$DEFAULT_ROOT}"
 GUARD_HOOK="${GUARD_HOOK:-$REPO_ROOT/plugins/soleur/hooks/destructive-command-guard.sh}"
 HOOKS_JSON="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
 LEXER="$REPO_ROOT/plugins/soleur/hooks/lib/shell-argv.pl"
@@ -85,6 +91,20 @@ ROWSEL="${DCG_ROWS:-}"
 README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.'
 README_SENT_HOSTED='Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.'
 README_SENT_KILL='`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
+# Loud first line for any run that is not the full gate. NOTFULL is repeated before the summary.
+NOTFULL=""
+if [[ -n "$ROWSEL" ]]; then
+  printf '[REDUCED RUN: DCG_ROWS=%s — not the full gate]\n' "$ROWSEL"; NOTFULL="${NOTFULL:+$NOTFULL; }DCG_ROWS=$ROWSEL selects a subset of the rows"
+fi
+if [[ -n "$FAST" ]]; then
+  printf '[COUNT-ONLY RUN: GUARD_FAST_COUNT is set, no hook is executed — not the full gate]\n'; NOTFULL="${NOTFULL:+$NOTFULL; }GUARD_FAST_COUNT skips every execution"
+fi
+if [[ -n "$SEAM_ROOT" && "$SEAM_ROOT" != "$DEFAULT_ROOT" ]]; then
+  printf '[REDIRECTED RUN: GUARD_REPO_ROOT=%s — the live tree is not what is judged]\n' "$SEAM_ROOT"; NOTFULL="${NOTFULL:+$NOTFULL; }GUARD_REPO_ROOT points at another tree"
+fi
+if [[ -n "$SEAM_HOOK" ]]; then
+  printf '[REDIRECTED RUN: GUARD_HOOK=%s — the live hook is not what is judged]\n' "$SEAM_HOOK"; NOTFULL="${NOTFULL:+$NOTFULL; }GUARD_HOOK points at another hook"
+fi
 # want_row <label>: always true unless DCG_ROWS (reduced mode) is set; then the label must match it.
 want_row_quiet() { [[ -z "$ROWSEL" ]] || [[ "$1" =~ $ROWSEL ]]; }
 SELECTED=0
@@ -1843,6 +1863,22 @@ elif [[ -n "${GUARD_META_COPY:-}" ]]; then
   chk "harness (a): deleting one expected-ask row makes the floor fail (not run inside the meta copy)" ok
   chk "harness (a): the unmodified control copy does not trip the floor (not run inside the meta copy)" ok
 fi
+# A reduced run says so: the first line of a DCG_ROWS run is the banner, the summary repeats it, and a run with no seam prints neither.
+if [[ -z "${GUARD_META_COPY:-}" ]] && want_row "harness (a2): a reduced run says so on its first line and in its summary"; then
+  assert_fixture_dir "$WORK"
+  _rr_out="$(env DCG_ROWS='^terraform plan$' GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
+  _rr_full="$(env -u DCG_ROWS -u GUARD_HOOK GUARD_REPO_ROOT="$REPO_ROOT" GUARD_FAST_COUNT=1 GUARD_META_COPY=1 "$BASH" "$SELF" 2>&1 </dev/null)"
+  if [[ "$(head -n 1 <<<"$_rr_out")" == '[REDUCED RUN: DCG_ROWS=^terraform plan$ — not the full gate]' ]]; then _x=ok; else _x=bad; fi
+  chk "harness (a2): the first line of a DCG_ROWS run is the REDUCED RUN banner naming the selection" "$_x" "first line: $(head -n 1 <<<"$_rr_out")"
+  if grep -q '^\[NOT THE FULL GATE: DCG_ROWS=\^terraform plan\$ selects a subset of the rows' <<<"$_rr_out"; then _x=ok; else _x=bad; fi
+  chk "harness (a2): the summary of a DCG_ROWS run says it is not the full gate" "$_x" "$(tail -n 3 <<<"$_rr_out" | tr '\n' ' ')"
+  if ! grep -q '^\[REDUCED RUN' <<<"$_rr_full" && ! grep -q '^\[NOT THE FULL GATE: DCG_ROWS' <<<"$_rr_full"; then _x=ok; else _x=bad; fi
+  chk "harness (a2): a run without DCG_ROWS prints no REDUCED RUN banner" "$_x" "$(head -n 2 <<<"$_rr_full" | tr '\n' ' ')"
+elif [[ -n "${GUARD_META_COPY:-}" ]]; then
+  chk "harness (a2): the first line of a DCG_ROWS run is the REDUCED RUN banner naming the selection (not run inside the meta copy)" ok
+  chk "harness (a2): the summary of a DCG_ROWS run says it is not the full gate (not run inside the meta copy)" ok
+  chk "harness (a2): a run without DCG_ROWS prints no REDUCED RUN banner (not run inside the meta copy)" ok
+fi
 
 # =====================================================================================================
 echo "== summary =="
@@ -1855,6 +1891,7 @@ if [[ -z "$ROWSEL" ]]; then
   chk "the ask rate on the ordinary-command corpus is 0 (and no row errored)" "$_x" "ask=$CORPUS_ASK errors=$CORPUS_ERR of $CORPUS_N"
 fi
 echo "cases=$CHECKED passes=$PASS_COUNT fails=$FAIL_COUNT"
+[[ -z "$NOTFULL" ]] || echo "[NOT THE FULL GATE: $NOTFULL]"
 if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
@@ -1866,7 +1903,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=754
+MIN_CASES=757
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
