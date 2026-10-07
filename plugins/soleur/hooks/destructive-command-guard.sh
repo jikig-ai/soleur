@@ -258,6 +258,7 @@ RTXT=""
 redact_text() {
   local IFS=$' \t\n' w q i=0 n out=""
   local -a ws
+  # shellcheck disable=SC2206  # the split on blanks is the point (no pathname expansion: set -f)
   ws=($1); n=${#ws[@]}
   while (( i < n )); do
     (( ${#out} > 200 )) && break
