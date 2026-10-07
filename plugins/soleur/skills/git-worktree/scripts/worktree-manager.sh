@@ -3209,6 +3209,15 @@ cleanup_orphan_worktree_dirs() {
 # purge take, so the three can never run destructively at once. Contention or
 # a missing classifier skips LOUDLY and returns 0 — a sweep failure must never
 # abort the unrelated maintenance below (repo lock, fetch, reap loop).
+# _sweep_uint <value> <default> — a decimal integer from an env var, or the default. These values feed
+# `$(( ))` and `(( ))`: `08` is an octal ERROR (a floor comparison then silently reads false and is
+# skipped), and `5s` or `a[$(cmd)]` is an arithmetic error / command-substitution vector that
+# aborts the sweep before it prints its summary. Plain digits only, `10#` pins base 10 (#9677 review).
+_sweep_uint() {
+  local v="${1-}"
+  if [[ "$v" =~ ^[0-9]{1,9}$ ]]; then printf '%s' "$((10#$v))"; else printf '%s' "$2"; fi
+}
+
 sweep_orphan_scratch_dirs() {
   local tc_lib="$SCRIPT_DIR/../../../scripts/lib/tmp-classify.sh"
   if [[ ! -f "$tc_lib" ]]; then
@@ -3255,7 +3264,8 @@ sweep_orphan_scratch_dirs() {
   fi
   local age_min="${SOLEUR_SWEEP_AGE_MIN:-1440}"
   local wt_cap="${SOLEUR_SWEEP_WT_CAP:-50}"
-  local deadline=$(( t0 + ${SOLEUR_SWEEP_TIMEBOX_S:-10} ))
+  local box_s; box_s="$(_sweep_uint "${SOLEUR_SWEEP_TIMEBOX_S-}" 10)"
+  local deadline=$(( t0 + box_s ))
   # Amortized clock: EPOCHSECONDS is a bash-5 builtin (zero forks); the
   # `${EPOCHSECONDS:-$(date)}` fallback keeps bash 3.2 correct at one fork
   # per check. The deadline bounds EVERY arm — the mass-death backlog is
@@ -3333,6 +3343,12 @@ sweep_orphan_scratch_dirs() {
       # Lazy liveness map: built on the first declared-owner candidate, not
       # unconditionally — a clean host pays nothing for the sweep. Failure
       # leaves the per-candidate walk fallback in charge (fail-closed).
+      # A live-owner candidate is retained by tc_reap_decide BEFORE it reads the map, so it must not
+      # pay for the build either: an active sibling session's soleur-run.<pid>.* dir would otherwise
+      # cost every session start the whole 5-12 s build for nothing.
+      if (( map_tried == 0 )) && tc_owner_pid_verify "$d" >/dev/null 2>&1 && tc_owner_alive "$TC_PID"; then
+        retained=$((retained + 1)); continue
+      fi
       if (( map_tried == 0 )); then
         map_tried=1
         local map_t0; map_t0="$(now_s)"
@@ -3344,7 +3360,7 @@ sweep_orphan_scratch_dirs() {
         # reclaimed. The timebox now restarts when the map is built and bounds the work that is
         # actually per-candidate; the map cost is reported as map_s.
         map_s=$(( $(now_s) - map_t0 ))
-        deadline=$(( $(now_s) + ${SOLEUR_SWEEP_TIMEBOX_S:-10} ))
+        deadline=$(( $(now_s) + box_s ))
       fi
 
       # Single-sourced conjunct chain — same gates as Reaper 3 and the purge:
@@ -3358,11 +3374,14 @@ sweep_orphan_scratch_dirs() {
       fstype="$(findmnt -no FSTYPE --target "$base" 2>/dev/null || true)"
       # Direct delete only for schema-NAMED roots on tmpfs (creation-certain
       # attribution + mv frees no RAM); marker-only dirs quarantine on every
-      # base. Terminal deletes get an action-time liveness re-walk — the map
-      # is a snapshot.
+      # base. Terminal deletes get an action-time liveness check — the map is a
+      # snapshot, so it is rebuilt when older than 5 s. The interactive sweep does NOT use the full
+      # per-process walk here (tc_tree_has_live_handles_now, which the unattended guard keeps):
+      # it was measured at 138 s for one candidate on a loaded 743-process host, inside the flock,
+      # against ~5 s for one map build, and a truncated or unbuilt map still falls back to that walk.
       if [[ ( "$fstype" == "tmpfs" || "$fstype" == "ramfs" ) ]] \
          && tc_schema_owner_pid "$name" >/dev/null 2>&1 \
-         && ! tc_tree_has_live_handles_now "$d"; then
+         && { tc_inuse_map_refresh 5 || true; ! tc_tree_has_live_handles "$d"; }; then
         if find "$d" -xdev -depth -delete 2>/dev/null; then
           reaped=$((reaped + 1))
           tc_ledger_append "delete" "scratch" "$d" "-"
@@ -3388,17 +3407,18 @@ sweep_orphan_scratch_dirs() {
   # default drain trigger (ADR-250). Each TTL is floored (default 1440 min) so an exported 0 can
   # never make a session start empty the quarantine it just filled.
   if [[ "${SOLEUR_QUARANTINE_DRAIN-}" == "1" ]]; then
-    local qfloor="${SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN:-1440}"
-    local sttl="${SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN:-10080}" wttl="${SOLEUR_SWEEP_QUAR_WT_TTL_MIN:-43200}" ddl
-    [[ "$qfloor" =~ ^[0-9]+$ ]] || qfloor=1440
-    [[ "$sttl" =~ ^[0-9]+$ ]] || sttl=10080
-    [[ "$wttl" =~ ^[0-9]+$ ]] || wttl=43200
+    local qfloor sttl wttl ddl dcap
+    qfloor="$(_sweep_uint "${SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN-}" 1440)"
+    sttl="$(_sweep_uint "${SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN-}" 10080)"
+    wttl="$(_sweep_uint "${SOLEUR_SWEEP_QUAR_WT_TTL_MIN-}" 43200)"
+    dcap="$(_sweep_uint "${SOLEUR_SWEEP_DRAIN_MAX_ENTRIES-}" 200)"
+    (( dcap > 0 )) || dcap=200                 # 0 means unbounded in the library; never from an env var
     if (( sttl < qfloor )); then sttl=$qfloor; fi
     if (( wttl < qfloor )); then wttl=$qfloor; fi
-    ddl=$(( $(now_s) + ${SOLEUR_SWEEP_DRAIN_TIMEBOX_S:-5} ))
+    ddl=$(( $(now_s) + $(_sweep_uint "${SOLEUR_SWEEP_DRAIN_TIMEBOX_S-}" 5) ))
     for base in $bases; do
       [[ -d "$base" ]] || continue
-      tc_drain_quarantine "$base" 0 "$sttl" "$wttl" "$ddl" "${SOLEUR_SWEEP_DRAIN_MAX_ENTRIES:-200}" || true
+      tc_drain_quarantine "$base" 0 "$sttl" "$wttl" "$ddl" "$dcap" || true
       # tc_drain_quarantine resets TC_DRAINED on every call: sum per base here.
       drained=$((drained + TC_DRAINED)); drained_bytes=$((drained_bytes + TC_DRAINED_BYTES))
     done
@@ -3409,7 +3429,7 @@ sweep_orphan_scratch_dirs() {
   local ms=$(( ("$(now_s)" - t0) * 1000 ))
   echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred drained=$drained drained_bytes=$drained_bytes map_s=$map_s wt_scanned=$wt_done ms=$ms"
   if (( deferred > 0 )); then
-    echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${SOLEUR_SWEEP_TIMEBOX_S:-10}s/${wt_cap}-worktree bound — deferred to the next session start"
+    echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${box_s}s/${wt_cap}-worktree bound (the ${map_s}s liveness-map build is not counted) — deferred to the next session start"
   fi
   # Drain has no always-on trigger unless the systemd timer is installed or an
   # operator runs --drain — surface a non-empty quarantine so the bytes don't
@@ -4117,6 +4137,12 @@ docker_builder_prune() {
     echo "SOLEUR_DOCKER_PRUNE skipped reason=no-worktree-removed"; return 0
   fi
   command -v docker >/dev/null 2>&1 || { echo "SOLEUR_DOCKER_PRUNE skipped reason=docker-missing"; return 0; }
+  # The prune acts on whatever daemon the environment names. A tcp:// or ssh:// DOCKER_HOST is a remote
+  # machine this cleanup has no business pruning, and the marker row would never say so.
+  case "${DOCKER_HOST-}" in
+    ""|unix://*) ;;
+    *) echo "SOLEUR_DOCKER_PRUNE skipped reason=remote-daemon"; return 0 ;;
+  esac
   # Same timeout -> gtimeout resolution the install arms use (stock macOS has neither on PATH by default).
   if command -v timeout >/dev/null 2>&1; then tobin="timeout"
   elif command -v gtimeout >/dev/null 2>&1; then tobin="gtimeout"
@@ -4126,22 +4152,24 @@ docker_builder_prune() {
   [[ "$probe" =~ ^[0-9]+$ && "$probe" -gt 0 ]] || probe=5
 
   rc=0; "$tobin" -k 5 "$probe" docker info >/dev/null 2>&1 || rc=$?
-  if (( rc == 124 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+  if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
   if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=daemon-unreachable"; return 0; fi
 
   if [[ "$mode" == "dry-run" ]]; then
     # `docker system df` ignores the until=24h filter, so this is an UPPER BOUND on what apply frees.
-    local df_row; rc=0
-    df_row="$("$tobin" -k 5 "$secs" docker system df 2>/dev/null | grep -i 'build cache' | head -n 1)" || rc=$?
+    local df_row df_out; rc=0
+    df_out="$("$tobin" -k 5 "$secs" docker system df 2>/dev/null)" || rc=$?
+    if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+    df_row="$(printf '%s\n' "$df_out" | grep -i 'build cache' | head -n 1 || true)"
     echo "SOLEUR_DOCKER_PRUNE mode=dry-run (upper bound; ignores until=24h) build_cache=\"${df_row:-unknown}\""
     return 0
   fi
 
   rc=0; out_b="$("$tobin" -k 5 "$secs" docker builder prune -f --filter until=24h 2>&1)" || rc=$?
-  if (( rc == 124 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+  if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
   if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=$rc"; return 0; fi
   rc=0; out_i="$("$tobin" -k 5 "$secs" docker image prune -f --filter until=24h 2>&1)" || rc=$?
-  if (( rc == 124 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+  if (( rc == 124 || rc == 137 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
   if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=$rc"; return 0; fi
   echo "SOLEUR_DOCKER_PRUNE mode=apply builder=\"$(printf '%s\n' "$out_b" | grep '^Total' | tail -n 1)\" images=\"$(printf '%s\n' "$out_i" | grep '^Total' | tail -n 1)\""
   return 0
@@ -4566,7 +4594,6 @@ Commands:
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
-  space-report                        Print current disk/snapshot state (read-only; same SOLEUR_CLEANUP_SPACE line cleanup-merged prints)
                                       (reaps branches proven merged: ancestor
                                       of main, or a merged PR containing the
                                       tip; [gone] alone is kept;
@@ -4575,6 +4602,8 @@ Commands:
                                       files, kills runaway procs)
                                       NOTE: does NOT durably archive spec dirs
                                       — see ship/SKILL.md Phase 7 Step 4.
+  space-report                        Print current disk/snapshot state (read-only; same
+                                      SOLEUR_CLEANUP_SPACE line cleanup-merged prints)
   cleanup-tmp                         Remove stale Claude task output files
                                       (reclaims RAM from /tmp/claude-<uid>/)
   cleanup-procs                       Kill runaway processes wasting CPU

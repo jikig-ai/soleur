@@ -700,7 +700,7 @@ tc_ledger_append() {
   fi
 }
 
-# tc_drain_quarantine <base> <dry> <scratch_ttl_min> <wt_ttl_min> — the ONLY
+# tc_drain_quarantine <base> <dry> <scratch_ttl_min> <wt_ttl_min> [<deadline_epoch> [<max_entries>]] — the ONLY
 # delete permitted inside soleur-quarantine.<uid>/: entries whose QUARANTINE
 # dwell exceeds the class TTL (subdir name encodes it). A symlinked or
 # foreign-owned quarantine root/class dir refuses outright — a squatter on a
@@ -710,9 +710,13 @@ tc_ledger_append() {
 #
 # Optional trailing arguments (#9677), both 0 = unbounded so the guard and the purge, which pass
 # four arguments, are unchanged: <deadline_epoch> stops the drain between top-level entries once
-# the clock reaches it, and <max_entries> caps how many entries one call may delete. Neither can
-# interrupt a single entry's `find -delete`; an entry cut short stays in place and is retried by the
-# next call, because the ledger row is written only after a completed delete.
+# the clock reaches it, and <max_entries> caps how many entries one call may delete. Both are checked
+# BETWEEN entries only: the mount probe, `du -sk` and `find -delete` of one entry cannot be interrupted,
+# so a single very large entry can overrun the deadline. The enumeration is pre-filtered with
+# `find -cmin +(ttl-1)` (looser than the authoritative tc_quar_age_min re-check below), so unexpired
+# entries cost one find, not a fork each (measured 12 ms/entry otherwise). An entry whose delete is cut
+# short is NOT retried promptly: deleting its children advances its own ctime, so its TTL restarts and
+# the next call sees it as fresh (no data loss — the error direction is retention).
 TC_DRAINED=0
 TC_DRAINED_BYTES=0
 tc_drain_quarantine() {
@@ -748,14 +752,17 @@ tc_drain_quarantine() {
       attempts=$((attempts + 1))
       # du -sk (portable; -b is GNU-only) BEFORE the delete — the bytes are gone afterwards. An
       # unreadable size counts as 0 rather than aborting the drain.
-      kb="$(du -sk -- "$e" 2>/dev/null | cut -f1)"
+      # `|| true` is load-bearing: du exits 1 on any unreadable subtree or a file that vanishes mid-walk,
+      # and under pipefail that fails the assignment — the guard and the purge call this function bare
+      # under `set -e`, so without it one such entry would abort them on every run (#9677 review).
+      kb="$(du -sk -- "$e" 2>/dev/null | cut -f1)" || true
       [[ "$kb" =~ ^[0-9]+$ ]] || kb=0
       if find "$e" -xdev -depth -delete 2>/dev/null; then
         tc_ledger_append "drain" "${cls##*/}" "$e" "-"
         TC_DRAINED=$((TC_DRAINED + 1))
         TC_DRAINED_BYTES=$((TC_DRAINED_BYTES + kb * 1024))
       fi
-    done < <(find "$cls" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+    done < <(find "$cls" -mindepth 1 -maxdepth 1 -cmin "+$(( ttl > 0 ? ttl - 1 : 0 ))" -print0 2>/dev/null)
   done
   return 0
 }

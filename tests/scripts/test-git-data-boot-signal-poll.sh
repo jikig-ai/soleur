@@ -577,11 +577,14 @@ sed -E 's/(^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete info "")/\1 "plaintext_
 g2_mut "S21h MUTATION a terminal emitted as a literal other than yes/no -> RED" \
   'grep -qF "plaintext_empty=maybe" "$G2_TMP/boot-third.sh"' "$G2_TMP/boot-third.sh" "$LIB" "$G2_CAP"
 
-# S22 the library's scratch dirs land under the suite sandbox, not the shared TMPDIR. The suite's own
-# polls above created them; a deleted `export TMPDIR="$SANDBOX"` leaves this count at 0.
+# S22 the library's scratch dirs land under the suite sandbox, not the shared TMPDIR. Each poll above
+# makes exactly one `gdboot.*` dir, and this suite makes 44 polls (measured), so the count must be AT
+# LEAST that: a deleted `export TMPDIR="$SANDBOX"` leaves 0, and one moved below the first polls leaves
+# only the later ones (38 measured). Raise the floor when polls are added.
+_GD_POLLS_MIN=44
 _gd_n="$(find "$SANDBOX" -maxdepth 1 -type d -name 'gdboot.*' | grep -c . || true)"
-if (( _gd_n >= 1 )); then _report "S22 gdboot scratch dirs land under the suite sandbox ($_gd_n), not the shared TMPDIR" ok
-else _report "S22 gdboot scratch dirs land under the suite sandbox" bad "none found under $SANDBOX"; fi
+if (( _gd_n >= _GD_POLLS_MIN )); then _report "S22 every gdboot scratch dir ($_gd_n) lands under the suite sandbox, not the shared TMPDIR" ok
+else _report "S22 gdboot scratch dirs land under the suite sandbox" bad "only $_gd_n of >= $_GD_POLLS_MIN found under $SANDBOX"; fi
 
 # ── Assertion count: EXACT, printf + exit, never through the helper it backstops ──
 _total=$((pass + fail))

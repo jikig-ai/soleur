@@ -59,6 +59,9 @@ unset SOLEUR_SCRATCH_SESSION_ROOT SOLEUR_SCRATCH_OWNER_PID SOLEUR_SCRATCH_BASE
 # quarantine arm; if no non-tmpfs writable dir exists the arm is skipped.
 DISK_BASE=""
 for cand in /var/tmp "${XDG_CACHE_HOME:-$HOME/.cache}" "$HOME"; do
+  # SCRATCH_TEST_NO_DISK=1 forces the tmpfs-only path (what a CI box with no disk-class dir runs),
+  # so the conditional-block floor below can be measured instead of assumed.
+  [[ -n "${SCRATCH_TEST_NO_DISK:-}" ]] && break
   if [[ -d "$cand" && -w "$cand" ]]; then
     fst="$(findmnt -no FSTYPE --target "$cand" 2>/dev/null || true)"
     if [[ "$fst" != "tmpfs" && "$fst" != "ramfs" && -n "$fst" ]]; then
@@ -372,7 +375,7 @@ cases=$((cases + 1)); [[ -d "$FAKE_TMP/soleur-run.${LIVE}.sweeplive1" ]] \
   && pass "sweep retains live schema root" || fail "sweep reaped live root"
 cases=$((cases + 1)); printf '%s' "$out" | grep -q 'SOLEUR_TMP_SWEEP.*reaped=[0-9]' \
   && pass "sweep emits SOLEUR_TMP_SWEEP telemetry" || fail "sweep telemetry missing: $out"
-rm -rf "$FAKE_PROC/$LIVE"
+rm -rf "${FAKE_PROC:?}/$LIVE"
 
 # lock contention → loud skip, no mutation
 reset_fixtures
@@ -447,6 +450,7 @@ case "${FX_MODE:-}" in
   badmap)     tc_build_inuse_map() { return 1; } ;;
   slowdecide) eval "$(declare -f tc_reap_decide | sed '1s/tc_reap_decide/_orig_tc_reap_decide/')"
               tc_reap_decide() { sleep 1; _orig_tc_reap_decide "$@"; } ;;
+  argprobe)   tc_drain_quarantine() { echo "ARGS dry=$2 sttl=$3 wttl=$4 box=$(( $5 - $(date +%s) )) cap=$6" >> "${FX_LOG:?}"; TC_DRAINED=0; TC_DRAINED_BYTES=0; } ;;
   drainprobe) eval "$(declare -f tc_drain_quarantine | sed '1s/tc_drain_quarantine/_orig_tc_drain_quarantine/')"
               tc_drain_quarantine() {
                 if ( exec 8<"${XDG_STATE_HOME}/soleur/tmp-guard.lock"; flock -n 8 ); then echo DRAIN-LOCK-FREE >> "${FX_LOG:?}"
@@ -460,7 +464,7 @@ sweep_fx() {
     SOLEUR_SWEEP_BASES="${SWEEP_BASES:-$FAKE_TMP}" SOLEUR_SWEEP_AGE_MIN=0 SOLEUR_SWEEP_WT_AGE_MIN=0 \
     SOLEUR_SWEEP_TIMEBOX_S=10 XDG_STATE_HOME="$SWEEP_STATE" TMP_CLASSIFY_PROC="${TC_PROC_OVERRIDE:-/proc}" \
     TMP_CLASSIFY_RETAIN_DIR="$TESTROOT/retain" REAL_TC="$REAL_TC" FX_LOG="$FX_LOG" "$@" \
-    bash -c "source '$WM' >/dev/null 2>&1 || true; SCRIPT_DIR='$FX_SD'; sweep_orphan_scratch_dirs" 2>&1 || true
+    bash -c "source '$WM' >/dev/null 2>&1 || true; SCRIPT_DIR='$FX_SD'; sweep_orphan_scratch_dirs; echo \"SPACE_LOGICAL=\${_SPACE_LOGICAL_BYTES:-unset}\"" 2>&1 || true
 }
 
 # T1: a map build slower than the timebox must not starve every later candidate. now_s has 1 s
@@ -472,8 +476,8 @@ out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowmap SOLEUR_SWEEP_TIMEB
 left=0; for i in 1 2 3; do [[ -d "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i" ]] && left=$((left + 1)); done
 cases=$((cases + 1)); [[ "$left" == "0" ]] && grep -q 'deferred=0' <<<"$out" \
   && pass "T1 map build (4s) over the 3s timebox: all 3 dead roots still reclaimed, deferred=0" || fail "T1 left=$left out=$out"
-cases=$((cases + 1)); grep -qE 'drained=0 drained_bytes=0 map_s=[0-9]+' <<<"$out" \
-  && pass "T1s summary carries drained=, drained_bytes=, map_s=" || fail "T1s summary shape: $out"
+cases=$((cases + 1)); grep -qE 'drained=0 drained_bytes=0 map_s=[3-9] ' <<<"$out" \
+  && pass "T1s summary carries drained=, drained_bytes=, and the MEASURED map_s (a 4s build reads 3-9, never 0)" || fail "T1s summary shape: $out"
 
 # T1b: the rebase must not remove the bound — slow per-candidate work still defers.
 reset_fixtures
@@ -483,6 +487,16 @@ left=0; for i in 1 2 3 4 5 6; do [[ -d "$FAKE_TMP/soleur-run.${DEAD}.slowdec$i" 
 cases=$((cases + 1)); [[ "$left" -ge 1 ]] && grep -qE 'deferred=[1-9]' <<<"$out" \
   && pass "T1b per-candidate work past the rebased timebox still defers ($left of 6 left)" || fail "T1b left=$left out=$out"
 
+# T8: a candidate whose owner is ALIVE is retained before the liveness map is needed, so it must not
+# pay for the build (a slow 4 s build would otherwise be charged to every session start while any
+# sibling session's soleur-run.<pid>.* dir exists).
+reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"
+mkdir -p "$FAKE_TMP/soleur-run.${LIVE}.liveonly1" "$FAKE_PROC/$LIVE"
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowmap)"
+cases=$((cases + 1)); grep -qE 'map_s=0 ' <<<"$out" && [[ -d "$FAKE_TMP/soleur-run.${LIVE}.liveonly1" ]] \
+  && pass "T8 a live-owner-only sweep builds no map (map_s=0) and keeps the dir" || fail "T8: $out"
+rm -rf "${FAKE_PROC:?}/$LIVE"
+
 # T12: a FAILING map build falls back to the per-candidate walk (fail closed): the live owner survives.
 reset_fixtures
 mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.badmapdead" "$FAKE_TMP/soleur-run.${LIVE}.badmaplive" "$FAKE_PROC/$LIVE"
@@ -490,7 +504,67 @@ mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.badmapdead" "$FAKE_TMP/soleur-run.${LIVE}
 out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=badmap)"
 cases=$((cases + 1)); [[ ! -d "$FAKE_TMP/soleur-run.${DEAD}.badmapdead" && -d "$FAKE_TMP/soleur-run.${LIVE}.badmaplive" ]] \
   && pass "T12 failing map build: dead root reclaimed, live-owner root retained" || fail "T12: $out"
-rm -rf "$FAKE_PROC/$LIVE"
+rm -rf "${FAKE_PROC:?}/$LIVE"
+
+# T4: every env var that feeds the drain is normalised to a decimal integer BEFORE it is compared or
+# passed on. `08`/`09` are octal ERRORS (a floor comparison then reads false and is skipped, so the
+# TTL would be 8 minutes), 0 means unbounded in the library, and the argument the library receives is
+# the only place the effective values are observable — hence the argprobe seam.
+argprobe() { # VAR=val ... -> the ARGS line the library would have received
+  reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"; : > "$FX_LOG"
+  sweep_fx FX_MODE=argprobe SOLEUR_QUARANTINE_DRAIN=1 "$@" >/dev/null
+  grep '^ARGS' "$FX_LOG" | head -n 1
+}
+a="$(argprobe)"
+cases=$((cases + 1)); [[ "$a" == "ARGS dry=0 sttl=10080 wttl=43200 box="[45]" cap=200" ]] \
+  && pass "T4a defaults reach the library: TTLs 10080/43200 min, 5 s box, cap 200" || fail "T4a: $a"
+a="$(argprobe SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=08 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=09)"
+cases=$((cases + 1)); [[ "$a" == "ARGS dry=0 sttl=1440 wttl=1440 "* ]] \
+  && pass "T4b TTL=08 / 09 are floored to 1440, not read as an octal error that skips the floor" || fail "T4b: $a"
+a="$(argprobe SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0100000 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=0090)"
+cases=$((cases + 1)); [[ "$a" == "ARGS dry=0 sttl=100000 wttl=1440 "* ]] \
+  && pass "T4c leading zeros are decimal: 0100000 -> 100000 (not octal 32768), 0090 -> floored" || fail "T4c: $a"
+for v in 0 abc -1 ""; do
+  a="$(argprobe SOLEUR_SWEEP_DRAIN_MAX_ENTRIES="$v")"
+  cases=$((cases + 1)); [[ "$a" == *" cap=200" ]] \
+    && pass "T4d SOLEUR_SWEEP_DRAIN_MAX_ENTRIES='$v' -> the 200 default (never unbounded)" || fail "T4d '$v': $a"
+done
+a="$(argprobe SOLEUR_SWEEP_DRAIN_MAX_ENTRIES=7)"
+cases=$((cases + 1)); [[ "$a" == *" cap=7" ]] && pass "T4e a valid cap is passed through" || fail "T4e: $a"
+a="$(argprobe SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN=08 SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=5)"
+cases=$((cases + 1)); [[ "$a" == "ARGS dry=0 sttl=8 "* ]] \
+  && pass "T4f floor=08 is decimal 8: a 5-minute TTL is raised to it" || fail "T4f: $a"
+a="$(argprobe SOLEUR_SWEEP_DRAIN_TIMEBOX_S=0)"
+cases=$((cases + 1)); [[ "$a" == *"box=0 cap="* ]] && pass "T4g a zero drain timebox is honoured (drains nothing), not read as unbounded" || fail "T4g: $a"
+
+# T5: a hostile or sloppy timebox must not abort the sweep before it prints its summary, and must
+# never execute: `BASH_SOURCE[$(touch FLAG)]` is an arithmetic-expression command substitution.
+reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"; PWNED="$TESTROOT/pwned.flag"; rm -f "$PWNED"
+for v in '5s' "BASH_SOURCE[\$(touch $PWNED)]"; do
+  out="$(sweep_fx SOLEUR_QUARANTINE_DRAIN=1 SOLEUR_SWEEP_TIMEBOX_S="$v" SOLEUR_SWEEP_DRAIN_TIMEBOX_S="$v")"
+  cases=$((cases + 1)); [[ ! -e "$PWNED" ]] && grep -q 'SOLEUR_TMP_SWEEP bases=' <<<"$out" \
+    && pass "T5 timebox '${v:0:12}...': no command ran and the sweep still printed its summary" || fail "T5 '$v': pwned=$([[ -e $PWNED ]] && echo yes || echo no) out=$out"
+done
+
+# T6: tc_drain_quarantine called BARE under errexit (what tmpfs-guard.sh and soleur-tmp-purge.sh do)
+# must survive an unreadable size. A `du` shim that fails with output after the size reproduces an
+# unreadable subtree without needing root-vs-user permission semantics.
+reset_fixtures; Q_UID="$(id -u)"; Q6="$FAKE_TMP/soleur-quarantine.$Q_UID"
+mkdir -p "$Q6/scratch/e1" "$Q6/scratch/e2" "$TESTROOT/du-shim"; chmod 0700 "$Q6"
+printf '#!/bin/sh\nprintf "4\\t%%s\\n" "$3"\nexit 1\n' > "$TESTROOT/du-shim/du"; chmod +x "$TESTROOT/du-shim/du"
+out="$(env -i PATH="$TESTROOT/du-shim:$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" XDG_STATE_HOME="$SWEEP_STATE" \
+  bash -c 'set -euo pipefail; source "$1"; tc_drain_quarantine "$2" 0 0 0; echo "AFTER drained=$TC_DRAINED bytes=$TC_DRAINED_BYTES"' _ "$REAL_TC" "$FAKE_TMP" 2>&1 || true)"
+cases=$((cases + 1)); grep -q 'AFTER drained=2 ' <<<"$out" \
+  && pass "T6 a failing du does not abort a bare caller under set -euo pipefail; both entries drained" || fail "T6: $out"
+
+# T7: the drain's own bounds, driven on the real library: a cap of 1 deletes one of three expired
+# entries, and a deadline already in the past deletes none.
+reset_fixtures; Q7="$FAKE_TMP/soleur-quarantine.$Q_UID"; mkdir -p "$Q7/scratch/c1" "$Q7/scratch/c2" "$Q7/scratch/c3"; chmod 0700 "$Q7"
+out="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" XDG_STATE_HOME="$SWEEP_STATE" \
+  bash -c 'source "$1"; tc_drain_quarantine "$2" 0 0 0 0 1; echo "CAP drained=$TC_DRAINED"; tc_drain_quarantine "$2" 0 0 0 1 0; echo "DEADLINE drained=$TC_DRAINED"' _ "$REAL_TC" "$FAKE_TMP" 2>&1 || true)"
+cases=$((cases + 1)); grep -q 'CAP drained=1' <<<"$out" && grep -q 'DEADLINE drained=0' <<<"$out" && [[ "$(find "$Q7/scratch" -mindepth 1 -maxdepth 1 | wc -l)" == "2" ]] \
+  && pass "T7 max_entries=1 drains exactly one entry; an expired deadline drains none" || fail "T7: $out"
+rm -rf "$Q6" "$Q7"
 
 # --- drain (needs a disk-class base: tmpfs bases direct-delete, so quarantine never forms there) ---
 if [[ -n "$DISK_BASE" ]]; then
@@ -499,7 +573,7 @@ if [[ -n "$DISK_BASE" ]]; then
     reset_fixtures; assert_fixture_dir "$QR"; rm -rf "$QR"; mkdir -p "$QR/scratch/$1" "$QR/worktrees/$2"; chmod 0700 "$QR"
     head -c 2048 /dev/zero > "$QR/scratch/$1/blob"; head -c 2048 /dev/zero > "$QR/worktrees/$2/blob"
   }
-  DRAIN_ON=(SWEEP_BASES_UNUSED=1 SOLEUR_QUARANTINE_DRAIN=1 SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN=0)
+  DRAIN_ON=(SOLEUR_QUARANTINE_DRAIN=1 SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN=0)
 
   # T2: per-class TTLs — scratch past TTL drains, worktrees inside TTL stays; counts are summed
   # ACROSS bases (the second base has no quarantine, so a last-call-wins counter would read 0).
@@ -509,6 +583,26 @@ if [[ -n "$DISK_BASE" ]]; then
     && pass "T2a drain removes the past-TTL class and keeps the inside-TTL class" || fail "T2a: $out"
   cases=$((cases + 1)); grep -qE 'drained=1 drained_bytes=[0-9]{4,}' <<<"$out" \
     && pass "T2b summary reports drained=1 with a measured drained_bytes (du -sk based)" || fail "T2b summary: $out"
+  cases=$((cases + 1)); db="$(sed -n 's/.*drained_bytes=\([0-9]*\) .*/\1/p' <<<"$out" | head -n 1)"; sl="$(sed -n 's/^SPACE_LOGICAL=//p' <<<"$out" | head -n 1)"
+  [[ -n "$db" && "$db" -gt 0 && "$sl" == "$db" ]] \
+    && pass "T2b2 drained bytes reach the report's logical_bytes accumulator ($sl)" || fail "T2b2 drained_bytes=$db SPACE_LOGICAL=$sl"
+  cases=$((cases + 1)); ! grep -q 'holds entries' <<<"$out" \
+    && pass "T2b3 with the drain on, the 'holds entries' hint is not printed" || fail "T2b3: $out"
+
+  # T2e: the OTHER direction — a worktrees-class entry past its TTL drains while the scratch entry
+  # inside its TTL stays (a swapped or hardcoded TTL argument reddens exactly one of the two).
+  mk_quar fresh-scratch old-wt
+  out="$(SWEEP_BASES="$DISK_BASE" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=999999 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=0)"
+  cases=$((cases + 1)); [[ -d "$QR/scratch/fresh-scratch" && ! -e "$QR/worktrees/old-wt" ]] \
+    && pass "T2e past-TTL worktrees entry drains, inside-TTL scratch entry stays" || fail "T2e: $out"
+
+  # T2h: the drain visits EVERY base, not just the first (the entry sits in the last one).
+  reset_fixtures; mkdir -p "$DISK_BASE/second"; rm -rf "$QR" "$DISK_BASE/second/soleur-quarantine.$UID_N"
+  Q2="$DISK_BASE/second/soleur-quarantine.$UID_N"; mkdir -p "$Q2/scratch/lastbase"; chmod 0700 "$Q2"; head -c 2048 /dev/zero > "$Q2/scratch/lastbase/blob"
+  out="$(SWEEP_BASES="$DISK_BASE $DISK_BASE/second" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0)"
+  cases=$((cases + 1)); [[ ! -e "$Q2/scratch/lastbase" ]] && grep -q 'drained=1 ' <<<"$out" \
+    && pass "T2h an entry in the last base drains (the loop does not stop after the first base)" || fail "T2h: $out"
+  rm -rf "$DISK_BASE/second"
 
   # T2c: an exported recovery seam of 0 must not drain entries younger than the default floor.
   mk_quar young-scratch young-wt
@@ -549,8 +643,11 @@ if [[ -n "$DISK_BASE" ]]; then
 fi
 
 # --- Conservation ----------------------------------------------------------------------
-MIN_ASSERTIONS=44   # anti-vacuity floor — a truncated run can't pass at 0/0
-                    # (the disk-class block is conditional on a non-tmpfs dir)
+MIN_ASSERTIONS_NODISK=58    # measured with SCRATCH_TEST_NO_DISK=1 (the unconditional assertions)
+MIN_ASSERTIONS_DISK=74        # measured with a disk-class base: the disk-class block adds the rest
+MIN_ASSERTIONS="$MIN_ASSERTIONS_NODISK"; [[ -n "$DISK_BASE" ]] && MIN_ASSERTIONS="$MIN_ASSERTIONS_DISK"
+# anti-vacuity floor — a truncated run can't pass at 0/0; set to the FULL current count so a deleted
+# assertion is a failure, not slack.
 echo ""
 echo "test-scratch-session: $pass_n passed, $fails failed ($cases cases)"
 [[ $((pass_n + fails)) -ge $MIN_ASSERTIONS && $((pass_n + fails)) -eq $cases && $fails -eq 0 ]]

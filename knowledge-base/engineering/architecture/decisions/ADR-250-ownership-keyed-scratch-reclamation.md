@@ -273,7 +273,16 @@ built lazily at the first declared-owner candidate and took 12.7 s on a 739-proc
 (`tc_build_inuse_map /tmp /var/tmp`), so the clock expired during the build and every later candidate
 was `deferred`, on every session start. The timebox now restarts when the map is built and bounds the
 per-candidate work that remains. The map cost is reported as `map_s` in the `SOLEUR_TMP_SWEEP` line.
-A host with no declared-owner candidate still pays nothing for the map.
+A host with no declared-owner candidate still pays nothing for the map, and neither does one whose only
+candidates have a live owner: those are retained before the map is read, so the build is skipped for them.
+
+The timebox is checked **between** candidates, so it is not a latency ceiling: the default path is
+bounded by the map build, plus one timebox, plus the work of one candidate. Two review measurements
+shaped this. A tmpfs schema-named root is deleted directly, behind an action-time liveness check; the
+full per-process walk used for that check cost 138 s for one candidate on a loaded 739-process host
+(inside the flock), against about 5 s for one map build. The session sweep therefore rebuilds the map
+when it is older than 5 s and consults it (a truncated or unbuilt map still falls back to the walk, so
+the check stays fail-closed); the unattended guard keeps the full walk, where nobody is waiting.
 
 ### A2.2 Opt-in session-start drain
 
@@ -285,19 +294,32 @@ needs no install: with `SOLEUR_QUARANTINE_DRAIN=1` the sweep drains quarantine e
 TTL (scratch 7 days, worktrees 30 days) before it releases the `tmp-guard.lock`, so it is serialised
 against the guard and the purge. Boundaries:
 
-- **Opt-in.** The session sweep is unchanged by default (Amendment 1's "the session sweep is
-  unchanged" holds unless the variable is set). The script runs on machines Soleur does not own and
-  the drain is a terminal delete, so the consent model is the user's choice (CPO and CLO assessments,
-  plan review of #9677). Where the timer is installed it drains every five minutes and does not need
-  the variable.
+- **Opt-in.** The session sweep does not drain by default. The script runs on machines Soleur does not
+  own and the drain is a terminal delete, so the consent model is the user's choice (CPO and CLO
+  assessments, plan review of #9677). Only the exact value `1` enables it. Where the timer is installed
+  it drains every five minutes and does not need the variable.
 - **Floors.** Each TTL is floored (`SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN`, default 1440 min), so an exported
-  0 cannot make a session start empty the quarantine it just filled. The sweep does not read the
-  `SOLEUR_PURGE_QUAR_*` recovery seams.
-- **Bounds.** A 5 s drain timebox (`SOLEUR_SWEEP_DRAIN_TIMEBOX_S`) and a 200-entry cap
+  0 cannot make a session start empty the quarantine it just filled. Every numeric variable the sweep
+  reads is first normalised to a decimal integer (plain digits only, base 10), because `08` is an octal
+  arithmetic error that would skip the floor comparison and `5s` is an arithmetic error that would
+  abort the sweep; an invalid value falls back to its default, and a max-entries value of 0 means the
+  default 200, never unbounded. The sweep does not read the `SOLEUR_PURGE_QUAR_*` recovery seams.
+- **Bounds.** A 5 s drain timebox (`SOLEUR_SWEEP_DRAIN_TIMEBOX_S`) and a 200-entry cap per base
   (`SOLEUR_SWEEP_DRAIN_MAX_ENTRIES`), enforced between top-level entries by an optional deadline and
-  cap on `tc_drain_quarantine`. One very large entry can overrun the bound because `find -delete`
-  cannot be interrupted; it stays in place and is retried next session, since the ledger row is written
-  only after a completed delete. Restore after a drain reports "already gone".
+  cap on `tc_drain_quarantine`. They are not a wall-clock ceiling: the mount probe, the `du -sk` size
+  read and `find -delete` of one entry cannot be interrupted, so one very large entry can overrun the
+  bound. Entries are pre-filtered with `find -cmin` so unexpired ones cost one `find`, not a fork each
+  (measured 12 ms per entry otherwise, which let 400 fresh entries use the whole 5 s and reclaim
+  nothing). A delete cut short is not retried promptly: removing an entry's children advances its own
+  ctime, which restarts its TTL, so no data is lost and the error direction is retention. Restore after
+  a drain reports "already gone".
+- **Accepted residual: no action-time liveness re-walk in the drain.** The drain checks age and mounts
+  but not open handles. An entry reaches it only after a dwell of at least the floored TTL (24 h) in a
+  directory nothing names by path, having been dead-owner and stale when it was moved, and the same
+  property holds for the timer's existing unattended drain. A per-entry process walk was measured at
+  138 s on a loaded host and would make the bound meaningless, so it was not added. A user who `cd`s
+  into a quarantined directory to recover files keeps it alive only through its top-level ctime, which
+  deeper activity does not advance; recovery is `--restore`, not working in place.
 - **No drain on the early returns** (`lock-contended`, `flock-missing`, `bases-empty`).
 - The sweep line gains `drained`, `drained_bytes` (`du -sk` before the delete) and `map_s`.
 
@@ -320,17 +342,22 @@ returned only after the snapshots were deleted.
 
 An opt-in `SOLEUR_DOCKER_PRUNE=1` (dry run) or `apply` prunes old Docker build cache and dangling images
 (`--filter until=24h`) once per `cleanup-merged` run, after the cleanup lock is released, and only when
-the run removed a worktree. An age-filtered prune over a shared daemon is the heuristic this ADR rejects
+the run removed a worktree. It acts on the ambient daemon, so a `tcp://` or `ssh://` `DOCKER_HOST` is
+refused (`skipped reason=remote-daemon`); each Docker call is bounded by `SOLEUR_DOCKER_TIMEOUT_S` (60 s
+plus a 5 s kill grace, probe 5 s), so an apply run can take about 140 s in the worst case. An age-filtered prune over a shared daemon is the heuristic this ADR rejects
 for scratch, so it is admitted only as an explicit exception in the style of A1.3's durable-log GC:
 regenerable cache, opt-in, dry-run first, never `-a`, never a volume or container. Label-scoped pruning
 was considered and cut: no local `docker build` call site stamps a worktree label.
 
 ### Consequences of Amendment 2
 
-- A1's "the session sweep is unchanged" now reads "unchanged by default"; the "weaker-evidence marker
-  moves are drained only by the timer's unattended drain" note also covers the opt-in session drain.
-- The default sweep reclaims more candidates per session on every machine (the A2.1 rebase), which is a
-  behaviour change that needs no opt-in because it only lets the existing, already-shipped conjuncts run.
+- Amendment 1 says the session sweep is unchanged and that the timer is the only automated terminal
+  delete. With `SOLEUR_QUARANTINE_DRAIN=1` the session sweep is a second one; without it both statements
+  still hold for the drain.
+- The default sweep processes more candidates per session on every machine (the A2.1 rebase) and so
+  moves more marker-only dirs into quarantine (a reversible `mv`); it needs no opt-in because it only
+  lets the existing, already-shipped conjuncts run. It also adds up to one timebox of default-path
+  latency.
 - Phase 7 of the #9677 plan installs the existing timer on the operator host; that is host
   configuration, not plugin behaviour.
 

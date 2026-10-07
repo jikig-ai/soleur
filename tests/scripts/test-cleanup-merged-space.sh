@@ -3,7 +3,7 @@
 # effective-space report (SOLEUR_CLEANUP_SPACE), and the cleanup-merged wrapper that places
 # both after the cleanup lock is released (worktree-manager.sh).
 #
-# Every external is a PATH shim (docker, findmnt, df, snapper, timeout); nothing outside
+# Every external is a PATH shim (docker, findmnt, df, snapper; the real timeout is used); nothing outside
 # TESTROOT is touched. Fixtures are synthesized (cq-test-fixtures-synthesized-only).
 #
 # MUTATION ROWS this suite must redden (checked by hand when the suite is edited):
@@ -12,6 +12,10 @@
 #   M3 print the Docker marker when the opt-in is unset         -> D1 reddens
 #   M4 call `snapper` for the snapshot hint                     -> S4 reddens
 #   M5 run Docker before the cleanup lock is released           -> W5 reddens
+#   M6 drop `space_begin`, or take it after the inner function  -> W6a / W7a redden
+#   M7 swap the builder/images labels, or drop the remote-daemon refusal -> D7 / D8 redden
+#   M8 treat only rc 124 (not 137) as a timeout                 -> D9 reddens
+#   M9 point the cleanup-merged dispatch at the bare inner function -> W7c reddens
 #
 # AUTHORING CONSTRAINTS (work/SKILL.md): never `producer | grep -q` under pipefail — grep a
 # FILE; `cases` increments at the CALL SITE; deliberately-nonzero commands in `$(...)` need
@@ -57,7 +61,9 @@ printf '%s\n' "$*" >> "${DOCKER_CALLS:?}"
 case "$1 ${2-}" in
   "info "*)         [[ -n "${FAKE_DOCKER_INFO_FAIL:-}" ]] && exit 1; exit 0 ;;
   "system df"*)     echo "TYPE  TOTAL  ACTIVE  SIZE  RECLAIMABLE"; echo "Build Cache  3  0  1.2GB  1.2GB"; exit 0 ;;
-  "builder prune")  [[ -n "${FAKE_DOCKER_SLEEP:-}" ]] && sleep "$FAKE_DOCKER_SLEEP"
+  "builder prune")  # an ignored TERM survives exec, so `timeout -k` must escalate to KILL (rc 137)
+                    [[ -n "${FAKE_DOCKER_IGNORE_TERM:-}" ]] && { trap '' TERM; exec sleep 30; }
+                    [[ -n "${FAKE_DOCKER_SLEEP:-}" ]] && sleep "$FAKE_DOCKER_SLEEP"
                     echo "Deleted build cache objects:"; echo "abc123"; echo "Total:  1.2GB"; exit 0 ;;
   "image prune")    echo "Total reclaimed space: 300MB"; exit 0 ;;
   *)                exit 64 ;;
@@ -65,6 +71,7 @@ esac
 STUB
 cat > "$SHIMS/findmnt" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FINDMNT_ARGV:-/dev/null}"
 [[ -n "${FAKE_FSTYPE:-}" ]] || exit 1
 printf '%s\n' "$FAKE_FSTYPE"
 STUB
@@ -77,6 +84,7 @@ STUB
 # POSIX `df -Pk <path>` shape: header + one row; column 4 is Available (KB).
 cat > "$SHIMS/df" <<'STUB'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "${DF_ARGV:-/dev/null}"
 n=$(cat "${DF_STATE:?}" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" > "$DF_STATE"
 IFS=' ' read -r first second <<<"${FAKE_DF_AVAIL_KB:-1000 1500}"
 avail="$first"; [[ "$n" -ge 2 ]] && avail="$second"
@@ -98,9 +106,10 @@ mkdir -p "$TESTROOT/space-path" "$TESTROOT/state" "$TESTROOT/snapper-conf"
 # sourced (its main is guarded), shims first on PATH.
 run() {
   local -a envs=(); while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done; shift
-  : > "$CALLS"; : > "$SNAPPER_CALLS"; rm -f "$DFSTATE"
+  : > "$CALLS"; : > "$SNAPPER_CALLS"; : > "$TESTROOT/df.argv"; : > "$TESTROOT/findmnt.argv"; rm -f "$DFSTATE"
   env -i PATH="${RUN_PATH:-$SHIMS:$PATH}" HOME="$TESTROOT" XDG_STATE_HOME="$TESTROOT/state" \
     DOCKER_CALLS="$CALLS" SNAPPER_CALLS="$SNAPPER_CALLS" DF_STATE="$DFSTATE" \
+    DF_ARGV="$TESTROOT/df.argv" FINDMNT_ARGV="$TESTROOT/findmnt.argv" \
     SOLEUR_SPACE_PATH="$TESTROOT/space-path" SOLEUR_SNAPPER_CONFIG_DIR="$TESTROOT/snapper-conf" \
     "${envs[@]}" bash -c "source '$WM' >/dev/null 2>&1 || true; $1" 2>&1 || true
 }
@@ -117,7 +126,7 @@ cases=$((cases + 1)); [[ "$(calls_count)" == "0" && "$out" != *SOLEUR_DOCKER_PRU
 
 # D2 =apply with a worktree removed: EXACTLY the three contract calls, none of the forbidden ones.
 out="$(run SOLEUR_DOCKER_PRUNE=apply -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune')"
-cases=$((cases + 1)); [[ "$(calls_count)" == "3" ]] && calls_file_has '^info' \
+cases=$((cases + 1)); [[ "$(calls_count)" == "3" ]] && calls_file_has '^info$' \
   && calls_file_has '^builder prune -f --filter until=24h$' && calls_file_has '^image prune -f --filter until=24h$' \
   && pass "D2a apply: info + builder prune + image prune, each with until=24h" || fail "D2a calls: $(cat "$CALLS") out=$out"
 cases=$((cases + 1)); ! calls_file_has '(volume|container|system prune|--all| -a( |$)|^image prune -a)' \
@@ -129,8 +138,8 @@ cases=$((cases + 1)); [[ "$out" == *"SOLEUR_DOCKER_PRUNE mode=apply"* ]] \
 out="$(run SOLEUR_DOCKER_PRUNE=1 -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune')"
 cases=$((cases + 1)); ! calls_file_has 'prune' && calls_file_has '^system df' \
   && pass "D3a =1: reads only (system df), no prune" || fail "D3a calls: $(cat "$CALLS")"
-cases=$((cases + 1)); [[ "$out" == *"mode=dry-run"* && "$out" == *"upper bound"* ]] \
-  && pass "D3b =1: dry-run marker labelled an upper bound" || fail "D3b marker: $out"
+cases=$((cases + 1)); [[ "$out" == *"mode=dry-run"* && "$out" == *"upper bound"* && "$out" == *'build_cache="Build Cache  3  0  1.2GB  1.2GB"'* ]] \
+  && pass "D3b =1: dry-run marker labelled an upper bound, carrying the build-cache row in its field" || fail "D3b marker: $out"
 
 # D4 unrecognised values never run docker.
 for v in yes true 0 Apply; do
@@ -163,14 +172,35 @@ cases=$((cases + 1)); [[ "$out" == *"reason=no-worktree-removed"* && "$(calls_co
 
 # D7 Docker's own totals are echoed verbatim, never parsed.
 out="$(run SOLEUR_DOCKER_PRUNE=apply -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune')"
-cases=$((cases + 1)); [[ "$out" == *"Total:  1.2GB"* && "$out" == *"Total reclaimed space: 300MB"* ]] \
-  && pass "D7 both docker total lines appear verbatim" || fail "D7: $out"
+cases=$((cases + 1)); [[ "$out" == *'builder="Total:  1.2GB"'* && "$out" == *'images="Total reclaimed space: 300MB"'* ]] \
+  && pass "D7 each docker total line appears verbatim in ITS OWN labelled field (builder/images not swapped)" || fail "D7: $out"
+
+# D8 a remote daemon is never pruned; a local unix:// socket is.
+for h in tcp://10.0.0.5:2375 ssh://ops@build-host; do
+  out="$(run SOLEUR_DOCKER_PRUNE=apply DOCKER_HOST="$h" -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune')"
+  cases=$((cases + 1)); [[ "$(calls_count)" == "0" && "$out" == *"skipped reason=remote-daemon"* ]] \
+    && pass "D8 DOCKER_HOST=$h -> remote-daemon, no docker call" || fail "D8 '$h': calls=$(calls_count) out=$out"
+done
+out="$(run SOLEUR_DOCKER_PRUNE=apply DOCKER_HOST=unix:///var/run/docker.sock -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune')"
+cases=$((cases + 1)); [[ "$(calls_count)" == "3" ]] \
+  && pass "D8b a local unix:// DOCKER_HOST still prunes" || fail "D8b: calls=$(calls_count) out=$out"
+
+# D9 a Docker CLI that ignores TERM is escalated to KILL by `timeout -k` (rc 137), and 137 must read
+# as a timeout, not as a failed prune with a bare number.
+out="$(run SOLEUR_DOCKER_PRUNE=apply FAKE_DOCKER_IGNORE_TERM=1 SOLEUR_DOCKER_TIMEOUT_S=1 -- '_SOLEUR_CLEANED_COUNT=1; docker_builder_prune; echo RC=$?')"
+cases=$((cases + 1)); [[ "$out" == *"reason=timeout"* && "$out" != *"prune-failed"* && "$out" == *"RC=0"* ]] \
+  && pass "D9 a prune that ignores TERM (killed, rc 137) is reported as a timeout" || fail "D9: $out"
 
 # --- S: report_cleanup_space ----------------------------------------------------------
 # S1 signed delta + logical bytes.
 out="$(run FAKE_DF_AVAIL_KB='1000 1500' FAKE_FSTYPE=ext4 -- '_SPACE_BEFORE_KB=; space_begin; _SPACE_LOGICAL_BYTES=4096; report_cleanup_space')"
 cases=$((cases + 1)); [[ "$out" == *"SOLEUR_CLEANUP_SPACE"* && "$out" == *"logical_bytes=4096"* && "$out" == *"df_delta_bytes=512000"* ]] \
   && pass "S1 logical bytes beside the measured df delta (500 KB freed)" || fail "S1: $out"
+cases=$((cases + 1)); [[ "$(grep -c . "$TESTROOT/df.argv" || true)" == "2" ]] \
+  && [[ "$(sort -u "$TESTROOT/df.argv")" == "-Pk $TESTROOT/space-path" ]] \
+  && grep -qx -- "-no FSTYPE --target $TESTROOT/space-path" "$TESTROOT/findmnt.argv" \
+  && pass "S1b df and findmnt are asked about the configured space path, with the portable flags" \
+  || fail "S1b argv: df=[$(cat "$TESTROOT/df.argv")] findmnt=[$(cat "$TESTROOT/findmnt.argv")]"
 # S2 a negative delta prints as is.
 out="$(run FAKE_DF_AVAIL_KB='1500 1000' FAKE_FSTYPE=ext4 -- 'space_begin; _SPACE_LOGICAL_BYTES=10; report_cleanup_space')"
 cases=$((cases + 1)); [[ "$out" == *"df_delta_bytes=-512000"* ]] \
@@ -234,9 +264,35 @@ cases=$((cases + 1)); a="$(printf '%s\n' "$out" | grep -n 'INNER-DONE' | head -1
 [[ -n "$a" && -n "$b" && "$a" -lt "$b" ]] \
   && pass "W5 the Docker marker prints after the inner (lock-holding) function finished" || fail "W5 order a=$a b=$b: $out"
 
+# W6 the wrapper's wiring, driven with the REAL helpers: the inner stub plays a drain that freed bytes
+# (it sets the accumulator and the removal count the way the real function does). The baseline must
+# be taken BEFORE it (else the delta reads '-'), must not be taken AFTER it (else the accumulator is
+# reset to 0), and a stale removal count from an earlier run must not arm Docker.
+out="$(run FAKE_DF_AVAIL_KB='1000 1500' FAKE_FSTYPE=ext4 SOLEUR_DOCKER_PRUNE=1 -- 'cleanup_merged_worktrees() { _SPACE_LOGICAL_BYTES=777; _SOLEUR_CLEANED_COUNT=1; return 0; }; cleanup_merged_run')"
+cases=$((cases + 1)); [[ "$out" == *"logical_bytes=777"* && "$out" == *"df_delta_bytes=512000"* ]] \
+  && pass "W6a the baseline is taken before the inner function: bytes kept, df delta measured" || fail "W6a: $out"
+d="$(printf '%s\n' "$out" | grep -n 'SOLEUR_DOCKER_PRUNE' | head -n 1 | cut -d: -f1)"; r="$(printf '%s\n' "$out" | grep -n 'SOLEUR_CLEANUP_SPACE logical' | head -n 1 | cut -d: -f1)"
+cases=$((cases + 1)); [[ -n "$d" && -n "$r" && "$d" -lt "$r" ]] \
+  && pass "W6b the Docker marker precedes the space report (the report names the Docker outcome)" || fail "W6b order d=$d r=$r: $out"
+out="$(run SOLEUR_DOCKER_PRUNE=apply -- '_SOLEUR_CLEANED_COUNT=5; cleanup_merged_worktrees() { return 0; }; cleanup_merged_run')"
+cases=$((cases + 1)); [[ "$(calls_count)" == "0" && "$out" == *"no-worktree-removed"* ]] \
+  && pass "W6c a stale removal count from before the run does not arm Docker" || fail "W6c: $out calls=$(cat "$CALLS")"
+
+# W7 wiring that no behavioural stub can see — the real inner function and the real dispatch — pinned
+# on the comment-stripped SOURCE, anchored on the statement form.
+fn_body() { awk -v n="$1" '$0 ~ "^" n "\\(\\) \\{" {f=1} f {print} f && /^}/ {exit}' "$WM" | sed 's/^[[:space:]]*#.*$//'; }
+order="$(fn_body cleanup_merged_run | grep -oE '^[[:space:]]*(space_begin|cleanup_merged_worktrees|docker_builder_prune|report_cleanup_space)' | tr -d ' \t' | tr '\n' ',')"
+cases=$((cases + 1)); [[ "$order" == "space_begin,cleanup_merged_worktrees,docker_builder_prune,report_cleanup_space," ]] \
+  && pass "W7a the wrapper runs baseline, inner, Docker, report — each exactly once, in that order" || fail "W7a order: $order"
+cases=$((cases + 1)); [[ "$(fn_body cleanup_merged_worktrees | grep -cE '^[[:space:]]*_SOLEUR_CLEANED_COUNT=\$\{#cleaned\[@\]\}$')" == "1" ]] \
+  && pass "W7b the real inner function publishes its removal count to the wrapper (the Docker gate's only input)" || fail "W7b: removal-count assignment missing or duplicated"
+arm="$(awk '/^[[:space:]]*cleanup-merged\)$/ {getline nxt; sub(/^[[:space:]]+/, "", nxt); print nxt}' "$WM" | tr '\n' ',')"
+cases=$((cases + 1)); [[ "$arm" == "cleanup_merged_run," ]] \
+  && pass "W7c the cleanup-merged subcommand dispatches to the wrapper, not the bare inner function" || fail "W7c dispatch arm: $arm"
+
 echo ""
 echo "test-cleanup-merged-space: $pass_n passed, $fails failed ($cases cases)"
 # Instrument check: the suite must have executed its assertions.
-[[ "$cases" -ge 30 ]] || { echo "FAIL: only $cases cases executed (floor 30)" >&2; exit 1; }
-[[ "$pass_n" -gt 0 ]] || { echo "FAIL: no assertion passed" >&2; exit 1; }
+[[ "$cases" -ge 42 ]] || { echo "FAIL: only $cases cases executed (floor 42)" >&2; exit 1; }
+[[ $((pass_n + fails)) -eq "$cases" ]] || { echo "FAIL: pass+fail ($((pass_n + fails))) != cases ($cases) — a verdict was lost" >&2; exit 1; }
 exit $(( fails > 0 ? 1 : 0 ))

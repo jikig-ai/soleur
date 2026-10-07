@@ -23,7 +23,7 @@ systemctl --user list-timers tmpfs-guard.timer   # verify
 ```
 
 The shipped unit assumes the checkout is `~/soleur`. If it lives elsewhere
-(for example a bare-repo layout such as `/data/git-repositories/<org>/soleur`),
+(for example `/data/git-repositories/<org>/soleur`, a checkout outside `~`),
 point the drop-in at the **main checkout**, never at a `.worktrees/` entry — a
 worktree is removed when its branch merges and the unit would then fail:
 
@@ -68,7 +68,10 @@ does not own. Tunables, all with safe defaults: `SOLEUR_SWEEP_QUAR_SCRATCH_TTL_M
 (1440, a floor under both TTLs), `SOLEUR_SWEEP_DRAIN_TIMEBOX_S` (5) and
 `SOLEUR_SWEEP_DRAIN_MAX_ENTRIES` (200). The sweep line then reports `drained=`
 and `drained_bytes=`. With the timer installed (Option 1) the variable is not
-needed: the timer drains every run.
+needed: the timer drains every run. The full variable table (including
+`SOLEUR_DOCKER_PRUNE`, the opt-in Docker build-cache prune, and its
+`SOLEUR_DOCKER_PRUNE` skip reasons) is in `plugins/soleur/skills/git-worktree/SKILL.md`;
+the sweep line also reports `map_s=`, the one-time liveness-map build in seconds.
 
 `cleanup-merged` also prints a `SOLEUR_CLEANUP_SPACE` line: the bytes it
 logically drained next to the measured `df` delta of `/var/tmp`, and a note

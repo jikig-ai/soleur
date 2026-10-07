@@ -1577,7 +1577,7 @@ AFFECTED_TESTS_SCRIPTS_TMP_PURGE_PATHS=(
 )
 
 # tests/scripts/scratch-session — allocator + Reaper 3 + session sweep
-# (#7004/ADR-250); declared from the repo paths its suite file names.
+# (#7004/ADR-250) is ALWAYS_ON (above), so it declares no array here.
 
 # tests/scripts/cleanup-merged-space — opt-in Docker prune, space report and the
 # cleanup-merged wrapper (#9677); declared from the repo paths its suite file names.

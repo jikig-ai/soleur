@@ -124,11 +124,12 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     a sweep that does nothing is correct-by-design on a clean host.
 //   - SOLEUR_CLEANUP_SPACE — cleanup-merged's effective-space line (#9677, ADR-250
 //     Amendment 2): bytes the run logically drained beside the measured `df` delta, the
-//     filesystem type and whether btrfs snapper snapshots may pin the freed space. Carries
+//     filesystem type, the Docker opt-in state and whether btrfs snapper snapshots may pin the
+//     freed space. SOLEUR_TMP_SWEEP also gains `drained`, `drained_bytes` and `map_s`. Carries
 //     no path. NOT paged — it is a report, not a failure.
 //   - SOLEUR_DOCKER_PRUNE — the opt-in Docker build-cache prune's result or its named
 //     `skipped reason=` (docker-missing, no-timeout, daemon-unreachable, timeout,
-//     no-worktree-removed, invalid-value, prune-failed). NOT paged — every skip is the
+//     no-worktree-removed, invalid-value, remote-daemon, prune-failed). NOT paged — every skip is the
 //     safe outcome of an opt-in step.
 // MIRRORED-NOT-PAGED (#9127, ADR-258): the SOLEUR_REAP_ARCHIVE_* family —
 // COMMITTED / STAGED / DEFERRED — emitted by worktree-manager.sh's reap loop at

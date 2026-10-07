@@ -272,16 +272,16 @@ Not applicable to Terraform: no cloud resource, vendor account or secret is intr
 
 - [x] No new network egress and no new telemetry sink (verified by grep of the diff for `curl`/`wget`/Sentry/Better Stack).
 - [ ] NFR register assessment run (no NFR is affected: a local, opt-in, stdout-only maintenance script — recorded in the PR body instead of a separate run) (`soleur:architecture assess`) and recorded in the PR.
-- [x] Session-start latency: sweep + drain + Docker stay within the declared bounds (map ≈ already-paid cost; +10 s sweep, +5 s drain, Docker only when opted in).
+- [x] Session-start latency: the bounds are stated honestly in ADR-250 A2 — the timebox is checked between candidates (map build + one timebox + one candidate; the tmpfs action-time check no longer runs the per-process walk), the drain bound is between entries (one large entry can overrun), Docker only when opted in (up to ~140 s).
 
 #### Quality Gates
 
 - [x] ADR-250 amended; `model.c4` plugin description updated; C4 syntax/render/count-parity tests green.
 - [x] Runbook and `git-worktree/SKILL.md` document `SOLEUR_QUARANTINE_DRAIN` and `SOLEUR_DOCKER_PRUNE` (one table, both opt-in) and the new markers.
-- [x] PR body carries the root-cause table with the measurement commands, and `Closes #9677`.
+- [ ] PR body carries the root-cause table with the measurement commands, and `Closes #9677` (written at ship).
 - [x] `tests/scripts/test-cleanup-merged-space.sh` is registered in `scripts/test-all.sh` and `lint-orphan-test-suites.sh` (run once the file is tracked) does not report it as never run.
 - [x] The declared `discoverability_test` (`bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh space-report`) is executed once in the preflight Check 10 sandbox (repo read-only, `HOME` on tmpfs) and prints `SOLEUR_CLEANUP_SPACE` without writing outside tmp; it contains none of the shell-active characters the check rejects.
-- [x] PR body states that the deadline rebase lets the default sweep quarantine more candidates per session on every machine, and that the drain and Docker prune are opt-in.
+- [ ] PR body states that the deadline rebase lets the default sweep quarantine more candidates per session on every machine, and that the drain and Docker prune are opt-in (written at ship).
 - [x] markdownlint is clean on the plan and `tasks.md`.
 
 ### Post-merge (agent-run)
