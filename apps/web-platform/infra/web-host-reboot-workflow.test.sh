@@ -206,7 +206,7 @@ def _():
     ext = [l for l in USES_LINES if "./.github/actions/" not in l]
     local = [l for l in USES_LINES if "./.github/actions/" in l]
     bad = [l.strip() for l in ext if not re.search(r'uses:\s*[\w.-]+/[\w./-]+@[0-9a-f]{40}\s+#\s*v?\d+(\.\d+)*', l)]
-    return (len(ext) >= 4 and not bad and len(local) == 1 and "./.github/actions/infra-credentials" in local[0], bad or len(ext))
+    return (len(ext) == 3 and not bad and len(local) == 1 and "./.github/actions/infra-credentials" in local[0], bad or len(ext))
 
 @row("S11b the pinned SHAs are the ones the sibling workflow already uses (a new pin is a review event, not a drive-by)")
 def _():
@@ -215,7 +215,7 @@ def _():
     sib_text = open(sib).read()
     mine = re.findall(r'uses:\s*([\w.-]+/[\w./-]+)@([0-9a-f]{40})', NONCOMMENT)
     bad = [a for a, s in mine if a in ("actions/checkout", "hashicorp/setup-terraform") and (a + "@" + s) not in sib_text]
-    return (len(mine) >= 4 and not bad, bad)
+    return (len(mine) == 3 and not bad, bad)
 
 @row("S12 no ${{ }} expression inside any run body, and nothing but the validated STARTED_AT and the masked backend pair is written to GITHUB_ENV")
 def _():
@@ -319,7 +319,7 @@ def _():
 def _():
     uses = [str(s.get("uses")) for j in jobs for s in steps_of(j) if s.get("uses")]
     bad = [u for u in uses if not (u.startswith("actions/checkout@") or u.startswith("hashicorp/setup-terraform@") or u == "./.github/actions/infra-credentials")]
-    return (not bad and len(uses) == 5, bad or len(uses))
+    return (not bad and len(uses) == 4, bad or len(uses))
 
 # ================= E: the env -i allow-lists and the credential scoping =====================================================
 ALLOW = {
@@ -546,7 +546,7 @@ def grade_run(rc_stub, reason_line="reason=new_boot_seen_probe_pending\n"):
     s = find("observe", "Grade the rows")
     d = sandbox()
     p = os.path.join(d, "scripts", "web-host-reboot-evidence.sh")
-    open(p, "w").write('#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/args.gr"\nenv | sort > "%s/dump.gr"\nprintf "%%s" "%s" >> "$GITHUB_OUTPUT"\nexit %d\n'
+    open(p, "w").write('#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/args.gr"\nenv | sort > "%s/dump.gr"\nprintf "%%b" "%s" >> "$GITHUB_OUTPUT"\nexit %d\n'
                        % (d, d, reason_line.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n"), rc_stub))
     env = {"BETTERSTACK_QUERY_HOST": "h.example", "BETTERSTACK_QUERY_USERNAME": "u", "BETTERSTACK_QUERY_PASSWORD": "pw-sentinel-5d", "ANCHOR_EPOCH": "1780000000"}
     rc, out = run_logged(d, s["run"], env)

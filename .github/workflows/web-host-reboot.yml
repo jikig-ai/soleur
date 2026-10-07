@@ -1,0 +1,276 @@
+# #9372 — soft-reboot ONE allow-listed web host (web-2 today) and read the evidence rows that follow. DISPATCH-ONLY.
+#
+# Three jobs, in this order:
+#   validate  no environment, no secrets: the typed inputs are format-checked here, so a malformed dispatch dies BEFORE an
+#             approval request exists (the run title is rendered from the raw inputs at queue time, and an approver reads it).
+#   reboot    the Tier-B environment approval, the `web-1-swap` mutex, main only. It re-checks the inputs, loads the tiered
+#             credentials, reads the never-pooled evidence (names only), prints the pre-request context, and then runs
+#             scripts/web-host-reboot.sh, the ONLY step with a Hetzner call. Its refusals (allow-list, typed id, web-1's id,
+#             the live id, the Terraform state id) all run before the one write; the anchor epoch is written first.
+#   observe   no environment, no Hetzner token, no Doppler: it reads Better Stack rows through scripts/web-host-reboot-evidence.sh
+#             for up to 40 minutes and reports PASS, FAIL or NOT YET as ROW PRESENCE ONLY. Exit 2 (NOT YET, the expected
+#             pending state) is a green job with a notice; exit 4 and every unexpected outcome are red.
+#
+# THE MERGE OF THIS FILE IS INERT: it has no push or schedule trigger and nothing is dispatched by the change that adds it.
+# Every dispatch needs the owner's explicit go-ahead naming the production write (hr-menu-option-ack-not-prod-write-auth):
+# the environment approval and the typed confirm are authorization and typo guards, never a substitute for it. A dispatch
+# that is not approved should be cancelled promptly (whether a pending run holds the `web-1-swap` slot is not documented).
+#
+# WHAT THIS WORKFLOW NEVER CLAIMS: anything about the volume or what is on it. A request accepted by Hetzner is a request,
+# not a restart; the evidence job reports which rows exist and says so in a fixed footer. Grading of the soak belongs to
+# scripts/followthroughs/web2-luks-live-6931.sh.
+#
+# ONE-TRUST-BOUNDARY RULES (pinned by apps/web-platform/infra/web-host-reboot-workflow.test.sh): values reach shell only
+# through `env:` (no expression in any run body); the three steps that run code beyond the credential loader run under an
+# `env -i` allow-list; every `uses:` is a 40-hex SHA pin; nothing here plans or applies Terraform, or names a Terraform target.
+#
+# RETIREMENT: this workflow depends on scripts/web2-rebirth-never-pooled.sh and shares helpers with scripts/web2-rebirth.sh.
+# The rebirth closing change retires all of them together, with their tests (or keeps this one by a recorded owner decision).
+
+name: web host reboot (#9372)
+
+run-name: web-host-reboot ${{ inputs.host }} ${{ inputs.confirm }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: "The host to reboot. web-2 only: the allow-list lives in scripts/web-host-reboot.sh, here and in the suite."
+        required: true
+        type: choice
+        options:
+          - web-2
+      confirm:
+        description: "Type REBOOT-web-2-<server id>, the id taken from a read-only Hetzner GET. A typo and retarget guard, not the authorization."
+        required: true
+        type: string
+      reason:
+        description: "Why this dispatch (1 to 200 characters of letters, digits, space and . _ , : # / ( ) -; recorded in the run summary only)."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # The summary looks up the run's approvals through the Actions API.
+  actions: read
+
+env:
+  # Equal to apply-web-platform-infra.yml's: a client newer than the state's last writer can refuse the state.
+  TERRAFORM_VERSION: "1.10.5"
+  INFRA_DIR: apps/web-platform/infra
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 3
+    steps:
+      - name: Validate dispatch inputs (format only; this job holds no secrets and asks for no approval)
+        env:
+          HOST_RAW: ${{ inputs.host }}
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          export LC_ALL=C
+          [[ "$HOST_RAW" == "web-2" ]] || { echo "::error::host is not on the reboot allow-list (web-2 only); no approval was requested"; exit 1; }
+          confirm_re='^REBOOT-web-2-[1-9][0-9]{0,11}$'
+          [[ "$CONFIRM_RAW" =~ $confirm_re ]] || { echo "::error::confirm must be REBOOT-web-2-<server id> (digits only, no leading zero, at most 12); no approval was requested"; exit 1; }
+          reason_re='^[A-Za-z0-9 ._,:#/()-]{1,200}$'
+          [[ "$REASON_RAW" =~ $reason_re ]] || { echo "::error::reason must be 1 to 200 characters of letters, digits, space and . _ , : # / ( ) - ; no approval was requested"; exit 1; }
+          echo "dispatch format validated: host web-2; confirm and reason within their patterns"
+
+  reboot:
+    needs: validate
+    # Default branch only: a dispatch from any other ref never runs with these credentials.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    # The sole HUMAN authorization on this path. Reused, never re-declared: infra/web-host-birth-environment.tf covers its
+    # reviewer set with the DP-11 F8 non-empty-reviewers guard (an untracked environment emptied in the UI auto-approves).
+    environment: web-platform-infra-apply
+    concurrency:
+      # Shared cross-pipeline mutex, byte-identical to web_host_create / web_host_replace and the rebirth workflow. DO NOT
+      # RENAME: GitHub does not error on divergent group strings, they simply fail to serialize.
+      group: web-1-swap
+      cancel-in-progress: false
+    timeout-minutes: 25
+    outputs:
+      server_id: ${{ steps.reboot.outputs.server_id }}
+      anchor_epoch: ${{ steps.reboot.outputs.anchor_epoch }}
+    steps:
+      - name: Re-check the typed host and confirm (defence in depth; the validate job already ran)
+        env:
+          HOST: ${{ inputs.host }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          export LC_ALL=C
+          [[ "$HOST" == "web-2" ]] || { echo "::error::host is not on the reboot allow-list (web-2 only)"; exit 1; }
+          confirm_re='^REBOOT-web-2-[1-9][0-9]{0,11}$'
+          [[ "$CONFIRM" =~ $confirm_re ]] || { echo "::error::confirm must be REBOOT-web-2-<server id> (digits only, no leading zero, at most 12)"; exit 1; }
+          printf 'STARTED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "typed host and confirm re-checked"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # The state backend credentials for the writer's read of the Terraform state. The GITHUB_ENV write uses the
+      # heredoc-delimiter form: a value carrying a newline would otherwise write a second variable that every later step honours.
+      - name: Extract backend credentials (and check the repository secret is present)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          [[ -n "${DOPPLER_TOKEN:-}" ]] || { echo "::error::DOPPLER_TOKEN secret is not configured."; exit 1; }
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1
+          fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          d1="SOLEUR_EOF_$(openssl rand -hex 12)"; d2="SOLEUR_EOF_$(openssl rand -hex 12)"
+          printf 'AWS_ACCESS_KEY_ID<<%s\n%s\n%s\n' "$d1" "$KEY_ID" "$d1" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY<<%s\n%s\n%s\n' "$d2" "$SECRET" "$d2" >> "$GITHUB_ENV"
+          echo "backend credentials extracted (values not printed)."
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Never-pooled evidence (the soak marker is absent; names only; the reboot needs it)
+        id: pooled
+        env:
+          # READ/WRITE today (a read-only token is a prerequisite on #9358); bound to THIS step only and used by one allow-listed,
+          # names-only reader that the census in workspaces-luks-verify-workflow.test.sh holds to that. The allow-list keeps the
+          # loader's other exports (the workplace-scope provider token among them) out of the process that holds it.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" DOPPLER_TOKEN="$DOPPLER_TOKEN" \
+            bash scripts/web2-rebirth-never-pooled.sh
+          printf 'verdict=absent\n' >> "$GITHUB_OUTPUT"
+
+      - name: Evidence snapshot (read-only; prints the pre-request context)
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \
+            BETTERSTACK_QUERY_HOST="$BETTERSTACK_QUERY_HOST" BETTERSTACK_QUERY_USERNAME="$BETTERSTACK_QUERY_USERNAME" \
+            BETTERSTACK_QUERY_PASSWORD="$BETTERSTACK_QUERY_PASSWORD" \
+            bash scripts/web-host-reboot-evidence.sh snapshot
+
+      # The ONLY step with a Hetzner call, and the last step that can write. Every refusal runs inside the script before its one
+      # POST; the anchor epoch is written to the step outputs immediately before that POST, so a failure after it still hands
+      # the observe job an anchor. The request is a request: the script says so and the evidence job reads what follows.
+      - name: Reboot request (the one Hetzner write; every refusal runs before it)
+        id: reboot
+        env:
+          HOST: ${{ inputs.host }}
+          CONFIRM: ${{ inputs.confirm }}
+          NEVER_POOLED: ${{ steps.pooled.outputs.verdict }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          env -i PATH="$PATH" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \
+            HCLOUD_TOKEN="${HCLOUD_TOKEN:-}" AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}" AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}" \
+            INFRA_DIR="$INFRA_DIR" NEVER_POOLED="${NEVER_POOLED:-}" \
+            GITHUB_OUTPUT="$GITHUB_OUTPUT" GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
+            bash scripts/web-host-reboot.sh reboot "$HOST" "$CONFIRM"
+
+      - name: Run summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          HOST: ${{ inputs.host }}
+          SERVER_ID: ${{ steps.reboot.outputs.server_id }}
+          ANCHOR_EPOCH: ${{ steps.reboot.outputs.anchor_epoch }}
+          REASON: ${{ inputs.reason }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ACTOR: ${{ github.actor }}
+        run: bash scripts/web-host-reboot.sh summary
+
+  observe:
+    needs: reboot
+    # The anchor exists only once the POST was about to be sent: a refusal skips this job, a failure after the request does not.
+    if: ${{ always() && github.ref == 'refs/heads/main' && needs.reboot.outputs.anchor_epoch != '' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    concurrency:
+      group: web-host-reboot-observe
+      cancel-in-progress: false
+    timeout-minutes: 55
+    steps:
+      - name: Validate the reboot job outputs (format only)
+        env:
+          SERVER_ID: ${{ needs.reboot.outputs.server_id }}
+          ANCHOR_EPOCH: ${{ needs.reboot.outputs.anchor_epoch }}
+        run: |
+          set -euo pipefail
+          case $- in *x*) echo "::error::refusing to run under xtrace"; exit 78 ;; esac
+          export LC_ALL=C
+          id_re='^[1-9][0-9]{0,11}$'
+          anchor_re='^[0-9]{1,10}$'
+          [[ "$SERVER_ID" =~ $id_re ]] || { echo "::error::the reboot job's server_id output is not a plain numeric id"; exit 1; }
+          [[ "$ANCHOR_EPOCH" =~ $anchor_re ]] || { echo "::error::the reboot job's anchor_epoch output is not a plain epoch"; exit 1; }
+          echo "job outputs validated"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # The grade script writes its own step summary on every path (verdict, boots seen, next line, fixed footer), so this job
+      # has no separate summary step. Exit mapping: 0 PASS and 2 NOT YET are green (2 with a notice: it is the expected pending
+      # state); 4 (no boot seen, the old boot still shipping, or a new boot gone silent) and everything else are red.
+      - name: Grade the rows (PASS, FAIL or NOT YET, as row presence only)
+        id: grade
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          ANCHOR_EPOCH: ${{ needs.reboot.outputs.anchor_epoch }}
+        run: |
+          case $- in *x*) echo "::error::refusing to run under xtrace (credentials are in scope)"; exit 78 ;; esac
+          set -euo pipefail
+          rc=0
+          bash scripts/web-host-reboot-evidence.sh grade --anchor "$ANCHOR_EPOCH" --window-min 40 --poll-s 60 || rc=$?
+          reason="$(sed -n 's/^reason=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+          reason_re='^[a-z_]{1,64}$'
+          [[ "$reason" =~ $reason_re ]] || reason="unavailable"
+          case "$rc" in
+            0) echo "grade finished: PASS (row presence only), reason ${reason}." ;;
+            2) echo "::notice::NOT YET (reason ${reason}): a pending state, not a failure. Do not re-dispatch to force a row; re-grade later with the command in the next line of the log." ;;
+            1) echo "::error::FAIL (reason ${reason}): see the verdict and next lines above."; exit 1 ;;
+            4) echo "::error::no usable boot signal after the request (reason ${reason}, exit 4): see the verdict and next lines above."; exit 1 ;;
+            *) echo "::error::the grade step could not reach a verdict (exit ${rc}, reason ${reason})."; exit 1 ;;
+          esac
