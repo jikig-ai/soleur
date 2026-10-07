@@ -4,6 +4,17 @@
 - Plan file: knowledge-base/project/plans/2026-10-07-fix-inngest-cutover-followups-6940-plan.md
 - Status: complete
 
+## Deepen-Plan Phase
+- Status: complete (inline — no Task/Skill tool fan-out available in this harness;
+  deviation recorded below)
+- lint-guard-contract: rc=0 (2 guard entries)
+- Scope Check halt: 1 live section, all rows mapped
+- User-Brand Impact halt: `none` + scope-out reason present
+- Conditional gates skipped: 4.5 network-outage (no SSH/apply), 4.55 downtime
+  (no downtime op), 4.10 encryption (no new store/connection), 4.9 .pen (no UI)
+- discoverability_test fixed to a probe-verb-gate-legal `grep -c` (runs at
+  preflight Check 10, post-implementation)
+
 ### Errors
 None.
 
