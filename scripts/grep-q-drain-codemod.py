@@ -22,6 +22,9 @@ Two modes, one transform function:
 Run `apply` BEFORE editing the guard's SWEEP_DEFERRALS: it reads the checkout's guard, and a path whose row was
 already deleted is printed as `unowned` rather than converted.
 
+Contract: the early-exit grep reads STDIN only (the pipe). A grep that also names file operands is out of contract (`grep -q a - missing`
+exits 0 where `grep -c a - missing` exits 2); the guard's population has none today.
+
 The population is the guard's own: this tool sources the guard's SWEEP_* strings (so it cannot disagree with
 the guard about what a site is), runs `git grep --no-index --column -o` with the guard's pathspec, and edits
 exactly the matched span.
@@ -37,6 +40,7 @@ import fnmatch
 import itertools
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,11 +48,17 @@ import tempfile
 GUARD = ".claude/hooks/grep-q-pipe-guard.test.sh"
 SUSPECT_RE = re.compile(r"sigpipe|epipe|false-?fail|broken pipe", re.I)
 UNBOUNDED_RE = re.compile(
-    r"(^|[^\w./-])(yes|journalctl|ncat|nc|socat|sleep|timeout|inotifywait)(\s|$)"
-    r"|tail\s+-[A-Za-z]*[fF]|docker\s+logs|while\s+(true|:)|/dev/(zero|urandom|random)"
+    r"(^|[^\w.-])(yes|journalctl|ncat|nc|socat|sleep|timeout|inotifywait|watch|ping|dmesg\s+-[A-Za-z]*w)(\s|\)|$)"
+    r"|tail\b[^|]*(\s-[A-Za-z]*[fF]|--follow)|\blogs\s+[^|]*(-f|--follow)|while\s+(true|:)|/dev/(zero|urandom|random)"
 )
+CLOSER_HEAD_RE = re.compile(r"^\s*(done|fi|esac|\}|\))\b")
 SAFE_LETTERS = set("iEFGwxvsazIyP")   # letters whose exit-status behaviour -c leaves unchanged
 OPERAND_LETTERS = set("efABCdD")      # letters that take an operand (the rest of the token, or the next token)
+
+
+def fpath(root, path):
+    """Filesystem path for a repo-relative path held as a latin-1 string (git's output is decoded byte for byte, so re-encode before opening)."""
+    return os.path.join(os.fsencode(root), path.encode("latin-1"))
 
 
 def die(code, msg):
@@ -94,11 +104,11 @@ printf '%s\0' "$PATTERN_V2" "$ALLOW_MARKER" "${#SWEEP_PATHSPEC[@]}" "${SWEEP_PAT
 
 
 def row_globs(rows):
-    out = []
-    for row in rows:
-        g = row.split("|")[0].strip()
-        out.append(g)
-    return out
+    return [row.split("|")[0].strip() for row in rows]
+
+
+def row_modes(rows):
+    return {row.split("|")[0].strip(): row.split("|")[1].strip() for row in rows if row.count("|") >= 1}
 
 
 def owner_of(path, globs):
@@ -111,13 +121,13 @@ def owner_of(path, globs):
 # ------------------------------------------------------------------------------------------ population (git grep)
 def population(root, pattern, pathspec, marker):
     """-> {path: {line_no: [(col0, span), ...]}} with the guard's comment and marker filters applied."""
-    cmd = ["git", "-c", "core.excludesFile=/dev/null", "-C", root, "grep", "--no-index", "--exclude-standard",
+    cmd = ["git", "-c", "core.excludesFile=/dev/null", "-c", "core.quotepath=false", "-C", root, "grep", "--no-index", "--exclude-standard",
            "-a", "-n", "-E", "--column", "-o", "-e", pattern, "--"] + pathspec
     r = sh(cmd, check=False)
     if r.returncode > 1:
         die(3, "UNRESOLVED: git grep exited %d: %s" % (r.returncode, r.stderr.decode("latin-1")[:300]))
     pop = {}
-    for raw in r.stdout.decode("latin-1").splitlines():
+    for raw in r.stdout.decode("latin-1").split("\n"):
         m = re.match(r"^(.*?):(\d+):(\d+):(.*)$", raw)
         if not m:
             continue
@@ -125,7 +135,7 @@ def population(root, pattern, pathspec, marker):
         pop.setdefault(path, {}).setdefault(ln, []).append((col - 1, span))
     # comment-only lines and marked lines are dropped, exactly as the guard's _strip_comments --marker does
     for path in list(pop):
-        with open(os.path.join(root, path), "rb") as f:
+        with open(fpath(root, path), "rb") as f:
             lines = f.read().decode("latin-1").split("\n")
         for ln in list(pop[path]):
             text = lines[ln - 1] if ln - 1 < len(lines) else ""
@@ -152,6 +162,7 @@ def classify(text):
     stack = [Frame("base", None, True)]
     pending = []   # (delimiter, strip_tabs) heredocs waiting for the end of the line
     i = 0
+    unterminated = False
 
     def mark(a, b, k):
         for j in range(a, min(b, n)):
@@ -206,6 +217,7 @@ def classify(text):
             i += 1
             if pending:
                 for delim, strip in pending:
+                    found = False
                     while i < n:
                         eol = text.find("\n", i)
                         eol = n if eol < 0 else eol
@@ -213,7 +225,9 @@ def classify(text):
                         mark(i, min(eol + 1, n), "h")
                         i = eol + 1
                         if (line.lstrip("\t") if strip else line) == delim:
+                            found = True
                             break
+                    unterminated = unterminated or not found   # a phantom opener (`(( 1 << 3 ))`) would swallow the rest of the file
                 pending = []
             continue
         if top.closer is not None and ch == top.closer:
@@ -270,7 +284,7 @@ def classify(text):
                 i = j + m.end()
                 continue
         i += 1
-    ok = len(stack) == 1 and not pending
+    ok = len(stack) == 1 and not pending and not unterminated
     return kinds, ok
 
 
@@ -296,6 +310,8 @@ def parse_span(span):
         if t.startswith("--"):
             if t.startswith("--max-count"):
                 return "H-m", "max-count"
+            if t in ("--quiet", "--silent"):
+                return "X", "repeated-quiet"   # converting one leaves the other quiet: still an early exit
             k += 1
             continue
         if re.fullmatch(r"-[efABCm]", t):
@@ -322,6 +338,8 @@ def parse_span(span):
         return "X", "unparsed-token"
     letters = last[1:]
     qpos = None
+    if letters.count("q") > 1:
+        return "X", "repeated-q"
     for p, c in enumerate(letters):
         if c == "m":
             return "H-m", "-m"
@@ -357,6 +375,8 @@ def rewrite_span_token(line, abs_start, span, how):
         if len(tok) < 2 or tok[0] != "-" or tok[1 + qpos] != "q":
             return None
         new = tok[:1 + qpos] + "c" + tok[2 + qpos:]
+    if end < len(line) and line[end] not in " \t;&|)<>":
+        return None   # `-q$opt` / `-q"p"`: the redirect would glue onto the next word
     return line[:tok_start] + new + " >/dev/null" + line[end:]
 
 
@@ -378,10 +398,14 @@ def stdout_redirected(line, kinds, base, end):
 
 
 def producer_text(lines, idx, abs_start):
+    """The text of the pipeline stage(s) feeding the match: this line's head, plus every continuation line above it."""
     head = lines[idx][:abs_start]
-    if head.strip(" \t&|(") == "" and idx > 0:
-        return lines[idx - 1] + " " + head
-    return head
+    parts = [head]
+    j = idx
+    while j > 0 and (parts[0].strip(" \t&|(") == "" or lines[j - 1].rstrip().endswith(("|", "\\"))) and len(parts) < 8:
+        j -= 1
+        parts.insert(0, lines[j])
+    return " ".join(parts)
 
 
 def convert_line(line, hits, decide):
@@ -403,12 +427,20 @@ def convert_line(line, hits, decide):
 
 
 # --------------------------------------------------------------------------------------------------- apply mode
-def select_rows(args, globs):
+def select_rows(args, globs, rows):
+    modes = row_modes(rows)
+    if args.write:
+        if not args.row:
+            die(2, "usage: --write needs at least one --row (one slice is one deferral row; quote the glob so the shell leaves it alone). "
+                   "Valid rows: " + " ".join("'%s'" % g for g in globs))
+        exact = [g for g in args.row if modes.get(g) == "="]
+        if exact:
+            die(2, "usage: row '%s' is file-exact (mode =): those carriers convert only inside the PR scheduled for their host replace or image tag" % exact[0])
     if not args.row:
         return globs
     missing = [g for g in args.row if g not in globs]
     if missing:
-        die(2, "usage: --row %s is not a row of the guard's SWEEP_DEFERRALS" % missing[0])
+        die(2, "usage: --row %s is not a row of the guard's SWEEP_DEFERRALS. Valid rows: %s" % (missing[0], " ".join("'%s'" % g for g in globs)))
     return args.row
 
 
@@ -416,7 +448,7 @@ def do_apply(args):
     root = os.path.abspath(args.root)
     pattern, pathspec, marker, rows = load_guard(os.path.join(root, GUARD) if os.path.exists(os.path.join(root, GUARD)) else args.guard)
     globs = row_globs(rows)
-    wanted = set(select_rows(args, globs))
+    wanted = set(select_rows(args, globs, rows))
     pop = population(root, pattern, pathspec, marker)
     total_lines = sum(len(v) for v in pop.values())
     if total_lines == 0:
@@ -427,6 +459,7 @@ def do_apply(args):
     changed_lines = 0
     changed_files = 0
     tiers = {}
+    pending_writes = []   # (path, bytes): written only after every file classified cleanly, each via temp file + os.replace
 
     def bump(row, tier):
         per_row.setdefault(row, {}).setdefault(tier, 0)
@@ -438,12 +471,12 @@ def do_apply(args):
         if row is None:
             # the checkout's guard has no row for this path (a slice already deleted it): run apply BEFORE editing SWEEP_DEFERRALS
             for ln in sorted(pop[path]):
-                queue.append((path, ln, "unowned", "no-deferral-row"))
+                queue.append((path, ln, "unowned", "no-deferral-row (run apply BEFORE editing SWEEP_DEFERRALS)"))
                 bump("(none)", "unowned")
             continue
         if row not in wanted or path in args.exclude:
             continue
-        with open(os.path.join(root, path), "rb") as f:
+        with open(fpath(root, path), "rb") as f:
             text = f.read().decode("latin-1")
         lines = text.split("\n")
         starts = [0]
@@ -471,6 +504,8 @@ def do_apply(args):
                 prod = producer_text(lines, idx, col0)
                 if UNBOUNDED_RE.search(prod):
                     return "X", "unbounded-producer"
+                if CLOSER_HEAD_RE.match(line[:col0 + span.index("|")] if "|" in span else line):
+                    return "X", "loop-or-group-producer"   # `done | grep -q`: the producer is a whole loop, which may not end
                 if stdout_redirected(line, kinds, starts[idx], col0 + len(span)):
                     return "X", "stdout-redirected"
                 return v
@@ -486,9 +521,20 @@ def do_apply(args):
                 changed_lines += 1
         if file_changed:
             changed_files += 1
-            if args.write:
-                with open(os.path.join(root, path), "wb") as f:
-                    f.write("\n".join(lines).encode("latin-1"))
+            pending_writes.append((path, "\n".join(lines).encode("latin-1")))
+    if args.write:
+        for path, data in pending_writes:
+            full = fpath(root, path)
+            fd, tmp = tempfile.mkstemp(prefix=b".gq-codemod-", dir=os.path.dirname(full))
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                shutil.copymode(full, tmp)
+                os.replace(tmp, full)
+            except BaseException:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
     print("POPULATION: %d lines in %d files (the guard's own pattern, comment and marker lines dropped)" % (total_lines, len(pop)))
     for g in globs + ["(none)"]:
         if (g in wanted or g == "(none)") and g in per_row:
@@ -538,13 +584,15 @@ def do_verify(args):
     shown = sh(["git", "-C", root, "show", "%s:%s" % (base, GUARD)], check=False)
     guard_src = os.path.join(root, GUARD) if os.path.exists(os.path.join(root, GUARD)) else args.guard
     if shown.returncode == 0:
-        tf = tempfile.NamedTemporaryFile(prefix="gq-base-guard-", suffix=".sh", dir="/var/tmp", delete=False)
+        tf = tempfile.NamedTemporaryFile(prefix="gq-base-guard-", suffix=".sh", delete=False)
         tf.write(shown.stdout)
         tf.close()
         guard_src = tf.name
-    pattern, pathspec, marker, rows = load_guard(guard_src)
-    if shown.returncode == 0:
-        os.unlink(guard_src)
+    try:
+        pattern, pathspec, marker, rows = load_guard(guard_src)
+    finally:
+        if shown.returncode == 0:
+            os.unlink(guard_src)
     entries = []   # [path, raw range text, set(lines), used-lines set]
     if args.hand_edits:
         with open(args.hand_edits, "r", encoding="latin-1") as f:
@@ -552,39 +600,55 @@ def do_verify(args):
                 raw = raw.strip()
                 if not raw or raw.startswith("#"):
                     continue
-                m = re.match(r"^(.+?):(\d+)(?:-(\d+))?:(.+)$", raw)
+                m = re.match(r"^(.+?):(\d+)(?:-(\d+)|(\+))?:(.+)$", raw)
                 if not m:
-                    die(2, "usage: bad hand-edit entry %r (want path:OLD[-OLD2]:reason)" % raw)
+                    die(2, "usage: bad hand-edit entry %r (want path:OLD[-OLD2]:reason, or path:OLD+:reason for lines inserted after base line OLD)" % raw)
                 lo = int(m.group(2))
                 hi = int(m.group(3)) if m.group(3) else lo
-                entries.append([m.group(1), str(lo) if hi == lo else "%d-%d" % (lo, hi), set(range(lo, hi + 1)), set()])
-    ns = sh(["git", "-C", root, "diff", "--name-status", "--no-renames", "--no-color", base]).stdout.decode("latin-1")
-    # every changed file the guard's own pathspec sweeps must be explained; the rest (the guard file itself, this tool, docs) is listed, not judged
-    swept = set(sh(["git", "-C", root, "ls-files", "--"] + pathspec).stdout.decode("latin-1").split("\n"))
+                text = "%d+" % lo if m.group(4) else (str(lo) if hi == lo else "%d-%d" % (lo, hi))
+                entries.append([m.group(1), text, None if m.group(4) else set(range(lo, hi + 1)), set()])
+    g = ["git", "-c", "core.quotepath=false", "-C", root]
+    gl = ["git", "--literal-pathspecs", "-c", "core.quotepath=false", "-C", root]   # a changed path is a literal, never glob magic
+    raw_diff = sh(g + ["diff", "--raw", "-z", "--no-renames", "--no-color", base]).stdout.decode("latin-1").split("\0")
+    # records are ":oldmode newmode oldsha newsha STATUS" then the path; a mode change leaves no text hunk, so the modes are compared here
+    ns = []
+    modes = {}
+    for hdr, path in zip(raw_diff[0::2], raw_diff[1::2]):
+        f = hdr.lstrip(":").split()
+        ns += [f[-1][0], path]
+        modes[path] = (f[0], f[1])
+    # every changed file the guard's own pathspec sweeps must be explained, judged against the index AND the base tree (a deleted file is in
+    # only the latter); the rest (the guard file itself, this tool, docs) is listed, not judged
+    swept = set(sh(g + ["ls-files", "-z", "--with-tree=" + base, "--"] + pathspec).stdout.decode("latin-1").split("\0"))
+    swept.discard("")
     files = []
     out_of_scope = []
     unexplained = []
-    for raw in ns.splitlines():
-        status, _, path = raw.partition("\t")
+    for status, path in zip(ns[0::2], ns[1::2]):
         if path not in swept:
             out_of_scope.append(path)
             continue
         if status != "M":
             unexplained.append("%s: status %s (only modifications of existing files are a transform)" % (path, status))
             continue
+        if modes[path][0] != modes[path][1]:
+            unexplained.append("%s: file mode changed %s -> %s (a mode change is not a transform)" % (path, modes[path][0], modes[path][1]))
         files.append(path)
 
     def entry_for(path, line):
         for e in entries:
-            if e[0] == path and line in e[2]:
+            if e[0] == path and e[2] is not None and line in e[2]:
                 return e
         return None
 
     verified = 0
     hand_edited = 0
     for path in files:
-        diff = sh(["git", "-C", root, "diff", "-U0", "--no-color", "--no-ext-diff", base, "--", path]).stdout.decode("latin-1")
-        for h in re.split(r"^@@ ", diff, flags=re.M)[1:]:
+        diff = sh(gl + ["diff", "-U0", "--no-color", "--no-ext-diff", base, "--", path.encode("latin-1")]).stdout.decode("latin-1")
+        hunks = re.split(r"^@@ ", diff, flags=re.M)[1:]
+        if not hunks:
+            unexplained.append("%s: changed but has no text hunk (a mode change, a binary file or a path git quotes)" % path)
+        for h in hunks:
             head, _, body = h.partition("\n")
             m = re.match(r"-(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", head)
             if not m:
@@ -594,30 +658,45 @@ def do_verify(args):
             b = int(m.group(2)) if m.group(2) is not None else 1
             removed = [l[1:] for l in body.split("\n") if l.startswith("-")]
             added = [l[1:] for l in body.split("\n") if l.startswith("+")]
+            spans = {}
+            if removed:
+                with tempfile.TemporaryDirectory(prefix="gq-verify-") as td:
+                    with open(os.path.join(td, "r.sh"), "wb") as f:
+                        f.write(("\n".join(removed) + "\n").encode("latin-1"))
+                    r = sh(["git", "-C", td, "grep", "--no-index", "-a", "-n", "-E", "--column", "-o", "-e", pattern, "--", "r.sh"], check=False)
+                for raw in r.stdout.decode("latin-1").split("\n"):
+                    mm = re.match(r"^r\.sh:(\d+):(\d+):(.*)$", raw)
+                    if mm:
+                        spans.setdefault(int(mm.group(1)), []).append((int(mm.group(2)) - 1, mm.group(3)))
+
+            def is_transform(i, j):
+                return added[j] in transform_variants(removed[i], spans.get(i + 1, []))
+
             if len(removed) != len(added) or not removed:
-                # a hunk that changes the line count is a hand edit and must be listed with EXACTLY its removed range
-                key = str(a) if b == 1 else "%d-%d" % (a, a + b - 1)
+                # a hunk that changes the line count holds a hand edit. Adjacent converted lines share the hunk, so peel the verified pairs
+                # off both ends; what is left must be listed with EXACTLY its base-side range
+                lo = 0
+                while lo < min(len(removed), len(added)) and is_transform(lo, lo):
+                    lo += 1
+                hi = 0
+                while hi < min(len(removed), len(added)) - lo and is_transform(len(removed) - 1 - hi, len(added) - 1 - hi):
+                    hi += 1
+                verified += lo + hi
+                rem_n = len(removed) - lo - hi
+                ra = a + lo
+                key = "%d+" % (a if b == 0 else ra - 1) if rem_n == 0 else (str(ra) if rem_n == 1 else "%d-%d" % (ra, ra + rem_n - 1))
                 hit = [e for e in entries if e[0] == path and e[1] == key]
                 if not hit:
-                    unexplained.append("%s:%d: hunk changes the line count (%d removed, %d added) and is not a listed hand edit" % (path, a, len(removed), len(added)))
+                    unexplained.append("%s:%d: hunk changes the line count (%d removed, %d added) and is not a listed hand edit (key %s, base-side)" % (path, ra, rem_n, len(added) - lo - hi, key))
                     continue
-                hit[0][3].update(range(a, a + b))
-                hand_edited += max(len(removed), len(added))
+                hit[0][3].update(range(ra, ra + rem_n) if rem_n else [a if b == 0 else ra - 1])
+                hand_edited += max(rem_n, len(added) - lo - hi)
                 continue
             # equal counts: judge line by line (adjacent changed lines share one hunk, so the hunk is not the unit)
-            with tempfile.TemporaryDirectory(prefix="gq-verify-", dir="/var/tmp") as td:
-                with open(os.path.join(td, "r.sh"), "wb") as f:
-                    f.write(("\n".join(removed) + "\n").encode("latin-1"))
-                r = sh(["git", "-C", td, "grep", "--no-index", "-a", "-n", "-E", "--column", "-o", "-e", pattern, "--", "r.sh"], check=False)
-            spans = {}
-            for raw in r.stdout.decode("latin-1").splitlines():
-                mm = re.match(r"^r\.sh:(\d+):(\d+):(.*)$", raw)
-                if mm:
-                    spans.setdefault(int(mm.group(1)), []).append((int(mm.group(2)) - 1, mm.group(3)))
             for i, (rem, add) in enumerate(zip(removed, added)):
                 ln = a + i
                 e = entry_for(path, ln)
-                if add in transform_variants(rem, spans.get(i + 1, [])):
+                if is_transform(i, i):
                     if e is not None:
                         unexplained.append("%s:%d: hand-edit entry covers a line that is a plain transform (the entry is wider than the hand edit)" % (path, ln))
                     verified += 1
@@ -627,14 +706,18 @@ def do_verify(args):
                 else:
                     unexplained.append("%s:%d: added line is not the transform of its base line" % (path, ln))
     for path, text, lines_, used in entries:
-        if not used:
-            unexplained.append("%s:%s: stale hand-edit entry (no changed line falls in that range)" % (path, text))
+        if lines_ is None:
+            if not used:
+                unexplained.append("%s:%s: stale hand-edit entry (no hunk inserts there; lines are base-side)" % (path, text))
+        elif not used:
+            unexplained.append("%s:%s: stale hand-edit entry (no changed line falls in that range; ranges are base-side)" % (path, text))
         elif used != lines_:
             unexplained.append("%s:%s: hand-edit entry covers lines that are not hand edits: %s" % (path, text, ",".join(str(x) for x in sorted(lines_ - used))))
     print("verified: %d" % verified)
     print("hand-edited: %d" % hand_edited)
-    if out_of_scope:
-        print("out-of-scope (not swept by the guard, not judged): %d: %s" % (len(out_of_scope), " ".join(out_of_scope[:12]) + (" ..." if len(out_of_scope) > 12 else "")))
+    shown_oos = [x for x in out_of_scope if not x.startswith("knowledge-base/")]
+    print("out-of-scope (not swept by the guard, not judged): %d (%d under knowledge-base/): %s" % (len(out_of_scope), len(out_of_scope) - len(shown_oos), " ".join(shown_oos)))
+    print("NOT PROVEN: that a converted line was code rather than data, what any listed hand edit does, or any out-of-scope file")
     for u in unexplained:
         print("UNEXPLAINED %s" % u)
     print("unexplained: %d" % len(unexplained))
@@ -647,24 +730,32 @@ def do_verify(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="exit codes: 0 ok; 1 verify found unexplained lines; 2 usage; 3 UNRESOLVED (nothing was measured, or a file/ref could not be read).\n"
+               "hand-edits file (verify): one `path:OLD[-OLD2]:reason` per line, or `path:OLD+:reason` for lines inserted after base line OLD; line numbers are BASE-side.\n"
+               "Run `apply` before editing the guard's SWEEP_DEFERRALS; take a ceiling from the guard's own `DEFERRED:` line (it counts LINES; ROW/SUMMARY count hits).")
     sub = ap.add_subparsers(dest="mode", required=True)
     for name in ("apply", "verify"):
-        p = sub.add_parser(name)
-        p.add_argument("--root", default=".")
-        p.add_argument("--guard", default=GUARD)
+        p = sub.add_parser(name, formatter_class=argparse.RawDescriptionHelpFormatter)
+        p.add_argument("--root", default=".", help="repository root (default: the current directory)")
+        p.add_argument("--guard", default=GUARD, help="FALLBACK guard path, used only when --root has no %s of its own" % GUARD)
         if name == "apply":
-            p.add_argument("--row", action="append", default=[], help="restrict to this SWEEP_DEFERRALS glob (repeatable)")
+            p.add_argument("--row", action="append", default=[], help="restrict to this SWEEP_DEFERRALS glob, quoted (repeatable); required with --write")
             p.add_argument("--exclude", action="append", default=[], help="exact path to leave alone (repeatable)")
-            p.add_argument("--write", action="store_true")
-            p.add_argument("--reviewed-suspect", action="append", default=[], help="a demonstration-suspect file a human has read")
+            p.add_argument("--write", action="store_true", help="edit the files (default: dry run); never touches a file-exact `=` row")
+            p.add_argument("--reviewed-suspect", action="append", default=[], help="a demonstration-suspect file a human has read (repeatable)")
         else:
-            p.add_argument("--base", required=True)
-            p.add_argument("--hand-edits")
+            p.add_argument("--base", required=True, help="ref the slice started from; the diff is taken against its merge-base with HEAD")
+            p.add_argument("--hand-edits", help="file listing the lines edited by hand (format in the epilog of the top-level --help)")
     args = ap.parse_args()
-    if args.mode == "apply":
-        return do_apply(args)
-    return do_verify(args)
+    try:
+        if args.mode == "apply":
+            return do_apply(args)
+        return do_verify(args)
+    except OSError as e:
+        die(3, "UNRESOLVED: %s" % e)
 
 
 if __name__ == "__main__":

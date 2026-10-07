@@ -24,7 +24,7 @@ Scope of this task list: S1 only (draft PR #9720; 107 sites in 26 in-scope files
 ## Phase 2: convert
 
 - [x] 2.1 One conversion commit (the tool does not classify producers by kind, and `verify` covers the whole set; the three-commit ordering was not worth a producer classifier). Deviation recorded in the PR body.
-- [x] 2.2 Hand queue: `test-tag-filter.sh` (3 lines, mirror production, add the first-match-not-first-line row); `iac-plan-write-guard.test.sh:268` marker; leave the 5 data lines.
+- [x] 2.2 Hand queue: `test-tag-filter.sh` (3 lines, mirror production; the existing `ac1-plugin` row already sees a first-line-only reader, mutation-confirmed); `iac-plan-write-guard.test.sh:268` marker; leave the 5 data lines.
 - [x] 2.3 Rows: lower `.claude/*.test.sh` to 5 and `scripts/test-*` to 2 (both `<=`); delete `.github/scripts/test/*`, `scripts/lib/test-*`, `*.test.sh`.
 - [x] 2.4 Record every hand edit in the hand-edit list for `verify`, keyed by base-side line range (`path:OLD[-OLD2]:reason`).
 

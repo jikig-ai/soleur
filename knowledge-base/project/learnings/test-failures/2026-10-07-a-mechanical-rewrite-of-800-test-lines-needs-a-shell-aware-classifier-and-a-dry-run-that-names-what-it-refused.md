@@ -24,10 +24,12 @@ exit) and 1 is a demo.
 - **A prefix probe is the wrong instrument for "where did the tokenizer lose balance".** Re-tokenizing growing prefixes
   of `devin-matcher-parity.test.sh` reported "unbalanced" at the first line inside any multi-line command, which is
   every prefix that ends mid-pipeline. The useful signal is the stack at EOF with each frame's opener position
-  (`('dq', 378) ('param', 378) ('paren', 378)`), which named line 378 in one step.
+  (it named line 378 in one step; the position bookkeeping was removed again once the frames below went).
 - **`${rule#Bash(}` is a pattern, not a subshell.** Inside a `${...}` the `(` must not open a frame, or the closing `}`
-  never pops and the rest of the file reads as quoted. Five hits in one file went to the queue as `unsure` until the
-  parameter frame stopped counting parentheses.
+  never pops and the rest of the file reads as quoted. Five hits in one file went to the queue as `unsure`. The review's
+  simplicity pass then showed the parameter, bare-parenthesis and backtick frames bought nothing on the real population
+  (the dry run over all 827 sites diffs to nothing without them), so the tokenizer tracks only quotes, `$(` and `$((`; fewer frame
+  types means fewer ways to end unbalanced.
 - **A tail scan for a stdout redirect has to use the same code/quote map.** The first version searched the text after the
   match for `>` and refused two lines whose `>` sat inside the single-quoted pattern (`'soleur:__probe__->nonexistent_phase'`,
   a tagger-line pattern ending in `github\.com>`). The dry run showed them as `X:stdout-redirected`; reading the lines showed they
@@ -42,7 +44,7 @@ exit) and 1 is a demo.
 ## What works
 
 - Take the population from the guard itself (its `SWEEP_*` strings, its pathspec, its comment and marker filters) so the tool
-  and the guard cannot disagree about what a site is. The dry run's `POPULATION: 827 lines` equals the guard's own
+  and the guard cannot disagree about what a site is. The dry run's `POPULATION: 827 lines` (on `origin/main`; 725 once this slice's 102 hits are gone) equals the guard's own
   `DEFERRED:` sum (804 test-shaped + 23 production).
 - Print what was refused with a reason (`QUEUE path:line:tier:reason`). The queue is the first thing a reviewer reads; it is
   what caught every misclassification above.
@@ -53,3 +55,11 @@ exit) and 1 is a demo.
 When a rewrite tool has to decide "code or data", its dry run must list every refusal with its reason, and the first pass
 over a real population must be read line by line before `--write`. A green suite after a blind conversion is not evidence for
 data lines.
+
+## Review additions
+
+- A phantom heredoc opener (`(( x = 1 << 3 ))`) used to mark the rest of the file as a heredoc body without the tokenizer noticing,
+  because the pending list was cleared at every newline; a heredoc whose delimiter never arrives now makes the file `unsure`.
+- The unbounded-producer screen reads the text before the match on this line only. It now walks every continuation line above it,
+  refuses a loop- or group-headed pipe (`done | grep -q`), and knows `tail -n 5 -f`, `--follow`, `logs -f`, `watch`, `ping`,
+  `dmesg -w` and `/usr/bin/yes`. A converted pipe whose producer never ends hangs instead of taking SIGPIPE.
