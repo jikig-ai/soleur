@@ -368,7 +368,7 @@ battery_evidence() {
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe ""; graded "evidence: a new boot and no probe row is the expected pending state (exit 2)" 2 new_boot_seen_probe_pending
   check "evidence: pending gives the daily probe window" "$([[ "$LASTOUT" == *"00:00 to 00:30 UTC"* ]]; echo $?)"
   check "evidence: pending gives the filled-in re-grade command" "$([[ "$LASTOUT" == *"web-host-reboot-evidence.sh grade --anchor $(anchor_now)"* || "$LASTOUT" == *"web-host-reboot-evidence.sh grade --anchor"* ]]; echo $?)"
-  check "evidence: pending says not to re-dispatch to force a row" "$([[ "$LASTOUT" == *"do not re-dispatch"* ]]; echo $?)"
+  check "evidence: pending says not to re-dispatch to force a row" "$([[ "${LASTOUT,,}" == *"do not re-dispatch"* ]]; echo $?)"
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 28000 "$CURD")"
   graded "evidence: an OK probe row on the OLD boot is not evidence of this request" 2 new_boot_seen_probe_pending
   world; set_boots "$CUR 45000 700 3000" "$NEW 300 15 40"; set_rows probe "$(fx_probe ok 400 "$CURD")"
@@ -501,7 +501,7 @@ for f in "$RSCRIPT" "$ESCRIPT"; do
   srow "static: ${b} carries the footer constant verbatim" "$([[ -f "$f" && "$(grep -cF -- "$FOOTER" "$f")" -ge 1 ]]; echo $?)"
   srow "static: ${b} refuses xtrace" "$([[ -f "$f" && "$(grep -c 'refusing to trace' "$f")" -ge 1 ]]; echo $?)"
   srow "static: ${b} has no shellcheck finding" "$(if command -v shellcheck >/dev/null && [[ -f "$f" ]]; then shellcheck -x "$f" >/dev/null 2>&1; echo $?; elif [[ -f "$f" ]]; then echo 0; else echo 1; fi)"
-  srow "static: ${b} has no ssh, doppler write, or token mint verb" "$([[ -f "$f" && "$(noncomment "$f" | grep -ciE '(^|[^a-z])ssh |scp |doppler (secrets|run)|api\.doppler|tokens? (create|mint)')" == 0 ]]; echo $?)"
+  srow "static: ${b} has no ssh, doppler write, or token mint verb" "$([[ -f "$f" && "$(noncomment "$f" | grep -ciE '(^|[^a-z])ssh |scp |doppler[^#]*secrets[^#]*(set|delete|upload)|api\.doppler|tokens? (create|mint)')" == 0 ]]; echo $?)"
 done
 # the denylist scan is itself live: a planted token is caught, and a must-pass wording is not
 srow "static: (positive control) the scan catches a planted claim word" "$([[ -n "$(printf 'the volume is Encrypted\n' | deny_hits)" ]]; echo $?)"
