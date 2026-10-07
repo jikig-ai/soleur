@@ -455,10 +455,11 @@ SWEEP_DEFERRALS=(
   # carrier byte-identical to that tag, so a one-token edit needs a new image AND a pin bump in cloud-init-inngest.yml (= an inngest host
   # replace). Convert it only in the PR that mints the next image tag, and delete the row there.
   'apps/web-platform/infra/inngest-luks-cutover.sh | = | 1 | #9217'
-  # A seventh and eighth, found at CI: converting these two put them in `lint-shell-trace-credential-refusal.py --changed` (ci.yml, a
-  # required check), which scans every TOUCHED file and fails on defects that predate this sweep: neither carries the xtrace refusal
-  # (#7797), and web-private-nic-guard.sh's credentialed curl lacks `--disable` / `--noproxy '*'` and an INGEST_URL pin. Those are
-  # credential-hardening changes to a host guard, not a mechanical grep rewrite, so they ride a PR that carries that review.
+  # A seventh and eighth, found at CI: converting these two put them in `lint-shell-trace-credential-refusal.py --changed` (the advisory
+  # `lint-bot-statuses` job in ci.yml), which scans every TOUCHED file and failed on defects that predated this sweep: no xtrace refusal
+  # (#7797), and web-private-nic-guard.sh's credentialed curl lacked `--disable` / `--noproxy '*'` and an INGEST_URL pin. That credential
+  # hardening has since landed and both files left the lint baselines, so the precondition is met; the grep conversion itself is still
+  # to do, and these rows stay at their ceilings until it is.
   'apps/web-platform/infra/cron-egress-enforce-probe.sh | = | 2 | #9217'
   'apps/web-platform/infra/web-private-nic-guard.sh | = | 4 | #9217'
 )
