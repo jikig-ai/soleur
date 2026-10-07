@@ -11,7 +11,7 @@ branch: feat-mistral-large-4-and-vibe-support
 
 ## Overview
 
-Add Mistral support to Soleur in gate-staged slices: dogfood Mistral models (ML4 preview API / Devstral) through vehicles that need no new harness (Codex custom `model_providers`, #1215 BYOM proxy), then a Mistral Vibe CLI harness adapter (skills-only v1, Agent Plugins 1.0 package, consuming the #9609 checklist once #9608's measurements stabilize it), then a flagged BYOK `mistral` provider gated on the legal train, plus small-class self-hosted open weights (Devstral Small 2 / Mistral Small 4, single GPU) under the ADR-120 spend gate — with ML4 frontier self-host tracked only (#9649). Phase A's primary beneficiary is positioning/distribution (harness-neutrality proof + Vibe marketplace optionality), not current users (CPO F7). The latent upside: BYOK key → Hetzner (EEA) → Mistral (EEA) is an end-to-end EU-resident inference path Anthropic/OpenAI BYOK cannot offer — claim locked until the legal train makes it true (CPO F11). An honest "evaluating" content piece ships inside the Oct 6→27 preview news window; capability claims wait for the eval table and legal train.
+Add Mistral support to Soleur in gate-staged slices: dogfood Mistral models (ML4 preview API / Devstral) through vehicles that need no new harness (Codex custom `model_providers`, #1215 BYOM proxy), then a Mistral Vibe CLI harness adapter (skills-only v1, Agent Plugins 1.0 package, consuming the #9609 checklist once #9608's measurements stabilize it), then a flagged BYOK `mistral` provider gated on the legal train, plus small-class self-hosted open weights (Devstral Small 2 / Mistral Small 4, single GPU) under the ADR-120 spend gate — with ML4 frontier self-host tracked only (#9649). Phase A's primary beneficiary is positioning/distribution (harness-neutrality proof + Vibe marketplace optionality), not current users (CPO F7). The latent upside: BYOK key → Hetzner (EEA) → Mistral (EEA) is an end-to-end EU-resident inference path Anthropic/OpenAI BYOK cannot offer — claim locked until the legal train makes it true (CPO F11). Capability claims wait for the eval table and legal train — the operator declined the "evaluating" hedge-content stage (Phase 0 cut; no content PR).
 
 ## Problem Statement / Motivation
 
@@ -21,7 +21,6 @@ Soleur has zero Mistral support (`git grep -il mistral` outside KB → only `plu
 
 | Stage | Piece | Gate | PR shape |
 |---|---|---|---|
-| 0 | Hedge content ("harness-neutral, evaluating") | none | docs-only PR |
 | 1 | A0 — model dogfood on existing vehicles (Codex `model_providers` / #1215 proxy path) | Mistral Studio API access | runbook + measured eval table on #9648 |
 | 2 | A — Vibe as a new harness, skills-only, shipped as an **Agent Plugins 1.0 package** (operator-chosen) | A0 eval signal + prefers #9608 slice-1 merged | adapter arm + `vibe/` plugin tree + INSTRUCTIONS.md |
 | 3 | B — BYOK `mistral` provider behind default-off flag | A0 eval signal + legal train (FR4) before flag-on | provider row + flag + keyed consumer |
@@ -94,15 +93,6 @@ The `openai` BYOK precedent is the 4-site shape: Provider union + `PROVIDER_CONF
 - **Demand framing (DHH P1):** the ledger row also requires one of (a) #9651 returning positive demand signal, or (b) the operator explicitly recording C1 *as* the demand test ("rent one GPU for a month to prove the sovereignty story boots") — either is honest; neither lets spend float on vibes.
 - Host order is post-merge follow-through gated on operator spend ack + live stock check + #6546 soak green (or an explicit parallel-capacity note — two GPU dogfood hosts double operational surface mid-Phase-4).
 - Same three `grok-measure.sh` measure classes; comparison table posted on the umbrella.
-
-### Phase 0 — Hedge content ("evaluating" post)
-
-- **Deliverable:** `knowledge-base/marketing/distribution-content/2026-10-XX-mistral-evaluating-thread.md` — an X/Bluesky technical-register thread (not blog — a mechanism-first post violates the blog's founder-register contract per #8774; a founder-problem-first reframe is a CMO call, not default). Publish target ≤ **Oct 13** (news-window decay is steepest week one; Oct 26 wastes it).
-- **Producer chain:** `soleur:marketing:copywriter` drafts → `soleur:marketing:fact-checker` verifies vendor-reported facts (1T params, pricing, Oct 27 weights date, Apache-2.0 — attribution per brand-guide) → CLO reviews sovereignty phrasing. Declarative process register ("we're running Mistral Large 4 through the same gates every model passes"), never hedge-words.
-- **Copy rules:** "Mistral Vibe" in full, never bare "Vibe" (collides with Soleur's own anti-vibe-coding position); sovereignty framed as *user choice of model/key* — not a positioning commitment (#9651 is unvalidated).
-- **Pre-commit:** publish the eval table positive OR negative — "we measured, here's the table, here's why we're waiting" is the stronger brand move. Oct 27 (weights drop) is a second news event — the thread carries the sequel hook.
-- **Per-stage allowed-claims table** (CMO+CLO signed, lives in the brainstorm/this plan): stage 0 = "evaluating"; stage A0+eval = "we measured (table)"; stage A + flag-on = "run Soleur skills under Mistral Vibe / bring your Mistral key"; C1 = "self-hosted small-class Mistral weights"; never = "EU-sovereign" / "data never leaves the EU" / "GDPR-compliant Mistral".
-- **Roadmap placement (CPO F1):** add #9648 to the roadmap's Post-MVP table or verify it carries the `Post-MVP / Later` milestone — an open issue with no milestone is unsorted until placed (roadmap.md rule).
 
 ## Files to Edit
 
@@ -327,7 +317,7 @@ exception:
 | 1 | "I'd like for Soleur users to be able to use this model" | Phase A0 + Phase B | mapped |
 | 2 | "or even their Mistral Vibe Harness" | Phase A | mapped |
 | 3 | "what would it take to add it to Soleur?" | whole plan + staged gates | mapped |
-| 4 | "in light of our EU sovereignty play" | Phase 0 content + legal train + C1 self-host | mapped |
+| 4 | "in light of our EU sovereignty play" | legal train + C1 self-host + claims discipline | mapped |
 | 5 | "Agent Plugins 1.0 plugin format is valuable to be supported" (second steer) | Phase A delivery vehicle | mapped |
 
 ### Plan-Item Provenance
@@ -339,7 +329,6 @@ exception:
 | Phase B BYOK provider | "use this model" + operator "BYOK + bundled later" | asked |
 | Phase B-legal train | — | inferred — justification: CLO requirement; no user content may reach Mistral before DPA/docs |
 | Phase C1 small-class self-host | operator "Small-class dogfood" answer | asked |
-| Hedge content | "EU sovereignty play" news window | inferred — justification: decouple-build-from-news-window precedent; CMO-owned |
 | ADR-274 + C4 edits | — | inferred — justification: `wg-architecture-decision-is-a-plan-deliverable` — a fifth harness is an architectural decision |
 
 ### Split Assessment
@@ -366,7 +355,7 @@ exception:
 ### Marketing (CMO)
 
 **Status:** reviewed (session 1)
-**Assessment:** honest ladder — "evaluating" now, "runs on Mistral" after the eval table, "self-hosted open weights" after license + hardware. EU sovereignty is a new pillar needing demand validation (#9651).
+**Assessment:** honest claims ladder — no claims now, "runs on Mistral" only after the eval table, "self-hosted open weights" after license + hardware. EU sovereignty is a new pillar needing demand validation (#9651). The operator cut the hedge-content stage — the ladder has no stage-0 rung.
 
 ### Product (CPO)
 
@@ -402,7 +391,6 @@ Queried 87 open `code-review` issues against the Files to Edit list:
 
 ## Acceptance Criteria
 
-- [ ] Phase 0: the `knowledge-base/marketing/distribution-content/2026-10-*-mistral-evaluating-thread.md` artifact exists, fact-checked + CLO-reviewed, published ≤ Oct 13.
 - [ ] A0: a measured eval table for Mistral model(s) via an existing vehicle is posted on #9648, with the vehicle and OpenAI-compat finding recorded.
 - [ ] A: `detectHarness` returns `vibe` only for a marker measured on a real Vibe install; `Harness` union + TIER_MAPS + adapter arms + `vibe/` plugin package (Agent Plugins 1.0) + INSTRUCTIONS.md ship; harness-parity tests pass; discovery job is non-required with `continue-on-error`.
 - [ ] A: `/go` classifies and one pipeline skill completes its gates under Vibe, or every gap is a named, test-asserted refusal.
@@ -414,7 +402,7 @@ Queried 87 open `code-review` issues against the Files to Edit list:
 - [ ] `spawnAgent`'s `vibe` arm is test-asserted to emit the inline-execution/sequential-fallback instruction (never a spawn-tool name Vibe lacks) — covered by a `harness.test.ts` case, not just prose.
 - [ ] ADR-274 (provisional) committed; C4 model+views updated; c4 tests green.
 - [ ] PR bodies use `Ref #9648`, never `Closes #9648`.
-- [ ] Claims grep (scoped, case-insensitive): `git grep -inE '(mistral|vibe).{0,80}(EU[- ]sovereign|data never leaves|data stays in Europe|GDPR[- ]compliant|sovereign AI)|runs on mistral|Mistral-powered|supports Mistral' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!knowledge-base/project/brainstorms' ':!knowledge-base/project/learnings'` returns zero hits — until the eval table posts on #9648 AND the B-legal train merges, after which the earned rungs in the allowed-claims table unlock. (Scoped to Mistral-proximity: bare `sovereignty` and sanctioned legal/blog phrasing are legitimate existing copy.)
+- [ ] Claims grep (scoped, case-insensitive): `git grep -inE '(mistral|vibe).{0,80}(EU[- ]sovereign|data never leaves|data stays in Europe|GDPR[- ]compliant|sovereign AI)|runs on mistral|Mistral-powered|supports Mistral' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/specs' ':!knowledge-base/project/brainstorms' ':!knowledge-base/project/learnings'` returns zero hits — until the eval table posts on #9648 AND the B-legal train merges, after which the earned rungs of the claims ladder unlock (eval table → "runs on Mistral"; license+hardware → "self-hosted open weights"). (Scoped to Mistral-proximity: bare `sovereignty` and sanctioned legal/blog phrasing are legitimate existing copy.)
 
 ## Test Scenarios
 

@@ -2,13 +2,6 @@
 
 Derived from `knowledge-base/project/plans/2026-10-06-feat-mistral-large-4-vibe-support-plan.md` (post-review). Stage PRs use `Ref #9648`, never `Closes #9648`.
 
-## Phase 0 — Hedge content ("evaluating" thread)
-
-- [ ] 0.1 CMO: draft `knowledge-base/marketing/distribution-content/2026-10-XX-mistral-evaluating-thread.md` (X/Bluesky technical register; "Mistral Vibe" in full, never bare "Vibe"; declarative process register, no hedge-words)
-- [ ] 0.2 `soleur:marketing:fact-checker`: verify vendor facts (1T params, pricing, Oct 27 weights, Apache-2.0) with attribution
-- [ ] 0.3 CLO reviews sovereignty phrasing
-- [ ] 0.4 Publish ≤ Oct 13; carry Oct-27 weights-drop sequel hook
-
 ## Phase B-0 — standalone live-defect fixes (first code PR)
 
 - [ ] 0.5 `apps/web-platform/app/api/keys/route.ts` — replace provider ternary at :32 with explicit allowlist + 400
