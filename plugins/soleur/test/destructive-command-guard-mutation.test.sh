@@ -66,6 +66,7 @@ export LC_ALL=C
 set -uo pipefail
 
 SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF="$SUITE_DIR/$(basename "${BASH_SOURCE[0]}")"
 REPO_ROOT="$(cd "$SUITE_DIR/../../.." && pwd)"
 HOOK_SUITE="$SUITE_DIR/destructive-command-guard-hook.test.sh"
 T0="$SECONDS"
@@ -211,10 +212,14 @@ scaled_timeout() {
     print t
   }'
 }
-current_timeout() { # the timeout for a run started now
-  local load cores
-  load="$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)" || load=""
-  cores="$(nproc 2>/dev/null)" || cores=""
+# The load average and the core count are read here and nowhere else. A sandbox COPY of this suite (DCG_MUT_META_COPY, set only by the
+# self-test rows below) may point them at fixtures; the real run always reads /proc/loadavg and nproc.
+LOADAVG_FILE=/proc/loadavg; CORES_FIXED=""
+if [[ -n "${DCG_MUT_META_COPY:-}" ]]; then LOADAVG_FILE="${DCG_LOADAVG_FILE:-/proc/loadavg}"; CORES_FIXED="${DCG_CORES:-}"; fi
+current_timeout() { # [loadavg file] [cores]: the timeout for a run started now
+  local lf="${1:-$LOADAVG_FILE}" load cores
+  load="$(cut -d' ' -f1 "$lf" 2>/dev/null)" || load=""
+  cores="${2:-${CORES_FIXED:-$(nproc 2>/dev/null)}}"
   scaled_timeout "$load" "$cores"
 }
 RS_TIMEOUT=50
@@ -232,7 +237,7 @@ is_unresolved() { [[ "$RS_RC" -eq 124 ]]; }
 UNRESOLVED_N=0; UNRESOLVED_WHO=""
 note_unresolved() { # <what>
   UNRESOLVED_N=$((UNRESOLVED_N + 1)); UNRESOLVED_WHO="${UNRESOLVED_WHO:+$UNRESOLVED_WHO, }$1"
-  printf '[UNRESOLVED] %s: the reduced run exceeded its %s s timeout (load %s over %s cores); it is neither killed nor survived. Re-run on a quieter machine.\n' "$1" "$RS_TIMEOUT" "$(cut -d' ' -f1 /proc/loadavg 2>/dev/null || echo '?')" "$(nproc 2>/dev/null || echo '?')"
+  printf '[UNRESOLVED] %s: the reduced run exceeded its %s s timeout (load %s over %s cores); it is neither killed nor survived. Re-run on a quieter machine.\n' "$1" "$RS_TIMEOUT" "$(cut -d' ' -f1 "$LOADAVG_FILE" 2>/dev/null || echo '?')" "${CORES_FIXED:-$(nproc 2>/dev/null || echo '?')}"
 }
 
 # is_green: the control's contract. <min selected rows>
@@ -382,6 +387,49 @@ UNION=""
 for _id in $M_IDS; do mdef "$_id"; UNION="${UNION:+$UNION|}($M_ROWS)"; done
 UNION_FLOOR=73
 
+# current_timeout reads its two inputs (the first field of the load-average file, the core count): driven with fixtures, so a wrong field,
+# a wrong file or a constant is a red row, not a green one (only scaled_timeout's arithmetic was rowed before)
+GT="$WORK/t9"; assert_fixture_dir "$GT"; mkdir -p "$GT" || harness_die "mkdir t9"
+printf '30.00 2.00 1.00 3/700 12345\n' > "$GT/load30"; printf '4.00 90.00 90.00 1/700 1\n' > "$GT/load4"; printf 'garbage\n' > "$GT/loadbad"
+_ct_got="$(current_timeout "$GT/load30" 8) $(current_timeout "$GT/load4" 8) $(current_timeout "$GT/loadbad" 8) $(current_timeout "$GT/absent" 8) $(current_timeout "$GT/load30" 2) $(current_timeout "$GT/load30" abc)"
+chk "timeout: current_timeout reads the FIRST field of the load-average file and the core count it is given (load 30 on 8 cores 188 s; load 4 with a high 5- and 15-minute average 50 s; a garbage or missing file 100 s; load 30 on 2 cores the 200 s cap; a core count that is not a number 100 s)" \
+  "$([[ "$_ct_got" == "188 50 100 100 200 100" ]] && printf ok || printf bad)" "got: $_ct_got"
+
+# The unresolved wiring, driven through the REAL per-mutant loop: a sandbox COPY of this suite whose hook suite is a canned stub (the control's union
+# selection answered green, every other selection cut off with exit 124, as timeout(1) does) must exit 3 with [UNRESOLVED] for every mutant and
+# score none of them killed or survived; with a control that is itself cut off it must exit 3 before any mutant runs.
+if [[ -z "${DCG_MUT_META_COPY:-}" ]]; then
+  mk_t9_tree() { # <name> <stub body> -> T9_DIR: a tree that holds the hooks, the test lib, a copy of this suite and the stub hook suite
+    T9_DIR="$WORK/t9/$1"; assert_fixture_dir "$T9_DIR"
+    mkdir -p "$T9_DIR/plugins/soleur/test" || harness_die "mkdir $T9_DIR"
+    cp -R "$REPO_ROOT/plugins/soleur/hooks" "$T9_DIR/plugins/soleur/hooks" && cp -R "$REPO_ROOT/plugins/soleur/test/lib" "$T9_DIR/plugins/soleur/test/lib" \
+      && cp "$SELF" "$T9_DIR/plugins/soleur/test/destructive-command-guard-mutation.test.sh" || harness_die "cannot build the t9 tree"
+    printf '#!/usr/bin/env bash\n%s\n' "$2" > "$T9_DIR/plugins/soleur/test/destructive-command-guard-hook.test.sh"
+    chmod +x "$T9_DIR/plugins/soleur/test/destructive-command-guard-hook.test.sh"
+    env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} git -C "$T9_DIR" init -q >/dev/null 2>&1
+  }
+  t9_run() { # <tree dir> -> T9_OUT, T9_RC
+    T9_OUT="$(env ${GIT_UNSET[@]+"${GIT_UNSET[@]}"} DCG_MUT_META_COPY=1 "DCG_LOADAVG_FILE=$GT/load30" DCG_CORES=8 "TMPDIR=$WORK/t9" "$BASH" "$1/plugins/soleur/test/destructive-command-guard-mutation.test.sh" 2>&1 </dev/null | strip_ansi)"; T9_RC=${PIPESTATUS[0]}
+  }
+  mkdir -p "$WORK/t9"
+  mk_t9_tree cut "case \"\${DCG_ROWS:-}\" in \"(\"*) printf 'cases=100 passes=100 fails=0\\nselected=100\\n'; exit 0 ;; esac; exit 124"
+  t9_run "$T9_DIR"
+  _ids_missing=""; for _id in $M_IDS; do grep -q "^\[UNRESOLVED\] $_id: " <<<"$T9_OUT" || _ids_missing+=" $_id"; done
+  chk "unresolved: a hook suite that is cut off on every mutant makes the battery exit 3 (INCONCLUSIVE), not 0 and not 1 (rc=$T9_RC)" \
+    "$([[ "$T9_RC" -eq 3 ]] && grep -q 'INCONCLUSIVE (exit 3)' <<<"$T9_OUT" && printf ok || printf bad)" "tail: $(tail -n 3 <<<"$T9_OUT" | tr '\n' ' ')"
+  chk "unresolved: every mutant is reported [UNRESOLVED] by name" "$([[ -z "$_ids_missing" ]] && printf ok || printf bad)" "not reported:$_ids_missing"
+  chk "unresolved: no cut-off mutant is scored killed or survived (no 'turns RED on the designed detector' verdict at all)" \
+    "$(grep -q 'turns RED on the designed detector' <<<"$T9_OUT" && printf bad || printf ok)" "$(grep -m2 'turns RED on the designed detector' <<<"$T9_OUT" | cut -c1-160 | tr '\n' '~')"
+  chk "unresolved: the timeout a cut-off run reports is the one the load-average source gives (load 30 over 8 cores: 188 s)" \
+    "$(grep -q '^\[UNRESOLVED\] M1: the reduced run exceeded its 188 s timeout (load 30.00 over 8 cores)' <<<"$T9_OUT" && printf ok || printf bad)" "$(grep -m1 '^\[UNRESOLVED\] M1' <<<"$T9_OUT" | cut -c1-200)"
+  mk_t9_tree ctl "exit 124"
+  t9_run "$T9_DIR"
+  chk "unresolved: a control run that is itself cut off exits 3 before any mutant runs (rc=$T9_RC)" \
+    "$([[ "$T9_RC" -eq 3 ]] && grep -q '^\[UNRESOLVED\] control: ' <<<"$T9_OUT" && ! grep -q '^== the mutants ==' <<<"$T9_OUT" && printf ok || printf bad)" "tail: $(tail -n 3 <<<"$T9_OUT" | tr '\n' ' ')"
+else
+  for _n in 1 2 3 4 5; do chk "unresolved: sandbox-copy row $_n (not run inside the meta copy)" ok; done
+fi
+
 echo "== control: the unedited copy must be GREEN before any mutant runs =="
 CONTROL="$WORK/control"
 restore "$CONTROL"
@@ -448,7 +496,7 @@ fi
 if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
-MIN_CASES=54
+MIN_CASES=60
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
