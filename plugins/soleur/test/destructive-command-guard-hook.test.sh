@@ -959,20 +959,27 @@ chk "the header's User-facing statement is the README's non-coverage sentence, w
 # the derivation is verdict-owning code, so it is a function the instrument self-test below drives with fixture hooks and READMEs.
 HOOKS_README="$REPO_ROOT/.claude/hooks/README.md"
 _RID_LABEL="README roster: every rule id the hook can emit is listed on its row (derived from the hook source)"
-roster_ids() { # <hook file>: the derived ids, one per line
-  { grep -oE 'note [12] [a-z]+(-[a-z0-9]+)*' "$1" | awk '{print $3}'
-    grep -oE 'emit(_fixed)? (ask|deny|"\$1") "[a-z]+(-[a-z0-9]+)*:' "$1" | sed -E 's/^.*"//; s/:$//'
+# The roster the hook must emit, as a literal (a derivation that loses an id, or finds one more, is a mismatch with this list, not slack
+# under a floor). Adding a rule id to the hook is a two-place edit: this list and the README row.
+_RID_EXPECT="bound command-not-parsed default-branch-force-push envelope-unreadable guard-degraded-jq-missing guard-degraded-perl-missing guard-output-fallback infra-destroy lexer-empty recursive-delete-home recursive-delete-workdir unparsed-wrapper unresolved-cd-before-destructive wrapper-depth"
+roster_ids() { # <hook file>: the derived ids, one per line. CODE only: a full-line comment or a trailing ` # ...` comment that mentions `note 1 <id>` emits nothing.
+  local code
+  code="$(grep -v '^[[:space:]]*#' "$1" 2>/dev/null | sed -E 's/[[:space:]]#([[:space:]].*)?$//')"
+  { grep -oE 'note [^[:space:]]+ [A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*' <<<"$code" | awk '{print $3}'
+    grep -oE 'emit(_fixed)? (ask|deny|"\$1") "[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*:' <<<"$code" | sed -E 's/^.*"//; s/:$//'
   } 2>/dev/null | sort -u
 }
-roster_verdict() { # <hook file> <hooks README>  -> RV (ok|bad); RV_WHY says why (no subshell: both are globals)
-  local ids rrow r rmiss="" rn=0
-  ids="$(roster_ids "$1")"
+roster_verdict() { # <hook file> <hooks README> <expected ids, space separated>  -> RV (ok|bad); RV_WHY says why (no subshell: both are globals)
+  local ids exp rrow r rmiss="" rn=0
+  ids="$(roster_ids "$1" | tr '\n' ' ')"; ids="${ids% }"
+  exp="$(printf '%s\n' $3 | sort -u | tr '\n' ' ')"; exp="${exp% }"
   rrow="$(grep -F '| `destructive-command-guard.sh`' "$2" 2>/dev/null)"
   for r in $ids; do rn=$((rn + 1)); grep -qF -- "\`$r\`" <<<"$rrow" || rmiss+=" $r"; done
-  RV_WHY="derived ids=$rn (floor 13), row found=$([[ -n "$rrow" ]] && echo yes || echo no), missing:${rmiss:- none}"
-  if [[ "$rn" -ge 13 && -n "$rrow" && -z "$rmiss" ]]; then RV=ok; else RV=bad; fi
+  RV_WHY="derived ids=$rn, expected roster ids=$(wc -w <<<"$exp" | tr -d ' '), derived [$ids] expected [$exp], row found=$([[ -n "$rrow" ]] && echo yes || echo no), missing from the row:${rmiss:- none}"
+  if [[ -n "$ids" && "$ids" == "$exp" && -n "$rrow" && -z "$rmiss" ]]; then RV=ok; else RV=bad; fi
 }
-# roster self-test: a fixture hook that emits 13 ids, a fixture README row that lists them all (ok) and one that lacks one id (bad)
+# roster self-test: a fixture hook that emits 13 ids, a fixture README row that lists them all (ok) and one that lacks one id (bad); a hook
+# whose derivation loses an id, finds an extra one (capitalised, behind a rank variable) or only sees a comment is told apart from the roster
 _st_save
 mkdir -p "$WORK/selftest" || harness_die "selftest mkdir"
 assert_fixture_dir "$WORK"
@@ -980,18 +987,31 @@ assert_fixture_dir "$WORK"
 for _i in a b c d e f g h i j k l; do printf 'note 1 rule-%s\n' "$_i" >> "$WORK/selftest/hook-ids.sh"; done
 printf 'emit ask "rule-m: text"\n' >> "$WORK/selftest/hook-ids.sh"
 _row_all='| `destructive-command-guard.sh` | `rule-a` `rule-b` `rule-c` `rule-d` `rule-e` `rule-f` `rule-g` `rule-h` `rule-i` `rule-j` `rule-k` `rule-l` `rule-m` |'
+_exp_fix="rule-a rule-b rule-c rule-d rule-e rule-f rule-g rule-h rule-i rule-j rule-k rule-l rule-m"
 printf '%s\n' "$_row_all" > "$WORK/selftest/readme-all.md"
 printf '%s\n' "${_row_all/ \`rule-g\`/}" > "$WORK/selftest/readme-missing.md"
 printf '| `other.sh` | `rule-a` |\n' > "$WORK/selftest/readme-norow.md"
-roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-all.md"; [[ "$RV" == ok ]] || _st_fatal "the roster verdict failed a row that lists every derived id"
-roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-missing.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a row that lacks one derived id"
-roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-norow.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a README with no row for the hook"
-roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-absent.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a README that does not exist"
+_st_roster() { # <ok|bad> <hook fixture> <readme fixture> <what>
+  roster_verdict "$WORK/selftest/$2" "$WORK/selftest/$3" "$_exp_fix"
+  [[ "$RV" == "$1" ]] || _st_fatal "the roster verdict $([[ "$1" == ok ]] && echo failed || echo passed) $4"
+}
+_st_roster ok hook-ids.sh readme-all.md "a row that lists every derived id"
+_st_roster bad hook-ids.sh readme-missing.md "a row that lacks one derived id"
+_st_roster bad hook-ids.sh readme-norow.md "a README with no row for the hook"
+_st_roster bad hook-ids.sh readme-absent.md "a README that does not exist"
 printf 'note 1 only-one\n' > "$WORK/selftest/hook-few.sh"
-roster_verdict "$WORK/selftest/hook-few.sh" "$WORK/selftest/readme-all.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a derivation that found too few ids"
+_st_roster bad hook-few.sh readme-all.md "a derivation that found too few ids"
+grep -v 'rule-l' "$WORK/selftest/hook-ids.sh" > "$WORK/selftest/hook-lost.sh"
+_st_roster bad hook-lost.sh readme-all.md "a derivation that lost one id (12 of the 13 expected: an exact roster, not a floor with slack)"
+{ cat "$WORK/selftest/hook-ids.sh"; printf 'note 1 Brand-New-Rule\n'; } > "$WORK/selftest/hook-upper.sh"
+_st_roster bad hook-upper.sh readme-all.md "a new rule id spelled with capitals (the derivation must see it and the roster must not list it)"
+{ cat "$WORK/selftest/hook-ids.sh"; printf 'note $RK variable-rank-rule\n'; } > "$WORK/selftest/hook-var.sh"
+_st_roster bad hook-var.sh readme-all.md "a new rule id whose rank is held in a variable"
+{ cat "$WORK/selftest/hook-ids.sh"; printf '# note 1 commented-rule-one\nnote 1 rule-a   # note 1 commented-rule-two\n'; } > "$WORK/selftest/hook-comment.sh"
+_st_roster ok hook-comment.sh readme-all.md "a hook whose only extra mentions of an id are inside comments (a comment emits nothing)"
 _st_load
 if want_row "$_RID_LABEL"; then
-  roster_verdict "$GUARD_HOOK" "$HOOKS_README"
+  roster_verdict "$GUARD_HOOK" "$HOOKS_README" "$_RID_EXPECT"
   chk "$_RID_LABEL" "$RV" "$RV_WHY"
 fi
 
@@ -1761,14 +1781,31 @@ quote_row "quote: a wrapper stays in the quoted command (sudo rm -rf /)" 'sudo r
 quote_row "quote: the words before a -- stay in the quoted command (rm -rf -- /)" 'rm -rf -- /' - 'rm -rf -- /'
 quote_row "quote: doppler run -- terraform destroy quotes the whole command" 'doppler run -- terraform destroy' - 'doppler run -- terraform destroy'
 quote_row "quote: an env wrapper with an option and an assignment" 'env -i FOO=1 terraform destroy' - 'env -i FOO=1 terraform destroy'
+rule_last() { # <label> <rule id>: the LAST hook output's reason carries the rule id right after the opening sentence(s)
+  jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | test("(^|\\. )" + $id + ": ")' --arg id "$2"
+}
 rule_row() { # <label> <command> <cwd-template> <rule id>: the reason starts (after the not-run sentence) with the rule id
   want_row_quiet "$1" || return 0
   subst "$3"; hook_run "$(mkjson "$2" "$SUBST_OUT")"
-  jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | test("(^|\\. )" + $id + ": ")' --arg id "$4"
+  rule_last "$1" "$4"
+}
+rule_env() { # <label> <rule id> <stdin text> [ENV=VAL ...]: the same for a row that needs its own stdin or environment
+  local label="$1" id="$2" in="$3"; shift 3
+  want_row_quiet "$label" || return 0
+  hook_run "$in" "$@"
+  rule_last "$label" "$id"
 }
 rule_row "rule id: env -S asks with its own rule id" "env -S 'rm -rf /'" - unparsed-wrapper
 rule_row "rule id: env -iS asks with its own rule id" "env -iS 'rm -rf /'" - unparsed-wrapper
 rule_row "rule id: nine nested sudo ask with the wrapper-depth rule id" 'sudo sudo sudo sudo sudo sudo sudo sudo sudo ls "x"' - wrapper-depth
+# every other id the hook can emit has its own exact-id row (the roster row only proves the id is LISTED; these prove it is what the hook SAYS)
+rule_row "rule id: rm -rf ~ denies with the recursive-delete-home rule id" 'rm -rf ~' - recursive-delete-home
+rule_row "rule id: rm -rf of the working directory asks with the recursive-delete-workdir rule id" 'rm -rf "$PWD"' @SUB@ recursive-delete-workdir
+rule_row "rule id: terraform destroy asks with the infra-destroy rule id" 'terraform destroy' - infra-destroy
+rule_row "rule id: a force push to main asks with the default-branch-force-push rule id" 'git push --force origin main' @R1@ default-branch-force-push
+rule_row "rule id: a recursive delete after an unresolvable cd asks with the unresolved-cd-before-destructive rule id" 'cd "$UNKNOWN_DIR" && rm -rf build' - unresolved-cd-before-destructive
+rule_row "rule id: an unbalanced quote asks with the command-not-parsed rule id" "echo 'unbalanced" - command-not-parsed
+rule_env "rule id: garbage stdin asks with the envelope-unreadable rule id" envelope-unreadable 'not json at all {'
 
 # =====================================================================================================
 echo "== the bash phase is bounded (the harness kills the hook at 10 s and a killed hook is not a decision) =="
@@ -2136,6 +2173,7 @@ chk "canary: the perl-less PATH has no perl" "$(verdict_of absent "$_c")"
 chk "canary: the perl-less PATH still has jq" "$(verdict_of present "$_d")"
 FJ="PATH=$WORK/farm-nojq"; FP="PATH=$WORK/farm-noperl"
 env_row "jq-less: rm -f jq; rm -rf ~ asks (ADR-165: never an implicit allow)" ask "$_chain" "$FJ"
+rule_last "jq-less: the ask carries the guard-degraded-jq-missing rule id" guard-degraded-jq-missing
 jqchk "jq-less: the hand-built output is a valid envelope with hookEventName" '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "ask"'
 jqchk "jq-less: the reason names the missing tool" '.hookSpecificOutput.permissionDecisionReason | test("jq")'
 if grep -qi 'jq' <<<"$HOOK_ERR"; then _x=ok; else _x=bad; fi
@@ -2155,6 +2193,7 @@ env_row "jq-less: a push without force is not decided" none "$_gok" "$FJ"
 env_row "jq-less: rm -rf node_modules is not decided" none "$_rmok" "$FJ"
 env_row "jq-less: the kill switch is honoured" none "$_chain" "$FJ" SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1
 env_row "perl-less: rm -rf ~ asks, never denies (a dependency failure never denies)" ask "$_rmhome" "$FP"
+rule_last "perl-less: the ask carries the guard-degraded-perl-missing rule id" guard-degraded-perl-missing
 if grep -qi 'perl' <<<"$HOOK_ERR"; then _x=ok; else _x=bad; fi
 if want_row_quiet "perl-less: rm -rf ~ asks, never denies (a dependency failure never denies)"; then chk "perl-less: stderr carries a notice naming perl" "$_x" "stderr: ${HOOK_ERR:0:200}"; fi
 env_row "perl-less: terraform destroy asks (the decoded command is scanned)" ask "$(mkjson 'terraform destroy' "$TREE")" "$FP"
@@ -2368,7 +2407,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=991
+MIN_CASES=1000
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
