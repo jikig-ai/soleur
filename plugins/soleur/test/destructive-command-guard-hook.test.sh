@@ -136,7 +136,9 @@ if [[ "$PASS_COUNT" -ne $((_iv_p + 1)) || "$FAIL_COUNT" -ne $((_iv_f + 1)) ]]; t
 fi
 PASS_COUNT=0; FAIL_COUNT=0
 
-harness_die() { printf 'HARNESS: %s\n' "$1" >&2; exit 2; }
+# fd 9 is the suite's own stderr: the instrument self-test runs rows with stderr silenced, and a harness defect inside one must still be said
+exec 9>&2
+harness_die() { printf 'HARNESS: %s\n' "$1" >&9; exit 2; }
 
 JQ_BIN="$(command -v jq)" || harness_die "jq is required"
 PERL_BIN="$(command -v perl)" || harness_die "perl is required"
@@ -756,6 +758,18 @@ reason_has() {
   jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | contains($s)' --arg s "$2"
 }
 
+# LH <label> <want> <home> <command>: a literal row whose HOME is a path the oracle cannot create (defined here so the instrument self-test can drive it)
+HOME_W_REAL="$HOME_W"
+LH() {
+  local label="$1" want="$2" home="$3" cmd="$4"
+  want_row "$label" || return 0
+  ROWS_LIT=$((ROWS_LIT + 1))
+  CUR_HOME="$home"
+  hook_run "$(mkjson "$cmd" "$TREE")"
+  classify
+  chk "$label" "$(verdict_of "$want" "$GOT")" "want=$want got=$GOT"
+  CUR_HOME="$HOME_W_REAL"
+}
 # The ask reasons open with a sentence for the person reading the prompt; the agent's instructions follow under their own label.
 ASK_LEAD='The guard paused this command and is asking you. It has not run yet and runs only if you approve.'
 ASK_LEAD_RX='The guard paused this command and is asking you\. It has not run yet and runs only if you approve\. '
@@ -767,6 +781,7 @@ bound_row() {
   local label="$1" want="$2" cwdt="$3" cmd="$4" rx="${5:-}" t0 t1 el ok=ok why=""
   want_row "$label" || return 0
   ROWS_LIT=$((ROWS_LIT + 1))
+  [[ "$cwdt" == - ]] && cwdt='@TREE@'
   subst "$cwdt"
   t0="$(date +%s)"
   hook_run "$(mkjson "$cmd" "$SUBST_OUT")" "${@:6}"
@@ -805,6 +820,9 @@ tree_row() {
 # known-good and a known-bad input each, before any row. Reported by printf + exit 1, never through the helpers it backstops. A
 # helper that always reads "ok" would otherwise turn every row green: nothing else in the suite drives them with a bad input.
 _st_fatal() { printf '[FATAL] instrument self-test: %s\n' "$1" >&2; exit 1; }
+# A later self-test runs after rows have counted: it snapshots the counters, ignores DCG_ROWS, and puts everything back.
+_st_save() { _sv_p="$PASS_COUNT"; _sv_f="$FAIL_COUNT"; _sv_c="$CHECKED"; _sv_s="$SELECTED"; _sv_rs="$ROWSEL"; ROWSEL=""; }
+_st_load() { PASS_COUNT="$_sv_p"; FAIL_COUNT="$_sv_f"; CHECKED="$_sv_c"; SELECTED="$_sv_s"; ROWSEL="$_sv_rs"; }
 _st_p="$PASS_COUNT"; _st_f="$FAIL_COUNT"; _st_c="$CHECKED"; _st_rowsel="$ROWSEL"; _st_out="$HOOK_OUT"
 ROWSEL=""   # the probes below must run whatever DCG_ROWS selects
 [[ "$(verdict_of a a)" == ok && "$(verdict_of a b)" == bad && "$(verdict_of '' x)" == bad && "$(verdict_of ask none)" == bad ]] \
@@ -848,13 +866,53 @@ ASKEOF
     GUARD_HOOK="$WORK/selftest/$1"; { env_row "self-test: env_row" "$2" '{}'; } >/dev/null 2>&1; GUARD_HOOK="$_st_saved"
     if [[ "$3" == ok ]]; then [[ "$PASS_COUNT" -eq $((p0 + 1)) && "$FAIL_COUNT" -eq "$f0" ]]; else [[ "$PASS_COUNT" -eq "$p0" && "$FAIL_COUNT" -eq $((f0 + 1)) ]]; fi
   }
+  # a stub that answers correctly after 6 s: the elapsed limit of bound_row (5 s) is the only thing that can fail it
+  { printf '#!/bin/sh\nsleep 6\n'; tail -n +2 "$WORK/selftest/ask.sh"; } > "$WORK/selftest/slow.sh"
+  chmod +x "$WORK/selftest/slow.sh"
   _st_run ask.sh ask ok || _st_fatal "env_row did not pass a stub hook that asks when an ask was wanted"
   _st_run silent.sh none ok || _st_fatal "env_row did not pass a stub hook that is silent when none was wanted"
   _st_run ask.sh none bad || _st_fatal "env_row passed a stub hook that asks when none was wanted"
   _st_run silent.sh ask bad || _st_fatal "env_row passed a stub hook that is silent when an ask was wanted"
+  # The layer above chk: run_row's three comparators (the oracle comparison of X/Xh/C, the L arm, the D arm), LH and bound_row each
+  # judge a row against a stub hook that answers right or WRONG; the wrong answer must record a fail and the right one a pass.
+  _st_call() { # <stub> <ok|bad> <function> <args...>
+    local stub="$1" exp="$2" p0="$PASS_COUNT" f0="$FAIL_COUNT"; shift 2
+    GUARD_HOOK="$WORK/selftest/$stub"; { "$@"; } >/dev/null 2>&1; GUARD_HOOK="$_st_saved"
+    if [[ "$exp" == ok ]]; then [[ "$PASS_COUNT" -eq $((p0 + 1)) && "$FAIL_COUNT" -eq "$f0" ]]; else [[ "$PASS_COUNT" -eq "$p0" && "$FAIL_COUNT" -eq $((f0 + 1)) ]]; fi
+  }
+  # X (executed, oracle-derived): terraform destroy is an ask to the oracle
+  _st_call ask.sh ok run_row X "self-test: run_row X" ask - 'terraform destroy' || _st_fatal "run_row X did not pass a hook that answers the oracle's ask"
+  _st_call silent.sh bad run_row X "self-test: run_row X" ask - 'terraform destroy' || _st_fatal "run_row X passed a hook that is silent where the oracle expects an ask"
+  _st_call ask.sh bad run_row X "self-test: run_row X" none - 'ls' || _st_fatal "run_row X passed a hook that asks where the oracle expects none"
+  _st_call silent.sh bad run_row X "self-test: run_row X" ask - 'ls' || _st_fatal "run_row X judged the hook when the oracle and the author's intent disagree (a harness defect must fail)"
+  _st_call ask.sh ok run_row Xh "self-test: run_row Xh" ask - 'terraform destroy' || _st_fatal "run_row Xh did not pass a hook that answers the oracle's ask"
+  _st_call silent.sh bad run_row Xh "self-test: run_row Xh" ask - 'terraform destroy' || _st_fatal "run_row Xh passed a hook that is silent where the oracle expects an ask"
+  # C (the ordinary-command corpus)
+  _st_call silent.sh ok run_row C "self-test: run_row C" none - 'ls' || _st_fatal "run_row C did not pass a hook that is silent on an ordinary command"
+  _st_call ask.sh bad run_row C "self-test: run_row C" none - 'ls' || _st_fatal "run_row C passed a hook that asks on an ordinary command"
+  # D (dead code: a literal expectation, executed once to prove the stub does not fire)
+  _st_call ask.sh ok run_row D "self-test: run_row D" ask - 'false && terraform destroy' || _st_fatal "run_row D did not pass a hook that answers the literal ask"
+  _st_call silent.sh bad run_row D "self-test: run_row D" ask - 'false && terraform destroy' || _st_fatal "run_row D passed a hook that is silent where the literal ask is wanted"
+  _st_call ask.sh bad run_row D "self-test: run_row D" ask - 'terraform destroy' || _st_fatal "run_row D accepted a row labelled dead code whose stub fired (a harness defect must fail)"
+  # L (a literal expectation, never executed)
+  _st_call ask.sh ok run_row L "self-test: run_row L" ask - 'terraform destroy' || _st_fatal "run_row L did not pass a hook that answers the literal ask"
+  _st_call silent.sh bad run_row L "self-test: run_row L" ask - 'terraform destroy' || _st_fatal "run_row L passed a hook that is silent where the literal ask is wanted"
+  _st_call ask.sh bad run_row L "self-test: run_row L" none - 'ls' || _st_fatal "run_row L passed a hook that asks where none is wanted"
+  # LH (a literal row with its own HOME)
+  _st_call ask.sh ok LH "self-test: LH" ask /home/st-fixture 'terraform destroy' || _st_fatal "LH did not pass a hook that answers the literal ask"
+  _st_call silent.sh bad LH "self-test: LH" ask /home/st-fixture 'terraform destroy' || _st_fatal "LH passed a hook that is silent where the literal ask is wanted"
+  _st_call ask.sh bad LH "self-test: LH" none /home/st-fixture 'ls' || _st_fatal "LH passed a hook that asks where none is wanted"
+  # bound_row: the decision, the reason pattern and the 5 s limit are three separate checks, each with a stub that fails only it
+  _st_call ask.sh ok bound_row "self-test: bound_row" ask - 'ls' '^r$' || _st_fatal "bound_row did not pass a fast hook with the right decision and reason"
+  _st_call silent.sh bad bound_row "self-test: bound_row" ask - 'ls' || _st_fatal "bound_row passed a hook that is silent where an ask is wanted (the decision check)"
+  _st_call ask.sh bad bound_row "self-test: bound_row" none - 'ls' || _st_fatal "bound_row passed a hook that asks where none is wanted (the decision check)"
+  _st_call ask.sh bad bound_row "self-test: bound_row" ask - 'ls' '^zzz' || _st_fatal "bound_row passed a reason that does not match its pattern (the reason check)"
+  if [[ -z "$_st_rowsel" ]]; then   # 6 s: only the full gate pays for it (the mutation suite runs reduced selections once per mutant)
+    _st_call slow.sh bad bound_row "self-test: bound_row" ask - 'ls' || _st_fatal "bound_row passed a hook that answers correctly after 6 s (the 5 s limit)"
+  fi
 fi
 ROWSEL="$_st_rowsel"; HOOK_OUT="$_st_out"; GOT=""
-PASS_COUNT=0; FAIL_COUNT=0; CHECKED=0; ROWS_LIT=0; SELECTED=0
+PASS_COUNT=0; FAIL_COUNT=0; CHECKED=0; ROWS_LIT=0; SELECTED=0; ROWS_EXEC=0; ROWS_DEAD=0; CORPUS_N=0; CORPUS_ASK=0; CORPUS_ERR=0
 
 # =====================================================================================================
 echo "== static: the hook file, its header and its portability =="
@@ -898,18 +956,43 @@ chk "the header's User-facing statement is the README's non-coverage sentence, w
 
 # Every rule id the hook can emit is listed in the hooks roster (.claude/hooks/README.md), in backticks, on the hook's own row.
 # The ids are DERIVED from the hook source (a `note <rank> <id>` call or the id that opens an `emit` reason), never hand-copied;
-# the floor keeps an empty derivation (a changed emit shape) from reading as "all listed".
+# the derivation is verdict-owning code, so it is a function the instrument self-test below drives with fixture hooks and READMEs.
 HOOKS_README="$REPO_ROOT/.claude/hooks/README.md"
 _RID_LABEL="README roster: every rule id the hook can emit is listed on its row (derived from the hook source)"
+roster_ids() { # <hook file>: the derived ids, one per line
+  { grep -oE 'note [12] [a-z]+(-[a-z0-9]+)*' "$1" | awk '{print $3}'
+    grep -oE 'emit(_fixed)? (ask|deny|"\$1") "[a-z]+(-[a-z0-9]+)*:' "$1" | sed -E 's/^.*"//; s/:$//'
+  } 2>/dev/null | sort -u
+}
+roster_verdict() { # <hook file> <hooks README>  -> RV (ok|bad); RV_WHY says why (no subshell: both are globals)
+  local ids rrow r rmiss="" rn=0
+  ids="$(roster_ids "$1")"
+  rrow="$(grep -F '| `destructive-command-guard.sh`' "$2" 2>/dev/null)"
+  for r in $ids; do rn=$((rn + 1)); grep -qF -- "\`$r\`" <<<"$rrow" || rmiss+=" $r"; done
+  RV_WHY="derived ids=$rn (floor 13), row found=$([[ -n "$rrow" ]] && echo yes || echo no), missing:${rmiss:- none}"
+  if [[ "$rn" -ge 13 && -n "$rrow" && -z "$rmiss" ]]; then RV=ok; else RV=bad; fi
+}
+# roster self-test: a fixture hook that emits 13 ids, a fixture README row that lists them all (ok) and one that lacks one id (bad)
+_st_save
+mkdir -p "$WORK/selftest" || harness_die "selftest mkdir"
+assert_fixture_dir "$WORK"
+: > "$WORK/selftest/hook-ids.sh"
+for _i in a b c d e f g h i j k l; do printf 'note 1 rule-%s\n' "$_i" >> "$WORK/selftest/hook-ids.sh"; done
+printf 'emit ask "rule-m: text"\n' >> "$WORK/selftest/hook-ids.sh"
+_row_all='| `destructive-command-guard.sh` | `rule-a` `rule-b` `rule-c` `rule-d` `rule-e` `rule-f` `rule-g` `rule-h` `rule-i` `rule-j` `rule-k` `rule-l` `rule-m` |'
+printf '%s\n' "$_row_all" > "$WORK/selftest/readme-all.md"
+printf '%s\n' "${_row_all/ \`rule-g\`/}" > "$WORK/selftest/readme-missing.md"
+printf '| `other.sh` | `rule-a` |\n' > "$WORK/selftest/readme-norow.md"
+roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-all.md"; [[ "$RV" == ok ]] || _st_fatal "the roster verdict failed a row that lists every derived id"
+roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-missing.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a row that lacks one derived id"
+roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-norow.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a README with no row for the hook"
+roster_verdict "$WORK/selftest/hook-ids.sh" "$WORK/selftest/readme-absent.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a README that does not exist"
+printf 'note 1 only-one\n' > "$WORK/selftest/hook-few.sh"
+roster_verdict "$WORK/selftest/hook-few.sh" "$WORK/selftest/readme-all.md"; [[ "$RV" == bad ]] || _st_fatal "the roster verdict passed a derivation that found too few ids"
+_st_load
 if want_row "$_RID_LABEL"; then
-  _rids="$( { grep -oE 'note [12] [a-z]+(-[a-z0-9]+)*' "$GUARD_HOOK" | awk '{print $3}'
-              grep -oE 'emit(_fixed)? (ask|deny|"\$1") "[a-z]+(-[a-z0-9]+)*:' "$GUARD_HOOK" | sed -E 's/^.*"//; s/:$//'
-            } | sort -u )"
-  _rrow="$(grep -F '| `destructive-command-guard.sh`' "$HOOKS_README" 2>/dev/null)"
-  _rmiss=""; _rn=0
-  for _r in $_rids; do _rn=$((_rn + 1)); grep -qF -- "\`$_r\`" <<<"$_rrow" || _rmiss+=" $_r"; done
-  if [[ "$_rn" -ge 13 && -n "$_rrow" && -z "$_rmiss" ]]; then _x=ok; else _x=bad; fi
-  chk "$_RID_LABEL" "$_x" "derived ids=$_rn (floor 13), row found=$([[ -n "$_rrow" ]] && echo yes || echo no), missing:${_rmiss:- none}"
+  roster_verdict "$GUARD_HOOK" "$HOOKS_README"
+  chk "$_RID_LABEL" "$RV" "$RV_WHY"
 fi
 
 echo "== registration (Guard 1, M7) =="
@@ -964,6 +1047,31 @@ _readme_row() { # <label> <literal sentence>
   if [[ "$n" == 1 && "$sec" -ge 5 ]]; then _x=ok; else _x=bad; fi
   chk "$1" "$_x" "expected exactly one line STARTING with the sentence in the '## Destructive-Command Guard' section of $PLUGIN_README (found $n; section has $sec non-blank lines)"
 }
+# _readme_row self-test: fixture READMEs (a section with the sentence once; with none; twice; hidden in a comment; inside a fence)
+# drive the row's own verdict, so a row that reads "ok" whatever the README holds is stopped before the real README is judged.
+_st_save
+assert_fixture_dir "$WORK"
+mkdir -p "$WORK/selftest" || harness_die "selftest mkdir"
+_st_rm_fixture() { # <name> <payload printed inside the section>
+  printf '# Plugin\n\n## Destructive-Command Guard\n\nfiller one\nfiller two\nfiller three\nfiller four\n\n%s\n\n## Next section\n\nmore\n' "$2" > "$WORK/selftest/readme-$1.md"
+}
+_st_rm_case() { # <ok|bad> <fixture name> <sentence> <what>
+  local p0="$PASS_COUNT" f0="$FAIL_COUNT" saved="$PLUGIN_README"
+  PLUGIN_README="$WORK/selftest/readme-$2.md"; { _readme_row "self-test: _readme_row" "$3"; } >/dev/null 2>&1; PLUGIN_README="$saved"
+  if [[ "$1" == ok ]]; then [[ "$PASS_COUNT" -eq $((p0 + 1)) && "$FAIL_COUNT" -eq "$f0" ]] || _st_fatal "_readme_row failed $4"
+  else [[ "$PASS_COUNT" -eq "$p0" && "$FAIL_COUNT" -eq $((f0 + 1)) ]] || _st_fatal "_readme_row passed $4"; fi
+}
+_st_rm_fixture one "$README_SENT_NONCOVERAGE"
+_st_rm_fixture none 'A sentence that is not the one the row requires.'
+_st_rm_fixture twice "$README_SENT_NONCOVERAGE"$'\n\n'"$README_SENT_NONCOVERAGE"
+_st_rm_fixture comment "<!-- $README_SENT_NONCOVERAGE -->"
+_st_rm_fixture fence $'```\n'"$README_SENT_NONCOVERAGE"$'\n```'
+_st_rm_case ok one "$README_SENT_NONCOVERAGE" "a README that states the sentence once"
+_st_rm_case bad none "$README_SENT_NONCOVERAGE" "a README with no matching sentence"
+_st_rm_case bad twice "$README_SENT_NONCOVERAGE" "a README that states the sentence twice"
+_st_rm_case bad comment "$README_SENT_NONCOVERAGE" "a README whose only copy of the sentence is inside an HTML comment"
+_st_rm_case bad fence "$README_SENT_NONCOVERAGE" "a README whose only copy of the sentence is inside a code fence"
+_st_load
 _readme_row "README: the non-coverage sentence appears exactly once" "$README_SENT_NONCOVERAGE"
 _readme_row "README: the hosted-gap line appears exactly once" "$README_SENT_HOSTED"
 _readme_row "README: the kill switch is documented exactly once as an assignment" "$README_SENT_KILL"
@@ -1622,18 +1730,6 @@ ROWS
 
 # =====================================================================================================
 echo "== literal rows with a HOME the oracle cannot create (a /home path) =="
-_saved_home="$HOME_W"
-HOME_W_REAL="$HOME_W"
-LH() { # LH <label> <want> <home> <command>
-  local label="$1" want="$2" home="$3" cmd="$4"
-  want_row "$label" || return 0
-  ROWS_LIT=$((ROWS_LIT + 1))
-  CUR_HOME="$home"
-  hook_run "$(mkjson "$cmd" "$TREE")"
-  classify
-  chk "$label" "$(verdict_of "$want" "$GOT")" "want=$want got=$GOT"
-  CUR_HOME="$HOME_W_REAL"
-}
 _FH="/home/soleur-guard-fixture-user"
 LH "/home is an ancestor of the home directory" deny "$_FH" 'rm -rf /home'
 LH "/home/* is the contents of an ancestor" deny "$_FH" 'rm -rf /home/*'
