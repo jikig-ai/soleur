@@ -1196,7 +1196,7 @@ t24_strip_comments() {
 
 # Keyed on the ACT of obtaining or presenting a credential. `read -[a-z]*s` (not `read -s`)
 # because the real sites write `read -rs`; that exact miss cost a false-clean during the ruling.
-t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *(Bearer|Bot)|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
+t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *[A-Za-z]|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
 
 t24_acquirers=()
 while IFS= read -r t24_f; do
@@ -1212,7 +1212,7 @@ done < <(find "${REPO_ROOT}/plugins/soleur" -path '*/scripts/*' -type f \
 # These three are pinned because each is a DISTINCT acquisition mechanism; a predicate that
 # stops seeing any one of them has stopped doing its job whatever its total.
 #   trigger.sh                — secrets-manager read (`doppler secrets get … -c prd --plain`)
-#   discord-setup.sh          — ambient bot token (`DISCORD_BOT_TOKEN`)
+#   discord-setup.sh          — presents a bot token (`Authorization: Bot` on curl's stdin config)
 #   provision-hetzner.sh      — silent interactive prompt (`read -rs`)
 # `community-router.sh` is deliberately NOT pinned: under an acquisition predicate it correctly
 # drops out, because its only credential mention is inside a routing-table string.
@@ -1231,7 +1231,7 @@ for t24_req in "${t24_required[@]}"; do
 done
 
 if [[ -n "${t24_missing_required}" ]]; then
-  echo "FAIL: Test 24: credential-acquisition discovery no longer sees:${t24_missing_required} — each is a DISTINCT acquisition mechanism (secrets-manager read / ambient bot token / silent prompt), so the predicate is broken and the zero-violation verdict below would be vacuous. Population is ${#t24_acquirers[@]}."
+  echo "FAIL: Test 24: credential-acquisition discovery no longer sees:${t24_missing_required} — each is a DISTINCT acquisition mechanism (secrets-manager read / presented bot token / silent prompt), so the predicate is broken and the zero-violation verdict below would be vacuous. Population is ${#t24_acquirers[@]}."
   FAIL=$((FAIL + 1))
 else
   t24_violations=""

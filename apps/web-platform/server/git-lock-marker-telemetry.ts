@@ -136,8 +136,11 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // bsky-setup.sh) when a credential fails its shape guard BEFORE it reaches curl's stdin config
 // stream (a quote/newline could append a `url =` directive). The line is value-free by
 // construction (script name and a fixed reason, never the credential). NOT paged: the refusal is
-// the safe outcome and a user-visible one; it is mirrored so a hosted `bsky-community.sh post`
-// refusal reaches Better Stack/Sentry instead of only the fallback-issue text.
+// the safe outcome and a user-visible one. It is mirrored when a refusal is printed inside an
+// agent Bash call (the only place this extractor is wired: the PostToolUse hook in
+// agent-runner-query-options.ts). A hosted `bsky-community.sh post` run from
+// scripts/content-publisher.sh does NOT pass through it: that refusal reaches the operator
+// through the content-publisher fallback issue body (head -c 1000 of stderr), not telemetry.
 const MARKER_RE =
   /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
