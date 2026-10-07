@@ -455,7 +455,6 @@ SWEEP_DEFERRALS=(
   # carrier byte-identical to that tag, so a one-token edit needs a new image AND a pin bump in cloud-init-inngest.yml (= an inngest host
   # replace). Convert it only in the PR that mints the next image tag, and delete the row there.
   'apps/web-platform/infra/inngest-luks-cutover.sh | = | 1 | #9217'
-  # The rows for cron-egress-enforce-probe.sh (2) and web-private-nic-guard.sh (4) were retired in pass 2 (#9217) once converted.
 )
 
 # scan_sweep <root> -> line 1 `SWEPT: <n> files`, then any `UNRESOLVED: ...` lines, then the code lines that match

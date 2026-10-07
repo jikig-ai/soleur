@@ -87,7 +87,7 @@ BIN="$TMP/bin"
 mkdir -p "$BIN"
 
 # `ip` serves the trigger predicate (`-4 -o addr show`) and the emit's NIC_ADDRS tail.
-# With STUB_IP_COUNTER set (pass-2 W-5 only) it counts its own invocations in that file and answers the
+# With STUB_IP_COUNTER set (pass-2 rows W-5, W-5b, W-5c, W-5d, W-7) it counts its own invocations in that file and answers the
 # address-absent shape until call number STUB_IP_APPEAR_AT; unset, it is the plain fixed-output stub.
 cat > "$BIN/ip" <<'EOS'
 #!/usr/bin/env bash
@@ -565,8 +565,15 @@ EXTRA_ENV=("STUB_IMDS_BODY=- ip: ${TEST_IP}0"$'\n  network_id: 1001')
 run_guard true 0 true
 assert "W-4 IMDS near-miss: an address with a longer tail does not corroborate (imds_has_expected=false)" "[[ \"\$(field imds_has_expected)\" == false ]]"
 assert "W-4 the network_id line is still counted (imds_nets=1 pins the numeric value)" "[[ \"\$(field imds_nets)\" == 1 ]]"
+EXTRA_ENV=("STUB_IMDS_BODY=- ip: 10.0.1.99"$'\n  network_id: 1001\n- ip: '"${TEST_IP}"$'\n  network_id: 1002')
+run_guard true 0 true
+assert "W-4b the expected address in the SECOND IMDS entry still corroborates, and both network_id lines are counted (a first-entry-only reader would miss it)" \
+  "[[ \"\$(field imds_has_expected)\" == true && \"\$(field imds_nets)\" == 2 ]]"
+# The address sits mid-list with a docker0 line after it, as on a real host, so a last-line-only reader
+# (tail -1) cannot find it at the trigger or in the wait loop.
+MID_IP_OUT=$'1: lo    inet 127.0.0.1/8 scope host lo\n3: enp7s0    inet '"${TEST_IP}"$'/32 scope global enp7s0\n4: docker0    inet 172.17.0.1/16 scope global docker0'
 W5_CTR="$TMP/ip-calls.w5"; printf '0' > "$W5_CTR"
-EXTRA_ENV=("STUB_IP_COUNTER=$W5_CTR" STUB_IP_APPEAR_AT=2)
+EXTRA_ENV=("STUB_IP_COUNTER=$W5_CTR" STUB_IP_APPEAR_AT=2 "STUB_IP_OUT=$MID_IP_OUT")
 run_guard true 0 true
 assert "W-5 the address appearing on the second probe is found by the wait loop (nic_ok=true, already)" \
   "[[ \"\$(field nic_ok)\" == true && \"\$(field converged_by)\" == already ]]"
@@ -574,14 +581,22 @@ assert "W-5 the address appearing on the second probe is found by the wait loop 
 assert "W-5 exactly three ip calls: the trigger, one wait-loop iteration, the emit" \
   "[[ \"\$(cat '$W5_CTR')\" -eq 3 ]]"
 W5B_CTR="$TMP/ip-calls.w5b"; printf '0' > "$W5B_CTR"
-EXTRA_ENV=("STUB_IP_COUNTER=$W5B_CTR" STUB_IP_APPEAR_AT=3)
+EXTRA_ENV=("STUB_IP_COUNTER=$W5B_CTR" STUB_IP_APPEAR_AT=3 "STUB_IP_OUT=$MID_IP_OUT")
 run_guard true 0 true
 assert "W-5b the address appearing on the THIRD probe is still found: the wait loop retries (nic_ok=true, already)" \
   "[[ \"\$(field nic_ok)\" == true && \"\$(field converged_by)\" == already ]]"
-assert "W-5b exactly four ip calls: the trigger, TWO wait-loop iterations, the emit (a loop cut to one iteration would not find it)" \
-  "[[ \"\$(cat '$W5B_CTR')\" -eq 4 ]]"
+W5C_CTR="$TMP/ip-calls.w5c"; printf '0' > "$W5C_CTR"
+EXTRA_ENV=("STUB_IP_COUNTER=$W5C_CTR" STUB_IP_APPEAR_AT=31 "STUB_IP_OUT=$MID_IP_OUT")
+run_guard true 0 true
+assert "W-5c an address appearing on the LAST wait-loop probe is still found (nic_ok=true) after 32 ip calls: the loop bound is not shortened" \
+  "[[ \"\$(field nic_ok)\" == true && \"\$(cat '$W5C_CTR')\" -eq 32 ]]"
+W5D_CTR="$TMP/ip-calls.w5d"; printf '0' > "$W5D_CTR"
+EXTRA_ENV=("STUB_IP_COUNTER=$W5D_CTR" STUB_IP_APPEAR_AT=32 "STUB_IP_OUT=$MID_IP_OUT")
+run_guard true 0 true
+assert "W-5d an address appearing one probe AFTER the loop ends is not found (detect-only, still 32 ip calls): the loop bound is not lengthened" \
+  "[[ \"\$(field nic_ok)\" == false && \"\$(field converged_by)\" == detect-only && \"\$(cat '$W5D_CTR')\" -eq 32 ]]"
 W7_CTR="$TMP/ip-calls.w7"; printf '0' > "$W7_CTR"
-EXTRA_ENV=("STUB_IP_COUNTER=$W7_CTR" STUB_IP_APPEAR_AT=1)
+EXTRA_ENV=("STUB_IP_COUNTER=$W7_CTR" STUB_IP_APPEAR_AT=1 "STUB_IP_OUT=$MID_IP_OUT")
 run_guard true 0 true
 assert "W-7 an address present at the first probe is found by the trigger itself (nic_ok=true, already)" \
   "[[ \"\$(field nic_ok)\" == true && \"\$(field converged_by)\" == already ]]"
@@ -598,7 +613,7 @@ if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
   printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
   exit 1
 fi
-MIN_CASES=167
+MIN_CASES=169
 if [[ "$CASES" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
   exit 1
