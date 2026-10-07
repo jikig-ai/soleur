@@ -433,8 +433,121 @@ cases=$((cases + 1)); [[ -d "$SWEEP_WT" ]] \
   && pass "marker-bearing worktree kept on the worktree arm (registry first)" \
   || fail "marker-bearing worktree left the registry arm: $out"
 
+# --- Arm 7: session-start sweep — timebox vs the one-time map build, opt-in drain (#9677) -----
+# The sweep sources its classifier from $SCRIPT_DIR/../../../scripts/lib, so the seam for a SLOW
+# map build is a copied script tree whose classifier wrapper sources the REAL library and then
+# redefines one function. FX_MODE selects the override.
+REAL_TC="$REPO_ROOT/plugins/soleur/scripts/lib/tmp-classify.sh"
+FX="$TESTROOT/fx"; FX_SD="$FX/skills/git-worktree/scripts"; FX_LOG="$TESTROOT/fx.log"
+assert_fixture_dir "$FX"; mkdir -p "$FX_SD" "$FX/scripts/lib"
+cat > "$FX/scripts/lib/tmp-classify.sh" <<'WRAP'
+source "${REAL_TC:?}"
+case "${FX_MODE:-}" in
+  slowmap)    tc_build_inuse_map() { sleep 2; } ;;
+  badmap)     tc_build_inuse_map() { return 1; } ;;
+  slowdecide) eval "$(declare -f tc_reap_decide | sed '1s/tc_reap_decide/_orig_tc_reap_decide/')"
+              tc_reap_decide() { sleep 1; _orig_tc_reap_decide "$@"; } ;;
+  drainprobe) eval "$(declare -f tc_drain_quarantine | sed '1s/tc_drain_quarantine/_orig_tc_drain_quarantine/')"
+              tc_drain_quarantine() {
+                if ( exec 8<"${XDG_STATE_HOME}/soleur/tmp-guard.lock"; flock -n 8 ); then echo DRAIN-LOCK-FREE >> "${FX_LOG:?}"
+                else echo DRAIN-LOCK-HELD >> "${FX_LOG:?}"; fi
+                _orig_tc_drain_quarantine "$@"; } ;;
+esac
+WRAP
+# sweep_fx [VAR=val ...]: like sweep(), but against the fixture script tree; later assignments win.
+sweep_fx() {
+  env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" \
+    SOLEUR_SWEEP_BASES="${SWEEP_BASES:-$FAKE_TMP}" SOLEUR_SWEEP_AGE_MIN=0 SOLEUR_SWEEP_WT_AGE_MIN=0 \
+    SOLEUR_SWEEP_TIMEBOX_S=10 XDG_STATE_HOME="$SWEEP_STATE" TMP_CLASSIFY_PROC="${TC_PROC_OVERRIDE:-/proc}" \
+    TMP_CLASSIFY_RETAIN_DIR="$TESTROOT/retain" REAL_TC="$REAL_TC" FX_LOG="$FX_LOG" "$@" \
+    bash -c "source '$WM' >/dev/null 2>&1 || true; SCRIPT_DIR='$FX_SD'; sweep_orphan_scratch_dirs" 2>&1 || true
+}
+
+# T1: a map build slower than the timebox must not starve every later candidate.
+reset_fixtures; mkdir -p "$SWEEP_STATE/soleur"
+for i in 1 2 3; do mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i"; : > "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i/x"; done
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowmap SOLEUR_SWEEP_TIMEBOX_S=1)"
+left=0; for i in 1 2 3; do [[ -d "$FAKE_TMP/soleur-run.${DEAD}.slowmap$i" ]] && left=$((left + 1)); done
+cases=$((cases + 1)); [[ "$left" == "0" ]] && printf '%s' "$out" | grep -q 'deferred=0' \
+  && pass "T1 map build (2s) over the 1s timebox: all 3 dead roots still reclaimed, deferred=0" || fail "T1 left=$left out=$out"
+cases=$((cases + 1)); printf '%s' "$out" | grep -qE 'drained=0 drained_bytes=0 map_s=[0-9]+' \
+  && pass "T1s summary carries drained=, drained_bytes=, map_s=" || fail "T1s summary shape: $out"
+
+# T1b: the rebase must not remove the bound — slow per-candidate work still defers.
+reset_fixtures
+for i in 1 2 3 4 5 6; do mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.slowdec$i"; : > "$FAKE_TMP/soleur-run.${DEAD}.slowdec$i/x"; done
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=slowdecide SOLEUR_SWEEP_TIMEBOX_S=2)"
+left=0; for i in 1 2 3 4 5 6; do [[ -d "$FAKE_TMP/soleur-run.${DEAD}.slowdec$i" ]] && left=$((left + 1)); done
+cases=$((cases + 1)); [[ "$left" -ge 1 ]] && printf '%s' "$out" | grep -qE 'deferred=[1-9]' \
+  && pass "T1b per-candidate work past the rebased timebox still defers ($left of 6 left)" || fail "T1b left=$left out=$out"
+
+# T12: a FAILING map build falls back to the per-candidate walk (fail closed): the live owner survives.
+reset_fixtures
+mkdir -p "$FAKE_TMP/soleur-run.${DEAD}.badmapdead" "$FAKE_TMP/soleur-run.${LIVE}.badmaplive" "$FAKE_PROC/$LIVE"
+: > "$FAKE_TMP/soleur-run.${DEAD}.badmapdead/x"
+out="$(TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx FX_MODE=badmap)"
+cases=$((cases + 1)); [[ ! -d "$FAKE_TMP/soleur-run.${DEAD}.badmapdead" && -d "$FAKE_TMP/soleur-run.${LIVE}.badmaplive" ]] \
+  && pass "T12 failing map build: dead root reclaimed, live-owner root retained" || fail "T12: $out"
+rm -rf "$FAKE_PROC/$LIVE"
+
+# --- drain (needs a disk-class base: tmpfs bases direct-delete, so quarantine never forms there) ---
+if [[ -n "$DISK_BASE" ]]; then
+  UID_N="$(id -u)"; QR="$DISK_BASE/soleur-quarantine.$UID_N"
+  mk_quar() { # scratch-entry worktree-entry
+    reset_fixtures; assert_fixture_dir "$QR"; rm -rf "$QR"; mkdir -p "$QR/scratch/$1" "$QR/worktrees/$2"; chmod 0700 "$QR"
+    head -c 2048 /dev/zero > "$QR/scratch/$1/blob"; head -c 2048 /dev/zero > "$QR/worktrees/$2/blob"
+  }
+  DRAIN_ON=(SWEEP_BASES_UNUSED=1 SOLEUR_QUARANTINE_DRAIN=1 SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN=0)
+
+  # T2: per-class TTLs — scratch past TTL drains, worktrees inside TTL stays; counts are summed
+  # ACROSS bases (the second base has no quarantine, so a last-call-wins counter would read 0).
+  mk_quar old-scratch keep-wt
+  out="$(SWEEP_BASES="$DISK_BASE $FAKE_TMP" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=999999)"
+  cases=$((cases + 1)); [[ ! -e "$QR/scratch/old-scratch" && -d "$QR/worktrees/keep-wt" ]] \
+    && pass "T2a drain removes the past-TTL class and keeps the inside-TTL class" || fail "T2a: $out"
+  cases=$((cases + 1)); printf '%s' "$out" | grep -qE 'drained=1 drained_bytes=[0-9]{4,}' \
+    && pass "T2b summary reports drained=1 with a measured drained_bytes (du -sk based)" || fail "T2b summary: $out"
+
+  # T2c: an exported recovery seam of 0 must not drain entries younger than the default floor.
+  mk_quar young-scratch young-wt
+  out="$(SWEEP_BASES="$DISK_BASE" sweep_fx SOLEUR_QUARANTINE_DRAIN=1 SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=0)"
+  cases=$((cases + 1)); [[ -d "$QR/scratch/young-scratch" && -d "$QR/worktrees/young-wt" ]] \
+    && pass "T2c TTL=0 is floored (default 1440 min): fresh quarantine entries survive" || fail "T2c: $out"
+
+  # T3: opt-in — unset / 0 / yes drain nothing and the 'holds entries' note prints; =1 drains.
+  for v in "" 0 yes; do
+    mk_quar optin-scratch optin-wt
+    out="$(SWEEP_BASES="$DISK_BASE" sweep_fx SOLEUR_QUARANTINE_DRAIN="$v" SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN=0 SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=0)"
+    cases=$((cases + 1)); [[ -d "$QR/scratch/optin-scratch" ]] && printf '%s' "$out" | grep -q 'holds entries' \
+      && pass "T3 SOLEUR_QUARANTINE_DRAIN='$v': nothing drained, the undrained-quarantine note prints" || fail "T3 '$v': $out"
+  done
+
+  # T2d: restore after a drain reports the entry gone instead of failing.
+  reset_fixtures; assert_fixture_dir "$QR"; rm -rf "$QR"
+  mkdir -p "$DISK_BASE/soleur-run.${DEAD}.restoreme"; : > "$DISK_BASE/soleur-run.${DEAD}.restoreme/x"
+  SWEEP_BASES="$DISK_BASE" TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx >/dev/null
+  SWEEP_BASES="$DISK_BASE" TC_PROC_OVERRIDE="$FAKE_PROC" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0 >/dev/null
+  rout="$(env -i PATH="$PATH" HOME="$HOME" SOLEUR_PURGE_LEDGER="$SOLEUR_PURGE_LEDGER" SOLEUR_PURGE_BASES="$DISK_BASE" XDG_STATE_HOME="$SWEEP_STATE" bash "$REPO_ROOT/scripts/soleur-tmp-purge.sh" --restore all 2>&1 || true)"
+  cases=$((cases + 1)); [[ ! -d "$DISK_BASE/soleur-run.${DEAD}.restoreme" ]] && printf '%s' "$rout" | grep -q 'already gone' \
+    && pass "T2d restore after a drain says 'already gone' and resurrects nothing" || fail "T2d: $rout"
+
+  # T14: the drain runs INSIDE the tmp-guard lock window (serialised against the guard and purge).
+  mk_quar lockwin-scratch lockwin-wt; : > "$FX_LOG"
+  out="$(SWEEP_BASES="$DISK_BASE" sweep_fx FX_MODE=drainprobe "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0 SOLEUR_SWEEP_QUAR_WT_TTL_MIN=0)"
+  cases=$((cases + 1)); grep -q 'DRAIN-LOCK-HELD' "$FX_LOG" && ! grep -q 'DRAIN-LOCK-FREE' "$FX_LOG" \
+    && pass "T14 the drain executes while the sweep still holds the tmp-guard lock" || fail "T14 log: $(cat "$FX_LOG") out=$out"
+
+  # T14b: no drain on the early-return paths — a contended lock drains nothing.
+  mk_quar contend-scratch contend-wt; mkdir -p "$SWEEP_STATE/soleur"
+  ( flock -n 9 && sleep 4 ) 9>"$SWEEP_STATE/soleur/tmp-guard.lock" & sleep 0.3
+  out="$(SWEEP_BASES="$DISK_BASE" sweep_fx "${DRAIN_ON[@]}" SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN=0)"; wait || true
+  cases=$((cases + 1)); [[ -d "$QR/scratch/contend-scratch" ]] && printf '%s' "$out" | grep -q 'reason=lock-contended' \
+    && pass "T14b lock-contended sweep drains nothing" || fail "T14b: $out"
+  rm -rf "$QR"
+fi
+
 # --- Conservation ----------------------------------------------------------------------
-MIN_ASSERTIONS=38   # anti-vacuity floor — a truncated run can't pass at 0/0
+MIN_ASSERTIONS=44   # anti-vacuity floor — a truncated run can't pass at 0/0
                     # (the disk-class block is conditional on a non-tmpfs dir)
 echo ""
 echo "test-scratch-session: $pass_n passed, $fails failed ($cases cases)"

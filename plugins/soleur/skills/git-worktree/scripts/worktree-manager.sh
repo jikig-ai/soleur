@@ -3263,7 +3263,7 @@ sweep_orphan_scratch_dirs() {
   # while the operator waits at session start.
   now_s() { printf '%s' "${EPOCHSECONDS:-$(date +%s)}"; }
 
-  local reaped=0 quar=0 retained=0 deferred=0 wt_done=0 map_tried=0
+  local reaped=0 quar=0 retained=0 deferred=0 wt_done=0 map_tried=0 map_s=0 drained=0 drained_bytes=0
   local base d name verdict fstype dest
 
   for base in $bases; do
@@ -3335,8 +3335,16 @@ sweep_orphan_scratch_dirs() {
       # leaves the per-candidate walk fallback in charge (fail-closed).
       if (( map_tried == 0 )); then
         map_tried=1
+        local map_t0; map_t0="$(now_s)"
         # shellcheck disable=SC2086  # space-separated base list — splitting IS the contract
         tc_build_inuse_map $bases || true
+        # The map is a FIXED cost paid once per sweep (12.7 s measured on a 739-process host,
+        # #9677), not per-candidate work. Charging it to the timebox let a build longer than the
+        # timebox defer EVERY later candidate on every session start, so marked dirs were never
+        # reclaimed. The timebox now restarts when the map is built and bounds the work that is
+        # actually per-candidate; the map cost is reported as map_s.
+        map_s=$(( $(now_s) - map_t0 ))
+        deadline=$(( $(now_s) + ${SOLEUR_SWEEP_TIMEBOX_S:-10} ))
       fi
 
       # Single-sourced conjunct chain — same gates as Reaper 3 and the purge:
@@ -3372,21 +3380,48 @@ sweep_orphan_scratch_dirs() {
     done < <(find "$base" -mindepth 1 -maxdepth 1 -type d -user "$uid" -print0 2>/dev/null)
   done
 
+  # Opt-in session-start drain of EXPIRED quarantine entries (#9677). It runs here, BEFORE the
+  # flock fd is closed, so it is serialised against tmpfs-guard.sh and soleur-tmp-purge.sh exactly
+  # like the sweep itself; the early returns above (lock-contended, flock-missing, bases-empty)
+  # never reach it. Without the opt-in this sweep behaves as it always has: a terminal delete on a
+  # machine Soleur does not own is the user's choice, and the optional systemd timer remains the
+  # default drain trigger (ADR-250). Each TTL is floored (default 1440 min) so an exported 0 can
+  # never make a session start empty the quarantine it just filled.
+  if [[ "${SOLEUR_QUARANTINE_DRAIN-}" == "1" ]]; then
+    local qfloor="${SOLEUR_SWEEP_QUAR_TTL_FLOOR_MIN:-1440}"
+    local sttl="${SOLEUR_SWEEP_QUAR_SCRATCH_TTL_MIN:-10080}" wttl="${SOLEUR_SWEEP_QUAR_WT_TTL_MIN:-43200}" ddl
+    [[ "$qfloor" =~ ^[0-9]+$ ]] || qfloor=1440
+    [[ "$sttl" =~ ^[0-9]+$ ]] || sttl=10080
+    [[ "$wttl" =~ ^[0-9]+$ ]] || wttl=43200
+    if (( sttl < qfloor )); then sttl=$qfloor; fi
+    if (( wttl < qfloor )); then wttl=$qfloor; fi
+    ddl=$(( $(now_s) + ${SOLEUR_SWEEP_DRAIN_TIMEBOX_S:-5} ))
+    for base in $bases; do
+      [[ -d "$base" ]] || continue
+      tc_drain_quarantine "$base" 0 "$sttl" "$wttl" "$ddl" "${SOLEUR_SWEEP_DRAIN_MAX_ENTRIES:-200}" || true
+      # tc_drain_quarantine resets TC_DRAINED on every call: sum per base here.
+      drained=$((drained + TC_DRAINED)); drained_bytes=$((drained_bytes + TC_DRAINED_BYTES))
+    done
+    _SPACE_LOGICAL_BYTES=$(( ${_SPACE_LOGICAL_BYTES:-0} + drained_bytes ))
+  fi
+
   if [[ -n "$sweep_fd" ]]; then exec {sweep_fd}>&- 2>/dev/null || true; fi
   local ms=$(( ("$(now_s)" - t0) * 1000 ))
-  echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred wt_scanned=$wt_done ms=$ms"
+  echo "SOLEUR_TMP_SWEEP bases=[$bases] reaped=$reaped quarantined=$quar retained=$retained deferred=$deferred drained=$drained drained_bytes=$drained_bytes map_s=$map_s wt_scanned=$wt_done ms=$ms"
   if (( deferred > 0 )); then
     echo "SWEEP-DEFER: $deferred candidate(s) beyond the ${SOLEUR_SWEEP_TIMEBOX_S:-10}s/${wt_cap}-worktree bound — deferred to the next session start"
   fi
   # Drain has no always-on trigger unless the systemd timer is installed or an
   # operator runs --drain — surface a non-empty quarantine so the bytes don't
   # sit forever on a host with no scheduled guard.
-  for base in $bases; do
-    if compgen -G "$base/soleur-quarantine.$uid" >/dev/null 2>&1 \
-       && compgen -G "$base/soleur-quarantine.$uid/*/*" >/dev/null 2>&1; then
-      echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --drain or install scripts/tmpfs-guard.timer for TTL draining"
-    fi
-  done
+  if [[ "${SOLEUR_QUARANTINE_DRAIN-}" != "1" ]]; then
+    for base in $bases; do
+      if compgen -G "$base/soleur-quarantine.$uid" >/dev/null 2>&1 \
+         && compgen -G "$base/soleur-quarantine.$uid/*/*" >/dev/null 2>&1; then
+        echo "SOLEUR_TMP_SWEEP note: $base/soleur-quarantine.$uid holds entries — run scripts/soleur-tmp-purge.sh --drain, install scripts/tmpfs-guard.timer, or set SOLEUR_QUARANTINE_DRAIN=1 for TTL draining"
+      fi
+    done
+  fi
   return 0
 }
 
@@ -3895,6 +3930,8 @@ cleanup_merged_worktrees() {
   done
 
   # Output summary
+  # Exported for cleanup_merged_run (#9677): the Docker step is gated on a removal this run.
+  _SOLEUR_CLEANED_COUNT=${#cleaned[@]}
   if [[ ${#cleaned[@]} -gt 0 ]]; then
     echo -e "${GREEN}Cleaned ${#cleaned[@]} merged worktree(s): ${cleaned[*]}${NC}"
     # A recovery pointer, once per run rather than once per branch. A deleted local ref is
@@ -4012,6 +4049,119 @@ cleanup_merged_worktrees() {
   cleanup_runaway_processes
 
   return 0
+}
+
+# --- Effective-space report and opt-in Docker builder-cache prune (#9677) ---------------------
+# Freed bytes are not the same as bytes the filesystem reports free: on btrfs with snapper, a
+# snapshot keeps every deleted block referenced until the snapshot rotates out. So cleanup-merged
+# prints what it LOGICALLY reclaimed next to the MEASURED `df` delta, and names snapshot pinning
+# when it is detectable. Read-only: this never calls `snapper` and never touches a snapshot.
+_SPACE_LOGICAL_BYTES=0
+_SPACE_BEFORE_KB=""
+_SOLEUR_CLEANED_COUNT=0
+
+# The filesystem the drain frees. /var/tmp by default (the disk-class scratch base); a missing
+# directory falls back to /.
+_space_path() { local p="${SOLEUR_SPACE_PATH:-/var/tmp}"; [[ -d "$p" ]] || p=/; printf '%s' "$p"; }
+
+# Available KB via POSIX `df -Pk` (column 4) — works on macOS and Linux; GNU `--output` does not.
+_space_avail_kb() {
+  df -Pk "$(_space_path)" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print $4; exit }'
+}
+
+space_begin() {
+  _SPACE_LOGICAL_BYTES=0
+  _SPACE_BEFORE_KB="$(_space_avail_kb || true)"
+}
+
+report_cleanup_space() {
+  local logical="-" delta="-" fstype="unknown" snaps="unknown" dock="off" after_kb conf p
+  if [[ -n "${_SPACE_BEFORE_KB:-}" ]]; then
+    logical="${_SPACE_LOGICAL_BYTES:-0}"
+    after_kb="$(_space_avail_kb || true)"
+    if [[ -n "$after_kb" ]]; then delta=$(( (after_kb - _SPACE_BEFORE_KB) * 1024 )); fi
+  fi
+  p="$(_space_path)"
+  if command -v findmnt >/dev/null 2>&1; then
+    fstype="$(findmnt -no FSTYPE --target "$p" 2>/dev/null | head -n 1 || true)"
+    [[ -n "$fstype" ]] || fstype="unknown"
+  fi
+  case "$fstype" in
+    unknown) snaps="unknown" ;;
+    btrfs)
+      conf="${SOLEUR_SNAPPER_CONFIG_DIR:-/etc/snapper/configs}/root"
+      if [[ -f "$conf" ]]; then snaps="snapper"; else snaps="none"; fi ;;
+    *) snaps="none" ;;
+  esac
+  case "${SOLEUR_DOCKER_PRUNE-}" in 1) dock="dry-run" ;; apply) dock="apply" ;; esac
+  echo "SOLEUR_CLEANUP_SPACE logical_bytes=$logical df_delta_bytes=$delta fstype=$fstype docker_prune=$dock snapshots=$snaps"
+  if [[ "$snaps" == "snapper" ]]; then
+    echo "SOLEUR_CLEANUP_SPACE note: freed space can stay pinned by snapper snapshots until they rotate out; Soleur never deletes snapshots."
+  fi
+  return 0
+}
+
+# Opt-in (SOLEUR_DOCKER_PRUNE=1 dry-run, =apply) prune of OLD Docker build cache and dangling images
+# only, and only when this run removed a worktree. Never `-a`, never volumes, never containers,
+# never `system prune`. `until=24h` keeps a sibling session's active build on the shared daemon
+# safe. Docker's own totals are echoed verbatim — never parsed.
+docker_builder_prune() {
+  local mode="${SOLEUR_DOCKER_PRUNE-}" tobin="" secs probe rc=0 out_b out_i
+  [[ -n "$mode" ]] || return 0
+  case "$mode" in
+    1) mode="dry-run" ;;
+    apply) mode="apply" ;;
+    *) echo "SOLEUR_DOCKER_PRUNE skipped reason=invalid-value"; return 0 ;;
+  esac
+  if (( ${_SOLEUR_CLEANED_COUNT:-0} < 1 )); then
+    echo "SOLEUR_DOCKER_PRUNE skipped reason=no-worktree-removed"; return 0
+  fi
+  command -v docker >/dev/null 2>&1 || { echo "SOLEUR_DOCKER_PRUNE skipped reason=docker-missing"; return 0; }
+  # Same timeout -> gtimeout resolution the install arms use (stock macOS has neither on PATH by default).
+  if command -v timeout >/dev/null 2>&1; then tobin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then tobin="gtimeout"
+  else echo "SOLEUR_DOCKER_PRUNE skipped reason=no-timeout"; return 0; fi
+  secs="${SOLEUR_DOCKER_TIMEOUT_S:-60}"; probe="${SOLEUR_DOCKER_PROBE_TIMEOUT_S:-5}"
+  [[ "$secs" =~ ^[0-9]+$ && "$secs" -gt 0 ]] || secs=60
+  [[ "$probe" =~ ^[0-9]+$ && "$probe" -gt 0 ]] || probe=5
+
+  rc=0; "$tobin" -k 5 "$probe" docker info >/dev/null 2>&1 || rc=$?
+  if (( rc == 124 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+  if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=daemon-unreachable"; return 0; fi
+
+  if [[ "$mode" == "dry-run" ]]; then
+    # `docker system df` ignores the until=24h filter, so this is an UPPER BOUND on what apply frees.
+    local df_row; rc=0
+    df_row="$("$tobin" -k 5 "$secs" docker system df 2>/dev/null | grep -i 'build cache' | head -n 1)" || rc=$?
+    echo "SOLEUR_DOCKER_PRUNE mode=dry-run (upper bound; ignores until=24h) build_cache=\"${df_row:-unknown}\""
+    return 0
+  fi
+
+  rc=0; out_b="$("$tobin" -k 5 "$secs" docker builder prune -f --filter until=24h 2>&1)" || rc=$?
+  if (( rc == 124 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+  if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=$rc"; return 0; fi
+  rc=0; out_i="$("$tobin" -k 5 "$secs" docker image prune -f --filter until=24h 2>&1)" || rc=$?
+  if (( rc == 124 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=timeout"; return 0; fi
+  if (( rc != 0 )); then echo "SOLEUR_DOCKER_PRUNE skipped reason=prune-failed rc=$rc"; return 0; fi
+  echo "SOLEUR_DOCKER_PRUNE mode=apply builder=\"$(printf '%s\n' "$out_b" | grep '^Total' | tail -n 1)\" images=\"$(printf '%s\n' "$out_i" | grep '^Total' | tail -n 1)\""
+  return 0
+}
+
+# What `cleanup-merged` dispatches to. cleanup_merged_worktrees stays untouched (several suites
+# extract its body by name); the wrapper takes the `df` baseline BEFORE it, then runs the Docker
+# step and the report AFTER it has returned — i.e. after the cleanup-merged lock was released by its
+# RETURN trap, so a slow Docker call never holds the lock siblings give up on after 5 s, and the
+# report prints on every early return (lock contended, fetch failure). The inner function is called
+# bare on purpose: an `||` would switch errexit off inside it. Under `set -e` an inner failure still
+# aborts exactly as before.
+cleanup_merged_run() {
+  _SOLEUR_CLEANED_COUNT=0
+  space_begin || true
+  cleanup_merged_worktrees
+  local rc=$?
+  docker_builder_prune || headless_or_stderr warn "cleanup-merged: docker builder prune step failed; continuing"
+  report_cleanup_space || headless_or_stderr warn "cleanup-merged: space report failed; continuing"
+  return "$rc"
 }
 
 # Clean up stale Claude Code temp files to reclaim RAM.
@@ -4342,7 +4492,11 @@ main() {
       cleanup_worktrees
       ;;
     cleanup-merged)
-      cleanup_merged_worktrees
+      cleanup_merged_run
+      ;;
+    space-report)
+      # Read-only: current df/fstype/snapshot state and the Docker opt-in; no baseline, no mutation.
+      report_cleanup_space
       ;;
     cleanup-tmp)
       cleanup_claude_tmp
@@ -4412,6 +4566,7 @@ Commands:
                                       (if name omitted, uses current worktree)
   cleanup | clean                     Clean up inactive worktrees
   cleanup-merged                      Clean up worktrees for merged branches
+  space-report                        Print current disk/snapshot state (read-only; same SOLEUR_CLEANUP_SPACE line cleanup-merged prints)
                                       (reaps branches proven merged: ancestor
                                       of main, or a merged PR containing the
                                       tip; [gone] alone is kept;
