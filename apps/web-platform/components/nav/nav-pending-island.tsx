@@ -10,7 +10,7 @@
 // below the iOS notch/status strip; on non-notch contexts it resolves 0 —
 // one rule covers both frames, no breakpoint branching.
 
-import { Suspense, useEffect, useSyncExternalStore } from "react";
+import { Suspense, useEffect, useRef, useSyncExternalStore } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
   getNavLastLocation,
@@ -60,10 +60,26 @@ function NavPendingLocationWatcher() {
   // Completion watcher (§1 step 4): a pathname OR searchParams delta commits
   // the episode — same-path query navs like `workstream?issue=` count. Also
   // keeps the store's last-location current for the popstate gate below.
+  //
+  // Invariant (#9666): only a COMMIT ends an episode — never this component
+  // mounting. The watcher hydrates inside a Suspense boundary after the rail
+  // links, so a click can open an episode before its first run; stopping
+  // unconditionally there cancelled it before the bar ever showed. The first
+  // run therefore compares against the store's last noted location (a commit
+  // that landed before mount still ends the episode — also the intended
+  // fallback for an episode started after that commit, as the old code did),
+  // and later runs compare against the previous key (the island tests move
+  // the mocked hooks, not window.location). A "skip the first run" flag is
+  // wrong: StrictMode double-invokes effects. A navigation that lands on the
+  // current URL still stalls to the 30s timer (pre-existing, out of scope).
+  const key = `${pathname}?${searchParams?.toString() ?? ""}`;
+  const prevKey = useRef<string | null>(null);
   useEffect(() => {
-    noteNavLocation();
-    stopNavPending();
-  }, [pathname, searchParams]);
+    const moved = noteNavLocation();
+    const changed = prevKey.current === null ? moved : prevKey.current !== key;
+    prevKey.current = key;
+    if (changed) stopNavPending();
+  }, [key]);
 
   // History Back/Forward (§1 popstate edge): fire only when the post-pop
   // location's pathname+search differs from the last committed one — the
