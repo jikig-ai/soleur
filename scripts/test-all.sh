@@ -5118,6 +5118,9 @@ if want_scripts; then
   run_suite "scripts/web2-rebirth-emptiness" bash scripts/web2-rebirth-emptiness.test.sh
   run_suite "scripts/web2-rebirth-never-pooled" bash scripts/web2-rebirth-never-pooled.test.sh
   run_suite "scripts/web2-rebirth-recovery-check" bash scripts/web2-rebirth-recovery-check.test.sh
+  # #9372 — the agent-dispatchable, approval-gated soft reboot of the allow-listed web-2 standby: the writer's refusal table and the
+  # read-only rows evidence reader against a fake Hetzner/Terraform/Better Stack world, with a claim-word scan and a mutation battery.
+  run_suite "scripts/web-host-reboot" bash scripts/web-host-reboot.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
