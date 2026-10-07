@@ -39,3 +39,10 @@ None blocking. Non-blocking notes: (a) an early candidate-plan selector returned
 
 ## QA
 Skipped per skill rule — Test Scenarios are Given/When/Then prose only (no Browser:/API verify: steps); coverage is the unit/regression suite + in-image capture/verify. No dashboard/layout diff → Step 2.6 nav-states gate N/A.
+
+## Review round 2 (git-history seat — retried after connection error)
+- P2 fixed: ADR-075 addendum mis-attributed the reorder to the 0.3.284 bump — it was vendored since CLI 2.1.197 / SDK 0.3.197 (#5849), predating ADR-075's merge; the era-pinned 0.2.85 spawned bundled cli.js (2.1.85) so the capability was unreachable. Addendum corrected.
+- P3 fixed: addendum overstated the allowRead arm as load-bearing — now states it's inert today (support workspacePath = pluginPath, outside the deny root) but forward-declared.
+- P3 fixed: ADR-068:231 stale "per-sibling since ADR-075" cross-ref updated.
+- P3 fixed: cc-dispatcher attribution corrected — #5848 (regression) → #5864 (per-sibling deny) → #5862 (constant parent deny).
+- Verified accurate: v0.2.85-era ordering claim; #9636 scope (projection placeholder only); /proc tail pre-existing on main.

@@ -2044,7 +2044,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `.git` FILE at the workspace root passes isValidGitWorkTree (lstat) but
     // strands the agent's IN-BWRAP `git rev-parse` when its `gitdir:` target
     // resolves OUTSIDE the agent's own workspace (sibling workspaces are
-    // hidden by the parent-root `denyRead` tmpfs; #5848 → per-sibling deny,
+    // hidden by the parent-root `denyRead` tmpfs; #5848 regression → #5864 per-sibling deny,
     // #5862 → constant parent deny). The prompt-driven
     // `/soleur:go` Step 0.0 then self-stops with NO server event — the dark
     // surface all three prior fixes missed. One `probeGitWorktreeShape` (sync
@@ -2621,7 +2621,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   // sandbox read+writable dir is `workspacePath` — the agent's OWN workspace
   // sits under the parent `denyRead` tmpfs and the vendored builder's
   // deny-then-restore ordering re-binds it rw (see `buildAgentSandboxConfig`;
-  // #5848 → per-sibling deny, #5862 → constant parent deny — the earlier
+  // #5848 regression → #5864 per-sibling deny → #5862 constant parent deny — the earlier
   // `allowRead:[workspacePath]` re-bind was read-only and shadowed the write
   // bind, breaking writes) plus `createSandboxHook` realpath-containment;
   // `$HOME`/`/tmp` bwrap-visibility is unverifiable. We write the helper into

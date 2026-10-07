@@ -108,12 +108,15 @@ boot self-probe `op:"sandbox-hardening-selfprobe"`.
 
 **Status: `accepted` (residual closed).** The exit criterion fired — and the trigger that fired it was
 the *opposite* of what was predicted: dependency-patch infrastructure did not need to be introduced,
-because the SDK bump itself delivered the reorder. The vendored `@anthropic-ai/claude-agent-sdk@0.3.284`
-/ CLI 2.1.284 binary's embedded bwrap builder implements deny-then-restore natively: each `denyRead`
-landing emits `--tmpfs` FIRST, then every covered `allowWrite` path is re-bound rw (`Re-bound write
-path wiped by denyRead tmpfs`) and every covered `allowRead` path re-binds ro (`Re-allowed read access
-within denied region`). Confirmed by reading the binary's embedded builder and by the in-image capture
-audit (`infra/sandbox-canary-argv.json` regenerated via `SANDBOX_CANARY_MODE=capture` on `node:22-slim`,
+because the reorder was already vendored. Deny-then-restore has been in the native builder since CLI
+2.1.197 — vendored since the SDK's move to the external native binary (SDK 0.3.197, #5849, which even
+predates this ADR's merge); the era-pinned SDK 0.2.85 could never reach it because it spawned its
+bundled `cli.js` (CLI 2.1.85) instead. The pinned `@anthropic-ai/claude-agent-sdk@0.3.284` / CLI
+2.1.284 binary merely carries it forward. What the builder does: each `denyRead` landing emits
+`--tmpfs` FIRST, then every covered `allowWrite` path is re-bound rw (`Re-bound write path wiped by
+denyRead tmpfs`) and every covered `allowRead` path re-binds ro (`Re-allowed read access within
+denied region`). Confirmed by reading the binary's embedded builder and by the in-image capture audit
+(`infra/sandbox-canary-argv.json` regenerated via `SANDBOX_CANARY_MODE=capture` on `node:22-slim`,
 `verify_ok`).
 
 What changed:
@@ -121,8 +124,9 @@ What changed:
 - `buildAgentSandboxConfig` reverted to the structural shape — `denyRead: [workspacesRoot(),
   c4StagingRoot, "/proc", ...denyReadExtra]`, a constant list. `enumerateSiblingDenyPaths`, its
   `degraded` fail-closed arm, and the per-dispatch `readdirSync` are deleted. The `readOnly` support
-  persona (ADR-113) carries `allowRead: [workspacePath]`, which the same builder restores ro inside
-  the masked parent.
+  persona (ADR-113) carries `allowRead: [workspacePath]` — inert today (the support workspacePath is
+  the plugin root, outside the deny parent) but forward-declared so a future root-resident read-only
+  session gets the same builder's ro restore instead of a blanked workspace.
 - The TOCTOU is structurally closed: a sibling workspace created after a session's namespace build
   lives under the parent `--tmpfs` — masked, not merely unlisted. The direct-bwrap TOCTOU regression
   case in `test/sandbox-isolation.test.ts` pins the property (create sibling mid-session → invisible).
