@@ -180,7 +180,7 @@ logs:
   where: "journald on the web host (tag inngest-registry-probe) → vector.toml → Better Stack; Actions run log for the workflow side"
   retention: "Better Stack retention window"
 discoverability_test:
-  command: grep -c 'triggers { type value }' apps/web-platform/infra/inngest-registry-probe.sh
+  command: grep -c 'FUNCTIONS_GQL_QUERY.*triggers { type value }' apps/web-platform/infra/inngest-registry-probe.sh
   expected_output: "1"
 ```
 

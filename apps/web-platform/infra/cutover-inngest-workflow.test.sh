@@ -4128,6 +4128,15 @@ assert "#6940 discovery is gated on flag == true AND both window vars set" "grep
 DISC_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"' | head -1 | sed 's/^[[:space:]]*//' || true)
 assert "#6940 the discovery block directly follows the 2.6 SCOPE CAVEAT echo (got: \$DISC_PREV)" "[[ \"\$DISC_PREV\" == 'echo \"::notice::2.6 SCOPE CAVEAT'* ]]"
 assert "#6940 an empty zero-run set issues NO second call (guarded by -n)" "grep -qF 'if [[ -n \"\$ZERO_RUN_IDS\" ]]; then' '$VERIFY_ARM_FILE'"
+# The WIRE, not just the endpoints (#7969): the suite executes the extracted helper
+# and pins the URL below — but a call site reading `zero_run_cron_ids "$BODY"
+# "$REG_BODY"` (swapped) or assigning `""` would leave every row green. Pin the
+# exact call, in argument order, comment-stripped (VERIFY_ARM_FILE is already
+# comment-stripped, so a commented-out call cannot satisfy this).
+assert "#6940 the derivation call is wired (registry body first, runs body second)" "grep -qF 'ZERO_RUN_IDS=\$(zero_run_cron_ids \"\$REG_BODY\" \"\$BODY\")' '$VERIFY_ARM_FILE'"
+# The merge must ASSIGN back to MTR_BODY — a discarded jq output leaves the
+# enumeration on the primary body while the URL/call pins stay green.
+assert "#6940 the re-scan runs are merged INTO MTR_BODY (assignment pinned)" "grep -qF 'MTR_BODY=\$(jq -nc --argjson a \"\$MTR_BODY\" --argjson b \"\$DISC_BODY\"' '$VERIFY_ARM_FILE' && grep -qF 'runs:(\$a.runs + \$b.runs)' '$VERIFY_ARM_FILE'"
 
 # The scoped URL: function_ids=<the derived set>, from=<lookback>, and NEVER an
 # `until=` — the post-repoint region is the highest-risk interval (same invariant
@@ -4406,11 +4415,12 @@ _DISPATCHED=$((PASS + FAIL))
 #   longer greps the raw row (+2), _flip_transition_dt derives no anchor from doppler or LUKS-FSM rows
 #   (+2), _fsm_own_rows keeps only the flip FSM's own row and emits only the projection (+2), and the
 #   exact-tag liveness rows: the other FSM's rows and a prefix-sharing tag count 0 (+2).
-# 1000 -> 1026 (+26) at #6940 item 1, measured: the zero-run discovery block —
+# 1000 -> 1028 (+28) at #6940 item 1, measured: the zero-run discovery block —
 # REG_BODY capture pins (2), zero_run_cron_ids extraction (1), gate/placement/
-# URL/curl/retry/failure-policy structural rows (13), the item-2 deferral env
-# rows (4), and the five executed zr_run cases + their case counter (6).
-_EXACT_FLOOR=1026
+# URL/curl/retry/failure-policy structural rows (13), the WIRE pins for the
+# helper call site and the MTR_BODY merge assignment (2), the item-2 deferral
+# env rows (4), and the five executed zr_run cases + their case counter (6).
+_EXACT_FLOOR=1028
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""
