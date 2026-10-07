@@ -100,3 +100,14 @@ read-only. No commit was created by the failed command. The same exact commit
 command succeeded with scoped sandbox escalation. A successful prior staging
 operation does not prove subsequent Git metadata writes are permitted; verify
 each result and distinguish sandbox access from rehearsal authorization.
+
+The shared `origin/main` ref advanced between its inspected log and the merge:
+another upstream commit landed in the successful merge. Read back the merge's
+second parent and its complete commit range rather than describing only the
+earlier snapshot. Pin a resolved SHA when inspection must bind to the exact
+merge input. Use quiet merge output plus bounded parent/stat readback; large
+adapter additions otherwise truncate the merge summary. A post-rehearsal
+runtime change leaves the previous proof source-bound and does not authorize
+another rehearsal of the newer source. A later multi-file evidence patch again
+omitted the feature-spec prefix for the session record and was rejected with
+no partial edits; verify every target path before submitting the patch.

@@ -186,3 +186,9 @@ real credential, shared database/production write or customer content was used.
 The one-use authorization is consumed; another rehearsal needs new explicit
 authorization. Local suites and all later QA, routine, Web, legal, review and
 promotion gates remain held. Keep draft/default-off/customer content blocked.
+
+Main `8bcbe0379aeddaec86d51e084276e643d1d84bd8` subsequently merged cleanly.
+Its API/cost-accounting and plugin changes differ from the rehearsed candidate.
+The scoped `27c04a95` pass remains historical and source-specific; current-head
+recovery is unqualified again. No rebuild or further rehearsal was authorized
+or performed. The selected migration bodies remain unchanged.

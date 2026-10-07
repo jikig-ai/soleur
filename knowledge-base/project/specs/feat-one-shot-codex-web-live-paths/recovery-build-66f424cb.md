@@ -259,3 +259,14 @@ startup and scoped retained-state/RPC recovery passed; full runner/tool/infra,
 workspace readiness and observability parity remain unqualified. Local suites,
 authenticated screenshots, routine eligibility, permitted Web matrices,
 attributable mode-specific CLO dispositions, full review and promotion stay held.
+
+## Post-rehearsal main sync
+
+Main `8bcbe0379aeddaec86d51e084276e643d1d84bd8` merged cleanly after the
+rehearsal, including API provider validation, cost-accounting source and Cursor
+adapter/plugin changes. This changes application and plugin bytes from the
+rehearsed `27c04a95` candidate. Its successful result remains source-bound;
+the local image does not qualify the subsequently merged runtime. No rebuild
+or second rehearsal ran, and the consumed authorization does not permit one.
+All later qualification holds remain. The 13 selected migration bodies are
+unchanged by this sync; that does not extend the renderer startup verdict.
