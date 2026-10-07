@@ -531,6 +531,8 @@ Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the 
 
 It is a seatbelt, not a boundary: an agent that can edit your settings can switch it off.
 
+The guard also asks, rather than allows, when it cannot read a command it was given: an oversized or unparsable command, `env -S`, or wrappers nested more than eight deep. You may meet such an ask on a command that is not destructive.
+
 `SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off. Set it in your own shell before you start the session; the
 harness reads it at startup, so a running session needs a restart. Any other value, including `0` and empty, leaves
 the guard on.
