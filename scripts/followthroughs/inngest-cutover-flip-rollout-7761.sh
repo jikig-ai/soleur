@@ -161,7 +161,9 @@ DRIFT_GREPS=(
   '"reason":"flip-complete'
   '"reason":"flushall-failed'
   '"reason":"flushed-resume-no-reflush'
+  '"reason":"latch-cleared'
   '"reason":"latch-unrecordable'
+  '"reason":"reflush-evidence-invalid'
   '"reason":"refuse-rearm-after-done'
   '"reason":"rolled-back'
   '"reason":"unexpected-exit'
@@ -180,7 +182,8 @@ DRIFT_GREPS=(
 # when it is one of these (noop-unset / unexpected-exit(from=…) embed the raw flag value, and this
 # output lands in a PUBLIC issue comment that the runner's secret masker never sees).
 KNOWN_REASONS='["dbsize-nonzero","flip-complete","flushall-failed","flushed-resume-no-reflush",
-  "latch-unrecordable","refuse-rearm-after-done","rolled-back","verify-health",
+  "latch-cleared","latch-unrecordable","reflush-evidence-invalid","refuse-rearm-after-done",
+  "rolled-back","verify-health",
   "verify-owner-unrecordable","verify-registry-empty","verify-registry-unreadable","verify-unknown",
   "noop-done","noop-unset","noop-rolled-back","noop-aborted"]'
 
