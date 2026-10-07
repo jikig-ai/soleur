@@ -2201,7 +2201,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
+# Re-measured at 363 (PR #9674 review round 1, third pass: the compose-guard, visited-key witness, _hs_want and e_row rc-2 controls). Earlier: 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
 # alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).

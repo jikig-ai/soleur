@@ -66,11 +66,11 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 # --- Transport-confinement diagnostics (#7873) --------------------------------
 # Every credentialed `curl` below carries `--disable --noproxy '*'` and discards
 # curl's own stderr (which can carry the URL). A failed request then has four
-# competing causes the founder cannot tell apart: the xtrace refusal, the proxy
-# this script deliberately bypassed, a ~/.curlrc that `--disable` dropped, or an
-# ordinary network failure. So each failure emits ONE structured marker carrying
-# all four discriminators, beside a human line that names the bypass instead of
-# blaming the founder's connectivity.
+# competing causes the founder cannot tell apart: the proxy this script
+# deliberately bypassed, a ~/.curlrc that `--disable` dropped, a TLS trust
+# variable it cleared, or an ordinary network failure. So each failure emits ONE
+# structured marker carrying the discriminators, beside a human line that names
+# the bypass instead of blaming the founder's connectivity.
 SOLEUR_TRANSPORT_SCRIPT="bsky-community.sh"
 SOLEUR_TRANSPORT_PLATFORM="Bluesky"
 
@@ -111,7 +111,8 @@ proxy_bypassed() {
 # claiming it was applied. It now reports whether a proxy was actually configured
 # for this request to bypass, which is the fact a reader needs. `refusal` was the
 # constant "none" at every call site, so the cause it exists to discriminate could
-# never appear; it now carries `env-rebind-refused` and `xtrace-credential-bound`.
+# never appear; the field stays for a caller that can refuse for a named cause, and
+# this script has none, so it passes "none".
 #
 # `tls_env_cleared` is new. The prologue unsets CURL_CA_BUNDLE/SSL_CERT_FILE et al,
 # which is correct against an attacker and BREAKS a founder whose corporate CA
