@@ -10,7 +10,7 @@ tags: [egress, sandbox, squid, security, agent-runtime]
 brand_survival_threshold: single-user incident
 ---
 
-# ADR-274: Opt-in open-web egress via a dedicated CONNECT-only gateway and per-session forwarder
+# ADR-276: Opt-in open-web egress via a dedicated CONNECT-only gateway and per-session forwarder
 
 ## Status
 

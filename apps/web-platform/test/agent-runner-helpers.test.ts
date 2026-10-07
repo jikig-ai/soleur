@@ -92,8 +92,11 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // would let a stray/extra entry or a silently-widened deny set slip through
     // the guard — and denyRead is now the sole bwrap-level cross-tenant guard,
     // so an unexpected member is exactly what this must fail on.
+    // #9534: the egress token dir is denied for EVERY session — its files ARE
+    // live gateway credentials for concurrent entitled sessions.
+    const tokenDir = process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens";
     expect([...result.filesystem.denyRead].sort()).toEqual(
-      [sibA, sibB, "/proc", `${root}-c4-staging`].sort(),
+      [sibA, sibB, "/proc", `${root}-c4-staging`, tokenDir].sort(),
     );
   });
 
@@ -202,8 +205,9 @@ describe("buildAgentSandboxConfig — GitHub egress variant (#5041 follow-up)", 
     expect(result.filesystem.allowWrite).toEqual([own]);
     expect(result.filesystem).not.toHaveProperty("allowRead");
     // EXACT set (order-independent) — see the T17 guard rationale above.
+    // The egress token dir is denied for every session (#9534).
     expect([...result.filesystem.denyRead].sort()).toEqual(
-      [sibA, "/proc", `${root}-c4-staging`].sort(),
+      [sibA, "/proc", `${root}-c4-staging`, process.env.EGRESS_TOKEN_DIR ?? "/var/lib/soleur/egress-tokens"].sort(),
     );
   });
 

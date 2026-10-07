@@ -153,6 +153,7 @@
 1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
 10	apps/web-platform/infra/disk-monitor.test.sh
+1	apps/web-platform/infra/egress-gateway-bootstrap.sh
 4	apps/web-platform/infra/generate-apex-rollback-pr.sh
 2	apps/web-platform/infra/git-data-bootstrap.sh
 2	apps/web-platform/infra/git-data-bootstrap-store-verify.test.sh

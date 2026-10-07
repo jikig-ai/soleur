@@ -38,12 +38,8 @@ const EXPECTED_ALLOWLIST = [
   "USER",
   "SHELL",
   "TMPDIR",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
+  // Proxy vars are DELIBERATELY absent (structural review A8): ambient proxy
+  // env would steer every session outside the egress guard.
   "SOLEUR_BWRAP_SECCOMP_BPF",
 ] as const;
 
@@ -158,10 +154,12 @@ describe("buildAgentEnv", () => {
     expect(env).not.toHaveProperty("CLAUDECODE");
   });
 
-  test("forwards proxy vars when present", () => {
+  test("does NOT forward ambient proxy vars (default-deny; the egressProxy injection is the only carrier)", () => {
     const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
-    expect(env.HTTPS_PROXY).toBe("test-https_proxy");
-    expect(env.http_proxy).toBe("test-http_proxy");
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.http_proxy).toBeUndefined();
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.NO_PROXY).toBeUndefined();
   });
 
   test("contains only known keys (no process.env leakage)", () => {

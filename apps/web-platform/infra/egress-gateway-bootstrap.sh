@@ -63,7 +63,7 @@ fi
 # gateway's auth helper runs as the `proxy` uid and needs only TRAVERSE (+x)
 # for `-f "$TOKDIR/$pass"`; nobody else can LIST the dir, so token filenames
 # (the credentials) stay unenumerable. Shared rw mount into the app
-# container is the mint channel; residual (accepted, ADR-274): a same-uid
+# container is the mint channel; residual (accepted, ADR-276): a same-uid
 # process in the app container could mint a file here — the container uid is
 # the trust boundary; the sandboxed agent is behind denyRead.
 mkdir -p "$TOKEN_DIR"

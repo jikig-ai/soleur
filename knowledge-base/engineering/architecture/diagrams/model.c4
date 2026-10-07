@@ -115,7 +115,7 @@ model {
       }
       egressForwarder = component "Per-Dispatch Egress Forwarder" {
         technology "egress-forwarder.mjs — spawned per entitled dispatch inside the webapp dispatcher process, binds 127.0.0.1:0, ppid watchdog"
-        description "Session-scoped bridge between the spawned-CLI env proxy (HTTP(S)_PROXY=http://<workspaceId>:<sessionToken>@127.0.0.1:<port>) and the egress gateway (ADR-274). Requires the session token inbound, injects workspaceId:token upstream. Lifetime-bound: dies with the dispatch; token file deleted at teardown or toggle-off (warm-path re-resolution). Spawn failure degrades the dispatch to zero-egress — never a dead config — mirrored to Sentry. The token never reaches the sandboxed child's env (SRT substitutes its own creds on the in-netns hop — measured, spec TR7 arm 3)"
+        description "Session-scoped bridge between the spawned-CLI env proxy (HTTP(S)_PROXY=http://<workspaceId>:<sessionToken>@127.0.0.1:<port>) and the egress gateway (ADR-276). Requires the session token inbound, injects workspaceId:token upstream. Lifetime-bound: dies with the dispatch; token file deleted at teardown or toggle-off (warm-path re-resolution). Spawn failure degrades the dispatch to zero-egress — never a dead config — mirrored to Sentry. The token never reaches the sandboxed child's env (SRT substitutes its own creds on the in-netns hop — measured, spec TR7 arm 3)"
       }
     }
 
@@ -304,7 +304,7 @@ model {
       }
       egressGw = container "Agent Egress Gateway" {
         technology "Squid CONNECT-only on dedicated docker bridge soleur-egress0 (172.31.100.2:8443)"
-        description "Standing outbound HTTPS chokepoint for ENTITLED hosted agent sessions only (feat-open-web-egress, #9534, ADR-274). The SDK sandbox's own domain filter is NOT a boundary under a proxy chain (spec TR7 — measured: it forwards upstream unfiltered), so this gateway is the load-bearing control: CONNECT-only, SSL_ports 443, proxy_auth REQUIRED (per-session tokens ro-mounted from /var/lib/soleur/egress-tokens — a file's existence IS the credential), DNS-pinned per request, file-backed dst deny-set (RFC1918/CGNAT/link-local/cluster-private/IPv6-local/v4-mapped/6to4 + cloud-metadata endpoints), JSON decision+close log. Belted by nftables chain SOLEUR-EGRESS-GW (iifname soleur-egress0, ct-state-new-scoped) and the standing default-drop for every other egress path. Fail-closed: gateway unreachable = no egress, same as before the feature"
+        description "Standing outbound HTTPS chokepoint for ENTITLED hosted agent sessions only (feat-open-web-egress, #9534, ADR-276). The SDK sandbox's own domain filter is NOT a boundary under a proxy chain (spec TR7 — measured: it forwards upstream unfiltered), so this gateway is the load-bearing control: CONNECT-only, SSL_ports 443, proxy_auth REQUIRED (per-session tokens ro-mounted from /var/lib/soleur/egress-tokens — a file's existence IS the credential), DNS-pinned per request, file-backed dst deny-set (RFC1918/CGNAT/link-local/cluster-private/IPv6-local/v4-mapped/6to4 + cloud-metadata endpoints), JSON decision+close log. Belted by nftables chain SOLEUR-EGRESS-GW (iifname soleur-egress0, ct-state-new-scoped) and the standing default-drop for every other egress path. Fail-closed: gateway unreachable = no egress, same as before the feature"
       }
       inngestRedis = container "Inngest Redis" {
         technology "Self-hosted Redis — AOF on /mnt/data"
@@ -350,7 +350,7 @@ model {
   }
   publicInternet = system "Public Internet Destinations" {
     #external
-    description "The unenumerated set of public HTTPS hosts an entitled workspace's agent session may CONNECT to through the egress gateway (#9534, ADR-274) — documentation, package registries, third-party APIs, chosen by the agent at run time. NOT a recipient/sub-processor in the Art. 28 sense: destinations are owner-directed, and the gateway's audit log attributes each CONNECT to the workspace token. The risk is disclosed at the toggle and accepted by name in the DPIA screening."
+    description "The unenumerated set of public HTTPS hosts an entitled workspace's agent session may CONNECT to through the egress gateway (#9534, ADR-276) — documentation, package registries, third-party APIs, chosen by the agent at run time. NOT a recipient/sub-processor in the Art. 28 sense: destinations are owner-directed, and the gateway's audit log attributes each CONNECT to the workspace token. The risk is disclosed at the toggle and accepted by name in the DPIA screening."
   }
   github = system "GitHub" {
     #external

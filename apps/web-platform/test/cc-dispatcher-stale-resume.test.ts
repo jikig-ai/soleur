@@ -121,7 +121,6 @@ import {
   __registerCcWorktreeLeaseForTests,
   handleCcCloseQuery,
 } from "@/server/cc-dispatcher";
-import { teardownEgressForwarder } from "@/server/egress-forwarder";
 import {
   CONTEXT_RESET_NOTICE_GENERIC,
   CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
