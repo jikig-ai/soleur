@@ -1277,6 +1277,50 @@ missed_tick_report() {
   return 0
 }
 
+# #6940 item 1 (ADR-146 §Deferred item 1) — registry-sourced missed-tick
+# discovery. missed_tick_report enumerates empty (function, bucket) pairs only
+# for ids OBSERVED in the primary doublefire body — a live cron with zero runs
+# in the fsm-anchored window (e.g. a quarterly schedule) is invisible to it. The
+# registry probe's additive `functions` field supplies the full population: the
+# zero-run set is registry_cron_ids − observed, and only THAT set is re-probed.
+#
+# args: $1 registry-probe body-json ({functions:[{id,slug,triggers:[{type,value}]}]})
+#       $2 doublefire runs body-json ({runs:[{functionID,startedAt,...}]})
+# stdout: one line — CSV of ids that are (a) registry functions carrying a CRON
+#   trigger, (b) absent from $2's .runs[].functionID, (c) shape-checked against
+#   \A[A-Za-z0-9._-]{1,128}\z (same rule as missed_tick_report — \A..\z, not
+#   ^..$: jq's $ also matches before a trailing newline).
+# stderr: a diagnostic line counting shape-skipped candidates (never on stdout —
+#   the caller consumes stdout as a URL query value).
+# DEGRADES, never fails: unparseable or missing fields yield an empty csv and rc
+#   0 — a failed derivation must not redden a verdict that already printed.
+# Same extraction contract as missed_tick_report: signature and closing brace at
+# column 0, and no column-0 `}` inside the body (the suite awk-extracts it).
+zero_run_cron_ids() {
+  local res
+  if ! res=$(jq -nc --arg r "$1" --arg b "$2" '
+    def okid: type == "string" and test("\\A[A-Za-z0-9._-]{1,128}\\z");
+    ($r | fromjson? // {}) as $reg
+    | ($b | fromjson? // {}) as $runs
+    | ([ $runs.runs[]?.functionID ] | unique) as $obs
+    | ([ $reg.functions[]?
+         | select(any(.triggers[]?; .type == "CRON"))
+         | .id ]) as $cron_ids
+    | [ $cron_ids[] | select(. as $id | ($obs | index($id)) == null) ] as $cand
+    | { csv: ([ $cand[] | select(okid) ] | unique | join(",")),
+        skipped: ([ $cand[] | select(okid | not) ] | unique | length) }
+  '); then
+    echo "zero_run_cron_ids: derivation failed (unparseable input) — discovery skipped" >&2
+    return 0
+  fi
+  local skipped
+  skipped=$(jq -r '.skipped' <<<"$res")
+  if [[ "$skipped" != "0" ]]; then
+    echo "zero_run_cron_ids: $skipped registry CRON id value(s) failed the shape check and were skipped" >&2
+  fi
+  jq -r '.csv' <<<"$res"
+}
+
 case "$OP" in
   enumerate)
     # GET hook → records JSON in the response body. HMAC over empty body
@@ -1983,7 +2027,8 @@ case "$OP" in
     echo "::notice::2.-1 pool pre-check CLEAN — inngest_conns=$INNGEST_CONNS ≤ readiness ceiling $READINESS_CEILING (burst headroom OK). breakdown: ${POOL_BREAKDOWN}"
 
     # ---- 2.0 empty-registry pre-flight (P1-6). GET the web-host registry probe
-    # (HMAC over empty body); it forwards the { functions { id } } query to the
+    # (HMAC over empty body); it forwards the
+    # { functions { id slug triggers { type value } } } query (#6940) to the
     # dedicated host GQL over the private net. registry_empty MUST be true — a
     # non-empty dark registry means a second scheduler would register + double-fire
     # against prod Postgres, the exact failure this cutover exists to prevent.
@@ -2866,6 +2911,9 @@ case "$OP" in
     else
       echo "::warning::verify precondition (P3-c): function_count=$REG_COUNT is NON-EMPTY but that only proves the re-sync STARTED. Confirm $REG_COUNT matches the pre-cutover op=inventory 'functions' count (or set CUTOVER_REGISTRY_BASELINE) before trusting an exactly-once verdict over a possibly-incomplete function-set."
     fi
+    # #6940 — keep the registry-probe body for the zero-run discovery below. BODY
+    # is overwritten by the 2.6 doublefire fetch, so the capture MUST happen here.
+    REG_BODY="$BODY"
 
     # ---- 2.6 exactly-once double-fire check. GET the web-host doublefire probe
     # (it forwards the runs(first, filter: RunsFilterV2!, orderBy) query with
@@ -3023,9 +3071,57 @@ case "$OP" in
     fi
     echo "::notice::2.6 SCOPE CAVEAT (P2-a / DI-C3): the doublefire-probe reads ONLY the dedicated host's (10.0.1.40) run history. It is NOT a web-host double-fire detector — a surviving web-host (colocated) scheduler fires against prod Postgres via its OWN loopback backend PRE-repoint, whose runs never appear on the dedicated host. The web scheduler host (web-1) is the only colocated scheduler (web-2 scope: see op=execute SEAM 2.2a); op=quiesce-web + the op=execute 2.2 QUIESCED gate are the control against a web-host double-fire — op=verify cannot substitute for it."
 
+    # #6940 item 1 (ADR-146 §Deferred 1) — REGISTRY-SOURCED ZERO-RUN DISCOVERY.
+    # missed_tick_report enumerates only ids OBSERVED in $BODY, so a live cron
+    # with zero runs in the fsm-anchored window (e.g. the quarterly
+    # cron-legal-audit) is invisible to it. When the report is armed AND the gap
+    # window is set, derive registry_cron_ids − observed from the registry probe's
+    # additive `functions` field (REG_BODY, captured before BODY was overwritten)
+    # and re-probe JUST that set over a ~2x-max-cron-period lookback — the
+    # function_ids scope is what makes a 184d window affordable (ADR-146). The
+    # merged body feeds the enumeration. ONE bounded call, never retried, never
+    # exit 1 — discovery is advisory and must not redden the verdict above.
+    MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"
+    MTR_BODY="$BODY"
+    if [[ "$MTR_GATE" == "true" && -n "${CUTOVER_WINDOW_FROM:-}" && -n "${CUTOVER_WINDOW_UNTIL:-}" ]]; then
+      if ! echo "$REG_BODY" | jq -e 'has("functions")' >/dev/null 2>&1; then
+        echo "::warning::2.6 zero-run discovery skipped: the registry-probe body has no 'functions' field — the on-host probe predates #6940 (the infra-config push has not landed on the web host). Re-run after the push lands. The missed-tick enumeration below covers only functions observed in the verify window. The exactly-once verdict above STANDS."
+      else
+        ZERO_RUN_IDS=$(zero_run_cron_ids "$REG_BODY" "$BODY")
+        if [[ -n "$ZERO_RUN_IDS" ]]; then
+          DISC_LOOKBACK="${CUTOVER_DISCOVERY_LOOKBACK_S:-15897600}"
+          if [[ "$DISC_LOOKBACK" =~ ^[1-9][0-9]*$ ]]; then
+            DISC_FROM=$(date -u -d "@$(( $(date -u +%s) - DISC_LOOKBACK ))" +%Y-%m-%dT%H:%M:%SZ)
+            DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}"
+            echo "::notice::2.6 zero-run discovery: re-probing registry cron function(s) with zero runs in the verify window over a ${DISC_LOOKBACK}s (~2x max cron period) lookback — function_ids=[$ZERO_RUN_IDS]"
+            rm -f /tmp/verify-zero-run
+            # Credential headers ride curl's stdin config channel (--config -), never argv —
+            # lint-shell-trace-credential-refusal's per-file baseline is shrink-only and this
+            # call is a NEW site; /proc/<pid>/cmdline must not carry the secrets.
+            DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
+              -X GET \
+              --config - \
+              "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
+            DISC_BODY=$(cat /tmp/verify-zero-run 2>/dev/null || echo "")
+            if [[ "$DISC_CODE" == "200" ]] && echo "$DISC_BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
+              DISC_N=$(echo "$DISC_BODY" | jq '.runs | length')
+              MTR_BODY=$(jq -nc --argjson a "$MTR_BODY" --argjson b "$DISC_BODY" '{runs:($a.runs + $b.runs)}')
+              echo "::notice::2.6 zero-run discovery: merged $DISC_N run(s) from the scoped re-scan into the missed-tick enumeration body — live-but-slow crons are now visible to the enumeration"
+            else
+              echo "::warning::2.6 zero-run discovery probe failed (HTTP $DISC_CODE) — the missed-tick enumeration below covers only the primary-window population; live-but-slow crons with zero recent runs are not enumerated. The exactly-once verdict above STANDS."
+            fi
+          else
+            echo "::warning::2.6 zero-run discovery skipped: CUTOVER_DISCOVERY_LOOKBACK_S='$DISC_LOOKBACK' is not a positive integer. The exactly-once verdict above STANDS."
+          fi
+        else
+          echo "::notice::2.6 zero-run discovery: every registered cron function has a run in the verify window — nothing to re-probe"
+        fi
+      fi
+    fi
+
     # #6939 — the missed-tick report runs AFTER the verdict above and cannot change it (OFF, the
     # default, never fails; ON fails only on an invalid window). See missed_tick_report().
-    missed_tick_report "${CUTOVER_MISSED_TICK_CANDIDATES:-}" "$BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"
+    missed_tick_report "$MTR_GATE" "$MTR_BODY" "$CRON_PERIOD" "${CUTOVER_WINDOW_FROM:-}" "${CUTOVER_WINDOW_UNTIL:-}"
     echo "::notice::op=verify complete"
     ;;
 

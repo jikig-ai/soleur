@@ -667,6 +667,8 @@ jobs:
               -target=betteruptime_heartbeat.inngest_prd \
               -target=betteruptime_policy.inngest \
               -target=doppler_secret.inngest_heartbeat_url_prd \
+              -target=betteruptime_heartbeat.inngest_server_probe \
+              -target=doppler_secret.inngest_server_probe_heartbeat_url \
               -target=betteruptime_heartbeat.git_data_prd \
               -target=doppler_secret.git_data_heartbeat_url_prd \
               -target=doppler_secret.zot_heartbeat_url_prd \
