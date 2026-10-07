@@ -67,8 +67,8 @@ jobs:
         working-directory: apps/web-platform
         run: ./scripts/supabase-local.sh assert --require-stack
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+      - name: Assert psql present (runner-image dependency)
+        run: psql --version
 
       # Fresh-stack content_sha bootstrap: run-migrations.sh creates the tracking
       # table WITHOUT content_sha (mig 054 adds it later via ADD COLUMN IF NOT
