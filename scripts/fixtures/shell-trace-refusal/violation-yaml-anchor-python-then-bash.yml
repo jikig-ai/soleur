@@ -1,0 +1,23 @@
+# Rule E must fire ONCE. One anchored step list is reached under TWO inherited default shells:
+# first under job `first` (defaults.run.shell: python, so its body is skipped), then through the
+# alias under job `second` (defaults.run.shell: bash, so the SAME body is scanned). The walk's
+# visited-container key must carry the inherited shell: keyed on the node alone, the aliased
+# visit under bash is cut short as "already walked" and the one real site is lost.
+name: fixture-anchor-python-then-bash
+on: workflow_dispatch
+jobs:
+  first:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps: &steps
+      - name: shared steps
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"
+  second:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps: *steps
