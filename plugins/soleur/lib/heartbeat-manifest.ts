@@ -290,7 +290,7 @@ export const MANIFEST: ManifestEntry[] = [
   {
     name: "inngest_server_probe",
     // #8516 — the dead-probe sibling of logtail_exploration_alert.inngest_luks_wrong_volume:
-    // a pusher beats it only while a fresh host_role=dedicated SOLEUR_INNGEST_SERVER_PROBE row
+    // a pusher beats it only while a fresh host_role=dedicated inngest-server-probe row
     // reaches the warehouse (hourly emission cadence; period 3600 + grace 1800). DP-10's delivery
     // shape: born paused with the feeder deliberately deferred — candidate shapes live on #9703.
     arming: "external-probe",

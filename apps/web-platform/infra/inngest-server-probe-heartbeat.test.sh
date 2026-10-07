@@ -3,7 +3,7 @@
 # logtail_exploration_alert.inngest_luks_wrong_volume.
 #
 # The wrong-volume alert runs on_missing_data = "treat_as_zero": a dead
-# SOLEUR_INNGEST_SERVER_PROBE pipeline (emitter / Vector allowlist / sink) reads as ZERO
+# inngest-server-probe pipeline (emitter / Vector allowlist / sink) reads as ZERO
 # wrong-volume rows — silently healthy while a rollback onto plaintext hcloud_volume.inngest_redis
 # goes unpaged. The remedy is a dead-man's-switch heartbeat mirroring DP-10
 # (betteruptime_heartbeat.workspaces_luks) sized to the probe's HOURLY emission cadence

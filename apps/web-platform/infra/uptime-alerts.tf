@@ -525,7 +525,7 @@ resource "doppler_secret" "workspaces_luks_heartbeat_url" {
 # pings at creation, so an unfed unpaused heartbeat pages falsely. The FEEDER is deliberately not
 # in this resource's PR — candidate shapes and the beat budget are tracked on the issue the
 # heartbeat-manifest.ts row (feeder.kind = "none" + tracking_issue + arming_pending) names. The
-# beat must certify a FRESH host_role=dedicated SOLEUR_INNGEST_SERVER_PROBE row landed in the
+# beat must certify a FRESH host_role=dedicated inngest-server-probe row landed in the
 # warehouse (covers sink + allowlist failures a host-side push cannot see; #6780).
 resource "betteruptime_heartbeat" "inngest_server_probe" {
   name      = "soleur-inngest-server-probe-prd"
