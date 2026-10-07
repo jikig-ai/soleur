@@ -12,10 +12,14 @@ import {
   argvSecretRejection,
   assessCaptureOutcome,
   buildBwrapInvocation,
+  BWRAP_BIND_SRC_OPTS,
+  BWRAP_ONE_ARG_PATH,
+  CANARY_BRIDGE_SPAWN_PLACEHOLDER,
   CANARY_C4_STAGING_PLACEHOLDER,
   CANARY_EMPTY_PLACEHOLDER,
   CANARY_WS_PLACEHOLDER,
   hasUnsubstitutedPlaceholder,
+  isDeterministicConstPath,
   classifyFdCensusProbe,
   classifyForkProbe,
   classifyReplayVerdict,
@@ -570,7 +574,7 @@ describe("C4 staging root placeholder (#8623)", () => {
     expect(argv.some((t) => /^\/(root|home)(\/|$)/.test(t))).toBe(false);
     const tmpfsC4 = argv.filter((t, i) => t === CANARY_C4_STAGING_PLACEHOLDER && argv[i - 1] === "--tmpfs");
     expect(tmpfsC4).toHaveLength(1);
-    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER];
+    const known = [CANARY_WS_PLACEHOLDER, CANARY_EMPTY_PLACEHOLDER, CANARY_C4_STAGING_PLACEHOLDER, CANARY_BRIDGE_SPAWN_PLACEHOLDER];
     for (const t of [...argv, ...fx.prepDirs]) {
       for (const m of t.match(/\$\{CANARY_[A-Z0-9_]*\}/g) ?? []) expect(known).toContain(m);
     }
@@ -578,6 +582,153 @@ describe("C4 staging root placeholder (#8623)", () => {
   });
 });
 
+// #9614/#9618 — the SDK-internal bridge-spawn dir is HOME-derived
+// (`join(homedir(), ".claude", "bridge-spawn")` in the bundled CLI, no env
+// override); ADR-079 2026-10-06 amendment: SDK-internal HOME-derived dirs are
+// placeholdered via a capture-computed root.
+describe("bridge-spawn placeholder (#9614/#9618)", () => {
+  const WS = "/tmp/soleur-sandbox-canary/00000000-0000-4000-8000-0000000000ca";
+  const BSP = "/root/.claude/bridge-spawn";
+  const RAW = ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc", "--tmpfs", BSP];
+
+  it("maps the bridge-spawn root (and subpaths) to ${CANARY_BRIDGE_SPAWN} and adds it to prepDirs", () => {
+    const { bwrapSetupArgv, prepDirs } = normalizeCapturedArgv([...RAW, "--tmpfs", `${BSP}/sub`], {
+      wsRoot: WS,
+      bridgeSpawnRoot: BSP,
+    });
+    expect(bwrapSetupArgv).toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+    expect(bwrapSetupArgv).toContain(`${CANARY_BRIDGE_SPAWN_PLACEHOLDER}/sub`);
+    expect(bwrapSetupArgv.some((t: string) => t.includes(BSP))).toBe(false);
+    expect(prepDirs).toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  });
+
+  it("does NOT add the placeholder to prepDirs when the argv never references it", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", "/proc"],
+      { wsRoot: WS, bridgeSpawnRoot: BSP },
+    );
+    expect(prepDirs).not.toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  });
+
+  it("still throws host_path on the bridge-spawn token when bridgeSpawnRoot is NOT supplied (fail-loud)", () => {
+    expect(() => normalizeCapturedArgv(RAW, { wsRoot: WS })).toThrow(/host_path/);
+  });
+
+  it("still throws host_path on other HOME paths when bridgeSpawnRoot IS supplied", () => {
+    for (const bad of ["/root/.ssh", `${BSP}-evil`, `${BSP}x`]) {
+      expect(
+        () =>
+          normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", bad], {
+            wsRoot: WS,
+            bridgeSpawnRoot: BSP,
+          }),
+        `expected host_path throw for '${bad}'`,
+      ).toThrow(/host_path/);
+    }
+  });
+
+  it("rejects `..` segments inside mapped subpaths (traversal would reach mkdir outside the roots)", () => {
+    expect(() =>
+      normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", `${WS}/../escape`], {
+        wsRoot: WS,
+      }),
+    ).toThrow(/traversal/);
+    expect(() =>
+      normalizeCapturedArgv(["--ro-bind", "/", "/", "--bind", WS, WS, "--tmpfs", `${BSP}/../escape`], {
+        wsRoot: WS,
+        bridgeSpawnRoot: BSP,
+      }),
+    ).toThrow(/traversal/);
+  });
+
+  it("preps placeholder-subpath bind sources and literal tmpfs targets (replay precondition)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      [
+        "--ro-bind", "/", "/",
+        "--bind", WS, WS,
+        "--ro-bind", `${WS}/.claude`, `${WS}/.claude`,
+        "--ro-bind", "/dev/null", `${WS}/.claude/settings.json`,
+        "--tmpfs", "/tmp/claude-0/bash-edit-diff",
+        "--tmpfs", "/proc",
+      ],
+      { wsRoot: WS, bridgeSpawnRoot: BSP },
+    );
+    expect(prepDirs).toContain(`${CANARY_WS_PLACEHOLDER}/.claude`);
+    expect(prepDirs).toContain("/tmp/claude-0/bash-edit-diff");
+    // File-mount dsts are auto-created by bwrap — never pre-created as dirs.
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/.claude/settings.json`);
+    // Image-guaranteed consts are exempt.
+    expect(prepDirs).not.toContain("/proc");
+  });
+
+  it("preps placeholder-subpath MOUNT targets exactly (mount order makes prefix coverage unsound)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--tmpfs", `${WS}/probe`, "--bind", WS, WS],
+      { wsRoot: WS },
+    );
+    expect(prepDirs).toContain(`${CANARY_WS_PLACEHOLDER}/probe`);
+  });
+
+  it("does NOT prep symlink targets or file/file-data sources (not real source dirs)", () => {
+    const { prepDirs } = normalizeCapturedArgv(
+      ["--ro-bind", "/", "/", "--bind", WS, WS, "--symlink", `${WS}/tgt`, `${WS}/lnk`],
+      { wsRoot: WS },
+    );
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/tgt`);
+    expect(prepDirs).not.toContain(`${CANARY_WS_PLACEHOLDER}/lnk`);
+  });
+
+  it("substitutes ${CANARY_BRIDGE_SPAWN} at replay, and flags it when unsubstituted", () => {
+    const argv = [CANARY_WS_PLACEHOLDER, `${CANARY_BRIDGE_SPAWN_PLACEHOLDER}/x`];
+    const out = substituteCanonicalArgv(argv, { ws: "/w", empty: "/e", bridgeSpawn: "/b" });
+    expect(out).toEqual(["/w", "/b/x"]);
+    expect(hasUnsubstitutedPlaceholder(out)).toBe(false);
+    expect(
+      hasUnsubstitutedPlaceholder(substituteCanonicalArgv(argv, { ws: "/w", empty: "/e" })),
+    ).toBe(true);
+  });
+
+  it("the COMMITTED fixture carries the bridge-spawn tmpfs exactly once, placeholdered", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+    const argv = fx.bwrapSetupArgv;
+    const tmpfsBsp = argv.filter((t, i) => t === CANARY_BRIDGE_SPAWN_PLACEHOLDER && argv[i - 1] === "--tmpfs");
+    expect(tmpfsBsp).toHaveLength(1);
+    expect(fx.prepDirs).toContain(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  });
+
+  // The hole that let a non-replayable fixture ship: every dir the real bwrap
+  // spawn needs must resolve EXACTLY in prepDirs — a placeholder-root prefix
+  // is not sufficient for subpath targets, because bwrap applies mounts in
+  // argv order and a target under a not-yet-bound parent fails like a missing
+  // source. Pinned structurally so a future SDK argv shape cannot
+  // reintroduce it silently. Opt vocab + const predicate are imported from
+  // the implementation — a parser addition updates this test automatically.
+  it("the COMMITTED fixture preps every bind-source subpath and mount target", () => {
+    const fx = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../infra/sandbox-canary-argv.json", import.meta.url)), "utf8"),
+    ) as { bwrapSetupArgv: string[]; prepDirs: string[] };
+    const argv = fx.bwrapSetupArgv;
+    const prepped = new Set(fx.prepDirs);
+    for (let i = 0; i < argv.length; i++) {
+      const t = argv[i];
+      const next = argv[i + 1];
+      if (BWRAP_ONE_ARG_PATH.has(t) && typeof next === "string" && !isDeterministicConstPath(next)) {
+        expect(prepped.has(next), `mount target ${t} ${next} not in prepDirs`).toBe(true);
+      }
+      // Any bind option whose SOURCE is a placeholder subpath must be prepped
+      // (bwrap never creates sources).
+      if (
+        BWRAP_BIND_SRC_OPTS.has(t) &&
+        typeof next === "string" &&
+        /\$\{CANARY_[A-Z0-9_]*\}\//.test(next)
+      ) {
+        expect(prepped.has(next), `bind source ${next} not in prepDirs`).toBe(true);
+      }
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // #8752 — derived hardening probes: verdict contract. Probe failures are
