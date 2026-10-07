@@ -9,11 +9,15 @@ import { buildAgentEnv, type AgentCredential, type BuildAgentEnvOptions } from "
 //
 // The web Concierge loads the plugin's hooks.json (SDK `plugins:[{type:"local"}]`;
 // `settingSources:[]` does not exclude it), so a PreToolUse hook written for a person at a
-// terminal also runs inside hosted sessions (ADR-093). Hosted Bash is already sandboxed and
-// gated by `permission-callback.ts`, and the web runtime has no `ask` prompt for these hooks
-// to reach, so a hook that answers there stalls or blocks the agent. Each such hook reads a
+// terminal also runs inside hosted sessions (ADR-093). Hosted Bash runs in the sandbox under the
+// workspace approval mode of `permission-callback.ts` (in the default autonomous mode a command
+// outside `BLOCKED_BASH_PATTERNS` runs without a prompt), and whether a hook `ask` reaches any prompt
+// there is unmeasured, so a hook that answers there may stall or block the agent. Each such hook reads a
 // kill switch that `buildAgentEnv` sets in `AGENT_ENV_OVERRIDES`; this census makes the next
 // hook author classify theirs, and the behavioural runs prove the override really silences it.
+// SCOPE: it covers the hosted Agent SDK sessions only. The server-side scheduled agents that spawn
+// `claude --plugin-dir plugins/soleur` build their own env (`buildSpawnEnv` in each cron function,
+// `_cron-claude-eval-substrate.ts`), never call `buildAgentEnv`, and are outside this census (ADR-274).
 //
 // The population is DERIVED from hooks.json; the registry below classifies it. An unlisted
 // hook fails. Behaviour, not the label, is the anchor: a `web-disabled` hook is spawned with
