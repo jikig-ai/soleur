@@ -24,8 +24,8 @@ lane: single-domain
 
 ### New considerations discovered
 
-1. **The BEHIND reading appears while checks are still pending.** Re-measured on #9697 at 12:33Z: `OPEN BEHIND`, 78 pass / 1 pending / 9 skipping, armed, `--queue-state` = `not_queued OPEN armed removal=none`, head `4b0bb6d78d` two `main` commits behind. So BEHIND is not a "CI is done" signal under the strict policy; it is shown for the whole armed window, which is exactly the window the wait arm covers, and it is why a pending-count (not the mergeStateStatus) is what the idle grace keys on. Earlier (12:14Z, `behind_by` 0) the same PR read `OPEN BLOCKED`.
-2. **#9697 is the live discriminating case and was still unresolved at the end of planning.** If its last check settles and GitHub enqueues it while it is still BEHIND, that is a sixth observation for outcome (a) from the exact PR that motivated this plan (the other session's Phase 7 may sync it first, which is not this plan's concern and which this session never does). If it sits green, BEHIND and un-enqueued, that is outcome (b) and the expiry arm is the carrier. Read-only reads only; the plan's conclusion does not rest on it.
+1. **The BEHIND reading appears while checks are still pending.** Re-measured on #9697 at 12:33Z: `OPEN BEHIND`, 78 pass / 1 pending / 9 skipping, armed, `--queue-state` = `not_queued OPEN armed removal=none`, head `4b0bb6d78d` two `main` commits behind. So BEHIND is not a "CI is done" signal under the strict policy; it is shown while a check is pending, which is exactly the window the wait arm covers. Once everything settled the same PR read `OPEN CLEAN` (still 2 commits behind) and was enqueued about 90 s later; earlier (12:14Z, `behind_by` 0) it read `OPEN BLOCKED`.
+2. **#9697 resolved it before the end of the planning session** (see the Premise section): enqueued by GitHub at 12:39:57Z while 2 `main` commits behind, about 90 s after its last check settled, with no push. Latency, the CLEAN-once-settled behaviour and the `disarmed`-while-queued reading are now measured, not assumed.
 3. **`--queue-state` consumes the seen-queued marker when it prints `dequeued`** (sync-pr-behind.sh, consume-on-report). Any new caller must therefore treat `dequeued` as terminal, which is why the grace-crossing `case` breaks the poll on it instead of falling through to `--step` (a marker-only dequeue would otherwise read as plain "not queued" and push).
 
 ## Overview
@@ -72,14 +72,20 @@ with SQUASH / ALLGREEN / max_entries_to_build 2 / max_entries_to_merge 1 / min_e
 check_response_timeout_minutes 60). Outcome (b) was not observed in 5 of 5, which is sufficient to drop the explicit-enqueue design because the expiry arm below carries the PR if GitHub ever behaves otherwise. The green-to-enqueue latency itself is not measured (the table's windows are dominated by CI time); the post-merge check records it. No ruleset change is needed and none is
 proposed; `infra/github/ruleset-ci-required.tf` is not touched.
 
-**Not measured, recorded exactly.** PR #9697 (read-only: `gh pr view 9697`, the timeline, `--queue-state`) at
-12:14Z was `OPEN BLOCKED`, armed (`enabledAt` 11:02Z, `mergeMethod: MERGE`), 50 pass / 28 pending / 8 skipping, head
-`4b0bb6d78d` last committed 11:53Z, `--queue-state` = `not_queued OPEN armed removal=none`, and `behind_by = 0`
-against `origin/main`. It has not yet been BEHIND with a settled CI, so it cannot discriminate (a) from (b) and the
-conclusion above does not rest on it. A read-only re-check (never push, sync, enqueue or merge it) is cheap at any time; if it ever sits BEHIND, green and un-enqueued for more than 5 minutes, that is outcome (b) and the
-expiry arm below is what carries the PR; surface the strict flag to the operator, do not change it.
+**The motivating PR resolved it (read-only, 2026-10-07).** PR #9697 (never touched by this session) was `OPEN BLOCKED` at
+12:14Z (50 pass / 28 pending, `behind_by` 0), became `OPEN BEHIND` once `main` advanced by 2 commits while one check was
+still pending (12:33Z: 78 pass / 1 pending, armed, `not_queued`), read `OPEN BEHIND` with every check settled at 12:38:30Z
+(79 pass, 0 pending), flipped to `OPEN CLEAN` by 12:38:38Z with its head still 2 `main` commits behind, and GitHub added
+it to the merge queue at **12:39:57Z** (`added_to_merge_queue` in its timeline), about 90 seconds after its last check
+settled, with no push from anyone. That is a sixth observation for outcome (a), made on the exact PR that motivated this
+plan, and it measures the two things the table could not: **last-green-to-enqueue latency is about 90 s**, and **under the
+queue the strict-policy BEHIND reading lasts only while a check is pending**; once the checks settle the state reads
+CLEAN. The BEHIND window the fence mishandles is therefore exactly the CI window. Two more facts it measured: **a queued PR
+reads `disarmed`** (`autoMergeRequest` is null while queued: `--queue-state` printed `queued OPEN disarmed`) and its
+`mergeStateStatus` is `CLEAN`. So a queued PR never enters the wait arm; it reaches the existing `--step` queue gate, which
+skips it (exit 11), as scenario 18 already pins.
 
-**Also not measured:** the `mergeStateStatus` a queued PR shows (ADR-270 canary 3). The design does not depend on it.
+**Still not measured:** the removal-event payload on a real ejection (ADR-270 canary 3, second half). The design does not depend on it.
 
 ## Research Insights
 
@@ -191,7 +197,9 @@ if (( real_behind == 1 && QUEUE_RULE == 1 && qwait_expired == 0 )) \
   pend="$(gh pr checks "$PR" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || true)"
   if [[ "$pend" =~ ^[1-9][0-9]*$ ]]; then qidle=0; else qidle=$((qidle+1)); fi
   if (( qidle > QUEUE_GRACE_TICKS )); then
-    # A PR already IN the queue also shows no pending PR check, so ask before calling it un-enqueued. A dequeue is
+    # A PR already IN the queue also shows no pending PR check (measured: a queued PR reads disarmed and CLEAN, so it
+    # normally never reaches this arm; the read stays as a cheap guard for an armed-and-queued reading), so ask before
+    # calling it un-enqueued. A dequeue is
     # reported here exactly as the every-5th-tick read does (--queue-state consumes the seen-queued marker, so
     # falling through to --step after it would read "not queued" and push).
     qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
@@ -504,7 +512,7 @@ Files list.
 ### Post-merge (agent-run)
 
 - [ ] Comment on #8683: queue mode shipped (PR link), the livelock no longer reproduces on queue repos, the re-evaluation now concerns queue-less repos only (option A).
-- [ ] On the next real PR through Phase 7 that reads BEHIND, confirm from its Monitor output and timeline that no push followed the first `queue_wait` line and that `added_to_merge_queue` preceded `merged`; record the result, including the last-green-to-enqueue latency (the unmeasured input to the 5-tick grace), as a one-line comment on #9454.
+- [ ] On the next real PR through Phase 7 that reads BEHIND, confirm from its Monitor output and timeline that no push followed the first `queue_wait` line and that `added_to_merge_queue` preceded `merged`; record the result, including the last-green-to-enqueue latency (one sample so far: about 90 s on #9697), as a one-line comment on #9454.
 
 ## Test Scenarios
 
@@ -521,7 +529,7 @@ All run through `run_scenario_both` (ship fence and merge-pr mirror), with `QGH`
 | Q6c | queue | true | pending, but BLOCKED on tick 4 (the BEHIND ticks are 1-3 and 5-7), then green BEHIND | no expiry before tick 10: the idle count is consecutive | `queue_wait_expired` at tick 10 or later | `queue_wait_expired` before tick 10 |
 | Q7 | queue | true | pending | DIRTY with clean merge-tree | `auto-sync 1 pushed` | `queue_wait\]`, `ship.phase7.dirty\] PR is DIRTY` |
 | Q8 | queue | true | pending | `MOCK_GQL_SEQ=queued,removed`, BEHIND | `[10/90] [ship.phase7.dequeued]` | `[11/90]`, `auto-sync` |
-| Q9 | queue | true | green | `MOCK_GQL_SEQ=queued`, BEHIND, 12 ticks | `[ship.phase7.queued]` exactly once, no expiry | `queue_wait_expired`, `auto-sync` |
+| Q9 | queue | true (conservative: a real queued PR reads `disarmed` and CLEAN) | green | `MOCK_GQL_SEQ=queued`, BEHIND, 12 ticks | `[ship.phase7.queued]` exactly once, no expiry | `queue_wait_expired`, `auto-sync` |
 | Q10 | queue | true | a required context in `fail` | BEHIND | `[ship.phase7.required_failed]` | `queue_wait\]` after the failure tick |
 | Q11 | queue | true | pending | not inside a worktree (`sync_ok=0`) | `behind_no_sync` | `queue_wait` |
 
@@ -538,12 +546,13 @@ nothing, so `QUEUE_RULE` stays 0 for all of them.
 - **A positional rules reader is a bug.** The `merge_queue` entry can sit first, last or between other rules; the selector
   is `.type == "merge_queue"`, and Q1 serves the entry in the middle of the array so a first-index or last-index reader fails.
 - **`QUEUE_GRACE_TICKS` is a tick count, not minutes.** A tick is one `sleep 60` plus the `gh` calls; if the tick length
-  ever changes, the grace moves with it. 5 is a chosen margin (see the grace note above), not a measured latency; re-derive
-  once the post-merge check has recorded the last-green-to-enqueue latency.
+  ever changes, the grace moves with it. 5 is a margin over one measured latency (about 90 s, see the grace note above); re-derive
+  once the post-merge check has recorded more samples.
 - **The base branch is `main`, hard-coded**, as in the rest of the fence (both the required-check read and the sync target
   `origin/main`); a PR with another base reads the `main` rules. Out of scope; unchanged from today.
-- **The 5-tick grace is a chosen margin, not a measured latency.** The measured quantity is armed-to-enqueue (9 to 47 min,
-  CI-dominated); the post-merge check records last-green-to-enqueue. If a dequeue ever lacks a `RemovedFromMergeQueueEvent`,
+- **The 5-tick grace is a margin over a measured latency.** Last-green-to-enqueue was about 90 s on #9697 (one observation);
+  armed-to-enqueue was 9 to 47 min, CI-dominated. Five minutes is roughly 3x the one measured latency; the post-merge check
+  records more samples. If a dequeue ever lacks a `RemovedFromMergeQueueEvent`,
   queue mode waits to `MAX_POLL_MIN`; the `--queue-state` read at the grace crossing reports a marker-or-event dequeue first.
 - **Latching expiry is deliberate.** After one expiry the poll behaves as today for its remaining life, so a flapping
   read cannot oscillate between waiting and pushing.
