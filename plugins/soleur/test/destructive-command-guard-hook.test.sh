@@ -92,8 +92,8 @@ ROWSEL="${DCG_ROWS:-}"
 # The plugin README sentences the doc rows below require, each at the START of a line inside the `## Destructive-Command Guard`
 # section (HTML comments and fenced code stripped first), exactly once. They live HERE and nowhere else in the suite: rewriting
 # a sentence in the README is a one-edit change to the matching variable. The kill-switch sentence is the same kind of anchor.
-README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.'
-README_SENT_HOSTED='Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.'
+README_SENT_NONCOVERAGE='The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.'
+README_SENT_HOSTED="Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt; this guard does not add one."
 README_SENT_KILL='`SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1` turns it off.'
 # Loud first line for any run that is not the full gate. NOTFULL is repeated before the summary.
 NOTFULL=""

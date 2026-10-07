@@ -525,9 +525,9 @@ degrade to **silence**, never to a false claim that the behaviour is present.
 the working directory or one of its ancestors. It denies a recursive delete of `/`, your home directory or an
 ancestor of it.
 
-The guard does not cover a plain `terraform apply`, secret writes, SQL or non-Bash tools, and is not a substitute for scoped credentials.
+The guard does not cover a plain `terraform apply`, secret writes, SQL, non-Bash tools, `terragrunt` or `pulumi` destroy, or indirect command forms (scripts or heredocs fed to a shell, wrappers it does not unwrap, obfuscated command names), and is not a substitute for scoped credentials.
 
-Not active in Soleur-hosted sessions; hosted sessions rely on the sandbox and review gate.
+Not active in Soleur-hosted sessions: hosted Bash runs in the sandbox under the workspace's approval mode, and in the default autonomous mode (after the owner's one-time acknowledgement) commands outside a short blocklist run without a prompt; this guard does not add one.
 
 It is a seatbelt, not a boundary: an agent that can edit your settings can switch it off.
 
@@ -535,9 +535,14 @@ It is a seatbelt, not a boundary: an agent that can edit your settings can switc
 harness reads it at startup, so a running session needs a restart. Any other value, including `0` and empty, leaves
 the guard on.
 
-It needs `bash`, `jq`, `perl` and `git`. Without `jq` or `perl` it scans the raw tool input with a narrower
-set of patterns and says so on stderr; it is never silently off. It also needs `/dev/fd` (standard on Linux and macOS); in a
-minimal sandbox without it the guard asks with a "could not parse" reason instead of denying.
+It needs `bash`, `jq`, `perl` and `git`. Without `jq` or `perl` it scans with a narrower set of patterns and prints a
+notice on stderr, which a person may never see, and a command that scan misses runs without a prompt. It also needs `/dev/fd`
+(standard on Linux and macOS); in a minimal sandbox without it the guard asks with a "could not parse" reason instead of denying.
+
+Headless and CI: under `claude -p` an ask blocks the call and the agent is told why (measured on Claude Code 2.1.291). There is
+no per-rule allow, and the kill switch is all-or-nothing and is read when the process starts. Soleur's own server-side scheduled
+agents that load this plugin outside the hosted session environment are covered by the guard too, and an ask there blocks the
+same way (ADR-274).
 
 ## Known Issues
 
