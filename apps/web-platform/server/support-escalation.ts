@@ -36,8 +36,29 @@ const log = createChildLogger("permission");
  */
 export type SupportEscalationSource = "skill" | "bash" | "tool";
 
+/**
+ * What the registry stores per conversation (#9556): the deny-path source
+ * (telemetry) plus the dispatch-time repo-connection flag the support route
+ * stamps on the `support_handoff` frame. Recorded AT deny time — never
+ * re-resolved at emit — so the deny→emit bridge costs zero extra DB reads.
+ */
+export interface SupportEscalationRecord {
+  source: SupportEscalationSource;
+  /**
+   * Whether the dispatching workspace had a connected repo when the deny
+   * fired — injected from `CanUseToolDeps.repoConnected`, which cc-dispatcher
+   * fills from the `repoUrl` it already resolves per dispatch. `undefined`
+   * when the dep is unwired (dep-less deny contexts — unit tests and any
+   * future runner path that does not fill the field) OR when the wired dep
+   * resolved degraded (a transient dispatch-time read blip — cc-dispatcher
+   * emits `undefined` rather than a false "not connected"): the emitted
+   * frame omits the field and the client renders the legacy copy arm.
+   */
+  repoConnected?: boolean;
+}
+
 const ESCALATION_CAP = 1000;
-const escalations = new Map<string, SupportEscalationSource>();
+const escalations = new Map<string, SupportEscalationRecord>();
 
 // Model-controlled strings (the `.skill` field, truncated commands) are
 // prompt-steerable — strip control chars + Unicode line separators and cap
@@ -54,10 +75,11 @@ function sanitizeDetail(detail: string | undefined): string | undefined {
 export function recordSupportEscalation(
   conversationId: string,
   source: SupportEscalationSource,
+  repoConnected?: boolean,
 ): void {
   // Refresh insertion order so the FIFO cap evicts genuinely-oldest keys.
   escalations.delete(conversationId);
-  escalations.set(conversationId, source);
+  escalations.set(conversationId, { source, repoConnected });
   if (escalations.size > ESCALATION_CAP) {
     const oldest = escalations.keys().next().value;
     if (oldest !== undefined) {
@@ -71,16 +93,16 @@ export function recordSupportEscalation(
 }
 
 /**
- * Consume-on-read: returns the recorded source and clears the flag. The route
- * calls this once at the terminal frame — a second call (or a turn with no
- * deny) returns null, which is the vacuity guard for the emit.
+ * Consume-on-read: returns the recorded escalation and clears the flag. The
+ * route calls this once at the terminal frame — a second call (or a turn with
+ * no deny) returns null, which is the vacuity guard for the emit.
  */
 export function consumeSupportEscalation(
   conversationId: string,
-): SupportEscalationSource | null {
-  const source = escalations.get(conversationId) ?? null;
+): SupportEscalationRecord | null {
+  const record = escalations.get(conversationId) ?? null;
   escalations.delete(conversationId);
-  return source;
+  return record;
 }
 
 /**
@@ -96,7 +118,9 @@ export function clearSupportEscalation(conversationId: string): boolean {
  * One authoring point for a support-persona deny: structured `deny-support-*`
  * log (the observability join key is `conversationId`), permission-decision
  * log, escalation record, and the ADR-070 user-relayable deny — every present
- * and future support deny path gets record + telemetry for free.
+ * and future ESCALATING support deny path gets record + telemetry for free.
+ * (The deliberately non-escalating support denies — AskUserQuestion and the
+ * UX-signal belts in permission-callback.ts — bypass this helper.)
  *
  * `detail` is sanitized before logging and ALSO emitted under the legacy
  * `requested` key for the skill arm — the original `deny-support-skill` line
@@ -108,6 +132,14 @@ export function denySupport(opts: {
   source: SupportEscalationSource;
   message: string;
   detail?: string;
+  /**
+   * #9556 — the dispatching workspace's repo-connected state at deny time.
+   * Stamped onto the escalation record so the route's `support_handoff` frame
+   * carries it and the rendered copy degrades honestly for repo-less users.
+   * The `deny()` wrapper in permission-callback.ts injects this from
+   * `CanUseToolDeps` — deny call sites never pass it themselves.
+   */
+  repoConnected?: boolean;
 }): Extract<PermissionResult, { behavior: "deny" }> {
   const { conversationId, toolName, source, message } = opts;
   const detail = sanitizeDetail(opts.detail);
@@ -127,6 +159,6 @@ export function denySupport(opts: {
     "deny",
     detail,
   );
-  recordSupportEscalation(conversationId, source);
+  recordSupportEscalation(conversationId, source, opts.repoConnected);
   return { behavior: "deny" as const, message };
 }
