@@ -130,3 +130,29 @@ Same livelock, two days later; operator-merged by hand because the diff edits `.
 
 category: workflow-patterns
 module: workflow
+
+## Resolution under the merge queue (2026-10-07)
+
+Appended; nothing above is rewritten. The livelock above is a property of a strict up-to-date policy WITHOUT a merge
+queue. `main` now has one (ADR-270), and the queue builds each candidate against the projected post-merge state, so
+"up to date" holds by construction and the sync buys an armed PR nothing. A third recurrence on PR #9697 (three syncs
+in about 35 minutes, a fourth cycle running) was the push loop itself, not slow CI: the poll still synced a BEHIND,
+armed PR in the window BEFORE enqueue, which is where a PR spends its whole CI cycle.
+
+**Measured.** GitHub enqueues an armed PR that is still BEHIND, under `strict_required_status_checks_policy = true`.
+PR #9697 was enqueued 12:39:57Z with its head (`4b0bb6d78d`, last pushed 11:53:47Z) missing 2 `main` commits and no push
+in between. So the right behaviour on a queue repo is to wait, not to sync.
+
+**Fix (#9710).** Phase 7 (ship and the merge-pr mirror) enters queue mode when the base branch has a `merge_queue` rule
+and auto-merge is armed: no sync on a BEHIND that GitHub reported, one `[ship.phase7.queue_wait]` line, one
+`[ship.phase7.queued]` line on enqueue, and a 5-consecutive-idle-tick fall-back to today's sync
+(`[ship.phase7.queue_wait_expired]`). Every unreadable answer falls toward the sync. A repo with no merge queue runs the
+old code unchanged. Decision record: ADR-270 Decision 5 (amendment 2026-10-07).
+
+**Still open.** Option A of #8683 (settle before sync) is the answer for a repo WITHOUT a queue and is not delivered
+here; #8683 stays open for it.
+
+**Prevention.** When a platform feature removes the condition that made a workaround necessary, search the tooling for
+the workaround and give it a measured off-switch, with the old behaviour as the fail-safe. The livelock was documented
+three times and "rely on the merge queue" was recorded as an option each time; nothing made the poll consult the queue
+before pushing.
