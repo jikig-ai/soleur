@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, resolve, delimiter } from "node:path";
 import { buildAgentEnv, type AgentCredential, type BuildAgentEnvOptions } from "../server/agent-env";
@@ -239,5 +239,84 @@ describe("plugin PreToolUse hooks are classified for the web runtime", () => {
     const r = runHook("destructive-command-guard.sh", DESTRUCTIVE, bare);
     expect(r.rc).toBe(0);
     expect(r.stdout).toMatch(/"permissionDecision"\s*:\s*"ask"/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// The server-side scheduled agents (ADR-274). They spawn `claude --plugin-dir plugins/soleur`, so the destructive guard
+// is registered for them, and the decision recorded in ADR-274 is to leave it ACTIVE there (an `ask` blocks headlessly, which is
+// fail-closed for an agent that ingests untrusted issue and web content). That disposition is a negative: nothing in their spawn
+// env sets the kill switch. This census pins it, so the day a function starts passing SOLEUR_DISABLE_DESTRUCTIVE_GUARD (or a
+// thirteenth function starts loading the plugin) the record is re-read instead of drifting.
+const FUNCTIONS_DIR = resolve(__dirname, "../server/inngest/functions");
+const KILL_SWITCH = "SOLEUR_DISABLE_DESTRUCTIVE_GUARD";
+
+// Source with its comments removed, string and template literals left alone (a `//` inside a URL string is not a comment).
+function stripComments(src: string): string {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === "/" && n === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+    } else if (c === "/" && n === "*") {
+      const end = src.indexOf("*/", i + 2);
+      i = end < 0 ? src.length : end + 2;
+    } else if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === "\\" ? 2 : 1;
+      out += src.slice(i, j + 1);
+      i = j + 1;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+function walkTs(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    return e.isDirectory() ? walkTs(p) : e.name.endsWith(".ts") ? [p] : [];
+  });
+}
+
+describe("server-side scheduled agents that load the plugin keep the destructive guard active (ADR-274)", () => {
+  const sources = walkTs(FUNCTIONS_DIR).map((file) => ({ file, name: basename(file), code: stripComments(readFileSync(file, "utf8")) }));
+  const spawners = sources.filter((s) => s.code.includes('"--plugin-dir"'));
+
+  it("the comment stripper keeps code and strings and drops comments (so the census below cannot be satisfied or defeated by a comment)", () => {
+    const src = [
+      'const a = "--plugin-dir"; // SOLEUR_DISABLE_DESTRUCTIVE_GUARD in a trailing comment',
+      '/* "--plugin-dir" in a block',
+      "comment */",
+      'const url = "https://example.test/x"; const b = "SOLEUR_DISABLE_DESTRUCTIVE_GUARD";',
+    ].join("\n");
+    const out = stripComments(src);
+    expect(out).toContain('const a = "--plugin-dir";');
+    expect(out).not.toContain("trailing comment");
+    expect(out).not.toContain("in a block");
+    expect(out).toContain('"https://example.test/x"');
+    expect(out).toContain('const b = "SOLEUR_DISABLE_DESTRUCTIVE_GUARD";');
+  });
+
+  it("exactly twelve functions pass --plugin-dir (a comment that only mentions the flag does not count)", () => {
+    expect(spawners.map((s) => s.name).sort(), "the set of server-side functions that load the plugin changed: re-read the disposition in ADR-274 and update this count").toHaveLength(12);
+  });
+
+  it("none of them, nor the shared eval substrate, names the kill switch (the guard stays active for them)", () => {
+    const substrate = sources.find((s) => s.name === "_cron-claude-eval-substrate.ts");
+    expect(substrate, "the shared substrate must exist").toBeTruthy();
+    for (const s of [...spawners, substrate!]) {
+      expect(s.code.includes(KILL_SWITCH), `${s.name} sets or mentions ${KILL_SWITCH}: the ADR-274 disposition (guard active in server-side scheduled agents) no longer holds`).toBe(false);
+    }
+  });
+
+  it("none of them builds its env with buildAgentEnv or AGENT_ENV_OVERRIDES (the hosted-session path that sets the switch)", () => {
+    for (const s of spawners) {
+      expect(/\bbuildAgentEnv\b|\bAGENT_ENV_OVERRIDES\b/.test(s.code), `${s.name} reaches the hosted-session env builder, which sets ${KILL_SWITCH}`).toBe(false);
+    }
   });
 });
