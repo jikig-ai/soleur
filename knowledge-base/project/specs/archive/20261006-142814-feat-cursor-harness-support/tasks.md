@@ -29,18 +29,18 @@ Issue #9608. Lane `cross-domain`, carried from `spec.md`. Slice 1 uses draft PR 
 - [x] 2.4 Slice 1 C4
   - [x] 2.4.1 Add `cursorCli` to `model.c4` as an external system, with `founder -> cursorCli` and `cursorCli -> platform.plugin`. Include it in the context and containers views. Do not add a `github -> cursorCli` edge. Do not retouch the embedded count clauses.
 - [ ] 2.5 Slice 2, after the capture, on a second PR
-  - [ ] 2.5.1 Record which hook sources the CLI loaded, then the marker, the envelope, the working directory, and the tool names. `CURSOR_AGENT` is a candidate until a CLI session and a non-CLI process are both measured.
-  - [ ] 2.5.2 Add the predicate after the Claude, Grok, Codex, and Devin arms. `CLAUDECODE` plus the marker still returns `claude`. Arm `emit-decision.sh` and the four no-argument emitters in that same change.
-  - [ ] 2.5.3 Fill `plugins/soleur/cursor/hooks-empty.json` only if the capture shows the CLI loads that path. Otherwise add no second registry and do not call the plugin supported. Do not add a repo-level `.cursor/hooks.json`.
-  - [ ] 2.5.4 Mark `.claude/settings.json` already-fires or dead before copying any guard command from it. Do not store `user_email`.
-  - [ ] 2.5.5 Write the shape note, the disposition ledger, and the matcher parity test from the capture. The shape note is what the support bar quotes.
+  - [x] 2.5.1 Record which hook sources the CLI loaded, then the marker, the envelope, the working directory, and the tool names. `CURSOR_AGENT` is a candidate until a CLI session and a non-CLI process are both measured. 2026-10-07: `cursor-agent` `2026.10.01-e373342` exited at authentication before any hook ran. No source loaded. `CURSOR_AGENT` was unset on that CLI process. `CURSOR_INVOKED_AS=cursor-agent` was set there and was not measured on a non-CLI Cursor process. Envelope, working directory, and tool names were not observed. See `plugins/soleur/cursor/2026-10-07-cli-hook-shape.md`.
+  - [ ] 2.5.2 Add the predicate after the Claude, Grok, Codex, and Devin arms. `CLAUDECODE` plus the marker still returns `claude`. Arm `emit-decision.sh` and the four no-argument emitters in that same change. Blocked: the 2026-10-07 capture did not produce a CLI-only marker. Neither name was adopted.
+  - [x] 2.5.3 Fill `plugins/soleur/cursor/hooks-empty.json` only if the capture shows the CLI loads that path. Otherwise add no second registry and do not call the plugin supported. Do not add a repo-level `.cursor/hooks.json`. The capture did not show that load. The file stays `{ "hooks": {} }`. The plugin is not called supported.
+  - [ ] 2.5.4 Mark `.claude/settings.json` already-fires or dead before copying any guard command from it. Do not store `user_email`. Blocked: the session never reached hook load, so the ledger row is `unmeasured`. No command was copied. No email was stored.
+  - [x] 2.5.5 Write the shape note, the disposition ledger, and the matcher parity test from the capture. The shape note is what the support bar quotes. The note quotes the bar and records that this session did not meet it.
 
 ## Phase 3: Testing
 
 - [x] 3.1 Drive Guards 1, 2, and 3 red, then green, in slice 1. Guard 3's empty-object row is slice 1 only. Slice 2 retires it in the same change that fills the hooks file.
-- [ ] 3.2 Drive Guard 4 red, then green, in slice 2, including the four emitters and the `CLAUDECODE`-plus-marker case.
+- [ ] 3.2 Drive Guard 4 red, then green, in slice 2, including the four emitters and the `CLAUDECODE`-plus-marker case. Blocked: no CLI-only marker. The new harness test pins that `CURSOR_INVOKED_AS` still returns `unknown`, and `CLAUDECODE` plus that name still returns `claude`. Guard 4 is not green.
 - [x] 3.3 Run `plugins/soleur/test/c4-count-parity.test.sh`, `apps/web-platform/test/c4-code-syntax.test.ts`, and `apps/web-platform/test/c4-render.test.ts` after the C4 edit.
 - [x] 3.4 Run `git diff --quiet origin/main...HEAD` on the public-doc paths and on `plugins/soleur/docs/pages/legal`. Both stay empty.
-- [ ] 3.5 Slice 1's PR carries `semver:minor` and does not edit version files. Slice 2's PR body closes #9608 only after the shape note quotes the support bar.
+- [ ] 3.5 Slice 1's PR carries `semver:minor` and does not edit version files. Slice 2's PR body closes #9608 only after the shape note quotes the support bar. The 2026-10-07 note quotes the bar and does not record it as met, so this PR body does not contain `Closes #9608`. No version file is edited.
 - [x] 3.6 `bun plugins/soleur/scripts/sync-cursor-name-map.ts --check` prints `cursor-name-map ok`. A deleted stub makes that same command exit non-zero and name the path.
 - [x] 3.7 `formatSkillRef` for `cursor` returns `/go`, `/sync`, `/soleur-help`, `/soleur-plan`, and `/soleur-review` for those five names.

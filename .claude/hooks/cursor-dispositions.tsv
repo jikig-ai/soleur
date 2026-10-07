@@ -1,0 +1,18 @@
+# Cursor hook disposition ledger — issue #9608 slice 2
+#
+# Written from plugins/soleur/cursor/2026-10-07-cli-hook-shape.md.
+# The 2026-10-07 CLI session exited at authentication before any hook ran.
+# No source is already-fires. No source is dead. No guard command was copied.
+#
+# Schema: registry<TAB>hook_path<TAB>event<TAB>matcher_or_tool<TAB>disposition<TAB>reason<TAB>evidence
+# Dispositions in this capture: unmeasured
+# matcher (none) means this session observed no matcher.
+# Evidence cites the shape note. Do not store user_email.
+enterprise	/etc/cursor/hooks.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+team	.cursor/managed/active-team-hooks/hooks.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+user	~/.cursor/hooks.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+project	.cursor/hooks.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+claude-user	~/.claude/settings.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+claude-project	.claude/settings.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+claude-project-local	.claude/settings.local.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
+plugin	plugins/soleur/cursor/hooks-empty.json	(none)	(none)	unmeasured	auth-exit-before-hook-load	shape-note-2026-10-07
