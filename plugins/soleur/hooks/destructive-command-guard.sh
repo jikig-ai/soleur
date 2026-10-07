@@ -165,6 +165,8 @@ SECONDS=0
 DEADLINE_S=6
 MAX_RECORDS=2000
 MAX_WORDS=20000
+MAX_ENVELOPE=262144   # 256 KiB: a larger tool call asks `bound` before anything reads it (the prefilter and the raw scans are not linear)
+SCAN_MAX_SEG=65536    # 64 KiB: the longest segment the raw/decoded scans will try their patterns on
 BOUND_WHY=""
 BOUND_SOFT=""
 
@@ -186,7 +188,12 @@ emit() {
   out="$(jq -nc --arg d "$1" --arg r "$reason" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}
      + (if $d == "deny" then {systemMessage: $r} else {} end)' 2>/dev/null)" || out=""
-  if [[ -z "$out" ]]; then emit_fixed "$1" "$FALLBACK_REASON"; return; fi
+  if [[ -z "$out" ]]; then
+    # jq could not build the output: a reason of our own text (no quote, backslash or newline) is sent as it is, a reason that
+    # quotes the command gets the fixed text, so the rule id and the not-run sentence survive in both
+    case "$reason" in *[\"\\]*|*$'\n'*) emit_fixed "$1" "$FALLBACK_REASON" ;; *) emit_fixed "$1" "$reason" ;; esac
+    return
+  fi
   printf '%s\n' "$out"
 }
 # emit_fixed <ask|deny> <fixed reason without quotes or backslashes>: no jq, no interpolation of input text.
@@ -237,7 +244,10 @@ redact_word() { # <word> -> RW
 RTXT=""
 redact_text() {
   local IFS=$' \t\n' w out=""
-  for w in $1; do redact_word "$w"; out="${out:+$out }$RW"; done
+  for w in $1; do
+    (( ${#out} > 200 )) && break   # only the first 200 characters are shown; whole words only, so a cut never leaves half of one
+    redact_word "$w"; out="${out:+$out }$RW"
+  done
   RTXT="$out"
 }
 
@@ -269,10 +279,14 @@ RE_TF_DESTROY="${SC_B}(terraform|tofu)[[:space:]]([^[:space:]].*[[:space:]])?des
 RE_TF_APPLY="${SC_B}(terraform|tofu)[[:space:]]([^[:space:]].*[[:space:]])?apply[[:space:]]([^[:space:]].*[[:space:]])?-{1,2}destroy([^[:alnum:]_.-]|\$)"
 RE_GIT_PUSH="${SC_B}git[[:space:]]([^[:space:]].*[[:space:]])?push[[:space:]]([^[:space:]].*[[:space:]])?(-[a-zA-Z]*f[a-zA-Z]*|--force[^[:space:]]*|\\+[^[:space:]+])"
 SCAN_SEG=""
-# scan_narrow <text>: 0 on a hit (SCAN_SEG = the matched segment), 1 on a miss.
+# scan_narrow <text>: 0 on a hit (SCAN_SEG = the matched segment), 1 on a miss, 2 when a bound tripped (SCAN_WHY): a segment
+# longer than SCAN_MAX_SEG (the patterns are not linear in a segment's length) or the clock reached DEADLINE_S.
+SCAN_WHY=""
 scan_narrow() {
   local seg IFS=$';&|\n'
   for seg in $1; do
+    if (( ${#seg} > SCAN_MAX_SEG )); then SCAN_WHY="a command segment longer than 64 KiB"; return 2; fi
+    if (( SECONDS >= DEADLINE_S )); then SCAN_WHY="the ${DEADLINE_S} s time limit was reached while scanning"; return 2; fi
     if [[ "$seg" =~ $RE_RM_WORD && "$seg" =~ $RE_RM_REC && "$seg" =~ $RE_RM_TGT ]]; then SCAN_SEG="$seg"; return 0; fi
     if [[ "$seg" =~ $RE_TF_DESTROY || "$seg" =~ $RE_TF_APPLY ]]; then SCAN_SEG="$seg"; return 0; fi
     if [[ "$seg" =~ $RE_GIT_PUSH ]]; then SCAN_SEG="$seg"; return 0; fi
@@ -286,6 +300,9 @@ case "$INPUT" in
   *[![:space:]]*) : ;;
   *) ask_envelope "stdin was empty" ;;
 esac
+
+# An oversize tool call asks before anything reads it (the prefilter below and the raw scans are not linear in its size).
+if (( ${#INPUT} > MAX_ENVELOPE )); then ask_bound "the tool call is larger than 256 KiB"; fi
 
 # ---- 2. the zero-spawn prefilter (D7) --------------------------------------------------------------
 # Skip the lexer only for a `{...}` envelope with a STRING command that has no keyword and no boundary
@@ -323,7 +340,9 @@ degrade_jq() {
   local raw="$INPUT"
   raw="${raw//\\n/;}"; raw="${raw//\\u000[aA]/;}"; raw="${raw//\\u000[dD]/;}"
   raw="${raw//\\t/ }"; raw="${raw//\\r/ }"; raw="${raw//\\u0009/ }"; raw="${raw//\\u0020/ }"
-  if scan_narrow "$raw"; then
+  scan_narrow "$raw"; SCAN_RC=$?
+  [[ "$SCAN_RC" -eq 2 ]] && ask_bound "$SCAN_WHY"
+  if [[ "$SCAN_RC" -eq 0 ]]; then
     emit_fixed ask "This command was NOT run. guard-degraded-jq-missing: jq is missing or unusable on this machine, so the destructive-command guard scanned the raw tool input instead of parsing it, and this call looks destructive (a recursive delete of / or home, a destroy, or a force push). Stop and tell the person. Do not retry this command or rephrase it. If no person is available, end the task and report it as blocked. The person can run it in their own terminal, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1, or install jq. Report a wrong flag at ${ISSUES_URL}"
   fi
   exit 0
@@ -393,7 +412,9 @@ if [[ "$SAW_OK" -ne 1 && -z "$BOUND_SOFT" ]]; then
   if [[ "$PERL_PROBE" != ok || ! -r "$LEXER" ]]; then
     echo "soleur destructive-command-guard: perl (or its lexer) is missing or unusable on this machine; scanning the decoded command with the guard's own narrow patterns instead of lexing it (install perl for full coverage)" >&2
     DEC_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command' 2>/dev/null)" || DEC_CMD=""
-    if scan_narrow "$DEC_CMD"; then
+    scan_narrow "$DEC_CMD"; SCAN_RC=$?
+    [[ "$SCAN_RC" -eq 2 ]] && ask_bound "$SCAN_WHY"
+    if [[ "$SCAN_RC" -eq 0 ]]; then
       redact_text "$SCAN_SEG"
       emit ask "guard-degraded-perl-missing: perl is missing or unusable on this machine, so the destructive-command guard scanned the decoded command with its narrow patterns instead of lexing it, and this call looks destructive. Matched segment: ${RTXT:0:200}.${REASON_TAIL}"
     fi

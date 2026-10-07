@@ -654,8 +654,8 @@ hook_run() {
     "HOME=$CUR_HOME" "$@" "$BASH" "$GUARD_HOOK" <"$INF" 2>"$ERRF")"; HOOK_RC=$?
   HOOK_ERR="$(cat "$ERRF" 2>/dev/null)"
 }
-mkjson() { # <command> <cwd>
-  "$JQ_BIN" -nc --arg c "$1" --arg cwd "$2" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$cwd,session_id:"s-1"}'
+mkjson() { # <command> <cwd>; the command goes in through a file, not an argument (one argument is capped at 128 KB)
+  "$JQ_BIN" -nc --rawfile c <(printf '%s' "$1") --arg cwd "$2" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$cwd,session_id:"s-1"}'
 }
 GOT=""
 classify() {
@@ -743,7 +743,7 @@ reason_has() {
   jqchk "$1" '.hookSpecificOutput.permissionDecisionReason | contains($s)' --arg s "$2"
 }
 
-# bound_row <label> <want> <cwd-template> <command> [reason ERE]: a literal row that ALSO asserts the answer arrived in
+# bound_row <label> <want> <cwd-template> <command> [reason ERE] [ENV=VAL ...]: a literal row that ALSO asserts the answer arrived in
 # under 5 s. The hook's own deadline is 6 s of the harness's 10 s timeout. Times are whole-second deltas of `date +%s`,
 # so a delta below 5 proves the real elapsed time was below 5 s. Contention caveat: a machine under heavy load can make
 # a correct hook read as slow here; that is the signal the row exists to give, not a flake to widen away.
@@ -753,7 +753,7 @@ bound_row() {
   ROWS_LIT=$((ROWS_LIT + 1))
   subst "$cwdt"
   t0="$(date +%s)"
-  hook_run "$(mkjson "$cmd" "$SUBST_OUT")"
+  hook_run "$(mkjson "$cmd" "$SUBST_OUT")" "${@:6}"
   t1="$(date +%s)"; el=$((t1 - t0))
   classify
   [[ "$GOT" == "$want" ]] || { ok=bad; why="want=$want got=$GOT"; }
@@ -1884,6 +1884,26 @@ env_row "jq-less: rm -rf / asks (the root target alternative)" ask "$(mkjson 'rm
 env_row "jq-less: rm --recursive ~ asks (the long flag alternative)" ask "$(mkjson 'rm --recursive ~' "$TREE")" "$FJ"
 env_row "jq-less: rm -f ~ && echo -r is not decided (& separates the segments, so the -r belongs to echo)" none "$(mkjson 'rm -f ~ && echo -r' "$TREE")" "$FJ"
 
+# The degraded scans are bounded too: a segment is capped at 64 KiB and the clock is read per segment (ask bound), the envelope is
+# capped at 256 KiB before anything else runs, and the quoted segment is redacted only as far as the 200 characters that are shown.
+_t=""; for _i in $(seq 1 8000); do _t+="terraform a "; done; _cmd96k_miss="${_t}; terraform destroy"; _cmd96k_hit="${_t}destroy"
+_t=""; for _i in $(seq 1 5000); do _t+="terraform a "; done; _cmd60k_hit="${_t}destroy"
+_t=""; for _i in $(seq 1 100000); do _t+="abcdefg "; done; _cmd800k="echo ${_t}"; _cmd200k="echo ${_t:0:200000}"
+bound_row "degraded bound: jq-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" '^This command was NOT run\. bound: ' "$FJ"
+bound_row "degraded bound: perl-less, a 96 KB first segment then terraform destroy asks (bound) in under 5 s" ask - "$_cmd96k_miss" '^This command was NOT run\. bound: ' "$FP"
+bound_row "degraded bound: perl-less, a 60 KB segment that hits asks in under 5 s (the quoted segment is redacted only as far as it is shown)" ask - "$_cmd60k_hit" '^This command was NOT run\. guard-degraded-perl-missing: ' "$FP"
+bound_row "degraded bound: an 800 KB benign command asks (bound) in under 5 s, before the prefilter reads it" ask - "$_cmd800k" '^This command was NOT run\. bound: .*too large to check in full'
+bound_row "degraded bound: an 800 KB command asks (bound) with no jq on the PATH as well" ask - "$_cmd800k" '^This command was NOT run\. bound: ' "$FJ"
+bound_row "degraded bound: a 200 KB benign command (under the envelope cap) is not an ask, in under 5 s" none - "$_cmd200k"
+# the clock is read per segment: a private copy with a 1 s deadline scans 30000 short segments and stops with a bound ask
+mk_hook_tree degraded-clock; HE_OK=ok
+hook_edit "$HT_HOOK" $'\nDEADLINE_S=6\n' $'\nDEADLINE_S=1\n'
+chk "degraded bound: the 1 s deadline edit landed in the private copy" "$HE_OK"
+_t=""; for _i in $(seq 1 30000); do _t+="echo x;"; done; _cmd30kseg="${_t} rm -rf /"
+tree_row "degraded bound: jq-less, a hook whose clock is nearly up stops scanning 30000 segments and asks" ask "$HT_HOOK" "$(mkjson "$_cmd30kseg" "$TREE")" "$FJ"
+reason_has "degraded bound: jq-less, that ask is the bound ask, not the scan's hit" 'This command was NOT run. bound: '
+tree_row "degraded bound: perl-less, a hook whose clock is nearly up stops scanning 30000 segments and asks" ask "$HT_HOOK" "$(mkjson "$_cmd30kseg" "$TREE")" "$FP"
+reason_has "degraded bound: perl-less, that ask is the bound ask, not the scan's hit" 'This command was NOT run. bound: '
 echo "== output shape (D4, Phase 3.4, CPO C4) =="
 _TRUNC_ARGS="$(printf '%0400d' 0 | tr 0 a)"
 hook_run "$(mkjson 'terraform destroy' "$TREE")"
@@ -2033,7 +2053,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=805
+MIN_CASES=816
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1
