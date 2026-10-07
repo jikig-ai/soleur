@@ -76,11 +76,7 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // server-side scheduled agents that load the plugin through their own `--plugin-dir` spawn build their
   // env with a per-function `buildSpawnEnv` allowlist and never receive these overrides (ADR-274).
   SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK: "1",
-  // `destructive-command-guard.sh` (PreToolUse, ADR-093/ADR-274): a no-op in hosted sessions by decision D8, not because
-  // hosted Bash is gated for these commands. Hosted Bash runs in the bwrap sandbox under the workspace approval mode; in the
-  // default autonomous mode (`deps.bashAutonomous`, `permission-callback.ts`) a command that survives `BLOCKED_BASH_PATTERNS`
-  // (curl, wget, nc, eval, sudo, `sh -c`-style forms; NOT `terraform destroy`, `rm -rf` or `git push -f`) runs without a prompt
-  // after the owner's one-time acknowledgement. The hosted `ask` path is unmeasured, so enabling the guard here is an ADR-274 follow-up.
+  // `destructive-command-guard.sh` is a no-op in hosted sessions by decision D8 (ADR-274), which also states what actually gates hosted Bash.
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
 } as const);
 
