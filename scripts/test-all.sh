@@ -4382,6 +4382,11 @@ elif (( _ENUMERATE == 0 )) && [[ -n "${PPID:-}" ]]; then
       # Keep the LAST NON-EMPTY snapshot: after the runner dies pgrep -P
       # returns empty on every poll, and an unconditional overwrite would
       # drain the record before the debounce's N-poll threshold can reap it.
+      # Bound, stated honestly: a child born <1 poll interval before an
+      # untrappable runner death is never sampled — its ppid rewrites to
+      # init before any enumeration can see it, and no post-mortem walk can
+      # recover it. Real suite children outlive the interval by orders of
+      # magnitude; the gap is the residual, not the contract (#9686).
       # grep -vxF strips the watchdog itself: it is a direct child of the
       # runner, so pgrep -P returns it on every live poll, and a reap list
       # carrying it self-TERMs the watchdog mid-sweep (#9686).

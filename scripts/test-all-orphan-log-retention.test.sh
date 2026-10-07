@@ -736,6 +736,14 @@ deadline=$(( SECONDS + 15 ))
 while ! grep -q 'MARKER-SLEEP-FX' "$out" 2>/dev/null && (( SECONDS < deadline )); do
   sleep 0.2
 done
+# Settle past one poll interval before the kill: the retained child
+# snapshot refreshes only once per _RUN_WD_POLL_S, so a suite child born
+# <1 poll before the runner's death is invisible to the reap (its ppid
+# rewrites to init before the watchdog ever sampled it). The mechanism's
+# contract is "children the watchdog OBSERVED are reaped" — the arm must
+# give a live poll time to land, or the kill races the refresh and the
+# child survives the full grace window (measured on a loaded CI shard).
+sleep 3
 RUNNER_PID="$(pgrep -P "$WRAP_PID" 2>/dev/null | head -1)"
 if [[ -z "$RUNNER_PID" ]]; then
   fail "could not resolve the runner pid for the untrappable-death arm"
