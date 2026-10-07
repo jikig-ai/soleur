@@ -378,7 +378,7 @@ s = s.replace(old, "    host        = hcloud_server.web[\"web-1\"].ipv4_address"
 # webhook_doppler_token_env, and only the credential-exclusion check sees it.
 expect_red "M4b (§1: credential material injected into the web-2 sibling)" server.tf \
   "credential-material references" '
-old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),"
 assert old in s
 s = s.replace(old, "    local.webhook_doppler_token_env,\n" + old, 1)
 '
@@ -388,7 +388,7 @@ s = s.replace(old, "    local.webhook_doppler_token_env,\n" + old, 1)
 # `doppler_token|DOPPLER_TOKEN` set must catch it.
 expect_red "M4c (§1: raw var.doppler_token injected into the web-2 sibling)" server.tf \
   "credential-material references" '
-old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),"
 assert old in s
 s = s.replace(old, "    var.doppler_token,\n" + old, 1)
 '
@@ -398,7 +398,7 @@ s = s.replace(old, "    var.doppler_token,\n" + old, 1)
 # `webhook_doppler_token_env`-only grep.
 expect_red "M4d (§1: soleur_doppler_token_env_b64 injected into the web-2 sibling)" server.tf \
   "credential-material references" '
-old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),\n    \"dpf-web2-remote-exec-v1\","
+old = "    file(\"${path.module}/web-2-ssh-host-key.pub\"),"
 assert old in s
 s = s.replace(old, "    local.soleur_doppler_token_env_b64,\n" + old, 1)
 '
@@ -417,18 +417,18 @@ s = s.replace(old, "hooks_json = templatefile(\"${path.module}/hooks.json.tmpl\"
 # arbitrary paths the inline sweep cannot see — reported, never swept.
 expect_red "M4f (§2: a remote-exec scripts= arg is unprovable, not skippable)" server.tf \
   "uses remote-exec" '
-old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
 assert old in s
-s = s.replace(old, "  provisioner \"remote-exec\" {\n    scripts = [\"${path.module}/web-probe-envwrite.sh\"]\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    scripts = [\"${path.module}/web-probe-envwrite.sh\"]\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
 # A same-line `inline = ["..."]` (review enumeration 2b): the old `\n\s*\]` terminator
 # missed single-line arrays entirely.
 expect_red "M4g (§2: single-line inline array is still swept)" server.tf \
   "/etc/soleur/singleline-inline.conf is written by" '
-old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
+old = "  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\","
 assert old in s
-s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
+s = s.replace(old, "  provisioner \"remote-exec\" {\n    inline = [\"install /tmp/x /etc/soleur/singleline-inline.conf\"]\n  }\n  provisioner \"remote-exec\" {\n    inline = [\n      \"set -e\",\n      \"mkdir -p /etc/soleur /etc/systemd/system/vector.service.d /etc/systemd/system/inngest-heartbeat.service.d /etc/systemd/system/inngest-server.service.d /etc/systemd/system/inngest-redis.service.d\",", 1)
 '
 
 # Terraform identifiers legally contain uppercase and hyphens. v1 matched `[a-z_0-9]+`, so such
