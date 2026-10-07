@@ -283,7 +283,7 @@ Edit `plugins/soleur/skills/preflight/SKILL.md` (uncapped, but 113 KB and read o
 - [x] `python3 scripts/lint-skill-body-budget.py` is green against the merge base; `plan/SKILL.md` grew by at most 136 bytes; `work`, `qa`, `ship`, `brainstorm` and every `description:` are unchanged; the `components.test.ts` budget test still passes at 2413/2413; `preflight-founder-check.test.ts` is registered in the suite-integrity gate.
 - [x] ADR-274 exists (ordinal re-verified against `origin/main`), the ADR-175 amendment is present, ADR-229 and `workflow-fidelity.ts` are unmodified, and the `model.c4` and regenerated `model.likec4.json` edits pass `c4-code-syntax`, `c4-render` and `c4-count-parity`.
 - [x] `python3 scripts/lint-guard-contract.py` reports 4 entries for this plan.
-- [ ] The CLO has reviewed the final prompt, notice, banner and result wording; no marketing, changelog or demo copy claims the feature.
+- [x] The CLO has reviewed the final prompt, notice, banner and result wording (three reviews; the third, PASS-WITH-EDITS, landed as drafted in `202a5d9d16`); no marketing, changelog or demo copy claims the feature.
 
 > Implementation note (work phase): `brainstorm/SKILL.md` carries commit 820eb958fb (a +144 B surface-attribution edit from the brainstorm phase, before this plan was written, so the 140,875 B baseline above already includes it). The implementation made no edit to `work`, `qa`, `ship` or `brainstorm`. The CLO wording review (last item) needs the CLO agent and is still open.
 
@@ -536,5 +536,5 @@ The ADR describes the target state and is authored in this PR, not postponed. St
 - [x] `bun test plugins/soleur/test/preflight-founder-check.test.ts` reports 0 failures (the full suite, 235 tests, at the last run).
 - [x] `bash plugins/soleur/test/preflight-check10-suite-integrity.test.sh` is green (38 checks) with the floors at the measured values: tests 437, assertions 2363, manifest 338.
 - [x] Every new guard has a mutant that the suite kills (two batteries of single-guard mutants against copies of the script through the `FOUNDER_CHECK_SCRIPT` seam with `FOUNDER_CHECK_MUTATION_RUN=1`); the survivors are equivalent or redundant by design and are recorded in the final report.
-- [ ] The CLO has checked the third round of changed wording constants (`refrozen-note`, `no-pr-note` are new; the second-round constants are unchanged since the second review). Criterion 16 above stays unchecked until then.
+- [x] The CLO has checked the third round of changed wording constants (PASS-WITH-EDITS; the ten drafted edits landed as drafted in `202a5d9d16` and are pinned in the `EXACT` map and the reference-row tests). Criterion 16 above is satisfied by that check landing.
 

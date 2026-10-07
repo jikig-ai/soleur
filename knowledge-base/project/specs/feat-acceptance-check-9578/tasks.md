@@ -50,7 +50,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 
 - [x] 6.1 Run the suites and lints (plan Phase 6.1–6.2)
 - [x] 6.2 Trace `soleur:ship` staging of `founder-check-log.md`
-- [ ] 6.3 CLO review of prompt, notice, banner and result wording
+- [x] 6.3 CLO review of prompt, notice, banner and result wording (three reviews, the last landed as drafted)
 
 ## Phase 7 — Review round (2026-10-06)
 
@@ -58,7 +58,7 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 - [x] 7.2 Rewrite the suite, the fixtures and the three references for the new interface
 - [x] 7.3 Ratchet the integrity suite (section 1c, manifest, floors)
 - [x] 7.4 Append the ADR, plan, spec and decision-challenges addenda; soften the `contributor` wording and regenerate the C4 json
-- [ ] 7.5 Second CLO review of every changed `WORDING` constant (parent)
+- [x] 7.5 Second CLO review of every changed `WORDING` constant (parent)
 
 ## Phase 8 — Second review round (2026-10-07)
 
@@ -68,4 +68,4 @@ Plan: knowledge-base/project/plans/2026-10-06-feat-founder-acceptance-check-plan
 - [x] 8.4 Apply the second CLO review's wording (untrusted-fail, untrusted-unmeasured, changed-ask, headless-stop, rejected-ask, approval-ask, eyes-ask, reason-prompt, first-use, baseline-ok, no-block, no-sandbox-stop, `opt-*`)
 - [x] 8.5 Tests: behavioural Guard 4 canary, wider AST walk, per-alternative static rows, pin mode and link rows, ordering and refreeze rows, log fidelity, extractor and parser tables, docs calls parsed against the real parser; mutation battery
 - [x] 8.6 Fix ADR-274, plan, spec, tasks and decision-challenges text that the earlier rounds left stale
-- [ ] 8.7 Third CLO check of the changed `WORDING` constants (parent), then tick plan AC 16 and item 7.5
+- [x] 8.7 Third CLO check of the changed `WORDING` constants (parent), then tick plan AC 16 and item 7.5
