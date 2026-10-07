@@ -228,7 +228,8 @@ fixes for every per-step plan:
    (IaC option (c)), which proxies to the lease-holder over the private net.
 
 6. **Cross-tenant isolation is per-`workspace_id`, enforced at every new boundary.**
-   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts:106`, per-sibling since ADR-075)
+   The bwrap `denyRead` guard (`agent-runner-sandbox-config.ts`, constant parent deny since the
+   2026-10-07 ADR-075 addendum / #5862)
    does **not** cover remote git-data — the bare-repo fetch runs in the Node process,
    outside the sandbox. Network access to git-data MUST carry a per-`workspace_id`
    credential / mTLS (reuse the `resolve_workspace_installation_id` membership-RPC
