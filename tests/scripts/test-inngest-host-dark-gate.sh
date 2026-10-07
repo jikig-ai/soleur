@@ -382,6 +382,19 @@ predicate G7 "host_role=web => wrong_host" wrong_host "$TMP/rows-g7.json" "$FIN"
 mk_rows "$TMP/rows-g8.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=active)")"
 predicate G8 "server_active=active => host_serving" host_serving "$TMP/rows-g8.json" "$FIN"
 
+# #8078 — the WIDE not-serving predicate (the execute gate's E10 verbatim). `activating` is what
+# the P1-5 refuse loop leaves the unit in indefinitely on the live host (measured 2026-09-11:
+# 25/25 probe rows `activating`, http_code=000), and `failed` is where a start-limit-latched unit
+# lands — both must-PASS, or the recut can never be authorised on exactly the host it exists for.
+# `unknown` is the emitter's read-failed sentinel: a readability failure, never a claim about the
+# unit — must refuse `unreadable`, not pass as "not active".
+mk_rows "$TMP/rows-g8-activating.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=activating)")"
+expect "G8 #8078: server_active=activating (P1-5 refuse-loop state) => dark" dark "$TMP/rows-g8-activating.json" "$FIN"
+mk_rows "$TMP/rows-g8-failed.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=failed)")"
+expect "G8 #8078: server_active=failed (start-limit-latched) => dark" dark "$TMP/rows-g8-failed.json" "$FIN"
+mk_rows "$TMP/rows-g8-unknown.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg server_active=unknown)")"
+expect "G8 #8078: server_active=unknown (emitter read-failed sentinel) => unreadable" unreadable "$TMP/rows-g8-unknown.json" "$FIN"
+
 # G9 — the loopback disagrees with systemd. This host has already been observed reporting a started
 # unit that had failed to bind its port, so both signals are required.
 mk_rows "$TMP/rows-g9.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg http_code=200)")"
@@ -1147,7 +1160,16 @@ if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: mutate() did not fail
 
 mutate G4  's|^  \[\[ "\$schema" == "\$expected_schema" \]\].*|  :|'                 "$TMP/rows-g4.json"  stale_schema
 mutate G7  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$host_role" == "dedicated" \]\].*|  :|'                      "$TMP/rows-g7.json"  wrong_host
-mutate G8  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$server_active" == "inactive" \]\].*|  :|'                   "$TMP/rows-g8.json"  host_serving
+mutate G8  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$server_active" != "active" \]\].*|  :|'                   "$TMP/rows-g8.json"  host_serving
+# #8078 — the regression row the issue mandates: WIDEN the predicate back to `== inactive` and
+# the `activating` fixture must go RED (the mutant refuses host_serving on a host the gate must
+# clear). The control proves `activating` grades `dark` on the unmutated gate, so the kill is the
+# mutation, not the fixture.
+mutate G8w '/^inngest_host_dark_gate() {$/,/^}$/ s@^  \[\[ "\$server_active" != "active" \]\].*@  [[ "$server_active" == "inactive" ]] || { _ihdg_verdict "host_serving"; return $?; }@' "$TMP/rows-g8-activating.json" dark
+# #8078 — the `!= "unknown"` clause is load-bearing on its own: without it the emitter's
+# read-failed sentinel is graded "not active" and passes, a fail-OPEN kill on the
+# server_active=unknown fixture.
+mutate G8u '/^inngest_host_dark_gate() {$/,/^}$/ s| && "\$server_active" != "unknown"||' "$TMP/rows-g8-unknown.json" unreadable
 mutate G9  '/^inngest_host_dark_gate() {$/,/^}$/ s|^  \[\[ "\$http_code" != "200" \]\].*|  :|'                            "$TMP/rows-g9.json"  host_serving
 mutate G11 's|^  \[\[ "\$redis_active" == "active" \]\].*|  :|'                      "$TMP/rows-g11.json" redis_down
 # G12 on the EMPTY value, not `__UNREADABLE__`: `[[ "" -eq 0 ]]` is TRUE under bash coercion, so
@@ -1936,8 +1958,10 @@ fi
 #   +6  SPLICE-ROWS / SPLICE-COUNT / SPLICE-TIE, both entry points each
 #   +4  [#8846-lib] inherited permissive JQ + empty lib x both entry points; the permissive-lib
 #       fixture landed; a lib whose def is permissive (its selftest fails) => unreadable
-# 297 + 21 = 318.
-_FLOOR=318
+#   +5  [#8078] G8 wide predicate: activating + failed must-PASS rows, unknown => unreadable,
+#       and the widen-back (G8w) / unknown-clause (G8u) mutate rows
+# 297 + 21 + 5 = 323.
+_FLOOR=323
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

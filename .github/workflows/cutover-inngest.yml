@@ -42,6 +42,11 @@ on:
           # names INNGEST_CUTOVER_FLIP=flushed as the recovery — which no verb wrote, making the
           # only documented recovery a bare out-of-band Doppler write against a deny-all host.
           - resume
+          # #7777: the authorized second FLUSHALL. Writes reflush,run=<run-id>,by=<actor> to
+          # INNGEST_CUTOVER_FLIP; the on-host FSM appends a cleared_at authorization record to
+          # the append-only latch ledger and re-enters the flush path. A prod write of the same
+          # class as arm — inside BOTH ternaries below.
+          - reflush
           # #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
           # volume, and its reverse. Both write INNGEST_LUKS_CUTOVER on soleur-inngest/prd, so both
           # are in the reviewer-gated environment ternary AND the token ternary below — an op added
@@ -88,7 +93,7 @@ jobs:
     # same required-reviewer gate. That approval IS the prod-write ack
     # (hr-menu-option-ack-not-prod-write-auth); omitting it here would have let a flag that starts
     # a production scheduler be dispatched with no second pair of eyes.
-    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'luks-cutover' || inputs.op == 'luks-rollback') && 'inngest-cutover' || '' }}
+    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover' || inputs.op == 'luks-rollback') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
@@ -133,7 +138,7 @@ jobs:
           # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
           # which holds the run for the required-reviewer approval before any step (incl. this write)
           # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
-          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'luks-cutover' || inputs.op == 'luks-rollback') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover' || inputs.op == 'luks-rollback') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
           # github_actions_secret.supabase_access_token). Read-only Management-API scope.
