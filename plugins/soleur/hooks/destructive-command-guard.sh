@@ -72,7 +72,8 @@
 # hand-built with a fixed reason naming jq, plus a stderr notice naming jq), a miss exits 0. A missing or
 # broken `perl` with a working jq scans the jq-decoded command the same way (stderr notice naming perl). It
 # never DENIES on a dependency failure (the repair is itself a Bash call). A miss on the raw scan is a stated,
-# tested fail-open (ADR-165's own `.claude` accepted residual, narrower than its row).
+# tested fail-open (the raw-scan-miss residual ADR-165 accepts for its `.openhands` row; ADR-274 records why
+# this hook asks on a hit where that row denies, and why its `.claude` row, which asks on every call, is narrowed).
 #
 # KILL SWITCH (D5). SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 (exactly 1; empty, 0 and anything else leave the
 # guard on) exits 0 with no output, before any dependency probe. It is read from the harness process
