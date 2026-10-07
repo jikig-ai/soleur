@@ -306,19 +306,15 @@ to the clear append.
 gate chain (terminal flag + latch-exists + audible + evidence-shape + stdin write +
 confirm), plus the two flag-value consumers (`_erg_flag_class`, G19) staying fail-closed.
 
-**Mutation matrix (≥5 rows).**
+**Mutation matrix:**
 
-1. `flush_already_performed` reads the FIRST line instead of the newest → after clear+reflush
-   the ledger's head is still `flushed_at` → the authorized-reflush fixture goes RED (refuses).
-2. `record_latch_clear` writes with `>` instead of `>>` → the prior `flushed_at` is destroyed
-   → the append-only assertion (original record still present after clear) goes RED.
-3. `reflush` arm accepts a bare `reflush` (skip evidence validation) → the bare/malformed-
-   evidence fixture goes RED (it must refuse, no FLUSHALL).
-4. `op=reflush` gate chain drops the L>=1 requirement → the workflow test's "refuse when no
-   recorded flush" row goes RED.
-5. Harness non-vacuity: run a reflush case with the latch path NOT wired into the fixture →
-   the clear-append assertion and the latch-existence stamps in the trace go RED, proving
-   the fixture actually exercises the ledger.
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | `flush_already_performed` reads the FIRST line instead of the newest — after clear+reflush the ledger's head is still `flushed_at` | RED — the authorized-reflush fixture refuses |
+| 2 | `record_latch_clear` writes with `>` instead of `>>` — the prior `flushed_at` is destroyed | RED — the append-only assertion (original record still present after clear) fails |
+| 3 | `reflush` arm accepts a bare `reflush` (skip evidence validation) | RED — the bare/malformed-evidence fixture must refuse, no FLUSHALL |
+| 4 | `op=reflush` gate chain drops the L>=1 requirement | RED — the workflow test's "refuse when no recorded flush" row fails |
+| 5 | Harness non-vacuity: run a reflush case with the latch path NOT wired into the fixture | RED — the clear-append assertion and the latch-existence stamps in the trace fail, proving the fixture exercises the ledger |
 
 **Harness rows.** must-PASS non-canonical: `armed` on a ledger whose newest is `cleared_at`
 proceeds (the slot cannot veto a newer clear); `flushed`-resume backfills `flushed_at` over a
@@ -334,13 +330,13 @@ host under the P1-5 refuse loop) while `active` still refuses as `host_serving` 
 **Assembly.** Two predicate lines inside `inngest_host_dark_gate` only (E10 already correct);
 the header table, monotonicity step, and divergence note carry the safety argument.
 
-**Mutation matrix (≥3 rows).**
+**Mutation matrix:**
 
-1. Restore `== "inactive"` semantics (`!= "active"` → `== "inactive"`) → the `activating`
-   fixture must go RED (verdict `host_serving`, kill).
-2. Drop the `!= "unknown"` clause → the `server_active=unknown` fixture goes RED
-   (must stay `unreadable`).
-3. Weaken to `!= "activating"` (wrong constant) → `active`/`failed` fixtures go RED.
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Restore `== "inactive"` semantics (`!= "active"` → `== "inactive"`) | RED — the `activating` fixture verdicts `host_serving`, kill |
+| 2 | Drop the `!= "unknown"` clause | RED — the `server_active=unknown` fixture must stay `unreadable` |
+| 3 | Weaken to `!= "activating"` (wrong constant) | RED — `active`/`failed` fixtures fail |
 
 **Harness rows.** must-PASS: `server_active=activating`, `server_active=failed` (coherent
 dark fixtures). must-REFUSE: `active` (host_serving), `unknown`/empty/absent (unreadable).
@@ -355,13 +351,13 @@ not-delivered, failed, unreadable, empty — refuses before the write.
 before the `doppler secrets set`), plus the followthrough probe's own contract (iid join,
 DEGRADED ≠ PASS, probe-fault distinct from not-delivered).
 
-**Mutation matrix (≥3 rows).**
+**Mutation matrix:**
 
-1. `resume_bootstrap_decide` returns `proceed` on `verdict=FAIL reason=degraded` → the
-   degraded fixture row goes RED.
-2. G4 moves AFTER the `flushed` write (order swap) → the ordering assertion
-   (probe call line < write line in the extracted resume block) goes RED.
-3. Decide treats TRANSIENT as proceed → `in-progress`/`not-delivered` rows go RED.
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | `resume_bootstrap_decide` returns `proceed` on `verdict=FAIL reason=degraded` | RED — the degraded fixture row fails |
+| 2 | G4 moves AFTER the `flushed` write (order swap) | RED — the ordering assertion (probe call line < write line in the extracted resume block) fails |
+| 3 | Decide treats TRANSIENT as proceed | RED — `in-progress`/`not-delivered` rows fail |
 
 **Harness rows.** Behavioural: PASS+rc0 → proceed; FAIL degraded → refuse; FAIL no-bootstrap →
 refuse; TRANSIENT in-progress → refuse; TRANSIENT not-delivered → refuse; TRANSIENT
