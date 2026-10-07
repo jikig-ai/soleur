@@ -635,6 +635,13 @@ checks are green, under `strict_required_status_checks_policy = true`? Answer: y
 - The plan records BEHIND showing only while a check was pending; that reading is why the idle count keys on
   pending REQUIRED checks and not on `mergeStateStatus`. Not measured: the last-green-to-enqueue latency over more
   than one sample. The 5-tick grace is a chosen margin, to be re-derived from that latency.
+- Dogfood finding (PR #9710's own poll, same day): the idle count keyed on pending REQUIRED checks *present in the list*, but
+  the aggregate required context `test` does not exist until its shards finish, so 24 of 25 required contexts were
+  complete (last at 20:45:17Z) while the shards ran and the count expired on tick 6, syncing mid-CI (push at 20:50:54Z).
+  The expiry fallback did its job (a sync, today's behaviour) but defeated the wait for the whole shard window. Fixed in
+  the same PR: a required context that is absent counts as pending while any check is pending, and as idle when nothing
+  is (fixtures Q12, Q12b). This run therefore says nothing about enqueue latency: it expired before the required set could
+  complete.
 
 ## Cost Impacts
 

@@ -38,6 +38,9 @@ enqueue an armed BEHIND PR under `strict_required_status_checks_policy = true`.
 7. **Battery run stopped after M14 and its `done` marker was written anyway** — Recovery: reran M15-M19/H1-H4 from a fresh snapshot. **Prevention:** count result rows against the row list before accepting a `done` marker.
 8. **Trial edit to `AGENTS.rules.md:65` (hard rule)** — Recovery: reverted; needs human review. **Prevention:** hard-rule edits are an operator gate, not a drive-by.
 
+9. **The idle count read only the required checks present, so the not-yet-created `test` aggregate looked idle and the wait expired mid-CI on this PR's own poll.** Recovery: an absent required context counts as pending while anything runs (Q12, Q12b). **Prevention:** a fence fixture mock that lists only the required names present cannot show absence; model the real set (aggregate absent while shards run) and run the new fence on its own PR before trusting it.
+10. **Extracting SKILL.md prose into a reference moved a CWD-relative command into a new file and the plugin-root anchoring ratchet counted a new site; separately `lint-skill-body-budget` needed 7.5 KB cut.** Recovery: pointer instead of the command; three blocks extracted. **Prevention:** run `lint-skill-body-budget.py --base <merge-base>` and the repo-wide ratchets before pushing a SKILL.md edit (file-selected suites cannot see them).
+
 ## Tags
 
 category: workflow-patterns

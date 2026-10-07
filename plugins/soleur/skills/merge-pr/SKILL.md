@@ -483,15 +483,23 @@ while true; do
   if (( real_behind == 1 && QUEUE_RULE == 1 && qwait_expired == 0 )) \
      && [[ "$(gh pr view "$PR" --json autoMergeRequest --jq '.autoMergeRequest != null' 2>/dev/null || true)" == true ]]; then
     qwait=1
-    pend=0
-    mapfile -t pend_names < <(gh pr checks "$PR" --json name,bucket \
-      --jq '.[] | select(.bucket == "pending") | .name' 2>/dev/null || true)
-    if (( ${#pend_names[@]} > 0 )); then
-      for n in "${pend_names[@]}"; do
+    pend=0; anypend=0; seen=$'\n'
+    mapfile -t chk_rows < <(gh pr checks "$PR" --json name,bucket \
+      --jq '.[] | "\(.bucket)\t\(.name)"' 2>/dev/null || true)
+    if (( ${#chk_rows[@]} > 0 )); then
+      for row in "${chk_rows[@]}"; do
+        n="${row#*$'\t'}"; seen+="$n"$'\n'
+        [[ "${row%%$'\t'*}" == pending ]] || continue
+        anypend=$((anypend+1))
         for r in "${REQUIRED_CHECKS[@]}"; do
           [[ "$n" == "$r" ]] && { pend=$((pend+1)); break; }
         done
       done
+    fi
+    # A required check that does not exist yet (the `test` aggregate is created only after its shards finish) is not
+    # settled while any check is still running; with nothing running it will not appear, so it counts as idle.
+    if (( anypend > 0 )); then
+      for r in "${REQUIRED_CHECKS[@]}"; do [[ "$seen" == *$'\n'"$r"$'\n'* ]] || pend=$((pend+1)); done
     fi
     if (( pend > 0 )); then qidle=0; else qidle=$((qidle+1)); fi
     if (( qidle > QUEUE_GRACE_TICKS )); then
