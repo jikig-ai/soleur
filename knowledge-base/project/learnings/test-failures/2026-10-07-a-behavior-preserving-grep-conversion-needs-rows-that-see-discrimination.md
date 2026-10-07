@@ -82,3 +82,21 @@ forgotten `>/dev/null` and an inverted `!` all keep every pre-existing row green
 - **A hook suite that scans the repo cannot run in a hand-extracted subtree.** The sandbox copy needed a commit and the
   files its fixture list names; the Guard 1 mutants were applied in the committed worktree with pristine copies and a
   clean-tree check instead.
+
+## Session Errors
+
+- **Dropped a row on a "redundant" claim and removed the only observer of an axis.** A simplicity seat called the
+  "no `docker exec` ran" row redundant (the rc and sentinel already prove the step failed); a test-design seat then
+  showed that moving the whole structure step after the behavioural probes stayed green without it. Recovery: restore
+  the row with a healthy-run control. **Prevention:** before deleting a row a seat calls redundant, run the mutants that
+  row was written for with the row removed; a row is redundant only if the battery still kills each of them.
+- **A learning table named a killer row from memory.** The empty-pattern mutant was credited to the lookalike P2-4 row;
+  the empty-chain row is the first red. Recovery: a verifier seat caught it. **Prevention:** build a mutant table from
+  the battery's printed first-red rows, never from the row names you remember.
+- **A subtree sandbox of a repo-scanning suite exits 1 silently.** The hook suite needs a git repo with a commit and
+  the files its fixture list names. **Prevention:** apply mutants to a committed worktree with pristine copies and a
+  clean-tree check, or allocate a full sandbox with `scripts/soleur-sandbox.sh`.
+- **One-off process slips:** an unset `TMPDIR` redirected a log to `/`; an unquoted heredoc interpolated shell variables
+  into generated Python; a first-red filter matched a section heading; a plan edit introduced a markdown code-span lint
+  error. **Prevention:** `mktemp -p /var/tmp`, quoted heredocs (`<<'PY'`) with values passed through the environment,
+  anchor a failure filter on the `FAIL:` prefix, and run `markdownlint-cli2` on every edited markdown file before commit.
