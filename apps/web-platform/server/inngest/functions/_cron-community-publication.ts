@@ -386,6 +386,12 @@ export function buildExampleDraftLine(): string {
 export type GithubOverride = {
   status: "failed" | "partial";
   failureCause: CommunityFailureCause;
+  /**
+   * Keep the draft's own numbers under the overridden (partial) status instead of withholding
+   * them. Only for a collector fact that makes ONE metric unavailable (stargazers) while the
+   * rest are measured; every other override replaces the model's github metrics entirely.
+   */
+  keepMetrics?: boolean;
 };
 
 export type RenderOptions = {
@@ -442,6 +448,14 @@ function effectivePlatform(
   platform: CommunityPlatform,
   githubOverride: GithubOverride | undefined,
 ): EffectivePlatform {
+  if (platform === "github" && githubOverride?.keepMetrics) {
+    return {
+      status: githubOverride.status,
+      failureCause: githubOverride.failureCause,
+      metrics: draft.platforms.github.metrics as Record<string, number>,
+      metricsWithheld: false,
+    };
+  }
   if (platform === "github" && githubOverride) {
     return {
       status: githubOverride.status,
@@ -585,7 +599,11 @@ export function renderCommunityPublication(
     "## Follow-up",
     "",
     "Counts only. Names, quotes and message text are not recorded in this digest.",
-    `Review inbound items: ${issuesUrl} and ${pullsUrl}`,
+    // No URL here: the digest is a committed markdown file and the required markdown-lint
+    // check (MD034/no-bare-urls) refuses a bare one, which holds the digest PR out of the
+    // merge queue; an autolink would widen the closed output alphabet (G1-5) for no gain, since
+    // the issue body below carries the links and is not linted.
+    "Review inbound items in the open issues and pull requests of this repository.",
     "",
   ].join("\n");
 

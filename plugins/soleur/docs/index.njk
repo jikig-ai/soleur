@@ -90,6 +90,38 @@ summaryCounts: computed
       </div>
     </section>
 
+    {# One brief reaching the departments (#9577): a labelled, static illustration. Rows come from _data/fanoutDemo.js, which fails the build on bad input. No button, event or product-surface wording here; plugins/soleur/test/fanout-demo-drift.test.ts pins that. #}
+    <section class="landing-section fanout-section">
+      <div class="landing-section-inner">
+        <p class="section-label">{{ fanoutDemo.label }}</p>
+        <h2 class="section-title">{{ fanoutDemo.heading }}</h2>
+        <figure class="fanout-figure" aria-label="{{ fanoutDemo.figureName }}">
+          <p class="fanout-tag">{{ fanoutDemo.tag }}</p>
+          <div class="fanout-brief">
+            <p class="fanout-brief-label">{{ fanoutDemo.briefEyebrow }}</p>
+            <p class="fanout-brief-text">{{ fanoutDemo.briefText }}</p>
+          </div>
+          <ul class="fanout-rows" role="list">
+            {%- for row in fanoutDemo.rows %}
+            <li class="fanout-row" data-status="{{ row.status }}">
+              <div class="fanout-row-head">
+                <span class="fanout-dept">{{ row.name }}</span><span class="fanout-colon sr-only">:</span>
+                <span class="fanout-chip"><span class="fanout-glyph" aria-hidden="true"></span>{{ row.label }}</span>
+              </div>
+              <p class="fanout-line">{{ row.line }}</p>
+            </li>
+            {%- endfor %}
+          </ul>
+          <figcaption class="fanout-caption">
+            {%- for line in fanoutDemo.captionLines %}
+            <p>{{ line }}</p>
+            {%- endfor %}
+          </figcaption>
+        </figure>
+        <p class="fanout-link-wrap"><a class="fanout-link" href="#departments">{{ fanoutDemo.linkText }} <span aria-hidden="true">&darr;</span></a></p>
+      </div>
+    </section>
+
     <!-- Attribution: dated paraphrase of what was said, with the source. No verbatim quotation marks (fact-checked, see #9579). -->
     <section class="landing-quote">
       <p class="landing-quote-text">In May 2025, at Anthropic&rsquo;s Code with Claude developer conference in San Francisco, Anthropic CEO Dario Amodei was asked whether a billion-dollar company run by one person using AI could be built. He said it would certainly happen, as soon as 2026. Inc. reported that in a later press Q&amp;A he slightly walked back that prediction, putting the chance at 70&ndash;80 percent.</p>
@@ -97,8 +129,8 @@ summaryCounts: computed
       <p class="landing-quote-note">Soleur is an independent product, not affiliated with, sponsored by, or endorsed by Anthropic.</p>
     </section>
 
-    <!-- Features Section -->
-    <section class="landing-section">
+    <!-- Features Section (id is the link target of the fan-out demo section above) -->
+    <section class="landing-section" id="departments">
       <div class="landing-section-inner">
         <p class="section-label">Your AI Organization</p>
         <h2 class="section-title">{{ stats.departments }} departments. One knowledge base. Your expertise, amplified.</h2>
