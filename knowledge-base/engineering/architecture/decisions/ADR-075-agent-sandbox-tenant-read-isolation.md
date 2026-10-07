@@ -33,6 +33,10 @@ through the SDK config.
 
 ## Decision
 
+> **Superseded by the 2026-10-07 addendum** (#5862): the per-sibling enumeration this
+> section describes was replaced by the constant parent deny once the vendored CLI 2.1.284
+> builder's deny-then-restore ordering landed. Preserved below for history.
+
 **Ship per-sibling `denyRead` now** (this PR): at dispatch, enumerate the entries under
 `WORKSPACES_ROOT`, deny each sibling individually (plus `/proc`), and leave the agent's OWN
 workspace out of the deny set — so it is never `--tmpfs`-shadowed and keeps read+write via the base

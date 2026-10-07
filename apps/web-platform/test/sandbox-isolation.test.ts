@@ -214,12 +214,14 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     const goFlag = path.join(pair.rootA, ".probe-go");
     const script = [
       `touch ${shellQuote(readyFlag)}`,
-      `while [ ! -f ${shellQuote(goFlag)} ]; do sleep 0.05; done`,
+      // Bounded poll — a broken handshake must not spin until the harness
+      // timeout with no diagnostic.
+      `for i in $(seq 1 400); do [ -f ${shellQuote(goFlag)} ] && break; sleep 0.05; done`,
       `echo "__LS__"; ls ${shellQuote(pair.parent)}`,
       `echo "__CAT__"; cat ${shellQuote(late + "/secret.md")} 2>&1 || echo "__CAT_RC__$?"`,
     ].join("; ");
 
-    const handle = spawnSandboxed(pair.rootA, script, { pair });
+    const handle = spawnSandboxed(pair.rootA, script, { pair, timeoutMs: 15_000 });
     procHandles.push(handle);
     // The namespace is confirmed built (marker written through the rw bind).
     await waitForFile(readyFlag, 10_000);
@@ -227,11 +229,15 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     // The late sibling arrives on the HOST after the namespace exists.
     const { token } = seedMarker(late, "secret.md");
     fs.writeFileSync(goFlag, "go");
-    await handle.waitExit();
+    const exit = await handle.waitExit();
+    expect(exit.code, `sandboxed probe exited early; stderr=${handle.stderrChunks.join("")}`).toBe(0);
 
     const out = handle.stdoutChunks.join("");
-    // Scope to the `ls` output — the `cat` error line legitimately names the
-    // late-sibling PATH, so a whole-output `not.toContain` false-fails.
+    // window-assembly: lsSection — everything between the __LS__ and __CAT__
+    // markers is exactly the `ls` listing of the parent dir (the script emits
+    // the markers around it; nothing else writes to stdout between them). The
+    // `cat` error line legitimately names the late-sibling PATH, so a
+    // whole-output `not.toContain` would false-fail — the window is required.
     const lsSection = (out.split("__LS__")[1] ?? "").split("__CAT__")[0];
     expect(lsSection).toContain("rootA");
     // rootB existed BEFORE the build (masked by the tmpfs); late-sibling
@@ -542,15 +548,15 @@ async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResu
         enableWeakerNestedSandbox: true,
         network: { allowedDomains: [], allowManagedDomainsOnly: true },
         filesystem: {
-          // Mirror the prod fix (#5733 → per-sibling deny, #5848 follow-up):
-          // deny the SIBLING (rootB) explicitly, NOT the parent — so rootA
-          // (the session's own workspace) is never `--tmpfs`-shadowed and
-          // keeps read+WRITE via `allowWrite`, while rootB stays hidden. The
-          // cross-tenant leak assertions (rootB secret must not surface) still
-          // hold, and this now also mirrors that own-workspace writes work
-          // (the read-only `allowRead` re-bind of PR #5848 is gone).
+          // Mirror the prod fix (#5733 → per-sibling deny, #5862 → constant
+          // parent deny): deny the shared PARENT root explicitly. Under the
+          // vendored builder's deny-then-restore ordering the parent `--tmpfs`
+          // masks rootB (and any sibling created mid-session) while rootA —
+          // the session's own workspace — is re-bound rw via the `allowWrite`
+          // restore. This is the only tier that exercises the real SDK
+          // argv against the deny-then-restore shape.
           allowWrite: [pair.rootA],
-          denyRead: [pair.rootB, "/proc"],
+          denyRead: [pair.parent, "/proc"],
         },
       },
     },

@@ -216,14 +216,29 @@ export function spawnSandboxed(
   const stderrChunks: string[] = [];
   child.stdout?.on("data", (c) => stdoutChunks.push(String(c)));
   child.stderr?.on("data", (c) => stderrChunks.push(String(c)));
+  // Without a listener an async spawn failure (ENOENT/EACCES/EMFILE) crashes
+  // the vitest worker instead of failing the test; surface it on stderrChunks.
+  child.on("error", (err) => stderrChunks.push(`spawn error: ${err.message}`));
+  // Honor the documented timeoutMs contract (spawnSync enforces it for
+  // spawnBwrap; the async path arms its own SIGKILL deadline).
+  const killer = setTimeout(
+    () => child.kill("SIGKILL"),
+    opts.timeoutMs ?? 10_000,
+  );
+  killer.unref();
 
   const waitExit = () =>
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(killer);
+        resolve({ code, signal });
+      };
       if (child.exitCode !== null || child.signalCode !== null) {
-        resolve({ code: child.exitCode, signal: child.signalCode });
+        finish(child.exitCode, child.signalCode);
         return;
       }
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      child.once("exit", (code, signal) => finish(code, signal));
+      child.once("error", () => finish(null, null));
     });
 
   return {

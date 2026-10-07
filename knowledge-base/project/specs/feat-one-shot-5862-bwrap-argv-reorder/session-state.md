@@ -26,3 +26,13 @@ None blocking. Non-blocking notes: (a) an early candidate-plan selector returned
 - **T5**: 6 touched suites green (189 pass, 3 skip); `tsc --noEmit` clean.
 - **Phase-2 exit**: GDPR gate — zero canonical-regex hits, no mandatory-check triggers. Affected-test gate queued behind 3 sibling `test-all` runs (advisory lock position 3) at commit time; pending.
 - Commit `466e162f98`; pushed; PR #9709 body finalized (still draft pending gate + review).
+
+## Review round 1 (tally: seats=99, fix_rounds=4)
+12-seat panel on the pushed diff. Adjudication:
+
+- **REJECTED (not a regression):** `.claude` ro-bind shadowing (user-impact P1, data-integrity P2, agent-native P3). The `--ro-bind ${WS}/.claude` at fixture idx 10 was ALREADY dead on main — shadowed by `--bind ${WS} ${WS}` at idx 13 in the old argv. Effective `.claude` protection has always been the `/dev/null` masks + `.cc-writes` ro-bind, all of which land post-restore. Adjudicated per the plan's T3.2 audit criterion ("confirmed intentionally shadowed").
+- **FIXED INLINE:** strengthened `denyBeforeRestoreViolations` — last covering mount op (any op class incl. `--bind`/`--ro-bind`/`--remount-ro`) must be the rw ws bind; strict-ancestor tmpfs required for the deny clause; trailing-slash/`/` normalization; matrix widened to 10 rows with per-row violation-class assertions. Query-tier literal now mirrors the constant parent deny (`denyRead:[pair.parent,"/proc"]`). `spawnSandboxed` honors timeoutMs + error listener + bounded poll. Deleted dead `sortDenyPaths`. Fixed fabricated vendor string (`mounts nothing this wrap can place` is verbatim). Added `workspacesRootExists` + prod `reportSilentFallback` + ws-covers-root throw guard + `workspaceUnderDenyRoot` log field. Comment sweeps (docstring :244, header, allowRead rationale, denyReadExtra contract, /proc tail caveat). Test fixes: sbx-elsewhere leak, coverage precondition, ENOENT full-list, ADR-075 Decision forward-pointer.
+- **DEFERRED (issues filed):** #9723 `/proc` trailing bind undoes tmpfs (pre-existing); #9724 capture-gate dark-launch + readOnly arm uncaptured + shim surface + dropped-member invisibility; #9725 WORKSPACES_ROOT vs WORKTREE_ROOT divergence at git-data cutover.
+
+## Affected-gate result
+`test-all.sh --affected` (175 selected): 6 failures, 1 attributable — `lint-window-closure-assertion-live` flagged the `lsSection` window (fixed with `// window-assembly:` declaration). The other 5 are contention/environmental (orphan-process-reaper sees sibling worktrees' procs; orphan-log-retention live-parent check; sweep-followthroughs T18 probe starved; infra apt budget exhausted in docker; run-migrations-unmerged-gate spawn timeouts at -1 under load). Deferred: #9723, #9724, #9725.

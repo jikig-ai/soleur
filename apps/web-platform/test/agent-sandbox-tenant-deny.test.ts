@@ -31,6 +31,7 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
   let root: string;
   let own: string;
   let staging: string;
+  const extraDirs: string[] = [];
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "sbx-tenant-"));
@@ -45,6 +46,9 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
     rmSync(staging, { recursive: true, force: true });
+    while (extraDirs.length) {
+      rmSync(extraDirs.pop()!, { recursive: true, force: true });
+    }
   });
 
   it("the enumeration export is gone — no per-dispatch readdirSync path remains", () => {
@@ -71,20 +75,22 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
 
     expect(after.filesystem.denyRead).toEqual(before.filesystem.denyRead);
     // The coverage is structural: the parent root is the deny landing, so the
-    // late sibling is masked by the same `--tmpfs` — no entry needed.
+    // late sibling is masked by the same `--tmpfs` — no entry needed. Pin the
+    // precondition that makes "covered" non-vacuous: the sibling IS under root.
+    expect(lateSibling.startsWith(`${root}/`)).toBe(true);
     expect(after.filesystem.denyRead).not.toContain(lateSibling);
     expect(after.filesystem.denyRead).toContain(root);
   });
 
-  it("an ENOENT (unmounted) root still emits the deny entry — the SDK skips it, no degraded arm", () => {
+  it("an ENOENT (unmounted) root still emits the deny entry — the vendored builder skips a landing that mounts nothing", () => {
     const missing = join(root, "vanished");
     vi.stubEnv("WORKSPACES_ROOT", missing);
     const result = buildAgentSandboxConfig(own);
-    // Same constant list whether or not the root exists; the vendored builder
-    // skips a non-existent deny path ("Skipping non-existent read deny path"),
-    // which reproduces the old benign-ENOENT posture with no code.
-    expect(result.filesystem.denyRead[0]).toBe(missing);
-    expect(result.filesystem.denyRead).toContain("/proc");
+    // Same constant list whether or not the root exists; the builder's
+    // "mounts nothing this wrap can place (absent, …)" skip reproduces the old
+    // benign-ENOENT posture with no code. In production a missing root is a
+    // vanished-mount fault — reported via reportSilentFallback, not silently.
+    expect(result.filesystem.denyRead).toEqual([missing, staging, "/proc"]);
   });
 
   it("a symlinked workspacePath does not change the deny set (no realpath classification)", () => {
@@ -96,11 +102,20 @@ describe("buildAgentSandboxConfig — constant tenant deny", () => {
     expect(viaLink.filesystem.allowWrite).toEqual([ownLink]);
   });
 
-  it("workspacePath outside the root still emits the same deny set (own simply isn't covered)", () => {
-    const elsewhere = join(mkdtempSync(join(tmpdir(), "sbx-elsewhere-")), "own");
-    const result = buildAgentSandboxConfig(elsewhere);
+  it("workspacePath outside the root still emits the same deny set (own simply isn't covered — siblings stay masked regardless)", () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), "sbx-elsewhere-"));
+    extraDirs.push(elsewhere);
+    const result = buildAgentSandboxConfig(join(elsewhere, "own"));
     expect(result.filesystem.denyRead).toEqual([root, staging, "/proc"]);
-    expect(result.filesystem.allowWrite).toEqual([elsewhere]);
+    expect(result.filesystem.allowWrite).toEqual([join(elsewhere, "own")]);
+  });
+
+  it("refuses the catastrophic shape — workspacePath that IS or CONTAINS the deny root", () => {
+    // Equal or ancestor wsPath would make the vendor's restore re-bind the
+    // whole root rw after the tmpfs, unmasking every sibling. Fail loud.
+    expect(() => buildAgentSandboxConfig(root)).toThrow(/equals\/contains deny root/);
+    const ancestor = join(root, "..");
+    expect(() => buildAgentSandboxConfig(ancestor)).toThrow(/equals\/contains deny root/);
   });
 
   it("denyReadExtra merges after the constant base, deduped", () => {

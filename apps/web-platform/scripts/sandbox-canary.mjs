@@ -460,17 +460,6 @@ export function runArgsFdTransportProbe(setupArgv) {
   }
 }
 
-/**
- * Deterministic sort for captured deny lists. Any caller whose deny input
- * order is not stable across runners MUST sort before capture so the emitted
- * argv is byte-reproducible and `--verify`'s diff does not false-fail. (Under
- * the #5862 constant parent deny the list is already stable; this stays for
- * any future enumerated input.)
- */
-export function sortDenyPaths(paths) {
-  return [...paths].sort();
-}
-
 // ---------------------------------------------------------------------------
 // CAPTURE-side pure logic (#5913 / ADR-079 deferral B). LLM-free: the model
 // turn decides only WHETHER the SDK builds+spawns bwrap; these functions decide

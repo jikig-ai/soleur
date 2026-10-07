@@ -95,9 +95,9 @@ describe("buildAgentSandboxConfig drift guard", () => {
     // re-render staging root (#8623) + /proc — the vendored builder's
     // deny-then-restore ordering re-binds `allowWrite` paths after the covering
     // `--tmpfs`, so own stays writable while the parent mask hides every
-    // sibling (present or future). An order-independent compare would let a
-    // silently-widened deny set slip through; a per-sibling entry here means
-    // enumeration crept back in — fail on either.
+    // sibling (present or future). Order matters because the emitted deny
+    // sequence maps to the builder's `--tmpfs` emission order; a per-sibling
+    // entry here means enumeration crept back in — fail on either drift.
     expect(result.filesystem.denyRead).toEqual([
       root,
       `${root}-c4-staging`,
