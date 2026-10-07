@@ -1127,6 +1127,11 @@ L @@ an unbalanced single quote @@ ask @@ - @@ echo 'unbalanced
 L @@ an unbalanced double quote @@ ask @@ - @@ echo "unbalanced; terraform destroy
 L @@ an unterminated substitution @@ ask @@ - @@ echo $(ls
 L @@ a heredoc with no delimiter word @@ ask @@ - @@ cat <<
+# ---- each prefilter boundary character alone (no rm/destroy/push/eval keyword in the command): the lexer path asks, a skip would not
+L @@ prefilter: an unterminated backtick alone @@ ask @@ - @@ echo `ls
+L @@ prefilter: an unterminated ${ alone @@ ask @@ - @@ echo ${x
+L @@ prefilter: an unterminated <( alone @@ ask @@ - @@ diff <(ls
+L @@ prefilter: an unterminated >( alone @@ ask @@ - @@ tee >(cat
 # ---- decide_argv keeps the caller's state: a `--` or a wrapper must not change what the cd effect or the quote sees
 X @@ state: cd -- ~ then rm -rf * (a `--` after cd must not hide the cd) @@ deny @@ - @@ cd -- ~ && rm -rf *
 X @@ state: pushd -- ~ then rm -rf * @@ deny @@ - @@ pushd -- ~ && rm -rf *
@@ -1440,6 +1445,16 @@ env_row "a substitution nested past the depth bound asks (a bound trip)" ask "$(
 # a 100 KB heredoc lexes within the bounds: no decision
 _body="$(printf 'line %05d lorem ipsum dolor sit amet consectetur adipiscing\n' $(seq 1 1500))"
 env_row "a ~90 KB heredoc lexes within the bounds: no decision (no budget false positive)" none "$(mkjson "cat ${_HD}EOF"$'\n'"$_body"$'\n'"EOF" "$TREE")"
+# the prefilter reads the first "command" key; jq reads .tool_input.command: more than one "command" key in the envelope goes to jq
+env_row "prefilter: a nested decoy command key before the real one is not skipped" deny '{"tool_name":"Bash","tool_input":{"x":{"command":"ls"},"command":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: an array decoy command key before the real one is not skipped" deny '{"tool_name":"Bash","tool_input":{"x":[{"command":"ls"}],"command":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: a top-level decoy command key before tool_input is not skipped" deny '{"command":"ls","tool_name":"Bash","tool_input":{"command":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: a duplicate command key (jq reads the last) is not skipped" deny '{"tool_name":"Bash","tool_input":{"command":"ls","command":"rm -rf ~"},"cwd":"/var/tmp"}'
+env_row "prefilter: a destroy hidden behind a decoy command key is not skipped" ask '{"tool_name":"Bash","tool_input":{"y":{"command":"ls"},"command":"terraform destroy"}}'
+env_row "prefilter: the text command as a value is not a second key (still decided by jq, no decision for ls)" none '{"tool_name":"Bash","description":"command","tool_input":{"command":"ls"}}'
+env_row "prefilter: one command key and no keyword is skipped without jq or perl (no notice on stderr)" none '{"tool_name":"Bash","tool_input":{"command":"ls -la"},"cwd":"/var/tmp"}' "PATH=$WORK/farm-none"
+if [[ -z "$HOOK_ERR" ]]; then _x=ok; else _x=bad; fi
+if want_row_quiet "prefilter: one command key and no keyword is skipped without jq or perl (no notice on stderr)"; then chk "prefilter: that skip printed nothing on stderr (no spawn, no probe)" "$_x" "stderr: ${HOOK_ERR:0:120}"; fi
 env_row "a ~90 KB heredoc followed by a real destroy asks" ask "$(mkjson "cat ${_HD}EOF"$'\n'"$_body"$'\n'"EOF"$'\n'"terraform destroy" "$TREE")"
 
 echo "== the kill switch (D5, Guard 1 M6/row 20) =="
@@ -1600,7 +1615,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=636
+MIN_CASES=648
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

@@ -86,15 +86,21 @@
 # `command -v` (a jq that is present and exits non-zero fails like an absent one; probed only on failure, so
 # the happy path pays nothing); jq extraction (the command goes through `jq -j` straight into the lexer so
 # NULs and newlines survive; the small fields use a separate jq call); lib/shell-argv.pl; the rule table; the
-# decision. The prefilter skips the lexer only when the command's raw JSON text has NONE of the keywords rm,
-# destroy, push, eval and none of backslash, single quote, double quote, $, a backtick or `<<` (a heredoc
-# whose delimiter word is missing is the one unparseable command spelled with none of the others, and the
-# lexer path asks on it, so the skip must not hide it). It reads the
-# command string only (the text after "command":" up to the first double quote), because the envelope's other
-# fields can spell a keyword (permission_mode, a cwd of .../web-platform), and a double quote inside the
-# command is always JSON-escaped with a backslash, so the backslash test is what sees it. It also requires a
-# `{...}`-shaped envelope with a string "command" so garbage and a non-string command reach the jq path and
-# ask. Every skipped class is one the lexer path would also allow; every boundary character has a must-ASK row.
+# decision. The prefilter skips the lexer only when the envelope holds exactly one `"command"` text and that
+# command's raw JSON text has NONE of the keywords rm (also as RM, Rm, rM), destroy, push, eval and none of
+# backslash, single quote, double quote, $, a backtick, `<(`, `>(` or `<<`. It reads the command string only (the
+# text after "command":" up to the first double quote), because the envelope's other fields can spell a keyword
+# (permission_mode, a cwd of .../web-platform), and a double quote inside the command is always JSON-escaped with a
+# backslash, so the backslash test is what sees it. It also requires a `{...}`-shaped envelope with a string
+# "command" so garbage and a non-string command reach the jq path and ask. WHAT THE SKIP IS AND IS NOT: it is not
+# "everything skipped is also allowed by the lexer path" (an unterminated `<(` or backtick is skipped by a
+# keyword-only test yet asks on the lexer path, which is why those are boundary characters and why `<(`/`>(`
+# were added after a differential fuzz found 79 such commands, all unterminated process substitutions). It is
+# "nothing skipped can be a D1 command": every command in the decision set spells rm, destroy or push as a plain
+# substring, and every other spelling of those (a quote, escape, expansion or runner) carries a boundary
+# character; so the lexer path could only ever add a parse-failure or wrapper-depth ask to a skipped command, never a
+# destructive-command decision.
+# Every boundary character has a must-ASK row.
 #
 # DEPENDENCIES. bash (3.2 or later), jq, perl >= 5.10 with core pragmas only (the lexer), git (read-only,
 # local `symbolic-ref`, only for a force/delete push), POSIX utilities. No `eval`, ever (ADR-156: hook stdin
@@ -215,12 +221,16 @@ esac
 PF_LEAD="${INPUT#"${INPUT%%[![:space:]]*}"}"
 PF_TAIL="${INPUT%"${INPUT##*[![:space:]]}"}"
 PF_CMD_RE='"command"[[:space:]]*:[[:space:]]*"'
-if [[ "${PF_LEAD:0:1}" == "{" && "${PF_TAIL: -1}" == "}" && "$INPUT" =~ $PF_CMD_RE ]]; then
+# Exactly one `"command"` text in the whole envelope, or the prefilter does not decide: it reads the FIRST key
+# while jq reads .tool_input.command, so a decoy key before the real one (nested, in an array, at the top level, or
+# a duplicate) must go to jq. Nine characters are the text `"command"`.
+PF_ONCE="${INPUT//\"command\"/}"
+if [[ "${PF_LEAD:0:1}" == "{" && "${PF_TAIL: -1}" == "}" && $(( ${#INPUT} - ${#PF_ONCE} )) -eq 9 && "$INPUT" =~ $PF_CMD_RE ]]; then
   PF_MARK="${BASH_REMATCH[0]}"
   PF_REST="${INPUT#*"$PF_MARK"}"
   PF_CMD="${PF_REST%%\"*}"
   case "$PF_CMD" in
-    *rm*|*destroy*|*push*|*eval*|*Rm*|*RM*|*rM*|*'<<'*|*[\\\'\"\$\`]*) : ;;
+    *rm*|*destroy*|*push*|*eval*|*Rm*|*RM*|*rM*|*'<('*|*'>('*|*'<<'*|*[\\\'\"\$\`]*) : ;;
     *) exit 0 ;;
   esac
 fi
