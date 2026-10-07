@@ -29,13 +29,65 @@ export async function POST(request: Request) {
   }
 
   const apiKey: string = body.key.trim();
-  const provider: "anthropic" | "openai" = body.provider === "openai" ? "openai" : "anthropic";
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: "Missing or invalid key" },
+      { status: 400 },
+    );
+  }
 
-  // feat-operator-cc-oauth — credential type. Absent/anything-else ⇒
-  // 'api_key' (back-compat; both onboarding + settings POST this route
-  // without the field today).
-  const credentialType: "api_key" | "oauth_token" =
-    body.credential_type === "oauth_token" ? "oauth_token" : "api_key";
+  // #9648 B-0 — explicit allowlists, no silent coercion. The old ternaries
+  // folded any unrecognized value into the default ("anthropic"/"api_key"),
+  // which would POST the caller's key to api.anthropic.com for validation
+  // under a provider the caller never named. Absent keeps the defaults
+  // (existing callers omit both fields); a present-but-unrecognized value
+  // is a 400 — BEFORE validateToken sees the key.
+  const provider =
+    body.provider === undefined || body.provider === "anthropic"
+      ? "anthropic"
+      : body.provider === "openai"
+        ? "openai"
+        : null;
+  if (provider === null) {
+    logger.warn(
+      { route: "api/keys", rejectedProvider: typeof body.provider },
+      "POST /api/keys rejected unknown provider",
+    );
+    return NextResponse.json(
+      {
+        error: "Unknown provider",
+        code: "unknown_provider",
+        allowed: ["anthropic", "openai"],
+      },
+      { status: 400 },
+    );
+  }
+
+  // feat-operator-cc-oauth — credential type. Absent ⇒ 'api_key' (back-
+  // compat; both onboarding + settings POST this route without the field
+  // today). Present-but-unknown ⇒ 400, same shape as provider above.
+  const credentialType =
+    body.credential_type === undefined || body.credential_type === "api_key"
+      ? "api_key"
+      : body.credential_type === "oauth_token"
+        ? "oauth_token"
+        : null;
+  if (credentialType === null) {
+    return NextResponse.json(
+      { error: "Unknown credential_type", code: "unknown_credential_type" },
+      { status: 400 },
+    );
+  }
+
+  if (credentialType === "oauth_token" && body.provider !== undefined && body.provider !== "anthropic") {
+    // store_oauth_credential hardcodes provider='anthropic_oauth' — a
+    // caller asserting another provider gets a stored row for a different
+    // vendor than it named. Reject rather than silently discard.
+    return NextResponse.json(
+      { error: "oauth_token is anthropic-only", code: "provider_credential_mismatch" },
+      { status: 400 },
+    );
+  }
 
   if (credentialType === "oauth_token") {
     // AUTHORITATIVE operator-authorization fence (AC5/AC8). The UI hides the
