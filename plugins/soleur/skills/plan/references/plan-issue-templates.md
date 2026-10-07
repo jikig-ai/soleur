@@ -196,6 +196,8 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 
 ## Acceptance Criteria
 
+<!-- founder-stated check: see plan-founder-check.md -->
+
 - [ ] Core requirement 1
 - [ ] Core requirement 2
 
@@ -424,6 +426,8 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 - Recommendation: single PR | split — <proposed PR boundary>
 
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 - [ ] Detailed requirement 1
 - [ ] Detailed requirement 2
@@ -668,6 +672,8 @@ per ask, verbatim quote; every plan item cites the user words it answers or is
 - Recommendation: single PR | split — <proposed PR boundary>
 
 ## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
 
 ### Functional Requirements
 
