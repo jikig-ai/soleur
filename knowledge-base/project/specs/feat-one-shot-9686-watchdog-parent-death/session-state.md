@@ -71,3 +71,26 @@ killed-classification 77/77, runtime-ceiling 23/23, fixture ratchet 62/62
    directive still live on #9686 — closed-set sweeper pass keeps probing
    while the label stays).
 3. Tally show + worktree cleanup (ship skill Phase 7).
+
+## CI fix-round (56fa097534)
+
+First CI round failed 5 checks on the same defect class:
+
+- `test-all-killed-classification` AC8 FAIL — clean-run tail differed from
+  origin/main by `tr: write error: Broken pipe`: the watchdog's startup
+  `$(ps | tr)` probe raced the disarm TERM under shard load; the orphaned
+  `tr` (ignored-SIGPIPE inheritance) printed EPIPE onto the run's stderr.
+  Fix: `_wd_self` via `$BASHPID` (no forks/children/race), probe kept as
+  bash-3.2 fallback only.
+- `lint-trap-tempfile-ownership` — probe `mktemp` lacked an owning
+  `trap ... EXIT` (explicit `rm -f` paths don't cover die-early). Fixed.
+- `grep-q-pipe-guard` deferral ceiling (130 vs 128) — two new
+  `printf | grep -q` pipes converted to `grep -q <<<"$var"`. Fixed.
+- Suite arm fragility found on re-run: bare `grep 'orphaned'` matched the
+  orphan-process-reaper epilogue's `look orphaned` report on a dirty box —
+  pinned to `orphaned test-all run`.
+- `test` aggregator — rollup of the above.
+
+Post-fix verified locally: orphan-retention 54/54, killed-classification
+77/77, soak harness all-green, tempfile lint clean, grep-q sweep clean.
+Second CI round pending on 56fa097534; auto-merge still armed (merge queue).
