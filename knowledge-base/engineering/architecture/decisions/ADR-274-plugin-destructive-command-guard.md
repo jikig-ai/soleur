@@ -151,7 +151,7 @@ A throwaway stub hook and a scripted Anthropic stand-in inside a loopback-only n
 - Not measured and not claimed: the hosted Agent SDK `ask` path, a real model's reaction to a block, the auto-mode classifier on a
   real model, answering the prompt, the expanded transcript view of a deny, Devin's `ask`.
 
-The mutation evidence is in the same file, section 1.3: 43 mutants for matrix rows 9-20 run once at work time (35 killed on the
+The mutation evidence is in the same file, section 1.6: 43 mutants for matrix rows 9-20 run once at work time (35 killed on the
 first run; of the survivors five were fixture-inadequate and were killed after six rows were added, one is an equivalent mutant, and
 one hang counts as a kill by timeout), and rows M1-M8 run in CI by the mutation suite against a copy of the plugin tree.
 

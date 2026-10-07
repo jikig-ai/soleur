@@ -175,7 +175,7 @@ The first two rows survived the earlier self-run battery, which mutated the conf
 
 Probe artifacts (the stub hook, the scripted stand-in, the throwaway settings, the config dir, the parity scratch tree) live under `/var/tmp/w2-probe.*` and `/var/tmp/w2-parity.*` and are disposable; none is committed.
 
-## 1.3 — W2 mutation rows 9-20 (run once at work time)
+## 1.6 — W2 mutation rows 9-20 (run once at work time)
 
 Method. Rows 9-20 of the Guard 1 mutation matrix in `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md` (rows M1-M8 run in CI by `plugins/soleur/test/destructive-command-guard-mutation.test.sh`). Each row was split into one or more mutants (43 in all), each a content-anchored edit of a COPY of `plugins/soleur/hooks` and `plugins/soleur/test/lib` in a temp dir (never the working tree), proven to have landed (anchor found the stated number of times, the edited file differs from the pristine copy, no other file differs, the mutant still parses with `bash -n` or `perl -c`). The FULL hook suite (`GUARD_REPO_ROOT` pointed at the copy, no `DCG_ROWS`) ran against each; the unedited control ran first and was 479/479 green (485/485 after the rows added below). KILLED = exit 1 with at least one `[FAIL]` row. The harness was a throwaway script, not committed; these rows are not run in CI.
 

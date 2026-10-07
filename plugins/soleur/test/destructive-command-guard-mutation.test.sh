@@ -3,7 +3,7 @@
 # Guard 1 of the W2 plan, mutation half (plan Phase 1.6; knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-guard-w2-plan.md):
 # the chokepoint rows M1-M8 of the destructive-command hook's mutation matrix, executed in CI against a COPY
 # of the plugin tree. The other matrix rows (9-20) were run once at work time and are recorded in
-# knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md (section 1.3).
+# knowledge-base/project/specs/feat-agent-security-three-layers/phase-0-measurements.md (section 1.6).
 #
 # WALL-TIME BUDGET: 60 s total for this file (measured at work time and reported in the PR; the hook suite
 # alone takes ~35 s, so every mutant runs it in REDUCED mode: DCG_ROWS=<ERE> selects only the rows that kill
