@@ -11,9 +11,11 @@ Two modes, one transform function:
   apply   dry run by default: prints per-row and per-tier counts and the hand queue (`QUEUE path:line:tier:reason`).
           `--write` edits the files. One line in, one line out, idempotent.
   verify  `verify --base REF --hand-edits FILE`: proves a slice's diff is ONLY this transform plus an enumerated
-          hand-edit list. It proves the TRANSFORM, not the classification: a data line converted by mistake still
-          equals transform(removed) and passes, so classification is held by the printed queue, the
-          demonstration-suspect rule and a per-suite pair run.
+          hand-edit list, judged line by line (adjacent changed lines share one diff hunk, so the hunk is not the
+          unit). A listed range must cover only hand-edited lines; a hunk that changes the line count must be listed
+          with exactly its removed range. The scope is the BASE guard's rows and pathspec. It proves the TRANSFORM,
+          not the classification: a data line converted by mistake still equals transform(removed) and passes, so
+          classification is held by the printed queue, the demonstration-suspect rule and a per-suite pair run.
 
 The population is the guard's own: this tool sources the guard's SWEEP_* strings (so it cannot disagree with
 the guard about what a site is), runs `git grep --no-index --column -o` with the guard's pathspec, and edits
@@ -543,7 +545,17 @@ def transform_variants(line, spans):
 
 def do_verify(args):
     root = os.path.abspath(args.root)
-    pattern, pathspec, marker, rows = load_guard(os.path.join(root, GUARD) if os.path.exists(os.path.join(root, GUARD)) else args.guard)
+    # the rows that scope a slice are the BASE guard's: the branch's guard has already deleted the rows this slice took to zero
+    shown = sh(["git", "-C", root, "show", "%s:%s" % (args.base, GUARD)], check=False)
+    guard_src = os.path.join(root, GUARD) if os.path.exists(os.path.join(root, GUARD)) else args.guard
+    if shown.returncode == 0:
+        tf = tempfile.NamedTemporaryFile(prefix="gq-base-guard-", suffix=".sh", dir="/var/tmp", delete=False)
+        tf.write(shown.stdout)
+        tf.close()
+        guard_src = tf.name
+    pattern, pathspec, marker, rows = load_guard(guard_src)
+    if shown.returncode == 0:
+        os.unlink(guard_src)
     globs = row_globs(rows)
     wanted = set(select_rows(args, globs))
     entries = []   # [path, raw range text, set(lines) or None for an insertion, used-lines set]
