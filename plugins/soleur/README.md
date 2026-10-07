@@ -536,7 +536,8 @@ harness reads it at startup, so a running session needs a restart. Any other val
 the guard on.
 
 It needs `bash`, `jq`, `perl` and `git`. Without `jq` or `perl` it scans the raw tool input with a narrower
-set of patterns and says so on stderr; it is never silently off.
+set of patterns and says so on stderr; it is never silently off. It also needs `/dev/fd` (standard on Linux and macOS); in a
+minimal sandbox without it the guard asks with a "could not parse" reason instead of denying.
 
 ## Known Issues
 

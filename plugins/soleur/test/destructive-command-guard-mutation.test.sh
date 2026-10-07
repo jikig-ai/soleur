@@ -9,7 +9,8 @@
 # alone takes ~35 s, so every mutant runs it in REDUCED mode: DCG_ROWS=<ERE> selects only the rows that kill
 # that mutant, plus the always-on static, registration, lexer-contract and harness checks; the suite's own
 # 488-case floor does not apply to a selection and is replaced there by a selected-row count). A run that
-# takes longer is reported with a [WARN], never failed on time alone (a slow runner is not a defect); each
+# takes longer is reported with a [WARN], never failed on time alone (measured: 31-41 s on a quiet box, 136 s once with five sibling
+# worktrees running suites; the budget is the quiet figure) (a slow runner is not a defect); each
 # hook-suite run is bounded by `timeout 50` so a hang cannot hold the battery.
 #
 # PROPERTY. For each edit of the guard's chokepoints below, the hook suite turns RED on the row that is

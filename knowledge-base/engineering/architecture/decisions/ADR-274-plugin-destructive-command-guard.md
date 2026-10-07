@@ -190,12 +190,15 @@ one hang counts as a kill by timeout), and rows M1-M8 run in CI by the mutation 
 - **C1 — an honest scope statement where users read it.** The plugin README and the hook header carry the one sentence from D2.
 - **C2 — the hosted gap stated outside this ADR.** The plugin README carries "Not active in Soleur-hosted sessions; hosted sessions
   rely on the sandbox and review gate." The ADR-093 amendment of 2026-10-07 records it for the hosted path.
-- **C3 — follow-ups filed before merge, not left as prose.** One tracking issue with a milestone, linked from the PR body (the list is
-  below).
+- **C3 — follow-ups durably recorded, not left as prose.** The CPO asked for one filed tracking issue. The repository's filing gate
+  (`guardrails:require-filing-justification`) refuses a roll-up issue unless it carries a measured fix size, and a roll-up has none; the
+  operator therefore decided on 2026-10-07 to record the list here, in the section below, and in the plan's Non-Goals, which is what
+  `wg-when-deferring-a-capability-create-a` prescribes. This is a recorded deviation from the literal wording of C3, not a silent one;
+  the PR body states it. Each item becomes its own issue when someone picks it up with a measured size.
 - **C4 — a deny the person can read.** Every `deny` carries `systemMessage` with the full reason, the escape hatch and the issues URL;
   a suite row asserts it.
 
-## Open follow-ups (tracked in the W2 deferral issue)
+## Open follow-ups (recorded here; no tracking issue by operator decision, see C3)
 
 Enabling the guard in hosted sessions (needs a measured hosted `ask` path); Devin `exec` coverage and Devin `ask` measurement; a
 per-rule allow for headless CI teardown; a settings-env tripwire; a session-start message stating full or degraded dependency
@@ -203,7 +206,9 @@ posture (the stderr notice for a missing `jq` or `perl` is likely invisible to t
 `terraform apply`, secret writes, `kubectl delete`, `pulumi`/`terragrunt destroy`, `git push --mirror`, `find -delete`); a canonical
 plugin-side lexer for the filing gate when it is next touched; and moving the `%FIND_ACT` and `$MAX_RECORDS` declarations above the
 `BEGIN SHARED-LEXER` marker in `filing-shape.pl` so the lexer spans stop depending on two filing-only names (an incidental coupling
-the parity test currently tolerates).
+the parity test currently tolerates); and a README note, now added, that where `/dev/fd` or `/proc` is unavailable (a minimal sandbox without
+`/proc`) the hook reads the lexer output through process substitution and so asks with the parse reason instead of denying (fail-safe,
+but noisy for every lexed command).
 
 ## Cost Impacts
 

@@ -34,3 +34,8 @@ Plan: `knowledge-base/project/plans/2026-10-06-feat-plugin-destructive-command-g
 - `scripts/verify-agent-security-slice1.sh` extension (simplicity seat: cut). Kept because the observability gate needs a command that exists in this PR's tree and reads W2's signal.
 - Separate mutation suite (DHH, devex and simplicity seats: fold it in). Kept separate but cut to eight CI rows M1-M8; the rest run once and are recorded.
 - ADR-274 (DHH: fold into one amendment). Kept: the vendored-lexer, degrade-posture and decision-set decisions have no existing home; the ADR-157 and ADR-223 amendment lines were dropped.
+
+## T7 — CPO condition C3 satisfied by the ADR, not a filed issue (operator decision, 2026-10-07)
+
+- CPO round 1 required the W2 follow-ups to be a filed tracking issue before merge (C3). The repository's filing gate refuses a roll-up issue without a measured `Fix-Size` (or the `meta/machinery` label, which says "not a user-facing surface" and hides the issue from the operator digest), and a roll-up has no measurable size.
+- Operator decision: record the follow-ups in ADR-274 (section "Open follow-ups") and the plan's Non-Goals, per `wg-when-deferring-a-capability-create-a`; do not file. This deviates from the literal wording of C3 and is stated in the PR body. The decision set D1-D9 is unchanged.
