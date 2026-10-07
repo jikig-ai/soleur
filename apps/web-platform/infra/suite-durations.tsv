@@ -2,10 +2,11 @@
 # group=infra
 # generated-from-runs=36327508617,36323335413,36249105039,36194570054,36186259058
 # default-weight-ms=1000
-# generated-at=2026-09-29T21:45:33Z
+# generated-at=2026-10-07T09:45:57Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	12000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
+apps/web-platform/infra/apt-bounded.test.sh	1000	floor
 apps/web-platform/infra/arm-heartbeats.test.sh	21000	measured
 apps/web-platform/infra/audit-bwrap-uid.test.sh	500	measured
 apps/web-platform/infra/bwrap-userns-sysctl.test.sh	0	measured
@@ -26,7 +27,10 @@ apps/web-platform/infra/cosign-trusted-root-staleness.test.sh	0	measured
 apps/web-platform/infra/credential-persist-home-guard.test.sh	10500	measured
 apps/web-platform/infra/cron-egress-enforce-probe.test.sh	0	measured
 apps/web-platform/infra/cron-egress-firewall.test.sh	1000	measured
+apps/web-platform/infra/cron-egress-ghcr-probe.test.sh	1000	floor
 apps/web-platform/infra/cron-egress-metadata-endpoint.test.sh	1000	floor
+apps/web-platform/infra/cron-egress-nftables.test.sh	1000	floor
+apps/web-platform/infra/cron-egress-self-heal.test.sh	1000	floor
 apps/web-platform/infra/cutover-inngest-workflow.test.sh	18500	measured
 apps/web-platform/infra/disk-monitor.test.sh	1000	measured
 apps/web-platform/infra/doppler-download-error-channel.test.sh	3000	measured
@@ -87,6 +91,7 @@ apps/web-platform/infra/inngest-vector-download.test.sh	500	measured
 apps/web-platform/infra/inngest-wiped-volume-verify.test.sh	2000	measured
 apps/web-platform/infra/inngest.test.sh	4000	measured
 apps/web-platform/infra/journald-config.test.sh	500	measured
+apps/web-platform/infra/lb-weight-gate-with-marker.test.sh	1000	floor
 apps/web-platform/infra/lb-weight-gate.test.sh	2000	measured
 apps/web-platform/infra/lib/mutation-scorer-consumers.test.sh	1000	floor
 apps/web-platform/infra/lib/mutation-scorer.test.sh	1000	floor
@@ -135,6 +140,7 @@ apps/web-platform/infra/web-ghcr-deny.test.sh	1000	floor
 apps/web-platform/infra/web-git-data-probe.test.sh	0	measured
 apps/web-platform/infra/web-host-provisioner-parity-mutation.test.sh	101500	measured
 apps/web-platform/infra/web-host-provisioner-parity.test.sh	2000	measured
+apps/web-platform/infra/web-host-reboot-workflow.test.sh	1000	floor
 apps/web-platform/infra/web-hosts-fanout-parity.test.sh	0	measured
 apps/web-platform/infra/web-private-nic-guard.test.sh	500	measured
 apps/web-platform/infra/web-probes-token-rotation.test.sh	12000	measured
@@ -146,10 +152,12 @@ apps/web-platform/infra/workspaces-luks-cutover-workflow.test.sh	0	measured
 apps/web-platform/infra/workspaces-luks-freeze.test.sh	12000	measured
 apps/web-platform/infra/workspaces-luks-fresh-boot.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-g4-mutation.test.sh	29500	measured
+apps/web-platform/infra/workspaces-luks-header-web.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-header.test.sh	2000	measured
 apps/web-platform/infra/workspaces-luks-host-token-refresh.test.sh	2000	measured
 apps/web-platform/infra/workspaces-luks-provision.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-staging.test.sh	6000	measured
+apps/web-platform/infra/workspaces-luks-t2-rehearsal.test.sh	1000	floor
 apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh	3000	measured
 apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh	28500	measured
 apps/web-platform/infra/workspaces-luks-verify.test.sh	0	measured

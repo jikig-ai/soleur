@@ -122,6 +122,15 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     bases-empty). NOT paged — every skip reason is either the safe outcome
 //     (lock contention, missing flock) or an intentional disarm (empty bases);
 //     a sweep that does nothing is correct-by-design on a clean host.
+//   - SOLEUR_CLEANUP_SPACE — cleanup-merged's effective-space line (#9677, ADR-250
+//     Amendment 2): bytes the run logically drained beside the measured `df` delta, the
+//     filesystem type, the Docker opt-in state and whether btrfs snapper snapshots may pin the
+//     freed space. SOLEUR_TMP_SWEEP also gains `drained`, `drained_bytes` and `map_s`. Carries
+//     no path. NOT paged — it is a report, not a failure.
+//   - SOLEUR_DOCKER_PRUNE — the opt-in Docker build-cache prune's result or its named
+//     `skipped reason=` (docker-missing, no-timeout, daemon-unreachable, timeout,
+//     no-worktree-removed, invalid-value, remote-daemon, df-failed, prune-failed). NOT paged — every skip is the
+//     safe outcome of an opt-in step.
 // MIRRORED-NOT-PAGED (#9127, ADR-258): the SOLEUR_REAP_ARCHIVE_* family —
 // COMMITTED / STAGED / DEFERRED — emitted by worktree-manager.sh's reap loop at
 // the archive-persistence decision point. They report WHICH arm ran for a
@@ -142,7 +151,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // scripts/content-publisher.sh does NOT pass through it: that refusal reaches the operator
 // through the content-publisher fallback issue body (head -c 1000 of stderr), not telemetry.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED (#9269): SOLEUR_WORKTREE_INSTALL_SKIPPED. Emitted by
 // worktree-manager.sh's install_deps when a dependency-install arm is skipped

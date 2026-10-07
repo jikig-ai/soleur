@@ -203,6 +203,16 @@ on:
       # (#9391) The hosts-file GHCR deny lost alert's drift guard resolves the runbook anchor in
       # its incident link against this file; a docs-only heading rename must run the guard.
       - "knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md"
+      # (#9372) web-host-reboot-workflow.test.sh (under apps/*/infra/**) parses and EXECUTES the run bodies OF
+      # web-host-reboot.yml and reads scripts/web-host-reboot.sh for the allow-list and confirm-pattern
+      # agreement rows and web2-luks-rebirth.yml for the sibling-parity rows. (scripts/web-host-reboot.test.sh,
+      # which drives both scripts, runs from scripts/test-all.sh, not from this workflow.)
+      # The two scripts and the workflow are not under apps/*/infra/**, so a PR editing ONLY one of them (an
+      # exit-code mapping, the allow-list, the one POST) would skip the workflow-shape guard whose job is protecting it. Same
+      # defect class as the #6454, #7025 and #6808 comments above.
+      - ".github/workflows/web-host-reboot.yml"
+      - "scripts/web-host-reboot.sh"
+      - "scripts/web-host-reboot-evidence.sh"
   workflow_dispatch:
 
 permissions:
