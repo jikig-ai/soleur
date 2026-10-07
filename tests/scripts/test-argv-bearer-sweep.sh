@@ -740,12 +740,20 @@ synth_variant() {
   if cmp -s "$p" "$base"; then fatal "synthetic variant $1 did not land (sed $*)"; fi
   SV="$p"
 }
+# kind_check <probe> <kind> <expected sorted failed set> <rowname>: rc 0 only when the probe is RED on
+# `kind` AND the sorted failed set is EXACTLY the expected one. Split from `kind_row` so a control can
+# drive it with a probe that trips two kinds and require rc 1 (the exact-set half is otherwise unseen:
+# every kind_row probe trips exactly the expected set, so dropping the comparison stayed green).
+kind_check() {
+  local probe="$1" kind="$2" want="$3" name="$4"
+  run_probe "$name" "$probe" "${canon_env[@]}"
+  evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
+  has_check "$kind" && [[ "$(sorted_failed)" == "$want" ]]
+}
 # kind_row <label> <probe> <kind> <expected sorted failed set>
 kind_row() {
   local label="$1" probe="$2" kind="$3" want="$4"
-  run_probe "k-$kind" "$probe" "${canon_env[@]}"
-  evaluate "$RUN_ROW" "$SYN_HOST" 1 "$FIXTURE_TOKEN"
-  if has_check "$kind" && [[ "$(sorted_failed)" == "$want" ]]; then row "evaluate: $label is RED on '$kind' (failed set exactly '$want')" ok
+  if kind_check "$probe" "$kind" "$want" "k-$kind"; then row "evaluate: $label is RED on '$kind' (failed set exactly '$want')" ok
   else row "evaluate: $label is RED on '$kind' (failed set exactly '$want')" fail "failed='$EV_FAILED'"; fi
 }
 synth_variant jqarg "$P_CANON" '/^RESP=/i jq -n --arg t "$SYNTH_TOKEN" 1 >/dev/null'
@@ -760,6 +768,54 @@ synth_variant leak "$P_CANON" '/^RESP=/i echo "leak=$SYNTH_TOKEN"'
 kind_row "a probe that echoes the token to its output" "$SV" token-in-output "token-in-output"
 synth_variant basherr "$P_CANON" '/^RESP=/i synthetic_missing_command_for_bash_error'
 kind_row "a probe that trips a bash error" "$SV" bash-error "bash-error"
+
+# CONTROL for kind_row's exact-set assertion: ONE probe that trips TWO kinds. Expecting only one of them
+# must be rejected (the set is not exact); expecting both must be accepted (the probe really trips both).
+synth_variant twokinds "$P_CANON" -e '/^RESP=/i echo "leak=$SYNTH_TOKEN"' -e '/^RESP=/i gh issue list >/dev/null || true'
+kc_one=0; kc_both=0
+kind_check "$SV" token-in-output "token-in-output" kc-twokinds-one && kc_one=1
+kind_check "$SV" token-in-output "token-in-output unexpected-tool" kc-twokinds-both && kc_both=1
+if [[ "$kc_one" -eq 0 && "$kc_both" -eq 1 ]]; then row "evaluate: kind_row's exact-set assertion rejects a probe that trips two kinds when only one is expected (and accepts the full set)" ok
+else row "evaluate: kind_row's exact-set assertion rejects a probe that trips two kinds when only one is expected (and accepts the full set)" fail "one-kind-accepted=$kc_one both-kinds-accepted=$kc_both failed='$EV_FAILED'"; fi
+
+# CONTROL for synth_variant's landing guard: an edit whose anchor has drifted (the sed matches nothing)
+# must FAIL LOUDLY (rc 2 and a "did not land" message), never hand back a copy equal to its base, which
+# would let a mutation row report the baseline. Run in a subshell: `fatal` exits.
+sv_rc=0
+( synth_variant drifted "$P_CANON" 's/NO-SUCH-ANCHOR-IN-THE-BASE-PROBE/x/' ) > /dev/null 2> "$TMPD/sv-drift.err" || sv_rc=$?
+if [[ "$sv_rc" -eq 2 ]] && grep -q 'did not land' "$TMPD/sv-drift.err"; then row "synth_variant: an edit whose anchor drifted (no change) fails loudly (rc 2, 'did not land'), never reports the baseline" ok
+else row "synth_variant: an edit whose anchor drifted (no change) fails loudly (rc 2, 'did not land'), never reports the baseline" fail "rc=$sv_rc"; fi
+
+# CONTROLS for the outcome helpers (each check inside them has a row that needs it).
+# transient_outcome: one fabricated row dir per case, so every clause is exercised alone.
+tc_case() { # <name> <rc> <stdout> <stderr> -> transient_outcome's rc
+  local d="$ROWS/tc-$1"; assert_fixture_dir "$d"; mkdir -p "$d"
+  printf '%s' "$3" > "$d/stdout"; printf '%s' "$4" > "$d/stderr"
+  transient_outcome "$d" "$2"
+}
+tc_bad=""
+tc_case good 2 "" $'TRANSIENT: x\n' || tc_bad+=" good-rejected"
+tc_case pass-line 2 $'PASS: 0 events\n' $'TRANSIENT: x\n' && tc_bad+=" PASS-accepted"
+tc_case no-marker 2 "" $'something else\n' && tc_bad+=" no-marker-accepted"
+tc_case bash-error 2 "" $'TRANSIENT: x\nsynth.sh: line 3: boom: command not found\n' && tc_bad+=" bash-error-accepted"
+tc_case rc1 1 "" $'TRANSIENT: x\n' && tc_bad+=" rc1-accepted"
+if [[ -z "$tc_bad" ]]; then row "transient_outcome: accepts rc 2 + marker, and rejects a PASS line, a missing TRANSIENT marker, a bash error and rc 1 each on its own" ok
+else row "transient_outcome: accepts rc 2 + marker, and rejects a PASS line, a missing TRANSIENT marker, a bash error and rc 1 each on its own" fail "$tc_bad"; fi
+
+# shape_check: a probe that echoes the unusable token into its TRANSIENT message must be refused for THAT
+# cause (zero calls, rc 2 and the marker all hold, so only the token-in-output check can reject it).
+synth_variant tokecho "$P_CANON" 's/echo "TRANSIENT: token unusable"/echo "TRANSIENT: token unusable $SYNTH_TOKEN"/'
+if ! shape_check "$SV" SYNTH_TOKEN quote m7c-tokecho && [[ "$SHAPE_DETAIL" == *token-in-output* ]]; then row "shape_check: a probe that echoes the unusable token on its TRANSIENT path is refused on token-in-output" ok
+else row "shape_check: a probe that echoes the unusable token on its TRANSIENT path is refused on token-in-output" fail "$SHAPE_DETAIL"; fi
+# shape_check: the token-shape guard removed, so the call is made (a 401 -> TRANSIENT rc 2): only the
+# zero-calls check can refuse it.
+if ! shape_check "$P_NOGUARD" SYNTH_TOKEN quote m7c-noguard && [[ "$SHAPE_DETAIL" == "rc=2 calls=1" ]]; then row "shape_check: a probe without the token-shape guard that still reaches its TRANSIENT path is refused on the zero-calls check" ok
+else row "shape_check: a probe without the token-shape guard that still reaches its TRANSIENT path is refused on the zero-calls check" fail "$SHAPE_DETAIL"; fi
+# xtrace_check: a probe that refuses xtrace with zero calls and no token on output but with the WRONG
+# status (1, not 78) must be refused: only the rc 78 clause can see it.
+synth_variant xt1 "$P_CANON" 's/exit 78/exit 1/'
+if ! xtrace_check "$SV" SYNTH_TOKEN m9c-rc1 env && [[ "$XT_DETAIL" == "rc=1 calls=0" ]]; then row "xtrace_check: a probe that refuses xtrace with the wrong status (1, not 78) is refused" ok
+else row "xtrace_check: a probe that refuses xtrace with the wrong status (1, not 78) is refused" fail "$XT_DETAIL"; fi
 
 # The stdin bearer check is an EXACT-LINE match (`grep -qxF`), not a substring match: a line that
 # merely CONTAINS the expected header text, with trailing junk, must be rejected, in BOTH accepted
@@ -1375,18 +1431,31 @@ echo "=== stage 4: shim extensions (scheme, stdin body, fail7, jq shim, static r
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
 # through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
 # =====================================================================================
-echo "=== $pass passed, $fail failed ==="
-
 # Conservation: `row` counts at the call site, `_report` counts the verdict. If they diverge the
-# helper stopped counting (or a row bypassed it).
-if [[ "$((pass + fail))" -ne "$CASES" ]]; then
-  printf '[FAIL] harness: pass+fail=%s but %s rows were dispatched -- the reporting helper stopped counting\n' "$((pass + fail))" "$CASES" >&2
+# helper stopped counting (or a row bypassed it). A function over its three counters so a control can
+# drive it with a doctored set: a check that can be disabled while the suite stays green is no check.
+check_conservation() { # <pass> <fail> <cases>: rc 1 (and a message) when pass+fail != cases
+  if [[ "$(($1 + $2))" -ne "$3" ]]; then
+    printf '[FAIL] harness: pass+fail=%s but %s rows were dispatched -- the reporting helper stopped counting\n' "$(($1 + $2))" "$3" >&2
+    return 1
+  fi
+  return 0
+}
+# The control runs in a subshell (stderr discarded) with counters that do NOT reconcile, and with a set that
+# does; reported with printf + exit, never through `row`/`_report` (the helpers under test).
+cc_bad=0; cc_good=0
+( check_conservation 3 0 4 ) > /dev/null 2>&1 && cc_bad=1
+( check_conservation 3 1 4 ) > /dev/null 2>&1 && cc_good=1
+if [[ "$cc_bad" -ne 0 || "$cc_good" -ne 1 ]]; then
+  printf '[FAIL] harness: the conservation check accepted a doctored counter (accepted-mismatch=%s accepted-match=%s)\n' "$cc_bad" "$cc_good" >&2
   exit 1
 fi
+echo "=== $pass passed, $fail failed ==="
+check_conservation "$pass" "$fail" "$CASES" || exit 1
 
 # BOTH operands are literals on the lines IMMEDIATELY above the `if`.
 SELFTEST_PASSES=0
-EXPECTED_TESTS=181
+EXPECTED_TESTS=187
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
