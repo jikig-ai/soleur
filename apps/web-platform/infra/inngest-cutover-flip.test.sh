@@ -311,6 +311,37 @@ assert_contains "refuse marker emitted (refuse-rearm-after-done)" "$(cat "$LOGTR
 assert_logger "logger line emitted (refuse branch)"
 teardown_case
 
+# --- Test 4e: reflush (#7777) — the AUTHORIZED second flush. Evidence rides the flag value as
+#     `reflush,run=<id>,by=<actor>`; the arm appends the cleared_at authorization record to the
+#     latch ledger FIRST, then takes the SAME ordered forward path as `armed`. ---
+echo "TEST: #7777 reflush,run=,by= => clear appended then the full armed ordering, exit 0"
+setup_case
+rc=$(run_flip 'reflush,run=42000001,by=octocat' CUTOVER_REDIS_DBSIZE=0 CUTOVER_BOOT_ID=boot-fixture)
+order=$(trace_csv)
+assert_eq "exit 0 on authorized reflush" "0" "$rc"
+assert_eq "reflush takes the armed ordering after the clear" \
+  "flag:flipping,stop,flushall,flag:flushed,start,flag:done,owner@done" "$order"
+assert_contains "the cleared_at authorization was appended" "$(cat "$LATCH")" "cleared_at="
+assert_contains "the clear carries run+by+boot_id evidence" "$(cat "$LATCH")" "run=42000001 by=octocat boot_id=boot-fixture"
+assert_contains "the NEWEST record is the fresh flushed_at" "$(tail -n 1 "$LATCH")" "flushed_at="
+assert_contains "latch-cleared marker emitted" "$(cat "$LOGTRACE")" "latch-cleared"
+teardown_case
+
+# --- Test 4f: bare reflush (#7777) — NO evidence, NO clear, NO flush, loud refusal. The clear
+#     is not a reset switch: authorization evidence is mandatory and its absence refuses. ---
+echo "TEST: #7777 bare reflush => refuse (no clear/flush), flag:aborted, marker, exit 1"
+setup_case
+rc=$(run_flip 'reflush' CUTOVER_REDIS_DBSIZE=0)
+order=$(trace_csv)
+assert_eq "exit 1 on evidence-less reflush" "1" "$rc"
+assert_absent "NO FLUSHALL on evidence-less reflush" "$order" "flushall"
+assert_absent "NO stop on evidence-less reflush" "$order" "stop"
+assert_absent "NO start on evidence-less reflush" "$order" "start"
+assert_contains "flag transitioned to aborted" "$order" "flag:aborted"
+assert_absent "NO clear record was appended" "$([[ -e "$LATCH" ]] && cat "$LATCH" || true)" "cleared_at="
+assert_contains "refuse marker emitted (reflush-evidence-invalid)" "$(cat "$LOGTRACE")" "reflush-evidence-invalid"
+teardown_case
+
 # --- Test 4c: telemetry-blind give-up guard (#5934) — an unhandled stop/start/flag_set
 #     failure must EMIT a marker AND land the flag in terminal `aborted` (never a silent
 #     non-zero exit, never a stuck `flipping`/false `done`). Uses a failing seam per case;
@@ -1173,7 +1204,9 @@ fi
 # raise in lockstep when adding tests.
 # 147 -> 150: +3 for the #8054 producer-side heartbeat contract (flag key, tag literal, Vector
 # allowlist) that op=execute 2.0 consumes.
-MIN_ASSERTIONS=150
+# 150 -> 163: +13 for the #7777 reflush arm — the authorized-clear ordering case (4e, 6
+# assertions) and the evidence-less refusal case (4f, 7 assertions).
+MIN_ASSERTIONS=163
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
