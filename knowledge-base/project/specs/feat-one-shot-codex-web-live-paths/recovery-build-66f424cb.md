@@ -1,7 +1,8 @@
 ---
 title: Source-current offline recovery image preparation
 date: 2026-10-07
-source_sha: 66f424cb0a592a54ea33d12cc64a1cbbd627e8c6
+compiled_source_sha: 66f424cb0a592a54ea33d12cc64a1cbbd627e8c6
+candidate_source_sha: 387e36f75d730c1b8283c245d76263241412dff3
 pr: 9051
 status: local-image-prepared-startup-and-recovery-unqualified
 ---
@@ -15,7 +16,8 @@ this preparation. Local application test suites remain held.
 
 ## Build boundary
 
-The app and plugin were exported from the exact source revision above. The
+The initial app and plugin export used the compiled source revision above. The
+resync section below records the refreshed plugin source. The
 root helper imported by a test included in Next's typecheck was subsequently
 exported unchanged from the same revision. The
 [preparation learning](../../learnings/workflow-patterns/2026-10-07-isolated-build-export-must-include-root-typecheck-imports.md)
@@ -104,7 +106,7 @@ preparation failure; they do not establish connected application startup.
 The prepared rehearsal refuses missing or failed build stages, incomplete
 image results, missing artifact names, image/source-label mismatches and changes
 to app/plugin/build source after compilation. A static admission check accepted
-a complete synthetic record and rejected 20 incomplete variants, including
+a complete synthetic record and rejected 21 incomplete variants, including
 each omitted build step and artifact. This executed only the admission
 statements; it did not execute the rehearsal runner or an application suite.
 
@@ -117,7 +119,7 @@ hash checking executed no SQL and establish no full-history or real-auth parity.
 If separately authorized, the one-use command is:
 
 ```bash
-python3 .soleur/current-source-recovery-66f424cb/recovery-run.py --authorized-one-synthetic-rehearsal-66f424cb
+python3 .soleur/current-source-recovery-66f424cb/recovery-run.py --authorized-one-synthetic-rehearsal-387e36f7
 ```
 
 The script and raw records are task-owned ignored scratch, not committed
@@ -130,9 +132,40 @@ published port, provider/auth call, real credential, flag or cohort is involved.
 It stops on the first failure and has no automatic retry permission.
 
 The prepared rehearsal script's SHA-256 is
-`e2eb8fa33505bde385c2a1f8157dd08cb0d0db6c810fbde63878f3c45f3b0488`.
+`9980e4dd78b33fbd67614b14e3a3e3c50ac736376af8d3409a7951cc1d11e44a`.
 No `recovery-record.json` exists for this source-current candidate; the command
 above has not run. Authorization for offline preparation does not authorize it.
+
+## Main resync and current candidate
+
+Main advanced to `db99f2a261a3517879012955bebd4c0e719f34f7` during preparation.
+It merged cleanly as `387e36f75d730c1b8283c245d76263241412dff3`. Git comparisons
+prove app, root scripts/compiler helper, workflows and dependency files are
+byte-identical to compiled source `66f424cb`. The only plugin changes are
+`commands/go.md` and `test/go-session-gates.test.sh`. Recompiling unchanged app
+source is unnecessary; the compiled source SHA remains distinct from the
+candidate's refreshed plugin source SHA.
+
+Both plugin files were exported from the merged revision and copied into a
+small local layer over the initial prepared image. Its assembly container was
+never started. The current image ID is
+`sha256:a3b7c93d6500b48967b8d71e8d2087de64a849cff455a6e589745d519df92ae2`;
+its source label is the merged revision. A fresh read-only plugin mount passed.
+Independent image verification matched all six unchanged app hashes and both
+plugin hashes. All task-owned overlay/probe containers were removed. The
+original build record is preserved separately from this resync.
+
+| Updated plugin file | SHA-256 |
+|---|---|
+| `commands/go.md` | `46afb1627816f99af67d24b86a89ee68d2c12c9b2c9aa83540ccbd0bcf081e1a` |
+| `test/go-session-gates.test.sh` | `78784f5d1bbce5678a4321b6ed11ea3f52c9e243a9695105dfc82ea264cef2c8` |
+
+The current admission guard requires twelve successful named stages, including
+the plugin overlay and fresh image verification. Its 21 incomplete variants
+were refused. The 13-body/185-file SQL manifest was regenerated statically for
+the merged revision; no SQL ran. The scratch directory retains the original
+compiled SHA in its name, while the command's authorization selector identifies
+the current candidate revision. No prior recovery authorization transfers to it.
 
 ## Remaining qualification
 

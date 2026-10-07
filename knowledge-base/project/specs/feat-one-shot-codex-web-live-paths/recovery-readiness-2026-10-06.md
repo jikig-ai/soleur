@@ -155,3 +155,9 @@ This resolves candidate preparation only. No application startup, SQL setup,
 snapshot comparison or recovery scenario ran for this source. The two historical
 recovery attempts remain incomplete. A new one-use synthetic rehearsal still
 requires fresh explicit authorization; all later qualification holds remain.
+
+Main subsequently merged as `387e36f75d730c1b8283c245d76263241412dff3`.
+App/compiler/dependency bytes are unchanged; the two changed plugin files were
+refreshed in a local image layer. Fresh image/plugin hashes and read-only mounting
+passed. The linked candidate record identifies the current image, provenance,
+twelve required stages and updated one-use command. No rehearsal has run.
