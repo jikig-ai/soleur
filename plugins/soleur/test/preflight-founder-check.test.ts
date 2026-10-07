@@ -992,8 +992,8 @@ describe("verify: the static rules (in-process table)", () => {
     ["git -c", cmdBlock({ command: "git -c alias.t=x t" }), "dangerous-option"],
     ["git -cname=value", cmdBlock({ command: "git -calias.t=x t" }), "dangerous-option"],
     ["rg --pre", cmdBlock({ command: "rg --pre ./x foo f" }), "dangerous-option"],
-    ["curl -K", cmdBlock({ command: "curl -K cfg http://x" }), "dangerous-option"],
-    ["a bearer token in the command", cmdBlock({ command: 'curl -H "Authorization: Bearer abcdefgh12345" http://x' }), "secret-shape"],
+    ["curl -K", cmdBlock({ command: "curl -K cfg http://x" }), "dangerous-option"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["a bearer token in the command", cmdBlock({ command: 'curl -H "Authorization: Bearer abcdefgh12345" http://x' }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     ["a token in the founder's words", cmdBlock({ text: "check with ghp_" + "a".repeat(30) }), "secret-shape"],
     ["a credentialed URL in expected", cmdBlock({ expected: "https://user:hunter2@host/x" }), "secret-shape"],
     ["a password assignment", cmdBlock({ command: "grep password=hunter22 f" }), "secret-shape"],
@@ -1006,7 +1006,7 @@ describe("verify: the static rules (in-process table)", () => {
     ["an empty approved_by", cmdBlock({ approved_by: " " }), "missing-field"],
     ["an empty approved_at", cmdBlock({ approved_at: "" }), "missing-field"],
     ["an empty approved_by on a judgement check", cmdBlock({ kind: "judgement", command: "", approved_by: "" }), "missing-field"],
-    ["a secret in approved_by (the founder's answer is committed too)", cmdBlock({ approved_by: "yes, token=abcdef123456" }), "secret-shape"],
+    ["a secret in approved_by (the founder's answer is committed too)", cmdBlock({ approved_by: "yes, token=abcdef123456" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     ["a secret in approved_by on a judgement check", cmdBlock({ kind: "judgement", command: "", approved_by: "ghp_" + "a".repeat(30) }), "secret-shape"],
     ["a pin that is not a sha", cmdBlock({ command: "bash scripts/ok.sh", pins: { "scripts/ok.sh": "nope" } }), "unparseable"],
     ["a pin path that traverses", cmdBlock({ command: "bash scripts/ok.sh", pins: { "../x.sh": SHA40 } }), "unparseable"],
@@ -1043,25 +1043,25 @@ describe("verify: the static rules (in-process table)", () => {
     ["a control character in approved_by", cmdBlock({ approved_by: "yes\u001b[2J" }), "control-character"],
     ["a U+2028 in the founder's words", cmdBlock({ text: "a\u2028b" }), "control-character"],
     ["a Bearer token with no Authorization header", cmdBlock({ text: "send Bearer abcdefgh12345 along" }), "secret-shape"],
-    ["an Authorization header with no Bearer", cmdBlock({ command: 'curl -H "Authorization: x" http://x' }), "secret-shape"],
-    ["an AWS access key id", cmdBlock({ text: "key AKIAABCDEFGHIJKLMNOP" }), "secret-shape"],
-    ["a private key header", cmdBlock({ text: "-----BEGIN RSA PRIVATE KEY-----" }), "secret-shape"],
-    ["curl -u user:pass", cmdBlock({ command: "curl -u me:hunter2 http://x" }), "secret-shape"],
-    ["an api_key assignment", cmdBlock({ text: "api_key=abcdef123456" }), "secret-shape"],
+    ["an Authorization header with no Bearer", cmdBlock({ command: 'curl -H "Authorization: x" http://x' }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["an AWS access key id", cmdBlock({ text: "key AKIAABCDEFGHIJKLMNOP" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["a private key header", cmdBlock({ text: "-----BEGIN RSA PRIVATE KEY-----" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["curl -u user:pass", cmdBlock({ command: "curl -u me:hunter2 http://x" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["an api_key assignment", cmdBlock({ text: "api_key=abcdef123456" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     ["a plain word 'token' with no value is not a secret", cmdBlock({ text: "the token page loads" }), null],
     ["a plain 'secret garden' is not a secret", cmdBlock({ text: "the secret garden page loads" }), null],
     // secret FORMS: a name that merely contains the keyword, a flag, a JWT (\\b fails between _ and a keyword)
-    ["GITHUB_TOKEN=", cmdBlock({ text: "run with GITHUB_TOKEN=abcdefgh1234" }), "secret-shape"],
-    ["AWS_SECRET_ACCESS_KEY=", cmdBlock({ text: "AWS_SECRET_ACCESS_KEY=abcdefghij12" }), "secret-shape"],
+    ["GITHUB_TOKEN=", cmdBlock({ text: "run with GITHUB_TOKEN=abcdefgh1234" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["AWS_SECRET_ACCESS_KEY=", cmdBlock({ text: "AWS_SECRET_ACCESS_KEY=abcdefghij12" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     ["DB_PASSWORD=", cmdBlock({ text: "DB_PASSWORD=hunter2abc" }), "secret-shape"],
     ["SLACK_BOT_TOKEN=", cmdBlock({ text: "SLACK_BOT_TOKEN=xoxb-1234-abcd" }), "secret-shape"],
-    ["NPM_TOKEN=", cmdBlock({ text: "NPM_TOKEN=npm_abcdef12" }), "secret-shape"],
+    ["NPM_TOKEN=", cmdBlock({ text: "NPM_TOKEN=npm_abcdef12" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     ["client_secret=", cmdBlock({ text: "client_secret=abcdefgh" }), "secret-shape"],
-    ["access_token= inside a URL in the command", cmdBlock({ command: "curl http://x/p?access_token=abcdef123" }), "secret-shape"],
-    ["access_token= inside a URL (founder's words)", cmdBlock({ text: "open http://x/p?access_token=abcdef123" }), "secret-shape"],
-    ["curl --password", cmdBlock({ command: "curl --password hunter2 http://x" }), "secret-shape"],
-    ["curl --password=", cmdBlock({ command: "curl --password=hunter2 http://x" }), "secret-shape"],
-    ["curl --user u:p", cmdBlock({ command: "curl --user me:pw http://x" }), "secret-shape"],
+    ["access_token= inside a URL in the command", cmdBlock({ command: "curl http://x/p?access_token=abcdef123" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["access_token= inside a URL (founder's words)", cmdBlock({ text: "open http://x/p?access_token=abcdef123" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["curl --password", cmdBlock({ command: "curl --password hunter2 http://x" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["curl --password=", cmdBlock({ command: "curl --password=hunter2 http://x" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
+    ["curl --user u:p", cmdBlock({ command: "curl --user me:pw http://x" }), "secret-shape"], // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     ["a JWT", cmdBlock({ text: "token eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJSMeKKF2QT4fwpM" }), "secret-shape"],
     ["a JWT with no keyword near it", cmdBlock({ expected: "eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJSMeKKF2QT4fwpM" }), "secret-shape"],
     // length caps
@@ -2029,7 +2029,7 @@ describe("log: the only writer of outcomes", () => {
 
   test("a reason that looks like a secret is refused (the log is committed and may be public)", () => {
     const { r, file, extra } = scenario("FAILED");
-    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "FAILED", "--reason-stdin"], "token=abcdef123456\n");
+    const l = log(r, file, ["--mode", "interactive", "--outcome", "OVERRIDDEN", ...extra, "--underlying", "FAILED", "--reason-stdin"], "token=abcdef123456\n"); // gitleaks:allow # issue:#9578 synthetic input for the secret-shape detector
     expect(l.status).toBe(3);
   });
 

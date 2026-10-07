@@ -313,7 +313,10 @@ LOG_COLUMNS = (
 _SHELL_ACTIVE = re.compile(r"\$\(|`|<\(|>\(|;|&&|\|\||\||>|<|&|\$\{?[A-Za-z_]")
 _SUBSTITUTION = re.compile(r"\$\(|`|\$\{|<\(|>\(")
 _CONTROL = re.compile("[\x00-\x1f\x7f\u2028\u2029]")
-_HARD_CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f\u2028\u2029]")  # text may keep \t and \n
+# text may keep \t and \n. Listed one code point at a time: a hand-written \x0b-\x1f range reads to CodeQL as a suspicious one.
+_HARD_CONTROL = re.compile(
+    "[" + "".join(f"\\x{c:02x}" for c in (*range(0x00, 0x09), *range(0x0B, 0x20), 0x7F)) + "\\u2028\\u2029]"
+)
 _KW = r"(?:password|passwd|passphrase|secret|api[_-]?key|apikey|token|credential|auth)"
 _SECRET_SHAPES = (
     re.compile(r"(?i)(?<![A-Za-z0-9])bearer[ \t]+[A-Za-z0-9._~+/=-]{8,}"),
@@ -1418,7 +1421,7 @@ def cmd_log(a):
         return 3
     try:
         # O_NOFOLLOW: a link planted at the log path (dangling or not) is refused, never written through
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     except OSError as e:
         print(f"refused: cannot open the log without following a link: {e.strerror}", file=sys.stderr)
         return 3
