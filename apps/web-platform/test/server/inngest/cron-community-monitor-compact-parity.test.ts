@@ -408,3 +408,103 @@ describe("compact collector output parity (#9678)", () => {
     expect(PROMPT).not.toContain("DISTINCT");
   });
 });
+
+// The follow-through probe that closes #9678 grades the EFFECT from committed digests. It is
+// driven here against synthetic digests (no separate .test.sh) so its PASS, FAIL, NOT YET,
+// CANNOT ESTABLISH and --status-line arms are pinned beside the change they grade.
+describe("follow-through probe for #9678 (community-collectors-collected-9678.sh)", () => {
+  const PROBE = join(__dirname, "../../../../../scripts/followthroughs/community-collectors-collected-9678.sh");
+  const CUT = 1_791_000_000; // arbitrary fixed cut-off (epoch seconds); digests are dated relative to it
+  const iso = (epoch: number) => new Date(epoch * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const day = (n: number) => new Date((CUT + 86_400 * n) * 1000).toISOString().slice(0, 10);
+
+  function digest(dir: string, dayN: number, discord: string, discordHeadline: string, commits: number, genOffset = 3600): void {
+    const date = day(dayN);
+    writeFileSync(
+      join(dir, `${date}-digest.md`),
+      [
+        "---",
+        `period_start: ${date}`,
+        `generated_at: ${iso(CUT + 86_400 * dayN + genOffset)}`,
+        "---",
+        "",
+        `# Community Digest - ${date}`,
+        "",
+        "| Platform | Status | Headline |",
+        "|----------|--------|----------|",
+        `| Discord | ${discord} | ${discordHeadline}: Members 13, Channels 10, Messages (latest 50 per channel) 6 |`,
+        `| GitHub | partial | partial (auth; a 0 may mean unavailable): Stars 16, Forks 5, Commits ${commits}, Pull requests touched 0, External contributors 0 |`,
+        "",
+      ].join("\n"),
+    );
+  }
+
+  function probe(dir: string, nowDay: number, args: string[] = []): { rc: number | null; out: string } {
+    const r = spawnSync("bash", [PROBE, ...args], {
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        COLLECTOR_PROBE_DIGEST_DIR: dir,
+        COLLECTOR_PROBE_CUTOFF: String(CUT),
+        COLLECTOR_PROBE_NOW: String(CUT + 86_400 * nowDay),
+      } as unknown as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    return { rc: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  const fresh = () => mkdtempSync(join(root, "probe-"));
+
+  it("NOT YET (2) while no digest was generated after the change plus the deploy lag", () => {
+    const dir = fresh();
+    digest(dir, 0, "partial", "partial (output-too-large; a 0 may mean unavailable)", 0, 3600); // inside the lag window: ignored
+    expect(probe(dir, 2).rc).toBe(2);
+  });
+
+  it("CANNOT ESTABLISH (3) when 7 days pass with no qualifying digest", () => {
+    const dir = fresh();
+    expect(probe(dir, 8).rc).toBe(3);
+  });
+
+  it("FAIL (1) when a qualifying digest still reports output-too-large, and echoes only enum tokens", () => {
+    const dir = fresh();
+    digest(dir, 2, "partial", "partial (output-too-large; a 0 may mean unavailable)", 0);
+    const r = probe(dir, 3);
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("discord=partial/output-too-large");
+    expect(r.out).not.toContain("Members 13"); // a digest line is never echoed
+  });
+
+  it("NOT YET (2) with one clean qualifying digest, PASS (0) with two consecutive", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    expect(probe(dir, 3).rc).toBe(2);
+    digest(dir, 3, "collected", "collected", 5);
+    const r = probe(dir, 4);
+    expect(r.rc).toBe(0);
+    expect(r.out).toContain("PASS");
+  });
+
+  it("TRANSIENT (4), never FAIL, when a qualifying day is partial for an unrelated cause", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    digest(dir, 3, "partial", "partial (timeout; a 0 may mean unavailable)", 5);
+    expect(probe(dir, 4).rc).toBe(4);
+  });
+
+  it("does not PASS on zeros: Discord collected but no GitHub count across the two digests", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 0);
+    digest(dir, 3, "collected", "collected", 0);
+    expect(probe(dir, 4).rc).toBe(4);
+  });
+
+  it("--status-line always exits 0 and prints enum tokens only; unknown arguments exit 2", () => {
+    const dir = fresh();
+    digest(dir, 2, "partial", "partial (output-too-large; a 0 may mean unavailable)", 0);
+    const r = probe(dir, 3, ["--status-line"]);
+    expect(r.rc).toBe(0);
+    expect(r.out.trim()).toMatch(/^discord=[a-z]+ github=[a-z-]+$/);
+    expect(probe(dir, 3, ["--nope"]).rc).toBe(2);
+  });
+});
