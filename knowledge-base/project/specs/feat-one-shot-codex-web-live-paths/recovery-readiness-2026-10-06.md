@@ -167,3 +167,22 @@ The candidate record now identifies its current renderer/plugin image and
 explicitly excludes the new deployment-guard shell changes from the synthetic
 proof. Full production runner/infrastructure parity remains unqualified.
 Fresh image/plugin checks and read-only binding passed; no rehearsal ran.
+
+## Authorized scoped rehearsal result — 2026-10-07
+
+The user subsequently authorized one synthetic rehearsal of the prepared
+`27c04a95` renderer/plugin candidate. It ran once and passed fresh isolated
+database setup with 13 unchanged migrations, connected initial/replacement
+health and graceful shutdown, exact pre/post retained-state equality, and the
+scoped generation, owner/member/tenant and erasure SQL cases. All five owned
+containers were removed. The [attributable result and hashes](recovery-build-66f424cb.md#separately-authorized-rehearsal--2026-10-07)
+bind this verdict to candidate source, observed head, image, script and raw record.
+This discharges connected renderer startup/restart and this synthetic retained-
+state/RPC proof only; the two historical attempts remain incomplete.
+
+Production tool/infra/workspace/observability parity, full historical schema,
+concurrency and live Codex-process recovery remain unqualified. No OpenAI call,
+real credential, shared database/production write or customer content was used.
+The one-use authorization is consumed; another rehearsal needs new explicit
+authorization. Local suites and all later QA, routine, Web, legal, review and
+promotion gates remain held. Keep draft/default-off/customer content blocked.

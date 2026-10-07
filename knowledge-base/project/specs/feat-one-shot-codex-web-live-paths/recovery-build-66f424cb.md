@@ -4,7 +4,7 @@ date: 2026-10-07
 compiled_source_sha: 66f424cb0a592a54ea33d12cc64a1cbbd627e8c6
 candidate_source_sha: 27c04a95ca007813847a17e4c765dc37e2d0aeb6
 pr: 9051
-status: local-image-prepared-startup-and-recovery-unqualified
+status: scoped-synthetic-startup-restart-and-retained-state-passed
 ---
 
 # Source-current offline recovery image preparation
@@ -200,3 +200,62 @@ production runner parity, concurrency, authenticated screenshots, an eligible
 routine consumer, separate permitted Web matrices, attributable mode-specific
 CLO dispositions, full-branch review and promotion remain unqualified.
 Keep PR #9051 draft, Codex default-off and customer content blocked.
+
+## Separately authorized rehearsal — 2026-10-07
+
+After reviewing this candidate, the user explicitly answered “Authorize one
+synthetic rehearsal.” The exact one-use command above ran once with script
+SHA-256 `1847a52487434481101985595774c59169a697fe64b89352613b5189679a972e`.
+Candidate source was `27c04a95ca007813847a17e4c765dc37e2d0aeb6`, observed repository
+head `aeedc0ced9dfdf2d40e0fd312a3c3d85ffd05efa`, and renderer/plugin image
+`sha256:09a90a42a30f5d4f6c7fe335e027da6dbe6e773cf6bd41e922a0e2b6c564ba17`.
+Runtime/build source comparison and the six recorded artifact hashes passed
+admission. The preceding preparation and proposal sections remain historical;
+their statements that no rehearsal had run precede this authorization.
+
+The rehearsal ran from 11:11:34 to 11:12:03 UTC. Every recorded step exited zero:
+fresh synthetic database creation, the 13-body scoped migration/setup assertions,
+initial snapshot, connected health for both initial and replacement instances,
+both graceful stops and process exits, exact retained-state comparison, final
+snapshot, scenario SQL and result ledger. Neither process was OOM-killed.
+Both health responses identified this candidate SHA and `supabase: connected`.
+The replacement uses identical hard-linked renderer artifacts; no earlier
+release, provider turn or restoration of a live Codex process was exercised.
+
+The pre/post snapshots have identical SHA-256
+`78c923b0f9930ff03ab09ed757da836a62b2e3eee042bb0f09aa1fdc4d535cc6`.
+The SQL equality assertion covers the fixture's settings, attempt IDs,
+accepted timestamps, checkpoints, memberships and migration ledger. Subsequent
+SQL proved stale admission/checkpoint/lifecycle refusal, completion of an already
+admitted old generation, current-generation positive controls, duplicate-attempt
+refusal, owner/member and cross-tenant fences, and erasure with the other tenant
+and migration ledger retained. Synthetic claim helpers and sequential SQL do not
+qualify real authentication, the full 185-file migration history or concurrency.
+
+Four traced application fetches used only `127.0.0.1:3001/rest/v1/`: startup
+conversation housekeeping and database health reads. No prohibited fetch was
+observed. PostgreSQL used network `none`; the other four containers shared its
+isolated namespace, with no published ports, read-only roots, dropped
+capabilities and no new privileges. All five owned containers were confirmed
+removed in the record and by an empty exact-prefix Docker inventory. No real
+credential, OpenAI provider/auth call, shared database/production write, flag
+change, customer content or browser-auth copy was involved. The one-use
+authorization is consumed; the runner now refuses another invocation.
+
+The raw record and bounded logs remain in ignored task scratch
+`.soleur/current-source-recovery-66f424cb/`. The final record's SHA-256 is
+`d95068fdeed30e1cdecb443010fde7187eee4a8fec29019cf3214b77922e17c3`.
+This tracked result does not publish synthetic JWTs, raw account screenshots
+or credential-bearing environment values.
+
+Application warnings/errors were inspected: the empty synthetic workspace
+fails its populated-workspace check; absent host identity disarms watchdog
+dispatch; git replication, proxy TLS and Sentry are unconfigured; agent sandbox
+shim/BPF and LikeC4 self-probes fail because those tools are absent from this
+renderer image. The missing-pepper sentinel and Sentry configuration deprecation
+also remain visible. These intentionally incomplete synthetic fixtures do not
+establish production readiness or a production incident. Connected renderer
+startup and scoped retained-state/RPC recovery passed; full runner/tool/infra,
+workspace readiness and observability parity remain unqualified. Local suites,
+authenticated screenshots, routine eligibility, permitted Web matrices,
+attributable mode-specific CLO dispositions, full review and promotion stay held.

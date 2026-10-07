@@ -93,3 +93,10 @@ human infrastructure instruction. Separate account evidence from prepared-image
 results with a semantic heading and run the scoped infra-document guard before
 committing. Keep the linter unchanged; blank lines do not break its adjacency
 model, and no waiver or suppression is needed for this correction.
+
+The post-rehearsal evidence commit initially failed to create the shared
+worktree `index.lock` because the sandbox exposed that Git metadata as
+read-only. No commit was created by the failed command. The same exact commit
+command succeeded with scoped sandbox escalation. A successful prior staging
+operation does not prove subsequent Git metadata writes are permitted; verify
+each result and distinguish sandbox access from rehearsal authorization.
