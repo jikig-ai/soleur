@@ -350,7 +350,7 @@ while :; do
     # branch the operator would read as "still working".
     if [[ "$queued" != "1" ]]; then
       case "$mergestate" in
-        BEHIND)  printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync).\n' "$PR"; exit 1 ;;
+        BEHIND)  printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync). On a repo whose main has a merge queue, an armed PR that reads BEHIND just after its checks settle is usually about to be enqueued by GitHub: re-run this watch once before syncing.\n' "$PR"; exit 1 ;;
         DIRTY)   printf 'CHECKS GREEN BUT DIRTY — PR #%s has a merge conflict; auto-merge cannot resolve it.\n' "$PR"; exit 1 ;;
         DRAFT)   printf 'CHECKS GREEN BUT DRAFT — PR #%s cannot merge until it is marked ready.\n' "$PR"; exit 1 ;;
         # BLOCKED with nothing pending means branch protection is unsatisfied by something OUTSIDE
