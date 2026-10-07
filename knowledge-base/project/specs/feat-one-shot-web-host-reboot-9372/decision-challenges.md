@@ -56,3 +56,10 @@ Headless plan run, 2026-10-07. Each item is a Taste or User-Challenge finding fr
 
 - Measured 2026-10-07: the environment's only reviewer is the owner's own login, and `prevent_self_review` is `false`. The agent's `gh` identity is that login, so the platform does not separate dispatching from approving; `hr-menu-option-ack-not-prod-write-auth` does, by rule.
 - A `.tf` change (`prevent_self_review` plus a distinct agent identity) is out of scope for this PR; a follow-up issue is filed in Phase 7.
+- Review round, 2026-10-07: no new issue is filed. The existing issue #8044 (open: should destructive replace-class dispatches be two-party; `prevent_self_review` is false everywhere and every gated environment has one reviewer) already tracks the property. The environment was re-measured the same day: a custom deployment branch policy listing exactly `main`, the sole reviewer login `deruelle`, `prevent_self_review` false. The runbook and ADR-241 state the gate as a rule and point there.
+
+## 11. A validate-time check for in-flight `web-1-swap` runs (User-Challenge, not adopted)
+
+- Review round, 2026-10-07: the `validate` job could refuse to proceed when a run of another workflow that holds the `web-1-swap` mutex is in progress or queued, so that a waiting dispatch never displaces or blocks a release deploy.
+- Not adopted: how a job that waits for an environment approval interacts with the concurrency group is not documented and has not been measured here, and a check in `validate` would make a claim about it. The runbook carries the check instead, run by the dispatching agent immediately before every dispatch (a loop over the workflows that hold the group, listing their in-progress, queued and waiting runs), with the rule to cancel an unapproved dispatch.
+- Option for the owner: adopt a validate-time check after the interaction has been measured on a throwaway run, or after GitHub documents it. Reversal cost: one `validate` step, one token scope (`actions: read` is already granted) and its suite rows.
