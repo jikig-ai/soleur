@@ -3129,12 +3129,13 @@ case "$OP" in
             DISC_URL="$BASE/inngest-doublefire-probe?from=${DISC_FROM}&function_ids=${ZERO_RUN_IDS}"
             echo "::notice::2.6 zero-run discovery: re-probing registry cron function(s) with zero runs in the verify window over a ${DISC_LOOKBACK}s (~2x max cron period) lookback — function_ids=[$ZERO_RUN_IDS]"
             rm -f /tmp/verify-zero-run
+            # Credential headers ride curl's stdin config channel (--config -), never argv —
+            # lint-shell-trace-credential-refusal's per-file baseline is shrink-only and this
+            # call is a NEW site; /proc/<pid>/cmdline must not carry the secrets.
             DISC_CODE=$(curl --disable --noproxy '*' -s --max-time 120 -o /tmp/verify-zero-run -w '%{http_code}' \
               -X GET \
-              -H "X-Signature-256: sha256=$SIG" \
-              -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
-              -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
-              "$DISC_URL" || echo "000")
+              --config - \
+              "$DISC_URL" < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$SIG" "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET") || echo "000")
             DISC_BODY=$(cat /tmp/verify-zero-run 2>/dev/null || echo "")
             if [[ "$DISC_CODE" == "200" ]] && echo "$DISC_BODY" | jq -e '.runs | type == "array"' >/dev/null 2>&1; then
               DISC_N=$(echo "$DISC_BODY" | jq '.runs | length')
