@@ -186,9 +186,9 @@ compact_on() {
 emit_compact() { # $1=compact JSON
   local bytes
   bytes=$(printf '%s' "$1" | wc -c)
-  # Outranks the truncation warn (a data-quality signal about THIS run's output), never the
-  # standing stargazers_unavailable the handler acts on.
-  if ((bytes > COMPACT_BUDGET_BYTES)) && [[ -z "$_CAP_WARN" || "$_CAP_WARN" == truncated_at_per_page ]]; then
+  # Lowest priority: a truncation warn means counts may be undercounted, and
+  # stargazers_unavailable is acted on by the handler; both outrank a size note.
+  if ((bytes > COMPACT_BUDGET_BYTES)) && [[ -z "$_CAP_WARN" ]]; then
     _CAP_WARN="compact_over_budget"
   fi
   # The projection succeeded: a later failure is not a projection failure.
@@ -281,7 +281,7 @@ cmd_activity() {
       --arg since "$since" \
       --argjson max "$COMPACT_MAX_ITEMS" \
       --argjson tmax "$COMPACT_TITLE_MAX" \
-      'def titles: sort_by(.updated_at) | reverse | .[:$max] | map((.title // "" | tostring | gsub("[[:cntrl:]\u2028\u2029]"; " "))[:$tmax]);
+      'def titles: sort_by(.updated_at) | reverse | .[:$max] | map((.title // "" | tostring | gsub("[[:cntrl:]\\p{Cf}\u2028\u2029]"; " "))[:$tmax]);
       ($issues | add // [] | map(select(.pull_request == null))) as $iss
       | ($prs | add // [] | map(select(.updated_at >= $since))) as $pr
       | {issues: {count: ($iss | length), titles: ($iss | titles)},
@@ -439,7 +439,7 @@ cmd_discussions() {
       '{titles: [.data.repository.discussions.nodes
                  | map(select(.updatedAt >= $since))
                  | sort_by(.updatedAt) | reverse | .[:$max][]
-                 | (.title // "" | tostring | gsub("[[:cntrl:]\u2028\u2029]"; " "))[:$tmax]]}' <<<"$result")
+                 | (.title // "" | tostring | gsub("[[:cntrl:]\\p{Cf}\u2028\u2029]"; " "))[:$tmax]]}' <<<"$result")
     emit_compact "$out"
     return 0
   fi

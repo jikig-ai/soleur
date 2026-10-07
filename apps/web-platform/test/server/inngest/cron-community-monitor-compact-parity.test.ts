@@ -425,11 +425,20 @@ describe("compact collector output parity (#9678)", () => {
     expect(PROMPT).toMatch(/IDs are\s+in `channel_ids`/);
     expect(PROMPT).toMatch(/messages is the sum of each call's\s+`count`/);
     expect(PROMPT).toMatch(/commits is\s+`commit_total`/);
+    // the fallbacks the review added
+    expect(PROMPT).toMatch(/If EVERY channel call fails, report Discord as "partial" with\s+failureCause "script-error"/);
+    expect(PROMPT).toMatch(/If a field named above is ABSENT from a collector's output, report that\s+platform "partial" with failureCause "script-error"/);
+    expect(PROMPT).toMatch(/Classify only the listed titles \(the newest 40 per list/);
   });
 
   it("hostile titles (control characters, quotes, backslashes) cannot push the chain past the inline limit", () => {
     const hostile = mkdtempSync(join(root, "hostile-"));
-    const nasty = `${"\u0001".repeat(20)}${'"\\'.repeat(20)}${"é".repeat(20)}`;
+    const BAD = [
+      ...Array.from({ length: 31 }, (_, i) => i + 1),
+      127, 133, 8232, 8233, 8238, 8203, 65279, 917569,
+    ];
+    const bad = String.fromCodePoint(...BAD);
+    const nasty = `${bad}${'"\\'.repeat(5)}keep`;
     const items = (n: number, extra: Record<string, unknown>) =>
       Array.from({ length: n }, (_, i) => ({
         number: i + 1,
@@ -464,6 +473,18 @@ describe("compact collector output parity (#9678)", () => {
       const r = runCollector(c.script, c.args, { ...compact, GH_FIXTURES: hostile });
       expect(r.rc, r.stderr).toBe(0);
       expect(r.stdout).not.toMatch(/\\u00[0-1][0-9a-f]/); // no JSON control-character escapes
+      const parsed = JSON.parse(r.stdout) as {
+        titles?: string[];
+        issues?: { titles: string[] };
+        pull_requests?: { titles: string[] };
+      };
+      const titles = [...(parsed.titles ?? []), ...(parsed.issues?.titles ?? []), ...(parsed.pull_requests?.titles ?? [])];
+      expect(titles.length).toBeGreaterThan(0);
+      // checked on the decoded titles (the output's own trailing newline is not a title character)
+      for (const cp of BAD) {
+        expect(titles.some((t) => t.includes(String.fromCodePoint(cp))), `U+${cp.toString(16)} survived`).toBe(false);
+      }
+      expect(r.stdout).toContain("keep"); // ordinary text next to the stripped characters is kept
       total += Buffer.byteLength(r.stdout);
     }
     expect(total).toBeLessThan(INLINE_LIMIT / 2);
@@ -629,6 +650,38 @@ describe("follow-through probe for #9678 (community-collectors-collected-9678.sh
     digest(dir, 3, "partial", "partial (timeout; a 0 may mean unavailable)", 5);
     expect(probe(dir, 10).rc).toBe(4);
     expect(probe(dir, 20).rc).toBe(3);
+  });
+
+  it("a bad GitHub row on the SECOND-newest digest keeps the pair from passing (rc 4, not 0)", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3, 3600, "partial (output-too-large; a 0 may mean unavailable)");
+    digest(dir, 3, "collected", "collected", 5);
+    expect(probe(dir, 4).rc).toBe(4);
+  });
+
+  it("a hyphenated failed cause parses, and a cause outside the closed set is reported as unknown without echoing it", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    digest(dir, 3, "failed", "collection failed: rate-limit", 5);
+    expect(probe(dir, 4).out).toContain("discord=failed/rate-limit");
+    const dir2 = fresh();
+    digest(dir2, 2, "collected", "collected", 3);
+    digest(dir2, 3, "failed", "collection failed: leaktoken-xyz", 5);
+    const r = probe(dir2, 4);
+    expect(r.out).toContain("discord=failed/unknown");
+    expect(r.out).not.toContain("leaktoken");
+  });
+
+  it("the ungraded bound sits at 14 days: 4 at day 13, 3 at day 15 (also with a single digest)", () => {
+    const dir = fresh();
+    digest(dir, 2, "collected", "collected", 3);
+    digest(dir, 3, "partial", "partial (timeout; a 0 may mean unavailable)", 5);
+    expect(probe(dir, 13).rc).toBe(4);
+    expect(probe(dir, 15).rc).toBe(3);
+    const one = fresh();
+    digest(one, 2, "collected", "collected", 3);
+    expect(probe(one, 10).rc).toBe(2);
+    expect(probe(one, 15).rc).toBe(3);
   });
 
   it("--status-line always exits 0 and prints enum tokens only; unknown arguments exit 2", () => {

@@ -725,6 +725,57 @@ describe("publication flow — collector truth is bound into the render", () => 
     expect(issues[0].body).toContain("| GitHub | failed | collection failed: rate-limit |");
   });
 
+  it("when compact_off and stargazers_unavailable are both present, compact_off wins (script-error, metrics withheld)", async () => {
+    writeSidecar([
+      { collector: "github", command: "repo-stats", exit: 0, cause: "", warn: "stargazers_unavailable" },
+      { collector: "github", command: "activity", exit: 0, cause: "", warn: "compact_off" },
+    ]);
+
+    const { out } = await run();
+
+    const exp = expectedRender({ status: "partial", failureCause: "script-error" });
+    expect(out.value).toEqual({ ok: true });
+    expect(issues[0].body).toBe(exp.issueBody);
+  });
+
+  it("a compact_off warn does not soften a github platform the draft reports as disabled", async () => {
+    writeSidecar([{ collector: "github", command: "activity", exit: 0, cause: "", warn: "compact_off" }]);
+    spawnClaudeEvalSpy.mockResolvedValue(
+      okSpawn({ finalMessage: validDraftFinalMessage({ platforms: { github: { status: "disabled" } } }) }),
+    );
+
+    await run();
+
+    expect(issues[0].body).toMatch(/\| GitHub \| disabled \|/);
+  });
+
+  const warnMessageFor = async (records: Array<Record<string, unknown>>): Promise<string> => {
+    writeSidecar(records as never);
+    await run();
+    return String(opCall("collector-status-warn")?.[1]?.message ?? "");
+  };
+
+  it("the warn event says per_page for a truncation warn", async () => {
+    expect(
+      await warnMessageFor([{ collector: "github", command: "activity", exit: 0, cause: "", warn: "truncated_at_per_page" }]),
+    ).toContain("per_page");
+  });
+
+  it("the warn event does not blame a per_page cap for a compact-only warn", async () => {
+    expect(
+      await warnMessageFor([{ collector: "github", command: "activity", exit: 0, cause: "", warn: "compact_over_budget" }]),
+    ).not.toContain("per_page");
+  });
+
+  it("the warn event says per_page when a truncation warn rides with a compact warn", async () => {
+    expect(
+      await warnMessageFor([
+        { collector: "github", command: "activity", exit: 0, cause: "", warn: "truncated_at_per_page" },
+        { collector: "github", command: "contributors", exit: 0, cause: "", warn: "compact_over_budget" },
+      ]),
+    ).toContain("per_page");
+  });
+
   it("a compact_over_budget warn is reported but does not override a collected github row", async () => {
     writeSidecar([{ collector: "github", command: "activity", exit: 0, cause: "", warn: "compact_over_budget" }]);
 

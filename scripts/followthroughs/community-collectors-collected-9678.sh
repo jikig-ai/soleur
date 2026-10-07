@@ -175,6 +175,11 @@ if [[ "$d_cause" == output-too-large || "$g_cause" == output-too-large ]]; then
 fi
 
 if ((${#QUAL[@]} < 2)); then
+  # The ungraded bound applies here too: one digest and then silence must not read as "NOT YET" forever.
+  if ((NOW > CUTOFF + UNGRADED_SECONDS)); then
+    echo "CANNOT ESTABLISH: only one qualifying digest 14 days after the change; check the FAILED audit issue and the Sentry op community-publication-rejected"
+    exit 3
+  fi
   echo "NOT YET: one qualifying digest so far (${#QUAL[@]} of 2 needed)"
   exit 2
 fi

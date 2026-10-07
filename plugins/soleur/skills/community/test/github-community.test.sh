@@ -545,6 +545,25 @@ if [[ -f "$STATUS8W/collector-status.jsonl" ]]; then
 else
   echo "  FAIL: sidecar missing after capped run"; FAIL=$((FAIL + 1))
 fi
+# Compact contributors must not call the issues endpoint at all: make it FAIL and require success
+# with no warn (a reordering that fetches issues again would exit 1 here).
+echo 1 > "$CASE8W/fixtures/issues.exit"
+printf 'boom\n' > "$CASE8W/fixtures/issues.stderr"
+gen_commits 3 16 > "$CASE8W/fixtures/commits.json"
+rm -f "$STATUS8W/collector-status.jsonl"
+(
+  export PATH="$CASE8W/stub:$PATH"
+  export GITHUB_REPOSITORY="test-owner/test-repo"
+  export TMPDIR="$CASE8W/tmp"
+  export SOLEUR_COLLECTOR_STATUS_DIR="$STATUS8W"
+  export SOLEUR_COLLECTOR_COMPACT=1
+  bash "$COLLECTOR" contributors 1
+) >"$CASE8W/out/stdout" 2>"$CASE8W/out/stderr"
+RC=$?
+assert_rc 0 "$RC" "compact contributors never calls the issues endpoint"
+assert_jq "$STATUS8W/collector-status.jsonl" 'has("warn") | not' "no warn when only the unused issues list would have been capped"
+rm -f "$CASE8W/fixtures/issues.exit" "$CASE8W/fixtures/issues.stderr"
+gen_commits 100 16 > "$CASE8W/fixtures/commits.json"
 # The same capped run WITHOUT the flag (a cron whose flag did not arrive): compact_off outranks the
 # truncation warn, so the flag regression is not hidden behind the per_page cap.
 rm -f "$STATUS8W/collector-status.jsonl"
@@ -882,6 +901,81 @@ else
   echo "  FAIL: control-character titles produced $CTRL_BYTES B (budget 6000 B)"; FAIL=$((FAIL + 1))
 fi
 assert_file_not_matches "$C/out/stdout" '\\u00' "no JSON control-character escapes survive in titles"
+
+# --- Test 12: warn precedence, cause clearing, commit_total parity, hostile titles --------
+
+echo "Test 12: sidecar warn precedence and the compact edge cases"
+
+# compact_off must not overwrite the standing stargazers_unavailable the handler acts on.
+C="$(new_case prec_stargazers)"
+gen_repo > "$C/fixtures/repo.json"
+echo '[]' > "$C/fixtures/stargazers.json"
+printf 'gh: Resource not accessible by integration (HTTP 403)\n' > "$C/fixtures/stargazers.stderr"
+echo 1 > "$C/fixtures/stargazers.exit"
+run_collector_env "$C" "SOLEUR_COLLECTOR_STATUS_DIR=$C/status" repo-stats 1
+assert_jq "$C/status/collector-status.jsonl" '.warn == "stargazers_unavailable"' \
+  "compact_off does not overwrite stargazers_unavailable"
+
+# compact_over_budget is the lowest priority: a capped (truncated) run keeps its truncation warn.
+C="$(new_case prec_budget)"
+jq -nc '[range(100) | {number: (.+1), title: ("\"" * 60), state: "open", user: {login: "u"},
+   created_at: "2099-01-01T00:00:00Z", updated_at: "2099-01-01T00:00:00Z", pull_request: null}]' > "$C/fixtures/issues.json"
+jq -nc '[range(99) | {number: (.+1), title: ("\"" * 60), state: "open", user: {login: "u"},
+   created_at: "2099-01-01T00:00:00Z", updated_at: "2099-01-01T00:00:00Z", merged_at: null}]' > "$C/fixtures/pulls.json"
+run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1 SOLEUR_COLLECTOR_STATUS_DIR=$C/status" activity 1
+assert_jq "$C/status/collector-status.jsonl" '.warn == "truncated_at_per_page"' \
+  "compact_over_budget does not overwrite truncated_at_per_page"
+run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1" activity 1
+OVER_BYTES=$(wc -c < "$C/out/stdout")
+if [[ "$OVER_BYTES" -gt 6000 ]]; then
+  echo "  PASS: precedence fixture really is over the compact budget ($OVER_BYTES B)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: precedence fixture is only $OVER_BYTES B, not over the 6000 B budget"; FAIL=$((FAIL + 1))
+fi
+
+# A failure AFTER a successful projection must not be labelled compact-projection-failed:
+# stdout is /dev/full, so the final printf fails after the projection succeeded.
+C="$(new_case cause_clearing)"
+gen_commits 3 16 > "$C/fixtures/commits.json"
+(
+  export PATH="$C/stub:$PATH"
+  export GITHUB_REPOSITORY="test-owner/test-repo"
+  export TMPDIR="$C/tmp"
+  export SOLEUR_COLLECTOR_COMPACT=1
+  export SOLEUR_COLLECTOR_STATUS_DIR="$C/status"
+  bash "$COLLECTOR" contributors 1
+) >/dev/full 2>"$C/out/stderr"
+RC=$?
+assert_nonzero_rc "$RC" "contributors exits non-zero when stdout cannot be written"
+assert_jq "$C/status/collector-status.jsonl" '.cause == "" and .exit != 0' \
+  "a post-projection write failure is not recorded as compact-projection-failed"
+
+# commit_total counts exactly what the default commit_authors sums: login-only and name-only commits.
+C="$(new_case commit_total)"
+jq -nc '[{author: {login: "a"}, commit: {author: {name: "A"}}},
+         {author: {login: "c"}, commit: {author: {name: null}}},
+         {author: null, commit: {author: {name: "Anon"}}},
+         {author: null, commit: {author: {name: null}}}]' > "$C/fixtures/commits.json"
+jq -nc '[]|.+[{number: 1, title: "t", state: "open", user: {login: "u"}, created_at: "2099-01-01T00:00:00Z", updated_at: "2099-01-01T00:00:00Z", pull_request: null}]' > "$C/fixtures/issues.json"
+run_collector "$C" contributors 1
+DEFAULT_SUM=$(jq '[.commit_authors[].commits] | add' "$C/out/stdout")
+run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1" contributors 1
+assert_jq "$C/out/stdout" ".commit_total == $DEFAULT_SUM and .commit_total == 3" \
+  "compact commit_total equals the default commit_authors sum (login-only and name-only commits count)"
+
+# Every control code point, DEL, the line/paragraph separators, bidi/zero-width/tag format characters
+# (category Cf) are neutralised in titles; ordinary text next to them is kept.
+C="$(new_case all_ctrl)"
+jq -nc --arg ts "$NOW" '([range(1;32)] + [127, 133, 8232, 8233, 8238, 8203, 65279, 917569] | implode) as $bad
+  | [range(5) | {number: (.+1), title: ($bad + "keep"), state: "open", user: {login: "u"},
+                 created_at: $ts, updated_at: $ts, pull_request: null}]' > "$C/fixtures/issues.json"
+jq -nc --arg ts "$NOW" '[range(2) | {number: (.+1), title: "p", state: "open", user: {login: "u"},
+                 created_at: $ts, updated_at: $ts, merged_at: null}]' > "$C/fixtures/pulls.json"
+run_collector_env "$C" "SOLEUR_COLLECTOR_COMPACT=1" activity 1
+assert_jq "$C/out/stdout" '(.issues.titles | length) == 5
+  and (.issues.titles[0] | endswith("keep"))
+  and ([.issues.titles[] | explode[] | select(. < 32 or . == 127 or . == 133 or . == 8232 or . == 8233 or . == 8238 or . == 8203 or . == 65279 or . == 917569)] | length) == 0' \
+  "every control, separator and format character is stripped from titles, text is kept"
 
 echo ""
 print_results
