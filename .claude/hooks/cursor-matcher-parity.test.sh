@@ -139,5 +139,15 @@ else
   pass "emit-decision.sh does not read a CURSOR_ marker"
 fi
 
+# Anti-vacuity floor. pass() and fail() are the assertion machinery. Neutering
+# them leaves PASS and FAIL at 0, and this bound exits 1 without calling fail().
+# 20 is the measured count for this capture: twelve fixed checks plus one pass
+# for each of the eight ledger sources.
+ASSERTED=$((PASS + FAIL))
+if [ "$ASSERTED" -lt 20 ]; then
+  printf '[FATAL] assertion floor: only %s assertion(s) ran\n' "$ASSERTED" >&2
+  exit 1
+fi
+
 echo "cursor-matcher-parity: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
