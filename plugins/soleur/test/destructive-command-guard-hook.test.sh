@@ -65,7 +65,7 @@
 #      points it at a mutated COPY) and GUARD_FAST_COUNT (used only by the in-suite meta copy),
 #      DCG_ROWS (reduced mode, used only by destructive-command-guard-mutation.test.sh: an ERE matched
 #      against each row LABEL; rows that do not match are not run and not counted, the unlabelled static,
-#      registration and harness checks always run, and the 479-case floor is replaced by the floor of the
+#      registration and harness checks always run, and the 485-case floor is replaced by the floor of the
 #      selected rows, so a reduced run proves the selected rows and nothing else).
 export TMPDIR="${TMPDIR:-/var/tmp}"
 export LC_ALL=C
@@ -806,6 +806,7 @@ X @@ rm -rf ../build sibling @@ none @@ @SUB@ @@ rm -rf ../build
 X @@ rm -rf ./* in a directory that is not home @@ none @@ - @@ cd @TREE@ && rm -rf ./*
 X @@ rm -rf ./* in an empty subdirectory @@ none @@ - @@ cd @SUB@ && rm -rf ./*
 X @@ rm ~ (no recursive flag) @@ none @@ - @@ rm ~
+X @@ rm -- -rf ~ (after -- nothing is an option: -rf is a file name) @@ none @@ - @@ rm -- -rf ~
 X @@ rm -f ~/x.txt @@ none @@ - @@ rm -f ~/x.txt
 X @@ rm -rf ~/projects @@ none @@ - @@ rm -rf ~/projects
 X @@ rm -rf ~/.cache/foo @@ none @@ - @@ rm -rf ~/.cache/foo
@@ -916,6 +917,7 @@ X @@ terraform workspace select destroy (not the subcommand) @@ none @@ - @@ ter
 X @@ terraform state list @@ none @@ - @@ terraform state list
 X @@ command -v rm @@ none @@ - @@ command -v rm
 X @@ command -v terraform @@ none @@ - @@ command -v terraform
+X @@ command -v rm -rf ~ (a look-up only: rm never runs) @@ none @@ - @@ command -v rm -rf ~
 X @@ doppler run -- terraform plan @@ none @@ - @@ doppler run -- terraform plan
 X @@ doppler run -- ls @@ none @@ - @@ doppler run -- ls
 X @@ xargs is not unwrapped (D1/D2 stated non-coverage) @@ none @@ - @@ echo ~ | xargs rm -rf
@@ -938,6 +940,7 @@ X @@ terraform plan |& tee log @@ none @@ - @@ terraform plan |& tee @TREE@/out.
 X @@ a clobber redirect @@ none @@ - @@ echo x >| @TREE@/out.log
 X @@ a double paren with a comment-free body @@ none @@ - @@ ((ls); (ls))
 X @@ more than 32 simple commands, all benign (no record cap) @@ none @@ - @@ echo 1; echo 2; echo 3; echo 4; echo 5; echo 6; echo 7; echo 8; echo 9; echo 10; echo 11; echo 12; echo 13; echo 14; echo 15; echo 16; echo 17; echo 18; echo 19; echo 20; echo 21; echo 22; echo 23; echo 24; echo 25; echo 26; echo 27; echo 28; echo 29; echo 30; echo 31; echo 32; echo 33; echo 34; echo 35; echo 36; echo 37; echo 38; echo 39; echo 40
+X @@ more than 32 simple commands, all benign, quoted so they reach the lexer (no record cap) @@ none @@ - @@ echo "1"; echo "2"; echo "3"; echo "4"; echo "5"; echo "6"; echo "7"; echo "8"; echo "9"; echo "10"; echo "11"; echo "12"; echo "13"; echo "14"; echo "15"; echo "16"; echo "17"; echo "18"; echo "19"; echo "20"; echo "21"; echo "22"; echo "23"; echo "24"; echo "25"; echo "26"; echo "27"; echo "28"; echo "29"; echo "30"; echo "31"; echo "32"; echo "33"; echo "34"; echo "35"; echo "36"; echo "37"; echo "38"; echo "39"; echo "40"
 # ---- prefilter boundary rows (Guard 1, M4): a boundary character plus a destructive word ------------
 X @@ boundary backslash: r\m -rf ~ @@ deny @@ - @@ r\m -rf ~
 X @@ boundary single quote: r''m -rf ~ @@ deny @@ - @@ r''m -rf ~
@@ -1143,6 +1146,7 @@ LH "the contents of a nonexistent home" deny "$_FH" "rm -rf $_FH/*"
 LH "rm -rf ~ with a nonexistent home" deny "$_FH" 'rm -rf ~'
 LH "a project under a nonexistent home is not home" none "$_FH" "rm -rf $_FH/projects/x"
 LH "another user's home is not this home" none "$_FH" 'rm -rf /home/other-user-dir'
+LH "a .. through a nonexistent directory is normalized lexically and still reaches an ancestor of home" deny "$_FH" "rm -rf $_FH/nonexistent-dir/../.."
 
 # =====================================================================================================
 echo "== the envelope (ADR-156/157): an unreadable envelope asks, a non-Bash tool is not decided =="
@@ -1193,6 +1197,12 @@ printf '{"env":{"SOLEUR_DISABLE_DESTRUCTIVE_GUARD":"1"}}\n' > "$WORK/decoy/.clau
 printf 'SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1\n' > "$WORK/decoy/.env"
 env_row "a project settings file that sets the switch is not read by the hook" ask "$(mkjson 'terraform destroy' "$WORK/decoy")" "CLAUDE_PROJECT_DIR=$WORK/decoy"
 env_row "a .env that sets the switch is not read by the hook" ask "$(mkjson 'terraform destroy' "$WORK/decoy")"
+# the hook process itself runs with $WORK as its working directory: a switch file placed THERE is the file a hook that read ./.env would find
+printf 'SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1\n' > "$WORK/.env"
+mkdir -p "$WORK/.claude"
+printf '{"env":{"SOLEUR_DISABLE_DESTRUCTIVE_GUARD":"1"}}\n' > "$WORK/.claude/settings.json"
+env_row "a .env in the hook's own working directory that sets the switch is not read by the hook" ask "$(mkjson 'terraform destroy' "$TREE")"
+env_row "a .claude/settings.json in the hook's own working directory that sets the switch is not read by the hook" ask "$(mkjson 'terraform destroy' "$TREE")"
 
 echo "== degraded paths (D6): a missing dependency scans the raw envelope, never allows silently =="
 _ls="$(mkjson 'ls' "$TREE")"
@@ -1317,14 +1327,14 @@ if [[ $((PASS_COUNT + FAIL_COUNT)) -ne "$CHECKED" ]]; then
   printf '[FATAL] anti-vacuity: %s verdicts recorded for %s cases\n' "$((PASS_COUNT + FAIL_COUNT))" "$CHECKED" >&2; exit 1
 fi
 if [[ -n "$ROWSEL" ]]; then
-  # Reduced mode (DCG_ROWS, the mutation suite only): the 479-case floor below does not apply to a selection.
+  # Reduced mode (DCG_ROWS, the mutation suite only): the 485-case floor below does not apply to a selection.
   # The selection must have matched at least one row; the verdict is the failure count.
   echo "selected=$SELECTED"
   if [[ "$SELECTED" -lt 1 ]]; then printf '[FATAL] anti-vacuity: DCG_ROWS matched no row\n' >&2; exit 1; fi
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=479
+MIN_CASES=485
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

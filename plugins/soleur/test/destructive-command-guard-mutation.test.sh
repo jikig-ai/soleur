@@ -8,7 +8,7 @@
 # WALL-TIME BUDGET: 60 s total for this file (measured at work time and reported in the PR; the hook suite
 # alone takes ~35 s, so every mutant runs it in REDUCED mode: DCG_ROWS=<ERE> selects only the rows that kill
 # that mutant, plus the always-on static, registration, lexer-contract and harness checks; the suite's own
-# 479-case floor does not apply to a selection and is replaced there by a selected-row count). A run that
+# 485-case floor does not apply to a selection and is replaced there by a selected-row count). A run that
 # takes longer is reported with a [WARN], never failed on time alone (a slow runner is not a defect); each
 # hook-suite run is bounded by `timeout 50` so a hang cannot hold the battery.
 #
