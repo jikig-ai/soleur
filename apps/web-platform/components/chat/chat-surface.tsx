@@ -218,6 +218,8 @@ export function ChatSurface({
   const pathname = usePathname();
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
   const msgParam = searchParams.get("msg");
+  // #9557 — command-palette "Ask an agent about <q>" → /dashboard/chat/new?q=…
+  const qParam = searchParams.get("q");
 
   const {
     messages,
@@ -635,6 +637,37 @@ export function ChatSurface({
     // `firstRunBusy` re-runs this effect after a re-arm: the session may
     // already have re-confirmed while the upload was in flight.
   }, [sessionConfirmed, msgParam, frParam, realConversationId, conversationId, variant, resumedFrom, sendMessage, router, pathname, firstRunBusy]);
+
+  // #9557 — `?q=` prefill strip. `router.replace(pathname)` clears the WHOLE
+  // query, so this fires only on the surface that actually consumes the
+  // param (full variant, route id "new") AND only while no first-run params
+  // are pending — an eager strip would wipe `msg`/`fr` before the first-run
+  // effect above reads them, and that effect's own strip already removes
+  // `q` when it runs. On every other surface the foreign param is left
+  // untouched. Latched like the first-run once-guard so the strip fires
+  // exactly once per mount — a second `?q=` navigation to this same pathname
+  // leaves its param in the URL (same once-per-mount scope as firstRun).
+  // The wholesale clear also drops params outside the deferral set (e.g.
+  // `leader` — unlike the first-run strip, this effect has no
+  // `sessionConfirmed` gate, so a crafted `?q=&leader=` URL CAN strip leader
+  // before startSession consumes it while `status` is still connecting).
+  // No producer emits `q` combined with other params; the reachable cases
+  // are crafted-URL-only residue.
+  const qStrippedRef = useRef(false);
+  useEffect(() => {
+    if (qStrippedRef.current) return;
+    if (
+      qParam === null ||
+      variant !== "full" ||
+      conversationId !== "new" ||
+      msgParam ||
+      frParam
+    ) {
+      return;
+    }
+    qStrippedRef.current = true;
+    router.replace(pathname, { scroll: false });
+  }, [qParam, variant, conversationId, msgParam, frParam, router, pathname]);
 
   useEffect(() => {
     if (!sessionStarted || sessionConfirmed) return;
@@ -1348,6 +1381,20 @@ export function ChatSurface({
             quoteRef={quoteRef}
             focusRef={focusRef}
             draftKey={draftKey}
+            // #9557 — `?q=` composer prefill: only the producer's target
+            // surface (full-variant /chat/new) consumes it, and `?msg=` wins
+            // (auto-send beats prefill). `fr=1` also wins — a staged-files
+            // first-run send must not land with a prefill parked beside it.
+            // `""` collapses to undefined so a bare `?q=` is a no-op
+            // downstream, not a latch burn.
+            prefill={
+              variant === "full" &&
+              conversationId === "new" &&
+              !msgParam &&
+              !frParam
+                ? qParam || undefined
+                : undefined
+            }
             streamState={streamState}
             onStop={abort}
             repoSetupState={repoSetupState}
