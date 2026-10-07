@@ -1,0 +1,17 @@
+# MUST PASS (rc 0). Defaults NEST: the workflow's defaults.run.shell is bash, the job's is python,
+# and the step names no shell. The INNER (job) default wins, so the body is not bash: skipped.
+name: fixture-nested-default-python
+on: workflow_dispatch
+defaults:
+  run:
+    shell: bash
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps:
+      - name: step under an inner python default
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

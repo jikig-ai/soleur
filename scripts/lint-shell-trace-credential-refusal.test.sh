@@ -448,32 +448,217 @@ mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc
   fi
 }
 
+
+# --- Rule E row helpers and sandbox-repo helpers ---------------------------------------------
+# Defined HERE, ahead of the instrument self-tests below, so every helper that owns a verdict is
+# driven before a single row relies on it. The rows that use them are further down.
+E_ROWS=0
+Y_ROWS=0
+e_row() { # <label> <lint> <fixture> <want-E-count>
+  local label="$1" lint="$2" fx="$3" want="$4" rc en tot
+  E_ROWS=$((E_ROWS + 1))
+  rc="$(rc_of "$lint" "$fx")"
+  if grep -qE 'Traceback|SyntaxError' "$WORK/err"; then
+    fail "$label: INSTRUMENT ERROR -- the lint crashed (Traceback/SyntaxError on stderr)"
+    return
+  fi
+  en="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
+  tot="$(grep -ohE '[0-9]+ violation\(s\)' "$WORK/err" | grep -oE '^[0-9]+')"
+  tot="${tot:-0}"
+  if [ "$want" = "0" ]; then
+    if [ "$rc" = "0" ] && [ "$en" = "0" ]; then
+      pass "$label: rc=0 with 0 Rule E messages"
+    else
+      fail "$label: expected rc=0 and 0 Rule E messages, got rc=$rc E=$en total=$tot"
+    fi
+  elif [ "$rc" = "1" ] && [ "$en" = "$want" ] && [ "$tot" = "$want" ]; then
+    pass "$label: rc=1 with exactly $want Rule E message(s) and no other rule firing"
+  else
+    fail "$label: expected rc=1, $want Rule E message(s) and $want total, got rc=$rc E=$en total=$tot"
+  fi
+}
+
+# Mutate a COPY of a fixture (never the corpus), assert the mutation landed, then
+# score the copy like any other fixture.
+fx_mut_row() { # <label> <perl-expr> <source-fixture> <want-E-count> [<suffix, default .sh>]
+  # The suffix is a PARAMETER because the lint dispatches on it: a YAML twin copied to a
+  # `.sh` name would be scored by the shell arm and the row would test the wrong feeder.
+  local label="$1" expr="$2" src="$3" want="$4" suffix="${5:-.sh}" copy
+  copy="$WORK/fxmut$suffix"
+  cp "$src" "$copy" || { fail "$label: fixture copy failed"; return; }
+  perl -0pi -e "$expr" "$copy"
+  if diff -q "$src" "$copy" >/dev/null 2>&1; then
+    fail "$label: fixture mutation did NOT land -- the row would score the unmutated fixture"
+    return
+  fi
+  [ "$suffix" = ".sh" ] || Y_ROWS=$((Y_ROWS + 1))
+  e_row "$label" "$LINT" "$copy" "$want"
+}
+
+# y_row: a YAML-arm row (counted in Y_ROWS as well as E_ROWS).
+y_row() { Y_ROWS=$((Y_ROWS + 1)); e_row "$@"; }
+
+SBX_N=0
+SBX=""
+SBX_GIT=(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git)
+sbx_repo() { # <baseline-E body (printf-escaped)> [<perl-expr applied to the lint copy>] [<yaml fixture -> .github/workflows/offender.yml>] [<yaml fixture -> .github/workflows/offender2.yaml>] [<yaml fixture -> .github/direct.yml>]
+  SBX_N=$((SBX_N + 1))
+  SBX="$WORK/sbx$SBX_N"
+  local lintc="$SBX/scripts/lint-shell-trace-credential-refusal.py"
+  mkdir -p "$SBX/scripts" || return 1
+  cp "$LINT" "$lintc" || return 1
+  if [ -n "${2:-}" ]; then
+    perl -0pi -e "$2" "$lintc"
+    if diff -q "$LINT" "$lintc" >/dev/null 2>&1; then
+      printf 'sbx_repo: perl mutation did not land\n' >&2
+      return 1
+    fi
+  fi
+  printf '# sandbox\n' > "$SBX/scripts/lint-shell-trace-credential-refusal.baseline.txt"
+  printf '# sandbox\n' > "$SBX/scripts/lint-shell-trace-credential-refusal-d.baseline.txt"
+  # shellcheck disable=SC2059
+  printf "# sandbox (#9597)\n$1" > "$SBX/scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
+  cp "$FIX/violation-argv-bearer-literal.sh" "$SBX/scripts/offender.sh"
+  cp "$FIX/compliant-stdin-bearer-procsub.sh" "$SBX/scripts/clean.sh"
+  if [ -n "${3:-}" ]; then
+    mkdir -p "$SBX/.github/workflows" || return 1
+    cp "$3" "$SBX/.github/workflows/offender.yml" || return 1
+    if [ -n "${4:-}" ]; then
+      cp "$4" "$SBX/.github/workflows/offender2.yaml" || return 1
+    fi
+  fi
+  if [ -n "${5:-}" ]; then
+    mkdir -p "$SBX/.github" || return 1
+    cp "$5" "$SBX/.github/direct.yml" || return 1
+  fi
+  "${SBX_GIT[@]}" -C "$SBX" init -q >/dev/null 2>&1 && "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
+}
+sbx_run() { # <lint-args...> -> echoes rc; runs from inside the sandbox
+  ( cd "$SBX" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE \
+      python3 scripts/lint-shell-trace-credential-refusal.py "$@" ) >"$WORK/out" 2>"$WORK/err"
+  printf '%s' "$?"
+}
+sbx_clean_run() { # -> 0 when the last run left no crash on stderr
+  ! grep -qE 'Traceback|SyntaxError' "$WORK/err"
+}
+
+# --- INSTRUMENT SELF-TESTS (#9674 review) ---------------------------------------------------------
+# Every helper above that owns a pass/fail decision decides the verdict of MANY rows, so a
+# neutered helper disarms all of them at once while the suite stays green. Each is driven here
+# with a STAND-IN lint whose behaviour is known, in both directions, and the counter deltas must
+# be EXACTLY the expected ones. Every scenario isolates ONE internal check: the stand-in
+# satisfies every OTHER check, so deleting that one check flips a delta (a stand-in that tripped
+# two checks at once would let either be deleted unseen). They run FIRST, ahead of the matrix, and
+# are reported with printf + exit 1 directly, never through a helper under test.
+#
+# mk_fake <name> <rc> <stderr text>: a stand-in lint. `RC = <rc>  # M` is the anchor a perl
+# mutation (mutate_row) flips; the text uses `\n` escapes and no double quotes.
+mk_fake() {
+  printf 'import sys\nRC = %s  # M\nsys.stderr.write("%s")\nsys.exit(RC)\n' "$2" "$3" > "$WORK/$1.py"
+}
+# _hs <cmd...>: run one scenario, record the counter deltas it caused, then unwind all four
+# counters (a scenario's verdicts are not rows).
+_hs() {
+  local p0="$PASS" f0="$FAIL" e0="$E_ROWS" y0="$Y_ROWS"
+  "$@" >/dev/null 2>&1
+  HS_DF=$((FAIL - f0)) HS_DP=$((PASS - p0)) HS_DE=$((E_ROWS - e0)) HS_DY=$((Y_ROWS - y0))
+  PASS="$p0" FAIL="$f0" E_ROWS="$e0" Y_ROWS="$y0"
+}
+_hs_want() { # <what the scenario isolates> <fail-delta> <pass-delta> <E_ROWS-delta> <Y_ROWS-delta>
+  if [ "$HS_DF" != "$2" ] || [ "$HS_DP" != "$3" ] || [ "$HS_DE" != "$4" ] || [ "$HS_DY" != "$5" ]; then
+    printf '[FATAL] instrument self-test (%s): fail/pass/E_ROWS/Y_ROWS deltas were %s/%s/%s/%s, want %s/%s/%s/%s. A helper that cannot fail (or cannot pass) disarms every row that routes through it.\n' \
+      "$1" "$HS_DF" "$HS_DP" "$HS_DE" "$HS_DY" "$2" "$3" "$4" "$5" >&2
+    exit 1
+  fi
+}
+# The helpers read the global $LINT: shadow it for ONE call (dynamic scope), never reassign it.
+_hs_lint() { local LINT="$1"; shift; "$@"; }
+
+_ST_MSG='f.sh:3: credential header on curl argv -- x.\n'
+_ST_FXV="$FIX/violation-argv-bearer-literal.sh"
+_ST_FXY="$FIX/violation-yaml-literal.yml"
+mk_fake st-ok 0 ''                                              # exits 0, prints nothing
+mk_fake st-red 1 ''                                             # exits 1, prints nothing
+mk_fake st-one 1 "${_ST_MSG}1 violation(s)\n"                   # a correct one-finding violation run
+mk_fake st-rc2 2 "${_ST_MSG}1 violation(s)\n"                   # right output, wrong rc
+mk_fake st-tb 1 "${_ST_MSG}1 violation(s)\nTraceback (most recent call last):\n"
+mk_fake st-se 1 "${_ST_MSG}1 violation(s)\nSyntaxError: invalid syntax\n"
+mk_fake st-en 1 "1 violation(s)\n"                              # rc 1, total 1, NO Rule E message
+mk_fake st-tot 1 "${_ST_MSG}2 violation(s)\n"                   # one Rule E message, but a second (non-E) violation
+mk_fake st-en0 0 "$_ST_MSG"                                     # rc 0 yet a Rule E message is printed
+
+# e_row: rc (both branches), Traceback/SyntaxError, the Rule E message count (both branches) and
+# the lint's own total (the "no other rule fired" half of a violation row).
+_hs e_row 'st' "$WORK/st-one.py" "$_ST_FXV" 1;  _hs_want 'e_row control: a correct violation run passes' 0 1 1 0
+_hs e_row 'st' "$WORK/st-ok.py" "$_ST_FXV" 1;   _hs_want 'e_row rc: an always-0 stand-in on a violation row' 1 0 1 0
+_hs e_row 'st' "$WORK/st-rc2.py" "$_ST_FXV" 1;  _hs_want 'e_row rc: rc 2 with the right output on a violation row' 1 0 1 0
+_hs e_row 'st' "$WORK/st-red.py" "$_ST_FXY" 0;  _hs_want 'e_row rc: an always-1 stand-in on a must-PASS row' 1 0 1 0
+_hs e_row 'st' "$WORK/st-ok.py" "$_ST_FXY" 0;   _hs_want 'e_row control: a silent rc-0 run passes a must-PASS row' 0 1 1 0
+_hs e_row 'st' "$WORK/st-tb.py" "$_ST_FXV" 1;   _hs_want 'e_row Traceback check' 1 0 1 0
+_hs e_row 'st' "$WORK/st-se.py" "$_ST_FXV" 1;   _hs_want 'e_row SyntaxError check' 1 0 1 0
+_hs e_row 'st' "$WORK/st-en.py" "$_ST_FXV" 1;   _hs_want 'e_row Rule E message count (violation branch)' 1 0 1 0
+_hs e_row 'st' "$WORK/st-tot.py" "$_ST_FXV" 1;  _hs_want 'e_row total-violation count (a non-E rule fired too)' 1 0 1 0
+_hs e_row 'st' "$WORK/st-en0.py" "$_ST_FXY" 0;  _hs_want 'e_row Rule E message count (must-PASS branch)' 1 0 1 0
+pass "instrument self-test: e_row scores rc, crash, Rule E message count and total in both directions (counter deltas pinned)"
+
+# y_row and fx_mut_row delegate to e_row. A stand-in that exits 0 on a violation row must make
+# EACH of them fail exactly once; one that satisfies the row must pass it exactly once, and both
+# must move the E_ROWS counter (and, for the YAML arm, Y_ROWS) that the floors hang on.
+_hs y_row 'st' "$WORK/st-one.py" "$_ST_FXY" 1;  _hs_want 'y_row control: a correct run passes and counts as an E row and a Y row' 0 1 1 1
+_hs y_row 'st' "$WORK/st-ok.py" "$_ST_FXY" 1;   _hs_want 'y_row: an always-0 stand-in on a violation row must FAIL' 1 0 1 1
+_hs _hs_lint "$WORK/st-one.py" fx_mut_row 'st' 's/\A/# x\n/' "$_ST_FXY" 1 .yml
+_hs_want 'fx_mut_row control (.yml): counts as an E row and a Y row' 0 1 1 1
+_hs _hs_lint "$WORK/st-one.py" fx_mut_row 'st' 's/\A/# x\n/' "$_ST_FXV" 1
+_hs_want 'fx_mut_row control (.sh): counts as an E row, NOT a Y row' 0 1 1 0
+_hs _hs_lint "$WORK/st-ok.py" fx_mut_row 'st' 's/\A/# x\n/' "$_ST_FXY" 1 .yml
+_hs_want 'fx_mut_row: an always-0 stand-in on a violation row must FAIL (scored through e_row)' 1 0 1 1
+_hs _hs_lint "$WORK/st-one.py" fx_mut_row 'st' 's/NO_SUCH_ANCHOR/x/' "$_ST_FXY" 1 .yml
+_hs_want 'fx_mut_row landing check: a mutation that changes nothing must FAIL and not score the fixture' 1 0 0 0
+_hs _hs_lint "$WORK/st-one.py" fx_mut_row 'st' 's/\A/# x\n/' "$WORK/no-such-source.yml" 1 .yml
+_hs_want 'fx_mut_row copy check: a missing source fixture must FAIL and not score a stale copy' 1 0 0 0
+pass "instrument self-test: y_row and fx_mut_row fail an always-0 stand-in exactly once, pass a correct run, and move the floor counters"
+
+# mutate_row: landing, baseline rc, Traceback/SyntaxError, the mutant's Rule E count and its rc.
+# The no-op row uses want_mut == want_base, so ONLY the landing check can fail it.
+_hs _hs_lint "$WORK/st-red.py" mutate_row 'st' 's/RC = 1  # M/RC = 0  # M/' "$_ST_FXV" 1 0
+_hs_want 'mutate_row control: a landed mutation that moves the rc 1 -> 0 passes' 0 1 0 0
+_hs _hs_lint "$WORK/st-red.py" mutate_row 'st' 's/NO_SUCH_ANCHOR/x/' "$_ST_FXV" 1 1
+_hs_want 'mutate_row landing check (want_mut == want_base: nothing else can fail a no-op mutation)' 1 0 0 0
+_hs _hs_lint "$WORK/st-red.py" mutate_row 'st' 's/RC = 1  # M/RC = 0  # M/' "$_ST_FXV" 0 0
+_hs_want 'mutate_row baseline-rc check (the mutation lands and reaches the wanted rc, so only the baseline can fail it)' 1 0 0 0
+_hs _hs_lint "$WORK/st-ok.py" mutate_row 'st' 's/RC = 0  # M/RC = 1  # M\nsys.stderr.write("Traceback\\n")/' "$_ST_FXV" 0 1
+_hs_want 'mutate_row Traceback check (the crashing mutant reaches the wanted rc 1)' 1 0 0 0
+_hs _hs_lint "$WORK/st-one.py" mutate_row 'st' 's/# M/# M2/' "$_ST_FXV" 1 1 2
+_hs_want 'mutate_row want_e check (the mutant prints 1 Rule E message, 2 wanted; its rc is right)' 1 0 0 0
+_hs _hs_lint "$WORK/st-one.py" mutate_row 'st' 's/# M/# M2/' "$_ST_FXV" 1 1 1
+_hs_want 'mutate_row control: the right Rule E count passes' 0 1 0 0
+_hs _hs_lint "$WORK/st-red.py" mutate_row 'st' 's/RC = 1  # M/RC = 0  # M/' "$_ST_FXV" 1 1
+_hs_want 'mutate_row final rc check (everything else holds; the mutant rc is not the wanted one)' 1 0 0 0
+pass "instrument self-test: mutate_row's landing, baseline, crash, Rule E count and final-rc checks each fail alone"
+
+# sbx_clean_run (crash detector of every sandbox-repo row) and sbx_repo (mutation landing, fixture copy).
+printf 'Traceback (most recent call last):\n' > "$WORK/err"
+if sbx_clean_run; then printf '[FATAL] instrument self-test: sbx_clean_run accepted a Traceback on stderr\n' >&2; exit 1; fi
+printf 'SyntaxError: invalid syntax\n' > "$WORK/err"
+if sbx_clean_run; then printf '[FATAL] instrument self-test: sbx_clean_run accepted a SyntaxError on stderr\n' >&2; exit 1; fi
+: > "$WORK/err"
+if ! sbx_clean_run; then printf '[FATAL] instrument self-test: sbx_clean_run rejected a clean stderr\n' >&2; exit 1; fi
+if sbx_repo '' 's/NO_SUCH_ANCHOR/x/' 2>/dev/null; then
+  printf '[FATAL] instrument self-test: sbx_repo accepted a perl mutation that did not land\n' >&2; exit 1
+fi
+if ! sbx_repo '' 's/\A/# x\n/' 2>/dev/null || cmp -s "$LINT" "$SBX/scripts/lint-shell-trace-credential-refusal.py"; then
+  printf '[FATAL] instrument self-test: sbx_repo did not build a repo around a landed mutation\n' >&2; exit 1
+fi
+if sbx_repo '' '' "$WORK/no-such-fixture.yml" 2>/dev/null; then
+  printf '[FATAL] instrument self-test: sbx_repo accepted a missing YAML fixture\n' >&2; exit 1
+fi
+pass "instrument self-test: sbx_clean_run and sbx_repo refuse a crash, a mutation that did not land and a missing fixture"
+
 # Own dispatch first: a lint that resolves nothing and exits 0 is the vacuity
 # every other row is structurally blind to.
 # Expected mutant rc is 2, not 0: the zero-target guard added after review turns
 # "the walker resolved nothing" into an explicit refusal rather than a silent
 # clean report. A row expecting 0 here would now fail for the RIGHT reason.
-# INSTRUMENT SELF-TEST for mutate_row (#7898 review). It is the only helper that
-# owns its own pass/fail decision, and EVERY mutation row routes through it, so
-# neutering it disarms every one of them at once: measured, inserting
-# `pass "$1: DISARMED"; return 0` as its first line left this suite at
-# "=== 61 passed, 0 failed ===", exit 0, floor satisfied. pass()/fail() are
-# already driven in both directions; this closes the same gap one level up.
-#
-# Drive it with a row that MUST fail (a no-op mutation cannot change the rc, so
-# the mutant rc equals the baseline and the row must be scored a failure), then
-# unwind the counters. Reported with printf + exit, never through the helper.
-_mr_p="$PASS" _mr_f="$FAIL"
-mutate_row "instrument self-test (expected; not a real failure)" \
-  's/NOTHING_MATCHES_THIS_TOKEN/x/' "$FIX/violation-no-preamble.sh" 1 2 >/dev/null 2>&1
-if [ "$FAIL" -eq "$_mr_f" ]; then
-  printf '[FATAL] instrument self-test: mutate_row did not report a failure for a no-op mutation (FAIL %d -> %d). The mutation harness is disarmed; every mutation row below is meaningless.\n' \
-    "$_mr_f" "$FAIL" >&2
-  exit 1
-fi
-PASS="$_mr_p" FAIL="$_mr_f"
-unset _mr_p _mr_f
-
 mutate_row 'M5 own-dispatch: walker yields nothing' \
   's|(def targets_from_args[^\n]*\n)|$1    return []\n|s' \
   "$FIX/violation-no-preamble.sh" 1 2
@@ -596,48 +781,7 @@ mutate_row 'D11 Rule D: bare `-` treated as a flag, hiding the operand after it'
 # call". Each violation fixture starts from a Rule-A/B/C/D-clean copy, so the total
 # must equal the Rule E count. Each compliant fixture must exit 0 with zero Rule E
 # messages.
-E_ROWS=0
-Y_ROWS=0
-e_row() { # <label> <lint> <fixture> <want-E-count>
-  local label="$1" lint="$2" fx="$3" want="$4" rc en tot
-  E_ROWS=$((E_ROWS + 1))
-  rc="$(rc_of "$lint" "$fx")"
-  if grep -qE 'Traceback|SyntaxError' "$WORK/err"; then
-    fail "$label: INSTRUMENT ERROR -- the lint crashed (Traceback/SyntaxError on stderr)"
-    return
-  fi
-  en="$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")"
-  tot="$(grep -ohE '[0-9]+ violation\(s\)' "$WORK/err" | grep -oE '^[0-9]+')"
-  tot="${tot:-0}"
-  if [ "$want" = "0" ]; then
-    if [ "$rc" = "0" ] && [ "$en" = "0" ]; then
-      pass "$label: rc=0 with 0 Rule E messages"
-    else
-      fail "$label: expected rc=0 and 0 Rule E messages, got rc=$rc E=$en total=$tot"
-    fi
-  elif [ "$rc" = "1" ] && [ "$en" = "$want" ] && [ "$tot" = "$want" ]; then
-    pass "$label: rc=1 with exactly $want Rule E message(s) and no other rule firing"
-  else
-    fail "$label: expected rc=1, $want Rule E message(s) and $want total, got rc=$rc E=$en total=$tot"
-  fi
-}
-
-# Mutate a COPY of a fixture (never the corpus), assert the mutation landed, then
-# score the copy like any other fixture.
-fx_mut_row() { # <label> <perl-expr> <source-fixture> <want-E-count> [<suffix, default .sh>]
-  # The suffix is a PARAMETER because the lint dispatches on it: a YAML twin copied to a
-  # `.sh` name would be scored by the shell arm and the row would test the wrong feeder.
-  local label="$1" expr="$2" src="$3" want="$4" suffix="${5:-.sh}" copy
-  copy="$WORK/fxmut$suffix"
-  cp "$src" "$copy" || { fail "$label: fixture copy failed"; return; }
-  perl -0pi -e "$expr" "$copy"
-  if diff -q "$src" "$copy" >/dev/null 2>&1; then
-    fail "$label: fixture mutation did NOT land -- the row would score the unmutated fixture"
-    return
-  fi
-  [ "$suffix" = ".sh" ] || Y_ROWS=$((Y_ROWS + 1))
-  e_row "$label" "$LINT" "$copy" "$want"
-}
+# (E_ROWS / Y_ROWS / e_row / fx_mut_row / y_row are defined with the helpers above.)
 
 e_row 'Rule E: literal -H "Authorization: Bearer" on argv is reported' "$LINT" "$FIX/violation-argv-bearer-literal.sh" 1
 e_row 'Rule E: a SECOND curl in the same script is judged too (compliant neighbour does not launder it)' "$LINT" "$FIX/violation-argv-bearer-second-member.sh" 1
@@ -737,12 +881,12 @@ e_row 'Rule E xfail: -b "session=$T", -H "Cookie: s=$T" and x-gitlab-token are N
 # POSITIVE CONTROL: the copied fixture corpus must hold the YAML fixtures. A guard that
 # scans no YAML cannot then pass the must-PASS set unnoticed.
 Y_FIXTURES="$(find "$FIX" -maxdepth 1 -name '*.yml' | wc -l)"
-if [ "$Y_FIXTURES" -lt 23 ]; then
-  fail "YAML positive control: only $Y_FIXTURES .yml fixtures were copied, anti-vacuity floor is 23"
+if [ "$Y_FIXTURES" -lt 31 ]; then
+  fail "YAML positive control: only $Y_FIXTURES .yml fixtures were copied, anti-vacuity floor is 31"
 else
-  pass "YAML positive control: $Y_FIXTURES .yml fixtures present in the fixture copy (anti-vacuity floor 23)"
+  pass "YAML positive control: $Y_FIXTURES .yml fixtures present in the fixture copy (anti-vacuity floor 31)"
 fi
-y_row() { Y_ROWS=$((Y_ROWS + 1)); e_row "$@"; }
+# (y_row is defined with the helpers above.)
 
 y_row 'Rule E YAML: literal block (run: |) after a compliant first step is reported' "$LINT" "$FIX/violation-yaml-literal.yml" 1
 y_row 'Rule E YAML: FOLDED scalar (run: >-) is reported' "$LINT" "$FIX/violation-yaml-folded.yml" 1
@@ -861,24 +1005,6 @@ else
   fail "Rule E YAML: a non-YAMLError failure must not be reported as 'did not parse' or rc 0/2, got rc=$rc: $(head -c 300 "$WORK/err")"
 fi
 
-# HARNESS ROW (b): the fixture runner must NOT ignore the exit status. Drive e_row with a
-# stand-in lint that exits 0 and prints nothing: a violation row (want 1) MUST be scored a
-# failure, and a stand-in that exits 1 silently must fail a must-PASS row. Counters are
-# unwound; the verdict is reported directly, never through the helper under test.
-printf 'import sys\nsys.exit(0)\n' > "$WORK/fake-ok.py"
-printf 'import sys\nsys.exit(1)\n' > "$WORK/fake-red.py"
-_h_f="$FAIL" _h_p="$PASS" _h_e="$E_ROWS"
-e_row 'instrument self-test: always-0 stand-in on a violation row (expected failure)' "$WORK/fake-ok.py" "$FIX/violation-yaml-literal.yml" 1 >/dev/null 2>&1
-_h_a=$((FAIL - _h_f))
-e_row 'instrument self-test: always-1 stand-in on a must-PASS row (expected failure)' "$WORK/fake-red.py" "$FIX/compliant-yaml-stdin.yml" 0 >/dev/null 2>&1
-_h_b=$((FAIL - _h_f - _h_a))
-PASS="$_h_p" FAIL="$_h_f" E_ROWS="$_h_e"
-if [ "$_h_a" != "1" ] || [ "$_h_b" != "1" ]; then
-  printf '[FATAL] instrument self-test: e_row ignores the exit status / message count (violation row failures=%s, must-PASS row failures=%s, want 1 and 1). Every Rule E row below is meaningless.\n' "$_h_a" "$_h_b" >&2
-  exit 1
-fi
-unset _h_f _h_p _h_e _h_a _h_b
-
 # Real-corpus discovery floors (matrix row 2, against the real tree): the lint's own file
 # set must hold the measured YAML population. A discovery reverted to `*.sh` reports "0
 # checked" for YAML and exits 0, which no per-file row can see.
@@ -923,21 +1049,7 @@ else
 fi
 unset _dead _ps _nps
 
-# Floors on EXECUTED fixture rows, hung on call-site counters (E_ROWS counts every e_row call,
-# Y_ROWS every YAML-arm row). Each threshold is the EXACT measured count, so deleting one row
-# reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
-# `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
-# can see and mutation-test them.
-if [ "$E_ROWS" -lt 52 ]; then
-  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 52"
-else
-  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 52)"
-fi
-if [ "$Y_ROWS" -lt 32 ]; then
-  fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 32"
-else
-  pass "Rule E YAML arm: $Y_ROWS rows executed (anti-vacuity floor 32)"
-fi
+# (the E_ROWS / Y_ROWS floors are checked after the LAST row, just before the H1 floor probe below.)
 
 # --census must agree with baseline E: a dispatch that never runs Rule E reports
 # offenders_e=0 against a non-empty baseline.
@@ -1099,6 +1211,72 @@ mutate_row 'E6c Rule E: here-string/heredoc hazard dropped' \
   's/E_HEREDOC = re\.compile\(r"[^\n]*\n/E_HEREDOC = re.compile(r"(?!x)x")\n/' \
   "$FIX/violation-argv-bearer-config-hazards.sh" 1 1 2
 
+# --- Rule E hazards: ONE site per MEMBER of the hazard vocabulary (#9674 review) ----------------------
+# E6a-c delete a WHOLE regex, so a single member dropped from E_STDIN_BODY or E_VERBOSE (or one inline
+# spelling in _e_scan) survived at full green. violation-argv-config-hazard-members.sh holds ONE
+# `--config -` call per member, each with exactly one hazard, so deleting a member must lose EXACTLY
+# one finding (rc stays 1, N-1 messages). The alternation members are DERIVED from the constants'
+# own source (a hand-copied list would survive someone adding a member); the inline spellings that
+# are not constants each get an explicit row.
+HZ="$FIX/violation-argv-config-hazard-members.sh"
+_hz_n="$(grep -c '^curl ' "$HZ")"
+if [ "$_hz_n" -lt 21 ]; then
+  fail "hazard members: only $_hz_n hazard calls in the fixture, anti-vacuity floor is 21"
+else
+  pass "hazard members: $_hz_n hazard calls in the fixture (anti-vacuity floor 21)"
+fi
+e_row "Rule E hazard members: one finding per member ($_hz_n sites: every E_STDIN_BODY and E_VERBOSE member, -d@-, --data*=@-, -T -, --upload-file -, -T-, -D -, --dump-header -, -D-)" "$LINT" "$HZ" "$_hz_n"
+_hz_members() { # <constant name> -> the members of its `^(?:a|b|c)$` alternation, one per line, source order
+  python3 - "$LINT" "$1" <<'PY'
+import importlib.util, re, sys
+s = importlib.util.spec_from_file_location("l", sys.argv[1])
+m = importlib.util.module_from_spec(s)
+s.loader.exec_module(m)
+body = re.fullmatch(r"\^\(\?:(.*)\)\$", getattr(m, sys.argv[2]).pattern)
+print("\n".join(body.group(1).split("|")) if body else "")
+PY
+}
+mapfile -t _hz_body < <(_hz_members E_STDIN_BODY)
+mapfile -t _hz_verb < <(_hz_members E_VERBOSE)
+if [ "${#_hz_body[@]}" -lt 10 ]; then
+  fail "hazard members: derived only ${#_hz_body[@]} E_STDIN_BODY member(s), anti-vacuity floor is 10"
+else
+  pass "hazard members: ${#_hz_body[@]} E_STDIN_BODY members derived (anti-vacuity floor 10)"
+fi
+if [ "${#_hz_verb[@]}" -lt 3 ]; then
+  fail "hazard members: derived only ${#_hz_verb[@]} E_VERBOSE member(s), anti-vacuity floor is 3"
+else
+  pass "hazard members: ${#_hz_verb[@]} E_VERBOSE members derived (anti-vacuity floor 3)"
+fi
+for ((_k = 1; _k <= ${#_hz_body[@]}; _k++)); do
+  mutate_row "HZ-body-$_k member #$_k of ${#_hz_body[@]} (${_hz_body[$((_k - 1))]}) deleted from E_STDIN_BODY" \
+    "s/(^E_STDIN_BODY = re\\.compile\\(\\s*r\"\\^\\(\\?:(?:[^|\"]*\\|){$((_k - 1))})[^|)\"]*/\${1}(?!x)x/m" \
+    "$HZ" 1 1 "$((_hz_n - 1))"
+done
+for ((_k = 1; _k <= ${#_hz_verb[@]}; _k++)); do
+  mutate_row "HZ-verbose-$_k member #$_k of ${#_hz_verb[@]} (${_hz_verb[$((_k - 1))]}) deleted from E_VERBOSE" \
+    "s/(^E_VERBOSE = re\\.compile\\(\\s*r\"\\^\\(\\?:(?:[^|\"]*\\|){$((_k - 1))})[^|)\"]*/\${1}(?!x)x/m" \
+    "$HZ" 1 1 "$((_hz_n - 1))"
+done
+unset _k
+# The inline spellings (no constant): one spelling dropped at a time.
+mutate_row 'HZ-inline-1 `-d@-` spelling dropped from the stdin-body hazard' \
+  's/r"\^-d\@-\$\|\^--data/r"^--data/' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-2 `--data*=@-` spelling dropped from the stdin-body hazard' \
+  's/\|\^--data\[\\w-\]\*=\@-\$//' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-3 `-T -` spelling dropped from the stdin-body hazard' \
+  's/\("-T", "--upload-file"\)/("--upload-file",)/' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-4 `--upload-file -` spelling dropped from the stdin-body hazard' \
+  's/\("-T", "--upload-file"\)/("-T",)/' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-5 `-T-` spelling dropped from the stdin-body hazard' \
+  's/ or w == "-T-":/:/' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-6 `-D -` spelling dropped from the header-dump hazard' \
+  's/\("-D", "--dump-header"\)/("--dump-header",)/' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-7 `--dump-header -` spelling dropped from the header-dump hazard' \
+  's/\("-D", "--dump-header"\)/("-D",)/' "$HZ" 1 1 "$((_hz_n - 1))"
+mutate_row 'HZ-inline-8 `-D-` spelling dropped from the header-dump hazard' \
+  's/ or w == "-D-":/:/' "$HZ" 1 1 "$((_hz_n - 1))"
+
 # --- Rule E baseline: a sandbox repo (rows 8 and 9) ----------------------------
 # The repo-wide arm compares baseline E to the live offender set on PATH AND COUNT.
 # That cannot be exercised against the real tree (editing the real baseline is
@@ -1107,49 +1285,7 @@ mutate_row 'E6c Rule E: here-string/heredoc hazard dropped' \
 # E-only offender and one clean file. `git init && git add` is what makes
 # `git ls-files` (the repo-wide walk) see them. The sandbox lives under $WORK; the
 # real checkout is never touched.
-SBX_N=0
-SBX=""
-SBX_GIT=(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git)
-sbx_repo() { # <baseline-E body (printf-escaped)> [<perl-expr applied to the lint copy>] [<yaml fixture -> .github/workflows/offender.yml>] [<yaml fixture -> .github/workflows/offender2.yaml>] [<yaml fixture -> .github/direct.yml>]
-  SBX_N=$((SBX_N + 1))
-  SBX="$WORK/sbx$SBX_N"
-  local lintc="$SBX/scripts/lint-shell-trace-credential-refusal.py"
-  mkdir -p "$SBX/scripts" || return 1
-  cp "$LINT" "$lintc" || return 1
-  if [ -n "${2:-}" ]; then
-    perl -0pi -e "$2" "$lintc"
-    if diff -q "$LINT" "$lintc" >/dev/null 2>&1; then
-      printf 'sbx_repo: perl mutation did not land\n' >&2
-      return 1
-    fi
-  fi
-  printf '# sandbox\n' > "$SBX/scripts/lint-shell-trace-credential-refusal.baseline.txt"
-  printf '# sandbox\n' > "$SBX/scripts/lint-shell-trace-credential-refusal-d.baseline.txt"
-  # shellcheck disable=SC2059
-  printf "# sandbox (#9597)\n$1" > "$SBX/scripts/lint-shell-trace-credential-refusal-e.baseline.txt"
-  cp "$FIX/violation-argv-bearer-literal.sh" "$SBX/scripts/offender.sh"
-  cp "$FIX/compliant-stdin-bearer-procsub.sh" "$SBX/scripts/clean.sh"
-  if [ -n "${3:-}" ]; then
-    mkdir -p "$SBX/.github/workflows" || return 1
-    cp "$3" "$SBX/.github/workflows/offender.yml" || return 1
-    if [ -n "${4:-}" ]; then
-      cp "$4" "$SBX/.github/workflows/offender2.yaml" || return 1
-    fi
-  fi
-  if [ -n "${5:-}" ]; then
-    mkdir -p "$SBX/.github" || return 1
-    cp "$5" "$SBX/.github/direct.yml" || return 1
-  fi
-  "${SBX_GIT[@]}" -C "$SBX" init -q >/dev/null 2>&1 && "${SBX_GIT[@]}" -C "$SBX" add -A >/dev/null 2>&1
-}
-sbx_run() { # <lint-args...> -> echoes rc; runs from inside the sandbox
-  ( cd "$SBX" && env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE \
-      python3 scripts/lint-shell-trace-credential-refusal.py "$@" ) >"$WORK/out" 2>"$WORK/err"
-  printf '%s' "$?"
-}
-sbx_clean_run() { # -> 0 when the last run left no crash on stderr
-  ! grep -qE 'Traceback|SyntaxError' "$WORK/err"
-}
+# (SBX_N / SBX / SBX_GIT / sbx_repo / sbx_run / sbx_clean_run are defined with the helpers above.)
 
 # Sanity first: baseline E listing the offender with its exact count is GREEN.
 if sbx_repo 'scripts/offender.sh\t1\n'; then
@@ -1383,20 +1519,32 @@ LEGACY='re.compile("authorization *: *bearer", re.I)'
 mutate_row 'V-M1 vocabulary narrowed back to Authorization: Bearer (every non-Bearer site goes unseen)' \
   's/^E_CREDENTIAL = re\.compile\(.*$/E_CREDENTIAL = re.compile(r"authorization\\s*:\\s*bearer", re.I)/m' \
   "$FIX/violation-argv-cred-alternates.sh" 1 0 0
+# The five read sites of E_CREDENTIAL, one perl expression each: it replaces the constant AT THAT ONE
+# SITE with the text given as $2 (the other four keep the full vocabulary). Shared by V-S1..V-S5
+# and by the site x alternate matrix below, so a site's anchor lives in exactly one place.
+_site_expr() { # <read site 1..5> <replacement for the E_CREDENTIAL token at that site>
+  case "$1" in
+    1) printf '%s' "s/(if m and )E_CREDENTIAL(\\.search\\(m\\.group\\(2\\)\\))/\${1}$2\${2}/" ;;
+    2) printf '%s' "s/(if not hv\\.startswith\\(\"\\@\"\\) and \\()E_CREDENTIAL(\\.search\\(hv\\))/\${1}$2\${2}/" ;;
+    3) printf '%s' "s/(elif )E_CREDENTIAL(\\.search\\(hv\\) or \\(held_re)/\${1}$2\${2}/" ;;
+    4) printf '%s' "s/(bearer_in_call = bearer_argv or bool\\()E_CREDENTIAL(\\.search\\(cmd\\))/\${1}$2\${2}/" ;;
+    5) printf '%s' "s/(bearer_ctx = bearer_ctx or bool\\()E_CREDENTIAL(\\.search\\(r\\[\"cmd\"\\]\\))/\${1}$2\${2}/" ;;
+  esac
+}
 mutate_row 'V-S1 ONLY the held-name capture re-narrowed to the legacy constant' \
-  "s/(if m and )E_CREDENTIAL(\\.search\\(m\\.group\\(2\\)\\))/\${1}$LEGACY\${2}/" \
+  "$(_site_expr 1 "$LEGACY")" \
   "$FIX/violation-argv-cred-held.sh" 1 0 0
 mutate_row 'V-S2 ONLY the array capture re-narrowed to the legacy constant' \
-  "s/(if not hv\\.startswith\\(\"\\@\"\\) and \\()E_CREDENTIAL(\\.search\\(hv\\))/\${1}$LEGACY\${2}/" \
+  "$(_site_expr 2 "$LEGACY")" \
   "$FIX/violation-argv-cred-array-late.sh" 1 0 0
 mutate_row 'V-S3 ONLY the _e_scan header branch re-narrowed to the legacy constant' \
-  "s/(elif )E_CREDENTIAL(\\.search\\(hv\\) or \\(held_re)/\${1}$LEGACY\${2}/" \
+  "$(_site_expr 3 "$LEGACY")" \
   "$FIX/violation-argv-cred-literal.sh" 1 0 0
 mutate_row 'V-S4 ONLY the call-level bearer_in_call re-narrowed to the legacy constant' \
-  "s/(bearer_in_call = bearer_argv or bool\\()E_CREDENTIAL(\\.search\\(cmd\\))/\${1}$LEGACY\${2}/" \
+  "$(_site_expr 4 "$LEGACY")" \
   "$FIX/violation-argv-cred-second-credential.sh" 1 0 0
 mutate_row 'V-S5 ONLY the wrapper-site bearer_ctx re-narrowed to the legacy constant' \
-  "s/(bearer_ctx = bearer_ctx or bool\\()E_CREDENTIAL(\\.search\\(r\\[\"cmd\"\\]\\))/\${1}$LEGACY\${2}/" \
+  "$(_site_expr 5 "$LEGACY")" \
   "$FIX/violation-argv-cred-second-wrapper.sh" 1 0 0
 
 # One alternate deleted at a time, over the alternates DERIVED from the constant's own source
@@ -1414,6 +1562,136 @@ for ((_k = 1; _k <= _nalt; _k++)); do
     "$_expr" "$FIX/violation-argv-cred-alternates.sh" 1 1 "$((_nalt - 1))"
 done
 unset _k _expr
+
+# --- Rule E vocabulary: the SITE x ALTERNATE matrix (#9674 review) ----------------------------------
+# V-S1..V-S5 pin each read site with ONE fixture, and V-ALT deletes an alternate from the constant for
+# ALL sites at once. Neither sees ONE site that only knows `authorization` (or only the one alternate
+# its single fixture happens to use): the other four sites still report every alternate. So here a
+# fixture is GENERATED per (site, alternate) -- the alternates DERIVED from the constant's own source
+# like V-ALT -- and each read site is narrowed ALONE to `authorization` in a sandbox copy of the lint
+# (mutate_row asserts the mutation landed and the control is GREEN). Per column: every
+# non-authorization alternate must go unseen (1 -> 0), and the authorization alternate must STILL be
+# reported (1 -> 1), so the narrowing is the only thing that changed.
+SITE_AUTH_ONLY='re.compile("authorization *:", re.I)'
+mapfile -t _alts < <(awk '/^E_CREDENTIAL_HEADERS = \(/{f=1;next} f&&/^\)/{f=0} f' "$LINT" | sed -E 's/^[[:space:]]*r"([^"]*)".*$/\1/')
+_have_auth=0
+for _a in "${_alts[@]}"; do [ "$_a" = "authorization" ] && _have_auth=1; done
+if [ "${#_alts[@]}" != "$_nalt" ] || [ "$_have_auth" != "1" ]; then
+  fail "site x alternate matrix: derived ${#_alts[@]} alternate name(s) (V-ALT counted $_nalt), authorization present=$_have_auth -- the derivation drifted from the constant's layout"
+else
+  pass "site x alternate matrix: ${#_alts[@]} alternate names derived from E_CREDENTIAL_HEADERS, authorization among them"
+fi
+
+# The clean prologue every generated fixture shares: a refusal guarding BOTH tokens, a pinned
+# destination, and nothing else, so Rules A/B/C/D stay silent and only Rule E can speak.
+_gen_pre() {
+  cat <<'EOS'
+#!/usr/bin/env bash
+set -uo pipefail
+
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}${SUPABASE_ANON_KEY:+x}" ]; then
+      printf "[FATAL] refusing to trace with a live credential set (#7797)\n" >&2
+      exit 78
+    fi
+    ;;
+esac
+
+readonly SINK_URL_PINNED="https://pinned.example/ingest"
+SINK_URL="${FIXTURE_SINK_URL:-$SINK_URL_PINNED}"
+if [ "$SINK_URL" != "https://pinned.example/ingest" ]; then
+  printf 'refusing an unpinned destination\n' >&2
+  exit 2
+fi
+
+EOS
+}
+# gen_site_fixture <kind> <alternate> <file name under $WORK>: Rule E must fire ONCE, through the <kind> read site alone.
+#   held          header built into a variable far from the call                     (read site 1)
+#   array         header in an array assigned after `&&` (file-wide array capture)   (read site 2)
+#   literal       header literally on the curl argv                                  (read site 3)
+#   wrapper-call  header is an argument of a CALL to a file-local curl wrapper       (read site 3)
+#   call-level    credential on STDIN, `apikey:` on argv beside it                   (read site 4)
+#   wrapper-site  wrapper keeps the credential on stdin, the CALL adds `apikey:`     (read site 5)
+gen_site_fixture() {
+  local kind="$1" alt="$2"
+  {
+    _gen_pre
+    case "$kind" in
+      held) cat <<'EOS'
+cred_hdr="@ALT@: ${SENTRY_AUTH_TOKEN}"
+curl --disable --noproxy '*' -sS -H "$cred_hdr" "$SINK_URL" || true
+EOS
+        ;;
+      array) cat <<'EOS'
+send_gated() {
+  local -a _gate=()
+  [ -n "${SENTRY_AUTH_TOKEN:-}" ] && _gate=(--disable --noproxy '*' -sS -H "@ALT@: ${SENTRY_AUTH_TOKEN}")
+  curl "${_gate[@]}" "$SINK_URL" || true
+}
+EOS
+        ;;
+      literal) cat <<'EOS'
+curl --disable --noproxy '*' -sS -H "@ALT@: ${SENTRY_AUTH_TOKEN}" "$SINK_URL" || true
+EOS
+        ;;
+      wrapper-call) cat <<'EOS'
+run_probe() {
+  api_get -H "@ALT@: ${SENTRY_AUTH_TOKEN}" "$SINK_URL"
+}
+
+api_get() { curl --disable --noproxy '*' -sS --max-time 20 "$@" || true; }
+
+run_probe
+EOS
+        ;;
+      call-level) cat <<'EOS'
+printf '@ALT@: %s\n' "$SENTRY_AUTH_TOKEN" | curl --disable --noproxy '*' -sS -H @- -H "apikey: ${SUPABASE_ANON_KEY}" "$SINK_URL" || true
+EOS
+        ;;
+      wrapper-site) cat <<'EOS'
+run_probe() {
+  api_get -H "apikey: ${SUPABASE_ANON_KEY}" "$SINK_URL"
+}
+
+api_get() {
+  curl --disable --noproxy '*' -sS --max-time 20 --config - "$@" < <(printf 'header = "@ALT@: %s"\n' "$SENTRY_AUTH_TOKEN") || true
+}
+
+run_probe
+EOS
+        ;;
+    esac
+  } | sed "s/@ALT@/$alt/g" > "$WORK/$3"
+}
+
+# column = <narrowed read site>:<fixture kind>. Read site 3 (_e_scan) serves two kinds.
+_cells=0
+for _col in 1:held 2:array 3:literal 3:wrapper-call 4:call-level 5:wrapper-site; do
+  _site="${_col%%:*}"
+  _kind="${_col#*:}"
+  _sexpr="$(_site_expr "$_site" "$SITE_AUTH_ONLY")"
+  for _a in "${_alts[@]}"; do
+    _gf="gen-$_kind-$_a.sh"
+    gen_site_fixture "$_kind" "$_a" "$_gf"
+    _cells=$((_cells + 1))
+    e_row "site x alternate [$_kind] $_a: reported once, and by no other rule" "$LINT" "$WORK/$_gf" 1
+    if [ "$_a" = "authorization" ]; then
+      mutate_row "site x alternate [$_kind] $_a: read site $_site narrowed to authorization ONLY still reports it (control)" \
+        "$_sexpr" "$WORK/$_gf" 1 1 1
+    else
+      mutate_row "site x alternate [$_kind] $_a: read site $_site narrowed to authorization ONLY loses it" \
+        "$_sexpr" "$WORK/$_gf" 1 0 0
+    fi
+  done
+done
+if [ "$_cells" -lt 36 ]; then
+  fail "site x alternate matrix: only $_cells (site, alternate) cells executed, anti-vacuity floor is 36"
+else
+  pass "site x alternate matrix: $_cells (site, alternate) cells executed (anti-vacuity floor 36)"
+fi
+unset _a _col _site _kind _sexpr _gf _have_auth
 
 # Array declaration (matrix row 4): the discord-setup.sh miss. Reverting the shared prefix to
 # `local -a` / `declare -a` / `readonly -a` must redden BOTH the Rule E fixture (finding lost)
@@ -1505,6 +1783,107 @@ if mutant_copy 's/^(\s*)except RecursionError:$/${1}except ZeroDivisionError:/m'
 else
   fail "Y-M8c: mutation did not land"
 fi
+
+
+# --- Rule E YAML arm: the shell-resolution and reporting mutants (#9674 review) ----------------------
+# Fixture rows first (each is a fixture the mutants below move), then the mutants.
+y_row 'Rule E YAML must-PASS: one step per SKIP_SHELLS member (python, pwsh, powershell, cmd, node, ruby), each carrying an argv credential, is skipped' "$LINT" "$FIX/compliant-yaml-skip-shells.yml" 0
+y_row 'Rule E YAML must-PASS: `shell: python {0}` (the command-template spelling) is judged by its FIRST WORD and skipped' "$LINT" "$FIX/compliant-yaml-shell-args.yml" 0
+y_row 'Rule E YAML: `shell: sh` is a POSIX shell, not a non-bash interpreter, and stays scanned' "$LINT" "$FIX/violation-yaml-shell-sh.yml" 1
+y_row 'Rule E YAML: a `shell: bash` step under defaults.run.shell: python is SCANNED (the step wins over the default)' "$LINT" "$FIX/violation-yaml-step-shell-over-default.yml" 1
+y_row 'Rule E YAML must-PASS: a `shell: python` step under defaults.run.shell: bash is skipped (the step wins over the default)' "$LINT" "$FIX/compliant-yaml-step-shell-python-over-bash-default.yml" 0
+y_row 'Rule E YAML: a workflow-level python default under a job-level bash default is SCANNED (the inner default wins)' "$LINT" "$FIX/violation-yaml-nested-default.yml" 1
+y_row 'Rule E YAML must-PASS: a workflow-level bash default under a job-level python default is skipped (the inner default wins)' "$LINT" "$FIX/compliant-yaml-nested-default-python.yml" 0
+y_row 'Rule E YAML must-PASS: a `run:` whose value is not a string scalar (custom tag) carries no bash body and is skipped' "$LINT" "$FIX/compliant-yaml-nonstring-run.yml" 0
+
+# SKIP_SHELLS: one member deleted at a time, over the members DERIVED from the constant's own source.
+# The fixture holds one step per member, so each deletion must bring exactly ONE step back into scope.
+mapfile -t _skips < <(grep -E '^SKIP_SHELLS = ' "$LINT" | grep -oE '"[a-z]+"' | tr -d '"')
+if [ "${#_skips[@]}" -lt 6 ]; then
+  fail "SKIP_SHELLS members: derived only ${#_skips[@]}, anti-vacuity floor is 6"
+else
+  pass "SKIP_SHELLS members: ${#_skips[@]} derived from the constant (anti-vacuity floor 6)"
+fi
+for ((_k = 1; _k <= ${#_skips[@]}; _k++)); do
+  mutate_row "Y-SKIP-$_k member #$_k of ${#_skips[@]} (${_skips[$((_k - 1))]}) dropped from SKIP_SHELLS: its step is scanned as bash" \
+    "s/(^SKIP_SHELLS = frozenset\\(\\{(?:\"[^\"]*\", ){$((_k - 1))})\"[^\"]*\"/\${1}\"__gone__\"/m" \
+    "$FIX/compliant-yaml-skip-shells.yml" 0 1 1
+done
+unset _k
+mutate_row 'Y-SKIP-sh `sh` ADDED to SKIP_SHELLS: the shell: sh step goes unseen' \
+  's/(^SKIP_SHELLS = frozenset\(\{)/${1}"sh", /m' "$FIX/violation-yaml-shell-sh.yml" 1 0 0
+mutate_row 'Y-SPLIT shell compared as a whole string (not its first word): `shell: python {0}` is scanned as bash' \
+  's/\(shell\.split\(\) or \[""\]\)\[0\] not in SKIP_SHELLS/shell not in SKIP_SHELLS/' \
+  "$FIX/compliant-yaml-shell-args.yml" 0 1 1
+# Precedence: the step's own shell over the default, and the inner default over the outer one.
+_prec='s/shell = \(_scalar_text\(shell_node\) or default_shell or "bash"\)/shell = (default_shell or _scalar_text(shell_node) or "bash")/'
+mutate_row 'Y-PREC-1 default beats the step: a `shell: bash` step under a python default goes unseen' \
+  "$_prec" "$FIX/violation-yaml-step-shell-over-default.yml" 1 0 0
+mutate_row 'Y-PREC-2 default beats the step: a `shell: python` step under a bash default is scanned' \
+  "$_prec" "$FIX/compliant-yaml-step-shell-python-over-bash-default.yml" 0 1 1
+_nest='s/default_shell = _yaml_default_shell\(node\) or default_shell$/default_shell = default_shell or _yaml_default_shell(node)/m'
+mutate_row 'Y-PREC-3 outer default beats the inner: a bash job default under a python workflow default goes unseen' \
+  "$_nest" "$FIX/violation-yaml-nested-default.yml" 1 0 0
+mutate_row 'Y-PREC-4 outer default beats the inner: a python job default under a bash workflow default is scanned' \
+  "$_nest" "$FIX/compliant-yaml-nested-default-python.yml" 0 1 1
+unset _prec _nest
+mutate_row 'Y-STR the run_node.tag check dropped: a non-string run: value is scanned' \
+  's/ and run_node\.tag == _YAML_STR_TAG//' "$FIX/compliant-yaml-nonstring-run.yml" 0 1 1
+
+# EXACT reported line and step name (the grammar row accepts any [0-9]+, so a constant line_of, a
+# dropped `+ n`, an off-by-one in one style, or a removed `where` text all survived). One fixture per
+# scalar style: literal block (the offender is the SECOND line of its body), folded, inline, and an
+# unnamed step. yline_ok -> 0 only when the run reports exactly ONE finding on exactly that line with
+# exactly that step label.
+yline_ok() { # <lint> <fixture> <line> <step name, empty for an unnamed step>
+  local rc_ base where
+  rc_="$(rc_of "$1" "$2")"
+  [ "$rc_" = "1" ] || return 1
+  base="$(basename "$2")"
+  base="${base//./\\.}"
+  if [ -n "$4" ]; then where=" \\(step \"$4\"\\)"; else where=" \\(unnamed step\\)"; fi
+  [ "$(cat "$WORK/out" "$WORK/err" | grep -cE "$E_MSG_RE")" = "1" ] \
+    && [ "$(cat "$WORK/out" "$WORK/err" | grep -cE "^[^[:space:]]*/$base:$3: credential header on curl argv$where -- ")" = "1" ]
+}
+yline_row() { # <label> <fixture basename> <line> <step name>
+  Y_ROWS=$((Y_ROWS + 1))
+  if yline_ok "$LINT" "$FIX/$2" "$3" "$4"; then
+    pass "$1"
+  else
+    fail "$1: expected exactly one finding at line $3 with step label '${4:-<unnamed>}', got: $(head -c 300 "$WORK/err")"
+  fi
+}
+yline_mut_row() { # <label> <perl-expr> <fixture basename> <line> <step name>: the pinned row must read RED on the mutant
+  if ! mutant_copy "$2"; then
+    fail "$1: mutation did not land"
+    return
+  fi
+  if yline_ok "$WORK/mut2.py" "$FIX/$3" "$4" "$5"; then
+    fail "$1: SURVIVING -- the mutant still reports the pinned line and step label"
+  elif grep -qE 'Traceback|SyntaxError' "$WORK/err"; then
+    fail "$1: INSTRUMENT ERROR -- the mutant crashed (a crash would read as RED)"
+  else
+    pass "$1: the pinned line/step assertion reads RED"
+  fi
+}
+yline_row 'Rule E YAML line pin: a literal block reports the offender line (step body line 2) and its step name' violation-yaml-literal.yml 14 'offending literal block'
+yline_row 'Rule E YAML line pin: a folded scalar reports the first body line and its step name' violation-yaml-folded.yml 14 'offending folded scalar'
+yline_row 'Rule E YAML line pin: an inline run: reports its own line and its step name' violation-yaml-inline-quoted.yml 13 'offending inline single-quoted'
+yline_row 'Rule E YAML line pin: a step with no name reports "(unnamed step)" on its own line' violation-yaml-cyclic-alias.yml 3 ''
+yline_mut_row 'Y-LINE-1 literal line_of drops the `+ n` term' \
+  's/return start \+ 2 \+ n/return start + 2/' violation-yaml-literal.yml 14 'offending literal block'
+yline_mut_row 'Y-LINE-2 literal line_of is a constant' \
+  's/return start \+ 2 \+ n/return 1/' violation-yaml-literal.yml 14 'offending literal block'
+yline_mut_row 'Y-LINE-3 folded line_of off by one' \
+  's/(elif run\.style == ">":\n\s+def line_of\(n: int, start=start\) -> int:\n\s+return start \+ )2\n/${1}3\n/' violation-yaml-folded.yml 14 'offending folded scalar'
+yline_mut_row 'Y-LINE-4 inline line_of off by one' \
+  's/(else:\n\s+def line_of\(n: int, start=start\) -> int:\n\s+return start \+ )1\n/${1}2\n/' violation-yaml-inline-quoted.yml 13 'offending inline single-quoted'
+yline_mut_row 'Y-LINE-5 the whole `where` text removed from the finding' \
+  's/where = f\x27 \(step "\{run\.name\}"\)\x27 if run\.name else " \(unnamed step\)"/where = ""/' violation-yaml-literal.yml 14 'offending literal block'
+yline_mut_row 'Y-LINE-6 the step name dropped (every step reads unnamed)' \
+  's/name\[0\]\[:80\] if name else ""/""/' violation-yaml-literal.yml 14 'offending literal block'
+yline_mut_row 'Y-LINE-7 the "(unnamed step)" text removed' \
+  's/else " \(unnamed step\)"/else ""/' violation-yaml-cyclic-alias.yml 3 ''
 
 
 # --- Guard 2 (#7946): Rule C empty-predicate hardening ------------------------
@@ -1661,6 +2040,22 @@ rc=$?
   || fail "SKIP_SHELLS parity non-vacuity: an empty extraction must fail the row, got rc=$rc"
 unset SKIPSH_PY SIBLING _na _nb
 
+# Floors on EXECUTED fixture rows, hung on call-site counters (E_ROWS counts every e_row call,
+# Y_ROWS every YAML-arm row). Each threshold is the EXACT measured count, so deleting one row
+# reads RED, and a dead dispatch or a deleted loop reads RED instead of "0 checked". Written
+# `-lt N` with the lower-case words `anti-vacuity floor` so scripts/guard-vacuity-floor.test.sh
+# can see and mutation-test them.
+if [ "$E_ROWS" -lt 97 ]; then
+  fail "Rule E: only $E_ROWS fixture rows executed, anti-vacuity floor is 97"
+else
+  pass "Rule E: $E_ROWS fixture rows executed (anti-vacuity floor 97)"
+fi
+if [ "$Y_ROWS" -lt 44 ]; then
+  fail "Rule E YAML arm: only $Y_ROWS rows executed, anti-vacuity floor is 44"
+else
+  pass "Rule E YAML arm: $Y_ROWS rows executed (anti-vacuity floor 44)"
+fi
+
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old
 # check searched for a literal its own grep line contains, so deleting the floor
@@ -1727,10 +2122,11 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # everything, and here the loss of the positive direction was not even reported.
 # A floor at the measured count makes any row deletion RED. It is a LOWER bound,
 # so adding rows never trips it; re-measure and raise it when rows are added.
-# Re-measured at 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
+# Re-measured at 355 (PR #9674 review round 1, second pass: the instrument self-tests, the generated site x
+# alternate matrix, the hazard-member and YAML-arm mutant rows, on top of the 219 below). Earlier: 219 (PR #9674 review round 1: the YAML graph-walk, direct-under-.github, census-ceiling and
 # SKIP_SHELLS-parity rows, on top of the 198 below). Earlier: 198 (#9597 S1: the Rule E credential vocabulary and YAML-arm rows, the extractor, discovery, harness and
 # mutation rows added on top of the 119 recorded for the original Rule E rows).
-MIN_ASSERTIONS=219
+MIN_ASSERTIONS=355
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
