@@ -28,23 +28,48 @@ CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 
 PASS=0
 FAIL=0
+CASES=0   # moved by the assert wrappers below, never inside the verdict helpers (accounting identity at the bottom)
+# Verdict helpers: they move only the verdict counters.
+_pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
+_fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
+# Instrument self-test (printf + exit, never through the helpers it checks): drive a wrapper on a case that
+# MUST fail and one that MUST pass and require the matching verdict counter to move. An always-pass
+# wrapper (`... || true`) leaves every row green; only this sees it.
+_selftest() { # <label> <fail-arm-command...> -- <pass-arm-command...>
+  local label="$1" p0=$PASS f0=$FAIL c0=$CASES; shift
+  local -a fa=() pa=(); local seen=false w
+  for w in "$@"; do if [[ "$w" == "--" ]]; then seen=true; elif [[ "$seen" == true ]]; then pa+=("$w"); else fa+=("$w"); fi; done
+  "${fa[@]}" >/dev/null
+  if [[ "$FAIL" -ne $((f0 + 1)) || "$PASS" -ne "$p0" ]]; then
+    printf '[FATAL] instrument self-test: %s did not record a FAIL for a case that must fail\n' "$label" >&2; exit 1
+  fi
+  "${pa[@]}" >/dev/null
+  if [[ "$PASS" -ne $((p0 + 1)) || "$FAIL" -ne $((f0 + 1)) ]]; then
+    printf '[FATAL] instrument self-test: %s did not record a PASS for a case that must pass\n' "$label" >&2; exit 1
+  fi
+  PASS=$p0; FAIL=$f0; CASES=$c0
+}
 
 assert_grep() {
   local description="$1" pattern="$2" file="$3"
+  CASES=$((CASES + 1))
   if grep -qE -- "$pattern" "$file"; then
-    PASS=$((PASS + 1)); echo "  PASS: $description"
+    _pass "$description"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $description (pattern not found in $(basename "$file"): $pattern)"
+    _fail "$description (pattern not found in $(basename "$file"): $pattern)"
   fi
 }
 assert_cmd() {
   local description="$1"; shift
+  CASES=$((CASES + 1))
   if "$@" >/dev/null 2>&1; then
-    PASS=$((PASS + 1)); echo "  PASS: $description"
+    _pass "$description"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $description ($*)"
+    _fail "$description ($*)"
   fi
 }
+_selftest "assert_grep" assert_grep st "no-such-pattern-xyzzy" "$PROBE" -- assert_grep st '^#!' "$PROBE"
+_selftest "assert_cmd" assert_cmd st false -- assert_cmd st true
 
 echo "--- fresh-host egress-enforcement probe drift-guard (#5933) ---"
 
@@ -72,10 +97,10 @@ assert_grep "negative probe captures curl exit code (errexit-safe)" \
 assert_grep "negative probe treats reachable (exit 0) as INERT" 'neg_rc" -eq 0' "$PROBE"
 assert_grep "negative probe treats non-timeout (!= 28) as INCONCLUSIVE → fail-closed" 'neg_rc" -ne 28' "$PROBE"
 # Negative probe MUST stay single-shot (a --retry on it would mask a real open path).
-if grep -qE 'https://example\.com .*--retry' "$PROBE" || grep -cE '--retry.* https://example\.com' >/dev/null "$PROBE"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: negative probe must NOT --retry (would mask a real open egress path)"
+if grep -qE 'https://example\.com .*--retry' "$PROBE" || grep -cE -- '--retry.* https://example\.com' >/dev/null "$PROBE"; then
+  CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: negative probe must NOT --retry (would mask a real open egress path)"
 else
-  PASS=$((PASS + 1)); echo "  PASS: negative probe is single-shot (no --retry)"
+  CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: negative probe is single-shot (no --retry)"
 fi
 # Both enforcement sentinels + the structure/absent/inconclusive sentinels must be present so
 # the failing hypothesis is named (SSH-free diagnosis).
@@ -91,9 +116,9 @@ echo "-- Sentry envelope parity with soleur-host-bootstrap.sh emit_fail --"
 # The probe reuses the bootstrap emit_fail envelope (stage/failed_file/host_id) + probe_result.
 for tag in '"stage":"%s"' '"failed_file":"cron-egress-enforce-probe.sh"' '"host_id":"%s"' '"probe_result":"%s"'; do
   if grep -qF -- "$tag" "$PROBE"; then
-    PASS=$((PASS + 1)); echo "  PASS: Sentry tag present: $tag"
+    CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: Sentry tag present: $tag"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: Sentry tag missing: $tag"
+    CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: Sentry tag missing: $tag"
   fi
 done
 assert_grep "probe_result discriminates hypotheses (negative_fail — the exfil hole)" \
@@ -109,9 +134,9 @@ echo "-- Sentry TRANSPORT parity with soleur-host-bootstrap.sh emit_fail (drift 
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   if grep -qF -- "$line" "$PROBE" && grep -qF -- "$line" "$BOOTSTRAP"; then
-    PASS=$((PASS + 1)); echo "  PASS: transport line byte-identical in probe + bootstrap: $(printf '%.40s' "$line")…"
+    CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: transport line byte-identical in probe + bootstrap: $(printf '%.40s' "$line")…"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: emit transport drift between probe and bootstrap: $line"
+    CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: emit transport drift between probe and bootstrap: $line"
   fi
 done <<'TRANSPORT'
       KEY=$(printf '%s' "$DSN" | sed -E 's#https://([^@]+)@.*#\1#')
@@ -128,9 +153,9 @@ echo "-- probe-pair lockstep with sibling cron-egress-postapply-assert.sh (arch 
 SIBLING="$SCRIPT_DIR/cron-egress-postapply-assert.sh"
 for host in api.github.com example.com; do
   if grep -qF "https://$host" "$PROBE" && grep -qF "https://$host" "$SIBLING"; then
-    PASS=$((PASS + 1)); echo "  PASS: probe host https://$host shared by probe + sibling"
+    CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: probe host https://$host shared by probe + sibling"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: probe host https://$host drift between probe and sibling cron-egress-postapply-assert.sh"
+    CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: probe host https://$host drift between probe and sibling cron-egress-postapply-assert.sh"
   fi
 done
 
@@ -143,9 +168,9 @@ assert_grep "Dockerfile bakes cron-egress-enforce-probe.sh" '/app/infra/cron-egr
 # bootstrap installs it at 0755 AND asserts it executable (both loops carry the name).
 INSTALL_HITS="$(grep -c 'cron-egress-enforce-probe\.sh' "$BOOTSTRAP")"
 if [[ "$INSTALL_HITS" -ge 2 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: bootstrap references the probe in both install + assert loops ($INSTALL_HITS hits)"
+  CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: bootstrap references the probe in both install + assert loops ($INSTALL_HITS hits)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: bootstrap must carry the probe in BOTH the 0755 install and the test -x assert loop (got $INSTALL_HITS)"
+  CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: bootstrap must carry the probe in BOTH the 0755 install and the test -x assert loop (got $INSTALL_HITS)"
 fi
 
 echo "-- cloud-init boot wiring (post-container + fail-closed) --"
@@ -162,9 +187,9 @@ assert_grep "probe invocation is fail-closed (if ! probe; then … poweroff)" \
 CONTAINER_LINE="$(grep -nE '^\s*"\$\(cat /run/soleur-image-ref' "$CLOUD_INIT" | tail -1 | cut -d: -f1)"
 PROBE_LINE="$(grep -nE 'if ! /usr/local/bin/cron-egress-enforce-probe\.sh' "$CLOUD_INIT" | sed -n '1p' | cut -d: -f1)"
 if [[ -n "$CONTAINER_LINE" && -n "$PROBE_LINE" && "$PROBE_LINE" -gt "$CONTAINER_LINE" ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: probe runs AFTER the app container starts (container=$CONTAINER_LINE < probe=$PROBE_LINE)"
+  CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: probe runs AFTER the app container starts (container=$CONTAINER_LINE < probe=$PROBE_LINE)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: probe must be invoked after the docker run \${image_name} line (container=$CONTAINER_LINE probe=$PROBE_LINE)"
+  CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: probe must be invoked after the docker run \${image_name} line (container=$CONTAINER_LINE probe=$PROBE_LINE)"
 fi
 
 # This asserts the SHELL SEMANTICS the probe's fail branches rely on (emit-name-then-halt
@@ -174,9 +199,96 @@ fi
 echo "-- shell-semantics guard: an ASSERT-FAILED branch emits + halts under set -e --"
 SENTINEL_OUT="$(bash -c 'set -e; if true; then echo "ASSERT-FAILED: egress-probe-negative"; exit 1; fi; echo SHOULD-NOT-REACH' 2>&1 || true)"
 if echo "$SENTINEL_OUT" | grep -cF 'ASSERT-FAILED: egress-probe-negative' >/dev/null && ! echo "$SENTINEL_OUT" | grep -cF 'SHOULD-NOT-REACH' >/dev/null; then
-  PASS=$((PASS + 1)); echo "  PASS: an ASSERT-FAILED branch emits name and halts (fail-branch shell semantics intact)"
+  CASES=$((CASES + 1)); PASS=$((PASS + 1)); echo "  PASS: an ASSERT-FAILED branch emits name and halts (fail-branch shell semantics intact)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: ASSERT-FAILED branch did not emit+halt as expected (got: $SENTINEL_OUT)"
+  CASES=$((CASES + 1)); FAIL=$((FAIL + 1)); echo "  FAIL: ASSERT-FAILED branch did not emit+halt as expected (got: $SENTINEL_OUT)"
+fi
+
+# --- #7797 hardening: xtrace refusal (the probe ACQUIRES a live DSN via `doppler secrets get`) ----
+# Behavioural: the REAL probe runs against PATH stubs, so a refusal is observed rather than grepped.
+# Unconditional on purpose: a `${VAR:+x}` hatch would be open by construction since the credential is
+# acquired at runtime. The empty call log below proves the refusal precedes every probe step AND the
+# `trap emit_fail EXIT` (an armed trap would call the doppler stub on exit).
+echo "-- xtrace refusal (#7797) --"
+# shellcheck disable=SC2034  # consumed by check() conditions via eval
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+ENV_BIN="$(command -v env || true)"; BASH_BIN="$(command -v bash || true)"; TIMEOUT_BIN="$(command -v timeout || true)"
+STUBS="$(mktemp -d)"; trap 'rm -rf "$STUBS"' EXIT
+STUB_CALLS="$STUBS/calls"
+mk_stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" > "$STUBS/$1"; chmod +x "$STUBS/$1"; }
+LOGLINE='printf "%s\t%s\n" "$(basename "$0")" "$*" >> "$STUB_CALLS"'
+mk_stub docker "$LOGLINE
+case \"\$1\" in
+  ps) echo soleur-web-platform ;;
+  exec) case \"\$*\" in *api.github.com*) exit 0 ;; *example.com*) exit 28 ;; esac; echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
+  *) echo \"REFUSED docker \$*\" >> \"\$STUB_CALLS\"; exit 64 ;;
+esac"
+mk_stub nft "$LOGLINE
+echo 'jump SOLEUR-EGRESS'"
+mk_stub systemctl "$LOGLINE
+exit 0"
+mk_stub sleep "exit 0"
+mk_stub doppler "$LOGLINE
+echo 'https://synthetickey@o0.ingest.invalid/42'"
+mk_stub curl "$LOGLINE
+exit 0"
+printf 'set -x\n' > "$STUBS/xt.env"
+# shellcheck disable=SC2034  # OUT is consumed by check() conditions via eval
+RC=0; ERR=""; OUT=""
+# run_probe <env words...> -- <bash flags...>: runs the real probe, resets the call log first.
+run_probe() {
+  local -a envw=() flags=(); local seen=false w
+  for w in "$@"; do
+    if [[ "$w" == "--" ]]; then seen=true; elif [[ "$seen" == true ]]; then flags+=("$w"); else envw+=("$w"); fi
+  done
+  : > "$STUB_CALLS"
+  RC=0
+  # shellcheck disable=SC2034  # consumed by check() conditions via eval
+  OUT="$("$ENV_BIN" -u BASH_ENV -u SHELLOPTS PATH="$STUBS:$PATH" STUB_CALLS="$STUB_CALLS" ${envw[@]+"${envw[@]}"} \
+    "$TIMEOUT_BIN" 20 "$BASH_BIN" ${flags[@]+"${flags[@]}"} "$PROBE" 2>"$STUBS/err")" || RC=$?
+  ERR="$(cat "$STUBS/err" 2>/dev/null || true)"
+}
+check() {  # check <description> <cond>   (eval'd; same shape as the other suites)
+  CASES=$((CASES + 1))
+  if eval "$2"; then _pass "$1"; else _fail "$1 (condition: $2)"; fi
+}
+_selftest "check" check st false -- check st true
+for form in bash-x SHELLOPTS BASH_ENV; do
+  case "$form" in
+    bash-x)    run_probe -- -x ;;
+    SHELLOPTS) run_probe SHELLOPTS=xtrace -- ;;
+    BASH_ENV)  run_probe BASH_ENV="$STUBS/xt.env" -- ;;
+  esac
+  check "P-X1[$form] exits 78 (got rc=$RC; first stderr line: $(printf '%s' "$ERR" | sed -n '1p'))" '[[ "$RC" -eq 78 ]]'
+  check "P-X1[$form] a NON-'+' stderr line carries the refusal message" \
+    '[[ "$(grep -v "^+" <<<"$ERR" | grep -c "refusing to run under xtrace" || true)" -ge 1 ]]'
+  check "P-X1[$form] no stub was called (refusal precedes every probe step and the EXIT trap)" '[[ ! -s "$STUB_CALLS" ]]'
+  check "P-X1[$form] neither stream carries the DSN the doppler stub would print" '[[ "$OUT$ERR" != *synthetickey* ]]'
+done
+run_probe --
+check "P-X1c untraced run is not refused: rc 0 and prints egress-enforce-ok (positive control)" \
+  '[[ "$RC" -eq 0 && "$OUT" == *egress-enforce-ok* ]]'
+check "P-X1c the clean-success path never acquires the DSN (doppler and curl on the host never called)" \
+  '[[ "$(grep -c "^doppler" "$STUB_CALLS" || true)" -eq 0 && "$(grep -c "^curl" "$STUB_CALLS" || true)" -eq 0 ]]'
+check "P-X1c the call log WORKS (instrument control): the healthy run logged docker and nft calls, so an empty log in P-X1 means the refusal, not a dead logger" \
+  '[[ "$(grep -c "^docker" "$STUB_CALLS" || true)" -ge 1 && "$(grep -c "^nft" "$STUB_CALLS" || true)" -ge 1 ]]'
+check "P-X1c no stub refused an unexpected argv" '[[ "$(grep -c "^REFUSED" "$STUB_CALLS" || true)" -eq 0 ]]'
+
+echo "-- drawdown (#7797): not grandfathered in the credential-refusal baseline --"
+check "P-L the probe's repo path is absent from the A/B/C baseline" \
+  '[[ "$(grep -cxF "apps/web-platform/infra/cron-egress-enforce-probe.sh" "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt")" -eq 0 ]]'
+check "P-L non-vacuity: the baseline is readable and non-empty" '[[ -s "$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt" ]]'
+
+# Accounting identity, then the anti-vacuity floor. Reported by printf + exit, never through the helpers they
+# backstop (ADR-193); the case counter moves in the wrappers, not in _pass/_fail.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). A call site recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
+  exit 1
+fi
+MIN_CASES=56
+if [[ "$CASES" -lt "$MIN_CASES" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
+  exit 1
 fi
 
 echo ""

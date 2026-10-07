@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # variables consumed by assert() conditions via eval
 # Tests the WEB-host private-NIC self-report guard (#6438 §3, AC4, web-private-nic-guard.sh).
 # This guard is the registry converger's web-host port with ONE deliberate divergence: it
 # NEVER reboots (a reboot would power-off the sole live origin, apply-web-platform-infra.yml
@@ -35,17 +36,46 @@ TEST_IP="10.0.1.10"   # web-1's private address (var.web_hosts[web-1].private_ip
 
 PASS=0
 FAIL=0
+CASES=0   # moved by the assert() WRAPPER, never inside the verdict helpers (accounting identity at the bottom)
+# Verdict helpers: they move only the verdict counters.
+_pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
+_fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; echo "        condition: $2"; }
 assert() {
   local desc="$1" cond="$2"
-  if eval "$cond"; then PASS=$((PASS + 1)); echo "  PASS: $desc"
-  else FAIL=$((FAIL + 1)); echo "  FAIL: $desc"; echo "        condition: $cond"; fi
+  CASES=$((CASES + 1))
+  if eval "$cond"; then _pass "$desc"; else _fail "$desc" "$cond"; fi
 }
+# Instrument self-test (report-only via printf + exit, never through assert): drive assert() once on a
+# false and once on a true condition and require the matching verdict counter to move. An always-pass
+# assert (`eval ... || true`) leaves every row green, so only this can see it.
+_selftest_assert() {
+  local p0=$PASS f0=$FAIL c0=$CASES
+  assert "selftest: a false condition" "false" >/dev/null
+  if [[ "$FAIL" -ne $((f0 + 1)) || "$PASS" -ne "$p0" ]]; then
+    printf '[FATAL] instrument self-test: assert() did not record a FAIL for a false condition\n' >&2
+    exit 1
+  fi
+  assert "selftest: a true condition" "true" >/dev/null
+  if [[ "$PASS" -ne $((p0 + 1)) || "$FAIL" -ne $((f0 + 1)) ]]; then
+    printf '[FATAL] instrument self-test: assert() did not record a PASS for a true condition\n' >&2
+    exit 1
+  fi
+  PASS=$p0; FAIL=$f0; CASES=$c0
+}
+_selftest_assert
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Resolved BEFORE any fixture strips PATH (the hide-ip arm runs on a stripped PATH).
 TIMEOUT_BIN="$(command -v timeout || true)"
+# Absolute paths, resolved once: the hide-ip arm (T3) runs on a stripped PATH that has no `env`.
+ENV_BIN="$(command -v env || true)"
+BASH_BIN="$(command -v bash || true)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+# The ONE pinned Better Stack source URL, read from its single source at test time (never retyped). The
+# sed is fresh-boot-ready.test.sh S4d's form: first double-quoted value after the key.
+PINNED_URL="$(sed -n 's/^[[:space:]]*betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' "$SCRIPT_DIR/zot-registry.tf" | sed -n '1p')"
 
 echo "=== web-host private-NIC self-report guard (#6438 §3, AC4) tests ==="
 assert "web-private-nic-guard.sh exists" "[[ -f '$SUT' ]]"
@@ -66,6 +96,25 @@ EOS
 # (--data-raw), and the liveness heartbeat ping (WEB_NIC_GUARD_URL, the only other curl).
 cat > "$BIN/curl" <<'EOS'
 #!/usr/bin/env bash
+# Log argv FIRST (before the IMDS early exit), one argument per line (printf, never echo: -n is a
+# valid curl flag; the payload and the Bearer header both contain spaces), calls split by a marker.
+if [[ -n "${STUB_ARGV:-}" ]]; then
+  printf '%s\n' '--CALL--' >> "$STUB_ARGV"
+  for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
+fi
+# A bearer fed on stdin (`--config -`) never reaches argv. Record, PER CALL, the call kind and whatever
+# arrives on stdin, so the suite can prove the header is delivered to the pinned POST and to nothing else.
+kind=ping; prev=""
+for a in "$@"; do
+  case "$a" in *private-networks*) kind=imds ;; --data-raw) [[ "$kind" == imds ]] || kind=post ;; esac
+done
+if [[ -n "${STUB_STDIN:-}" ]]; then
+  printf 'CALL %s\n' "$kind" >> "$STUB_STDIN"
+  for a in "$@"; do
+    if [[ "$prev" == "--config" && "$a" == "-" ]]; then cat >> "$STUB_STDIN"; fi
+    prev="$a"
+  done
+fi
 for a in "$@"; do
   case "$a" in
     *private-networks*) printf '%s' "${STUB_IMDS_BODY:-}"; exit "${STUB_IMDS_RC:-0}";;
@@ -76,12 +125,12 @@ for a in "$@"; do [[ "$a" == "--data-raw" ]] && is_post=true; done
 if $is_post; then
   prev=""
   for a in "$@"; do [[ "$prev" == "--data-raw" ]] && printf '%s\n' "$a" >> "$STUB_EMIT"; prev="$a"; done
-  exit 0
+  exit "${STUB_POST_RC:-0}"
 fi
 # Otherwise this is the heartbeat ping — record its URL (the last positional).
 url=""; for a in "$@"; do url="$a"; done
 printf '%s\n' "$url" >> "$STUB_PING"
-exit 0
+exit "${STUB_PING_RC:-0}"
 EOS
 
 # A reboot stub that RECORDS every call. A correct web-host guard never invokes it, so the
@@ -102,6 +151,15 @@ chmod +x "$BIN"/*
 
 # --- Fixture harness ---------------------------------------------------------------------
 # run_guard <ip_present:true|false> <imds_rc> <imds_has_expected:true|false> [hide_ip:true|false]
+# Optional per-run knobs, reset after every run so nothing leaks between rows:
+#   SUT_UNDER_TEST  script to execute (default $SUT)
+#   LAUNCH_FLAGS    bash flags (e.g. -x)
+#   EXTRA_ENV       NAME=value words handed to `env` AFTER the defaults (so they override). Nothing that
+#                   varies is exported in the test shell.
+# Results: RC OUT ERR EMIT PING TRACE, and ARGV_FILE (the stub curl's per-argument log).
+SUT_UNDER_TEST=""
+LAUNCH_FLAGS=()
+EXTRA_ENV=()
 run_guard() {
   local ip_present="$1" imds_rc="$2" imds_expected="$3" hide_ip="${4:-false}"
   local root="$TMP/root.$$.$RANDOM"
@@ -132,6 +190,11 @@ run_guard() {
   export STUB_EMIT="$root/emit"; : > "$STUB_EMIT"
   export STUB_PING="$root/ping"; : > "$STUB_PING"
   export STUB_TRACE="$root/trace"; : > "$STUB_TRACE"
+  export STUB_ARGV="$root/argv"; : > "$STUB_ARGV"
+  ARGV_FILE="$STUB_ARGV"
+  export STUB_STDIN="$root/stdin"; : > "$STUB_STDIN"
+  # shellcheck disable=SC2034  # consumed by assert() conditions via eval
+  STDIN_FILE="$STUB_STDIN"
 
   # hide_ip models the probe-fault class: `ip` unresolvable (lives in /usr/sbin, off cron's
   # default PATH) while curl still resolves. The stripped PATH is used ALONE so the real
@@ -147,17 +210,89 @@ run_guard() {
     run_path="$nobin"
   fi
 
-  PATH="$run_path" EXPECTED_IP="$TEST_IP" SOLEUR_NIC_TEST_ROOT="$root" \
-    BETTERSTACK_LOGS_TOKEN=synthetic-token BETTERSTACK_INGEST_URL="https://synthetic.invalid/ingest" \
+  local sut="${SUT_UNDER_TEST:-$SUT}"
+  "$ENV_BIN" -u BASH_ENV -u SHELLOPTS -u STUB_POST_RC -u STUB_PING_RC -u INGEST_URL_PINNED \
+    PATH="$run_path" EXPECTED_IP="$TEST_IP" SOLEUR_NIC_TEST_ROOT="$root" \
+    BETTERSTACK_LOGS_TOKEN=synthetic-token BETTERSTACK_INGEST_URL="$PINNED_URL" \
     WEB_NIC_GUARD_URL="https://synthetic.invalid/beat/web-nic-guard" \
-    "$TIMEOUT_BIN" 10 bash "$SUT" >/dev/null 2>&1
+    ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"} \
+    "$TIMEOUT_BIN" 10 "$BASH_BIN" ${LAUNCH_FLAGS[@]+"${LAUNCH_FLAGS[@]}"} "$sut" >"$root/out" 2>"$root/err"
+  RC=$?
+  SUT_UNDER_TEST=""; LAUNCH_FLAGS=(); EXTRA_ENV=()
 
   # shellcheck disable=SC2034  # consumed by assert() conditions via eval
+  OUT="$(cat "$root/out" 2>/dev/null || true)"
+  # shellcheck disable=SC2034
+  ERR="$(cat "$root/err" 2>/dev/null || true)"
+  # shellcheck disable=SC2034
   EMIT="$(cat "$root/emit" 2>/dev/null || true)"
   # shellcheck disable=SC2034
   PING="$(cat "$root/ping" 2>/dev/null || true)"
   # shellcheck disable=SC2034
   TRACE="$(cat "$root/trace" 2>/dev/null || true)"
+  # Every run is audited, not only the fixtures that remembered to ask (X2 used to cover three of them).
+  transport_audit
+  ALL_TA_BAD=$((ALL_TA_BAD + TA_BAD)); ALL_BEARER_BAD=$((ALL_BEARER_BAD + TA_BEARER_BAD))
+}
+
+# transport_audit — walk the stub curl's RECORDED argv (so a later-added call site is judged
+# automatically). Sets TA_POST / TA_PING (call counts) and TA_BAD (calls that are neither
+# `--disable`-first nor carry `--noproxy` immediately followed by `*`). The IMDS probe carries no
+# credential and is exempt BY NAME (it contains `private-networks`).
+IMDS_URL="http://169.254.169.254/hetzner/v1/metadata/private-networks"
+TA_POST=0; TA_PING=0; TA_BAD=0; TA_BEARER_BAD=0; ALL_TA_BAD=0; ALL_BEARER_BAD=0
+_ta_flush() {
+  [[ ${#TA_CALL[@]} -gt 0 ]] || return 0
+  local a i kind=ping
+  for a in "${TA_CALL[@]}"; do
+    case "$a" in *private-networks*) kind=imds ;; --data-raw) [[ "$kind" == imds ]] || kind=post ;; esac
+  done
+  case "$kind" in post) TA_POST=$((TA_POST + 1)) ;; ping) TA_PING=$((TA_PING + 1)) ;; esac
+  # GOLDEN argv per call class (an allowlist, not a deny-list of two flags): any added option such as
+  # -k, --location-trusted, --proxy or --resolve changes the shape and is a bad call. The IMDS probe is
+  # exempt from the credential flags BY EXACT URL (a call that merely contains `private-networks` is not),
+  # and must still match its own golden argv.
+  local ok=true
+  local -a want=(--disable --noproxy '*' -fsS -m 10 -o /dev/null); local n_tail=1
+  case "$kind" in
+    post) want=(--disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config -); n_tail=3 ;;
+    imds) want=(-sf -m 5); n_tail=1 ;;
+  esac
+  [[ ${#TA_CALL[@]} -eq $(( ${#want[@]} + n_tail )) ]] || ok=false
+  for ((i = 0; i < ${#want[@]}; i++)); do [[ "${TA_CALL[i]:-}" == "${want[i]}" ]] || ok=false; done
+  if [[ "$kind" == post ]]; then
+    [[ "${TA_CALL[${#want[@]}]:-}" == "$PINNED_URL" ]] || ok=false
+    [[ "${TA_CALL[$(( ${#want[@]} + 1 ))]:-}" == "--data-raw" ]] || ok=false
+  elif [[ "$kind" == imds ]]; then
+    [[ "${TA_CALL[${#want[@]}]:-}" == "$IMDS_URL" ]] || ok=false
+  fi
+  [[ "$ok" == true ]] || TA_BAD=$((TA_BAD + 1))
+  TA_CALL=()
+}
+transport_audit() {
+  TA_POST=0; TA_PING=0; TA_BAD=0; TA_BEARER_BAD=0; TA_CALL=()
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" == "--CALL--" ]]; then _ta_flush; else TA_CALL+=("$line"); fi
+  done < "$ARGV_FILE"
+  _ta_flush
+  # Stdin GOLDEN per call class: a POST's stdin is exactly ONE `header = "Authorization: Bearer <token>"`
+  # line (no `url =`, `proxy =`, `insecure`, `data =` or any second directive); every other call's stdin is
+  # empty. `missing` counts POSTs without the line, `extra` counts anything beyond it.
+  local miss extra
+  read -r miss extra < <(awk '
+    function flush() { if (k == "") return
+      if (k == "post") { if (n == 0) miss++; else { if (n > 1) extra += n - 1; if (!ok1) extra++ } } else extra += n
+      k = ""; n = 0; ok1 = 0 }
+    /^CALL / { flush(); k = $2; n = 0; ok1 = 0; next }
+    { if (k != "") { n++; if (n == 1 && $0 ~ /^header = "Authorization: Bearer [A-Za-z0-9._~+\/=-]+"$/) ok1 = 1 } }
+    END { flush(); printf "%d %d\n", miss + 0, extra + 0 }' "$STDIN_FILE")
+  # Fail CLOSED: an awk that errors leaves both empty, which must not read as "no bad calls". Also require that
+  # the stdin walk saw as many calls as the argv walk did (a control that the walk looked at anything).
+  local n_stdin n_argv
+  n_stdin=$(grep -c '^CALL ' "$STDIN_FILE" || true); n_argv=$(grep -c '^--CALL--$' "$ARGV_FILE" || true)
+  if [[ ! "$miss" =~ ^[0-9]+$ || ! "$extra" =~ ^[0-9]+$ || "$n_stdin" != "$n_argv" ]]; then miss=1; extra=1; fi
+  TA_BEARER_BAD=$((miss + extra))
 }
 
 field() { printf '%s' "$EMIT" | grep -oE "$1=[^ \"]+" | sed -n '1p' | cut -d= -f2; }
@@ -270,6 +405,156 @@ assert "nic-guard .service is root-run (no User=deploy without PrivateTmp=true)"
 # Anchor on the token VALUE wiring (web_probes.key), not just the literal (test-design review).
 assert "server.tf private_nic_guard_install writes DOPPLER_TOKEN=<web_probes.key> into /etc/default/web-private-nic-guard" \
   "grep -qE 'DOPPLER_TOKEN=%s.*web_probes\\.key.*/etc/default/web-private-nic-guard' '$SERVER_TF'"
+
+# ============================================================================================
+# --- #7797 hardening: xtrace refusal, curl transport confinement, ingest-URL pin ------------
+# Three properties of the credential handling (plan 2026-10-06-fix-credential-harden-...):
+#   X1  the guard never runs a command that expands a credential while shell tracing is on
+#   X2  every credentialed curl is `--disable`-first and carries `--noproxy '*'`
+#   X3  the bearer token only ever goes to the one pinned Better Stack source URL
+# No row below uses a pipe-fed `grep -q` (that shape is ratcheted by grep-q-pipe-guard.test.sh).
+# ============================================================================================
+echo "--- #7797 hardening: preconditions ---"
+assert "PINNED_URL was read from zot-registry.tf (non-empty, https://)" "[[ \"\$PINNED_URL\" == https://* ]]"
+assert "env / bash resolved by absolute path" "[[ -x '$ENV_BIN' && -x '$BASH_BIN' ]]"
+PIN_HOST="${PINNED_URL#https://}"; PIN_HOST="${PIN_HOST%/}"
+SYNTH_TOKEN="SYNTH-TOKEN-7797"
+SYNTH_BEAT="https://synthetic.invalid/beat/SYNTH-BEAT-7797"
+printf 'set -x\n' > "$TMP/xt.env"
+
+# --- X1: xtrace refusal, three launch forms (two of them carry no `-x` token) --------------
+echo "--- X1: the guard refuses to run under xtrace ---"
+for form in bash-x SHELLOPTS BASH_ENV; do
+  EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN" WEB_NIC_GUARD_URL="$SYNTH_BEAT")
+  case "$form" in
+    bash-x)   LAUNCH_FLAGS=(-x) ;;
+    SHELLOPTS) EXTRA_ENV+=(SHELLOPTS=xtrace) ;;
+    BASH_ENV) EXTRA_ENV+=(BASH_ENV="$TMP/xt.env") ;;
+  esac
+  run_guard true 0 true
+  assert "X1[$form] exits 78 (got rc=$RC; first stderr line: $(printf '%s' "$ERR" | sed -n '1p'))" "[[ \"\$RC\" -eq 78 ]]"
+  assert "X1[$form] a NON-'+' stderr line carries the refusal message" \
+    "[[ \"\$(grep -v '^+' <<<\"\$ERR\" | grep -c 'refusing to run under xtrace' || true)\" -ge 1 ]]"
+  assert "X1[$form] neither stream carries the token or the heartbeat URL" \
+    "[[ \"\$OUT\$ERR\" != *SYNTH-TOKEN-7797* && \"\$OUT\$ERR\" != *SYNTH-BEAT-7797* ]]"
+  assert "X1[$form] nothing was emitted, pinged or sent (the stub curl is on PATH)" \
+    "[[ -z \"\$EMIT\" && -z \"\$PING\" && ! -s \"\$ARGV_FILE\" ]]"
+done
+# X1b: unconditional — no credential and no EXPECTED_IP still refuses (the lint accepts a
+# conditional `${TOKEN:+x}` refusal for this file, so this row is the only guard of that property).
+x1b_rc=0
+"$ENV_BIN" -i PATH="$BIN:/usr/bin:/bin" "$TIMEOUT_BIN" 10 "$BASH_BIN" -x "$SUT" >/dev/null 2>&1 || x1b_rc=$?
+assert "X1b: bash -x with no credential and no EXPECTED_IP still exits 78 (got $x1b_rc)" "[[ \"\$x1b_rc\" -eq 78 ]]"
+run_guard true 0 true
+assert "X1c: the untraced healthy run is not refused (positive control)" "[[ \"\$RC\" -eq 0 && -n \"\$EMIT\" ]]"
+
+# --- X2: transport confinement over the stub's RECORDED argv --------------------------------
+echo "--- X2: every credentialed curl is --disable-first with --noproxy '*' ---"
+run_guard true 0 true;                              transport_audit; X2_HEALTHY_POST=$TA_POST; X2_HEALTHY_PING=$TA_PING; X2_BAD=$TA_BAD
+EXTRA_ENV=(STUB_POST_RC=1); run_guard true 0 true;  transport_audit; X2_POSTFAIL_POST=$TA_POST; X2_BAD=$((X2_BAD + TA_BAD))
+X2_POSTFAIL_BEAT=no; [[ -n "$PING" ]] && X2_POSTFAIL_BEAT=yes
+EXTRA_ENV=(STUB_PING_RC=1); run_guard true 0 true;  transport_audit; X2_PINGFAIL_PING=$TA_PING; X2_BAD=$((X2_BAD + TA_BAD))
+assert "X2 floors: a healthy run issues >=1 POST and >=1 ping (the walk is not vacuous)" \
+  "[[ \"\$X2_HEALTHY_POST\" -ge 1 && \"\$X2_HEALTHY_PING\" -ge 1 ]]"
+assert "X2 floors: the failing runs reach the fallback copies (>=2 POST, >=2 ping)" \
+  "[[ \"\$X2_POSTFAIL_POST\" -ge 2 && \"\$X2_PINGFAIL_PING\" -ge 2 ]]"
+assert "X2 a POST that was ATTEMPTED and failed still beats (an outage of the destination is not a refusal)" "[[ \"\$X2_POSTFAIL_BEAT\" == yes ]]"
+assert "X2: no credentialed curl is missing --disable-first or --noproxy '*' (bad calls=$X2_BAD)" "[[ \"\$X2_BAD\" -eq 0 ]]"
+
+# --- X3: the bearer goes only to the pinned URL ---------------------------------------------
+echo "--- X3: ingest-URL pin ---"
+EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN=OTHER-TOKEN-7797 EXPECTED_IP=10.0.1.11)
+run_guard true 0 true; transport_audit
+assert "X3 pinned URL (other token, other EXPECTED_IP): exactly one POST, to the pinned URL" \
+  "[[ \"\$TA_POST\" -eq 1 && \"\$(grep -cxF -- \"\$PINNED_URL\" \"\$ARGV_FILE\")\" -eq 1 ]]"
+EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN=)
+run_guard true 0 true; transport_audit
+assert "X3 pinned URL but no token: zero POSTs, and the heartbeat is withheld (cannot report)" "[[ \"\$TA_POST\" -eq 0 && -z \"\$PING\" ]]"
+EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN" BETTERSTACK_INGEST_URL=)
+run_guard true 0 true; transport_audit
+assert "X3 token but no ingest URL: zero POSTs, WARN on stderr, and the heartbeat is withheld" "[[ \"\$TA_POST\" -eq 0 && \"\$ERR\" == *WARN* && -z \"\$PING\" ]]"
+x3=0
+for url in "https://evil.invalid/ingest" "http://$PIN_HOST/" "${PINNED_URL%/}" \
+           "https://$PIN_HOST@evil.invalid/" "https://evil.invalid/?x=$PIN_HOST/" \
+           "${PINNED_URL}x" "${PINNED_URL}?q=1" "https://$(printf '%s' "$PIN_HOST" | tr a-z A-Z)/"; do
+  x3=$((x3 + 1))
+  EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN" BETTERSTACK_INGEST_URL="$url")
+  run_guard true 0 true; transport_audit
+  assert "X3 refused[$x3] $url: zero POSTs" "[[ \"\$TA_POST\" -eq 0 ]]"
+  assert "X3 refused[$x3]: the token is in no recorded argv" "[[ \"\$(grep -c -- \"\$SYNTH_TOKEN\" \"\$ARGV_FILE\")\" -eq 0 ]]"
+  assert "X3 refused[$x3]: stderr names unpinned_url and rc is 0" "[[ \"\$ERR\" == *unpinned_url* && \"\$RC\" -eq 0 ]]"
+  assert "X3 refused[$x3]: the heartbeat is WITHHELD (a guard that cannot report must not claim health)" "[[ -z \"\$PING\" ]]"
+  assert "X3 refused[$x3]: no curl was handed an Authorization header on stdin" "[[ \"\$(grep -c Authorization \"\$STDIN_FILE\")\" -eq 0 ]]"
+done
+# X3b: the pin cannot be redirected through the environment.
+EXTRA_ENV=(INGEST_URL_PINNED=https://evil.invalid/ BETTERSTACK_INGEST_URL=https://evil.invalid/)
+run_guard true 0 true; transport_audit
+assert "X3b INGEST_URL_PINNED and BETTERSTACK_INGEST_URL both evil: zero POSTs" "[[ \"\$TA_POST\" -eq 0 ]]"
+EXTRA_ENV=(INGEST_URL_PINNED=https://evil.invalid/)
+run_guard true 0 true; transport_audit
+assert "X3b evil INGEST_URL_PINNED with the real pinned URL still POSTs to the real pinned URL (positive control)" \
+  "[[ \"\$TA_POST\" -eq 1 && \"\$(grep -cxF -- \"\$PINNED_URL\" \"\$ARGV_FILE\")\" -eq 1 ]]"
+# X3c: the literal equals its single source byte-for-byte and cannot expand.
+# shellcheck disable=SC2034  # consumed by assert() conditions via eval
+PIN_LITERAL="$(sed -n 's/^readonly INGEST_URL_PINNED="\(.*\)"$/\1/p' "$SUT" | sed -n '1p')"
+assert "X3c the readonly literal equals zot-registry.tf betterstack_logs_ingest_url byte-for-byte" \
+  "[[ -n \"\$PIN_LITERAL\" && \"\$PIN_LITERAL\" == \"\$PINNED_URL\" ]]"
+assert "X3c the literal carries no \$ and no backtick (nothing the environment can expand)" \
+  "[[ -n \"\$PIN_LITERAL\" && \"\$PIN_LITERAL\" != *'\$'* && \"\$PIN_LITERAL\" != *'\`'* ]]"
+
+# --- X5: the bearer travels on stdin config, never on argv (Rule E, sweep #7843) -------------
+echo "--- X5: bearer on stdin config, not argv ---"
+EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$SYNTH_TOKEN")
+run_guard true 0 true; transport_audit
+assert "X5 a pinned POST happened (the argv scan below is not vacuous)" "[[ \"\$TA_POST\" -ge 1 ]]"
+assert "X5 no recorded argv carries an Authorization header at all" "[[ \"\$(grep -ci authorization \"\$ARGV_FILE\")\" -eq 0 ]]"
+assert "X5 the token is in NO recorded argv (not readable from /proc/<pid>/cmdline)" \
+  "[[ \"\$(grep -c -- \"\$SYNTH_TOKEN\" \"\$ARGV_FILE\")\" -eq 0 ]]"
+assert "X5 the bearer header arrives on the stdin config of the POST" \
+  "[[ \"\$(grep -cxF -- \"header = \\\"Authorization: Bearer \$SYNTH_TOKEN\\\"\" \"\$STDIN_FILE\")\" -ge 1 ]]"
+
+# --- X6: a token that would add curl-config directives is refused, never escaped -------------
+echo "--- X6: token-shape guard (one forbidden character at a time) ---"
+x6=0
+for bad in 'Aa"b' 'Aa b' $'Aa\nb' 'Aa\b' 'Aa;b' $'SYNTH"quote\nurl = "https://evil.invalid/"'; do
+  x6=$((x6 + 1))
+  EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="$bad")
+  run_guard true 0 true; transport_audit
+  assert "X6[$x6] a token with a forbidden character makes zero POSTs and names bad_token" "[[ \"\$TA_POST\" -eq 0 && \"\$ERR\" == *bad_token* ]]"
+  assert "X6[$x6] nothing reached curl stdin" "[[ \"\$(grep -c Authorization \"\$STDIN_FILE\")\" -eq 0 ]]"
+  assert "X6[$x6] the heartbeat is withheld" "[[ -z \"\$PING\" ]]"
+  assert "X6[$x6] the token value is not echoed to stderr" "[[ \"\$ERR\" != *\"\$bad\"* ]]"
+done
+EXTRA_ENV=(BETTERSTACK_LOGS_TOKEN="Aa0._~+/=-9")
+run_guard true 0 true; transport_audit
+assert "X6 a token using every permitted punctuation character still POSTs (positive control)" "[[ \"\$TA_POST\" -eq 1 ]]"
+
+# --- X4: drawdown — the grandfathering entries are gone --------------------------------------
+echo "--- X4: not baselined (the repo-wide lint run now guards this file from regrowth) ---"
+for bl in lint-shell-trace-credential-refusal.baseline.txt lint-shell-trace-credential-refusal-d.baseline.txt; do
+  assert "X4 apps/web-platform/infra/web-private-nic-guard.sh is absent from $bl" \
+    "[[ \"\$(grep -cxF 'apps/web-platform/infra/web-private-nic-guard.sh' '$REPO_ROOT/scripts/$bl')\" -eq 0 ]]"
+done
+assert "X4 apps/web-platform/infra/web-private-nic-guard.sh is absent from the Rule E baseline (path<TAB>count)" \
+  "[[ \"\$(grep -c '^apps/web-platform/infra/web-private-nic-guard.sh	' '$REPO_ROOT/scripts/lint-shell-trace-credential-refusal-e.baseline.txt')\" -eq 0 ]]"
+assert "X4 non-vacuity: the baseline file is readable and non-empty" \
+  "[[ -s '$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt' ]]"
+
+# --- every run, one verdict ------------------------------------------------------------------
+assert "no run anywhere issued a curl missing --disable-first or --noproxy '*' (ALL_TA_BAD=$ALL_TA_BAD)" "[[ \"\$ALL_TA_BAD\" -eq 0 ]]"
+assert "in no run did the bearer reach anything but the pinned POST, once per POST (ALL_BEARER_BAD=$ALL_BEARER_BAD)" "[[ \"\$ALL_BEARER_BAD\" -eq 0 ]]"
+
+# Accounting identity, then the anti-vacuity floor. Reported by printf + exit, never through assert() or the
+# verdict helpers they backstop (ADR-193); the case counter moves in assert(), not in _pass/_fail.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting identity: PASS(%d) + FAIL(%d) != CASES(%d). An assertion recorded no verdict or more than one.\n' "$PASS" "$FAIL" "$CASES" >&2
+  exit 1
+fi
+MIN_CASES=154
+if [[ "$CASES" -lt "$MIN_CASES" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %d assertions ran; floor is %d\n' "$CASES" "$MIN_CASES" >&2
+  exit 1
+fi
 
 echo
 echo "=== $PASS passed, $FAIL failed ==="
