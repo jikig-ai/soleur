@@ -12,3 +12,11 @@ knowledge-base/product/design/app-ui/session-completion-inline.pen:generic-api-k
 # Format for a git-mode scan: <commit>:<path>:<rule-id>:<line>
 e2e2e844ddf21590049cc7e07eb6d51e521b1ba7:scripts/test-weekly-analytics.sh:generic-api-key:307
 c5e40bfdd19973c2413840aa4a0cbf0c30fce18a:scripts/fixtures/shell-trace-refusal/violation-argv-bearer-long-form.sh:curl-auth-header:25
+
+# Synthetic secret-shaped inputs for the founder-check secret-shape detector tests (PR #9637), in intermediate commits.
+# They carry a line waiver at the tip; the PR-diff scan reads each commit as it was, so those four need a fingerprint.
+# Format for a git-mode scan: <commit>:<path>:<rule-id>:<line>
+47e98d28187cf81d1fb7332c8f36c3b3fc818563:plugins/soleur/test/preflight-founder-check.test.ts:aws-access-token:960
+47e98d28187cf81d1fb7332c8f36c3b3fc818563:plugins/soleur/test/preflight-founder-check.test.ts:curl-auth-user:959
+5c8dffd9397db13be6e9dd4403a73e63c6f935ac:plugins/soleur/test/preflight-founder-check.test.ts:curl-auth-header:744
+fe234ddc6d259bd885a5a5fe85c89a7f6cbd9f87:plugins/soleur/test/preflight-founder-check.test.ts:curl-auth-user:1060
