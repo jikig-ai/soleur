@@ -4207,7 +4207,7 @@ assert "#6940 the lookback is a now-relative window (from=<now - CUTOVER_DISCOVE
 DISC_CURL_N=$(grep -c 'verify-zero-run' "$VERIFY_ARM_FILE" || true)
 assert "#6940 the re-probe curl writes /tmp/verify-zero-run (rm + curl, got '$DISC_CURL_N')" "[[ '$DISC_CURL_N' -ge 2 ]]"
 DISC_CURL_LINE=$(grep -F 'curl ' "$VERIFY_ARM_FILE" | grep -F 'verify-zero-run' || true)
-assert "#6940 the re-probe curl is transport-confined + --max-time bounded" "echo \"\$DISC_CURL_LINE\" | grep -q \"curl --disable --noproxy '\*' \" && echo \"\$DISC_CURL_LINE\" | grep -q -- '--max-time'"
+assert "#6940 the re-probe curl is transport-confined + --max-time bounded" "grep -qF \"curl --disable --noproxy '*' \" <<< \"\$DISC_CURL_LINE\" && grep -qF -- '--max-time' <<< \"\$DISC_CURL_LINE\""
 VERIFY_RETRIES=$(grep -cE 'for attempt in 1 2; do' "$VERIFY_ARM_FILE" || true)
 assert "#6940 verify arm still has exactly 2 retry loops — the re-probe is single-shot (got '$VERIFY_RETRIES')" "[[ '$VERIFY_RETRIES' == '2' ]]"
 
