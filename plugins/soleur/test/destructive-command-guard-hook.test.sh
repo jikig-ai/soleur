@@ -1593,6 +1593,16 @@ bound_row "bound: rm -rf / first, then 2600 benign commands (above the record ca
 bound_row "bound: 40 -- words then terraform destroy asks, in under 5 s" ask - "$_cmd40dash"
 bound_row "bound: a 1000-target rm line then rm -rf ~ denies, in under 5 s" deny - "$_cmd1000rm"
 bound_row "bound: 30000 words in one command (above the word cap) asks with the bound reason, in under 5 s" ask - "$_cmdwords" '^This command was NOT run\. bound: '
+# A deep nonexistent target: the longest existing prefix is looked for once, with a depth cap (no per-level probe that grows with the path).
+rep '/a' 650; _REP650="$REP_OUT"; _cmddeep650="rm -rf /nonexist${REP_OUT}; rm -rf /"
+rep '/a' 100; _cmddeep100="rm -rf /nonexist${REP_OUT}; rm -rf /"
+_t=""; for _i in $(seq 1 300); do _t+=" /nx$_i/a/b/c"; done; _cmd300nx="rm -rf${_t}"
+bound_row "bound: a 650-component nonexistent rm target then rm -rf / still denies (a deny wins over the depth cap), in under 5 s" deny - "$_cmddeep650"
+bound_row "bound: a 650-component nonexistent rm target alone asks with the bound reason, in under 5 s" ask - "rm -rf /nonexist${_REP650}" '^This command was NOT run\. bound: .*more than 128'
+bound_row "bound: a 100-component nonexistent rm target then rm -rf / still denies, in under 5 s" deny - "$_cmddeep100"
+bound_row "bound: 300 distinct nonexistent rm targets are judged within the deadline (no decision), in under 5 s" none - "$_cmd300nx"
+_t=""; for _i in $(seq 1 2400); do _t+=" /nonexist/f$_i"; done; _cmd2400same="rm -rf${_t}"
+bound_row "bound: 2400 nonexistent rm targets under one parent are judged within the deadline (the parent is resolved once), in under 5 s" none - "$_cmd2400same"
 # The deadline branches: a private copy of the hook whose deadline is 0 s asks with the bound reason at the FIRST check it
 # reaches. There is one check per phase (reading the lexer output, judging the records, deciding one command, walking
 # the targets of one rm), so each row neuters the OTHER three in its copy: a row that stays green with its own check
@@ -1976,7 +1986,7 @@ if [[ -n "$ROWSEL" ]]; then
   [[ "$FAIL_COUNT" -eq 0 ]]
   exit
 fi
-MIN_CASES=773
+MIN_CASES=778
 if [[ "$CHECKED" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity: only %s assertions ran, floor is %s\n' "$CHECKED" "$MIN_CASES" >&2
   exit 1

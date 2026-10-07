@@ -166,6 +166,7 @@ DEADLINE_S=6
 MAX_RECORDS=2000
 MAX_WORDS=20000
 BOUND_WHY=""
+BOUND_SOFT=""
 
 ISSUES_URL='https://github.com/jikig-ai/soleur/issues'
 REASON_TAIL=" Stop and tell the person what you were about to run and why. Do not retry this command and do not rephrase it to get around the guard. If no person is available to answer, end the task and report it as blocked. The person can run the command themselves in their own terminal, outside the agent, or start the session with SOLEUR_DISABLE_DESTRUCTIVE_GUARD=1 set in their own shell. If this was flagged wrongly, report it at ${ISSUES_URL}"
@@ -447,50 +448,56 @@ lex_norm() {
   [[ -n "$LN" ]] || LN=/
 }
 
-phys_cd() { # <dir>: the physical path of an existing directory, else nothing
-  [[ -n "$1" ]] || return 1
-  ( cd -P -- "$1" 2>/dev/null && pwd -P )
-}
-
 # resolve_phys <abs path> <follow 0|1> -> RP (empty = no decision: rm refuses `.`)
 # follow=1: the path itself is resolved through symlinks (a trailing slash or a glob suffix); follow=0: a
-# bare final name stays literal (`rm -rf link` only unlinks the link).
-PC_K=(); PC_V=()
-phys_memo() { # <dir> -> PCR: phys_cd, one subshell per distinct directory (a long target list shares its parents)
-  local k n=${#PC_K[@]}
+# bare final name stays literal (`rm -rf link` only unlinks the link). A path with more than MAX_DEPTH components
+# sets BOUND_SOFT and returns 1 (nothing about that path was resolved); the rest of the command is still judged, so a
+# deny elsewhere in it wins, and the decision asks `bound` when nothing denied.
+#
+# phys_walk <abs dir> -> WK WP: ONE subshell finds the longest existing prefix of the directory (WP, physical) and how
+# many trailing components it had to drop to get there (WK; 0 = the directory itself exists). The answer is cached per
+# directory (a long target list shares its parents) in a table capped at PW_MAX entries, so a lookup is a short scan;
+# only this final per-directory answer is cached, never a probe of a prefix.
+PW_K=(); PW_V=()
+PW_MAX=256
+MAX_DEPTH=128
+phys_walk() {
+  local k n=${#PW_K[@]} out
   for ((k = 0; k < n; k++)); do
-    if [[ "${PC_K[$k]}" == "$1" ]]; then PCR="${PC_V[$k]}"; return 0; fi
+    if [[ "${PW_K[$k]}" == "$1" ]]; then out="${PW_V[$k]}"; WK="${out%%$'\n'*}"; WP="${out#*$'\n'}"; return 0; fi
   done
-  PCR="$(phys_cd "$1")"
-  PC_K[n]="$1"; PC_V[n]="$PCR"
+  out="$( cd / && q="$1" && c=0 && while ! cd -P -- "$q" 2>/dev/null; do c=$((c + 1)); q="${q%/*}"; [[ -z "$q" ]] && q=/; (( c > MAX_DEPTH + 2 )) && break; done; printf '%s\n' "$c"; pwd -P )" || out=""
+  WK="${out%%$'\n'*}"; WP="${out#*$'\n'}"
+  [[ "$WK" =~ ^[0-9]+$ ]] || { WK=0; WP=""; }
+  if (( n < PW_MAX )); then PW_K[n]="$1"; PW_V[n]="$WK"$'\n'"$WP"; fi
 }
 
 resolve_phys() {
-  local p="$1" follow="$2" last dir r rest probe
+  local p="$1" follow="$2" last dir rest probe slashes k
   RP=""
   while [[ "$p" == */ && "$p" != / ]]; do p="${p%/}"; done
   if [[ "$p" == / ]]; then RP=/; return 0; fi
+  slashes="${p//[!\/]/}"
+  if (( ${#slashes} > MAX_DEPTH )); then BOUND_SOFT="a path with more than ${MAX_DEPTH} components"; return 1; fi
   last="${p##*/}"
   if [[ "$follow" == 0 && "$last" == . ]]; then return 1; fi
-  if [[ "$follow" == 1 || "$last" == .. ]]; then
-    phys_memo "$p"; r="$PCR"
-    if [[ -n "$r" ]]; then RP="$r"; return 0; fi
-  fi
   dir="${p%/*}"; [[ -z "$dir" ]] && dir=/
-  phys_memo "$dir"; r="$PCR"
-  if [[ -n "$r" ]]; then
-    lex_norm "${r%/}/$last"; RP="$LN"; return 0
+  if [[ "$follow" == 1 || "$last" == .. ]]; then
+    # the path itself first; when it is missing the same walk already knows its parent (one component fewer)
+    phys_walk "$p"
+    if (( WK == 0 )) && [[ -n "$WP" ]]; then RP="$WP"; return 0; fi
+    k=$((WK - 1)); [[ "$k" -lt 0 ]] && k=0
+  else
+    phys_walk "$dir"
+    k="$WK"
   fi
-  # the parent does not exist either: resolve the longest existing prefix, normalize the rest lexically
+  [[ -n "$WP" ]] || { WP=/; }
   rest="$last"; probe="$dir"
-  while :; do
-    phys_memo "$probe"; r="$PCR"
-    [[ -n "$r" ]] && break
-    rest="${probe##*/}/$rest"; probe="${probe%/*}"
-    [[ -z "$probe" ]] && probe=/
-    if [[ "$probe" == / ]]; then r=/; break; fi
+  while (( k > 0 )); do
+    rest="${probe##*/}/$rest"; probe="${probe%/*}"; [[ -z "$probe" ]] && probe=/
+    k=$((k - 1))
   done
-  lex_norm "${r%/}/$rest"; RP="$LN"
+  lex_norm "${WP%/}/$rest"; RP="$LN"
   return 0
 }
 
@@ -985,6 +992,7 @@ done
 
 # ---- 6. the decision -------------------------------------------------------------------------------
 # a bound trip (record or word cap, or the deadline) is an ask unless a deny was already found
+[[ -z "$BOUND_WHY" ]] && BOUND_WHY="$BOUND_SOFT"
 if [[ -n "$BOUND_WHY" && "$BEST_RANK" -lt 2 ]]; then ask_bound "$BOUND_WHY"; fi
 (( BEST_RANK == 0 )) && exit 0
 lead_for "$BEST_RULE"
