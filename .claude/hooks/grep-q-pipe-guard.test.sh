@@ -431,6 +431,9 @@ SWEEP_CANARY_COUNT=4   # pinned beside SWEEP_CANARIES: the probe compares agains
 # A row whose subtree reaches zero is STALE and fails: the wave that converts a subtree deletes its row in the same PR.
 # Every row names its tracker. These are the only places a new instance can hide, so the diff of this table is the
 # review surface: raising a number is a visible, one-line, reviewable act and every run prints each row.
+# KNOWN HOLE (named, not covered): a `<=` row at slack 0 pins the COUNT per row, not the sites, so moving one hit between two files under
+# the same glob (add one, delete one) stays green. File-exact `=` rows would close it, but `_ts_re` below classifies a file-exact test path as
+# a PRODUCTION row (GATED_PROD_ROWS counts it), so that needs a `_ts_re` widening reviewed on its own; the last Wave B slice revisits it.
 SWEEP_DEFERRALS=(
   '.claude/*.test.sh | <= | 5 | #9217'
   'tests/* | <= | 181 | #9217'
@@ -983,7 +986,17 @@ _cm() { local m="$1"; shift; python3 "$CM" "$m" --guard "${BASH_SOURCE[0]}" "$@"
 # git with every GIT_* variable stripped by PREFIX (a hook runs this suite with GIT_DIR/GIT_INDEX_FILE set, and `git init` here would
 # otherwise act on the caller's repository) and no hooks.
 _cleangit() { ( while IFS= read -r _gv; do unset "$_gv"; done < <(compgen -e | grep '^GIT_' || true); git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=t -c user.email=t@t "$@" ); }
-cmr="$probe/cm"; mkdir -p "$cmr/scripts"
+# Each fixture root carries its OWN guard: the SWEEP_* pattern strings and pathspec copied from this file, and one synthetic catch-all row. The
+# tool reads the guard from the root it is given, so the checks below stay green whichever live deferral rows a later slice deletes (a fixture
+# rooted at the live table failed twelve checks the moment `scripts/*.test.sh` left it).
+_mkguard() { # <root>
+  local f="$1/.claude/hooks/grep-q-pipe-guard.test.sh"
+  mkdir -p "$(dirname "$f")"
+  { grep -E '^(SWEEP_(LEAD|WRAP|BIN|ARG|EARLY)|PATTERN_V2|ALLOW_MARKER)=' "${BASH_SOURCE[0]}"
+    awk '/^SWEEP_PATHSPEC=\(/,/^\)/' "${BASH_SOURCE[0]}"
+    printf '%s\n' 'SWEEP_DEFERRALS=(' "  '* | <= | 9999 | #1'" ')'; } > "$f"
+}
+cmr="$probe/cm"; mkdir -p "$cmr/scripts"; _mkguard "$cmr"
 cat > "$cmr/scripts/c.test.sh" <<'CM_C'
 #!/usr/bin/env bash
 set -o pipefail
@@ -1120,6 +1133,7 @@ echo "$d" | grep -q p 2>/dev/null
 true
 CM_V
   cp "$d/scripts/v.test.sh" "$d/scripts/w.test.sh"
+  _mkguard "$d"
   _cleangit init -q "$d" && _cleangit -C "$d" add -A && _cleangit -C "$d" commit -qm base
 }
 _vrun() { # <dir> [verify args...] -> vr_rc, vr_out

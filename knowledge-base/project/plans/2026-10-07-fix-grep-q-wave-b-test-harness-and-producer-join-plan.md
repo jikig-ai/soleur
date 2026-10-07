@@ -255,7 +255,7 @@ input included; bash and dash, 1,080 rows run once and recorded in the PR body).
 | Tier | Meaning | Action | Row owed |
 | --- | --- | --- | --- |
 | T0 | `-q` cluster, code context, bounded producer | codemod `apply` | none: `verify` proves the line differs from base only by the transform |
-| T1 | same, inside an executed string (eval helper argument, `bash -c`, generated stub heredoc) | codemod `apply --exec-strings` after the reviewer marks the line `exec` | none |
+| T1 | same, inside an executed string (eval helper argument, `bash -c`, generated stub heredoc) | NOT IMPLEMENTED in S1 (exec-string sites fall into `data:quoted` and the hand queue); add `apply --exec-strings` only in a slice that has such sites to convert | none |
 | H-m | `-m N` (output-bearing) | hand: capture then match, `grep -m1 P <<<"$V"` only where `$V` is never empty | yes, one that sees a first-match-not-first-line input |
 | H-mirror | a test replica of production logic that production has since converted | hand: copy the production form, not the codemod form | yes |
 | H-data | the shape is data (hook input, source-text pin of an unconverted carrier, mutation expression, label) | leave; stays counted in the row until its carrier converts | none |
