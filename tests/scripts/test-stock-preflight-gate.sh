@@ -952,6 +952,143 @@ SHIM
   kill "$SRV_PID" 2>/dev/null; SRV_PID=""
 fi
 
+# ---------------------------------------------------------------------------
+# T28 — class propagation (#9510): _STOCK_LAST_CLASS mirrors the arm that fired. The
+# workflow's closing line reads it — a stale or wrong class there re-opens the
+# class-blind misdiagnosis the issue closes.
+# ---------------------------------------------------------------------------
+FETCH_MODE=ok
+stock_preflight beta22 eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "orderable" ]] && pass || fail "T28: a passing probe must set class orderable. got=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight alpha33 eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "stock" ]] && pass || fail "T28: a stock miss must set class=stock. got=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight bogus99 eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "config" ]] && pass || fail "T28: an unknown type must set class=config. got=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight beta22 atlantis >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "config" ]] && pass || fail "T28: an unknown location must set class=config. got=${_STOCK_LAST_CLASS:-<unset>}"
+FETCH_MODE=fail_all
+stock_preflight beta22 eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "unreachable" ]] && pass || fail "T28: a fetch failure must set class=unreachable. got=${_STOCK_LAST_CLASS:-<unset>}"
+FETCH_MODE=garbage
+stock_preflight beta22 eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "malformed" ]] && pass || fail "T28: a malformed doc must set class=malformed. got=${_STOCK_LAST_CLASS:-<unset>}"
+FETCH_MODE=ok
+stock_preflight "" eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "config" ]] && pass || fail "T28: a missing type arg must set class=config. got=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight 'Bad Type' eu-b >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "config" ]] && pass || fail "T28: an unqueryable type must set class=config. got=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight beta22 'EU B' >/dev/null 2>&1
+[[ "${_STOCK_LAST_CLASS:-}" == "config" ]] && pass || fail "T28: an unqueryable location must set class=config. got=${_STOCK_LAST_CLASS:-<unset>}"
+
+# ---------------------------------------------------------------------------
+# T29 — gate-level folding: a single failing class passes through; a plan-shape
+# abort (no probe, or a row that cannot be probed) reads 'plan'; two rows failing
+# on different classes read 'mixed'. A leftover class from a PRIOR call must never
+# survive — the gate resets on entry. Calls below redirect to a file rather than
+# capture with $(...) so the sourced-global write lands in THIS shell — the same
+# shape the workflow uses (`if ! stock_preflight_gate` runs in the step's shell).
+# ---------------------------------------------------------------------------
+FETCH_MODE=ok
+stock_preflight_gate "$(plan_with 'hcloud_server.web["web-2"]' '["delete","create"]' alpha33 eu-b)" > "$TMP/out29.txt" 2>&1; rc=$?
+[[ "$rc" -eq 1 && "${_STOCK_LAST_CLASS:-}" == "stock" ]] && pass || fail "T29: a pure stock abort must leave class=stock. rc=$rc class=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight_gate "$(two_plan hcloud_server.a alpha33 eu-b hcloud_server.b bogus99 eu-b)" > "$TMP/out29.txt" 2>&1; rc=$?
+[[ "$rc" -eq 1 && "${_STOCK_LAST_CLASS:-}" == "mixed" ]] && pass || fail "T29: stock+config rows must fold to mixed. rc=$rc class=${_STOCK_LAST_CLASS:-<unset>}"
+_STOCK_LAST_CLASS=stock   # stale class: the reset must clear it even when no probe runs
+stock_preflight_gate "$TMP/noaddr.json" > "$TMP/out29.txt" 2>&1; rc=$?
+[[ "$rc" -eq 1 && "${_STOCK_LAST_CLASS:-}" == "plan" ]] && pass || fail "T29: an addressless row beside a good row is class=plan (good row passes, no fold). rc=$rc class=${_STOCK_LAST_CLASS:-<unset>}"
+_STOCK_LAST_CLASS=stock
+stock_preflight_gate /nonexistent/plan.json > "$TMP/out29.txt" 2>&1; rc=$?
+[[ "$rc" -eq 1 && "${_STOCK_LAST_CLASS:-}" == "plan" ]] && pass || fail "T29: an unreadable plan is class=plan. rc=$rc class=${_STOCK_LAST_CLASS:-<unset>}"
+stock_preflight_gate "$(two_plan hcloud_server.a beta22 eu-b hcloud_server.b beta22 eu-c)" > "$TMP/out29.txt" 2>&1; rc=$?
+[[ "$rc" -eq 0 && "${_STOCK_LAST_CLASS:-}" == "orderable" ]] && pass || fail "T29: a passing gate sets class=orderable. rc=$rc class=${_STOCK_LAST_CLASS:-<unset>}"
+
+# ---------------------------------------------------------------------------
+# T30 — stock_abort_closing: the workflow closing line renders the REAL class.
+# class=stock keeps the wait-and-re-fire wording; every other class must NOT
+# claim a stock shortage, and the per-site tail survives.
+# ---------------------------------------------------------------------------
+_STOCK_LAST_CLASS=stock
+out=$(stock_abort_closing t-target 'TAIL-MARKER' 2>&1)
+grep -q '::error::t-target stock-preflight ABORTED (class=stock)' <<<"$out" && pass || fail "T30: the closing line must carry the class token. out=$out"
+grep -q 'TAIL-MARKER' <<<"$out" && pass || fail "T30: the per-site tail must be preserved. out=$out"
+grep -q 'orderable' <<<"$out" && pass || fail "T30: class=stock keeps the stock wording. out=$out"
+for c in config unreachable malformed plan mixed; do
+  _STOCK_LAST_CLASS="$c"
+  out=$(stock_abort_closing t-target 2>&1)
+  grep -q "(class=${c})" <<<"$out" && pass || fail "T30: the closing must render class=${c}. out=$out"
+  grep -q 'is not orderable in its target location' <<<"$out" && fail "T30: class=${c} must not claim a stock shortage with the stock wording. out=$out" || pass
+done
+unset _STOCK_LAST_CLASS
+out=$(stock_abort_closing t-target 2>&1)
+grep -q 'class=none' <<<"$out" && pass || fail "T30: an unset class renders class=none, not a stale guess. out=$out"
+_STOCK_LAST_CLASS=config
+out=$(stock_abort_closing t-target 2>&1)
+grep -q 'do NOT re-dispatch\|NOT a stock' <<<"$out" && pass || fail "T30: class=config advice must say do-not-re-dispatch. out=$out"
+_STOCK_LAST_CLASS=malformed
+out=$(stock_abort_closing t-target 2>&1)
+grep -q 'contract' <<<"$out" && pass || fail "T30: class=malformed advice must name the contract change. out=$out"
+
+# ---------------------------------------------------------------------------
+# T31 — stock_recovery_report (#9510 Item A): on an apply failure the job re-reads
+# stock for every planned create (a FRESH fetch — never a replayed verdict), names
+# the current class per create, maps absent-vs-tainted from a post-failure state
+# dump when given one, prints the retained-volume re-dispatch doctrine, and always
+# exits 0 — it annotates a failure; it must never abort the caller's own branch.
+# ---------------------------------------------------------------------------
+FETCH_MODE=ok
+: > "$CALLS_LOG"
+REC_PLAN="$(two_plan hcloud_server.a alpha33 eu-b hcloud_server.b beta22 eu-b)"
+out=$(stock_recovery_report t-job "$REC_PLAN" 2>&1); rc=$?
+[[ "$rc" -eq 0 ]] && pass || fail "T31: the report is an annotation and must return 0 even over failing reads (rc=$rc). out=$out"
+[[ "$(grep -c '^/server_types' "$CALLS_LOG")" -eq 2 ]] && pass || fail "T31: the report must re-fetch once per planned create; calls: $(cat "$CALLS_LOG")"
+grep -q 'recovery-read' <<<"$out" && pass || fail "T31: the block must be greppable. out=$out"
+grep -q 'hcloud_server.a' <<<"$out" && pass || fail "T31: each create's address must be named. out=$out"
+grep -q 'class=stock' <<<"$out" && pass || fail "T31: the fresh class must be named (a=alpha33 -> stock). out=$out"
+grep -q 'class=orderable' <<<"$out" && pass || fail "T31: an orderable re-read must be shown — the create failed for a non-stock cause. out=$out"
+grep -q 're-dispatch' <<<"$out" && pass || fail "T31: the doctrine must name the re-dispatch recovery. out=$out"
+grep -q 'retained\|preserved' <<<"$out" && pass || fail "T31: the doctrine must state the volumes are retained/preserved. out=$out"
+grep -q 'bypass' <<<"$out" && pass || fail "T31: the no-bypass doctrine must be stated. out=$out"
+# state arm: absent vs tainted pick OPPOSITE re-dispatch arms, so the report must name which
+jq -n '{values:{root_module:{resources:[{address:"hcloud_server.a",type:"hcloud_server"}]}}}' > "$TMP/state.json"
+out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/state.json" 2>&1)
+grep -q 'hcloud_server.a.*present' <<<"$out" && pass || fail "T31: a present-in-state address must say so. out=$out"
+grep -q 'hcloud_server.b.*absent' <<<"$out" && pass || fail "T31: an absent address must be named absent (bare-create arm). out=$out"
+jq -n '{values:{root_module:{resources:[{address:"hcloud_server.a",type:"hcloud_server",status:"tainted"}]}}}' > "$TMP/state.json"
+out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/state.json" 2>&1)
+grep -q 'hcloud_server.a.*tainted' <<<"$out" && pass || fail "T31: a tainted address must be named tainted (delete+create arm). out=$out"
+# REGRESSION: `terraform show -json` carries .configuration (the DECLARED addresses) as well as
+# .values (the APPLIED state). A destroyed-but-declared server appears only under
+# .configuration — it must read ABSENT, not present (that misreads into the delete+create arm).
+jq -n '{configuration:{root_module:{resources:[{address:"hcloud_server.a",type:"hcloud_server"}]}}, values:{root_module:{resources:[]}}}' > "$TMP/state.json"
+out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/state.json" 2>&1)
+grep -q 'hcloud_server.a.*absent' <<<"$out" && pass || fail "T31: a declared-but-destroyed address (configuration only) must read absent, not present. out=$out"
+grep -q 'hcloud_server.a.*present' <<<"$out" && fail "T31: a configuration-only address read as present — the jq descended past .values" || pass
+# degrade arms: a plan with no server creates and an unreadable state file both annotate, never crash
+jq -n '{resource_changes:[{address:"hcloud_volume.x",type:"hcloud_volume",change:{actions:["create"],after:{}}}]}' > "$TMP/nosrv.json"
+out=$(stock_recovery_report t-job "$TMP/nosrv.json" 2>&1); rc=$?
+[[ "$rc" -eq 0 ]] && pass || fail "T31: a create-less plan degrades cleanly (rc=$rc)"
+grep -q 'no planned server creates' <<<"$out" && pass || fail "T31: a create-less plan must say so. out=$out"
+printf 'not json' > "$TMP/badstate.json"
+out=$(stock_recovery_report t-job "$REC_PLAN" "$TMP/badstate.json" 2>&1)
+grep -q 'unreadable' <<<"$out" && pass || fail "T31: an unreadable state dump must degrade to a stated 'unreadable', not a wrong arm. out=$out"
+
+# ---------------------------------------------------------------------------
+# T32 — workflow parity: every stock_preflight_gate invocation closes through
+# stock_abort_closing (no surviving literal class-blind closing echo), and every
+# enumerated apply step's failure branch names stock_recovery_report.
+# ---------------------------------------------------------------------------
+WF="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+n_gate=$(grep -c 'if ! stock_preflight_gate' "$WF")
+n_close=$(grep -c 'stock_abort_closing' "$WF")
+[[ "$n_gate" -gt 0 && "$n_gate" -eq "$n_close" ]] && pass || fail "T32: every stock_preflight_gate call site must close via stock_abort_closing (gate=$n_gate closing=$n_close)"
+n_aborted=$(grep -c 'stock-preflight ABORTED' "$WF")
+[[ "$n_aborted" -eq 0 ]] && pass || fail "T32: no literal 'stock-preflight ABORTED' echo may survive in the workflow — the lib emits it (found $n_aborted)"
+n_recover=$(grep -c 'stock_recovery_report [[:alnum:]-]* tfplan' "$WF")
+# 6 destroy-first replaces + 2 additive creates — a ninth caller added without the read reds here.
+# The pattern requires the call shape (label + tfplan arg) so a comment naming the function does
+# not count (#9510-class advice tokens would otherwise satisfy a bare-name grep).
+[[ "$n_recover" -eq 8 ]] && pass || fail "T32: all 8 apply failure branches must call stock_recovery_report (found $n_recover)"
+
 # Reaching this line IS the completion signal the EXIT trap checks (see cleanup above).
 SUITE_DONE=1
 
@@ -962,7 +1099,7 @@ SUITE_DONE=1
 # cannot prove anything RAN. The `.ts` sibling
 # already carries MIN_APPLY_TARGET_OPTIONS / MIN_GATED_TARGETS sentinels for exactly this;
 # the asymmetry was the tell. `-lt` (not `-ne`) so adding cases never trips it.
-MIN_ASSERTIONS=339
+MIN_ASSERTIONS=389
 if [ "$passes" -lt "$MIN_ASSERTIONS" ]; then
   echo "stock-preflight-gate: FAIL — only $passes assertion(s) ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "  The suite did not run to completion (truncation / early exit / removed block)." >&2

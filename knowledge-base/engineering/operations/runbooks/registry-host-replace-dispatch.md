@@ -65,7 +65,7 @@ gh api --paginate --slurp "repos/jikig-ai/soleur/issues/N/comments?per_page=100"
 |---|---|---|
 | `refused` | the read-only preflight declined (its own `::error::` names the predicate) | resolve the predicate (P1 local-cache pulls / P5 log channel / P6 boot asset, see § zot boot image), re-fire |
 | `dispatch-failed` | `gh workflow run` exited non-zero; an apply MAY still have queued | read `apply-web-platform-infra.yml`'s run list before re-firing (double-replace hazard) |
-| `apply-failed` | the replace RAN and did not conclude success; the host may be dark, the volume is preserved | re-dispatch `registry-host-replace` |
+| `apply-failed` | the replace RAN and did not conclude success; the host may be dark, the volume is preserved | read the apply step's `recovery-read` block first (#9510): it re-fetches stock for every planned create, names the post-failure `class=` per address and whether the address is absent or tainted in state; then re-dispatch `registry-host-replace` per that block |
 | `unverified` | the apply's conclusion could not be read in the poll window (job stayed green) | read the apply run; the delivering change's follow-through is the authority |
 | `cancelled` | the job hit its ceiling; a replace may be in flight | read the run before re-firing |
 | `gate-failed` | the delta gate could not classify the diff (compare API), or the head render is unmeasurable / over the 32,768 B cap (#7582) | read the gate's `::error::`, fix, re-fire |
