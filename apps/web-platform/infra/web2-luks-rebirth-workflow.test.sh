@@ -194,6 +194,7 @@ PY3
   cp "$REPO/tests/scripts/lib/web-host-rebirth-gate.sh" "$REPO/tests/scripts/lib/plan-gate-preamble.sh" "$sb/tests/scripts/lib/"
   cat > "$sb/tests/scripts/lib/stock-preflight-gate.sh" <<'SH'
 stock_preflight_gate() { [[ -z "${STOCK_FAIL:-}" ]]; }
+stock_recovery_report() { echo "stub recovery-report invoked: $*"; return 0; }
 SH
   cat > "$sb/bin/doppler" <<'SH'
 #!/usr/bin/env bash

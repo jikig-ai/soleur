@@ -145,6 +145,12 @@ vi.mock("@/server/workspace-resolver", async () => {
 
 vi.mock("@/server/current-repo-url", () => ({
   getCurrentRepoUrl: mockGetCurrentRepoUrl,
+  // #9556 — the SUT calls the degrade-aware variant; delegate to the same spy
+  // (degraded=false — this suite does not exercise the degraded arm).
+  readCurrentRepoUrlResult: async (userId: string, workspaceId: string) => ({
+    url: await mockGetCurrentRepoUrl(userId, workspaceId),
+    degraded: false,
+  }),
   // #5394 — gate reads repo readiness; default ready so dispatch is not blocked.
   getCurrentRepoStatus: vi.fn(async () => ({
     repoStatus: "ready",
