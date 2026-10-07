@@ -294,7 +294,7 @@ webhook HMAC key or a Cloudflare Access pair). S1 removes the vector for the fou
 makes every remaining instance a counted, shrink-only baseline entry; the residual in S2 to S5 is
 visible in the baseline until converted.
 
-**Brand-survival threshold:** aggregate pattern
+- **Brand-survival threshold:** aggregate pattern
 
 ## Architecture Decision (ADR/C4)
 
