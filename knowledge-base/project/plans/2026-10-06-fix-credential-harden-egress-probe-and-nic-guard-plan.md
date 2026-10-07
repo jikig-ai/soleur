@@ -620,17 +620,17 @@ guard cannot be traced on-host by design; follow-ups F1 (filed issue with trigge
 
 ### Pre-merge (PR)
 
-- [ ] AC1 `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` exits 0 and the explicit-path run on both files prints `OK: 2 scanned file(s), 0 baselined (A/B/C), 0 baselined (D)`.
-- [ ] AC2 Both files are absent from `scripts/lint-shell-trace-credential-refusal.baseline.txt`; the NIC guard is absent from `scripts/lint-shell-trace-credential-refusal-d.baseline.txt`; the repo-wide run (`python3 scripts/lint-shell-trace-credential-refusal.py`) exits 0.
-- [ ] AC3 The new rows FAILED against the pristine scripts (RED output recorded) and pass against the edited ones; no pre-existing row changed verdict.
-- [ ] AC4 Every mutation in the Guard Contract tables was run once on a scratch copy and went RED in the stated row (per-row result pasted in the PR body), and the untraced healthy runs stay green.
-- [ ] AC5 `.claude/hooks/grep-q-pipe-guard.test.sh` passes with the two rows still at `= | 2` and `= | 4` (no `grep` added to either script, no pipe-fed `grep -q` added to either suite).
-- [ ] AC6 `cron-egress-enforce-probe.test.sh` "Sentry TRANSPORT parity" block and `betterstack-send-failed-alert-mutation.test.sh` M18 stay green.
+- [x] AC1 (the final text also carries `0 baselined (Rule E: 0 site(s))`) `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` exits 0 and the explicit-path run on both files prints `OK: 2 scanned file(s), 0 baselined (A/B/C), 0 baselined (D)`.
+- [x] AC2 Both files are absent from `scripts/lint-shell-trace-credential-refusal.baseline.txt`; the NIC guard is absent from `scripts/lint-shell-trace-credential-refusal-d.baseline.txt`; the repo-wide run (`python3 scripts/lint-shell-trace-credential-refusal.py`) exits 0.
+- [x] AC3 The new rows FAILED against the pristine scripts (RED output recorded) and pass against the edited ones; no pre-existing row changed verdict.
+- [x] AC4 Every mutation in the Guard Contract tables was run once on a scratch copy and went RED in the stated row (per-row result pasted in the PR body), and the untraced healthy runs stay green.
+- [x] AC5 `.claude/hooks/grep-q-pipe-guard.test.sh` passes with the two rows still at `= | 2` and `= | 4` (no `grep` added to either script, no pipe-fed `grep -q` added to either suite).
+- [x] AC6 `cron-egress-enforce-probe.test.sh` "Sentry TRANSPORT parity" block and `betterstack-send-failed-alert-mutation.test.sh` M18 stay green.
 - [ ] AC7 The carrier-census suites listed in Phase 3 pass; `bash scripts/test-all.sh --affected` result is recorded verbatim in the PR body (a skipped run is stated as skipped).
-- [ ] AC8 `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` pass on the plan, `tasks.md`, `decision-challenges.md` and every new learning.
-- [ ] AC9 No commit message in the PR carries the `[skip-deploy-fix-apply]` marker (the plan names it only as a non-use), no `.tf` file is edited, and `server.tf` is not edited (`git diff --name-only origin/main...HEAD` has no `.tf` line).
+- [x] AC8 `python3 scripts/lint-guard-contract.py` and `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` pass on the plan, `tasks.md`, `decision-challenges.md` and every new learning.
+- [x] AC9 No commit message in the PR carries the `[skip-deploy-fix-apply]` marker (the plan names it only as a non-use), no `.tf` file is edited, and `server.tf` is not edited (`git diff --name-only origin/main...HEAD` has no `.tf` line).
 - [ ] AC10 PR body first line answers "does merging THIS alone mutate production?": yes, the push-triggered infra apply re-provisions the NIC guard on web-1 and a normal image release follows; nothing replaces a host. Then: `Ref` lines only, both premise corrections, the blast-radius paragraph, deferred list, and a "not fixed" statement (the Sentry curl, F1, with its issue number).
-- [ ] AC10b `npx markdownlint-cli2` is clean on the plan and `tasks.md` (hard tabs and list-spacing are the recurring violations).
+- [x] AC10b `npx markdownlint-cli2` is clean on the plan and `tasks.md` (hard tabs and list-spacing are the recurring violations).
 
 ### Post-merge
 
@@ -753,7 +753,6 @@ a conditional form misses the secret heartbeat URL); exact-equality `readonly` p
 `decision-challenges.md` (it is the headless channel `ship` renders); the F1 issue; evidence comments (named
 deliverable). DHH's point that a traced fresh-host boot powers the host off for an ingest-only key is accepted as
 R2: the refusal is what the lint requires and nothing in the boot path enables tracing.
-
 
 ## Addendum — 2026-10-06 (review round, #9632)
 

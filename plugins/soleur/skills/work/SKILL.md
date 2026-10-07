@@ -209,6 +209,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    docstring records the four ways an inline case was defeated and why it was dropped); and read the ratchet's rc from
    `rc=$?` on its own line — `echo "$(basename $t) RC=$?"` prints `basename`'s status and reported this ratchet green
    while its log carried `FAIL` (#7968).
+6.7. **A new anti-vacuity floor in a suite ⇒ build it to the meta-guard's shape and run `scripts/guard-vacuity-floor.test.sh` before the first commit.** A floor makes the suite a member of that guard's derived population: multi-line `if [[ "$CASES" -lt "$MIN_CASES" ]]` with the literal bound on the line above, a `[FATAL] accounting identity` sentinel over `$((PASS + FAIL)) -ne "$CASES"`, `CASES` moved by the assert wrapper and never inside `_pass`/`_fail`, and an entry in the LIVE `PROMOTED_FILES` definition (the file assigns it four times; only the last is read). Copy `cron-egress-ghcr-probe.test.sh`. **Why:** #9632 — a first-draft floor in two suites reddened the meta-guard twice and cost two review rounds to retrofit.
 
 **Design artifact checks:**
 
