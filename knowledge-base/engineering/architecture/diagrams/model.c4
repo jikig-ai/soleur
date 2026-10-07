@@ -28,6 +28,17 @@ model {
   founder -> devin "Runs Soleur sessions locally in the CLI or remotely in Devin Cloud"
   devin -> platform.plugin "Loads skills, AGENTS.md rules, and MCP in both substrates; plugin subagents and SessionStart/SessionEnd hooks only on local. Since #8401 all three /soleur:go session gates also resolve the plugin root from the two managed Devin plugin caches by .claude-plugin/plugin.json IDENTITY (never by script basename), so a cloud session with no *_PLUGIN_ROOT exported no longer runs every gate dead; the session-start gate dispatches cleanup-merged from a cache root only when that root's worktree-manager.sh carries the reap-capability token, because the cached copy may predate the #8400 guards (ADR-179 A16)" { technology "File I/O" }
 
+  // External system — local Cursor CLI only (ADR-274). The IDE editor agent and
+  // Cloud Agents are outside this element. Slice 1 loads the plugin with
+  // --plugin-dir and registers no hook events.
+  cursorCli = system "Cursor CLI" {
+    #external
+    description "Local Cursor CLI only. The founder loads this repository's Soleur plugin with agent --plugin-dir. Slice 1 registers no hook events and does not classify the session as cursor; hooks stay unwired until a measured guard port shows the CLI loads them. The IDE editor agent and Cloud Agents are outside this element (ADR-274)."
+  }
+
+  founder -> cursorCli "Runs Soleur from the local Cursor CLI"
+  cursorCli -> platform.plugin "Loads generated skill and agent stubs from the plugin root" { technology "File I/O" }
+
   founder = actor "Founder / Operator" {
     description "A workspace Owner using Soleur as their AI organization. Workspaces may have MULTIPLE Owners (ADR-038, ADR-073 team workspaces); Owner-shared surfaces (e.g. the operator email-triage inbox, ADR-066) are readable by every Owner, not just one founder."
   }
@@ -73,13 +84,14 @@ model {
   // `founder` Owner above. In CI their PR-head code executes only in the
   // fix-constraints Stage A recovery producer (`pull_request`, contents:read, no
   // write/secret token); it never runs in the privileged Stage B consumer
-  // (ADR-074). Operator-side, preflight Check 10 executes a plan-declared probe
-  // inside a bwrap sandbox (ADR-175) — but running a checked-out PR head's tests
-  // or scripts by hand is outside both boundaries. Keep this comment and the
-  // description below in agreement; they disagreed once (#7393 review).
+  // (ADR-074). Operator-side, preflight executes plan-declared probes and checks
+  // (a discoverability probe, a founder-stated check) inside a bwrap sandbox
+  // (ADR-175, ADR-275) — but running a checked-out PR head's tests or scripts by
+  // hand is outside both boundaries. Keep this comment and the description below
+  // in agreement; they disagreed once (#7393 review).
   contributor = actor "Contributor / PR Author" {
     #external
-    description "An untrusted contributor opening a pull request. In CI their PR-head code executes only under pull_request isolation (fix-constraints Stage A: contents:read, no write token) and never in the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074). The one PR-head artifact preflight executes on the operator's own workstation — a plan-declared discoverability probe — runs inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed if that sandbox cannot be established (ADR-175); its residual reach is host-loopback and outbound network (#7412). Other operator-side execution of a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary."
+    description "An untrusted contributor opening a pull request. In CI their PR-head code executes only under pull_request isolation (fix-constraints Stage A: contents:read, no write token) and never in the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074). The PR-head artifacts preflight executes on the operator's own workstation are plan-declared probes and checks (a discoverability probe, a founder-stated check). Each runs inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed if that sandbox cannot be established (ADR-175, ADR-275); a founder-stated check whose freeze does not trace to the local operator or to a reviewed copy on the default branch is shown and never run (a FAIL), and a freeze commit's author is a name anyone can type, so that anchor makes an override attributable and does not authenticate anyone. Their residual reach is host-loopback and outbound network (#7412). Other operator-side execution of a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------

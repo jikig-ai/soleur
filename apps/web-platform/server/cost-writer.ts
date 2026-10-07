@@ -264,6 +264,11 @@ export interface UsageDeltas {
 }
 
 export interface TurnCostInput {
+  /**
+   * #9648 B-0 sentinel contract: a non-finite value (NaN) means "the turn
+   * ran but could not be priced" — both writers refuse the WORM ledger row
+   * and alert Sentry (`op: "unpriced-model"`) rather than recording $0.
+   */
   totalCostUsd: number;
   usage: UsageDeltas;
 }
@@ -316,6 +321,33 @@ export interface TurnCostMarker {
   attempt?: number;
 }
 
+/**
+ * #9648 B-0 — a non-finite `totalCostUsd` is the "unpriced model" sentinel:
+ * the turn ran and billed the caller's key, but no price was resolvable.
+ * Fail-closed on the WORM ledger: skip the audit/delegation write (a $0 row
+ * asserts a lie the ledger can never un-write), alert Sentry, and keep
+ * recording token deltas on `increment_conversation_cost`.
+ */
+function reportUnpricedTurn(
+  userId: string,
+  conversationId: string,
+  model: string | null,
+): void {
+  log.error(
+    { conversationId, userId, model },
+    "unpriced model turn — refusing $0 ledger row",
+  );
+  reportSilentFallback(
+    new Error("unpriced model turn — refusing $0 ledger row"),
+    {
+      feature: "agent-cost-tracking",
+      op: "unpriced-model",
+      tags: { model: model ?? "unknown" },
+      extra: { userId, conversationId, model },
+    },
+  );
+}
+
 export function persistTurnCost(
   userId: string,
   conversationId: string,
@@ -325,12 +357,17 @@ export function persistTurnCost(
   marker: TurnCostMarker,
   delegation?: ByokDelegationContext,
 ): void {
-  const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
+  const priced = Number.isFinite(input.totalCostUsd);
+  const costDelta = priced ? input.totalCostUsd : 0;
+  if (!priced) {
+    reportUnpricedTurn(userId, conversationId, marker.model);
+  }
   const usage = input.usage;
 
   // Side-effect #5 (plan Phase 1): emit the queryable cost marker. Synchronous,
   // BEFORE the fire-and-forget RPCs (does not change turn timing). Fail-open —
-  // `emitClaudeCostMarker` never throws.
+  // `emitClaudeCostMarker` never throws. Unpriced turns ride `capture_status:
+  // "unpriced"` + `cost_usd: null` — never "ok"+0, which would read as free.
   emitClaudeCostMarker({
     source: marker.source,
     model: marker.model,
@@ -338,9 +375,9 @@ export function persistTurnCost(
     output_tokens: usage.output_tokens,
     cache_read_input_tokens: usage.cache_read_input_tokens,
     cache_creation_input_tokens: usage.cache_creation_input_tokens,
-    cost_usd: costDelta,
+    cost_usd: priced ? costDelta : null,
     id: conversationId,
-    capture_status: "ok",
+    capture_status: priced ? "ok" : "unpriced",
   });
 
   // (1) Atomic increment via v2 RPC (5 deltas).
@@ -396,7 +433,12 @@ export function persistTurnCost(
   const invocationId = randomUUID();
   const unitCostCents = Math.round(costDelta * 100);
 
-  if (delegation) {
+  // #9648 B-0 — unpriced turns skip section (2) entirely: no solo audit row,
+  // and no delegation-RPC row (which would book $0 against the GRANTOR's
+  // ledger). Cap checks for an unpriced turn are moot — it cannot trip a
+  // cost cap it does not bill. `increment_conversation_cost` (1) already ran
+  // for token accounting; section (3) usage_update still emits at the end.
+  if (priced && delegation) {
     // (2b) Delegated path — merged atomic RPC.
     //
     // Since migration 137 a REFUSAL IS A RETURNED VALUE, not an exception:
@@ -601,7 +643,7 @@ export function persistTurnCost(
           extra: { conversationId, delegationId: delegation.delegationId },
         });
       });
-  } else {
+  } else if (priced) {
     // (2a) Solo path — existing migration-037 RPC (extended to 6 args
     // in mig 061 with p_workspace_id).
     supabase()
@@ -666,7 +708,15 @@ export async function persistTurnCostAwaitable(
   input: TurnCostInput,
   marker: TurnCostMarker,
 ): Promise<void> {
-  const costDelta = Number.isFinite(input.totalCostUsd) ? input.totalCostUsd : 0;
+  // #9648 B-0 — a non-finite totalCostUsd means the caller could not price
+  // the model. Never write a $0 audit row for it (that's the fail-open the
+  // WORM ledger can never un-write): skip write_byok_audit, alert Sentry,
+  // still record token deltas on increment_conversation_cost.
+  const priced = Number.isFinite(input.totalCostUsd);
+  const costDelta = priced ? input.totalCostUsd : 0;
+  if (!priced) {
+    reportUnpricedTurn(userId, conversationId, marker.model);
+  }
   const usage = input.usage;
 
   // Cost marker (plan Phase 1 / leader-loop path). Fail-open, before the RPCs.
@@ -677,9 +727,9 @@ export async function persistTurnCostAwaitable(
     output_tokens: usage.output_tokens,
     cache_read_input_tokens: usage.cache_read_input_tokens,
     cache_creation_input_tokens: usage.cache_creation_input_tokens,
-    cost_usd: costDelta,
+    cost_usd: priced ? costDelta : null,
     id: conversationId,
-    capture_status: "ok",
+    capture_status: priced ? "ok" : "unpriced",
     ...(marker.turn !== undefined ? { turn: marker.turn } : {}),
     ...(marker.attempt !== undefined ? { attempt: marker.attempt } : {}),
   });
@@ -699,14 +749,16 @@ export async function persistTurnCostAwaitable(
     usage.cache_read_input_tokens +
     usage.cache_creation_input_tokens;
 
-  const auditResult = supabase().rpc("write_byok_audit", {
-    p_invocation_id: randomUUID(),
-    p_founder_id: userId,
-    p_workspace_id: workspaceId,
-    p_agent_role: leaderId,
-    p_token_count: totalTokens,
-    p_unit_cost_cents: Math.round(costDelta * 100),
-  });
+  const auditResult = priced
+    ? supabase().rpc("write_byok_audit", {
+        p_invocation_id: randomUUID(),
+        p_founder_id: userId,
+        p_workspace_id: workspaceId,
+        p_agent_role: leaderId,
+        p_token_count: totalTokens,
+        p_unit_cost_cents: Math.round(costDelta * 100),
+      })
+    : Promise.resolve(null); // unpriced → no ledger row (see priced guard above)
 
   const [incr, audit] = await Promise.all([incrementResult, auditResult]);
   if (incr.error) {
@@ -727,7 +779,7 @@ export async function persistTurnCostAwaitable(
       },
     });
   }
-  if (audit.error) {
+  if (audit?.error) {
     log.error(
       { err: audit.error, conversationId, userId },
       "Failed to write byok audit row",

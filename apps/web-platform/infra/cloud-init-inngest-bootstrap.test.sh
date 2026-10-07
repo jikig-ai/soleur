@@ -1369,6 +1369,104 @@ assert "GuardA anti-vacuity: the section ran its full inventory (expected 11, ra
   "(( GUARDA_ASSERTIONS == 11 ))"
 
 # =========================================================================================
+# Guard A2 (#9082) — image-input drift beyond carriers: four pins + Dockerfile recipe
+# =========================================================================================
+# PROPERTY. Guard A binds the pinned tag to HEAD for the carrier FILES only. The mint's
+# decide stage additionally compares the four image pins (inngest_cli_version /
+# inngest_cli_sha256 / vector_version / vector_sha256) and the Dockerfile heredoc recipe.
+# A merge that changes any of those while the mint run is skipped, dropped, or failed
+# leaves the pinned tag behind HEAD and NOTHING reds — this block is that backstop,
+# comparing each input at the pinned tag to HEAD byte-for-byte.
+#
+# EXTRACTOR REUSE. Every extractor below is token-identical to
+# .github/scripts/mint-inngest-bootstrap-tag's extract_side modulo the variable and file
+# operand — the ga2-pin-*/ga2-recipe-awk parity rows in
+# the mint suite's own test battery (`.github/scripts/test/test-mint-inngest-bootstrap-tag`,
+# named without the executable suffix deliberately: a `.sh` path literal would pull that
+# file into `scripts/battery-tag-authorship`'s closure, where its sandbox tag-fixture
+# commands exceed the ADR-207 per-line exemption-ledger ceiling — an ADR-level decision
+# that needs a suite-level class, tracked in #9700) pin that
+# shape, so a
+# same-intent/different-tokens copy reds there.
+#
+# SAME KNOWN CAVEAT AS GUARD A. A PR that legitimately bumps a pin or the recipe reds this
+# section pre-merge — the PR-context exemption is the open #9081, unchanged by this block.
+# On main the red is the intended signal: pinned tag behind HEAD means a mint run was
+# missed.
+GUARDA2_BEFORE="$TOTAL"
+# git-show the three input files at the pinned tag. GA_TAG_OK was already asserted by
+# Guard A row 4; an unresolvable side is a FINDING here, never "nothing to compare, pass".
+GA2_TMP="$(mktemp -d -t guarda2-XXXXXX)"
+GA2_UNRESOLVED=""
+GA2_T_ITF="$GA2_TMP/inngest.tf"; GA2_T_VTF="$GA2_TMP/vector.tf"; GA2_T_WF="$GA2_TMP/wf.yml"
+if (( GA_TAG_OK == 1 )); then
+  git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/inngest.tf" > "$GA2_T_ITF" 2>/dev/null || GA2_UNRESOLVED="$GA2_UNRESOLVED inngest.tf"
+  git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/vector.tf" > "$GA2_T_VTF" 2>/dev/null || GA2_UNRESOLVED="$GA2_UNRESOLVED vector.tf"
+  git -C "$SCRIPT_DIR" show "$GA_TAG_REF:.github/workflows/build-inngest-bootstrap-image.yml" > "$GA2_T_WF" 2>/dev/null || GA2_UNRESOLVED="$GA2_UNRESOLVED build-workflow"
+else
+  GA2_UNRESOLVED=" tag($GA_TAG_REF)"
+fi
+assert "GuardA2: all three input files resolve at $GA_TAG_REF (unresolved:${GA2_UNRESOLVED:- none})" \
+  "[[ -z '$GA2_UNRESOLVED' ]]"
+
+# Pin extraction — one line per pin per side, each byte-identical to the mint script's
+# p_* lines modulo the lhs name and file operand (g3_parity ga2-pin-* rows enforce it).
+# An EMPTY pin on either side is a finding: it makes the equality check fail below, so
+# "unparseable at both sides" can never report green.
+t_iv=$(grep -E '^\s*inngest_cli_version\s*=' "$GA2_T_ITF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+t_is=$(grep -E '^\s*inngest_cli_sha256\s*=' "$GA2_T_ITF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+t_vv=$(grep -E '^\s*vector_version\s*=' "$GA2_T_VTF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+t_vs=$(grep -E '^\s*vector_sha256\s*=' "$GA2_T_VTF" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_iv=$(grep -E '^\s*inngest_cli_version\s*=' "$SCRIPT_DIR/inngest.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_is=$(grep -E '^\s*inngest_cli_sha256\s*=' "$SCRIPT_DIR/inngest.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_vv=$(grep -E '^\s*vector_version\s*=' "$SCRIPT_DIR/vector.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+h_vs=$(grep -E '^\s*vector_sha256\s*=' "$SCRIPT_DIR/vector.tf" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+assert "GuardA2: inngest_cli_version identical at $GA_TAG_REF and HEAD (tag='$t_iv' head='$h_iv')" \
+  "[[ -n '$t_iv' && '$t_iv' == '$h_iv' ]]"
+assert "GuardA2: inngest_cli_sha256 identical at $GA_TAG_REF and HEAD (tag='$t_is' head='$h_is')" \
+  "[[ -n '$t_is' && '$t_is' == '$h_is' ]]"
+assert "GuardA2: vector_version identical at $GA_TAG_REF and HEAD (tag='$t_vv' head='$h_vv')" \
+  "[[ -n '$t_vv' && '$t_vv' == '$h_vv' ]]"
+assert "GuardA2: vector_sha256 identical at $GA_TAG_REF and HEAD (tag='$t_vs' head='$h_vs')" \
+  "[[ -n '$t_vs' && '$t_vs' == '$h_vs' ]]"
+
+# Recipe extraction — the mint's own awk, verbatim modulo the out=/operand (the
+# ga2-recipe-awk parity row pins the program lines). recipe.n carries the block count the
+# same way: `unterminated`, or the integer n, and n != 1 makes the comparison meaningless
+# rather than an implicit pass.
+awk -v out="$GA2_TMP/tag-recipe.txt" '
+    /^[[:space:]]*cat > "\$BUILD_DIR\/Dockerfile" <<DOCKERFILE[[:space:]]*$/ { n++; on = 1; next }
+    on && /^[[:space:]]*DOCKERFILE[[:space:]]*$/ { on = 0; closed++; next }
+    on { print > out }
+    END { if (n != closed) print "unterminated"; else print n + 0 }
+  ' "$GA2_T_WF" > "$GA2_TMP/tag-recipe.n"
+awk -v out="$GA2_TMP/head-recipe.txt" '
+    /^[[:space:]]*cat > "\$BUILD_DIR\/Dockerfile" <<DOCKERFILE[[:space:]]*$/ { n++; on = 1; next }
+    on && /^[[:space:]]*DOCKERFILE[[:space:]]*$/ { on = 0; closed++; next }
+    on { print > out }
+    END { if (n != closed) print "unterminated"; else print n + 0 }
+  ' "$GA_WF" > "$GA2_TMP/head-recipe.n"
+[[ -f "$GA2_TMP/tag-recipe.txt" ]] || : > "$GA2_TMP/tag-recipe.txt"
+[[ -f "$GA2_TMP/head-recipe.txt" ]] || : > "$GA2_TMP/head-recipe.txt"
+GA2_T_RECIPE_N="$(cat "$GA2_TMP/tag-recipe.n")"
+GA2_H_RECIPE_N="$(cat "$GA2_TMP/head-recipe.n")"
+assert "GuardA2: the pinned tag's build workflow carries exactly one terminated DOCKERFILE block (n=$GA2_T_RECIPE_N)" \
+  "[[ '$GA2_T_RECIPE_N' == '1' ]]"
+assert "GuardA2: HEAD's build workflow carries exactly one terminated DOCKERFILE block (n=$GA2_H_RECIPE_N)" \
+  "[[ '$GA2_H_RECIPE_N' == '1' ]]"
+# A recipe that extracted EMPTY on both sides compares same while guarding nothing —
+# the body must carry content before the byte-parity row means anything.
+assert "GuardA2: the extracted recipe body is non-empty on both sides" \
+  "[[ -s '$GA2_TMP/tag-recipe.txt' && -s '$GA2_TMP/head-recipe.txt' ]]"
+assert "GuardA2: the DOCKERFILE recipe is byte-identical at $GA_TAG_REF and HEAD" \
+  "[[ '$(ga_cmp "$GA2_TMP/tag-recipe.txt" "$GA2_TMP/head-recipe.txt")' == 'same' ]]"
+
+GUARDA2_ASSERTIONS=$(( TOTAL - GUARDA2_BEFORE ))
+assert "GuardA2 anti-vacuity: the section ran its full inventory (expected 9, ran $GUARDA2_ASSERTIONS)" \
+  "(( GUARDA2_ASSERTIONS == 9 ))"
+rm -rf "$GA2_TMP"
+
+# =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
 # =========================================================================================
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
@@ -2107,8 +2205,9 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # COND_ASSERTIONS). The prior 123 had drifted 11 below the measured count.
 # #8036 1d: 144 -> 153, re-measured from a green run (Guard 1 grew 50 -> 59; the executed Guard 4
 # rows are terraform-gated and counted in COND_ASSERTIONS, like the rendered NIC-G1 rows).
+# #9082: 153 -> 163, re-measured from a green run (Guard A2 added 10 unconditional rows).
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=153
+BOOTSTRAP_MIN_ASSERTIONS=163
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

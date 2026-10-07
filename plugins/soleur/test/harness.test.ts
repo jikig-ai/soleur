@@ -10,6 +10,7 @@ import {
   normalizeSkillName,
   normalizeAgentName,
 } from "../lib/harness";
+import { behindSyncInstructions } from "../lib/pr-merge-poll";
 
 function env(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const base: NodeJS.ProcessEnv = {};
@@ -96,6 +97,11 @@ describe("detectHarness", () => {
 
   test("empty env → unknown", () => {
     expect(detectHarness(env({}))).toBe("unknown");
+  });
+
+  test("slice 1 does not classify a cursor-shaped env", () => {
+    expect(detectHarness(env({ CURSOR_AGENT: "1" }))).toBe("unknown");
+    expect(detectHarness(env({ CLAUDECODE: "1", CURSOR_AGENT: "1" }))).toBe("claude");
   });
 });
 
@@ -313,6 +319,26 @@ describe("routingInstructions", () => {
     expect(md).toContain("grok inspect");
     expect(md).not.toMatch(/grok --trust/);
   });
+
+  test("cursor names /go and /soleur-plan and does not name claude tools", () => {
+    const md = routingInstructions("cursor");
+    expect(md).toContain("/go");
+    expect(md).toContain("/sync");
+    expect(md).toContain("/soleur-plan");
+    expect(md).toContain("/soleur-help");
+    expect(md).toContain("/soleur-review");
+    expect(md).toContain("/soleur-engineering-cto");
+    expect(md).not.toContain("/soleur-go");
+    expect(md).not.toContain("/soleur:");
+    expect(md).not.toContain("Skill");
+    expect(md).not.toContain("Task");
+    expect(md).not.toContain("run_subagent");
+    expect(md).not.toContain("AwaitShell");
+    expect(md).not.toContain("Stop hook");
+    expect(md).toContain("canonical file");
+    expect(md).toContain("does not classify the session as cursor");
+    expect(md).toContain("does not run hooks");
+  });
 });
 
 describe("pollInstructions", () => {
@@ -345,5 +371,16 @@ describe("pollInstructions", () => {
     // while nothing will ever wake it. Absence is the property; a `toContain`
     // on the replacement cannot express it.
     expect(md).not.toContain("get_output");
+  });
+
+  test("cursor poll is the behind-sync stop and names no wait tool", () => {
+    const stop = behindSyncInstructions("cursor");
+    expect(pollInstructions("cursor")).toBe(stop);
+    expect(stop).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(stop).not.toContain("AwaitShell");
+    expect(stop).not.toContain("run_subagent");
+    expect(stop).toContain("or stop");
+    expect(stop).toContain("harness that already has a wait");
+    expect(stop).toContain("No wait primitive has been measured");
   });
 });

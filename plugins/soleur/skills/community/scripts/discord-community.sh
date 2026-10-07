@@ -298,6 +298,25 @@ discord_request() {
   esac
 }
 
+# --- Compact output (#9678) ---
+#
+# The spawned community-monitor agent has no file tools, so any collector output
+# past the Bash tool's inline limit (30,000 characters) is unreadable and the digest row
+# is forced to `partial` / `output-too-large`. The cron handler therefore sets
+# SOLEUR_COLLECTOR_COMPACT=1 and each command prints ONE line of compact JSON
+# holding only the fields the prompt reads (counts, channel ids). Unset, or any
+# other value, leaves the output byte-identical to the interactive form.
+# `members` is exempt: the cron's containment hook denies it, so it never runs there.
+readonly COMPACT_MAX_ITEMS=40
+
+compact_on() {
+  [[ "${SOLEUR_COLLECTOR_COMPACT:-}" == "1" ]] && return 0
+  if [[ -n "${SOLEUR_COLLECTOR_COMPACT:-}" ]]; then
+    echo "compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1" >&2
+  fi
+  return 1
+}
+
 # --- Commands ---
 
 # An operand reaches bash arithmetic, a URL or a jq program only AFTER this check:
@@ -361,6 +380,11 @@ cmd_messages() {
     fi
   done
 
+  if compact_on; then
+    # Only the count is read; bodies, authors and attachments never reach the model.
+    jq -ce 'if type == "array" then {count: length} else error("compact: messages not an array") end' <<<"$all_messages"
+    return
+  fi
   echo "$all_messages"
 }
 
@@ -404,10 +428,25 @@ cmd_members() {
 }
 
 cmd_guild_info() {
+  if compact_on; then
+    discord_request "/guilds/${DISCORD_GUILD_ID}?with_counts=true" | \
+      jq -ce '{approximate_member_count: (.approximate_member_count | if type == "number" then . else error("compact: approximate_member_count missing") end)}'
+    return
+  fi
   discord_request "/guilds/${DISCORD_GUILD_ID}?with_counts=true"
 }
 
 cmd_channels() {
+  if compact_on; then
+    # `count` stays exact so more than COMPACT_MAX_ITEMS channels is still detectable; ids
+    # are filtered to digits because they feed the next Bash call.
+    discord_request "/guilds/${DISCORD_GUILD_ID}/channels" | \
+      jq -ce --argjson max "$COMPACT_MAX_ITEMS" \
+        '[.[] | select(.type == 0)] as $t
+         | {count: ($t | length),
+            channel_ids: [$t[] | .id | strings | select(test("^[0-9]{1,20}$"))][:$max]}'
+    return
+  fi
   discord_request "/guilds/${DISCORD_GUILD_ID}/channels" | \
     jq '[.[] | select(.type == 0)]'  # type 0 = text channels
 }
