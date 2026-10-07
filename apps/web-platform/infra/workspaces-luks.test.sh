@@ -339,7 +339,7 @@ p_b4_for_each_narrowed() {
     b="$(block_of "$f" "$t" workspaces)"
     if [ -z "$b" ]; then echo 0; return; fi
     [ "$(printf '%s\n' "$b" | grep -Ec '^[[:space:]]+for_each[[:space:]]*=')" = "1" ] || { echo 0; return; }
-    printf '%s\n' "$b" | grep -Eq "^[[:space:]]+for_each[[:space:]]*=[[:space:]]*local\.plaintext_workspaces_hosts${B4_TAIL}" \
+    grep -Eq "^[[:space:]]+for_each[[:space:]]*=[[:space:]]*local\.plaintext_workspaces_hosts${B4_TAIL}" <<<"$b" \
       || { echo 0; return; }
   done
   echo 1
@@ -350,7 +350,7 @@ p_b4_local_excludes_web1() {
   local code
   code="$(strip_comments "$1")"
   [ "$(printf '%s\n' "$code" | grep -Ec '^[[:space:]]+plaintext_workspaces_hosts[[:space:]]*=')" = "1" ] || { echo 0; return; }
-  if printf '%s\n' "$code" | grep -Eq "^[[:space:]]+plaintext_workspaces_hosts[[:space:]]*=[[:space:]]*\{[[:space:]]*for[[:space:]]+k[[:space:]]*,[[:space:]]*v[[:space:]]+in[[:space:]]+var\.web_hosts[[:space:]]*:[[:space:]]*k[[:space:]]*=>[[:space:]]*v[[:space:]]+if[[:space:]]+k[[:space:]]*!=[[:space:]]*\"web-1\"[[:space:]]*\}${B4_TAIL}"; then
+  if grep -Eq "^[[:space:]]+plaintext_workspaces_hosts[[:space:]]*=[[:space:]]*\{[[:space:]]*for[[:space:]]+k[[:space:]]*,[[:space:]]*v[[:space:]]+in[[:space:]]+var\.web_hosts[[:space:]]*:[[:space:]]*k[[:space:]]*=>[[:space:]]*v[[:space:]]+if[[:space:]]+k[[:space:]]*!=[[:space:]]*\"web-1\"[[:space:]]*\}${B4_TAIL}" <<<"$code"; then
     echo 1
   else
     echo 0
@@ -364,7 +364,7 @@ p_b4_sentinel() {
   b="$(block_of "$1" hcloud_server web)"
   if [ -z "$b" ]; then echo 0; return; fi
   [ "$(printf '%s\n' "$b" | grep -Ec '^[[:space:]]+workspaces_volume_id[[:space:]]*=')" = "1" ] || { echo 0; return; }
-  if printf '%s\n' "$b" | grep -Eq "^[[:space:]]+workspaces_volume_id[[:space:]]*=[[:space:]]*contains\(keys\(local\.plaintext_workspaces_hosts\),[[:space:]]*each\.key\)[[:space:]]*\?[[:space:]]*hcloud_volume\.workspaces\[each\.key\]\.id[[:space:]]*:[[:space:]]*\"retired-6604\"${B4_TAIL}"; then
+  if grep -Eq "^[[:space:]]+workspaces_volume_id[[:space:]]*=[[:space:]]*contains\(keys\(local\.plaintext_workspaces_hosts\),[[:space:]]*each\.key\)[[:space:]]*\?[[:space:]]*hcloud_volume\.workspaces\[each\.key\]\.id[[:space:]]*:[[:space:]]*\"retired-6604\"${B4_TAIL}" <<<"$b"; then
     echo 1
   else
     echo 0
@@ -378,14 +378,14 @@ _b4_attr_true() {
   b="$(block_of "$f" "$type" "$name")"
   if [ -z "$b" ]; then echo 0; return; fi
   [ "$(printf '%s\n' "$b" | grep -Ec "^[[:space:]]+${attr}[[:space:]]*=")" = "1" ] || { echo 0; return; }
-  if printf '%s\n' "$b" | grep -Eq "^[[:space:]]+${attr}[[:space:]]*=[[:space:]]*true${B4_TAIL}"; then echo 1; else echo 0; fi
+  if grep -Eq "^[[:space:]]+${attr}[[:space:]]*=[[:space:]]*true${B4_TAIL}" <<<"$b"; then echo 1; else echo 0; fi
 }
 # prevent_destroy is only legal inside a lifecycle block — require one in the same resource.
 _b4_prevent_destroy_of() {
   local f="$1" type="$2" name="$3" b
   b="$(block_of "$f" "$type" "$name")"
   if [ -z "$b" ]; then echo 0; return; fi
-  printf '%s\n' "$b" | grep -Eq '^[[:space:]]+lifecycle[[:space:]]*\{' || { echo 0; return; }
+  grep -Eq '^[[:space:]]+lifecycle[[:space:]]*\{' <<<"$b" || { echo 0; return; }
   _b4_attr_true "$f" "$type" "$name" prevent_destroy
 }
 p_b4_prevent_destroy() { _b4_prevent_destroy_of "$1" hcloud_volume workspaces_luks; }
