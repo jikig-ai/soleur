@@ -4,17 +4,17 @@ Stage 4 of the #9721 hosted-runner demand plan (lever 3), parked: PR runs run th
 
 ## Re-decide gate
 
-Do not start before S2 (push-run dedupe, #9512) and S3 (draft-light) have post-merge censuses, and ADR-270 is `accepted` (ADR-276 Decision 3(h)). Evidence is a replay, not a live shadow: `--print-selection` over the last 300 first-parent commits against suite failures, replay escape rate under 2%. Break-even escape rate is about 12 to 16 percent (a queue failure costs a ~148 job-minute candidate run plus a re-queue and ejects the entries behind it).
+Do not start before S2 (push-run dedupe, #9512) and S3 (draft-light) each have a post-merge census or are closed by their entry gate or stop rule, and ADR-270 is `accepted` (ADR-276 Decision 3(h)). Evidence is a replay, not a live shadow: `--print-selection` over the last 300 first-parent commits against suite failures, replay escape rate under 2%. Break-even escape rate is about 12 to 16 percent (a queue failure costs a ~148 job-minute candidate run plus a re-queue and ejects the entries behind it).
 
 ## Scope
 
-Extend ADR-262's call-site opt-in (`_diff_touches --pr-gated`) from five batteries to the affected set on `pull_request` only; `merge_group`, `push`, `workflow_dispatch`, `schedule`, an undeterminable diff and a runner edit keep the full battery. Entry gates: (1) `admin-merge-ready.sh` demands a full-battery marker at the head before treating an affected-set `test` success as green, because agent `--admin` merges skip the queue and "merge_group red with a green PR run" never sees them; (2) the "runner changed means full battery" detector and the affected-selection index are evaluated from a trusted base-ref copy, not the PR's own tree, and the registration-only carve-out stays out of PR mode. This stage's PR appends its ADR-276 amendment, pointer amendments to ADR-262 (including its stale "No merge queue is enforced") and ADR-183, and `amends:` frontmatter. Own Guard Contract in its plan.
+Extend ADR-262's call-site opt-in (`_diff_touches --pr-gated`) from five batteries to the affected set on `pull_request` only; `merge_group`, `push`, `workflow_dispatch`, `schedule`, an undeterminable diff and a runner edit keep the full battery. Minutes target: PR `CI` job-minutes per run down at least 20% (about 20 of 99.8). Entry gates: (1) `admin-merge-ready.sh` demands the full-battery marker before treating an affected-set `test` success as green, because agent `--admin` merges skip the queue and "merge_group red with a green PR run" never sees them. The marker is a completed full-battery `CI` run on the head SHA, produced by an on-demand full-battery run this stage adds (a `workflow_dispatch` input or label-triggered run, in `ci.yml`) and by any full-mode PR run, and is read through the runs API on head SHA, event and conclusion, not by check name (a `checks: write` token can post any check name, KNOWN LIMIT (b) in the script). It stops agent accidents, not non-agent admin tokens or a bypass actor editing the ruleset; (2) an admin-side control is decided with the repository admins before the stage starts (narrow the CI Required bypass actors, or a detective post-merge probe that flags any bypass merge whose head lacks the marker), and the residual is counted in the escape metric; (3) the "runner changed means full battery" detector and the affected-selection index are evaluated from a trusted base-ref copy, not the PR's own tree, and the registration-only carve-out stays out of PR mode. This stage's PR appends its ADR-276 amendment, pointer amendments to ADR-262 (recording that its stale "No merge queue is enforced" premise and its admission rule are reversed for the PR arm) and ADR-183, and `amends:` frontmatter. Own Guard Contract in its plan.
 
 User-Impact: PR required `test` context behaviour (`scripts/test-all.sh`, `scripts/lib/test-relevance-paths.sh`); merge_group stays the full battery
-Fix-Size: 450 lines / 10 files
+Fix-Size: 520 lines / 12 files
 
-Rollback: the repository variable unset restores the full battery on PRs (the `admin-merge-ready.sh` marker requirement stays).
+Rollback: the repository variable unset restores the full battery on PRs; the `admin-merge-ready.sh` marker requirement stays, and full-mode PR runs also emit the marker, so the admin route does not stall.
 
-Re-evaluation: after S2 and S3 have post-merge censuses.
+Re-evaluation: after S2 and S3 each have a post-merge census, or are closed by their entry gate or stop rule.
 
 Refs #9721, #9307, #9323

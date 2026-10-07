@@ -16,7 +16,7 @@ Discoverability test (handed over by the plan's Observability block): `bash scri
 
 Exit: the census is attached to this issue (#9727); smoke minutes down at least 80% on PRs that miss the subject paths.
 
-Rollback: revert (the census script is additive; the smoke gate is a non-required, PR-only job).
+Rollback: revert (the census script is additive; the smoke gate is a non-required, PR-only job that fails open, which is why it is exempt from ADR-276 Decision 3(c), (d) and (g): no switch, no amendment).
 
 Re-evaluation: after the plan PR #9722 merges; census attached to this issue afterwards.
 

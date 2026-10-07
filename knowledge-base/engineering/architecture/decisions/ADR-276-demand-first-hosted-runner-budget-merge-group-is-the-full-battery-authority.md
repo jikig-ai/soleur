@@ -12,19 +12,27 @@ brand_survival_threshold: aggregate pattern
 
 ## Status
 
-**Proposed, 2026-10-07 (#9721).** On acceptance the guardrail decisions (1, 2, 3, 6, 7 and 8) become
-`adopting`. Decisions 4 and 5 are the proposed shape of stages 3 and 4. Every stage, stage 2 included,
-takes effect only when its own PR appends a dated `## Amendment` to this ADR (Decision 3(g)), so
-finishing one stage cannot activate an unrun one. The file `status:` stays within `proposed`,
-`adopting` and `accepted`; per-stage state lives only in the table below. Nothing in this ADR
-provisions infrastructure.
+**Proposed, 2026-10-07 (#9721).** The file `status:` moves `proposed` to `adopting` when the CTO
+approves this ADR in a review comment on a PR that edits the line, and no stage PR that changes CI
+behaviour (S2, S3, S4) may merge while it reads `proposed`. On that edit the guardrail decisions (1, 2,
+3, 6, 7 and 8) become `adopting`; Decisions 4 and 5 stay the proposed shape of stages 3 and 4. It moves
+`adopting` to `accepted` when S5 closes with a post-merge census for S2 and S3, or with each closed by
+its entry gate or stop rule. Every stage that changes CI behaviour (S2, S3, S4) takes effect only when
+its own PR appends a dated `## Amendment` to this ADR (Decision 3(g)), so finishing one stage cannot
+activate an unrun one. S1 is exempt from 3(c), (d) and (g): its smoke gate is a PR-only, non-required
+job that runs unconditionally off `pull_request` and fails open, it moves no required context or merge
+authority, and its rollback is a revert (a variable would add a switch to guard 1.8% of minutes); S1's
+census script changes no CI behaviour and S5 is decision-only, so neither appends an amendment. Nothing
+in this ADR provisions infrastructure.
 
 ### Stage status
 
 Append-only: a change is a dated line added under the table (`- 2026-MM-DD S3 amended`, `- ... S3
-active`), never an edit of an earlier row. `active` means the stage's dark-launch exit criterion passed.
+live`), never an edit of an earlier row, so the current state of a stage is the last dated line that
+names it (the column below is the initial state only). `live` means the stage's dark-launch exit
+criterion passed (ADR file statuses use `active`, so the stage word differs on purpose).
 
-| Stage | Lever | Tracking issue | State |
+| Stage | Lever | Tracking issue | Initial state |
 |---|---|---|---|
 | S1 | Census script and secret-scan smoke path gate | #9727 | not started |
 | S2 | Push-run dedupe | #9512 | not started |
@@ -49,12 +57,15 @@ inflated an earlier pass by 26%):
 |---|---|
 | Runner job-minutes in the window | 7,456 |
 | Mean / p90 / peak concurrent jobs | 21.4 / 57 / 60 (the cap) |
-| Minutes of the window at 55+ concurrent | 77 of 349 (22%); at the 60-job cap itself a re-run found 2 of 360 (0.6%) |
+| Minutes of the window at 55+ concurrent | First pass 77 of 349 sampled minutes (22%); the re-run uses all 360: 82 of 360 (22.8%) at 55 or more, 45 of 360 (12.5%) at 58 or more, 2 of 360 (0.6%) at the 60-job cap itself |
 | `CI` workflow, by event | pull_request 3,094 (31 runs, 99.8 per run), merge_group 1,183 (8 runs, 147.9), push main 1,018 (7 runs, 145.4) |
 | `test-scripts` share of a CI run | 64% of a PR run, 63% of a merge_group run |
 | Draft-state PR events | 1,814 of 4,218 PR-event job-minutes (43%); 1,319 of them in `CI` |
-| Dynamic CodeQL-family runs | 601 job-minutes, 521 of them on PR heads; two different features (code scanning, advisory per ADR-270, and GitHub Code Quality), split in the plan |
+| Dynamic CodeQL-family runs | 601 job-minutes, 521 of them on PR heads (first pass); the re-run measured 613 and 533 on PR heads, split 294 code scanning (advisory per ADR-270) + 239 GitHub Code Quality, two different features (plan) |
 | Cancelled jobs that held a runner | 304 job-minutes (4%) |
+
+The 60-job cap is account-wide: the org's private repositories share the pool and are not visible to
+this public-repository analysis, so the measured peak understates total demand on the pool.
 
 The saturation is bursty rather than constant (mean 21 against a cap of 60), so queue wait is a
 peak-demand problem, and a merged PR pays the full battery three times: on the PR head (~100),
@@ -100,27 +111,36 @@ S-A to S-C and the chosen Option C corresponds to S-D.
 ## Decision
 
 1. **Demand first, supply second.** No supply change is adopted until the demand stages below have
-   been re-measured. Supply options are recorded in the lever-5 memo and decided in a separate ADR.
+   been re-measured: S2 and S3 each have a post-merge census, or are closed by their entry gate or
+   stop rule. Supply options are recorded in the lever-5 memo and decided in a separate ADR.
 2. **The authority invariant, with named residuals.** On the queue path, reductions hold: the
    `merge_group` run executes the full battery against the candidate tree (the candidate's own
    `ci.yml` and runner, so the authority is only as strong as that tree). The push-to-`main` run keeps
    producing the success conclusion the deploy arm's `workflow_run` trust ladder needs; it may be
    elided only per SHA, keyed on a green `merge_group` run for that exact head SHA (#9512), never by
-   static removal. This narrows ADR-217 ("the verdict never crosses as a value"): an attestation job
-   that reads a `merge_group` conclusion and lets the push run conclude `success` manufactures a push
-   verdict from another run's value. Before choosing, S2's plan must compare that design with keying
-   the deploy `workflow_run` arm on the `merge_group` run for that head SHA and dropping the push run
-   (no run then asserts a success it did not earn), and must append an amendment to ADR-217 if the
-   attestation design wins.
+   static removal. Both S2 designs change ADR-217, so S2's PR appends an ADR-217 amendment whichever
+   wins. An attestation job that reads a `merge_group` conclusion and lets the push run conclude
+   `success` manufactures a push verdict from another run's value, against ADR-217's "the verdict never
+   crosses as a value". Keying the deploy `workflow_run` arm on the `merge_group` run for that head SHA
+   and dropping the push run (no run then asserts a success it did not earn) changes the trigger that
+   ADR-217 Decision 2 establishes. S2's plan compares the two before choosing.
 
    **Named residual, owner S4's plan with the repository admins: the admin-merge route.** It is the
    only route that skips the queue (`gh pr merge --admin` or "merge without waiting" by an
    OrganizationAdmin or a repository Admin-role actor; the ruleset bypass mode is `pull_request`, so a
    PR is still required and direct pushes are closed). `admin-merge-ready.sh` is an agent-side
-   convention, not a hook or a ruleset rule; any admin token merges without it. A reduction does not
-   hold on this route until `admin-merge-ready.sh` demands a full-battery marker at the head before
-   treating an affected-set `test` success as green (S4 entry gate, Decision 5). The detective control
-   for bypass actors is `scripts/ci-required-ruleset-canonical-bypass-actors.json` and the
+   convention, not a hook or a ruleset rule; any admin token merges without it. The full-battery
+   marker (S4 entry gate, Decision 5) is a completed `CI` run on the head SHA that ran the full
+   battery and concluded `success`, produced by an on-demand full-battery run that S4 adds (a
+   `workflow_dispatch` input, or a label-triggered run) and by any full-mode PR run, so after a
+   rollback (variable unset, full PR runs) the marker is still emitted and the admin route does not
+   stall. `admin-merge-ready.sh` reads it from the runs API on head SHA, event and run conclusion, not
+   by check name, because any `checks: write` token can post a check run under any name (KNOWN LIMIT
+   (b) in the script). The marker stops accidents by agents, not an adversary. The residual is reduced,
+   not closed: a human or other-token `--admin` merge, and a bypass actor editing the ruleset, still
+   land an affected-only-green PR. S4 therefore also needs an admin-side control decided with the
+   repository admins before it starts (Decision 5 entry gates), and the residual is counted in the
+   escape metric. The detective control for bypass actors is `scripts/ci-required-ruleset-canonical-bypass-actors.json` and the
    `cron-ruleset-bypass-audit` cron. Two more limits on "authority": several required contexts are not
    re-run at `merge_group` (the CLA contexts are verified synthetics, `rename-guard` and
    `allowlist-diff` post a pass without re-running, the vendor-pin and tenant rows trust the PR run),
@@ -147,46 +167,63 @@ S-A to S-C and the chosen Option C corresponds to S-D.
    types (the full list `opened, synchronize, reopened, ready_for_review`). While the live draft state
    of the PR (read from the API at run time, never only from the event payload, which a re-run reuses)
    is draft and the kill-switch is on, the heavy test families do not run; marking the PR ready runs
-   the full set on the same head. Net saving is about 600 job-minutes per 6h window at the plan's
-   inputs (sensitivity 180 to 730 in the plan, formula there) and the break-even is about 2.2 to 3 draft
-   pushes per draft PR against a measured mean of 2.6, so it is marginal. Numeric entry gate: the
-   measured distribution of draft pushes per PR, with the cheaper policy (no draft push before a local
-   `--affected` run passes) applied first; stage 3 proceeds only if the post-policy mean is at least 3,
-   and its exit adds a net criterion and a stop rule (plan, S3 row).
+   the full set on the same head. Net saving at steady state (every draft PR is eventually readied, r = 7
+   in the window) is about 180 job-minutes per 6h window on first-pass inputs and about 895 on the
+   re-measure inputs (formula and table in the plan); the in-window transient (3 to 4 readied PRs,
+   591 to 1,277) is not the steady state. The break-even is about 2.2 draft pushes per draft PR on
+   first-pass inputs (about 1.1 on the re-measure inputs) against a measured pre-policy mean of 2.6,
+   so it is marginal. Numeric entry gate: the pre-policy and the post-policy mean pushes per draft PR
+   are measured separately, with the cheaper policy (no draft push before a local `--affected` run
+   passes) applied first; stage 3 proceeds only if the post-policy mean is at least 2.75 (the 2.2
+   first-pass break-even plus a 25% margin). The gate may legitimately fail, because that policy
+   exists to lower draft pushes; S3 then closes by its own stop rule (the same 2.75), and its exit adds
+   a net criterion (plan, S3 row).
    - **Option R is the decision:** the draft `test` aggregator concludes red ("full battery owed at
      ready"), so a PR cannot be enqueued until the ready run replaces the row and no consumer can read
      a light result as green. It fails toward stall (safe). The red row stays on the head for the whole
-     ready run (the aggregator is created only after the shards end, 25 to 30 minutes), so for a
+     ready run (the aggregator is created only after the shards end: up to about 35 minutes, since 12
+     PR `CI` runs in the window took 14 to 37, median about 28), so for a
      non-draft head with a red `test` and the newest `CI` `pull_request` run still in progress, the
      consumers (`monitor-pr-checks.sh`, ship Phase 7 `required_failed`, `drain-prs` triage, `gh pr
      checks` readers, `admin-merge-ready.sh --wait`) must resolve the verdict from the newest non-draft
-     run at HEAD, never from the check row. A PR for which no ready run is ever created (wrong token,
-     dropped event) stalls with `test` red; stage 3 adds an owner-visible signal for it, because the
-     ADR-270 stall probe watches queue entries only.
+     run at HEAD, never from the check row. A PR whose ready run is never created (wrong token,
+     dropped event) or ran light because the live draft read lagged stalls with `test` red; stage 3
+     adds an owner-visible signal keyed on a non-draft head whose newest `test` is draft-mode red for
+     more than N minutes (N above the 35-minute run lifetime, fixed in S3's plan), not only on a
+     missing ready run, because the ADR-270 stall probe watches queue entries only.
    - **Option T is REJECTED** (a success marker plus a tolerance arm). The ruleset cannot enforce a
-     marker; a marker made a required context would land in `scripts/required-checks.txt` and
-     `bot-pr-with-synthetic-checks` and `SYNTHETIC_CHECK_NAMES` in `_cron-safe-commit.ts` would post it
-     green for every bot PR, fabricating the signal it exists to carry; and it fails open on the
-     admin route.
+     marker; a marker made a required context would land in `scripts/required-checks.txt`, from which the
+     composite action `bot-pr-with-synthetic-checks` derives its names and would post it green for
+     every bot PR, fabricating the signal it exists to carry (the `SYNTHETIC_CHECK_NAMES` list in
+     `_cron-safe-commit.ts` is hard-coded and needs a manual add); and it fails open on the admin
+     route.
    - **Dark-launch cost.** The `ready_for_review` entry in `types` is not gated by the variable: while
      the variable is unset every drafted-then-readied PR gets one extra full run (about 95 to 137
-     job-minutes), so the dark phase raises demand and "variable unset" is not a full rollback. Gating
-     the ready-triggered run at job level is allowed only if the S3 same-name rollup gate shows the
-     required names stay stable. The non-switchable parts (the `types` entry, the ship Phase 6 wait,
+     job-minutes), so the dark phase raises demand and "variable unset" is not a full rollback. The
+     ready-triggered run must NOT be gated on the kill-switch variable: a variable flipped between the
+     draft push and the ready transition would skip the ready run or post a skipped or tolerated row
+     newer than the red one, and a skipped required check posts green (the #8450 pattern). The only
+     allowed form is that the ready run runs the full battery unless the head's own draft run
+     concluded a full-mode `test` success, read from the API (a failed or undeterminable read runs
+     full); any skip arm concludes explicitly, never `skipped`, and Guard 1 carries a mutation row for
+     it. The non-switchable parts (the `types` entry, the ship Phase 6 wait,
      the `admin-merge-ready.sh` and `battery-owed.sh` changes) are listed under the S3 Rollback.
 5. **PR runs may select affected suites; merge_group may not (stage 4).** The `--affected` selection
    already shipped by ADR-242 and `--print-selection` (#9307) is computed once per run, not per shard
    leg, and PR runs decline unselected suites inside the runner, the same call-site opt-in ADR-262
    uses, each decline a counted verdict (ADR-181). `merge_group`, `push`, `workflow_dispatch`,
-   `schedule`, an undeterminable diff and a runner edit keep the full battery. Stage 4's PR will amend
-   ADR-262 (the PR arm grows from five batteries to the affected set) and ADR-183 by an appended
-   amendment section, adding `amends:` to its frontmatter and `amended_by:` to the targets. ADR-183
-   gets a pointer amendment only: its decision (the full local battery at ship) is unchanged, its
+   `schedule`, an undeterminable diff and a runner edit keep the full battery. Stage 4's PR appends pointer
+   amendments to ADR-262 (recording that its R1 premise and its admission rule are reversed for the PR
+   arm, which grows from five batteries to the affected set) and to ADR-183, adding `amends:` to its
+   frontmatter and `amended_by:` to the targets. ADR-183's amendment is a pointer only: its decision (the full local battery at ship) is unchanged, its
    context premise (CI's required `test` blocks merge on the full battery) changes. Entry gates:
-   `admin-merge-ready.sh` demands a full-battery marker at the head (Decision 2), and the "runner
+   `admin-merge-ready.sh` demands the full-battery marker of Decision 2; an admin-side control is
+   decided with the repository admins (narrowing the bypass actors of the CI Required ruleset, or a
+   detective post-merge probe that flags any bypass merge whose head lacks the marker); and the "runner
    changed means full battery" detector and the affected-selection index are evaluated from a trusted
    base-ref copy, never the PR's own tree (otherwise a PR can edit the index and shrink its own gate on
-   both arms at once); the registration-only carve-out stays out of PR mode.
+   both arms at once); the registration-only carve-out stays out of PR mode. Minutes target (Decision 3(e)): PR `CI`
+   job-minutes per run down at least 20% (about 20 of 99.8), at a replay escape rate under 2%.
 6. **Per-push fan-out is trimmed only where no required context moves**, or where the context is
    named and its owner agrees. Security posture changes need a CLO/CTO decision of their own: CodeQL
    code scanning (query suite or event scope, advisory per ADR-270) and GitHub Code Quality are
