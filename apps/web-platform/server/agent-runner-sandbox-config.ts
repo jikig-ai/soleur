@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
+import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
 import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
 import { basename, delimiter, dirname, join, resolve } from "path";
@@ -420,13 +420,19 @@ function webEgressDenyReadPaths(): string[] {
     for (const r of relFiles) {
       try {
         const fp = join(home, r);
-        if (existsSync(fp)) continue;
         mkdirSync(dirname(fp), { recursive: true, mode: 0o700 });
         // "{}" not "" for JSON config files — an empty .claude.json would
         // crash the CLI's startup parse before the sandbox even mattered.
-        writeFileSync(fp, r.endsWith(".json") ? "{}" : "", { mode: 0o600 });
+        // `flag: "wx"` — exclusive create, atomic: no existsSync-then-write
+        // TOCTOU (a same-uid process could swap the path for a symlink and
+        // make this write clobber an arbitrary file — CodeQL
+        // js/file-system-race).
+        writeFileSync(fp, r.endsWith(".json") ? "{}" : "", {
+          mode: 0o600,
+          flag: "wx",
+        });
       } catch {
-        /* best-effort */
+        /* best-effort — EEXIST means the path is already there (deny applies) */
       }
     }
   }
