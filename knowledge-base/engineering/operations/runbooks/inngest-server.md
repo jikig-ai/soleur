@@ -26,6 +26,7 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Private-NIC boot event after a host replace (#8539) | [§ Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539) |
 | `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
 | Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
+| Deliberate SECOND FLUSHALL on the same host (#7777) | `gh workflow run cutover-inngest.yml -f op=reflush` — [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777) |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
 
 ## Inherited `done` after a host replace (#7228)
@@ -74,8 +75,9 @@ gh workflow run cutover-inngest.yml -f op=resume
 > recovery that is already in flight.
 
 `op=resume` exists for exactly this state. Its G1 requires the flag to be `done` (only that
-evidences a completed flip), G3 requires the host to be audible, and it then writes
-`INNGEST_CUTOVER_FLIP=flushed`. The on-host 30s timer takes the post-flush arm: start → verify it
+evidences a completed flip), G3 requires the host to be audible, G4 (#9177) requires the current
+host generation's `bootstrap-done` — the same check the probe reports as `verdict=PASS` — and it
+then writes `INNGEST_CUTOVER_FLIP=flushed`. The on-host 30s timer takes the post-flush arm: start → verify it
 SERVES → re-record the marker → complete to `done`, **with no re-FLUSHALL**, so the queue
 survives. Confirm by the FSM row `reason="flushed-resume-no-reflush"` followed by a return to
 `noop-done` — read it with:
@@ -129,6 +131,11 @@ filter (a jq fault — file an issue). The anchor's classes:
   the token was rejected (HTTP 401/403 — the warning names which variable was sent), or `created` is
   out of bounds.
 
+When G4 refuses, the `::error::` names which outcome the provisioning probe reported
+(`bootstrap-done-DEGRADED` is never a pass; `not-delivered` on a host life that predates the
+provision unit means replace, not resume) and the probe's per-stage detail lines sit on the same
+run's stderr.
+
 Nothing was written in any of these cases. The anchor also prints which token it used: today that is
 the read/write `HCLOUD_TOKEN`, because `HCLOUD_TOKEN_READONLY` is not yet minted
 (`infra-credential-tiers-8209.md` step O5). The same generation scope applies to op=arm G3.7's
@@ -136,11 +143,54 @@ liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops 
 while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback.
 
 **Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
-it. For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
+it. If the intent is a deliberate SECOND flush on the same host — not a recovery — the verb is
+`op=reflush` (see [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777)).
+For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
 
 **Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
 was invisible until the host journal was read — see
 [§ Reading host state without SSH](#reading-host-state-without-ssh) for the read that finds it.
+
+### Authorizing a second FLUSHALL (`op=reflush`, #7777)
+
+The `/mnt/data` latch is an **append-only ledger**, never a flag file: each record is one line,
+`flushed_at=… host=… dbsize=…` when a FLUSHALL ran, and `cleared_at=… run=… by=… boot_id=…` when a
+deliberate second flush was authorized. **The newest record decides** whether the FSM may flush —
+a `cleared_at` supersedes the `flushed_at` it follows, and a later `flushed_at` re-latches the
+host. Records are only ever appended; nothing deletes or truncates the ledger, so the flush
+evidence and the authorization evidence coexist permanently.
+
+A second flush is needed when a deliberate recut emptied the queue once and a later operation —
+typically the `inngest-volume-recut` refusal telling you the store holds N keys — requires it
+empty again. The verb:
+
+```
+gh workflow run cutover-inngest.yml -f op=reflush
+```
+
+Like `op=resume`, the run **holds in `Waiting` for the required-reviewer approval** on the
+`inngest-cutover` environment before any step executes — that approval IS the authorization the
+ledger records. The op writes `INNGEST_CUTOVER_FLIP=reflush,run=<gha-run-id>,by=<actor>` — the
+evidence rides the flag value because `soleur-inngest/prd`'s boot-isolation self-check is an
+exact-set match on the config and no new secret name can exist. The on-host FSM's `reflush` arm
+then appends the `cleared_at` record (stamping `cleared_at` and the host's own `boot_id` at the
+host, so a clear can never be attributed to a boot that did not record it) and re-enters the
+normal `stop → FLUSHALL → assert → flushed → start → done` path, which appends a fresh
+`flushed_at` and re-engages the latch.
+
+Gates, all refusing **before** the write:
+
+- **G1** the flag must be terminal (`done`/`aborted`/`rolled-back`) — a reflush over an
+  in-flight flip races the running FSM;
+- **G2** the latch must **exist** off-host (the inverse of op=arm's G3.7) — a reflush with no
+  recorded flush is a first flush, and its verb is `op=arm`;
+- **G3** the host must be audible — `reflush` is consumed only by the on-host 30s timer;
+- **G4** the evidence must be well-formed — a bare or malformed `reflush` carries no
+  authorization, and the FSM refuses it the same way (`reflush-evidence-invalid`).
+
+Confirm the ledger afterwards with `tail` on the latch record surfaced by
+`cat-inngest-cutover-state.sh`, or the Better Stack rows `reason="latch-cleared"` followed by
+`reason="flip-complete"`. **There is still no delete and no SSH anywhere in this path.**
 
 ### Reading the private-NIC boot event (#8539)
 
@@ -327,7 +377,8 @@ Signatures that have no stage of their own:
   replace.** The host may recover on its own as soon as the cause clears (a late NIC, a zot blip).
 - **Run `op=resume` only after `bootstrap-done` for the new `iid`.** `bootstrap-done-DEGRADED` is
   not enough. The unit's quiesce keeps a retry from restarting the server inside the flip's verify
-  window, but the ordering rule still stands.
+  window, and since #9177 the ordering rule is also enforced gate-side: op=resume's G4 runs the
+  provisioning probe and refuses anything but `verdict=PASS` for the current iid.
 
 **Find the host life (`iid`).** The armed row is written once per host life, so the window must
 cover the whole life (30 days, as the probe uses); `raw` is double-encoded and must be decoded:
@@ -1363,7 +1414,7 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    | `::error::tag:` with NO `tag_state=unknown` (`workflows-permission`, `bad-response`, an `http-*` from the tag-object POST, `ls-remote-failed` at the re-read) | The failure came before the ref POST: nothing was published (a tag object alone is orphaned and harmless). For `workflows-permission` (R1), hand-tag per the fallback above. Otherwise re-run the mint; it re-decides from a fresh read of the remote tags. |
    | `::error::tag:` WITH `tag_state=unknown` (`verify-failed`, `ls-remote-failed` at verify, an `http-*` from the ref POST), or a ref POST / verify hang killed at the step timeout (no `::error::` line; the name was recorded before the POST); Slack says the tag MAY exist | The ref POST was attempted, so the tag may exist even though the step failed. Check `git ls-remote --tags origin refs/tags/<tag> 'refs/tags/<tag>^{}'`. **Absent:** re-run the mint. **Present and peeling to the commit the run logged:** confirm no build run exists for it (above), then dispatch exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. **Present but peeling elsewhere:** do not dispatch; delete it per ADR-232 §7 only when no build run exists for it, then re-run the mint. Never reuse the name. |
    | `::error::dispatch:` | The tag exists and is the merged max. Confirm no build run exists for it (above), then run the line the step printed, exactly once: `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>`. Never delete or reuse the tag. `reason=ls-remote-failed` means the origin was unreachable, not that the tag is missing. |
-   | `::error::mint-infra-app-token: …` (the App-token step of the mint job or of a build's `bump-cloud-init-pin` job), or `::error::DOPPLER_TOKEN_INFRA_PRIVILEGED is not available` | Nothing was tagged or pushed: both jobs mint before the tag and before the push. A permission refusal (`GitHub said: …`) or a grant mismatch (`differ from the requested`, `not limited to the requested repositories`) means the live `soleur-infra` App lacks the committed manifest's scopes: do step O4c of `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`. `DOPPLER_TOKEN_INFRA_PRIVILEGED is not available`, or a Doppler read failure (`not readable from Doppler soleur-infra-privileged/prd`), means the environment secret is unseeded: step O3 of the same runbook. A transport failure (`did not complete (curl rc=…)`) needs no fix. Then, for the mint: `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`. For a bump job: `gh run rerun <run-id> --failed` (reruns only the failed bump job: no rebuild, the digest does not move). |
+   | `::error::mint-infra-app-token: …` (the App-token step of the mint job or of a build's `bump-cloud-init-pin` job), or `::error::DOPPLER_TOKEN_INFRA_APP is not available` | Nothing was tagged or pushed: both jobs mint before the tag and before the push. A permission refusal (`GitHub said: …`) or a grant mismatch (`differ from the requested`, `not limited to the requested repositories`) means the live `soleur-infra` App lacks the committed manifest's scopes: do step O4c of `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md`. `DOPPLER_TOKEN_INFRA_APP is not available`, or a Doppler read failure (`not readable from Doppler soleur-infra-app/prd`), means the narrow read token or its copied App values are missing or stale: the cause-to-stage table in §Release-job App source of the same runbook names the bootstrap stage to re-run. A transport failure (`did not complete (curl rc=…)`) needs no fix. Then, for the mint: `gh workflow run mint-inngest-bootstrap-tag.yml --ref main`. For a bump job: `gh run rerun <run-id> --failed` (reruns only the failed bump job: no rebuild, the digest does not move). |
    | The build or the bump failed after a successful dispatch | If the bump job failed and the build job succeeded: `gh run rerun <run-id> --failed` (reruns only the bump job; no rebuild, the digest does not move). If the build job itself failed, re-run that build run (it posts its own Slack). |
    | R12: a bump PR held with signed ≠ target after two auto-mints in flight | `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<max-tag> -f mirror_only=true` (digest-preserving). Since #9262 a `mirror_only` run never arms auto-merge, and disarms one an earlier run armed. On the existing PR it refreshes the branch, disables auto-merge if it was armed (`gh pr merge <n> --disable-auto`; the run dies at stage `pr` if that fails), and posts a hold comment; the PR body keeps its original text. Review the held PR, then merge it: `gh pr merge <n> --squash`. |
    | A later run ends `result=noop` with `::notice::base=<tag>`, but that tag has no build run | An earlier dispatch was lost. Confirm no build run exists for it (above), then run `gh workflow run build-inngest-bootstrap-image.yml --ref main -f ref=<tag>` once. |

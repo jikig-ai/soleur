@@ -192,6 +192,86 @@ fi
 echo "-- apply workflow SSH -target --"
 assert_grep "workflow -targets cron_egress_firewall" 'target=terraform_data\.cron_egress_firewall' "$WORKFLOW"
 
+echo "-- deploy_pipeline_fix_web2 cron-egress delivery parity (#9393) --"
+# A RUNNING web-2 receives host-script content only through the SSH sibling
+# terraform_data.deploy_pipeline_fix_web2: the web-1 provisioners never dial it
+# (parity guard's premise), and cloud-init/image-bake covers fresh hosts only.
+# The issue's three artifacts — the carved CIDR file, the resolver, and the
+# post-apply probe — must therefore ride that sibling with the SAME destinations
+# the web-1 resource uses, each hashed in triggers_replace (an artifact edit
+# re-fires delivery), each byte-asserted after scp (a truncated transfer fails
+# the provisioner rather than latching silent drift), and the assert script
+# EXECUTED last (delivering the probe without running it runs no probe).
+#
+# Anchored on the delivery constructs inside the resource's own block — never a
+# bare filename grep, which a comment or a same-named file in ANOTHER resource
+# would satisfy (the 2026-06-02 drift-guard learning this file already encodes).
+WEB2_BLOCK="$(awk '/resource "terraform_data" "deploy_pipeline_fix_web2"/,/^}/' "$SERVER_TF")"
+w2_assert() { # w2_assert <description> <ERE pattern>
+  # Herestring, NOT `echo | grep -q`: `grep -q` exits on first match, the writer
+  # dies on SIGPIPE mid-block, and `set -o pipefail` then reports the WON match
+  # as a FAIL — a measured 1-in-N flake (rc=1 on the destination row in CI).
+  # grep -c below is exempt (it reads all input; no early exit).
+  if grep -qE -- "$2" <<<"$WEB2_BLOCK"; then
+    PASS=$((PASS + 1)); echo "  PASS: $1"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 (pattern not found in deploy_pipeline_fix_web2 block: $2)"
+  fi
+}
+# Non-vacuity floor on the slice itself: a renamed or restructured resource must
+# red here, not pass over an empty block.
+if echo "$WEB2_BLOCK" | grep -c 'provisioner "file"' >/dev/null; then
+  PASS=$((PASS + 1)); echo "  PASS: deploy_pipeline_fix_web2 block extracted (non-empty slice)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: deploy_pipeline_fix_web2 block not found in server.tf"
+fi
+for spec in \
+  "cron-egress-allowlist-cidr.txt /etc/soleur/cron-egress-allowlist-cidr.txt" \
+  "cron-egress-resolve.sh /usr/local/bin/cron-egress-resolve.sh" \
+  "cron-egress-postapply-assert.sh /usr/local/bin/cron-egress-postapply-assert.sh"; do
+  f="${spec%% *}"
+  dest="${spec##* }"
+  w2_assert "web2 delivers $f (source=)" "source += +\"\\\$\\{path\\.module\\}/$f\""
+  w2_assert "web2 delivers $f to $dest (destination=)" "destination += +\"$(printf '%s' "$dest" | sed 's/[.[\*^$/]/\\&/g')\""
+  w2_assert "web2 trigger folds $f hash" "file\\(\"\\\$\\{path\\.module\\}/$f\"\\)"
+  w2_assert "web2 remote-exec byte-asserts $f" "filesha256\\(\"\\\$\\{path\\.module\\}/$f\"\\)"
+  # Cross-block destination parity: the web-1 resource and the web-2 sibling must
+  # write the SAME absolute path for the same artifact — a destination typo puts
+  # the file where no consumer reads it, with every delivery row still green.
+  W1_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$SERVER_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  W2_DEST="$(grep -A1 "source *= *\"\\\${path.module}/$f\"" <<<"$WEB2_BLOCK" | grep -oE 'destination *= *"[^"]+"' | sed 's/.*"\([^"]*\)".*/\1/' | head -1)"
+  if [[ -n "$W1_DEST" && "$W1_DEST" == "$W2_DEST" ]]; then
+    PASS=$((PASS + 1)); echo "  PASS: $f destination parity web-1 == web-2 ($W2_DEST)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $f destination drift: web-1='$W1_DEST' web-2='$W2_DEST' (expected identical, and web-1's extraction must be non-empty)"
+  fi
+done
+w2_assert "web2 creates /etc/soleur before file provisioners (scp does not mkdir)" 'mkdir -p [^"]*/etc/soleur'
+w2_assert "web2 marks cron-egress-resolve.sh executable" 'chmod 0755 [^"]*cron-egress-resolve\.sh'
+w2_assert "web2 marks cron-egress-postapply-assert.sh executable" 'chmod 0755 [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 lands the carved CIDR file at mode 0644" 'chmod 0644 [^"]*cron-egress-allowlist-cidr\.txt'
+w2_assert "web2 asserts root ownership of cron-egress-resolve.sh" 'chown root:root [^"]*cron-egress-resolve\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-postapply-assert.sh" 'chown root:root [^"]*cron-egress-postapply-assert\.sh'
+w2_assert "web2 asserts root ownership of cron-egress-allowlist-cidr.txt" 'chown root:root [^"]*cron-egress-allowlist-cidr\.txt'
+# The probe is the point of the issue — a delivered-but-never-run assert script
+# leaves web-2 with the carve on disk and no proof of enforcement.
+w2_assert "web2 EXECUTES the post-apply assert (the probe)" 'bash /usr/local/bin/cron-egress-postapply-assert\.sh'
+# The web-1 resource's assert run is its provisioner's terminal step; on web-2 it
+# must likewise run AFTER the deliveries+asserts, inside the same remote-exec
+# script (provisioner ordering is declaration order — the ghcr deny block stays
+# last either way).
+W2_EXEC_LN="$(echo "$WEB2_BLOCK" | grep -nE 'bash /usr/local/bin/cron-egress-postapply-assert\.sh' | cut -d: -f1 | tail -1)"
+W2_SHA_LN="$(echo "$WEB2_BLOCK" | grep -nE 'filesha256\("\$\{path\.module\}/cron-egress-postapply-assert\.sh"\)' | cut -d: -f1 | tail -1)"
+if [[ -n "$W2_EXEC_LN" && -n "$W2_SHA_LN" && "$W2_EXEC_LN" -gt "$W2_SHA_LN" ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: assert-execution ordered after the content assertions (line $W2_EXEC_LN > $W2_SHA_LN)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: assert-execution must come after the sha256 content assertions (exec=$W2_EXEC_LN sha=$W2_SHA_LN)"
+fi
+# The trigger sentinel must still exist (the lockstep rule requires a bump with
+# any inline edit; pin PRESENCE not a version — a future legitimate bump must not
+# red this guard).
+w2_assert "web2 inline sentinel present (bumped in lockstep with the inline edit)" 'dpf-web2-remote-exec-v[0-9]+'
+
 echo "-- loader safety invariants --"
 # Availability ordering: the resolve (set population) line must precede the
 # default-drop install (flush chain + add rules) — proven by line order.
@@ -348,9 +428,9 @@ CARVE_MODE="floor-only"
 CARVE_OK=0
 if [[ "${CARVE_HDRS:-0}" -ge 1 ]]; then
   CARVE_OK=1
-  if echo "$CARVE_ORACLE" | grep -q '^BASE_PREFIXES '; then
+  if grep -q '^BASE_PREFIXES ' <<<"$CARVE_ORACLE"; then
     CARVE_MODE="every header inside the pre-carve base file ($(echo "$CARVE_ORACLE" | sed -n 's/^BASE_PREFIXES //p') prefixes)"
-    echo "$CARVE_ORACLE" | grep -qE '^BASE_OUTSIDE 0 ?$' || CARVE_OK=0
+    grep -qE '^BASE_OUTSIDE 0 ?$' <<<"$CARVE_ORACLE" || CARVE_OK=0
   fi
 fi
 if [[ "$CARVE_OK" -eq 1 ]]; then
@@ -854,8 +934,10 @@ run_alarm() {
   mkdir -p "$d/bin"
   cat > "$d/bin/curl" << MOCK
 #!/bin/bash
-vendor=""; scheme_http=0; has_proto=0
+vendor=""; scheme_http=0; has_proto=0; cfg_stdin=0; prev=""
 for arg in "\$@"; do
+  [[ "\$prev" == "--config" && "\$arg" == "-" ]] && cfg_stdin=1
+  prev="\$arg"
   case "\$arg" in
     *api.resend.com*) vendor="api.resend.com" ;;
     *.sentry.io*) vendor="sentry.io" ;;
@@ -877,6 +959,8 @@ if [[ -n "\$vendor" ]]; then
   if [[ -n "\${SSLKEYLOGFILE:-}\${CURL_CA_BUNDLE:-}" ]]; then echo "TLS_ENV_LEAK" >> "$d/curl_violations"; fi
 fi
 if [[ "\$scheme_http" -eq 1 && "\$has_proto" -eq 1 ]]; then echo "PROTO_ON_HTTP" >> "$d/curl_violations"; fi
+# \`--config -\`: consume (and record) the stdin config so the writer is read
+if [[ "\$cfg_stdin" -eq 1 ]]; then cat >> "$d/curl_stdin"; fi
 # one line per INVOCATION (the -d payload is multi-line JSON)
 echo "\$*" | tr '\\n' ' ' >> "$d/curl_args"; echo >> "$d/curl_args"
 if [[ -n "\${ALARM_MOCK_CURL_EXIT:-}" ]]; then echo "000"; exit "\$ALARM_MOCK_CURL_EXIT"; fi
@@ -1051,6 +1135,44 @@ grep -qF "../evil" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
 alarm_row "alarm exec: a %n outside the unit-name charset reads unit=invalid-unit-name in every marker" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
 rm -rf "$ALARM_D"
 
+# Rows 9-10 (argv-bearer sweep): the Resend key rides curl's stdin config
+# channel, never argv; a key that fails the token-shape guard takes the existing
+# SEND_SKIPPED arm (reason=token_shape) with NO call to api.resend.com.
+# Row 9: valid synthetic key -> argv clean, stdin exact, no violations, exit 0.
+ALARM_D="$(mktemp -d -t alarm-bearer.XXXXXXXX)"
+ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+ALARM_OK=1
+[[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+grep -qF "re_test_fake_key_123" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+grep -qF "Authorization" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+grep -qF -- "--config -" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+[[ "$(cat "$ALARM_D/curl_stdin" 2>/dev/null)" == 'header = "Authorization: Bearer re_test_fake_key_123"' ]] || ALARM_OK=0
+[[ ! -f "$ALARM_D/curl_violations" ]] || ALARM_OK=0
+[[ -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+alarm_row "alarm exec: Resend key absent from curl argv, exact 'header = \"Authorization: Bearer <key>\"' on the --config - stdin, 2xx stamps cooldown" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+rm -rf "$ALARM_D"
+
+# Row 10: malformed keys (space, double quote, embedded newline) -> never reach
+# curl; SEND_SKIPPED channel=resend reason=token_shape; Sentry channel still
+# posts; exit 0 as for every other skip; the key never appears in output/logger.
+for ALARM_BAD in "re_test fake key" 're_test"fake' $'re_test\nheader = "x"'; do
+  ALARM_D="$(mktemp -d -t alarm-bearer.XXXXXXXX)"
+  ALARM_OUT="$(run_alarm "$ALARM_D" "${ALARM_TRIPLE_OK[@]}" "RESEND_API_KEY=$ALARM_BAD" 2>&1)" && ALARM_RC=0 || ALARM_RC=$?
+  ALARM_OK=1
+  [[ "$ALARM_RC" -eq 0 ]] || ALARM_OK=0
+  grep -qF "api.resend.com" "$ALARM_D/curl_args" 2>/dev/null && ALARM_OK=0
+  [[ ! -e "$ALARM_D/curl_stdin" ]] || ALARM_OK=0
+  [[ ! -e "$ALARM_D/last-email" ]] || ALARM_OK=0
+  grep -qF "sentry.io" "$ALARM_D/curl_args" 2>/dev/null || ALARM_OK=0
+  grep -qF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=token_shape unit=cron-egress-resolve.service" "$ALARM_D/logger_args" 2>/dev/null || ALARM_OK=0
+  grep -cF "SOLEUR_CRON_EGRESS_ALARM_SEND_SKIPPED channel=resend reason=token_shape" >/dev/null <<<"$ALARM_OUT" || ALARM_OK=0
+  grep -qF "_SEND_FAILED" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+  grep -qF "fake" "$ALARM_D/logger_args" 2>/dev/null && ALARM_OK=0
+  alarm_row "alarm exec: malformed Resend key ($(printf '%q' "$ALARM_BAD" | cut -c1-12)...) -> no Resend curl, SEND_SKIPPED reason=token_shape, exit 0" "$ALARM_OK" "$ALARM_D" "$ALARM_OUT"
+  rm -rf "$ALARM_D"
+done
+
 # Parity rows. (a) The predicate-only `sentry-dest-pin` region must be BYTE-
 # IDENTICAL in the alarm (inside sentry_checkin()) and container-restart-
 # monitor.sh (inside sentry_event()) — same indentation, no normalisation.
@@ -1097,7 +1219,8 @@ for host in api.anthropic.com github.com api.github.com api.doppler.com \
   plausible.io api.resend.com api.buttondown.com api.cloudflare.com \
   api.stripe.com api.hetzner.cloud fcm.googleapis.com \
   updates.push.services.mozilla.com web.push.apple.com \
-  soleur.ai app.soleur.ai api.soleur.ai api.supabase.com; do
+  soleur.ai app.soleur.ai api.soleur.ai api.supabase.com \
+  registry.npmjs.org; do
   # -Fxq = exact full-line literal (dots are NOT wildcards)
   if grep -Fxq -- "$host" "$ALLOWLIST"; then
     PASS=$((PASS + 1)); echo "  PASS: allowlists $host"
@@ -1107,15 +1230,27 @@ for host in api.anthropic.com github.com api.github.com api.doppler.com \
 done
 # Exact-set guard: a NEW host (the firewall's entire attack-surface dial)
 # must force a deliberate edit here carrying its evidence.
-# Count is 23 since #5199 (restore 7 Tier-2 crons) grew the allowlist with
-# evidence-gated hosts (e.g. hn.algolia.com, plausible.io) but did not bump
-# this guard — drift fixed here. The CIDR ranges live in a SEPARATE interval
-# set/file (cron-egress-allowlist-cidr.txt) and are NOT counted here.
+# Count is 123 since the Actions-log + npm-registry egress widening (24
+# vendor hosts + 99 productionresultssa<N>.blob.core.windows.net accounts —
+# sa0..99 minus sa22, which NXDOMAINs). The CIDR ranges live in a SEPARATE
+# interval set/file (cron-egress-allowlist-cidr.txt) and are NOT counted here.
 HOST_COUNT="$(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$ALLOWLIST")"
-if [[ "$HOST_COUNT" -eq 23 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: allowlist host count is exactly 23"
+if [[ "$HOST_COUNT" -eq 123 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: allowlist host count is exactly 123"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: allowlist host count is $HOST_COUNT (expected 23 — update BOTH the allowlist and this test with evidence)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: allowlist host count is $HOST_COUNT (expected 123 — update BOTH the allowlist and this test with evidence)"
+fi
+# Actions-blob fleet guard: the signed-URL accounts are exact hosts, so the
+# fleet boundaries AND the sa22 hole are pinned — a deleted account that
+# reappears in the file would NXDOMAIN-page via the resolver failcount.
+assert_grep "allowlists productionresultssa0 (fleet lower bound)" '^productionresultssa0\.blob\.core\.windows\.net$' "$ALLOWLIST"
+assert_grep "allowlists productionresultssa99 (fleet upper bound)" '^productionresultssa99\.blob\.core\.windows\.net$' "$ALLOWLIST"
+assert_not_grep "sa22 is NXDOMAIN — must NOT be allowlisted (resolver failcount would page)" '^productionresultssa22\.blob\.core\.windows\.net$' "$ALLOWLIST"
+SA_FLEET="$(grep -cE '^productionresultssa[0-9]+\.blob\.core\.windows\.net$' "$ALLOWLIST" || true)"
+if [[ "$SA_FLEET" -eq 99 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: productionresultssa fleet is exactly 99 hosts"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: productionresultssa fleet count is $SA_FLEET (expected 99 — verify each member resolves before adding/removing; an NXDOMAIN member pages via the resolver failcount)"
 fi
 assert_not_grep "Better Stack is HOST egress (must not be in the container allowlist)" '^(logs\.)?(betterstack|betteruptime)' "$ALLOWLIST"
 assert_not_grep "GHCR is HOST egress (must not be in the container allowlist)" '^ghcr\.io$' "$ALLOWLIST"
@@ -1195,12 +1330,18 @@ GHCR_HOST_RE='ghcr\.io|pkg\.github\.com|githubusercontent'
 SERVER_CENSUS_RE='githubusercontent|codeload|objects\.github|release-assets|pkg\.github\.com|ghcr\.io'
 # Explicit exemptions (repo-relative to the scanned dir). Empty today (0 hits, 2026-10-01).
 SERVER_CENSUS_EXEMPT=()
-sandbox_domains() {   # sandbox_domains <ts-file> -> sorted GITHUB_EGRESS_DOMAINS entries, one per line
-  awk '/GITHUB_EGRESS_DOMAINS = Object\.freeze\(\[/ { grab = 1; next } grab && /\] as const/ { grab = 0 } grab' "$1" \
+sandbox_domains() {   # sandbox_domains <ts-file> -> sorted literal entries under EITHER egress const, one per line
+  awk '/(ENTITLED_EGRESS_DOMAINS|GITHUB_ACTIONS_LOG_ACCOUNTS) = Object\.freeze\(\[/ { grab = 1; next } grab && /\] as const/ { grab = 0 } grab' "$1" \
     | grep -oE '"[^"]+"' | tr -d '"' | sort
 }
-sandbox_domains_ok() {   # sandbox_domains_ok <sorted domains, one per line> -> 0 iff EXACTLY {api.github.com, github.com}
-  [[ "$1" == $'api.github.com\ngithub.com' ]]
+expected_domains_sorted() {   # expected_domains_sorted -> the census-approved set: 3 base hosts + sa0..99 minus sa22 (NXDOMAIN)
+  { echo api.github.com; echo github.com; echo registry.npmjs.org
+    for i in $(seq 0 99); do
+      [[ "$i" -eq 22 ]] || echo "productionresultssa$i.blob.core.windows.net"
+    done; } | sort
+}
+sandbox_domains_ok() {   # sandbox_domains_ok <sorted domains, one per line> -> 0 iff EXACTLY the expected set (computed, not hardcoded, so the 99-account fleet stays readable)
+  [[ "$1" == "$(expected_domains_sorted)" ]]
 }
 allowlist_ghcr_hits() {   # allowlist_ghcr_hits <file> -> non-comment lines naming a GHCR / Packages / usercontent host (case-insensitive: DNS names are)
   grep -vE '^[[:space:]]*(#|$)' "$1" | grep -iE "$GHCR_HOST_RE" || true
@@ -1220,9 +1361,9 @@ SANDBOX_CFG="$SCRIPT_DIR/../server/agent-runner-sandbox-config.ts"
 SERVER_DIR="$SCRIPT_DIR/../server"
 SANDBOX_DOMAINS="$(sandbox_domains "$SANDBOX_CFG")"
 if sandbox_domains_ok "$SANDBOX_DOMAINS"; then
-  PASS=$((PASS + 1)); echo "  PASS: census: GITHUB_EGRESS_DOMAINS is exactly github.com + api.github.com"
+  PASS=$((PASS + 1)); echo "  PASS: census: egress domain consts are exactly github.com + api.github.com + registry.npmjs.org + the 99 productionresultssa accounts"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: census: GITHUB_EGRESS_DOMAINS is not exactly {github.com, api.github.com} (got: $(echo "$SANDBOX_DOMAINS" | tr '\n' ' ')); widening needs its own security review AND a decision on the GHCR deny"
+  FAIL=$((FAIL + 1)); echo "  FAIL: census: egress domain consts drifted from the approved set (got: $(echo "$SANDBOX_DOMAINS" | tr '\n' ' ')); widening needs its own security review AND a decision on the GHCR deny"
 fi
 # Read floor: an unreadable / emptied / relocated allowlist yields ZERO hits and would read as "clean".
 ALLOW_ENTRIES="$(grep -vcE '^[[:space:]]*(#|$)' "$ALLOWLIST" 2>/dev/null || true)"
@@ -1258,7 +1399,7 @@ echo 'const ok = "https://api.github.com/";' > "$CEN_D/server/a.ts"
 echo 'fetch("https://ghcr.io/v2/");' > "$CEN_D/server/sub/b.ts"
 echo 'const OIDC = "https://token.actions.githubusercontent.com";' > "$CEN_D/scripts/provision.sh"
 CEN_SCAN="$(server_census_scan "$CEN_D/server")"
-if echo "$CEN_SCAN" | grep -qF "HIT $CEN_D/server/sub/b.ts" && ! echo "$CEN_SCAN" | grep -qF "HIT $CEN_D/server/a.ts" && echo "$CEN_SCAN" | grep -qx 'SCANNED 2'; then
+if grep -qF "HIT $CEN_D/server/sub/b.ts" <<<"$CEN_SCAN" && ! grep -qF "HIT $CEN_D/server/a.ts" <<<"$CEN_SCAN" && grep -qx 'SCANNED 2' <<<"$CEN_SCAN"; then
   PASS=$((PASS + 1)); echo "  PASS: census self-test: a ghcr.io literal in a server file is flagged, a clean file is not"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: server scanner did not flag exactly b.ts (got: $(echo "$CEN_SCAN" | tr '\n' ';'))"
@@ -1270,25 +1411,36 @@ else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: a script outside the server tree was scanned"
 fi
 CEN_EMPTY="$(server_census_scan "$CEN_D/empty")"
-if echo "$CEN_EMPTY" | grep -qx 'SCANNED 0'; then
+if grep -qx 'SCANNED 0' <<<"$CEN_EMPTY"; then
   PASS=$((PASS + 1)); echo "  PASS: census self-test: an empty tree reports SCANNED 0 (the floor above turns that into a RED)"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: empty tree did not report SCANNED 0 (got: $CEN_EMPTY)"
 fi
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "raw.githubusercontent.com",\n] as const);\n' > "$CEN_D/cfg-widened.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "raw.githubusercontent.com",\n] as const);\n' > "$CEN_D/cfg-widened.ts"
 # The self-test drives the SAME sandbox_domains_ok() the live check uses: a weakened predicate (a
 # glob such as *github.com*, a prefix test, a count-only test) accepts at least one negative below.
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n] as const);\n' > "$CEN_D/cfg-exact.ts"
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n] as const);\n' > "$CEN_D/cfg-one.ts"
-printf 'export const GITHUB_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "evilgithub.com",\n] as const);\n' > "$CEN_D/cfg-lookalike.ts"
+# The positive fixture carries BOTH consts and the full fleet — generated so the sa0..99-minus-22
+# bound is written once (expected_domains_sorted) and cannot drift from the live check's notion.
+{
+  printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n  "registry.npmjs.org",\n  ...GITHUB_ACTIONS_LOG_ACCOUNTS,\n] as const);\n'
+  printf 'export const GITHUB_ACTIONS_LOG_ACCOUNTS = Object.freeze([\n'
+  for i in $(seq 0 99); do
+    [[ "$i" -eq 22 ]] || printf '  "productionresultssa%s.blob.core.windows.net",\n' "$i"
+  done
+  printf '] as const);\n'
+} > "$CEN_D/cfg-exact.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "api.github.com",\n] as const);\n' > "$CEN_D/cfg-pair.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n] as const);\n' > "$CEN_D/cfg-one.ts"
+printf 'export const ENTITLED_EGRESS_DOMAINS = Object.freeze([\n  "github.com",\n  "evilgithub.com",\n] as const);\n' > "$CEN_D/cfg-lookalike.ts"
 CEN_SD_OK=1
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-exact.ts")" || CEN_SD_OK=0
+sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-pair.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-widened.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-one.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "$(sandbox_domains "$CEN_D/cfg-lookalike.ts")" && CEN_SD_OK=0
 sandbox_domains_ok "" && CEN_SD_OK=0
 if [[ "$CEN_SD_OK" -eq 1 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: census self-test: sandbox_domains_ok accepts exactly {github.com, api.github.com} and rejects a widened, single, look-alike and empty list"
+  PASS=$((PASS + 1)); echo "  PASS: census self-test: sandbox_domains_ok accepts the full {github, api.github, npm, sa0..99 minus sa22} set and rejects pair-only, widened, single, look-alike and empty lists"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: census self-test: sandbox_domains_ok misjudged a synthetic sandbox config (the live exact-set check is weaker than intended)"
 fi
@@ -1314,9 +1466,9 @@ for lit in raw.githubusercontent.com codeload.example.invalid objects.github.exa
 done
 printf 'const ok = "https://api.github.com/";\n' > "$CEN_D/members/clean.ts"
 CEN_MEMBER_SCAN="$(server_census_scan "$CEN_D/members")"
-for k in $(seq 1 "$CEN_MEMBER_N"); do echo "$CEN_MEMBER_SCAN" | grep -qxF "HIT $CEN_D/members/m$k.ts" || CEN_MEMBER_MISS+="m$k "; done
-echo "$CEN_MEMBER_SCAN" | grep -qxF "HIT $CEN_D/members/clean.ts" && CEN_MEMBER_MISS+="clean-flagged "
-echo "$CEN_MEMBER_SCAN" | grep -qx "SCANNED $((CEN_MEMBER_N + 1))" || CEN_MEMBER_MISS+="scanned-count "
+for k in $(seq 1 "$CEN_MEMBER_N"); do grep -qxF "HIT $CEN_D/members/m$k.ts" <<<"$CEN_MEMBER_SCAN" || CEN_MEMBER_MISS+="m$k "; done
+grep -qxF "HIT $CEN_D/members/clean.ts" <<<"$CEN_MEMBER_SCAN" && CEN_MEMBER_MISS+="clean-flagged "
+grep -qx "SCANNED $((CEN_MEMBER_N + 1))" <<<"$CEN_MEMBER_SCAN" || CEN_MEMBER_MISS+="scanned-count "
 if [[ -z "$CEN_ALLOW_MISS" && -z "$CEN_MEMBER_MISS" ]]; then
   PASS=$((PASS + 1)); echo "  PASS: census self-test: every allowlist and server-scan alternation member (githubusercontent, codeload, objects.github, release-assets, pkg.github.com, ghcr.io) flags a synthetic positive, case-insensitively"
 else
@@ -1469,9 +1621,15 @@ ga_setup() {   # ga_setup <name> -> prints the scenario dir; creates shims
   cat > "$d/bin/nft" << 'MOCK'
 #!/bin/bash
 case "$*" in
-  "list chain ip filter DOCKER-USER") echo "jump SOLEUR-EGRESS"; exit 0 ;;
+  "list chain ip filter DOCKER-USER") if [[ -n "${GA_JUMPOLD:-}" ]]; then echo "jump SOLEUR-EGRESS-OLD"; else echo "jump SOLEUR-EGRESS"; fi; exit 0 ;;
   "list chain ip filter SOLEUR-EGRESS")
-    echo 'log prefix "egress-blocked: " ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0 ;;
+    # GA_NODROP: the default-drop LOG rule survives but the terminal drop is gone. The log rule carries the
+    # `egress-blocked` prefix (which the old sentinel mistook for the drop) AND its own comment
+    # `... default drop log`, which a sentinel that loses its closing quote would mistake for the drop.
+    if [[ -n "${GA_NODROP:-}" ]]; then
+      echo 'log prefix "egress-blocked: " comment "soleur-egress: default drop log" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0
+    fi
+    echo 'log prefix "egress-blocked: " ; counter drop comment "soleur-egress: default drop" ; egress-dns-exfil ; tcp dport 8288 accept ; ip daddr 10.0.1.40 tcp dport 8288 accept ; cidr allowlist'; exit 0 ;;
   "list set ip filter soleur_egress_allow") echo "elements = { 104.18.24.159 }"; exit 0 ;;
   "list set ip filter soleur_egress_allow_cidr") echo "elements = { 140.82.112.0/22, 20.1.2.3, 4.5.6.7 }"; exit 0 ;;
 esac
@@ -1578,10 +1736,10 @@ ga_fx() {   # ga_fx <name> -> GA_D = a fresh scenario dir holding the healthy fi
 ga_calls_n() { { grep -c '' "$GA_D/get_element_calls" 2>/dev/null || true; } | head -n1; }   # recorded `nft get element` calls (incl. the 1 positive control)
 ga_inconclusive_ok() {   # ga_inconclusive_ok <rc ERE> -> 0 iff exit 0, loud inconclusive WARNING naming rc, NO held-ok, NO fatal sentinel
   [[ "$GA_RC" -eq 0 ]] \
-    && echo "$GA_OUT" | grep -qE "WARNING: ghcr-frontend-inconclusive [(]rc=($1)[)]" \
-    && ! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' \
-    && ! echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable' \
-    && echo "$GA_OUT" | grep -qx 'host-egress-ok'
+    && grep -qE "WARNING: ghcr-frontend-inconclusive [(]rc=($1)[)]" <<<"$GA_OUT" \
+    && ! grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" \
+    && ! grep -q 'ASSERT-FAILED: ghcr-frontend-reachable' <<<"$GA_OUT" \
+    && grep -qx 'host-egress-ok' <<<"$GA_OUT"
 }
 # Fixture CIDR file: a /31 and a /32 carved out of the 140.82.121.0 neighbourhood (synthetic, RFC
 # values chosen only for shape) plus the remainder prefixes; the set file is the file's allow
@@ -1608,8 +1766,8 @@ GA_D="$(ga_setup healthy)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -eq 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -qx 'host-egress-ok' || GA_OK=0
-echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+grep -qx 'host-egress-ok' <<<"$GA_OUT" || GA_OK=0
+grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
 grep -q -- '--resolve ghcr.io:443:140.82.121.32 ' "$GA_D/docker_exec_calls" 2>/dev/null || GA_OK=0
 ga_row "post-apply assert: healthy carve -> exit 0, host-egress-ok, live probe pinned to the first excluded address" "$GA_OK"
 # Curl contract (B4): the WHOLE argv the container sees, anchored as one exact line (-q first, --noproxy,
@@ -1631,8 +1789,25 @@ GA_D="$(ga_setup noheader)"; assert_fixture_dir "$GA_D"; ga_cidr_ok | grep -v '^
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-header-absent' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-header-absent' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: no Excluded header -> ASSERT-FAILED: ghcr-carve-header-absent, non-zero exit" "$GA_OK"
+
+# Row B2: the default-drop LOG rule survives but the terminal drop is gone -> default-drop sentinel (the log rule's
+# `egress-blocked` prefix alone must not satisfy it).
+GA_D="$(ga_setup nodrop)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_NODROP=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: default-drop' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: log rule present but terminal drop gone -> ASSERT-FAILED: default-drop, non-zero exit" "$GA_OK"
+
+# Row B3: a jump to a similarly named chain is not our jump -> docker-user-jump sentinel (the target token is matched, not a prefix).
+GA_D="$(ga_setup jumpold)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; ga_set_of "$GA_D/cidr.txt" > "$GA_D/set.txt"
+ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_JUMPOLD=1
+GA_OK=1
+[[ "$GA_RC" -ne 0 ]] || GA_OK=0
+grep -q 'ASSERT-FAILED: docker-user-jump' <<<"$GA_OUT" || GA_OK=0
+ga_row "post-apply assert: a jump to SOLEUR-EGRESS-OLD is not our jump -> ASSERT-FAILED: docker-user-jump, non-zero exit" "$GA_OK"
 
 # Row C: an excluded address is present in the LIVE set (stale set / loader not reloaded) ->
 # live-set sentinel naming the address. The SECOND address of the /31 (.33) is the one leaked, so
@@ -1641,14 +1816,14 @@ GA_D="$(ga_setup leak)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.tx
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.33 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.33 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: second address of an excluded /31 present in the live set -> ASSERT-FAILED: ghcr-carve-live-set 140.82.121.33" "$GA_OK"
 # Row C2: the LAST excluded prefix leaks (a loop that stops after the first prefix passes this).
 GA_D="$(ga_setup leaklast)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; { ga_set_of "$GA_D/cidr.txt"; echo "192.30.255.164/32"; } > "$GA_D/set.txt"
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 192.30.255.164 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 192.30.255.164 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: the LAST excluded prefix leaking is also caught (every prefix is walked)" "$GA_OK"
 
 # Row D: POSITIVE CONTROL. The set is missing/empty (nft errors on every get element): without the
@@ -1657,7 +1832,7 @@ GA_D="$(ga_setup deadset)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set (positive control' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set (positive control' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: missing/empty set -> positive control fails (ghcr-carve-live-set), not a vacuous pass" "$GA_OK"
 
 # Row E: the live end-to-end probe CONNECTS (time_connect > 0) -> ghcr-frontend-reachable.
@@ -1665,7 +1840,7 @@ ga_fx reachable
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT=0.021 GA_GHCR_RC=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: probe completes a handshake (time_connect 0.021) -> ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32" "$GA_OK"
 # Row E2/E3 bind the verdict to the FIELD the script asks curl for: the shim renders the -w format it
 # receives. A handshake that completed before a later phase timed out (rc 28, time_connect 0.021) is a
@@ -1675,21 +1850,21 @@ ga_fx e2
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TC=0.021 GA_NL=0 GA_GHCR_RC=28
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
-! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
+! grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: rc 28 with time_connect 0.021 (handshake done, later phase timed out) is a connect, not a drop (field-bound)" "$GA_OK"
 ga_fx e3
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_TC=0 GA_NL=0.9 GA_GHCR_RC=28
 GA_OK=1
 [[ "$GA_RC" -eq 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
-! echo "$GA_OUT" | grep -q 'ASSERT-FAILED' || GA_OK=0
+grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
+! grep -q 'ASSERT-FAILED' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: rc 28 + time_connect 0 (time_namelookup 0.9) -> held, ghcr-frontend-held-ok (field-bound, the other direction)" "$GA_OK"
 ga_fx e4
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_GHCR_OUT= GA_GHCR_RC=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-frontend-reachable 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: curl exit 0 (a full response from an excluded frontend) is fatal even with empty output" "$GA_OK"
 
 # Row F: hostile / unprovable probe output. A binary inside a possibly compromised container writes it;
@@ -1739,14 +1914,14 @@ GA_D="$(ga_setup fresh)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.t
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_CONTAINER=0
 GA_OK=1
 [[ "$GA_RC" -eq 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'WARNING: .*ghcr-frontend-reachable probe SKIPPED' || GA_OK=0
+grep -q 'WARNING: .*ghcr-frontend-reachable probe SKIPPED' <<<"$GA_OUT" || GA_OK=0
 [[ ! -e "$GA_D/docker_exec_calls" ]] || GA_OK=0
 ga_row "post-apply assert: container absent -> live probe skipped with a LOUD warning, exit 0" "$GA_OK"
 GA_D="$(ga_setup freshleak)"; assert_fixture_dir "$GA_D"; ga_cidr_ok > "$GA_D/cidr.txt"; { ga_set_of "$GA_D/cidr.txt"; echo "140.82.121.32/32"; } > "$GA_D/set.txt"
 ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt" GA_CONTAINER=0
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.32 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 140.82.121.32 ' <<<"$GA_OUT" || GA_OK=0
 ga_row "post-apply assert: container absent but an excluded address leaked -> the nft checks still fail the apply" "$GA_OK"
 
 # Row H: a malformed, over-broad or MISALIGNED Excluded prefix must not drive a nft loop (a /16 would be
@@ -1760,9 +1935,9 @@ ga_bad_header_row() {   # ga_bad_header_row <name> <bad-header-cidr> -> GA_OK (1
   ga_run "$GA_D" "$GA_D/cidr.txt" "$GA_D/set.txt"
   GA_OK=1
   [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-  echo "$GA_OUT" | grep -qF "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $2)" || GA_OK=0
+  grep -qF "ASSERT-FAILED: ghcr-carve-header-absent (malformed or over-broad Excluded prefix: $2)" <<<"$GA_OUT" || GA_OK=0
   [[ "$(ga_calls_n)" -eq 1 ]] || GA_OK=0
-  ! echo "$GA_OUT" | grep -qx 'ghcr-frontend-held-ok' || GA_OK=0
+  ! grep -qx 'ghcr-frontend-held-ok' <<<"$GA_OUT" || GA_OK=0
 }
 ga_bad_header_row broad 10.0.0.0/24
 ga_row "post-apply assert: an over-broad Excluded prefix (/24, 256 addresses) is rejected before any nft loop" "$GA_OK"
@@ -1811,13 +1986,13 @@ ga_row "post-apply assert: a /29 and a /28 hole -> nft is asked for exactly 2^(3
 ga_card_setup cardleak29 198.51.100.12
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 198.51.100.12 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 198.51.100.12 ' <<<"$GA_OUT" || GA_OK=0
 [[ "$(ga_calls_n)" -eq 6 ]] || GA_OK=0   # control + .8 .9 .10 .11 .12 then the walk stops
 ga_row "post-apply assert: a leak at a MIDDLE address of an excluded /29 (.12) is named and stops the walk there" "$GA_OK"
 ga_card_setup cardleak28 203.0.113.23
 GA_OK=1
 [[ "$GA_RC" -ne 0 ]] || GA_OK=0
-echo "$GA_OUT" | grep -q 'ASSERT-FAILED: ghcr-carve-live-set 203.0.113.23 ' || GA_OK=0
+grep -q 'ASSERT-FAILED: ghcr-carve-live-set 203.0.113.23 ' <<<"$GA_OUT" || GA_OK=0
 [[ "$(ga_calls_n)" -eq 17 ]] || GA_OK=0   # control + all 8 of the /29 + .16 .. .23 of the /28
 ga_row "post-apply assert: a leak at a MIDDLE address of an excluded /28 (.23, after a fully walked /29) is named" "$GA_OK"
 
@@ -1837,8 +2012,8 @@ echo "RESULT: $PASS passed, $FAIL failed"
 # Anti-vacuity floor (ADR-193, #7898): CI reads only the exit status, so a
 # deleted row would vanish green. Reported directly, never through the
 # PASS/FAIL accounting this backstops. Ratchet when adding rows.
-if [[ $((PASS + FAIL)) -lt 301 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 301. A row was deleted.\n' "$((PASS + FAIL))" >&2
+if [[ $((PASS + FAIL)) -lt 338 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d verdict(s) recorded, expected >= 338. A row was deleted.\n' "$((PASS + FAIL))" >&2
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1

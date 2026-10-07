@@ -13,7 +13,8 @@
 # app container starts (invoked from cloud-init.yml's terminal block) and is NOT
 # skippable — the container IS up when it runs.
 #
-# FAIL-CLOSED: on ANY failure this script emits a discriminating Sentry event (SSH-free
+# FAIL-CLOSED: on ANY failure (except the xtrace refusal below, exit 78, which is silent by design)
+# this script emits a discriminating Sentry event (SSH-free
 # root-cause signal, mirroring soleur-host-bootstrap.sh's emit_fail envelope + a
 # probe_result tag that names WHICH hypothesis fired) then exits non-zero. The cloud-init
 # caller `poweroff -f`s on that non-zero exit, so a host whose container egress is not
@@ -26,6 +27,22 @@
 # is one shell with no implicit errexit. The enforcement probes capture the curl exit code
 # explicitly (`|| rc=$?`) so errexit does not abort before the exit-code discrimination.
 set -e
+
+# Refuse to run under xtrace (#7797): emit_fail ACQUIRES credentials at runtime (the deploy-owned
+# /etc/default/webhook-deploy it sources, a Doppler token, and the Sentry DSN from `doppler secrets
+# get`), so tracing would print them into whatever captures stderr. Unconditional on purpose: a
+# `${VAR:+x}` escape hatch would be open by construction, since the credential is not in the
+# environment at launch. It tests the STATE (`$-`), so `bash -x`, SHELLOPTS=xtrace and a BASH_ENV
+# `set -x` are all caught. Placed BEFORE `trap emit_fail EXIT` so emit_fail's credential steps never
+# run under trace and the EXIT trap is not armed when the refusal exits. This exit is deliberately
+# SILENT (no Sentry event: emitting needs the DSN, which is what is being protected); the caller
+# (cloud-init.yml) powers the host off on any non-zero exit, so a traced fresh-host boot fails closed and
+# is observable only by that host's absence (the refusal text reaches stderr only; tracked as #9639).
+# LIMIT: emit_fail sources a deploy-owned file as root; a `set -x` planted there is not caught by this
+# entry check (tracked as #9639).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 CONTAINER=soleur-web-platform
 STAGE=egress-enforce
@@ -65,8 +82,11 @@ trap emit_fail EXIT
 
 # 1. Container readiness — bounded wait (the container starts moments before this runs;
 #    a missing container is itself a failure, not a skip, on this path).
+# The grep predicates in this script read the whole stream (grep -c, count discarded) so a producer never takes
+# EPIPE. It sets no pipefail today; this keeps the exit status identical if one is added or inherited via
+# SHELLOPTS. See the header of .claude/hooks/grep-q-pipe-guard.test.sh.
 N=0
-until docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; do
+until docker ps --format '{{.Names}}' | grep -cx "$CONTAINER" >/dev/null; do
   N=$((N + 1))
   if [ "$N" -ge 30 ]; then
     PROBE_RESULT=container_absent
@@ -80,7 +100,7 @@ done
 # 2. Structure — the egress chain must be wired and the loader unit active BEFORE trusting
 #    the behavioral probes (a missing jump would make the negative probe pass for the wrong
 #    reason). `nft`/`systemctl` failures here mean the firewall never came up.
-if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -q 'jump SOLEUR-EGRESS'; then
+if ! nft list chain ip filter DOCKER-USER 2>/dev/null | grep -c 'jump SOLEUR-EGRESS' >/dev/null; then
   PROBE_RESULT=structure_fail
   echo 'ASSERT-FAILED: docker-user-jump (SOLEUR-EGRESS jump absent from DOCKER-USER)'
   emit_fail

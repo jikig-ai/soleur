@@ -83,7 +83,7 @@ git_fixture_env "$TMP" || { echo "FATAL: git_fixture_env refused fixture root $T
 
 PASS=0
 FAIL=0
-MIN_ASSERTIONS=610   # anti-vacuity floor = the green run's exact count; raise when adding rows, never lower it silently
+MIN_ASSERTIONS=665   # anti-vacuity floor = the green run's exact count (665 on 2026-10-04, +3 for the lowercase Tier-A row); raise when adding rows, never lower it silently
 
 pass() { echo "PASS [$1]"; PASS=$((PASS+1)); }
 fail() { echo "FAIL [$1]: $2"; FAIL=$((FAIL+1)); }
@@ -1215,6 +1215,31 @@ g3_parity() {
     if [[ "$na" == 1 && "$nm" == 1 && -n "$la" && "$la" == "$lm" ]]; then echo "OK pin-$pin"
     else echo "BAD pin-$pin the ${pin} extraction (found $nm) differs from the build step's (found $na). Authority: $bwf (Read pinned inngest-cli + vector versions); copy: $mint. diff: $(diff <(printf '%s\n' "$la") <(printf '%s\n' "$lm") | tr '\n' '|')"; fi
   done
+  # #9082 — Guard A2's extractors must be token-identical to the mint's: each pin
+  # grep appears twice in the suite (tag side + HEAD side), each normalizing to the
+  # mint's own extractor line. The file operand is normalized away; a
+  # same-intent/different-tokens copy (a drifted regex, a dropped `|| true`) BADs.
+  for pin in inngest_cli_version inngest_cli_sha256 vector_version vector_sha256; do
+    pat="grep -E '^\\s*${pin}\\s*='"
+    nm=$(grep -cF -- "$pat" "$mint" || true)
+    na=$(grep -cF -- "$pat" "$ga" || true)
+    lm=$(grep -F -- "$pat" "$mint" | sed -E -e 's/^[[:space:]]+//' -e 's/^[A-Za-z_]+=\$\(//' -e 's/"\$[A-Za-z0-9_.\/]*"/X/g')
+    la=$(grep -F -- "$pat" "$ga" | sed -E -e 's/^[[:space:]]+//' -e 's/^[A-Za-z_]+=\$\(//' -e 's/"\$[A-Za-z0-9_.\/]*"/X/g' | sort -u)
+    if [[ "$nm" == 1 && "$na" == 2 && "$(grep -c '' <<<"$la")" == 1 && "$la" == "$lm" ]]; then echo "OK ga2-pin-$pin"
+    else echo "BAD ga2-pin-$pin Guard A2's ${pin} extractor (found $na normalized lines) differs from the mint's (found $nm). Authority: $mint (extract_side); copies: $ga Guard A2 (tag + HEAD arms). diff: $(diff <(printf '%s\n' "$lm") <(printf '%s\n' "$la") | tr '\n' '|')"; fi
+  done
+  # The recipe extractor: the suite copies the mint's awk program TWICE (tag side +
+  # HEAD side). Compare the program lines between the two files — operand/out= live
+  # outside the quoted program, so verbatim copies normalize to identical sets.
+  recipe_prog() { # recipe_prog <file> — the awk PROGRAM lines (between `awk -v out=` and the closing quote line), whitespace-normalized
+    awk '/awk -v out=/{on=1; next} on && /^[[:space:]]*'"'"'/ {on=0; next} on {sub(/^[[:space:]]+/, ""); print}' "$1"
+  }
+  lm=$(recipe_prog "$mint" | sort -u)
+  la=$(recipe_prog "$ga" | sort -u)
+  nm=$(recipe_prog "$mint" | grep -c . || true)
+  na=$(recipe_prog "$ga" | grep -c . || true)
+  if [[ "$nm" == 4 && "$na" == 8 && -n "$la" && "$la" == "$lm" ]]; then echo "OK ga2-recipe-awk"
+  else echo "BAD ga2-recipe-awk Guard A2's recipe awk program (found $na lines, expected 8 = 2 sides x 4) differs from the mint's (found $nm, expected 4). Authority: $mint (extract_side); copies: $ga Guard A2. diff: $(diff <(printf '%s\n' "$lm") <(printf '%s\n' "$la") | tr '\n' '|')"; fi
   # The strict tag-name regex is the build's own "Validate dispatch ref" gate: a
   # name the mint accepts but the build refuses would tag and never publish.
   la=$(grep -oE '^[[:space:]]*if \[\[ ! "\$REF" =~ [^ ]+ \]\]' "$bwf" | sed -E 's/.*=~ ([^ ]+) \]\]$/\1/')
@@ -1287,7 +1312,7 @@ w = co.get("with") or {}
 (ok if w.get("fetch-depth") == 0 and w.get("fetch-tags") is True and w.get("persist-credentials") is False else bad)("checkout-history", "checkout needs fetch-depth 0, fetch-tags true, persist-credentials false" + AUTH)
 di, dec = find(lambda s: s.get("id") == "decide")
 ii, inst = find(lambda s: str(s.get("uses", "")).startswith("DopplerHQ/cli-action@"))
-ki, chk = find(lambda s: s.get("name") == "Verify DOPPLER_TOKEN_INFRA_PRIVILEGED present")
+ki, chk = find(lambda s: s.get("name") == "Verify DOPPLER_TOKEN_INFRA_APP present")
 ai, app = find(lambda s: str(s.get("uses", "")).endswith("mint-infra-app-token"))
 ti, tag = find(lambda s: s.get("name") == "Create tag")
 xi, dsp = find(lambda s: s.get("name") == "Dispatch build")
@@ -1310,9 +1335,9 @@ def exact(sid, st, want):
 exact("decide", dec, {"id": "decide", "if": None, "env": None, "run": SCRIPT + " --dry-run", "uses": None})
 exact("doppler-install", inst, {"if": WOULD, "env": None, "run": None, "uses": ANY})
 exact("doppler-check", chk, {"if": WOULD, "uses": None, "run": ANY,
-                             "env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}"}})
+                             "env": {"DOPPLER_TOKEN_CHECK": "${{ secrets.DOPPLER_TOKEN_INFRA_APP }}"}})
 exact("app", app, {"id": "app", "if": WOULD, "env": None, "run": None, "uses": "./.github/actions/mint-infra-app-token",
-                   "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}", "installation-id": "166065653",
+                   "with": {"doppler-token": "${{ secrets.DOPPLER_TOKEN_INFRA_APP }}", "installation-id": "166065653",
                             "permissions": '{"actions":"write"}', "repositories": "soleur"}})
 exact("tag", tag, {"id": "tag", "if": WOULD, "uses": None, "run": SCRIPT + " --tag",
                    "env": {"MINT_TAG_TOKEN": "${{ github.token }}"}})
@@ -1348,13 +1373,21 @@ for rid in ("tag-token-isolated", "dispatch-token-isolated", "app-token-isolated
     if not any(o.startswith("BAD " + rid + " ") for o in out): ok(rid)
 # find() returns the FIRST match, so the exact rows alone cannot see a second minter
 # appended after a compliant first one; count them. And no step anywhere in the job
-# may name the Tier-A secrets.DOPPLER_TOKEN (the lookahead spares *_INFRA_PRIVILEGED).
+# may name the Tier-A secrets.DOPPLER_TOKEN (the lookahead spares *_INFRA_APP) or the
+# broad Tier-B secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED (no-broad-tier-b, #9321).
 minters = [s for s in steps if str(s.get("uses", "")).endswith("mint-infra-app-token")]
 (ok if len(minters) == 1 else bad)("one-minter", "expected exactly one mint-infra-app-token step, found %d%s" % (len(minters), AUTH))
 # Scans the job AND the workflow-level env/defaults (a workflow `env:` reaches every
 # step), and both the dotted and the bracket spelling of the secret.
 TIER_A_RE = r"secrets(\.DOPPLER_TOKEN|\[\s*['\"]+DOPPLER_TOKEN['\"]+\s*\])(?![A-Za-z0-9_])"
-(bad if re.search(TIER_A_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")})) else ok)("no-tier-a", "the mint job (or the workflow-level env/defaults) references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_PRIVILEGED (#9262)" + AUTH)
+(bad if re.search(TIER_A_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I) else ok)("no-tier-a", "the mint job (or the workflow-level env/defaults) references the Tier-A secrets.DOPPLER_TOKEN; it holds only DOPPLER_TOKEN_INFRA_APP (#9321)" + AUTH)
+# #9321: the job holds ONLY the narrow DOPPLER_TOKEN_INFRA_APP (it reads the two App
+# values from soleur-infra-app/prd). The broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED
+# (the whole Tier-B project) must not appear anywhere in the job or the workflow-level
+# env/defaults, in the dotted, bracket or whitespace spellings and in ANY letter case (secret
+# names and the `secrets` context are case-insensitive in Actions, so re.I).
+BROAD_RE = r"secrets(\s*\.\s*DOPPLER_TOKEN_INFRA_PRIVILEGED|\s*\[\s*['\"]+DOPPLER_TOKEN_INFRA_PRIVILEGED['\"]+\s*\])(?![A-Za-z0-9_])"
+(bad if re.search(BROAD_RE, yaml.safe_dump({"job": job, "env": doc.get("env"), "defaults": doc.get("defaults")}), re.I) else ok)("no-broad-tier-b", "the mint job (or the workflow-level env/defaults) references the broad secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED; it holds only the narrow DOPPLER_TOKEN_INFRA_APP (#9321)" + AUTH)
 (bad if re.search(r"secrets\.[A-Za-z0-9_]*PAT\b|\b[A-Z0-9_]*_PAT\b", raw) else ok)("no-pat", "a PAT-named secret is referenced (hr-github-app-auth-not-pat)")
 si, sl = find(lambda s: str(s.get("name", "")).startswith("Post to Slack"))
 (ok if si == len(steps) - 1 and str(sl.get("if", "")).strip() == "failure() || cancelled()" and sl.get("continue-on-error") is True else bad)("slack-on-failure", "the LAST step is the Slack step, if: failure() || cancelled(), continue-on-error: true" + AUTH)
@@ -1372,9 +1405,9 @@ PY
 g3_wf() { python3 "$TMP/g3_wf.py" "$1" "$2" "${3:-$SCRIPT}" "${4:-$COMPOSITE}" 2>&1 || echo "BAD python-crashed"; }
 
 report g3.parity < <(g3_parity "$SCRIPT" "$BUMP" "$CONSUMER" "$BUILD_WF")
-a_eq 'g3.parity:row-count' "$REPORTED" 11
+a_eq 'g3.parity:row-count' "$REPORTED" 16
 report g3.wf < <(g3_wf "$MINT_WF" "$BUILD_WF")
-a_eq 'g3.wf:row-count' "$REPORTED" 39
+a_eq 'g3.wf:row-count' "$REPORTED" 40
 
 # Guard 3 mutation rows: mutate a TEMP copy; RED = at least one BAD line.
 MUTDIR="$TMP/g3mut"; mkdir -p "$MUTDIR"
@@ -1405,6 +1438,19 @@ PY
   if (( nbad > 0 )); then pass "$id:caught [$(grep '^BAD ' <<<"$out" | awk '{print $2}' | paste -sd, -)]"
   else fail "$id:caught" "mutant SURVIVED: every Guard 3 row stayed OK"; fi
 }
+# Positive control (review #9453): g3_mut must be able to FAIL. A comment-only change to the workflow leaves every
+# Guard 3 row OK, so g3_mut must record exactly one failure (`:caught`, "mutant SURVIVED"); subshell, printf + exit.
+# The control's output is captured and must carry the verdict's own tag: an anchor that drifted records `:landed`
+# instead, which a bare count cannot tell from the verdict failing.
+_g3o="$( (g3_mut g3.st-must-reject 'mwf' $'    environment: infra-privileged\n' $'    environment: infra-privileged  # control\n' 2>&1; printf '\n@@%s' "$FAIL") )"
+_g3="${_g3o##*@@}"
+# The `:caught` tag alone is not enough (review #9453, final pass): g3_mut also records it when the checker CRASHES,
+# so a control mutation that breaks the checker would pass. The failure must carry the survivor signature
+# (`mutant SURVIVED`) and must NOT carry the crash signature (`instrument broken`).
+if [[ "$_g3" != "$((FAIL + 1))" ]] || ! grep -qF 'FAIL [g3.st-must-reject:caught]' <<<"$_g3o" \
+   || ! grep -qF 'mutant SURVIVED' <<<"$_g3o" || grep -qF 'instrument broken' <<<"$_g3o"; then
+  printf 'FAIL INSTRUMENT: g3_mut did not reject a mutant that no Guard 3 row sees, for its named reason: a survivor, not a crashed checker (FAIL %s -> %s)\n' "$FAIL" "$_g3" >&2; exit 2
+fi
 g3_mut g3.m1-sort 'mint' '  | sort -V | tail -1 || true)' '  | sort | tail -1 || true)'
 g3_mut g3.m2-guarda-regex 'ga' "cp apps/web-platform/infra/[A-Za-z0-9._-]+ '" "cp apps/web-platform/infra/[A-Za-z0-9._]+ '"
 g3_mut g3.m3-no-selector 'mint' "$(fxt sel_anchor)" "$(fxt sel_renamed)"
@@ -1418,6 +1464,14 @@ g3_mut g3.m8b-no-job-if 'mwf' "    if: github.ref == 'refs/heads/main'" '    # (
 g3_mut g3.m9-pin-pattern 'mint' "grep -E '^\\s*vector_sha256\\s*=' \"\$VTF\"" "grep -E '^\\s*vector_sha256.*=' \"\$VTF\""
 g3_mut g3.m10-unscoped-app 'mwf' "permissions: '{\"actions\":\"write\"}'" "permissions: ''"
 g3_mut g3.m11-strict-re 'mint' "STRICT_TAG_RE='^vinngest-v[0-9]+\.[0-9]+\.[0-9]+\$'" "STRICT_TAG_RE='^vinngest-v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?\$'"
+# #9082: a same-intent/different-tokens extractor in Guard A2's HEAD arm must red
+# the ga2-pin-* parity row — the mint's extractor is the authority.
+g3_mut g3.m12-ga2-pin 'ga' "grep -E '^\\s*vector_sha256\\s*=' \"\$SCRIPT_DIR/vector.tf\"" "grep -E '^\\s*vector_sha256.*=' \"\$SCRIPT_DIR/vector.tf\""
+# #9082: the recipe awk program drifted on one side — a missing END guard on the
+# HEAD-side copy must red ga2-recipe-awk.
+g3_mut g3.m13-ga2-recipe 'ga' '    END { if (n != closed) print "unterminated"; else print n + 0 }
+  '"'"' "$GA_WF" > "$GA2_TMP/head-recipe.n"' '    END { print n + 0 }
+  '"'"' "$GA_WF" > "$GA2_TMP/head-recipe.n"'
 # W1-W6: mutants that CONTAIN the right words, which a substring check let live.
 g3_mut g3.w1-decide-or-true 'mwf' 'run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run' 'run: bash .github/scripts/mint-inngest-bootstrap-tag.sh --dry-run || true'
 g3_mut g3.w2-tag-if-widened 'mwf' $'        id: tag\n        if: steps.decide.outputs.result == \'would-mint\'' $'        id: tag\n        if: steps.decide.outputs.result == \'would-mint\' || always()'
@@ -1434,17 +1488,55 @@ g3_mut g3.w10-no-tag-state-branch 'mwf' '          TAG_STATE: ${{ steps.tag.outp
 g3_mut g3.w11-paths-whole-infra 'mwf' "      - 'apps/web-platform/infra/inngest*'" "      - 'apps/web-platform/infra/**'"
 # #9262 re-tier rows (plan Guard Contract, Guard 1 mutation matrix rows 2, 5, 6, 7).
 g3_mut g3.w12-app-continue-on-error 'mwf' '        uses: ./.github/actions/mint-infra-app-token' $'        continue-on-error: true\n        uses: ./.github/actions/mint-infra-app-token'
-g3_mut g3.w13-app-tier-a-token 'mwf' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN }}'
+g3_mut g3.w13-app-tier-a-token 'mwf' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN }}'
 g3_mut g3.w14-env-not-tier-b 'mwf' '    environment: infra-privileged' '    environment: production'
 g3_mut g3.w15-no-env 'mwf' $'    environment: infra-privileged\n' ''
 g3_mut g3.w17-workflow-env-tier-a 'mwf' $'\npermissions:\n  contents: read\n' $'\nenv:\n  LEAK: ${{ secrets.DOPPLER_TOKEN }}\npermissions:\n  contents: read\n'
-g3_mut g3.w18-bracket-tier-a 'mwf' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
-g3_mut g3.w16b-second-minter-tier-b 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          installation-id: "166065653"\n          permissions: \'{"administration":"write"}\'\n          repositories: soleur\n'
-# ...and the row that catches it must be one-minter (the Tier-B token passes no-tier-a).
+g3_mut g3.w18-bracket-tier-a 'mwf' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' $'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN\'] }}'
+g3_mut g3.w16b-second-minter-tier-b 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}\n          installation-id: "166065653"\n          permissions: \'{"administration":"write"}\'\n          repositories: soleur\n'
+# ...and the row that catches it must be one-minter (the narrow token passes no-tier-a and no-broad-tier-b).
 w16b_out=$(g3_wf "$MUTDIR/g3.w16b-second-minter-tier-b.$(basename "$MINT_WF")" "$BUILD_WF")
 if grep -q '^BAD one-minter ' <<<"$w16b_out"; then pass 'g3.w16b:caught-by-one-minter'
-else fail 'g3.w16b:caught-by-one-minter' "the Tier-B second minter was not caught by one-minter"; fi
+else fail 'g3.w16b:caught-by-one-minter' "the second minter was not caught by one-minter"; fi
 g3_mut g3.w16-second-minter 'mwf' $'          repositories: soleur\n' $'          repositories: soleur\n      - name: Second mint\n        id: app2\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN }}\n          installation-id: "166065653"\n          permissions: \'{"actions":"write"}\'\n          repositories: soleur\n'
+# #9321 narrow-source rows. w19: the mint step's token regresses to the broad Tier-B
+# secret. The exact-shape row AND no-broad-tier-b must both see it (explicit greps:
+# g3_mut only requires at least one BAD).
+g3_mut g3.w19-app-broad-token 'mwf' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+w19_out=$(g3_wf "$MUTDIR/g3.w19-app-broad-token.$(basename "$MINT_WF")" "$BUILD_WF")
+if grep -q '^BAD app-exact ' <<<"$w19_out"; then pass 'g3.w19:caught-by-app-exact'
+else fail 'g3.w19:caught-by-app-exact' "the broad token in the mint step's with: was not caught by app-exact"; fi
+if grep -q '^BAD no-broad-tier-b ' <<<"$w19_out"; then pass 'g3.w19:caught-by-no-broad-tier-b'
+else fail 'g3.w19:caught-by-no-broad-tier-b' "the broad token in the mint step's with: was not caught by no-broad-tier-b"; fi
+# The verify step's env regresses to the broad secret: its exact row and no-broad-tier-b.
+g3_mut g3.w21-check-broad-token 'mwf' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}' 'DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'
+w21_out=$(g3_wf "$MUTDIR/g3.w21-check-broad-token.$(basename "$MINT_WF")" "$BUILD_WF")
+if grep -q '^BAD doppler-check-exact ' <<<"$w21_out"; then pass 'g3.w21:caught-by-doppler-check-exact'
+else fail 'g3.w21:caught-by-doppler-check-exact' "the broad secret in the verify step was not caught by doppler-check-exact"; fi
+if grep -q '^BAD no-broad-tier-b ' <<<"$w21_out"; then pass 'g3.w21:caught-by-no-broad-tier-b'
+else fail 'g3.w21:caught-by-no-broad-tier-b' "the broad secret in the verify step was not caught by no-broad-tier-b"; fi
+# w20: a NEW step (compliant otherwise: its own if and timeout, before Create tag so the
+# last-step Slack row and the timeout sum stay green) names the broad secret in BRACKET
+# spelling. No exact-shape row can see a new step, so ONLY no-broad-tier-b may redden.
+g3_mut g3.w20-bracket-broad-extra-step 'mwf' $'\n      - name: Create tag\n' $'\n      - name: Extra step\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        env:\n          LEAK: ${{ secrets[\'DOPPLER_TOKEN_INFRA_PRIVILEGED\'] }}\n        run: \'true\'\n\n      - name: Create tag\n'
+w20_out=$(g3_wf "$MUTDIR/g3.w20-bracket-broad-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
+if [[ "$(grep '^BAD ' <<<"$w20_out" | awk '{print $2}' | paste -sd, -)" == "no-broad-tier-b" ]]; then pass 'g3.w20:caught-only-by-no-broad-tier-b'
+else fail 'g3.w20:caught-only-by-no-broad-tier-b' "expected exactly one BAD row (no-broad-tier-b), got: $(grep '^BAD ' <<<"$w20_out" | awk '{print $2}' | paste -sd, -)"; fi
+
+# w22 (#9321 review): a NEW step names the broad secret in LOWERCASE (`secrets.doppler_token_infra_privileged`
+# resolves to the same secret). The regex was case-sensitive, so this passed every row; only no-broad-tier-b
+# may redden (a new step is invisible to every exact-shape row).
+g3_mut g3.w22-lowercase-broad-extra-step 'mwf' $'\n      - name: Create tag\n' $'\n      - name: Extra step\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        env:\n          LEAK: ${{ secrets.doppler_token_infra_privileged }}\n        run: \'true\'\n\n      - name: Create tag\n'
+w22_out=$(g3_wf "$MUTDIR/g3.w22-lowercase-broad-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
+if [[ "$(grep '^BAD ' <<<"$w22_out" | awk '{print $2}' | paste -sd, -)" == "no-broad-tier-b" ]]; then pass 'g3.w22:caught-only-by-no-broad-tier-b'
+else fail 'g3.w22:caught-only-by-no-broad-tier-b' "expected exactly one BAD row (no-broad-tier-b), got: $(grep '^BAD ' <<<"$w22_out" | awk '{print $2}' | paste -sd, -)"; fi
+
+# w23 (#9453 review pass 2): the same case-insensitivity for the Tier-A regex. A NEW step names the Tier-A
+# secret in LOWERCASE (`secrets.doppler_token`); only no-tier-a may redden.
+g3_mut g3.w23-lowercase-tier-a-extra-step 'mwf' $'\n      - name: Create tag\n' $'\n      - name: Extra step\n        if: steps.decide.outputs.result == \'would-mint\'\n        timeout-minutes: 1\n        env:\n          LEAK: ${{ secrets.doppler_token }}\n        run: \'true\'\n\n      - name: Create tag\n'
+w23_out=$(g3_wf "$MUTDIR/g3.w23-lowercase-tier-a-extra-step.$(basename "$MINT_WF")" "$BUILD_WF")
+if [[ "$(grep '^BAD ' <<<"$w23_out" | awk '{print $2}' | paste -sd, -)" == "no-tier-a" ]]; then pass 'g3.w23:caught-only-by-no-tier-a'
+else fail 'g3.w23:caught-only-by-no-tier-a' "expected exactly one BAD row (no-tier-a), got: $(grep '^BAD ' <<<"$w23_out" | awk '{print $2}' | paste -sd, -)"; fi
 
 # H2 (must-PASS, non-canonical): the {name: ...} mapping form of the environment is
 # the same binding, so every row stays OK. A row that only accepted the scalar would
@@ -1478,10 +1570,14 @@ fi
 echo "=== Composite (mint-infra-app-token) ==="
 # ===========================================================================
 # The composite's `run:` block, executed under the runner's composite shell with
-# `doppler` and `curl` shimmed and a real synthesized RSA key. #9262 made it
-# Tier-B-only: one identity (soleur-infra), one source (soleur-infra-privileged/prd,
-# named in ARGV so this stub can see it — the harness unsets DOPPLER_PROJECT and
-# DOPPLER_CONFIG, so an env-var form would read nothing), and mandatory scoping.
+# `doppler` and `curl` shimmed and a real synthesized RSA key. One identity
+# (soleur-infra), mandatory scoping, and (#9321) a source that is one of two named
+# projects: the input `doppler-project` (default soleur-infra-app, validated against
+# exactly soleur-infra-app and soleur-infra-privileged before any Doppler call). The
+# source is named in ARGV so this stub can see it — the harness unsets DOPPLER_PROJECT
+# and DOPPLER_CONFIG, so an env-var form would read nothing. The stub accepts ONE
+# project per run (DOPPLER_EXPECT_PROJECT, default the narrow project), like a Doppler
+# service token, which is bound to one project and refused for any other.
 CDIR="$TMP/composite"; CBIN="$CDIR/bin"; mkdir -p "$CBIN"
 extract_comp() { awk '/^      run: \|[[:space:]]*$/ {on=1; next} on' "$1" | sed 's/^        //'; }
 extract_comp "$COMPOSITE" > "$CDIR/run.sh"
@@ -1489,12 +1585,13 @@ if grep -qF 'INSTALL_RESP=$(curl -sS --max-time 30 -X POST \' "$CDIR/run.sh"; th
 else fail 'comp:extracted' "could not extract the composite run block from $COMPOSITE"; fi
 openssl genrsa 2048 > "$CDIR/key.pem" 2>/dev/null
 # doppler: logs its argv, and refuses (exit 1) unless the argv carries exactly
-# `--project soleur-infra-privileged --config prd` and names one of the two keys.
+# `--project $DOPPLER_EXPECT_PROJECT --config prd` (default soleur-infra-app) and names
+# one of the two keys.
 cat > "$CBIN/doppler" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "\${DOPPLER_LOG:?unset}"
 case " \$* " in
-  *" --project soleur-infra-privileged --config prd "*) : ;;
+  *" --project \${DOPPLER_EXPECT_PROJECT:-soleur-infra-app} --config prd "*) : ;;
   *) echo "doppler-stub: wrong project/config: \$*" >&2; exit 1 ;;
 esac
 case "\$1 \$2 \$3" in
@@ -1514,13 +1611,17 @@ if [[ -n "${CURL_RESP:-}" ]]; then printf '%s' "$CURL_RESP"
 else printf '%s' '{"token":"fixture-installation-credential"}'; fi
 STUB
 chmod +x "$CBIN/doppler" "$CBIN/curl"
+# comp_default <action.yml> — the composite's `doppler-project` input default, which the
+# runner substitutes for an omitted input; run_comp emulates that binding with it.
+comp_default() { python3 -c 'import sys, yaml; print(((yaml.safe_load(open(sys.argv[1])).get("inputs") or {}).get("doppler-project") or {}).get("default", "NONE"))' "$1"; }
+COMP_DEFAULT=$(comp_default "$COMPOSITE")
 # run_comp <label> <permissions> <repositories> [response-json] [doppler-token] [installation-id] [run.sh]
 run_comp() {
   CLOG="$CDIR/$1.curl"; COUT="$CDIR/$1.out"; DLOG="$CDIR/$1.doppler"; : > "$CLOG"; : > "$COUT"; : > "$DLOG"
   CRC=0
   env -u SCOPE_PERMISSIONS -u SCOPE_REPOSITORIES -u CURL_RESP -u DOPPLER_PROJECT -u DOPPLER_CONFIG ${CURL_FAIL:+CURL_FAIL="$CURL_FAIL"} \
     ${4:+CURL_RESP="$4"} PATH="$CBIN:$PATH" CURL_LOG="$CLOG" DOPPLER_LOG="$DLOG" \
-    DOPPLER_TOKEN="${5-fixture}" INSTALLATION_ID="${6-166065653}" \
+    DOPPLER_TOKEN="${5-fixture}" INSTALLATION_ID="${6-166065653}" DOPPLER_SOURCE="${COMP_SOURCE-$COMP_DEFAULT}" \
     SCOPE_PERMISSIONS="$2" SCOPE_REPOSITORIES="$3" RUNNER_TEMP="$CDIR" GITHUB_OUTPUT="$COUT" \
     bash --noprofile --norc -eo pipefail "${7:-$CDIR/run.sh}" > "$CDIR/$1.stdout" 2>&1 || CRC=$?
 }
@@ -1540,10 +1641,37 @@ a_eq 'comp.scoped:one-call' "$(calls)" 1
 a_eq 'comp.scoped:not-revoked' "$(grep -cx 'https://api.github.com/installation/token' "$CLOG" || true)" 0
 # The token call is bounded, on every path.
 a_eq 'comp.scoped:max-time' "$(awk 'f {print; exit} $0 == "--max-time" {f=1}' "$CLOG")" 30
-# The source is fixed: exactly these two reads, project and config in argv.
-a_eq 'comp.scoped:doppler-argv' "$(cat "$DLOG")" $'secrets get GITHUB_INFRA_APP_ID --plain --project soleur-infra-privileged --config prd\nsecrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-privileged --config prd'
-# Per-run evidence (runbook O4c): the identity, installation and granted scope.
-a_eq 'comp.scoped:notice' "$(grep -c '^::notice title=app-token::app=soleur-infra installation=166065653 permissions={"actions":"write","metadata":"read"}$' "$CDIR/scoped.stdout" || true)" 1
+# The default source is the narrow project (read from the composite's own input default).
+a_eq 'comp.scoped:default-source' "$COMP_DEFAULT" soleur-infra-app
+# The source is the validated project: exactly these two reads, project and config in argv.
+a_eq 'comp.scoped:doppler-argv' "$(cat "$DLOG")" $'secrets get GITHUB_INFRA_APP_ID --plain --project soleur-infra-app --config prd\nsecrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-app --config prd'
+# Per-run evidence (runbook O4c): the identity, installation, granted scope and source.
+a_eq 'comp.scoped:notice' "$(grep -c '^::notice title=app-token::app=soleur-infra installation=166065653 permissions={"actions":"write","metadata":"read"} source=soleur-infra-app/prd$' "$CDIR/scoped.stdout" || true)" 1
+# The explicit broad source (the apply-github-infra caller's shape): reads that project
+# (the stub expects it for this run) and succeeds; the notice names it.
+DOPPLER_EXPECT_PROJECT=soleur-infra-privileged COMP_SOURCE=soleur-infra-privileged run_comp privileged '{"actions":"write"}' soleur "$R_OK"
+a_eq 'comp.privileged:rc' "$CRC" 0
+a_eq 'comp.privileged:token-out' "$(cat "$COUT")" 'token=fixture-installation-credential'
+a_eq 'comp.privileged:doppler-argv' "$(cat "$DLOG")" $'secrets get GITHUB_INFRA_APP_ID --plain --project soleur-infra-privileged --config prd\nsecrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-privileged --config prd'
+a_eq 'comp.privileged:notice-source' "$(grep -c ' source=soleur-infra-privileged/prd$' "$CDIR/privileged.stdout" || true)" 1
+# An unlisted source (the Tier-A project, an empty value, a lookalike) is refused BEFORE
+# any Doppler or GitHub call, and nothing is handed out.
+for spec in 'unlisted:soleur' 'unlisted-empty:' 'unlisted-lookalike:soleur-infra-app2' 'unlisted-prefix:soleur-infra'; do
+  lbl="${spec%%:*}"; val="${spec#*:}"
+  COMP_SOURCE="$val" run_comp "$lbl" '{"actions":"write"}' soleur "$R_OK"
+  a_eq "comp.$lbl:refused" "$(refused)" yes
+  a_eq "comp.$lbl:no-doppler" "$(dcalls)" 0
+  a_eq "comp.$lbl:no-call" "$(calls)" 0
+  a_eq "comp.$lbl:no-token-out" "$(cat "$COUT")" ''
+  a_eq "comp.$lbl:named" "$(grep -c '^::error::mint-infra-app-token: doppler-project must be' "$CDIR/$lbl.stdout" || true)" 1
+done
+# A token used against the wrong project is refused by Doppler itself (the stub models
+# it): the broad project asked of a stub that expects the narrow one reads nothing.
+COMP_SOURCE=soleur-infra-privileged run_comp wrong-project-token '{"actions":"write"}' soleur "$R_OK"
+a_eq 'comp.wrong-project-token:refused' "$(refused)" yes
+a_eq 'comp.wrong-project-token:no-token-out' "$(cat "$COUT")" ''
+a_eq 'comp.wrong-project-token:named' "$(grep -c '^::error::mint-infra-app-token: GITHUB_INFRA_APP_ID not readable from Doppler soleur-infra-privileged/prd' "$CDIR/wrong-project-token.stdout" || true)" 1
+a_eq 'comp.wrong-project-token:runbook-pointer' "$(grep -c 'see runbook infra-credential-tiers-8209.md §Release-job App source' "$CDIR/wrong-project-token.stdout" || true)" 1
 run_comp scoped-no-meta '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
 a_eq 'comp.scoped-no-metadata:rc' "$CRC" 0
 run_comp scope-wider '{"actions":"write"}' soleur '{"token":"fixture-installation-credential","permissions":{"actions":"write","contents":"write","metadata":"read"},"repository_selection":"selected","repositories":[{"name":"soleur"}]}'
@@ -1626,11 +1754,13 @@ d = yaml.safe_load(open(sys.argv[1]))
 steps = (d.get("runs") or {}).get("steps") or []
 st = steps[0] if len(steps) == 1 else {}
 want_env = {"DOPPLER_TOKEN": "${{ inputs.doppler-token }}", "INSTALLATION_ID": "${{ inputs.installation-id }}",
-            "SCOPE_PERMISSIONS": "${{ inputs.permissions }}", "SCOPE_REPOSITORIES": "${{ inputs.repositories }}"}
+            "SCOPE_PERMISSIONS": "${{ inputs.permissions }}", "SCOPE_REPOSITORIES": "${{ inputs.repositories }}",
+            "DOPPLER_SOURCE": "${{ inputs.doppler-project }}"}
 ok = (len(steps) == 1 and set(st) == {"name", "id", "shell", "env", "run"} and st.get("id") == "mint"
       and st.get("shell") == "bash" and st.get("env") == want_env
       and ((d.get("outputs") or {}).get("token") or {}).get("value") == "${{ steps.mint.outputs.token }}"
-      and set((d.get("inputs") or {})) == {"doppler-token", "installation-id", "permissions", "repositories"})
+      and set((d.get("inputs") or {})) == {"doppler-token", "doppler-project", "installation-id", "permissions", "repositories"}
+      and ((d.get("inputs") or {}).get("doppler-project") or {}).get("required") is False)
 print("OK" if ok else "BAD keys=%s env=%s" % (sorted(st), st.get("env")))
 PY
 comp_shape=$(python3 "$CDIR/shape.py" "$COMPOSITE")
@@ -1651,23 +1781,60 @@ PY
 comp_shape_mut continue-on-error $'      id: mint\n' $'      id: mint\n      continue-on-error: true\n'
 comp_shape_mut env-swapped 'SCOPE_PERMISSIONS: ${{ inputs.permissions }}' 'SCOPE_PERMISSIONS: ${{ inputs.repositories }}'
 comp_shape_mut output-rewired 'value: ${{ steps.mint.outputs.token }}' 'value: ${{ steps.other.outputs.token }}'
-# Mutation (plan Guard Contract row 8): the composite's project argv moved to the
-# Tier-A `soleur` project must turn the scoped row RED — the stub refuses it.
-comp_mut="$CDIR/action.mut-project.yml"
-python3 - "$COMPOSITE" "$comp_mut" <<'PY'
+# comp_mut <id> <old> <new> [nth] — copy the composite with `old` replaced by `new`
+# (every occurrence, or only the nth when given), extract its run block to
+# $CDIR/run.mut-<id>.sh and leave the copy at $CDIR/action.mut-<id>.yml. The anchor must
+# occur; a copy identical to the original is a broken instrument.
+comp_mut() {
+  local cid="$1" cdst="$CDIR/action.mut-$1.yml"
+  python3 - "$COMPOSITE" "$cdst" "$2" "$3" "${4:-}" <<'PY'
 import sys
-src, dst = sys.argv[1:3]
+src, dst, old, new, nth = sys.argv[1:6]
 s = open(src).read()
-n = s.count("--project soleur-infra-privileged")
+n = s.count(old)
 if n < 1: sys.exit(2)
-open(dst, "w").write(s.replace("--project soleur-infra-privileged", "--project soleur"))
+if nth:
+    i = -1
+    for _ in range(int(nth)):
+        i = s.find(old, i + 1)
+        if i < 0: sys.exit(2)
+    s = s[:i] + new + s[i + len(old):]
+else:
+    s = s.replace(old, new)
+open(dst, "w").write(s)
 PY
-if [[ $? -ne 0 ]] || cmp -s "$COMPOSITE" "$comp_mut"; then fail 'comp.mut-project:landed' "the project argv anchor did not land in the composite copy"
-else
-  pass 'comp.mut-project:landed'
-  extract_comp "$comp_mut" > "$CDIR/run.mut-project.sh"
+  if [[ $? -ne 0 ]] || cmp -s "$COMPOSITE" "$cdst"; then fail "comp.mut-$cid:landed" "the anchor did not land in the composite copy"; return 1; fi
+  pass "comp.mut-$cid:landed"
+  extract_comp "$cdst" > "$CDIR/run.mut-$cid.sh"
+}
+# M0 (Tier-A / wrong project): every `--project` argv moved to the Tier-A `soleur`
+# project must turn the scoped row RED: the stub refuses it.
+if comp_mut project '--project "$DOPPLER_SOURCE"' '--project soleur'; then
   run_comp mut-project '{"actions":"write"}' soleur "$R_OK" fixture 166065653 "$CDIR/run.mut-project.sh"
   a_eq 'comp.mut-project:caught' "$( (( CRC != 0 )) && [[ ! -s "$COUT" ]] && echo yes || echo "no (rc=$CRC, token-out=$(wc -c < "$COUT"))")" yes
+fi
+# M1: the composite's DEFAULT flipped to the broad project. The runner would hand that
+# default to the run block; the stub (expecting the narrow project) refuses it, so the
+# scoped default row must go RED: refused, no token out.
+if comp_mut default-flip 'default: soleur-infra-app' 'default: soleur-infra-privileged'; then
+  mut_default=$(comp_default "$CDIR/action.mut-default-flip.yml")
+  a_eq 'comp.mut-default-flip:default-is-broad' "$mut_default" soleur-infra-privileged
+  COMP_SOURCE="$mut_default" run_comp mut-default-flip '{"actions":"write"}' soleur "$R_OK" fixture 166065653 "$CDIR/run.mut-default-flip.sh"
+  a_eq 'comp.mut-default-flip:caught' "$( (( CRC != 0 )) && [[ ! -s "$COUT" ]] && echo yes || echo "no (rc=$CRC, token-out=$(wc -c < "$COUT"))")" yes
+fi
+# M2: the allow-list widened to accept `soleur`: the unlisted-value row must go RED. The
+# widened copy no longer refuses it BEFORE a Doppler call (the stub then refuses at the
+# read, after logging it), so zero Doppler calls is the property that catches it.
+if comp_mut allowlist-widened 'soleur-infra-app|soleur-infra-privileged)' 'soleur-infra-app|soleur-infra-privileged|soleur)'; then
+  COMP_SOURCE=soleur run_comp mut-allowlist-widened '{"actions":"write"}' soleur "$R_OK" fixture 166065653 "$CDIR/run.mut-allowlist-widened.sh"
+  a_eq 'comp.mut-allowlist-widened:caught' "$( (( $(dcalls) > 0 )) && echo yes || echo "no (dcalls=$(dcalls))")" yes
+fi
+# M3: `--config prd` dropped from the SECOND read only (nth-occurrence replacement; the
+# stub then refuses the second read and the argv equality of the scoped row differs).
+if comp_mut config-dropped-second ' --config prd 2>/dev/null' ' 2>/dev/null' 2; then
+  run_comp mut-config-dropped-second '{"actions":"write"}' soleur "$R_OK" fixture 166065653 "$CDIR/run.mut-config-dropped-second.sh"
+  a_eq 'comp.mut-config-dropped-second:caught' "$([[ "$(cat "$DLOG")" != "$(cat "$CDIR/scoped.doppler")" ]] && echo yes || echo no)" yes
+  a_eq 'comp.mut-config-dropped-second:refused' "$(refused)" yes
 fi
 
 # ===========================================================================

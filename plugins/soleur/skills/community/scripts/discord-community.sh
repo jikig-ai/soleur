@@ -273,15 +273,41 @@ discord_request() {
   esac
 }
 
+# --- Compact output (#9678) ---
+#
+# The spawned community-monitor agent has no file tools, so any collector output
+# past the Bash tool's inline limit (30,000 characters) is unreadable and the digest row
+# is forced to `partial` / `output-too-large`. The cron handler therefore sets
+# SOLEUR_COLLECTOR_COMPACT=1 and each command prints ONE line of compact JSON
+# holding only the fields the prompt reads (counts, channel ids). Unset, or any
+# other value, leaves the output byte-identical to the interactive form.
+# `members` is exempt: the cron's containment hook denies it, so it never runs there.
+readonly COMPACT_MAX_ITEMS=40
+
+compact_on() {
+  [[ "${SOLEUR_COLLECTOR_COMPACT:-}" == "1" ]] && return 0
+  if [[ -n "${SOLEUR_COLLECTOR_COMPACT:-}" ]]; then
+    echo "compact mode ignored: SOLEUR_COLLECTOR_COMPACT must be 1" >&2
+  fi
+  return 1
+}
+
 # --- Commands ---
 
-validate_snowflake_id() {
-  local id="$1"
-  local label="$2"
-  if [[ ! "$id" =~ ^[0-9]+$ ]]; then
-    echo "Error: ${label} must be numeric. Got: ${id}" >&2
+# An operand reaches bash arithmetic, a URL or a jq program only AFTER this check:
+# `(( limit ))` and `$(( limit ))` EVALUATE their operand, so `HOME[$(cmd)]` would run
+# `cmd` (#7122). The message names the operand's LABEL and never the offending value:
+# agent runtimes surface stderr, and the value is third-party-influenced text.
+require_uint() {
+  local label="$1"
+  if [[ ! "${2:-}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "Error: ${label} must be a non-negative integer." >&2
     exit 1
   fi
+}
+
+validate_snowflake_id() {
+  require_uint "$2" "$1"
 }
 
 cmd_messages() {
@@ -289,6 +315,10 @@ cmd_messages() {
   validate_snowflake_id "$channel_id" "channel_id"
   local limit="${2:-100}"
   local after_id="${3:-}"
+  require_uint "limit" "$limit"
+  if [[ -n "$after_id" ]]; then
+    require_uint "after_id" "$after_id"
+  fi
 
   local all_messages="[]"
   local fetched=0
@@ -325,11 +355,17 @@ cmd_messages() {
     fi
   done
 
+  if compact_on; then
+    # Only the count is read; bodies, authors and attachments never reach the model.
+    jq -ce 'if type == "array" then {count: length} else error("compact: messages not an array") end' <<<"$all_messages"
+    return
+  fi
   echo "$all_messages"
 }
 
 cmd_members() {
   local limit="${1:-1000}"
+  require_uint "limit" "$limit"
   local all_members="[]"
   local after="0"
   local batch_size=1000
@@ -352,7 +388,7 @@ cmd_members() {
     total=$(echo "$all_members" | jq 'length')
 
     if (( total >= limit )); then
-      all_members=$(echo "$all_members" | jq ".[0:${limit}]")
+      all_members=$(echo "$all_members" | jq --argjson n "$limit" '.[0:$n]')
       break
     fi
 
@@ -367,10 +403,25 @@ cmd_members() {
 }
 
 cmd_guild_info() {
+  if compact_on; then
+    discord_request "/guilds/${DISCORD_GUILD_ID}?with_counts=true" | \
+      jq -ce '{approximate_member_count: (.approximate_member_count | if type == "number" then . else error("compact: approximate_member_count missing") end)}'
+    return
+  fi
   discord_request "/guilds/${DISCORD_GUILD_ID}?with_counts=true"
 }
 
 cmd_channels() {
+  if compact_on; then
+    # `count` stays exact so more than COMPACT_MAX_ITEMS channels is still detectable; ids
+    # are filtered to digits because they feed the next Bash call.
+    discord_request "/guilds/${DISCORD_GUILD_ID}/channels" | \
+      jq -ce --argjson max "$COMPACT_MAX_ITEMS" \
+        '[.[] | select(.type == 0)] as $t
+         | {count: ($t | length),
+            channel_ids: [$t[] | .id | strings | select(test("^[0-9]{1,20}$"))][:$max]}'
+    return
+  fi
   discord_request "/guilds/${DISCORD_GUILD_ID}/channels" | \
     jq '[.[] | select(.type == 0)]'  # type 0 = text channels
 }

@@ -52,8 +52,11 @@ case "$BASE_URL" in
   *) fail "SOLEUR_BASE_URL must be https://... (got: $BASE_URL)" ;;
 esac
 
-if [ -z "${INNGEST_MANUAL_TRIGGER_SECRET:-}" ]; then
-  fail "INNGEST_MANUAL_TRIGGER_SECRET unset — read it via: export INNGEST_MANUAL_TRIGGER_SECRET=\$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)"
+# Token-shape guard: a newline in the token would inject a curl config directive on the
+# stdin channel below, and an empty one would send the request headerless. Never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "${INNGEST_MANUAL_TRIGGER_SECRET:-}"; then
+  fail "INNGEST_MANUAL_TRIGGER_SECRET unset or malformed — read it via: export INNGEST_MANUAL_TRIGGER_SECRET=\$(doppler secrets get INNGEST_MANUAL_TRIGGER_SECRET -p soleur -c prd --plain)"
 fi
 
 date_plus() { # $1 = days ahead; prints UTC ISO instant
@@ -76,9 +79,9 @@ trap 'rm -f "$RESP"' EXIT
 post() { # $1 = json body; prints HTTP status
   curl --disable --noproxy '*' -sS -o "$RESP" -w '%{http_code}' -X POST \
     "${BASE_URL}/api/internal/schedule-reminder" \
-    -H "Authorization: Bearer ${INNGEST_MANUAL_TRIGGER_SECRET}" \
     -H "Content-Type: application/json" \
-    -d "$1" 2>/dev/null
+    -d "$1" --config - 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "${INNGEST_MANUAL_TRIGGER_SECRET}")
 }
 
 # Build bodies without jq (macOS stock has none).

@@ -144,6 +144,14 @@ Live standing alarms over this source:
   `apps/web-platform/test/infra/bwrap-probe-rollback-alert.test.sh` (mutation rows). It auto-resolves
   after 10 quiet minutes, which does not mean the cause was found. Runbook and no-SSH decode:
   [`canary-probe-set.md`](./canary-probe-set.md#blocking-bwrap-sandbox-probe--reading-its-self-report-8016-pr-8026).
+- **`logtail_exploration_alert.ghcr_hostsfile_deny_lost`** (#9391, `higher_than 0`, missing data counts as zero):
+  `soleur-ghcr-hostsfile-deny-lost-prd`. It emails (team email on the free tier) when a host's hosts-file GHCR
+  deny is no longer in force: a `ci-deploy` row whose whole message is `GHCR_DENY ghcr_blocked=0`, or a
+  `SOLEUR_ZOT_DISK` heartbeat head carrying `ghcr_blocked=0`. `unknown` does not page. No `host_name` conjunct
+  (registry rows have no `host_name`). It auto-resolves after 30 quiet minutes, which does not mean the deny
+  is back. Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`; drift guard
+  `apps/web-platform/test/infra/ghcr-blocked-alert.test.sh`. Decode, silent states and per-host repair:
+  [`cron-egress-blocked.md`](./cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert).
 - **`scheduled-zot-restart-loop.yml`** (#6291; hourly, dispatched by the web-server watchdog clock since #8495 with a GHA-cron fallback — see `inngest-server.md` "How the external watchdogs are triggered") — the zot registry restart-loop
   recurrence alarm. Reads the `SOLEUR_ZOT_DISK` marker, fires a deduped `[ci/zot-restart-loop]`
   issue on a newest-`boot_id` OOM/crash-loop and a `[ci/zot-telemetry-silent]` issue if the
@@ -871,6 +879,21 @@ SQL
 `auth_broken` above 0 is a credential fault (the probe exits 3), not an outage. For a web-2 page,
 also check `soleur-web-nic-guard-web-2`. When both page together, the whole host was dark, not zot.
 
+**A `soleur-web-nic-guard-<host>` beat that stops is not always a NIC fault.** The web NIC guard also withholds
+its beat when it cannot report at all (#9632): `BETTERSTACK_LOGS_TOKEN` or `BETTERSTACK_INGEST_URL` unset, the
+ingest URL differing from the pinned literal, or a token outside the token alphabet. Read the guard's own rows,
+which share one `SYSLOG_IDENTIFIER`, and tell the two causes apart by the line itself:
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 30m \
+  --grep 'web-nic-guard' --limit 20
+```
+
+`unpinned_url`, `bad_token` or `WARN: BETTERSTACK_LOGS_TOKEN/BETTERSTACK_INGEST_URL unset` means the guard refused to
+ship (fix the Doppler value or the pin); a `SOLEUR_PRIVATE_NIC ... nic_ok=false` row means the private NIC is
+really absent. A malformed token can blind Vector too (it reads the same secret), in which case the absence of
+rows is the only off-box signal. The monitor alerts only once the arm step has un-paused it.
+
 **Step 3: why the registry withheld beats.** Since #7270, every 5-minute `SOLEUR_ZOT_DISK` row
 carries the liveness feeder's per-boot counters. Read the rows around the incident. The window
 below is the last 2 hours; widen it as needed.
@@ -1008,7 +1031,11 @@ in NATIVE Vector shape, NOT the `tag_metrics`-flattened log shape.** So:
 - **`source_kind` is unset** on these rows — a filter `source_kind='host_metrics'`
   returns ZERO and looks like "metrics don't ship." They do; you filtered wrong.
   (The repo's `tag_metrics` remap that would add those fields is not reflected in
-  shipped data — tracked in #6944 separately; query by `tags.host` + `name` and it just works.)
+  shipped data — tracked in #6944 separately; query by `tags.host` + `name` and it just works.
+  Measured 2026-10-06 (#9372): with the pinned Vector 0.43.1 the remap is a silent no-op on metric events, so the
+  stored row is the bare metric. The web-2 emptiness gate `scripts/web2-rebirth-emptiness.sh` reads exactly this native
+  shape — `tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value` — and its suite resolves those paths against
+  a real-shape row.)
 
 Memory utilisation distribution for one host over 30 days (min available =
 worst-case peak usage; subtract from total for GB used):

@@ -26,13 +26,30 @@ ROOT="$(cd "${DIR}/../.." && pwd)"
 GATE="${ROOT}/tests/scripts/lib/web-host-replace-gate.sh"
 
 TMP="$(mktemp -d)"
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+assert_fixture_dir "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 passes=0
 fails=0
-pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+# INDEPENDENT CASE COUNTER (ADR-193 #2): incremented AT THE CALL SITE (check / mutate_*),
+# never inside pass()/fail(), so a neutered fail() cannot drop a row and its count together.
+cases=0
+# APPEND-ONLY TRANSCRIPT of every verdict (one "ok|name" / "FAIL|name" entry each). The instrument
+# self-test below requires the helpers to move BOTH their counter and this ledger.
+LEDGER=()
+pass() { passes=$((passes + 1)); LEDGER+=("ok|$1"); printf '  ok   %s\n' "$1"; }
 fail() {
-  fails=$((fails + 1))
+  fails=$((fails + 1)); LEDGER+=("FAIL|$1")
   printf '  FAIL %s\n' "$1"; printf '       rc=%s\n' "${2:-?}"; printf '       out=%s\n' "${3:-}"
 }
 
@@ -47,6 +64,7 @@ source "$GATE"
 # mk_plan <file> <json-array-of-resource_changes>
 mk_plan() {
   local f="$1" changes="$2"
+  assert_fixture_dir "$f"
   printf '{"format_version":"1.2","resource_changes":%s}\n' "$changes" > "$f"
 }
 
@@ -113,6 +131,7 @@ happy_changes() {
 check() {
   local name="$1" want_rc="$2" needle="$3" plan="$4" key="$5"
   local out rc
+  cases=$((cases + 1))
   out="$(web_host_replace_gate "$plan" "$key" 2>&1)"; rc=$?
   # Bash pattern match, NOT a `printf ... | grep -q` pipe: under `pipefail` an early grep
   # match SIGPIPEs the producer (141) and the pipeline reports failure even though it
@@ -123,6 +142,31 @@ check() {
     fail "$name (want rc=$want_rc containing '$needle')" "$rc" "$out"
   fi
 }
+
+# ── INSTRUMENT SELF-TEST (check) ─────────────────────────────────────────────────────
+# Every verdict in this file is owned by check()/check_arms(). A helper that always records a pass
+# would leave every row green, and the case counter + conservation floor below cannot see it (a
+# neutered helper still counts its case and still records one verdict). So drive check() ONCE with
+# an input that MUST fail and ONCE with one that MUST pass, and require the failure/pass counter AND
+# the append-only ledger to move. The result is reported with printf + exit, never through the
+# helper under test, and the counters/ledger are then unwound so the self-test is not a case.
+_st_instrument() { # <helper-name> <must-fail-cmd> <must-pass-cmd>
+  local h="$1" p0 f0 c0 l0
+  p0=$passes; f0=$fails; c0=$cases; l0=${#LEDGER[@]}
+  eval "$2" >/dev/null 2>&1
+  if [[ "$fails" -ne $((f0 + 1)) || "$passes" -ne "$p0" || "${#LEDGER[@]}" -ne $((l0 + 1)) || "${LEDGER[$l0]%%|*}" != "FAIL" ]]; then
+    printf '[FATAL] instrument self-test: %s() did not record a FAIL (fail counter + ledger) for an input that must fail\n' "$h" >&2; exit 2
+  fi
+  eval "$3" >/dev/null 2>&1
+  if [[ "$passes" -ne $((p0 + 1)) || "$fails" -ne $((f0 + 1)) || "${#LEDGER[@]}" -ne $((l0 + 2)) || "${LEDGER[$((l0 + 1))]%%|*}" != "ok" || "$cases" -ne $((c0 + 2)) ]]; then
+    printf '[FATAL] instrument self-test: %s() did not record an ok (pass counter + ledger) for an input that must pass\n' "$h" >&2; exit 2
+  fi
+  passes=$p0; fails=$f0; cases=$c0; LEDGER=("${LEDGER[@]:0:$l0}")
+}
+mk_plan "$TMP/st-happy.json" "$(happy_changes web-2)"
+_st_instrument check \
+  'check "self-test" 1 "PASS" "$TMP/st-happy.json" "web-2"' \
+  'check "self-test" 0 "PASS" "$TMP/st-happy.json" "web-2"'
 
 printf '\n=== web-host-replace-gate ===\n\n'
 
@@ -153,9 +197,10 @@ check "the gate is generic over var.web_hosts keys => PASS for web-3" 0 "PASS" "
 #   2. cloudflare_record.app.content is hcloud_server.web["web-1"].ipv4_address (dns.tf).
 #      Replacing web-1 without re-pointing it leaves app.soleur.ai resolving to a destroyed
 #      host — a total outage of the product.
-#   3. all 17 terraform_data.* SSH provisioners in server.tf pin connection.host to web-1;
-#      `-target` is upstream-only so none is pulled into the plan, and a replaced web-1
-#      leaves every one of them un-run against a dead IP.
+#   3. every web-1-pinned terraform_data.* SSH provisioner pins connection.host to web-1
+#      (22 measured 2026-10-02: 18 server.tf + 3 workspaces-luks.tf + 1 ci-ssh-key.tf; the old
+#      "17" was server.tf-only and not a measurement); `-target` is upstream-only so none is
+#      pulled into the plan, and a replaced web-1 leaves every one of them un-run against a dead IP.
 #   4. DECISIVE, and not a plan property at all: /mnt/data pins BY-ID to
 #      hcloud_volume.workspaces[key] — on web-1 the PLAINTEXT volume the 2026-07-23 cutover
 #      SUPERSEDED — and nothing on a fresh boot opens the LUKS mapper (crypttab keyfile
@@ -180,7 +225,7 @@ check "the LUKS-pinned host web-1 => ABORT (refused by name)" 1 "web-1" "$TMP/ha
 # panel measured that ground false; a needle pinned to a rationale the codebase contradicts
 # keeps passing while the message misleads the operator it exists for.
 check "the web-1 refusal names the superseded-plaintext hazard" 1 "superseded by the 2026-07-23 LUKS cutover" "$TMP/happy-web1.json" "web-1"
-check "the web-1 refusal names the real remaining unblock conditions (gate arms, rehearsal, #6964), not the shipped mount pin" 1 "key-conditional gate arms, a rehearsal on a non-production host and #6964" "$TMP/happy-web1.json" "web-1"
+check "the web-1 refusal names the real remaining unblock conditions (rehearsal, #6964) and says the arms are arms-only, not the shipped mount pin" 1 "arms-only and cannot observe any of the blockers above, so this still needs a rehearsal on a non-production host and #6964 first" "$TMP/happy-web1.json" "web-1"
 
 # ── REJECT: no host key supplied ──────────────────────────────────────────────────
 #
@@ -423,6 +468,241 @@ mk_plan "$TMP/no-firewall.json" "$(printf '[%s,%s,%s]' \
   "$(rc_entry 'hcloud_volume_attachment.workspaces["web-2"]' 'hcloud_volume_attachment' '["delete","create"]')")"
 check "the server replaced with NO firewall re-attach => ABORT (naked public IP)" 1 "hcloud_firewall_attachment" "$TMP/no-firewall.json" "web-2"
 
+# ── THE KEYED ARMS FOR web-1 (#9356) ──────────────────────────────────────────────
+#
+# THESE FIXTURES ARE ARMS-ONLY AND CERTIFY NOTHING ABOUT WEB-1 SAFETY. A web-1 replace entails
+# three blockers no plan can show: the by-id /mnt/data pin to the SUPERSEDED plaintext volume,
+# the web-1-pinned terraform_data SSH provisioners (not in a -target plan), and -target being
+# upstream-only. The arms exist so a later relaxing change is graded against them; the REFUSAL
+# at the top of the gate is what keeps web-1 out, and it stays first and intact (CPO condition 1).
+#
+# The arms are reachable only with the refusal constant cleared. `check_arms` clears it INSIDE a
+# subshell so the override never leaks into the rest of the suite; `check` (no override) is
+# used wherever the refusal must be seen intact.
+#
+# mk_w1 <file> <att-entry|-> <apex-entry|-> [extra-entry|-] [prior-luks-id|none] [content-refs-json|none]
+LUKS_ID="9356001"
+OTHER_LUKS_ID="9356002"
+APEX_B='{"name":"app","type":"A","proxied":true,"ttl":1,"zone_id":"zone1","content":"192.0.2.10","id":"rec1"}'
+APEX_A='{"name":"app","type":"A","proxied":true,"ttl":1,"zone_id":"zone1","content":"192.0.2.99","id":"rec1"}'
+REFS_OK='["hcloud_server.web[\"web-1\"].ipv4_address","hcloud_server.web[\"web-1\"]","hcloud_server.web"]'
+
+# rc_att <actions-json> <volume-id-json>
+rc_att() {
+  printf '{"address":"hcloud_volume_attachment.workspaces_luks","type":"hcloud_volume_attachment","change":{"actions":%s,"before":{},"after":{"volume_id":%s}}}' "$1" "$2"
+}
+# rc_apex <actions-json> <before-json> <after-json> <after_unknown-json>
+rc_apex() {
+  printf '{"address":"cloudflare_record.app","type":"cloudflare_record","change":{"actions":%s,"before":%s,"after":%s,"after_unknown":%s}}' "$1" "$2" "$3" "$4"
+}
+mk_w1() {
+  local f="$1" att="$2" apex="$3" extra="${4:--}" prior="${5:-$LUKS_ID}" refs="${6:-$REFS_OK}"
+  assert_fixture_dir "$f"
+  local entries
+  entries="$(happy_changes web-1 | sed 's/^\[//; s/\]$//')"
+  [[ "$att" != "-" ]] && entries="${entries},${att}"
+  [[ "$apex" != "-" ]] && entries="${entries},${apex}"
+  [[ "$extra" != "-" ]] && entries="${entries},${extra}"
+  jq -n --argjson c "[${entries}]" --arg id "$prior" --argjson refs "${refs/none/null}" '
+    {format_version: "1.2", resource_changes: $c}
+    + (if $id == "none" then {} else {prior_state: {values: {root_module: {resources: [{address: "hcloud_volume.workspaces_luks", values: {id: $id}}]}}}} end)
+    + (if $refs == null then {} else {configuration: {root_module: {resources: [{address: "cloudflare_record.app", expressions: {content: {references: $refs}}}]}}} end)' > "$f"
+}
+
+# check_arms <name> <want_rc> <needle> <plan> [key]  — the refusal constant cleared in a SUBSHELL.
+check_arms() {
+  local name="$1" want_rc="$2" needle="$3" plan="$4" key="${5:-web-1}"
+  local out rc
+  cases=$((cases + 1))
+  out="$( _WEB_HOST_REPLACE_LUKS_PINNED_KEY=""; web_host_replace_gate "$plan" "$key" 2>&1 )"; rc=$?
+  if [[ "$rc" -eq "$want_rc" && "$out" == *"$needle"* ]]; then
+    pass "$name"
+  else
+    fail "$name (want rc=$want_rc containing '$needle')" "$rc" "$out"
+  fi
+}
+
+ATT_OK="$(rc_att '["delete","create"]' "$LUKS_ID")"
+APEX_OK="$(rc_apex '["update"]' "$APEX_B" "$APEX_A" '{}')"
+W1_PASS='replace of hcloud_server.web["web-1"] permitted'
+ARM_ATT='does NOT create hcloud_volume_attachment.workspaces_luks onto the LUKS volume'
+ARM_APEX='cloudflare_record.app is not updated in place'
+
+# ── INSTRUMENT SELF-TEST (check_arms): see the check() block above ───────────────────
+mk_w1 "$TMP/st-w1.json" "$ATT_OK" "$APEX_OK"
+_st_instrument check_arms \
+  'check_arms "self-test" 1 "$W1_PASS" "$TMP/st-w1.json"' \
+  'check_arms "self-test" 0 "$W1_PASS" "$TMP/st-w1.json"'
+
+# H2 — MUST-PASS (arms-only fixture, NOT a safety claim) -------------------------
+mk_w1 "$TMP/w1-complete.json" "$ATT_OK" "$APEX_OK"
+check_arms "H2: an arms-complete web-1 plan with the refusal cleared => PASS (arms-only fixture, not a safety claim)" 0 "$W1_PASS" "$TMP/w1-complete.json"
+check_arms "H2: the PASS names the keyed arms it evaluated" 0 "keyed arms for web-1: luks_attachment_recreated_onto_prior_volume=1 apex_record_repointed_in_place=1" "$TMP/w1-complete.json"
+
+# A differently ordered, key-reshuffled equivalent of the same plan: order must not matter.
+jq -S '.resource_changes |= reverse' "$TMP/w1-complete.json" > "$TMP/w1-reordered.json"
+check_arms "H2: a differently ordered equivalent plan JSON => PASS" 0 "$W1_PASS" "$TMP/w1-reordered.json"
+
+# Provider id typing: the volume id is a string in state and an integer in the attachment.
+mk_w1 "$TMP/w1-attstr.json" "$(rc_att '["create"]' "\"$LUKS_ID\"")" "$APEX_OK"
+check_arms "a string-typed attachment volume_id equal to the prior id => PASS (string vs integer)" 0 "$W1_PASS" "$TMP/w1-attstr.json"
+
+# An unknown-after-apply content with the source reference present (the real replace shape).
+mk_w1 "$TMP/w1-unknown.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" '{"name":"app","type":"A","proxied":true,"ttl":1,"zone_id":"zone1","id":"rec1"}' '{"content":true}')"
+check_arms "apex content unknown-after-apply, sourced from the replaced server => PASS" 0 "$W1_PASS" "$TMP/w1-unknown.json"
+
+# A provider-computed attribute dropped from `after` (marked unknown) is tolerated.
+mk_w1 "$TMP/w1-computed.json" "$ATT_OK" "$(rc_apex '["update"]' '{"name":"app","type":"A","proxied":true,"ttl":1,"zone_id":"zone1","content":"192.0.2.10","modified_on":"t0"}' '{"name":"app","type":"A","proxied":true,"ttl":1,"zone_id":"zone1","content":"192.0.2.99"}' '{"modified_on":true}')"
+check_arms "a computed attribute unknown-after-apply on the apex record is tolerated => PASS" 0 "$W1_PASS" "$TMP/w1-computed.json"
+
+# Refusal intact (CPO condition 1): the SAME complete plan, refusal active, no override.
+check "CPO 1: a COMPLETE web-1 plan still ABORTS while the refusal is active (arms are inert)" 1 "REFUSES it by name" "$TMP/w1-complete.json" "web-1"
+
+# Guard 4 rows 1 / 2 / 2b -------------------------------------------------------
+mk_w1 "$TMP/w1-no-att.json" "-" "$APEX_OK"
+check_arms "row 1: the LUKS attachment absent => ABORT" 1 "$ARM_ATT" "$TMP/w1-no-att.json"
+mk_w1 "$TMP/w1-att-delete.json" "$(rc_att '["delete"]' "$LUKS_ID")" "$APEX_OK"
+check_arms "the LUKS attachment only DELETED (never created) => ABORT" 1 "$ARM_ATT" "$TMP/w1-att-delete.json"
+mk_w1 "$TMP/w1-no-apex.json" "$ATT_OK" "-"
+check_arms "row 2: the apex record absent => ABORT" 1 "$ARM_APEX" "$TMP/w1-no-apex.json"
+mk_w1 "$TMP/w1-apex-dc.json" "$ATT_OK" "$(rc_apex '["delete","create"]' "$APEX_B" "$APEX_A" '{}')"
+check_arms "row 2b: a delete+create of the apex record (an outage window) => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-dc.json"
+mk_w1 "$TMP/w1-apex-noop.json" "$ATT_OK" "$(rc_apex '["no-op"]' "$APEX_B" "$APEX_B" '{}')"
+check_arms "an apex record that is a no-op (stale, not re-pointed) => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-noop.json"
+
+# Row 3: the LUKS volume in the keyed allow-set. An UPDATE is not a delete, so no named
+# backstop objects: out_of_scope is the SOLE objection.
+mk_w1 "$TMP/w1-luksvol-update.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'hcloud_volume.workspaces_luks' 'hcloud_volume' '["update"]')"
+check_arms "row 3: an UPDATE of hcloud_volume.workspaces_luks stays out of scope => ABORT" 1 "out-of-scope" "$TMP/w1-luksvol-update.json"
+mk_w1 "$TMP/w1-luksvol-delete.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'hcloud_volume.workspaces_luks' 'hcloud_volume' '["delete"]')"
+check_arms "a DELETE of the LUKS volume under the arms key stays a named prohibition => ABORT" 1 "LUKS at-rest volume" "$TMP/w1-luksvol-delete.json"
+mk_w1 "$TMP/w1-ptvol-delete.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume' '["delete"]')"
+check_arms "a DELETE of web-1's plaintext backstop volume under the arms key => ABORT (named)" 1 "workspaces volume" "$TMP/w1-ptvol-delete.json"
+mk_w1 "$TMP/w1-pw.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'random_password.workspaces_luks' 'random_password' '["delete","create"]')"
+check_arms "a passphrase rotation under the arms key stays a prohibition => ABORT" 1 "$PASSPHRASE_ARM" "$TMP/w1-pw.json"
+mk_w1 "$TMP/w1-webkey.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'doppler_secret.workspaces_luks_web_key' 'doppler_secret' '["update"]')"
+check_arms "an update of the web-class key copy under the arms key => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w1-webkey.json"
+mk_w1 "$TMP/w1-webpw.json" "$ATT_OK" "$APEX_OK" "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["update"]')"
+check_arms "an update of the web-class passphrase (#9377) under the arms key => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w1-webpw.json"
+
+# Ordering: the arms run AFTER every prohibition. A plan that is missing the apex arm AND
+# destroys the LUKS volume must be refused for the DESTROY, never reported as an arm gap.
+mk_w1 "$TMP/w1-order.json" "$ATT_OK" "-" "$(rc_entry 'hcloud_volume.workspaces_luks' 'hcloud_volume' '["delete"]')"
+check_arms "ordering: a prohibition outranks a missing arm (the destroy is named, not the apex gap)" 1 "LUKS at-rest volume" "$TMP/w1-order.json"
+
+# Row 5: the arms are for the arms key ONLY. A web-2 plan that carries web-1's two members is out of
+# scope; the base allow-set must not widen for any other key.
+w2_plan_with_w1_members() {
+  printf '[%s,%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$ATT_OK" "$APEX_OK"
+}
+mk_plan "$TMP/w2-w1members.json" "$(w2_plan_with_w1_members)"
+check "row 5: a web-2 plan that creates the LUKS attachment and re-points the apex record => ABORT" 1 "out-of-scope" "$TMP/w2-w1members.json" "web-2"
+mk_plan "$TMP/w2-attonly.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$ATT_OK")"
+check "row 5: a web-2 plan that creates only the LUKS attachment => ABORT" 1 "out-of-scope" "$TMP/w2-attonly.json" "web-2"
+mk_plan "$TMP/w2-webkey.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$(rc_entry 'doppler_secret.workspaces_luks_web_key' 'doppler_secret' '["update"]')")"
+check "an update of the web-class key copy on a web-2 replace => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w2-webkey.json" "web-2"
+mk_plan "$TMP/w2-webpw.json" "$(printf '[%s,%s]' "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["delete","create"]')")"
+check "a REPLACE of the web-class passphrase (#9377) on a web-2 replace => ABORT (named)" 1 "$PASSPHRASE_ARM" "$TMP/w2-webpw.json" "web-2"
+
+# ── EMPTY actions arrays (data-integrity, pre-existing, newly relied on by #9377) ───────────────────
+# `[] | any(...)` is false and `[] - ["no-op","read"] | length > 0` is false, so an entry with `"actions": []`
+# (before populated, after null: the SHAPE of a destroy) scored zero in every arm and PASSED. The shape guard
+# now demands a NON-EMPTY array. Each guarded address below must ABORT as unclassifiable: the web-class
+# passphrase, web-1's LUKS volume, and this host's workspaces volume.
+for _ea in 'random_password.workspaces_luks_web|random_password' 'doppler_secret.workspaces_luks_web_key|doppler_secret' \
+           'hcloud_volume.workspaces_luks|hcloud_volume' 'hcloud_volume.workspaces["web-2"]|hcloud_volume'; do
+  _ea_addr="${_ea%%|*}"; _ea_type="${_ea##*|}"
+  mk_plan "$TMP/empty-actions.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_entry "$_ea_addr" "$_ea_type" '[]')")"
+  check "an entry at ${_ea_addr} with EMPTY .change.actions (a destroy-shaped entry) => ABORT (unclassifiable, entry named)" 1 "unclassifiable plan entry: ${_ea_addr} has no" "$TMP/empty-actions.json" "web-2"
+done
+
+# ── INDEXED passphrase addresses are NOT normalized here, and need not be ──────────────────────────────
+# The destroy-guard counter strips an index/module prefix (luks_passphrase_base) because it names addresses
+# by exact match with no allow-set behind it. THIS gate has an exact-match ALLOW-set: an indexed or module-
+# prefixed address of a passphrase resource is not in it, so out_of_scope aborts it. Pinned so that widening
+# the allow-set to a prefix or index form cannot open the door silently.
+for _ia in 'random_password.workspaces_luks_web["web-2"]|random_password' 'doppler_secret.workspaces_luks_web_key[0]|doppler_secret' \
+           'module.x.random_password.workspaces_luks_web|random_password'; do
+  _ia_addr="${_ia%%|*}"; _ia_type="${_ia##*|}"
+  mk_plan "$TMP/indexed-pw.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_entry "$_ia_addr" "$_ia_type" '["delete","create"]')")"
+  check "an INDEXED/module-prefixed passphrase address (${_ia_addr}) replaced on a web-2 replace => ABORT (out-of-scope)" 1 "out-of-scope" "$TMP/indexed-pw.json" "web-2"
+done
+
+# ── The operator-facing passphrase ABORT names the whole set, and the counter counts delete/forget ────
+# PASSPHRASE_ARM alone ('opens a NEW header') survived removing the pair names from the message. Pin the
+# parenthetical in full: dropping any one of the four addresses reds this row. The status-line needle
+# `luks_passphrase_touched=1` is the OBSERVABLE a mutant that drops `delete` or `forget` from the counter
+# changes (1 -> 0): the verdict itself stays ABORT because out_of_scope also fires.
+PASSPHRASE_NAMES='(random_password.workspaces_luks / doppler_secret.workspaces_luks_key / doppler_secret.workspaces_luks_web_key / random_password.workspaces_luks_web)'
+check "the passphrase ABORT names all four addresses (web-class key copy update)" 1 "$PASSPHRASE_NAMES" "$TMP/w2-webkey.json" "web-2"
+check "the passphrase ABORT names all four addresses (web-class passphrase replace)" 1 "$PASSPHRASE_NAMES" "$TMP/w2-webpw.json" "web-2"
+for _v in '["delete"]' '["forget"]'; do
+  mk_plan "$TMP/pw-verb.json" "$(printf '[%s,%s]' \
+    "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+    "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' "$_v")")"
+  check "a ${_v} of the web-class passphrase is COUNTED (luks_passphrase_touched=1), not just out-of-scope" 1 "luks_passphrase_touched=1" "$TMP/pw-verb.json" "web-2"
+done
+mk_plan "$TMP/pw-noop.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '["no-op"]')")"
+check "a no-op of the web-class passphrase is not counted (luks_passphrase_touched=0) and the replace PASSES" 0 "luks_passphrase_touched=0" "$TMP/pw-noop.json" "web-2"
+
+# Row 6: an apex entry with no `actions`.
+mk_w1 "$TMP/w1-apex-noactions.json" "$ATT_OK" "$(rc_noactions 'cloudflare_record.app' 'cloudflare_record')"
+check_arms "row 6: an apex entry missing .change.actions => ABORT (unclassifiable)" 1 "unclassifiable" "$TMP/w1-apex-noactions.json"
+
+# Row 7: the apex update must CHANGE content and nothing else.
+mk_w1 "$TMP/w1-apex-same.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$APEX_B" '{}')"
+check_arms "row 7: an apex update whose content does not change => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-same.json"
+for _attr in 'proxied:false' 'ttl:300' 'name:"www"' 'zone_id:"zone2"' 'type:"CNAME"'; do
+  _k="${_attr%%:*}"; _v="${_attr#*:}"
+  _a="$(jq -c --arg k "$_k" --argjson v "$_v" '.[$k] = $v' <<<"$APEX_A")"
+  mk_w1 "$TMP/w1-apex-attr.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$_a" '{}')"
+  check_arms "row 7: the apex update also changes ${_k} => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-attr.json"
+done
+mk_w1 "$TMP/w1-apex-extra.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c '. + {comment:"x"}' <<<"$APEX_A")" '{}')"
+check_arms "row 7: the apex update introduces an attribute absent before => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-extra.json"
+# A NON-named attribute present on BOTH sides must be equal too (the `$b[$n] == $a[$n]` clause). The five
+# loop rows above all name an attribute the first clause already pins, so they cannot see this clause.
+for _attr in 'comment:"old":"new"' 'modified_on:"t0":"t1"' 'allow_overwrite:false:true' 'tags:["a"]:["b"]'; do
+  IFS=: read -r _k _bv _av <<<"$_attr"
+  _bb="$(jq -c --arg k "$_k" --argjson v "$_bv" '.[$k] = $v' <<<"$APEX_B")"
+  _aa="$(jq -c --arg k "$_k" --argjson v "$_av" '.[$k] = $v' <<<"$APEX_A")"
+  mk_w1 "$TMP/w1-apex-nonnamed.json" "$ATT_OK" "$(rc_apex '["update"]' "$_bb" "$_aa" '{}')"
+  check_arms "row 7: the apex update changes the NON-named attribute ${_k} (present on both sides) => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-nonnamed.json"
+done
+# `proxied` is one of the five REQUIRED-present names: unknown-after-apply or absent on either side aborts
+# (a provider-computed stamp would be tolerated, but flipping the record out of / into Cloudflare proxying
+# unobserved is the one attribute that must never be tolerated).
+mk_w1 "$TMP/w1-apex-proxied-unk.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c 'del(.proxied)' <<<"$APEX_A")" '{"proxied":true}')"
+check_arms "row 7: apex proxied unknown-after-apply (absent from after) => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-proxied-unk.json"
+mk_w1 "$TMP/w1-apex-proxied-nobefore.json" "$ATT_OK" "$(rc_apex '["update"]' "$(jq -c 'del(.proxied)' <<<"$APEX_B")" "$(jq -c 'del(.proxied)' <<<"$APEX_A")" '{}')"
+check_arms "row 7: apex proxied absent on BOTH sides => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-proxied-nobefore.json"
+mk_w1 "$TMP/w1-apex-nullcontent.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c '.content = null' <<<"$APEX_A")" '{}')"
+check_arms "row 7: the apex content nulled => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-nullcontent.json"
+
+# The content must be SOURCED from the replaced server: after_unknown.content is true for ANY replace.
+mk_w1 "$TMP/w1-apex-foreign.json" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" '{"name":"app","type":"A","proxied":true,"ttl":1,"zone_id":"zone1","id":"rec1"}' '{"content":true}')" - "$LUKS_ID" '["var.origin_ip"]'
+check_arms "apex content sourced from a variable, not the replaced server => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-foreign.json"
+mk_w1 "$TMP/w1-apex-sibling.json" "$ATT_OK" "$APEX_OK" - "$LUKS_ID" '["hcloud_server.web[\"web-2\"].ipv4_address","hcloud_server.web[\"web-2\"]"]'
+check_arms "apex content sourced from a SIBLING host => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-sibling.json"
+mk_w1 "$TMP/w1-apex-bare.json" "$ATT_OK" "$APEX_OK" - "$LUKS_ID" '["hcloud_server.web"]'
+check_arms "apex content referencing only the bare for_each map => ABORT" 1 "$ARM_APEX" "$TMP/w1-apex-bare.json"
+mk_w1 "$TMP/w1-apex-noconfig.json" "$ATT_OK" "$APEX_OK" - "$LUKS_ID" none
+check_arms "a plan with no configuration section (source unprovable) => ABORT, fail-closed" 1 "$ARM_APEX" "$TMP/w1-apex-noconfig.json"
+
+# Row 8: the attachment must go back onto the prior state's LUKS volume.
+mk_w1 "$TMP/w1-att-other.json" "$(rc_att '["delete","create"]' "$OTHER_LUKS_ID")" "$APEX_OK"
+check_arms "row 8: the attachment recreated onto a DIFFERENT volume id => ABORT" 1 "$ARM_ATT" "$TMP/w1-att-other.json"
+mk_w1 "$TMP/w1-att-unknownvol.json" "$(printf '{"address":"hcloud_volume_attachment.workspaces_luks","type":"hcloud_volume_attachment","change":{"actions":["delete","create"],"before":{},"after":{},"after_unknown":{"volume_id":true}}}')" "$APEX_OK"
+check_arms "the attachment's volume id unknown-after-apply (volume being replaced) => ABORT" 1 "$ARM_ATT" "$TMP/w1-att-unknownvol.json"
+mk_w1 "$TMP/w1-noprior.json" "$ATT_OK" "$APEX_OK" - none
+check_arms "no prior-state LUKS volume id recorded (cannot prove the volume) => ABORT, fail-closed" 1 "$ARM_ATT" "$TMP/w1-noprior.json"
+
 # ── MUTATION SECTION ──────────────────────────────────────────────────────────────
 #
 # AC4. Reading a gate and believing its arms are load-bearing is exactly the confidence
@@ -439,8 +719,9 @@ check "the server replaced with NO firewall re-attach => ABORT (naked public IP)
 
 # mutate_and_check <label> <sed-expr> <plan> <key>
 mutate_and_check() {
-  local label="$1" sed_expr="$2" plan="$3" key="$4"
+  local label="$1" sed_expr="$2" plan="$3" key="$4" pre="${5:-:}"
   local mutated out rc
+  cases=$((cases + 1))
   mutated="$TMP/mutated-gate.sh"
   sed "$sed_expr" "$GATE" > "$mutated"
   # NON-VACUITY FLOOR. A sed expression that matches nothing produces a byte-identical
@@ -450,7 +731,7 @@ mutate_and_check() {
     fail "$label — the mutation matched NOTHING in the gate (byte-identical copy); the guard is missing or the sed expression drifted." "n/a" "no textual change"
     return
   fi
-  out="$(bash -c "source '$mutated'; web_host_replace_gate '$plan' '$key'" 2>&1)"; rc=$?
+  out="$(bash -c "source '$mutated'; $pre; web_host_replace_gate '$plan' '$key'" 2>&1)"; rc=$?
   if [[ "$rc" -eq 0 ]]; then
     pass "$label (sole guard — neutering it ACCEPTS the dangerous plan)"
   else
@@ -460,8 +741,9 @@ mutate_and_check() {
 
 # mutate_layered <label> <sed-expr> <plan> <key> <own-signature> <fallback-signature>
 mutate_layered() {
-  local label="$1" sed_expr="$2" plan="$3" key="$4" own="$5" fallback="$6"
+  local label="$1" sed_expr="$2" plan="$3" key="$4" own="$5" fallback="$6" pre="${7:-:}"
   local mutated base out rc
+  cases=$((cases + 1))
   mutated="$TMP/mutated-layered.sh"
   sed "$sed_expr" "$GATE" > "$mutated"
   if cmp -s "$mutated" "$GATE"; then
@@ -471,12 +753,12 @@ mutate_layered() {
   # POSITIVE CONTROL: the UNMUTATED gate must reject this plan via THIS arm. Without it, an
   # arm that never fired for this fixture would still satisfy "own signature absent" and the
   # case would pass without ever exercising the guard.
-  base="$(web_host_replace_gate "$plan" "$key" 2>&1)"
+  base="$( eval "$pre"; web_host_replace_gate "$plan" "$key" 2>&1 )"
   if [[ "$base" != *"$own"* ]]; then
     fail "$label — the unmutated gate did not reject this plan via the '$own' arm; the fixture does not exercise it." "n/a" "$base"
     return
   fi
-  out="$(bash -c "source '$mutated'; web_host_replace_gate '$plan' '$key'" 2>&1)"; rc=$?
+  out="$(bash -c "source '$mutated'; $pre; web_host_replace_gate '$plan' '$key'" 2>&1)"; rc=$?
   if [[ "$rc" -eq 1 && "$out" != *"$own"* && "$out" == *"$fallback"* ]]; then
     pass "$label (layered — owns the rejection; neutering it hands off to '$fallback', never to PASS)"
   else
@@ -484,11 +766,43 @@ mutate_layered() {
   fi
 }
 
+# mutate_must_reject <label> <sed-expr> <plan> <key> <needle> [pre]
+#
+# The inverse contract: the mutated gate must REJECT a plan the unmutated gate PASSES. It proves
+# the suite would notice a mutation that makes the gate refuse a correct plan (the arms demanded
+# for every key, so a web-2 replace would abort). Same non-vacuity floors as the others.
+mutate_must_reject() {
+  local label="$1" sed_expr="$2" plan="$3" key="$4" needle="$5" pre="${6:-:}"
+  local mutated base out rc
+  cases=$((cases + 1))
+  mutated="$TMP/mutated-reject.sh"
+  sed "$sed_expr" "$GATE" > "$mutated"
+  if cmp -s "$mutated" "$GATE"; then
+    fail "$label — the mutation matched NOTHING in the gate (byte-identical copy)." "n/a" "no textual change"
+    return
+  fi
+  base="$( eval "$pre"; web_host_replace_gate "$plan" "$key" 2>&1 )"; rc=$?
+  if [[ "$base" != *"PASS"* ]]; then
+    fail "$label — the unmutated gate does not PASS this plan; the fixture is not a must-pass control." "n/a" "$base"
+    return
+  fi
+  out="$(bash -c "source '$mutated'; $pre; web_host_replace_gate '$plan' '$key'" 2>&1)"; rc=$?
+  if [[ "$rc" -eq 1 && "$out" == *"$needle"* ]]; then
+    pass "$label (the mutated gate REFUSES the correct plan — the suite's must-pass row would go red)"
+  else
+    fail "$label — the mutated gate did not refuse with '$needle'" "$rc" "$out"
+  fi
+}
+
 # SOLE: the web-1 refusal. Nothing else objects to a well-formed web-1 replace plan — the
 # allow-set is keyed on the REQUESTED host, so every address in it is in scope when the
 # request IS web-1. Neuter this arm and the gate authorizes replacing the sole live origin.
-mutate_and_check "web-1 refusal" 's/if \[\[ "\$host_key" == "\$_WEB_HOST_REPLACE_LUKS_PINNED_KEY" \]\]; then/if false; then/' \
-  "$TMP/happy-web1.json" "web-1"
+# Graded on the COMPLETE arms plan ($TMP/w1-complete.json), not the arms-less happy-web1.json: with the keyed
+# arms in place an arms-less web-1 plan is ALSO rejected by the arms once the refusal is removed,
+# which would reclassify this guard as layered and hide the "arms became the relaxation path"
+# mutation (Guard 4 row 4). The refusal must be the SOLE thing between a complete plan and PASS.
+mutate_and_check "web-1 refusal (arms complete: the arms must not become the relaxation path)" 's/if \[\[ "\$host_key" == "\$_WEB_HOST_REPLACE_LUKS_PINNED_KEY" \]\]; then/if false; then/' \
+  "$TMP/w1-complete.json" "web-1"
 
 # SOLE: the actions-shape guard. Measured, not reasoned about — the birth gate's equivalent
 # looked layered behind numeric counter-validation and was not.
@@ -534,11 +848,120 @@ mutate_layered "LUKS-volume backstop" 's/if \[\[ "\$lvd" -ne 0 \]\]; then/if fal
 mutate_layered "LUKS-passphrase backstop" 's/if \[\[ "\$lpt" -ne 0 \]\]; then/if false; then/' \
   "$TMP/passphrase-rotate.json" "web-2" "$PASSPHRASE_ARM" "out-of-scope"
 
+mk_plan "$TMP/empty-actions.json" "$(printf '[%s,%s]' \
+  "$(happy_changes web-2 | sed 's/^\[//; s/\]$//')" \
+  "$(rc_entry 'random_password.workspaces_luks_web' 'random_password' '[]')")"
+mutate_and_check "empty-actions guard: the length>0 clause (a destroy-shaped web-class passphrase entry passes without it)" \
+  '/^ *and (\.change\.actions | length) > 0$/d' \
+  "$TMP/empty-actions.json" "web-2"
+
 # LAYERED: the reboot arm. A web-1 power-cycle is both a reboot and out of scope today. The
 # arm earns its place by naming the consequence, and by surviving a future widening of the
 # allow-set that would silence the backstop but not it.
 mutate_layered "reboot guard" 's/if \[\[ "\$reboot" -ne 0 \]\]; then/if false; then/' \
   "$TMP/reboot.json" "web-2" "reboot-forcing" "out-of-scope"
+
+# ── GUARD 4: the keyed arms (#9356) ───────────────────────────────────────────────
+#
+# Every row neuters ONE guard in a copy of the gate and requires the suite to notice. The arms
+# are reachable only with the refusal cleared, so each runs under the same subshell override the
+# fixtures use ($PRE); row 4 (the refusal) runs WITHOUT it, which is the point of that row.
+PRE='_WEB_HOST_REPLACE_LUKS_PINNED_KEY=""'
+
+# Row 1 / 2: each requirement arm is SOLE. No prohibition can see a MISSING member.
+mutate_and_check "row 1: LUKS-attachment requirement arm" 's/if \[\[ "\$latt" -lt 1 \]\]; then/if false; then/' \
+  "$TMP/w1-no-att.json" "web-1" "$PRE"
+mutate_and_check "row 2: apex-record requirement arm" 's/if \[\[ "\$apex" -lt 1 \]\]; then/if false; then/' \
+  "$TMP/w1-no-apex.json" "web-1" "$PRE"
+
+# Row 2b: the apex actions must be EXACTLY ["update"].
+mutate_and_check "row 2b: apex actions widened to accept delete+create" \
+  's/select(.change.actions == \["update"\]) # arm:apex-actions/select(.change.actions | index("update") or index("create")) # arm:apex-actions/' \
+  "$TMP/w1-apex-dc.json" "web-1" "$PRE"
+
+# Row 3: hcloud_volume.workspaces_luks added to the keyed allow-set.
+mutate_and_check "row 3: the LUKS volume added to the keyed allow-set" \
+  's/^      "cloudflare_record.app"$/      "cloudflare_record.app",\n      "hcloud_volume.workspaces_luks"/' \
+  "$TMP/w1-luksvol-update.json" "web-1" "$PRE"
+
+# Row 4 is the existing "web-1 refusal" mutation above, graded on the COMPLETE arms plan.
+
+# Row 5: the keyed allow-set applied to every key (a web-2 plan carrying web-1's members passes),
+# and, inversely, the arms DEMANDED of every key (a correct web-2 replace aborts).
+mutate_and_check "row 5a: the keyed allow-set applied to key web-2" \
+  's/if \$k == \$akey then allow_arms else \[\] end/if true then allow_arms else [] end/' \
+  "$TMP/w2-w1members.json" "web-2"
+mutate_must_reject "row 5b: the keyed ARMS demanded of every key (a correct web-2 replace aborts)" \
+  's/if \[\[ "\$host_key" == "\$_WEB_HOST_REPLACE_LUKS_ARMS_KEY" \]\]; then/if true; then/' \
+  "$TMP/happy.json" "web-2" "$ARM_ATT"
+
+# Row 6: the shape guard is the sole thing that sees an apex entry without actions.
+mutate_and_check "row 6: actions-shape guard (an apex entry with no actions)" \
+  's/^    echo "web_host_replace_gate: ABORT — unclassifiable.*/    return 0/' \
+  "$TMP/w1-apex-noactions.json" "web-1" "$PRE"
+
+# Row 7: content change, other-attribute change and content source each have their own line.
+mutate_and_check "row 7a: apex content-must-change predicate" \
+  's/.*# arm:apex-content$/                | select(true)/' \
+  "$TMP/w1-apex-same.json" "web-1" "$PRE"
+_PROXIED_FLIP="$TMP/w1-apex-proxied.json"
+mk_w1 "$_PROXIED_FLIP" "$ATT_OK" "$(rc_apex '["update"]' "$APEX_B" "$(jq -c '.proxied = false' <<<"$APEX_A")" '{}')"
+mutate_and_check "row 7b: apex other-attributes-unchanged predicate" \
+  's/.*# arm:apex-attrs$/                | select(true)/' \
+  "$_PROXIED_FLIP" "web-1" "$PRE"
+mutate_and_check "row 7b2: apex non-named-attribute equality clause neutered (a changed comment passes)" \
+  's/ or \$b\[\$n\] == \$a\[\$n\])$/ or true)/' \
+  "$TMP/w1-apex-nonnamed.json" "web-1" "$PRE"
+mutate_and_check "row 7b3: the whole before-keys clause removed (a changed comment passes)" \
+  '/and all((\$b | keys_unsorted)\[\]/d' \
+  "$TMP/w1-apex-nonnamed.json" "web-1" "$PRE"
+mutate_and_check "row 7b4: proxied dropped from the five required-present names (unknown-after proxied passes)" \
+  's/\["name", "type", "proxied", "ttl", "zone_id"\]/["name", "type", "ttl", "zone_id"]/' \
+  "$TMP/w1-apex-proxied-unk.json" "web-1" "$PRE"
+mutate_and_check "row 7c: apex content-sourced-from-the-replaced-server predicate" \
+  's/.*# arm:apex-source$/                | select(true)/' \
+  "$TMP/w1-apex-foreign.json" "web-1" "$PRE"
+
+# Row 8: the attachment must return onto the prior state's LUKS volume.
+mutate_and_check "row 8: attachment volume-id equals the prior state's LUKS volume id" \
+  's/.*# arm:luks-volume-id$/                | select(true)/' \
+  "$TMP/w1-att-other.json" "web-1" "$PRE"
+
+# H1 — HARNESS: remove the whole keyed block. A plan missing an arm must then PASS, which proves
+# the suite's fixtures reach the arms and would go red if the block were gone.
+mutate_and_check "H1: the whole keyed-arms block removed (arms-less gate passes an arm-less web-1 plan)" \
+  's/if \[\[ "\$host_key" == "\$_WEB_HOST_REPLACE_LUKS_ARMS_KEY" \]\]; then/if false; then/' \
+  "$TMP/w1-no-apex.json" "web-1" "$PRE"
+
+# The web-class key copy (#9377) joins the passphrase prohibition. Layered over out_of_scope (it is
+# in nobody's allow-set), and it earns its place by naming the consequence.
+mutate_layered "luks_passphrase_touched names the web-class key copy" \
+  's/ or \.address == "doppler_secret\.workspaces_luks_web_key"//' \
+  "$TMP/w2-webkey.json" "web-2" "$PASSPHRASE_ARM" "out-of-scope"
+
+# The NEW web-class passphrase generator (#9377 decision A1) joins the same prohibition, proven the same way.
+mutate_layered "luks_passphrase_touched names the web-class passphrase random_password.workspaces_luks_web" \
+  's/ or \.address == "random_password\.workspaces_luks_web"//' \
+  "$TMP/w2-webpw.json" "web-2" "$PASSPHRASE_ARM" "out-of-scope"
+
+# ── ANTI-VACUITY FLOOR ────────────────────────────────────────────────────────────
+#
+# `cases` is incremented at every check/mutate call site and NEVER inside pass()/fail(), so it
+# moves whether or not a verdict is recorded. Two assertions: the conservation identity (every
+# case recorded exactly one verdict — a neutered pass/fail breaks it) and a floor (deleting a
+# block of arms lowers `cases` and reddens the floor). A FLOOR, not equality: it is developer
+# incremented, and `-eq` trains people to bump it unread.
+CASES_FLOOR=125
+_verdicts=$((passes + fails))
+if [[ "$cases" -ne "$_verdicts" ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded (a pass/fail was dropped).\n' "$cases" "$_verdicts"
+elif [[ "$cases" -lt "$CASES_FLOOR" ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s. Arms were deleted or the suite exited early.\n' "$cases" "$CASES_FLOOR"
+else
+  printf '  ok   anti-vacuity floor: %s cases ran, each recorded one verdict (floor %s)\n' "$cases" "$CASES_FLOOR"
+fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

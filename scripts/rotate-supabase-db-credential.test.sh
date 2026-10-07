@@ -85,7 +85,10 @@ if [[ "$*" == *" -i "* ]]; then
   cat >/dev/null
   [[ -n "${STUB_SWEEP_FAIL:-}" ]] && { echo "ERROR:  permission denied" >&2; exit 3; }
   echo 2
-else echo 1; fi
+else
+  echo 1
+  if [[ -n "${STUB_PROBE_FAIL:-}" ]]; then exit 1; fi
+fi
 STUB
   chmod +x "$T/bin/"*
 }
@@ -126,6 +129,12 @@ cases=$((cases + 1)); [[ "$rc" -eq 8 ]] && pass "exit 8" || { fail "exit $rc (wa
 cases=$((cases + 1)); grep -q 'session sweep FAILED' "$T/out" && pass "failure is named" || fail "sweep failure not reported"
 cases=$((cases + 1)); ! grep -q '^==> DONE' "$T/out" && pass "does not claim DONE" || fail "claimed DONE after a failed sweep"
 cases=$((cases + 1)); [[ -z "$(ls -A "$T/tmpdir" | grep soleur-rotation-recovery || true)" ]] && pass "no recovery file left behind" || fail "recovery file left behind"
+rm -rf "$T"
+
+echo "== T4: a probe that prints 1 and then exits non-zero is NOT proof the new credential authenticates"
+setup; STUB_PROBE_FAIL=1; export STUB_PROBE_FAIL; run --config dev; unset STUB_PROBE_FAIL
+cases=$((cases + 1)); [[ "$rc" -eq 7 ]] && pass "exit 7 (recovery path)" || { fail "exit $rc (want 7)"; sed 's/^/       | /' "$T/out"; }
+cases=$((cases + 1)); ! grep -q '^    OK$' "$T/out" && pass "does not print OK" || fail "printed OK for a probe that exited non-zero"
 rm -rf "$T"
 
 echo

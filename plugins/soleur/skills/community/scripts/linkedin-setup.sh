@@ -164,6 +164,24 @@ readonly LINKEDIN_OAUTH="https://www.linkedin.com/oauth/v2"
 readonly LINKEDIN_API="https://api.linkedin.com"
 LINKEDIN_DEFAULT_REDIRECT_URI="https://localhost:8080/callback"
 
+# (#7843) The access token is parsed out of an API reply, so it is RESPONSE-DERIVED:
+# untrusted bytes. It rides curl's STDIN config channel (`--config -`), never its
+# argument list (readable by every local user in /proc/<pid>/cmdline). That channel is
+# line-oriented, so a token holding a quote and a newline could append a `url = "..."`
+# directive and make curl issue a second request. This guard refuses anything outside the
+# token alphabet BEFORE the value is formatted into the stream, and never echoes it.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+
+# (#9597) The OAuth client secret and the access token being introspected are form
+# fields, not bearers, so `_bearer_ok`'s alphabet does not fit them. They still must
+# not ride curl's argument list, so they go on the stdin config channel as
+# `data-urlencode = "name=value"` lines. A config string is one line with `\` and `"`
+# as its only escapes, so a value holding a control character (CR/LF would end the
+# directive and let the next bytes act as a new one), a quote or a backslash is refused
+# BEFORE it is formatted into the stream; `_cfg_q` still escapes what reaches it.
+_cfg_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*|*'"'*|*'\'*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
 # --- Dependency checks ---
 
 require_jq() {
@@ -228,13 +246,18 @@ cmd_validate_credentials() {
 
   local response http_code body
   # Token introspection uses client credentials as POST body params (not Bearer)
+  if ! _cfg_ok "$LINKEDIN_CLIENT_SECRET" || ! _cfg_ok "$LINKEDIN_ACCESS_TOKEN"; then
+    echo "Error: LinkedIn client secret or access token has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
+  # The secret and the token ride curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
     -X POST \
     --data-urlencode "client_id=${LINKEDIN_CLIENT_ID}" \
-    --data-urlencode "client_secret=${LINKEDIN_CLIENT_SECRET}" \
-    --data-urlencode "token=${LINKEDIN_ACCESS_TOKEN}" \
-    "${LINKEDIN_OAUTH}/introspectToken" 2>/dev/null) || __curl_rc=$?
+    "${LINKEDIN_OAUTH}/introspectToken" 2>/dev/null \
+    < <(printf 'data-urlencode = "client_secret=%s"\ndata-urlencode = "token=%s"\n' \
+      "$(_cfg_q "$LINKEDIN_CLIENT_SECRET")" "$(_cfg_q "$LINKEDIN_ACCESS_TOKEN")")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to LinkedIn OAuth API."
     exit 1
@@ -315,7 +338,7 @@ cmd_generate_token() {
   # rotated in and the Phase-6 test post hit this). The app must have the
   # Community Management API product approved for LinkedIn to grant it.
   local scopes="openid%20profile%20w_member_social%20w_organization_social"
-  local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${redirect_uri}', safe=''))" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
+  local auth_url="${LINKEDIN_OAUTH}/authorization?response_type=code&client_id=${LINKEDIN_CLIENT_ID}&redirect_uri=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${redirect_uri}" 2>/dev/null || echo "${redirect_uri}")&scope=${scopes}"
 
   echo "=== LinkedIn OAuth Token Generation ===" >&2
   echo "" >&2
@@ -349,15 +372,20 @@ cmd_generate_token() {
   echo "Exchanging authorization code for access token..." >&2
 
   local response http_code body
+  if ! _cfg_ok "$LINKEDIN_CLIENT_SECRET"; then
+    echo "Error: LINKEDIN_CLIENT_SECRET has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
+  # The client secret rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
     -X POST \
     --data-urlencode "grant_type=authorization_code" \
     --data-urlencode "code=${auth_code}" \
     --data-urlencode "client_id=${LINKEDIN_CLIENT_ID}" \
-    --data-urlencode "client_secret=${LINKEDIN_CLIENT_SECRET}" \
     --data-urlencode "redirect_uri=${redirect_uri}" \
-    "${LINKEDIN_OAUTH}/accessToken" 2>/dev/null) || __curl_rc=$?
+    "${LINKEDIN_OAUTH}/accessToken" 2>/dev/null \
+    < <(printf 'data-urlencode = "client_secret=%s"\n' "$(_cfg_q "$LINKEDIN_CLIENT_SECRET")")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to LinkedIn OAuth API."
     exit 1
@@ -381,13 +409,19 @@ cmd_generate_token() {
     exit 1
   fi
 
+  if ! _bearer_ok "$access_token"; then
+    echo "Error: access_token in the response has an unexpected shape; refusing to use it." >&2
+    exit 1
+  fi
+
   # Resolve person URN
   echo "Resolving person URN..." >&2
   local userinfo_response userinfo_code userinfo_body
   local __curl_rc=0
-  userinfo_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: Bearer ${access_token}" \
-    "${LINKEDIN_API}/v2/userinfo" 2>/dev/null) || __curl_rc=$?
+  # The bearer rides curl's stdin config channel, never its argument list.
+  userinfo_response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "${LINKEDIN_API}/v2/userinfo" 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$access_token")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to resolve person URN."
     exit 1

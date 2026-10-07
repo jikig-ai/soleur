@@ -39,7 +39,7 @@
 # perturbs the alert under test. Digits only (interpolated into a root shell literal and a
 # ClickHouse LIKE) — enforced by the probe's lifecycle.precondition and by the guard.
 #
-# TO ADD ANOTHER LOGS ALERT (five steps, in this order):
+# TO ADD ANOTHER LOGS ALERT (seven steps, in this order):
 #   1. a `locals { <name>_sql = <<-SQL … SQL }` predicate (probe it live via betterstack-query.sh
 #      with a positive control first — the template SQL is NOT validated by `terraform validate`).
 #      Source 2457081 carries EVERY web host (web-1 `soleur-web-platform`, web-2 `soleur-web-2`):
@@ -50,9 +50,15 @@
 #   4. two `-target=` lines in apply-web-platform-infra.yml's MAIN plan allowlist (NOT covered by
 #      the #5566 guard in terraform-target-parity.test.ts, which checks terraform_data only: your
 #      alert's own drift guard must assert both lines);
-#   5. a "Standing alarms over this source" row in runbooks/betterstack-log-query.md + a runbook.
+#   5. a "Standing alarms over this source" row in runbooks/betterstack-log-query.md + a runbook;
+#   6. one `values = [local.vector_prd_source_id]` more in the exploration count that
+#      apps/web-platform/test/infra/betterstack-send-failed-alert-mutation.test.sh asserts exactly;
+#   7. a `run: bash` step for the alert's drift guard in .github/workflows/infra-validation.yml
+#      (apps/web-platform/test/infra/ is not glob-registered), plus any runbook path the guard reads
+#      in that workflow's `paths:` filters.
 #   A same-severity SOLEUR_* PRIORITY-2 class opts IN to THIS alert by adding a needle (+ a guard
-#   row + a runbook decode row), not by adding a new alert — the free-tier alert count stays 1.
+#   row + a runbook decode row), not by adding a new alert. (The alert count and the unmeasured
+#   free-tier cap are recorded in ADR-218.)
 #
 # DELETION. The per-merge apply is `-target`-scoped, so removing these resources is a silent
 # no-op until the `[ack-destroy]` procedure runs (learning 2026-07-17). The runbook says so.
@@ -980,6 +986,133 @@ resource "logtail_exploration_alert" "bwrap_probe_rollback" {
   incident_cause = "No user-facing outage: a release was blocked and rolled back; production still runs the previous version. The canary's blocking bwrap probe failed (reason canary_sandbox_failed). The email has no row body: read it without SSH via the runbook's Query block, taking rc, ms and cstate from the ci-deploy row only. Remediation is GitHub Re-run failed jobs on the release run. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was found. Runbook: ${local.bwrap_probe_rollback_runbook_url}"
   metadata = {
     runbook = local.bwrap_probe_rollback_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9391 / ADR-096: a host's hosts-file GHCR deny is no longer in force ────────────────────────
+#
+# WHAT IT DETECTS. Every host carries a hosts-file deny that sinkholes ghcr.io to 0.0.0.0. It is an
+# accident guard on NAME RESOLUTION (ADR-096, Amendment 2026-09-30), not an egress control, and deploy
+# pulls are zot-only since #8036, so no deploy depends on it. Two emitters report whether it is in
+# force, and value 0 means ghcr.io resolved to a real address:
+#   * web hosts (web-1, web-2): ci-deploy writes `logger -t ci-deploy "GHCR_DENY ghcr_blocked=<1|0|unknown>"`
+#     on every ci-deploy.sh invocation that passes validation (deploy, restart, quiesce, enable), before
+#     flock. The whole message is that string, so arm W compares it for EQUALITY;
+#   * the registry host: its SOLEUR_ZOT_DISK heartbeat (every five minutes, a direct POST with no Vector,
+#     so the row has NO host_name key: the host is the in-message `host=` token) carries
+#     ` ghcr_blocked=<…> ` in the head, BEFORE the attacker-influenced free text ` zot_last_err=`; arm R
+#     scopes the match to the head as registry_store_not_luks does.
+# What is exposed when the deny is lost: host processes and host-network containers resolving ghcr.io
+# (bridge containers are covered by the #9275 carve once it is delivered, #9393). The Sentry op `ghcr_deny_lost` (cron-egress-resolve.sh)
+# watches that carve from inside the app container, a different property.
+#
+# WHAT IT DELIBERATELY DOES NOT DETECT, and so reads as quiet:
+#   * `unknown` (ghcr.io does not resolve): not the deny regressing, and a blind probe is silence, not health;
+#   * a web host that has not run ci-deploy since the loss: the web arm is a sample per invocation, not a
+#     monitor, so it can never precede the pull it would have guarded, and an idle host is not sampled;
+#   * a host whose ci-deploy.sh predates the GHCR_DENY line (#9169);
+#   * a registry row whose message does not parse: arm R is a positive match, so it is fail-QUIET where
+#     registry_store_not_luks is fail-loud on the same row (`[ci/zot-telemetry-silent]` covers ABSENT
+#     registry rows only);
+#   * a compromised host: both arms are self-reports, so this is a drift alarm, not a tamper-evident control.
+#
+# HOW IT RESOLVES. The incident closes after quiet minutes (recovery_period), which says nothing about the
+# cause: a deny lost on a web host stays lost until a delivery re-asserts it, and the next ci-deploy writes
+# value 0 again. The per-host repair routes are in the runbook, not here.
+#
+# Paging semantics are registry_store_not_luks's measured combination (check 300 / query 900 / recovery 1800):
+# the registry heartbeat is */5, so one 900 s bucket holds up to three of its rows and the incident does not
+# flap across one gap. `higher_than 0`: a single value-0 row is the signal on either arm. Free tier: team
+# email only; the paid tier escalates.
+#
+# NO host_name conjunct, on purpose: web-1 (`soleur-web-platform`, and `soleur-inngest-prd` before
+# 2026-09-19), web-2 (`soleur-web-2`) and the registry host (no host_name at all) all carry these rows. The
+# drift guard (ghcr-blocked-alert.test.sh, row M9) reds on the harmonising edit.
+#
+# LIVE-PROBED 2026-10-04 (hot remote() UNION s3Cluster archive, 14-day window, counts only), the predicate
+# below. The fields shipped on 2026-09-28 (registry heartbeat) and 2026-09-30 (web GHCR_DENY), so the window
+# holds about six and four days of emissions:
+#   (1) as written, arm W 1 (a web-1 row from 2026-09-30, a minute before web-2's first row), arm R 0;
+#   (2) positive controls, the needle changed to value 1: arm W 97 (web-1 49, web-2 48), arm R 1,669;
+#   (3) a loose variant (any row containing `ghcr_blocked=0`, no identifier scoping, no equality): 14, so
+#       the scoping excludes 13 rows that merely QUOTE the marker: inngest GitHub-webhook payload logs
+#       (identifier `doppler`, host `soleur-inngest-prd`) carrying issue and PR text.
+# Both -target= lines are enforced only by this alert's own drift guard (see header step 4).
+locals {
+  ghcr_hostsfile_deny_lost_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND (
+        (JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+          AND JSONExtractString(raw, 'message') = 'GHCR_DENY ghcr_blocked=0')
+        OR (startsWith(raw, '{"message":"SOLEUR_ZOT_DISK ')
+          AND position(JSONExtractString(raw, 'message'), 'SOLEUR_ZOT_DISK ') = 1
+          AND position(JSONExtractString(raw, 'message'), ' ghcr_blocked=0 ') > 0
+          AND position(JSONExtractString(raw, 'message'), ' ghcr_blocked=0 ') < position(JSONExtractString(raw, 'message'), ' zot_last_err='))
+      )
+    GROUP BY time
+  SQL
+
+  ghcr_hostsfile_deny_lost_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#hosts-file-deny-lost-better-stack-alert"
+}
+
+resource "logtail_exploration" "ghcr_hostsfile_deny_lost" {
+  name      = "soleur-ghcr-hostsfile-deny-lost-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.ghcr_hostsfile_deny_lost_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
+  exploration_id = logtail_exploration.ghcr_hostsfile_deny_lost.id
+  name           = "soleur-ghcr-hostsfile-deny-lost-prd"
+
+  # See "Paging semantics" above: registry_store_not_luks's windows, with higher_than 0 because one value-0
+  # row is the signal on either arm. recovery_period covers two windows so one good bucket does not close an
+  # incident the next would re-open.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 1800
+  # A count query with no rows returns NO bucket, which must read as healthy (0) so an open incident can
+  # observe recovery. Silence is NOT this rule's job (see WHAT IT DELIBERATELY DOES NOT DETECT).
+  on_missing_data = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A host reports that its hosts-file GHCR deny is no longer in force: ghcr.io resolved to a real address (ci-deploy GHCR_DENY ghcr_blocked=0 on a web host, or the registry heartbeat's ghcr_blocked=0). The deny is an accident guard on name resolution and deploy pulls are zot-only, so this is not a deploy or user outage; host processes and host-network containers on that host could resolve ghcr.io. The web arm samples only when ci-deploy runs. This incident auto-resolves after 30 quiet minutes, which does NOT mean the deny is back. Decode the arm and host, and pick the repair route per host, in the runbook: ${local.ghcr_hostsfile_deny_lost_runbook_url}"
+  metadata = {
+    runbook = local.ghcr_hostsfile_deny_lost_runbook_url
   }
 
   escalation_target {

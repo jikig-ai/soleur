@@ -1139,7 +1139,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // back to FALLBACK_LABELS.Read. Defense-in-depth against echoing
     // host-shaped paths to clients during a Supabase incident.
     expect(frame.label).not.toBe("Read");
-    expect(frame.label).toBe("Reading file...");
+    expect(frame.label).toBe("Reading file…");
     expect(frame.label).not.toContain(absolutePath);
   });
 

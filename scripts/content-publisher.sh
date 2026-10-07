@@ -235,7 +235,7 @@ extract_section() {
   content=$(echo "$content" | sed '/./,$!d')
 
   # Handle "Not scheduled" placeholder sections
-  if echo "$content" | grep -q "Not scheduled for"; then
+  if grep -q "Not scheduled for" <<<"$content"; then
     echo ""
     return 0
   fi
@@ -262,7 +262,7 @@ extract_tweets() {
   # tweet content in the labeled convention) are not mistakenly treated as tweet
   # boundaries. Label detection tolerates leading whitespace (`  **Tweet 1 ...`).
   mode="labeled"
-  if ! echo "$x_section" | grep -qE '^[[:space:]]*\*\*Tweet[[:space:]]+[0-9]'; then
+  if ! grep -qE '^[[:space:]]*\*\*Tweet[[:space:]]+[0-9]' <<<"$x_section"; then
     mode="numbered"
   fi
 
@@ -474,7 +474,7 @@ post_x_thread() {
     local err_text
     err_text=$(cat "$hook_stderr")
     rm -f "$hook_stderr"
-    if echo "$err_text" | grep -q "402"; then
+    if grep -q "402" <<<"$err_text"; then
       echo "X API returned 402 (Payment Required). Creating fallback issue." >&2
       create_x_fallback_issue "$file" "$err_text"
       return 1
@@ -503,7 +503,7 @@ post_x_thread() {
       local reply_exit=$?
       local reply_err
       reply_err=$(cat "$reply_stderr")
-      if echo "$reply_err" | grep -q "402"; then
+      if grep -q "402" <<<"$reply_err"; then
         echo "X API returned 402 (Payment Required) on tweet $((i+1)). Thread is partial." >&2
       else
         echo "Error posting tweet $((i+1))/${#tweets[@]} (exit $reply_exit): $reply_err" >&2
@@ -570,7 +570,7 @@ append_to_linkedin_tracker() {
     echo "Warning: failed to fetch tracker #${tracker} body (reason: ${error_reason}). Will retry next cron." >&2
     return 1
   }
-  if printf '%s' "$current_body" | grep -qF -- "$marker"; then
+  if grep -qF -- "$marker" < <(printf '%s' "$current_body"); then
     echo "[info] Tracker #${tracker} already lists \"${case_name} (${section})\" — skip append."
     return 0
   fi

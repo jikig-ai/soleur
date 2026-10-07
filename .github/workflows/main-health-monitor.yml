@@ -105,14 +105,15 @@ permissions:
 #                        (this file added to its list by #7307).
 #   LIKEC4_VERSION    -> sites: Dockerfile, package.json (x2),
 #                        plugins/soleur/scripts/render-c4-model.sh,
-#                        ci.yml (test-webplat + test-scripts + test-scripts-heavy),
+#                        ci.yml (test-webplat + test-scripts),
 #                        and here.
 #                        Guarded by apps/web-platform/test/c4-likec4-version-pin.test.ts
 #                        (this file added by #7307). NB the install below writes
 #                        the literal, not "likec4@${LIKEC4_VERSION}", because that
 #                        guard's regex requires a digit after `likec4@`. The same
-#                        guard pairs the version with the `--before=<date>` literal on
-#                        that line (#9300); the date is literal-only, with no env entry.
+#                        guard pairs the version with the `--before=<date>` literal and
+#                        requires `--ignore-scripts` on that line (#9300); the date is
+#                        literal-only, with no env entry.
 #   TERRAFORM_VERSION -> 8 declarations across .github/workflows/, ALL "1.10.5",
 #                        with no coupling guard anywhere. Naming one of them as
 #                        "the owner" would be a misleading map, so: they are peers;
@@ -284,7 +285,7 @@ jobs:
       - name: Install likec4 CLI (pinned — matches Dockerfile/package.json)
         run: |
           set -euo pipefail
-          npm install -g likec4@1.50.0 --before=2026-09-28   # literals, not env: see TOOLCHAIN PINS
+          npm install -g likec4@1.50.0 --before=2026-09-28 --ignore-scripts   # literals, not env: see TOOLCHAIN PINS
           likec4 --version
 
       # ORDERED BEFORE the infra step, and that ordering is the invariant.
@@ -413,7 +414,67 @@ jobs:
           # unreadable by anything but a human with a browser.
           # `tests_elapsed_s` / `infra_elapsed_s` are ABSENT when the step ended before the runner
           # returned (killed at its ceiling), which marks that sample as censored.
-          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }}${T_EL}${I_EL}"
+          # `mint=` is the mintwatch verdict (#9082): the annotation is the
+          # machine-readable verdict surface, so the mint conclusion's input belongs
+          # on it too (empty when the step never ran).
+          echo "::notice title=main-health-outcomes::SOLEUR_MAIN_HEALTH tests=${{ steps.tests.outcome }} infra=${{ steps.infra.outcome }} mint=${{ steps.mintwatch.outputs.verdict }}${T_EL}${I_EL}"
+
+      # #9082 — the auto-mint's own conclusion as a monitor input. A red
+      # `mint-inngest-bootstrap-tag.yml` run on main reaches the operator otherwise
+      # only via its Slack step, which silently does nothing when
+      # SLACK_RELEASES_WEBHOOK_URL is unset or the post fails. This step reads the
+      # newest COMPLETED run on main and emits `verdict` — `red` ONLY for the two
+      # conclusions the issue names (`failure`, `startup_failure`): an in-flight
+      # run, a success/skipped/cancelled conclusion, or no run at all is not red,
+      # and an unreadable API is `unknown` — fail-open but never silent, with
+      # `::error::` on every such path (the 2026-10-06 queue-health conventions).
+      # `gh --json` is piped to a STANDALONE jq — `gh --jq` does not forward
+      # `--arg` (#9533) — and no pipe-fed `grep -q` decides a predicate (jq
+      # computes it). Deliberately NO `timeout-minutes:` of its own: the job
+      # ceiling is pinned at sum(step ceilings)+15 by the workflow test, so the
+      # bounded part here is the `timeout`-wrapped gh call, and the step always
+      # exits 0 — an API blip must never consume the suite job's ceiling.
+      - name: Read newest mint-inngest-bootstrap-tag run (slow-path)
+        id: mintwatch
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          MINT_RUN_ID=""
+          MINT_CONCLUSION=""
+          VERDICT="unknown"
+          RUNS_JSON=""
+          if ! RUNS_JSON="$(timeout 60 gh run list \
+            --workflow=mint-inngest-bootstrap-tag.yml \
+            --branch main --limit 10 \
+            --json databaseId,conclusion,status,createdAt,headSha 2>&1)"; then
+            echo "::error::mintwatch: gh run list failed — verdict unknown, not green: ${RUNS_JSON:0:200}"
+          elif ! jq -e 'type == "array"' <<<"$RUNS_JSON" >/dev/null; then
+            echo "::error::mintwatch: gh output was not a JSON array — verdict unknown, not green: ${RUNS_JSON:0:200}"
+          else
+            LATEST="$(printf '%s' "$RUNS_JSON" | jq -r '
+              ([.[] | select(.status == "completed")] | sort_by(.createdAt) | .[-1]) // null
+              | if . == null then "none"
+                else "\(.databaseId)|\(.conclusion // "null")|\((.headSha // "")[0:12])" end')"
+            if [[ "$LATEST" == "none" ]]; then
+              VERDICT="green"
+              echo "mintwatch: no completed mint-inngest-bootstrap-tag.yml run on main yet — verdict=green"
+            else
+              MINT_RUN_ID="${LATEST%%|*}"
+              MINT_CONCLUSION="$(printf '%s' "$LATEST" | cut -d'|' -f2)"
+              case "$MINT_CONCLUSION" in
+                failure|startup_failure) VERDICT="red" ;;
+                *) VERDICT="green" ;;
+              esac
+              echo "mintwatch: newest completed run ${MINT_RUN_ID} concluded ${MINT_CONCLUSION} (sha $(printf '%s' "$LATEST" | cut -d'|' -f3)) — verdict=${VERDICT}"
+            fi
+          fi
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "run_id=$MINT_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$MINT_CONCLUSION" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Create issue on failure
         # `!= 'success'`, not `== 'failure'` — a job/step timeout is `cancelled`
@@ -429,7 +490,10 @@ jobs:
         # Exhaustive and disjoint with the closer over STEP outcomes WHEN THE JOB
         # COMPLETES. A job-level cancel skips both arms regardless of `if:`; that
         # class is covered by the Sentry missed-check-in alarm, not here.
-        if: ${{ !cancelled() && !inputs.dry_run && (steps.tests.outcome != 'success' || steps.infra.outcome != 'success') }}
+        # #9082 — the mint verdict is a third red input, disjoint with the
+        # suites': a mint-red run with green suites reaches the dedicated mint
+        # arm below, not the suite arms.
+        if: ${{ !cancelled() && !inputs.dry_run && (steps.tests.outcome != 'success' || steps.infra.outcome != 'success' || steps.mintwatch.outputs.verdict == 'red') }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -438,6 +502,9 @@ jobs:
           INFRA_OUTCOME: ${{ steps.infra.outcome }}
           TESTS_ELAPSED_S: ${{ steps.tests.outputs.elapsed_s }}
           INFRA_ELAPSED_S: ${{ steps.infra.outputs.elapsed_s }}
+          MINT_VERDICT: ${{ steps.mintwatch.outputs.verdict }}
+          MINT_RUN_ID: ${{ steps.mintwatch.outputs.run_id }}
+          MINT_CONCLUSION: ${{ steps.mintwatch.outputs.conclusion }}
         run: |
           # SENTINEL: the closer only retires trackers carrying this marker.
           # Selecting on the label alone would let this job close a HUMAN-filed
@@ -661,6 +728,13 @@ jobs:
             fi
           done
 
+          # #9082 — the mint verdict rides the body in EVERY arm. A suite failure
+          # dominates the title below, but the mint detail must still reach the
+          # issue; on a mint-red-only run this is the whole summary.
+          if [[ "$MINT_VERDICT" == "red" ]]; then
+            SUMMARY="${SUMMARY}--- mintwatch (verdict=red) ---"$'\n'"latest completed mint-inngest-bootstrap-tag.yml run on main: run=${MINT_RUN_ID:-?} conclusion=${MINT_CONCLUSION:-?}"$'\n\n'
+          fi
+
           gh label create "ci/main-broken" \
             --description "Main branch CI is failing" \
             --color "B60205" \
@@ -685,7 +759,19 @@ jobs:
             "3. Verify CI passes on main before closing this issue"
           )
 
-          if [[ "$RAN_ANY" == "0" ]]; then
+          if [[ "$RAN_ANY" == "0" && "$MINT_VERDICT" == "red" ]]; then
+            # #9082 mint-red-only: both suites reported success (or no outcome),
+            # so the suite arms would mis-name this — AP-021: name what was
+            # measured, which here is the mint workflow's own conclusion.
+            TITLE="CI: inngest-bootstrap auto-mint run ${MINT_CONCLUSION:-failed} on main"
+            HEADING="Auto-mint watch — newest completed run concluded ${MINT_CONCLUSION:-failure}"
+            LEDE="The health monitor's mintwatch step read the newest completed mint-inngest-bootstrap-tag.yml run on main and it concluded ${MINT_CONCLUSION:-failure}; the test and infra suites are green, so the red here is the auto-mint itself. A carrier/pin/recipe change that needed a tag may have shipped un-minted — the drift is caught by Guard A/AC6 until the next mint lands."
+            ACTIONS=(
+              "1. Read the failing run's log: \`gh run view ${MINT_RUN_ID:-<run-id>} --log\` — the mint's own stage= name identifies where it stopped"
+              "2. If a legitimate image-input change merged while the mint skipped or failed, the fix is a successful mint: re-run \`gh workflow run mint-inngest-bootstrap-tag.yml\` or land the pin bump"
+              "3. Do not revert a commit on the strength of this issue alone — it reports the workflow's conclusion, not a product defect"
+            )
+          elif [[ "$RAN_ANY" == "0" ]]; then
             TITLE="CI: main-branch health check could not run"
             HEADING="Run failed before the suites started"
             LEDE="A setup step failed (checkout, toolchain install, or the toolchain assertion). The suites never ran, so this issue says nothing about main's health — see the run log's failed step."
@@ -775,7 +861,7 @@ jobs:
             echo ""
             echo "${LEDE}"
             echo ""
-            echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`${ELAPSED_NOTE}"
+            echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\`${ELAPSED_NOTE}"
             echo ""
             echo "### ${HEADING}"
             echo ""
@@ -820,7 +906,7 @@ jobs:
               # a runner that measured nothing about what terminated the suite.
               echo "${LEDE}"
               echo ""
-              echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`${ELAPSED_NOTE}"
+              echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\` \`mint=${MINT_VERDICT:-unknown}\`${ELAPSED_NOTE}"
               echo ""
               echo "### ${HEADING}"
               echo ""
@@ -873,10 +959,21 @@ jobs:
           gh issue edit "$ISSUE_URL" --milestone "Post-MVP / Later" \
             || echo "::warning::milestone 'Post-MVP / Later' not set on ${ISSUE_URL}"
 
-          echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME:-none} infra=${INFRA_OUTCOME:-none}). Issue created."
+          echo "::error::Main branch health check did not pass (tests=${TESTS_OUTCOME:-none} infra=${INFRA_OUTCOME:-none} mint=${MINT_VERDICT:-unknown}). Issue created."
 
       - name: Close issue on success
-        if: ${{ !inputs.dry_run && steps.tests.outcome == 'success' && steps.infra.outcome == 'success' }}
+        # #9082 — the mint verdict is a non-closing conjunct: a green-suite sweep
+        # must not retire a tracker the mint arm filed. `!= 'red'` (not
+        # `== 'green'`) is deliberate fail-open: an `unknown` verdict is an API
+        # blip, not a measured red, and the queue-health convention does not let
+        # an unmeasured input block the green path. `!cancelled() &&` is the
+        # alarm-issue-filing-guard remedy: an `if:` gated on `steps.*.outputs.`
+        # with no status-check function inherits implicit success() and skips —
+        # it never even evaluates — whenever ANY earlier step failed. It is
+        # `!cancelled()` and NOT `always()` for the same reason the filer uses
+        # it: `always()` would close the tracker regardless of the suite
+        # verdict (the (3b) check pins that). The conjuncts still gate the body.
+        if: ${{ !cancelled() && !inputs.dry_run && steps.tests.outcome == 'success' && steps.infra.outcome == 'success' && steps.mintwatch.outputs.verdict != 'red' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -930,7 +1027,9 @@ jobs:
         uses: ./.github/actions/sentry-heartbeat
         with:
           monitor-slug: main-health-monitor
-          status: ${{ (steps.tests.outcome == 'success' && steps.infra.outcome == 'success') && 'ok' || 'error' }}
+          # #9082 — the mint verdict joins the heartbeat's measured-red set, with
+          # the same fail-open polarity as the closer: `unknown` is not `red`.
+          status: ${{ (steps.tests.outcome == 'success' && steps.infra.outcome == 'success' && steps.mintwatch.outputs.verdict != 'red') && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

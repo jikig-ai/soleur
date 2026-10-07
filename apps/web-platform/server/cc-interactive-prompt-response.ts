@@ -27,6 +27,7 @@
 import {
   PendingPromptRegistry,
   makePendingPromptKey,
+  COST_CAP_TOOL_USE_ID_PREFIX,
   type InteractivePromptKind,
   type PendingPromptRecord,
 } from "./pending-prompt-registry";
@@ -54,6 +55,18 @@ export interface HandleInteractivePromptResponseArgs {
     conversationId: string;
     toolUseId: string;
     content: string;
+  }) => void;
+  /**
+   * feat-cc-cap-raise-resume (#9565) — delivery channel for records whose
+   * `toolUseId` carries the `cost-cap:` sentinel. Those prompts were
+   * emitted by the runner at cost-cap breach — no SDK `tool_use` exists,
+   * so feeding a `tool_result` via `deliverToolResult` would corrupt the
+   * stream. When absent, a sentinel record resolves to `not_found`
+   * (consumers that never wire cost-cap prompts can't produce them).
+   */
+  deliverCostCapResponse?: (args: {
+    conversationId: string;
+    response: string;
   }) => void;
 }
 
@@ -215,6 +228,23 @@ export function handleInteractivePromptResponse(
   // All checks passed — consume + deliver.
   registry.consume(key, userId);
   tombstonesFor(registry).add(key);
+
+  // feat-cc-cap-raise-resume — sentinel records bypass `deliverToolResult`
+  // (no real SDK tool_use; see COST_CAP_TOOL_USE_ID_PREFIX). The response
+  // string (e.g. "Raise to $10" / "Keep the cap") routes to the runner's
+  // applyCostCapRaise via the caller's wiring.
+  if (record.toolUseId.startsWith(COST_CAP_TOOL_USE_ID_PREFIX)) {
+    if (!args.deliverCostCapResponse) {
+      // Defensive — production always wires it; treat like a missing
+      // record so the rejection taxonomy stays narrow.
+      return { ok: false, error: "not_found" };
+    }
+    args.deliverCostCapResponse({
+      conversationId: record.conversationId,
+      response: normalized.content,
+    });
+    return { ok: true };
+  }
 
   deliverToolResult({
     conversationId: record.conversationId,

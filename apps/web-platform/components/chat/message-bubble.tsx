@@ -8,9 +8,9 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import type { AttachmentRef, MessageState } from "@/lib/types";
-import type { CommandBlock } from "@/lib/chat-state-machine";
+import type { ActivityEntry } from "@/lib/chat-state-machine";
+import { ActivityTrail, LiveStep } from "@/components/chat/activity-trail";
 import { formatAssistantText } from "@/lib/format-assistant-text";
-import { redactCommandForDisplay } from "@/lib/safety/redaction-allowlist";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 export function ThinkingDots() {
@@ -100,7 +100,6 @@ export const MessageBubble = memo(function MessageBubble({
   showFullTitle = false,
   messageState,
   toolLabel,
-  toolsUsed,
   retrying = false,
   getDisplayName,
   getIconPath,
@@ -108,7 +107,12 @@ export const MessageBubble = memo(function MessageBubble({
   variant = "full",
   status,
   usage,
-  commandBlocks,
+  activity,
+  currentActivityStartedAt,
+  interrupted = false,
+  liveNarration,
+  liveNarrationStartedAt,
+  suppressLive = false,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -116,7 +120,6 @@ export const MessageBubble = memo(function MessageBubble({
   showFullTitle?: boolean;
   messageState?: MessageState;
   toolLabel?: string;
-  toolsUsed?: string[];
   /** FR5 (#2861) / FR4 (#5240): when true, show the honest "No response yet"
    *  chip on tool_use bubbles (nothing is actually retried). */
   retrying?: boolean;
@@ -132,13 +135,25 @@ export const MessageBubble = memo(function MessageBubble({
   /** #3448 PR2: aborted-turn snapshot. Required when `status === "aborted"`;
    *  ignored otherwise. */
   usage?: AbortMarkerUsage | null;
-  /** feat-concierge-stream-commands — inline streamed-terminal blocks for
-   *  Concierge Bash tool-uses (cc_router). Append-only; rendered below the
-   *  bubble content as monospace `<pre>` blocks, Claude-Code-terminal style,
-   *  with NO Approve/Deny buttons. Each block's command/output is redacted
-   *  again at render (belt-and-suspenders Art. 14 gate). Empty/undefined on
-   *  bubbles that ran no commands. */
-  commandBlocks?: CommandBlock[];
+  /** #9515 — session-only in-turn step history (dimmed priors). Rendered
+   *  only while the bubble is live-ish (transitional state or
+   *  `interrupted`) — done/error/hydrated bubbles skip it, so teardown
+   *  needs no mutation. */
+  activity?: ActivityEntry[];
+  /** ms epoch the current tool step began (elapsed renders live). */
+  currentActivityStartedAt?: number;
+  /** #9515 — mid-flap honest marker: swept transitional bubble awaiting a
+   *  rebind. Renders the neutral "Interrupted" chip + keeps the trail
+   *  visible; never the amber Working pill. */
+  interrupted?: boolean;
+  /** #9515 — the turn's live narration folded INTO this bubble (the
+   *  consolidated box — the standalone "Still working…" line is gone). */
+  liveNarration?: string | null;
+  liveNarrationStartedAt?: number | null;
+  /** #9515 — parked-gate suppression: an unresolved review_gate /
+   *  autonomous_disclosure parks the turn on the operator, so the live
+   *  line must not claim "still working". The trail itself still renders. */
+  suppressLive?: boolean;
   // Review F5 (#2886): the `parentId` prop, the `ml-6` indentClass, and the
   // `data-parent-id` attribute were removed — they had no production caller.
   // SubagentGroup renders its child rows directly with their own indentation
@@ -161,6 +176,31 @@ export const MessageBubble = memo(function MessageBubble({
   const isActive = messageState === "thinking" || messageState === "tool_use" || messageState === "streaming";
   const isError = messageState === "error";
   const isDone = messageState === "done";
+  // #9515 — consolidated working box: the ActivityTrail footer renders for
+  // every live-ish assistant bubble (priors + live step + elapsed +
+  // interrupted marker in ONE surface). Done/error/hydrated bubbles never
+  // reach it — turn end collapses for free.
+  // `interrupted` counts as live-ish only while the bubble is NOT terminal —
+  // a re-bound bubble that later ends done keeps the flag as history but
+  // must render the normal Done card, not a stale Interrupted chip.
+  const showTrail =
+    role === "assistant" &&
+    (isActive || (interrupted && !isDone && !isError));
+
+  // #9515 follow-up — the CURRENT step is the meaningful text in the box.
+  // When no streamed content occupies the body yet, the live step renders
+  // there (prominent, ticking) and the trail's tail carries the in-progress
+  // dots; once content streams, the live step sits in the trail as before.
+  const liveStep =
+    suppressLive || interrupted || retrying
+      ? null
+      : liveNarration
+        ? { label: liveNarration, startedAt: liveNarrationStartedAt }
+        : toolLabel
+          ? { label: toolLabel, startedAt: currentActivityStartedAt }
+          : null;
+  const currentInBody =
+    liveStep !== null && isActive && (content ?? "") === "";
 
   const borderStyle = isError
     ? "border-2 border-red-900/60"
@@ -226,10 +266,35 @@ export const MessageBubble = memo(function MessageBubble({
 
           {status === "aborted" && role === "assistant"
             ? renderAbortedAssistant({ content, usage, variant })
-            : renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, retrying, isDone, variant })}
+            : renderBubbleContent({
+                isUser,
+                messageState,
+                content,
+                toolLabel,
+                activity,
+                retrying,
+                isDone,
+                variant,
+                liveStep: currentInBody ? liveStep : null,
+                // #9515 — the trail's live line owns the CURRENT step;
+                // body's ToolStatusChip is suppressed so the label can
+                // never double. When the live line is itself suppressed
+                // (parked gate / interrupted) the body chip stays — the
+                // step must show somewhere honest.
+                suppressToolStatus: showTrail && !suppressLive && !interrupted,
+              })}
 
-          {commandBlocks && commandBlocks.length > 0 && (
-            <CommandStreamBlocks blocks={commandBlocks} />
+          {/* #9515 — consolidated working box: in-turn step trail + the
+              live narration/tool step + honest Interrupted marker, all
+              INSIDE the bubble. Render-gated on live-ish state so done /
+              error / hydrated bubbles never show a stale trail. */}
+          {showTrail && (
+            <ActivityTrail
+              activity={activity}
+              interrupted={interrupted}
+              current={liveStep}
+              currentInBody={currentInBody}
+            />
           )}
 
           {attachments && attachments.length > 0 && (
@@ -237,78 +302,6 @@ export const MessageBubble = memo(function MessageBubble({
           )}
         </div>
       </div>
-    </div>
-  );
-});
-
-/**
- * feat-concierge-stream-commands — inline streamed-terminal block for
- * Concierge Bash tool-uses (cc_router), rendered below the bubble content,
- * Claude-Code-terminal style: a `$ <command>` prompt line + monospace
- * stdout/stderr, NO Approve/Deny buttons (command already executed under the
- * autonomous posture; the blocklist guardrail + redaction are the safety
- * floor). Styled like BashApprovalCard's `<pre>` but inline.
- *
- * Render-time redaction (`redactCommandForDisplay`) is the belt-and-
- * suspenders Art. 14 gate per `redaction-allowlist.ts:9-14` — the server
- * already redacted at the emit boundary, but a render-time pass is the final
- * defense if a persisted/replayed block predates a redaction-rule fix. A
- * surviving secret shape mirrors to Sentry via `reportSilentFallback`.
- */
-/**
- * FIX 3 — single block, memoized. `redactCommandForDisplay` is the
- * belt-and-suspenders render-time gate but it is non-trivial regex work; the
- * active cc_router bubble re-renders at streaming-token rate, so running it on
- * every block of every render is wasteful. `React.memo` skips re-render when
- * the block's `command`/`output`/`truncated` are referentially stable, and the
- * inner `useMemo` recomputes redaction only when the RAW strings change.
- */
-const CommandStreamBlock = memo(function CommandStreamBlock({
-  block,
-}: {
-  block: CommandBlock;
-}): React.ReactElement {
-  const command = React.useMemo(
-    () => redactCommandForDisplay(block.command),
-    [block.command],
-  );
-  const output = React.useMemo(
-    () => redactCommandForDisplay(block.output),
-    [block.output],
-  );
-  return (
-    <pre
-      data-testid="command-stream-block"
-      className="min-w-0 overflow-x-auto rounded-md border border-soleur-border-default/60 bg-soleur-bg-surface-2 px-3 py-2 font-mono text-xs text-soleur-text-secondary whitespace-pre-wrap [overflow-wrap:anywhere]"
-    >
-      <span className="text-amber-500">$ </span>
-      <span className="text-soleur-text-primary">{command}</span>
-      {output.length > 0 && (
-        <>
-          {"\n"}
-          {output}
-        </>
-      )}
-    </pre>
-  );
-});
-
-const CommandStreamBlocks = memo(function CommandStreamBlocks({
-  blocks,
-}: {
-  blocks: CommandBlock[];
-}): React.ReactElement {
-  return (
-    <div
-      className="mt-2 flex flex-col gap-2"
-      data-testid="command-stream-blocks"
-    >
-      {blocks.map((block, i) => (
-        // `i` is a stable index for an append-only list (blocks are never
-        // reordered; the FIX 3 cap prepends a marker + drops a contiguous head,
-        // but the bubble is transient and re-keying on truncation is acceptable).
-        <CommandStreamBlock key={i} block={block} />
-      ))}
     </div>
   );
 });
@@ -323,19 +316,27 @@ function renderBubbleContent({
   messageState,
   content,
   toolLabel,
-  toolsUsed,
+  activity,
   retrying,
   isDone,
   variant,
+  liveStep = null,
+  suppressToolStatus = false,
 }: {
   isUser: boolean;
   messageState: MessageState | undefined;
   content: string;
   toolLabel: string | undefined;
-  toolsUsed: string[] | undefined;
+  activity: ActivityEntry[] | undefined;
   retrying: boolean;
   isDone: boolean;
   variant: "full" | "sidebar";
+  /** #9515 follow-up — live step promoted to the body slot (replaces the
+   *  generic dots) when no streamed content exists yet. */
+  liveStep?: { label: string; startedAt: number | null | undefined } | null;
+  /** #9515 — when the ActivityTrail live line carries the current step,
+   *  the body's ToolStatusChip is dropped (one label, one surface). */
+  suppressToolStatus?: boolean;
 }): React.ReactNode {
   const wrapCode = variant === "sidebar";
   if (isUser) {
@@ -350,6 +351,13 @@ function renderBubbleContent({
   // content stays verbatim. `reportFallthrough` mirrors to Sentry when a
   // `/workspaces/` or `/tmp/claude-` shape survives the canonical pattern
   // table — this is the success metric for FR2+FR3.
+  // #9515 — "Used:" reads the same deduped trail the box recorded (the
+  // plan's single-accumulator fold; `toolsUsed` was deleted).
+  const usedToolLabels = [
+    ...new Set(
+      (activity ?? []).filter((e) => e.kind === "tool").map((e) => e.label),
+    ),
+  ];
   const scrubbedContent = formatAssistantText(content, {
     reportFallthrough: (shape) =>
       reportSilentFallback(null, {
@@ -361,11 +369,22 @@ function renderBubbleContent({
 
   switch (messageState) {
     case "thinking":
+      // The live step (narration or tool label) IS the meaningful text —
+      // show it in the prominent slot; the dots fallback only when no step
+      // has been reported yet.
+      if (liveStep) return <LiveStep label={liveStep.label} startedAt={liveStep.startedAt} />;
       return <ThinkingDots />;
     case "tool_use":
-      if (retrying) return <RetryingChip label={toolLabel} />;
-      return toolLabel ? <ToolStatusChip label={toolLabel} /> : <ThinkingDots />;
+      if (retrying)
+        return <RetryingChip label={toolLabel ? formatAssistantText(toolLabel) : toolLabel} />;
+      if (suppressToolStatus)
+        return liveStep
+          ? <LiveStep label={liveStep.label} startedAt={liveStep.startedAt} />
+          : <ThinkingDots />;
+      return toolLabel ? <ToolStatusChip label={formatAssistantText(toolLabel)} /> : <ThinkingDots />;
     case "streaming":
+      if (scrubbedContent === "" && liveStep)
+        return <LiveStep label={liveStep.label} startedAt={liveStep.startedAt} />;
       return (
         <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
           {scrubbedContent}
@@ -382,7 +401,7 @@ function renderBubbleContent({
               <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
             <span className="text-sm">
-              Agent stopped responding after: {toolLabel ?? "Working"}
+              Agent stopped responding after: {toolLabel ? formatAssistantText(toolLabel) : "Working"}
             </span>
           </div>
           <a
@@ -397,11 +416,11 @@ function renderBubbleContent({
         </div>
       );
     case "done":
-      if (content === "" && toolsUsed && toolsUsed.length > 0) {
+      if (content === "" && usedToolLabels.length > 0) {
         return (
           <div className="flex items-center gap-1.5 text-xs text-soleur-text-muted">
             <span>Used:</span>
-            {toolsUsed.map((t, i) => (
+            {usedToolLabels.map((t, i) => (
               <span key={i} className="rounded bg-soleur-bg-surface-2 px-1.5 py-0.5">
                 {t}
               </span>

@@ -304,16 +304,19 @@ describe("references/ files are reachable from their skill", () => {
 // Autonomous-loop skills must disclose API budget (#3819)
 // ---------------------------------------------------------------------------
 
+// Shared by the API-budget and pipeline-tally sentinels — one list, never two
+// (#9403 review: a duplicated list silently diverges on the next loop skill).
+const AUTONOMOUS_LOOP_SKILLS = [
+  "test-fix-loop",
+  "drain-labeled-backlog",
+  "resolve-todo-parallel",
+  "resolve-pr-parallel",
+  "work",
+  "one-shot",
+  "eval-harness",
+];
+
 describe("Autonomous-loop API-budget disclosure", () => {
-  const AUTONOMOUS_LOOP_SKILLS = [
-    "test-fix-loop",
-    "drain-labeled-backlog",
-    "resolve-todo-parallel",
-    "resolve-pr-parallel",
-    "work",
-    "one-shot",
-    "eval-harness",
-  ];
 
   // Sentinel chosen for distinctiveness + verbatim across all 7 disclosures.
   // Tracks the BSL 1.1 disclaimer carried over from `goal-primitive.md`.
@@ -339,6 +342,132 @@ describe("Autonomous-loop API-budget disclosure", () => {
       ).toBe(true);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Autonomous-loop skills must carry the pipeline-tally call-out (#9403)
+// ---------------------------------------------------------------------------
+// Prose-only bookkeeping has ~zero compliance — the tally only exists if every
+// autonomous loop invokes the counter script. This sentinel pins the anchored
+// call forms: each skill must `init`, `gate` (pre-expensive-step), and `incr`
+// via scripts/pipeline-tally.sh. review/ship are instrumented alongside the
+// loop list (review seats; ship ci_cycles + the ## Pipeline Tally render).
+
+describe("Autonomous-loop pipeline-tally call-out (#9403)", () => {
+  // review (seats) and ship (ci_cycles + render) are instrumented alongside the
+  // loop list — the sentinel covers all nine skills.
+  const TALLY_SKILLS = [...AUTONOMOUS_LOOP_SKILLS, "review", "ship"];
+
+  // Loop until stable — a nested `<!-- <!-- --> -->` can splice neighbours into
+  // a fresh comment (CodeQL incomplete-multi-character-sanitization); a
+  // comment-only mention must NOT satisfy the call-form assertions below.
+  const stripHtmlComments = (raw: string) => {
+    let out = raw;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/<!--[\s\S]*?-->/g, "");
+    } while (out !== prev);
+    return out;
+  };
+
+  // The qualified invocation is the contract — `pipeline-tally.sh` copied
+  // bare resolves to `command not found`, and the fail-open design makes that
+  // a SILENT skip. `[ \t]+` (not `\s+`) keeps the subcommand on the same line.
+  const CALL_FORMS = [
+    /scripts\/pipeline-tally\.sh"?[ \t]+init\b/, // init invocation
+    /scripts\/pipeline-tally\.sh"?[ \t]+gate\b/, // gate before expensive steps
+    /scripts\/pipeline-tally\.sh"?[ \t]+incr\b/, // incr <dim> call form
+  ];
+
+  for (const skillName of TALLY_SKILLS) {
+    test(`${skillName} SKILL.md carries pipeline-tally init/gate/incr call forms`, () => {
+      const raw = stripHtmlComments(
+        readFileSync(
+          resolve(PLUGIN_ROOT, "skills", skillName, "SKILL.md"),
+          "utf-8",
+        ),
+      );
+      for (const re of CALL_FORMS) {
+        expect(
+          re.test(raw),
+          `${skillName} is missing tally call form ${re.source} — every autonomous loop must ` +
+            `invoke scripts/pipeline-tally.sh (init at start, gate before expensive steps, ` +
+            `incr per counted op). Removing or renaming the call defeats the running tally (#9403).`,
+        ).toBe(true);
+      }
+    });
+  }
+
+  test("review SKILL.md counts seats via pipeline-tally incr", () => {
+    const raw = stripHtmlComments(readFileSync(resolve(PLUGIN_ROOT, "skills", "review", "SKILL.md"), "utf-8"));
+    expect(
+      /scripts\/pipeline-tally\.sh"?[ \t]+incr[ \t]+seats/.test(raw),
+      "review must `incr seats <N>` after spawning its panel (#9403)",
+    ).toBe(true);
+  });
+
+  test("ship SKILL.md renders ## Pipeline Tally in BOTH PR-body templates", () => {
+    // NOT comment-stripped: ship's own regex literals contain an unbalanced
+    // `<!--` (gate-override grep patterns ~L2004), so the fixpoint strip eats
+    // this entire section — a comment-strip here false-negatives the very
+    // templates it checks. The `<tally>`-placeholder scope already excludes
+    // prose mentions.
+    const raw = readFileSync(resolve(PLUGIN_ROOT, "skills", "ship", "SKILL.md"), "utf-8");
+    // `## Pipeline Tally` followed by the <tally> placeholder only exists
+    // inside the two PR-body templates — a bare count can't distinguish
+    // template headings from prose mentions (deleting BOTH templates once
+    // left the count at 2 and the assert green on the property it names).
+    const occurrences = (raw.match(/## Pipeline Tally\n\s*<tally>/g) || []).length;
+    expect(
+      occurrences === 2,
+      `ship SKILL.md has ${occurrences} '## Pipeline Tally' template heading(s) — the ` +
+        `\`gh pr edit\` AND \`gh pr create\` fallback templates must each render it (#9403 AC4)`,
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_ABSENT"),
+      "ship must render SOLEUR_TALLY_ABSENT for an instrumented run that wrote no ledger",
+    ).toBe(true);
+    expect(
+      raw.includes("SOLEUR_TALLY_CAP_IGNORED"),
+      "ship must render SOLEUR_TALLY_CAP_IGNORED for a run that crossed a cap and shipped anyway",
+    ).toBe(true);
+  });
+
+  test("instrumented workflows return a counts field (one-writer bridge)", () => {
+    // Enumerate workflows under instrumented skills, not a hardcoded list —
+    // a new *.workflow.js in a tally-instrumented skill joins this contract
+    // automatically (un-instrumented skills' workflows legitimately carry none).
+    const bridged = readdirSync(resolve(PLUGIN_ROOT, "skills"), { withFileTypes: true })
+      .filter((d) => d.isDirectory() && TALLY_SKILLS.includes(d.name))
+      .flatMap((d) =>
+        existsSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+          ? readdirSync(resolve(PLUGIN_ROOT, "skills", d.name, "workflows"))
+              .filter((f) => f.endsWith(".workflow.js"))
+              .map(() => d.name)
+          : [],
+      )
+      .sort();
+    expect(
+      bridged.length > 0,
+      "no *.workflow.js found under instrumented skills — the bridge contract lost its population",
+    ).toBe(true);
+    for (const name of bridged) {
+      const wfPath = resolve(
+        PLUGIN_ROOT,
+        "skills",
+        name,
+        "workflows",
+        `${name}.workflow.js`,
+      );
+      const raw = readFileSync(wfPath, "utf-8");
+      expect(
+        /counts:\s*\{/.test(raw),
+        `${name}.workflow.js does not return counts:{…} — the invoking prose posts ` +
+          `it via \`pipeline-tally.sh incr\`; without the field the workflow path tallies nothing (#9403)`,
+      ).toBe(true);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1255,7 +1384,7 @@ describe("plugin slash-name uniqueness", () => {
     // "all manifests", and narrowing the dirent regex to `.claude-plugin` (the
     // one manifest that structurally cannot fail clause (a)) would drop both
     // real rows while a >= 1 floor stayed green.
-    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".devin-plugin"]);
+    expect(manifestDirs).toEqual([".claude-plugin", ".codex-plugin", ".cursor-plugin", ".devin-plugin"]);
 
     // Identity, not just count: three WRONG stems satisfy a length floor, and
     // clause (b) would then compare against names no command has.

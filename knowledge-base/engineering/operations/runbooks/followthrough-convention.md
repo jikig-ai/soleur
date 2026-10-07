@@ -32,7 +32,9 @@ verification passes — no human revisit required.
      maps these to words in the comment heading; anything else still reads TRANSIENT. First use:
      `scripts/followthroughs/ccla-representative-icla-7922.sh`. A notify-only probe should say
      so in its header and assert the never-0/never-1 invariant in its own suite — an exit-code
-     contract nothing drives is a comment.
+     contract nothing drives is a comment. The operator ends such a tracker by closing it AND removing
+     its `follow-through` label: the sweeper's closed-set pass keeps running the probe of a tracker
+     closed as completed, for the lookback window, for as long as the label is on.
    - **State the probe's CREDENTIAL POSTURE in its header, and be exact about what "none" covers.**
      A probe declaring no `secrets=` holds no credential *in its environment*. That is not the same
      as running unauthenticated: `actions/checkout` persists a token into `.git/config`, so any

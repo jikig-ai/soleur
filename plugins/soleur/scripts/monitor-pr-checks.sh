@@ -49,6 +49,18 @@
 #
 # Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal; 2 on timeout;
 # 3 on usage error. The caller's Monitor watch ends when this exits.
+#
+# Merge queue (#9454): a PR that is IN the merge queue is neither stale nor stuck, so the BEHIND / BLOCKED /
+# auto-merge-off verdicts below (which tell the caller to sync, wait on protection, or merge by hand) would
+# be wrong or dangerous for it — a push dequeues it. Those arms (and every --heartbeat-every'th poll, so a PR that
+# reads CLEAN + armed is covered too) first read the queue through `sync-pr-behind.sh <pr> --queue-state` (the
+# one shared read). The read is TRI-STATE: queued / not queued / unknown. A queued PR prints one `IN MERGE QUEUE`
+# line and keeps watching. `LEFT THE MERGE QUEUE UNMERGED` (exit 1) needs a POSITIVE not-queued read of an OPEN
+# PR from a measured poll, and either a `dequeued` verdict (a removal event newer than the last re-arm / push,
+# or seen queued earlier) or a queued sighting of this watch followed by auto-merge off (confirmed by ONE re-read
+# first; a not-queued answer whose state is not OPEN, e.g. the queue's own merge landing, is UNKNOWN). An UNKNOWN read (gh
+# failed, helper absent) changes nothing: it keeps the previous verdict path, and after a queued sighting it
+# holds that verdict (keeps watching) rather than guessing. --repo must be OWNER/REPO (else exit 3).
 set -uo pipefail
 
 PR=""; INTERVAL=120; MAX_POLLS=60; HEARTBEAT_EVERY=5; REPO_ARG=()
@@ -57,8 +69,10 @@ while [[ $# -gt 0 ]]; do
     --interval)  INTERVAL="${2:?--interval needs a value}"; shift 2 ;;
     --max-polls) MAX_POLLS="${2:?--max-polls needs a value}"; shift 2 ;;
     --heartbeat-every) HEARTBEAT_EVERY="${2:?--heartbeat-every needs a value}"; shift 2 ;;
-    --repo)      REPO_ARG=(--repo "${2:?--repo needs a value}"); shift 2 ;;
-    -h|--help)   sed -n '41,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --repo)      [[ "${2:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$ ]] \
+                   || { echo "monitor-pr-checks: --repo must be OWNER/REPO, got '${2:-}' (not a URL, not host-qualified)" >&2; exit 3; }
+                 REPO_ARG=(--repo "$2"); shift 2 ;;
+    -h|--help)   sed -n '/^# Usage:/,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     -*)          echo "monitor-pr-checks: unknown flag $1" >&2; exit 3 ;;
     *)           if [[ -n "$PR" ]]; then echo "monitor-pr-checks: unexpected argument $1" >&2; exit 3; fi
                  PR="$1"; shift ;;
@@ -136,7 +150,7 @@ annotate_red_on_main() {
     else
       out="$("$probe" "$name" --run-id "$runid" "${REPO_ARG[@]}" 2>"$ERRTMP")"; rc=$?
     fi
-    marker="$(printf '%s\n' "$out" | grep -m1 '^SOLEUR_RED_ON_MAIN ' || true)"
+    marker="$(grep -m1 '^SOLEUR_RED_ON_MAIN ' <<<"$out" || true)"
     if [[ -n "$marker" ]]; then
       printf '    %s\n' "$marker"
     else
@@ -148,7 +162,33 @@ annotate_red_on_main() {
   done <<<"$rows"
 }
 
-n=0; prev_sig=""
+# in_queue — the TRI-STATE merge-queue read through `sync-pr-behind.sh <pr> --queue-state`: returns 0 = queued,
+# 1 = a positive NOT-queued answer, 2 = unknown (gh failed, unparseable, the script absent). It sets Q_DQ=1 when the
+# answer's first token is `dequeued` (out of the queue, OPEN, and a removal event newer than the last re-arm/push,
+# or seen queued earlier) and Q_RM to the removal reason. Collapsing 2 into 1 ("not queued") is what made one
+# transient gh failure end the watch with a false terminal LEFT THE MERGE QUEUE UNMERGED.
+QS_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/sync-pr-behind.sh"
+Q_DQ=0; Q_RM="none"
+in_queue() {
+  local out first v st
+  Q_DQ=0; Q_RM="none"
+  [[ -r "$QS_SH" ]] || return 2
+  out="$(PR_QUEUE_REPO="${REPO_ARG[1]:-}" bash "$QS_SH" "$PR" --queue-state 2>/dev/null)" || return 2
+  first="${out%%$'\n'*}"; v="${first%% *}"
+  case "$first" in *removal=*) Q_RM="${first##*removal=}"; Q_RM="${Q_RM%% *}" ;; esac
+  # The verdict's STATE token (2nd field) must be OPEN for a not-queued answer to mean anything: `not_queued MERGED` is the
+  # queue's own merge landing (and CLOSED is not a departure), so it is UNKNOWN here (hold, the next view reads it), never
+  # a positive "left the queue".
+  st="${first#* }"; st="${st%% *}"
+  case "$v" in
+    queued)     return 0 ;;
+    not_queued) [[ "$st" == OPEN ]] || return 2; return 1 ;;
+    dequeued)   [[ "$st" == OPEN ]] || return 2; Q_DQ=1; return 1 ;;
+    *)          return 2 ;;
+  esac
+}
+
+n=0; prev_sig=""; queue_seen=0
 while :; do
   n=$((n + 1))
 
@@ -269,6 +309,38 @@ while :; do
         exit 1
       fi
     fi
+    # Merge queue (#9454): BEHIND, BLOCKED and an unarmed auto-merge are what a QUEUED PR can look like,
+    # and each verdict below is wrong for it (syncing or merging by hand dequeues it / skips the
+    # merge_group run). Read the queue only for those states; a healthy CLEAN + armed PR costs no call.
+    queued=0; qread=2
+    if [[ "$state" == "OPEN" && ( "$mergestate" == "BEHIND" || "$mergestate" == "BLOCKED" || "$automerge" == "false" \
+          || $(( n % HEARTBEAT_EVERY )) -eq 0 ) ]]; then
+      in_queue; qread=$?
+      # A positive not-queued OPEN answer with NO removal evidence (not `dequeued`) that would end the watch because a queued
+      # sighting is followed by auto-merge off is confirmed by ONE re-read first (as queue_read_settled does for the script's
+      # own candidates): the instant the queue's own merge lands reads not queued + OPEN once, then MERGED. The re-read's
+      # answer replaces the first (queued again: keeps watching; unknown: holds; not queued OPEN: the departure stands).
+      if [[ "$qread" == "1" && "$Q_DQ" != "1" && "$queue_seen" == "1" && "$automerge" == "false" ]]; then
+        in_queue; qread=$?
+      fi
+    fi
+    if [[ "$qread" == "0" ]]; then
+      queued=1
+    elif [[ "$qread" == "2" && "$queue_seen" == "1" ]]; then
+      queued=1   # UNKNOWN read after a queued sighting: hold that verdict quietly, never guess a dequeue
+    fi
+    if [[ "$queued" == "1" ]]; then
+      if [[ "$qread" == "0" && "$queue_seen" != "1" ]]; then
+        printf 'IN MERGE QUEUE — PR #%s is queued (mergeState=%s): checks are green and the queue merges it. Do NOT sync, update-branch, push or --admin it (a push dequeues it); watching for MERGED or removal from the queue.\n' "$PR" "$mergestate"
+      fi
+      [[ "$qread" != "0" ]] || queue_seen=1
+    elif [[ "$qread" == "1" && ( "$Q_DQ" == "1" || ( "$queue_seen" == "1" && "$automerge" == "false" ) ) ]]; then
+      # qread is 1 only when the read ran: state OPEN (the gate above) inside this settled block, which needs a
+      # measured `gh pr checks` (tot > 0) and, with a failed `gh pr view`, state UNKNOWN: T24i pins it.
+      printf 'LEFT THE MERGE QUEUE UNMERGED — PR #%s is OPEN and out of the queue (removal: %s; auto-merge %s): a failed merge_group run or a removal. Do NOT merge it by hand or --admin it. Read it: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '"'"'.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-%s-"))'"'"'; recovery (ONE re-enqueue): plugins/soleur/skills/ship/references/merge-queue-dequeue.md.\n' "$PR" "$Q_RM" "$([[ "$automerge" == "true" ]] && echo armed || echo disarmed)" "$PR"
+      exit 1
+    fi
+
     # Green but still OPEN with auto-merge armed: keep watching for the merge itself, but say so
     # rather than looping silently.
     # BEHIND and DIRTY are both "green, but a human has to do something", and both are reachable
@@ -276,17 +348,19 @@ while :; do
     # conflict. FOUND BY DOGFOODING: the first cut handled BEHIND and not DIRTY, so watching a real
     # PR that went green-then-DIRTY kept polling a state that needed action. The bug was in the
     # branch the operator would read as "still working".
-    case "$mergestate" in
-      BEHIND)  printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync).\n' "$PR"; exit 1 ;;
-      DIRTY)   printf 'CHECKS GREEN BUT DIRTY — PR #%s has a merge conflict; auto-merge cannot resolve it.\n' "$PR"; exit 1 ;;
-      DRAFT)   printf 'CHECKS GREEN BUT DRAFT — PR #%s cannot merge until it is marked ready.\n' "$PR"; exit 1 ;;
-      # BLOCKED with nothing pending means branch protection is unsatisfied by something OUTSIDE
-      # the check list — a missing required review, a required context that never posts, a merge
-      # queue. Auto-merge sits there indefinitely. It renders identically to CLEAN, which lands in
-      # seconds: same line, opposite futures. That is the defect class this script exists to close,
-      # and it is the sibling of the DIRTY miss found by dogfooding.
-      BLOCKED) printf 'CHECKS GREEN BUT BLOCKED — PR #%s is held by branch protection outside the check list (a required review, an unposted required context, or a merge queue). Auto-merge will not resolve it.\n' "$PR"; exit 1 ;;
-    esac
+    if [[ "$queued" != "1" ]]; then
+      case "$mergestate" in
+        BEHIND)  printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync).\n' "$PR"; exit 1 ;;
+        DIRTY)   printf 'CHECKS GREEN BUT DIRTY — PR #%s has a merge conflict; auto-merge cannot resolve it.\n' "$PR"; exit 1 ;;
+        DRAFT)   printf 'CHECKS GREEN BUT DRAFT — PR #%s cannot merge until it is marked ready.\n' "$PR"; exit 1 ;;
+        # BLOCKED with nothing pending means branch protection is unsatisfied by something OUTSIDE
+        # the check list — a missing required review, a required context that never posts, a merge
+        # queue. Auto-merge sits there indefinitely. It renders identically to CLEAN, which lands in
+        # seconds: same line, opposite futures. That is the defect class this script exists to close,
+        # and it is the sibling of the DIRTY miss found by dogfooding.
+        BLOCKED) printf 'CHECKS GREEN BUT BLOCKED — PR #%s is held by branch protection outside the check list (a required review or an unposted required context; a PR already in the merge queue reads IN MERGE QUEUE instead). Auto-merge will not resolve it.\n' "$PR"; exit 1 ;;
+      esac
+    fi
 
     # ORDER IS THE POINT. This branch must run AFTER the mergeStateStatus dispatch above, never
     # before it. The first cut ran it first and special-cased only DRAFT — so a green PR that was
@@ -295,7 +369,7 @@ while :; do
     # that at `mergeState=BEHIND`. Fixing DRAFT alone fixed the INSTANCE and left the CLASS; the
     # dispatch above is the complete set of "cannot merge right now" states, so deferring to it is
     # the fix that does not need revisiting per-state.
-    if [[ "$automerge" == "false" && "$state" == "OPEN" \
+    if [[ "$queued" != "1" && "$automerge" == "false" && "$state" == "OPEN" \
           && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
       printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge (mergeState=%s). Before any --admin merge, admin-merge-ready.sh <PR> <sha> must exit 0 — this line reads only checks that exist.\n' "$PR" "$mergestate"; exit 0
     fi

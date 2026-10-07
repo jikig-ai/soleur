@@ -336,13 +336,58 @@ inprogress 1
 queued_page $(live_rows 30 1900)
 expect "two-page jobs payload sums to 30 delivered -> SATURATED" 0 "SATURATED:"
 
-# 19. In-progress list truncation: total_count exceeds the page -> UNKNOWN,
-#     never an undercounted delivered that false-pages UNDER_ASSIGNED.
+# 19. In-progress list GENUINE truncation: a FULL page with total_count beyond
+#     it -> UNKNOWN, never an undercounted delivered that false-pages
+#     UNDER_ASSIGNED. Knob-scaled (MAX_IP_RUNS=1): 1 row + total_count=2.
 mkplan team
 queued_count 0
-printf '{"total_count":150,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
+printf '{"total_count":2,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
 jobs_for 700 "$(infl x 1)"
-expect "in-progress truncation -> UNKNOWN rc2" 2 "UNKNOWN:"
+PROBE_ENV="MAX_IP_RUNS=1" expect "in-progress page full + total beyond -> UNKNOWN rc2" 2 "UNKNOWN:"
+
+# 19b. The Oct-5 race (#9533): total_count is a point-in-time snapshot — a run
+#      completing between the count read and the page fetch yields
+#      total_count > page length with NO truncation. 7 of 8 rows, partial
+#      page -> must NOT UNKNOWN; the probe judges on the rows it got.
+mkplan team
+queued_count 0
+rows=(); for i in 700 701 702 703 704 705 706; do rows+=("$(run_row $i "$(iso_ago 300)")"); done
+printf '{"total_count":8,"workflow_runs":[%s]}\n' "$(IFS=,; echo "${rows[*]}")" > "$WORK/fix/inprogress.json"
+for i in 700 701 702 703 704 705 706; do jobs_for "$i" "$(infl x "$i")"; done
+expect "partial page + stale total_count (Oct-5 race) -> judged, not UNKNOWN" 0 "HEALTHY:"
+
+# 19c. Boundary: page exactly full AND total_count == page length -> complete,
+#      not truncated — proceeds to a verdict.
+mkplan team
+queued_count 0
+printf '{"total_count":2,"workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)"),$(run_row 701 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
+jobs_for 700 "$(infl x 1)"; jobs_for 701 "$(infl x 2)"
+PROBE_ENV="MAX_IP_RUNS=2" expect "full page + total_count == page length -> judged" 0 "HEALTHY:"
+
+# 19d. A non-numeric total_count on a full page is an anomaly that must not read
+#      as "not truncated" — `[ "x" -gt n ]` errors to false silently. UNKNOWN.
+mkplan team
+queued_count 0
+printf '{"total_count":"abc","workflow_runs":[%s]}\n' "$(run_row 700 "$(iso_ago 300)")" > "$WORK/fix/inprogress.json"
+jobs_for 700 "$(infl x 1)"
+PROBE_ENV="MAX_IP_RUNS=1" expect "non-numeric in_progress total_count on a full page -> UNKNOWN rc2" 2 "UNKNOWN:"
+
+# 19e. Same anomaly on the queued-count read: non-numeric QUEUED_RUNS must not
+#      silently skip the age block into a false HEALTHY.
+mkplan team
+printf '{"total_count":"abc","workflow_runs":[]}\n' > "$WORK/fix/queued-count.json"
+in_flight 0
+expect "non-numeric queued total_count -> UNKNOWN rc2" 2 "UNKNOWN:"
+
+# 19f. MAX_IP_RUNS > 100 must not disarm the truncation guard: GitHub caps
+#      per_page at 100, so the full-page conjunct is measured against 100, not
+#      the knob. 100 rows + total_count=150 with the knob at 150 -> UNKNOWN.
+mkplan team
+queued_count 0
+rows=(); for i in $(seq 700 799); do rows+=("$(run_row $i "$(iso_ago 300)")"); done
+printf '{"total_count":150,"workflow_runs":[%s]}\n' "$(IFS=,; echo "${rows[*]}")" > "$WORK/fix/inprogress.json"
+PROBE_ENV="MAX_IP_RUNS=150" expect "MAX_IP_RUNS>100 clamped to the API's 100-row page -> UNKNOWN rc2" 2 "UNKNOWN:"
+unset PROBE_ENV 2>/dev/null || true
 
 # 20. Non-numeric knob must fail UNKNOWN, not degrade the gate to a false
 #     HEALTHY (an unbound QUEUE_DEPTH_ALERT makes the stall test error-false).
@@ -402,12 +447,42 @@ jobs_for 700 "$(infl x 1)" \
 queued_page $(live_rows 30 1900)
 expect "queued jobs inside an in-progress run do not count as delivered" 1 "UNDER_ASSIGNED:"
 
+# 25. Workflow hygiene (#9533): no `gh` argv may carry `--arg` — gh rejects it
+#     as an unknown flag in ANY position, and under `set -euo pipefail` the
+#     filing step dies and the alarm is never filed. The check joins `\`
+#     continuations and drops comment lines so reordered/line-split spellings
+#     are caught too — a literal '--jq --arg' adjacency grep only catches the
+#     one historical spelling. The dedupe must ALSO stay fail-open: reverting
+#     the `if !` wrapper re-creates the silent-filing defect while passing a
+#     flag-shape pin. Count-shaped greps, never pipe-fed grep -q readers.
+QH_WF=".github/workflows/scheduled-actions-queue-health.yml"
+[ -f "$QH_WF" ] || { echo "FAIL - $QH_WF not found (run from the repo root)" >&2; exit 1; }
+# `--arg`/`--argjson` are jq's flags — gh rejects both in ANY position of its
+# own argv. Rather than pattern the gh side, strip the legitimate `| jq …`
+# segment (and comment lines) and assert neither flag survives anywhere.
+qh_jq_arg="$(sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba}' "$QH_WF" 2>/dev/null \
+  | grep -vE '^[[:space:]]*#' \
+  | sed 's/| *jq[^|]*//g' \
+  | grep -cE -- '--arg(json)?\b' || true)"
+qh_failopen="$(grep -c -- 'if ! ISSUE_LIST=' "$QH_WF" 2>/dev/null || true)"
+if [ "$qh_jq_arg" -eq 0 ] && [ "$qh_failopen" -eq 2 ]; then
+  pass "workflow carries zero '--arg-in-gh-argv' sites and both dedupe queries stay fail-open"
+else
+  fail "dedupe hygiene drifted (--arg-in-gh sites=$qh_jq_arg want 0, fail-open wrappers=$qh_failopen want 2)"
+fi
+qh_named="$(grep -cE -- '^[[:space:]]*- name: (File action-required on runner under-assignment|File probe-unavailable note on UNKNOWN)[[:space:]]*$' "$QH_WF" 2>/dev/null || true)"
+if [ "$qh_named" -eq 2 ]; then
+  pass "both queue-health filing steps present (under-assignment + probe-unavailable)"
+else
+  fail "queue-health filing steps drifted (named File steps=$qh_named want 2)"
+fi
+
 # Anti-vacuity floor: deleting every assertion must not exit 0. Reports
 # directly and exits (ADR-193): a floor routed through fail() is disarmed
 # by the same neutered machinery it exists to catch.
 total=$((passes + fails))
-if [ "$total" -lt 24 ]; then
-  echo "[FATAL] assertion floor: only $total assertions ran, want >=24" >&2
+if [ "$total" -lt 32 ]; then
+  echo "[FATAL] assertion floor: only $total assertions ran, want >=32" >&2
   exit 1
 fi
 

@@ -15,7 +15,10 @@
 #   1. the newest web-2 readiness row (emitted once per instance) is GREEN and at least SOAK_DAYS old;
 #   2. probe rows are GREEN (crypto_LUKS on /dev/mapper/workspaces, escrow ok) in at least SOAK_DAYS distinct
 #      24 h buckets counted from that readiness row, and the NEWEST probe row is GREEN and fresh (<= 26 h);
-#   3. no non-green probe row (a FAIL line, a malformed one, a non-LUKS OK) at or after that readiness row.
+#   3. no non-green probe row (a FAIL line, a malformed one, a non-LUKS OK) at or after that readiness row;
+#   4. the REBOOT is evidenced (#9372): the newest probe row's boot_id and the readiness row's are both known and
+#      DIFFER (w2l_reboot_seen). Three GREEN days on the boot that formatted the volume prove it opened once, never
+#      that it reopens, so without this arm the soak would pass on a host that was never rebooted.
 #
 # Exit semantics (sweep-followthroughs.sh rc→word map):
 #   0 = PASS              the soak is met
@@ -31,6 +34,11 @@
 #
 # Enrollment (the tracker body carries the directive; the tracker carries the `follow-through` label):
 #   <!-- soleur:followthrough script=scripts/followthroughs/web2-luks-live-6931.sh earliest=<web-2 rebirth+3d> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
+# The post-merge step of the #9372 retirement change sets the directive on #6931 to `earliest=2026-10-18T00:00:00Z` (the
+# 2026-10-15 decision date + 3 days, so the window closes 2026-10-22, the date the encryption-posture exception on
+# hcloud_volume.workspaces expires). The #9372
+# rebirth dispatch re-sets it from the actual rebirth time (runbook web2-luks-rebirth-9372.md, closing row 4); the
+# `<web-2 rebirth+3d>` placeholder above is the formula, not the value that is enrolled.
 # All three names are bound in scheduled-followthrough-sweeper.yml's env: block (shared with #5934/#5110).
 # `earliest` reaches this script as SOLEUR_FT_EARLIEST (the sweeper's own clock; an empty or unparseable value
 # means "no clock", and then nothing here ever FAILs on the window).
@@ -57,7 +65,7 @@ done
 _w2l_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/web2-luks-rows.sh"
 # shellcheck source=scripts/lib/web2-luks-rows.sh
 if ! source "$_w2l_lib" || ! declare -F w2l_probe_verdict >/dev/null || ! declare -F w2l_ready_verdict >/dev/null \
-   || ! declare -F w2l_soak_scan >/dev/null; then
+   || ! declare -F w2l_soak_scan >/dev/null || ! declare -F w2l_reboot_seen >/dev/null; then
   printf 'CANNOT ESTABLISH: the shared helper could not be loaded (lib=%s). Nothing was measured.\n' "$_w2l_lib"
   exit 3
 fi
@@ -127,6 +135,12 @@ if [[ "$verdict" != GREEN* ]]; then
 fi
 if (( green_days < SOAK_DAYS )); then
   unmet "${green_days} of ${SOAK_DAYS} distinct days of GREEN probe rows since the readiness row."
+fi
+
+# The reboot proof (#9372): a probe row from a boot other than the one that emitted the readiness row. Without it the
+# volume was formatted and opened once and nothing shows it REOPENS after a reboot, which is the property the soak is for.
+if ! w2l_reboot_seen "$verdict" "$rverdict"; then
+  unmet "no GREEN probe row carries a boot_id that differs from the readiness row's (probe: ${verdict}; readiness: ${rverdict}): the reboot and reopen are not evidenced."
 fi
 
 printf 'PASS: web-2 is live on a LUKS-backed /workspaces — %s distinct days of GREEN probe rows since the readiness row (%s h ago), no non-green row, and the newest probe row is fresh (%s). (#6931 soak-gated closure)\n' \

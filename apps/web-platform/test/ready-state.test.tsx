@@ -5,8 +5,8 @@ import { render, screen } from "@testing-library/react";
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock("next/font/google", () => ({
-  Inter: () => ({ className: "mock-sans", variable: "--font-inter" }),
+vi.mock("next/font/local", () => ({
+  default: () => ({ className: "mock-sans", variable: "--font-inter" }),
 }));
 
 // ---------------------------------------------------------------------------

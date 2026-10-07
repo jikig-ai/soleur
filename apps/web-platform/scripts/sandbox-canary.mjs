@@ -31,15 +31,17 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -80,6 +82,12 @@ export function classifyReplayVerdict({
   }
   if (bwrapExitCode === 0) {
     return { verdict: "pass", reason: "ok" };
+  }
+  // #8752: our own shim's refusal marker (exit 65, `bwrap-shim:` on stderr) is
+  // a deterministic deployed-hardening defect, not the flake class
+  // `canary_infra_error` exists to absorb — escalate it as sandbox_broken.
+  if (/bwrap-shim:/.test(bwrapStderr)) {
+    return { verdict: "sandbox_broken", reason: "bwrap_shim_refused" };
   }
   // bwrap merges its userns/seccomp stderr into this stream; the EPERM phrase is
   // the load-bearing signature (Phase-0 spike; matches the seccomp `unshare`
@@ -126,10 +134,10 @@ export function validateFixture(obj) {
     : [];
   return {
     status: "captured",
-    // `canonical-bwrap-v1` argv carries ${CANARY_WS}/${CANARY_EMPTY}
-    // placeholders that runReplay substitutes to real container paths before
-    // the bwrap spawn (ADR-079 amendment / CTO Option A). Absent → a legacy
-    // verbatim fixture (no placeholders), replayed as-is.
+    // `canonical-bwrap-v1` argv carries ${CANARY_*} placeholders that
+    // runReplay substitutes to real container paths before the bwrap spawn
+    // (ADR-079 amendment / CTO Option A). Absent → a legacy verbatim fixture
+    // (no placeholders), replayed as-is.
     schema: typeof obj.schema === "string" ? obj.schema : null,
     bwrapSetupArgv: argv,
     prepDirs,
@@ -170,6 +178,286 @@ export function buildBwrapInvocation(fixture) {
     );
   }
   return { cmd: "bwrap", args: [...argv, "--", "true"] };
+}
+
+// ---------------------------------------------------------------------------
+// #8752 — derived hardening probes (deploy-time).
+//
+// The replayed spawn resolves `bwrap` via PATH — inside the runner image that
+// is infra/bwrap-shim/bwrap, the same interception the Agent SDK's spawn
+// takes. A `pass` on the main replay only proves the sandbox BUILDS; these
+// probes measure the hardening inside it, failing with distinct
+// `sandbox_broken` reasons (soak reset + Sentry page, like the main verdict):
+//
+//   nested_userns_deny — `unshare -U` inside MUST EPERM (the filter denies
+//     clone/unshare carrying CLONE_NEWUSER). Exit 0 = the filter never
+//     installed → `userns_filter_bypass`.
+//   fork_survives — a forked child inside MUST run; the over-broad control.
+//     (`unshare -m` CANNOT discriminate here — the payload runs
+//     capability-free (bwrap zeroes the capset before exec), so a nested
+//     CLONE_NEWNS needs a CAP_SYS_ADMIN it does not hold: EPERM on every
+//     kernel, measured 2026-10-06 / bwrap 0.12. A real fork is the
+//     blanket-clone-deny tripwire.)
+//   fd_census — `ls /proc/self/fd | wc -l` inside MUST stay within
+//     `4 + #(fd-valued argv options)` — stdio 0-2, ls's own transient dir fd,
+//     plus any fd the SETUP argv itself references (none today; the
+//     vocabulary below stays in step with the shim's preserve-set). Larger =
+//     an inherited fd leaked into the sandbox → `fd_hygiene_bypass`. `ls`
+//     (not a glob echo) so a missing /proc bind fails LOUD (ls exit 2 →
+//     infra error) instead of a vacuous `$#`=1 green.
+//   args_fd_transport — the SDK's real spawn shape: setup argv rides
+//     `--args <fd>` NUL-separated on a pipe the shim's preserve-set must
+//     keep. Replay that shape with the fd carrying the same setup argv so a
+//     sweep regression that closes it lands HERE — not on every session's
+//     first Bash call (pre-merge tests cover `--args` against a stub;
+//     nothing else covers it at deploy time).
+// ---------------------------------------------------------------------------
+
+// bwrap options whose FIRST argument is an fd NUMBER — the complete
+// fd-valued vocabulary in bwrap(1), kept in step with the shim's
+// preserve-set (infra/bwrap-shim/bwrap); sandbox-canary-regression.test.sh
+// §D4 asserts the two lists identical. Two-arg forms (`--file`,
+// `--bind-data`, `--ro-bind-data`, `--bind-fd`, `--ro-bind-fd`, `--userns2`)
+// preserve only arg1 — the fd.
+const BWRAP_FD_VALUED_OPTS = new Set([
+  "--args",
+  "--seccomp",
+  "--add-seccomp-fd",
+  "--sync-fd",
+  "--info-fd",
+  "--json-status-fd",
+  "--block-fd",
+  "--userns-block-fd",
+  "--userns",
+  "--userns2",
+  "--pidns",
+  "--file",
+  "--bind-data",
+  "--ro-bind-data",
+  "--bind-fd",
+  "--ro-bind-fd",
+]);
+
+/** Count fd-valued options in a setup argv (the census' argv-driven slack). */
+export function countFdValuedOptions(setupArgv) {
+  return setupArgv.filter((t) => BWRAP_FD_VALUED_OPTS.has(t)).length;
+}
+
+/**
+ * Classify the `unshare -U` inside-the-sandbox probe. Returns a verdict or
+ * null (probe passed — the filter denied the nested namespace).
+ *
+ * @param {{ status?: number | null, stderr?: string, errorCode?: string }} res
+ */
+export function classifyUsernsDenyProbe({ status, stderr = "", errorCode } = {}) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `userns_probe_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "nested_userns_deny",
+    };
+  }
+  if (status === 0) {
+    return { verdict: "sandbox_broken", reason: "userns_filter_bypass", probe: "nested_userns_deny" };
+  }
+  // The denial must surface as the payload's own EPERM — anything else means
+  // the probe never exercised the filter (expected-fail inversion).
+  if (!/operation not permitted/i.test(stderr)) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `userns_probe_exit_${status ?? "null"}`,
+      probe: "nested_userns_deny",
+    };
+  }
+  return null;
+}
+
+/**
+ * Classify the fork-survival over-broad control. Returns a verdict or null.
+ * Discrimination: a SIGNAL kill (`status: null`, incl. the 15s spawn timeout
+ * or a container OOM) or a `bwrap:`/`execvp` setup-side line is infra — only
+ * a clean non-zero payload exit is an over-broad filter.
+ *
+ * @param {{ status?: number | null, stderr?: string, errorCode?: string }} res
+ */
+export function classifyForkProbe({ status, stderr = "", errorCode } = {}) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fork_probe_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "fork_survives",
+    };
+  }
+  if (status === null || /(^|\n)bwrap:|execvp |No such file/.test(`${stderr}`)) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fork_probe_exit_${status === null ? "null" : status}`,
+      probe: "fork_survives",
+    };
+  }
+  if (status !== 0) {
+    return { verdict: "sandbox_broken", reason: "userns_filter_overbroad", probe: "fork_survives" };
+  }
+  return null;
+}
+
+/**
+ * Classify the in-sandbox fd census against `fdLimit`. Returns a verdict or
+ * null.
+ *
+ * @param {{ status?: number | null, stdout?: string, errorCode?: string }} res
+ * @param {number} fdLimit
+ */
+export function classifyFdCensusProbe({ status, stdout = "", errorCode } = {}, fdLimit) {
+  if (errorCode) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fd_census_spawn_${String(errorCode).toLowerCase()}`,
+      probe: "fd_census",
+    };
+  }
+  if (status !== 0) {
+    return {
+      verdict: "canary_infra_error",
+      reason: `fd_census_exit_${status ?? "null"}`,
+      probe: "fd_census",
+    };
+  }
+  const n = Number(stdout.trim());
+  // Lower bound too: stdio 0-2 always exist, so n < 3 means the census read
+  // nothing real (an absent /proc glob echoes back empty — a vacuous pass).
+  if (!Number.isInteger(n) || n < 3) {
+    return { verdict: "canary_infra_error", reason: "fd_census_unparseable", probe: "fd_census" };
+  }
+  if (n > fdLimit) {
+    return { verdict: "sandbox_broken", reason: "fd_hygiene_bypass", probe: "fd_census" };
+  }
+  return null;
+}
+
+/** The three probes, in order; `classify` returns a verdict or null (ok). */
+const HARDENING_PROBES = [
+  {
+    argv: ["/usr/bin/unshare", "-U", "/usr/bin/true"],
+    classify: classifyUsernsDenyProbe,
+  },
+  {
+    argv: ["/bin/sh", "-c", "/bin/true; /bin/true"],
+    classify: classifyForkProbe,
+  },
+  {
+    argv: ["/bin/sh", "-c", "/usr/bin/ls /proc/self/fd | /usr/bin/wc -l"],
+    classify: classifyFdCensusProbe,
+    leakFd: true,
+  },
+];
+
+/**
+ * Run the derived hardening probes inside the replayed sandbox argv.
+ * Returns the first failing verdict, or null when all probes pass.
+ *
+ * @param {string[]} setupArgv - placeholder-substituted bwrap SETUP argv.
+ * Exported for the live real-bwrap row in test/bwrap-shim.test.ts.
+ */
+export function runHardeningProbes(setupArgv) {
+  const fdLimit = 4 + countFdValuedOptions(setupArgv);
+  for (const probe of HARDENING_PROBES) {
+    // fd_census carries a deliberately UNREFERENCED fd (child fd 3): swept by
+    // the shim ⇒ count stays at the bound; a sweep regression ⇒ +1 over the
+    // bound ⇒ fd_hygiene_bypass actually discriminates (measuring only an
+    // incidentally-clean fd table would make it a latent-only detector).
+    let leakFd = -1;
+    if (probe.leakFd) {
+      const dir = mkdtempSync(join(tmpdir(), "canary-leak-"));
+      const p = join(dir, "leak");
+      writeFileSync(p, "x");
+      leakFd = openSync(p, "r");
+    }
+    let res;
+    try {
+      res = spawnSync("bwrap", [...setupArgv, "--", ...probe.argv], {
+        encoding: "utf8",
+        timeout: 15_000, // a wedge lands as status null → canary_infra_error, never a soak reset
+        ...(leakFd >= 0 ? { stdio: ["inherit", "pipe", "pipe", leakFd] } : {}),
+      });
+    } finally {
+      if (leakFd >= 0) closeSync(leakFd);
+    }
+    const verdict = probe.classify(
+      {
+        status: res.status,
+        stderr: `${res.stderr ?? ""}`,
+        stdout: `${res.stdout ?? ""}`,
+        errorCode: res.error?.code,
+      },
+      fdLimit,
+    );
+    if (verdict) return verdict;
+  }
+  return runArgsFdTransportProbe(setupArgv);
+}
+
+/**
+ * The SDK's real spawn shape: the whole setup argv on `--args <fd>` as a
+ * NUL-separated stream — the fd the shim's preserve-set must keep. Write the
+ * setup argv to a tmpfile, hand its fd to `bwrap --args` via stdio, and
+ * require a clean spawn. Returns a verdict or null.
+ *
+ * @param {string[]} setupArgv
+ * Exported for the live real-bwrap row in test/bwrap-shim.test.ts.
+ */
+export function runArgsFdTransportProbe(setupArgv) {
+  const dir = mkdtempSync(join(tmpdir(), "canary-args-fd-"));
+  const payload = join(dir, "setup.argv");
+  // bwrap's --args parser reads NUL-separated tokens (same wire shape the
+  // SDK's pipe carries).
+  writeFileSync(payload, Buffer.concat(setupArgv.map((t) => Buffer.from(t + "\x00", "utf8"))));
+
+  const argsFd = openSync(payload, "r");
+  try {
+    const res = spawnSync("bwrap", ["--args", "3", "--", "/usr/bin/true"], {
+      encoding: "utf8",
+      timeout: 15_000,
+      // stdio[3] maps the host fd into the child AS fd 3 — the argv names the
+      // CHILD index (same trap the test rows handle: "child sees it as fd 3").
+      stdio: ["inherit", "pipe", "pipe", argsFd],
+    });
+    if (res.error?.code) {
+      return {
+        verdict: "canary_infra_error",
+        reason: `args_fd_probe_spawn_${String(res.error.code).toLowerCase()}`,
+        probe: "args_fd_transport",
+      };
+    }
+    const err = `${res.stderr ?? ""}`;
+    // Shim refusal is deterministic breakage (same as the main replay's
+    // classifyReplayVerdict mapping) — never infra flake.
+    if (err.includes("bwrap-shim:")) {
+      return { verdict: "sandbox_broken", reason: "bwrap_shim_refused", probe: "args_fd_transport" };
+    }
+    if (res.status === null) {
+      return { verdict: "canary_infra_error", reason: "args_fd_probe_killed", probe: "args_fd_transport" };
+    }
+    if (res.status !== 0) {
+      // `Can't read --args` IS the closed-fd signature; any other `bwrap:`/
+      // setup-side line is a canary-infra failure, not a hardening one.
+      if (/can't read --args/i.test(err)) {
+        return { verdict: "sandbox_broken", reason: "args_fd_closed", probe: "args_fd_transport" };
+      }
+      if (/(^|\n)bwrap:|execvp |No such file/.test(err)) {
+        return {
+          verdict: "canary_infra_error",
+          reason: `args_fd_probe_exit_${res.status}`,
+          probe: "args_fd_transport",
+        };
+      }
+      return { verdict: "sandbox_broken", reason: "args_fd_closed", probe: "args_fd_transport" };
+    }
+    return null;
+  } finally {
+    closeSync(argsFd);
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -299,6 +587,12 @@ export const CANARY_EMPTY_PLACEHOLDER = "${CANARY_EMPTY}";
 // (capture-host-specific), so capture points it at a mkdtemp dir via
 // C4_RENDER_STAGING_ROOT and the projection replaces that path with this token.
 export const CANARY_C4_STAGING_PLACEHOLDER = "${CANARY_C4_STAGING}";
+// #9614/#9618: the SDK-internal bridge-spawn dir — the bundled CLI computes it
+// as `join(homedir(), ".claude", "bridge-spawn")` with NO env override, so
+// capture derives the identical expression (ADR-079 2026-10-06 amendment:
+// SDK-internal HOME-derived dirs get named placeholders via a capture-computed
+// root). The dir is HOME-based, so without this the host_path census throws.
+export const CANARY_BRIDGE_SPAWN_PLACEHOLDER = "${CANARY_BRIDGE_SPAWN}";
 
 // bwrap option arities for the projection parser. `null` = classify as a
 // bind-like 2-arg (src, dest). An unrecognized `--option` throws (fail loud →
@@ -312,7 +606,7 @@ const BWRAP_ZERO_ARG = new Set([
   "--as-pid-1",
 ]);
 // 1-arg options whose single arg is a PATH we may normalize/keep.
-const BWRAP_ONE_ARG_PATH = new Set([
+export const BWRAP_ONE_ARG_PATH = new Set([
   "--dev",
   "--proc",
   "--tmpfs",
@@ -357,11 +651,22 @@ const BWRAP_TWO_ARG_BIND = new Set([
   "--bind-data",
   "--ro-bind-data",
 ]);
+// Bind opts whose first arg is a real filesystem SOURCE that must pre-exist at
+// replay. --symlink's target may dangle and --file/--*-data carry an FD, not a
+// path — neither belongs in prepDirs.
+export const BWRAP_BIND_SRC_OPTS = new Set([
+  "--bind",
+  "--bind-try",
+  "--dev-bind",
+  "--dev-bind-try",
+  "--ro-bind",
+  "--ro-bind-try",
+]);
 
 const RANDOM_SOCKET_RE = /\/claude-http-[0-9a-f]+\.sock$/;
 const RANDOM_EMPTY_RE = /\/claude-empty-[A-Za-z0-9]+$/;
 
-function isDeterministicConstPath(p) {
+export function isDeterministicConstPath(p) {
   return (
     p === "/" ||
     p === "/dev/null" ||
@@ -387,19 +692,33 @@ function isDeterministicConstPath(p) {
  * against the pre-#5874 profile, ADR-079 §2d proof obligation).
  *
  * @param {string[]} rawArgv
- * @param {{ wsRoot: string, c4StagingRoot?: string }} opts - the realpath'd hermetic own-workspace path, and the capture's C4 staging root (#8623).
+ * @param {{ wsRoot: string, c4StagingRoot?: string, bridgeSpawnRoot?: string }} opts - the realpath'd hermetic own-workspace path, the capture's C4 staging root (#8623), and the capture's SDK-internal bridge-spawn root (#9614).
  * @returns {{ bwrapSetupArgv: string[], prepDirs: string[],
  *   dropped: { setenv: number, hostBind: number, randomSocket: number, randomEmptyDirBind: number } }}
  */
-export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
+export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot, bridgeSpawnRoot }) {
   const norm = (p) => {
     if (typeof p !== "string") return p;
+    // A `..` segment inside a mapped subpath would survive the host_path
+    // census (the token starts with `${`) and substitute at replay into a
+    // mkdir/bind target outside the mkdtemp roots — refuse to project it.
+    const checkNoTraversal = (mapped) => {
+      if (mapped.split("/").includes("..")) {
+        throw new Error(
+          `normalizeCapturedArgv: traversal in mapped path '${p}' — refusing to project (projection error)`,
+        );
+      }
+      return mapped;
+    };
     if (p === wsRoot) return CANARY_WS_PLACEHOLDER;
     if (p.startsWith(`${wsRoot}/`)) {
-      return CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length);
+      return checkNoTraversal(CANARY_WS_PLACEHOLDER + p.slice(wsRoot.length));
     }
     if (c4StagingRoot && (p === c4StagingRoot || p.startsWith(`${c4StagingRoot}/`))) {
-      return CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length);
+      return checkNoTraversal(CANARY_C4_STAGING_PLACEHOLDER + p.slice(c4StagingRoot.length));
+    }
+    if (bridgeSpawnRoot && (p === bridgeSpawnRoot || p.startsWith(`${bridgeSpawnRoot}/`))) {
+      return checkNoTraversal(CANARY_BRIDGE_SPAWN_PLACEHOLDER + p.slice(bridgeSpawnRoot.length));
     }
     return p;
   };
@@ -413,6 +732,9 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     randomSocket: 0,
     randomEmptyDirBind: 0,
   };
+  // Replay-precondition collectors — see the prepDirs comment below.
+  const subPrepDirs = new Set();
+  const literalPrepDirs = new Set();
 
   for (let i = 0; i < rawArgv.length; ) {
     const tok = rawArgv[i];
@@ -425,7 +747,23 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     } else if (tok === "--args") {
       i += 2; // FD — never persisted; parseShimSetupArgv already resolved it
     } else if (BWRAP_ONE_ARG_PATH.has(tok)) {
-      out.push(tok, norm(rawArgv[i + 1]));
+      const n = norm(rawArgv[i + 1]);
+      out.push(tok, n);
+      // Literal mount targets (--tmpfs /tmp/claude-0/bash-edit-diff, --dir …)
+      // must pre-exist at replay: bwrap cannot mkdir a target whose parent
+      // chain lies under the ro-bound root. Image-guaranteed consts (/, /proc,
+      // /dev, /sys) are exempt; anything else lands in prepDirs (mkdir -p is
+      // idempotent where the dir already exists).
+      if (typeof n === "string" && n.startsWith("/") && !isDeterministicConstPath(n)) {
+        literalPrepDirs.add(n);
+      }
+      // A mount target that is a placeholder SUBPATH (${CANARY_WS}/probe)
+      // needs the exact dir prepped: bwrap applies mounts in argv order, so a
+      // tmpfs target under a not-yet-bound parent fails the same as a missing
+      // source — prefix coverage under the root is not sufficient.
+      if (typeof n === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(n)) {
+        subPrepDirs.add(n);
+      }
       i += 2;
     } else if (BWRAP_ONE_ARG_OPAQUE.has(tok)) {
       out.push(tok, rawArgv[i + 1]);
@@ -443,7 +781,19 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
         (isWs(src) || isDeterministicConstPath(src)) &&
         (isWs(dst) || isDeterministicConstPath(dst))
       ) {
-        out.push(tok, norm(src), norm(dst));
+        const ns = norm(src);
+        // A bind SOURCE must pre-exist — bwrap never creates it. A source that
+        // is a subpath under a placeholder root (${CANARY_WS}/.claude) is a
+        // dir the SDK self-binds; prep it. File sources (/dev/null → file dsts)
+        // are consts, and bind DSTS are auto-created once their parent exists.
+        // ASSUMPTION (pinned in tests): every placeholder-subpath source is a
+        // DIRECTORY — a future file source would be mkdir'd as a dir at replay
+        // (fails loud ENOTDIR, never silently). --symlink/--file/--*-data srcs
+        // are excluded via BWRAP_BIND_SRC_OPTS (dangling target / FD arg).
+        if (BWRAP_BIND_SRC_OPTS.has(tok) && typeof ns === "string" && /\$\{CANARY_[A-Z0-9_]*\}\//.test(ns)) {
+          subPrepDirs.add(ns);
+        }
+        out.push(tok, ns, norm(dst));
       } else {
         // Host-specific bind (e.g. /home/<user>/.npm/_logs) — not in the prod
         // canary container; dropping it is what makes the replay run off-host.
@@ -462,9 +812,14 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     }
   }
 
-  // prepDirs: the placeholder directories runReplay must mkdir before binding.
-  // Only directory roots — bwrap auto-creates nested mount points; file-mount
-  // dsts (/dev/null → …/.gitconfig) must NOT be pre-created as dirs.
+  // prepDirs: every path runReplay must mkdir before the bwrap spawn. Three
+  // classes: (a) placeholder ROOTS the argv mounts onto (${CANARY_WS} always;
+  // others only when referenced); (b) placeholder SUBPATHS used as bind
+  // sources — bwrap auto-creates nested DSTs under a prepped root but never a
+  // source; (c) literal mount targets a fresh replay host may lack
+  // (--tmpfs /tmp/claude-0/bash-edit-diff — its parent cannot be created
+  // under the ro-bound root). File-mount dsts (/dev/null → …/.gitconfig) must
+  // NOT be pre-created as dirs.
   // A literal capture-host HOME path would fail the prod replay (a different
   // HOME, a read-only root) — fail loud rather than bake one into the fixture
   // (#8623; ADR-079 amendment "server-private deny roots are placeholdered").
@@ -484,6 +839,12 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
     // bwrap cannot --tmpfs a path it cannot create under a read-only root.
     prepDirs.push(CANARY_C4_STAGING_PLACEHOLDER);
   }
+  if (out.some((t) => typeof t === "string" && t.startsWith(CANARY_BRIDGE_SPAWN_PLACEHOLDER))) {
+    // bwrap cannot --tmpfs a path it cannot create under a read-only root.
+    prepDirs.push(CANARY_BRIDGE_SPAWN_PLACEHOLDER);
+  }
+  for (const d of subPrepDirs) prepDirs.push(d);
+  for (const d of literalPrepDirs) prepDirs.push(d);
 
   return { bwrapSetupArgv: out, prepDirs, dropped };
 }
@@ -493,14 +854,15 @@ export function normalizeCapturedArgv(rawArgv, { wsRoot, c4StagingRoot }) {
  * Applied to `bwrapSetupArgv` AND `prepDirs` before the bwrap spawn.
  *
  * @param {string[]} argv
- * @param {{ ws: string, empty: string, c4Staging?: string }} paths
+ * @param {{ ws: string, empty: string, c4Staging?: string, bridgeSpawn?: string }} paths
  * @returns {string[]}
  */
-export function substituteCanonicalArgv(argv, { ws, empty, c4Staging }) {
+export function substituteCanonicalArgv(argv, { ws, empty, c4Staging, bridgeSpawn }) {
   return argv.map((t) => {
     if (typeof t !== "string") return t;
     let out = t.split(CANARY_WS_PLACEHOLDER).join(ws).split(CANARY_EMPTY_PLACEHOLDER).join(empty);
     if (c4Staging !== undefined) out = out.split(CANARY_C4_STAGING_PLACEHOLDER).join(c4Staging);
+    if (bridgeSpawn !== undefined) out = out.split(CANARY_BRIDGE_SPAWN_PLACEHOLDER).join(bridgeSpawn);
     return out;
   });
 }
@@ -577,7 +939,7 @@ function runReplay(fixtureUrl) {
     return 0;
   }
 
-  // Canonical fixtures (canonical-bwrap-v1) carry ${CANARY_WS}/${CANARY_EMPTY}
+  // Canonical fixtures (canonical-bwrap-v1) carry ${CANARY_*}
   // placeholders — substitute real container paths before mkdir + spawn. A
   // legacy verbatim fixture has no placeholders, so substitution is a no-op.
   let replayFixture = fixture;
@@ -585,14 +947,16 @@ function runReplay(fixtureUrl) {
     const ws = mkdtempSync(join(tmpdir(), "canary-replay-ws-"));
     const empty = mkdtempSync(join(tmpdir(), "canary-replay-empty-"));
     const c4Staging = mkdtempSync(join(tmpdir(), "canary-replay-c4-"));
+    const bridgeSpawn = mkdtempSync(join(tmpdir(), "canary-replay-bridge-spawn-"));
     replayFixture = {
       ...fixture,
       bwrapSetupArgv: substituteCanonicalArgv(fixture.bwrapSetupArgv, {
         ws,
         empty,
         c4Staging,
+        bridgeSpawn,
       }),
-      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging }),
+      prepDirs: substituteCanonicalArgv(fixture.prepDirs, { ws, empty, c4Staging, bridgeSpawn }),
     };
     // A placeholder this replay does not know would reach bwrap as a literal
     // path — say so instead of spawning.
@@ -609,7 +973,8 @@ function runReplay(fixtureUrl) {
     }
   }
 
-  // Best-effort prep of the bind-source dirs the captured argv references.
+  // Best-effort prep of every dir the captured argv needs to pre-exist:
+  // placeholder roots, subpath bind sources, and literal mount targets.
   for (const dir of replayFixture.prepDirs) {
     try {
       mkdirSync(dir, { recursive: true });
@@ -625,7 +990,15 @@ function runReplay(fixtureUrl) {
     bwrapStderr: `${res.stderr ?? ""}`,
     spawnErrorCode: res.error?.code,
   });
-  emitVerdict({ ...verdict, sdkVersion: fixture.sdkVersion });
+  // #8752: a `pass` proves only that the sandbox BUILDS. The derived probes
+  // then measure the deployed hardening inside it — through PATH-resolved
+  // `bwrap`, which in the runner image is the same shim the Agent SDK's spawn
+  // lands on.
+  const final =
+    verdict.verdict === "pass"
+      ? (runHardeningProbes(replayFixture.bwrapSetupArgv) ?? verdict)
+      : verdict;
+  emitVerdict({ ...final, sdkVersion: fixture.sdkVersion });
   // Always exit 0: the verdict is the payload (read from stdout). A non-zero
   // exit here is reserved for the host to read as `canary_infra_error` when the
   // `docker exec` itself fails (125/126/127) — see ci-deploy.sh.
@@ -718,10 +1091,13 @@ function readCapturedInvocations(captureFile) {
  * runs the secret-scrub then `normalizeCapturedArgv` (CTO Option A). The raw
  * argv is NOT written anywhere (it carries host paths + env forwarding).
  *
- * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, sdkVersion: string, sdkPackage: string }
+ * @returns {Promise<{ ok: true, rawSetupArgv: string[], wsRoot: string, c4StagingRoot: string, bridgeSpawnRoot: string, sdkVersion: string, sdkPackage: string }
  *                  | { ok: false, reason: string }>}
  */
-export async function doCapture() {
+export async function doCapture({
+  attempts = CAPTURE_ATTEMPTS,
+  attemptTimeoutMs = ATTEMPT_TIMEOUT_MS,
+} = {}) {
   const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
   // Lazy import so the config's heavy static graph never loads on the creds-free
   // replay path (unit test sandbox-canary.test.ts asserts this stays lazy).
@@ -750,6 +1126,12 @@ export async function doCapture() {
   // the projection can placeholder it — never under the hermetic workspaces
   // root, where it would become a sibling and break the zero-sibling invariant.
   const c4StagingDir = realpathSync(mkdtempSync(join(tmpdir(), "soleur-canary-c4-")));
+  // #9614/#9618: the bundled CLI derives its bridge-spawn dir as
+  // `join(homedir(), ".claude", "bridge-spawn")` — a raw homedir() join with no
+  // env override. Compute the identical expression (no realpath — match the
+  // SDK byte-for-byte) so the projection can map that token to
+  // ${CANARY_BRIDGE_SPAWN}.
+  const bridgeSpawnRoot = join(homedir(), ".claude", "bridge-spawn");
 
   try {
     process.env.C4_RENDER_STAGING_ROOT = c4StagingDir;
@@ -771,13 +1153,13 @@ export async function doCapture() {
     const sandbox = buildAgentSandboxConfig(resolvedOwn);
 
     let lastReason = "capture_no_bwrap:no_tool_call";
-    for (let attempt = 1; attempt <= CAPTURE_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const controller = new AbortController();
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
         controller.abort();
-      }, ATTEMPT_TIMEOUT_MS);
+      }, attemptTimeoutMs);
       try {
         const q = query({
           prompt: CAPTURE_PROMPT,
@@ -833,6 +1215,7 @@ export async function doCapture() {
           rawSetupArgv: setupArgv,
           wsRoot: resolvedOwn,
           c4StagingRoot: c4StagingDir,
+          bridgeSpawnRoot,
           sdkVersion,
           sdkPackage: SDK_PACKAGE,
         };
@@ -935,6 +1318,7 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
     projected = normalizeCapturedArgv(result.rawSetupArgv, {
       wsRoot: result.wsRoot,
       c4StagingRoot: result.c4StagingRoot,
+      bridgeSpawnRoot: result.bridgeSpawnRoot,
     });
   } catch (err) {
     // Unrecognized bwrap option → SDK argv shape changed; fail loud (ack-fallback).
@@ -948,7 +1332,7 @@ async function runCapture(fixtureUrl, { verify = false } = {}) {
 
   const captured = {
     _comment:
-      "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_WS}/${CANARY_EMPTY}/${CANARY_C4_STAGING} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
+      "Real-captured SDK bwrap SETUP argv (canonical projection) for the faithful sandbox canary (#5875 / #5913 / ADR-079). Populated by --capture driving the real @anthropic-ai/claude-agent-sdk query() with buildAgentSandboxConfig(), then normalizeCapturedArgv() (drops env-forwarding + random/host paths, keeps the seccomp-relevant --unshare-*/mount structure; ${CANARY_*} placeholders substituted at replay). MUST NOT be hand-authored (#4932 trap).",
     status: "captured",
     schema: "canonical-bwrap-v1",
     sdkPackage: result.sdkPackage,

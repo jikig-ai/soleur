@@ -2809,7 +2809,42 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (Doppler soleur/prd_terraform) alone: it grades from the probe and readiness rows and never reads the marker, so it
   // holds no other credential. NO SUBSTITUTE: web-2's probe and readiness rows land only in the Logs warehouse, which has
   // no unauthenticated read path. Genuine.
-  const BASELINE_DECLARED_PROBES = 42;
+  // #9392 (2026-10-03): +1 (42 -> 43) for `2026-10-03-chore-zot-adr096-wrapup-delivery-resolver-alert-adr190-plan.md` (archived under plans/archive/ with a `20261004-124500-` prefix by #9391).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the `GHCR_DENY` journald rows through `scripts/betterstack-query.sh` under
+  // `doppler run -c prd_terraform` (BETTERSTACK_QUERY_*), the pipeline that feeds the follow-up alert.
+  // NO SUBSTITUTE: Better Stack has no unauthenticated read path. Genuine.
+  // #9458 (2026-10-04): +1 (43 -> 44, after #9392 took 42 -> 43) for `2026-10-03-feat-inbox-provider-neutral-email-routing-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`apps/web-platform/scripts/email-route-status.sh`) reads `public.email_inbox_routes`
+  // through DATABASE_URL_POOLER (Doppler soleur/prd). NO SUBSTITUTE: the table is service-role only (RLS on,
+  // zero policies, every privilege revoked from anon/authenticated), so no unauthenticated probe can read it.
+  // Genuine.
+  // #9372 (2026-10-05): +1 (44 -> 45) for `2026-10-05-feat-web2-luks-rebirth-workflow-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/web2-luks-live-6931.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform) alone and grades web-2's readiness and probe rows. NO SUBSTITUTE: those rows land only
+  // in the Logs warehouse, which has no unauthenticated read path. Genuine.
+  // #8278 (2026-10-06): +1 (45 -> 46) for `2026-10-06-fix-zot-log-channel-span-grading-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/followthroughs/zot-log-channel-7440.sh`) reads BETTERSTACK_QUERY_*
+  // (Doppler soleur/prd_terraform) alone and grades verdicts against live warehouse rows on the newest
+  // boot. NO SUBSTITUTE: those rows exist only in the Logs warehouse, which has no unauthenticated read
+  // path; the fixture suite verifies the arms pre-merge but cannot finish inside the Check-10 cap. Genuine.
+  // #9372 (2026-10-06): +1 (46 -> 47) for `2026-10-06-fix-web2-rebirth-emptiness-gate-field-paths-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe (`scripts/web2-rebirth-emptiness.sh`) reads BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}
+  // (Doppler soleur/prd_terraform). NO SUBSTITUTE: the property is that the STORED host_metrics rows have
+  // the shape the gate's SQL reads, which the fixture suite can model but not observe, and the warehouse
+  // has no unauthenticated read path. Genuine. The waiver's own hazard applies: Check 10 skips this
+  // command without executing it, so the live read was run by hand during the PR (PASS) instead.
+  // #9372 (2026-10-07): +1 (47 -> 48) for `2026-10-07-feat-web-host-reboot-workflow-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line
+  // (a double-quoted scalar). TRUTH: the probe (`scripts/web-host-reboot-evidence.sh snapshot`) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) alone and prints web-2's newest
+  // readiness, probe and journald boot rows as ids and ages. NO SUBSTITUTE: those rows land only in the Logs
+  // warehouse, which has no unauthenticated read path. Genuine.
+  const BASELINE_DECLARED_PROBES = 48;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -334,11 +334,32 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         of the real diff (print-only; never narrows a real run).
   --affected-scope=V    diff source for affected selection: branch (default) or
                         staged (the index — what the pre-commit hook gates on).
+                        Selects on the INDEX only: committed edits are not in that
+                        window, and a NEW suite is selected only if its files are staged.
   --enumerate           emit the leg's assigned registration labels; runs nothing.
   --enumerate-commands  emit each registration's argv as SUITE_COMMAND records.
   --capacity            report whether the box can absorb another full gate.
   --print-suite-globs   print the registration glob list.
   --help                this text.
+
+RUNNER EDITS (a diff touching scripts/test-all.sh or scripts/lib/test-affected-paths.sh):
+  Those two files ARE the gate's selection logic, so such a diff degrades --affected to
+  the FULL battery and prints AFFECTED_FALLBACK reason=runner-changed plus a banner that
+  states the expected duration. Registering a new suite is itself such an edit, so a
+  REGISTRATION-ONLY diff (nothing but new single-line run_suite registrations for NEW
+  suites, each directly below another registration, plus, for each suite the same diff
+  registers, its own AFFECTED_*_PATHS block and ALWAYS_ON_SUITES entry)
+  takes the bounded selection instead: the run prints AFFECTED_RUNNER_IN_SCOPE
+  reason=registration-only and AFFECTED_SUMMARY ... fallback=none. Any other line, in
+  either file, keeps the fallback.
+  Preview what any diff selects, running nothing:
+      bash scripts/test-all.sh --print-selection
+  Scope an edit you have judged safe (selects on the INDEX only, so stage the new
+  suite's files too):
+      git add <files> && bash scripts/test-all.sh --affected --affected-scope=staged
+  TEST_GROUP=affected is a DIFFERENT, heuristic selector (#8591): it has no runner-changed
+  arm, its content-reference signal selects every suite whose text mentions the changed
+  path, and it cannot be combined with --affected. It is not an escape from the fallback.
 
 Recovery levers: --full (explicit), SOLEUR_TEST_FORCE_ALL=1 (legacy spelling of
 the same intent), SOLEUR_ALLOW_FULL_GATE=1 (names a refusal you mean to bypass).
@@ -2073,6 +2094,360 @@ _diff_edge_hit() {
   esac
 }
 
+# Registration-only runner-diff classifier (ADR-242 decision 20).
+#
+# WHY. The runner and the declarations lib are their own SUT, so any diff touching either
+# degrades --affected to the full battery (`runner-changed`). Registering a NEW suite is itself
+# such an edit, which made every suite-adding PR pay the whole battery. This classifier decides
+# whether a runner-file diff is NOTHING BUT new-suite registration; if so the pre-pass takes the
+# bounded selection, otherwise the full fallback stands. It FAILS CLOSED: the grammar is a closed
+# allowlist of whole-line shapes (it models none of bash's syntax), every unknown is `semantic`,
+# and every inability to decide is `undecidable` (treated as semantic).
+#
+# THE GRAMMAR (violating any rule makes the WHOLE diff semantic; the first offender is reported):
+#   G0  headers: only diff/index/---/+++/@@. Any mode, rename, copy, delete, new-file, binary or
+#       no-newline marker is semantic.
+#   G1  zero removed lines in either file (an edited line is a removal plus an addition).
+#   G2  every line added to scripts/test-all.sh is exactly one of: a blank line, a `#` comment
+#       line, or `  run_suite "<label>" <argv0> <args...>` (single line, closed charset, argv0 in
+#       bash|python3|bun|node; the first argument is a plain repo-relative path: not option-shaped,
+#       no leading `/`, no `..` segment; `bun` takes `test <path>`, and `python3 -m` only
+#       unittest|pytest). And the ANCHOR rule binds every added line: the nearest preceding
+#       post-image line that is neither blank nor a comment must itself be a complete single-line
+#       registration, which keeps added lines out of backslash continuations, heredocs and
+#       multi-line strings. Every added line must also equal the working-tree line it claims to
+#       be (a line-ending or filter differential between the diff text and the file is refused).
+#   G3  index file: only (a) ONE contiguous added `AFFECTED_<MAP(label)>_PATHS=( ... )` block per
+#       added suite (opener directly below another array's `)` or entry, closer a lone `)`, all in
+#       one hunk) and (b) added entries of ALWAYS_ON_SUITES, each bound (G5) to a label ADDED in this
+#       same diff. The array name must be defined exactly once, not be an AFFECTED_CONSUMED_EDGES
+#       target, and not be the name any OTHER live label maps to. Checked post-walk against the
+#       live stream: no added label may map to an array this diff does not declare (it would
+#       inherit that suite's edges), and no other live label may map to a declared array. Any
+#       other added index line is semantic.
+#   G4  `bash -n` passes on both post-image files.
+# The post-walk pre-pass additionally requires every added label to occur EXACTLY ONCE in the live
+# enumerate stream and every anchor label at least once. The anchor check is by LABEL, not by line:
+# it relies on every two-space `run_suite "` literal in the runner being a live call site (a
+# registration-shaped line inside a string is text, not a registration). Re-check that invariant
+# if a literal ever moves into a heredoc or an untaken branch.
+#
+# The verdict covers ONLY the two trigger files. A registration that rides along with an edit to a
+# third runner-sourced file (scripts/lib/test-relevance-paths.sh, test-contention.sh, ...) gets that
+# file's ordinary edge-based selection, exactly as editing it alone does.
+#
+# Sets (CURRENT shell, never inside $(...)): _aff_runner_class (registration-only|semantic|
+# undecidable), _aff_runner_reason, _aff_runner_off_n, _aff_runner_offenders ("<file>:<line> <code>"),
+# _aff_runner_added_labels, _aff_runner_anchor_labels, _aff_runner_index_arrays,
+# _aff_runner_index_entries, _aff_runner_index_pairs ("<array>|<label>"). Reads only git and the
+# post-image files; writes nothing.
+# Reads are separate functions so a battery can replace them at build time (never shipped inline:
+# an env-readable substitution here would be the first seam able to narrow a real run's diff).
+_aff_rd_root() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git rev-parse --show-toplevel 2>/dev/null
+}
+_aff_rd_diff() {
+  local _b
+  _b="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git merge-base origin/main HEAD 2>/dev/null)" || return 1
+  [[ -n "$_b" ]] || return 1
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS \
+      -u GIT_CONFIG -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+    git -c core.quotePath=false -c diff.mnemonicPrefix=false -c diff.noprefix=false \
+      -c core.autocrlf=false -c core.eol=lf -c core.safecrlf=false \
+      diff --no-color --no-ext-diff --no-textconv --no-renames --no-relative \
+      --src-prefix=a/ --dst-prefix=b/ -U0 "$_b" -- scripts/test-all.sh scripts/lib/test-affected-paths.sh 2>/dev/null
+}
+# The blob id of a trigger file's RAW working-tree bytes (no clean filters). The diff text shows what
+# git BELIEVES the file holds; with `skip-worktree`, `assume-unchanged` or a clean filter, the bytes
+# bash will run can differ from it. A file the diff shows must hash to the `index <a>..<b>` id; a
+# trigger file the diff does NOT show must hash to its merge-base blob (_aff_rd_base_hash).
+_aff_rd_hash() {
+  local _r
+  _r="$(_aff_rd_root)" || return 1
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" hash-object --no-filters -- "$1" 2>/dev/null
+}
+_aff_rd_base_hash() {
+  local _r _b
+  _r="$(_aff_rd_root)" || return 1
+  _b="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" merge-base origin/main HEAD 2>/dev/null)" || return 1
+  [[ -n "$_b" ]] || return 1
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$_r" rev-parse "${_b}:$1" 2>/dev/null
+}
+# aff-rd-seam-end
+# The census normalisation of a registration label into its AFFECTED_<LABEL>_PATHS array name:
+# uppercased, every non-alphanumeric to `_`, ONE leading `_` dropped (byte-for-byte what
+# `_affected_classify` and scripts/lint-orphan-test-suites.sh compute; a third spelling that
+# disagreed would let a declared array be visible to exactly one of them). NOT injective
+# (`a/b-c` and `a/b_c` collide), which is why an index declaration is bound to a label added in
+# the same diff and the pre-pass checks no other live label maps to the same name.
+_aff_label_map() {
+  local _u
+  _u="$(printf '%s' "$1" | tr 'a-z' 'A-Z')"
+  _u="${_u//[!A-Z0-9]/_}"
+  printf '%s' "${_u#_}"
+}
+# Record one grammar offender: bump the count, keep the first three for the banner. Always
+# returns 0 (callers run it as a plain statement under errexit-suppressed context).
+_aff_runner_offend() {
+  _aff_runner_off_n=$(( _aff_runner_off_n + 1 ))
+  if (( ${#_aff_runner_offenders[@]} < 3 )); then _aff_runner_offenders+=("$1 $2"); fi
+  return 0
+}
+_aff_classify_runner_diff() {
+  _aff_runner_class=""
+  _aff_runner_reason=""
+  _aff_runner_off_n=0
+  _aff_runner_offenders=()
+  _aff_runner_added_labels=()
+  _aff_runner_anchor_labels=()
+  _aff_runner_index_arrays=()
+  _aff_runner_index_entries=()
+  _aff_runner_index_pairs=()
+  local _hfiles=() _hvals=() _hi _hv _bh
+  local _root _text _rc _tag _a _b _f _l _m _ok
+  _root="$(_aff_rd_root)" || { _aff_runner_class=undecidable; _aff_runner_reason="no-repo-root"; return 0; }
+  [[ -n "$_root" && -f "$_root/scripts/test-all.sh" ]] || { _aff_runner_class=undecidable; _aff_runner_reason="no-post-image"; return 0; }
+  _rc=0
+  _text="$(_aff_rd_diff)" || _rc=$?
+  if (( _rc != 0 )); then _aff_runner_class=undecidable; _aff_runner_reason="no-merge-base-or-git-error"; return 0; fi
+  if [[ -z "$_text" ]]; then _aff_runner_class=undecidable; _aff_runner_reason="empty-diff-text"; return 0; fi
+  local _out
+  _out="$(AFF_RD_ROOT="$_root" LC_ALL=C awk '
+    function viol(code, f, n) { printf "V\t%s\t%s:%d\n", code, f, n }
+    function plain_path(s) {
+      return (s ~ /^[A-Za-z0-9_.\/-]+$/ && substr(s, 1, 1) != "-" && substr(s, 1, 1) != "/" && s !~ /(^|\/)\.\.(\/|$)/)
+    }
+    function reg_ok(l,    rest, q, label, n, a, i, argv0) {
+      # A complete single-line registration. Closed charset; nothing else is admitted.
+      if (substr(l, 1, 13) != "  run_suite \"") return ""
+      rest = substr(l, 14)
+      q = index(rest, "\"")
+      if (q < 2) return ""
+      label = substr(rest, 1, q - 1)
+      if (label !~ /^[A-Za-z0-9_.\/ -]+$/) return ""
+      if (index(label, "..") > 0) return ""
+      if (substr(label, 1, 1) == "-") return ""
+      rest = substr(rest, q + 1)
+      if (substr(rest, 1, 1) != " ") return ""
+      rest = substr(rest, 2)
+      if (rest == "" || rest ~ / $/ || rest ~ /  /) return ""
+      n = split(rest, a, " ")
+      if (n < 2) return ""
+      argv0 = a[1]
+      if (argv0 != "bash" && argv0 != "python3" && argv0 != "bun" && argv0 != "node") return ""
+      if (argv0 == "bun") {
+        if (a[2] != "test") return ""
+        if (n < 3) return ""
+        if (!plain_path(a[3])) return ""
+        i = 4
+      } else if (argv0 == "python3" && a[2] == "-m") {
+        if (n < 3 || (a[3] != "unittest" && a[3] != "pytest")) return ""
+        i = 4
+      } else {
+        if (!plain_path(a[2])) return ""
+        i = 3
+      }
+      for (; i <= n; i++) if (a[i] !~ /^[A-Za-z0-9_.\/@=:-]+$/) return ""
+      return label
+    }
+    function endblk(f, n) { if (blk == 1) { viol("INDEX-BLOCK", f, n); blk = 0 } }
+    function load(f, arr,    k, line, path) {
+      path = root "/" f; k = 0
+      while ((getline line < path) > 0) { k++; arr[f, k] = line }
+      close(path)
+    }
+    BEGIN { RUNNER = "scripts/test-all.sh"; INDEX = "scripts/lib/test-affected-paths.sh"
+            file = ""; inhunk = 0; seen = 0; nadd = 0; blk = 0
+            root = ENVIRON["AFF_RD_ROOT"]
+            load(RUNNER, post); load(INDEX, post) }
+    {
+      line = $0
+      if (inhunk) {
+        c = substr(line, 1, 1)
+        if (c == "-") { viol("G1-removal", file, nl_old); rem_old--; nl_old++ }
+        else if (c == "+") {
+          body = substr(line, 2); rem_new--
+          cur = nl_new; nl_new++; nadd++
+          # The diff text must be the file text: a line-ending or filter differential (or a file
+          # edited between the diff and this read) would make every context rule below judge
+          # bytes bash never runs.
+          if (body !~ /\r/ && post[file, cur] != body) viol("G2-postimage", file, cur)
+          if (file == INDEX) {
+            # Index declarations (G3): contiguous added AFFECTED_<MAP>_PATHS=( ... ) blocks and added
+            # ALWAYS_ON_SUITES entries. Everything else in this file is semantic. Binding each to a
+            # label added in the same diff, and the injectivity rules, are checked by the caller.
+            if (body ~ /\r/) { viol("G2-cr", file, cur) }
+            else if (blk == 1) {
+              if (body ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/ || body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+              else if (body == ")") { blk = 0 }
+              else { viol("INDEX-SHAPE", file, cur); blk = 0 }
+            } else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) {
+              j = cur - 1
+              while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
+              if (!(j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/))) viol("INDEX-ANCHOR", file, cur)
+            } else if (body ~ /^AFFECTED_[A-Z0-9_]+_PATHS=\($/) {
+              j = cur - 1
+              while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
+              if (j >= 1 && (post[file, j] == ")" || post[file, j] ~ /^  "[A-Za-z0-9_.\/-]+\/?"( +#.*)?$/)) {
+                blk = 1; nm = body; sub(/=\($/, "", nm); printf "R\t%s\n", nm
+              } else viol("INDEX-ANCHOR", file, cur)
+            } else if (body ~ /^  "[A-Za-z0-9_.\/-]+"( +#.*)?$/) {
+              j = cur - 1; enc = ""
+              while (j >= 1) {
+                if (post[file, j] == ")") break
+                if (post[file, j] ~ /^[A-Za-z_][A-Za-z0-9_]*=\($/) { enc = post[file, j]; break }
+                j--
+              }
+              if (enc == "ALWAYS_ON_SUITES=(") { lab = body; sub(/^  "/, "", lab); sub(/".*$/, "", lab); printf "E\t%s\n", lab }
+              else viol("INDEX-SHAPE", file, cur)
+            } else viol("INDEX-SHAPE", file, cur)
+          }
+          else {
+            if (body ~ /\r/) { viol("G2-cr", file, cur) }
+            else if (body ~ /^[ \t]*$/ || body ~ /^[ \t]*#/) { }
+            else {
+              lab = reg_ok(body)
+              if (lab == "") { viol((body ~ /^  run_suite /) ? "G2-charset" : "G2-shape", file, cur) }
+              else {
+                if (lab in addl) viol("G2-label-dup", file, cur)
+                addl[lab] = 1; printf "L\t%s\n", lab
+              }
+            }
+            # Anchor rule, for every added line of the runner file.
+            if (body !~ /\r/) {
+              j = cur - 1
+              while (j >= 1 && (post[file, j] ~ /^[ \t]*$/ || post[file, j] ~ /^[ \t]*#/)) j--
+              al = (j >= 1) ? reg_ok(post[file, j]) : ""
+              if (al == "") viol("G2-anchor", file, cur)
+              else printf "A\t%s\n", al
+            }
+          }
+        }
+        else { viol("G0-header", file, 0); inhunk = 0; endblk(file, nl_new); next }
+        if (rem_old <= 0 && rem_new <= 0) { inhunk = 0; endblk(file, nl_new) }
+        next
+      }
+      if (line ~ /^diff --git a\/[^ ]+ b\/[^ ]+$/) {
+        file = line; sub(/^diff --git a\//, "", file); sub(/ b\/.*$/, "", file)
+        if (file != RUNNER && file != INDEX) viol("G0-header", file, 0)
+        seen++; next
+      }
+      if (line ~ /^index [0-9a-f]+\.\.[0-9a-f]+ [0-7]+$/) {
+        h = line; sub(/^index [0-9a-f]+\.\./, "", h); sub(/ .*$/, "", h)
+        printf "H\t%s\t%s\n", file, h
+        next
+      }
+      if (line ~ /^--- a\// || line ~ /^\+\+\+ b\//) next
+      if (line ~ /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/) {
+        h = line; sub(/^@@ -/, "", h)
+        split(h, p, " ")
+        o = p[1]; n = p[2]; sub(/^\+/, "", n)
+        if (index(o, ",")) { split(o, oo, ","); nl_old = oo[1]; rem_old = oo[2] } else { nl_old = o; rem_old = 1 }
+        if (index(n, ",")) { split(n, nn, ","); nl_new = nn[1]; rem_new = nn[2] } else { nl_new = n; rem_new = 1 }
+        if (rem_old == 0 && rem_new == 0) { viol("G0-header", file, 0); next }
+        inhunk = (rem_old > 0 || rem_new > 0)
+        next
+      }
+      viol("G0-header", file, 0)
+    }
+    END { endblk(file, nl_new); if (seen == 0) print "Z\tno-diff-header"; printf "N\t%d\n", nadd }
+  ' <<<"$_text")" || { _aff_runner_class=undecidable; _aff_runner_reason="awk-failed"; return 0; }
+  local _n_added=0
+  while IFS=$'\t' read -r _tag _a _b; do
+    case "$_tag" in
+      V) _aff_runner_offend "$_b" "$_a" ;;
+      L) _aff_runner_added_labels+=("$_a") ;;
+      A) _aff_runner_anchor_labels+=("$_a") ;;
+      Z) _aff_runner_class=undecidable; _aff_runner_reason="$_a" ;;
+      R) _aff_runner_index_arrays+=("$_a") ;;
+      E) _aff_runner_index_entries+=("$_a") ;;
+      H) _hfiles+=("$_a"); _hvals+=("$_b") ;;
+      N) _n_added="$_a" ;;
+    esac
+  done <<<"$_out"
+  [[ "$_aff_runner_class" == undecidable ]] && return 0
+  if (( _aff_runner_off_n > 0 )); then _aff_runner_class=semantic; return 0; fi
+  if (( _n_added == 0 )); then _aff_runner_class=undecidable; _aff_runner_reason="no-added-lines"; return 0; fi
+  # G5 binding and array-name injectivity (index declarations). Every declared array / always-on
+  # entry must name a label ADDED in this diff, so a registration can never touch an existing suite's
+  # selection; the array must be defined exactly once in the post-image and must not be the target of
+  # an AFFECTED_CONSUMED_EDGES pair (an explicit pair can name an array no label maps to).
+  local _idx="$_root/scripts/lib/test-affected-paths.sh" _bound _cnt
+  for _a in ${_aff_runner_index_arrays[@]+"${_aff_runner_index_arrays[@]}"}; do
+    _bound=""
+    for _l in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do
+      _m="AFFECTED_$(_aff_label_map "$_l")_PATHS"
+      if [[ "$_m" == "$_a" ]]; then _bound="$_l"; break; fi
+    done
+    if [[ -z "$_bound" ]]; then
+      _aff_runner_offend "scripts/lib/test-affected-paths.sh:0" INDEX-UNBOUND
+      continue
+    fi
+    _cnt="$(grep -c -x -F -- "${_a}=(" "$_idx" 2>/dev/null)" || _cnt=0
+    if [[ "$_cnt" != "1" ]] || grep -q -F -- "|${_a}\"" "$_idx" 2>/dev/null; then
+      _aff_runner_offend "scripts/lib/test-affected-paths.sh:0" INDEX-ARRAY-NAME
+      continue
+    fi
+    _aff_runner_index_pairs+=("${_a}|${_bound}")
+  done
+  for _a in ${_aff_runner_index_entries[@]+"${_aff_runner_index_entries[@]}"}; do
+    _ok=0
+    for _l in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do
+      if [[ "$_l" == "$_a" ]]; then _ok=1; break; fi
+    done
+    if (( _ok == 0 )); then
+      _aff_runner_offend "scripts/lib/test-affected-paths.sh:0" INDEX-UNBOUND
+    fi
+  done
+  if (( _aff_runner_off_n > 0 )); then _aff_runner_class=semantic; return 0; fi
+  # A diff that registers nothing is not a registration-only edit (a comment-only change could not
+  # alter behaviour, but the claim this class makes is "adds new suites"): it keeps the full fallback.
+  if (( ${#_aff_runner_added_labels[@]} == 0 )); then _aff_runner_class=undecidable; _aff_runner_reason="no-registration"; return 0; fi
+  # The post-image blob id of every changed file must be the id the diff reports: otherwise the
+  # file bash will run holds bytes the diff text did not show (skip-worktree, assume-unchanged, a
+  # clean filter). Fails closed.
+  _hi=0
+  for _a in ${_hfiles[@]+"${_hfiles[@]}"}; do
+    _hv="$(_aff_rd_hash "$_a")" || _hv=""
+    if [[ -z "$_hv" || "$_hv" != "${_hvals[$_hi]}"* ]]; then
+      _aff_runner_class=semantic
+      _aff_runner_off_n=1
+      _aff_runner_offenders=("${_a}:0 G2-postimage")
+      return 0
+    fi
+    _hi=$(( _hi + 1 ))
+  done
+  # A trigger file the diff does not show must be byte-identical to its merge-base blob: a file hidden
+  # from git (skip-worktree / assume-unchanged) never appears in the diff at all.
+  for _f in scripts/test-all.sh scripts/lib/test-affected-paths.sh; do
+    _ok=0
+    for _a in ${_hfiles[@]+"${_hfiles[@]}"}; do
+      if [[ "$_a" == "$_f" ]]; then _ok=1; fi
+    done
+    if (( _ok == 1 )); then continue; fi
+    _hv="$(_aff_rd_hash "$_f")" || _hv=""
+    _bh="$(_aff_rd_base_hash "$_f")" || _bh=""
+    if [[ -z "$_hv" || "$_hv" != "$_bh" ]]; then
+      _aff_runner_class=semantic
+      _aff_runner_off_n=1
+      _aff_runner_offenders=("${_f}:0 G2-postimage")
+      return 0
+    fi
+  done
+  # G4: both post-images must parse. `-n` only parses; the ambient environment cannot run code.
+  for _f in scripts/test-all.sh scripts/lib/test-affected-paths.sh; do
+    if [[ -L "$_root/$_f" || ! -f "$_root/$_f" ]] \
+       || ! env -u BASH_ENV -u ENV bash --noprofile --norc -n "$_root/$_f" >/dev/null 2>&1; then
+      _aff_runner_class=semantic
+      _aff_runner_off_n=1
+      _aff_runner_offenders=("${_f}:0 G4-syntax")
+      return 0
+    fi
+  done
+  _aff_runner_class=registration-only
+  return 0
+}
+
 # Does this run's diff touch any of the given paths? Used to decline suites that guard code the
 # diff does not reach. An entry WITHOUT a `^` mark is a substring match, matching the existing
 # infra check: over-matching a path that merely CONTAINS the string errs toward RUNNING the
@@ -2310,13 +2685,35 @@ _affected_normpath() {
 # nothing literal is read as a Python module (`from pkg.mod import x`,
 # `import pkg.mod`) and re-tried as pkg/mod.py — Python imports are unquoted,
 # which the quoted-import arms of the sed chain never see.
+_ET_NOD1=0   # 1 while the D1 fallback re-runs a token with the cd-target resolution switched off
+_EB_HIT=0    # set by _affected_buf_add when the path it was offered EXISTS (a duplicate still counts)
 _affected_edge_token() {
-  local _p="$1"
+  local _p="$1" _alt=""
+  _EB_HIT=0
   # `$(dirname …)` substitutions run BEFORE the quote-strip: the token may
   # legitimately carry quotes inside `$(dirname "$0")`, and stripping first
   # would cut it to `$(dirname` — which is how these tokens arrive.
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  # `$(cd "<dir>[/..]" && pwd[ -P])` resolves to its cd TARGET, normalised (D1, #9307): the dirname
+  # substitutions above have already turned `<dir>` into the file's own directory, so
+  # `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` names the repo root two levels up.
+  # The greedy replacements below collapse the whole substitution to `$_fdir` and LOSE the `/..`, which
+  # put `$REPO_ROOT/lib/x.sh` one or two levels below the repo root and dropped the edge; they stay as the
+  # fallback for any spelling this pattern does not match.
+  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
+    local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
+    # Only a FULLY resolved target is normalised: `cd "$REPO_ROOT/.." && pwd` (a variable rebuilt from a
+    # variable) cannot be resolved here, and normpath would collapse its `$REPO_ROOT/..` to `.`, a path that
+    # is not what the file means. Such a token keeps the greedy fallback below, exactly as before.
+    if [[ "$_cdt" != *'$'* ]]; then
+      _affected_normpath "$_cdt"
+      # normpath leaves `app/` or an empty string for a target that is a directory or the repo root
+      _cdt="${_NP%/}"; [[ -n "$_cdt" ]] || _cdt="."
+      _alt="$_p"
+      _p="${_p/"$_cdm"/$_cdt}"
+    fi
+  fi
   # `$(cd "$(dirname …)" && pwd -P)/rest` — the physical-path idiom — resolves
   # to the file's own directory too. The glob is greedy; on the single-`$(cd)`
   # tokens the extractor emits that is exactly the span to replace.
@@ -2334,13 +2731,26 @@ _affected_edge_token() {
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
   _p="${_p#"$PWD"/}"
-  case "$_p" in /*|../*|..|.) return 0 ;; esac
-  _affected_normpath "$_p"; _p="$_NP"
-  case "$_p" in ../*|..|.) return 0 ;; esac
-  if [[ ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
+  # A rejected spelling becomes the empty string (which _affected_buf_add ignores) instead of returning here, so the
+  # D1 fallback below also runs for a token D1 resolved to the repo root or outside it.
+  case "$_p" in
+    /*|../*|..|.) _p="" ;;
+    *)
+      _affected_normpath "$_p"; _p="$_NP"
+      case "$_p" in ../*|..|.) _p="" ;; esac
+      ;;
+  esac
+  if [[ -n "$_p" && ! -e "$_p" && "$_p" =~ ^[a-zA-Z0-9_]+(\.[a-zA-Z0-9_]+)+$ ]]; then
     _p="$(printf '%s' "$_p" | tr '.' '/').py"
   fi
   _affected_buf_add "$_p"
+  # The D1 target resolved to a path that names nothing (`R="$(cd "$(dirname "$0")/../.." && pwd)"; bash "$R/other/y.sh"` on
+  # one line carries the whole line as one token, so `$R` expands to a value that ends in the rest of the line): the greedy
+  # collapse D1 pre-empted gave that token the file's own directory, and dropping it would NARROW selection. D1 may only
+  # widen, so a token it left without an edge is re-run exactly as it was before D1 existed.
+  if [[ -n "$_alt" ]] && (( _EB_HIT == 0 )); then
+    _ET_NOD1=1; _affected_edge_token "$_alt"; _ET_NOD1=0
+  fi
 }
 
 # The source/import closure of one file: `source X`, `. X`, `from 'X'`,
@@ -2367,6 +2777,7 @@ _FE_BUF=()
 _affected_buf_add() {
   local _p="$1"
   [[ -n "$_p" && -e "$_p" ]] || return 0
+  _EB_HIT=1
   _affected_in_list "$_p" ${_FE_BUF[@]+"${_FE_BUF[@]}"} && return 0
   _FE_BUF+=("$_p")
 }
@@ -2451,6 +2862,17 @@ _affected_file_edges_uncached() {
       -e "s/^.*load[[:space:]]+['\"]([^'\"]+).*/\1/" \
       -e "s|^[[:space:]]*from[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]+import[[:space:]].*|\1|" \
       -e "s|^[[:space:]]*import[[:space:]]+([a-zA-Z0-9_.]+).*|\1|")
+  # A5 (#9307, ADR-242 decision 18): the runner and its index are closure LEAVES for text
+  # mentions. Real LOAD edges stay: pass 1 above, and the `source`/`.` lines of pass 2 below
+  # (which resolve variables, so `source "$_AFF_LIB"` is followed). What a leaf loses is the
+  # invocation words (bash|sh|python|node|bun) and pass 3's `$VAR/path` tokens, which follow what
+  # the file's text merely NAMES: for these two files ~475 paths every suite reaching them
+  # inherited. The file itself stays an edge of every closure that reaches it. A leading
+  # `./` is stripped first (memo entries are keyed on the raw spelling).
+  local _leaf _lf="${_f#./}" _is_leaf=0
+  for _leaf in ${CLOSURE_LEAF_FILES[@]+"${CLOSURE_LEAF_FILES[@]}"}; do
+    [[ "$_lf" == "$_leaf" ]] && { _is_leaf=1; break; }
+  done
   # Variable-indirect invocations. VAR=literal assignments are collected from
   # the same file (values keep their own $REPO_ROOT-style vars for
   # _affected_edge_token to resolve); invocation sites carrying a $VAR then
@@ -2474,9 +2896,27 @@ _affected_file_edges_uncached() {
   # position 2. `(`, `&`, `|` and `;` in the prefix class catch invocations
   # nested in command substitutions and pipelines. Vars resolve first so
   # `bash "$POLL"` lands its value.
-  local _l _tok
+  local _l _tok _inv_words='source|\.|bash|sh|python3?|node|bun'
+  # A leaf follows only the words that load code (`source`, `.`), including through a variable.
+  (( _is_leaf )) && _inv_words='source|\.'
   while IFS= read -r _l; do
     _affected_resolve_vars "$_l"; _l="$_RV"
+    # Every file resolves `$(dirname "${BASH_SOURCE[0]}")/` on the whole LINE before it is split into words: the
+    # value of `_X="$(dirname "${BASH_SOURCE[0]}")/lib/x.sh"` carries a space, so `read -ra` below would cut
+    # it in two and the lib the file really sources through `source "$_X"` would never become an edge. It only ever
+    # WIDENS (a token that could never resolve becomes one that can), so it is NOT gated on `_is_leaf`: gating it
+    # left the same loss in the 11 tracked hooks that use the idiom. A non-leaf file resolves only the form that is
+    # followed by a `/` (a path being built); the BARE `$(dirname ...)` (a `cd "$(dirname ...)"`) would become the
+    # file's own directory as a word and mint a coarse `^dir/` edge on every row (measured: 241 rows +326 edges and
+    # 29-39 selected-bit flips, against 58 rows +86 edges and 0-11 flips for the slash form). A leaf keeps the
+    # unconditional form (its edges are only the real source lines).
+    if (( _is_leaf )); then
+      _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
+      _l="${_l//\$\(dirname \"\$0\"\)/$_fdir}"
+    else
+      _l="${_l//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)\//$_fdir/}"
+      _l="${_l//\$\(dirname \"\$0\"\)\//$_fdir/}"
+    fi
     # `read -ra`, never `for tok in $_l`: a bare expansion would glob `*`-shaped
     # tokens (`find . -name "*.sh"`) against cwd into spurious edges. The
     # `/`-or-`$` early-out keeps the per-token substitution chain off the ~95%
@@ -2487,7 +2927,11 @@ _affected_file_edges_uncached() {
       [[ "$_tok" == */* || "$_tok" == *\$* ]] || continue
       _affected_edge_token "$_tok"
     done
-  done < <(grep -hE '(^|[[:space:](&|;])(source|\.|bash|sh|python3?|node|bun)[[:space:]]+["'"'"']?[^[:space:]]' "$_f" 2>/dev/null)
+  done < <(grep -hE "(^|[[:space:](&|;])(${_inv_words})[[:space:]]+[\"']?[^[:space:]]" "$_f" 2>/dev/null)
+  # A leaf stops here: pass 3 (and the invocation words above) are the text that merely NAMES files.
+  # Its `source`/`.` lines, including the ones that go through a variable (`source "$_AFF_LIB"`), were
+  # followed above: those are the runner's real dependencies.
+  (( _is_leaf )) && return 0
   # Pass 3: `$VAR/path` tokens ANYWHERE — the SUT path is often an argument two
   # positions deep, a heredoc payload, or a redirected operand no invocation
   # grep can see. Substitution resolves the vars pass 2 already collected;
@@ -2496,6 +2940,18 @@ _affected_file_edges_uncached() {
     _affected_resolve_vars "$_p"; _p="$_RV"
     _affected_edge_token "$_p"
   done < <(grep -ohE '\$[A-Za-z_{][A-Za-z0-9_}]*(/[A-Za-z0-9_.$}{-]+)+' "$_f" 2>/dev/null | sort -u)
+}
+
+# A runner SUBCOMMAND is not an operand (#9307): the word `test` in `bun test <file>` would
+# resolve to the repo-root test/ directory and mint an edge that selects every `bun test`
+# suite for any diff under it. `run test` covers npm|bun|pnpm|yarn run test. One list for
+# both walks (argv and the `-c` payload), so a form added here is skipped at both.
+_affected_runner_subcmd() { # <previous word> <word>
+  case "$1 $2" in
+    "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test"|"deno test"|"make test"|"run test")
+      return 0 ;;
+  esac
+  return 1
 }
 
 # Derivation: argv literals + `-c` payload paths + name-stem + closure.
@@ -2509,20 +2965,17 @@ _affected_derive() {
         # A `-c` payload is a script string, not a path: word-split it and keep
         # the tokens that resolve — `cd apps/web-platform && npm run x` yields
         # the directory edge, which is the whole point of looking inside.
-        local _w
+        local _w _pw=""
         for _w in $_tok; do
           _w="${_w%\"}"; _w="${_w#\"}"; _w="${_w%\'}"; _w="${_w#\'}"
+          if _affected_runner_subcmd "$_pw" "$_w"; then _pw="$_w"; continue; fi
+          _pw="$_w"
           _affected_add_edge "$_w"
         done
         ;;
     esac
-    # A runner SUBCOMMAND is not an operand (#9307): the word `test` in
-    # `bun test <file>` would resolve to the repo-root test/ directory and mint an
-    # edge that selects every `bun test` suite for any diff under it.
-    case "$_prev $_tok" in
-      "bun test"|"npm test"|"pnpm test"|"yarn test"|"go test"|"cargo test")
-        _prev="$_tok"; continue ;;
-    esac
+    # A runner SUBCOMMAND is not an operand — see _affected_runner_subcmd.
+    if _affected_runner_subcmd "$_prev" "$_tok"; then _prev="$_tok"; continue; fi
     _prev="$_tok"
     case "$_tok" in
       /*)
@@ -2922,6 +3375,98 @@ fi
 _infra_ran=0
 _infra_skip_reason=""
 
+# Cost of the full battery for the runner-changed banner: the sum of the duration
+# manifests (second column, milliseconds), in whole minutes. Fails (rc 1) when either
+# manifest is absent or carries no rows, so the banner says "unknown" instead of guessing.
+_aff_full_cost_min() {
+  local _d _f _s _tot=0
+  _d="$(dirname "${BASH_SOURCE[0]}")"
+  for _f in suite-durations.tsv suite-durations-heavy.tsv; do
+    [[ -r "$_d/$_f" ]] || return 1
+    _s="$(LC_ALL=C awk -F'\t' '/^#/ || NF < 2 { next } $2 ~ /^[0-9]+$/ { s += $2; n++ } END { if (n > 0) printf "%d", s; else exit 1 }' "$_d/$_f")" || return 1
+    _tot=$(( _tot + _s ))
+  done
+  printf '%d' $(( (_tot + 30000) / 60000 ))
+}
+
+# How many times a label occurs in the live enumerate stream (exact-field match over `_aff_label[]`,
+# which holds both SUITE_COMMAND and SUITE_COMMAND_DECLINED labels). Prints the count.
+_aff_label_count() {
+  local _c=0 _x
+  for _x in ${_aff_label[@]+"${_aff_label[@]}"}; do
+    [[ "$_x" == "$1" ]] && _c=$(( _c + 1 ))
+  done
+  printf '%d' "$_c"
+}
+
+# One fixed sentence per rule code. Nothing here is derived from diff text.
+_aff_rule_sentence() {
+  case "$1" in
+    G0-header)       echo "a mode change, rename, delete, binary or no-newline marker is not a registration" ;;
+    G1-removal)      echo "a removed or edited line is a narrowing edit, not a registration" ;;
+    G2-shape)        echo "an added line outside the closed registration shape (one single-line run_suite for a NEW suite, or a blank or comment line directly after one)" ;;
+    G2-charset)      echo "a run_suite line outside the closed charset or argv shape (no quotes, substitutions, redirects, option-shaped first argument, a leading / or .. in a path, or a python3 -m module other than unittest or pytest)" ;;
+    G2-cr)           echo "a carriage return in an added line" ;;
+    G2-postimage)    echo "the working-tree line differs from the diff text (a line-ending or filter differential, or a file edited mid-run)" ;;
+    G2-anchor)       echo "no registration line directly above it; first-in-group insertions are refused" ;;
+    G2-label-dup)    echo "two added registrations share one label" ;;
+    INDEX-SHAPE)     echo "an added line in the declarations lib outside the admitted shapes (a new AFFECTED_<LABEL>_PATHS block, or an ALWAYS_ON_SUITES entry, for a suite added in this diff)" ;;
+    INDEX-ANCHOR)    echo "an added array block must start directly below another array's closing line or entry" ;;
+    INDEX-BLOCK)     echo "an added array block that does not close inside the same hunk" ;;
+    INDEX-UNBOUND)   echo "a declaration for a suite this diff does not register (a declaration for an existing suite can narrow its selection)" ;;
+    INDEX-ARRAY-NAME) echo "the array name is defined twice, targeted by an AFFECTED_CONSUMED_EDGES pair, already declared for another suite, or also the name of another live label" ;;
+    G4-syntax)       echo "a post-image does not parse, or could not be checked" ;;
+    LABEL-NOT-UNIQUE) echo "an added label occurs other than exactly once in the live stream (it aliases an existing label, including loop- and glob-generated ones, or its registration is not live)" ;;
+    ANCHOR-NOT-LIVE) echo "the registration above it is not live in the enumerate stream (text inside a string?)" ;;
+    *)               echo "outside the registration grammar" ;;
+  esac
+}
+
+# The runner-changed banner (stderr). It states the cause, the cost, the first offending line
+# and the escape — and never echoes diff text: this output is read by agents, so a printed source
+# line would be a prompt-injection channel. Everything printed is a fixed sentence, a path, a
+# line number, a rule code, or a label already restricted to the registration charset (spaces
+# shown as `_`, truncated to 64 characters). The staged-scope hint is withheld from semantic
+# hunks on purpose and shown only where a narrower option is legitimate.
+_aff_runner_banner() {
+  local _n _o _loc _code _detail _first="" _more="" _seen=" " _sentences=() _s _staged=0 _i=0
+  local LC_ALL=C
+  if _n="$(_aff_full_cost_min)"; then
+    echo "[affected] this diff edits the runner (scripts/test-all.sh or scripts/lib/test-affected-paths.sh); the battery is running in FULL (about ${_n} min of suite time at manifest weights, serial and uncontended; contended runs take longer)." >&2
+  else
+    echo "[affected] this diff edits the runner (scripts/test-all.sh or scripts/lib/test-affected-paths.sh); the battery is running in FULL (duration unknown, manifest unavailable)." >&2
+  fi
+  case "${_aff_runner_class:-}" in
+    semantic)
+      for _o in ${_aff_runner_offenders[@]+"${_aff_runner_offenders[@]}"}; do
+        _loc="${_o%% *}"; _o="${_o#* }"; _code="${_o%% *}"
+        _detail=""; [[ "$_o" == *" "* ]] && _detail="${_o#* }"
+        _loc="${_loc//[^A-Za-z0-9_.\/:-]/?}"; _code="${_code//[^A-Za-z0-9_.-]/?}"
+        _detail="${_detail//[^A-Za-z0-9_.\/ -]/?}"; _detail="${_detail// /_}"; _detail="${_detail:0:64}"
+        if (( _i == 0 )); then _first="${_loc} [${_code}]${_detail:+ ${_detail}}"; else _more+=" ${_loc} [${_code}]${_detail:+ ${_detail}}"; fi
+        _i=$(( _i + 1 ))
+        if [[ "$_seen" != *" ${_code} "* ]]; then _seen+="${_code} "; _sentences+=("$_code"); fi
+        [[ "$_code" == "G2-anchor" || "$_code" == "ANCHOR-NOT-LIVE" ]] && _staged=1
+      done
+      echo "[affected] edits judged over merge-base..working tree (every commit on the branch plus uncommitted edits); ${_aff_runner_off_n} finding(s) outside the registration grammar, first: ${_first}${_more:+; more:${_more}}" >&2
+      for _s in ${_sentences[@]+"${_sentences[@]}"}; do echo "[affected]   ${_s}: $(_aff_rule_sentence "$_s")" >&2; done ;;
+    undecidable)
+      echo "[affected] could not classify this diff as registration-only (${_aff_runner_reason:-no verdict}); it is treated as a full-battery edit." >&2
+      _staged=1 ;;
+    *)
+      echo "[affected] no diff content to classify under --paths (the classifier is not computed); a runner path in the list is treated as a full-battery edit." >&2 ;;
+  esac
+  if (( _PRINT_PATHS_REQ == 0 )); then
+    echo "[affected] a registration-only edit (new single-line run_suite registrations for NEW suites) takes the bounded selection automatically. Preview any diff: bash scripts/test-all.sh --print-selection. If origin/main is stale the first offender may be another author's line: git fetch origin main and re-run." >&2
+  else
+    echo "[affected] preview any diff: bash scripts/test-all.sh --print-selection." >&2
+  fi
+  if (( _staged == 1 )); then
+    echo "[affected] to scope an edit you have judged safe: git add it, then bash scripts/test-all.sh --affected --affected-scope=staged (selects on the INDEX only: committed edits are not in that window, and a NEW suite is selected only if its files are staged)." >&2
+  fi
+  echo "[affected] TEST_GROUP=affected is a different selector and does not narrow a runner edit; see --help (RUNNER EDITS)." >&2
+}
+
 # --- Affected derivation pre-pass (#8322) ------------------------------------
 #
 # EXECUTION MODE ONLY — never under _ENUMERATE, which runs no suite and so can
@@ -2944,7 +3489,7 @@ _infra_skip_reason=""
 # effective selected set of zero means the run would certify a battery that
 # never executes. Both exit 4 — "refused, nothing ran" — NOT 3, which #7424
 # reserved for a suite TERMINATED mid-coverage.
-_MIN_ALWAYS_ON_DECLARED=116
+_MIN_ALWAYS_ON_DECLARED=143
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -2961,13 +3506,30 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
     || grep -qF 'scripts/lib/test-affected-paths.sh' <<<"$_diff_names"; then
     _aff_runner_in_diff=1
   fi
+  # Registration-only classification (ADR-242 decision 20). Computed only when it can matter:
+  # `_aff_fallback` is assigned INSIDE the ladder below, so it cannot be the guard here; spell out
+  # the rungs that precede the runner arm. `--paths` mode has no diff content to judge. The call
+  # is failure-proof under `set -e` (`|| undecidable`), so a git/awk failure degrades to the full
+  # battery and never exits the runner.
+  _aff_runner_class=""
+  _aff_runner_reason=""
+  _aff_runner_off_n=0
+  _aff_runner_offenders=()
+  _aff_runner_added_labels=()
+  _aff_runner_anchor_labels=()
+  if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )) \
+     && [[ "${SOLEUR_TEST_FORCE_ALL:-}" != "1" ]] && (( _AFF_LIB_OK == 1 )) \
+     && [[ "$_diff_detect_ok" == "1" && "$_diff_head_ok" == "1" ]] && (( _PRINT_PATHS_REQ == 0 )); then
+    _aff_classify_runner_diff || _aff_runner_class=undecidable
+  fi
   if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then
     _aff_fallback="force-all"
   elif (( _AFF_LIB_OK == 0 )); then
     _aff_fallback="index-missing"
   elif [[ "$_diff_detect_ok" == "0" || "$_diff_head_ok" == "0" ]]; then
     _aff_fallback="undecidable-diff"
-  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )); then
+  elif [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && (( _aff_runner_in_diff == 1 )) \
+       && [[ "$_aff_runner_class" != "registration-only" ]]; then
     # The runner and the index are their own SUT: a diff touching either could
     # be narrowing the very selection this run is about to apply. Under staged
     # scope this arm is DARK BY CONSTRUCTION (#9173, #9197 review): firing it
@@ -3073,16 +3635,80 @@ if (( _AFFECTED == 1 && _ENUMERATE == 0 )) && [[ "$TEST_GROUP" == "all" ]]; then
         rm -f "$_aff_enum_err"
         exit 4
       fi
-      _aff_ready=1
-      # `not-affected` counts only SUITE_COMMAND records — DECLINED records are
-      # relevance/incident declines decided inside the child and reported as
-      # `skipped` in the epilogue, not as selection declines.
-      echo "[affected] MODE=affected selected=${_aff_selected} not-affected=$(( _aff_cmd_records - _aff_selected )) of ${_aff_cmd_records} runnable registrations" >&2
+      # Registration-only runner edit: the classifier proved the diff adds only new single-line
+      # registrations, but it reads TEXT, and about half the live registrations come from loops
+      # and globs whose labels never appear as literals. So the live enumerate stream decides what
+      # text cannot: every added label must occur EXACTLY ONCE (an alias of an existing label would
+      # change an existing suite's selection) and every anchor label at least once (a
+      # registration-shaped line inside a string is text, not a registration). Any other count
+      # degrades to the full fallback through the same print block below — never to a silent
+      # narrow, and never via a new ladder arm (that would repeat the #9197 defect).
+      _aff_uniq_bad=""
+      if [[ "$_aff_runner_class" == "registration-only" ]]; then
+        for _aff_l in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do
+          if [[ "$(_aff_label_count "$_aff_l")" != "1" ]]; then _aff_uniq_bad="LABEL-NOT-UNIQUE $_aff_l"; break; fi
+        done
+        if [[ -z "$_aff_uniq_bad" ]]; then
+          for _aff_l in ${_aff_runner_anchor_labels[@]+"${_aff_runner_anchor_labels[@]}"}; do
+            if [[ "$(_aff_label_count "$_aff_l")" == "0" ]]; then _aff_uniq_bad="ANCHOR-NOT-LIVE $_aff_l"; break; fi
+          done
+        fi
+        # A new label whose census name is ALREADY a declared array inherits that suite's edges
+        # without any index edit in this diff: only an array this diff declares may match.
+        if [[ -z "$_aff_uniq_bad" ]]; then
+          for _aff_l in ${_aff_runner_added_labels[@]+"${_aff_runner_added_labels[@]}"}; do
+            _aff_arr="AFFECTED_$(_aff_label_map "$_aff_l")_PATHS"
+            if declare -p "$_aff_arr" >/dev/null 2>&1; then
+              _aff_decl=0
+              for _aff_pair in ${_aff_runner_index_pairs[@]+"${_aff_runner_index_pairs[@]}"}; do
+                [[ "${_aff_pair%%|*}" == "$_aff_arr" ]] && _aff_decl=1
+              done
+              if (( _aff_decl == 0 )); then _aff_uniq_bad="INDEX-ARRAY-NAME $_aff_l"; break; fi
+            fi
+          done
+        fi
+        # Injectivity (iv): the label-to-array map is not injective, so a declared array that some
+        # OTHER live label (loop- and glob-generated ones included) also maps to would overwrite or
+        # alias that suite's edges. Every pair `array|label` must have no second claimant.
+        if [[ -z "$_aff_uniq_bad" && ${#_aff_runner_index_pairs[@]} -gt 0 ]]; then
+          _aff_lmap=()
+          for _aff_x in ${_aff_label[@]+"${_aff_label[@]}"}; do
+            _aff_lmap+=("${_aff_x}|AFFECTED_$(_aff_label_map "$_aff_x")_PATHS")
+          done
+          for _aff_pair in "${_aff_runner_index_pairs[@]}"; do
+            for _aff_x in ${_aff_lmap[@]+"${_aff_lmap[@]}"}; do
+              [[ "${_aff_x%|*}" == "${_aff_pair#*|}" ]] && continue
+              if [[ "${_aff_x##*|}" == "${_aff_pair%%|*}" ]]; then
+                _aff_uniq_bad="INDEX-ARRAY-NAME ${_aff_pair#*|}"; break 2
+              fi
+            done
+          done
+        fi
+      fi
+      if [[ -n "$_aff_uniq_bad" ]]; then
+        _aff_fallback="runner-changed"
+        # Deliberately NOT _aff_runner_offend: this REPLACES the (clean) classifier verdict with the
+        # single post-walk finding, rather than adding one to a list.
+        _aff_runner_class="semantic"
+        _aff_runner_off_n=1
+        _aff_runner_offenders=("scripts/test-all.sh:0 ${_aff_uniq_bad%% *} ${_aff_uniq_bad#* }")
+      else
+        if [[ "$_aff_runner_class" == "registration-only" ]]; then
+          printf 'AFFECTED_RUNNER_IN_SCOPE\treason=registration-only\n'
+          echo "[affected] registration-only runner edit: taking the bounded selection (ADR-242 decision 20); the new suite(s) run with the edge-selected and always-on suites." >&2
+        fi
+        _aff_ready=1
+        # `not-affected` counts only SUITE_COMMAND records — DECLINED records are
+        # relevance/incident declines decided inside the child and reported as
+        # `skipped` in the epilogue, not as selection declines.
+        echo "[affected] MODE=affected selected=${_aff_selected} not-affected=$(( _aff_cmd_records - _aff_selected )) of ${_aff_cmd_records} runnable registrations" >&2
+      fi
     fi
     rm -f "$_aff_enum_err"
   fi
   if [[ -n "$_aff_fallback" ]]; then
     printf 'AFFECTED_FALLBACK\treason=%s\n' "$_aff_fallback"
+    [[ "$_aff_fallback" == "runner-changed" ]] && _aff_runner_banner
     # Degraded is NOT `--full`: `_FULL_GATE` stays 0, so `not_in_diff`
     # relevance declines still apply — the banner must not claim otherwise.
     echo "[affected] MODE=full (degraded: ${_aff_fallback}) — selection declines disabled; relevance declines still apply." >&2
@@ -3983,6 +4609,13 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # #9612. Same both-halves shape as the pair above: `gh --jq` takes ONE jq expression and does not
+  # forward jq CLI flags (--arg/--argjson/--argfile/--slurpfile/--rawfile), so `gh ... --arg` lands in
+  # GH argv where it fails or silently misbehaves. The unit suite proves the rule on fixtures (and
+  # carries the live-tree clean scan + planted-defect verify-the-verifier); the live scan proves the
+  # tree.
+  run_suite "scripts/lint-gh-argv-arg" bash scripts/lint-gh-argv-arg.test.sh
+  run_suite "scripts/lint-gh-argv-arg-live" python3 scripts/lint-gh-argv-arg.py
   # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
   # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
   run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
@@ -4139,6 +4772,16 @@ if want_scripts; then
   # that reported a clean bill of health for a family it never enumerated, and an
   # unregistered suite is the same failure one level up.
   run_suite "scripts/check-cloudflare-token-drift" bash scripts/check-cloudflare-token-drift.test.sh
+  # #9377: the web-host escrow-split contract (Guard 3 census: every web-class path selects
+  # prd_workspaces_luks_web, web-1 keeps prd_workspaces_luks) plus its live-mode stub-doppler rows.
+  # Registered explicitly: scripts/*.test.sh is NOT auto-globbed (the #5417 orphan class). The
+  # generated suite-shard-legs.tsv / suite-durations.tsv are NOT hand-edited.
+  run_suite "scripts/check-web-host-escrow-config" bash scripts/check-web-host-escrow-config.test.sh
+  # #9377: the fail-closed escrow preflight every web-host birth route runs (env token wins, one named fallback
+  # read, empty token fails before the checker, no token bytes in output, xtrace refused). Registered explicitly
+  # for the same reason as its neighbour; the workflow census of the routes that must run it is a bun suite under
+  # plugins/soleur/test/ (web-host-escrow-preflight-census.test.ts), picked up by that directory's run.
+  run_suite "scripts/web-host-escrow-preflight" bash scripts/web-host-escrow-preflight.test.sh
   # #6789: arms for the contention instrumentation + advisory queue that this
   # runner itself now uses. Registered explicitly — scripts/*.test.sh is NOT in
   # the auto-glob below, so an unregistered suite is an ORPHAN that gates
@@ -4159,6 +4802,10 @@ if want_scripts; then
   # TMPDIR and holds an fd — every conjunct (dead/live owner, marker validity,
   # fail-closed bases/procfs, tmpfs-vs-disk disposal) is asserted both ways.
   run_suite "tests/scripts/scratch-session" bash tests/scripts/test-scratch-session.sh
+  # #9677: the opt-in Docker builder-cache prune, the effective-space report (df delta + snapper
+  # note) and the cleanup-merged wrapper that places both after the cleanup lock is released.
+  # docker/findmnt/df/snapper are PATH shims; the argv the SUT sends is asserted.
+  run_suite "tests/scripts/cleanup-merged-space" bash tests/scripts/test-cleanup-merged-space.sh
   # Agent sandbox allocator (soleur-sandbox.sh new|rm): disk-only base, owner marker,
   # refusals on unmarked/foreign paths are asserted in both directions.
   run_suite "tests/scripts/soleur-sandbox" bash tests/scripts/test-soleur-sandbox.sh
@@ -4326,6 +4973,7 @@ if want_scripts; then
   # exits 0 on any readable register and 2 on one it cannot parse, which is the code property.
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
+  run_suite "scripts/watch-registration-narrowing-9564" bash scripts/watch-registration-narrowing-9564.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
   # Guard 2 (#7500): the sink-side credential scrub before PUBLIC publication. Registered
@@ -4464,6 +5112,15 @@ if want_scripts; then
   # the daily verify leg; a structural arm pins that it carries no query or parse of its own. Four
   # mutants are replayed against the arms, each from a sandbox tree.
   run_suite "scripts/web2-luks-live-6931" bash scripts/followthroughs/web2-luks-live-6931.test.sh
+  # #9372 — the single-use web-2 volume rebirth: the stateful steps against a fake Hetzner/Terraform world, the 7-day emptiness
+  # evidence, the names-only never-pooled reader and the birth-time recovery check. Each carries its own mutation battery.
+  run_suite "scripts/web2-rebirth" bash scripts/web2-rebirth.test.sh
+  run_suite "scripts/web2-rebirth-emptiness" bash scripts/web2-rebirth-emptiness.test.sh
+  run_suite "scripts/web2-rebirth-never-pooled" bash scripts/web2-rebirth-never-pooled.test.sh
+  run_suite "scripts/web2-rebirth-recovery-check" bash scripts/web2-rebirth-recovery-check.test.sh
+  # #9372 — the agent-dispatchable, approval-gated soft reboot of the allow-listed web-2 standby: the writer's refusal table and the
+  # read-only rows evidence reader against a fake Hetzner/Terraform/Better Stack world, with a claim-word scan and a mutation battery.
+  run_suite "scripts/web-host-reboot" bash scripts/web-host-reboot.test.sh
   # #7220: exit-code harness for the ACTIVATION soak. Registered explicitly (orphan-suite class
   # above). Review found this probe returning exit 0 — which auto-closes the tracker — on a host
   # where reconciliation was BROKEN: it counted `action=failed reason=sudo_denied` rows, and the
@@ -4610,6 +5267,9 @@ if want_scripts; then
   # apply-deploy-pipeline-fix.yml). Explicit run_suite — scripts/*.test.sh is not auto-globbed here.
   run_suite "scripts/seccomp-unenforced-alert" bash scripts/seccomp-unenforced-alert.test.sh
   run_suite "scripts/infra-config-red-alert" bash scripts/infra-config-red-alert.test.sh
+  # Drift auto-close decision (called by apply-deploy-pipeline-fix.yml): an `infra-drift` issue
+  # with a pending hcloud_server replacement, or an unreadable/incomplete plan, must stay open.
+  run_suite "scripts/infra-drift-autoclose" bash scripts/infra-drift-autoclose.test.sh
   # Production version-drift alerter (#7091), sourced by scheduled-prod-version-drift.yml.
   # Explicit run_suite — scripts/*.test.sh is not auto-globbed here, and an unregistered
   # suite is the #5417 class: green CI over zero coverage.
@@ -4949,6 +5609,10 @@ if want_scripts; then
   # inherits nothing from the per-PR apply's inline HALT), so every arm is load-bearing and
   # the suite mutation-proves each one. Registered HERE — nothing auto-discovers tests/scripts/.
   run_suite "tests/scripts/web-host-birth-gate" bash tests/scripts/test-web-host-birth-gate.sh
+  # web-2 volume REBIRTH gate (#9372) — the third sibling (birth requires zero destroys, replace requires the volume to survive;
+  # this one grades the pre and post plans of the single-use rebirth). Registered HERE: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/web-host-rebirth-gate" bash tests/scripts/test-web-host-rebirth-gate.sh
+  run_suite "tests/scripts/web2-rebirth-classify" bash tests/scripts/test-web2-rebirth-classify.sh
   # web-host REPLACE gate (#6969) — the SIBLING of the birth gate above and its opposite by
   # contract: exactly one delete+create of the dispatched host, both volume families and the
   # LUKS passphrase preserved by omission, plus positive requirements on the NIC, the volume
@@ -5001,6 +5665,12 @@ if want_scripts; then
   # probe's header claims to detect, so the claim is checked rather than asserted.
   # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
   run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  # (#7843) The argv-bearer sweep's CONVERSION BATTERY (Guard 2). Registered HERE for the
+  # reason every line around it is: nothing auto-discovers tests/scripts/, and the orphan
+  # linter's producer is `*.test.sh`. Hermetic: a PATH-shim curl, synthesized tokens, no
+  # network, no Doppler. Its rows are keyed off the Rule E baseline, so each probe
+  # conversion flips the same rows from "argv bearer present (known)" to the full contract.
+  run_suite "tests/scripts/argv-bearer-sweep" bash tests/scripts/test-argv-bearer-sweep.sh
   # #8050 — the PR-time reference gate and the `tf`/`reference` sides of the
   # projection module. The probe's reference is projected from the Terraform
   # plan; the committed copy the daily job reads is held equal to the plan by
@@ -5063,7 +5733,8 @@ if want_scripts; then
   # explicitly for the reason its neighbours state (no `scripts/*.test.sh` glob; it was a
   # never-run suite until the orphan census said so) and LAST in the block for the same
   # ordinal-parity reason as the watchdog classifier above. Its cost is one `--print-selection`
-  # walk, so its edge set is declared (not always-on) in the declarations lib.
+  # walk, so its edge set is declared in the declarations lib AND it is hedged always-on there (its read set is
+  # the registration corpus itself; ADR-242 decision 19). The declared array stays for pre-push-ratchet-lane arm 21.
   run_suite "scripts/test-affected-kb-consumers" bash scripts/test-affected-kb-consumers.test.sh
   # #9323 soak probe's own contract suite (fake gh): exit-code semantics 0/1/2/3/78. EXPLICIT, because
   # scripts/followthroughs/ is covered by no glob here.
@@ -5077,6 +5748,20 @@ if want_scripts; then
   # registration's ordinal moves (the positional shard fallback keys on it; abd29f4bcf). Its edge set is
   # declared in the declarations lib.
   run_suite "scripts/test-affected-derive" bash scripts/test-affected-derive.test.sh
+  # #9400: the pre-push ratchet lane's own Guard Contract battery (member-table
+  # parity, merged-tree dispatch, degrade/abort arms, scrub parity). Explicit
+  # run_suite for the same no-`scripts/*.test.sh`-glob reason; registered LAST in
+  # the block so no existing suite's positional-shard leg shifts. Declared edge
+  # set (not always-on): the members the lane invokes plus its own pair.
+  run_suite "scripts/pre-push-ratchet-lane" bash scripts/pre-push-ratchet-lane.test.sh
+  # (#9307 PR-B) the committed read recorder's verdict function and live reader. Appended LAST in the
+  # block for the same positional-shard reason; its manifest row comes from the shard regeneration.
+  run_suite "scripts/audit-suite-reads" bash scripts/audit-suite-reads.test.sh
+  # #9387: exit-code harness for the notify-only date probe (2 = NOT YET, 5 = ACTION REQUIRED, 3 = cannot
+  # establish; never 0 or 1, which would close the tracker or read as FAIL). Explicit run_suite because
+  # scripts/followthroughs/ matches no SUITE_GLOBS entry; appended LAST in the block so no earlier
+  # registration's positional-shard ordinal moves. Its manifest rows come from the shard regeneration.
+  run_suite "scripts/followthroughs/tty-ack-migration-9387" bash scripts/followthroughs/tty-ack-migration-9387.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -5446,7 +6131,7 @@ fi
 #
 # The three cost-heaviest registrations are gated by want_scripts_heavy, not want_scripts:
 # ci.yml runs them on a dedicated `test-scripts-heavy` matrix so each lands on its own leg,
-# while the lighter scripts group fans out over seven legs. TEST_GROUP=all still covers all
+# while the lighter scripts group fans out over the K-leg light matrix. TEST_GROUP=all still covers all
 # three — want_scripts_heavy's `all` arm is what keeps the ship gate, the lefthook battery
 # and main-health-monitor running them.
 #

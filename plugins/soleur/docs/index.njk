@@ -4,8 +4,9 @@ seoTitle: "Soleur — AI Agents for Solo Founders | Every Department, One Platfo
 description: "Company-as-a-Service for solo founders. AI agents across 8 departments — engineering, marketing, legal, finance, operations, product, sales, support."
 layout: base.njk
 permalink: index.html
-date: 2026-06-01
-last_updated: 2026-06-01
+date: 2026-10-06
+last_updated: 2026-10-06
+summaryCounts: computed
 ---
 
     <!-- Hero -->
@@ -13,25 +14,35 @@ last_updated: 2026-06-01
       <p class="section-label">Company-as-a-Service</p>
       <h1>Stop hiring. Start delegating.</h1>
       <p class="hero-tagline">The Company-as-a-Service platform that already knows your business. Build a billion-dollar company &mdash; alone.</p>
-      <p class="hero-sub">Soleur is the source-available Company-as-a-Service platform: 60+ AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving one founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.</p>
+      <p class="hero-sub">Soleur is the source-available Company-as-a-Service platform: {{ stats.agents }} AI agents and {{ stats.skills }} skills across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving one founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.</p>
       <p class="hero-trust">Human-in-the-loop. Your expertise, amplified.</p>
-      <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
-        action="https://buttondown.com/api/emails/embed-subscribe/soleur"
-        method="post">
-        <label for="newsletter-email-homepage-waitlist" class="sr-only">Email address</label>
-        <input type="email" name="email" id="newsletter-email-homepage-waitlist"
-          placeholder="Enter your email address" required autocomplete="email" inputmode="email"
-          aria-describedby="homepage-waitlist-privacy" />
-        <input type="hidden" name="embed" value="1" />
-        <input type="hidden" name="tag" value="homepage-waitlist" />
-        <input type="hidden" name="url" value="" />
-        <button type="submit" class="btn btn-primary">Join the waitlist</button>
-        <p id="homepage-waitlist-privacy" class="sr-only">We'll only email you about your Soleur waitlist spot. Unsubscribe anytime. <a href="/legal/privacy-policy/">Privacy Policy</a>.</p>
-        <div class="newsletter-status" id="homepage-waitlist-status" aria-live="polite" role="status"></div>
-      </form>
+      <div class="landing-hero-install">
+        <a href="/getting-started/#self-hosted" class="btn btn-primary plausible-event-name=Hero+Self-host+Click">Get the self-hosted version</a>
+        <p class="landing-hero-install-note">Source-available. Runs inside your own Claude Code; you pay for your own Claude usage.</p>
+      </div>
+      <div class="hero-waitlist-form-card" role="group" aria-labelledby="homepage-hosted-label">
+        <p class="hero-waitlist-form-label" id="homepage-hosted-label">Hosted version (coming soon)</p>
+        <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
+          action="https://buttondown.com/api/emails/embed-subscribe/soleur"
+          method="post">
+          <label for="newsletter-email-homepage-waitlist" class="sr-only">Email address</label>
+          <input type="email" name="email" id="newsletter-email-homepage-waitlist"
+            placeholder="Enter your email address" required autocomplete="email" inputmode="email"
+            aria-describedby="homepage-waitlist-privacy" />
+          <input type="hidden" name="embed" value="1" />
+          <input type="hidden" name="tag" value="homepage-waitlist" />
+          <input type="hidden" name="url" value="" />
+          <button type="submit" class="btn btn-secondary">Join the waitlist</button>
+          <p id="homepage-waitlist-privacy" class="newsletter-privacy">We&rsquo;ll email you Soleur updates, including when hosted access opens. Unsubscribe any time. Sent through Buttondown. <a href="/legal/privacy-policy/">Privacy Policy</a>.</p>
+          <div class="newsletter-status" id="homepage-waitlist-status" aria-live="polite" role="status"></div>
+        </form>
+      </div>
+      <div class="landing-hero-plan">
+        <p>Self-hosted runs inside your own Claude Code, signed in with your Claude plan or an Anthropic API key.</p>
+        <p>Hosted version (coming soon): bring your own Anthropic API key, billed by Anthropic to you.</p>
+      </div>
       <div class="hero-cta">
-        <a href="/getting-started/" class="cta-link">Or self-host it free <span aria-hidden="true">&rarr;</span></a>
-        <a href="#soleur-vs-copilots" class="cta-link">How Soleur compares to Cursor &amp; Copilot <span aria-hidden="true">&rarr;</span></a>
+        <a href="/compare/soleur-vs-cursor/" class="cta-link">Compare Soleur with Cursor <span aria-hidden="true">&rarr;</span></a>
       </div>
     </section>
 
@@ -79,33 +90,47 @@ last_updated: 2026-06-01
       </div>
     </section>
 
-    <!-- Quote Section -->
-    <section class="landing-quote">
-      <blockquote>
-        &ldquo;I would not be surprised if the first single-person billion-dollar company &hellip; happens in the next couple of years.&rdquo;
-      </blockquote>
-      <cite>&mdash; Dario Amodei, CEO of Anthropic, assigning a <a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609" rel="noopener noreferrer">70&ndash;80% probability</a></cite>
-    </section>
-
-    <!-- As seen in / Press strip -->
-    <section class="landing-press-strip" aria-labelledby="press-strip-heading">
+    {# One brief reaching the departments (#9577): a labelled, static illustration. Rows come from _data/fanoutDemo.js, which fails the build on bad input. No button, event or product-surface wording here; plugins/soleur/test/fanout-demo-drift.test.ts pins that. #}
+    <section class="landing-section fanout-section">
       <div class="landing-section-inner">
-        <p class="section-label" id="press-strip-heading">As seen in</p>
-        <ul class="press-outlet-list">
-          <li class="press-outlet">
-            <a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609"
-               rel="noopener noreferrer" target="_blank"
-               aria-label="Read the Inc.com article on the billion-dollar solo founder thesis">
-              <span class="press-outlet-name">Inc.com</span>
-              <span class="press-outlet-context" aria-hidden="true">&mdash; The thesis behind Soleur, as reported on the billion-dollar solo founder.</span>
-            </a>
-          </li>
-        </ul>
+        <p class="section-label">{{ fanoutDemo.label }}</p>
+        <h2 class="section-title">{{ fanoutDemo.heading }}</h2>
+        <figure class="fanout-figure" aria-label="{{ fanoutDemo.figureName }}">
+          <p class="fanout-tag">{{ fanoutDemo.tag }}</p>
+          <div class="fanout-brief">
+            <p class="fanout-brief-label">{{ fanoutDemo.briefEyebrow }}</p>
+            <p class="fanout-brief-text">{{ fanoutDemo.briefText }}</p>
+          </div>
+          <ul class="fanout-rows" role="list">
+            {%- for row in fanoutDemo.rows %}
+            <li class="fanout-row" data-status="{{ row.status }}">
+              <div class="fanout-row-head">
+                <span class="fanout-dept">{{ row.name }}</span><span class="fanout-colon sr-only">:</span>
+                <span class="fanout-chip"><span class="fanout-glyph" aria-hidden="true"></span>{{ row.label }}</span>
+              </div>
+              <p class="fanout-line">{{ row.line }}</p>
+            </li>
+            {%- endfor %}
+          </ul>
+          <figcaption class="fanout-caption">
+            {%- for line in fanoutDemo.captionLines %}
+            <p>{{ line }}</p>
+            {%- endfor %}
+          </figcaption>
+        </figure>
+        <p class="fanout-link-wrap"><a class="fanout-link" href="#departments">{{ fanoutDemo.linkText }} <span aria-hidden="true">&darr;</span></a></p>
       </div>
     </section>
 
-    <!-- Features Section -->
-    <section class="landing-section">
+    <!-- Attribution: dated paraphrase of what was said, with the source. No verbatim quotation marks (fact-checked, see #9579). -->
+    <section class="landing-quote">
+      <p class="landing-quote-text">In May 2025, at Anthropic&rsquo;s Code with Claude developer conference in San Francisco, Anthropic CEO Dario Amodei was asked whether a billion-dollar company run by one person using AI could be built. He said it would certainly happen, as soon as 2026. Inc. reported that in a later press Q&amp;A he slightly walked back that prediction, putting the chance at 70&ndash;80 percent.</p>
+      <p class="landing-quote-source"><a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609" rel="noopener noreferrer">Inc. report by Ben Sherry, May 23, 2025</a></p>
+      <p class="landing-quote-note">Soleur is an independent product, not affiliated with, sponsored by, or endorsed by Anthropic.</p>
+    </section>
+
+    <!-- Features Section (id is the link target of the fan-out demo section above) -->
+    <section class="landing-section" id="departments">
       <div class="landing-section-inner">
         <p class="section-label">Your AI Organization</p>
         <h2 class="section-title">{{ stats.departments }} departments. One knowledge base. Your expertise, amplified.</h2>
@@ -160,7 +185,7 @@ last_updated: 2026-06-01
         <p class="section-label">How Soleur Compares</p>
         <h2 class="section-title">Soleur vs. Cursor and GitHub Copilot</h2>
         <p class="section-desc">Cursor and Copilot help you write code. Soleur helps you run a company. Soleur includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more &mdash; not just engineering.</p>
-        <p class="section-desc">The core difference is memory. Soleur maintains a persistent, compounding knowledge base across every department: your marketing agent knows your brand voice, your legal agent knows your compliance posture, your finance agent references your actual revenue data. Cursor and Copilot start fresh every session. Soleur remembers.</p>
+        <p class="section-desc">The core difference is memory. Soleur maintains a persistent, compounding knowledge base across every department: your marketing agent knows your brand voice, your legal agent knows your compliance posture, your finance agent references your actual revenue data.</p>
         <p class="section-desc">Soleur is built on <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> and the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
       </div>
     </section>
@@ -173,7 +198,7 @@ last_updated: 2026-06-01
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What is Soleur?</summary>
-            <p class="faq-answer">Soleur deploys 60+ AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.</p>
+            <p class="faq-answer">Soleur deploys {{ stats.agents }} AI agents and {{ stats.skills }} skills across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is company-as-a-service?</summary>
@@ -181,7 +206,7 @@ last_updated: 2026-06-01
           </details>
           <details class="faq-item">
             <summary class="faq-question">How does Soleur differ from Cursor or GitHub Copilot?</summary>
-            <p class="faq-answer">Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session. Soleur is built on <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> and the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
+            <p class="faq-answer">Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Soleur is built on <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> and the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What if the AI output is wrong?</summary>
@@ -189,7 +214,7 @@ last_updated: 2026-06-01
           </details>
           <details class="faq-item">
             <summary class="faq-question">Is Soleur free?</summary>
-            <p class="faq-answer">Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) &mdash; every agent, every skill, every department. The cloud platform (coming soon) adds managed infrastructure, a web dashboard, and priority support; <a href="/pricing/">see pricing</a> for plan details. Both paths run on Anthropic's Claude models, so your AI costs depend on your Claude usage.</p>
+            <p class="faq-answer">Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) &mdash; every agent, every skill, every department. It runs inside your own Claude Code, so you pay for your own Claude usage. The hosted version (coming soon) adds managed infrastructure, a web dashboard, and email support; <a href="/pricing/">see pricing</a> for plan details. Hosted plans use your own Anthropic API key, billed by Anthropic to you.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Who is Soleur for?</summary>
@@ -197,9 +222,10 @@ last_updated: 2026-06-01
           </details>
           <details class="faq-item">
             <summary class="faq-question">How do I get started?</summary>
-            <p class="faq-answer">Join the waitlist for the cloud platform, or install the self-hosted version and run <code>/soleur:go</code> to start. Describe what you need &mdash; build a feature, validate a business idea, generate legal documents, run a competitive analysis &mdash; and Soleur routes to the right workflow.</p>
+            <p class="faq-answer">Get the self-hosted version and run <code>/soleur:go</code> inside your own Claude Code, signed in with your Claude plan or an Anthropic API key. Or join the waitlist for the hosted version, which takes your own Anthropic API key. Describe what you need &mdash; build a feature, validate a business idea, generate legal documents, run a competitive analysis &mdash; and Soleur routes to the right workflow.</p>
           </details>
         </div>
+        <p class="faq-community">Questions we didn&rsquo;t cover? <a href="{{ site.discord }}" rel="noopener noreferrer">Ask in the Soleur Discord</a>.</p>
       </div>
     </section>
 
@@ -213,7 +239,7 @@ last_updated: 2026-06-01
           "name": "What is Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Soleur deploys 60+ AI agents across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.") | jsonLdSafe | safe }}
+            "text": {{ ("Soleur deploys " + stats.agents + " AI agents and " + stats.skills + " skills across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.") | jsonLdSafe | safe }}
           }
         },
         {
@@ -229,7 +255,7 @@ last_updated: 2026-06-01
           "name": "How does Soleur differ from Cursor or GitHub Copilot?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session. Soleur is built on Claude Code and the Model Context Protocol (MCP), the open standard for connecting AI to external tools."
+            "text": "Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Soleur is built on Claude Code and the Model Context Protocol (MCP), the open standard for connecting AI to external tools."
           }
         },
         {
@@ -245,7 +271,7 @@ last_updated: 2026-06-01
           "name": "Is Soleur free?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) — every agent, every skill, every department. The cloud platform (coming soon) adds managed infrastructure, a web dashboard, and priority support; see pricing for plan details. Both paths run on Anthropic's Claude models, so your AI costs depend on your Claude usage."
+            "text": "Soleur offers two paths. The self-hosted version is free and source-available under BSL 1.1 (it converts to Apache-2.0 four years after each release) — every agent, every skill, every department. It runs inside your own Claude Code, so you pay for your own Claude usage. The hosted version (coming soon) adds managed infrastructure, a web dashboard, and email support; see pricing for plan details. Hosted plans use your own Anthropic API key, billed by Anthropic to you."
           }
         },
         {
@@ -261,7 +287,7 @@ last_updated: 2026-06-01
           "name": "How do I get started?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Join the waitlist for the cloud platform, or install the self-hosted version and run /soleur:go to start. Describe what you need — build a feature, validate a business idea, generate legal documents, run a competitive analysis — and Soleur routes to the right workflow."
+            "text": "Get the self-hosted version and run /soleur:go inside your own Claude Code, signed in with your Claude plan or an Anthropic API key. Or join the waitlist for the hosted version, which takes your own Anthropic API key. Describe what you need — build a feature, validate a business idea, generate legal documents, run a competitive analysis — and Soleur routes to the right workflow."
           }
         }
       ]
@@ -271,7 +297,7 @@ last_updated: 2026-06-01
     <!-- Final CTA -->
     <section class="landing-cta">
       <h2>The team you can&rsquo;t afford to hire is already built.</h2>
-      <p>60+ agents across {{ stats.departments }} departments. One knowledge base that remembers everything.</p>
+      <p>{{ stats.agents }} agents and {{ stats.skills }} skills across {{ stats.departments }} departments. One knowledge base that remembers everything.</p>
       <a href="/pricing/" class="btn btn-primary">See Pricing &amp; Join Waitlist</a>
       <p class="waitlist-secondary"><a href="/getting-started/">Or start with the free self-hosted version &rarr;</a></p>
     </section>

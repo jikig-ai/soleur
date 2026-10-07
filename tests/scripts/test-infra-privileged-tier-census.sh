@@ -121,7 +121,7 @@ mkdir -p "$T/mut" || { printf 'FAIL SETUP: mkdir %s/mut\n' "$T" >&2; exit 1; }
 printf '\n=== infra-privileged tier census (Guards 1, 2 and 4; #8209, ADR-241) ===\n\n'
 
 cat > "$T/ipt.py" <<'PY'
-import sys, os, re, json, yaml, subprocess, glob
+import sys, os, re, json, yaml, subprocess, glob, posixpath
 
 GHDIR, REPO = sys.argv[1], sys.argv[2]
 STATE_LIST = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else ""
@@ -1426,6 +1426,141 @@ g7_bad_e = sorted({rel for rel, t in g6_scan if G7_XREF.search(t)})
 check("G7e: no workflow, action, reachable script, .tf, .tmpl or cloud-init file carries a Doppler reference "
       "`${soleur-infra-app.` [%d files scanned]" % len(g6_scan), not g7_bad_e, g7_bad_e[:5])
 
+# G7f (#9321, ADR-241 D11) -- every call of the App-token composite is exactly ONE of two source shapes, and the
+# composite itself offers nothing else:
+#   narrow  no `doppler-project` input; `doppler-token` is secrets.DOPPLER_TOKEN_INFRA_APP (the release jobs);
+#   broad   `doppler-project: soleur-infra-privileged` and secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED, and only in
+#           a job that also calls the infra-credentials loader (it already holds the whole Tier-B project).
+# The composite's `doppler-project` default is the narrow project, its allow-list is exactly the two project
+# literals, and it makes exactly two `doppler secrets get` calls (the App id and key, project from the validated
+# variable, config prd); no command-position read of an App value exists anywhere else.
+#
+# POPULATION is derived, never listed: (a) every workflow-job step whose `uses` resolves to the composite, in the
+# local `./.github/actions/<dir>`, the remote `owner/repo/.github/actions/<dir>@ref` and the `..`-spelled forms
+# (the two non-canonical spellings are themselves refused, clause `spelling`), plus every composite action that
+# wraps the composite in its own `runs.steps` (refused, clause `wrapper`); (b) the composite file the same
+# resolution finds, parsed for the input default, the DOPPLER_SOURCE env mapping, the validation `case` literals
+# and EVERY command-position `doppler secrets get|download` / `doppler run` in it (so a third read of ANOTHER name
+# is seen, which the App-value regex of (c) cannot do); (c) every command-position `doppler secrets get` of an App
+# value in any workflow or action `run:` body, so a second reader or a second composite cannot escape by living in
+# a new file. Command position (cmd_sites) means a comment, an echo argument or a heredoc body is not a read. Token
+# references match in the dotted and the whitespace spellings (the bracket spelling is refused repo-wide by G1e, and
+# refused here as an unnamed token). Each failure carries a `[clause]` tag and the row detail lists the clauses that
+# fired, so a red row says which clause caught it. "Release job" is a job that calls the composite and not the
+# loader: a release job that later adds the loader escapes the broad-shape restriction; the per-suite
+# no-broad-tier-b rows pin the two named jobs.
+# The live tree has exactly three callers (a fourth is a deliberate, dated edit here); a fixture needs >= 1.
+G7F_COMP_REL = "actions/mint-infra-app-token/action.yml"
+G7F_NARROW, G7F_BROAD = "soleur-infra-app", "soleur-infra-privileged"
+G7F_NARROW_TOK, G7F_BROAD_TOK = "DOPPLER_TOKEN_INFRA_APP", "DOPPLER_TOKEN_INFRA_PRIVILEGED"
+G7F_APP_READ = re.compile(r"\bdoppler\b[^\n]*?\bsecrets\s+get\b[^\n]*?\bGITHUB_INFRA_APP_(?:ID|PRIVATE_KEY)\b")
+# `run` is anchored to the subcommand position (only whitespace-separated words, none of them a shell operator,
+# between `doppler` and `run`), so the English word in `doppler --version ... || { echo "...run the install step"; }`
+# is not a read, while a flag value that contains a space (`--token "$(cat f)" run`) still is.
+G7F_ANY_READ = re.compile(r"\bdoppler\b(?:[^\n]*?\bsecrets\s+(?:get|download)\b|(?:\s+[^\s|&;<>]+)*?\s+run\b)")
+G7F_SECRET = re.compile(r"^\$\{\{\s*secrets\s*\.\s*([A-Za-z0-9_]+)\s*\}\}$", re.I)
+G7F_LOADER = re.compile(r"^\./\.github/actions/infra-credentials/?$")
+G7F_CANON = re.compile(r"^\./\.github/actions/mint-infra-app-token/?$")
+def g7f_target(uses):
+    """The `.github`-relative path a `uses` string names, or None: the local `./.github/...` form, the remote
+    `owner/repo/.github/...@ref` form, and a `..`-spelled path all normalise to the same target."""
+    u = str(uses or "").strip().split("@", 1)[0]
+    if u.startswith("./"):
+        pth = u[2:]
+    else:
+        rm = re.match(r"^[^/\s]+/[^/\s]+/(\.github/.*)$", u)
+        if not rm:
+            return None
+        pth = rm.group(1)
+    pth = posixpath.normpath(pth)
+    return pth[len(".github/"):] if pth.startswith(".github/") else None
+def g7f_is_comp(uses):
+    t = g7f_target(uses)
+    return t is not None and (t + "/action.yml" == G7F_COMP_REL or t == G7F_COMP_REL)
+g7f_bad, g7f_callers = [], []
+# Every failure is tagged with the clause that fired, so a red row names its cause and the mutation rows can
+# pin ONE clause each (a mutant two clauses both catch hides a clause that was deleted).
+def g7f_fail(tag, msg):
+    g7f_bad.append("[%s] %s" % (tag, msg))
+for rel, (doc, text) in sorted(docs.items()):
+    # (iii) a composite that wraps the mint composite: the token/project pairing cannot be proven statically
+    # through an `inputs.*` pass-through, so a wrapper is refused outright (the composite itself is exempt).
+    runs_ = doc.get("runs")
+    if rel != G7F_COMP_REL and isinstance(runs_, dict):
+        for st in (runs_.get("steps") or []):
+            if isinstance(st, dict) and g7f_is_comp(st.get("uses")):
+                g7f_fail("wrapper", "%s wraps the mint composite inside another composite action" % rel)
+    for jn, jb in (doc.get("jobs") or {}).items():
+        if not isinstance(jb, dict):
+            continue
+        steps_ = [st for st in (jb.get("steps") or []) if isinstance(st, dict)]
+        has_loader = any(G7F_LOADER.match(str(st.get("uses") or "")) for st in steps_)
+        for st in steps_:
+            if not g7f_is_comp(st.get("uses")):
+                continue
+            who = "%s::%s" % (rel, jn)
+            g7f_callers.append(who)
+            # (i)/(ii) the remote and `..` spellings name the same composite but escape every other census
+            # mapping (`./.github/actions/<dir>`); only the one local spelling is admitted.
+            if not G7F_CANON.match(str(st.get("uses") or "")):
+                g7f_fail("spelling", "%s names the composite as %r, not ./.github/actions/mint-infra-app-token" % (who, st.get("uses")))
+            w = st.get("with") or {}
+            tm = G7F_SECRET.match(str(w.get("doppler-token", "")).strip())
+            tok = tm.group(1).upper() if tm else None   # secret names are case-insensitive at GitHub
+            if "doppler-project" not in w:
+                if tok != G7F_NARROW_TOK:
+                    g7f_fail("caller-shape", "%s: no doppler-project (narrow source) but doppler-token is %r, not secrets.%s" % (who, w.get("doppler-token"), G7F_NARROW_TOK))
+            elif str(w.get("doppler-project")) == G7F_BROAD:
+                if tok != G7F_BROAD_TOK:
+                    g7f_fail("caller-shape", "%s: doppler-project %s but doppler-token is %r, not secrets.%s" % (who, G7F_BROAD, w.get("doppler-token"), G7F_BROAD_TOK))
+                if not has_loader:
+                    g7f_fail("loader", "%s: the broad source in a job that does not call the infra-credentials loader" % who)
+            else:
+                g7f_fail("caller-shape", "%s: doppler-project %r is neither absent nor %s" % (who, w.get("doppler-project"), G7F_BROAD))
+g7f_comp = docs.get(G7F_COMP_REL)
+if g7f_comp is None:
+    g7f_fail("composite-missing", "the composite %s was not found" % G7F_COMP_REL)
+else:
+    cdoc = g7f_comp[0]
+    dflt = (((cdoc.get("inputs") or {}).get("doppler-project")) or {}).get("default")
+    if dflt != G7F_NARROW:
+        g7f_fail("default", "composite doppler-project default is %r, not %s" % (dflt, G7F_NARROW))
+    # the env mapping that feeds every read: DOPPLER_SOURCE is the validated input and nothing else
+    csrc = [(st.get("env") or {}).get("DOPPLER_SOURCE") for st in ((cdoc.get("runs") or {}).get("steps") or [])
+            if isinstance(st, dict) and "DOPPLER_SOURCE" in (st.get("env") or {})]
+    if csrc != ["${{ inputs.doppler-project }}"]:
+        g7f_fail("env-map", "composite DOPPLER_SOURCE env is %r, not exactly one ${{ inputs.doppler-project }}" % (csrc,))
+    cbody = "\n".join(str(b) for b in step_bodies(cdoc))
+    allowed = set()
+    for alts in re.findall(r"^\s*([A-Za-z0-9_-]+(?:\|[A-Za-z0-9_-]+)*)\)\s*:\s*;;", cbody, re.M):
+        allowed |= set(alts.split("|"))
+    if allowed != {G7F_NARROW, G7F_BROAD}:
+        g7f_fail("allow-list", "composite allow-list is %s, not exactly {%s, %s}" % (sorted(allowed), G7F_NARROW, G7F_BROAD))
+    csites = [line for line, _m in cmd_sites(cbody, G7F_ANY_READ)]
+    cnames = sorted(re.findall(r"\bsecrets\s+get\s+(?:\S+\s+)*?(GITHUB_INFRA_APP_(?:ID|PRIVATE_KEY))\b", " ".join(csites)))
+    if len(csites) != 2 or cnames != ["GITHUB_INFRA_APP_ID", "GITHUB_INFRA_APP_PRIVATE_KEY"]:
+        g7f_fail("read-count", "composite makes %d Doppler read/run call(s) naming %s, not exactly the two App-value reads" % (len(csites), cnames))
+    for line in csites:
+        if not (re.search(r'--project\s+"\$DOPPLER_SOURCE"', line) and re.search(r"--config\s+prd\b", line)):
+            g7f_fail("read-argv", "composite read without --project \"$DOPPLER_SOURCE\" --config prd: %s" % line.strip()[:80])
+for rel, (doc, text) in sorted(docs.items()):
+    if rel == G7F_COMP_REL:
+        continue
+    for _job, body in step_sites(doc):
+        if any(True for _l, _m in cmd_sites(body, G7F_APP_READ)):
+            g7f_fail("outside-read", "%s reads an App value with doppler secrets get outside the composite" % rel)
+g7f_n = len(g7f_callers)
+if CHECK_GIT and g7f_n != 3:
+    g7f_fail("caller-count", "%d callers, the live tree has exactly 3 (a fourth is a deliberate, dated edit here)" % g7f_n)
+elif g7f_n < 1:
+    g7f_fail("caller-count", "no caller of the composite was scanned")
+check("G7f: every mint-infra-app-token call is the narrow shape (no doppler-project, secrets.%s) or the loader-job broad "
+      "shape (doppler-project %s, secrets.%s), the composite defaults to %s with a two-literal allow-list and exactly "
+      "two pinned reads, and no other workflow or action run body reads an App value [%d callers, composite %s]"
+      % (G7F_NARROW_TOK, G7F_BROAD, G7F_BROAD_TOK, G7F_NARROW, g7f_n, "found" if g7f_comp is not None else "missing"),
+      not g7f_bad,
+      "clauses=%s callers=%s bad=%s" % (sorted({b[1:b.index("]")] for b in g7f_bad}), sorted(g7f_callers), sorted(set(g7f_bad))[:4]))
+
 # G6l -- the provider fact the state-residency argument rests on.
 g6_lock = os.path.join(REPO, G6_LOCK_REL)
 g6_ver = ""
@@ -1562,7 +1697,8 @@ check("G6u: every unit or drop-in that loads /etc/default/soleur-doppler-token a
 
 print("\n".join(out))
 PY
-CENSUS_ROWS=41  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+CENSUS_ROWS=42  # 22 -> 23 (#9215): G1i-rk, the root-key extract-precedence row. 23 -> 34 (#8609): Guard 6, G6a..G6l.
+# 41 -> 42 (#9321 PR-2, 2026-10-03): G7f, the App-token composite and callers source-shape row.
 # 34 -> 38 (#8609 review): G6o (plan-context invariance), G6q (exact opt-in set), G6s (cosign
 # caller-ref pin), G6u (UnsetEnvironment sweep).
 
@@ -1585,9 +1721,27 @@ census_rows() {
 }
 
 # wf_row <tsv> <name-prefix> — 1 only when the named row is PRESENT and not ok. An ABSENT row (the
-# census crashed on a fixture) returns 0, so a mutant can never read as RED for the wrong reason.
+# census crashed on a fixture) returns 0, so a mutant can never read as RED for the wrong reason. A TSV that
+# is MISSING or EMPTY (a fixcensus line deleted, so awk had nothing to read) is UNRESOLVED: rc 2 and a stderr
+# note, never 1, so it cannot read as RED either (review #9453: awk exits 2 on a missing file and every caller
+# used to take any non-zero rc as RED).
 # shellcheck disable=SC2317  # invoked indirectly through mutant_red
-wf_row() { awk -F'\t' -v p="$2" 'index($2, p) == 1 { found = 1; if ($1 != "ok") bad = 1 } END { exit (found && bad) ? 1 : 0 }' "$1"; }
+wf_row() {
+  [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }
+  awk -F'\t' -v p="$2" 'index($2, p) == 1 { found = 1; if ($1 != "ok") bad = 1 } END { exit (found && bad) ? 1 : 0 }' "$1"
+}
+# wf_red <tsv> <name-prefix> — true ONLY on the verdict "present and not ok" (rc exactly 1), never on UNRESOLVED.
+wf_red() { local rc=0; wf_row "$@" || rc=$?; [ "$rc" -eq 1 ]; }
+# wf_clause <tsv> <name-prefix> <clause> [<clause that must NOT fire>] — as wf_row, but the row must be red
+# BECAUSE the named G7f clause fired (its detail lists `clauses=['...']`), and optionally not because of a
+# second one. This is how a mutant pins ONE clause: a mutant two clauses both catch hides a deleted clause.
+# shellcheck disable=SC2317  # invoked indirectly through mutant_red
+wf_clause() {
+  [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }
+  awk -F'\t' -v p="$2" -v w="'$3'" -v a="${4:+'$4'}" '
+    index($2, p) == 1 { found = 1; if ($1 != "ok") { bad = 1; if (match($3, /clauses=\[[^]]*\]/)) cl = substr($3, RSTART, RLENGTH) } }
+    END { exit (found && bad && index(cl, w) > 0 && (a == "" || index(cl, a) == 0)) ? 1 : 0 }' "$1"
+}
 
 # ── the base tree for the deleted-resource-block row (Guard 4 row 3) ─────────────────
 # `git show <ref>:<path>` per file rather than a worktree checkout: this suite must never touch
@@ -1627,6 +1781,7 @@ fi
 # control the mutation matrix is measured against; see the header for why the live tree is not.
 FIX="$T/fix"; assert_fixture_dir "$FIX"
 mkdir -p "$FIX/tree/.github/workflows" "$FIX/tree/.github/actions/infra-credentials" \
+         "$FIX/tree/.github/actions/mint-infra-app-token" \
          "$FIX/tree/scripts" "$FIX/tree/apps/web-platform/infra/git-data-root-key" \
          "$FIX/base/apps/web-platform/infra/git-data-root-key" \
   || { printf 'FAIL SETUP: fixture mkdir\n' >&2; exit 1; }
@@ -1756,6 +1911,83 @@ jobs:
         run: |
           set -euo pipefail
           doppler run -p soleur -c prd_terraform -- terraform plan -refresh=false
+EOF
+
+# G7f (#9321): the compliant App-token composite and its two call shapes. The composite's default is
+# the narrow project, its allow-list is exactly the two named projects, and it makes exactly the two
+# pinned reads. The release-shaped caller (narrow: no project input, the narrow token) and the
+# loader-calling caller (broad: the explicit project input, the broad token) are the two shapes the
+# live tree has. Without them the G7f row could only ever show its empty-population branch, and the
+# control would be red.
+cat > "$FIX/tree/.github/actions/mint-infra-app-token/action.yml" <<'EOF'
+name: "Mint App token (fixture)"
+description: "fixture composite"
+inputs:
+  doppler-token:
+    required: true
+  doppler-project:
+    required: false
+    default: soleur-infra-app
+  installation-id:
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Mint
+      id: mint
+      shell: bash
+      env:
+        DOPPLER_SOURCE: ${{ inputs.doppler-project }}
+      run: |
+        set -euo pipefail
+        case "${DOPPLER_SOURCE:-}" in
+          soleur-infra-app|soleur-infra-privileged) : ;;
+          *) echo "::error::doppler-project must be one of the two named projects"; exit 1 ;;
+        esac
+        APP_ID=$(doppler secrets get GITHUB_INFRA_APP_ID --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null)
+        PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null)
+        echo "::add-mask::$APP_ID" > /dev/null
+        echo "$PEM" > /dev/null
+EOF
+
+cat > "$FIX/tree/.github/workflows/release.yml" <<'EOF'
+name: fixture release job (narrow source)
+on: workflow_dispatch
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - name: Verify DOPPLER_TOKEN_INFRA_APP present
+        env:
+          DOPPLER_TOKEN_CHECK: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+        run: |
+          set -euo pipefail
+          test -n "$DOPPLER_TOKEN_CHECK"
+      - name: Mint
+        uses: ./.github/actions/mint-infra-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}
+          installation-id: "166065653"
+EOF
+
+cat > "$FIX/tree/.github/workflows/marketplace-verify.yml" <<'EOF'
+name: fixture marketplace verify (broad source, loader job)
+on: workflow_dispatch
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    environment: infra-privileged
+    steps:
+      - uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+      - name: Mint
+        uses: ./.github/actions/mint-infra-app-token
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-project: soleur-infra-privileged
+          installation-id: "166065653"
 EOF
 
 # A compliant App-key consumer for G4e. Tier A on purpose: board-status-sync is
@@ -2160,7 +2392,7 @@ mkdir -p "$_EMPTYTF/tree/.github" "$_EMPTYTF/base" || { printf 'FAIL SETUP: empt
 cp -r "$FIX/tree/.github/workflows" "$FIX/tree/.github/actions" "$_EMPTYTF/tree/.github/" \
   || { printf 'FAIL SETUP: empty-tf copy\n' >&2; exit 1; }
 fixcensus "$_EMPTYTF" "$T/empty-tf.tsv" ""
-if grep -q '^IPT_G4_FILES=0$' "$T/empty-tf.tsv.err" && ! wf_row "$T/empty-tf.tsv" "G4a:"; then
+if grep -q '^IPT_G4_FILES=0$' "$T/empty-tf.tsv.err" && wf_red "$T/empty-tf.tsv" "G4a:"; then
   pass "H5: Guard 4's instrument self-test — an empty \`.tf\` set reports 0 files and reds G4a"
 else
   fail "H5: an empty .tf set did not red Guard 4" "$(grep -E 'IPT_G4_FILES|G4a' "$T/empty-tf.tsv.err" "$T/empty-tf.tsv" | cut -c1-200)"
@@ -2169,14 +2401,14 @@ _EMPTYGH="$T/empty-gh"; assert_fixture_dir "$_EMPTYGH"
 mkdir -p "$_EMPTYGH/tree/.github/workflows" "$_EMPTYGH/tree/.github/actions" "$_EMPTYGH/base" \
   || { printf 'FAIL SETUP: empty-gh fixture\n' >&2; exit 1; }
 fixcensus "$_EMPTYGH" "$T/empty-gh.tsv" ""
-if grep -q '^IPT_FILES_SCANNED=0$' "$T/empty-gh.tsv.err" && ! wf_row "$T/empty-gh.tsv" "G1a:"; then
+if grep -q '^IPT_FILES_SCANNED=0$' "$T/empty-gh.tsv.err" && wf_red "$T/empty-gh.tsv" "G1a:"; then
   pass "H6: the dispatch self-test — an empty input tree reports '0 files scanned' and reds G1a (the suite's own SCAN FLOOR then exits non-zero)"
 else
   fail "H6: an empty input tree did not report 0 files scanned" "$(head -2 "$T/empty-gh.tsv.err")"
 fi
 # G6g / G6g2 — Guard 6's own dispatch self-tests, over the same two empty trees. Without them an
 # empty tree reds only G1a/G4a, and a Guard 6 that had stopped scanning would still read green.
-if ! wf_row "$T/empty-gh.tsv" "G6a:"; then
+if wf_red "$T/empty-gh.tsv" "G6a:"; then
   pass "G6g: an empty workflow tree reds a G6 row (G6a: 0 files, 0 referencing jobs), not only G1a"
 else
   fail "G6g: an empty workflow tree left G6a green" "$(grep -F 'G6a:' "$T/empty-gh.tsv" | cut -c1-200)"
@@ -2224,16 +2456,72 @@ fixture_written() { # <name> <file>
   if [ -s "$2" ]; then MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-$1: fixture $(basename "$2") written ($(md5sum < "$2" | cut -c1-8))"; return 0; fi
   fail "M-$1: fixture not written"; return 1
 }
-mutant_red() { # <name> <case-fn> [args...] — the named case must go RED
-  local name="$1"; shift
-  if "$@"; then fail "M-$name: the named census row stayed GREEN against the mutant"
-  else pass "M-$name: the named census row goes RED against the mutant"; fi
+mutant_red() { # <name> <case-fn> [args...] — the named case must go RED (rc exactly 1); rc 2 is UNRESOLVED
+  local name="$1" rc=0; shift
+  "$@" || rc=$?
+  case "$rc" in
+    0) fail "M-$name: the named census row stayed GREEN against the mutant" ;;
+    1) pass "M-$name: the named census row goes RED against the mutant" ;;
+    *) fail "M-$name: UNRESOLVED (the case returned rc=$rc: a missing or empty census TSV is not a verdict)" ;;
+  esac
 }
 # mutant_red self-test (ADR-193), both directions, in a subshell so the counters roll back.
 _mr="$( (mutant_red st-green true >/dev/null; printf '%s,%s ' "$passes" "$fails"; mutant_red st-red false >/dev/null; printf '%s,%s' "$passes" "$fails") )"
 if [ "$_mr" != "$passes,$((fails + 1)) $((passes + 1)),$((fails + 1))" ]; then
   printf 'FAIL INSTRUMENT: mutant_red self-test read "%s" (from %s,%s) — a GREEN case must fail, a RED case must pass\n' "$_mr" "$passes" "$fails" >&2; exit 1
 fi
+# The third direction (review #9453): a case that cannot reach a verdict (a deleted fixcensus leaves its TSV
+# missing; an emptied one leaves it empty) must FAIL the row, not pass it as RED. Driven through the real
+# wf_row / wf_clause / presence helpers, in subshells so the counters roll back.
+: > "$T/st-empty.tsv"
+for _st in "wf_row $T/st-missing.tsv G7f:" "wf_row $T/st-empty.tsv G7f:" "wf_clause $T/st-missing.tsv G7f: spelling" \
+           "wf_clause $T/st-empty.tsv G7f: spelling"; do
+  # shellcheck disable=SC2086  # the helper name and its arguments are split on purpose
+  _mr="$( (mutant_red st-unresolved $_st >/dev/null 2>&1; printf '%s,%s' "$passes" "$fails") )"
+  if [ "$_mr" != "$passes,$((fails + 1))" ]; then
+    printf 'FAIL INSTRUMENT: mutant_red read a missing/empty TSV as RED for [%s] (got "%s" from %s,%s)\n' "$_st" "$_mr" "$passes" "$fails" >&2; exit 1
+  fi
+done
+pass "H7: a mutant row whose census TSV is missing or empty (a deleted fixcensus) is UNRESOLVED and fails, never RED (wf_row, wf_clause, 4 drives)"
+# H7b (review #9453, pass 2): the verdict helpers' OWN logic, driven with hand-written one-line TSVs and an exact rc
+# each (printf + exit, never through the helpers it backstops). Without these, wf_clause could accept any red, or
+# ignore its exclusion, wf_red could read UNRESOLVED as RED, and the empty-TSV guards could be dropped, with every
+# mutant row above still green: their verdicts happen to coincide today.
+printf 'bad\tG7f: demo\tclauses=[%s]\n' "'spelling'" > "$T/st-one.tsv"
+printf 'bad\tG7f: demo\tclauses=[%s, %s]\n' "'spelling'" "'wrapper'" > "$T/st-two.tsv"
+printf 'ok\tG7f: demo\t\n' > "$T/st-ok.tsv"
+_h7b() { # <exact rc wanted> <helper> [args...]
+  local want="$1" rc=0; shift
+  "$@" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = "$want" ] || { printf 'FAIL INSTRUMENT: H7b [%s] returned rc %s, wanted %s\n' "$*" "$rc" "$want" >&2; exit 1; }
+}
+_h7b 1 wf_clause "$T/st-one.tsv" G7f: spelling             # the named clause fired: RED (1)
+_h7b 0 wf_clause "$T/st-one.tsv" G7f: wrapper              # a DIFFERENT clause fired: not this row's clause (0)
+_h7b 0 wf_clause "$T/st-two.tsv" G7f: spelling wrapper     # the excluded clause fired too: not isolated (0)
+_h7b 1 wf_clause "$T/st-two.tsv" G7f: spelling             # two clauses fired, none excluded: RED (1)
+_h7b 0 wf_clause "$T/st-ok.tsv" G7f: spelling              # an ok row is never RED (0)
+_h7b 1 wf_row "$T/st-one.tsv" G7f:                         # a present, not-ok row: 1
+_h7b 0 wf_row "$T/st-ok.tsv" G7f:                          # a present, ok row: 0
+_h7b 2 wf_row "$T/st-empty.tsv" G7f:                       # an EMPTY TSV is UNRESOLVED, exactly 2 (awk alone says 0)
+_h7b 2 wf_row "$T/st-missing.tsv" G7f:
+_h7b 2 wf_clause "$T/st-empty.tsv" G7f: spelling
+_h7b 2 wf_clause "$T/st-missing.tsv" G7f: spelling
+_h7b 0 wf_red "$T/st-one.tsv" G7f:                         # wf_red is true on a RED row ...
+_h7b 1 wf_red "$T/st-ok.tsv" G7f:                          # ... false on an ok row ...
+_h7b 1 wf_red "$T/st-missing.tsv" G7f:                     # ... and false on a missing or an empty TSV (not a verdict)
+_h7b 1 wf_red "$T/st-empty.tsv" G7f:
+# An ABSENT row on a NON-empty TSV (the census crashed on a fixture, so the named row is not there) is 0, never RED:
+# flipping wf_row's `(found && bad)` to `(!found || bad)` would read every absent row as RED.
+_h7b 0 wf_row "$T/st-one.tsv" NoSuchRow:
+_h7b 0 wf_clause "$T/st-one.tsv" NoSuchRow: spelling
+_h7b 1 wf_red "$T/st-one.tsv" NoSuchRow:
+# _h7b's OWN logic, in both directions, in subshells (it exits 1 on a mismatch): a drive with a deliberately wrong
+# wanted rc must make _h7b exit 1. Neutering _h7b (`true || {`) would leave all 18 drives above vacuous.
+for _w in "0 wf_row $T/st-one.tsv G7f:" "1 wf_row $T/st-ok.tsv G7f:" "2 wf_clause $T/st-one.tsv G7f: spelling"; do
+  _hrc=0; ( _h7b $_w ) >/dev/null 2>&1 || _hrc=$?
+  [ "$_hrc" = 1 ] || { printf 'FAIL INSTRUMENT: H7b self-test: _h7b accepted a WRONG wanted rc [%s] (subshell rc %s, wanted 1)\n' "$_w" "$_hrc" >&2; exit 1; }
+done
+pass "H7b: wf_row, wf_clause and wf_red return their exact verdicts on hand-written TSVs (named clause, other clause, excluded clause, ok, empty, missing, absent row; 18 drives) and _h7b itself rejects a wrong wanted rc (3 self-test drives)"
 
 # shellcheck disable=SC2016  # sed programs and fixture YAML are data
 {
@@ -2924,9 +3212,193 @@ if awk -F'\t' 'index($2, "G7c:") == 1 && $1 == "ok" { c = 1 } index($2, "G7d:") 
 else
   fail "M-g7-must-pass: a G7 row reds a compliant input" "$(grep -E '^(FAIL)' "$T/mut/g7-pass.tsv" | cut -c1-240)"
 fi
+# ── G7f (#9321): every App-token call and the composite use only the two permitted source shapes ──
+# Each row is written against the compliant control (a release-shaped caller on the narrow source, a
+# loader-calling caller on the broad one, the composite with a narrow default, a two-literal allow-list and
+# exactly two pinned reads). M1 flips the composite default; M2 widens its allow-list; M2b adds a third read of
+# ANOTHER name (the App-value regex of clause (c) cannot see it); M3 appends a SECOND caller job in the
+# same file after a compliant first one (a check that stops at the first member is the defect); M4 a Tier-A token;
+# M5 the broad token in bracket spelling with the narrow default; M6 a NEW workflow that reads an App value
+# inline; M7 an empty tree (a population of zero must not pass).
+G7F_COMP='tree/.github/actions/mint-infra-app-token/action.yml'
+MUTDIR="$(fixcopy g7f-m1)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m1-composite-default-flipped "$MUTDIR/$G7F_COMP" 2 's/^    default: soleur-infra-app$/    default: soleur-infra-privileged/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m1.tsv" ""
+  mutant_red g7f-m1-composite-default-flipped wf_row "$T/mut/g7f-m1.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m2)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2-allow-list-widened "$MUTDIR/$G7F_COMP" 2 's/soleur-infra-app\|soleur-infra-privileged\)/soleur-infra-app|soleur-infra-privileged|soleur)/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2.tsv" ""
+  mutant_red g7f-m2-allow-list-widened wf_row "$T/mut/g7f-m2.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2b-third-read-of-another-name "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        X=$(doppler secrets get HCLOUD_TOKEN --plain --project soleur-infra-app --config prd 2>/dev/null)'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2b.tsv" ""
+  mutant_red g7f-m2b-third-read-of-another-name wf_row "$T/mut/g7f-m2b.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m3-second-caller-broad-no-loader "$MUTDIR/tree/.github/workflows/release.yml" 10 '$a\  second:\n    runs-on: ubuntu-24.04\n    environment: infra-privileged\n    steps:\n      - name: Mint again\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n          doppler-project: soleur-infra-privileged\n          installation-id: "166065653"'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m3.tsv" ""
+  mutant_red g7f-m3-second-caller-broad-no-loader wf_row "$T/mut/g7f-m3.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m4)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m4-tier-a-token "$MUTDIR/tree/.github/workflows/release.yml" 2 's/^          doppler-token: \$\{\{ secrets\.DOPPLER_TOKEN_INFRA_APP \}\}$/          doppler-token: ${{ secrets.DOPPLER_TOKEN }}/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m4.tsv" ""
+  mutant_red g7f-m4-tier-a-token wf_row "$T/mut/g7f-m4.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m5)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m5-broad-token-bracket-spelling-narrow-default "$MUTDIR/tree/.github/workflows/release.yml" 2 "s/^          doppler-token: \\$\\{\\{ secrets\\.DOPPLER_TOKEN_INFRA_APP \\}\\}\$/          doppler-token: \\$\\{\\{ secrets['DOPPLER_TOKEN_INFRA_PRIVILEGED'] \\}\\}/"; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m5.tsv" ""
+  mutant_red g7f-m5-broad-token-bracket-spelling-narrow-default wf_row "$T/mut/g7f-m5.tsv" "G7f:"
+fi
+MUTDIR="$(fixcopy g7f-m6)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m6-inline-app-key-read "$MUTDIR/tree/.github/workflows/tiera.yml" 1 '$a\          PEM=$(doppler secrets get GITHUB_INFRA_APP_PRIVATE_KEY --plain --project soleur-infra-app --config prd)'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m6.tsv" ""
+  mutant_red g7f-m6-inline-app-key-read wf_row "$T/mut/g7f-m6.tsv" "G7f:"
+fi
+# ── clause-isolated rows (review #9453): each pins ONE G7f clause through the `clauses=[...]` the row detail
+# lists, and a clause a second one could also catch is told apart by naming the one that must NOT fire. Every
+# mutant below keeps the rest of the tree compliant, so only its own clause is available to catch it.
+# M2b' -- a third read of another name whose project IS "$DOPPLER_SOURCE": only the read-COUNT clause sees it
+# (M2b hard-codes the project, so the per-read argv clause catches that one too and hides a deleted count clause).
+MUTDIR="$(fixcopy g7f-m2bp)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2bp-third-read-via-source-variable "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        X=$(doppler secrets get HCLOUD_TOKEN --plain --project "$DOPPLER_SOURCE" --config prd 2>/dev/null)'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2bp.tsv" ""
+  mutant_red g7f-m2bp-third-read-via-source-variable wf_clause "$T/mut/g7f-m2bp.tsv" "G7f:" read-count read-argv
+fi
+# M2c -- exactly two App-value reads, but the project is hard-coded: only the per-read argv clause sees it.
+MUTDIR="$(fixcopy g7f-m2c)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-m2c-two-reads-hard-coded-project "$MUTDIR/$G7F_COMP" 4 's/--project "\$DOPPLER_SOURCE"/--project soleur-infra-app/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-m2c.tsv" ""
+  mutant_red g7f-m2c-two-reads-hard-coded-project wf_clause "$T/mut/g7f-m2c.tsv" "G7f:" read-argv read-count
+fi
+# M-run -- a `doppler run` (not `secrets get`) line in the composite: the `|run` alternative of the read regex.
+MUTDIR="$(fixcopy g7f-mrun)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun-doppler-run-in-composite "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler run --project "$DOPPLER_SOURCE" --config prd -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun.tsv" ""
+  mutant_red g7f-mrun-doppler-run-in-composite wf_clause "$T/mut/g7f-mrun.tsv" "G7f:" read-count read-argv
+fi
+# M-run2 -- the same read with global flags before the subcommand (`doppler --project ... run`): the anchored
+# `run` still sees it, so narrowing the regex to `doppler run` alone cannot pass.
+MUTDIR="$(fixcopy g7f-mrun2)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun2-doppler-flags-then-run "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler --project "$DOPPLER_SOURCE" --config prd run -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun2.tsv" ""
+  mutant_red g7f-mrun2-doppler-flags-then-run wf_clause "$T/mut/g7f-mrun2.tsv" "G7f:" read-count read-argv
+fi
+# M-run3 -- the same read with a global flag whose quoted value contains a space (`--token "$(cat f)" run`): the
+# old one-word-per-flag anchor missed it, so a third, unpinned read went unseen.
+MUTDIR="$(fixcopy g7f-mrun3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mrun3-doppler-spaced-flag-value-then-run "$MUTDIR/$G7F_COMP" 1 '/^        PEM=\$\(/a\        doppler --token "$(cat /dev/null)" --project "$DOPPLER_SOURCE" --config prd run -- true'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mrun3.tsv" ""
+  mutant_red g7f-mrun3-doppler-spaced-flag-value-then-run wf_clause "$T/mut/g7f-mrun3.tsv" "G7f:" read-count read-argv
+fi
+# M-env -- the DOPPLER_SOURCE env mapping hard-wired to the broad literal: default, allow-list and both reads
+# still look compliant, so only the env-map clause sees it.
+MUTDIR="$(fixcopy g7f-menv)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-menv-source-env-hard-wired "$MUTDIR/$G7F_COMP" 2 's/^        DOPPLER_SOURCE: \$\{\{ inputs\.doppler-project \}\}$/        DOPPLER_SOURCE: soleur-infra-privileged/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-menv.tsv" ""
+  mutant_red g7f-menv-source-env-hard-wired wf_clause "$T/mut/g7f-menv.tsv" "G7f:" env-map read-argv
+fi
+# M-wrongtok -- the broad shape (explicit broad project, in the loader job) with the NARROW token.
+MUTDIR="$(fixcopy g7f-mwrongtok)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mwrongtok-broad-project-narrow-token "$MUTDIR/tree/.github/workflows/marketplace-verify.yml" 2 's/^          doppler-token: \$\{\{ secrets\.DOPPLER_TOKEN_INFRA_PRIVILEGED \}\}$/          doppler-token: ${{ secrets.DOPPLER_TOKEN_INFRA_APP }}/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mwrongtok.tsv" ""
+  mutant_red g7f-mwrongtok-broad-project-narrow-token wf_clause "$T/mut/g7f-mwrongtok.tsv" "G7f:" caller-shape loader
+fi
+# M-remote / M-dotdot -- the compliant narrow caller, with the composite named by its remote spelling and by a
+# `..` path: neither matches the `./.github/actions/<dir>` mapping the other census rows use, so only the
+# spelling clause (G7f resolves both to the composite and refuses a non-canonical form) sees them.
+MUTDIR="$(fixcopy g7f-mremote)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mremote-remote-spelling "$MUTDIR/tree/.github/workflows/release.yml" 2 's#^        uses: \./\.github/actions/mint-infra-app-token$#        uses: jikig-ai/soleur/.github/actions/mint-infra-app-token@main#'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mremote.tsv" ""
+  mutant_red g7f-mremote-remote-spelling wf_clause "$T/mut/g7f-mremote.tsv" "G7f:" spelling caller-shape
+fi
+MUTDIR="$(fixcopy g7f-mdotdot)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-mdotdot-dot-dot-spelling "$MUTDIR/tree/.github/workflows/release.yml" 2 's#^        uses: \./\.github/actions/mint-infra-app-token$#        uses: ./.github/actions/../actions/mint-infra-app-token#'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mdotdot.tsv" ""
+  mutant_red g7f-mdotdot-dot-dot-spelling wf_clause "$T/mut/g7f-mdotdot.tsv" "G7f:" spelling caller-shape
+fi
+# M-wrapper -- a NEW composite action whose own `runs.steps` call the mint composite (the caller loop used to
+# walk only `jobs.*.steps`, so a wrapper forwarding the broad project and an `inputs.*` token was invisible).
+MUTDIR="$(fixcopy g7f-mwrapper)"; assert_fixture_dir "$MUTDIR"
+mkdir -p "$MUTDIR/tree/.github/actions/zz-wrap" || { printf 'FAIL SETUP: g7f-mwrapper dir\n' >&2; exit 1; }
+cat > "$MUTDIR/tree/.github/actions/zz-wrap/action.yml" <<'EOF'
+name: "Wrapper (fixture)"
+description: "fixture composite that wraps the mint composite"
+inputs:
+  tok:
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Mint through the wrapper
+      uses: ./.github/actions/mint-infra-app-token
+      with:
+        doppler-token: ${{ inputs.tok }}
+        doppler-project: soleur-infra-privileged
+        installation-id: "166065653"
+EOF
+if fixture_written g7f-mwrapper-composite-wraps-the-mint "$MUTDIR/tree/.github/actions/zz-wrap/action.yml"; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-mwrapper.tsv" ""
+  mutant_red g7f-mwrapper-composite-wraps-the-mint wf_clause "$T/mut/g7f-mwrapper.tsv" "G7f:" wrapper spelling
+fi
+# M7 -- the empty tree (no caller, no composite): "0 scanned" must not pass. It reds through the
+# composite-missing clause AND the caller-count clause; it does not measure the live-tree 3-caller pin.
+MUTANTS_RUN=$((MUTANTS_RUN + 1))
+mutant_red g7f-m7-empty-tree wf_row "$T/empty-gh.tsv" "G7f:"
+# H2 (must-PASS, non-canonical): the composite mentions the broad project and a would-be extra read ONLY in
+# comments; the loader-calling caller lists its `with:` keys in a different order and spells the broad token
+# with whitespace around the dot; the release caller spells the narrow token the same way. (The bracket
+# spelling is not usable here: G1e bans `secrets[...]` repo-wide, so a bracket-spelled caller reds that row.)
+# All of it is compliant, so G7f AND every other census row must stay GREEN (a guard that rejects
+# everything also reds every mutant above).
+MUTDIR="$(fixcopy g7f-h2)"; assert_fixture_dir "$MUTDIR"
+python3 - "$MUTDIR/$G7F_COMP" <<'PY' || { printf 'FAIL SETUP: g7f-h2 composite\n' >&2; exit 1; }
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '        set -euo pipefail\n'
+assert s.count(old) == 1
+cmt = ('        # the broad project soleur-infra-privileged is the second allowed source\n'
+       '        # doppler secrets get HCLOUD_TOKEN --plain --project soleur-infra-privileged --config prd\n')
+open(p, "w").write(s.replace(old, old + cmt, 1))
+PY
+printf 'name: fixture marketplace verify (reordered keys, spaced spelling)\non: workflow_dispatch\njobs:\n  verify:\n    runs-on: ubuntu-24.04\n    environment: infra-privileged\n    steps:\n      - name: Mint\n        uses: ./.github/actions/mint-infra-app-token\n        with:\n          installation-id: "166065653"\n          doppler-project: soleur-infra-privileged\n          doppler-token: ${{ secrets . DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n      - uses: ./.github/actions/infra-credentials\n        with:\n          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}\n' > "$MUTDIR/tree/.github/workflows/marketplace-verify.yml"
+sed -i -E "s/^          doppler-token: \\$\\{\\{ secrets\\.DOPPLER_TOKEN_INFRA_APP \\}\\}\$/          doppler-token: \\$\\{\\{ secrets . DOPPLER_TOKEN_INFRA_APP \\}\\}/" "$MUTDIR/tree/.github/workflows/release.yml"
+fixcensus "$MUTDIR" "$T/mut/g7f-h2.tsv" ""
+if grep -q 'secrets \. DOPPLER_TOKEN_INFRA_APP' "$MUTDIR/tree/.github/workflows/release.yml" \
+   && grep -q '^ok	G7f:' "$T/mut/g7f-h2.tsv" && [ -z "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h2.tsv")" ]; then
+  pass "M-g7f-h2-must-pass: G7f and every other census row stay GREEN on a compliant tree with comment-only mentions, reordered with: keys and spaced spellings"
+else
+  fail "M-g7f-h2-must-pass: a compliant non-canonical tree reds a census row" "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h2.tsv" | cut -c1-240)"
+fi
+# H3 (must-PASS): prose that merely contains the English word "run" on a line starting with `doppler` is not a
+# read. The composite gets a CLI-presence check whose message says "run the install step"; the read regex used to
+# match the bare word and red read-count and read-argv on it. The real `doppler run` rows (M-run, M-run2) still red.
+MUTDIR="$(fixcopy g7f-h3)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-h3-prose-run-in-composite "$MUTDIR/$G7F_COMP" 1 '/^        set -euo pipefail$/a\        doppler --version >/dev/null 2>\&1 || { echo "::error::doppler CLI missing; run the install step"; exit 1; }'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-h3.tsv" ""
+  if grep -q '^        doppler --version' "$MUTDIR/$G7F_COMP" && grep -q '^ok	G7f:' "$T/mut/g7f-h3.tsv" \
+     && [ -z "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h3.tsv")" ]; then
+    pass "M-g7f-h3-must-pass: G7f and every other census row stay GREEN when the composite carries prose containing the word run on a doppler line"
+  else
+    fail "M-g7f-h3-must-pass: prose containing the word run reds a census row" "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h3.tsv" | cut -c1-240)"
+  fi
+fi
+# H4 (must-PASS): a release caller that spells the narrow token in lowercase names the same secret (secret names
+# are case-insensitive at GitHub), so G7f accepts it; it used to refuse it as an unnamed token.
+MUTDIR="$(fixcopy g7f-h4)"; assert_fixture_dir "$MUTDIR"
+if mutate g7f-h4-lowercase-narrow-token "$MUTDIR/tree/.github/workflows/release.yml" 2 's/^          doppler-token: \$\{\{ secrets\.DOPPLER_TOKEN_INFRA_APP \}\}$/          doppler-token: ${{ secrets.doppler_token_infra_app }}/'; then
+  fixcensus "$MUTDIR" "$T/mut/g7f-h4.tsv" ""
+  if grep -q 'secrets\.doppler_token_infra_app' "$MUTDIR/tree/.github/workflows/release.yml" && grep -q '^ok	G7f:' "$T/mut/g7f-h4.tsv"; then
+    pass "M-g7f-h4-must-pass: G7f accepts the narrow token spelled in lowercase (secret names are case-insensitive)"
+  else
+    fail "M-g7f-h4-must-pass: G7f refuses the lowercase narrow token" "$(awk -F'\t' '$1 != "ok"' "$T/mut/g7f-h4.tsv" | cut -c1-240)"
+  fi
+fi
 # G7 row PRESENCE (a count floor cannot tell a renamed or dropped row from a duplicated one), as G6h2 does for Guard 6.
-G7_ROW_IDS="G7c G7d G7e"
-g7_present() { local id; for id in $G7_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+G7_ROW_IDS="G7c G7d G7e G7f"
+g7_present() { [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }; local id; for id in $G7_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
 if g7_present "$T/live.tsv" && g7_present "$T/control.tsv"; then
   pass "G7h2: every named G7 row id ($G7_ROW_IDS) is present in the live and the control census"
 else
@@ -2940,10 +3412,29 @@ else
   fail "M-g7h2-row-missing: the removal did not land on exactly one line"
 fi
 
+# H1 (#9321): the same presence check, with G7f removed from a copy of the control TSV.
+grep -v "$(printf '\tG7f: ')" "$T/control.tsv" > "$T/mut/g7h2-f.tsv"
+if [ "$(grep -c . "$T/mut/g7h2-f.tsv")" -eq "$(( $(grep -c . "$T/control.tsv") - 1 ))" ]; then
+  MUTANTS_RUN=$((MUTANTS_RUN + 1)); pass "M-g7h2-g7f-row-missing: exactly one G7 row (G7f) removed from a copy of the control TSV"
+  mutant_red g7h2-g7f-row-missing g7_present "$T/mut/g7h2-f.tsv"
+else
+  fail "M-g7h2-g7f-row-missing: the removal did not land on exactly one line"
+fi
+
 # G6h2 — PRESENCE of every named G6 row (a count floor cannot tell a renamed or dropped row from
 # a duplicated one). Positive on the live and control TSVs, negative on a control with one removed.
 G6_ROW_IDS="G6a G6a2 G6a3 G6b G6c G6c2 G6d G6e G6m G6n G6l G6o G6q G6s G6u"
-g6_present() { local id; for id in $G6_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+g6_present() { [ -s "$1" ] || { printf 'UNRESOLVED: census TSV %s is missing or empty\n' "$1" >&2; return 2; }; local id; for id in $G6_ROW_IDS; do awk -F'\t' -v p="$id: " 'index($2, p) == 1 { f = 1 } END { exit f ? 0 : 1 }' "$1" || return 1; done; }
+# The presence helpers get the same third direction as wf_row (a missing or empty TSV is UNRESOLVED, rc 2, never the
+# "a row is absent" verdict that mutant_red reads as RED); subshells roll the counters back, printf + exit on a miss.
+for _st in "g7_present $T/st-missing.tsv" "g7_present $T/st-empty.tsv" "g6_present $T/st-missing.tsv" "g6_present $T/st-empty.tsv"; do
+  # shellcheck disable=SC2086  # the helper name and its arguments are split on purpose
+  _mr="$( (mutant_red st-unresolved-presence $_st >/dev/null 2>&1; printf '%s,%s' "$passes" "$fails") )"
+  if [ "$_mr" != "$passes,$((fails + 1))" ]; then
+    printf 'FAIL INSTRUMENT: mutant_red read a missing/empty TSV as RED for [%s] (got "%s" from %s,%s)\n' "$_st" "$_mr" "$passes" "$fails" >&2; exit 1
+  fi
+done
+pass "H8: the G6/G7 presence helpers read a missing or empty census TSV as UNRESOLVED, never as an absent row that reads RED (4 drives)"
 if g6_present "$T/live.tsv" && g6_present "$T/control.tsv"; then
   pass "G6h2: every named G6 row id ($G6_ROW_IDS) is present in the live and the control census"
 else
@@ -2972,7 +3463,11 @@ fi
 # G6h self-run (review: simplicity P2, patterns P3-4): with equality enforced here, deleting ANY
 # mutant trips this line by construction, not only the one G6h deleted; and a mutant added without
 # raising the number names its real cause instead of reding G6h.
-MUTANT_FLOOR=94
+# 94 -> 103 (#9321 PR-2, 2026-10-03): G7f M1, M2, M2b, M3, M4, M5, M6 (7 landings), M7 (the empty tree) and the G7f presence-row removal (H1).
+# 103 -> 111 (#9321 PR-2 review, 2026-10-04): G7f M2b', M2c, M-run, M-env, M-wrongtok, M-remote, M-dotdot, M-wrapper (8 landings).
+# 111 -> 114 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3, H4 (3 landings).
+# 114 -> 115 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (spaced flag value before run; 1 landing). Measured: 115 ran.
+MUTANT_FLOOR=115
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -2995,7 +3490,11 @@ _ran=$((passes + fails))
 # fixture (1), and the cause checks added to e1/e2 (2). Measured: 205 ran.
 # 205 -> 220 (#9321): live G7c/G7d (2), G7g (1), 6 landings + 6 verdicts. Measured: 220 ran (this branch alone: 175 -> 190).
 # 220 -> 250 (#9321 review): live G7e, G7h2 presence, the must-pass row and 14 new mutant rows. Measured: 250 ran.
-FLOOR=250
+# 250 -> 269 (#9321 PR-2, 2026-10-03): live G7f (1), G7f M1/M2/M2b/M3/M4/M5/M6 (7 landings + 7 verdicts), M7 (1 verdict), the G7f must-pass row (1), the G7f presence-row removal (1 landing + 1 verdict). Measured: 269 ran.
+# 269 -> 287 (#9321 PR-2 review, 2026-10-04): 8 clause-isolated G7f mutants (8 landings + 8 verdicts) and the H7 and H8 unresolved-TSV controls (2). Measured: 287 ran.
+# 287 -> 294 (#9321 PR-2 review pass 2, 2026-10-04): G7f M-run2, H3 (prose "run") and H4 (lowercase token) (3 landings + 3 verdicts) and the H7b exact-verdict drives (1). Measured: 294 ran.
+# 294 -> 296 (#9321 PR-2 final pass, 2026-10-04): G7f M-run3 (1 landing + 1 verdict); the H7b absent-row and _h7b self-test drives add no assertion (inside the one H7b pass). Measured: 296 ran.
+FLOOR=296
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

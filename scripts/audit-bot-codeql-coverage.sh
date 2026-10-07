@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # Audit CodeQL coverage on bot PRs (R15 follow-up D2, #3545).
 #
-# Empirically verifies that the `CodeQL` required status check on the
-# `CI Required` ruleset (#14145388) is being satisfied on bot-authored PRs.
-# CodeQL is pinned to integration_id 57789 (github-advanced-security app);
-# default setup runs on every PR and concludes `neutral` when no analyzable
-# changes are in scope. Per GitHub Docs, `neutral` satisfies required checks.
+# Empirically verifies that CodeQL (integration_id 57789, github-advanced-security
+# app) reports on bot-authored PRs: default setup runs on every PR and concludes
+# `neutral` when no analyzable changes are in scope.
+#
+# STATUS (#9454): CodeQL is ADVISORY. It is NO LONGER a required status check on
+# the `CI Required` ruleset (#14145388): CodeQL cannot report on `merge_group` in
+# any setup mode (github/codeql-action#1537), so a merge queue and a blocking
+# required CodeQL check are mutually exclusive, and the check was removed in the
+# same apply that enabled the queue. This audit therefore no longer protects a
+# merge gate; it remains a coverage signal for the advisory pull_request scan
+# (a bot PR whose CodeQL never ran means the scan is blind there, and the
+# post-merge alert gate, codeql-main-alert-gate.yml, is then the only catch).
+# The historical rationale (a `neutral` conclusion satisfied the old required
+# check per GitHub Docs) is kept only to explain the exit-code semantics below.
 # This audit confirms that behavior across the live bot-workflow inventory.
 #
 # Exit codes:
@@ -83,7 +92,7 @@ enumerate_workflows() {
   for f in .github/workflows/scheduled-*.yml; do
     [[ -f "$f" ]] || continue
     [[ "$f" == *"pr-quality-guards"* ]] && continue
-    if printf '%s\n' "$composite" | grep -qFx "$f"; then continue; fi
+    if grep -qFx "$f" <<<"$composite"; then continue; fi
     if grep -qE 'check-runs' "$f" && grep -qE '(name=test|"name":[[:space:]]*"test")' "$f"; then
       inline+="$f"$'\n'
     fi

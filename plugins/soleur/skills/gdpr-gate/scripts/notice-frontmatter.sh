@@ -9,14 +9,15 @@
 #                     stale immediately, per plan TR2 + SpecFlow P1.5).
 #                     Always exits 0 — the gdpr-gate hook subshell-execs this
 #                     and depends on the always-exit-0 advisory contract.
-#   cron-run-stale    Integer days since the content-vendor-drift check (see the
-#                     warning at cmd_cron_run_stale: currently always 999)
-#                     workflow last succeeded (via `gh run list`). 999 on any
-#                     failure mode (no GH_TOKEN, no gh CLI, network blocked,
-#                     empty result, malformed timestamp, timeout). The
-#                     `gdpr-gate.sh` caller computes MIN(days-stale,
-#                     cron-run-stale) to defend against a backdated
-#                     last-verified field (issue #3535).
+#   cron-run-stale    Integer days since the content-vendor-drift check last
+#                     produced its attestation artifact — the weekly
+#                     `ci/vendor-attest-*` PR the Inngest cron writes on every
+#                     completed run (ADR-203), read via `gh pr list --search
+#                     head:ci/vendor-attest`. 999 on any failure mode (no
+#                     GH_TOKEN, no gh CLI, network blocked, empty result,
+#                     malformed timestamp, timeout). The `gdpr-gate.sh` caller
+#                     computes MIN(days-stale, cron-run-stale) to defend
+#                     against a backdated last-verified field (issue #3535).
 #   lifted-files      One `<path>:<local-blob-sha>` per line. Local blob SHAs
 #                     pin the file as it exists in this repo (post-attribution
 #                     header) and are consumed by `vendor-pin-integrity.sh`.
@@ -184,54 +185,43 @@ _emit_files() {
 }
 
 cmd_cron_run_stale() {
-  # Days since the content-vendor-drift check last succeeded (see the warning below:
-  # the job moved to Inngest and this GitHub-Actions query no longer resolves),
-  # via `gh run list ... --json updatedAt`. Always exits 0 — any failure
-  # mode (no token, no gh, network blocked, empty result, malformed
-  # timestamp, non-zero clock skew) resolves to 999 so the caller's
-  # subshell-exec contract holds. Wrap network call with `timeout 5s` to
-  # bound the runtime-banner wall clock.
+  # Days since the content-vendor-drift check last produced its attestation
+  # artifact. Always exits 0 — any failure mode (no token, no gh, network
+  # blocked, empty result, malformed timestamp, non-zero clock skew) resolves
+  # to 999 so the caller's subshell-exec contract holds. Wrap the network call
+  # with `timeout 5s` to bound the runtime-banner wall clock.
   #
-  # ⚠️ THIS PROBE CURRENTLY RETURNS 999 ON EVERY CALL, AND HAS SINCE THE JOB MOVED.
-  # `scheduled-content-vendor-drift.yml` NO LONGER EXISTS — the content-vendor-drift
-  # check now runs as an Inngest cron
-  # (`apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`), which
-  # has no GitHub Actions run for `gh run list` to find. So the query below matches
-  # nothing, falls through to 999, and the caller shows the operator-attested-mode
-  # banner unconditionally.
+  # DATA SOURCE (#7255). The check is the Inngest cron
+  # `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts`
+  # — it has no GitHub Actions run, so a `gh run list` query can never see it
+  # (that is exactly how this probe once went dead at 999 with nobody
+  # noticing). What the run DOES leave behind on every completed execution is
+  # a GitHub artifact: the self-merging attestation PR on head branch
+  # `ci/vendor-attest-*` (`ATTEST_BRANCH_PREFIX` in the function file;
+  # ADR-203's unchanged-attestation machinery creates one even when zero
+  # files drift). "Days since the newest such PR was CREATED" is the honest
+  # "days since the check last ran to completion" — PR creation is the run's
+  # output, whereas mergedAt lags days behind the run and is unrelated to
+  # cron health.
   #
-  # That is the FAIL-SAFE direction — 999 forces attestation rather than falsely
-  # asserting freshness — which is why this went unnoticed. It is NOT fixed here:
-  # repointing at another workflow filename cannot work when the job is not a workflow,
-  # and an Inngest-aware liveness source is a different change in a different subsystem.
-  # Tracked separately. The reference is corrected rather than left silently false so
-  # the next reader is not hunting a workflow that does not exist.
-  # COST NOTE (#7710 review, measured on a dev workstation, 15 runs each, one
-  # regulated path staged): with GH_TOKEN set this probe costs p50 528ms / p95
-  # 649ms against p50 227ms / p95 271ms unset — ~+300ms on every matching
-  # `git commit`, with the `timeout 5s` above as the ceiling, for an answer the
-  # comment above proves is always 999.
-  #
-  # A short-circuit to 999 was written and REVERTED: it reds two suites that
-  # encode this function's contract (`notice-frontmatter` TS "cron-run-stale
-  # prints exact days (99) for fixture timestamp", and `gdpr-gate-self-test`
-  # Case B, which asserts the operator-attested banner is ABSENT when the probe
-  # resolves), and it would bake today's environment into a tested function
-  # while permanently disabling #3535's anti-backdating cross-check rather than
-  # leaving it incidentally inert. The cost belongs to the tracked
-  # Inngest-aware-liveness change, which repoints this probe rather than
-  # hard-coding its current answer.
+  # Query notes, both measured: `--state all` is load-bearing (the search
+  # treats merged/closed PRs correctly; a `--state merged` variant of this
+  # same query returned empty while the merged attest PR exists); and the
+  # `max` aggregation over `--limit 10` removes any dependence on
+  # search-result ordering. If this job's artifact moves again — new branch
+  # prefix, different substrate — the probe goes back to 999; the
+  # `TS-cron-argv` case in the notice-frontmatter suites pins the query shape
+  # so that regression is loud.
   local token raw ts cron_epoch today_epoch days
   token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   [[ -n "$token" ]] || { echo 999; return 0; }
   command -v gh >/dev/null 2>&1 || { echo 999; return 0; }
-  # `// empty` collapses the literal `null` (empty result set) to empty
-  # string. Belt-and-suspenders with the strict-ISO regex below — a
-  # softened guard alone would silently slip `null` through.
-  raw=$(GH_TOKEN="$token" timeout 5s gh run list \
-          --workflow=scheduled-content-vendor-drift.yml \
-          --status=success --limit=1 \
-          --json updatedAt --jq '.[0].updatedAt // empty' \
+  # `// empty` collapses the empty result set to empty string.
+  # Belt-and-suspenders with the strict-ISO regex below — a softened guard
+  # alone would silently slip a null through.
+  raw=$(GH_TOKEN="$token" timeout 5s gh pr list \
+          --search "head:ci/vendor-attest" --state all --limit 10 \
+          --json createdAt --jq '[.[].createdAt] | max // empty' \
           2>/dev/null) || { echo 999; return 0; }
   ts="${raw%%[[:space:]]*}"
   [[ -n "$ts" ]] || { echo 999; return 0; }

@@ -99,6 +99,7 @@ resource "sentry_alert" "cron_monitor_failure" {
     sentry_cron_monitor.scheduled_machinery_drain.id,
     sentry_cron_monitor.scheduled_marketplace_drift.id,
     sentry_cron_monitor.scheduled_membership_health.id,
+    sentry_cron_monitor.scheduled_merge_queue_stall_dispatch.id,
     sentry_cron_monitor.scheduled_nag_4216_readiness.id,
     sentry_cron_monitor.scheduled_oauth_probe.id,
     sentry_cron_monitor.scheduled_plausible_goals.id,

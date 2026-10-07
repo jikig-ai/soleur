@@ -47,9 +47,11 @@ at the stock gate.
 
 **Re-probe rather than trusting that date.** Stock moves without notice and a revert needs a
 *second* successful create, so the reading that matters is the one taken immediately before firing.
-Read `.server_types.available` (never `.supported` — the type stays supported while availability is
-zero, which is the whole distinction); `apps/web-platform/infra/zot-registry.tf` carries the last
-recorded probe and the command shape. The durable fix is #7309.
+Read `locations[].available` from `GET /v1/server_types?name=<type>` (never the mere presence of a location
+entry — the type stays supported while availability is zero, which is the whole distinction; the old
+`/v1/datacenters` endpoint was removed, HTTP 410); `apps/web-platform/infra/zot-registry.tf` carries the last
+recorded probe (taken on the removed `/v1/datacenters`; use the probe command in the header of
+`tests/scripts/lib/stock-preflight-gate.sh` instead). The durable fix is #7309.
 
 > ### ⚠️ Do NOT route around it with `registry-region-migrate`
 >
@@ -443,7 +445,7 @@ The job prints a line of counters before it decides. Find your case here.
 | `luks_key_touched=1` | The encryption key is not in the isolated Doppler config yet, so Terraform wants to create it. | Run the operator's untargeted apply (the `OPERATOR_APPLIED_EXCLUSIONS` contract) so the key lands, then re-fire. |
 | `logs_secret_destroyed=1` | The plan would delete the logging token; the rebuilt host would fail to start without it. | Reconcile the plan. Do not proceed. |
 | `out_of_scope=1` (or more) | The plan touches something outside the registry. | **Never widen the allow-set.** This is the only thing protecting the web host and the sole copy of `/mnt/data`. Reconcile the plan. |
-| `stock-preflight ABORTED` | Hetzner has no capacity for the replacement host right now. | **Nothing was destroyed.** Wait and re-fire. If the type is unavailable in this datacenter generally (#6460), see the caveat in [What authorizes a recut](#what-authorizes-a-recut) **before** reaching for `registry-region-migrate` — that dispatch has no confirm token, no id-pin, no posture probe and no D10 gate (#6946). |
+| `stock-preflight ABORTED` | The `::error::` lines above it about Hetzner's answer carry a `class=` token: **`class=stock`** — Hetzner reports no capacity for the replacement host right now; `class=config` — the plan names a type or location Hetzner does not list; `class=unreachable` — no 2xx answer (a bare `curl exit` is usually transient, but an `api_error=` of `deprecated_api_endpoint`, `unauthorized` or `forbidden` is not); `class=malformed` — Hetzner answered 2xx in a shape the gate does not accept, which is **not** a shortage. Aborts about the plan itself (an unreadable plan, a create with no address, type or location) carry no class: reconcile the plan. The job's own closing line ("not orderable ... wait and re-fire") is the same for every class and is right only for `class=stock` — trust the `class=` line. | **Nothing was destroyed.** For `class=stock`: wait and re-fire. For `class=unreachable`: re-fire **once** if it is a bare curl exit other than 22 or `api_error=rate_limit_exceeded`, otherwise do **not** blind re-fire. For `class=config` and `class=malformed`: do **not** re-fire — read the `::error::` line and fix the plan, the token or the contract first. If the type is unavailable in this datacenter generally (#6460), see the caveat in [What authorizes a recut](#what-authorizes-a-recut) **before** reaching for `registry-region-migrate` — that dispatch has no confirm token, no id-pin, no posture probe and no D10 gate (#6946). |
 | `probe` / `did not report the pinned volume absent` | The job saw a "resume" shaped plan but the volume still exists. | This is a state problem, not a recut. Reconcile with `terraform import` — never let it `create`. |
 
 ### If the apply itself fails partway

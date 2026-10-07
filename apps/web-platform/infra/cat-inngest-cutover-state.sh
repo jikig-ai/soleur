@@ -23,9 +23,20 @@ STATE_FILE="${INNGEST_CUTOVER_STATE:-/var/lock/inngest-cutover-flip.state}"
 # which is the exact confusion that let the erasure bug hide.
 LATCH_FILE="${INNGEST_CUTOVER_LATCH:-/mnt/data/inngest-cutover/flip-done.latch}"
 
+# #7777: the latch is an append-only LEDGER of records — `flushed_at=…` (a FLUSHALL ran) or
+# `cleared_at=… run=… by=… boot_id=…` (a later, separately-evidenced authorization to flush
+# again). The NEWEST record decides, exactly as flush_already_performed reads it: a clear
+# supersedes the flush it follows without erasing it. `latch_record` surfaces that newest
+# record verbatim; `flush_latched` is the SAME fail-closed mapping the FSM applies —
+# `flushed_at`, malformed, or empty all read as latched; only a clear reads as unlatched.
 if [[ -e "$LATCH_FILE" ]]; then
-  latch_json="$(jq -nc --arg r "$(tail -n 1 "$LATCH_FILE" 2>/dev/null || printf '')" \
-    '{flush_latched:true, latch_record:$r}')"
+  newest="$(awk 'NF { line=$0 } END { print line }' "$LATCH_FILE" 2>/dev/null || true)"
+  latched=true
+  case "$newest" in
+    cleared_at=*) latched=false ;;
+  esac
+  latch_json="$(jq -nc --argjson l "$latched" --arg r "$newest" \
+    '{flush_latched:$l, latch_record:$r}')"
 else
   latch_json='{"flush_latched":false,"latch_record":""}'
 fi

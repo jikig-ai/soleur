@@ -23,8 +23,11 @@
 #
 # EXIT CODES / ARMS (each failure is one SOLEUR_WORKSPACES_LUKS_PROVISION row and a
 # soleur-boot-emit stage workspaces_luks_provision_<arm>):
-#   2             test-seam root refused (empty, /, relative, `..`, or under /proc /sys /dev)
-#   config        10  both env files present, regular, root-owned, 0600, well-shaped
+#   2             test seam refused (a real cloud-init host as root; or a root that is empty, /, relative,
+#                 `..`, or under /proc /sys /dev)
+#   config        10  both env files present, regular, root-owned, 0600, well-shaped; also `flock` absent,
+#                     the lock file unopenable, or the single-instance lock not won within 600 s
+#                     (reason `lock_timeout`: another provisioner holds it)
 #   device        11  the by-id device answers blockdev within 300 s (attachment lags server boot)
 #   discriminate  12  blkid rc 0|2 only; PTTYPE + wipefs + a zero-content probe corroborate raw
 #   key           13  WORKSPACES_LUKS_KEY via the R9-pinned `doppler secrets get ... --plain`,
@@ -39,7 +42,11 @@
 #   mount         17  /mnt/data is not mounted from the mapper after wire
 #   78            refused under xtrace (the passphrase is handled here)
 #   (escrow)          NON-fatal: header backup -> off-host bucket; failure records escrow=missing
-#                     and emits a warning-level Sentry stage. NOT retried: this script runs ONCE per instance
+#                     (reasons: creds, shape [bucket/endpoint], creds_shape [key id/secret], uuid, tmp, backup,
+#                     put, readback; each is decoded in the web-host-replace/web-host-birth runbooks and the
+#                     provision suite fails on an undecoded one) and emits a warning-level
+#                     Sentry stage that PAGES by stage name (#9377, issue-alerts.tf web_luks_boot_fatal).
+#                     NOT retried: this script runs ONCE per instance
 #                     (cloud-init runcmd) and is idempotent, so escrow=missing persists until the
 #                     host is replaced or the provisioner is re-run by hand. The FENCE is the soak
 #                     marker (a header with no off-host copy never earns it), not the boot path.
@@ -54,7 +61,21 @@
 # TEST SEAM. WORKSPACES_PROVISION_TEST_SEAM=1 + WORKSPACES_PROVISION_ROOT=<abs dir> prefix every
 # FILE path so the suite can run against a scratch tree; every external command is called by BARE
 # name so a scratch PATH can intercept it. Nothing in production sets the seam, and outside it the
-# prefix is the empty string.
+# prefix is the empty string. Under the seam ONLY, WORKSPACES_PROVISION_LOCK_WAIT shortens the lock
+# wait (a knob visible in production would be new attack surface). The seam is REFUSED (exit 2) on a
+# real host: euid 0 together with the cloud-init instance marker. A non-root runner that happens to
+# carry cloud-init state is not refused (the production provisioner always runs as root). The marker
+# path is a literal constant, never an environment value. The refusal exits before `fatal`/`row`
+# exist, so it prints and logs best-effort; the page for such a host is indirect (cloud-init's own
+# workspaces_luks_not_mounted stage).
+#
+# SERIALIZATION AND ATOMIC WRITES. One provisioner at a time: an exclusive flock on fd 9 is taken before the
+# first side effect (the web-1 SSH installer and the reopen script write some of the same files without it;
+# that is accepted). fd 9 is inherited by every child; none of the commands this script runs daemonizes while
+# holding it (the same child-leak hazard ci-deploy.sh documents at its fd-200 flock), and
+# workspaces-luks-provision.test.sh pins what happens if one did (the lock stays held). fstab,
+# crypttab, the docker drop-in and the format intent file are only ever replaced through _install_file: a
+# same-directory temp file, fsynced, renamed, directory fsynced.
 set -uo pipefail
 case "$-" in
   *x*)
@@ -62,13 +83,27 @@ case "$-" in
     exit 78
     ;;
 esac
+# lastpipe: the final stage of a pipeline runs in THIS shell, so `... | _install_file` can hand its reason
+# (_IF_WHY) back to the caller's fatal message. Scripts have no job control, which lastpipe requires.
+shopt -s lastpipe
 umask 077
 ulimit -c 0 2>/dev/null || true # the LUKS key sits in a shell variable: a crash must not write the process image to the root disk
 : "${HOME:=/root}"
 export HOME
 
+# >>> seam
+# A real cloud-init host carries /var/lib/cloud/instance (a symlink on every cloud-init image), root-owned and
+# never under the test root. `-e` misses a dangling symlink, hence the `-L` half.
+_seam_allowed() { # <cloud-init-marker-path>: non-zero when the marker exists
+  [ ! -e "$1" ] && [ ! -L "$1" ]
+}
 ROOT=""
 if [ "${WORKSPACES_PROVISION_TEST_SEAM:-0}" = "1" ]; then
+  if [ "$(id -u)" = 0 ] && ! _seam_allowed /var/lib/cloud/instance; then
+    printf '[FATAL] refusing the test seam on a real cloud-init host (euid 0 and the cloud-init instance marker is present)\n' >&2
+    logger -t workspaces-luks-reopen -- "SOLEUR_WORKSPACES_LUKS_PROVISION arm=seam rc=2 reason=test seam refused on a cloud-init host" 2>/dev/null || true
+    exit 2
+  fi
   ROOT="${WORKSPACES_PROVISION_ROOT:-}"
   case "$ROOT" in
     ""|/|//|/.|*/../*|*/..) printf '[FATAL] test-seam root %s is empty, the filesystem root or contains ..; refusing\n' "$ROOT" >&2; exit 2 ;;
@@ -78,6 +113,20 @@ if [ "${WORKSPACES_PROVISION_TEST_SEAM:-0}" = "1" ]; then
   esac
 fi
 readonly ROOT
+# <<< seam
+
+# >>> pin
+# Production (ROOT empty) runs only system-path commands: a caller-supplied PATH cannot substitute
+# `cryptsetup`, `mkfs.ext4`, `doppler`... Under the seam the scratch PATH stays so the suite's stubs intercept.
+# SOLEUR_STAGE_DETAIL_DIR is an env knob that steers a root mkdir and write; production has no use for it, so it
+# is clamped to the default soleur-boot-emit reads (children inherit the clamped value).
+if [ -z "$ROOT" ]; then
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  export PATH
+  SOLEUR_STAGE_DETAIL_DIR=/run/soleur-stage-detail.d
+  export SOLEUR_STAGE_DETAIL_DIR
+fi
+# <<< pin
 
 ENVFILE="${ROOT}/etc/default/workspaces-luks-boot"
 TOKFILE="${ROOT}/etc/default/luks-monitor"
@@ -115,11 +164,13 @@ ESCROW=none
 KEY=""
 TOKEN=""
 HDR_DIR=""
+HAVE_LOCK=0
 
 ERRF="$RUN_DIR/workspaces-luks-cmd.err"
 cleanup() {
   unset KEY TOKEN
-  rm -f "$ERRF" 2>/dev/null || true
+  # Only the lock holder owns the scratch file: a provisioner that lost the lock must not delete the winner's.
+  [ "$HAVE_LOCK" != 1 ] || rm -f "$ERRF" 2>/dev/null || true
   [ -z "$HDR_DIR" ] || { shred -u "$HDR_DIR"/* 2>/dev/null || rm -f "$HDR_DIR"/* 2>/dev/null || true; rmdir "$HDR_DIR" 2>/dev/null || true; }
 }
 trap cleanup EXIT
@@ -155,6 +206,38 @@ warn() { # <arm> <reason>
   soleur-boot-emit "workspaces_luks_provision_$1" warning 2>/dev/null || true
 }
 
+# ── atomic writes ─────────────────────────────────────────────────────────────────────────────
+# The ONLY way fstab, crypttab, the docker drop-in and the format intent file are written. The content arrives
+# on stdin and is read to EOF BEFORE the destination is touched, so callers compute (and validate) their content
+# into a variable first. The helper cannot tell a truncated stream from a complete one, so a `producer | _install_file`
+# whose producer can die mid-stream WOULD rename the partial output over the real file: every caller below pipes `printf`
+# of an already-built, already-validated variable, and a new caller must do the same.
+# Temp file in the SAME directory (rename is atomic only within one filesystem), fsynced (coreutils >= 8.24:
+# `sync FILE` is an fsync; the host and the runner are Ubuntu), renamed, and the directory fsynced. Every step
+# is checked because this script has no `set -e`. A symlinked destination is refused (a bare `mv -f` would
+# silently replace the link), a pre-existing temp path is removed first (a planted temp symlink would otherwise
+# be followed), and an existing file's mode and ownership are kept. A stale *.provision.tmp from a crash is
+# overwritten, never read. _IF_WHY carries the reason for the caller's fatal text (non-secret by construction).
+_IF_WHY=""
+_install_file() { # <dest> <mode-if-created>
+  local dest="$1" mode="$2" tmp dir body=""
+  tmp="$dest.provision.tmp"; dir="${dest%/*}"; _IF_WHY=""
+  IFS= read -r -d '' body || true
+  [ -n "$body" ] || { _IF_WHY="empty content"; return 1; }
+  [ ! -L "$dest" ] || { _IF_WHY="destination is a symlink"; return 1; }
+  [ ! -e "$dest" ] || [ -f "$dest" ] || { _IF_WHY="destination is not a regular file"; return 1; }
+  rm -f "$tmp" || { _IF_WHY="cannot clear the temp path"; return 1; }
+  printf '%s' "$body" > "$tmp" || { rm -f "$tmp"; _IF_WHY="cannot write the temp file"; return 1; }
+  if [ -e "$dest" ]; then
+    { chmod --reference="$dest" "$tmp" && chown --reference="$dest" "$tmp"; } || { rm -f "$tmp"; _IF_WHY="cannot copy the existing mode and owner"; return 1; }
+  else
+    chmod "$mode" "$tmp" || { rm -f "$tmp"; _IF_WHY="cannot set the mode"; return 1; }
+  fi
+  sync "$tmp" || { rm -f "$tmp"; _IF_WHY="fsync of the temp file failed"; return 1; }
+  mv -f "$tmp" "$dest" || { rm -f "$tmp"; _IF_WHY="rename failed"; return 1; }
+  sync "$dir" || { _IF_WHY="fsync of the directory failed"; return 1; }
+}
+
 # ── config ────────────────────────────────────────────────────────────────────────────────────
 _secure_file() { # <path>: regular, not a symlink, owned by the running uid, mode 600
   [ ! -L "$1" ] && [ -f "$1" ] || return 1
@@ -170,11 +253,31 @@ _one() { # <file> <KEY>: the value of the single KEY= line, or fail (0 or 2+ lin
   printf '%s' "$v"
 }
 
+# ── serialize ─────────────────────────────────────────────────────────────────────────────────
+# Before the first side effect. File-descriptor form (not a re-exec with an env guard): no env flag to forge and
+# no second exec. A missing `flock` is arm config, not rc 127 (the required-commands loop runs later). A failed
+# `exec` redirection does not stop bash outside POSIX mode, so the `||` is load-bearing. 600 s is deliberate
+# (a second boot-time invocation should queue, not fail) and sits inside cloud-init's once-per-instance runcmd,
+# equal to the 300 s device wait plus the ~300 s key retry (a holder that burns both can outlast a queued second run). Reuses arm config (10) so the stage alert contract
+# does not move; the distinct reason text separates contention from misconfiguration.
+LOCK_WAIT=600
+[ -z "$ROOT" ] || LOCK_WAIT="${WORKSPACES_PROVISION_LOCK_WAIT:-600}"
+[[ "$LOCK_WAIT" =~ ^[0-9]{1,4}$ ]] || LOCK_WAIT=600
+command -v flock >/dev/null 2>&1 || fatal config 10 "flock is absent"
+mkdir -p "${ROOT}/run" || fatal config 10 "cannot create the lock directory"
+exec 9>"${ROOT}/run/workspaces-luks-provision.lock" || fatal config 10 "cannot open the lock file"
+flock -w "$LOCK_WAIT" 9 || fatal config 10 "lock_timeout: another provisioner holds the lock"
+HAVE_LOCK=1
+
 _secure_file "$ENVFILE" || fatal config 10 "boot env file absent, not a regular file, or not root 0600"
 DEV=$(_one "$ENVFILE" WORKSPACES_LUKS_DEV) || fatal config 10 "WORKSPACES_LUKS_DEV missing or ambiguous"
 CFG=$(_one "$ENVFILE" WORKSPACES_DOPPLER_CONFIG) || fatal config 10 "WORKSPACES_DOPPLER_CONFIG missing or ambiguous"
 [[ "$DEV" =~ ^/dev/disk/by-id/scsi-0HC_Volume_[0-9]+$ ]] || fatal config 10 "device pin is not a by-id Hetzner volume path"
-[ "$CFG" = prd_workspaces_luks ] || fatal config 10 "doppler config is not the dedicated prd_workspaces_luks"
+# Closed set (#9377): web-1 keeps the original pair config; the web-host class reads its own split config. The token's config scope, not this name check, is what stops a mis-paired image reading web-1's pair.
+case "$CFG" in
+  prd_workspaces_luks|prd_workspaces_luks_web) ;;
+  *) fatal config 10 "doppler config is not a dedicated workspaces-luks config" ;;
+esac
 _secure_file "$TOKFILE" || fatal config 10 "luks-monitor env file absent, not a regular file, or not root 0600"
 TOKEN=$(_one "$TOKFILE" DOPPLER_TOKEN) || fatal config 10 "DOPPLER_TOKEN missing or ambiguous in the luks-monitor env file"
 CRYPTTAB_LINE="$MAPPER_NAME $DEV none luks,noauto"
@@ -301,9 +404,7 @@ if [ "$MODE" = format ]; then
   # a stale or foreign intent file cannot authorise a mkfs on another container.
   _nu=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
   [[ "$_nu" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || fatal format 14 "cannot generate the volume UUID"
-  printf '%s %s %s\n' "$DEV" "$_nu" "$(date +%s)" > "$INTENT.tmp" || fatal format 14 "cannot write the format intent file"
-  mv "$INTENT.tmp" "$INTENT" || fatal format 14 "cannot install the format intent file"
-  sync
+  printf '%s %s %s\n' "$DEV" "$_nu" "$(date +%s)" | _install_file "$INTENT" 600 || fatal format 14 "cannot install the format intent file${_IF_WHY:+: $_IF_WHY}"
   printf '%s' "$KEY" | cryptsetup luksFormat --batch-mode --type luks2 --label "$LABEL_FORMATTING" --uuid "$_nu" --key-file - "$DEV" >/dev/null 2>"$ERRF" \
     || fatal format 14 "luksFormat failed$(_cause)"
   [ "$(cryptsetup luksUUID "$DEV" 2>/dev/null)" = "$_nu" ] || fatal format 14 "the formatted volume does not carry the UUID the intent file recorded"
@@ -368,29 +469,39 @@ unset KEY
 # ── wire ──────────────────────────────────────────────────────────────────────────────────────
 # crypttab: append the canonical line if the mapper has none; a foreign `workspaces` line is
 # refused, never coexisted with (web-1's installer refuses it with exit 32 for the same reason).
+# Read-modify-write through _install_file: the file is read whole, the new line is added on its OWN line even when
+# the old last line has no trailing newline, and a file that already holds the canonical line is not rewritten.
 [ ! -L "$CRYPTTAB" ] || fatal wire 16 "crypttab is a symlink"
-[ -e "$CRYPTTAB" ] || : > "$CRYPTTAB"
-if grep -q '^[[:space:]]*workspaces[[:space:]]' "$CRYPTTAB"; then
-  [ "$(grep -c '^[[:space:]]*workspaces[[:space:]]' "$CRYPTTAB")" = 1 ] && grep -qxF "$CRYPTTAB_LINE" "$CRYPTTAB" \
+_ct=""
+# `&&`, not `;`: the sentinel `x` keeps trailing newlines through $(...), and `cat ...; printf x` would report printf's status, so a
+# failed cat (I/O error) would read as an empty crypttab and the rewrite below would drop every other entry.
+if [ -e "$CRYPTTAB" ]; then _ct=$(cat "$CRYPTTAB" && printf x) || fatal wire 16 "cannot read crypttab"; _ct="${_ct%x}"; fi
+if grep -q '^[[:space:]]*workspaces[[:space:]]' <<< "$_ct"; then
+  [ "$(grep -c '^[[:space:]]*workspaces[[:space:]]' <<< "$_ct")" = 1 ] && grep -qxF "$CRYPTTAB_LINE" <<< "$_ct" \
     || fatal wire 16 "a foreign workspaces crypttab line exists; refusing to coexist"
 else
-  printf '%s\n' "$CRYPTTAB_LINE" >> "$CRYPTTAB" || fatal wire 16 "cannot append the crypttab line"
+  [ -z "$_ct" ] || [ "${_ct: -1}" = $'\n' ] || _ct+=$'\n'
+  _ctnew="$_ct$CRYPTTAB_LINE"$'\n'
+  # Same no-fewer-lines guard fstab has: the rewrite may only ADD the canonical line, never lose an existing entry.
+  [ "$(grep -c . <<< "$_ctnew")" -gt "$(grep -c . <<< "$_ct")" ] || fatal wire 16 "the rewritten crypttab would not add exactly the canonical line"
+  printf '%s' "$_ctnew" | _install_file "$CRYPTTAB" 600 || fatal wire 16 "cannot install the crypttab line${_IF_WHY:+: $_IF_WHY}"
 fi
 # fstab: exactly ONE non-comment /mnt/data entry and it is the canonical mapper line. Anything else
-# naming /mnt/data is commented in place (kept as evidence), never deleted.
+# naming /mnt/data is commented in place (kept as evidence), never deleted. The new content is built and
+# validated in a variable (exactly one canonical line, no fewer lines than before) before it is installed.
 [ ! -L "$FSTAB" ] || fatal wire 16 "fstab is a symlink"
-[ -e "$FSTAB" ] || : > "$FSTAB"
-_ft="$FSTAB.provision.tmp"
-awk -v canon="$FSTAB_LINE" '
+_fsrc="$FSTAB"; [ -e "$FSTAB" ] || _fsrc=/dev/null
+_fnew=$(awk -v canon="$FSTAB_LINE" '
   { m = $2; sub(/\/+$/, "", m)
     if ($1 !~ /^#/ && m == "/mnt/data") {
       if ($0 == canon && !seen) { print; seen = 1 } else print "# provision-6931-superseded " $0
     } else print }
-  END { if (!seen) print canon }' "$FSTAB" > "$_ft" || fatal wire 16 "fstab rewrite failed"
-[ "$(awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END { print n+0 }' "$_ft")" = 1 ] \
-  && grep -qxF "$FSTAB_LINE" "$_ft" || { rm -f "$_ft"; fatal wire 16 "the rewritten fstab does not hold exactly one canonical /mnt/data line"; }
-chmod 644 "$_ft" || fatal wire 16 "cannot set the rewritten fstab mode"  # umask 077 would leave it 0600
-mv "$_ft" "$FSTAB" || fatal wire 16 "cannot install the rewritten fstab"
+  END { if (!seen) print canon }' "$_fsrc") || fatal wire 16 "fstab rewrite failed"
+[ "$(awk '{ m=$2; sub(/\/+$/,"",m); if ($1 !~ /^#/ && m == "/mnt/data") n++ } END { print n+0 }' <<< "$_fnew")" = 1 ] \
+  && grep -qxF "$FSTAB_LINE" <<< "$_fnew" \
+  && [ "$(grep -c . <<< "$_fnew")" -ge "$(grep -c . "$_fsrc")" ] \
+  || fatal wire 16 "the rewritten fstab does not hold exactly one canonical /mnt/data line"
+printf '%s\n' "$_fnew" | _install_file "$FSTAB" 644 || fatal wire 16 "cannot install the rewritten fstab${_IF_WHY:+: $_IF_WHY}"
 # The covered root-disk inode is made immutable BEFORE anything is mounted on it, so that if the
 # mapper is ever absent a container's implicit bind-mount mkdir is refused (an outage) instead of
 # silently writing sole user data to the plaintext root disk (the #5274 data-stranding mode).
@@ -403,8 +514,7 @@ if ! mountpoint -q "$MNT" 2>/dev/null; then
   esac
 fi
 ( umask 022; mkdir -p "$DROPIN_DIR" ) || fatal wire 16 "cannot create the docker drop-in directory"
-printf '%s' "$DROPIN_BODY" > "$DROPIN" || fatal wire 16 "cannot write the docker drop-in"
-chmod 644 "$DROPIN"
+printf '%s' "$DROPIN_BODY" | _install_file "$DROPIN" 644 || fatal wire 16 "cannot install the docker drop-in${_IF_WHY:+: $_IF_WHY}"
 systemctl daemon-reload 2>/dev/null || true
 if ! mountpoint -q "$MNT" 2>/dev/null; then
   mount "$MNT" >/dev/null 2>&1 || fatal mount 17 "mount $MNT failed"
@@ -435,7 +545,14 @@ _escrow() {
   bucket=$(_dget WORKSPACES_HEADER_BUCKET); kid=$(_dget WORKSPACES_HEADER_R2_ACCESS_KEY_ID)
   sec=$(_dget WORKSPACES_HEADER_R2_SECRET_ACCESS_KEY); ep=$(_dget WORKSPACES_HEADER_R2_ENDPOINT)
   if [ -z "$bucket" ] || [ -z "$kid" ] || [ -z "$sec" ] || [ -z "$ep" ]; then ESCROW_WHY=creds; return 1; fi
-  [[ "$bucket" =~ ^[a-z0-9][a-z0-9.-]*$ ]] && [[ "$ep" =~ ^https://[A-Za-z0-9.-]+$ ]] || { ESCROW_WHY=shape; return 1; }
+  [[ "$bucket" =~ ^[a-z0-9][a-z0-9.-]*$ ]] && [[ "$ep" =~ ^https://[0-9a-f]{32}\.r2\.cloudflarestorage\.com$ ]] || { ESCROW_WHY=shape; return 1; }
+  # The R2 pair reaches curl as a config line `user = "<kid>:<sec>"` on stdin (_curl below), so a quote, backslash,
+  # whitespace or control byte in either value would add a directive to that stream. Shape-checked HERE, before _curl
+  # exists, under LC_ALL=C (a locale can widen the bracket ranges to non-ASCII letters). Deliberately wider than R2's
+  # current 32/64 hex so a vendor format change does not silently turn escrow off; no value is echoed on refusal.
+  # Its own reason (creds_shape), distinct from the bucket/endpoint refusal above (shape): the paged event carries only the
+  # reason, so one value for both could not say whether the bucket/endpoint or the minted pair was refused.
+  ( LC_ALL=C; [[ "$kid" =~ ^[A-Za-z0-9]{16,128}$ ]] && [[ "$sec" =~ ^[A-Za-z0-9/+=_-]{16,256}$ ]] ) || { ESCROW_WHY=creds_shape; return 1; }
   uuid=$(cryptsetup luksUUID "$DEV" 2>/dev/null) || uuid=""
   [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || { ESCROW_WHY=uuid; return 1; }
   HDR_DIR=$(mktemp -d "${ROOT}/run/soleur-lukshdr.XXXXXXXX") || { ESCROW_WHY=tmp; return 1; }

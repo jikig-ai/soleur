@@ -27,7 +27,7 @@ import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 
 interface ReducerState {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   workflow: WorkflowLifecycleState;
   spawnIndex: SpawnIndex;
 }
@@ -37,7 +37,7 @@ function emptyState(): ReducerState {
     messages: [],
     activeStreams: new Map(),
     workflow: { state: "idle" },
-    spawnIndex: new Map(),
+    spawnIndex: new Set(),
   };
 }
 

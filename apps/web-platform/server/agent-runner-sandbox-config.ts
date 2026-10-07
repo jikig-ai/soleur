@@ -1,6 +1,8 @@
-import { mkdirSync, readdirSync, realpathSync } from "fs";
+import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { c4RenderStagingRoot } from "./c4-staging-root";
-import { basename, join } from "path";
+import { AGENT_AUTH_ENV_VARS } from "./agent-auth-env-vars";
+import { basename, delimiter, join } from "path";
+import * as Sentry from "@sentry/nextjs";
 
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
@@ -24,12 +26,15 @@ const log = createChildLogger("agent-sandbox");
 //     `feature: "agent-sandbox"` (the cc path mirrors the same precedent
 //     — see `cc-dispatcher.ts realSdkQueryFactory` body).
 //   - `enableWeakerNestedSandbox: true` — Docker containers cannot mount
-//     /proc inside user namespaces; this skips `--proc /proc` in bwrap.
-//     `/proc` is already in `denyRead`, so the weaker mode is acceptable
-//     (#1557).
+//     /proc inside user namespaces; this skips `--proc /proc` in bwrap
+//     (#1557). `denyRead` is NOT what keeps the CLI parent's environment out
+//     of reach. Measured (ADR-272): no process environment readable from
+//     inside the sandbox carries the key. Which bubblewrap flag does that work
+//     is not established, so a change to the sandbox flags needs re-measuring
+//     (`sandbox-credential-deny-runtime.test.ts` repeats it).
 //   - `network.allowedDomains` + `allowManagedDomainsOnly: true` —
 //     no outbound network by default; `opts.allowGithubEgress` widens
-//     the allowlist to exactly `GITHUB_EGRESS_DOMAINS` (entitled-token
+//     the allowlist to exactly `ENTITLED_EGRESS_DOMAINS` (entitled-token
 //     sessions only — derived from `ghToken` presence at the consumer).
 //   - `filesystem.allowWrite: [workspacePath]` + PER-SIBLING `denyRead` —
 //     the agent gets full READ+WRITE of its OWN `/workspaces/<uuid>` while
@@ -49,6 +54,16 @@ const log = createChildLogger("agent-sandbox");
 //     and its `allowWrite --bind` survives), computed at dispatch by
 //     `enumerateSiblingDenyPaths`. ADR-075; durable TOCTOU closer is
 //     the vendored SDK bwrap-arg reorder (tracked follow-up).
+//
+// #8752 — the two hardening layers this config cannot express through the SDK
+// (the vendored builder owns the whole bwrap argv, transported on `--args
+// <fd>`) live OUTSIDE this object, at the spawn layer: the PATH shim
+// `infra/bwrap-shim/bwrap` (installed at /usr/local/bin/bwrap) closes
+// inherited fds not referenced by the argv and injects the shared
+// nested-userns filter via --add-seccomp-fd before exec'ing the real
+// /usr/bin/bwrap. `probeAgentSandboxHardening` below is the boot-time
+// measurement of that pair; the deploy-time measurement is the canary's
+// `runHardeningProbes`.
 
 const WORKSPACES_ROOT_DEFAULT = "/workspaces";
 
@@ -144,19 +159,147 @@ export type AgentSandboxConfig = {
     allowWrite: string[];
     denyRead: string[];
   };
+  // W1 (#9601, ADR-272): unset the owner's Anthropic credential for every
+  // sandboxed Bash command. Typed (not left to the index signature) so a test
+  // reads the entries as data, not `unknown`.
+  credentials: {
+    envVars: { name: (typeof AGENT_AUTH_ENV_VARS)[number]; mode: "deny" }[];
+  };
 } & { [x: string]: unknown };
 
 /**
- * Exact-host egress allowlist for the Concierge's in-sandbox GitHub
- * surface. No wildcards — `gh` (REST + GraphQL) needs `api.github.com`;
- * raw `git push/fetch` via the GIT_ASKPASS path needs `github.com`.
- * Widening beyond these two hosts (gist/upload/CDN) requires its own
- * security review — each added host is exfiltration surface.
+ * GitHub-owned Actions log/artifact download hosts: `api.github.com`
+ * 302s `/actions/{runs,jobs}/.../logs` and artifact zips to signed
+ * per-account Azure Blob URLs. Enumerated, NOT a wildcard — a
+ * `*.blob.core.windows.net` entry would admit EVERY Azure storage
+ * account, and exact hosts keep both layers (this domain filter AND
+ * the container nftables allowlist) GitHub-scoped even off-host.
+ * Fleet verified 2026-10-05: sa0..sa99 resolve EXCEPT sa22 (NXDOMAIN —
+ * listing it would page via the resolver failcount). Keep in sync with
+ * the productionresultssa block in infra/cron-egress-allowlist.txt and
+ * the fleet guards in cron-egress-firewall.test.sh.
  */
-const GITHUB_EGRESS_DOMAINS = Object.freeze([
+const GITHUB_ACTIONS_LOG_ACCOUNTS = Object.freeze([
+  "productionresultssa0.blob.core.windows.net",
+  "productionresultssa1.blob.core.windows.net",
+  "productionresultssa2.blob.core.windows.net",
+  "productionresultssa3.blob.core.windows.net",
+  "productionresultssa4.blob.core.windows.net",
+  "productionresultssa5.blob.core.windows.net",
+  "productionresultssa6.blob.core.windows.net",
+  "productionresultssa7.blob.core.windows.net",
+  "productionresultssa8.blob.core.windows.net",
+  "productionresultssa9.blob.core.windows.net",
+  "productionresultssa10.blob.core.windows.net",
+  "productionresultssa11.blob.core.windows.net",
+  "productionresultssa12.blob.core.windows.net",
+  "productionresultssa13.blob.core.windows.net",
+  "productionresultssa14.blob.core.windows.net",
+  "productionresultssa15.blob.core.windows.net",
+  "productionresultssa16.blob.core.windows.net",
+  "productionresultssa17.blob.core.windows.net",
+  "productionresultssa18.blob.core.windows.net",
+  "productionresultssa19.blob.core.windows.net",
+  "productionresultssa20.blob.core.windows.net",
+  "productionresultssa21.blob.core.windows.net",
+  "productionresultssa23.blob.core.windows.net",
+  "productionresultssa24.blob.core.windows.net",
+  "productionresultssa25.blob.core.windows.net",
+  "productionresultssa26.blob.core.windows.net",
+  "productionresultssa27.blob.core.windows.net",
+  "productionresultssa28.blob.core.windows.net",
+  "productionresultssa29.blob.core.windows.net",
+  "productionresultssa30.blob.core.windows.net",
+  "productionresultssa31.blob.core.windows.net",
+  "productionresultssa32.blob.core.windows.net",
+  "productionresultssa33.blob.core.windows.net",
+  "productionresultssa34.blob.core.windows.net",
+  "productionresultssa35.blob.core.windows.net",
+  "productionresultssa36.blob.core.windows.net",
+  "productionresultssa37.blob.core.windows.net",
+  "productionresultssa38.blob.core.windows.net",
+  "productionresultssa39.blob.core.windows.net",
+  "productionresultssa40.blob.core.windows.net",
+  "productionresultssa41.blob.core.windows.net",
+  "productionresultssa42.blob.core.windows.net",
+  "productionresultssa43.blob.core.windows.net",
+  "productionresultssa44.blob.core.windows.net",
+  "productionresultssa45.blob.core.windows.net",
+  "productionresultssa46.blob.core.windows.net",
+  "productionresultssa47.blob.core.windows.net",
+  "productionresultssa48.blob.core.windows.net",
+  "productionresultssa49.blob.core.windows.net",
+  "productionresultssa50.blob.core.windows.net",
+  "productionresultssa51.blob.core.windows.net",
+  "productionresultssa52.blob.core.windows.net",
+  "productionresultssa53.blob.core.windows.net",
+  "productionresultssa54.blob.core.windows.net",
+  "productionresultssa55.blob.core.windows.net",
+  "productionresultssa56.blob.core.windows.net",
+  "productionresultssa57.blob.core.windows.net",
+  "productionresultssa58.blob.core.windows.net",
+  "productionresultssa59.blob.core.windows.net",
+  "productionresultssa60.blob.core.windows.net",
+  "productionresultssa61.blob.core.windows.net",
+  "productionresultssa62.blob.core.windows.net",
+  "productionresultssa63.blob.core.windows.net",
+  "productionresultssa64.blob.core.windows.net",
+  "productionresultssa65.blob.core.windows.net",
+  "productionresultssa66.blob.core.windows.net",
+  "productionresultssa67.blob.core.windows.net",
+  "productionresultssa68.blob.core.windows.net",
+  "productionresultssa69.blob.core.windows.net",
+  "productionresultssa70.blob.core.windows.net",
+  "productionresultssa71.blob.core.windows.net",
+  "productionresultssa72.blob.core.windows.net",
+  "productionresultssa73.blob.core.windows.net",
+  "productionresultssa74.blob.core.windows.net",
+  "productionresultssa75.blob.core.windows.net",
+  "productionresultssa76.blob.core.windows.net",
+  "productionresultssa77.blob.core.windows.net",
+  "productionresultssa78.blob.core.windows.net",
+  "productionresultssa79.blob.core.windows.net",
+  "productionresultssa80.blob.core.windows.net",
+  "productionresultssa81.blob.core.windows.net",
+  "productionresultssa82.blob.core.windows.net",
+  "productionresultssa83.blob.core.windows.net",
+  "productionresultssa84.blob.core.windows.net",
+  "productionresultssa85.blob.core.windows.net",
+  "productionresultssa86.blob.core.windows.net",
+  "productionresultssa87.blob.core.windows.net",
+  "productionresultssa88.blob.core.windows.net",
+  "productionresultssa89.blob.core.windows.net",
+  "productionresultssa90.blob.core.windows.net",
+  "productionresultssa91.blob.core.windows.net",
+  "productionresultssa92.blob.core.windows.net",
+  "productionresultssa93.blob.core.windows.net",
+  "productionresultssa94.blob.core.windows.net",
+  "productionresultssa95.blob.core.windows.net",
+  "productionresultssa96.blob.core.windows.net",
+  "productionresultssa97.blob.core.windows.net",
+  "productionresultssa98.blob.core.windows.net",
+  "productionresultssa99.blob.core.windows.net",
+] as const);
+
+/**
+ * Egress allowlist for an entitled (ghToken-minting) session. Exact
+ * hosts only, no wildcards — each added host is exfiltration surface:
+ *  - `github.com` — raw `git push/fetch` via the GIT_ASKPASS path.
+ *  - `api.github.com` — `gh` (REST + GraphQL).
+ *  - `registry.npmjs.org` — sessions regenerate package-lock.json via
+ *    `npx npm@11` (the lockfile-sync gate pins npm@11); npm serves
+ *    metadata and tarballs from this one host.
+ *  - `...GITHUB_ACTIONS_LOG_ACCOUNTS` — the signed-URL hosts above.
+ * Widening further (gist/upload/CDN, GitHub user-content domains)
+ * requires its own security review.
+ */
+const ENTITLED_EGRESS_DOMAINS = Object.freeze([
   "github.com",
   "api.github.com",
+  "registry.npmjs.org",
+  ...GITHUB_ACTIONS_LOG_ACCOUNTS,
 ] as const);
+
 
 /**
  * Build the canonical sandbox options block. Drift here propagates to BOTH
@@ -177,7 +320,8 @@ export function buildAgentSandboxConfig(
   const { denyRead: siblingDeny, degraded } = enumerateSiblingDenyPaths(workspacePath);
   // ADR-113 — support-persona containment: additional absolute paths to obscure
   // (`--tmpfs`) from the read-only support session. The support agent runs under
-  // `--ro-bind / /` (whole FS readable) with Bash (kb-search greps), so the
+  // `--ro-bind / /` (whole FS readable) with Bash retained as the
+  // deny+escalate tripwire (kb-search itself is Read/Grep/Glob-only, #9559), so the
   // internal `knowledge-base/` (confidential operator post-mortems/roadmap/ADRs)
   // is denied here at the tool/root level — NOT by prompt. Deduped with the
   // sibling deny set. NOTE: this is defense-in-depth; the LIVE `support-live` flag
@@ -236,11 +380,13 @@ export function buildAgentSandboxConfig(
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
     // Docker containers cannot mount proc inside user namespaces (kernel
-    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap,
-    // which is acceptable because /proc is already in denyRead (#1557).
+    // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap
+    // (#1557). `denyRead` is not what protects the CLI parent's environment;
+    // the outcome (no readable environ carries the key) is measured in ADR-272
+    // and pinned by sandbox-credential-deny-runtime.test.ts, the mechanism is not.
     enableWeakerNestedSandbox: true,
     network: {
-      allowedDomains: opts?.allowGithubEgress ? [...GITHUB_EGRESS_DOMAINS] : [],
+      allowedDomains: opts?.allowGithubEgress ? [...ENTITLED_EGRESS_DOMAINS] : [],
       allowManagedDomainsOnly: true,
     },
     filesystem: {
@@ -260,5 +406,127 @@ export function buildAgentSandboxConfig(
       // workspace's rw bind is never `--tmpfs`-shadowed. See module header.
       denyRead,
     },
+    // W1 (#9601, ADR-272): a prompt-injected session cannot read the owner's
+    // Anthropic key out of its shell. `deny` unsets the variable for
+    // every sandboxed command; the CLI process keeps it for its own API calls.
+    // Deliberately NOT denied: connected-service tokens (the agent is told they
+    // are available — `## Connected Services`), GH_TOKEN and
+    // GIT_INSTALLATION_TOKEN (`gh`/`git` need the short-lived App token). Those
+    // stay readable until the credential broker (#9543). Measured on SDK
+    // 0.3.284: the API key reaches Bash by default; the OAuth token is already
+    // withheld by the CLI, so its entry is defense in depth.
+    credentials: {
+      envVars: AGENT_AUTH_ENV_VARS.map((name) => ({
+        name,
+        mode: "deny" as const,
+      })),
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// #8752 — boot self-check for the Agent SDK sandbox hardening pair.
+// ---------------------------------------------------------------------------
+
+/** Default path of the committed nested-userns filter artifact inside the
+ *  runner image (Dockerfile COPY) — the same default the C4 close-fds prelude
+ *  and the bwrap PATH shim resolve via `SOLEUR_BWRAP_SECCOMP_BPF`. */
+const BWRAP_SECCOMP_BPF_DEFAULT = "/app/infra/bwrap-userns-clone3-deny.bpf";
+
+/** PATH resolution for `name`; returns the first executable hit or null. */
+function resolveOnPath(name: string, env: Record<string, string | undefined>): string | null {
+  for (const dir of (env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const p = join(dir, name);
+    try {
+      accessSync(p, constants.X_OK);
+      return p;
+    } catch {
+      // not here / not executable — keep looking
+    }
+  }
+  return null;
+}
+
+export interface AgentSandboxHardeningProbe {
+  /** Resolved PATH location of `bwrap` (null when absent). */
+  bwrapPath: string | null;
+  /** The resolved binary carries the shim's `bwrap-shim:` marker. */
+  shim: boolean;
+  bpfPath: string;
+  bpfBytes: number;
+  /** Readable, non-empty, raw-sock_filter-sized (multiple of 8 bytes). */
+  filter: boolean;
+  ok: boolean;
+}
+
+/**
+ * Measure — never throw — whether the agent-sandbox hardening pair is live in
+ * this image: PATH-resolved `bwrap` is our shim (closes inherited fds +
+ * injects the filter) and the committed seccomp artifact is present and
+ * `sock_filter`-shaped. Shim identity is a CONTENT marker (`bwrap-shim:`), not
+ * the path — a PATH-order or binary-swap drift cannot satisfy it.
+ */
+export function probeAgentSandboxHardening(
+  env: Record<string, string | undefined> = process.env,
+): AgentSandboxHardeningProbe {
+  const bwrapPath = resolveOnPath("bwrap", env);
+  let shim = false;
+  if (bwrapPath) {
+    try {
+      shim = readFileSync(bwrapPath, "utf8").includes("bwrap-shim:");
+    } catch {
+      shim = false;
+    }
+  }
+  const bpfPath = env.SOLEUR_BWRAP_SECCOMP_BPF || BWRAP_SECCOMP_BPF_DEFAULT;
+  let bpfBytes = 0;
+  try {
+    bpfBytes = statSync(bpfPath).size;
+  } catch {
+    // artifact absent
+  }
+  const filter = bpfBytes > 0 && bpfBytes % 8 === 0;
+  return { bwrapPath, shim, bpfPath, bpfBytes, filter, ok: shim && filter };
+}
+
+/**
+ * Emit the #8752 self-probe result once at boot: `log.info` + Sentry info on
+ * success (the success signal — Vector ships WARN+ to Better Stack, so info
+ * goes to Sentry like `c4 render sandbox probe ok`), `warnSilentFallback`
+ * otherwise (Sentry warn + Better Stack). Never throws; called un-awaited
+ * from the server `listen` callback in production.
+ */
+export function verifyAgentSandboxHardening(): void {
+  try {
+    const p = probeAgentSandboxHardening();
+    if (p.ok) {
+      log.info(
+        { feature: "agent-sandbox", op: "sandbox-hardening-selfprobe", ...p },
+        "agent-sandbox: hardening self-probe ok (shim on PATH + filter artifact present)",
+      );
+      try {
+        Sentry.captureMessage("agent sandbox hardening probe ok", {
+          level: "info",
+          tags: { event_type: "agent-sandbox-hardening-probe" },
+          extra: { ...p },
+        });
+      } catch {
+        // Sentry must never break the probe.
+      }
+      return;
+    }
+    warnSilentFallback(null, {
+      feature: "agent-sandbox",
+      op: "sandbox-hardening-selfprobe",
+      message: "agent sandbox hardening self-probe: shim or filter artifact missing",
+      extra: { ...p },
+    });
+  } catch (err) {
+    warnSilentFallback(err, {
+      feature: "agent-sandbox",
+      op: "sandbox-hardening-selfprobe",
+      message: "agent sandbox hardening self-probe threw",
+    });
+  }
 }

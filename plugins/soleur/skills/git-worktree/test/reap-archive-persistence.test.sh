@@ -218,9 +218,9 @@ run_cleanup_bare() {
 is_tracked() { git -C "$1" ls-files --error-unmatch -- "$2" >/dev/null 2>&1; }
 
 spec_live()  { [[ -e "$1/knowledge-base/project/specs/feat-victim" ]]; }
-spec_arch()  { ls "$1/knowledge-base/project/specs/archive/" 2>/dev/null | grep -q 'feat-victim'; }
+spec_arch()  { grep -q 'feat-victim' < <(ls "$1/knowledge-base/project/specs/archive/" 2>/dev/null); }
 plan_live()  { [[ -f "$1/knowledge-base/project/plans/2026-01-01-feat-victim-plan.md" ]]; }
-plan_arch()  { ls "$1/knowledge-base/project/plans/archive/" 2>/dev/null | grep -q 'feat-victim'; }
+plan_arch()  { grep -q 'feat-victim' < <(ls "$1/knowledge-base/project/plans/archive/" 2>/dev/null); }
 
 # ===========================================================================
 # FIXTURE A — non-bare clone on `main`, TRACKED spec dir + plan file.
@@ -277,7 +277,7 @@ if [[ -z "$(git -C "$CLONE_A" status --porcelain 2>/dev/null)" ]]; then
 else
   fail "A: worktree dirty after deferred reap: $(git -C "$CLONE_A" status --porcelain | head -3)"
 fi
-if ! git -C "$CLONE_A" log --oneline -5 --format=%s | grep -q 'chore(archive-kb)'; then
+if ! grep -q 'chore(archive-kb)' < <(git -C "$CLONE_A" log --oneline -5 --format=%s); then
   pass "A: no commit landed on main"
 else
   fail "A: a chore(archive-kb) commit landed on main — commits to main are prohibited"
@@ -334,7 +334,7 @@ else
   fail "B: feat-actor tip is '$ARCH_COMMIT', not the archive commit"
 fi
 
-if git -C "$CLONE_B" show --name-status --format= feat-actor | grep -q '^R100'; then
+if grep -q '^R100' < <(git -C "$CLONE_B" show --name-status --format= feat-actor); then
   pass "B: commit records R100 renames (git mv, not add+delete)"
 else
   fail "B: no R100 rename in the archive commit — the move was not `git mv`"
@@ -367,7 +367,7 @@ else
 fi
 
 # The untracked brainstorm file in the SAME batch plain-mv'd (per-file probe).
-if ls "$CLONE_B/knowledge-base/project/brainstorms/archive/" 2>/dev/null | grep -q 'feat-victim' \
+if grep -q 'feat-victim' < <(ls "$CLONE_B/knowledge-base/project/brainstorms/archive/" 2>/dev/null) \
    && ! is_tracked "$CLONE_B" "$(cd "$CLONE_B" 2>/dev/null && cd knowledge-base/project/brainstorms/archive 2>/dev/null && ls | grep feat-victim | head -1 | sed 's|^|knowledge-base/project/brainstorms/archive/|')"; then
   pass "B: untracked brainstorm file plain-mv'd in the same reap (mixed batch)"
 else
@@ -396,7 +396,7 @@ if spec_arch "$CLONE_C" && ! spec_live "$CLONE_C"; then
 else
   fail "C: untracked spec dir did not reach archive/ (plain-mv arm regressed)"
 fi
-if ! git -C "$CLONE_C" log --oneline -5 --format=%s | grep -q 'chore(archive-kb)'; then
+if ! grep -q 'chore(archive-kb)' < <(git -C "$CLONE_C" log --oneline -5 --format=%s); then
   pass "C: untracked move produced no commit on main"
 else
   fail "C: a commit landed on main for an untracked move"
@@ -491,12 +491,12 @@ if grep -q 'SOLEUR_REAP_ARCHIVE_STAGED' "$OUT_E"; then
 else
   fail "E: no STAGED marker on commit failure (output: $(grep 'SOLEUR_' "$OUT_E" | head -5))"
 fi
-if ! git -C "$CLONE_E" log --oneline -5 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+if ! grep -q 'chore(archive-kb)' < <(git -C "$CLONE_E" log --oneline -5 --format=%s feat-actor); then
   pass "E: no archive commit landed when commit failed"
 else
   fail "E: chore commit landed despite the forced identity failure"
 fi
-if git -C "$CLONE_E" diff --cached --name-status | grep -qE '^R100|^A'; then
+if grep -qE '^R100|^A' < <(git -C "$CLONE_E" diff --cached --name-status); then
   pass "E: staged rename payload survives in the index for the session to carry"
 else
   fail "E: archive move vanished instead of staying staged"
@@ -556,22 +556,44 @@ run_cleanup "$CLONE_G" "$OUT_G"
 # Restore perms before assertions (and so the EXIT trap's rm -rf can clean up).
 chmod -R u+w "$CLONE_G" 2>/dev/null || true
 
+# One failure of fixture G was seen under shard contention with at most five marker
+# lines on its first arm and nothing on the other two (cause unproven, #7376 class). $OUT_G
+# lives under $TMP and the EXIT trap deletes it, so inline everything a reader
+# needs to tell a STAGED outcome from a COMMITTED one from a hook failure,
+# flattened to one line.
+g_diag() {
+  local markers tailout status log
+  markers="$(grep 'SOLEUR_' "$OUT_G" 2>/dev/null | tr '\n' '|')"
+  tailout="$(tail -20 "$OUT_G" 2>/dev/null | tr '\n' '|')"
+  status="$(git --no-optional-locks -C "$CLONE_G" status --short 2>&1 | tr '\n' '|')"
+  log="$(git -C "$CLONE_G" log --oneline -5 feat-actor 2>&1 | tr '\n' '|')"
+  printf 'markers=[%s] tail20=[%s] status=[%s] log=[%s]' "$markers" "$tailout" "$status" "$log"
+}
+
 if grep -q 'SOLEUR_REAP_ARCHIVE_DEFERRED .*reason=git-mv-failed' "$OUT_G"; then
   pass "G: failed git mv emits DEFERRED reason=git-mv-failed (not a silent warn)"
 else
-  fail "G: no git-mv-failed marker (output: $(grep 'SOLEUR_' "$OUT_G" | head -5))"
+  fail "G: no git-mv-failed marker ($(g_diag))"
 fi
 if spec_live "$CLONE_G" && ! spec_arch "$CLONE_G"; then
   pass "G: failed git mv left the spec dir live (no partial move, no plain-mv fallback)"
 else
-  fail "G: spec dir moved/archived despite the failed git mv"
+  fail "G: spec dir moved/archived despite the failed git mv ($(g_diag))"
 fi
 # The tracked plan file DID move (plans/ stayed writable) — its commit proves
 # the mv-failure arm did not abort the reap loop mid-batch.
-if git -C "$CLONE_G" log --oneline -3 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+if grep -q 'chore(archive-kb)' < <(git -C "$CLONE_G" log --oneline -3 --format=%s feat-actor); then
   pass "G: tracked plan still committed — failed spec move did not abort the reap"
 else
-  fail "G: plan archive commit missing — the mv failure aborted the run"
+  fail "G: plan archive commit missing — the mv failure aborted the run ($(g_diag))"
+fi
+# The diagnostic only runs inside the three failure arms above, so nothing else
+# exercises it: pin that it still emits every field a reader needs.
+G_DIAG_OUT="$(g_diag)"
+if [[ "$G_DIAG_OUT" == *"markers=["*"SOLEUR_"*"] tail20=["*"] status=["*"] log=["*"]" ]]; then
+  pass "G: failure diagnostic carries SOLEUR_ markers, tail20, status and log"
+else
+  fail "G: failure diagnostic is missing a field: $G_DIAG_OUT"
 fi
 
 # ===========================================================================
@@ -618,7 +640,7 @@ if spec_live "$CLONE_H" && ! spec_arch "$CLONE_H"; then
 else
   fail "H: tracked spec dir moved mid-merge"
 fi
-if ! git -C "$CLONE_H" log --oneline -3 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+if ! grep -q 'chore(archive-kb)' < <(git -C "$CLONE_H" log --oneline -3 --format=%s feat-actor); then
   pass "H: no archive commit landed during a merge"
 else
   fail "H: chore commit landed mid-merge"
@@ -665,7 +687,7 @@ if [[ -f "$CLONE_I/knowledge-base/project/plans/2026-01-01-feat--plan.md" ]]; th
 else
   fail "I: feat- plan file moved — the guard should refuse, not partially move"
 fi
-if ! git -C "$CLONE_I" log --oneline -3 --format=%s feat-actor | grep -q 'chore(archive-kb)'; then
+if ! grep -q 'chore(archive-kb)' < <(git -C "$CLONE_I" log --oneline -3 --format=%s feat-actor); then
   pass "I: no archive commit produced for an empty feature slug"
 else
   fail "I: a chore commit landed for the empty-slug sweep"

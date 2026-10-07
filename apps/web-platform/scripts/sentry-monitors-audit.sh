@@ -112,6 +112,18 @@ set -euo pipefail
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 
+# Token-shape guard, BEFORE any curl. The bearer rides curl's stdin config channel
+# (`--config -`, never argv), so a newline in the token would inject a curl config directive and
+# an empty one would send the request headerless. An unusable token is a hard stop with zero
+# requests made -- never a success. The value is never echoed.
+# Sentry tokens (sntrys_/sntryu_ and internal-integration tokens) are base64-ish with `_`:
+# every character is already inside the allowlist, so it is not widened.
+_bearer_ok() { local LC_ALL=C; case "${1:-}" in ''|*[!A-Za-z0-9._~+/=-]*) return 1 ;; esac; }
+if ! _bearer_ok "$SENTRY_AUTH_TOKEN"; then
+  echo "ERROR: SENTRY_AUTH_TOKEN has an unexpected shape; refusing to send it" >&2
+  exit 1
+fi
+
 # ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
 # SENTRY_API_HOST, SENTRY_ORG and CURL_BIN are all caller-settable and all land
 # on the path that carries SENTRY_AUTH_TOKEN. Measured on this file's own HEAD
@@ -180,6 +192,14 @@ esac
 
 readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
+# The bearer also travels to `projects/${SENTRY_ORG}/${SENTRY_PROJECT}/` (Gate 2), so the
+# project is pinned like the org: empty (Gate 2 skipped) or a live slug of the Web Platform
+# project (infra/sentry/variables.tf default `web-platform`; `soleur-web-platform` is the
+# pre-DE slug configure-sentry-alerts.sh also accepts). Same rc=2 refusal contract as the org.
+case "$SENTRY_PROJECT" in
+  ''|web-platform|soleur-web-platform) ;;
+  *) printf 'ERROR: refusing project %s\n' "$(_safe "$SENTRY_PROJECT")" >&2; exit 2 ;;
+esac
 
 # Transport seam. Tests override this (or shadow `curl` on PATH) to script a
 # status sequence, response headers and a body — see the header's CURL_BIN note.
@@ -395,7 +415,11 @@ curl_retry() {
 
   while (( attempt <= max_attempts )); do
     : > "$hdr"
-    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
+    # The bearer is fed on curl's stdin as a config directive -- never on argv, where every local
+    # user could read it in /proc/<pid>/cmdline. Callers pass no Authorization header of their own.
+    # printf is the builtin; the process substitution is re-created per attempt.
+    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" --config - 2>/dev/null \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN")); then rc=0; else rc=$?; fi
     # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
     # failure produces no status line at all; normalise that to `000` rather
     # than the empty string, so it renders the same way `-w '%{http_code}'`
@@ -528,8 +552,8 @@ api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
   for candidate in "${SENTRY_HOST_CANDIDATES[@]}"; do
     http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-      "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
+      --config - "https://${candidate}/api/0/users/me/" 2>/dev/null \
+      < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || echo 000)
     if [[ "$http" == "200" ]]; then
       api_host="$candidate"
       break
@@ -574,7 +598,6 @@ readonly api_host
 if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 1: audit_destination_admin_controllable (org GET returns 200)
   gate1_body=$(curl_retry -s --max-time 10 \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/")
   if ! jq -e '.id' <<<"$gate1_body" >/dev/null 2>&1; then
     echo "ERROR: Gate 1 (audit_destination_admin_controllable) failed — org ${SENTRY_ORG} not reachable at ${api_host}. Token may lack org:read scope, OR the host rewrites slugs ending in '-eu' (use the org-subdomain ${SENTRY_ORG}.sentry.io as SENTRY_API_HOST instead — see learning 2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md). Refs #3861." >&2
@@ -584,7 +607,6 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 2: audit_project_scope (project GET returns 200) — skipped if no project set
   if [[ -n "$SENTRY_PROJECT" ]]; then
     gate2_http=$(curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/")
     if [[ "$gate2_http" != "200" ]]; then
       echo "ERROR: Gate 2 (audit_project_scope) failed — project ${SENTRY_ORG}/${SENTRY_PROJECT} returned HTTP ${gate2_http}. Token may lack project:read scope. Refs #3861." >&2
@@ -599,7 +621,6 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # the idempotency block in curl_retry.
   gate3_http=$(CURL_RETRY_UNSAFE=1 curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
     -d "{\"version\":\"${probe_ver}\",\"projects\":[\"${SENTRY_PROJECT:-web-platform}\"]}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/")
@@ -608,9 +629,9 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     exit 1
   fi
   curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -X DELETE \
-    -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
-    -o /dev/null 2>/dev/null || true
+    --config - "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
+    -o /dev/null 2>/dev/null \
+    < <(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN") || true
 
   # Gate 4: audit_dsn_org_id_matches_token_org_id — extract `o<id>` from DSN
   # (e.g. `o4523123` from `https://k@o4523123.ingest.de.sentry.io/789`) and
@@ -733,8 +754,7 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
   local base="https://${api_host}/api/0/${path}?per_page=100"
   while :; do
     url="${base}${qs}"
-    body=$(curl_retry -s --max-time 10 \
-      -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" "$url")
+    body=$(curl_retry -s --max-time 10 "$url")
     # Snapshot the shared last-header file under this label. Without the copy
     # the shape check below would read whichever fetch ran LAST, and would
     # report the wrong endpoint's deprecation headers against a failure.
@@ -1132,7 +1152,7 @@ if (( detectors_evaluated == 1 )); then
       echo "::warning::cron detector binding '$(warn_sanitize "$ref")' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
       continue
     fi
-    if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
+    if ! grep -qFx -- "$ref" <<<"$monitor_slug_set"; then
       orphan_alerts+=("$ref")
     fi
   done <<<"$cron_detector_names"
@@ -1183,17 +1203,20 @@ done < "$class_c_out"
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 #
-# Addendum 2026-09-17 (extended 2026-09-30 and 2026-10-01): the tf root now declares
-# 61 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# Addendum 2026-09-17 (extended 2026-09-30, 2026-10-01 and 2026-10-04): the tf root now declares
+# 62 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
 # one on 2026-09-10, the disposable #8160 devin-docs-drift watcher another, the
 # #8450 scheduled-actions-queue-health probe a third, the #9168
 # scheduled-supabase-watchdog monitor a fourth, and the #9274
-# scheduled-bot-pr-reaper monitor a fifth; #9304 then deleted the retired
-# scheduled-gh-pages-cert-state monitor (net 60).
+# scheduled-bot-pr-reaper monitor a fifth, and the #9482 follow-up (a)
+# scheduled-merge-queue-stall-dispatch monitor a sixth; #9304 deleted the
+# retired scheduled-gh-pages-cert-state monitor. This list names the additions
+# made since the 2026-08-19 live figure and is not a complete ledger, so the
+# declared count above (62) is the figure of record.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
-# than silently promoted to 60. T25 derives from the tf root, so it reads this
+# than silently promoted to the current declared count. T25 derives from the tf root, so it reads this
 # line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 
@@ -1312,14 +1335,14 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   class_d_candidates=()
   while IFS= read -r slug; do
     [[ -z "$slug" ]] && continue
-    printf '%s\n' "$declared_slugs" | grep -qFx -- "$slug" && continue
+    grep -qFx -- "$slug" <<<"$declared_slugs" && continue
     class_d_candidates+=("$slug")
   done <<<"$monitor_slugs"
 
   if (( state_known == 1 )); then
     for slug in ${class_d_candidates[@]+"${class_d_candidates[@]}"}; do
       # In state => Terraform WILL reclaim it on the next apply => not Class D.
-      printf '%s\n' "$state_slugs" | grep -qFx -- "$slug" && continue
+      grep -qFx -- "$slug" <<<"$state_slugs" && continue
       orphan_live_monitors+=("$slug")
     done
   else

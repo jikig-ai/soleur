@@ -5,9 +5,11 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
   - "#9307 (2026-09-30) — anchored edge matching, the runner-subcommand skip, `--print-selection` / `--paths`, and the evidence-based always-on audit; see ## Amendment — 2026-09-30"
+  - "#9400 (2026-10-01) — the affected-ratchets pre-push lane moves the cheap ratchet net earlier than the local gate (push time, merged tree); the required `test` context remains the merge gate; see ## Amendment — 2026-10-01 (#9400)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -185,7 +187,8 @@ Decisions added by this amendment:
    timeout, so one knob bounds both of tc_acquire's wait stages and on expiry
    it proceeds with the `LOCK_CONTENDED_PROCEEDING` banner rather than
    aborting.
-10. **`runner-changed` is scope-aware.** Under `staged` the ladder arm is
+10. **`runner-changed` is scope-aware.** *(Closing sentence superseded in part, and its "unconditional always-on runner-SUT battery" premise corrected,
+    by decision 20: a registration-only diff now takes the bounded selection under branch scope too.)* Under `staged` the ladder arm is
     gated off and the staged runner/index path is detected *inside* the
     bounded-selection walk — the paths are in the staged set by construction,
     so their declared self-edges plus the unconditional always-on runner-SUT
@@ -219,7 +222,7 @@ Alternatives added by this amendment:
 |---|---|
 | `TEST_GROUP=commit-scope` + a `SOLEUR_ALLOW_*`-style provenance env (#9173 option b) | Duplicates the existing narrow selector with new `want_*` plumbing for the same property; an env var's presence is not ownership and it inherits into the nested enumerate self-call. A flag buys the property outright. |
 | `runner-changed` → runner suites + staged set under branch scope (option c alone) | Still needs the staged plumbing; keeps branch-diff over-selection on every commit of a runner-touching branch; keeps the use-the-suspect-selector trust hole without the per-commit semantics that bound it. Its bounded-degradation half was adopted *inside* staged scope. |
-| `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. |
+| `runner-changed` distinguishes selection-logic vs registration-data edits (option d) | A pathname trigger cannot see edit kind without fragile diff-content inspection, and the dangerous narrowing edit is data-shaped — already covered by self-inclusion edges, the always-on census, and unclassified-selects-anyway. **Superseded in part by decision 20 (2026-10-05, #9552):** a CLOSED whole-line grammar over added lines, with zero tolerance for removed lines, is not the fragile inspection this row rejected, and the data-shaped narrowing edit is answered by the label-binding rule. |
 | Pass lefthook `{staged_files}` argv to the runner | Space-separated argv fragility; the in-runner index derivation is authoritative and seam-testable. |
 | `no_stash` on the hook (sibling symptom in #8045) | Out of scope for this amendment — `git diff --cached` is stash-agnostic, and the false-RED/stash question belongs to #8045. |
 
@@ -262,7 +265,7 @@ decisions 1-3 above and do not change the CI contract.
     registrations only; a relevance-declined suite is in neither `selected` nor `of`. The row format is
     private to the Soleur runner and unversioned; PR 2's plugin gate must not parse it.
     `--print-affected-set` stays class-only and must not be quoted as a selection.
-15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** Each always-on suite
+15. **The always-on floor is audited with evidence, and a ratchet guards the demotions.** *(Superseded in part by decisions 16 to 18: one-run evidence became a committed recorder, 20 of the 23 demotions were re-promoted, and the "one audited run" caveat no longer applies.)* Each always-on suite
     ran serially under an inotify open-event recorder (`strace` is not installed on the operator host) and its
     observed reads, not its name, decided whether it may leave the set. 23 suites moved to declared edges (24
     were audited as demotable; `scripts/domain-model-drift` was put back, see below);
@@ -349,6 +352,62 @@ quiet host. The route to a further order of magnitude is to stop following what 
 450 edges for 18 suites, measured at 61.9 s CPU by the plan); that narrows selection, so it is not
 identity-preserving and is a separate decision (decision 18, with the `REPO_ROOT` idiom fix).
 
+## Amendment — 2026-10-03 (PR-B and PR-C of #9307)
+
+Context: decision 15's evidence was one run of session-scratch scripts, and decision 16 named the further route to a cheaper pre-pass
+(stop following what the runner's text merely names) as a separate decision. This amendment records both. Numbers follow landing order.
+The measured figures live in `knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md` (Rounds 2 and 3); they are not restated here.
+
+17. **The always-on evidence is a committed recorder with one verdict function, and a recording that is not complete is never evidence for a
+    demotion.** `scripts/audit-suite-reads.sh` (with `scripts/lib/inotify-open-recorder.py`) re-issues decision 15's audit as "Round 2" and
+    **supersedes its "one audited run" caveat.** A recording that overflowed the inotify queue, failed to watch a directory, exited non-zero
+    or disagrees with its repeat, or skipped an arm of the suite (a `SKIP` line: its reads are unobserved), or moved or deleted a watched directory,
+    or left a dirty checkout, is `unreliable` (retry; the classification is never changed on it); a probe the open-event stream cannot see
+    (`[[ -e ]]`, `stat`, `ls`, `find`) whose operand the static scan cannot resolve **disqualifies**, and the audit doc states that the scan has
+    low resolving power. The event source is a raw-inotify reader because `inotifywait` was measured to deliver exactly 16,384 events for 17,500
+    opens and print no overflow record when the reader lags, so it cannot back that rule. Applied to the 23 existing demotions: 3 stay demoted and 20 return
+    to `ALWAYS_ON_SUITES`: 18 on the first recording, and 2 more after review found that the two rows first recorded `unreliable` were an artifact of
+    the recorder's own contamination probe (tracked-but-gitignored files made window 1 of every run look dirty; fixed) and re-recorded them `uncovered`.
+    The rule is the plan's: an `unreliable` suite that is already demoted goes BACK, because the default is keep (the first write-up of this decision left
+    them demoted, which is the unsafe direction). The isolation is "no IP network and a scrubbed environment", not a filesystem sandbox; only revisions
+    that are ancestors of HEAD or `origin/main` are audited. Three smaller changes belong to the same decision: a runner subcommand
+    (`deno test`, `make test`, `npm|bun|pnpm|yarn run test`) is not an operand in the argv walk or the `-c` payload walk (extends decision 13); the
+    dropped-consumer ratchet gains a form table with one new form (a directory operand with no code file), classifies every non-literal baseline
+    row, decides existence by git-tracked paths, and treats the declarations libs as data; and a declared edge to a deleted subject still being
+    dropped (decision 12's clause) was **not** reversed: that change was cut for cost and is tracked in #9441.
+18. **The runner and its index are closure leaves for text mentions, and the selection delta is certified by the bench's declared-delta mode plus
+    the recorder, not by identity.** `CLOSURE_LEAF_FILES` (exactly the two files the `runner-changed` fallback greps for, pinned equal by a derive
+    row) keep their real load edges (`source` and `.` lines, variables and `$(dirname "${BASH_SOURCE[0]}")` resolved) and lose the invocation words and
+    `$VAR/path` tokens; the file itself stays an edge of every closure reaching it. This **amends decision 16's wording that the bench is the identity
+    contract**: it stays so for every non-narrowing change, and this narrowing is the declared exception (`--leaf-files`: the head may only lose edges,
+    no real source edge of a leaf may be lost, every row that reaches a leaf with outbound edges must lose exactly what the walker expects, a row that
+    reaches none must lose nothing, a walker with no suite commands refuses, and two ceilings, `--max-unexplained` and `--max-kept`, both default 0).
+    The oracle's walker is a second implementation of the derive's text rules and reproduces every edge-classified row of the stream (408 of 408 at the
+    README probe), which is what lets the ceilings be 0; the first walker was not a model of the derive and needed a ceiling of 240, which the first
+    write-up understated as 200 and described as "over-approximating". It still cannot see a read the derive never modelled, so the recorder's check
+    mode on the suites that reached the runner is the behavioural cover, and it found runtime reads the incidental edges had covered, now declared per
+    label. The `runner-changed` fallback is NOT part of that cover: it fires only on a diff to the two leaf files themselves (and not under
+    `--affected-scope=staged`), never on a file the leaf stopped following. The recorder is operator-run, so a read added to a suite later is not
+    re-validated automatically; CI's full battery is the cover for that. Where the recorder gave no evidence the suite is hedged to always-on when
+    that costs under about 7 s (six suites after the re-check), and where hedging would cost 77 s to 134 s (`test-affected-kb-consumers`,
+    `orphan-process-reaper-mutations`, `audit-suite-reads`) the suite stays on its derived or declared edges with the evidence gap stated in the audit. The first version of this rule dropped the runner's
+    variable-sourced libs; the retained-edge floor, which had been vacuous when the list was empty, is what caught it. The `REPO_ROOT` idiom
+    fix (D1) is a **widening** recorded here with its census and selection delta: `cd "<dir>[/..]" && pwd` resolves to its cd target when the target
+    is fully resolved, and a token D1 leaves without an edge is re-run as before so it can only widen. Non-leaf files also resolve
+    `$(dirname ...)/` on the whole line (the slash form only: the bare form mints a coarse directory edge on 241 rows), which restores the real
+    source edges of the 11 hooks that lost them. Phase C: none of the six heavy always-on batteries narrows (no clean recording); `domain-model-drift` stays always-on on the
+    recorder rule now that its 82 s derive cost is 0.2 s.
+
+Alternatives added by this amendment:
+
+| Alternative | Why not |
+|---|---|
+| Keep `inotifywait` as the event source | It drops queue overflow silently (measured), which defeats "never demotable from an incomplete recording" |
+| Resolve `$VAR` probe operands in the recorder to keep more suites demoted | An unprovable operand is unproven; resolving it is the next increment of the scan, and always-on is the safe side meanwhile |
+| Make the bench an exact-equality oracle for the leaf rule | An independent text walker cannot reproduce every dropped edge; equality would force the walker to become the derive |
+| Treat the runner as a leaf by skipping passes 2 and 3 wholesale | Loses `source "$VAR"` loads (measured: five libs), which had reached suites only by being mentioned |
+| Declare `.` as an edge for the five suites that open the checkout root | A directory open of the root is a read of no particular file; no pre-change cover held it either |
+
 ## References
 
 - Issue: #8322; motivating review session: #8270/#8231; duplicate-full-run
@@ -376,3 +435,103 @@ declared array (`LINT_ORPHAN_BATTERY_PATHS`, `TAG_AUTHORSHIP_BATTERY_PATHS`,
 `TEST_ALL_AFFECTED_BATTERY_PATHS`), now read as `AFFECTED_CONSUMED_EDGES`. Their subjects
 (`scripts/lint-orphan-test-suites`, `scripts/battery-tag-authorship`) stay `ALWAYS_ON`. The new guard suite
 `scripts/test-all-pr-battery-gate` is `ALWAYS_ON`: its subject is the runner itself.
+
+## Amendment — 2026-10-01 (#9400)
+
+Added, not narrowed: a **third local gate tier** now exists below this ADR's `test-all.sh --affected`
+dispatch. `scripts/pre-push-ratchet-lane.sh` runs at `pre-push` time (lefthook `ratchet-lane` command and
+stage 1 of `scripts/hooks/pre-push`) and is scoped to the curated ratchet/lint members a push diff can trip:
+the highwater family (`lint-trap-tempfile-ownership`, `lint-supabase-deprecated-endpoints`,
+`lint-diagnosis-claims`, `alarm-issue-filing-guard`, `lint-workflow-step-env-refs`), the standalone
+`plugin-root-anchor-debt` probe, the three fixture-scan suites, the merge-base byte/body lints
+(`lint-skill-body-budget`, `lint-rule-bodies`), plus `test-affected-kb-consumers` under a conditional
+trigger and a capped branch-touched suite tier run in the deps-free, disk-backed-TMPDIR scratch.
+
+The load-bearing difference from every other local gate: the lane **evaluates the merged tree**, not the
+branch tree. It fetches `origin/main`, materializes the branch in an ephemeral detached scratch worktree,
+merges `origin/main` there, and runs every member with cwd inside that scratch — the shape that makes the
+five #9339 CI-only failure classes visible locally without mutating the operator's branch or working tree
+(a fetch failure degrades to `merge=skipped:fetch-failed` and members still run on the unmerged tree; a
+merge conflict exits 2 with `verdict=MERGE_CONFLICT`; the receipt never reads `all green`/`tests verified`).
+
+**ADR-183 reaffirmed.** This lane is not the merge gate and is never described as one. The required `test`
+context on the PR head remains the only merge gate; the lane is the cheap local net in front of it, and its
+receipt is a `RATCHET_LANE verdict=` line, not a battery verdict.
+
+## Amendment — 2026-10-04 (section 2 of #9307)
+
+19. **The recorder runs suites as the invoking user, and a suite whose recorded read set no short declaration can bound is hedged, not declared.** The
+    recorder probes `unshare -cn` (the caller's own uid), falls back to `unshare -rn` (namespace-root, stamped `idmap=root`), then bwrap, and carries
+    `unshare` on its scratch PATH. The mapping is stamped in the header and written to the meta file; a `--mode demote` row is decided only for `idmap=current`:
+    `idmap=root` (also a run started by uid 0) comes out `unreliable reason=idmap-root` and a meta with no IDMAP line (a pre-cell recording)
+    `reason=idmap-unknown`, because a namespace-root run can skip arms that refuse a privileged caller without saying so. **This supersedes,
+    for `scripts/test-affected-kb-consumers`, `scripts/orphan-process-reaper-mutations` and `scripts/audit-suite-reads` only, decision 18's sentence that
+    keeps them on their derived or declared edges with the evidence gap stated, and decision 18's threshold of about 7 s under which a suite with no
+    evidence is hedged.** The two suites with an instrument-side gap now have evidence; the third (`scripts/test-affected-kb-consumers`) is hedged into
+    `ALWAYS_ON_SUITES` because no short declaration bounds its read set (the registration corpus, plus a `git ls-files` walk inotify cannot see). The
+    criterion is "no short declaration bounds the set": a recorded read set spanning more than 20 directories, or any whole-tree `git ls-files` walk
+    (measured 2026-10-04: 24 directories for the hedged suite, at most 4 for every other row of that table). Directory-listing residue may stay
+    undeclared only where a cited assertion cannot depend on it (`scripts/audit-suite-reads` asserts only that the real runner enumerates at least
+    400 registrations). **Both-state, deliberately:** that label is
+    also kept in its declared array, solely because `scripts/pre-push-ratchet-lane.test.sh` arm 21 pins the lane's `KB_CONSUMERS_INPUTS` to it; the
+    array is dead to selection (always-on wins). Removing the always-on entry trips row f2; deleting the array trips arm 21. **Demotions recorded
+    before 2026-10-04 stand, as a deliberate exception to decision 17's keep-default** (they were recorded under `idmap=root`, where a skipped arm prints
+    SKIP and rates its row unreliable; a silent skip is the residual risk). The re-record that would close the exception is section 3 of the #9307
+    follow-up list (a scheduled recorder check); it does not exist yet and no separate issue tracks it, so the trigger is the next edit to any demoted
+    suite's edge array: re-record that suite then, or put it back in `ALWAYS_ON_SUITES`. **Revisit** the hedge when always-on suite time passes 1,500 s or when the suite
+    becomes incremental, so "keep" does not become permanent by default; row f1 holds the census slack at 5 and this change leaves it at 0, so the next
+    always-on addition raises the floor (in `scripts/test-all.sh` and in f1's pin), which is the review point. The measurements, costs and final table live in the audit doc's 2026-10-04 addendum
+    (`knowledge-base/project/specs/feat-affected-parallel-test-gate/always-on-audit.md`), not here.
+
+## Amendment — 2026-10-05 (#9552)
+
+20. **A registration-only runner diff takes the bounded selection under branch scope; every other runner edit keeps `runner-changed`.** Registering a
+    new suite is itself an edit to `scripts/test-all.sh`, so every suite-adding PR paid the whole battery (a recent one was stopped after 2 h 13 m of
+    contended run), and the run read as a hang. `_aff_classify_runner_diff` judges the diff `git merge-base origin/main HEAD` to the working tree for
+    both runner-critical files against a closed grammar, and the pre-pass takes the bounded walk (`AFFECTED_RUNNER_IN_SCOPE reason=registration-only`,
+    `AFFECTED_SUMMARY ... fallback=none`) only when EVERY changed line fits: **G0** headers only (a mode, rename, delete, binary or no-newline marker is
+    semantic); **G1** zero removed lines (an edited line is a removal plus an addition); **G2** every line added to the runner is a blank line, a `#`
+    comment, or one single-line `  run_suite "<label>" <argv0> <args>` in a closed charset (argv0 in `bash|python3|bun|node`; a plain repo-relative first <!-- markdownlint-disable-line MD038 -->
+    path argument that is not option-shaped, has no leading `/` and no `..` segment; `python3 -m` only `unittest|pytest`; no quote, substitution, redirect,
+    `;`, `&` or `|`), and an **anchor rule** binds every added line (the nearest preceding post-image line that is not blank or a comment must itself be a
+    complete single-line registration, which keeps added lines out of continuations, heredocs and multi-line strings; every added line must also equal the
+    working-tree line it claims to be); **G3** the only admitted additions to `scripts/lib/test-affected-paths.sh` are one contiguous
+    `AFFECTED_<MAP(label)>_PATHS=( ... )` block per added suite (opener directly below another array's closing `)` or entry, entries in a closed charset,
+    closer a lone `)`, all in one hunk) and entries of `ALWAYS_ON_SUITES`, each bound (**G5**) to a label ADDED in the same diff, with the array defined exactly once and not named by any
+    `AFFECTED_CONSUMED_EDGES` pair, because the label-to-array map is not injective; **G4** `bash -n` passes on both post-images. The pre-pass then requires every
+    added label to occur exactly once in the live `--enumerate-commands` stream, every anchor label at least once, no added label to inherit an
+    already-declared array, and no OTHER live label to map to a declared array name, because loops and globs produce about half of the live registrations
+    and their labels never appear as literals; any other count degrades to the full fallback through the same print block (never a new ladder arm, which
+    repeated the #9197 defect). That check runs after the 70-80 s walk and against the `all`-group stream, an accepted cost of deciding on the live stream.
+    Anything the classifier cannot decide (no merge-base, a git error, an empty diff text, a diff that registers nothing) is `undecidable` and behaves as
+    semantic; under `--paths` the classifier is not computed at all. It is also not computed under `--affected-scope=staged`, which stays byte-identical.
+    The verdict covers only the two trigger files: a registration that rides along with an edit to a third runner-sourced file
+    (`scripts/lib/test-relevance-paths.sh`, `scripts/lib/test-contention.sh`, ...) gets that file's ordinary edge-based selection, exactly as editing it
+    alone does today.
+    The full-fallback banner states the cause, the manifest-weight cost (`about N min`, or "duration unknown"), the first offending `<file>:<line>
+    [rule-code]` and a fixed sentence per code; it never prints diff text, because agents read this output (the only free-form token is an added label, restricted to
+    the registration charset, with spaces shown as `_` and cut at 64 characters).
+    **This SUPERSEDES decision 10's closing sentence** ("Branch scope keeps the full-corpus fallback byte-identical") for registration-only diffs, and
+    **CORRECTS a stale premise in decision 10**: it cites an "unconditional always-on runner-SUT battery (which includes `scripts/test-all-affected`)", but
+    ADR-262 withdrew that suite from `ALWAYS_ON_SUITES`; it still runs on every runner-touching diff because the runner is in its declared edge set and the
+    diff names it, and the residual argument rests on that edge. **Why this reverses the 2026-09-29 option-d rejection in part:** that row feared "fragile
+    diff-content inspection" and said the dangerous narrowing edit is data-shaped. A closed allowlist of whole-line shapes models none of bash's syntax and
+    every miss falls toward the full battery, so it is not fragile in the way that matters; and the only data edit that can narrow (a new
+    `AFFECTED_*_PATHS` array on an existing unclassified label turns "always runs" into "runs only when its edge is touched") is refused because every
+    declaration must bind to a label the same diff registers. **Measured** (2026-10-05, over 226 non-merge commits touching either runner file since 2026-06-01; 230 on 2026-10-06): 152 (67%) fit the
+    grammar including the anchor rule and 139 of those add a registration; the full battery is 91.4 min at manifest weights against 58.6 min for a bounded selection (a 36% saving, not minutes: 13.6 min of the
+    43 edge suites are heavy batteries that are not runner-SUT, and narrowing those is a separate, deferred concept). **Accepted residual**, the same class
+    as decision 10's with a larger window (the whole branch, not one commit's index): the classifier lives in the file it judges, so a PR that edits it is
+    semantic by G1/G2 and goes full. The real residual is a latent gap in the already-merged grammar that wrongly admits a FUTURE diff (for example, the
+    anchor check is by label, so it relies on every two-space `run_suite "` literal in the runner being a live call site). It is defended by the closed,
+    default-deny grammar, the live-stream checks and `bash -n`, by the rows in `scripts/test-all-affected.test.sh` (selected by every runner-touching run), and
+    by CI's full sharded battery on the PR head, which stays the merge gate. The `PR_GATE_MACHINERY_PATHS` arming of ADR-262 is unchanged: the name list a registration-only run reads still contains both paths.
+
+    Alternatives considered: (b) registrations in a data file (about 560 registrations interleaved with relevance-gated blocks and ordinal-indexed shard
+    selection; the data file would become a third runner-critical path needing its own grammar, which is mechanism (a) relocated); (c) banner only (does not
+    deliver the narrowing; its banner half is kept for the fail-closed arm); a selection-equivalence oracle (sees selection metadata only, costs two walks);
+    a classifier in a third file (an edit to it would not match the two-file trigger); admitting deletions or edits (a removed `run_suite` is a narrowing
+    edit by definition); `SUITE_GLOBS` auto-discovery of root `scripts/*.test.sh` (162 explicit registrations make it a mass conversion, and "registration
+    is a reviewed act" is a property worth keeping). Index declarations (G3/G5) ship in their own commit and are separable: dropping them changes no
+    runner-only line. They serve about 3.5% of the measured demand (5 of the commits that fit the grammar touched the index at all: 4 array blocks, 1 entry) and
+    were kept because the operator named "a new AFFECTED_*_PATHS array" as registration-only.

@@ -508,7 +508,7 @@ runcmd:
     ZEP='${registry_endpoint}'
     NIC=probe_fault; E='${private_ip}'; i=0; P=0
     command -v ip >/dev/null && [ -n "$E" ] && while [ $i -lt 75 ]; do
-      O=$(ip -4 -o addr show 2>/dev/null) && { P=1; printf '%s\n' "$O" | grep -qwF -- "$E" && { NIC=ready; break; }; }
+      O=$(ip -4 -o addr show 2>/dev/null) && { P=1; printf '%s\n' "$O" | grep -cwF -- "$E" >/dev/null && { NIC=ready; break; }; }
       i=$((i+1)); sleep 2
     done
     [ $NIC = ready ] || [ $P = 0 ] || NIC=timeout
@@ -556,7 +556,7 @@ runcmd:
   # END host-script extraction (#5921)
 
   # #6931: guest-side LUKS (baked provisioner, ADR-263). Hard gate: nothing below may write to /mnt/data unless the mapper backs it.
-  - printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks\n' '${workspaces_volume_id}' > /etc/default/workspaces-luks-boot
+  - printf 'WORKSPACES_LUKS_DEV=/dev/disk/by-id/scsi-0HC_Volume_%s\nWORKSPACES_DOPPLER_CONFIG=prd_workspaces_luks_web\n' '${workspaces_volume_id}' > /etc/default/workspaces-luks-boot
   - chmod 600 /etc/default/workspaces-luks-boot
   - /usr/local/bin/workspaces-luks-provision.sh
   - mountpoint -q /mnt/data && [ "$(findmnt -no SOURCE /mnt/data)" = /dev/mapper/workspaces ] || { soleur-boot-emit workspaces_luks_not_mounted fatal; poweroff -f; }
@@ -709,11 +709,11 @@ runcmd:
   # fresh hosts.
   - |
     set -e
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.44@sha256:7a380ca635bdcb71192c847133d7158714730860532f00b04f34085fe45e5bc7
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.45@sha256:ccfb7e419343c7b7f71bf870336555bbe438f4ddad90f15f070eff01e8e7e524
     # #8036 1d: IREF above is the pin carrier (bump bot + AC6), never pulled. zot is the only
     # source (the seed item's zot login is reused); a miss is fatal, no second registry.
     ZURL='${registry_endpoint}'  # baked (#8651/#6985)
-    ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.44@sha256:7a380ca635bdcb71192c847133d7158714730860532f00b04f34085fe45e5bc7"
+    ZIREF="$ZURL/jikig-ai/soleur-inngest-bootstrap:v1.1.45@sha256:ccfb7e419343c7b7f71bf870336555bbe438f4ddad90f15f070eff01e8e7e524"
     if timeout 180 docker pull "$ZIREF"; then IREF="$ZIREF"; soleur-boot-emit inngest_zot info; else soleur-boot-emit inngest_pull_fatal fatal; exit 1; fi
     EXTRACT_DIR=$(mktemp -d)
     cleanup() { docker rm -f soleur-inngest-bootstrap-extract >/dev/null 2>&1 || true; rm -rf "$EXTRACT_DIR"; }

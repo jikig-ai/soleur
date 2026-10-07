@@ -115,6 +115,13 @@ upload): a stale copy under the same UUID after a re-key is re-uploaded, not cer
 persists for the host's life and withholds the soak marker. The reopen unit stays luksOpen-only: the
 recurring timer never contains a format arm.
 
+> **Superseded 2026-10-03 (#9377):** `escrow=missing` still persists for the host's life and still withholds the
+> soak marker, but it is no longer quiet. From the merge of PR #9448 and once `apply-sentry-infra.yml` has applied the
+> alert-rule edit, the stage `workspaces_luks_provision_escrow` raises a Sentry alert emailed to issue owners (D8 in
+> the 2026-10-03 addendum). This is best-effort, not a guaranteed page: the emit is `|| true`, delivery is an email,
+> and the rule's 35-minute action-frequency window is a per-rule, per-shared-issue-group throttle (see D8 item 3). The boot still continues and the Sentry level is still
+> `warning`; the alert is routed by stage name.
+
 **D4 - Key access: a dedicated config, `fetch --plain` only, a dedicated fresh-host token in user_data.**
 A new service token (`doppler_service_token.workspaces_luks_fresh_boot`, project `soleur`, config
 `prd_workspaces_luks`, read access, no `create_before_destroy`) is a `templatefile()` variable written to
@@ -122,7 +129,7 @@ A new service token (`doppler_service_token.workspaces_luks_fresh_boot`, project
 `WORKSPACES_LUKS_BOOT_TOKEN` because that one is rotated by a `create_before_destroy` procedure whose
 installer reaches web-1 only; a shared token would be destroyed under web-2, whose next reboot would then
 fail `luksOpen`. The fresh-host token is never co-rotated and **its rotation is a host replacement**. The
-only permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks`.
+only permitted read is `doppler secrets get WORKSPACES_LUKS_KEY --plain --config prd_workspaces_luks` (superseded for web-class hosts born after #9377: `prd_workspaces_luks_web`, see the 2026-10-02 addendum D7).
 Scope, stated once and truthfully: like every `prd_*` branch-config token in this repo it resolves about
 116 `prd` secrets (ADR-164 census), so "dedicated config" isolates the passphrase from the container env
 file, not from a holder of this token. The metadata-endpoint exposure to containers is bounded by two
@@ -202,6 +209,15 @@ passphrase must also re-key or retire web-2's volume, or web-2's reboot unlock f
 hosts is the separate-project work (#6167). The residual is recorded in the Article 30 register and the
 compliance posture, conditioned on the live conversion.
 
+> **Superseded 2026-10-03 (#9377):** the first paragraph above describes the state before the passphrase split. Once PR
+> #9448 merges and the push-apply creates the web-class key (nothing has been applied), every NEW web-class birth will
+> hold a passphrase independent of web-1's, and "a leak of the fresh-host token from web-2 is a leak of web-1's
+> passphrase" and "rotating web-1's passphrase must also re-key or retire web-2's volume" will no longer hold for them. They remain true of the pre-split fresh-boot token until it is retired. See "Shared-passphrase
+> residual, rewritten" in the 2026-10-03 addendum. The second paragraph (the escrow credential pair) was already
+> narrowed by D7 of 2026-10-02 and is unchanged here.
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** the condition in the callout above ("once ... the push-apply creates the web-class key (nothing has been applied)") is met (by a dispatched apply, not by a push-triggered one); see "Addendum — 2026-10-05" for the measured state. The callout is kept as the dated record.
+
 The same token also reads the R2 header-escrow credential pair in `prd_workspaces_luks`. A compromised web-2
 (or a leak of the user_data token) can therefore overwrite or delete web-1's LUKS header backup, which is the
 recovery path for web-1's sole-copy volume: an integrity and availability exposure, not only a confidentiality
@@ -226,7 +242,7 @@ content-hash label equals `host_scripts_content_hash` at the same commit. This f
 where its existence is recorded. The expected readiness row is `luks=1 luks_arm=formatted escrow=ok`. The
 reboot proof is on the probe row, not the readiness row (which is emitted once per instance): after a
 workflow-issued hcloud reboot, the next daily probe row must carry a **new** `boot_id`, `device_type=crypto_LUKS`
-and `mount_source=/dev/mapper/workspaces` (the new `boot_id` is evidence that a reboot happened; no judge requires it). The host's SSH key changes, so the committed pin is re-captured
+and `mount_source=/dev/mapper/workspaces` (the new `boot_id` is evidence that a reboot happened; since the #9372 workflow change the soak-marker judge and the follow-through both require it, see the 2026-10-05 addendum). The host's SSH key changes, so the committed pin is re-captured
 (`scripts/capture-web-2-host-key.sh`, plus the admin-ip step its runbook names) as part of #9372; none of the SSH
 consumers affected in that window is in the LUKS path, but `apply-deploy-pipeline-fix` fails closed until the
 pin is re-captured. The window is web-2 only (weight 0, serving nothing, holding no user data); web-1 is
@@ -248,6 +264,15 @@ escalation if web-2 never produces rows.
   `escrow` once per instance, and the daily probe row evidences later boots. The provisioner's own rows ride the
   journald tag `workspaces-luks-reopen`, which Vector already allowlists and ships once it is up; Vector is installed
   after the provisioner, so for a boot that powers off on a fatal the Sentry stage is the record.
+
+  > **Superseded 2026-10-03 (#9377):** from the merge of PR #9448 (and once `apply-sentry-infra.yml` applies it),
+  > `web-host-luks-boot-fatal` alerts on **14** stages (the 13 above plus `workspaces_luks_provision_escrow`), and
+  > `web-host-luks-boot-warning` (NoOne) covers **three**: `workspaces_luks_provision_wire_warn`,
+  > `workspaces_luks_provision_result` and `fresh_boot_ready_bs_egress`. The escrow stage is still emitted at level
+  > `warning` and the boot continues; it alerts by stage name. "Alerts" means a Sentry email to issue owners, best-effort:
+  > the emit is non-fatal (`|| true`) and the rule's 35-minute action-frequency window is a throttle shared by all of its
+  > stages and hosts (D8 item 3).
+  > `resolve_link_local` (cron-egress resolver) is additionally routed on `cron-egress-blocked`.
 - The user_data now carries a scoped credential (D4). It cannot be revoked after first boot because the reopen
   unit needs it on every boot; this is the price of an unattended first boot and is recorded as residual R4.
 - Until the live conversion, no published or registered statement may say web-2 is encrypted. The published
@@ -276,7 +301,7 @@ escalation if web-2 never produces rows.
   that `moved` fails every `-target` plan is the reason T2 is deferred.
 - **ADR-068 section (c)** and **ADR-143 D3**: the anti-pooling gate remains the fence until the marker is
   consumed by the flip orchestrator (#9358).
-- **ADR-148**: the replace gate is untouched; its unblock list (key-conditional gate arms, a rehearsal, #6964)
+- **ADR-148**: the replace gate's refusal is untouched (key-conditional arms were added behind a separate constant on 2026-10-02, see the addendum); its unblock list (key-conditional gate arms, a rehearsal, #6964)
   is separate from this ADR's conversion.
 - **ADR-140 / ADR-141**: the encryption-posture ledger row for web-2's volume moves from `plaintext-exception`
   to `luks` only with the live conversion (#9372).
@@ -293,3 +318,481 @@ No new element. `knowledge-base/engineering/architecture/diagrams/model.c4` is c
 added because they are trust edges this decision creates: `github -> doppler` for the write token scoped to
 `prd_workspaces_luks_marker`, and the `github -> betterstack` edge now names the web-2 verify leg as a reader.
 Every sentence about web-2 being LUKS-backed is conditioned on the live conversion.
+
+## Addendum — 2026-10-02 (#9377, #9358, #9356, #9357, #9378)
+
+**D7 — web-host escrow credential and config split (#9377).** The web-host class reads its own Doppler branch config
+`prd_workspaces_luks_web` through a NEW read token (`doppler_service_token.workspaces_luks_fresh_boot_web`), and its
+header backups go to a NEW bucket (`soleur-workspaces-luks-header-web`). The config holds copies of `WORKSPACES_LUKS_KEY`
+(in-graph from `random_password.workspaces_luks`, so rotation cannot drift), the bucket name, the endpoint, and a
+bucket-scoped R2 pair that is minted live (a deferred, gated step on #9377; until it exists the provisioner records
+`escrow=missing`, which withholds the soak marker). web-1 keeps `prd_workspaces_luks` and its own bucket. The provisioner
+accepts the closed set {`prd_workspaces_luks`, `prd_workspaces_luks_web`}; `luks-monitor.sh` reads its key config from
+`/etc/default/workspaces-luks-boot` with a web-1 fallback. The old token resource is left in place: re-pointing it is
+ForceNew, which the push-apply destroy guard halts, and retiring it is a later acknowledged destroy.
+
+> **Superseded 2026-10-05 (#9377, counsel-review C9), in part:** "a deferred, gated step" and "a deferred mint" describe the state before 2026-10-05: the two R2 credential names existed in `prd_workspaces_luks_web` at the names-only check (run 37279392332, 07:44Z) and the mint is the operator's report on #9377. The pair's scope is still unverified here (C1).
+
+> **Superseded 2026-10-03 (#9377):** (1) "in-graph from `random_password.workspaces_luks`, so rotation cannot drift" is
+> not true of PR #9448: the web-class copy is in-graph from its own `random_password.workspaces_luks_web` (and this
+> D7 text was first written by #9397, merged 2026-10-03, not by #9352). (2) "a bucket-scoped R2 pair" states an
+> intent: the pair is a deferred mint, no gate verifies its scope, and the signed `HEAD` isolation proof is a later,
+> live-only step. (3) "until it exists the provisioner records `escrow=missing`" will, from the merge of PR #9448,
+> raise a best-effort Sentry alert on a web-class birth, and a birth route will refuse to start without the R2 pair
+> names (D8), which are names, not values.
+
+**R4 is narrowed, not closed.** Narrowed on merge for every NEW birth (inferred, not read from a host: `hcloud_server.web` ignores `user_data` and
+the token postdates both live hosts; the retirement step must confirm it is destroyed); closed when the old token is retired. The shared passphrase residual
+above stands unchanged: a compromised web-2 still reads web-1's passphrase.
+
+> **Superseded 2026-10-03 (#9377):** "stands unchanged: a compromised web-2 still reads web-1's passphrase" holds only
+> for a host that received the pre-split token. For a NEW birth it will be narrowed once PR #9448 merges and the key
+> is created (see the addendum below).
+
+**Option (b), an R2 bucket lock, is rejected.** R2 has no object versioning, an age-based lock leaves a window after
+retention expires, and an indefinite lock would break web-1's cutover flow, which rewrites the header object.
+
+**`doppler-config-inventory.txt` is deliberately not edited**, for the same reason the marker config is absent from it:
+adding a name mints a drift-read token and forces floor edits.
+
+**Precondition for the live conversion (#9372).** `scripts/check-web-host-escrow-config.sh` in live mode must pass
+before the workflow runs: the provisioner formats even when escrow is missing, by design. It is not run by the PR that
+introduced it.
+
+> **Superseded 2026-10-03 (#9377):** the live check is now run by the workflow itself on every birth route (D8), not by
+> a person-run runbook step.
+
+**#9358.** `lb-weight-gate.sh` stays pure and env-only; `lb-weight-gate-with-marker.sh` is the one seam through which the
+workspaces cutover marker reaches it (a names-list membership test, then a single-secret get). The flip orchestrator
+that will call it does not exist yet; a census pins that nothing else feeds the gate. The marker stays advisory and
+shape-only here: provenance is not validated.
+
+**#9356.** The replace gate gains key-conditional arms for `web-1` behind a SEPARATE constant; the by-name refusal
+stays first and intact, so a complete web-1 plan still aborts. The arms do not prove web-1 safe: the by-id mount pin to
+the superseded plaintext volume, the web-1-pinned SSH provisioners and upstream-only `-target` are blockers no plan can
+show. A header-restore drill joins the real-cryptsetup loopback suite. Whether a non-bypassable HALT on rotating
+`random_password.workspaces_luks` is needed (a `[ack-destroy]` can wave one through today) is left open; it is listed in the #9377 follow-up comment as a go/no-go before #9372 dispatches.
+
+> **Superseded 2026-10-03 (#9377):** decided: yes, a non-ackable HALT is needed (D8), implemented in PR #9448 and
+> effective on its merge.
+
+**#9378.** The provisioner is hardened in place: `flock` on fd 9 (600 s), a pinned `PATH`, the test seam refused as root on a cloud-init host, and every write to fstab, crypttab, the docker drop-in and the format intent file through one atomic, fsynced `_install_file` that refuses symlinks. The container egress ruleset refuses any CIDR overlapping `169.254.0.0/16`, starts with a rate-limited log rule and an unconditional drop for that range, and the resolver strips link-local answers from every feeder. `case_raw_formats_once` is split into four cases.
+
+**#9357.** Only the offline state-move rehearsal, the runbook and the blocked-by edges (#9421 de-pet rebuild; the held draft PR #9348 cannot be a GitHub dependency) ship. The HCL collapse and the
+single-use state-move workflow wait for the held PR B (#9348) and a web-1 de-pet rebuild.
+
+## Addendum — 2026-10-03 (#9377)
+
+Offline only. This addendum records decisions taken by the issue owner on #9377 and implemented in PR #9448, the PR that
+carries it (`Ref #9377`, never `Closes`); #9377 here means the issue, and the earlier credential-split change is #9397
+(merged 2026-10-03). Nothing here was applied: no apply, no workflow dispatch, no Doppler or Cloudflare write. Every
+"now" below means "on the merge of PR #9448", and every statement about what a host reads is conditional on the push-apply
+having created the web-class key, which has not happened. The superseded sentences above are marked in place; their text is kept as the dated record. The
+status stays `adopting`, and every statement that web-2 is LUKS-backed stays conditioned on the live conversion
+(#9372). Nothing below says web-2 is encrypted.
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** "which has not happened" no longer holds: the key was created on 2026-10-04 (run 37209725107). The status stays `adopting` and nothing here says web-2 is LUKS-backed.
+
+**D7, rewritten (passphrase sentence).** The web-class config `prd_workspaces_luks_web` carries its OWN
+`WORKSPACES_LUKS_KEY`, generated by a new `random_password.workspaces_luks_web` (40 characters, no special
+characters, `lifecycle { prevent_destroy = true }`, no `ignore_changes`, no `keepers`) and copied in-graph into
+`doppler_secret.workspaces_luks_web_key`. web-1 keeps `random_password.workspaces_luks`; the web-class file never
+names web-1's password, which the checker's `--static` census (the word-bounded address may appear in code only in
+`workspaces-luks.tf`) and the file-scoped suite `workspaces-luks-header-web.test.sh` both pin. The bucket name,
+endpoint and the live-minted R2 pair are unchanged from 2026-10-02. As measured on 2026-10-03, nothing from the
+earlier credential-split merge (#9397) had been applied (`apply-web-platform-infra.yml` was `disabled_manually` since
+2026-10-01), so the swap is a first create in Terraform, not a rotation, and no volume was ever keyed by the earlier
+shared value.
+
+> **Superseded 2026-10-04 (#9481), in part:** "nothing had been applied" no longer holds for two of the objects. Measured
+> on 2026-10-04: `doppler_config.workspaces_luks_web` and `doppler_service_token.workspaces_luks_fresh_boot_web` were
+> created at 07:27 UTC by an `apply-deploy-pipeline-fix` run (`-target` transitive dependencies of the web-host
+> user_data), and `apply-web-platform-infra.yml` was re-enabled for individual dispatches that day (08:00 to 12:06 UTC)
+> and is `disabled_manually` again. The bucket, `random_password.workspaces_luks_web` and the three `doppler_secret`
+> copies were still absent in the live names read of 2026-10-04. The sentence above is kept as the dated record.
+
+**D-A1 — a distinct passphrase per host class.** Rationale: a shared value made a web-2 leak a web-1 leak and made a
+future web-1 `luksChangeKey` a two-host re-key. The split is cheapest now: no web-class volume is LUKS-formatted yet
+(the live web-2 volume is plaintext and empty), so there is no data keyed by the old value. It becomes a data-bearing
+rotation after #9372.
+
+**D8 — three controls (decisions A2, B1, B2).**
+
+1. *Non-ackable rotation HALT (A2).* The push-apply's `luks_passphrase_rotations` counter now covers six addresses:
+   `random_password.inngest_redis_luks`, `doppler_secret.inngest_redis_luks_key`, `random_password.workspaces_luks`,
+   `doppler_secret.workspaces_luks_key`, `random_password.workspaces_luks_web` and `doppler_secret.workspaces_luks_web_key`.
+   An `update`, `delete` or `forget` there, or a change whose verb list cannot be read, stops the `apply` job before the
+   `destroy_count` sum and outside it, so `[ack-destroy]` cannot wave it through (a replace also trips `resource_deletes`,
+   which is why an ack aimed at an unrelated delete would otherwise have acked the rotation). A first `create` and a
+   `no-op` stay legal. The only bypass is `[skip-web-platform-apply]`, which skips the apply and performs nothing. The
+   cutover, recut and replace dispatch gates name the web-class pair in their `luks_passphrase_touched` clause, each
+   with a removal row in its suite; the by-name web-1 refusal in the replace gate is untouched. A table row in
+   `terraform-target-parity.test.ts` confines the web-class key copy and the new password to the `apply` job's
+   `-target` list and requires the HALT block there; the same suite checks the apply step from its `run:` header through the
+   luks HALT's closing `fi` as a CLOSED SEQUENCE: every line is consumed by exactly one expected step (each required
+   statement once and in order, if/fi balanced, `echo` and `grep` bodies restricted to ones that cannot run code, the numeric
+   validation naming every counter), so a rewrite of the counter, an echo-prefixed short-circuit, an ack-keyed reset, an
+   inserted `exit $rc` or a second `if` with an extra `fi` before the HALT has no slot and fails it. Why a HALT: a rotated Terraform value leaves the LUKS header cut from
+   the old one with no surviving copy of the old one, so the volume is unopenable at the next boot of a host with no
+   console. The supported rotation of a populated volume is a header re-key (`cryptsetup luksChangeKey`) followed by an
+   intentional state change under review, never a Terraform replace; the HALT's remediation text says so. The counter
+   compares a base address (module prefix and trailing instance index stripped, `luks_passphrase_base`, which also accepts
+   a quoted key holding escaped characters), so `random_password.workspaces_luks_web["web-2"]` is the same secret to it; the three dispatch gates keep exact-address
+   matching and abort an indexed or module-prefixed address as out of scope; the replace gate also aborts a plan entry
+   with an empty `actions` array (it was classified as no change before). The recut gate's ABORT message in the workflow names all four counted
+   passphrase addresses (pinned from the recut suite). The HALT is pinned structurally in the parity suite, executed against
+   fixture plans in the destroy-guard suite, and executed as the real step text from its start (with `doppler` and `terraform`
+   stubbed and the real acknowledgement environment) against ten skip or neuter mutations, each of which the structural
+   check refuses and each of which is shown to defeat the HALT when run unchecked. What this proves is that the step text in
+   the repository has that shape and that those ten mutants are caught; it does not prove the HALT against every possible
+   shell construct, and it says nothing about a workflow other than `apply`.
+2. *Escrow readiness as a workflow gate (B1).* New `scripts/web-host-escrow-preflight.sh` runs
+   `check-web-host-escrow-config.sh --live` fail-closed in `web_host_create` and `web_host_replace`, before the first
+   Terraform command (it follows the ADR-128 R1 backend-credentials step, which is deliberately the first Doppler reader).
+   It takes the workplace-scope provider token from `TF_VAR_doppler_token_tf`, or reads exactly one secret
+   (`DOPPLER_TOKEN_TF` in `prd_terraform`) with the step's own token, shape-checks it before masking it, refuses xtrace
+   first, and keeps the value out of argv, files, `GITHUB_ENV` and stdout. A third, non-creating consumer runs the same script from the dispatch-only diagnostic `web-host-escrow-diagnose.yml` (ADR-241 D2 note, 2026-10-04). In CI the checker runs in a count mode for the
+   `prd`-root advisory (the repo is public and the step runs on every birth, so names are withheld; a local `--live` run
+   lists them), a red run re-emits the checker's CAUSE, NOTE and unreadable lines and then its FAIL lines as annotations (nine at
+   most, causes first, each cut at 600 characters and flattened to printable ASCII), and the stderr of the fallback token read is scrubbed (token shapes and the literal value redacted,
+   non-printable bytes flattened, the first 300 bytes kept). A census test
+   (`web-host-escrow-preflight-census.test.ts`) makes any workflow job whose text has a `terraform` or `tofu` apply (bare or
+   path-qualified, any global-option form including `-chdir`, continuation lines joined) and a `-target`/`-replace` of an
+   indexed or module-qualified `hcloud_server.web[...]`, of the bare map outside quoted prose (a quoted string whose first
+   word is the binary, as in `bash -c "terraform apply ..."`, `eval`, `ssh h "..."` or an echo `$(...)`, is read as code), or
+   of a non-literal value (over-flagging on purpose) carry the step, so the single-use web-2 rebirth workflow (#9372) cannot
+   be written without it by those spellings, and pins the two `host_creates` refusals by name. The runbooks' "step 0" is now a diagnostic,
+   not the control.
+3. *`escrow=missing` alerts (B2).* The stage `workspaces_luks_provision_escrow` moved from the NoOne rule
+   `web-host-luks-boot-warning` to `web-host-luks-boot-fatal`: 14 alerting stages, 3 quiet ones. The provisioner still
+   continues after a failed escrow and still emits it at level `warning`; severity is by stage name, and the op-contract
+   suite carries an explicit carve-out for this one stage. "Pages" is best-effort and conditional: the emit
+   (`soleur-boot-emit ... || true`) is non-fatal, so a failed emit raises nothing; delivery is a Sentry email to issue
+   owners, not a push notification; and the rule edit takes effect only after `apply-sentry-infra.yml` applies it. The
+   35-minute `frequency_minutes` is a per-rule, per-issue-group throttle, and every boot event shares one perpetually-active
+   issue group (read from the rule's own group comments, not measured against live Sentry), so the window is fleet-wide and
+   spans boots: another page of the same rule within 35 minutes, from any of the 14 stages or any host, can fold an escrow
+   alert into silence, and an escrow alert can equally fold a fatal stage that follows it. The reads that do not depend on
+   the throttle are the readiness row's `escrow=ok` and `scripts/sentry-issue.sh --host-events <host> --stage
+   workspaces_luks_provision_escrow`, both in the runbooks. The cron-egress resolver's `resolve_link_local` op is routed on
+   `cron-egress-blocked`, and its once-per-source marker is written only after a POST curl reported as sent (delivery is
+   still best-effort: curl rc 0 is not an HTTP 2xx). The R2 key id and secret are shape-checked (`LC_ALL=C`, closed
+   charsets) before the curl config stream, so a quote, backslash, whitespace or control byte cannot add a directive; a
+   refusal records `escrow=missing` and no curl call, with reason `creds_shape` for the key id or secret and `shape` for the
+   bucket or endpoint (the runbooks carry the reason decode table).
+
+**Shared-passphrase residual, rewritten.** Once PR #9448 merges and the push-apply creates the web-class key, for every
+NEW web-class birth a leak of the web-class token or passphrase will no longer yield web-1's passphrase. This is **narrowed, not eliminated**, and not proven by a value comparison: both configs
+sit in one Doppler project, both passphrases live in one Terraform state, one provider token writes both, and the
+distinctness is structural (two independent `random_password` resources), not read from a host. Not closed while the
+pre-split fresh-boot token exists: it still resolves web-1's config (and its passphrase and escrow pair) until a later
+acknowledged destroy retires it, and it was never delivered to a host born after the split (inferred, not read from a
+host). R4 (a user_data credential that cannot be revoked after first boot) is narrowed by the same inference. The
+`luksChangeKey` constraint on web-1 is lifted for web-class hosts from that point. The residual is recorded in the Article 30 register and
+the compliance posture, scoped to NEW births, with the web-2 statements still conditioned on #9372. True isolation between
+hosts remains the separate-project work (#6167).
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** the creation condition ("Once PR #9448 merges and the push-apply creates the web-class key") is met: PR #9448 merged 2026-10-04 and a dispatched apply (run 37209725107, not a push-triggered run) created the key. The residual stays **narrowed, not eliminated**: the pre-split token is not retired (C2) and the distinctness is still structural, not read from a host. See "Addendum — 2026-10-05".
+
+**Loss recovery.** Once the push-apply creates it (it has not), the web-class passphrase will have as durable copies the Doppler secret,
+Terraform state and Doppler's secret history (plus the runner-local copy of the state described under Known limits); web-1's passphrase will no longer back it up, and the escrowed
+header cannot open a volume alone. While no web-class volume holds data a loss costs a rebuild of an empty standby. A
+recovery path for the data-bearing period is owned by #9372 (acceptance criterion 2 in the issue comment of 2026-10-03,
+<https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5973898251>) and is to be recorded and tested before data
+lands (GDPR Art. 32(1)(c)). One of the two copies has no restore substrate today: the Terraform state bucket has no
+object versioning (#7992).
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** "(it has not)" no longer holds. The key and its Doppler secret were created by run 37209725107 on 2026-10-04, so the Doppler secret and Terraform state existed from that apply and were read back at 2026-10-04 17:57Z (plan-only run 37222472359) and 2026-10-05 12:32Z (dispatch run 37310111213), each an allow-list or plan-only plan reporting no changes. That Doppler's secret history holds the value is Doppler's design and was not measured. The recovery path for the data-bearing period is unchanged and still owned by #9372; no web-class volume holds data.
+
+**Known limits, recorded not hidden.**
+
+- A first create cannot be told from a state loss: if state were lost or rewound after a web-class volume was formatted,
+  both web resources would plan as `create`, which the HALT permits, and the provider would overwrite the live secret. The
+  state bucket's own protections are the control.
+  > **Superseded 2026-10-06 (#9372), in part:** "which the HALT permits" no longer holds for the web-class passphrase: from the
+  > merge of the retirement change (#9569) the HALT counts a `create` of the web-class passphrase (see the dated marker under
+  > the D9 gate-shape item). The state bucket's protections remain the control for the other five addresses.
+- A tainted first create of the generator is blocked by `prevent_destroy` on the next plan; recover with `terraform untaint`
+  or by removing the tainted state entry under review. `doppler_secret.workspaces_luks_web_key` has no lifecycle block, so
+  a tainted or edited key copy is stopped by the HALT (an `update`, `delete` or `forget`), not by `prevent_destroy`.
+  Retiring the web-class config needs a dedicated operator-run state change reviewed on its own (owner: #9372), not the
+  push-apply: removing either resource plans a delete or forget that the non-ackable HALT counts, so every push-apply would
+  stop until `[skip-web-platform-apply]` (see the header comment of `workspaces-luks-header-web.tf`).
+- Any provider-driven `update` of a key copy wedges the push-apply until `[skip-web-platform-apply]`; the inngest pair
+  already accepts this trade.
+- The preflight reads Doppler names only, so a present but wrong R2 pair passes it and fails at the provisioner (a
+  best-effort alert, not a stopped birth). Whether a birth must instead fail closed on that is a recorded open question for #9372, before any
+  web-class host holds data. The preflight runs after the reviewer approval of the dispatch environment, so a refused birth
+  spends one approval. The preflight uses a write-capable provider token; a read-only token is a tracked deferral (#9461).
+- Sequencing: this change must merge before `apply-web-platform-infra.yml` is enabled. If that workflow were enabled
+  between the merge of #9397 and the merge of PR #9448, it would create the key from the shared password and the swap would
+  then plan as an `update` that the new HALT stops; recovery is to treat the swap as a rotation of a never-formatted key
+  and re-create the Doppler secret and its state entry under review.
+- **Owned by #9372, none of it done here** (acceptance criteria 2, 3 and 4 in the issue comment cited above). (1)
+  *Passphrase-loss recovery* for a data-bearing web-class host (Art. 32(1)(c)): define and test it, and re-attest the
+  Article 30 cells. (2) *Escrow re-attempt for a data-bearing host:* the provisioner attempts escrow once per instance, so
+  an `escrow=missing` alert cannot be cleared by re-running it, and a host replace of a host that holds data is not an
+  acceptable answer; define a re-escrow step before web-2 receives data. (3) *Create-exemption expiry:* the rotation HALT
+  treats a `create` as legal because no web-class volume is formatted yet; that basis ends when the rebirth formats web-2,
+  after which a lost or rewound state entry (planned as a `create`, overwriting the live Doppler secret) must be counted too.
+  The exemption applies to all six addresses, including web-1's long-lived pair, where a `create` can only mean state loss.
+  > **Superseded 2026-10-06 (#9372), in part:** item (3) is done for the web-class passphrase from the merge of the retirement
+  > change (#9569): the HALT now counts a `create` of the web-class passphrase. The exemption still applies to the other five
+  > addresses, including the web-class key copy and web-1's pair. Items (1) and (2) stay open.
+- **Indexed-address blind spots.** The rotation HALT compares a base address, with a module prefix and a trailing
+  instance index stripped (`luks_passphrase_base` in `destroy-guard-filter-web-platform.jq`), so
+  `random_password.workspaces_luks_web["web-2"]` is the same secret to it. The three dispatch gates match exact addresses
+  by design: an indexed or module-prefixed address is not in their allow-set and aborts as out of scope. Not covered:
+  the workflow census recognises a host-creating job by a `terraform apply` (any global-option form) beside an indexed,
+  bare-map or non-literal `-target`/`-replace` of `hcloud_server.web`, so a plan/apply split across two jobs where the apply
+  job names no target, a birth wrapped in a script file or nested composite action, a dependency pull (a `-target` of a
+  resource whose closure includes the server, which the per-merge jobs answer with their `host_creates` HALT), a `terraform
+  destroy` or Hetzner API delete step, a terraform call whose binary name is built at run time, flags held in a variable or
+  array and expanded at the call (`F="-target=hcloud_server.web"` then `terraform apply $F`), and (for the later-step
+  rule) job- or workflow-level `defaults.run.shell` are not seen; a message string that merely starts with the binary is a
+  known over-flag. Owner: #9372
+  (criterion 1: run the preflight before its first destructive step).
+- **Static census limit.** The `--static` census is a NAME census over `*.tf`, `*.tf.json`, `*.yml`/`*.yaml`, `*.sh`,
+  `*.tpl`/`*.tftpl` and `*.service` under the infra tree. It fails if web-1's password generator
+  (`random_password.workspaces_luks`) or its Doppler copy (`doppler_secret.workspaces_luks_key`, the same value) is named
+  in code outside `workspaces-luks.tf` (exact relative-path match), if a Doppler data source (`data "doppler_secret"` or
+  `"doppler_secrets"`, HCL or JSON spelling) appears outside web-1's own files, or if web-1's token address is named
+  outside its definition file; an empty census is a failure, not a pass. It does NOT see a value that reaches the web-class
+  secret by a route that names none of these (a variable, a remote state, a `.tfvars` file, a copy made by a person or an
+  out-of-band script, an indirect flow through a local that is itself assigned in `workspaces-luks.tf`), and it never proves
+  value distinctness. The file-scoped suite `workspaces-luks-header-web.test.sh` additionally pins the web-class passphrase
+  block in its own file. Value distinctness is unchecked by design (see "Rejected").
+- **A birth that holds the escrow pair names but not working values** passes the preflight and is caught only at the
+  provisioner, as a best-effort alert (above). Fail-closed on `escrow=missing` is #9372 criterion 5.
+- **The "first create" premise is read from the workflow state and the commit history, not from Doppler.** The web-class
+  key has never been applied because the push-apply workflow has been disabled since 2026-10-01 and the key resource first
+  appeared on 2026-10-03; nothing in the repository can show that no person set `WORKSPACES_LUKS_KEY` by hand in
+  `prd_workspaces_luks_web`. The provider's create overwrites an existing secret, and the HALT does not count a `create`.
+  Before the reviewed push-apply the checker's live mode must either report the key missing or, while the config does not
+  exist yet, exit 3 with the NOTE that the config was not found (it never reaches the per-name check then); after the
+  push-apply creates the config and before the mint, a key present must be only the one that apply created, and the reviewed
+  plan must show creates only for the web-class pair. Tracked as C8 with the other open legal conditions in
+  <https://github.com/jikig-ai/soleur/issues/9377#issuecomment-5974285193> (C4: supersede the conditional wording in the
+  register cells after the push-apply; C5: verify the Sentry rule edit applied; C8: this check).
+  > **Superseded 2026-10-06 (#9372), in part:** "the HALT does not count a `create`" no longer holds for the web-class passphrase
+  > from the merge of the retirement change (#9569). The premise itself (a hand-set value cannot be excluded from the
+  > repository) is unchanged.
+- **The credential read in the preflight's fallback arm is not seen by the privileged-tier census.** The census's check of
+  workflow `run:` bodies does not scan scripts, so the single-secret read of the workplace provider token inside
+  `scripts/web-host-escrow-preflight.sh` is invisible to it; the shape check on the value read is the only control, and a
+  read-only credential for this check is #9461.
+- **A runner-local copy exists.** The push-apply's arming step writes the root's state as JSON to `$RUNNER_TEMP`
+  (`terraform show -json`, which does not redact sensitive values), a deliberate pre-existing choice that already holds web-1's
+  passphrase and every other state secret for the life of a GitHub-hosted job. Once the web-class key exists it holds that
+  passphrase too; "Doppler secret and Terraform state" describes the durable copies only.
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4/C8), in part:** "has never been applied because the push-apply workflow has been disabled since 2026-10-01" does not hold: the key was created by a dispatch of `apply-web-platform-infra.yml` (run 37209725107, 2026-10-04) after that workflow was enabled for dispatches, and a read of its state on 2026-10-05 returned `active` (one observation; it was toggled around dispatches earlier). The pre-apply checks in this bullet were met in part: a names-only preflight inside run 37200210561 (`web_host_replace`, 2026-10-04 12:05:58Z) reported the three Terraform-managed names missing 2.5 h before the apply; a `--live` read showing the key missing immediately before the apply was not recorded (counsel review C8 limit (d)).
+
+**Rejected, with the reason.** A separate `sentry_alert` for `escrow=missing` (moving the stage buys the best-effort alert with no new
+frequency slot or import bijection). `prevent_destroy` on web-1's `random_password.workspaces_luks` (the HALT covers it and
+`workspaces-luks.test.sh` pins that file's exact content). Comparing the two passphrases by value in CI (it would give a CI
+job read access to web-1's key to prove what Terraform already guarantees structurally). A read-only Doppler token for the
+preflight (needs a live mint; deferred and tracked at #9461).
+
+**Still open on #9377, gated and live-only.** The live R2 pair mint with a signed `HEAD` isolation proof in both
+directions (only possible after the push-apply has created the config); retiring the pre-split token; the remaining census
+proofs; the runtime link-local-in-live-chain assertion.
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4/C9), in part:** "only possible after the push-apply has created the config" is met: the config was created on 2026-10-04 at 07:27Z by `apply-deploy-pipeline-fix.yml` run 37185772362; the mint and its two-way proof are the operator's report on #9377 and remain C1.
+
+## Addendum — 2026-10-04 (#9377)
+
+Offline only. This addendum records the mechanism that the PR carrying it (#9481, `Refs #9377` and `Refs #8609`, never
+`Closes`) adds for the first creation of the web-class escrow resources. Nothing here was applied: no workflow dispatch, no
+Doppler or Cloudflare write. Every "will" below is conditional on the owner's separate, explicit authorization of each
+dispatch. The status stays `adopting`; nothing below says web-2 is encrypted, and every statement that it is LUKS-backed
+stays conditioned on the live conversion (#9372).
+
+**D9 (new): a dedicated, create-only workflow is the only automated creation path for the web-class escrow resources while
+the push-apply is disabled.** `apply-web-platform-infra.yml` is `disabled_manually` (measured 2026-10-04; it was toggled for individual dispatches that
+day), so the three
+Terraform-managed names of `prd_workspaces_luks_web` (`WORKSPACES_LUKS_KEY`, `WORKSPACES_HEADER_BUCKET`,
+`WORKSPACES_HEADER_R2_ENDPOINT`) do not exist and the escrow readiness preflight cannot pass. `apply-web-escrow-create.yml`
+is dispatch-only (typed confirm, a reason echoed to the step summary, `plan_only` defaulting to true) and plans with exactly
+five `-target` addresses and no `-replace`: `cloudflare_r2_bucket.workspaces_luks_header_web`,
+`random_password.workspaces_luks_web` and the three `doppler_secret` copies. It contacts no host, runs no Terraform state
+command, imports nothing and arms no heartbeat. It runs in `infra-privileged` and takes the shared concurrency group
+`terraform-apply-web-platform-host` (the lockless R2 state's only serializer), not the job-level `web-1-swap` group, because
+it touches no SSH bridge credential.
+
+> **Superseded 2026-10-04 (#9492), in part:** "do not exist" no longer holds. A dispatch of `apply-web-platform-infra.yml` (run 37209725107) created all five resources at 14:35 UTC. A plan-only run of this workflow (run 37222472359) then reported `No changes`, and the readiness diagnostic (run 37222879953) failed only on the two R2 names, the operator mint. A dispatch of this workflow therefore plans nothing to create today; it stays single-use and retires with #9372 (below). The 2026-10-03 addendum's statements that the push-apply has not created the web-class key are superseded the same way, and the first live apply has happened, so re-evaluation trigger 1 (the CLO's measured supersession, counsel review C4) is due; it is tracked on #9377 and not performed here. The sentence above is kept as the dated record.
+
+> **Superseded 2026-10-05 (#9377, counsel-review C4), in part:** "while the push-apply is disabled" and "`disabled_manually`" are dated observations. `apply-web-platform-infra.yml` returned `active` on 2026-10-05 and ran dispatches that day (07:47Z and 07:51Z, both failed at the plan gate; 12:31Z, success; counsel review re-evaluation trigger 8); it was toggled around dispatches, so read its state again before relying on either description. The five-address plan gate of this workflow's design is unchanged.
+
+**The gate shape.** (1) An inverted allow-set: every plan entry that is neither no-op nor read must be exactly `["create"]`
+at one of the five addresses; any other address, any other verb list, an indexed or module-prefixed spelling, an entry whose
+action list is missing or empty, or a `doppler_config.workspaces_luks_web` change aborts before any mutation. The workflow
+measures no state fact, so the abort says only what the plan shows: a `create` means the config is not in this root's
+state (it is a `-target` dependency of the three `doppler_secret` copies; `apply-deploy-pipeline-fix` or a push-apply
+creates it), any other verb is read as state and live disagreeing (inferred), and the workflow has no import verb. The
+destination of every `doppler_secret` create is read from the graded plan (project `soleur`, config
+`prd_workspaces_luks_web`, a well-formed upper-snake name) and that name is what the live precondition checks, so a repointed config or a
+renamed secret cannot slip past a restated literal. (2) The seven shared
+destroy-guard counters of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` must read zero with `plan_ok` true; under
+`-target` most of them cannot see untargeted resources, so they are defense in depth and the allow-set is the guard. A first
+create of the passphrase and its key copy is legal under `luks_passphrase_rotations`. (3) A names-only live precondition
+(`scripts/web-escrow-create-names.sh`, the only Doppler verb being `secrets --only-names`, the listing written to a file and
+never to the public log) aborts when a plan-created key copy's name already exists live, and never reads an unreadable
+listing as absent. After an applying run the same reader re-reads the names.
+
+**First-create legality ends once a web-class volume is formatted (the #9372 rebirth).** After that, a state loss or
+rewind would plan a `create` that overwrites a live secret, which the push-apply's rotation HALT cannot tell from a first
+create. From that point the live names precondition, not the plan gate, is what refuses it (and it also refuses a
+hand-set value and an inherited `prd` name, a false positive that is safe). The workflow is therefore single-use and retires
+with #9372; the coupled artifacts are listed in
+<https://github.com/jikig-ai/soleur/issues/9372#issuecomment-5980161163>.
+
+> **Superseded 2026-10-06 (#9372), in part, from the merge of the retirement change:** the line "A first create of the passphrase and its key copy is legal under `luks_passphrase_rotations`" (gate-shape item 2 above) no longer holds for the web-class passphrase. From the merge of this change the rotation HALT of `tests/scripts/lib/destroy-guard-filter-web-platform.jq` counts a `create` of `random_password.workspaces_luks_web` and the apply refuses it with no acknowledgement path. A create of `doppler_secret.workspaces_luks_web_key` alone stays legal (it restores the same state-held value, and a missing copy is itself an incident; the CTO's re-ruling of 2026-10-06 narrowed the earlier two-address scope), as does a first create at the other four addresses. The single-use escrow-create workflow (`apply-web-escrow-create.yml`) and its names helper are retired by the same change; the push-apply can still create the escrow config, bucket and name secrets, and a create there is not halted. There is no documented or verified automated recovery for a lost passphrase entry: importing the existing value is not a supported route (measured in a sandbox with the lock-pinned random provider, the import plans `special = true -> false`, a forced replacement that `prevent_destroy` refuses and that, forced, would mint a new passphrase), the live value is unharmed while its Doppler copy exists, and the repair is the owner's decision (the state backend has no versioning, ADR-006). Whether an import plus a state-attribute fix yields a clean plan is unmeasured and tracked on #9572. The status stays `adopting`, and this marker does not record that the rebirth has run: it is dispatch-only and still pending. The passages above that describe the live names precondition describe the retired workflow's design and stay as the dated record. The text above is kept as the dated record.
+
+**Alternatives considered and rejected.** Re-enabling `apply-web-platform-infra.yml` (its whole-root plan carries unrelated
+destroy and replace entries, and the file sits near its byte cap). A new `apply_target` on that workflow (same file, same
+cap). A local, ungated `terraform apply` from a workstation (bypasses every gate and the serializer;
+`hr-all-infrastructure-provisioning-servers`). A Terraform root of its own (a second state for four resources, with its own
+lock question). A pre-apply copy of the state object to a dated key (a raw state read in a workflow scoped to no state
+verbs); #7992 tracks the capability once, for every applier.
+
+**Known limits.** Authorization is process, not mechanism: `infra-privileged` has a main-only branch policy and no required
+reviewer, so the typed `confirm` token and the owner's per-dispatch authorization are the only gates on a dispatch; the
+plan-only-first order is likewise a convention. A `doppler_secret` create is an upsert (recorded in the 2026-08-01
+credential-delivery plan), so the live names precondition is the only barrier between the plan and a silent overwrite, and
+the window between that check and the apply is not closed by a second read (a human Doppler write inside it would be
+overwritten; the group serializes appliers, not people). The listing is read from the Doppler CLI table, shared with the
+`--live` checker; an unrecognised shape is refused, a truncated name is not detectable offline. The state that will hold
+the passphrase is Tier-A readable (ADR-241 residual R2). The shared concurrency group keeps one running and one pending run, so a run queued behind another
+displaces an older pending run of any workflow sharing the group (`apply-web-platform-infra.yml`,
+`apply-deploy-pipeline-fix.yml`, `workspaces-plaintext-forget.yml`); the runbook step says to confirm the run actually
+started. The backend is lockless, so a cancelled running apply can leave a Doppler secret that state does not hold; the names
+precondition then refuses and a person decides. The passphrase exists on the runner for the life of the job and in
+Terraform state (no object versioning, #7992). Creation proves that names exist, not that a header can be restored (#9372
+criterion 2) or that the R2 pair is bucket-scoped (intended to be scoped, unverified until the signed isolation proof on
+#9377). The R2 access-key pair is not Terraform; the workflow prints the mint as the next step.
+
+**Follow-through that this change does not perform.** The first live apply fires re-evaluation trigger 1 of the legal
+posture: after reading state and re-reading the Doppler names, a dated `Superseded` marker is appended under every
+conditional sentence of the Article 30 and compliance-posture records without deleting any text, the two cells are kept
+byte-equal after bold removal, and `python3 scripts/lint-encryption-posture.py` is re-run (counsel review C4; owned by the
+CLO agent with the owner holding a veto). The GDPR gate must run when the first data-bearing web-class host is born.
+
+## Addendum — 2026-10-05 (#9377, counsel-review C4)
+
+**What this addendum does.** It performs the follow-through the 2026-10-04 addendum left open ("Follow-through that this
+change does not perform"): the first live apply has happened, so the conditional sentences about the web-class key are
+superseded by measured state. Each is kept as the dated record and carries a `Superseded 2026-10-05` marker; the Article 30
+register and compliance-posture cells carry the same marker, byte-equal.
+
+**Measured state (read-only; GitHub Actions run logs and the Doppler config audit log; no secret value was read).**
+
+- The web-class key exists. Run 37209725107 (`apply-web-platform-infra.yml`, `workflow_dispatch`, 2026-10-04 14:33:54Z to
+  14:37:14Z) planned 7 to add, 0 to change, 0 to destroy and created `random_password.workspaces_luks_web`, the three
+  `doppler_secret` resources (`WORKSPACES_LUKS_KEY` at 14:35:38Z, the bucket name and the R2 endpoint), the R2 bucket
+  `soleur-workspaces-luks-header-web` and two unrelated Better Stack resources. It was a manual dispatch by the operator, not a
+  push-triggered run. The web-class config and its read-only token were already in Terraform state when it began (refresh lines in its plan), and
+  no run of that workflow had applied since 2026-10-01 (run 37187540739 on 2026-10-04 08:00Z ran only `entrypoint_audit`), so they came from another route: `apply-deploy-pipeline-fix.yml` run 37185772362 (`workflow_dispatch`, 2026-10-04 07:26:12Z to 07:27:32Z; 3 added, 1 destroyed,
+  no secret written), which created `doppler_config.workspaces_luks_web` at 07:27:08Z and `doppler_service_token.workspaces_luks_fresh_boot_web` seconds later as
+  `-target` dependencies of the web-host `user_data`, as the Superseded 2026-10-04 (#9481) callout in this ADR already records.
+- C8 evidence, first-create premise: the Doppler audit log of `prd_workspaces_luks_web` (read by the author of this change at about 13:43Z on 2026-10-05 and not
+  re-read by counsel; 9 entries, the whole history of
+  the config) holds no secret write between the config's creation (2026-10-04 07:27Z) and the three writes at 14:35:37Z to
+  14:35:38Z that match run 37209725107's three creates one to one. A plan-only run (37222472359, 17:57Z) read the live
+  value back and reported no changes. The decisive control is not any of those reads but that the provider's create writes the value whether or not one
+  exists (ADR-263 Known limits record it as an upsert; not measured here): a value set by hand before 14:35Z would have been overwritten by the generated
+  one, and a value set by hand afterwards would show as an update in the next plan. That upsert premise is what remains unmeasured. Limits, as posted at <https://github.com/jikig-ai/soleur/issues/9377#issuecomment-5995711642>: every entry carries the operator's account, because
+  the provider runs on the workplace personal token, so the actor cannot separate a person from Terraform; the audit log
+  carries no secret names. The window after the apply is closed to 2026-10-05 12:32Z by the allow-list plan of dispatch run 37310111213, which refreshed `doppler_secret.workspaces_luks_web_key` and reported no changes; a later change is excluded only by the next Terraform refresh (the 06:02Z scheduled drift run is not relied on: its log carries no refresh lines for these resources, and its plan listed no web-class resource but did report drift on other hosts).
+- The names-only readiness diagnostic (run 37279392332, 2026-10-05 07:44Z) passed with `escrow-split-contract:live-ok`.
+  It reads names and not values, so it is necessary and not sufficient.
+
+**Not superseded, still open.** C1: the two R2 credential names exist as of 2026-10-05 07:44Z (the names-only check above; the mint itself is the operator's report on #9377, and the same check had reported both missing on 2026-10-04, run 37213826582), and the signed `HEAD` isolation results are
+recorded on #9377, but no proof record exists under `knowledge-base/` and this change did not re-run the proof, so the
+cells keep "intended to be scoped". C2: the pre-split token is not retired, so the narrowing holds for new births only. C3
+(#9372 items), C6 (state restore substrate, #7992) and the web-2 statements are unchanged. Nothing here says web-2 is
+encrypted.
+
+## Addendum — 2026-10-05 (#9372, offline PR: the workflow is merged inert)
+
+**Status of this addendum.** The decision below is true of the **code** at merge. The rebirth has **not** run; nothing here says
+web-2 is LUKS-backed. The workflow is dispatch-only with `plan_only` defaulting to true, and a dispatch needs the owner's explicit
+go-ahead plus the `web-platform-infra-apply` reviewer approval.
+
+**D10 — the rebirth is `-replace` over five explicit targets, not a destroy plan plus `web-host-create`.** The "Live conversion"
+section above describes the operation as delete the volume, remove the state address, destroy the server and attachment, then run
+`web-host-create`. Measured against the repo, a destroy-mode plan on the server also takes its dependents (including
+`hcloud_firewall_attachment.web`, which would strip web-1's firewall), and the create job is not dispatchable from another
+workflow. So `.github/workflows/web2-luks-rebirth.yml` (a new file: `apply-web-platform-infra.yml` is at its byte cap) deletes the
+empty volume through the Hetzner API (detach, then DELETE, 404 meaning already gone), forgets the volume and its attachment with
+`terraform state rm`, and then applies ONE `-replace` of `hcloud_server.web["web-2"]` over five `-target`s (server, private NIC,
+keyed volume, volume attachment, fleet firewall attachment). With the volume absent from state the plan CREATES it, raw (no
+`format`, D2), and `prevent_destroy` is never tripped because Terraform never destroys the volume.
+
+**Contracts.** (1) `tests/scripts/lib/web-host-rebirth-gate.sh` grades two plans with its own allow-set, never reusing the birth
+gate, the replace gate or `web2_retire_allow` (each header forbids it): `pre` (dry plan on current state; the volume is a no-op),
+`post` (after the delete and `state rm`; the volume is created raw, size, labels and name checked), and `post-heal`. Allowed
+action sets must EQUAL an allow-list entry, so a volume delete, forget or replace is unrepresentable; every destroy is pinned to
+a physical id captured from Hetzner (server id and name, NIC `server_id`, attachment `volume_id`); the by-name web-1 refusal is
+the first statement. (2) A pure classifier (`tests/scripts/lib/web2-rebirth-classify.sh`) maps Hetzner and state to `proceed`, a
+named `heal:` window (detach done, delete done, state rm done, apply midway, volume created), `resume:post_apply` (the rebirth
+already ran: state holds the new volume as web-2's only volume, the pinned plaintext volume is gone and the server is
+younger than 72 h (the never-pooled step, not the classifier, requires the soak marker to be absent), the bound being "a rebirth that has not yet had time to be certified"; nothing is replaced or deleted: a third plan mode may only
+ADD what a partly failed apply left missing, then the readiness poll, the recovery check and the reboot run) or `refuse:`
+(already reborn, orphan raw volume, orphan server, a foreign volume attached to web-2, an inconsistent pin listing, wrong shape,
+attached elsewhere, duplicate name, push-apply pause not real) before any write, so a re-dispatch after any crash heals, resumes or
+refuses. `scripts/web2-rebirth.sh` is also the chokepoint for the irreversible step: its write subcommands refuse unless the run is an
+apply dispatch, and `delete-volume` refuses unless the emptiness, never-pooled and pre-plan-graded proofs (each step's own output, empty
+when the step was skipped) are present. (3) Emptiness evidence is the 7-day Better Stack `host_metrics` series (hour coverage, freshness, a non-zero minimum, a 1 GiB
+ceiling, a 64 MiB spread, a 15 to 21.5 GB total; freshness is dropped only for `heal:detach_done`). The ceiling is a COARSE bound,
+so the printed used-bytes values are what the owner approves on, and the first live query is the first measurement of the real empty
+baseline. Never-pooled evidence is the soak marker's absence by exact-name membership over secret names, from a list shape the
+reader can interpret (anything else is a refusal). Web-2's serving weight is NOT measured: no weight orchestrator exists in the repo
+at this SHA, and the summary says so instead of asserting weight 0. (4) The escrow preflight runs before any Terraform command or Hetzner call; a missing escrow does NOT refuse the
+format (the volume is empty; the readiness verdict goes RED and the soak marker is withheld).
+
+> **Superseded 2026-10-06 (#9372), in part:** "the printed used-bytes values are what the owner approves on" and "the first live query is the first measurement of the real empty baseline" no longer hold; see the addendum at the end of this ADR.
+
+**What this change altered outside the workflow.** The reboot proof is now REQUIRED where it was only diagnostic:
+`scripts/lib/web2-luks-rows.sh` gains `w2l_reboot_seen`, which compares the `boot_id` tokens of the GREEN probe and readiness
+verdicts (known and different), and both the marker-absent branch of `w2l_judge` (so `WORKSPACES_LUKS_CUTOVER_AT`, and with it any
+weight, cannot be written on the readiness row alone) and the follow-through require it. A new `reboot_not_seen` reason is
+`not_live`, not red, between a rebirth and its first reboot.
+
+**Known limits and what is unconfirmed.** The Better Stack JSON paths for the used-bytes series and whether `dm-*` excludes the
+mapper device in `vector.toml` are unverified until the first live query (an absent field fails closed). `cryptsetup open
+--test-passphrase` against a header-image file is covered by shims only. The birth-time recovery check (the escrowed header
+object exists, begins with the LUKS magic and carries the UUID in its name; the Doppler and Terraform-state passphrases agree;
+a test unlock of the downloaded header) is a **birth-time consistency check, not a restore test**: it does not prove the live
+volume opens, that the backup matches the live volume, that either copy survives loss, or that the state bucket is versioned
+(#7992). It does not discharge the recovery or re-escrow acceptance for a data-bearing host; web-2 stays at weight 0 and holds no
+workspace data until those and #7992 are done. The marker config's only token is read/write today (#9358), bound to one
+names-only step that a census holds to that. Authorization is process, not mechanism: the typed confirm is a typo guard.
+
+> **Superseded 2026-10-06 (#9372), in part:** the Better Stack JSON paths are now confirmed (the `dm-*` exclusion is still unconfirmed); see the addendum at the end of this ADR.
+
+**Single use and retirement.** The workflow, `scripts/web2-rebirth*.sh`, `tests/scripts/lib/web-host-rebirth-gate.sh` and
+`tests/scripts/lib/web2-rebirth-classify.sh` are deleted after use in the closing change (runbook
+`web2-luks-rebirth-9372.md`, "Closing checklist"), together with the retirement of `apply-web-escrow-create.yml` and the flip of the
+rotation HALT's `create` exemption, which the apply path of this workflow requires to have merged first.
+
+> **Clarified 2026-10-06 (#9372):** "the closing change" in the paragraph above names two changes. The retirement of
+> `apply-web-escrow-create.yml` and the flip of the HALT's `create` arm merge together as PR #9569. The deletion of the rebirth
+> workflow, its scripts, gate and fixtures is a later change made after use (runbook `web2-luks-rebirth-9372.md`, closing
+> row 5).
+
+> **Superseded 2026-10-06 (#9372), in part — the emptiness evidence's paths and who reads its numbers.** Two sentences above no longer
+> hold. (1) "the first live query is the first measurement of the real empty baseline" and "unverified until the first live query": the
+> first live plan-only run (run 37463995633) read the flat paths `host_name`, `source_kind`, `metric.name` and `metric.value`, which no
+> stored row carries, matched zero rows and went RED `used_bytes_absent_or_host_dark`. A read-only control against the stored rows then
+> confirmed the native shape (`tags.host`, `namespace`, `tags.mountpoint`, `name`, `gauge.value`) and read the level for
+> soleur-web-2 `/mnt/data` (one device, `/dev/sdb` ext4, 7 days): 169 hours, used 15,556,608 to 16,027,648 bytes (spread 471,040),
+> total 20,957,446,144. The query now reads those paths, requires a single non-empty device per metric group and rows no later than now; whether `dm-*` drops the LUKS mapper
+> device in `vector.toml` remains unconfirmed. (2) "the printed used-bytes values are what the owner approves on": the environment
+> approval is a job-level gate, so it comes before the evidence step. The numbers are readable in a plan-only run, and an apply
+> dispatch's PASS flows into `delete-volume` in the same approved job. The thresholds, the verdict function and the `heal:detach_done`
+> arm are unchanged; the 1 GiB ceiling is about 65 to 70 times the observed level, and tightening it is an owner decision.
+
+## Addendum — 2026-10-07 (#9372, the reboot workflow)
+
+**An agent-dispatchable soft reboot of the allow-listed web-2 standby (`.github/workflows/web-host-reboot.yml`) is the path for the graded reboot evidence.** It issues one Hetzner reboot request behind the `web-platform-infra-apply` environment approval and then reads Better Stack rows, reporting PASS (row presence only), FAIL or NOT YET. It states nothing about the volume or its encryption: a fixed footer on every output path names `scripts/followthroughs/web2-luks-live-6931.sh` as the grader, and web-2 stays *provisioned, proof pending* until that grader reports PASS. **The gate is a rule, not a platform separation:** that environment's sole reviewer is the owner's own login and `prevent_self_review` is off (measured 2026-10-07), so the dispatching agent's identity could approve its own dispatch; what separates the two is the owner's go-ahead per dispatch and the owner doing the approving, recorded in ADR-241 (dated section 2026-10-07; whether destructive dispatches should be two-party is tracked on #8044). It depends on the never-pooled reader, refuses web-1 by id at four layers, refuses a re-run by design, and is dispatch-only, so merging it mutates nothing. It is retired in the rebirth closing change together with `scripts/web2-rebirth*.sh` and its own tests (closing row 5 of the rebirth runbook), or kept only by a recorded owner decision made in the same change that edits the tombstone rows in both suites. Operations: `knowledge-base/engineering/operations/runbooks/web-host-reboot.md`. No new Alternatives rows: the two rejected routes (dispatching the rebirth workflow for a plain reboot, and a Hetzner web-console reboot) are recorded in that runbook and the plan.

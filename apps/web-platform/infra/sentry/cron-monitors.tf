@@ -1465,6 +1465,31 @@ resource "sentry_cron_monitor" "scheduled_bot_pr_reaper" {
   timezone                = "UTC"
 }
 
+# Liveness for cron-merge-queue-stall-dispatch (#9482 follow-up (a)) — the
+# every-10-minutes Inngest dispatcher that triggers the merge-queue stall probe
+# (.github/workflows/merge-queue-stall-check.yml). DISPATCHER-fed: the check-in
+# is posted by the Inngest function itself, NOT by the executed workflow (which
+# carries no Sentry secrets), so a green check-in means "dispatched", not
+# "probe executed". Do not move the heartbeat into the workflow without
+# revisiting its secrets posture. Margin follows the Inngest-fired cohort
+# convention (30 min over the 10-min interval); no runner-queue allowance is
+# needed because the heartbeat posts from the dispatcher, not a runner. A dead
+# dispatcher opens a Sentry issue inside ~40 min and emails via
+# sentry_alert.cron_monitor_failure (the two-PR rule's second PR, tracked in
+# #9493). The workflow's own schedule: is the fallback trigger; its
+# detection-latency story lives in the function header.
+resource "sentry_cron_monitor" "scheduled_merge_queue_stall_dispatch" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-merge-queue-stall-dispatch"
+  schedule                = { crontab = "*/10 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 5
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 # Executor liveness for the bounded Supabase Postgres-hang auto-restart
 # watchdog (.github/workflows/scheduled-supabase-watchdog.yml, #9168, ADR-260).
 # Inngest-DISPATCHED every 5 min via

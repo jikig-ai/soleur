@@ -212,6 +212,17 @@ require_credentials() {
   fi
 }
 
+# (#9597) The OAuth 1.0a Authorization header carries the signature and the access
+# token, so it rides curl's stdin config channel (`--config -`), never its argument
+# list (readable by every local user in /proc/<pid>/cmdline). The channel is
+# line-oriented: a CR/LF or other control character in the header would end the
+# `header = "..."` directive and let the following bytes act as a new one, so a header
+# holding one is refused BEFORE it is formatted into the stream. The header's own
+# quotes (`oauth_token="..."`) are legitimate and are escaped by `_cfg_q`. The consumer
+# secret and token secret never reach curl at all: they only key the HMAC in oauth_sign.
+_hdr_ok() { local LC_ALL=C; case "${1:-}" in ''|*[[:cntrl:]]*) return 1 ;; esac; }
+_cfg_q() { local v="${1-}"; v=${v//\\/\\\\}; v=${v//\"/\\\"}; printf '%s' "$v"; }
+
 # --- OAuth 1.0a signing ---
 
 # URL-encode a string per RFC 3986
@@ -392,11 +403,8 @@ post_request() {
   auth_header=$(oauth_sign "POST" "$url")
 
   local -a curl_args=(
-    # `--disable` first (position is load-bearing) and `--noproxy '*'`: the array
-    # is expanded as `curl "${curl_args[@]}"`, so element 0 is curl's first arg.
-    --disable --noproxy '*'
     -s -w "\n%{http_code}"
-    -H "Authorization: ${auth_header}"
+    --config -
     -H "Content-Type: application/json"
   )
 
@@ -404,10 +412,17 @@ post_request() {
     curl_args+=(-X POST -d "$json_body")
   fi
 
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
+
   local response http_code body
-  # Suppress stderr to prevent credential leakage
+  # Suppress stderr to prevent credential leakage. The signed header rides curl's stdin
+  # config channel, never its argument list.
   local __curl_rc=0
-  response=$(curl "${curl_args[@]}" "$url" 2>/dev/null) || __curl_rc=$?
+  response=$(curl --disable --noproxy '*' "${curl_args[@]}" "$url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
@@ -459,10 +474,15 @@ get_request() {
   fi
 
   local response http_code body
+  if ! _hdr_ok "$auth_header"; then
+    echo "Error: the OAuth Authorization header has an unexpected shape; refusing to send it." >&2
+    exit 1
+  fi
   local __curl_rc=0
-  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" \
-    -H "Authorization: ${auth_header}" \
-    "$request_url" 2>/dev/null) || __curl_rc=$?
+  # The signed header rides curl's stdin config channel, never its argument list.
+  response=$(curl --disable --noproxy '*' -s -w "\n%{http_code}" --config - \
+    "$request_url" 2>/dev/null \
+    < <(printf 'header = "Authorization: %s"\n' "$(_cfg_q "$auth_header")")) || __curl_rc=$?
   if (( __curl_rc != 0 )); then
     report_transport_failure "$__curl_rc" "Failed to connect to X API."
     exit 1
@@ -579,11 +599,11 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$mr_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --max-results must be a numeric value, got '${mr_val}'." >&2
+          echo "Error: --max-results must be a numeric value." >&2
           exit 1
         fi
         if (( mr_val < 5 || mr_val > 100 )); then
-          echo "Error: --max-results must be between 5 and 100, got ${mr_val}." >&2
+          echo "Error: --max-results must be between 5 and 100." >&2
           exit 1
         fi
         max_results="$mr_val"
@@ -596,14 +616,14 @@ cmd_fetch_mentions() {
           exit 1
         fi
         if ! [[ "$si_val" =~ ^[0-9]+$ ]]; then
-          echo "Error: --since-id must be a numeric value, got '${si_val}'." >&2
+          echo "Error: --since-id must be a numeric value." >&2
           exit 1
         fi
         since_id="$si_val"
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '${1:-}'" >&2
+        echo "Error: Unknown option." >&2
         echo "Usage: x-community.sh fetch-mentions [--max-results N] [--since-id ID]" >&2
         exit 1
         ;;
@@ -671,7 +691,7 @@ cmd_fetch_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -679,7 +699,7 @@ cmd_fetch_timeline() {
 
   # Validate --max is a positive integer (prevents query param injection)
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -710,7 +730,7 @@ cmd_fetch_user_timeline() {
 
   # Validate user_id is a positive integer (prevents path traversal)
   if [[ ! "$user_id" =~ ^[0-9]+$ ]]; then
-    echo "Error: user_id must be a positive integer, got '${user_id}'." >&2
+    echo "Error: user_id must be a positive integer." >&2
     exit 1
   fi
 
@@ -723,7 +743,7 @@ cmd_fetch_user_timeline() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -731,7 +751,7 @@ cmd_fetch_user_timeline() {
 
   # Validate --max is a positive integer
   if [[ ! "$max_results" =~ ^[0-9]+$ ]]; then
-    echo "Error: --max must be a positive integer, got '${max_results}'" >&2
+    echo "Error: --max must be a positive integer." >&2
     exit 1
   fi
 
@@ -766,7 +786,7 @@ cmd_post_tweet() {
         shift 2
         ;;
       *)
-        echo "Error: Unknown option '$1'" >&2
+        echo "Error: Unknown option." >&2
         exit 1
         ;;
     esac
@@ -822,7 +842,7 @@ main() {
     fetch-user-timeline) cmd_fetch_user_timeline "$@" ;;
     post-tweet)          cmd_post_tweet "$@" ;;
     *)
-      echo "Error: Unknown command '${command}'" >&2
+      echo "Error: Unknown command." >&2
       echo "Run 'x-community.sh' without arguments for usage." >&2
       exit 1
       ;;

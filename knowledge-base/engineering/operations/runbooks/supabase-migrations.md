@@ -314,6 +314,13 @@ Any row where `bad > 0` fails the run. `UNION ALL` multiple SELECTs
 into one file to bundle sentinels with idempotence probes (see 031 for
 the pattern).
 
+String literals in a verify file must be single-quoted (double any inner
+`'`), and verify files may not use quoted identifiers at all: in Postgres a
+double-quoted token is an identifier, so `LIKE "x"` parses and fails only at
+bind time. `verify-sql-string-literals.test.ts`
+rejects double quotes, backslashes and non-ASCII characters in code
+position at PR time.
+
 CI executes every verify file via the `verify-migrations` job in
 `web-platform-release.yml` after `migrate` succeeds. A verify failure
 blocks `deploy` the same way a failed migrate does.

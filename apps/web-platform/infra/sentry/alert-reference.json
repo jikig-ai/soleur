@@ -603,7 +603,7 @@
             "comparison": {
               "key": "op",
               "match": "in",
-              "value": "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind"
+              "value": "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind,resolve_link_local"
             },
             "type": "tagged_event"
           }
@@ -707,7 +707,8 @@
       "2204550",
       "2270831",
       "2275153",
-      "2321651"
+      "2321651",
+      "2359391"
     ],
     "enabled": true,
     "frequency": 1441,
@@ -1943,7 +1944,7 @@
             "comparison": {
               "key": "stage",
               "match": "in",
-              "value": "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks"
+              "value": "workspaces_luks_provision_config,workspaces_luks_provision_device,workspaces_luks_provision_discriminate,workspaces_luks_provision_key,workspaces_luks_provision_format,workspaces_luks_provision_open,workspaces_luks_provision_wire,workspaces_luks_provision_mount,workspaces_luks_not_mounted,fresh_boot_not_ready_token,fresh_boot_not_ready_vector,fresh_boot_not_ready_volume,fresh_boot_not_ready_luks,workspaces_luks_provision_escrow"
             },
             "type": "tagged_event"
           }
@@ -1984,7 +1985,7 @@
             "comparison": {
               "key": "stage",
               "match": "in",
-              "value": "workspaces_luks_provision_escrow,workspaces_luks_provision_wire_warn,workspaces_luks_provision_result,fresh_boot_ready_bs_egress"
+              "value": "workspaces_luks_provision_wire_warn,workspaces_luks_provision_result,fresh_boot_ready_bs_egress"
             },
             "type": "tagged_event"
           }

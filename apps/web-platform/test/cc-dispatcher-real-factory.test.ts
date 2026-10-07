@@ -45,6 +45,7 @@ const {
   mockEnsureWorkspaceRepoCloned,
   mockResolveC4FlagEnabled,
   mockWriteC4Diagram,
+  mockGetSessionMessages,
 } = vi.hoisted(() => ({
   mockResolveC4FlagEnabled: vi.fn(async () => false),
   mockWriteC4Diagram: vi.fn(),
@@ -76,16 +77,21 @@ const {
   // installation-id the clone receives is inspectable — the load-bearing
   // assertion for the clone-consumes-self-healed-install fix.
   mockEnsureWorkspaceRepoCloned: vi.fn(async () => undefined),
+  // #9538 — named so a test can override the default `[]`: since the cc
+  // caller now passes `dropResumeOnEmptyHistory: true`, `[]` drops the
+  // resume id, so a test that wants resume to survive supplies a live
+  // user-terminated history instead.
+  mockGetSessionMessages: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
   // Drift-guard for #3250: `realSdkQueryFactory` calls `getSessionMessages`
-  // when `args.resumeSessionId` is set. Returning `[]` keeps the guard's
-  // empty-history branch from blocking these tests and matches the
-  // behavior asserted by the prefill-guard test file's empty-history
-  // scenario.
-  getSessionMessages: vi.fn().mockResolvedValue([]),
+  // when `args.resumeSessionId` is set. `[]` exercises the guard's
+  // empty-history branch — which, since #9538 added the cc caller's
+  // `dropResumeOnEmptyHistory: true`, now DROPS the resume id; tests that
+  // need resume to survive override with a user-terminated history.
+  getSessionMessages: mockGetSessionMessages,
   // Return inspectable shapes so the soleur_platform always-build assertion
   // (#5370 T2) can read tool names off the registered server. `tool(name,…)`
   // → `{ name, handler }` — the handler passthrough lets the #8739 emit-seam
@@ -598,6 +604,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.sandbox.failIfUnavailable).toBe(true);
     expect(opts.sandbox.allowUnsandboxedCommands).toBe(false);
+    // W1 (#9601): the dispatcher passes the builder's object through UNCHANGED.
+    // The builder is mocked here, so its `credentials` content is not the point;
+    // identity is: a spread or override at the call site (which would drop the
+    // credential deny the real builder returns) makes a new object.
+    expect(opts.sandbox).toBe(mockBuildAgentSandboxConfig.mock.results[0].value);
     // Helper was called with the workspace path AND fail-closed egress —
     // this dispatch has no connected repo, so no GitHub egress (#5041
     // follow-up).
@@ -1133,6 +1144,14 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // Sandbox GitHub egress lockstep (#5041 follow-up) — egress and the
   // entitled token move together. The sandbox-config mock delegates to the
   // REAL implementation in this block so the assertions reach the actual
+// Expected signed-URL account fleet, generated locally (NOT imported from the
+// source const) so a typo in the source list cannot self-verify: sa0..sa99
+// minus sa22 (NXDOMAIN — see the docblock on GITHUB_ACTIONS_LOG_ACCOUNTS).
+const EXPECTED_SA_ACCOUNTS = Array.from(
+  { length: 100 },
+  (_, i) => `productionresultssa${i}.blob.core.windows.net`,
+).filter((h) => h !== "productionresultssa22.blob.core.windows.net");
+
   // allowedDomains the SDK receives (call-arg pinning alone cannot prove
   // the flag maps to the GitHub hosts).
   // -------------------------------------------------------------------------
@@ -1181,6 +1200,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(opts.sandbox.network.allowedDomains).toEqual([
         "github.com",
         "api.github.com",
+        "registry.npmjs.org",
+        ...EXPECTED_SA_ACCOUNTS,
       ]);
     });
 
@@ -1442,6 +1463,12 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // Resume key: when resumeSessionId provided, options.resume is set.
   // -------------------------------------------------------------------------
   it("threads resumeSessionId into options.resume when present", async () => {
+    // #9538 — the cc call site now passes `dropResumeOnEmptyHistory: true`,
+    // so the default `[]` probe would drop the resume id. Give the guard a
+    // live user-terminated session so `resume:` survives.
+    mockGetSessionMessages.mockResolvedValueOnce([
+      { type: "user", uuid: "u1", session_id: "sess-abc", message: {}, parent_tool_use_id: null },
+    ]);
     await realSdkQueryFactory(makeArgs({ resumeSessionId: "sess-abc" }));
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBe("sess-abc");

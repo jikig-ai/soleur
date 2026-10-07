@@ -18,6 +18,7 @@
 // internal API boundaries (registry signatures, mint helpers).
 
 import { z, type ZodError } from "zod";
+import { reportSilentFallback } from "@/lib/client-observability";
 import {
   type WSMessage,
   WORKFLOW_END_STATUSES,
@@ -286,7 +287,7 @@ const streamEndSchema = z.strictObject({
 const toolUseSchema = z.strictObject({
   type: z.literal("tool_use"),
   leaderId: domainLeaderIdSchema,
-  label: z.string(),
+  label: z.string().max(512),
   seq: replaySeqSchema,
 });
 // feat-concierge-stream-commands — inline Bash command/output stream.
@@ -316,18 +317,23 @@ const toolProgressSchema = z.strictObject({
   elapsedSeconds: z.number(),
   seq: replaySeqSchema,
 });
-// feat-debug-mode-stream — internal dev-cohort harness instruction stream.
+// feat-debug-mode-stream — workspace debug-mode harness instruction stream.
 // Delta/append semantics: one event per frame (turn end is signalled by
 // stream_end/session_ended). `body` is already redacted-or-dropped at the
 // server emit boundary; `label` (optional) is the human tool label, never the
 // raw SDK tool name. `body` is byte-capped at the emit site
 // (COMMAND_STREAM_TOTAL_CAP_BYTES = 16384); the char `.max()` sits slightly
 // above to admit redaction-marker expansion + the truncation marker.
+// `seq`/`replayed`: the frame IS a member of the stream-replay buffer
+// (ADR-059); `replayed` marks a buffer re-emit so the client never treats it
+// as a liveness heartbeat.
 const debugEventSchema = z.strictObject({
   type: z.literal("debug_event"),
   kind: z.enum(["tool_use", "reasoning", "result"]),
   label: z.string().optional(),
   body: z.string().max(20000),
+  seq: replaySeqSchema,
+  replayed: z.boolean().optional(),
 });
 // feat-reasoning-chat-boxes (#5370) — agent-emitted user-facing narration.
 // `reasoning_narration` is the transient live status line (live-only, no seq,
@@ -337,10 +343,24 @@ const debugEventSchema = z.strictObject({
 const reasoningNarrationSchema = z.strictObject({
   type: z.literal("reasoning_narration"),
   message: z.string().max(20000),
+  // #9515 — conversation-scoped so the client can drop a frame intended for
+  // another tab's conversation before it lands in the trail (security seat).
+  conversationId: z.string().optional(),
 });
 const turnSummarySchema = z.strictObject({
   type: z.literal("turn_summary"),
   summary: z.string().max(20000),
+  seq: replaySeqSchema,
+});
+// feat-session-completion-inline — inline completion card frame. Buffered
+// family (carries seq). `conversationId` is required (not optional like
+// narration's) — the client drops any frame not bound to its mounted
+// conversation, so the server must always stamp it.
+const taskCompletedSchema = z.strictObject({
+  type: z.literal("task_completed"),
+  conversationId: z.string(),
+  inboxItemId: z.uuid(),
+  title: z.string().max(20000),
   seq: replaySeqSchema,
 });
 const reviewGateSchema = z.strictObject({
@@ -628,6 +648,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   debugEventSchema,
   reasoningNarrationSchema,
   turnSummarySchema,
+  taskCompletedSchema,
   reviewGateSchema,
   autonomousDisclosureSchema,
   autonomousPostureSchema,
@@ -670,6 +691,58 @@ export function parseWSMessage(raw: unknown): ParseWSMessageResult {
     return { ok: true, msg: result.data };
   }
   return { ok: false, error: result.error };
+}
+
+// ---------------------------------------------------------------------------
+// `wsMessageTypeLiterals` — the DERIVED set of every `type` literal the
+// schema admits, computed by walking the union arms (each arm is a
+// discriminated union of strictObjects; `interactive_prompt*` variants
+// collapse to their shared `type` literal). Used by `ws-client.ts` ONLY to
+// classify a parse failure as discriminator-miss (`ws-unknown-event`) vs
+// shape-miss (`ws-zod-parse-failure`) — admission itself is decided by
+// `parseWSMessage`, never by this set. There is no second literal list to
+// drift: the schema is the single source of truth.
+// ---------------------------------------------------------------------------
+
+// Review seat: memoized module-level — the parse-failure path is the only
+// caller but a malformed-frame storm should not rebuild the set per frame.
+let _wsMessageTypeLiterals: ReadonlySet<string> | null = null;
+export function wsMessageTypeLiterals(): ReadonlySet<string> {
+  if (_wsMessageTypeLiterals === null) {
+    const types = new Set<string>();
+    for (const arm of wsMessageSchema.options) {
+      const variants = (arm as { options?: unknown[] }).options;
+      if (!Array.isArray(variants)) continue;
+      for (const variant of variants) {
+        const shape = (variant as { shape?: Record<string, unknown> }).shape;
+        const typeField = shape?.type as
+          | { value?: unknown; values?: unknown[] }
+          | undefined;
+        // Prefer `.values` — `.value` THROWS on a multi-member ZodLiteral in
+        // zod 4 (agent-native seat), and a future wrapped/enum `type` field
+        // must degrade silently, not crash inside the breadcrumb path.
+        const values = Array.isArray(typeField?.values)
+          ? typeField.values
+          : typeField && typeof typeField.value === "string"
+            ? [typeField.value]
+            : [];
+        for (const v of values) {
+          if (typeof v === "string") types.add(v);
+        }
+      }
+    }
+    // Fail-loud rail: an empty set would reclassify every future shape-miss
+    // as `ws-unknown-event` — indistinguishable from correct. A drifted zod
+    // internals walk is caught here on the FIRST parse failure, not by audit.
+    if (types.size === 0) {
+      reportSilentFallback(
+        new Error("wsMessageTypeLiterals derived an empty discriminator set"),
+        { feature: "ws-zod-schemas", op: "ws-type-literals-empty" },
+      );
+    }
+    _wsMessageTypeLiterals = types;
+  }
+  return _wsMessageTypeLiterals;
 }
 
 // ---------------------------------------------------------------------------

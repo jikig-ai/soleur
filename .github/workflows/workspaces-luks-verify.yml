@@ -289,7 +289,7 @@ jobs:
             # which case it classifies and exits the step.
             [[ "$1" -eq 255 ]] || return 0
             if head -c 8192 "$2" 2>/dev/null | LC_ALL=C tr -cd '\12\40-\176' \
-                | grep -qE '^(Host key verification failed\.|@ +WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! +@|Unable to negotiate with .+: no matching host key type found.*)$'; then
+                | grep -cE '^(Host key verification failed\.|@ +WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! +@|Unable to negotiate with .+: no matching host key type found.*)$' >/dev/null; then
               echo "::error title=workspaces-luks-verify::verdict=host_key_mismatch role=web"
               echo "::error::web-1 presented a host key other than its committed pin (apps/web-platform/infra/web-1-ssh-host-key.pub), or none of the pinned algorithm. NOT an at-rest finding, and NOT a transport blip: re-dispatching cannot fix it. Follow \"Host-key mismatch (H4)\" in knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md (wrong capture -> re-capture PR; otherwise breach-notice triage). Never re-enable TOFU."
               emit_class unavailable web_1_host_key_mismatch
@@ -1007,8 +1007,10 @@ jobs:
   # body, any defective row, and rows going missing after the marker exists are still RED.
   #
   # CUSTODY. The write token (DOPPLER_TOKEN_WORKSPACES_LUKS_MARKER, workspaces-luks-fresh-boot.tf) is
-  # scoped to the one marker config and is used by this job ONLY (the follow-through grades from probe rows
-  # and holds no Doppler credential). The job runs on the default branch alone: a `schedule:` event is
+  # scoped to the one marker config and is used by this job (the follow-through grades from probe rows and holds
+  # no Doppler credential). The ONE other holder is the single-use web-2 rebirth workflow (#9372), which binds it to
+  # one step running scripts/web2-rebirth-never-pooled.sh, a names-only reader that the census in
+  # workspaces-luks-verify-workflow.test.sh holds to no write verb (the token is read/write until #9358). The job runs on the default branch alone: a `schedule:` event is
   # always the default branch, and a dispatch is refused from any other ref, so a branch copy of this file
   # or of the helper never runs with the token. A present marker is KEPT while GREEN and removed on a non-GREEN
   # run, so its VALUE is advisory / shape-only downstream (lb-weight-gate.sh checks the shape; sourcing the
@@ -1088,14 +1090,55 @@ jobs:
             exit 1
           fi
 
-          marker_args=(--no-interactive -p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")
+          marker_args=(-p "$W2L_MARKER_PROJECT" -c "$W2L_MARKER_CONFIG")
+          # marker_args is shared by get/read-back/delete; the interactive-skip flag carried on
+          # the `secrets set` argv below exists only on that verb of the installed Doppler CLI
+          # (v3.76.6) — get/delete reject it as an unknown flag, which is what kept #9429's
+          # `marker_read` reds running. Do not fold it back into this array.
+          # doppler_call (#9613) is the only way this step invokes the Doppler CLI — one definition so the
+          # sanitization cannot drift between call sites. It captures combined output; on success it prints
+          # stdout and returns 0 (callers keep `>/dev/null` to suppress the CLI's config dump). On failure
+          # the CLI's error text is REMOTE input, so it is sanitized before it can reach the run log or a
+          # variable a caller might later print: exact DOPPLER_TOKEN substitution (the token-shape guard
+          # above pins it to [A-Za-z0-9._-], glob-literal so the substitution is exact), ANSI CSI strip (a
+          # colourised CLI would otherwise leave `[31m` residue that tr only half-removes), an 8192-byte
+          # cap, a non-printable strip, and the dp.* token-shape mask. The same sanitized text is emitted
+          # twice: to stderr with a per-line [doppler-stderr] prefix (the run-log diagnostic — the prefix
+          # stops a forged ::command from smuggling into the runner), and unprefixed on stdout so callers
+          # can still classify the CLI's own `Doppler Error: ...` line — through the redact, never raw.
+          doppler_call() {
+            local out diag rc=0
+            out="$(doppler "$@" 2>&1)" || rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+              printf '%s' "$out"
+              return 0
+            fi
+            diag="${out//$DOPPLER_TOKEN/[REDACTED-DOPPLER-TOKEN]}"
+            diag="$(printf '%s' "${diag:0:8192}" | sed $'s/\x1b\\[[0-9;]*m//g' \
+              | LC_ALL=C tr -cd '\12\40-\176' \
+              | sed -E 's/dp\.[a-z]+\.[A-Za-z0-9._-]+/[REDACTED-TOKEN]/g')"
+            printf '%s\n' "$diag" | sed 's/^/[doppler-stderr] /' >&2
+            printf '%s' "$diag"
+            return "$rc"
+          }
+
           # marker_state prints `present` or `absent`; any other outcome (an auth or transport fault) is a
           # failure of THIS function, never an `absent`.
           marker_state() {
             local out rc=0
-            out="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}" 2>&1)" || rc=$?
-            if [[ "$rc" -eq 0 ]]; then printf 'present'; return 0; fi
-            if grep -qiF 'Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
+            out="$(doppler_call secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}")" || rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+              # An empty value is an unearned marker: a manual write of "" would otherwise freeze
+              # the soak at marker_kept while lb-weight-gate reads empty as absent — silently.
+              if [[ -n "$out" ]]; then printf 'present'; else printf 'absent'; fi
+              return 0
+            fi
+            # `out` here is the SANITIZED error text (doppler_call already redacted it and emitted the
+            # [doppler-stderr] diagnostic). Anchored: only the CLI's own key-miss line classifies as
+            # absent — a config or project miss ("Could not find requested config|project") stays a fault.
+            if grep -qiE '^Doppler Error: Could not find requested secret' <<<"$out"; then printf 'absent'; return 0; fi
+            # Self-describing fault (#9429): the run log already names the CLI's own error via the
+            # [doppler-stderr] line doppler_call emitted — nothing further to report here.
             return 1
           }
 
@@ -1113,9 +1156,9 @@ jobs:
                 exit 0
               fi
               at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              printf '%s' "$at" | doppler secrets set "$W2L_MARKER_NAME" "${marker_args[@]}" >/dev/null \
+              printf '%s' "$at" | doppler_call secrets set "$W2L_MARKER_NAME" --no-interactive "${marker_args[@]}" >/dev/null \
                 || { echo "::error::writing the marker failed."; emit query_failed marker_write; exit 1; }
-              got="$(doppler secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}")" || got=""
+              got="$(doppler_call secrets get "$W2L_MARKER_NAME" --plain "${marker_args[@]}")" || got=""
               [[ "$got" == "$at" ]] || { echo "::error::the marker did not read back as written."; emit query_failed marker_readback; exit 1; }
               echo "${W2L_MARKER_NAME}=${at} written (first green; the 3-day soak starts now)."
               emit green marker_written
@@ -1138,17 +1181,19 @@ jobs:
               # be noise. The gate is unchanged (the marker stays absent); the moment a row exists any defect in
               # it is RED as before, and rows going missing AFTER the marker was written still delete it and
               # fail. The follow-through (web2-luks-live-6931.sh) FAILS a conversion that never produces a soak.
-              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready ) ]]; then
+              # reboot_not_seen (#9372): a GREEN probe row from the SAME boot as the readiness row is the state between
+              # a rebirth and its first reboot; the marker (and with it any weight) waits for the reboot proof.
+              if [[ "$state" == absent && ( "$reason" == no_probe_row || "$reason" == no_ready_row || "$reason" == probe_predates_ready || "$reason" == reboot_not_seen ) ]]; then
                 echo "::notice title=web-2 not live yet::${reason}: no web-2 evidence certifies this instance and the soak marker is absent. The gate stays closed; this run is not an error until web-2 has been converted (#9372; runbook web-host-replace.md, section web-2 boot failed)."
                 emit not_live "$reason"
                 exit 0
               fi
               if [[ "$state" == present ]]; then
-                doppler secrets delete "$W2L_MARKER_NAME" --yes "${marker_args[@]}" >/dev/null \
+                doppler_call secrets delete "$W2L_MARKER_NAME" --yes "${marker_args[@]}" >/dev/null \
                   || { echo "::error::RED (${reason}) and deleting the marker FAILED."; emit red_delete_failed "$reason"; exit 1; }
                 after="$(marker_state)" || after=unknown
                 if [[ "$after" != absent ]]; then
-                  echo "::error::RED (${reason}); the delete returned success but the key still reads present. A branch config inherits prd, so a value placed in prd shows through; remove it there."
+                  echo "::error::RED (${reason}); the delete returned success but the recheck reads '${after}' — a 'present' can be a prd-level shadow (a branch config inherits prd; remove it there), an 'unknown' means the recheck itself faulted and nothing is proven."
                   emit red_delete_failed "$reason"
                   exit 1
                 fi

@@ -25,7 +25,7 @@ export const AUTONOMOUS_DISCLOSURE_COPY =
   "clearly dangerous commands (curl, wget, sudo, …) and hides your secrets — " +
   "but no blocklist is perfect. A command that looks safe could still change " +
   "or delete files in this workspace. Your work is backed up in git, and you " +
-  "can watch every command run in the chat. Only connect repos and accounts " +
+  "can watch each step in the chat. Only connect repos and accounts " +
   "you trust.";
 
 export function AutonomousDisclosureBanner({

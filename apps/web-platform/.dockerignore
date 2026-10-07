@@ -22,6 +22,15 @@ infra/
 # can read it with no network; without this re-include the builder-stage
 # `COPY . .` drops it and the runner COPY fails the image build.
 !infra/sandbox-canary-argv.json
+# Same three-surface rule for the #8752 shared sandbox hardening pair: the
+# Dockerfile runner stage bakes the committed nested-userns filter
+# (`COPY --from=builder /app/infra/bwrap-userns-clone3-deny.bpf`) and the bwrap
+# PATH shim (`COPY --from=builder /app/infra/bwrap-shim/bwrap →
+# /usr/local/bin/bwrap`). Exact-path bangs — measured on this repo (the
+# mock-supabase note below) — work two levels deep, so no bare
+# `!infra/bwrap-shim/` directory bang (which would re-include siblings).
+!infra/bwrap-userns-clone3-deny.bpf
+!infra/bwrap-shim/bwrap
 # Re-include the host-bootstrap scripts baked into the image (#5921 / ADR-080).
 # The Dockerfile runner stage bakes these into /opt/soleur/host-scripts/ via
 # `COPY --from=builder /app/infra/<file>` so cloud-init can `docker cp` the set

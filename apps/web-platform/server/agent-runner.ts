@@ -37,6 +37,7 @@ import {
 } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import { SDK_STALE_RESUME_SESSION_ID } from "./claude-error-signatures";
 import {
   ERR_ATTACHMENT_NOT_FOUND,
   ERR_WORKSPACE_NOT_PROVISIONED,
@@ -99,6 +100,7 @@ import { updateConversationFor } from "./conversation-writer";
 import { releaseSlot, SLOT_STALENESS_THRESHOLD_SECONDS } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
+  CREDENTIALS_PROMPT_DIRECTIVE,
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
   buildPdfGatedDirective,
   buildPdfUnreadableDirective,
@@ -1502,6 +1504,12 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
       systemPrompt += `\n\n## Connected Services\n${serviceList}`;
     }
 
+    // W1 (#9601, ADR-272): shared with the Concierge baseline prompt, since the
+    // deny applies on both paths. Unconditional (with or without connected
+    // services); its own heading keeps the Connected Services absence
+    // assertions true.
+    systemPrompt += `\n\n${CREDENTIALS_PROMPT_DIRECTIVE}`;
+
     // Announce KB share capability (closes #2315). Without this block the
     // agent cannot discover kb_share_* from natural-language requests like
     // "share the Q1 report."
@@ -2351,7 +2359,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Capture cost data from SDK result (per-turn delta). Cache
           // tokens flow through too (NULL-coerced) — schema 041 added
           // the columns; RPC v2 (migration 042) accepts the 5-arg shape.
-          const costDelta = message.total_cost_usd ?? 0;
+          // #9648 B-0 — absent/non-finite SDK cost rides NaN into the
+          // cost-writer (which fails closed + alerts) instead of a silent 0.
+          const costDelta = message.total_cost_usd ?? Number.NaN;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
           const cacheReadDelta = message.usage?.cache_read_input_tokens ?? 0;
@@ -2361,11 +2371,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // accumulator. The SDK can yield multiple `result` events
           // in a single session (multi-turn agents), and the abort
           // marker should reflect the cumulative cost the user paid
-          // for, not just the last turn's delta.
+          // for, not just the last turn's delta. An unpriced delta
+          // contributes nothing to the sum — its signal is the NaN
+          // that reaches the cost-writer below, not this accumulator.
           accumulatedUsage = {
             input_tokens: accumulatedUsage.input_tokens + inputDelta,
             output_tokens: accumulatedUsage.output_tokens + outputDelta,
-            cost_usd: accumulatedUsage.cost_usd + costDelta,
+            cost_usd:
+              accumulatedUsage.cost_usd +
+              (Number.isFinite(costDelta) ? costDelta : 0),
           };
 
           // Delegate to the shared cost-writer helper so both this
@@ -2491,6 +2505,10 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               conversationId,
               workspaceId: activeWorkspaceId,
               title: `${leader.title} finished`,
+              // feat-session-completion-inline — emits the inline card frame;
+              // sendToClient injects so notifications.ts never imports the
+              // ws-handler graph (cycle).
+              emit: sendToClient,
             });
           }
 
@@ -2737,7 +2755,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     } else if (
       resumeSessionId &&
       err instanceof Error &&
-      err.message.includes("No conversation found with session ID")
+      err.message.includes(SDK_STALE_RESUME_SESSION_ID)
     ) {
       // Resume-specific error: clean up the typing indicator and re-throw
       // so the caller's .catch() fallback can fire (clear stale session_id,

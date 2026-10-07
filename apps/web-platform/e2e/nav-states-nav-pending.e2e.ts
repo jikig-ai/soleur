@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import {
   injectFakeSupabaseSession,
   mockSupabaseAuth,
@@ -10,8 +10,25 @@ import {
 // on route commit (pathname OR searchParams change). Exercises two of the
 // three trigger channels in-browser (NavLink click, popstate via goBack);
 // usePendingRouter is covered at unit level (test/use-pending-router.test.tsx).
-// Timed behaviors are driven by delaying the target
+// Timed behaviors are driven by holding the target
 // route's RSC/document fetch via page.route — never by racing real latency.
+//
+// Every test that ASSERTS the bar goes through `clickNavLink` (#9666): it waits
+// until React has hydrated the link, clicks, and proves the click became a soft
+// navigation (the held fetch arrived). A pre-hydration click is a plain anchor
+// navigation — no episode, no bar — and used to flake this spec. The tests that
+// assert only the bar's ABSENCE (instant nav, second rapid nav, popstate) pass
+// vacuously on such a click rather than flaking; they are left as is.
+// The "no bar under the 150ms entry delay" claim is NOT asserted here (it is
+// wall-clock-dependent on a loaded box); it is pinned at unit level in
+// test/nav-pending-store.test.tsx ("opens pending at start() but stays
+// invisible through the entry delay", "a commit inside the entry delay
+// produces no visible flash").
+//
+// Stress recipe for a flake investigation (not reproducible in CI):
+//   npx playwright test e2e/nav-states-nav-pending.e2e.ts --project=authenticated \
+//     --retries=0 --repeat-each=30
+//   and again under `taskset -c 2,3` with a few busy loops running.
 
 const BAR = (page: Page) => page.getByTestId("nav-pending-bar");
 const LIVE = (page: Page) => page.getByRole("status");
@@ -103,6 +120,83 @@ async function delayRoute(page: Page, pathPattern: string, ms: number) {
   });
 }
 
+/** Hold the NAV fetch (RSC request) for `pathPattern` open until the test calls
+ *  `release()`. Same prefetch-abort and non-RSC `fallback()` rules as
+ *  `delayRoute` — see its comment. `requested` resolves when the held nav fetch
+ *  arrives, which is the proof that a click became a soft navigation. Install
+ *  BEFORE `gotoDash` (a resolved prefetch would make the click a warm nav).
+ *  `release` is also registered for teardown so a failed assertion cannot leave
+ *  a request held behind. */
+const heldReleases: Array<() => void> = [];
+
+async function holdNavFetch(
+  page: Page,
+  pathPattern: string,
+): Promise<{ requested: Promise<void>; release: () => void }> {
+  let release!: () => void;
+  let markRequested!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const requested = new Promise<void>((r) => (markRequested = r));
+  heldReleases.push(release);
+  await page.route(pathPattern, async (route) => {
+    const headers = route.request().headers();
+    if (
+      headers["next-router-prefetch"] !== undefined ||
+      headers["next-router-segment-prefetch"] !== undefined
+    ) {
+      await route.abort();
+      return;
+    }
+    if (headers.rsc === undefined && headers["next-router-state-tree"] === undefined) {
+      await route.fallback();
+      return;
+    }
+    markRequested();
+    await gate;
+    await route.continue();
+  });
+  return { requested, release };
+}
+
+/** Click a rail link only after React hydrated it, and prove the click was a
+ *  soft navigation. React attaches its internal props key to a DOM node only
+ *  when it hydrates it, and `next/link` puts `onClick` there (measured: no key
+ *  with all JS held, key with `onClick` after release). A locator poll
+ *  re-resolves the node each time, so a hydration mismatch that replaces the
+ *  `<a>` cannot strand the probe on a detached handle. */
+async function clickNavLink(
+  link: Locator,
+  hold: { requested: Promise<void> },
+): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        link.evaluate((el) => {
+          const key = Object.keys(el).find((k) => k.startsWith("__reactProps$"));
+          if (!key) return "React props key not found: the hydration probe may need updating for this React version";
+          const props = (el as unknown as Record<string, { onClick?: unknown }>)[key];
+          return typeof props?.onClick === "function" ? "hydrated" : "link has no React onClick yet";
+        }),
+      { timeout: 15_000, message: "rail link never hydrated" },
+    )
+    .toBe("hydrated");
+  await link.click();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      hold.requested,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("click was not a soft navigation: the held nav fetch never arrived")),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Age every Router Cache entry past its 30s `staleTimes.dynamic` window by
  *  shifting `Date.now()` forward — the only clock Next's staleness comparison
  *  reads. Needed for back-nav tests: a route visited <30s ago is served from
@@ -118,6 +212,10 @@ async function expireRouterCache(page: Page) {
 }
 
 test.describe("nav-pending bar (#8917 Guard 1)", () => {
+  test.afterEach(() => {
+    for (const release of heldReleases.splice(0)) release();
+  });
+
   test("harness precondition: bar hidden on a settled page", async ({
     page,
   }) => {
@@ -131,7 +229,7 @@ test.describe("nav-pending bar (#8917 Guard 1)", () => {
     page,
   }) => {
     await setup(page);
-    await delayRoute(page, "**/dashboard/settings**", 1500);
+    const hold = await holdNavFetch(page, "**/dashboard/settings**");
     await gotoDash(page);
 
     // Harness precondition — an always-on bar must not false-green this spec.
@@ -140,15 +238,14 @@ test.describe("nav-pending bar (#8917 Guard 1)", () => {
     const link = page
       .getByRole("link", { name: /settings/i })
       .first();
-    await link.click();
+    await clickNavLink(link, hold);
 
-    // Under the entry delay, nothing shows yet.
-    await expect(BAR(page)).toHaveCount(0);
-    // Past the 150ms delay + inside the held fetch, the bar renders and the
-    // live region announces.
+    // Inside the held fetch, past the 150ms entry delay, the bar renders and
+    // the live region announces.
     await expect(BAR(page)).toBeVisible({ timeout: 5_000 });
     await expect(LIVE(page).filter({ hasText: /loading/i })).toBeAttached();
     // Clears once the navigation commits.
+    hold.release();
     await expect(page).toHaveURL(/\/dashboard\/settings/, { timeout: 30_000 });
     await expect(BAR(page)).toHaveCount(0, { timeout: 10_000 });
   });
@@ -228,25 +325,12 @@ test.describe("nav-pending bar (#8917 Guard 1)", () => {
     // held nav neither stuck-blocks interactions nor strands the bar after
     // the route unblocks. Installed BEFORE gotoDash: kb's prefetch fires on
     // rail mount, and a resolved prefetch would make the click a warm nav.
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    await page.route("**/dashboard/kb**", async (route) => {
-      const headers = route.request().headers();
-      if (
-        headers["next-router-prefetch"] !== undefined ||
-        headers["next-router-segment-prefetch"] !== undefined
-      ) {
-        await route.abort();
-        return;
-      }
-      await gate;
-      await route.continue();
-    });
+    const hold = await holdNavFetch(page, "**/dashboard/kb**");
     await gotoDash(page);
     const link = page.getByRole("link", { name: /knowledge base/i }).first();
-    await link.click();
+    await clickNavLink(link, hold);
     await expect(BAR(page)).toBeVisible({ timeout: 5_000 });
-    release();
+    hold.release();
     await expect(BAR(page)).toHaveCount(0, { timeout: 15_000 });
   });
 });

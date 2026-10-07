@@ -80,6 +80,8 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 
 > **Numbers: soft floors in prose.** Use "60+ agents" and "60+ skills" in static documentation and marketing prose. The live site renders exact counts from the filesystem via `{{ stats.agents }}` / `{{ stats.skills }}` -- never duplicate the exact count in prose, where it will drift as new agents and skills ship. Soft floors stay accurate across releases.
 
+> **[2026-10-06 Homepage computed counts (#9579)]** Pages that set `summaryCounts: computed` in their frontmatter (the homepage only) render the live `{{ stats.agents }}` / `{{ stats.skills }}` counts in prose, because the hero, the FAQ answer, the final CTA and the page summary would otherwise contradict the stat strip beside them. Pricing, about, vision, agents, skills, blog posts and static prose keep the soft floor. The stats line quoted under the 2026-03-22 Business Validation note below is a static-prose use and keeps the floor. Pinned by "#9579 Guard 2" in `plugins/soleur/test/seo-aeo-drift-guard.test.ts`; do not quote an exact count in this guide (`marketing-content-drift.test.ts` Test 1 rejects stale literals).
+
 - Write like the future is already here
 - Use "we" when speaking as Soleur, "you" when addressing the founder
 - Keep sentences short and punchy in marketing copy
@@ -489,6 +491,10 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Final CTA: "Ready to build at scale?" / "Your AI organization is ready. Are you?" / Start Building.
 
 > **[2026-03-22 Business Validation Review]** When the web platform launches, the website CTA must shift from plugin installation to platform signup/login. The hero pattern, visual identity, and brand energy transfer directly -- the Solar Forge aesthetic is delivery-agnostic. The stats line ("60+ agents, 8 departments, 1 founder") remains valid. CTA copy candidates: "Start Building" (current, still works), "Open Your Dashboard", "Meet Your Organization." Do not reference CLI installation as the primary CTA in any new landing page content.
+
+> **[2026-10-06 Homepage hero CTA test (#9579, #9588)]** Scope: the homepage hero only, as a time-boxed rollout rather than an experiment. The hero primary button is "Get the self-hosted version" (the self-hosted install section), with the hosted waitlist kept visible and labelled below it; the premise of the rule above (the hosted platform launching) has not occurred. Review date: 2026-11-03. Revert triggers: the hero waitlist-signup rate falls more than about 30 percent relative to the pre-change baseline without matching install activity; the alpha cohort mix drifts further from its goal of at least 3 of 10 non-Claude-Code founders; hero copy drifts toward developer register. This note does not license "install", "CLI" or "terminal" wording, and every new landing page remains bound by the rule above.
+
+> **[2026-10-06 Homepage hero CTA test, bundled change (#9577, #9588)]** The homepage also gains a below-the-fold illustration section, "How a brief reaches the departments" (#9577), shipping inside the hero test window. It has no button and fires no event, so it cannot move the hero click events, but it adds a screen between the hero and the FAQ and is a candidate cause for scroll-based or waitlist-rate movement. The 2026-11-03 review compares hero click and waitlist signup rates in before and after windows around the section's ship date (recorded on #9588) and annotates the window; it does not restart it. The section is an illustration with sample data, not a depiction of the hosted product, until #9620 is decided.
 
 <!-- Heading read by name by plugins/soleur/skills/content-writer/SKILL.md; pinned by plugins/soleur/test/blog-audience-contract.test.ts. -->
 ### Blog

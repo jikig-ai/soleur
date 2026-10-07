@@ -183,6 +183,7 @@ NOT_TRANSCRIBED=(
   "knowledge-base/legal/audits/2026-09-counsel-review-8918.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #8918 pending_checkout_sessions legal lockstep (migration 144 + the four legal docs, DSAR exclusion, PA-3 markers, PR #9115). Its Art. 33/34 mentions record that NO trigger exists — a transient operational claim-table introduction destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189 and 5274 reviews above; citing #8918."
   "knowledge-base/legal/audits/2026-09-counsel-review-9034.md | Not a determination: the ship Phase 5.5 COUNSEL REVIEW (CLO-agent attestation) of the #8978 / PR #9034 legal-doc lockstep amendments (the bounded DSAR re-authentication technical-behavior note across the three published docs, their mirrors and compliance-posture). Its Art. 33/34 mentions are the frontmatter recording that NO trigger exists — a documentation-and-timeout change destroys, loses, alters and discloses nothing — so there is no event, no fact pattern and no controller determination to transcribe. Same class as the 8043, 8189, 8159, 8205, 8248, 7226 and 5274 reviews above; citing #8978."
   "knowledge-base/legal/audits/2026-09-counsel-reattestation-8634.md | Not a determination: the CLO RE-ATTESTATION discharging #8634 — it records that row D5 of 2026-09-counsel-review-8189.md's forward claim was superseded by ADR-239. Its Art. 33/34 mentions are the frontmatter fields recording that NO trigger exists — recording a supersession of a dated attestation assesses no fact pattern and makes no Art. 4(12) determination. Same class as the 8043 and 8189 counsel-review rows; citing #8634."
+  "knowledge-base/legal/audits/2026-10-counsel-review-9601.md | Not a determination: the COUNSEL REVIEW (CLO attestation under the ship Phase 5.5 gate, 2026-10-06) of an Art. 32 technical-measure entry in the Art. 30 register (the Anthropic API key withheld from sandboxed Bash). It assesses no fact pattern and makes no Art. 4(12) determination; its Art. 33 mention states that a readable-token residual is not a breach and starts no clock, which is a scoping statement, not an event. Same class as the 8043 and 8189 counsel-review rows; citing #9601"
 )
 
 # The one indexed determination that lives outside the producer's scope. Asserted literally
@@ -305,7 +306,7 @@ done <<< "$cited_paths"
 # same path -- so deleting the determination ROW left this assertion green and the guard reported
 # 6 assertions, 0 failed over a register missing the one row (c)'s producer cannot see. That is
 # cq-assert-anchor-not-bare-token, five lines below where this file cites it. Measured at review.
-if printf '%s' "$cited_paths" | grep -qxF "$OUT_OF_SCOPE_ROW"; then
+if grep -qxF "$OUT_OF_SCOPE_ROW" < <(printf '%s' "$cited_paths"); then
   pass "(b) the out-of-producer-scope determination row is present"
 else
   fail "(b) the out-of-producer-scope determination row is missing: $OUT_OF_SCOPE_ROW
@@ -388,7 +389,7 @@ for entry in "${NOT_TRANSCRIBED[@]}"; do
   [[ -n "$wpath" ]] || die2 "NOT_TRANSCRIBED entry has no path: $entry"
   [[ -f "$REPO_ROOT/$wpath" ]] || die2 "NOT_TRANSCRIBED waives a path that does not exist: $wpath"
   # Fail-closed on an uncited waiver -- the same contract EXCLUSIONS already uses.
-  echo "$wreason" | grep -qE '#[0-9]+' \
+  grep -qE '#[0-9]+' <<<"$wreason" \
     || die2 "NOT_TRANSCRIBED entry for $wpath has no citing issue (#NNNN): $wreason"
   waived_paths+="$wpath"$'\n'
 done
@@ -403,10 +404,10 @@ while IFS= read -r f; do
   # table and by the `related:` frontmatter, so a file listed as EXCLUDED counted as INDEXED
   # and its waiver became unfalsifiable -- deleting a waiver left the gate green. Caught by
   # mutation 7b (cq-assert-anchor-not-bare-token).
-  if printf '%s' "$cited_paths" | grep -qxF "$rel"; then
+  if grep -qxF "$rel" < <(printf '%s' "$cited_paths"); then
     continue
   fi
-  if printf '%s' "$waived_paths" | grep -qxF "$rel"; then
+  if grep -qxF "$rel" < <(printf '%s' "$waived_paths"); then
     continue
   fi
   uncovered=$((uncovered + 1))

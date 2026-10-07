@@ -354,6 +354,12 @@ export interface ClientSession {
    *  guard. `null` means "no persisted session_id"; `undefined` means
    *  "cache cold". */
   sessionId?: string | null;
+  /** feat-cc-cap-raise-resume (#9565) — cached
+   *  `conversations.cc_cost_cap_usd` override for the active
+   *  conversation. Seeded on chat-case cache miss from the SELECT and
+   *  refreshed by `persistCostCapOverride` on raise. `null` means "no
+   *  override"; `undefined` means "cache cold". */
+  costCapUsd?: number | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -417,6 +423,9 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.contextPath = undefined;
   // Same for the session_id cache (#3266).
   session.sessionId = undefined;
+  // Same for the cost-cap override cache (#9565) — a raise on the prior
+  // conversation must not bleed into the next one.
+  session.costCapUsd = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -1241,6 +1250,13 @@ export async function dispatchSoleurGoForConversation(
   context?: ConversationContext,
   attachments?: import("@/lib/types").AttachmentRef[],
   sessionId?: string | null,
+  /**
+   * feat-cc-cap-raise-resume (#9565) — cached
+   * `conversations.cc_cost_cap_usd` override from the caller's session
+   * cache. Seeded into the runner's ActiveQuery; takes precedence over
+   * the env-derived workflow/default cap.
+   */
+  costCapUsd?: number | null,
 ): Promise<void> {
   // feat-stream-since-disconnect (#5273) — turn boundary for the cc-soleur-go
   // path. The legacy fan-out wires resetTurn in `sendUserMessage`, but cc
@@ -1332,6 +1348,33 @@ export async function dispatchSoleurGoForConversation(
     });
   }
 
+  // feat-cc-cap-raise-resume (#9565) — write a raise tier back to
+  // `conversations.cc_cost_cap_usd` and refresh the in-process cache so
+  // the next turn reads it without a DB round-trip (same pattern as
+  // `onSessionIdPersisted` below).
+  const persistCostCapOverride = async (usd: number) => {
+    const { ok, error } = await updateConversationFor(
+      userId,
+      conversationId,
+      { cc_cost_cap_usd: usd },
+      {
+        feature: "ws-handler",
+        op: "persist-cost-cap-override",
+        extra: { usd },
+        expectMatch: false,
+      },
+    );
+    if (!ok) {
+      throw new Error(
+        `cc_cost_cap_usd update failed: ${error?.message ?? "unknown"}`,
+      );
+    }
+    const liveSession = sessions.get(userId);
+    if (liveSession && liveSession.conversationId === conversationId) {
+      liveSession.costCapUsd = usd;
+    }
+  };
+
   // 2026-05-06 Bug A1 fix — resolve workspacePath up-front when an
   // artifact directive is going to be built. `fetchUserWorkspacePath`
   // resolves the caller's ACTIVE workspace (ADR-044) — a single indexed
@@ -1392,6 +1435,10 @@ export async function dispatchSoleurGoForConversation(
     // validated context.type; appends ROUTINE_AUTHORING_DIRECTIVE in
     // buildSoleurGoSystemPrompt. Document context (path/content) is unused
     // for this mode (it carries no path).
+    // feat-cc-cap-raise-resume — persisted per-conversation cap override
+    // + the write-back sink used by the raise flow.
+    costCapOverrideUsd: costCapUsd ?? null,
+    persistCostCapOverride,
     routineAuthoring: context?.type === "routine-authoring",
     crmLead: context?.type === "crm-lead",
     // feat-wire-concierge-support-chat (ADR-113) — resolve the persona from the
@@ -1676,7 +1723,13 @@ async function handleResumeStream(
     // already carry `seq`). The client dedups any `seq <= lastRenderedSeq`.
     // Live frames then resume from the still-running agent.
     for (const frame of frames) {
-      sendToClient(userId, frame);
+      // debug_event re-emits are marked `replayed` so the client's watchdog
+      // heartbeat ignores them — a buffered tool_use is stale liveness
+      // evidence, not a live one (lib/chat-state-machine.ts `debug_event`).
+      sendToClient(
+        userId,
+        frame.type === "debug_event" ? { ...frame, replayed: true } : frame,
+      );
     }
   } catch (err) {
     Sentry.captureException(err);
@@ -1685,6 +1738,29 @@ async function handleResumeStream(
       "resume_stream error",
     );
     fallback(msg.conversationId);
+  }
+}
+
+/**
+ * Rejoin replay for the debug-mode panel: re-emit a conversation's buffered
+ * `debug_event` frames when the client binds to it via a full session resume
+ * (`resume_session` / context_path resume) — the leave-and-return remount
+ * path that never sends `resume_stream`. Each frame is cloned with
+ * `replayed: true` so the client's watchdog heartbeat ignores it
+ * (lib/chat-state-machine.ts `debug_event` case). The frames were already
+ * delivered to this user's socket once — re-sending within the same
+ * ownership boundary introduces no new exposure, and nothing is persisted.
+ * An absent/evicted ring is a silent no-op (the panel simply starts empty).
+ */
+function replayBufferedDebugEvents(
+  userId: string,
+  conversationId: string,
+): void {
+  const { frames } = streamReplayBuffer.replayFrom(conversationId, -1);
+  for (const frame of frames) {
+    if (frame.type === "debug_event") {
+      sendToClient(userId, { ...frame, replayed: true });
+    }
   }
 }
 
@@ -1870,6 +1946,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               resumedFromTimestamp: row.last_active,
               messageCount: countErr ? 0 : (messageCount ?? 0),
             });
+
+            // feat-debug-mode-stream — repopulate the debug panel on this
+            // leave-and-return rebind (buffered frames only; no-op when the
+            // ring is gone).
+            replayBufferedDebugEvents(userId, row.id);
 
             log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
             break;
@@ -2223,19 +2304,25 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         session.conversationId = msg.conversationId;
         // Resuming a different conversation — invalidate the routing,
-        // KB context, and session_id caches so the first chat-turn
-        // re-reads `active_workflow`, `context_path`, and `session_id`.
-        // The three caches share the same lifecycle invariant: invalidate
-        // together.
+        // KB context, session_id, and cost-cap (#9565) caches so the
+        // first chat-turn re-reads `active_workflow`, `context_path`,
+        // `session_id`, and `cc_cost_cap_usd`. The four caches share
+        // the same lifecycle invariant: invalidate together.
         session.routing = undefined;
         session.contextPath = undefined;
         session.sessionId = undefined;
+        session.costCapUsd = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
           conversationId: msg.conversationId,
           capabilities: WS_CAPABILITIES,
         });
+
+        // feat-debug-mode-stream — repopulate the debug panel on this
+        // leave-and-return rebind: emit the conversation's buffered debug
+        // frames (marked `replayed`; no-op when the ring is gone).
+        replayBufferedDebugEvents(userId, msg.conversationId);
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "resume_session error");
@@ -2282,6 +2369,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         session.routing = undefined;
         session.contextPath = undefined;
         session.sessionId = undefined;
+        session.costCapUsd = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -2419,6 +2507,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // ConversationContext. For crm-lead this is the mode sentinel,
           // not a KB path and not null.
           session.contextPath = insertedContextPath ?? null;
+          // feat-cc-cap-raise-resume — the materialized row cannot carry
+          // an override yet (createConversation inserts NULL; the
+          // (user_id, context_path) pre-existing-row race could carry one,
+          // in which case a `null` seed is the safe direction: the next
+          // turn's cache-miss SELECT re-reads the real value).
+          session.costCapUsd = null;
 
           log.info(
             {
@@ -2445,6 +2539,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               pendingRouting,
               pendingContext,
               msg.attachments,
+              null,
+              // feat-cc-cap-raise-resume — first-turn: no cap override
+              // can exist yet (row was just inserted).
               null,
             );
             break;
@@ -2540,7 +2637,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // visibility-sweep-audit: owner-scoped via RLS (no explicit user_id filter but tenant JWT scopes to auth.uid())
           const { data: row, error: routeErr } = await tenantRoute
             .from("conversations")
-            .select("active_workflow, session_id, context_path")
+            .select("active_workflow, session_id, context_path, cc_cost_cap_usd")
             .eq("id", convId)
             .single();
           if (routeErr) {
@@ -2557,6 +2654,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             active_workflow?: string | null;
             session_id?: string | null;
             context_path?: string | null;
+            cc_cost_cap_usd?: number | null;
           } | null;
           routing = typedRow
             ? parseConversationRouting({
@@ -2567,6 +2665,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           session.routing = routing;
           session.contextPath = typedRow?.context_path ?? null;
           session.sessionId = typedRow?.session_id ?? null;
+          session.costCapUsd = typedRow?.cc_cost_cap_usd ?? null;
         }
 
         if (routing.kind !== "legacy") {
@@ -2591,6 +2690,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             chatContext,
             msg.attachments,
             session.sessionId ?? null,
+            // feat-cc-cap-raise-resume — cached per-conversation cap
+            // override from the routing SELECT above.
+            session.costCapUsd ?? null,
           );
           break;
         }
@@ -2869,7 +2971,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // server→client only (emitted from cc-dispatcher onToolResult).
     case "reasoning_narration":
     case "turn_summary":
-    // feat-stream-since-disconnect (#5273) — server→client only.
+    case "task_completed":
+    // feat-stream-since-disconnect (#5273) — server→client only (likewise
+    // task_completed — feat-session-completion-inline, emitted from the shared
+    // notifyTaskCompleted seam).
     case "stream_replay": {
       sendToClient(userId, {
         type: "error",

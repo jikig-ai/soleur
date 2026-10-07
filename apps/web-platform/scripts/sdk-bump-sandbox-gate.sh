@@ -137,7 +137,7 @@ if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
   else
     ack_text="$(read_branch_messages)" || exit 1
   fi
-  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+  if grep -qiE "\b${ACK_TOKEN}\b" < <(printf '%s' "$ack_text"); then
     echo "sdk-bump-gate: SDK bump acknowledged (\`${ACK_TOKEN}\` present) — a maintainer attests the committed seccomp profile was validated against the new SDK. Proceeding."
   else
     echo "::error::sdk-bump-gate: an SDK version bump was detected (${bumped_pkgs[*]}) but NO \`${ACK_TOKEN}:\` acknowledgement is present in the branch commit messages."
@@ -180,7 +180,11 @@ capture_trigger=0
 # so on a SAME-REPO PR (creds present) force a re-verify, else fail closed to the
 # ack. NOTE: this only runs when the flag is set (same-repo capture job) — a fork's
 # fixture-only edit reaches neither; see the trust-boundary note above.
-if printf '%s\n' "$CHANGED" | grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)'; then
+# grep exits 0 on a match, 1 on none, above 1 when it could not run (a bad pattern): only a CLEAN miss may skip the gate. A
+# failed here-string redirect also returns 1, so this routing does not cover a redirect failure.
+ct_rc=0
+grep -qE 'apps/web-platform/(server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|scripts/sandbox-canary\.mjs|infra/sandbox-canary-argv\.json)' <<<"$CHANGED" || ct_rc=$?
+if (( ct_rc != 1 )); then
   capture_trigger=1
 fi
 
@@ -221,7 +225,7 @@ if [[ "$require_capture_ack" -eq 1 ]]; then
   else
     ack_text="$(read_branch_messages)" || exit 1
   fi
-  if printf '%s' "$ack_text" | grep -qiE "\b${ACK_TOKEN}\b"; then
+  if grep -qiE "\b${ACK_TOKEN}\b" < <(printf '%s' "$ack_text"); then
     echo "sdk-bump-gate: capture-gate ack present (\`${ACK_TOKEN}\`) — proceeding on the maintainer attestation."
   else
     echo "::error::sdk-bump-gate: the canary capture could not be verified automatically (see warning above) AND no \`${ACK_TOKEN}:\` ack is present. A maintainer must validate the committed profile against the SDK's real argv and add the ack trailer."

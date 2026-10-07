@@ -119,7 +119,13 @@ expect_fail_mode() {
     return
   fi
   if ! printf '%s' "$OUT" | grep -qF "fail_mode=$want"; then
-    fail "$label" "expected fail_mode=$want; got: $(printf '%s' "$OUT" | grep -F 'fail_mode=' || echo '(none emitted)')"
+    # Quote both operands with %q: a comparison that fails while printing two
+    # identical-looking strings is hiding the difference in whitespace, a CR,
+    # or an unflushed partial write. %q makes any such artifact visible instead
+    # of silently swallowed.
+    local got
+    got="$(printf '%s' "$OUT" | grep -F 'fail_mode=' || echo '(none emitted)')"
+    fail "$label" "expected fail_mode=$(printf '%q' "$want"); got: $(printf '%q' "$got")"
     return
   fi
   pass "$label"

@@ -23,9 +23,8 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
  * Stage 4 (#2886) adds four new ChatMessage variants for the `/soleur:go`
  * router protocol: subagent_group, interactive_prompt, workflow_ended,
  * tool_use_chip. A `workflow` ambient slice tracks the WorkflowLifecycleBar
- * state, and a `spawnIndex` reverse-lookup map lets `subagent_complete`
- * (which carries `spawnId` only) mutate the right child without an O(N²)
- * scan.
+ * state, and a `spawnIndex` Set<string> dedups `subagent_spawn` events;
+ * `subagent_complete` finds its child by an id scan of `prev`.
  */
 
 interface ChatMessageBase {
@@ -36,7 +35,6 @@ interface ChatMessageBase {
   attachments?: AttachmentRef[];
   state?: MessageState;
   toolLabel?: string;
-  toolsUsed?: string[];
   /**
    * FR5 (#2861) / FR4 (#5240): set by `applyTimeout` on the first stuck-timeout
    * and cleared on a follow-up `tool_progress` or the second consecutive
@@ -51,6 +49,39 @@ interface ChatMessageBase {
    * precedence over this activity flag (#5282, AC12).
    */
   retrying?: boolean;
+  /**
+   * feat-concierge-activity-trail (#9515): session-only in-turn step history —
+   * dimmed PRIOR steps (the current step is `toolLabel`/`liveNarration` for
+   * narration). Entries are pushed when a step is superseded or at
+   * terminalization; the trail RENDERS only while the bubble is live-ish
+   * (transitional state or `interrupted`) so teardown is free — turn end
+   * simply stops rendering it. Never persisted; hydrated rows never carry it.
+   */
+  activity?: ActivityEntry[];
+  /** #9515 follow-up — when the current text block began (set on every
+   *  non-prefix `stream` replace), so the folded prior's trail entry can
+   *  carry its real start time instead of the fold instant. */
+  contentStartedAt?: number;
+  /** ms epoch the CURRENT displayed step began (`toolLabel` set or last
+   *  narration) — elapsed time computes at render, no hot-path mutation. */
+  currentActivityStartedAt?: number;
+  /**
+   * feat-concierge-activity-trail (#9515): honest mid-flap marker set by
+   * `sweepTransitional` (clear_streams / enter_stopping) on bubbles still
+   * transitional at socket reconnect/teardown. Renders a neutral
+   * "Interrupted" chip (never "Working"); a resuming stream/tool_use REBINDS
+   * via `findInterruptedBubble` so the turn continues in one box. Cleared on
+   * rebind. Flag — not a `MessageState` member — mirroring `retrying`.
+   */
+  interrupted?: boolean;
+  /**
+   * feat-concierge-activity-trail (#9515): user-stop variant of `interrupted`
+   * — set by `sweepTransitional` only from `enter_stopping`. Renders the same
+   * "Interrupted" chip, but `findInterruptedBubble` SKIPS it: frames racing
+   * in behind a user abort (the cc path's `abort_turn` is a documented no-op,
+   * so they do) must not resurrect a Working box — they spawn fresh.
+   */
+  stopped?: boolean;
   /**
    * #5240 (leader-liveness sub-issue): counts how many times THIS bubble's
    * Stage-2 escalation has been *suppressed* because a sibling leader was still
@@ -76,11 +107,14 @@ export const MAX_LIVENESS_REARMS = 3;
 
 /**
  * feat-concierge-stream-commands — one inline terminal block per Concierge
- * Bash command. The reducer's `command_stream` case APPENDS these onto the
+ * Bash command. NOTE (#9515 follow-up): command blocks no longer render
+ * inside the bubble — the working box shows reasoning + plain-language steps;
+ * raw command detail lives in the Debug stream. The state is retained because
+ * the `command_stream` arm also drives chip-prune + liveness. The reducer's
+ * `command_stream` case APPENDS these onto the
  * active cc_router text bubble (output APPENDS to the matching block, the
  * command does NOT replace bubble text). `command`/`output` arrive
- * already-redacted at the server emit boundary; `message-bubble.tsx`
- * re-redacts at render as the belt-and-suspenders gate. `truncated` marks
+ * already-redacted at the server emit boundary. `truncated` marks
  * a block whose output hit the per-command cap (D4).
  */
 export interface CommandBlock {
@@ -101,8 +135,8 @@ export interface CommandBlock {
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
   /**
-   * feat-concierge-stream-commands — inline streamed-terminal blocks for
-   * Concierge Bash tool-uses. Append-only; `undefined`/empty on bubbles
+   * feat-concierge-stream-commands — retained for the command_stream arm's
+   * chip-prune + liveness; nothing renders these. Append-only; `undefined`/empty on bubbles
    * that ran no commands so existing fixtures + non-cc bubbles are
    * unaffected.
    */
@@ -213,6 +247,9 @@ export interface ChatToolUseChipMessage extends Omit<ChatMessageBase, "leaderId"
   toolName: string;
   toolLabel: string;
   leaderId: "cc_router" | "system";
+  /** ms epoch the chip was created — seeds the activity trail's `startedAt`
+   *  when the chip's label folds into the bubble on first stream. */
+  at?: number;
 }
 
 /** #3269: inline context-reset notice. Single-shot lifecycle card; renders
@@ -250,6 +287,19 @@ export interface ChatTurnSummaryMessage extends ChatMessageBase {
   type: "turn_summary";
 }
 
+/** feat-session-completion-inline — the inline per-request completion card.
+ *  Renders INLINE in the viewed conversation when the server emits the
+ *  `task_completed` frame; the matching inbox_item row stays the durable
+ *  record and is marked read when the card MOUNTS (TaskCompletedCard's mount
+ *  effect — "read" implies painted). Render MUST be plain-text — the title is
+ *  server-generated (never agent output, ADR-085) but the InboxItemRow
+ *  plain-text invariant still applies. `content` carries the title;
+ *  `inboxItemId` links the card to its durable row (the read-mark target). */
+export interface ChatTaskCompletedMessage extends ChatMessageBase {
+  type: "task_completed";
+  inboxItemId: string;
+}
+
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
@@ -260,7 +310,8 @@ export type ChatMessage =
   | ChatToolUseChipMessage
   | ChatContextResetMessage
   | ChatDebugEventMessage
-  | ChatTurnSummaryMessage;
+  | ChatTurnSummaryMessage
+  | ChatTaskCompletedMessage;
 
 /** Stage 4 (#2886): ambient lifecycle-bar slice. The bar is sticky context;
  *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card.
@@ -285,21 +336,290 @@ export type WorkflowLifecycleState =
       summary?: string;
     };
 
-/** Reverse-lookup index for `subagent_complete` is no longer needed —
- *  the reducer scans `prev` for the matching subagent_group + child by
- *  `spawnId`. Kept as an exported type alias for backward compat with any
- *  external snapshot consumers; the reducer treats it as a sentinel only.
- *  See review F2: absolute message indices were invalidated by
- *  `filter_prepend`. The id-based lookup is O(N) per `subagent_complete`,
- *  which is fine since spawn count per session is bounded. */
-export type SpawnIndex = Map<
-  string,
-  { messageIdx: number; childIdx: number }
->;
+/** feat-concierge-activity-trail (#9515): collapsed to `Set<spawnId>` —
+ *  the `{messageIdx, childIdx}` payload was write-only (absolute indices are
+ *  invalidated by `filter_prepend`/chip-prune; `subagent_complete` has
+ *  scanned `prev` by id since review F2). The only live read is
+ *  `subagent_spawn`'s `has(spawnId)` dedup. */
+export type SpawnIndex = Set<string>;
 
 /** Maximum number of `tool_use_chip` messages to retain per leader before
  *  the oldest is evicted. Plan §3 risk: "chip cap of 5 latest". */
 export const TOOL_USE_CHIP_CAP_PER_LEADER = 5;
+
+/** feat-concierge-activity-trail (#9515): one step in the in-turn activity
+ *  trail. `kind` separates tool labels from deliberate narration lines so the
+ *  render can style them distinctly if needed. `startedAt` is the step's
+ *  start — elapsed time is computed at render (no messages[] mutation on the
+ *  `tool_progress` heartbeat path). */
+export interface ActivityEntry {
+  label: string;
+  kind: "tool" | "narration";
+  startedAt: number;
+}
+
+/** Stored cap on `activity[]` per bubble — bounded accumulation, mirrors
+ *  MAX_COMMAND_BLOCKS (oldest entries evicted; the visible render cap is
+ *  ACTIVITY_VISIBLE_CAP). */
+export const MAX_ACTIVITY_ENTRIES = 20;
+
+/** Visible cap — the box shows the last N priors + "…and M more steps". */
+export const ACTIVITY_VISIBLE_CAP = 5;
+
+/**
+ * feat-concierge-activity-trail (#9515): append `entry` to `existing` with
+ * consecutive-duplicate suppression and the stored cap. A step that repeats
+ * verbatim (same label twice in a row — e.g. consecutive identical tool
+ * labels) collapses into one entry rather than spamming the trail.
+ */
+export function pushActivity(
+  existing: ActivityEntry[] | undefined,
+  entry: ActivityEntry,
+): ActivityEntry[] {
+  const list = existing ?? [];
+  if (list.length > 0 && list[list.length - 1].label === entry.label) {
+    return list;
+  }
+  const next = [...list, entry];
+  return next.length > MAX_ACTIVITY_ENTRIES
+    ? next.slice(next.length - MAX_ACTIVITY_ENTRIES)
+    : next;
+}
+
+/**
+ * #9515 follow-up — a `stream` event REPLACES the bubble's content per text
+ * block (W8); intermediate "reasoning" paragraphs were silently overwritten
+ * while the append-only debug stream kept them. When the incoming content is
+ * NOT a continuation of the current content (a new block, not a growing
+ * partial — cumulative partials share the prefix), the previous block's first
+ * line folds into the trail so the box shows the reasoning SEQUENCE.
+ * The text is the user-visible assistant content — already at the emit
+ * boundary — so no new exposure; label is bounded to one line / 160 chars.
+ * SNAPSHOT assumption: every live emitter sends cumulative-per-block content
+ * (cc `onText` block.replace, agent-runner lastBlock.text). The dormant Codex
+ * mapper emits per-delta FRAGMENTS — when it wires into ws-handler, gate this
+ * fold off that path or accumulate deltas per itemId upstream.
+ */
+function foldReplacedText(
+  prevContent: string,
+  nextContent: string,
+  activity: ActivityEntry[] | undefined,
+  contentStartedAt: number | undefined,
+): ActivityEntry[] | undefined {
+  if (!prevContent || nextContent.startsWith(prevContent)) return activity;
+  const firstLine = prevContent
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!firstLine) return activity;
+  return pushActivity(activity, {
+    // Code-point-safe truncate — a naive slice can split a surrogate pair.
+    label:
+      Array.from(firstLine).length > 160
+        ? `${Array.from(firstLine).slice(0, 159).join("")}…`
+        : firstLine,
+    kind: "narration",
+    // When the OUTGOING block began (contentStartedAt stamps each non-prefix
+    // replace); a missing stamp falls back to now — a 0s duration beats a
+    // wrong long one.
+    startedAt: contentStartedAt ?? Date.now(),
+  });
+}
+
+/**
+ * feat-concierge-activity-trail (#9515): fold the superseded `liveNarration`
+ * line into the tip text bubble's `activity[]` as a "narration" step.
+ * Tip = the sole active stream's bubble when unambiguous, else the newest
+ * live-ish-or-done text bubble — the turn-end fold lands on the JUST-
+ * terminalized bubble so the final narration is never dropped (bounded by
+ * the user barrier: it can never attach to a LATER turn's record).
+ * Returns `{messages, folded}` — `folded:false` when nothing could hold it.
+ */
+export function foldNarrationIntoTrail(
+  messages: ChatMessage[],
+  activeStreams: Map<DomainLeaderId, string>,
+  narration: string | null,
+  startedAt: number | null | undefined,
+): { messages: ChatMessage[]; folded: boolean } {
+  const none = { messages, folded: false };
+  if (!narration) return none;
+  let idx: number | undefined;
+  if (activeStreams.size === 1) {
+    const soleId = activeStreams.values().next().value;
+    const i = messages.findIndex((m) => m.id === soleId);
+    if (i !== -1) idx = i;
+  }
+  if (idx === undefined) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      // Never fold across a turn boundary into a prior turn's dead box.
+      if (m.role === "user") break;
+      if (
+        m.type === "text" &&
+        (m.state === "thinking" ||
+          m.state === "tool_use" ||
+          m.state === "streaming" ||
+          m.state === "done" ||
+          m.interrupted === true)
+      ) {
+        idx = i;
+        break;
+      }
+    }
+  }
+  if (idx === undefined) return none;
+  const t = messages[idx];
+  if (t.type !== "text") return none;
+  const updated = [...messages];
+  updated[idx] = {
+    ...t,
+    activity: pushActivity(t.activity, {
+      label: narration,
+      kind: "narration",
+      startedAt: startedAt ?? Date.now(),
+    }),
+  };
+  return { messages: updated, folded: true };
+}
+
+/**
+ * feat-concierge-activity-trail (#9515): `activeStreams` is keyed by message
+ * ID — `Map<leaderId, message.id>` — NOT absolute index. Indices are
+ * invalidated by `filter_prepend`, chip-prune `filter`s, and any future
+ * messages[] reorder (the cross-leader content-corruption class verified in
+ * plan review: a chip for leader A pruned while leader B streams shifts B's
+ * stored index onto the wrong row). An id that no longer resolves means the
+ * bubble is gone — the arm falls through cleanly rather than corrupting a
+ * hydrated row. `subagent_complete`'s id-scan is the precedent.
+ */
+export function resolveStreamIndex(
+  messages: ChatMessage[],
+  activeStreams: Map<DomainLeaderId, string>,
+  leaderId: DomainLeaderId,
+): number | undefined {
+  const id = activeStreams.get(leaderId);
+  if (id === undefined) return undefined;
+  const i = messages.findIndex((m) => m.id === id);
+  return i === -1 ? undefined : i;
+}
+
+/**
+ * feat-concierge-activity-trail (#9515): the latest text bubble for
+ * `leaderId` still carrying the `interrupted` flag — same tip-contract walk
+ * as `findRecoverableErrorBubble` (scan from the end; a newer non-flagged
+ * text bubble means the turn already continued elsewhere). Used by the
+ * rebind check that precedes every transitional entry path, so a resuming
+ * frame reattaches to the swept bubble instead of spawning a sibling box.
+ */
+/** feat-concierge-activity-trail (#9515): the "current step becomes a prior"
+ *  patch — folds `toolLabel` into `activity` (chip labels seeded FIRST so the
+ *  trail keeps chronological order) and clears the live-step slot. */
+function foldCurrentStep(
+  current: ChatMessage,
+  chips?: ChatMessage[],
+): Partial<ChatTextMessage> {
+  const seeded = chips?.length
+    ? seedActivityFromChips(current.activity, chips)
+    : current.activity;
+  return {
+    activity: current.toolLabel
+      ? pushActivity(seeded, {
+          label: current.toolLabel,
+          kind: "tool",
+          startedAt: current.currentActivityStartedAt ?? Date.now(),
+        })
+      : seeded,
+    toolLabel: undefined,
+    currentActivityStartedAt: undefined,
+  };
+}
+
+/** feat-concierge-activity-trail (#9515): one-pass chip partition — the
+ *  prune filter and the seed-collector fuse so a token-rate frame scans
+ *  `prev` once, not twice (perf seat). */
+function partitionLeaderChips(
+  prev: ChatMessage[],
+  leaderId: DomainLeaderId,
+): { working: ChatMessage[]; prunedChips: ChatMessage[] } {
+  const prunedChips: ChatMessage[] = [];
+  const working = prev.filter((m) => {
+    if (m.type === "tool_use_chip" && m.leaderId === leaderId) {
+      prunedChips.push(m);
+      return false;
+    }
+    return true;
+  });
+  return { working, prunedChips };
+}
+
+export function findInterruptedBubble(
+  messages: ChatMessage[],
+  leaderId: DomainLeaderId,
+): number | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    // A user message is a turn boundary: rebind must never cross it, or the
+    // new turn resumes a dead bubble positioned ABOVE the question it
+    // answers (ordering inversion, review-seat P1).
+    if (m.role === "user") break;
+    if (m.type !== "text" || m.leaderId !== leaderId) continue;
+    if (m.interrupted === true && m.stopped !== true) return i;
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * feat-concierge-activity-trail (#9515): sweep every transitional bubble
+ * (thinking / tool_use / streaming) to an honest `interrupted` marker —
+ * `state: undefined`, `interrupted: true`, `retrying` stripped and
+ * `livenessRearms` reset to 0 (an orphan that timed out once would otherwise pin the
+ * "No response yet" chip forever). Invoked by `clear_streams` (every
+ * `connect()` reconnect + session_ended/error/teardown) and `enter_stopping`
+ * — the two arms that can leave bubbles mid-turn outside a StreamEvent.
+ * The final `toolLabel` folds into `activity` so no step is dropped.
+ * The `interrupted`-flag bubble keeps its trail visible; a resuming frame
+ * rebinds via `findInterruptedBubble`.
+ */
+export function sweepTransitional(
+  messages: ChatMessage[],
+  opts: { stopped?: boolean } = {},
+): ChatMessage[] {
+  let changed = false;
+  const next = messages.map((m): ChatMessage => {
+    if (
+      m.type === "text" &&
+      (m.state === "thinking" ||
+        m.state === "tool_use" ||
+        m.state === "streaming")
+    ) {
+      changed = true;
+      const { retrying: _r, state: _s, ...rest } = m;
+      void _r;
+      void _s;
+      const folded = rest.toolLabel
+        ? {
+            ...rest,
+            activity: pushActivity(rest.activity, {
+              label: rest.toolLabel,
+              kind: "tool" as const,
+              startedAt: rest.currentActivityStartedAt ?? Date.now(),
+            }),
+            toolLabel: undefined,
+            currentActivityStartedAt: undefined,
+          }
+        : rest;
+      return {
+        ...folded,
+        interrupted: true,
+        ...(opts.stopped ? { stopped: true } : {}),
+        livenessRearms: 0,
+      };
+    }
+    return m;
+  });
+  return changed ? next : messages;
+}
 
 /** FIX 3 — cap on `commandBlocks` retained per bubble. A long autonomous turn
  *  can emit hundreds of Bash tool-uses; unbounded accumulation balloons the
@@ -313,14 +633,14 @@ export const MAX_COMMAND_BLOCKS = 100;
  *  from one source. */
 export interface ChatStateSnapshot {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   workflow: WorkflowLifecycleState;
   spawnIndex: SpawnIndex;
 }
 
 export interface StreamEventResult {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   /** Stage 4 (#2886): ambient lifecycle slice. Always present; defaults to
    *  the prior value unless the event mutates it. */
   workflow: WorkflowLifecycleState;
@@ -365,6 +685,8 @@ export type StreamEvent = Extract<
   | { type: "debug_event" }
   // feat-reasoning-chat-boxes (#5370) — durable per-turn summary (main list).
   | { type: "turn_summary" }
+  // feat-session-completion-inline — inline completion card (main list).
+  | { type: "task_completed" }
   | { type: "review_gate" }
   | { type: "autonomous_disclosure" }
   | { type: "subagent_spawn" }
@@ -379,7 +701,7 @@ const IDLE_WORKFLOW: WorkflowLifecycleState = { state: "idle" };
 
 /** Build a new SpawnIndex from a prior one (copy-on-write). */
 function cloneSpawnIndex(prev: SpawnIndex): SpawnIndex {
-  return new Map(prev);
+  return new Set(prev);
 }
 
 /** Stage 4 review F6: build a `ChatInteractivePromptMessage` from a wire
@@ -441,6 +763,8 @@ export function findRecoverableErrorBubble(
 ): number | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
+    // Same turn-boundary barrier as findInterruptedBubble.
+    if (m.role === "user") break;
     if (m.type !== "text" || m.leaderId !== leaderId) continue;
     if (m.state === "error") return i;
     // Newer live text bubble for this leader — leave older errors alone.
@@ -460,13 +784,13 @@ export function findRecoverableErrorBubble(
  */
 function rebindRecoveredErrorBubble(
   prev: ChatMessage[],
-  activeStreams: Map<DomainLeaderId, number>,
+  activeStreams: Map<DomainLeaderId, string>,
   leaderId: DomainLeaderId,
   errIdx: number,
   patch: Partial<ChatTextMessage> & { state: MessageState },
 ): {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
 } {
   const updated = [...prev];
   const current = updated[errIdx];
@@ -484,7 +808,71 @@ function rebindRecoveredErrorBubble(
     livenessRearms: 0,
   };
   const nextStreams = new Map(activeStreams);
-  nextStreams.set(leaderId, errIdx);
+  nextStreams.set(leaderId, updated[errIdx].id);
+  return { messages: updated, activeStreams: nextStreams };
+}
+
+/** feat-concierge-activity-trail (#9515): fold pruned `tool_use_chip` labels
+ *  into `activity` — the pre-bubble steps the user already saw must survive
+ *  the chip→bubble hand-off (spec-flow: chips are deleted on first stream,
+ *  so without seeding the trail "forgets" its own early steps). */
+function seedActivityFromChips(
+  activity: ActivityEntry[] | undefined,
+  chips: ChatMessage[],
+): ActivityEntry[] | undefined {
+  let out = activity;
+  for (const c of chips) {
+    if (c.type !== "tool_use_chip") continue;
+    out = pushActivity(out, {
+      label: c.toolLabel,
+      kind: "tool",
+      startedAt: c.at ?? Date.now(),
+    });
+  }
+  return out;
+}
+
+/**
+ * feat-concierge-activity-trail (#9515): rebind a resuming frame onto the
+ * swept `interrupted` bubble — clears the flag, applies the transitional
+ * patch, re-registers the leader in `activeStreams` (by message id), and
+ * seeds any pruned chip labels so the trail continues in the SAME box.
+ * Operator-chosen seamless resume (over the panel's honest-gap lean).
+ */
+function rebindInterruptedBubble(
+  prev: ChatMessage[],
+  activeStreams: Map<DomainLeaderId, string>,
+  leaderId: DomainLeaderId,
+  idx: number,
+  patch: Partial<ChatTextMessage>,
+): {
+  messages: ChatMessage[];
+  activeStreams: Map<DomainLeaderId, string>;
+} {
+  const updated = [...prev];
+  const current = updated[idx];
+  if (current.type !== "text") {
+    return { messages: prev, activeStreams };
+  }
+  const {
+    interrupted: _i,
+    stopped: _st,
+    retrying: _r,
+    livenessRearms: _l,
+    ...rest
+  } = current;
+  void _i;
+  void _st;
+  void _r;
+  void _l;
+  updated[idx] = {
+    ...rest,
+    ...patch,
+    type: "text",
+    livenessRearms: 0,
+  };
+  const nextStreams = new Map(activeStreams);
+  nextStreams.set(leaderId, updated[idx].id);
   return { messages: updated, activeStreams: nextStreams };
 }
 
@@ -498,13 +886,33 @@ function rebindRecoveredErrorBubble(
  */
 export function applyStreamEvent(
   prev: ChatMessage[],
-  activeStreams: Map<DomainLeaderId, number>,
+  activeStreams: Map<DomainLeaderId, string>,
   event: StreamEvent,
-  priorSpawnIndex: SpawnIndex = new Map(),
+  priorSpawnIndex: SpawnIndex = new Set(),
   priorWorkflow: WorkflowLifecycleState = IDLE_WORKFLOW,
 ): StreamEventResult {
   switch (event.type) {
     case "stream_start": {
+      // #9515 — a new turn for a leader whose tip bubble was swept to
+      // `interrupted` on the flap rebinds into ONE box (operator-chosen
+      // seamless resume). Checked before the error-rebind and the append —
+      // an interrupted bubble is fresher than any stale error.
+      const intIdx = findInterruptedBubble(prev, event.leaderId);
+      if (intIdx !== undefined) {
+        const rebound = rebindInterruptedBubble(
+          prev,
+          activeStreams,
+          event.leaderId,
+          intIdx,
+          { state: "thinking", toolLabel: undefined },
+        );
+        return {
+          ...rebound,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
       // Prefer rebind of a tip Stage-2 error over stacking a second thinking
       // row above a permanent red banner (Path A recovery).
       const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
@@ -530,10 +938,9 @@ export function applyStreamEvent(
         type: "text",
         leaderId: event.leaderId,
         state: "thinking",
-        toolsUsed: [],
       };
       const nextStreams = new Map(activeStreams);
-      nextStreams.set(event.leaderId, prev.length);
+      nextStreams.set(event.leaderId, newMsg.id);
       return {
         messages: [...prev, newMsg],
         activeStreams: nextStreams,
@@ -561,6 +968,31 @@ export function applyStreamEvent(
         (event.leaderId === "cc_router" || event.leaderId === "system") &&
         !activeStreams.has(event.leaderId)
       ) {
+        // #9515 — rebind BEFORE the chip path: a resuming tool_use after a
+        // flap must reattach to the swept bubble, never spawn a sibling chip
+        // row next to it (the duplicate-Working-box class, new costume).
+        const intIdx = findInterruptedBubble(prev, event.leaderId);
+        if (intIdx !== undefined) {
+          const current = prev[intIdx];
+          const rebound = rebindInterruptedBubble(
+            prev,
+            activeStreams,
+            event.leaderId,
+            intIdx,
+            {
+              state: "tool_use",
+              ...foldCurrentStep(current),
+              toolLabel: event.label,
+              currentActivityStartedAt: Date.now(),
+            },
+          );
+          return {
+            ...rebound,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: event.leaderId },
+          };
+        }
         const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
         if (errIdx !== undefined) {
           const current = prev[errIdx];
@@ -571,8 +1003,9 @@ export function applyStreamEvent(
             errIdx,
             {
               state: "tool_use",
+              ...foldCurrentStep(current),
               toolLabel: event.label,
-              toolsUsed: [...(current.toolsUsed ?? []), event.label],
+              currentActivityStartedAt: Date.now(),
             },
           );
           return {
@@ -590,9 +1023,13 @@ export function applyStreamEvent(
           toolName: event.label,
           toolLabel: event.label,
           leaderId: event.leaderId,
+          at: Date.now(),
         };
         // Review F4: cap at TOOL_USE_CHIP_CAP_PER_LEADER chips per leader.
         // Drop oldest chips for the same leader before appending the new one.
+        // #9515 known tradeoff: evicted chip labels are dropped (no bubble
+        // exists yet to seed into) — a >5-tool pre-bubble burst loses the
+        // earliest steps from the trail. Bounded, transient, accepted.
         const sameLeaderChips: number[] = [];
         for (let i = 0; i < prev.length; i++) {
           const m = prev[i];
@@ -614,8 +1051,30 @@ export function applyStreamEvent(
           spawnIndex: priorSpawnIndex,
         };
       }
-      const idx = activeStreams.get(event.leaderId);
-      if (idx === undefined || idx >= prev.length) {
+      const idx = resolveStreamIndex(prev, activeStreams, event.leaderId);
+      if (idx === undefined) {
+        const intIdx = findInterruptedBubble(prev, event.leaderId);
+        if (intIdx !== undefined) {
+          const current = prev[intIdx];
+          const rebound = rebindInterruptedBubble(
+            prev,
+            activeStreams,
+            event.leaderId,
+            intIdx,
+            {
+              state: "tool_use",
+              ...foldCurrentStep(current),
+              toolLabel: event.label,
+              currentActivityStartedAt: Date.now(),
+            },
+          );
+          return {
+            ...rebound,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: event.leaderId },
+          };
+        }
         const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
         if (errIdx !== undefined) {
           const current = prev[errIdx];
@@ -626,8 +1085,9 @@ export function applyStreamEvent(
             errIdx,
             {
               state: "tool_use",
+              ...foldCurrentStep(current),
               toolLabel: event.label,
-              toolsUsed: [...(current.toolsUsed ?? []), event.label],
+              currentActivityStartedAt: Date.now(),
             },
           );
           return {
@@ -645,11 +1105,24 @@ export function applyStreamEvent(
         };
       }
       const updated = [...prev];
+      const target = updated[idx];
+      // Belt: id-keyed activeStreams should never resolve to a non-text
+      // message, but a stale id must not stamp state onto a chip/gate row.
+      if (target.type !== "text") {
+        return {
+          messages: prev,
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+        };
+      }
       updated[idx] = {
-        ...updated[idx],
+        ...target,
+        ...foldCurrentStep(target),
         state: "tool_use",
         toolLabel: event.label,
-        toolsUsed: [...(updated[idx].toolsUsed ?? []), event.label],
+        currentActivityStartedAt: Date.now(),
+        interrupted: false,
       };
       return {
         messages: updated,
@@ -677,8 +1150,24 @@ export function applyStreamEvent(
       // heartbeat-only.
       // Path A: if the leader was Stage-2-evicted but the tip is still error,
       // rebind so heartbeats heal the orphan red banner (no chip spawn).
-      const idx = activeStreams.get(event.leaderId);
-      if (idx === undefined || idx >= prev.length) {
+      const idx = resolveStreamIndex(prev, activeStreams, event.leaderId);
+      if (idx === undefined) {
+        const intIdx = findInterruptedBubble(prev, event.leaderId);
+        if (intIdx !== undefined) {
+          const rebound = rebindInterruptedBubble(
+            prev,
+            activeStreams,
+            event.leaderId,
+            intIdx,
+            { state: "tool_use" },
+          );
+          return {
+            ...rebound,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "reset", leaderId: event.leaderId },
+          };
+        }
         const errIdx = findRecoverableErrorBubble(prev, event.leaderId);
         if (errIdx !== undefined) {
           const rebound = rebindRecoveredErrorBubble(
@@ -708,7 +1197,7 @@ export function applyStreamEvent(
         const updated = [...prev];
         const { retrying: _retrying, ...rest } = updated[idx];
         void _retrying;
-        updated[idx] = { ...rest };
+        updated[idx] = { ...rest, interrupted: false };
         return {
           messages: updated,
           activeStreams,
@@ -730,17 +1219,15 @@ export function applyStreamEvent(
       // Stage 4 (#2886): when a stream event for `cc_router`/`system` arrives,
       // the chip's job is done — first content has reached the user. Remove
       // any chips for this leader before processing the stream content.
-      let working = prev;
-      if (event.leaderId === "cc_router" || event.leaderId === "system") {
-        const filtered = prev.filter(
-          (m) => !(m.type === "tool_use_chip" && m.leaderId === event.leaderId),
-        );
-        if (filtered.length !== prev.length) {
-          working = filtered;
-        }
-      }
-      const idx = activeStreams.get(event.leaderId);
-      if (idx !== undefined && idx < working.length) {
+      // #9515 — chips pruned here are the pre-bubble steps the user already
+      // saw; seed their labels into the bubble's activity trail so nothing
+      // is forgotten at the chip→bubble hand-off.
+      const { working, prunedChips } =
+        event.leaderId === "cc_router" || event.leaderId === "system"
+          ? partitionLeaderChips(prev, event.leaderId)
+          : { working: prev, prunedChips: [] };
+      const idx = resolveStreamIndex(working, activeStreams, event.leaderId);
+      if (idx !== undefined) {
         // REPLACE content (not append) — server sends cumulative snapshots
         const updated = [...working];
         const target = updated[idx];
@@ -749,16 +1236,65 @@ export function applyStreamEvent(
         // guard at the boundary so a future regression surfaces here, not as
         // a corrupted bubble shape.
         if (target.type === "text") {
+          const withText = foldReplacedText(
+            target.content,
+            event.content,
+            target.activity,
+            target.contentStartedAt,
+          );
+          const folded = foldCurrentStep(
+            { ...target, activity: withText },
+            prunedChips,
+          );
           updated[idx] = {
             ...target,
+            ...folded,
             content: event.content,
             state: "streaming",
-            toolLabel: undefined,
+            interrupted: false,
+            contentStartedAt:
+              target.content !== event.content &&
+              !event.content.startsWith(target.content)
+                ? Date.now()
+                : (target.contentStartedAt ?? Date.now()),
           };
         }
         return {
           messages: updated,
           activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
+      // #9515 — rebind the swept interrupted bubble first (one box on resume).
+      const intIdx = findInterruptedBubble(working, event.leaderId);
+      if (intIdx !== undefined) {
+        const current = working[intIdx];
+        const withText = foldReplacedText(
+          current.content,
+          event.content,
+          current.activity,
+          current.contentStartedAt,
+        );
+        const folded = foldCurrentStep(
+          { ...current, activity: withText },
+          prunedChips,
+        );
+        const rebound = rebindInterruptedBubble(
+          working,
+          activeStreams,
+          event.leaderId,
+          intIdx,
+          {
+            state: "streaming",
+            content: event.content,
+            contentStartedAt: Date.now(),
+            ...folded,
+          },
+        );
+        return {
+          ...rebound,
           workflow: priorWorkflow,
           spawnIndex: priorSpawnIndex,
           timerAction: { type: "reset", leaderId: event.leaderId },
@@ -777,6 +1313,16 @@ export function applyStreamEvent(
             state: "streaming",
             content: event.content,
             toolLabel: undefined,
+            contentStartedAt: Date.now(),
+            activity: foldReplacedText(
+              working[errIdx].content,
+              event.content,
+              seedActivityFromChips(
+                working[errIdx].activity,
+                prunedChips,
+              ),
+              working[errIdx].contentStartedAt,
+            ),
           },
         );
         return {
@@ -794,10 +1340,10 @@ export function applyStreamEvent(
         type: "text",
         leaderId: event.leaderId,
         state: "streaming",
-        toolsUsed: [],
+        activity: seedActivityFromChips(undefined, prunedChips),
       };
       const nextStreams = new Map(activeStreams);
-      nextStreams.set(event.leaderId, working.length);
+      nextStreams.set(event.leaderId, newMsg.id);
       return {
         messages: [...working, newMsg],
         activeStreams: nextStreams,
@@ -811,17 +1357,63 @@ export function applyStreamEvent(
       // Review F11: stream_end is also a chip-removal trigger for cc_router /
       // system leaders (plan §124). The `tool_use → stream_end` path with
       // no streamed content otherwise leaks a permanent chip.
-      let working = prev;
-      if (event.leaderId === "cc_router" || event.leaderId === "system") {
-        const filtered = prev.filter(
-          (m) => !(m.type === "tool_use_chip" && m.leaderId === event.leaderId),
-        );
-        if (filtered.length !== prev.length) working = filtered;
-      }
-      const idx = activeStreams.get(event.leaderId);
+      const { working, prunedChips } =
+        event.leaderId === "cc_router" || event.leaderId === "system"
+          ? partitionLeaderChips(prev, event.leaderId)
+          : { working: prev, prunedChips: [] };
+      const idx = resolveStreamIndex(working, activeStreams, event.leaderId);
       const nextStreams = new Map(activeStreams);
       nextStreams.delete(event.leaderId);
-      if (idx === undefined || idx >= working.length) {
+      if (idx === undefined) {
+        // #9515 — the turn ended while the bubble sat `interrupted` (flap
+        // during the gap). Terminalize honestly: done, flag cleared, final
+        // toolLabel folded into the trail.
+        const intIdx = findInterruptedBubble(working, event.leaderId);
+        if (intIdx !== undefined && working[intIdx].type === "text") {
+          const t = working[intIdx] as ChatTextMessage;
+          const updated = [...working];
+          const { interrupted: _i, retrying: _r, ...rest } = t;
+          void _i;
+          void _r;
+          updated[intIdx] = {
+            ...rest,
+            type: "text",
+            state: "done",
+            ...foldCurrentStep(rest, prunedChips),
+            livenessRearms: 0,
+          };
+          return {
+            messages: updated,
+            activeStreams: nextStreams,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "clear", leaderId: event.leaderId },
+          };
+        }
+        // Post-stop chip phase: chips pruned here have no live bubble to
+        // seed — fall back to the leader's newest text bubble (the stopped
+        // one) so the labels aren't dropped (fix-round residual).
+        if (prunedChips.length > 0) {
+          const seeded = [...working];
+          for (let i = seeded.length - 1; i >= 0; i--) {
+            const m = seeded[i];
+            if (m.role === "user") break;
+            if (m.type === "text" && m.leaderId === event.leaderId) {
+              seeded[i] = {
+                ...m,
+                activity: seedActivityFromChips(m.activity, prunedChips),
+              };
+              break;
+            }
+          }
+          return {
+            messages: seeded,
+            activeStreams: nextStreams,
+            workflow: priorWorkflow,
+            spawnIndex: priorSpawnIndex,
+            timerAction: { type: "clear", leaderId: event.leaderId },
+          };
+        }
         return {
           messages: working,
           activeStreams: nextStreams,
@@ -831,7 +1423,25 @@ export function applyStreamEvent(
         };
       }
       const updated = [...working];
-      updated[idx] = { ...updated[idx], state: "done" };
+      const target = updated[idx];
+      if (target.type !== "text") {
+        return {
+          messages: updated,
+          activeStreams: nextStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "clear", leaderId: event.leaderId },
+        };
+      }
+      // #9515 — fold the final step into the trail at terminalization and
+      // seed any chip labels still pending, so the live "Used:" list is
+      // complete and nothing the user saw is dropped.
+      updated[idx] = {
+        ...target,
+        state: "done",
+        interrupted: false,
+        ...foldCurrentStep(target, prunedChips),
+      };
       return {
         messages: updated,
         activeStreams: nextStreams,
@@ -848,11 +1458,20 @@ export function applyStreamEvent(
       // badge when a review_gate fires while peer leaders are still streaming
       // (see #2843). The gate message itself is appended after the transition.
       const updated = prev.slice();
-      for (const idx of activeStreams.values()) {
-        if (idx >= updated.length) continue;
+      for (const id of activeStreams.values()) {
+        const idx = updated.findIndex((m) => m.id === id);
+        if (idx === -1) continue;
         const m = updated[idx];
-        if (m.state === "thinking" || m.state === "tool_use" || m.state === "streaming") {
-          updated[idx] = { ...m, state: "done" };
+        if (
+          m.type === "text" &&
+          (m.state === "thinking" || m.state === "tool_use" || m.state === "streaming")
+        ) {
+          updated[idx] = {
+            ...m,
+            state: "done",
+            interrupted: false,
+            ...foldCurrentStep(m),
+          };
         }
       }
       const gateMsg: ChatMessage = {
@@ -883,15 +1502,22 @@ export function applyStreamEvent(
       // append the disclosure card. The held Bash command does not proceed
       // until the owner acks via `autonomous_disclosure_response`.
       const updated = prev.slice();
-      for (const idx of activeStreams.values()) {
-        if (idx >= updated.length) continue;
+      for (const id of activeStreams.values()) {
+        const idx = updated.findIndex((m) => m.id === id);
+        if (idx === -1) continue;
         const m = updated[idx];
         if (
-          m.state === "thinking" ||
-          m.state === "tool_use" ||
-          m.state === "streaming"
+          m.type === "text" &&
+          (m.state === "thinking" ||
+            m.state === "tool_use" ||
+            m.state === "streaming")
         ) {
-          updated[idx] = { ...m, state: "done" };
+          updated[idx] = {
+            ...m,
+            state: "done",
+            interrupted: false,
+            ...foldCurrentStep(m),
+          };
         }
       }
       const disclosureMsg: ChatMessage = {
@@ -920,8 +1546,8 @@ export function applyStreamEvent(
       // #3775 — idempotent on `spawnId`. The wire protocol guarantees spawnId
       // uniqueness server-side, but a WS reconnect / supabase realtime retry
       // / regressed runner could re-emit. Duplicate-key state would corrupt
-      // `spawnIndex` (the second insert overwrites the first, breaking the
-      // subsequent `subagent_complete` lookup at line 668). Mirror the
+      // `spawnIndex` (a duplicate would append a second child to the same
+      // group — the Set is existence-only; id-scans own the lookup). Mirror the
       // `interactive_prompt` arm's dedup shape (line 751-770).
       if (priorSpawnIndex.has(event.spawnId)) {
         return {
@@ -960,10 +1586,7 @@ export function applyStreamEvent(
           ],
         };
         updated.push(newGroup);
-        nextSpawnIndex.set(event.spawnId, {
-          messageIdx: updated.length - 1,
-          childIdx: 0,
-        });
+        nextSpawnIndex.add(event.spawnId);
         return {
           messages: updated,
           activeStreams,
@@ -990,10 +1613,7 @@ export function applyStreamEvent(
         },
       ];
       updated[groupIdx] = { ...existing, children: newChildren };
-      nextSpawnIndex.set(event.spawnId, {
-        messageIdx: groupIdx,
-        childIdx: newChildren.length - 1,
-      });
+      nextSpawnIndex.add(event.spawnId);
       return {
         messages: updated,
         activeStreams,
@@ -1051,9 +1671,40 @@ export function applyStreamEvent(
     }
 
     case "workflow_started": {
-      // Sticky context bar update; remove any leftover tool_use chips.
-      const filtered = prev.filter((m) => m.type !== "tool_use_chip");
-      const messages = filtered.length !== prev.length ? filtered : prev;
+      // Sticky context bar update; remove any leftover tool_use chips —
+      // seeding their labels into a live bubble for the same leader first
+      // (#9515: pruned chip steps must not silently vanish).
+      const pruned = prev.filter((m) => m.type === "tool_use_chip");
+      let messages = pruned.length > 0
+        ? prev.filter((m) => m.type !== "tool_use_chip")
+        : prev;
+      if (pruned.length > 0) {
+        const updated = [...messages];
+        for (const chip of pruned) {
+          const leader = (chip as ChatToolUseChipMessage).leaderId;
+          let idx = resolveStreamIndex(updated, activeStreams, leader);
+          if (idx === undefined) {
+            // Chips exist only while their leader has NO active stream — the
+            // resolve above is dead code there (data seat F3). Fall back to
+            // the leader's newest text bubble so the label isn't dropped.
+            for (let i = updated.length - 1; i >= 0; i--) {
+              const m = updated[i];
+              if (m.role === "user") break;
+              if (m.type === "text" && m.leaderId === leader) {
+                idx = i;
+                break;
+              }
+            }
+          }
+          if (idx !== undefined && updated[idx].type === "text") {
+            updated[idx] = {
+              ...updated[idx],
+              activity: seedActivityFromChips(updated[idx].activity, [chip]),
+            };
+          }
+        }
+        messages = updated;
+      }
       return {
         messages,
         activeStreams,
@@ -1130,13 +1781,10 @@ export function applyStreamEvent(
       //
       // Chip-removal parity with `stream`/`stream_end`: a command stream is
       // also "first activity reached the user", so drop any lingering chip.
-      let working = prev;
-      if (event.leaderId === "cc_router" || event.leaderId === "system") {
-        const filtered = prev.filter(
-          (m) => !(m.type === "tool_use_chip" && m.leaderId === event.leaderId),
-        );
-        if (filtered.length !== prev.length) working = filtered;
-      }
+      const { working, prunedChips } =
+        event.leaderId === "cc_router" || event.leaderId === "system"
+          ? partitionLeaderChips(prev, event.leaderId)
+          : { working: prev, prunedChips: [] };
 
       const applyToBlocks = (existing: CommandBlock[] | undefined): CommandBlock[] => {
         let blocks = existing ? [...existing] : [];
@@ -1185,11 +1833,16 @@ export function applyStreamEvent(
         return blocks;
       };
 
-      const idx = activeStreams.get(event.leaderId);
-      if (idx !== undefined && idx < working.length && working[idx].type === "text") {
+      const idx = resolveStreamIndex(working, activeStreams, event.leaderId);
+      if (idx !== undefined && working[idx].type === "text") {
         const updated = [...working];
         const target = updated[idx] as ChatTextMessage;
-        updated[idx] = { ...target, commandBlocks: applyToBlocks(target.commandBlocks) };
+        updated[idx] = {
+          ...target,
+          commandBlocks: applyToBlocks(target.commandBlocks),
+          activity: seedActivityFromChips(target.activity, prunedChips),
+          interrupted: false,
+        };
         return {
           messages: updated,
           activeStreams,
@@ -1199,6 +1852,28 @@ export function applyStreamEvent(
         };
       }
 
+      // #9515 — rebind the swept interrupted bubble first (one box on resume).
+      const intIdx = findInterruptedBubble(working, event.leaderId);
+      if (intIdx !== undefined && working[intIdx].type === "text") {
+        const target = working[intIdx] as ChatTextMessage;
+        const rebound = rebindInterruptedBubble(
+          working,
+          activeStreams,
+          event.leaderId,
+          intIdx,
+          {
+            state: "streaming",
+            commandBlocks: applyToBlocks(target.commandBlocks),
+            activity: seedActivityFromChips(target.activity, prunedChips),
+          },
+        );
+        return {
+          ...rebound,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
       // Path A: rebind tip Stage-2 error rather than appending a second
       // streaming bubble below a permanent red banner.
       const errIdx = findRecoverableErrorBubble(working, event.leaderId);
@@ -1212,6 +1887,7 @@ export function applyStreamEvent(
           {
             state: "streaming",
             commandBlocks: applyToBlocks(target.commandBlocks),
+            activity: seedActivityFromChips(target.activity, prunedChips),
           },
         );
         return {
@@ -1230,11 +1906,11 @@ export function applyStreamEvent(
         type: "text",
         leaderId: event.leaderId,
         state: "streaming",
-        toolsUsed: [],
         commandBlocks: applyToBlocks(undefined),
+        activity: seedActivityFromChips(undefined, prunedChips),
       };
       const nextStreams = new Map(activeStreams);
-      nextStreams.set(event.leaderId, working.length);
+      nextStreams.set(event.leaderId, newMsg.id);
       return {
         messages: [...working, newMsg],
         activeStreams: nextStreams,
@@ -1288,14 +1964,15 @@ export function applyStreamEvent(
       // non-thinking/tool_use bubbles, so a re-armed dangling timer is harmless.
       // Only `kind: "tool_use"` counts; `reasoning`/`result` are weaker / can
       // fire post-turn and are excluded to keep the ceiling tight.
-      // INVARIANT (enforced, not just asserted): debug events are LIVE-ONLY, so
-      // this heartbeat can never fire on a dead socket. #5290's stream-replay
-      // buffer EXCLUDES `debug_event` from its `BufferedWSMessage` family
-      // (server/stream-replay-buffer.ts) — and that exclusion is compiler-
-      // enforced via `BUFFERED_FRAME_TYPE_MAP` (a `Record<BufferedWSMessage
-      // ["type"], true>`), so a buffered/replayed gap frame can never be a
-      // debug_event. If a future change adds debug_event to the buffered family
-      // it becomes a tsc error there AND re-opens this hole — keep it excluded.
+      // INVARIANT: a debug heartbeat must only fire on LIVE liveness evidence.
+      // `debug_event` IS a member of the #5290 stream-replay buffer family
+      // (server/stream-replay-buffer.ts), so buffered frames CAN reach this
+      // reducer twice — on a transient-reconnect `resume_stream` replay and on
+      // a leave-and-return session rebind. Every re-emitted frame carries
+      // `replayed: true` (server/ws-handler.ts `replayBufferedDebugEvents` and
+      // the resume_stream re-emit loop), so the heartbeat paths below gate on
+      // `!event.replayed`: replayed frames still append to the panel log but
+      // never re-arm the watchdog or rebind an orphan bubble on stale evidence.
       const debugMsg: ChatDebugEventMessage = {
         id: `debug-${crypto.randomUUID()}`,
         role: "assistant",
@@ -1309,27 +1986,47 @@ export function applyStreamEvent(
       // Stage-2 error text bubble exists, a debug tool_use is unambiguous
       // liveness for that orphan — rebind + reset that leader (not reset_all
       // against an empty timer map). Multi-orphan stays inert.
+      // `replayed` frames are stale evidence — never rebind on them.
       // Use findRecoverableErrorBubble (tip contract) — not any historical error.
-      if (event.kind === "tool_use" && activeStreams.size === 0) {
+      if (event.kind === "tool_use" && !event.replayed && activeStreams.size === 0) {
         const orphanLeaders = new Map<DomainLeaderId, number>();
+        const orphanKinds = new Map<DomainLeaderId, "interrupted" | "error">();
         const seenLeaders = new Set<DomainLeaderId>();
         for (let i = prev.length - 1; i >= 0; i--) {
           const m = prev[i];
           if (m.type !== "text" || m.leaderId === undefined) continue;
           if (seenLeaders.has(m.leaderId)) continue;
           seenLeaders.add(m.leaderId);
+          const intIdx = findInterruptedBubble(prev, m.leaderId);
+          if (intIdx !== undefined) {
+            orphanLeaders.set(m.leaderId, intIdx);
+            orphanKinds.set(m.leaderId, "interrupted");
+            continue;
+          }
           const errIdx = findRecoverableErrorBubble(prev, m.leaderId);
-          if (errIdx !== undefined) orphanLeaders.set(m.leaderId, errIdx);
+          if (errIdx !== undefined) {
+            orphanLeaders.set(m.leaderId, errIdx);
+            orphanKinds.set(m.leaderId, "error");
+          }
         }
         if (orphanLeaders.size === 1) {
-          const [[orphanLeader, errIdx]] = orphanLeaders;
-          const rebound = rebindRecoveredErrorBubble(
-            prev,
-            activeStreams,
-            orphanLeader,
-            errIdx,
-            { state: "tool_use" },
-          );
+          const [[orphanLeader, idx]] = orphanLeaders;
+          const rebound =
+            orphanKinds.get(orphanLeader) === "interrupted"
+              ? rebindInterruptedBubble(
+                  prev,
+                  activeStreams,
+                  orphanLeader,
+                  idx,
+                  { state: "tool_use" },
+                )
+              : rebindRecoveredErrorBubble(
+                  prev,
+                  activeStreams,
+                  orphanLeader,
+                  idx,
+                  { state: "tool_use" },
+                );
           return {
             messages: [...rebound.messages, debugMsg],
             activeStreams: rebound.activeStreams,
@@ -1340,7 +2037,8 @@ export function applyStreamEvent(
         }
       }
 
-      const isHeartbeat = event.kind === "tool_use" && activeStreams.size === 1;
+      const isHeartbeat =
+        event.kind === "tool_use" && !event.replayed && activeStreams.size === 1;
       if (!isHeartbeat) {
         return {
           messages: [...prev, debugMsg],
@@ -1353,9 +2051,12 @@ export function applyStreamEvent(
       // Mirror `tool_progress`: only clone+rewrite when there is something to
       // clear (a re-arm heartbeat fires every ~1-5s on a working turn; rewriting
       // an already-clean bubble would churn the message array for no effect).
-      const soleIdx = activeStreams.values().next().value as number | undefined;
-      const sole =
-        soleIdx !== undefined && soleIdx < prev.length ? prev[soleIdx] : undefined;
+      const soleId = activeStreams.values().next().value as string | undefined;
+      const soleIdx =
+        soleId !== undefined
+          ? prev.findIndex((m) => m.id === soleId)
+          : -1;
+      const sole = soleIdx >= 0 ? prev[soleIdx] : undefined;
       const needsClear =
         sole !== undefined &&
         (sole.state === "thinking" || sole.state === "tool_use") &&
@@ -1404,6 +2105,28 @@ export function applyStreamEvent(
       };
     }
 
+    case "task_completed": {
+      // feat-session-completion-inline — APPEND the inline completion card to
+      // the main message list. Emitted by the shared `notifyTaskCompleted`
+      // seam at every turn boundary (both lineages), so unlike turn_summary
+      // it arrives on EVERY completed request. Ephemeral — the inbox_item row
+      // (id in `inboxItemId`) is the durable record; a reload rehydrates from
+      // history without it, which is honest (the completion already showed).
+      const completedMsg: ChatTaskCompletedMessage = {
+        id: `task-completed-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: event.title,
+        type: "task_completed",
+        inboxItemId: event.inboxItemId,
+      };
+      return {
+        messages: [...prev, completedMsg],
+        activeStreams,
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+      };
+    }
+
     default: {
       // Compile-time exhaustiveness rail: a future variant added to
       // `WSMessage` (and pulled into `StreamEvent`) without a corresponding
@@ -1432,17 +2155,17 @@ export function applyStreamEvent(
  */
 export function applyTimeout(
   prev: ChatMessage[],
-  activeStreams: Map<DomainLeaderId, number>,
+  activeStreams: Map<DomainLeaderId, string>,
   leaderId: string,
 ): {
   messages: ChatMessage[];
-  activeStreams: Map<DomainLeaderId, number>;
+  activeStreams: Map<DomainLeaderId, string>;
   timerAction?:
     | { type: "reset"; leaderId: string }
     | { type: "clear"; leaderId: string };
 } {
-  const idx = activeStreams.get(leaderId as DomainLeaderId);
-  if (idx === undefined || idx >= prev.length) {
+  const idx = resolveStreamIndex(prev, activeStreams, leaderId as DomainLeaderId);
+  if (idx === undefined) {
     return { messages: prev, activeStreams };
   }
   const current = prev[idx];
@@ -1461,8 +2184,10 @@ export function applyTimeout(
     // mandatory — the in-flight leader is still in `activeStreams` at scan time,
     // so without it the leader would always see "itself" and never escalate.
     const rearms = current.livenessRearms ?? 0;
-    const siblingActive = [...activeStreams.entries()].some(([id, sIdx]) => {
+    const siblingActive = [...activeStreams.entries()].some(([id, sId]) => {
       if (id === (leaderId as DomainLeaderId)) return false;
+      const sIdx = prev.findIndex((m) => m.id === sId);
+      if (sIdx === -1) return false;
       const sib = prev[sIdx];
       return (
         sib !== undefined &&
@@ -1487,7 +2212,7 @@ export function applyTimeout(
     const { retrying: _retrying, livenessRearms: _rearms, ...rest } = updated[idx];
     void _retrying;
     void _rearms;
-    updated[idx] = { ...rest, state: "error" };
+    updated[idx] = { ...rest, state: "error", interrupted: false };
     const nextStreams = new Map(activeStreams);
     nextStreams.delete(leaderId as DomainLeaderId);
     return {

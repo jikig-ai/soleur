@@ -70,11 +70,37 @@ describe("pr-merge-poll BEHIND contract", () => {
     expect(ship).toMatch(/AwaitShell\*\* with a `pattern` matching poll output \([^\n]*`Merge poll timed out`[^\n]*`\\\[ship\\\.phase7\\\.`/);
   });
 
+  test("behindSyncInstructions agrees with the queued skip: queued is a no-op to keep polling, dequeued stops (#9454)", () => {
+    for (const h of ["grok", "claude"] as const) {
+      const md = behindSyncInstructions(h);
+      expect(md).toContain("kind=queued");
+      expect(md).toContain("kind=dequeued");
+    }
+    // The old unconditional ban would tell an agent to stop heartbeating on a queued PR.
+    expect(behindSyncInstructions("claude")).toMatch(/unless the script reported `kind=queued`/);
+    expect(behindSyncInstructions("grok")).toMatch(/never push, update-branch or --admin/);
+    // Exit 11 for a queued PR is the --step arm only; the standalone script the Grok text runs exits 0 (kind=queued rc=0).
+    expect(behindSyncInstructions("grok")).toMatch(/exits 0 here and 11 only with `--step`/);
+    expect(behindSyncInstructions("claude")).toMatch(/exit 11 with `--step`/);
+  });
+
   test("behindSyncInstructions forbids operator handoff on Grok", () => {
     const md = behindSyncInstructions("grok");
     expect(md).toContain("STOP");
     expect(md).toContain("sync-pr-behind.sh");
     expect(md).toContain("do NOT ask");
+  });
+
+  test("cursor behind-sync is one stop with no plugin root and no wait tool", () => {
+    const stop = behindSyncInstructions("cursor");
+    expect(pollInstructions("cursor")).toBe(stop);
+    expect(stop).not.toContain("CLAUDE_PLUGIN_ROOT");
+    expect(stop).not.toContain("AwaitShell");
+    expect(stop).not.toContain("Monitor");
+    expect(stop).not.toContain("run_subagent");
+    expect(stop).toContain("or stop");
+    expect(stop).toContain("harness that already has a wait");
+    expect(stop).toContain("does not make the plugin supported");
   });
 });
 

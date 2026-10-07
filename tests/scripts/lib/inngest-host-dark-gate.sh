@@ -42,9 +42,14 @@
 #      The corrected form is a MONOTONICITY claim over all three callers, and it is strictly
 #      stronger than the false one: the only non-server writer decreases the count, and the reader
 #      does not write at all.
-#   2. G8 ∧ G9 prove inngest-server was NOT BOUND on the newest row — `server_active=inactive` AND
-#      a non-200 loopback `http_code`. A process that is not running and not answering cannot have
-#      written a key since that row was emitted.
+#   2. G8 ∧ G9 prove inngest-server was NOT BOUND on the newest row — `server_active` present,
+#      non-empty, != `unknown`, != `active` (#8078: `activating`/`failed` are non-serving systemd
+#      states the P1-5 refuse loop legitimately produces, and `unknown`/empty are readability
+#      failures, not claims) AND a non-200 loopback `http_code`. A process that is not running
+#      and not answering cannot have written a key since that row was emitted — and a unit that
+#      is `activating` under the P1-5 refuse loop cannot have reached `active`, because the guard
+#      refuses the start from ExecStartPre while the flag is outside its allowlist, which G19
+#      re-reads synchronously below.
 #   3. G19 proves no concurrent FLUSHALL can be AUTHORIZED: the cutover flip FSM only writes to
 #      this Redis under `INNGEST_CUTOVER_FLIP` ∈ {arm, execute}, and G19 re-reads the flag
 #      SYNCHRONOUSLY at dispatch time (not from the row) and refuses anything but
@@ -115,7 +120,7 @@
 #     G6  envelope host_name == soleur-inngest-prd                             -> wrong_host
 #     G7  message host_role  == dedicated                                      -> wrong_host
 #   Not serving
-#     G8  server_active == inactive                                            -> host_serving
+#     G8  server_active present, non-empty, != unknown; != active              -> host_serving / unreadable
 #     G9  http_code parses as ^[0-9]+$ AND != 200                              -> host_serving
 #     G10 zero function.finished rows attributable to this host                -> host_executing
 #   Store empty
@@ -804,14 +809,22 @@ inngest_host_dark_gate() {
   host_role="$(_ihdg_field "$chosen_msg" host_role)" || { _ihdg_verdict "wrong_host"; return $?; }
   [[ "$host_role" == "dedicated" ]]                  || { _ihdg_verdict "wrong_host"; return $?; }
 
-  # ── G8 — systemd says the server unit is not running ────────────────────────────
+  # ── G8 — systemd does not say the unit is active ────────────────────────────────
+  # `!= active`, not `== inactive` (#8078): identical to the execute gate's E10. The P1-5
+  # flip-guard refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11
+  # on the live host — 25/25 probe rows `activating`, `http_code=000`), and `failed` is where a
+  # start-limit-latched unit lands. Neither serves, so `== inactive` graded the exact host this
+  # gate exists to authorise a recut on as `host_serving`. The safety argument for the WIDER
+  # predicate is carried by the gates around it, not by this line: G9 (`http_code != 200`)
+  # excludes a bound listener, and G19 re-reads the cutover flag SYNCHRONOUSLY and refuses
+  # anything but rolled-back/aborted — under the P1-5 refusal `activating` cannot progress to
+  # `active` without the flag leaving the pre-arm set, which G19 already refuses.
   local server_active
   server_active="$(_ihdg_field "$chosen_msg" server_active)" || { _ihdg_verdict "unreadable"; return $?; }
-  # A present-but-EMPTY value is a readability failure, not a claim about the unit. The emitter
-  # defaults this to `unknown` rather than blank, so a blank here means the row shape changed —
-  # which is a reason to stop, not a reason to say the host is serving.
-  [[ -n "$server_active" ]]                                 || { _ihdg_verdict "unreadable"; return $?; }
-  [[ "$server_active" == "inactive" ]]                      || { _ihdg_verdict "host_serving"; return $?; }
+  # `unknown` is the emitter's read-failed sentinel and a blank is a shape change; neither is a
+  # claim about the unit — both are `unreadable`, never a non-serving reading.
+  [[ -n "$server_active" && "$server_active" != "unknown" ]] || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$server_active" != "active" ]]                        || { _ihdg_verdict "host_serving"; return $?; }
 
   # ── G9 — and the loopback agrees ────────────────────────────────────────────────
   # `server_active` alone is a systemd CLAIM; `http_code` is the claim that matters. This host has
@@ -1062,11 +1075,16 @@ inngest_host_dark_gate() {
 # hourly row, `rolled-back` on the minute-old heartbeat) — only the NEWEST same-boot heartbeat is
 # graded, never "any arm-set flag in the window".
 #
-# THE DELIBERATE DIVERGENCE FROM G8. The recut gate requires `server_active == "inactive"`. The
-# P1-5 refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11 on the live
-# host), so G8 refuses today's host as `host_serving` — the same class of defect as this file's
-# reason for existing, tracked in its own issue (#8078) rather than changed under a destroy gate
-# here. E10 is `server_active != "active"`: `activating`, `failed`, `inactive` are all not-serving.
+# THE RESOLVED DIVERGENCE FROM G8 (#8078). G8 once required `server_active == "inactive"`, and
+# the P1-5 refuse loop leaves the unit in `activating` indefinitely (measured 2026-09-11 on the
+# live host), so G8 refused today's host as `host_serving` — the same class of defect as this
+# file's reason for existing. G8 now shares THIS gate's E10 predicate verbatim: `server_active`
+# present, non-empty, `!= "unknown"`, `!= "active"`. The divergence was safe to close because the
+# narrow reading was never load-bearing: G9 (`http_code != 200`) excludes a bound listener and
+# G19 re-reads the cutover flag synchronously, refusing anything but rolled-back/aborted —
+# `activating` under the P1-5 refusal cannot progress to `active` without the flag leaving the
+# pre-arm set, which G19 already refuses. `activating`, `failed`, `inactive` are all
+# not-serving; `active` alone is serving.
 #
 # E-TABLE (evaluation order; population before silence, identity before content):
 #   E1  probe --query-rc numeric and 0                                      unreadable

@@ -1577,6 +1577,60 @@ else
   no "LW-P4 a record naming the live mapper node ($LWP4_DM) was read as an intact plaintext: $(tr '\n' '|' < "$CASE_OUT" | cut -c1-300)"
 fi
 
+# --- LW8 (#9356, CPO): HEADER-RESTORE DRILL — a destroyed LUKS header is recoverable from the escrowed backup ---
+# The whole at-rest posture rests on one claim: the escrowed header backup (luksHeaderBackup, shipped to R2 by
+# the provisioner) plus the passphrase brings the data back if the on-disk header is lost. Nothing proved it
+# against a real device. Format a loop, put a SENTINEL filesystem on the mapper, back the header up, ZERO the
+# whole header region, prove the volume is then genuinely unopenable (the anti-vacuity half: a drill whose
+# "destruction" did nothing proves nothing), restore, reopen with the same passphrase, read the sentinel back.
+LW8_SENTINEL="lw8-sentinel-$$-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+new_session lw8
+LW8_BK="$TMPROOT/lw8-header.bak"
+LW8_MNT="$(mktemp -d "$TMPROOT/lw8mnt.XXXXXX")"; CLEAN_MOUNTS+=("$LW8_MNT")
+lw8_ok=1
+mkfs.ext4 -q "$MAPPER" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 mkfs.ext4 on the mapper failed — the drill has no filesystem to carry the sentinel"; }
+if [ "$lw8_ok" -eq 1 ]; then
+  mount "$MAPPER" "$LW8_MNT" && printf '%s\n' "$LW8_SENTINEL" > "$LW8_MNT/sentinel.txt" && sync && umount "$LW8_MNT" \
+    || { lw8_ok=0; no "LW8 could not write the sentinel through the mapper"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  cryptsetup close "$MAPPER_NAME" >/dev/null 2>&1 || { lw8_ok=0; no "LW8 could not close the mapper before the header is destroyed"; }
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  LW8_UUID_BEFORE="$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)"
+  rm -f "$LW8_BK"
+  cryptsetup luksHeaderBackup --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_ok=0
+  LW8_HDR_BYTES="$(stat -c %s "$LW8_BK" 2>/dev/null || echo 0)"
+  # The backup file is exactly the header area (binary headers + keyslots area), so its size is the span to destroy.
+  if [ "$lw8_ok" -eq 0 ] || [ "${LW8_HDR_BYTES:-0}" -lt 4096 ] || [ -z "$LW8_UUID_BEFORE" ]; then
+    lw8_ok=0; no "LW8 luksHeaderBackup produced no usable backup (bytes=${LW8_HDR_BYTES:-0} uuid='${LW8_UUID_BEFORE:-}')"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  dd if=/dev/zero of="$LOOP_DEV" bs=4096 count=$((LW8_HDR_BYTES / 4096)) oflag=direct conv=fsync status=none 2>/dev/null
+  lw8_open_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_open_rc=$?
+  lw8_uuid_rc=0; cryptsetup luksUUID "$LOOP_DEV" >/dev/null 2>&1 || lw8_uuid_rc=$?
+  if [ "$lw8_open_rc" -ne 0 ] && [ "$lw8_uuid_rc" -ne 0 ] && [ ! -b "$MAPPER" ]; then
+    ok "LW8a with the whole header region zeroed the volume is genuinely unopenable (luksOpen rc=$lw8_open_rc, luksUUID rc=$lw8_uuid_rc) — the drill destroys something real"
+  else
+    lw8_ok=0; no "LW8a the zeroed header did not make the volume unopenable (open rc=$lw8_open_rc uuid rc=$lw8_uuid_rc) — the drill would be vacuous"
+  fi
+fi
+if [ "$lw8_ok" -eq 1 ]; then
+  lw8_rs_rc=0; cryptsetup luksHeaderRestore --batch-mode "$LOOP_DEV" --header-backup-file "$LW8_BK" >/dev/null 2>&1 || lw8_rs_rc=$?
+  lw8_ro_rc=0; cryptsetup luksOpen --key-file "$KEYFILE" "$LOOP_DEV" "$MAPPER_NAME" >/dev/null 2>&1 || lw8_ro_rc=$?
+  lw8_read=""
+  if [ "$lw8_rs_rc" -eq 0 ] && [ "$lw8_ro_rc" -eq 0 ] && [ -b "$MAPPER" ] && mount "$MAPPER" "$LW8_MNT" 2>/dev/null; then
+    lw8_read="$(cat "$LW8_MNT/sentinel.txt" 2>/dev/null)"
+    umount "$LW8_MNT" 2>/dev/null || true
+  fi
+  if [ "$lw8_read" = "$LW8_SENTINEL" ] && [ "$(cryptsetup luksUUID "$LOOP_DEV" 2>/dev/null)" = "$LW8_UUID_BEFORE" ]; then
+    ok "LW8b luksHeaderRestore from the escrowed backup + the same passphrase reopens the volume and the sentinel reads back; the header UUID is the one backed up"
+  else
+    no "LW8b the header restore did not bring the data back (restore rc=$lw8_rs_rc open rc=$lw8_ro_rc sentinel='${lw8_read:-}')"
+  fi
+fi
+
 # ===========================================================================
 echo
 echo "workspaces-luks-loopback: $executed case(s) EXECUTED against real loopback+dm-crypt devices"

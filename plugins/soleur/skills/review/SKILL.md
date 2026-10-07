@@ -15,7 +15,7 @@ description: "This skill should be used when performing exhaustive code reviews 
 **Lifecycle handoff (standalone `soleur:review`):** When no parent orchestrator (`one-shot`, `work`, or `ship` — which passes `--parent ship` in the args) owns the pipeline, invoke `soleur:compound` then `soleur:ship` after review — do not end at the review summary. In pipeline mode, emit the compact `## Review Phase Complete` marker only (see Step 3 pipeline detection).
 <!-- lifecycle-handoff-protocol:end -->
 
-> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration.
+> **Dynamic-workflow alternative (opt-in).** A [`Workflow`-tool](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code) port of this skill's engine lives at [`workflows/review.workflow.js`](./workflows/review.workflow.js) — deterministic change-class fan-out, per-finding adversarial verification, and CONCUR-gated filing. Run it with `Workflow({ scriptPath: "plugins/soleur/skills/review/workflows/review.workflow.js", args: "<PR#>" })`. See [`workflows/README.md`](./workflows/README.md). The prose skill below stays the default; the two coexist during calibration. When the workflow ran: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` once, then `incr seats <counts.seats>` — the workflow-return IS the count, never also incr per seat (one writer per dim, #9403).
 
 # Review Command
 
@@ -109,7 +109,7 @@ First, I need to determine the review target type and set up the code for analys
 - [ ] Set up language-specific analysis tools
 - [ ] Prepare security scanning environment
 - [ ] Make sure we are on the branch we are reviewing. Use gh pr checkout to switch to the branch or manually checkout the branch.
-- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)`) — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the].
+- [ ] Push the branch to remote before spawning the panel (`git push -u origin $(git branch --show-current)` — review agents read remote state; unpushed commits produce stale findings [rf-before-spawning-review-agents-push-the]). That push drives a CI cycle on the PR head — `incr ci_cycles` after it (same convention ship uses).
 
 Ensure that the code is ready for analysis (either in worktree or on current branch). ONLY then proceed to the next step.
 
@@ -185,9 +185,11 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
    **`design-risk` overrides the `non-code` skip for `soleur:engineering:review:architecture-strategist` only.** The non-code list below skips it as "not relevant to documentation or configuration changes"; that rationale does not hold for a *prose* PR that introduces a new vocabulary a second file must learn, which is exactly this trigger's first example. `soleur:engineering:review:performance-oracle` stays skipped on `non-code` unless the economics condition above independently fires.
 
-   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something, and the dedup rule above is what bounds the cost when it does not.
+   **This is a phase ordering, not a reduced panel.** The Sharp Edges below warn — correctly — against partial panels with late gap-closers, and nothing here licenses one: the full panel still runs after the design question is settled, minus only lenses that already ran on the same diff. If the design pass recommends deleting a mechanism, the panel reviews what survives instead of what was about to be deleted. **Why:** #7418/PR #7419 — the full twelve-agent panel ran against a design that was about to be deleted, and **nine of its twelve blocking findings were defects in machinery the redesign removed**, at ~1.2M tokens for the review alone. That is one measured case, not a base rate: the saving is real only when the design pass actually cuts something.
 
 5. Announce the classification result and the `design-risk` verdict before spawning agents.
+
+**Seat tally:** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" init` before ANY seat spawn (design-pass included — when `design-risk` is set it precedes this step, so init belongs at skill start). `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" gate seats <N>` before each spawn batch (`<N>` = its width — design-pass seats count too); `STOP` → write `specs/<feature>/session-state.md` (`status: budget-capped` + `budget-capped: seats=<n>/<cap>` + resume) and exit; `WARN`/`UNKNOWN` → continue; `bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr seats <N>` after each batch.
 
 #### Parallel Agents to review the PR:
 
@@ -490,98 +492,7 @@ byte-identical to a full-coverage review's.
 
 ### 4. Ultra-Thinking Deep Dive Phases
 
-<ultrathink_instruction> For each phase below, spend maximum cognitive effort. Think step by step. Consider all angles. Question assumptions. And bring all reviews in a synthesis to the user.</ultrathink_instruction>
-
-<deliverable>
-Complete system context map with component interactions
-</deliverable>
-
-#### Phase 3: Stakeholder Perspective Analysis
-
-<thinking_prompt> ULTRA-THINK: Put yourself in each stakeholder's shoes. What matters to them? What are their pain points? </thinking_prompt>
-
-<stakeholder_perspectives>
-
-1. **Developer Perspective** <questions>
-
-   - How easy is this to understand and modify?
-   - Are the APIs intuitive?
-   - Is debugging straightforward?
-   - Can I test this easily? </questions>
-
-2. **Operations Perspective** <questions>
-
-   - How do I deploy this safely?
-   - What metrics and logs are available?
-   - How do I troubleshoot issues?
-   - What are the resource requirements? </questions>
-
-3. **End User Perspective** <questions>
-
-   - Is the feature intuitive?
-   - Are error messages helpful?
-   - Is performance acceptable?
-   - Does it solve my problem? </questions>
-
-4. **Security Team Perspective** <questions>
-
-   - What's the attack surface?
-   - Are there compliance requirements?
-   - How is data protected?
-   - What are the audit capabilities? </questions>
-
-5. **Business Perspective** <questions>
-   - What's the ROI?
-   - Are there legal/compliance risks?
-   - How does this affect time-to-market?
-   - What's the total cost of ownership? </questions> </stakeholder_perspectives>
-
-#### Phase 4: Scenario Exploration
-
-<thinking_prompt> ULTRA-THINK: Explore edge cases and failure scenarios. What could go wrong? How does the system behave under stress? </thinking_prompt>
-
-<scenario_checklist>
-
-- [ ] **Happy Path**: Normal operation with valid inputs
-- [ ] **Invalid Inputs**: Null, empty, malformed data
-- [ ] **Boundary Conditions**: Min/max values, empty collections
-- [ ] **Concurrent Access**: Race conditions, deadlocks
-- [ ] **Scale Testing**: 10x, 100x, 1000x normal load
-- [ ] **Network Issues**: Timeouts, partial failures
-- [ ] **Resource Exhaustion**: Memory, disk, connections
-- [ ] **Security Attacks**: Injection, overflow, DoS
-- [ ] **Data Corruption**: Partial writes, inconsistency
-- [ ] **Cascading Failures**: Downstream service issues </scenario_checklist>
-
-### 6. Multi-Angle Review Perspectives
-
-#### Technical Excellence Angle
-
-- Code craftsmanship evaluation
-- Engineering best practices
-- Technical documentation quality
-- Tooling and automation assessment
-
-#### Business Value Angle
-
-- Feature completeness validation
-- Performance impact on users
-- Cost-benefit analysis
-- Time-to-market considerations
-
-#### Risk Management Angle
-
-- Security risk assessment
-- Operational risk evaluation
-- Compliance risk verification
-- Technical debt accumulation
-
-#### Team Dynamics Angle
-
-- Code review etiquette
-- Knowledge sharing effectiveness
-- Collaboration patterns
-- Mentoring opportunities
+Run each phase per [references/ultrathink-phases.md](${CLAUDE_PLUGIN_ROOT}/skills/review/references/ultrathink-phases.md) (moved verbatim; byte-ceiling extraction).
 
 ### 4. Simplification and Minimalism Review
 
@@ -1192,7 +1103,7 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    ```bash
    git add <changed files>
    git commit -m "docs: review artifacts for feat-<name>"
-   git push
+   git push && bash "${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-tally.sh" incr ci_cycles
    ```
 
    If there are no local changes, skip the commit (this is the expected case — review's
@@ -1270,6 +1181,8 @@ After emitting the marker, the calling skill's continuation gate takes over — 
 **Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing. If that path is not absolute, or begins with `/skills/`, the root was not substituted: stop, and never Read a repository copy instead.
 
 ### Defect Classes This Review Reliably Catches
+
+- [workflow suites](./references/wfs.md)
 
 - **A test that INJECTS the seam under test measures the helper and leaves the BINDING unpinned — ask what the SUT binds when the test passes nothing, and which assertion observes that.** A default parameter (`sink = moduleLogger`), a module-level `let`, a factory production calls with no arguments: each is a wire, and a test that supplies the value itself cannot see what production supplies. The author's battery shares the blind spot — mutating the exported thing the test READS is not mutating the binding the code USES, so its kills measure the battery. Require the default path to be driven (a real-serialization partial mock of the dependency, not an injected substitute) and pin call SHAPE (paren-balanced argument count), not an identifier in one slot — a signature swap moves the slot. Then grep the CLASS before calling the fix complete: for a marker-shaped diff, `logger.warn({ SOLEUR_` / `[X_MARKER]: true` across every Inngest function. **Why:** #8281/PR #8344 — binding the default sink to `console` (the production defect verbatim) survived 13/13 green past a 2/3-kill self-run battery; the second class member had been dark on every live fire since it was written. See `knowledge-base/project/learnings/test-failures/2026-09-19-my-fix-for-the-unpinned-wire-injected-the-seam-under-test.md`.
 
@@ -1495,6 +1408,8 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 - **A selector over a TIME-ORDERED candidate list that settles on the first qualifier and only looks BACKWARDS from its winner is correct only when arrival order equals priority order.** Ask what can be created AFTER the winner and still outrank it, and require one fixture where the best candidate arrives LAST. **Why:** #8492 — the deploy-arm ladder settled on a descendant while the merge's own exact arm (created later, because the descendant's CI finished first) was still resolving; the author's 14/14 battery mutated only the rules it had written, and the structural-enumeration seat found it. See `knowledge-base/project/learnings/2026-09-21-a-selector-that-settles-on-the-first-qualifier-cannot-see-the-candidate-created-after-it.md`.
 - **A gate is three artifacts — predicate, harness, remediation text — and review lands on the one already right.** Ask whether the fixture has the RUNNER's ref layout (an actions/checkout tag checkout has no local branches, a detached HEAD, and every branch — including the PR carrying the unmerged commit — as `refs/remotes/origin/*`), and replay the refusal message literally, twice, against today's post-merge production state. **Why:** #8747/PR #8775 — a harness with a local `main` and no PR branch left "reachable from any remote branch" 342/342 green, and "delete the tag, re-cut, re-run" walked the pinned tag down to an auto-merged downgrade. See `knowledge-base/project/learnings/2026-09-25-my-ancestry-gate-was-sound-and-its-harness-and-its-recovery-text-were-not.md`.
 
+- **A non-decision verdict that lands on the FIRST item of every batch is a fact about the instrument's setup, not about the item — and a calibrated ceiling is a measurement written down as a policy.** Before a write-up attaches a cause to an `unreliable`/`contaminated` row, run the instrument over a known-clean control in the same batch position and rotate the order; when an oracle passes only above a ceiling, rebuild the oracle until the ceiling is 0, and re-run the documented command at the pinned SHA before quoting it. Also derive an evidence population from the mechanism that creates the obligation (the rows that lost edges), not from the list you already had. **Why:** #9422 — the recorder's probe counted 22 tracked-but-gitignored files as a dirty checkout, so window 1 of every run was `contaminated`; two audit rounds blamed the suites, and the documented bench ceiling of 200 needed 240. See `knowledge-base/project/learnings/2026-10-03-the-recorder-called-its-own-checkout-dirty-and-i-explained-it-as-the-suite.md`.
+
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
 
 - **A `continue`/early-return that DEFERS a case to a later pass is a claim about that pass's POPULATION — name the population and check membership, because "it is handled downstream" reads as routing rather than as an assertion.** The two predicates are written in different places by different reasoning and nothing forces them to agree: when the later pass's set is defined by a property the deferring predicate never mentions, the excepted cases pass SILENTLY, and the verdict line keeps counting them as compared. Ask per deferral: *what set does the downstream check iterate, and is this case provably in it?* If the answer is "usually", the deferral needs a LEDGER plus a reconciliation (every deferred key must have been named downstream, else it emits its own finding) — which also keeps any "all N compared" verdict honest by construction, since an unreconciled deferral always emits. **Why:** #8576 — a drift probe deferred a declared rule to a census that excludes Terraform-frozen names by construction; for that shape it printed `PASS (all 29 in-scope rules match …)` at rc=0 having compared 28, a REGRESSION against the pre-change code, which reported the rule. All 63 suite rows were green. See `knowledge-base/project/learnings/2026-09-23-a-hand-off-to-a-later-pass-is-a-silent-clean-hole-unless-it-is-accounted.md`.
@@ -1526,9 +1441,12 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
 
 ### Sharp Edges: Review Agent Limitations
 
+- **"Report-only" does not stop a seat from running a git write on the shared worktree — check `git branch --show-current` after the panel returns.** On #9449 the pattern seat ran `git checkout --detach` to read a pinned SHA and left the worktree on a detached HEAD; the tell was an empty `git branch --show-current` while `git status` stayed clean. Brief seats to use `git show <sha>:<path>` or their own detached worktree, and re-attach (`git switch <branch>`) before applying fixes.
+
 - **A long-running seat can return an EMPTY final result, and resuming it does not recover the text — mandate file delivery in the SPAWN prompt.** Have it write its report incrementally to a scratchpad file and end with `WROTE <path>`. **Why:** PR #8755 — two seats returned nothing across five resumes; only a respawn with that mandate delivered.
 - **A fix agent that dies mid-run (rate limit, timeout) is a PARTIAL writer — reconcile git before re-dispatching, and keep a multi-session brief out of the scratchpad.** Run `git log origin/<branch>..HEAD`, `git status --short`, and compare `gh pr view --json headRefOid`; map commit bodies to brief items and re-dispatch only the remainder. Persist the fix brief under `$(git rev-parse --git-dir)` (the scratchpad is wiped between sessions). **Why:** PR #9163 — a 429'd agent had committed 3 of 4 rounds unpushed while the handoff said "no edits"; the brief and seat reports were lost with the scratchpad.
 - **The session scratchpad is shared with every seat — give the lead's harness files a lead-unique name.** A test-design seat wrote its own `mut.py` into the same scratchpad and overwrote the lead's helper, so the lead's next battery printed NOT-LANDED on every row and mutated nothing (#8719/PR #8794). Brief seats to use seat-unique names too.
+- **Verify a runbook by RUNNING its fences against stubs (stub `gh`/`doppler`/`git`/`terraform` on PATH), and name the one section a seat may run.** On #9453 a seat ran an unrelated `terraform init` fence and another detached HEAD; running found lost shell state, a wrong PR from a loose search, and a failed listing read as empty.
 - **Brief every mutating seat's sandbox size and lifetime, not just its location.** Unbounded per-mutant tree copies in session scratch filled `/tmp` and failed every Bash call (#8292/PR #8536). Brief: the allocator command in "Suite scope for every agent below"; logs that must survive go separately in `/var/tmp` via `mktemp`. Full brief: [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md).
 - **A report-only seat that copies the tree while you edit underneath it reports a baseline no SHA ever had — pin its input, or stop editing until it returns.** Report-only spawning (all seats from one SHA, fixes applied after) is what keeps a panel's findings coherent, and it is defeated one level down when a seat re-snapshots mid-run: the test-design seat on #8418 measured `177/1/178` for a suite that was `178/0/178` at the SHA it was briefed on and at the SHA it returned to, because its `sb2` copy caught a half-applied fix. Every mutant it reported as "survived" was then a differential against a phantom. Brief a seat with the SHA and have it read content with `git show <sha>:<path>` from the live tree (never a `git worktree add --detach` sandbox; see [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md)), or hold the tree until the last seat lands. **Why:** #8418; see `knowledge-base/project/learnings/2026-09-20-every-defect-in-my-fix-was-a-sentence-i-could-have-run.md`.
 - **When a design is SYMMETRIC and one side got a ratchet, audit the other side — the unratcheted one is the one nobody re-read, and it is usually where the ADR makes the STRONGER claim.** On #8384 the cache side of ADR-235 carried `EXPECTED_N=5` in `kb-caches-untracked.test.sh`; the product side (`RESOLVABLE_PATHS`) had no cardinality or membership assertion, so appending a path left every suite green while the SUT's header promised "an edit HERE plus an ADR amendment". Five of that PR's eight P1s reduced to guards that pinned an artifact's PATH or CONTENT and never the WIRING that made it load-bearing (a path that resolves vs a command that runs; token spellings vs the arm; that regen ran vs that `MERGE_HEAD` existed; stdout sentinels vs the exit code). Do the structural roll-up FIRST and fix the class, not the five instances. See `knowledge-base/project/learnings/2026-09-20-every-guard-pinned-the-artifact-and-none-pinned-the-wire.md`.

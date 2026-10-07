@@ -664,7 +664,7 @@ tc_tree_has_mount() {
     [[ -n "$(ls -A -- "$dir" 2>/dev/null)" ]]
     return
   fi
-  printf '%s\n' "$lines" | grep -qvx -- "$dev"
+  grep -qvx -- "$dev" <<<"$lines"
 }
 
 # tc_quar_age_min <entry> — minutes since the entry entered quarantine.
@@ -700,17 +700,31 @@ tc_ledger_append() {
   fi
 }
 
-# tc_drain_quarantine <base> <dry> <scratch_ttl_min> <wt_ttl_min> — the ONLY
+# tc_drain_quarantine <base> <dry> <scratch_ttl_min> <wt_ttl_min> [<deadline_epoch> [<max_entries>]] — the ONLY
 # delete permitted inside soleur-quarantine.<uid>/: entries whose QUARANTINE
 # dwell exceeds the class TTL (subdir name encodes it). A symlinked or
 # foreign-owned quarantine root/class dir refuses outright — a squatter on a
 # world-writable base must not aim the drain at an arbitrary tree. Sets
-# TC_DRAINED.
+# TC_DRAINED and TC_DRAINED_BYTES (both RESET on every call — a caller looping over
+# bases sums them itself).
+#
+# Optional trailing arguments (#9677), both 0 = unbounded so the guard and the purge, which pass
+# four arguments, are unchanged: <deadline_epoch> stops the drain between top-level entries once
+# the clock reaches it, and <max_entries> caps how many entries one call may delete. Both are checked
+# BETWEEN entries only: the mount probe, `du -sk` and `find -delete` of one entry cannot be interrupted,
+# so a single very large entry can overrun the deadline. The enumeration is pre-filtered with
+# `find -cmin +(ttl-1)` (looser than the authoritative tc_quar_age_min re-check below), so unexpired
+# entries cost one find, not a fork each (measured 12 ms/entry otherwise). An entry whose delete is cut
+# short is NOT retried promptly: deleting its children advances its own ctime, so its TTL restarts and
+# the next call sees it as fresh (no data loss — the error direction is retention).
 TC_DRAINED=0
+TC_DRAINED_BYTES=0
 tc_drain_quarantine() {
-  local base="$1" dry="${2:-0}" sttl="${3:-10080}" wttl="${4:-43200}"
-  local qroot cls ttl e
-  TC_DRAINED=0
+  local base="$1" dry="${2:-0}" sttl="${3:-10080}" wttl="${4:-43200}" deadline="${5:-0}" cap="${6:-0}"
+  local qroot cls ttl e kb attempts=0
+  TC_DRAINED=0; TC_DRAINED_BYTES=0
+  [[ "$deadline" =~ ^[0-9]+$ ]] || deadline=0
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=0
   # TTLs arrive from env (SOLEUR_PURGE_QUAR_*_TTL_MIN, TMPFS_GUARD_QUAR_*_TTL_MIN) and are used in
   # arithmetic below: `-1`, `abc` (evaluates as an unset variable = 0) and `7d` (arithmetic error)
   # all DRAIN MORE or abort. Only plain digits are valid; anything else falls back to the default
@@ -728,16 +742,27 @@ tc_drain_quarantine() {
     case "${cls##*/}" in worktrees) ttl="$wttl" ;; *) ttl="$sttl" ;; esac
     while IFS= read -r -d '' e; do
       [[ -e "$e" && ! -L "$e" ]] || continue          # planted link — never follow
+      if (( deadline > 0 )) && (( "${EPOCHSECONDS:-$(date +%s)}" >= deadline )); then return 0; fi
+      if (( cap > 0 )) && (( attempts >= cap )); then return 0; fi
       (( "$(tc_quar_age_min "$e")" >= ttl )) || continue
       tc_tree_has_mount "$e" && continue             # never delete into a mount
       if [[ "$dry" == "1" ]]; then
         printf 'would drain %s\n' "$e"; continue
       fi
+      attempts=$((attempts + 1))
+      # du -sk (portable; -b is GNU-only) BEFORE the delete — the bytes are gone afterwards. An
+      # unreadable size counts as 0 rather than aborting the drain.
+      # `|| true` is load-bearing: du exits 1 on any unreadable subtree or a file that vanishes mid-walk,
+      # and under pipefail that fails the assignment — the guard and the purge call this function bare
+      # under `set -e`, so without it one such entry would abort them on every run (#9677 review).
+      kb="$(du -skx -- "$e" 2>/dev/null | cut -f1)" || true
+      [[ "$kb" =~ ^[0-9]+$ ]] || kb=0
       if find "$e" -xdev -depth -delete 2>/dev/null; then
         tc_ledger_append "drain" "${cls##*/}" "$e" "-"
         TC_DRAINED=$((TC_DRAINED + 1))
+        TC_DRAINED_BYTES=$((TC_DRAINED_BYTES + kb * 1024))
       fi
-    done < <(find "$cls" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+    done < <(find "$cls" -mindepth 1 -maxdepth 1 -cmin "+$(( ttl > 0 ? ttl - 1 : 0 ))" -print0 2>/dev/null)
   done
   return 0
 }

@@ -152,8 +152,7 @@ fi
 #   * Not truncated. Since #8010 each refusal line carries exactly one bracketed token AND the
 #     remedy sentence for that token; `head -1` on a multi-line capture handed the operator a
 #     cause with no remedy, which is what this probe exists to deliver.
-token_line="$(printf '%s\n' "$gate_out" \
-  | grep -m1 -E 'git_data_rung2_rehearsal_gate: (HOLD|ABORT) \[[A-Z0-9_]+\]' || true)"
+token_line="$(grep -m1 -E 'git_data_rung2_rehearsal_gate: (HOLD|ABORT) \[[A-Z0-9_]+\]' <<<"$gate_out" || true)"
 if [[ -n "$token_line" ]]; then
   token="${token_line#*[}"; token="${token%%]*}"
 else

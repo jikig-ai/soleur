@@ -77,8 +77,15 @@ authoritative for which machine emitted the row; `host_name` on web-1 still carr
 Rows that **never** page, by construction (a `SOLEUR_*_SEND_SKIPPED` or `SOLEUR_*_HALT` row in the
 same window is context, not the cause):
 
-- `SOLEUR_<UNIT>_SEND_SKIPPED channel=… reason=unset|cooldown|jq` — a deliberate skip (a channel's
-  env unset, cooldown, jq missing). Configuration; the alert's needles cannot match it.
+- `SOLEUR_<UNIT>_SEND_SKIPPED channel=… reason=unset|cooldown|jq|token_shape` — a deliberate skip (a channel's
+  env unset, cooldown, jq missing, or — `container-restart-monitor` / `cron-egress-alarm` only, which still
+  have the Sentry channel — a Resend key that fails the token-shape guard, #9597). Configuration; the alert's
+  needles cannot match it. Fix a `token_shape` skip by re-setting `RESEND_API_KEY` in Doppler `prd` (a stray
+  space, quote or newline), never via SSH.
+- `SOLEUR_DISK_MONITOR_REFUSED` / `SOLEUR_RESOURCE_MONITOR_REFUSED channel=resend reason=token_shape` — **does
+  page** (it matches the `_REFUSED` needle): those two units have no second channel, so a Resend key that
+  fails the token-shape guard is an unusable alert path, the same condition a 401 `SEND_FAILED` reported
+  before the key moved onto curl's stdin config (#9597). Same fix: re-set `RESEND_API_KEY` in Doppler `prd`.
 - `SOLEUR_<UNIT>_HALT reason=xtrace-credential-bound issue=7797` — the unit refused to run under
   shell tracing with a credential bound. Deliberately outside this alert's scope
   (decision-challenges UC-1 in the #8097 spec; ADR-218). Opting in is one more needle.

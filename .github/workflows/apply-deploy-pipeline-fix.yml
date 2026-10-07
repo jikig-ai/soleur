@@ -144,6 +144,15 @@ on:
       # apply (the sibling is the only resource that re-provisions web-2 over the bastion
       # forward this workflow opens).
       - "apps/web-platform/infra/web-2-ssh-host-key.pub"
+      # #9393 — the three cron-egress artifacts deploy_pipeline_fix_web2 delivers to a
+      # running web-2 (the carved CIDR allow list, the resolver, the post-apply probe).
+      # They hash into the sibling's triggers_replace, so a body-only edit — e.g. the
+      # daily CIDR-refresh regeneration PR — must fire this apply or web-2 keeps the
+      # stale allow list until its next replace. Kept in sync with the #5505
+      # paths-union test in ship-deploy-pipeline-fix-gate.test.ts.
+      - "apps/web-platform/infra/cron-egress-allowlist-cidr.txt"
+      - "apps/web-platform/infra/cron-egress-resolve.sh"
+      - "apps/web-platform/infra/cron-egress-postapply-assert.sh"
   workflow_dispatch:
     inputs:
       reason:
@@ -918,7 +927,7 @@ jobs:
           # no command substitution on the decoded bytes) so a trailing newline in the
           # rendered file is preserved — $(...) would strip it and shift the digest.
           if [[ "$console_rc" -eq 0 && -n "$b64" ]] \
-             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -q '^DOPPLER_TOKEN='; then
+             && printf '%s' "$b64" | base64 -d 2>/dev/null | grep -c '^DOPPLER_TOKEN=' >/dev/null; then
             sha="$(printf '%s' "$b64" | base64 -d 2>/dev/null | sha256sum | awk '{print $1}')"
           fi
           if [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
@@ -2325,10 +2334,13 @@ jobs:
           fi
           # Per ADR-079 the faithful canary is still NON-BLOCKING dark-launch: pass /
           # canary_infra_error / fixture_uncaptured are all acceptable here; only a
-          # faithful sandbox_broken (a real bwrap EPERM against the committed profile)
+          # faithful sandbox_broken (a real bwrap EPERM against the committed profile,
+          # or — since #8752 — a broken-hardening probe verdict; reason/probe decoded below)
           # is fatal. Promotion of the canary to a blocking gate is soak-owned (#5889).
           if [[ "$FINAL_VERDICT" == "sandbox_broken" ]]; then
-            echo "::error::Faithful sandbox canary verdict=sandbox_broken after redeploy — the committed seccomp profile EPERMs the real SDK bwrap argv. Do NOT leave this profile live."
+            REASON=$(jq -r '.sandbox_canary.reason // "?"' /tmp/redeploy-terminal.json 2>/dev/null || echo "?")
+            PROBE=$(jq -r '.sandbox_canary.probe // "?"' /tmp/redeploy-terminal.json 2>/dev/null || echo "?")
+            echo "::error::Faithful sandbox canary verdict=sandbox_broken reason=${REASON} probe=${PROBE} after redeploy. #8752 reasons: userns_filter_bypass=userns filter not engaged; userns_filter_overbroad=filter denies legit spawns; fd_hygiene_bypass=fd leak past shim sweep; args_fd_closed=--args transport fd closed; bwrap_shim_refused=shim exit 65 (artifact/real-bwrap missing). Do NOT leave this profile live."
             exit 1
           fi
           echo "STATE invariant holds: host_sha256==committed (${COMMITTED_SHA}) AND loaded_matches_host=true; canary verdict=${FINAL_VERDICT} (not sandbox_broken). Profile is live."
@@ -2442,6 +2454,14 @@ jobs:
       # "Server state was re-aligned with HEAD" — a claim about the HOST, which only the gate can
       # substantiate. On the `unadjudicated` arm nothing checked whether the host received
       # anything, so the drift the issue records may still be there.
+      # SECOND GATE, on the EVIDENCE (drift-autoclose fix). The host-level gate above only speaks
+      # for the five -target terraform_data resources this workflow plans; a drift issue is filed
+      # from an UNTARGETED plan, so one showing a pending hcloud_server replacement was closed
+      # although no host was replaced (it happened to three issues before this gate existed). The
+      # decision therefore lives in scripts/infra-drift-autoclose.sh, which closes an issue only
+      # when its newest recorded plan is readable, complete and shows no hcloud_server action, and
+      # leaves everything else open with a ::notice::. The `if:` below is pinned verbatim by
+      # apps/web-platform/infra/infra-config-gate.test.sh AC18: change it there too.
       - name: Auto-close any open drift issues for this stack
         if: >-
           success() && env.PLAN_HAS_CHANGES == 'true'
@@ -2451,15 +2471,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
         run: |
-          set -euo pipefail
-          issues=$(gh issue list --label "infra-drift" --state open -L 200 \
-            --search "infra: drift detected in web-platform in:title" \
-            --json number --jq '.[].number')
-          for n in $issues; do
-            gh issue comment "$n" --body "Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA}. Server state was re-aligned with HEAD."
-            gh issue close "$n" --reason completed
-            echo "Closed #$n"
-          done
+          bash "${GITHUB_WORKSPACE}/scripts/infra-drift-autoclose.sh"
 
       - name: Post-apply summary
         if: always()

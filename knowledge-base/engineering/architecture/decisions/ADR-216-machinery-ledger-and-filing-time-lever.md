@@ -506,3 +506,29 @@ Recorded so the next reader does not inherit them.
    endpoint honours the negation; `gh issue list` does not. Every user-facing
    drain exclusion is therefore a `jq` post-filter over labels the query already
    returns.
+
+## Addendum - 2026-10-06 (#7122)
+
+Append-only; nothing above is edited. Source decision: ADR-273.
+
+**The run-report population gains a second kind of filer.** The 2026-09-11 addendum defines the population as every cron whose run
+completion is verified by its own scheduled issue, and describes the `run-report-label` exit (exit 0) as the substrate-issued
+directive that lets the *agent's* `gh issue create` through the filing gate. For `cron-community-monitor` that premise no longer
+holds: since #7122 the handler upserts the tracking issue from a validated closed-schema draft, and the agent holds no `gh`
+verb at all. `RUN_REPORT_CRONS` therefore carries a `filer` field (`"agent"` for every other row, `"handler"` for community
+monitor), and the substrate emits the `run-report-label` directive only for `filer: "agent"` rows. The row cannot stay an agent
+row: `runHookSelfTest` probes the run-report filing for any spawn that carries the directive, and would abort every community
+spawn on a filing the agent must not be able to make.
+
+**What is unchanged.** The row stays in the population for the two consumers that key on the issue, not on who filed it: the
+stale-run-report sweeper (the handler-created issue carries the same App author and the `[Scheduled]` title, closed after the
+row's 9-day window) and the measurement mirror (`scripts/issue-flow-measure.sh`, kept in lockstep by the parity test). The other
+eight crons that call `resolveOutputAwareOk` are unchanged, including the exit-0 route. The #8059 first-live-contact failure
+(an agent relabelling a digest `meta/machinery` to pass the gate) cannot recur for this cron, because the agent files nothing.
+
+**Two consequences to read with the sweeper.** The sweeper keys on the title, the author and an audit-stub body prefix, so the handler's
+`not committed - see Sentry` notice line (the dangling-link repair in ADR-273, which replaces only the `Digest file:` line) does not exempt that issue: it is closed
+at 9 days like any report, and the closing comment's wording ("the digest file it links is committed") does not describe a
+notice issue. The `FAILED`-title and audit-self-report-body exemptions still protect the handler-authored failure issue.
+`resolveOutputAwareOk` also changes role for this cron: it is advisory telemetry after a handler write and no longer a gate
+(ADR-273, interaction with ADR-126).
