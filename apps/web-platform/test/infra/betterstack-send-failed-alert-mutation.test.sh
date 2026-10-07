@@ -149,8 +149,12 @@ expect_green_added() {
 # `logger -t`, user.notice), which adds one census row.
 # 59 -> 62 and 6 -> 7 guard cases at #8706: workspaces-luks-emit.sh joins the paging population
 # (its no_dsn / send_failed exits emit SOLEUR_WORKSPACES_LUKS_SEND_FAILED through a crit emit_refusal).
-BASELINE_PASSES=62
-BASELINE_CASES=7
+# 62 -> 65 and 7 -> 9 guard cases at #9597: container-restart-monitor adds a never-page SEND_SKIPPED
+# marker (reason=token_shape) and disk-monitor / resource-monitor add a paging REFUSED marker for the same
+# refusal (their Resend email is the ONLY channel, so a malformed key must page exactly as the 401 it
+# replaced did); the guard classifies each by needle, so no mutation row changes.
+BASELINE_PASSES=65
+BASELINE_CASES=9
 restore; cases=$((cases + 1))
 if run_guard; then ok "baseline: guard is GREEN against the unmutated sandbox"
 else no "baseline: guard is RED against the UNMUTATED sandbox; every RED below is meaningless. Output: $(<"$OUT")"
